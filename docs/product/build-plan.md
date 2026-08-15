@@ -12,11 +12,12 @@ as measured zeros.
 
 ## Delivery sequence
 
-1. **Foundation (current):** modular monorepo, exact nutrition math, immutable
+1. **Foundation (complete):** modular monorepo, exact nutrition math, immutable
    diary snapshots, PostgreSQL schema, API/client shells, CI, and local services.
-2. **Canonical food ingestion:** pinned USDA FoodData Central and Health Canada
-   CNF releases, resumable staging, validation, reconciliation, and provenance.
-3. **Food search:** disposable Meilisearch projection, generic/branded intent,
+2. **Canonical food ingestion core (complete):** release-candidate manifests and
+   real-data adapters for USDA FoodData Central and Health Canada CNF, plus
+   resumable staging, validation, atomic activation, rollback, and provenance.
+3. **Food search (next):** disposable Meilisearch projection, generic/branded intent,
    autocomplete, typo tolerance, synonyms, recent/favorite boosts, and barcode
    exact lookup.
 4. **Diary vertical slice:** account/profile, local-day diary, serving selection,
@@ -42,9 +43,23 @@ as measured zeros.
 - Begin as a modular monolith. Extract ingestion/search workers only when load or
   operational isolation justifies it.
 
+## Canonical-ingestion boundary
+
+The release pipeline, real FDC/CNF parsers, immutable database workflow, approval
+gates, atomic promotion, idempotent replay, and forward rollback are implemented
+and tested. A live FDC release has intentionally not been promoted: the checked-in
+candidate remains non-importable until two independently authenticated operators
+agree on the streamed artifact, rights review is recorded, immutable object
+storage is provisioned, and the complete nutrient map is reviewed. Current-vs-
+candidate reconciliation tooling and the CNF operator staging command remain
+pre-activation work; their absence blocks a live release but not the completed
+ingestion-core milestone. Tests use
+synthetic approvals only to verify the transaction and historical-snapshot
+invariants; they are not production attestations.
+
 ## Next acceptance target
 
-The next milestone is complete when one pinned FDC release can be downloaded by
-an operator, checksum-verified, staged, validated, imported idempotently into
-versioned food/source/nutrient records, and rolled back by deactivating the
-release without changing historical diary snapshots.
+Food search is complete when a rebuildable index can be generated from the
+promoted PostgreSQL catalogue, exact barcode lookup is deterministic, generic and
+branded keyword search has typo-tolerant ranked results, and relevance/latency
+fixtures pass without exposing quarantined or superseded foods.

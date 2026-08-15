@@ -10,14 +10,17 @@
     "accessUrl": "https://open.canada.ca/data/en/dataset/1b6139bd-ed7e-4043-bc28-ff00e10f3109"
   },
   "release": {
-    "releaseKey": "cnf-2026",
-    "publishedOn": null,
+    "releaseKey": "cnf-2026-resource-019f2a90-e3a9-489d-b6e1-f74f4ba1d006",
+    "publishedOn": "2026-05-14",
     "acquiredAt": null,
     "upstreamSchemaVersion": null
   },
   "artifact": {
-    "downloadUrl": null,
-    "permittedResolvedUrls": [],
+    "downloadUrl": "https://open.canada.ca/data/dataset/1b6139bd-ed7e-4043-bc28-ff00e10f3109/resource/019f2a90-e3a9-489d-b6e1-f74f4ba1d006/download/cnf_fcen_all-files-data_2026.zip",
+    "permittedResolvedUrls": [
+      "https://open.canada.ca/data/dataset/1b6139bd-ed7e-4043-bc28-ff00e10f3109/resource/019f2a90-e3a9-489d-b6e1-f74f4ba1d006/download/cnf_fcen_all-files-data_2026.zip",
+      "https://opencanada.blob.core.windows.net/opengovprod/resources/019f2a90-e3a9-489d-b6e1-f74f4ba1d006/cnf_fcen_all-files-data_2026.zip"
+    ],
     "objectUri": null,
     "mediaType": "application/zip",
     "sha256": null,
@@ -29,13 +32,13 @@
       "exactByteSize": null,
       "reportedSize": null,
       "metadataUrl": "https://open.canada.ca/data/api/action/package_show?id=1b6139bd-ed7e-4043-bc28-ff00e10f3109",
-      "notes": "The aggregate CNF ZIP resource has an empty hash and null size in the publisher metadata. Record two independent acquisition observations before this template can become import-ready."
+      "notes": "The publisher metadata leaves the aggregate ZIP hash empty and size null. A 2026-08-15 HEAD observation returned 26656195 bytes; that transport observation is not an acquired-artifact size or publisher checksum."
     },
     "acquisitionObservations": []
   },
   "rights": {
     "licenseExpression": "LicenseRef-Open-Government-Licence-Canada-2.0",
-    "licenseName": "Open Government Licence — Canada",
+    "licenseName": "Open Government Licence — Canada 2.0",
     "licenseUrl": "https://open.canada.ca/en/open-government-licence-canada",
     "termsUrl": "https://open.canada.ca/en/open-government-licence-canada",
     "commercialUseAllowed": true,
@@ -43,17 +46,18 @@
     "licenseAttributionRequired": true,
     "productAttributionRequired": true,
     "attributionFixture": "Source: Health Canada, Canadian Nutrient File 2026. Contains information licensed under the Open Government Licence — Canada.",
-    "databaseRightsNotes": "Keep CNF source records and English/French labels in their own namespace. Confirm the exact dataset resource and attribution presentation before promotion.",
+    "databaseRightsNotes": "The licence permits commercial copying, modification, publication, translation, adaptation, and distribution with source acknowledgement. It excludes third-party rights, marks, and official symbols and prohibits implying endorsement.",
     "review": {
-      "status": "template",
+      "status": "pending",
       "reviewedAt": null,
       "reviewedBy": null,
       "evidenceUrls": [
         "https://www.canada.ca/en/health-canada/services/food-nutrition/healthy-eating/nutrient-data/canadian-nutrient-file-about-us.html",
         "https://open.canada.ca/data/en/dataset/1b6139bd-ed7e-4043-bc28-ff00e10f3109",
+        "https://open.canada.ca/data/api/action/package_show?id=1b6139bd-ed7e-4043-bc28-ff00e10f3109",
         "https://open.canada.ca/en/open-government-licence-canada"
       ],
-      "notes": "The report identifies CNF 2026 and 5,993 foods; verify the downloaded release metadata and record counts rather than relying on this fixture."
+      "notes": "Official-source research is complete; named product-rights approval, attribution rendering, and acquisition verification are still required."
     }
   },
   "ingestion": {
@@ -75,10 +79,26 @@
       "food and nutrient counts are compared with official release metadata",
       "attribution fixture renders in food detail and export tests"
     ],
-    "expectedFiles": [],
+    "expectedFiles": [
+      "Food_Name.csv",
+      "Food_Source.csv",
+      "CNF_Food_Group.csv",
+      "Nutrient_Amount.csv",
+      "Nutrient_Name.csv",
+      "Nutrient_Source.csv",
+      "Measure_Weight_Conversion.csv",
+      "Measure_Type.csv",
+      "Measure_Name.csv"
+    ],
     "releaseSpecificExpectations": {
-      "reportedFoodCountToVerify": 5993,
-      "reportedMaximumNutrientsToVerify": 173
+      "officialFoodCount": 5993,
+      "officialMaximumNutrientCount": 173,
+      "officialDatasetPublishedOn": "2026-05-14",
+      "officialRecordReleasedOn": "2026-05-19",
+      "officialRecordModifiedOn": "2026-06-03",
+      "officialAggregateResourceCreatedAt": "2026-06-03T18:13:36.116325",
+      "officialAggregateResourceLastModifiedAt": "2026-06-03T18:10:27.842642",
+      "observedHeadContentLengthOn2026_08_15": 26656195
     }
   }
 }

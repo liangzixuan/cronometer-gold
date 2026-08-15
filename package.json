@@ -11,13 +11,14 @@
   "scripts": {
     "audit:prod": "node scripts/check-production-audit.mjs",
     "build": "turbo run build",
-    "check": "pnpm format:check && pnpm lint && pnpm mobile:check && pnpm typecheck && pnpm test",
+    "check": "pnpm format:check && pnpm manifests:check && pnpm lint && pnpm mobile:check && pnpm typecheck && pnpm test",
     "db:migrate": "dotenv -e .env -- pnpm --filter @nutrition-tracker/db db:migrate",
     "dev": "dotenv -e .env -- turbo run dev",
     "format": "biome check --write .",
     "format:check": "biome check .",
     "licenses:check": "node scripts/check-licenses.mjs",
     "lint": "node --test scripts/*.test.mjs && node scripts/check-boundaries.mjs",
+    "manifests:check": "tsx scripts/check-food-source-manifests.mjs",
     "infra:config": "docker compose -f infra/docker/compose.yml config",
     "infra:down": "docker compose -f infra/docker/compose.yml down",
     "infra:up": "docker compose -f infra/docker/compose.yml up -d --wait",
@@ -29,8 +30,11 @@
   "devDependencies": {
     "@babel/parser": "7.29.8",
     "@biomejs/biome": "2.5.8",
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
     "dotenv-cli": "11.0.0",
     "turbo": "2.10.10",
+    "tsx": "4.23.12",
     "typescript": "7.0.2",
     "vitest": "4.1.10"
   }

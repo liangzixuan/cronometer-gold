@@ -6,6 +6,9 @@ every applicable gate and an owner who records the decision.
 ## Every pull request
 
 - Formatting, lint, workspace-boundary, type, and unit checks pass.
+- Every checked-in food-source candidate/example compiles under the strict
+  JSON Schema gate, agrees with the ingestion runtime parser, and remains an
+  intentionally non-import-ready template.
 - No committed secret or unreviewed high/critical production dependency advisory.
 - Production dependency licenses are on the approved permissive allowlist or
   have a version-bounded exception in `config/license-policy.json` linked to
@@ -26,8 +29,10 @@ package boundaries.
   rights classification, attribution, and reviewer.
 - Import from the pinned raw artifact is deterministic and reports accepted,
   rejected, quarantined, and missing-nutrient counts.
-- A source cannot publish directly into the active catalogue. Staging, diff,
-  approval, atomic activation, and rollback are proven.
+- A source cannot publish directly into the active catalogue. Staging, validation,
+  three-role digest-bound approval, atomic activation, and pointer-only rollback
+  are proven by the PostgreSQL integration gate, including an unchanged historical
+  diary nutrient snapshot.
 - The product renders unknown, trace, imputed, and label-rounded values distinctly.
 
 ## Controlled beta

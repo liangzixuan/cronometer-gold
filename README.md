@@ -17,12 +17,18 @@ Cronometer source code, content, branding, assets, or proprietary food data.
 - `apps/web`: Next.js web client
 - `apps/mobile`: Expo/React Native client
 - `apps/worker`: background-process shell
+- `apps/ingest`: controlled food-source acquisition and catalogue release CLI
 - `packages/domain`: pure nutrition, serving, recipe, and snapshot rules
 - `packages/contracts`: transport-neutral API contracts
 - `packages/db`: PostgreSQL schema, Kysely types, and migrations
 - `infra/docker`: local development dependencies
 - `docs/adr`: decisions and non-negotiable boundaries
 - `docs/product`: executable product scope and milestone sequence
+
+Canonical source onboarding is documented in the
+[`food-source release runbook`](infra/runbooks/food-source-release.md). Checked-in
+USDA and Health Canada candidates are intentionally non-importable until their
+independent acquisition, rights, storage, and nutrient-mapping approvals exist.
 
 ## Prerequisites
 

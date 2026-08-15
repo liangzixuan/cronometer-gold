@@ -66,4 +66,37 @@ describe("forward migration discovery", () => {
       expect(migrationSql).toContain(`create table ${table}`);
     }
   });
+
+  it("adds resumable catalogue ingestion without requiring approval before validation", async () => {
+    const migrationSql = await readFile(
+      resolve(import.meta.dirname, "../migrations/0002_catalogue_ingestion.sql"),
+      "utf8",
+    );
+
+    for (const table of [
+      "food_import_batch",
+      "food_import_approval",
+      "food_import_record",
+      "food_import_checkpoint",
+      "food_source_release_activation",
+    ]) {
+      expect(migrationSql).toContain(`create table ${table}`);
+    }
+    const batchDefinition = migrationSql.slice(
+      migrationSql.indexOf("create table food_import_batch"),
+      migrationSql.indexOf("create table food_import_approval"),
+    );
+    expect(batchDefinition).not.toContain("promotion_approved");
+    expect(migrationSql).toContain("approval_role in ('data', 'quality', 'rights')");
+    expect(migrationSql).toContain("rights_manifest_sha256");
+    expect(migrationSql).toContain("create trigger food_nutrient_value_reject_delete");
+    expect(migrationSql).toContain("create trigger food_serving_reject_delete");
+    expect(migrationSql).toContain("create trigger diary_entry_nutrient_snapshot_guard_delete");
+    expect(migrationSql).toContain(
+      "status not in ('ready', 'promoting', 'completed', 'quarantined') or validated_at is not null",
+    );
+    expect(migrationSql).toContain(
+      "old.status = 'ready' and new.status in ('failed', 'promoting')",
+    );
+  });
 });

@@ -53,6 +53,16 @@ export type UnitSystem = "metric" | "us_customary";
 export type FoodSourceKind = "commercial" | "government" | "open" | "partner";
 export type RightsReviewStatus = "approved" | "blocked" | "pending" | "restricted";
 export type SourceReleaseStatus = "failed" | "imported" | "promoted" | "quarantined";
+export type FoodImportBatchStatus =
+  | "completed"
+  | "failed"
+  | "promoting"
+  | "quarantined"
+  | "ready"
+  | "staging";
+export type FoodImportRecordStatus = "materialized" | "pending" | "quarantined" | "valid";
+export type FoodImportCheckpointStage = "download" | "materialize" | "parse" | "stage" | "validate";
+export type FoodSourceReleaseActivationOperation = "activate" | "deactivate" | "rollback";
 export type NutrientDimension = "amount" | "energy" | "mass" | "ratio" | "volume";
 export type FoodKind = "branded" | "custom" | "generic";
 export type FoodVisibility = "private" | "public" | "unlisted";
@@ -117,8 +127,107 @@ export interface FoodSourceTable {
   rights_reviewed_at: NullableTimestamp;
   rights_reviewed_by: string | null;
   active: DefaultBoolean;
+  active_release_id: string | null;
   created_at: CreatedTimestamp;
   updated_at: UpdatedTimestamp;
+}
+
+export interface FoodImportBatchTable {
+  id: UuidId;
+  food_source_id: Int8;
+  release_key: string;
+  published_on: NullableDateOnly;
+  acquired_at: Timestamp;
+  artifact_uri: string;
+  artifact_sha256: string;
+  artifact_bytes: Int8;
+  media_type: string;
+  upstream_schema_version: string | null;
+  parser_version: string;
+  rights_manifest_uri: string;
+  rights_manifest_sha256: string;
+  status: DefaultValue<FoodImportBatchStatus>;
+  staged_count: DefaultInt8;
+  valid_count: DefaultInt8;
+  quarantined_count: DefaultInt8;
+  unresolved_error_count: DefaultInt8;
+  warning_count: DefaultInt8;
+  nutrient_input_count: DefaultInt8;
+  nutrient_materializable_count: DefaultInt8;
+  nutrient_excluded_count: DefaultInt8;
+  materialized_count: DefaultInt8;
+  validation_policy: DefaultJson;
+  release_id: string | null;
+  created_at: CreatedTimestamp;
+  updated_at: UpdatedTimestamp;
+  validated_at: NullableTimestamp;
+  completed_at: NullableTimestamp;
+}
+
+export interface FoodImportApprovalTable {
+  id: BigintId;
+  batch_id: string;
+  approval_role: "data" | "quality" | "rights";
+  validation_digest: string;
+  rights_manifest_sha256: string;
+  approved_at: CreatedTimestamp;
+  principal_id: string;
+  approval_reference: string;
+  created_at: CreatedTimestamp;
+}
+
+export interface FoodImportParserReportTable {
+  batch_id: string;
+  report: ImmutableJson;
+  report_sha256: string;
+  source_record_count: Int8;
+  emitted_record_count: Int8;
+  excluded_record_count: Int8;
+  source_nutrient_count: Int8;
+  emitted_nutrient_count: Int8;
+  excluded_nutrient_count: Int8;
+  source_portion_count: Int8;
+  emitted_portion_count: Int8;
+  excluded_portion_count: Int8;
+  created_at: CreatedTimestamp;
+}
+
+export interface FoodImportRecordTable {
+  id: BigintId;
+  batch_id: string;
+  source_record_key: string;
+  source_record_type: string;
+  sequence_number: Int8;
+  source_payload_sha256: string;
+  canonical_payload_sha256: string;
+  canonical_payload: ColumnType<JsonValue, JsonValue, never>;
+  validation_status: DefaultValue<FoodImportRecordStatus>;
+  validation_issues: JSONColumnType<JsonArray, JsonArray | undefined, JsonArray>;
+  food_version_id: NullableInt8;
+  created_at: CreatedTimestamp;
+  validated_at: NullableTimestamp;
+  materialized_at: NullableTimestamp;
+}
+
+export interface FoodImportCheckpointTable {
+  batch_id: string;
+  stage: FoodImportCheckpointStage;
+  cursor_data: DefaultJson;
+  last_sequence_number: NullableInt8;
+  processed_count: DefaultInt8;
+  updated_at: UpdatedTimestamp;
+}
+
+export interface FoodSourceReleaseActivationTable {
+  id: BigintId;
+  food_source_id: Int8;
+  operation: FoodSourceReleaseActivationOperation;
+  release_id: string | null;
+  previous_release_id: string | null;
+  import_batch_id: string | null;
+  reason: string;
+  performed_by: string;
+  occurred_at: CreatedTimestamp;
 }
 
 export interface FoodSourceReleaseTable {
@@ -137,6 +246,7 @@ export interface FoodSourceReleaseTable {
   record_counts: ImmutableJson;
   validation_summary: ImmutableJson;
   rights_manifest_uri: string;
+  rights_manifest_sha256: string | null;
   promoted_at: NullableTimestamp;
   created_at: CreatedTimestamp;
 }
@@ -177,6 +287,24 @@ export interface SourceNutrientMapTable {
   conversion_multiplier: DefaultNumeric;
   mapping_notes: string | null;
   reviewed_at: Timestamp;
+  reviewed_by: string;
+  current_revision_id: string;
+  created_at: CreatedTimestamp;
+}
+
+export interface SourceNutrientMapRevisionTable {
+  id: UuidId;
+  food_source_id: Int8;
+  source_nutrient_key: string;
+  nutrient_id: Int8;
+  source_name: string;
+  source_unit: string;
+  conversion_multiplier: Numeric;
+  mapping_notes: string | null;
+  reviewed_at: Timestamp;
+  reviewed_by: string;
+  change_reason: string;
+  supersedes_revision_id: string | null;
   created_at: CreatedTimestamp;
 }
 
@@ -442,10 +570,16 @@ export interface Database {
   diary_entry_nutrient_snapshot: DiaryEntryNutrientSnapshotTable;
   food: FoodTable;
   food_barcode: FoodBarcodeTable;
+  food_import_batch: FoodImportBatchTable;
+  food_import_approval: FoodImportApprovalTable;
+  food_import_checkpoint: FoodImportCheckpointTable;
+  food_import_parser_report: FoodImportParserReportTable;
+  food_import_record: FoodImportRecordTable;
   food_nutrient_value: FoodNutrientValueTable;
   food_serving: FoodServingTable;
   food_source: FoodSourceTable;
   food_source_release: FoodSourceReleaseTable;
+  food_source_release_activation: FoodSourceReleaseActivationTable;
   food_version: FoodVersionTable;
   nutrient: NutrientTable;
   nutrient_alias: NutrientAliasTable;
@@ -457,5 +591,6 @@ export interface Database {
   recipe_ingredient: RecipeIngredientTable;
   recipe_version: RecipeVersionTable;
   source_nutrient_map: SourceNutrientMapTable;
+  source_nutrient_map_revision: SourceNutrientMapRevisionTable;
   user_profile: UserProfileTable;
 }

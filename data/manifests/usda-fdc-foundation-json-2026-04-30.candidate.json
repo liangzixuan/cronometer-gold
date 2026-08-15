@@ -1,0 +1,100 @@
+{
+  "$schema": "./food-source-manifest.schema.json",
+  "manifestVersion": 3,
+  "templateOnly": true,
+  "source": {
+    "code": "USDA_FDC",
+    "displayName": "USDA FoodData Central",
+    "kind": "government",
+    "homepageUrl": "https://fdc.nal.usda.gov/",
+    "accessUrl": "https://fdc.nal.usda.gov/download-datasets/"
+  },
+  "release": {
+    "releaseKey": "FoodData_Central_foundation_food_json_2026-04-30",
+    "publishedOn": "2026-04-30",
+    "acquiredAt": null,
+    "upstreamSchemaVersion": null
+  },
+  "artifact": {
+    "downloadUrl": "https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_foundation_food_json_2026-04-30.zip",
+    "permittedResolvedUrls": [
+      "https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_foundation_food_json_2026-04-30.zip"
+    ],
+    "objectUri": null,
+    "mediaType": "application/zip",
+    "sha256": null,
+    "byteSize": null,
+    "publisherIntegrity": {
+      "publisherProvidesSha256": false,
+      "sha256": null,
+      "sha256EvidenceUrl": null,
+      "exactByteSize": null,
+      "reportedSize": "459K zipped; 6.5M unzipped",
+      "metadataUrl": "https://fdc.nal.usda.gov/download-datasets/",
+      "notes": "The release table publishes approximate display sizes but no cryptographic checksum. A 2026-08-15 HEAD observation returned 469303 bytes; that transport observation is not an acquired-artifact size or publisher checksum."
+    },
+    "acquisitionObservations": []
+  },
+  "rights": {
+    "licenseExpression": "CC0-1.0",
+    "licenseName": "Creative Commons CC0 1.0 Universal / US public-domain data",
+    "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+    "termsUrl": "https://fdc.nal.usda.gov/api-guide/",
+    "commercialUseAllowed": true,
+    "redistributionAllowed": true,
+    "licenseAttributionRequired": false,
+    "productAttributionRequired": true,
+    "attributionFixture": "U.S. Department of Agriculture, Agricultural Research Service. FoodData Central. https://fdc.nal.usda.gov/ (source release: {{releaseKey}}).",
+    "databaseRightsNotes": "USDA states FoodData Central data are public domain and published under CC0, while requesting that products identify FoodData Central as the source.",
+    "review": {
+      "status": "pending",
+      "reviewedAt": null,
+      "reviewedBy": null,
+      "evidenceUrls": [
+        "https://fdc.nal.usda.gov/api-guide/",
+        "https://fdc.nal.usda.gov/data-documentation/",
+        "https://fdc.nal.usda.gov/download-datasets/",
+        "https://fdc.nal.usda.gov/log/"
+      ],
+      "notes": "Official-source research is complete; named product-rights approval and acquisition verification are still required."
+    }
+  },
+  "ingestion": {
+    "parserPackage": "@nutrition-tracker/ingestion",
+    "parserVersion": null,
+    "parserBuildSha256": null,
+    "dataTypes": ["Foundation"],
+    "languages": ["en"],
+    "markets": ["US"],
+    "sourceIdentityFields": ["fdcId", "dataType"],
+    "missingValuePolicy": "absent-is-unknown-never-zero"
+  },
+  "validation": {
+    "rules": [
+      "archive contains exactly the pinned JSON member",
+      "every food has a unique positive fdcId and Foundation data type",
+      "every nutrient ID maps explicitly or is quarantined",
+      "original nutrient units, bases, derivation fields, and missingness are retained",
+      "portion weights are positive and reference their parent food",
+      "record counts and unmapped fields are diffed against the prior promoted release"
+    ],
+    "expectedFiles": ["FoodData_Central_foundation_food_json_2026-04-30.json"],
+    "releaseSpecificExpectations": {
+      "publisherReleaseLabel": "04/2026",
+      "officialPublishedOn": "2026-04-30",
+      "fdcReleaseVersion": "15.0",
+      "publisherReportedCompressedSize": "459K",
+      "publisherReportedUncompressedSize": "6.5M",
+      "observedHeadContentLengthOn2026_08_15": 469303,
+      "expectedArchiveMemberCount": 1,
+      "parserBaselineAcceptedFoodCount": 363,
+      "parserBaselineQuarantinedFoodCount": 32,
+      "parserBaselineStagedNutrientCount": 15183,
+      "parserBaselineExcludedNutrientCount": 10,
+      "parserBaselineStagedPortionCount": 383,
+      "parserBaselineExcludedPortionCount": 0,
+      "parserBaselineExcludedAttributeCount": 0,
+      "parserBaselineAcceptedPayloadDigest": "dcf29c40425720c1e305f3798786fea9bcac7e2d662e26a3b861157519c4bd18"
+    }
+  }
+}

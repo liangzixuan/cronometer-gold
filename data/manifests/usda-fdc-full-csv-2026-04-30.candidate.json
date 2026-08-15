@@ -10,14 +10,16 @@
     "accessUrl": "https://fdc.nal.usda.gov/download-datasets/"
   },
   "release": {
-    "releaseKey": "fdc-REPLACE-WITH-PINNED-RELEASE",
-    "publishedOn": null,
+    "releaseKey": "FoodData_Central_csv_2026-04-30",
+    "publishedOn": "2026-04-30",
     "acquiredAt": null,
     "upstreamSchemaVersion": null
   },
   "artifact": {
-    "downloadUrl": null,
-    "permittedResolvedUrls": [],
+    "downloadUrl": "https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_csv_2026-04-30.zip",
+    "permittedResolvedUrls": [
+      "https://fdc.nal.usda.gov/fdc-datasets/FoodData_Central_csv_2026-04-30.zip"
+    ],
     "objectUri": null,
     "mediaType": "application/zip",
     "sha256": null,
@@ -27,9 +29,9 @@
       "sha256": null,
       "sha256EvidenceUrl": null,
       "exactByteSize": null,
-      "reportedSize": null,
+      "reportedSize": "460M zipped; 3.1G unzipped",
       "metadataUrl": "https://fdc.nal.usda.gov/download-datasets/",
-      "notes": "FoodData Central does not currently publish a SHA-256 beside its downloads. Record two independent acquisition observations before this template can become import-ready."
+      "notes": "The release table publishes approximate display sizes but no cryptographic checksum. A 2026-08-15 HEAD observation returned 481510693 bytes; that transport observation is not an acquired-artifact size or publisher checksum."
     },
     "acquisitionObservations": []
   },
@@ -43,25 +45,26 @@
     "licenseAttributionRequired": false,
     "productAttributionRequired": true,
     "attributionFixture": "U.S. Department of Agriculture, Agricultural Research Service. FoodData Central. https://fdc.nal.usda.gov/ (source release: {{releaseKey}}).",
-    "databaseRightsNotes": "USDA states FoodData Central data are public domain/CC0 and requests citation. Reconfirm the API guide and exact artifact terms at acquisition.",
+    "databaseRightsNotes": "USDA states FoodData Central data are public domain and published under CC0, while requesting that products identify FoodData Central as the source.",
     "review": {
-      "status": "template",
+      "status": "pending",
       "reviewedAt": null,
       "reviewedBy": null,
       "evidenceUrls": [
         "https://fdc.nal.usda.gov/api-guide/",
         "https://fdc.nal.usda.gov/data-documentation/",
         "https://fdc.nal.usda.gov/download-datasets/",
-        "https://fdc.nal.usda.gov/GBFPD_Documentation"
+        "https://fdc.nal.usda.gov/log/",
+        "https://fdc.nal.usda.gov/docs/Download_Field_Descriptions_Oct2020.pdf"
       ],
-      "notes": "Confirm data types and any third-party fields present in the selected artifact. This template is not approval."
+      "notes": "Official-source research is complete; named product-rights approval and acquisition verification are still required. Branded records must retain their original market and provider provenance."
     }
   },
   "ingestion": {
     "parserPackage": "@nutrition-tracker/ingestion",
     "parserVersion": null,
     "parserBuildSha256": null,
-    "dataTypes": ["Foundation", "FNDDS", "SR Legacy", "Branded"],
+    "dataTypes": ["Foundation", "Experimental", "FNDDS", "SR Legacy", "Branded"],
     "languages": ["en"],
     "markets": ["US", "NZ"],
     "sourceIdentityFields": ["fdcId", "dataType"],
@@ -69,6 +72,7 @@
   },
   "validation": {
     "rules": [
+      "archive paths are safe and the extracted byte budget is bounded",
       "source IDs are unique within data type",
       "every nutrient ID maps explicitly or is quarantined",
       "original and canonical units and bases are retained",
@@ -77,6 +81,17 @@
       "record counts and source-type mix are diffed against the prior release"
     ],
     "expectedFiles": [],
-    "releaseSpecificExpectations": {}
+    "releaseSpecificExpectations": {
+      "publisherReleaseLabel": "04/2026",
+      "officialPublishedOn": "2026-04-30",
+      "fdcReleaseVersion": "15.0",
+      "publisherReportedCompressedSize": "460M",
+      "publisherReportedUncompressedSize": "3.1G",
+      "observedHeadContentLengthOn2026_08_15": 481510693,
+      "foundationReleaseLabel": "04/2026",
+      "brandedReleaseLabel": "04/2026",
+      "fnddsReleaseLabel": "10/2024",
+      "srLegacyReleaseLabel": "04/2018"
+    }
   }
 }

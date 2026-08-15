@@ -34,7 +34,7 @@ jobs:
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Check formatting, boundaries, types, and tests
+      - name: Check manifests, formatting, boundaries, types, and tests
         run: pnpm check
 
       - name: Build all applications and packages
@@ -118,3 +118,8 @@ jobs:
         run: |
           pnpm --filter @nutrition-tracker/db db:migrate
           pnpm --filter @nutrition-tracker/db db:migrate
+
+      - name: Exercise catalogue promotion and rollback
+        env:
+          TEST_DATABASE_URL: postgresql://nutrition_local:nutrition_local_only@127.0.0.1:5432/nutrition_tracker
+        run: pnpm --filter @nutrition-tracker/db test

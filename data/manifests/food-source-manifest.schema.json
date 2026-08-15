@@ -12,12 +12,11 @@
     "artifact",
     "rights",
     "ingestion",
-    "validation",
-    "promotion"
+    "validation"
   ],
   "properties": {
     "$schema": { "type": "string" },
-    "manifestVersion": { "const": 1 },
+    "manifestVersion": { "const": 3 },
     "templateOnly": { "type": "boolean" },
     "source": {
       "type": "object",
@@ -45,13 +44,112 @@
     "artifact": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["downloadUrl", "objectUri", "mediaType", "sha256", "byteSize"],
+      "required": [
+        "downloadUrl",
+        "permittedResolvedUrls",
+        "objectUri",
+        "mediaType",
+        "sha256",
+        "byteSize",
+        "publisherIntegrity",
+        "acquisitionObservations"
+      ],
       "properties": {
         "downloadUrl": { "type": ["string", "null"], "format": "uri" },
+        "permittedResolvedUrls": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "format": "uri", "pattern": "^https://" }
+        },
         "objectUri": { "type": ["string", "null"], "pattern": "^s3://" },
         "mediaType": { "type": "string", "minLength": 1 },
         "sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
-        "byteSize": { "type": ["integer", "null"], "minimum": 1 }
+        "byteSize": { "type": ["integer", "null"], "minimum": 1 },
+        "publisherIntegrity": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "publisherProvidesSha256",
+            "sha256",
+            "sha256EvidenceUrl",
+            "exactByteSize",
+            "reportedSize",
+            "metadataUrl",
+            "notes"
+          ],
+          "properties": {
+            "publisherProvidesSha256": { "type": "boolean" },
+            "sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+            "sha256EvidenceUrl": { "type": ["string", "null"], "format": "uri" },
+            "exactByteSize": { "type": ["integer", "null"], "minimum": 1 },
+            "reportedSize": { "type": ["string", "null"] },
+            "metadataUrl": { "type": "string", "format": "uri" },
+            "notes": { "type": "string" }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": { "publisherProvidesSha256": { "const": true } },
+                "required": ["publisherProvidesSha256"]
+              },
+              "then": {
+                "properties": {
+                  "sha256": { "type": "string" },
+                  "sha256EvidenceUrl": { "type": "string" }
+                }
+              },
+              "else": {
+                "properties": {
+                  "sha256": { "type": "null" },
+                  "sha256EvidenceUrl": { "type": "null" }
+                }
+              }
+            }
+          ]
+        },
+        "acquisitionObservations": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "acquisitionId",
+              "observedAt",
+              "operatorPrincipalId",
+              "tool",
+              "transport",
+              "freshDownload",
+              "downloadUrl",
+              "resolvedUrl",
+              "etag",
+              "lastModified",
+              "sha256",
+              "byteSize"
+            ],
+            "properties": {
+              "acquisitionId": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+              },
+              "observedAt": { "type": "string", "format": "date-time" },
+              "operatorPrincipalId": {
+                "type": "string",
+                "minLength": 3,
+                "pattern": "^(?!\\s)(?:.*\\S)?$"
+              },
+              "tool": { "type": "string", "minLength": 1, "pattern": "^(?!\\s)(?:.*\\S)?$" },
+              "transport": { "const": "https" },
+              "freshDownload": { "const": true },
+              "downloadUrl": { "type": "string", "format": "uri", "pattern": "^https://" },
+              "resolvedUrl": { "type": "string", "format": "uri", "pattern": "^https://" },
+              "etag": { "type": ["string", "null"] },
+              "lastModified": { "type": ["string", "null"] },
+              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "byteSize": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
       }
     },
     "rights": {
@@ -105,6 +203,7 @@
       "required": [
         "parserPackage",
         "parserVersion",
+        "parserBuildSha256",
         "dataTypes",
         "languages",
         "markets",
@@ -114,6 +213,7 @@
       "properties": {
         "parserPackage": { "type": "string", "minLength": 1 },
         "parserVersion": { "type": ["string", "null"] },
+        "parserBuildSha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
         "dataTypes": {
           "type": "array",
           "minItems": 1,
@@ -158,72 +258,70 @@
         },
         "releaseSpecificExpectations": {
           "type": "object",
-          "additionalProperties": { "type": ["boolean", "number", "string"] }
+          "additionalProperties": {
+            "anyOf": [{ "type": "boolean" }, { "type": "number" }, { "type": "string" }]
+          }
         }
-      }
-    },
-    "promotion": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["status", "approvedAt", "approvedBy"],
-      "properties": {
-        "status": { "enum": ["approved", "blocked", "staged", "template"] },
-        "approvedAt": { "type": ["string", "null"], "format": "date-time" },
-        "approvedBy": { "type": ["string", "null"] }
       }
     }
   },
   "allOf": [
     {
       "if": {
+        "type": "object",
         "properties": { "templateOnly": { "const": false } },
         "required": ["templateOnly"]
       },
       "then": {
+        "type": "object",
         "properties": {
           "release": {
+            "type": "object",
             "properties": {
               "acquiredAt": { "type": "string" },
               "upstreamSchemaVersion": { "type": "string", "minLength": 1 }
             }
           },
           "artifact": {
+            "type": "object",
             "properties": {
-              "downloadUrl": { "type": "string" },
+              "downloadUrl": { "type": "string", "pattern": "^https://" },
               "objectUri": { "type": "string" },
               "sha256": { "type": "string" },
-              "byteSize": { "type": "integer" }
+              "byteSize": { "type": "integer" },
+              "acquisitionObservations": { "type": "array", "minItems": 2 }
             }
           },
           "ingestion": {
-            "properties": { "parserVersion": { "type": "string", "minLength": 1 } }
-          }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "promotion": {
-            "properties": { "status": { "const": "approved" } },
-            "required": ["status"]
-          }
-        }
-      },
-      "then": {
-        "properties": {
-          "templateOnly": { "const": false },
-          "rights": {
+            "type": "object",
             "properties": {
-              "review": {
-                "properties": { "status": { "enum": ["approved", "restricted"] } }
-              }
+              "parserVersion": { "type": "string", "minLength": 1 },
+              "parserBuildSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
             }
           },
-          "promotion": {
+          "validation": {
+            "type": "object",
             "properties": {
-              "approvedAt": { "type": "string" },
-              "approvedBy": { "type": "string", "minLength": 1 }
+              "expectedFiles": { "type": "array", "minItems": 1 },
+              "releaseSpecificExpectations": { "type": "object", "minProperties": 1 }
+            }
+          },
+          "rights": {
+            "type": "object",
+            "properties": {
+              "commercialUseAllowed": { "const": true },
+              "review": {
+                "type": "object",
+                "properties": {
+                  "status": { "enum": ["approved", "restricted"] },
+                  "reviewedAt": { "type": "string" },
+                  "reviewedBy": {
+                    "type": "string",
+                    "minLength": 3,
+                    "pattern": "^(?!\\s)(?:.*\\S)?$"
+                  }
+                }
+              }
             }
           }
         }
