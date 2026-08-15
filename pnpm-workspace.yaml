@@ -1,0 +1,21 @@
+packages:
+  - apps/*
+  - packages/*
+
+autoInstallPeers: true
+engineStrict: true
+saveExact: true
+strictPeerDependencies: true
+
+overrides:
+  react: 19.2.3
+  react-dom: 19.2.3
+
+supportedArchitectures:
+  os: [current, darwin, linux]
+  cpu: [current, arm64, x64]
+  libc: [current, glibc, musl]
+
+allowBuilds:
+  esbuild: true
+  sharp: true

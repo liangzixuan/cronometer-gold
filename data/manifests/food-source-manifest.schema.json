@@ -1,0 +1,233 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nutrition.local/schemas/food-source-manifest.schema.json",
+  "title": "Nutrition Tracker food-source release manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "manifestVersion",
+    "templateOnly",
+    "source",
+    "release",
+    "artifact",
+    "rights",
+    "ingestion",
+    "validation",
+    "promotion"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "manifestVersion": { "const": 1 },
+    "templateOnly": { "type": "boolean" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "displayName", "kind", "homepageUrl", "accessUrl"],
+      "properties": {
+        "code": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{1,31}$" },
+        "displayName": { "type": "string", "minLength": 1 },
+        "kind": { "enum": ["commercial", "government", "open", "partner"] },
+        "homepageUrl": { "type": "string", "format": "uri" },
+        "accessUrl": { "type": "string", "format": "uri" }
+      }
+    },
+    "release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["releaseKey", "publishedOn", "acquiredAt", "upstreamSchemaVersion"],
+      "properties": {
+        "releaseKey": { "type": "string", "minLength": 1 },
+        "publishedOn": { "type": ["string", "null"], "format": "date" },
+        "acquiredAt": { "type": ["string", "null"], "format": "date-time" },
+        "upstreamSchemaVersion": { "type": ["string", "null"] }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["downloadUrl", "objectUri", "mediaType", "sha256", "byteSize"],
+      "properties": {
+        "downloadUrl": { "type": ["string", "null"], "format": "uri" },
+        "objectUri": { "type": ["string", "null"], "pattern": "^s3://" },
+        "mediaType": { "type": "string", "minLength": 1 },
+        "sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" },
+        "byteSize": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+    "rights": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "licenseExpression",
+        "licenseName",
+        "licenseUrl",
+        "termsUrl",
+        "commercialUseAllowed",
+        "redistributionAllowed",
+        "licenseAttributionRequired",
+        "productAttributionRequired",
+        "attributionFixture",
+        "databaseRightsNotes",
+        "review"
+      ],
+      "properties": {
+        "licenseExpression": { "type": "string", "minLength": 1 },
+        "licenseName": { "type": "string", "minLength": 1 },
+        "licenseUrl": { "type": "string", "format": "uri" },
+        "termsUrl": { "type": "string", "format": "uri" },
+        "commercialUseAllowed": { "type": ["boolean", "null"] },
+        "redistributionAllowed": { "type": ["boolean", "null"] },
+        "licenseAttributionRequired": { "type": "boolean" },
+        "productAttributionRequired": { "type": "boolean" },
+        "attributionFixture": { "type": "string", "minLength": 1 },
+        "databaseRightsNotes": { "type": "string" },
+        "review": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "reviewedAt", "reviewedBy", "evidenceUrls", "notes"],
+          "properties": {
+            "status": { "enum": ["approved", "blocked", "pending", "restricted", "template"] },
+            "reviewedAt": { "type": ["string", "null"], "format": "date-time" },
+            "reviewedBy": { "type": ["string", "null"] },
+            "evidenceUrls": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "format": "uri" }
+            },
+            "notes": { "type": "string" }
+          }
+        }
+      }
+    },
+    "ingestion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "parserPackage",
+        "parserVersion",
+        "dataTypes",
+        "languages",
+        "markets",
+        "sourceIdentityFields",
+        "missingValuePolicy"
+      ],
+      "properties": {
+        "parserPackage": { "type": "string", "minLength": 1 },
+        "parserVersion": { "type": ["string", "null"] },
+        "dataTypes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "languages": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 2 }
+        },
+        "markets": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^[A-Z0-9]{2,3}$" }
+        },
+        "sourceIdentityFields": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "missingValuePolicy": { "const": "absent-is-unknown-never-zero" }
+      }
+    },
+    "validation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rules", "expectedFiles", "releaseSpecificExpectations"],
+      "properties": {
+        "rules": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "expectedFiles": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "releaseSpecificExpectations": {
+          "type": "object",
+          "additionalProperties": { "type": ["boolean", "number", "string"] }
+        }
+      }
+    },
+    "promotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "approvedAt", "approvedBy"],
+      "properties": {
+        "status": { "enum": ["approved", "blocked", "staged", "template"] },
+        "approvedAt": { "type": ["string", "null"], "format": "date-time" },
+        "approvedBy": { "type": ["string", "null"] }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "templateOnly": { "const": false } },
+        "required": ["templateOnly"]
+      },
+      "then": {
+        "properties": {
+          "release": {
+            "properties": {
+              "acquiredAt": { "type": "string" },
+              "upstreamSchemaVersion": { "type": "string", "minLength": 1 }
+            }
+          },
+          "artifact": {
+            "properties": {
+              "downloadUrl": { "type": "string" },
+              "objectUri": { "type": "string" },
+              "sha256": { "type": "string" },
+              "byteSize": { "type": "integer" }
+            }
+          },
+          "ingestion": {
+            "properties": { "parserVersion": { "type": "string", "minLength": 1 } }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "promotion": {
+            "properties": { "status": { "const": "approved" } },
+            "required": ["status"]
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "templateOnly": { "const": false },
+          "rights": {
+            "properties": {
+              "review": {
+                "properties": { "status": { "enum": ["approved", "restricted"] } }
+              }
+            }
+          },
+          "promotion": {
+            "properties": {
+              "approvedAt": { "type": "string" },
+              "approvedBy": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

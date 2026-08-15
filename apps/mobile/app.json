@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "Nutrition Tracker",
+    "slug": "nutrition-tracker",
+    "version": "0.1.0",
+    "platforms": ["ios", "android"],
+    "orientation": "default",
+    "newArchEnabled": true,
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.nutritionledger.app",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": false
+        }
+      }
+    },
+    "android": {
+      "allowBackup": false,
+      "blockedPermissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.SYSTEM_ALERT_WINDOW",
+        "android.permission.VIBRATE",
+        "android.permission.WRITE_EXTERNAL_STORAGE"
+      ],
+      "package": "com.nutritionledger.app"
+    },
+    "extra": {
+      "productBoundary": "consumer-wellness"
+    }
+  }
+}

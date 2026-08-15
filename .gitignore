@@ -1,0 +1,36 @@
+# dependencies and package-manager state
+node_modules/
+.pnpm-store/
+
+# generated application output
+.next/
+.expo/
+dist/
+coverage/
+web-build/
+apps/web/next-env.d.ts
+*.tsbuildinfo
+
+# environment and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# local service data
+.local-data/
+data/raw/
+data/staged/
+data/exports/
+
+# editors and operating systems
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# logs and caches
+*.log
+.turbo/
+tmp/

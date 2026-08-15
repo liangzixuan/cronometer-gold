@@ -1,0 +1,37 @@
+{
+  "name": "nutrition-tracker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Provenance-first nutrition and health tracking platform",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "audit:prod": "node scripts/check-production-audit.mjs",
+    "build": "turbo run build",
+    "check": "pnpm format:check && pnpm lint && pnpm mobile:check && pnpm typecheck && pnpm test",
+    "db:migrate": "dotenv -e .env -- pnpm --filter @nutrition-tracker/db db:migrate",
+    "dev": "dotenv -e .env -- turbo run dev",
+    "format": "biome check --write .",
+    "format:check": "biome check .",
+    "licenses:check": "node scripts/check-licenses.mjs",
+    "lint": "node --test scripts/*.test.mjs && node scripts/check-boundaries.mjs",
+    "infra:config": "docker compose -f infra/docker/compose.yml config",
+    "infra:down": "docker compose -f infra/docker/compose.yml down",
+    "infra:up": "docker compose -f infra/docker/compose.yml up -d --wait",
+    "mobile:check": "pnpm --filter @nutrition-tracker/mobile dependencies:check && pnpm --filter @nutrition-tracker/mobile config:check",
+    "test": "turbo run test",
+    "typecheck": "turbo run typecheck",
+    "verify": "pnpm check && pnpm build && pnpm audit:prod && pnpm licenses:check"
+  },
+  "devDependencies": {
+    "@babel/parser": "7.29.8",
+    "@biomejs/biome": "2.5.8",
+    "dotenv-cli": "11.0.0",
+    "turbo": "2.10.10",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  }
+}

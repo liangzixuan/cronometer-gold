@@ -1,0 +1,56 @@
+{
+  "reviewedAt": "2026-08-15",
+  "allowedLicenseGroups": [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+    "CC0-1.0",
+    "BlueOak-1.0.0",
+    "Python-2.0",
+    "Unlicense",
+    "(MIT OR Apache-2.0)",
+    "(MIT OR CC0-1.0)",
+    "(BSD-3-Clause OR GPL-2.0)"
+  ],
+  "reviewedExceptions": [
+    {
+      "packagePattern": "^@img/sharp-libvips-(?:darwin-(?:arm64|x64)|linux-(?:arm|arm64|ppc64|riscv64|s390x|x64)|linuxmusl-(?:arm64|x64)|win32-(?:arm64|ia32|x64))$",
+      "license": "LGPL-3.0-or-later",
+      "versions": ["1.3.2"],
+      "noticeToken": "sharp/libvips",
+      "owner": "engineering",
+      "expires": "2026-11-15",
+      "reason": "Unmodified platform binary used by sharp. Distribution notices and relinking/source-offer obligations require release review."
+    },
+    {
+      "packagePattern": "^lightningcss(?:-(?:android|darwin|freebsd|linux|win32)-[a-z0-9-]+)?$",
+      "license": "MPL-2.0",
+      "versions": ["1.33.0"],
+      "noticeToken": "lightningcss",
+      "owner": "engineering",
+      "expires": "2026-11-15",
+      "reason": "Unmodified build/runtime dependency. Preserve notices and review any source modification at release."
+    },
+    {
+      "packageName": "caniuse-lite",
+      "license": "CC-BY-4.0",
+      "versions": ["1.0.30001809"],
+      "noticeToken": "caniuse-lite",
+      "owner": "engineering",
+      "expires": "2026-11-15",
+      "reason": "Compatibility dataset. Attribution must remain in the generated third-party notice bundle."
+    }
+  ],
+  "alwaysDeniedIdentifiers": [
+    "AGPL",
+    "BUSL",
+    "Commons-Clause",
+    "Elastic-License",
+    "NC",
+    "NonCommercial",
+    "SSPL"
+  ]
+}

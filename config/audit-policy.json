@@ -1,0 +1,27 @@
+{
+  "minimumSeverity": "high",
+  "reviewedExceptions": [
+    {
+      "advisoryId": "GHSA-w3rx-r6r6-pgpr",
+      "expectedSeverity": "high",
+      "moduleName": "image-size",
+      "versions": ["1.2.1"],
+      "requiredPathPrefix": "apps__mobile>",
+      "requiredPathSuffix": ">metro>image-size",
+      "owner": "engineering",
+      "expires": "2026-09-15",
+      "reason": "Metro processes reviewed repository assets during builds; user uploads never reach this parser."
+    },
+    {
+      "advisoryId": "GHSA-5p2g-fcmc-qvqq",
+      "expectedSeverity": "high",
+      "moduleName": "image-size",
+      "versions": ["1.2.1"],
+      "requiredPathPrefix": "apps__mobile>",
+      "requiredPathSuffix": ">metro>image-size",
+      "owner": "engineering",
+      "expires": "2026-09-15",
+      "reason": "Metro processes reviewed repository assets during builds; user uploads never reach this parser."
+    }
+  ]
+}
