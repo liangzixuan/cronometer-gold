@@ -10,6 +10,7 @@ const environmentSchema = z.object({
 });
 
 const dependencyEnvironmentSchema = z.object({
+  DATABASE_SSL_MODE: z.enum(["disable", "require", "verify-full"]).default("disable"),
   DATABASE_URL: z.string().trim().min(1),
   MEILI_SEARCH_KEY: z.string().trim().min(16).optional(),
   MEILI_URL: z.url().default("http://127.0.0.1:7700"),
@@ -100,6 +101,12 @@ export function loadApiDependencyConfig(
     issues.push({ field: "SEARCH_CURSOR_SECRET", message: "Required in production" });
   }
   if (result.data.NODE_ENV === "production") {
+    if (result.data.DATABASE_SSL_MODE !== "verify-full") {
+      issues.push({
+        field: "DATABASE_SSL_MODE",
+        message: "verify-full is required in production",
+      });
+    }
     if (!result.data.MEILI_SEARCH_KEY) {
       issues.push({ field: "MEILI_SEARCH_KEY", message: "Required in production" });
     }

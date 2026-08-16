@@ -9,6 +9,7 @@ import {
   type NutrientId,
   normalizeNutrientAggregate,
 } from "./nutrients.js";
+import { canonicalRfc3339Instant, deriveDiaryLocalCoordinates } from "./time.js";
 
 export type DiaryEntrySource =
   | {
@@ -94,9 +95,17 @@ export function createDiaryNutritionSnapshot(
   }
   validateSource(input.source);
   validateLocalDate(input.diaryDate);
-  validateInstant("occurredAt", input.occurredAt);
-  validateInstant("capturedAt", input.capturedAt);
-  validateRequiredText("timeZone", input.timeZone);
+  const localCoordinates = deriveDiaryLocalCoordinates(input.occurredAt, input.timeZone);
+  domainInvariant(
+    input.diaryDate === localCoordinates.localDate,
+    "INVALID_DATE",
+    "diaryDate must be derived from occurredAt and timeZone",
+    {
+      diaryDate: input.diaryDate,
+      derivedDiaryDate: localCoordinates.localDate,
+    },
+  );
+  const capturedAt = canonicalRfc3339Instant(input.capturedAt, "capturedAt");
   validateRequiredText("meal", input.meal);
   validateRequiredText("enteredUnit", input.portion.enteredUnit);
   validateRequiredText("nutritionEngineVersion", input.nutritionEngineVersion);
@@ -129,8 +138,8 @@ export function createDiaryNutritionSnapshot(
     supersedesRevisionId: input.supersedesRevisionId,
     source: { ...input.source },
     diaryDate: input.diaryDate,
-    occurredAt: input.occurredAt,
-    timeZone: input.timeZone,
+    occurredAt: localCoordinates.occurredAt,
+    timeZone: localCoordinates.timeZone,
     meal: input.meal,
     portion: {
       enteredAmount: canonicalPositiveDecimal(input.portion.enteredAmount, "entered portion"),
@@ -140,7 +149,7 @@ export function createDiaryNutritionSnapshot(
     },
     nutrients,
     nutritionEngineVersion: input.nutritionEngineVersion,
-    capturedAt: input.capturedAt,
+    capturedAt,
     calculationWarnings: [...(input.calculationWarnings ?? [])],
   });
 }
@@ -226,14 +235,5 @@ function validateLocalDate(value: string): void {
     "INVALID_DATE",
     "diaryDate is not a valid calendar date",
     { value },
-  );
-}
-
-function validateInstant(field: string, value: string): void {
-  domainInvariant(
-    /^\d{4}-\d{2}-\d{2}T.+(?:Z|[+-]\d{2}:\d{2})$/.test(value) && Number.isFinite(Date.parse(value)),
-    "INVALID_DATE",
-    `${field} must be an ISO-8601 instant with an offset or Z`,
-    { field, value },
   );
 }

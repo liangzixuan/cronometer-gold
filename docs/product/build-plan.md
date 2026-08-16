@@ -20,9 +20,10 @@ as measured zeros.
 3. **Food search (complete):** disposable Meilisearch projection,
    generic/branded intent, autocomplete, typo tolerance, reviewed synonyms,
    bounded recent/favorite reranking, and authoritative exact barcode lookup.
-4. **Diary vertical slice (next):** account/profile, local-day diary, serving selection,
-   add/edit/delete, meal groups, daily totals, and offline-safe idempotency.
-5. **Recipes and goals:** yield-aware recipe calculation, versioned targets,
+4. **Diary vertical slice (complete):** account/profile, local-day diary, serving
+   selection, add/edit/delete, meal groups, exact daily totals, and retry-safe
+   idempotency.
+5. **Recipes and goals (next):** yield-aware recipe calculation, versioned targets,
    energy equations, nutrient coverage, and explainable recommendations.
 6. **Retention features:** trends, exports, repeat logging, reminders, custom
    foods/biometrics, and platform health integrations.
@@ -68,10 +69,33 @@ user and health data and carries reviewed attribution through API, web, and mobi
 surfaces. Search relevance and the PostgreSQL-to-Meilisearch publication path are
 covered by real-service integration tests.
 
+## Diary boundary
+
+The write-capable private loop now uses normalized password accounts, bounded
+scrypt work, revocable opaque sessions, server-side ownership checks, strong
+entry revision preconditions, and UUID/digest-bound diary idempotency. Web bearer
+tokens remain in a host-only Secure/HttpOnly/SameSite cookie behind origin checks
+and a nonce CSP; native tokens use platform secure storage. Every food entry pins
+its food version, source release, reviewed attribution, effective IANA time zone,
+serving resolution, nutrition-engine version, and immutable reason-counted
+nutrient vector. Day reads are coherent snapshots, cross-day moves advance both
+day revisions, and trace, quantified zero, partial coverage, and unknown remain
+distinct through the clients.
+
+The checked-in food-release candidates are still deliberately non-promotable,
+so diary integration evidence uses a synthetic promoted catalogue fixture rather
+than claiming a live USDA or CNF release. Password recovery, email verification,
+durable cross-restart offline queues, account export/deletion, and signed-device
+preview testing remain controlled-beta gates rather than hidden claims of this
+milestone. Until diary entries are paginated, a local day is capped at 50 food
+entries so the full immutable nutrient vectors remain within a reviewed response
+and mobile-memory budget.
+
 ## Next acceptance target
 
-The diary vertical slice is complete when an authenticated user can add, edit,
-move, and delete serving-resolved entries in their profile time zone; retries are
-idempotent; daily exact-decimal nutrient totals preserve unknown/trace semantics;
-and every entry retains the immutable food-version and nutrient snapshot that was
-logged.
+Recipes and goals are complete when an authenticated user can build a versioned,
+yield-aware recipe from immutable food/recipe revisions, log an exact serving,
+and compare the resulting calories, macros, and micronutrients with versioned
+daily targets. Recipe cycles, unit ambiguity, retention/yield assumptions, and
+unknown nutrient coverage must fail visibly; energy equations and target sources
+must remain explainable and independently testable.

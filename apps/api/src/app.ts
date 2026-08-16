@@ -8,9 +8,13 @@ import Fastify, {
 } from "fastify";
 
 import { type AppConfig, loadConfig } from "./config.js";
+import { registerAuthContext } from "./http/authentication.js";
 import { registerErrorHandling } from "./http/error-handler.js";
 import { createLoggerOptions } from "./logging.js";
+import type { AuthService } from "./modules/auth/auth-service.js";
+import type { DiaryService } from "./modules/diary/diary.routes.js";
 import type { FoodSearchService } from "./modules/foods/food.routes.js";
+import type { ProfileService } from "./modules/profile/profile.routes.js";
 import { type ReadinessCheck, systemRoutes } from "./modules/system/system.routes.js";
 import { v1Routes } from "./modules/v1.routes.js";
 
@@ -19,6 +23,9 @@ export interface BuildAppOptions {
   logger?: FastifyServerOptions["logger"];
   readinessCheck?: ReadinessCheck;
   foodSearchService?: FoodSearchService;
+  authService?: AuthService;
+  profileService?: ProfileService;
+  diaryService?: DiaryService;
 }
 
 const defaultReadinessCheck: ReadinessCheck = (_signal) => true;
@@ -27,6 +34,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   const config = options.config ?? loadConfig();
   const requestStartedAt = new WeakMap<FastifyRequest, bigint>();
   const app = Fastify({
+    ajv: { customOptions: { removeAdditional: false } },
     genReqId: () => randomUUID(),
     logController: new LogController({ disableRequestLogging: true }),
     logger: options.logger ?? createLoggerOptions(config),
@@ -66,6 +74,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     );
   });
 
+  registerAuthContext(app);
   registerErrorHandling(app);
   void app.register(systemRoutes, {
     readinessCheck: options.readinessCheck ?? defaultReadinessCheck,
@@ -74,6 +83,9 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   void app.register(v1Routes, {
     prefix: "/v1",
     ...(options.foodSearchService ? { foodSearchService: options.foodSearchService } : {}),
+    ...(options.authService ? { authService: options.authService } : {}),
+    ...(options.profileService ? { profileService: options.profileService } : {}),
+    ...(options.diaryService ? { diaryService: options.diaryService } : {}),
   });
 
   return app;

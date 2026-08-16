@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,6 +10,23 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import {
+  apiUrl,
+  authenticatedHeaders,
+  jsonBody as privateJsonBody,
+  responseError,
+} from "../api/private-api";
+import { newOperationId } from "../auth/operation-id";
+import {
+  isLocalDate,
+  localDateInTimeZone,
+  type MealSlot,
+  mealLabel,
+  mealSlots,
+  parseDiaryMutation,
+  prepareQuickAddOperation,
+  type QuickAddOperation,
+} from "../diary/diary";
 import { palette } from "../theme";
 import {
   buildAutocompleteUrl,
@@ -30,12 +46,7 @@ import {
   parseBarcodeResult,
   parseSearchPage,
   parseSuggestions,
-  resolveMobileApiBase,
 } from "./food-search";
-
-declare const process: {
-  readonly env: { readonly EXPO_PUBLIC_API_URL?: string };
-};
 
 type LoadState = "idle" | "loading" | "ready" | "error";
 type BarcodeState = LoadState | "not-found";
@@ -70,16 +81,44 @@ function foodAccessibilityLabel(food: FoodSearchHit): string {
   return `${food.name}. ${servingText(food)}. Source: ${sourceText(food.source)}. License: ${food.source.licenseExpression}.`;
 }
 
-export function FoodSearchScreen() {
-  const apiBase = useMemo(() => {
-    try {
-      const platform =
-        Platform.OS === "android" ? "android" : Platform.OS === "web" ? "web" : "ios";
-      return resolveMobileApiBase(process.env.EXPO_PUBLIC_API_URL, platform);
-    } catch {
-      return null;
-    }
-  }, []);
+interface FoodSearchScreenProps {
+  readonly apiBase: URL;
+  readonly accessToken: string;
+  readonly profileTimeZone: string;
+  readonly diaryDate: string;
+  readonly mealSlot: MealSlot;
+  readonly onAdded: (date: string) => void;
+  readonly onUnauthorized: () => Promise<void>;
+}
+
+function hasGramServing(food: FoodSearchHit): boolean {
+  return (
+    food.defaultServing?.gramWeight !== null &&
+    food.defaultServing?.gramWeight !== undefined &&
+    /^(?:0*[1-9][0-9]*)(?:\.[0-9]+)?$|^0*\.0*[1-9][0-9]*$/u.test(food.defaultServing.gramWeight)
+  );
+}
+
+export function FoodSearchScreen({
+  apiBase,
+  accessToken,
+  profileTimeZone,
+  diaryDate: initialDate,
+  mealSlot: initialMeal,
+  onAdded,
+  onUnauthorized,
+}: FoodSearchScreenProps) {
+  const [diaryDate, setDiaryDate] = useState(() =>
+    isLocalDate(initialDate) ? initialDate : localDateInTimeZone(new Date(), profileTimeZone),
+  );
+  const [mealSlot, setMealSlot] = useState<MealSlot>(initialMeal);
+  const [addingVersion, setAddingVersion] = useState<string | null>(null);
+  const [addState, setAddState] = useState<LoadState>("idle");
+  const [addMessage, setAddMessage] = useState(
+    "Choose a local day and meal, then add one reviewed gram-resolved serving.",
+  );
+  const pendingAdds = useRef(new Map<string, QuickAddOperation>());
+  const activeAddOperation = useRef<string | null>(null);
   const [query, setQuery] = useState("");
   const [intent, setIntent] = useState<FoodSearchIntent>("all");
   const [suggestions, setSuggestions] = useState<readonly FoodSuggestion[]>([]);
@@ -301,6 +340,75 @@ export function FoodSearchScreen() {
     }
   }
 
+  async function addFood(food: FoodSearchHit) {
+    if (activeAddOperation.current !== null) {
+      setAddState("error");
+      setAddMessage("Wait for the current diary addition to finish before adding another food.");
+      return;
+    }
+    if (!food.defaultServing || !hasGramServing(food)) {
+      setAddState("error");
+      setAddMessage("This food needs a gram-resolved serving before it can be added.");
+      return;
+    }
+    let operation: QuickAddOperation;
+    try {
+      operation = prepareQuickAddOperation(
+        pendingAdds.current,
+        {
+          foodVersionId: food.foodVersionId,
+          servingId: food.defaultServing.servingId,
+          localDate: diaryDate,
+          mealSlot,
+          timeZone: profileTimeZone,
+        },
+        new Date(),
+        newOperationId,
+      );
+    } catch {
+      setAddState("error");
+      setAddMessage("That local date is not valid in your diary time zone.");
+      return;
+    }
+    pendingAdds.current.set(operation.intentKey, operation);
+    activeAddOperation.current = operation.operationId;
+    setAddingVersion(food.foodVersionId);
+    setAddState("loading");
+    setAddMessage(`Adding ${food.name}…`);
+    try {
+      const response = await fetch(apiUrl(apiBase, "/v1/diary/entries").toString(), {
+        method: "POST",
+        headers: authenticatedHeaders(accessToken, {
+          "content-type": "application/json",
+          "idempotency-key": operation.operationId,
+        }),
+        body: JSON.stringify(operation.body),
+      });
+      if (response.status === 401) return onUnauthorized();
+      const responseBody = await privateJsonBody(response);
+      if (!response.ok)
+        throw new Error(responseError(responseBody, "The food could not be added."));
+      const mutation = parseDiaryMutation(responseBody);
+      const loggedDate = mutation.affectedDays[0]?.localDate ?? diaryDate;
+      if (pendingAdds.current.get(operation.intentKey) === operation) {
+        pendingAdds.current.delete(operation.intentKey);
+      }
+      setAddState("ready");
+      setAddMessage(`${food.name} was added to ${mealLabel(mealSlot)} on ${loggedDate}.`);
+      onAdded(loggedDate);
+    } catch (caught) {
+      setAddState("error");
+      setAddMessage(
+        `${caught instanceof Error ? caught.message : "The food could not be added."} Choose Add again to retry safely.`,
+      );
+    } finally {
+      if (activeAddOperation.current === operation.operationId) {
+        activeAddOperation.current = null;
+      }
+      setAddingVersion(null);
+    }
+  }
+
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
       <ScrollView
@@ -315,6 +423,41 @@ export function FoodSearchScreen() {
         <Text style={styles.intro}>
           Search promoted generic and branded records. Missing portions stay visibly missing.
         </Text>
+
+        <View style={styles.destination}>
+          <Text style={styles.fieldLabel}>Diary destination</Text>
+          <TextInput
+            accessibilityLabel="Diary local date"
+            maxLength={10}
+            onChangeText={(value) => {
+              setDiaryDate(value);
+              if (!isLocalDate(value)) setAddMessage("Date must use YYYY-MM-DD.");
+            }}
+            style={styles.input}
+            value={diaryDate}
+          />
+          <View accessibilityRole="radiogroup" style={styles.intentRow}>
+            {mealSlots.map((meal) => (
+              <Pressable
+                accessibilityRole="radio"
+                accessibilityState={{ checked: mealSlot === meal }}
+                key={meal}
+                onPress={() => setMealSlot(meal)}
+                style={[styles.intentButton, mealSlot === meal && styles.intentButtonSelected]}
+              >
+                <Text style={[styles.intentLabel, mealSlot === meal && styles.intentLabelSelected]}>
+                  {mealLabel(meal)}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+          <Text
+            accessibilityLiveRegion="polite"
+            style={[styles.statusCopy, addState === "error" && styles.errorCopy]}
+          >
+            {addMessage}
+          </Text>
+        </View>
 
         <Text style={styles.fieldLabel}>Food type</Text>
         <View accessibilityRole="radiogroup" style={styles.intentRow}>
@@ -412,7 +555,6 @@ export function FoodSearchScreen() {
 
         {results.map((food) => (
           <View
-            accessible
             accessibilityLabel={foodAccessibilityLabel(food)}
             key={food.foodVersionId}
             style={styles.resultCard}
@@ -432,6 +574,33 @@ export function FoodSearchScreen() {
             <Text style={styles.resultLicense}>
               {food.source.licenseExpression} · {food.marketCode}
             </Text>
+            <Pressable
+              accessibilityHint="Adds one reviewed default serving to the selected diary day"
+              accessibilityLabel={
+                hasGramServing(food)
+                  ? `Add ${food.name}`
+                  : `${food.name} needs a gram-resolved serving`
+              }
+              accessibilityRole="button"
+              accessibilityState={{
+                disabled: !hasGramServing(food) || addingVersion !== null,
+              }}
+              disabled={!hasGramServing(food) || addingVersion !== null}
+              onPress={() => void addFood(food)}
+              style={({ pressed }) => [
+                styles.addButton,
+                !hasGramServing(food) && styles.disabled,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={styles.addButtonText}>
+                {addingVersion === food.foodVersionId
+                  ? "Adding…"
+                  : hasGramServing(food)
+                    ? "Add default serving"
+                    : "Needs a gram-resolved serving"}
+              </Text>
+            </Pressable>
           </View>
         ))}
 
@@ -487,7 +656,6 @@ export function FoodSearchScreen() {
 
         {barcodeResult ? (
           <View
-            accessible
             accessibilityLabel={foodAccessibilityLabel(barcodeResult)}
             style={[styles.resultCard, styles.barcodeResult]}
           >
@@ -498,6 +666,23 @@ export function FoodSearchScreen() {
             <Text style={styles.resultServing}>{servingText(barcodeResult)}</Text>
             <Text style={styles.resultSource}>{sourceText(barcodeResult.source)}</Text>
             <Text style={styles.resultLicense}>{barcodeResult.source.licenseExpression}</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{
+                disabled: !hasGramServing(barcodeResult) || addingVersion !== null,
+              }}
+              disabled={!hasGramServing(barcodeResult) || addingVersion !== null}
+              onPress={() => void addFood(barcodeResult)}
+              style={[styles.addButton, !hasGramServing(barcodeResult) && styles.disabled]}
+            >
+              <Text style={styles.addButtonText}>
+                {addingVersion === barcodeResult.foodVersionId
+                  ? "Adding…"
+                  : hasGramServing(barcodeResult)
+                    ? "Add default serving"
+                    : "Needs a gram-resolved serving"}
+              </Text>
+            </Pressable>
           </View>
         ) : null}
 
@@ -508,6 +693,16 @@ export function FoodSearchScreen() {
 }
 
 const styles = StyleSheet.create({
+  addButton: {
+    alignItems: "center",
+    backgroundColor: palette.forest,
+    borderRadius: 9,
+    justifyContent: "center",
+    marginTop: 14,
+    minHeight: 44,
+    paddingHorizontal: 14,
+  },
+  addButtonText: { color: palette.white, fontSize: 13, fontWeight: "800" },
   barcodeButton: {
     alignItems: "center",
     backgroundColor: palette.forest,
@@ -520,6 +715,15 @@ const styles = StyleSheet.create({
   barcodeResult: { marginTop: 8 },
   content: { padding: 24, paddingBottom: 64 },
   disclaimer: { color: palette.muted, fontSize: 12, marginTop: 36 },
+  destination: {
+    backgroundColor: palette.white,
+    borderColor: palette.line,
+    borderRadius: 14,
+    borderWidth: 1,
+    marginTop: 24,
+    padding: 16,
+  },
+  disabled: { opacity: 0.5 },
   errorCopy: { color: "#8a332b" },
   fieldLabel: {
     color: palette.muted,

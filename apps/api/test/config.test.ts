@@ -79,7 +79,7 @@ describe("loadApiDependencyConfig", () => {
     ).toThrow(ConfigValidationError);
   });
 
-  it("requires a scoped key, cursor secret, and TLS in production", () => {
+  it("requires a scoped key, cursor secret, and verified database/search TLS in production", () => {
     try {
       loadApiDependencyConfig({
         DATABASE_URL: "postgresql://production.invalid/nutrition",
@@ -91,9 +91,21 @@ describe("loadApiDependencyConfig", () => {
       expect(error).toBeInstanceOf(ConfigValidationError);
       expect((error as ConfigValidationError).issues.map((issue) => issue.field)).toEqual([
         "SEARCH_CURSOR_SECRET",
+        "DATABASE_SSL_MODE",
         "MEILI_SEARCH_KEY",
         "MEILI_URL",
       ]);
     }
+
+    expect(
+      loadApiDependencyConfig({
+        DATABASE_SSL_MODE: "verify-full",
+        DATABASE_URL: "postgresql://production.invalid/nutrition",
+        MEILI_SEARCH_KEY: "scoped-production-search-key",
+        MEILI_URL: "https://search.internal",
+        NODE_ENV: "production",
+        SEARCH_CURSOR_SECRET: "production-cursor-secret-at-least-32-bytes",
+      }),
+    ).toMatchObject({ databaseUrl: "postgresql://production.invalid/nutrition" });
   });
 });

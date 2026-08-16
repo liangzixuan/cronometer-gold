@@ -75,6 +75,7 @@ export type RecipeStatus = "active" | "archived";
 export type DiaryStatus = "locked" | "open";
 export type DiaryEntryKind = "food" | "note" | "quick_add" | "recipe";
 export type SnapshotStatus = "complete" | "partial" | "pending";
+export type DiaryRevisionOperation = "create" | "delete" | "move" | "update";
 export type GoalStatus = "active" | "archived" | "draft";
 export type GoalEnergyMode = "component" | "fixed" | "pal_total";
 export type AuditSensitivity = "health" | "operational" | "personal" | "security";
@@ -103,10 +104,32 @@ export interface UserProfileTable {
   time_zone: DefaultValue<string>;
   unit_system: DefaultValue<UnitSystem>;
   preferences: DefaultJson;
+  revision: DefaultInt8;
   onboarding_completed_at: NullableTimestamp;
   wellness_disclaimer_acknowledged_at: NullableTimestamp;
   created_at: CreatedTimestamp;
   updated_at: UpdatedTimestamp;
+}
+
+export interface UserPasswordCredentialTable {
+  user_id: string;
+  password_hash: string;
+  password_salt: string;
+  password_parameters: DefaultJson;
+  created_at: CreatedTimestamp;
+  updated_at: UpdatedTimestamp;
+}
+
+export interface UserSessionTable {
+  id: UuidId;
+  user_id: string;
+  token_hash: string;
+  expires_at: Timestamp;
+  last_used_at: DefaultTimestamp;
+  revoked_at: NullableTimestamp;
+  user_agent: string | null;
+  ip_address: string | null;
+  created_at: CreatedTimestamp;
 }
 
 export interface FoodSourceTable {
@@ -498,6 +521,72 @@ export interface DiaryEntryTable {
   created_at: CreatedTimestamp;
   updated_at: UpdatedTimestamp;
   deleted_at: NullableTimestamp;
+  current_revision_id: string;
+  current_revision_number: Int8;
+}
+
+export interface DiaryEntryRevisionTable {
+  id: UuidId;
+  diary_entry_id: string;
+  diary_id: string;
+  user_id: string;
+  revision_number: Int8;
+  operation: DiaryRevisionOperation;
+  entry_kind: DiaryEntryKind;
+  food_version_id: NullableInt8;
+  recipe_version_id: string | null;
+  food_serving_id: NullableInt8;
+  meal_slot: string | null;
+  quantity: NullableNumeric;
+  input_unit: string | null;
+  resolved_quantity: NullableNumeric;
+  resolved_unit: "g" | "ml" | "serving" | null;
+  occurred_at: Timestamp;
+  local_date: DateOnly;
+  local_time: string;
+  time_zone: string;
+  position: DefaultInteger;
+  note: string | null;
+  food_name: string | null;
+  brand_name: string | null;
+  source_code: string | null;
+  source_release_id: string | null;
+  source_display_name: string | null;
+  license_expression: string | null;
+  attribution_required: boolean | null;
+  attribution_text: string | null;
+  serving_label: string | null;
+  snapshot_status: "complete" | "partial";
+  snapshot_engine_version: string;
+  nutrient_component_count: number;
+  created_at: CreatedTimestamp;
+}
+
+export interface DiaryEntryRevisionNutrientTable {
+  diary_entry_revision_id: string;
+  nutrient_id: Int8;
+  nutrient_code: string;
+  nutrient_name: string;
+  unit: string;
+  known_amount: Numeric;
+  completeness: "complete" | "partial" | "unknown";
+  is_exact: boolean;
+  contributor_count: number;
+  quantified_count: number;
+  unknown_count: number;
+  trace_count: number;
+  unknown_reasons: ImmutableJson;
+  created_at: CreatedTimestamp;
+}
+
+export interface DiaryOperationTable {
+  user_id: string;
+  client_operation_id: string;
+  request_digest: string;
+  operation: "create" | "delete" | "update";
+  diary_entry_id: string;
+  result_payload: ImmutableJson;
+  created_at: CreatedTimestamp;
 }
 
 export interface DiaryEntryNutrientSnapshotTable {
@@ -605,6 +694,9 @@ export interface Database {
   diary: DiaryTable;
   diary_entry: DiaryEntryTable;
   diary_entry_nutrient_snapshot: DiaryEntryNutrientSnapshotTable;
+  diary_entry_revision: DiaryEntryRevisionTable;
+  diary_entry_revision_nutrient: DiaryEntryRevisionNutrientTable;
+  diary_operation: DiaryOperationTable;
   food: FoodTable;
   food_barcode: FoodBarcodeTable;
   food_import_batch: FoodImportBatchTable;
@@ -632,4 +724,6 @@ export interface Database {
   source_nutrient_map: SourceNutrientMapTable;
   source_nutrient_map_revision: SourceNutrientMapRevisionTable;
   user_profile: UserProfileTable;
+  user_password_credential: UserPasswordCredentialTable;
+  user_session: UserSessionTable;
 }

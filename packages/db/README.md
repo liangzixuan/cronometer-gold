@@ -26,6 +26,37 @@ It deliberately has no down-migration API. Use expand/migrate/contract and a new
 forward migration to repair schema. See the
 [migration runbook](../../infra/runbooks/database-migrations.md).
 
+### 0004 legacy diary compatibility gate
+
+Migration `0004_diary_accounts_and_revisions.sql` upgrades the legacy diary into
+the immutable, food-only revision model. Before creating any new object, it
+checks every non-deleted legacy entry. Active entries must be public,
+source-backed branded/generic foods with complete source-release attribution and
+a resolvable profile/day time zone. A serving-less portion must already be
+canonical grams (`input_unit = 'g'` and `quantity = resolved_grams`); legacy
+ounce or other ambiguous portions cannot be safely reconstructed. A referenced
+serving must use `input_unit = 'serving'`, have a gram weight, and satisfy
+`resolved_grams = quantity * serving.gram_weight` exactly. Active notes,
+quick-adds, recipes, custom or source-less foods, ambiguous portions, and
+malformed snapshots block the migration transactionally. Export or remediate
+those rows before retrying. Deleted unsupported kinds may remain as tombstones
+only when every copied immutable field is structurally valid; position, numeric,
+date/time, text, source-summary, and per-entry nutrient-vector checks apply to
+deleted rows too.
+
+The same preflight protects public response bounds: normalized email/profile
+fields must fit their contracts, dates and timestamps must be finite in UTC,
+numeric values must not be `NaN`/infinite, the active nutrient registry and every
+entry/day nutrient union are limited to 256, and an active day is limited to 50
+entries. Fifty is the controlled-beta limit for the non-paginated endpoint and
+keeps a synthetic 50-by-256 response within the roughly 5 MiB mobile-memory
+budget. Pagination is required before raising it.
+
+Legacy `client_operation_id` values remain reserved. Version 0001 did not retain
+the digest or response needed to reconstruct an exact replay, so a post-upgrade
+reuse returns the typed `DIARY_IDEMPOTENCY_CONFLICT` error rather than attempting
+the mutation or surfacing a raw unique-key error.
+
 ## Client
 
 ```ts
@@ -43,6 +74,30 @@ stored arithmetic.
 The application should supply UUIDv7 values for user-facing IDs where locality is
 valuable. PostgreSQL's `gen_random_uuid()` default is a safe local/import fallback,
 not the canonical ID-generation policy.
+
+## Lock order and immutable catalogue children
+
+All writers must preserve this global order:
+
+1. Diary mutations take the per-user advisory lock, then lock the active account.
+2. New food logs lock source, food, food version, and source release in that order;
+   they then pin the nutrient registry and finally lock affected diary-day IDs in
+   sorted order. Cross-day moves use the same sorted day set.
+3. Nutrient mapping writers lock their source first, then the global nutrient
+   registry advisory lock, and process mapping inputs sorted by canonical nutrient
+   code and source key. Raw nutrient inserts/active-state updates take that registry
+   lock in a `BEFORE STATEMENT` trigger.
+4. Source-backed `food_nutrient_value` and `food_serving` inserts lock source, food,
+   version, and release and are accepted only while the release is `imported`.
+   Promotion makes those children permanently closed. Custom source-less versions
+   remain available to user-owned privacy workflows.
+
+Do not introduce a nutrient-before-source or unsorted multi-day/multi-mapping path.
+The deterministic concurrency tests intentionally pause each side of these orders
+to guard against deadlocks, post-revocation logs, mixed nutrient generations, and
+open-to-locked diary races. Day reads use one read-only `REPEATABLE READ` snapshot;
+writes use `READ COMMITTED` behind the per-user lock so idempotent replays observe a
+just-committed operation.
 
 ## Promoted food-search read model
 

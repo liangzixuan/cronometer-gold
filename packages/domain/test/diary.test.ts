@@ -49,6 +49,8 @@ describe("immutable diary nutrition snapshots", () => {
     expect(snapshot.calculationWarnings).toEqual(["source fixture"]);
     expect(snapshot.nutrients.map((row) => row.nutrientId)).toEqual(["energy", "iron", "protein"]);
     expect(snapshot.portion.resolvedGrams).toBe("200");
+    expect(snapshot.occurredAt).toBe("2026-08-15T13:30:00.000Z");
+    expect(snapshot.capturedAt).toBe("2026-08-15T13:30:01.000Z");
     expect(Object.isFrozen(snapshot)).toBe(true);
     expect(Object.isFrozen(snapshot.source)).toBe(true);
     expect(Object.isFrozen(snapshot.nutrients)).toBe(true);
@@ -86,6 +88,32 @@ describe("immutable diary nutrition snapshots", () => {
       createDiaryNutritionSnapshot({
         ...snapshotInput(recipe.perServing ?? []),
         diaryDate: "2026-02-30",
+      }),
+    ).toThrowError(expect.objectContaining<Partial<DomainError>>({ code: "INVALID_DATE" }));
+  });
+
+  it("rejects normalized invalid instants and unsupported time zones", () => {
+    const recipe = calculateRecipeNutrition(PORRIDGE_GOLDEN_VECTOR);
+    expect(() =>
+      createDiaryNutritionSnapshot({
+        ...snapshotInput(recipe.perServing ?? []),
+        occurredAt: "2026-02-30T08:00:00Z",
+      }),
+    ).toThrowError(expect.objectContaining<Partial<DomainError>>({ code: "INVALID_DATE" }));
+    expect(() =>
+      createDiaryNutritionSnapshot({
+        ...snapshotInput(recipe.perServing ?? []),
+        timeZone: "UTC-05:00",
+      }),
+    ).toThrowError(expect.objectContaining<Partial<DomainError>>({ code: "INVALID_TIME_ZONE" }));
+  });
+
+  it("rejects a client-supplied day that disagrees with the instant and profile zone", () => {
+    const recipe = calculateRecipeNutrition(PORRIDGE_GOLDEN_VECTOR);
+    expect(() =>
+      createDiaryNutritionSnapshot({
+        ...snapshotInput(recipe.perServing ?? []),
+        diaryDate: "2026-08-16",
       }),
     ).toThrowError(expect.objectContaining<Partial<DomainError>>({ code: "INVALID_DATE" }));
   });

@@ -1,0 +1,465 @@
+import { createHash } from "node:crypto";
+
+import {
+  type CreateDiaryEntryRequest,
+  createDiaryEntryRequestSchema,
+  type DiaryDay,
+  type DiaryDayResponse,
+  type DiaryMutationResponse,
+  type DiaryNutrientAggregate,
+  diaryDayResponseSchema,
+  diaryMutationResponseSchema,
+  problemDetailsSchema,
+  type UpdateDiaryEntryRequest,
+  updateDiaryEntryRequestSchema,
+} from "@nutrition-tracker/contracts";
+import type { FastifyPluginAsync, FastifyRequest } from "fastify";
+
+import { authenticatedPrincipal, requireAuthentication } from "../../http/authentication.js";
+import { requireIdempotencyKey, requireRevision, revisionEtag } from "../../http/preconditions.js";
+import { HttpProblem } from "../../http/problem.js";
+import {
+  rejectUnexpectedBodyKeys,
+  rejectUnexpectedQueryKeys,
+} from "../../http/request-validation.js";
+import type { AuthService } from "../auth/auth-service.js";
+
+export interface DiaryService {
+  getDay(input: {
+    readonly userId: string;
+    readonly localDate: string;
+    readonly signal?: AbortSignal;
+  }): Promise<DiaryDay>;
+  createEntry(input: {
+    readonly userId: string;
+    readonly clientOperationId: string;
+    readonly requestDigest: string;
+    readonly entry: CreateDiaryEntryRequest;
+    readonly signal?: AbortSignal;
+  }): Promise<DiaryMutationResponse>;
+  updateEntry(input: {
+    readonly userId: string;
+    readonly entryId: string;
+    readonly expectedRevision: string;
+    readonly clientOperationId: string;
+    readonly requestDigest: string;
+    readonly patch: UpdateDiaryEntryRequest;
+    readonly signal?: AbortSignal;
+  }): Promise<DiaryMutationResponse>;
+  deleteEntry(input: {
+    readonly userId: string;
+    readonly entryId: string;
+    readonly expectedRevision: string;
+    readonly clientOperationId: string;
+    readonly requestDigest: string;
+    readonly signal?: AbortSignal;
+  }): Promise<DiaryMutationResponse>;
+}
+
+export interface DiaryRoutesOptions {
+  readonly authService?: AuthService;
+  readonly diaryService?: DiaryService;
+}
+
+export class DiaryNotFoundServiceError extends Error {
+  constructor() {
+    super("Diary entry not found");
+    this.name = "DiaryNotFoundServiceError";
+  }
+}
+
+export class DiaryRevisionConflictServiceError extends Error {
+  constructor() {
+    super("Diary entry revision conflict");
+    this.name = "DiaryRevisionConflictServiceError";
+  }
+}
+
+export class DiaryIdempotencyConflictServiceError extends Error {
+  constructor() {
+    super("Diary idempotency conflict");
+    this.name = "DiaryIdempotencyConflictServiceError";
+  }
+}
+
+export class DiaryValidationServiceError extends Error {
+  constructor() {
+    super("Diary validation failed");
+    this.name = "DiaryValidationServiceError";
+  }
+}
+
+export class DiaryLockedServiceError extends Error {
+  constructor() {
+    super("Diary day is locked");
+    this.name = "DiaryLockedServiceError";
+  }
+}
+
+interface DiaryQuerystring {
+  date: string;
+}
+
+interface EntryParams {
+  entryId: string;
+}
+
+const dateQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["date"],
+  properties: {
+    date: {
+      type: "string",
+      format: "date",
+      pattern: "^(?!0000)[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+    },
+  },
+} as const;
+
+const entryParamsSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["entryId"],
+  properties: {
+    entryId: {
+      type: "string",
+      pattern:
+        "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+    },
+  },
+} as const;
+
+function unavailable(cause?: unknown): HttpProblem {
+  return new HttpProblem({
+    statusCode: 503,
+    code: "SERVICE_NOT_READY",
+    title: "Service Unavailable",
+    detail: "Diary services are temporarily unavailable.",
+    expose: true,
+    cause,
+  });
+}
+
+function mapDiaryError(error: unknown): HttpProblem {
+  if (error instanceof HttpProblem) return error;
+  if (error instanceof DiaryNotFoundServiceError) {
+    return new HttpProblem({
+      statusCode: 404,
+      code: "NOT_FOUND",
+      title: "Not Found",
+      detail: "The diary entry was not found.",
+      expose: true,
+    });
+  }
+  if (error instanceof DiaryRevisionConflictServiceError) {
+    return new HttpProblem({
+      statusCode: 412,
+      code: "PRECONDITION_FAILED",
+      title: "Precondition Failed",
+      detail: "The diary entry changed. Refresh the day and retry your edit.",
+      expose: true,
+    });
+  }
+  if (error instanceof DiaryIdempotencyConflictServiceError) {
+    return new HttpProblem({
+      statusCode: 409,
+      code: "CONFLICT",
+      title: "Conflict",
+      detail: "The Idempotency-Key was already used for a different operation.",
+      expose: true,
+    });
+  }
+  if (error instanceof DiaryLockedServiceError) {
+    return new HttpProblem({
+      statusCode: 409,
+      code: "CONFLICT",
+      title: "Conflict",
+      detail: "The diary day is locked and cannot be changed.",
+      expose: true,
+    });
+  }
+  if (error instanceof DiaryValidationServiceError) {
+    return new HttpProblem({
+      statusCode: 400,
+      code: "VALIDATION_ERROR",
+      title: "Bad Request",
+      detail: "The diary entry is invalid for this account.",
+      expose: true,
+    });
+  }
+  return unavailable(error);
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(",")}]`;
+  const record = value as Readonly<Record<string, unknown>>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
+    .join(",")}}`;
+}
+
+function requestDigest(operation: string, value: unknown): string {
+  return createHash("sha256").update(canonicalJson({ operation, value }), "utf8").digest("hex");
+}
+
+function assertNutrientAggregate(aggregate: DiaryNutrientAggregate): void {
+  const reconciled = aggregate.quantifiedCount + aggregate.traceCount + aggregate.unknownCount;
+  const unknownReasonTotal = Object.values(aggregate.unknownReasonCounts).reduce(
+    (total, count) => total + count,
+    0,
+  );
+  const completenessIsValid =
+    (aggregate.completeness === "complete" && aggregate.unknownCount === 0) ||
+    (aggregate.completeness === "partial" &&
+      aggregate.unknownCount > 0 &&
+      aggregate.quantifiedCount + aggregate.traceCount > 0) ||
+    (aggregate.completeness === "unknown" &&
+      aggregate.unknownCount > 0 &&
+      aggregate.quantifiedCount + aggregate.traceCount === 0);
+  const exactnessIsValid =
+    aggregate.isExact === (aggregate.unknownCount === 0 && aggregate.traceCount === 0);
+  if (
+    reconciled !== aggregate.contributorCount ||
+    unknownReasonTotal !== aggregate.unknownCount ||
+    !completenessIsValid ||
+    !exactnessIsValid
+  ) {
+    throw new HttpProblem({
+      statusCode: 500,
+      code: "INTERNAL_ERROR",
+      title: "Invalid diary aggregate",
+      detail: "Diary aggregate invariants failed.",
+    });
+  }
+}
+
+function assertDiaryDay(day: DiaryDay): void {
+  for (const total of day.totals) assertNutrientAggregate(total);
+  for (const entry of day.entries) {
+    for (const nutrient of entry.nutrients) assertNutrientAggregate(nutrient);
+  }
+}
+
+function assertMutation(result: DiaryMutationResponse): void {
+  if (!result.data.entry) return;
+  for (const nutrient of result.data.entry.nutrients) assertNutrientAggregate(nutrient);
+}
+
+async function withRequestSignal<T>(
+  request: FastifyRequest,
+  operation: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const controller = new AbortController();
+  const abort = () => controller.abort("request-aborted");
+  if (request.raw.aborted) abort();
+  else request.raw.once("aborted", abort);
+  try {
+    return await operation(controller.signal);
+  } finally {
+    request.raw.off("aborted", abort);
+  }
+}
+
+export const diaryRoutes: FastifyPluginAsync<DiaryRoutesOptions> = async (app, options) => {
+  const requireAuth = requireAuthentication(options.authService);
+
+  app.get<{ Querystring: DiaryQuerystring }>(
+    "/",
+    {
+      preHandler: requireAuth,
+      preValidation: rejectUnexpectedQueryKeys(["date"]),
+      schema: {
+        querystring: dateQuerySchema,
+        response: {
+          200: diaryDayResponseSchema,
+          400: problemDetailsSchema,
+          401: problemDetailsSchema,
+          503: problemDetailsSchema,
+        },
+      },
+    },
+    async (request, reply): Promise<DiaryDayResponse> => {
+      if (!options.diaryService) throw unavailable();
+      const principal = authenticatedPrincipal(request);
+      try {
+        const day = await withRequestSignal(
+          request,
+          (signal) =>
+            options.diaryService?.getDay({
+              userId: principal.userId,
+              localDate: request.query.date,
+              signal,
+            }) ?? Promise.reject(unavailable()),
+        );
+        assertDiaryDay(day);
+        reply.header("cache-control", "no-store").header("etag", revisionEtag(day.revision));
+        return { data: day };
+      } catch (error) {
+        throw mapDiaryError(error);
+      }
+    },
+  );
+
+  app.post<{ Body: CreateDiaryEntryRequest }>(
+    "/entries",
+    {
+      preHandler: requireAuth,
+      preValidation: [
+        rejectUnexpectedQueryKeys([]),
+        rejectUnexpectedBodyKeys([
+          "foodVersionId",
+          "portion",
+          "mealSlot",
+          "occurredAt",
+          "position",
+        ]),
+      ],
+      schema: {
+        body: createDiaryEntryRequestSchema,
+        response: {
+          200: diaryMutationResponseSchema,
+          201: diaryMutationResponseSchema,
+          400: problemDetailsSchema,
+          401: problemDetailsSchema,
+          409: problemDetailsSchema,
+          503: problemDetailsSchema,
+        },
+      },
+    },
+    async (request, reply): Promise<DiaryMutationResponse> => {
+      if (!options.diaryService) throw unavailable();
+      const principal = authenticatedPrincipal(request);
+      const clientOperationId = requireIdempotencyKey(request.headers["idempotency-key"]);
+      try {
+        const digest = requestDigest("create-diary-entry", request.body);
+        const result = await withRequestSignal(
+          request,
+          (signal) =>
+            options.diaryService?.createEntry({
+              userId: principal.userId,
+              clientOperationId,
+              requestDigest: digest,
+              entry: request.body,
+              signal,
+            }) ?? Promise.reject(unavailable()),
+        );
+        assertMutation(result);
+        reply.header("cache-control", "no-store").status(result.data.replayed ? 200 : 201);
+        if (result.data.entry) reply.header("etag", revisionEtag(result.data.entry.revision));
+        return result;
+      } catch (error) {
+        throw mapDiaryError(error);
+      }
+    },
+  );
+
+  app.patch<{ Params: EntryParams; Body: UpdateDiaryEntryRequest }>(
+    "/entries/:entryId",
+    {
+      preHandler: requireAuth,
+      preValidation: [
+        rejectUnexpectedQueryKeys([]),
+        rejectUnexpectedBodyKeys(["portion", "mealSlot", "occurredAt", "position"]),
+      ],
+      schema: {
+        params: entryParamsSchema,
+        body: updateDiaryEntryRequestSchema,
+        response: {
+          200: diaryMutationResponseSchema,
+          400: problemDetailsSchema,
+          401: problemDetailsSchema,
+          404: problemDetailsSchema,
+          409: problemDetailsSchema,
+          412: problemDetailsSchema,
+          428: problemDetailsSchema,
+          503: problemDetailsSchema,
+        },
+      },
+    },
+    async (request, reply): Promise<DiaryMutationResponse> => {
+      if (!options.diaryService) throw unavailable();
+      const principal = authenticatedPrincipal(request);
+      const clientOperationId = requireIdempotencyKey(request.headers["idempotency-key"]);
+      const expectedRevision = requireRevision(request.headers["if-match"]);
+      try {
+        const digest = requestDigest("update-diary-entry", {
+          entryId: request.params.entryId,
+          expectedRevision,
+          patch: request.body,
+        });
+        const result = await withRequestSignal(
+          request,
+          (signal) =>
+            options.diaryService?.updateEntry({
+              userId: principal.userId,
+              entryId: request.params.entryId,
+              expectedRevision,
+              clientOperationId,
+              requestDigest: digest,
+              patch: request.body,
+              signal,
+            }) ?? Promise.reject(unavailable()),
+        );
+        assertMutation(result);
+        reply.header("cache-control", "no-store");
+        if (result.data.entry) reply.header("etag", revisionEtag(result.data.entry.revision));
+        return result;
+      } catch (error) {
+        throw mapDiaryError(error);
+      }
+    },
+  );
+
+  app.delete<{ Params: EntryParams }>(
+    "/entries/:entryId",
+    {
+      preHandler: requireAuth,
+      preValidation: rejectUnexpectedQueryKeys([]),
+      schema: {
+        params: entryParamsSchema,
+        response: {
+          200: diaryMutationResponseSchema,
+          400: problemDetailsSchema,
+          401: problemDetailsSchema,
+          404: problemDetailsSchema,
+          409: problemDetailsSchema,
+          412: problemDetailsSchema,
+          428: problemDetailsSchema,
+          503: problemDetailsSchema,
+        },
+      },
+    },
+    async (request, reply): Promise<DiaryMutationResponse> => {
+      if (!options.diaryService) throw unavailable();
+      const principal = authenticatedPrincipal(request);
+      const clientOperationId = requireIdempotencyKey(request.headers["idempotency-key"]);
+      const expectedRevision = requireRevision(request.headers["if-match"]);
+      try {
+        const digest = requestDigest("delete-diary-entry", {
+          entryId: request.params.entryId,
+          expectedRevision,
+        });
+        const result = await withRequestSignal(
+          request,
+          (signal) =>
+            options.diaryService?.deleteEntry({
+              userId: principal.userId,
+              entryId: request.params.entryId,
+              expectedRevision,
+              clientOperationId,
+              requestDigest: digest,
+              signal,
+            }) ?? Promise.reject(unavailable()),
+        );
+        assertMutation(result);
+        reply.header("cache-control", "no-store");
+        return result;
+      } catch (error) {
+        throw mapDiaryError(error);
+      }
+    },
+  );
+};

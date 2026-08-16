@@ -117,4 +117,29 @@ describe("forward migration discovery", () => {
     expect(migrationSql).toContain("dead_lettered_at");
     expect(migrationSql).toContain("food_search_rebuild_outbox_pending_idx");
   });
+
+  it("adds opaque auth sessions and an append-only diary revision model", async () => {
+    const migrationSql = await readFile(
+      resolve(import.meta.dirname, "../migrations/0004_diary_accounts_and_revisions.sql"),
+      "utf8",
+    );
+    expect(migrationSql).not.toMatch(/\bdrop\s+(table|column)\b/i);
+    for (const table of [
+      "user_password_credential",
+      "user_session",
+      "diary_entry_revision",
+      "diary_entry_revision_nutrient",
+      "diary_operation",
+    ]) {
+      expect(migrationSql).toContain(`create table ${table}`);
+    }
+    expect(migrationSql).toContain("token_hash ~ '^[0-9a-f]{64}$'");
+    expect(migrationSql).toContain("reject_immutable_row_update");
+    expect(migrationSql).toContain("diary_unknown_reasons_match");
+    expect(migrationSql).toContain("diary entry head must advance exactly one revision");
+    expect(migrationSql).toContain("source_release_id uuid");
+    expect(migrationSql).toContain(
+      "case when entry.deleted_at is null then 'create' else 'delete' end",
+    );
+  });
 });

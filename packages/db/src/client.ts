@@ -18,6 +18,11 @@ export interface DatabaseClientOptions {
  * invoke `destroy()` during graceful shutdown.
  */
 export function createDatabase(options: DatabaseClientOptions): Kysely<Database> {
+  if (options.ssl !== undefined && hasDatabaseTlsQueryParameter(options.connectionString)) {
+    throw new Error(
+      "DATABASE_URL must not contain TLS query parameters when an explicit SSL policy is configured",
+    );
+  }
   const pool = new Pool({
     application_name: options.applicationName ?? "nutrition-tracker",
     connectionTimeoutMillis: options.connectionTimeoutMs ?? 5_000,
@@ -31,6 +36,24 @@ export function createDatabase(options: DatabaseClientOptions): Kysely<Database>
   return new Kysely<Database>({
     dialect: new PostgresDialect({ pool }),
   });
+}
+
+/**
+ * node-postgres parses connection-string options after object options, so even
+ * `sslmode=disable` in the URL would otherwise override `rejectUnauthorized`.
+ */
+export function hasDatabaseTlsQueryParameter(connectionString: string): boolean {
+  try {
+    const url = new URL(connectionString);
+    return [...url.searchParams.keys()].some((key) => {
+      const normalized = key.toLowerCase();
+      return normalized.startsWith("ssl") || normalized === "uselibpqcompat";
+    });
+  } catch {
+    // The PostgreSQL driver owns validation/redaction of non-URL socket forms
+    // and malformed connection strings. This predicate must never echo them.
+    return false;
+  }
 }
 
 export function createDatabaseFromEnvironment(
@@ -50,13 +73,17 @@ export function createDatabaseFromEnvironment(
     environment.DATABASE_STATEMENT_TIMEOUT_MS,
     15_000,
   );
+  const sslMode = environment.DATABASE_SSL_MODE ?? "disable";
+  if (environment.NODE_ENV === "production" && sslMode !== "verify-full") {
+    throw new Error("DATABASE_SSL_MODE=verify-full is required in production");
+  }
 
   return createDatabase({
     applicationName: environment.DATABASE_APPLICATION_NAME ?? "nutrition-tracker",
     connectionTimeoutMs,
     connectionString,
     maxConnections,
-    ssl: parseSslMode(environment.DATABASE_SSL_MODE),
+    ssl: parseSslMode(sslMode),
     statementTimeoutMs,
   });
 }

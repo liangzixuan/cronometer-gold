@@ -1,7 +1,26 @@
 "use client";
 
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
+
+import {
+  createOperationId,
+  currentLocalDate,
+  defaultMealForHour,
+  defaultMealForTime,
+  isLocalDate,
+  localDateInTimeZone,
+  localTimeInTimeZone,
+  type MealSlot,
+  mealLabel,
+  mealSlots,
+  parseDiaryMutation,
+  parseSession,
+  prepareQuickAddOperation,
+  type QuickAddOperation,
+} from "../../lib/diary";
 
 import {
   buildAutocompleteRequestPath,
@@ -46,6 +65,15 @@ function displaySource(source: FoodSourceSummary): string {
   return source.attributionRequired ? source.attributionText : source.displayName;
 }
 
+function hasGramResolvedServing(food: FoodSearchHit): boolean {
+  const grams = food.defaultServing?.gramWeight;
+  return (
+    grams !== null &&
+    grams !== undefined &&
+    /^(?:0*[1-9][0-9]*)(?:\.[0-9]+)?$|^0*\.0*[1-9][0-9]*$/u.test(grams)
+  );
+}
+
 async function responseJson(response: Response): Promise<unknown> {
   try {
     return await response.json();
@@ -55,6 +83,25 @@ async function responseJson(response: Response): Promise<unknown> {
 }
 
 export function FoodSearchClient() {
+  const searchParams = useSearchParams();
+  const requestedDate = searchParams.get("date");
+  const requestedMeal = searchParams.get("meal");
+  const [diaryDate, setDiaryDate] = useState(() =>
+    requestedDate && isLocalDate(requestedDate) ? requestedDate : currentLocalDate(),
+  );
+  const [mealSlot, setMealSlot] = useState<MealSlot>(() =>
+    mealSlots.some((meal) => meal === requestedMeal)
+      ? (requestedMeal as MealSlot)
+      : defaultMealForTime(),
+  );
+  const [timeZone, setTimeZone] = useState<string | null>(null);
+  const [addState, setAddState] = useState<"idle" | "loading" | "ready" | "error">("idle");
+  const [addingFoodVersion, setAddingFoodVersion] = useState<string | null>(null);
+  const [addMessage, setAddMessage] = useState(
+    "Sign in to add a reviewed default serving to your diary.",
+  );
+  const pendingAdds = useRef(new Map<string, QuickAddOperation>());
+  const activeAddOperation = useRef<string | null>(null);
   const [query, setQuery] = useState("");
   const [intent, setIntent] = useState<FoodSearchIntent>("all");
   const [suggestions, setSuggestions] = useState<readonly FoodAutocompleteSuggestion[]>([]);
@@ -138,6 +185,39 @@ export function FoodSearchClient() {
     },
     [],
   );
+
+  useEffect(() => {
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await fetch("/api/auth/me", {
+          headers: { accept: "application/json" },
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) return;
+        const session = parseSession(await responseJson(response));
+        if (!controller.signal.aborted) {
+          setTimeZone(session.profile.timeZone);
+          const now = new Date();
+          if (!(requestedDate && isLocalDate(requestedDate))) {
+            setDiaryDate(localDateInTimeZone(now, session.profile.timeZone));
+          }
+          if (!mealSlots.some((meal) => meal === requestedMeal)) {
+            setMealSlot(
+              defaultMealForHour(
+                Number(localTimeInTimeZone(now, session.profile.timeZone).slice(0, 2)),
+              ),
+            );
+          }
+          setAddMessage("Choose a local day and meal, then add one reviewed default serving.");
+        }
+      } catch {
+        // Catalogue search remains public if session discovery is unavailable.
+      }
+    })();
+    return () => controller.abort();
+  }, [requestedDate, requestedMeal]);
 
   const runSearch = useCallback(
     async (requestedQuery: string, cursor?: string) => {
@@ -278,6 +358,88 @@ export function FoodSearchClient() {
     }
   }
 
+  async function addFood(food: FoodSearchHit) {
+    if (activeAddOperation.current !== null) {
+      setAddState("error");
+      setAddMessage("Wait for the current diary addition to finish before adding another food.");
+      return;
+    }
+    if (!food.defaultServing || !hasGramResolvedServing(food)) {
+      setAddState("error");
+      setAddMessage("This food needs a gram-resolved serving before it can be added.");
+      return;
+    }
+    if (!timeZone) {
+      setAddState("error");
+      setAddMessage("Sign in before adding food to a private diary.");
+      return;
+    }
+    let operation: QuickAddOperation;
+    try {
+      operation = prepareQuickAddOperation(
+        pendingAdds.current,
+        {
+          foodVersionId: food.foodVersionId,
+          servingId: food.defaultServing.servingId,
+          localDate: diaryDate,
+          mealSlot,
+          timeZone,
+        },
+        new Date(),
+        createOperationId,
+      );
+    } catch {
+      setAddState("error");
+      setAddMessage("That local date or time is not valid in your diary time zone.");
+      return;
+    }
+    pendingAdds.current.set(operation.intentKey, operation);
+    activeAddOperation.current = operation.operationId;
+    setAddingFoodVersion(food.foodVersionId);
+    setAddState("loading");
+    setAddMessage(`Adding ${food.name}…`);
+    try {
+      const response = await fetch(`/api/diary/entries?date=${encodeURIComponent(diaryDate)}`, {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "idempotency-key": operation.operationId,
+        },
+        body: JSON.stringify(operation.body),
+        cache: "no-store",
+      });
+      const body = await responseJson(response);
+      if (!response.ok) {
+        const message =
+          typeof body === "object" &&
+          body !== null &&
+          "error" in body &&
+          typeof body.error === "string"
+            ? body.error
+            : "The food could not be added.";
+        throw new Error(message);
+      }
+      const mutation = parseDiaryMutation(body);
+      const loggedDate = mutation.affectedDays[0]?.localDate ?? diaryDate;
+      if (pendingAdds.current.get(operation.intentKey) === operation) {
+        pendingAdds.current.delete(operation.intentKey);
+      }
+      setAddState("ready");
+      setAddMessage(`${food.name} was added to ${mealLabel(mealSlot)} on ${loggedDate}.`);
+    } catch (error) {
+      setAddState("error");
+      setAddMessage(
+        `${error instanceof Error ? error.message : "The food could not be added."} Choose Add again to retry safely.`,
+      );
+    } finally {
+      if (activeAddOperation.current === operation.operationId) {
+        activeAddOperation.current = null;
+      }
+      setAddingFoodVersion(null);
+    }
+  }
+
   const showSuggestionPanel = normalizeSearchText(query).length >= 2 && suggestionState !== "idle";
 
   return (
@@ -290,6 +452,39 @@ export function FoodSearchClient() {
           </div>
           <p>Public catalogue results only. Personal foods arrive with diary accounts.</p>
         </div>
+
+        <fieldset className="quickAddControls">
+          <legend className="srOnly">Diary destination</legend>
+          <label htmlFor="quick-add-date">
+            Local day
+            <input
+              id="quick-add-date"
+              onChange={(event) =>
+                isLocalDate(event.target.value) && setDiaryDate(event.target.value)
+              }
+              type="date"
+              value={diaryDate}
+            />
+          </label>
+          <label htmlFor="quick-add-meal">
+            Meal
+            <select
+              id="quick-add-meal"
+              onChange={(event) => setMealSlot(event.target.value as MealSlot)}
+              value={mealSlot}
+            >
+              {mealSlots.map((meal) => (
+                <option key={meal} value={meal}>
+                  {mealLabel(meal)}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Link href="/login">Account</Link>
+        </fieldset>
+        <p className={`addStatus addStatus--${addState}`} role="status" aria-live="polite">
+          {addMessage}
+        </p>
 
         <form aria-label="Food search" className="foodSearchForm" onSubmit={submitSearch}>
           <fieldset className="intentFieldset">
@@ -391,6 +586,18 @@ export function FoodSearchClient() {
                     <small>
                       {food.source.licenseExpression} · {food.marketCode} · {food.languageTag}
                     </small>
+                    <button
+                      className="quickAddButton"
+                      disabled={!hasGramResolvedServing(food) || addingFoodVersion !== null}
+                      onClick={() => void addFood(food)}
+                      type="button"
+                    >
+                      {addingFoodVersion === food.foodVersionId
+                        ? "Adding…"
+                        : hasGramResolvedServing(food)
+                          ? "Add default serving"
+                          : "Needs a gram-resolved serving"}
+                    </button>
                   </div>
                 </article>
               </li>
@@ -456,6 +663,18 @@ export function FoodSearchClient() {
               {displayServing(barcodeResult)} · {displaySource(barcodeResult.source)} ·{" "}
               {barcodeResult.source.licenseExpression}
             </small>
+            <button
+              className="quickAddButton"
+              disabled={!hasGramResolvedServing(barcodeResult) || addingFoodVersion !== null}
+              onClick={() => void addFood(barcodeResult)}
+              type="button"
+            >
+              {addingFoodVersion === barcodeResult.foodVersionId
+                ? "Adding…"
+                : hasGramResolvedServing(barcodeResult)
+                  ? "Add default serving"
+                  : "Needs a gram-resolved serving"}
+            </button>
           </article>
         ) : null}
       </section>

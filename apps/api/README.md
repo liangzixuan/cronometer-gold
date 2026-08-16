@@ -1,8 +1,9 @@
 # API
 
 Fastify adapter for the nutrition tracker modular monolith. Domain functionality
-is registered through `src/modules/v1.routes.ts`; food search is backed by a
-rebuildable Meilisearch projection with bounded PostgreSQL degradation.
+is registered through `src/modules/v1.routes.ts`. Account, profile, and diary
+state is authoritative in PostgreSQL; food search uses a rebuildable Meilisearch
+projection with bounded PostgreSQL degradation.
 
 ## Runtime configuration
 
@@ -17,10 +18,14 @@ rebuildable Meilisearch projection with bounded PostgreSQL degradation.
 | `SEARCH_DB_MAX_QUEUE` | `16` | 0 through 100 queued reads before failing fast |
 | `SHUTDOWN_GRACE_MS` | `10000` | 100 through 300000 milliseconds |
 
-The production entrypoint additionally requires `DATABASE_URL` and a search
-cursor secret of at least 32 bytes. `MEILI_URL` defaults to loopback for local
-development; production requires HTTPS and a scoped `MEILI_SEARCH_KEY`. See
-`.env.example` for the complete local configuration.
+The production entrypoint additionally requires `DATABASE_URL`,
+`DATABASE_SSL_MODE=verify-full`, and a search cursor secret of at least 32 bytes.
+Database TLS is configured only through `DATABASE_SSL_MODE`; TLS query parameters
+such as `ssl`, `sslmode`, or certificate paths in `DATABASE_URL` are rejected so
+the connection string cannot override certificate verification.
+`MEILI_URL` defaults to loopback for local development; production requires
+HTTPS and a scoped `MEILI_SEARCH_KEY`. See `.env.example` for the complete local
+configuration.
 
 `GET /health` is a process liveness check. `GET /ready` invokes the injected
 dependency readiness probe. Domain routes are mounted below `/v1`.
@@ -44,9 +49,34 @@ RFC 9457-style `application/problem+json` envelope and never expose stack traces
 
 Unknown query parameters are rejected. The public routes never accept favorite
 or recent-food IDs from callers; authenticated diary-derived preferences are an
-internal service input for the next milestone. Food-search responses are
+internal service input for a later relevance enhancement. Food-search responses are
 `no-store`: source-rights changes must take effect at the next request, and the
 current response contract is not revision-keyed or actively purgeable. Barcode
 mappings are read from PostgreSQL rather than trusted to an eventually consistent index.
 Degraded keyword reads and barcode reads share a bounded process-local bulkhead;
 production edge rate limits remain a separate deployment requirement.
+
+## Account and diary routes
+
+| Method | Route | Behavior |
+| --- | --- | --- |
+| `POST` | `/v1/auth/register` | Creates a password account and opaque bearer session; requires an IANA time zone |
+| `POST` | `/v1/auth/login` | Creates a fresh opaque bearer session with generic credential failures |
+| `GET` | `/v1/auth/me` | Returns the authenticated account and profile |
+| `POST` | `/v1/auth/logout` | Revokes the current session |
+| `GET/PATCH` | `/v1/profile` | Reads or revision-guards changes to the authenticated profile |
+| `GET` | `/v1/diary?date=YYYY-MM-DD` | Returns the authenticated profile-local day, immutable entry snapshots, and missingness-aware totals |
+| `POST` | `/v1/diary/entries` | Logs a serving or gram portion with UUID idempotency |
+| `PATCH/DELETE` | `/v1/diary/entries/:entryId` | Mutates the owned entry using UUID idempotency and a strong `If-Match` entry revision |
+
+Private responses use `Cache-Control: no-store`. Raw passwords and session tokens
+never reach PostgreSQL: fixed-parameter scrypt material and SHA-256 session-token
+digests are persisted. Scrypt concurrency, pending work, and process-local login
+attempt state are bounded; production still requires a shared edge rate limit.
+Entry mutation dates are derived from `occurredAt` and the persisted profile time
+zone. The caller cannot assign a local day, and unrelated writes on that day do
+not invalidate an entry-level precondition. Exact-decimal nutrient aggregates
+carry quantified, trace, and reason-counted unknown contributions; missing data
+is never serialized as a measured zero. The non-paginated beta day response is
+limited to 50 entries and 256 distinct nutrients; pagination is required before
+either response budget can be raised.

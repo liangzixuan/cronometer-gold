@@ -1,72 +1,19 @@
-import Link from "next/link";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 
-import { foundationMilestones } from "../../lib/foundation";
+import { SESSION_COOKIE } from "../../lib/private-api";
+import { DiaryClient } from "./DiaryClient";
 
-// Disable caching for this data-free prototype. Add a server-side authorization
-// guard before this route renders profile, diary, or other user-owned data.
+// User-owned diary data is always rendered dynamically behind the host-only session guard.
 export const dynamic = "force-dynamic";
 
-export default function DashboardPage() {
+export default async function DashboardPage() {
+  const cookieStore = await cookies();
+  if (!cookieStore.has(SESSION_COOKIE)) redirect("/login");
+
   return (
     <main className="shell">
-      <aside className="sidebar">
-        <Link className="brand brandDark" href="/">
-          nutrition<span>/ledger</span>
-        </Link>
-        <nav aria-label="Application navigation">
-          <a aria-current="page" href="#today">
-            Today
-          </a>
-          <Link href="/foods">Foods</Link>
-          <span aria-disabled="true">Recipes · soon</span>
-          <span aria-disabled="true">Trends · soon</span>
-        </nav>
-        <p className="wellnessNote">Wellness information only—not medical advice.</p>
-      </aside>
-
-      <section className="dashboard" id="today">
-        <header className="dashboardHeader">
-          <div>
-            <p className="kicker">Foundation build</p>
-            <h1>Today</h1>
-          </div>
-          <span className="statusPill">Local prototype</span>
-        </header>
-
-        <section className="emptyDiary" aria-labelledby="diary-title">
-          <div>
-            <p className="kicker">Sample day · no entries</p>
-            <h2 id="diary-title">Your diary is ready for honest data.</h2>
-            <p>
-              Food search and persistence arrive after the nutrient ontology and source manifests
-              pass review. This shell deliberately does not fabricate nutrition totals.
-            </p>
-          </div>
-          <Link className="emptyDiaryAction" href="/foods">
-            Find a food
-          </Link>
-        </section>
-
-        <section aria-labelledby="build-title">
-          <div className="sectionHeading">
-            <p className="kicker">Build ledger</p>
-            <h2 id="build-title">What this foundation proves</h2>
-          </div>
-          <ol className="milestoneList">
-            {foundationMilestones.map((milestone) => (
-              <li key={milestone.title}>
-                <span className={`milestoneState milestoneState--${milestone.state}`}>
-                  {milestone.state}
-                </span>
-                <div>
-                  <h3>{milestone.title}</h3>
-                  <p>{milestone.description}</p>
-                </div>
-              </li>
-            ))}
-          </ol>
-        </section>
-      </section>
+      <DiaryClient />
     </main>
   );
 }

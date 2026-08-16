@@ -25,6 +25,7 @@ import type {
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const SOURCE_LOCK_NAMESPACE = "nutrition-tracker:catalogue-source:v1";
+const NUTRIENT_REGISTRY_LOCK_NAMESPACE = "nutrition-tracker:active-nutrient-registry:v1";
 
 type DatabaseExecutor = Kysely<Database> | Transaction<Database>;
 type BatchRow = Selectable<FoodImportBatchTable>;
@@ -453,8 +454,14 @@ export async function registerSourceNutrientMappings(
       .executeTakeFirst();
     if (!source) throw new Error(`Unknown food source ${input.sourceCode}`);
     await lockSource(transaction, source.id);
+    await lockNutrientRegistry(transaction);
 
-    for (const mapping of input.mappings) {
+    const mappings = [...input.mappings].sort(
+      (left, right) =>
+        left.canonicalNutrient.code.localeCompare(right.canonicalNutrient.code) ||
+        left.sourceNutrientKey.localeCompare(right.sourceNutrientKey),
+    );
+    for (const mapping of mappings) {
       validateMappingInput(mapping);
       const multiplier = mapping.conversionMultiplier ?? "1";
       const nutrient = await ensureCanonicalNutrient(transaction, mapping, reviewedBy);
@@ -536,6 +543,7 @@ export async function supersedeSourceNutrientMapping(
       .executeTakeFirst();
     if (!source) throw new Error(`Unknown food source ${input.sourceCode}`);
     await lockSource(transaction, source.id);
+    await lockNutrientRegistry(transaction);
     const current = await selectCurrentMapping(
       transaction,
       source.id,
@@ -1812,6 +1820,12 @@ async function ensureCanonicalNutrient(
     throw new Error(`Canonical nutrient ${mapping.canonicalNutrient.code} conflicts with ontology`);
   }
   return nutrient;
+}
+
+async function lockNutrientRegistry(transaction: Transaction<Database>): Promise<void> {
+  await sql`select pg_advisory_xact_lock(hashtext(${NUTRIENT_REGISTRY_LOCK_NAMESPACE}))`.execute(
+    transaction,
+  );
 }
 
 function validateMappingInput(mapping: ReviewedNutrientMappingInput): void {

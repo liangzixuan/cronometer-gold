@@ -39,6 +39,57 @@ build a fresh database from zero before merge.
 - [ ] Error rate, database connections, locks, replica lag, disk, and outbox lag watched.
 - [ ] Post-deploy invariants and application smoke tests pass.
 
+## 0004 diary preflight and remediation
+
+`0004_diary_accounts_and_revisions.sql` intentionally supports only active
+legacy entries that can be represented by the new public, source-backed food
+diary contract. It aborts before any DDL if a non-deleted note, quick-add,
+recipe, custom/source-less food, malformed food snapshot, or invalid profile/day
+time zone exists. Serving-less portions must use canonical grams with
+`quantity = resolved_grams`; an old `quantity = 1, input_unit = 'oz'` row cannot
+be rendered safely even if it has a resolved gram weight, so it also blocks the
+migration. Rows with a serving reference must use `input_unit = 'serving'` and
+must exactly satisfy `resolved_grams = quantity * serving.gram_weight`; otherwise
+display and subsequent edits would diverge. The PostgreSQL error includes the
+incompatible count and up to five example entry IDs.
+
+Before retrying, export the affected records for retention and either migrate
+them to a reviewed source-backed food record or remove them through an approved
+privacy/data-remediation process. Do not fabricate source attribution. Deleted
+unsupported kinds may remain and are migrated as tombstones only when their
+copied immutable payload is structurally valid. Deleted rows still undergo
+bounded-text, finite numeric/date/time, canonical nutrient-unit, position, and
+256-component vector checks. Rehearse this check against a restored production
+snapshot before the deployment window.
+
+The preflight also rejects malformed/non-normalized account emails, profiles
+that cannot satisfy the public response schema, invalid empty diary days, more
+than 256 active nutrients, a legacy entry or active-day nutrient union above
+256, and an active day above the 50-entry controlled-beta response limit.
+Timestamp year checks are evaluated in UTC, independent of the operator session
+zone. Numeric `NaN` or infinite catalogue/diary facts fail before DDL.
+
+Pre-0004 diary entries already own their `client_operation_id`, but the old
+schema has no request digest or result payload. Those keys are therefore treated
+as reservations after upgrade: reuse deterministically returns
+`DIARY_IDEMPOTENCY_CONFLICT`; exact replay is not reconstructable.
+
+## Catalogue and diary lock-order audit
+
+Keep the canonical order `source -> food -> version -> release -> nutrient
+registry -> sorted diary days`. Mapping registration locks its source before the
+global nutrient-registry advisory and processes each set by canonical nutrient
+code then source key. Cross-day diary mutations sort source/target day IDs. The
+per-user diary advisory and active-account row lock precede this chain. Reversing
+source/nutrient order can deadlock mapping registration with diary creation;
+locking days in caller order can deadlock opposing moves.
+
+Imported source-backed servings and nutrient facts may be inserted only while
+their release is `imported`. The insert guard locks and revalidates the
+source/food/version/release chain, so a child either commits before promotion or
+is rejected after promotion. Never append children to a promoted, failed, or
+quarantined release.
+
 ## Failure behavior
 
 The transaction rolls back the pending schema set and does not write its migration

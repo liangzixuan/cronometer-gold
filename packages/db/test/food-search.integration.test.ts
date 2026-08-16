@@ -198,30 +198,24 @@ describeDatabase("promoted food-search projection", () => {
       });
 
       if (!modern) throw new Error("expected modern projection document");
-      await database
-        .insertInto("food_serving")
-        .values({
-          display_order: 99,
-          food_version_id: modern.foodVersionId,
-          gram_weight: "1",
-          is_default: false,
-          label: "😀".repeat(101),
-          metadata: { fixture: "oversized-legacy-serving" },
-          milliliter_volume: null,
-          quantity: "1",
-          source_serving_key: "oversized-legacy-serving",
-          unit: "portion",
-          unit_kind: "count",
-        })
-        .execute();
-      const afterOversizedServing = (
-        await pageFoodSearchProjection(database, { limit: 10 })
-      ).documents.find((document) => document.foodId === modern.foodId);
-      expect(afterOversizedServing?.servings).not.toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ sourceServingKey: "oversized-legacy-serving" }),
-        ]),
-      );
+      await expect(
+        database
+          .insertInto("food_serving")
+          .values({
+            display_order: 99,
+            food_version_id: modern.foodVersionId,
+            gram_weight: "1",
+            is_default: false,
+            label: "late promoted serving",
+            metadata: { fixture: "late-promoted-serving" },
+            milliliter_volume: null,
+            quantity: "1",
+            source_serving_key: "late-promoted-serving",
+            unit: "portion",
+            unit_kind: "count",
+          })
+          .execute(),
+      ).rejects.toMatchObject({ code: "55000" });
       const insertedBarcode = await database
         .insertInto("food_barcode")
         .values({
@@ -253,7 +247,7 @@ describeDatabase("promoted food-search projection", () => {
         limit: 500,
         workerId: "worker:child-mutations",
       });
-      expect(childMutationEvents).toHaveLength(3);
+      expect(childMutationEvents).toHaveLength(2);
       await markFoodSearchRebuildEventsPublished(database, {
         eventIds: childMutationEvents.map((event) => event.id),
         workerId: "worker:child-mutations",
@@ -800,6 +794,11 @@ async function seedSearchCatalogue(database: Kysely<Database>): Promise<SearchFi
     });
 
     await transaction
+      .updateTable("food_source_release")
+      .set({ promoted_at: "2026-08-15T13:00:00Z", status: "promoted" })
+      .where("id", "in", [supersededReleaseId, modernReleaseId])
+      .execute();
+    await transaction
       .updateTable("food_source")
       .set({ active_release_id: modernReleaseId })
       .where("id", "=", source.id)
@@ -834,13 +833,12 @@ async function insertRelease(
         food_source_id: sourceId,
         media_type: "application/json",
         parser_version: `search-fixture@${releaseKey}`,
-        promoted_at: "2026-08-15T13:00:00Z",
         published_on: "2026-08-15",
         record_counts: { fixture: true },
         release_key: releaseKey,
         rights_manifest_sha256: "a".repeat(64),
         rights_manifest_uri: "repo://search-fixture-rights.json",
-        status: "promoted",
+        status: "imported",
         upstream_schema_version: "fixture-v1",
         validation_summary: { fixture: true },
       })

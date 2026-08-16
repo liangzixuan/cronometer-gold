@@ -45,8 +45,11 @@ export async function startServer(
   let app: FastifyInstance;
   try {
     app = buildApp({
+      authService: runtime.authService,
       config,
+      diaryService: runtime.diaryService,
       foodSearchService: runtime.foodSearchService,
+      profileService: runtime.profileService,
       readinessCheck: runtime.readinessCheck,
     });
     app.addHook("onClose", async () => runtime.close());

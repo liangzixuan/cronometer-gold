@@ -587,71 +587,131 @@ async function createHistoricalSnapshot(
   foodVersionId: string,
   suffix: string,
 ) {
-  const user = await database
-    .insertInto("app_user")
-    .values({
-      auth_subject: `integration-${suffix}`,
-      deleted_at: null,
-      deletion_requested_at: null,
-      email: `integration-${suffix.toLowerCase()}@example.invalid`,
-      email_verified_at: null,
-      status: "active",
-    })
-    .returning("id")
-    .executeTakeFirstOrThrow();
-  const diary = await database
-    .insertInto("diary")
-    .values({
-      local_date: "2026-08-15",
-      note: null,
-      revision: 0,
-      status: "open",
-      time_zone: "UTC",
-      user_id: user.id,
-    })
-    .returning("id")
-    .executeTakeFirstOrThrow();
-  const entry = await database
-    .insertInto("diary_entry")
-    .values({
-      client_operation_id: randomUUID(),
-      deleted_at: null,
-      diary_id: diary.id,
-      entry_kind: "food",
-      food_serving_id: null,
-      food_version_id: foodVersionId,
-      input_unit: "g",
-      local_time: "12:00:00",
-      meal_slot: "lunch",
-      note: null,
-      occurred_at: "2026-08-15T12:00:00Z",
-      position: 0,
-      quantity: "100",
-      recipe_version_id: null,
-      resolved_grams: "100",
-      snapshot_engine_version: "integration@1",
-      snapshot_status: "complete",
-      user_id: user.id,
-    })
-    .returning("id")
-    .executeTakeFirstOrThrow();
-  const protein = await database
-    .selectFrom("nutrient")
-    .select("id")
-    .where("code", "=", "protein")
-    .executeTakeFirstOrThrow();
-  await database
-    .insertInto("diary_entry_nutrient_snapshot")
-    .values({
-      amount: "12.5",
-      calculation_version: "integration@1",
-      diary_entry_id: entry.id,
-      nutrient_id: protein.id,
-      provenance: { foodVersionId },
-      unit: "g",
-    })
-    .execute();
-  return { diaryEntryId: entry.id, diaryId: diary.id };
+  return database.transaction().execute(async (transaction) => {
+    const user = await transaction
+      .insertInto("app_user")
+      .values({
+        auth_subject: `integration-${suffix}`,
+        deleted_at: null,
+        deletion_requested_at: null,
+        email: `integration-${suffix.toLowerCase()}@example.invalid`,
+        email_verified_at: null,
+        status: "active",
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const diary = await transaction
+      .insertInto("diary")
+      .values({
+        local_date: "2026-08-15",
+        note: null,
+        revision: 0,
+        status: "open",
+        time_zone: "UTC",
+        user_id: user.id,
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const revisionId = randomUUID();
+    const version = await transaction
+      .selectFrom("food_version")
+      .select(["name", "brand_name"])
+      .where("id", "=", foodVersionId)
+      .executeTakeFirstOrThrow();
+    const entry = await transaction
+      .insertInto("diary_entry")
+      .values({
+        client_operation_id: randomUUID(),
+        current_revision_id: revisionId,
+        current_revision_number: "1",
+        deleted_at: null,
+        diary_id: diary.id,
+        entry_kind: "food",
+        food_serving_id: null,
+        food_version_id: foodVersionId,
+        input_unit: "g",
+        local_time: "12:00:00",
+        meal_slot: "lunch",
+        note: null,
+        occurred_at: "2026-08-15T12:00:00Z",
+        position: 0,
+        quantity: "100",
+        recipe_version_id: null,
+        resolved_grams: "100",
+        snapshot_engine_version: "integration@1",
+        snapshot_status: "complete",
+        user_id: user.id,
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    await transaction
+      .insertInto("diary_entry_revision")
+      .values({
+        brand_name: version.brand_name,
+        diary_entry_id: entry.id,
+        diary_id: diary.id,
+        entry_kind: "food",
+        food_name: version.name,
+        food_serving_id: null,
+        food_version_id: foodVersionId,
+        id: revisionId,
+        input_unit: "g",
+        local_date: "2026-08-15",
+        local_time: "12:00:00",
+        meal_slot: "lunch",
+        note: null,
+        nutrient_component_count: 1,
+        occurred_at: "2026-08-15T12:00:00Z",
+        operation: "create",
+        position: 0,
+        quantity: "100",
+        recipe_version_id: null,
+        resolved_quantity: "100",
+        resolved_unit: "g",
+        revision_number: "1",
+        serving_label: null,
+        snapshot_engine_version: "integration@1",
+        snapshot_status: "complete",
+        time_zone: "UTC",
+        user_id: user.id,
+      })
+      .execute();
+    const protein = await transaction
+      .selectFrom("nutrient")
+      .select(["id", "code", "name", "canonical_unit"])
+      .where("code", "=", "protein")
+      .executeTakeFirstOrThrow();
+    await transaction
+      .insertInto("diary_entry_revision_nutrient")
+      .values({
+        completeness: "complete",
+        contributor_count: 1,
+        diary_entry_revision_id: revisionId,
+        is_exact: true,
+        known_amount: "12.5",
+        nutrient_code: protein.code,
+        nutrient_id: protein.id,
+        nutrient_name: protein.name,
+        quantified_count: 1,
+        trace_count: 0,
+        unit: protein.canonical_unit,
+        unknown_count: 0,
+        unknown_reasons: {},
+      })
+      .execute();
+    await transaction
+      .insertInto("diary_entry_nutrient_snapshot")
+      .values({
+        amount: "12.5",
+        calculation_version: "integration@1",
+        diary_entry_id: entry.id,
+        nutrient_id: protein.id,
+        provenance: { foodVersionId },
+        unit: "g",
+      })
+      .execute();
+    return { diaryEntryId: entry.id, diaryId: diary.id };
+  });
 }
 
 async function readSnapshotAmount(

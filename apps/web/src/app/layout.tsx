@@ -3,6 +3,9 @@ import type { ReactNode } from "react";
 
 import "./styles.css";
 
+// Per-request CSP nonces require request-time rendering so every Next script receives the nonce.
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: "Nutrition Tracker",
   description: "Provenance-first nutrition tracking",

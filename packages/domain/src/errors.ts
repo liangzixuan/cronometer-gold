@@ -8,6 +8,7 @@ export type DomainErrorCode =
   | "INVALID_PORTION"
   | "INVALID_RECIPE"
   | "INVALID_SNAPSHOT"
+  | "INVALID_TIME_ZONE"
   | "INVALID_UNIT"
   | "MISSING_CONVERSION"
   | "UNIT_MISMATCH";

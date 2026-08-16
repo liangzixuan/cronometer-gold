@@ -79,7 +79,7 @@
     "@nutrition-tracker/web#dev": {
       "cache": false,
       "interruptible": true,
-      "passThroughEnv": ["API_INTERNAL_URL"],
+      "passThroughEnv": ["API_INTERNAL_URL", "WEB_PUBLIC_ORIGIN"],
       "persistent": true
     },
     "@nutrition-tracker/mobile#dev": {
@@ -95,7 +95,7 @@
     },
     "@nutrition-tracker/web#build": {
       "dependsOn": ["^build"],
-      "env": ["API_INTERNAL_URL"],
+      "env": ["API_INTERNAL_URL", "WEB_PUBLIC_ORIGIN"],
       "outputs": [".next/**", "!.next/cache/**"]
     },
     "lint": {
