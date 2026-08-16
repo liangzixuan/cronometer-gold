@@ -5,10 +5,12 @@ import {
   createDiaryEntryRequestSchema,
   type DiaryDay,
   type DiaryDayResponse,
+  type DiaryEntry,
   type DiaryMutationResponse,
   type DiaryNutrientAggregate,
   diaryDayResponseSchema,
   diaryMutationResponseSchema,
+  MAX_NUTRIENT_AGGREGATE_OUTPUT_LENGTH,
   problemDetailsSchema,
   type UpdateDiaryEntryRequest,
   updateDiaryEntryRequestSchema,
@@ -205,7 +207,7 @@ function requestDigest(operation: string, value: unknown): string {
   return createHash("sha256").update(canonicalJson({ operation, value }), "utf8").digest("hex");
 }
 
-function assertNutrientAggregate(aggregate: DiaryNutrientAggregate): void {
+export function assertNutrientAggregate(aggregate: DiaryNutrientAggregate): void {
   const reconciled = aggregate.quantifiedCount + aggregate.traceCount + aggregate.unknownCount;
   const unknownReasonTotal = Object.values(aggregate.unknownReasonCounts).reduce(
     (total, count) => total + count,
@@ -225,7 +227,8 @@ function assertNutrientAggregate(aggregate: DiaryNutrientAggregate): void {
     reconciled !== aggregate.contributorCount ||
     unknownReasonTotal !== aggregate.unknownCount ||
     !completenessIsValid ||
-    !exactnessIsValid
+    !exactnessIsValid ||
+    aggregate.knownAmount.length > MAX_NUTRIENT_AGGREGATE_OUTPUT_LENGTH
   ) {
     throw new HttpProblem({
       statusCode: 500,
@@ -236,16 +239,48 @@ function assertNutrientAggregate(aggregate: DiaryNutrientAggregate): void {
   }
 }
 
+export function assertDiaryEntry(entry: DiaryEntry): void {
+  for (const nutrient of entry.nutrients) assertNutrientAggregate(nutrient);
+  if (entry.entryKind === "food") return;
+  if (
+    (entry.recipe.servingCount === null) !== (entry.recipe.servingLabel === null) ||
+    (entry.portion.kind === "serving" && entry.recipe.servingCount === null) ||
+    (entry.portion.kind === "serving" && entry.portion.servingLabel !== entry.recipe.servingLabel)
+  ) {
+    throw new HttpProblem({
+      statusCode: 500,
+      code: "INTERNAL_ERROR",
+      title: "Invalid recipe diary entry",
+      detail: "Recipe serving invariants failed.",
+    });
+  }
+  const sourceKeys = entry.sources.map((source) => `${source.code}\u0000${source.releaseId}`);
+  if (
+    sourceKeys.length === 0 ||
+    new Set(sourceKeys).size !== sourceKeys.length ||
+    sourceKeys.some((key, index) => index > 0 && (sourceKeys[index - 1] ?? "") > key) ||
+    entry.recipe.retentionPolicy.code !== "identity-retention-default" ||
+    entry.recipe.retentionPolicy.version !== "1" ||
+    entry.recipe.retentionPolicy.assumption.trim().length === 0 ||
+    !entry.recipe.warnings.some((warning) => warning.code === "RETENTION_FACTORS_DEFAULTED")
+  ) {
+    throw new HttpProblem({
+      statusCode: 500,
+      code: "INTERNAL_ERROR",
+      title: "Invalid recipe diary entry",
+      detail: "Recipe provenance invariants failed.",
+    });
+  }
+}
+
 function assertDiaryDay(day: DiaryDay): void {
   for (const total of day.totals) assertNutrientAggregate(total);
-  for (const entry of day.entries) {
-    for (const nutrient of entry.nutrients) assertNutrientAggregate(nutrient);
-  }
+  for (const entry of day.entries) assertDiaryEntry(entry);
 }
 
 function assertMutation(result: DiaryMutationResponse): void {
   if (!result.data.entry) return;
-  for (const nutrient of result.data.entry.nutrients) assertNutrientAggregate(nutrient);
+  assertDiaryEntry(result.data.entry);
 }
 
 async function withRequestSignal<T>(

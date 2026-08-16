@@ -15,6 +15,9 @@ every applicable gate and an owner who records the decision.
   `THIRD_PARTY_NOTICES.md`.
 - Migrations are forward-only, transactional where PostgreSQL permits it, and
   include a recovery note.
+- Runtime readiness fails closed when the database migration ledger is missing a
+  bundled migration or its SHA-256 disagrees; connectivity alone is not schema
+  readiness.
 - Logs and telemetry contain no food diary, biometric, token, or free-text note
   payload.
 
@@ -50,6 +53,17 @@ package boundaries.
 - Core generic foods meet the agreed nutrient-completeness definition at least
   90% of the time.
 - Offline mutation retry/reorder simulations create no duplicate diary entry.
+- Recipe revisions preserve exact food/nested-recipe dependencies, reject cycles
+  and depth overflow, and retain source attribution plus trace/unknown coverage
+  through an exact diary log.
+- Recipe and goal retries reuse the same operation ID and canonical request;
+  ambiguous responses, concurrent revisions, and profile changes cannot create a
+  duplicate or silently select a newer version.
+- Derived energy targets reproduce the reviewed Mifflin–St Jeor and PAL golden
+  cases, fail closed outside the supported adult/profile boundary, identify
+  every input and source, and never add ordinary exercise twice.
+- Goal progress proves lower-bound semantics with incomplete nutrient panels and
+  never labels an unknown contribution as measured zero or exact completion.
 - Export, account deletion, backup restore, and search reindex drills pass.
 - Signed Android and iOS preview binaries compile from clean native projects and
   pass a device smoke test; a Metro export alone is not native-build evidence.

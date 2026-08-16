@@ -69,6 +69,10 @@ function editState(entry: DiaryEntry, currentProfileTimeZone: string): EntryEdit
   };
 }
 
+function entryName(entry: DiaryEntry): string {
+  return entry.entryKind === "food" ? entry.food.name : entry.recipe.name;
+}
+
 export function DiaryClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -195,7 +199,9 @@ export function DiaryClient() {
       const body = {
         portion:
           entry.portion.kind === "serving"
-            ? { kind: "serving", servingId: entry.portion.servingId, amount: editor.quantity }
+            ? entry.entryKind === "food"
+              ? { kind: "serving", servingId: entry.portion.servingId, amount: editor.quantity }
+              : { kind: "serving", amount: editor.quantity }
             : { kind: "grams", grams: editor.quantity },
         mealSlot: editor.mealSlot,
         ...(timestampChanged
@@ -254,7 +260,10 @@ export function DiaryClient() {
   }
 
   async function deleteEntry(entry: DiaryEntry) {
-    if (!diary || !window.confirm(`Delete ${entry.food.name} from ${mealLabel(entry.mealSlot)}?`)) {
+    if (
+      !diary ||
+      !window.confirm(`Delete ${entryName(entry)} from ${mealLabel(entry.mealSlot)}?`)
+    ) {
       return;
     }
     const key = `delete:${entry.id}:${diary.revision}`;
@@ -320,7 +329,8 @@ export function DiaryClient() {
             Diary
           </Link>
           <Link href={`/foods?date=${date}`}>Foods</Link>
-          <span aria-disabled="true">Recipes · soon</span>
+          <Link href={`/recipes?date=${date}`}>Recipes</Link>
+          <Link href={`/goals?date=${date}`}>Goals</Link>
           <span aria-disabled="true">Trends · soon</span>
         </nav>
         {session ? <p className="accountIdentity">Signed in as {session.user.email}</p> : null}
@@ -508,8 +518,13 @@ export function DiaryClient() {
                             ) : (
                               <article className="diaryEntry">
                                 <div>
-                                  <h3>{entry.food.name}</h3>
-                                  {entry.food.brandName ? <p>{entry.food.brandName}</p> : null}
+                                  <h3>{entryName(entry)}</h3>
+                                  {entry.entryKind === "food" && entry.food.brandName ? (
+                                    <p>{entry.food.brandName}</p>
+                                  ) : null}
+                                  {entry.entryKind === "recipe" ? (
+                                    <p>Recipe version {entry.recipe.versionNumber}</p>
+                                  ) : null}
                                   <small>
                                     {entry.portion.kind === "serving"
                                       ? `${entry.portion.amount} ${entry.portion.servingLabel}`
@@ -519,12 +534,29 @@ export function DiaryClient() {
                                   {entry.timeZone !== diary.timeZone ? (
                                     <small>Logged in {entry.timeZone}</small>
                                   ) : null}
-                                  <small>
-                                    {entry.source.attributionRequired
-                                      ? entry.source.attributionText
-                                      : entry.source.displayName}{" "}
-                                    · {entry.source.licenseExpression}
-                                  </small>
+                                  {entry.entryKind === "food" ? (
+                                    <small>
+                                      {entry.source.attributionRequired
+                                        ? entry.source.attributionText
+                                        : entry.source.displayName}{" "}
+                                      · {entry.source.licenseExpression}
+                                    </small>
+                                  ) : (
+                                    <div className="entryProvenance">
+                                      <small>{entry.recipe.retentionPolicy.assumption}</small>
+                                      {entry.recipe.warnings.map((warning) => (
+                                        <small key={warning.code}>{warning.message}</small>
+                                      ))}
+                                      {entry.sources.map((source) => (
+                                        <small key={`${source.code}:${source.releaseId}`}>
+                                          {source.attributionRequired
+                                            ? source.attributionText
+                                            : source.displayName}{" "}
+                                          · {source.licenseExpression}
+                                        </small>
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
                                 <div className="entryActions">
                                   <button

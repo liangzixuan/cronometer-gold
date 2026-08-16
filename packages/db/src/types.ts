@@ -42,6 +42,7 @@ export type DefaultValue<Value> = ColumnType<Value, Value | undefined, Value>;
 export type DefaultJson = JSONColumnType<JsonObject, JsonObject | undefined, JsonObject>;
 export type ImmutableJson = JSONColumnType<JsonObject, JsonObject | undefined, never>;
 export type ReadonlyColumn<Value> = ColumnType<Value, never, never>;
+export type OptionalImmutable<Value> = ColumnType<Value, Value | undefined, never>;
 export type NullableImmutableJson = JSONColumnType<
   JsonObject | null,
   JsonObject | null | undefined,
@@ -77,7 +78,7 @@ export type DiaryEntryKind = "food" | "note" | "quick_add" | "recipe";
 export type SnapshotStatus = "complete" | "partial" | "pending";
 export type DiaryRevisionOperation = "create" | "delete" | "move" | "update";
 export type GoalStatus = "active" | "archived" | "draft";
-export type GoalEnergyMode = "component" | "fixed" | "pal_total";
+export type GoalEnergyMode = "derived" | "fixed";
 export type AuditSensitivity = "health" | "operational" | "personal" | "security";
 
 export interface AppUserTable {
@@ -461,12 +462,23 @@ export interface RecipeVersionTable {
   name: string;
   description: string | null;
   instructions: string | null;
-  serving_count: Numeric;
-  total_yield_quantity: NullableNumeric;
-  total_yield_unit: string | null;
-  total_weight_grams: NullableNumeric;
+  serving_count: NullableNumeric;
+  total_yield_quantity: Numeric;
+  total_yield_unit: string;
+  total_weight_grams: Numeric;
   calculation_version: string;
+  calculation_assumptions: ImmutableJson;
+  final_yield_source: "estimated" | "measured";
+  input_mass_grams: Numeric;
+  ingredient_count: number;
   metadata: ImmutableJson;
+  nutrient_component_count: number;
+  recipe_status: RecipeStatus;
+  retention_policy_code: string;
+  retention_policy_version: string;
+  serving_label: string | null;
+  source_component_count: number;
+  warnings: ColumnType<JsonArray, JsonArray, never>;
   created_by_user_id: string;
   created_at: CreatedTimestamp;
 }
@@ -484,6 +496,63 @@ export interface RecipeIngredientTable {
   yield_factor: DefaultNumeric;
   retention_factor_set: string | null;
   note: string | null;
+  created_at: CreatedTimestamp;
+  ingredient_kind: "food" | "recipe";
+  food_name: string | null;
+  brand_name: string | null;
+  source_id: NullableInt8;
+  source_code: string | null;
+  source_release_id: string | null;
+  source_display_name: string | null;
+  license_expression: string | null;
+  attribution_required: boolean | null;
+  attribution_text: string | null;
+  serving_label: string | null;
+  nested_recipe_id: string | null;
+  nested_recipe_name: string | null;
+  nested_recipe_version_number: number | null;
+  nested_recipe_yield_grams: NullableNumeric;
+  nested_recipe_serving_count: NullableNumeric;
+  nested_recipe_serving_label: string | null;
+}
+
+export interface RecipeVersionNutrientTable {
+  recipe_version_id: string;
+  nutrient_id: Int8;
+  nutrient_code: string;
+  nutrient_name: string;
+  unit: string;
+  known_amount: Numeric;
+  completeness: "complete" | "partial" | "unknown";
+  is_exact: boolean;
+  contributor_count: number;
+  quantified_count: number;
+  trace_count: number;
+  unknown_count: number;
+  unknown_reasons: ImmutableJson;
+  calculation_version: string;
+  created_at: CreatedTimestamp;
+}
+
+export interface RecipeVersionSourceTable {
+  recipe_version_id: string;
+  food_source_id: Int8;
+  source_release_id: string;
+  source_code: string;
+  source_display_name: string;
+  license_expression: string;
+  attribution_required: boolean;
+  attribution_text: string;
+  created_at: CreatedTimestamp;
+}
+
+export interface RecipeOperationTable {
+  user_id: string;
+  client_operation_id: string;
+  request_digest: string;
+  operation: "create" | "revise";
+  recipe_id: string;
+  result_payload: ImmutableJson;
   created_at: CreatedTimestamp;
 }
 
@@ -556,9 +625,34 @@ export interface DiaryEntryRevisionTable {
   attribution_required: boolean | null;
   attribution_text: string | null;
   serving_label: string | null;
+  recipe_id: OptionalImmutable<string | null>;
+  recipe_name: OptionalImmutable<string | null>;
+  recipe_version_number: OptionalImmutable<number | null>;
+  recipe_yield_grams: ColumnType<string | null, number | string | null | undefined, never>;
+  recipe_yield_source: OptionalImmutable<"estimated" | "measured" | null>;
+  recipe_serving_count: ColumnType<string | null, number | string | null | undefined, never>;
+  recipe_serving_label: OptionalImmutable<string | null>;
+  recipe_calculation_version: OptionalImmutable<string | null>;
+  recipe_retention_policy_code: OptionalImmutable<string | null>;
+  recipe_retention_policy_version: OptionalImmutable<string | null>;
+  recipe_calculation_assumptions: OptionalImmutable<JsonObject | null>;
+  recipe_warnings: OptionalImmutable<JsonArray | null>;
+  source_component_count: OptionalImmutable<number>;
   snapshot_status: "complete" | "partial";
   snapshot_engine_version: string;
   nutrient_component_count: number;
+  created_at: CreatedTimestamp;
+}
+
+export interface DiaryEntryRevisionSourceTable {
+  diary_entry_revision_id: string;
+  food_source_id: Int8;
+  source_release_id: string;
+  source_code: string;
+  source_display_name: string;
+  license_expression: string;
+  attribution_required: boolean;
+  attribution_text: string;
   created_at: CreatedTimestamp;
 }
 
@@ -627,6 +721,24 @@ export interface NutritionGoalVersionTable {
   energy_adjustment_kcal: NullableNumeric;
   assumptions: ImmutableJson;
   rationale: string | null;
+  user_id: string;
+  goal_status: GoalStatus;
+  effective_from: DateOnly;
+  effective_to: NullableDateOnly;
+  target_count: number;
+  profile_revision: NullableInt8;
+  age_years: number | null;
+  profile_height_cm: NullableNumeric;
+  profile_weight_kg: NullableNumeric;
+  profile_sex_at_birth: "female" | "male" | null;
+  activity_level_code: "active_or_moderate" | "sedentary_or_light" | "vigorous" | null;
+  energy_source_code: string;
+  energy_source_version: string;
+  energy_source_url: string | null;
+  activity_policy_code: string | null;
+  activity_policy_version: string | null;
+  activity_policy_url: string | null;
+  calculation_version: string;
   created_by_user_id: string;
   created_at: CreatedTimestamp;
 }
@@ -641,6 +753,17 @@ export interface NutritionGoalTargetTable {
   target_source: string;
   target_source_version: string | null;
   metadata: ImmutableJson;
+  rationale: string | null;
+  created_at: CreatedTimestamp;
+}
+
+export interface NutritionGoalOperationTable {
+  user_id: string;
+  client_operation_id: string;
+  request_digest: string;
+  operation: "create" | "revise";
+  nutrition_goal_id: string;
+  result_payload: ImmutableJson;
   created_at: CreatedTimestamp;
 }
 
@@ -696,6 +819,7 @@ export interface Database {
   diary_entry_nutrient_snapshot: DiaryEntryNutrientSnapshotTable;
   diary_entry_revision: DiaryEntryRevisionTable;
   diary_entry_revision_nutrient: DiaryEntryRevisionNutrientTable;
+  diary_entry_revision_source: DiaryEntryRevisionSourceTable;
   diary_operation: DiaryOperationTable;
   food: FoodTable;
   food_barcode: FoodBarcodeTable;
@@ -715,12 +839,16 @@ export interface Database {
   nutrient_alias: NutrientAliasTable;
   nutrition_goal: NutritionGoalTable;
   nutrition_goal_target: NutritionGoalTargetTable;
+  nutrition_goal_operation: NutritionGoalOperationTable;
   nutrition_goal_version: NutritionGoalVersionTable;
   outbox_event: OutboxEventTable;
   food_search_projection_revision: FoodSearchProjectionRevisionTable;
   recipe: RecipeTable;
   recipe_ingredient: RecipeIngredientTable;
+  recipe_operation: RecipeOperationTable;
   recipe_version: RecipeVersionTable;
+  recipe_version_nutrient: RecipeVersionNutrientTable;
+  recipe_version_source: RecipeVersionSourceTable;
   source_nutrient_map: SourceNutrientMapTable;
   source_nutrient_map_revision: SourceNutrientMapRevisionTable;
   user_profile: UserProfileTable;

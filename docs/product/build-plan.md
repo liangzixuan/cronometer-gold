@@ -23,9 +23,10 @@ as measured zeros.
 4. **Diary vertical slice (complete):** account/profile, local-day diary, serving
    selection, add/edit/delete, meal groups, exact daily totals, and retry-safe
    idempotency.
-5. **Recipes and goals (next):** yield-aware recipe calculation, versioned targets,
-   energy equations, nutrient coverage, and explainable recommendations.
-6. **Retention features:** trends, exports, repeat logging, reminders, custom
+5. **Recipes and goals (complete):** yield-aware versioned recipes, immutable
+   recipe diary snapshots, versioned targets, bounded energy estimates, and
+   lower-bound nutrient progress.
+6. **Retention features (next):** trends, exports, repeat logging, reminders, custom
    foods/biometrics, and platform health integrations.
 7. **Subscription features:** advanced reports, long-range analytics, premium
    automation, and coaching only after the free tracking loop is excellent.
@@ -91,11 +92,42 @@ milestone. Until diary entries are paginated, a local day is capped at 50 food
 entries so the full immutable nutrient vectors remain within a reviewed response
 and mobile-memory budget.
 
+## Recipes-and-goals boundary
+
+An authenticated person can create and revise a private recipe from immutable
+food or nested-recipe versions, provide measured or estimated final yield, and
+log either grams or a defined serving. Recipe versions retain the exact resolved
+ingredients, calculation and identity-retention assumptions, reason-counted
+nutrient coverage, warnings, and transitive source attribution. Cycles, excessive
+depth or closure, cross-owner dependencies, ambiguous servings, and stale
+revisions fail closed. A diary log pins the selected recipe version and remains
+unchanged by later recipe edits.
+
+Daily goals are immutable revisions with explicit effective dates. Energy can be
+a user-supplied fixed value or a visibly estimated Mifflin–St Jeor result for the
+reviewed adult/profile boundary, multiplied by an explicitly selected PAL. The
+snapshot retains every input and source and does not add ordinary exercise a
+second time. Nutrient targets are user-supplied and source-labelled; this
+milestone does not silently invent DRI defaults. Progress is derived from one
+coherent diary/goal snapshot and labels trace, partial, or unknown intake as a
+known lower bound rather than exact completion. Web and native clients preserve
+idempotent retry bodies and exact recipe versions.
+
+Migration `0005` deliberately refuses experimental legacy recipe or goal roots
+that lack the immutable evidence required by these contracts. They require a
+reviewed export/remediation and API-based recreation; the migration does not
+fabricate nutrition, yield, source, or equation history. Whole-account erasure,
+automatic reference targets, retention-factor datasets, therapeutic goals, and
+signed-device validation remain controlled-beta work and are not claimed here.
+
 ## Next acceptance target
 
-Recipes and goals are complete when an authenticated user can build a versioned,
-yield-aware recipe from immutable food/recipe revisions, log an exact serving,
-and compare the resulting calories, macros, and micronutrients with versioned
-daily targets. Recipe cycles, unit ambiguity, retention/yield assumptions, and
-unknown nutrient coverage must fail visibly; energy equations and target sources
-must remain explainable and independently testable.
+Retention features are complete when an authenticated person can inspect
+timezone-correct nutrient trends, export a complete and machine-readable copy of
+their account and immutable nutrition history, repeat a prior log without
+silently selecting newer food or recipe versions, and configure reminders that
+remain consented, revocable, and free of health details on lock screens. Custom
+foods, biometrics, and platform-health imports must preserve provenance,
+deduplicate retries, expose conflicts, and remain deletable. Account erasure,
+backup restore, export reconciliation, notification delivery, and signed-device
+flows must pass end-to-end drills before this milestone is called complete.

@@ -10,6 +10,9 @@ export const nutrientUnknownReasons = [
   "withheld",
 ] as const;
 
+/** Derived recipe views may add scale digits beyond the 160-character persisted snapshot bound. */
+export const MAX_NUTRIENT_AGGREGATE_OUTPUT_LENGTH = 200;
+
 export type DiaryMealSlot = (typeof diaryMealSlots)[number];
 export type NutrientCompleteness = (typeof nutrientCompletenessValues)[number];
 export type NutrientUnknownReason = (typeof nutrientUnknownReasons)[number];
@@ -36,6 +39,12 @@ export type DiaryPortion =
   | { readonly kind: "serving"; readonly servingId: string; readonly amount: string }
   | { readonly kind: "grams"; readonly grams: string };
 
+export type RecipeDiaryPortion =
+  | { readonly kind: "serving"; readonly amount: string }
+  | { readonly kind: "grams"; readonly grams: string };
+
+export type DiaryMutablePortion = DiaryPortion | RecipeDiaryPortion;
+
 /** Immutable resolved portion returned with a logged diary revision. */
 export type DiaryEntryPortion =
   | {
@@ -46,18 +55,17 @@ export type DiaryEntryPortion =
     }
   | { readonly kind: "grams"; readonly grams: string };
 
+export type RecipeDiaryEntryPortion =
+  | { readonly kind: "serving"; readonly amount: string; readonly servingLabel: string }
+  | { readonly kind: "grams"; readonly grams: string };
+
 export interface DiaryFoodSourceSnapshot extends FoodSourceSummary {
   readonly releaseId: string;
 }
 
-export interface DiaryEntry {
+interface DiaryEntryCommon {
   readonly id: string;
   readonly revision: string;
-  readonly foodVersionId: string;
-  readonly portion: DiaryEntryPortion;
-  readonly food: { readonly name: string; readonly brandName: string | null };
-  /** Immutable source/release and reviewed attribution captured when this revision was logged. */
-  readonly source: DiaryFoodSourceSnapshot;
   readonly mealSlot: DiaryMealSlot;
   readonly resolvedGrams: string;
   readonly occurredAt: string;
@@ -68,6 +76,56 @@ export interface DiaryEntry {
   readonly position: number;
   readonly nutrients: readonly DiaryNutrientAggregate[];
 }
+
+export interface DiaryFoodEntry extends DiaryEntryCommon {
+  readonly entryKind: "food";
+  readonly foodVersionId: string;
+  readonly recipeVersionId: null;
+  readonly portion: DiaryEntryPortion;
+  readonly food: { readonly name: string; readonly brandName: string | null };
+  readonly recipe: null;
+  /** Immutable source/release and reviewed attribution captured when this revision was logged. */
+  readonly source: DiaryFoodSourceSnapshot;
+}
+
+export interface DiaryRecipeEntry extends DiaryEntryCommon {
+  readonly entryKind: "recipe";
+  readonly foodVersionId: null;
+  /** Exact immutable version selected by the client and pinned in the idempotency digest. */
+  readonly recipeVersionId: string;
+  readonly portion: RecipeDiaryEntryPortion;
+  readonly food: null;
+  readonly recipe: {
+    readonly id: string;
+    readonly name: string;
+    readonly versionNumber: number;
+    readonly yieldGrams: string;
+    readonly yieldSource: "measured" | "estimated";
+    readonly servingCount: string | null;
+    readonly servingLabel: string | null;
+    readonly calculationVersion: string;
+    readonly retentionPolicy: {
+      readonly code: "identity-retention-default";
+      readonly version: "1";
+      readonly assumption: string;
+    };
+    readonly warnings: readonly {
+      readonly code:
+        | "ESTIMATED_YIELD"
+        | "PARTIAL_NUTRIENT_DATA"
+        | "RETENTION_FACTORS_DEFAULTED"
+        | "YIELD_ABOVE_INPUT_MASS"
+        | "YIELD_BELOW_HALF_INPUT_MASS";
+      readonly message: string;
+      readonly nutrientIds: readonly string[];
+    }[];
+  };
+  /** Deterministic transitive food-source attribution; there is no invented singular source. */
+  readonly sources: readonly DiaryFoodSourceSnapshot[];
+  readonly source: null;
+}
+
+export type DiaryEntry = DiaryFoodEntry | DiaryRecipeEntry;
 
 export interface DiaryDay {
   readonly id: string | null;
@@ -94,9 +152,17 @@ export interface CreateDiaryEntryRequest {
 }
 
 export interface UpdateDiaryEntryRequest {
-  readonly portion?: DiaryPortion;
+  readonly portion?: DiaryMutablePortion;
   readonly mealSlot?: DiaryMealSlot;
   readonly occurredAt?: string;
+  readonly position?: number;
+}
+
+export interface CreateRecipeDiaryEntryRequest {
+  readonly recipeVersionId: string;
+  readonly portion: RecipeDiaryPortion;
+  readonly mealSlot: DiaryMealSlot;
+  readonly occurredAt: string;
   readonly position?: number;
 }
 
@@ -116,7 +182,7 @@ const uuidSchema = {
 const positiveIdentifierSchema = { type: "string", pattern: "^[1-9][0-9]{0,19}$" } as const;
 const nonNegativeDecimalSchema = {
   type: "string",
-  maxLength: 160,
+  maxLength: MAX_NUTRIENT_AGGREGATE_OUTPUT_LENGTH,
   pattern: "^(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?$",
 } as const;
 const positiveDecimalSchema = {
@@ -126,8 +192,8 @@ const positiveDecimalSchema = {
 } as const;
 const positiveResolvedDecimalSchema = {
   type: "string",
-  maxLength: 37,
-  pattern: "^(?=.*[1-9])(?:0|[1-9][0-9]{0,23})(?:\\.[0-9]{1,12})?$",
+  maxLength: 160,
+  pattern: "^(?=.*[1-9])(?:0|[1-9][0-9]{0,17})(?:\\.[0-9]+)?$",
 } as const;
 const localDateSchema = {
   type: "string",
@@ -204,6 +270,24 @@ const diaryEntryServingPortionSchema = {
     servingLabel: { type: "string", minLength: 1, maxLength: 300 },
   },
 } as const;
+const recipeServingPortionSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["kind", "amount"],
+  properties: {
+    kind: { type: "string", const: "serving" },
+    amount: positiveDecimalSchema,
+  },
+} as const;
+const recipeDiaryEntryServingPortionSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["kind", "amount", "servingLabel"],
+  properties: {
+    ...recipeServingPortionSchema.properties,
+    servingLabel: { type: "string", minLength: 1, maxLength: 100 },
+  },
+} as const;
 const gramPortionSchema = {
   type: "object",
   additionalProperties: false,
@@ -224,30 +308,77 @@ export const diaryEntryPortionSchema = {
   oneOf: [diaryEntryServingPortionSchema, gramPortionSchema],
 } as const;
 
-export const diaryEntrySchema = {
-  $id: "DiaryEntry",
+export const recipeDiaryPortionSchema = {
+  $id: "RecipeDiaryPortion",
+  oneOf: [recipeServingPortionSchema, gramPortionSchema],
+} as const;
+
+export const diaryMutablePortionSchema = {
+  $id: "DiaryMutablePortion",
+  oneOf: [servingPortionSchema, recipeServingPortionSchema, gramPortionSchema],
+} as const;
+
+export const recipeDiaryEntryPortionSchema = {
+  $id: "RecipeDiaryEntryPortion",
+  oneOf: [recipeDiaryEntryServingPortionSchema, gramPortionSchema],
+} as const;
+
+const diaryEntryCommonRequired = [
+  "id",
+  "revision",
+  "entryKind",
+  "foodVersionId",
+  "recipeVersionId",
+  "portion",
+  "food",
+  "recipe",
+  "source",
+  "mealSlot",
+  "resolvedGrams",
+  "occurredAt",
+  "localDate",
+  "localTime",
+  "timeZone",
+  "position",
+  "nutrients",
+] as const;
+
+const diaryEntryCommonProperties = {
+  id: uuidSchema,
+  revision: revisionSchema,
+  mealSlot: { type: "string", enum: diaryMealSlots },
+  resolvedGrams: positiveResolvedDecimalSchema,
+  occurredAt: occurredAtSchema,
+  localDate: localDateSchema,
+  localTime: {
+    type: "string",
+    pattern: "^(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]{1,9})?$",
+  },
+  timeZone: { type: "string", minLength: 1, maxLength: 63 },
+  position: { type: "integer", minimum: 0, maximum: 1000000 },
+  nutrients: { type: "array", maxItems: 256, items: diaryNutrientAggregateSchema },
+} as const;
+
+const foodSourceSnapshotSchema = {
   type: "object",
   additionalProperties: false,
-  required: [
-    "id",
-    "revision",
-    "foodVersionId",
-    "portion",
-    "food",
-    "source",
-    "mealSlot",
-    "resolvedGrams",
-    "occurredAt",
-    "localDate",
-    "localTime",
-    "timeZone",
-    "position",
-    "nutrients",
-  ],
+  required: [...foodSourceSummarySchema.required, "releaseId"],
   properties: {
-    id: uuidSchema,
-    revision: revisionSchema,
+    ...foodSourceSummarySchema.properties,
+    releaseId: uuidSchema,
+  },
+} as const;
+
+export const diaryFoodEntrySchema = {
+  $id: "DiaryFoodEntry",
+  type: "object",
+  additionalProperties: false,
+  required: diaryEntryCommonRequired,
+  properties: {
+    ...diaryEntryCommonProperties,
+    entryKind: { type: "string", const: "food" },
     foodVersionId: positiveIdentifierSchema,
+    recipeVersionId: { type: "null" },
     portion: diaryEntryPortionSchema,
     food: {
       type: "object",
@@ -260,27 +391,115 @@ export const diaryEntrySchema = {
         },
       },
     },
-    source: {
+    recipe: { type: "null" },
+    source: foodSourceSnapshotSchema,
+  },
+} as const;
+
+const diaryRecipeWarningSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["code", "message", "nutrientIds"],
+  properties: {
+    code: {
+      type: "string",
+      enum: [
+        "ESTIMATED_YIELD",
+        "PARTIAL_NUTRIENT_DATA",
+        "RETENTION_FACTORS_DEFAULTED",
+        "YIELD_ABOVE_INPUT_MASS",
+        "YIELD_BELOW_HALF_INPUT_MASS",
+      ],
+    },
+    message: { type: "string", minLength: 1, maxLength: 500 },
+    nutrientIds: { type: "array", maxItems: 256, items: positiveIdentifierSchema },
+  },
+} as const;
+
+export const diaryRecipeEntrySchema = {
+  $id: "DiaryRecipeEntry",
+  type: "object",
+  additionalProperties: false,
+  required: [...diaryEntryCommonRequired, "sources"],
+  properties: {
+    ...diaryEntryCommonProperties,
+    entryKind: { type: "string", const: "recipe" },
+    foodVersionId: { type: "null" },
+    recipeVersionId: uuidSchema,
+    portion: recipeDiaryEntryPortionSchema,
+    food: { type: "null" },
+    recipe: {
       type: "object",
       additionalProperties: false,
-      required: [...foodSourceSummarySchema.required, "releaseId"],
+      required: [
+        "id",
+        "name",
+        "versionNumber",
+        "yieldGrams",
+        "yieldSource",
+        "servingCount",
+        "servingLabel",
+        "calculationVersion",
+        "retentionPolicy",
+        "warnings",
+      ],
+      not: {
+        anyOf: [
+          {
+            type: "object",
+            required: ["servingCount", "servingLabel"],
+            properties: {
+              servingCount: { type: "null" },
+              servingLabel: { type: "string" },
+            },
+          },
+          {
+            type: "object",
+            required: ["servingCount", "servingLabel"],
+            properties: {
+              servingCount: { type: "string" },
+              servingLabel: { type: "null" },
+            },
+          },
+        ],
+      },
       properties: {
-        ...foodSourceSummarySchema.properties,
-        releaseId: uuidSchema,
+        id: uuidSchema,
+        name: { type: "string", minLength: 1, maxLength: 200 },
+        versionNumber: { type: "integer", minimum: 1 },
+        yieldGrams: positiveResolvedDecimalSchema,
+        yieldSource: { type: "string", enum: ["measured", "estimated"] },
+        servingCount: { anyOf: [positiveDecimalSchema, { type: "null" }] },
+        servingLabel: {
+          anyOf: [{ type: "string", minLength: 1, maxLength: 100 }, { type: "null" }],
+        },
+        calculationVersion: { type: "string", minLength: 1, maxLength: 100 },
+        retentionPolicy: {
+          type: "object",
+          additionalProperties: false,
+          required: ["code", "version", "assumption"],
+          properties: {
+            code: { type: "string", const: "identity-retention-default" },
+            version: { type: "string", const: "1" },
+            assumption: { type: "string", minLength: 1, maxLength: 500 },
+          },
+        },
+        warnings: { type: "array", maxItems: 5, items: diaryRecipeWarningSchema },
       },
     },
-    mealSlot: { type: "string", enum: diaryMealSlots },
-    resolvedGrams: positiveResolvedDecimalSchema,
-    occurredAt: occurredAtSchema,
-    localDate: localDateSchema,
-    localTime: {
-      type: "string",
-      pattern: "^(?:[01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](?:\\.[0-9]{1,9})?$",
+    sources: {
+      type: "array",
+      minItems: 1,
+      maxItems: 256,
+      items: foodSourceSnapshotSchema,
     },
-    timeZone: { type: "string", minLength: 1, maxLength: 63 },
-    position: { type: "integer", minimum: 0, maximum: 1000000 },
-    nutrients: { type: "array", maxItems: 256, items: diaryNutrientAggregateSchema },
+    source: { type: "null" },
   },
+} as const;
+
+export const diaryEntrySchema = {
+  $id: "DiaryEntry",
+  oneOf: [diaryFoodEntrySchema, diaryRecipeEntrySchema],
 } as const;
 
 export const diaryDaySchema = {
@@ -309,7 +528,7 @@ export const diaryDayResponseSchema = {
 } as const;
 
 const mutableEntryProperties = {
-  portion: diaryPortionSchema,
+  portion: diaryMutablePortionSchema,
   mealSlot: { type: "string", enum: diaryMealSlots },
   occurredAt: occurredAtSchema,
   position: { type: "integer", minimum: 0, maximum: 1000000 },
@@ -320,7 +539,25 @@ export const createDiaryEntryRequestSchema = {
   type: "object",
   additionalProperties: false,
   required: ["foodVersionId", "portion", "mealSlot", "occurredAt"],
-  properties: { foodVersionId: positiveIdentifierSchema, ...mutableEntryProperties },
+  properties: {
+    foodVersionId: positiveIdentifierSchema,
+    ...mutableEntryProperties,
+    portion: diaryPortionSchema,
+  },
+} as const;
+
+export const createRecipeDiaryEntryRequestSchema = {
+  $id: "CreateRecipeDiaryEntryRequest",
+  type: "object",
+  additionalProperties: false,
+  required: ["recipeVersionId", "portion", "mealSlot", "occurredAt"],
+  properties: {
+    recipeVersionId: uuidSchema,
+    portion: recipeDiaryPortionSchema,
+    mealSlot: mutableEntryProperties.mealSlot,
+    occurredAt: mutableEntryProperties.occurredAt,
+    position: mutableEntryProperties.position,
+  },
 } as const;
 
 export const updateDiaryEntryRequestSchema = {

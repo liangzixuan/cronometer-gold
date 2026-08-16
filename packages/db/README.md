@@ -57,6 +57,23 @@ the digest or response needed to reconstruct an exact replay, so a post-upgrade
 reuse returns the typed `DIARY_IDEMPOTENCY_CONFLICT` error rather than attempting
 the mutation or surfacing a raw unique-key error.
 
+### 0005 recipe and goal compatibility gate
+
+Migration `0005_recipes_and_goals.sql` intentionally fails before any DDL when
+an experimental deployment contains a legacy `recipe` or `nutrition_goal` root.
+Those reserved tables did not retain enough evidence to reconstruct immutable
+final-yield semantics, complete nutrient aggregates, reviewed energy snapshots,
+or idempotency digests/results. Do not fabricate that history. Export and
+remediate the experimental rows, retry the entire migration transaction, and
+verify the normal fresh-schema and 0004-to-0005 upgrade gates. There is no down
+migration.
+
+Recipe and goal child rows cascade when an unreferenced owning root is removed;
+an immutable recipe version referenced by diary history remains retained. This
+does not make direct `app_user` deletion a supported erasure workflow. Legacy
+diary, custom-food, operation, and audit edges still require a separately
+designed privileged privacy-erasure process for the controlled beta.
+
 ## Client
 
 ```ts
@@ -91,6 +108,12 @@ All writers must preserve this global order:
    version, and release and are accepted only while the release is `imported`.
    Promotion makes those children permanently closed. Custom source-less versions
    remain available to user-owned privacy workflows.
+5. Recipe writers lock the active user, then all source IDs, food IDs, immutable
+   food-version IDs, and release IDs in sorted order before nested recipe roots
+   and the nutrient registry. Recipe diary writes retain that source-first order
+   before sorted diary-day locks. Goal writers lock the active user and coherent
+   profile snapshot, then goal roots and the nutrient registry. Multi-root goal
+   and nested-recipe sets are always sorted.
 
 Do not introduce a nutrient-before-source or unsorted multi-day/multi-mapping path.
 The deterministic concurrency tests intentionally pause each side of these orders

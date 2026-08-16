@@ -1129,6 +1129,332 @@ button:disabled {
   outline-offset: 3px;
 }
 
+.recipesDashboard,
+.goalsDashboard {
+  width: min(1240px, 100%);
+}
+
+.workspaceIntro {
+  max-width: 780px;
+  margin: 20px 0 0;
+  color: var(--ink-muted);
+}
+
+.recipeWorkspace,
+.goalWorkspace {
+  display: grid;
+  grid-template-columns: minmax(250px, 0.34fr) minmax(0, 1fr);
+  gap: 28px;
+  margin-top: 42px;
+  align-items: start;
+}
+
+.recipeRail,
+.workspacePanel {
+  border: 1px solid var(--line);
+  border-radius: 20px;
+}
+
+.recipeRail {
+  padding: 18px;
+  background: var(--paper);
+}
+
+.workspacePanel {
+  min-width: 0;
+  padding: clamp(22px, 4vw, 42px);
+  background: var(--white);
+}
+
+.workspaceHeading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.workspaceHeading h2,
+.workspaceSection h3 {
+  margin: 0;
+  letter-spacing: -0.04em;
+}
+
+.workspaceHeading h2 {
+  font-size: clamp(2rem, 4vw, 3.2rem);
+  line-height: 1;
+}
+
+.goalEditorFields {
+  border: 0;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.recipeList,
+.ingredientList,
+.warningList,
+.progressList {
+  padding: 0;
+  margin: 18px 0 0;
+  list-style: none;
+}
+
+.recipeList button {
+  width: 100%;
+  padding: 13px;
+  color: var(--ink);
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.recipeList button[aria-current="true"] {
+  background: var(--white);
+}
+
+.recipeList button strong,
+.recipeList button small {
+  display: block;
+}
+
+.recipeList button small {
+  margin-top: 3px;
+  color: var(--ink-muted);
+}
+
+.workspaceForm,
+.goalTargetGrid {
+  display: grid;
+  gap: 16px;
+}
+
+.workspaceForm {
+  margin-top: 28px;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.formField {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.formField--wide {
+  grid-column: 1 / -1;
+}
+
+.formField > span,
+.fieldLegend {
+  color: var(--ink-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.formField input,
+.formField select,
+.formField textarea {
+  width: 100%;
+  min-height: 46px;
+  padding: 10px 12px;
+  color: var(--ink);
+  background: var(--white);
+  border: 1px solid rgba(23, 33, 29, 0.3);
+  border-radius: 9px;
+  font: inherit;
+}
+
+.formField textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
+.fieldHelp,
+.workspaceStatus,
+.coverageCopy,
+.sourceLine {
+  color: var(--ink-muted);
+  font-size: 0.78rem;
+}
+
+.workspaceStatus {
+  min-height: 22px;
+  margin: 14px 0 0;
+}
+
+.workspaceStatus[data-state="error"] {
+  color: #8a332b;
+}
+
+.workspaceSection {
+  padding-top: 28px;
+  margin-top: 30px;
+  border-top: 1px solid var(--line);
+}
+
+.ingredientSearchResults {
+  max-height: 340px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.ingredientResult,
+.ingredientRow,
+.goalTargetRow {
+  display: grid;
+  gap: 12px;
+  align-items: center;
+}
+
+.ingredientResult {
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 13px;
+}
+
+.ingredientResult + .ingredientResult,
+.ingredientRow + .ingredientRow,
+.goalTargetRow + .goalTargetRow {
+  border-top: 1px solid var(--line);
+}
+
+.ingredientResult p,
+.ingredientRow p {
+  margin: 2px 0;
+}
+
+.ingredientRow {
+  grid-template-columns: minmax(0, 1fr) minmax(90px, 0.22fr) auto;
+  padding: 15px 0;
+}
+
+.goalTargetRow {
+  grid-template-columns: minmax(150px, 1fr) repeat(3, minmax(90px, 0.45fr)) auto;
+  padding: 14px 0;
+}
+
+.ingredientRow input,
+.goalTargetRow input {
+  min-width: 0;
+  min-height: 42px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font: inherit;
+}
+
+.buttonPrimary,
+.buttonSecondary,
+.buttonQuiet,
+.buttonDanger {
+  min-height: 42px;
+  padding: 10px 14px;
+  border-radius: 9px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.buttonPrimary {
+  color: var(--white);
+  background: var(--forest);
+  border: 1px solid var(--forest);
+}
+
+.buttonSecondary,
+.buttonQuiet {
+  color: var(--forest);
+  background: transparent;
+  border: 1px solid var(--forest);
+}
+
+.buttonQuiet {
+  border-color: var(--line);
+}
+
+.buttonDanger {
+  color: #8a3128;
+  background: transparent;
+  border: 1px solid #b8685f;
+}
+
+.warningList li {
+  padding: 12px 14px;
+  margin-top: 8px;
+  color: #6b4c00;
+  background: #f7e6b0;
+  border-radius: 9px;
+}
+
+.nutritionTable {
+  width: 100%;
+  margin-top: 16px;
+  border-collapse: collapse;
+}
+
+.nutritionTable th,
+.nutritionTable td {
+  padding: 11px 8px;
+  border-top: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.nutritionTable th:last-child,
+.nutritionTable td:last-child {
+  text-align: right;
+}
+
+.progressList li {
+  padding: 16px 0;
+  border-top: 1px solid var(--line);
+}
+
+.progressHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.progressTrack {
+  height: 8px;
+  margin-top: 9px;
+  overflow: hidden;
+  background: var(--paper-deep);
+  border-radius: 999px;
+}
+
+.progressTrack span {
+  height: 100%;
+  display: block;
+  background: var(--forest);
+}
+
+.modeChooser {
+  padding: 0;
+  margin: 0;
+  border: 0;
+}
+
+.workspaceForm input:focus-visible,
+.workspaceForm select:focus-visible,
+.workspaceForm textarea:focus-visible,
+.workspaceForm button:focus-visible,
+.recipeList button:focus-visible {
+  outline: 3px solid #4c8c65;
+  outline-offset: 3px;
+}
+
 @media (max-width: 760px) {
   .trustBar,
   .cardGrid {
@@ -1182,6 +1508,16 @@ button:disabled {
   }
 
   .foodTools {
+    grid-template-columns: 1fr;
+  }
+
+  .recipeWorkspace,
+  .goalWorkspace {
+    grid-template-columns: 1fr;
+  }
+
+  .formGrid,
+  .goalTargetRow {
     grid-template-columns: 1fr;
   }
 
@@ -1250,6 +1586,10 @@ button:disabled {
   .diaryEntry {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .ingredientRow {
+    grid-template-columns: 1fr;
   }
 }
 

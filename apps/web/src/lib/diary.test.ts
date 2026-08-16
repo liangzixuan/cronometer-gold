@@ -36,9 +36,12 @@ const nutrient = {
 const entry = {
   id: "96aac405-c107-4776-923e-a40ca5014975",
   revision: "3",
+  entryKind: "food",
   foodVersionId: "202",
+  recipeVersionId: null,
   portion: { kind: "serving", servingId: "303", amount: "1", servingLabel: "medium apple" },
   food: { name: "Apple", brandName: null },
+  recipe: null,
   source: {
     code: "USDA_FDC",
     releaseId: "ea8c79b4-49b0-4548-8ae6-c1b228317f19",
@@ -55,6 +58,40 @@ const entry = {
   localTime: "08:30:00",
   position: 0,
   nutrients: [nutrient],
+} as const;
+
+const recipeEntry = {
+  ...entry,
+  id: "c8a7c76f-3c1d-445c-9160-152e57b29e40",
+  entryKind: "recipe" as const,
+  foodVersionId: null,
+  recipeVersionId: "de1f6d0a-f7dc-4b25-b7b9-3eef1d44779a",
+  portion: { kind: "serving" as const, amount: "1", servingLabel: "bowl" },
+  food: null,
+  recipe: {
+    id: "df94a52f-e84a-4cd5-873e-227d1e213d62",
+    name: "Bean stew",
+    versionNumber: 2,
+    yieldGrams: "800",
+    yieldSource: "measured" as const,
+    servingCount: "4",
+    servingLabel: "bowl",
+    calculationVersion: "recipe-v1",
+    retentionPolicy: {
+      code: "identity-retention-default" as const,
+      version: "1" as const,
+      assumption: "No cooking-retention factor was applied.",
+    },
+    warnings: [
+      {
+        code: "RETENTION_FACTORS_DEFAULTED" as const,
+        message: "Nutrients use identity retention.",
+        nutrientIds: [],
+      },
+    ],
+  },
+  source: null,
+  sources: [entry.source],
 } as const;
 
 describe("web diary contract", () => {
@@ -77,8 +114,27 @@ describe("web diary contract", () => {
     expect(nutrientDisplay(total).amount).toBe("≥ 125.500000000000 kcal");
   });
 
+  it("strictly parses a mixed food and immutable recipe day", () => {
+    const diary = parseDiaryDay({
+      data: {
+        id: "41b5f2ea-2274-4b98-8b13-96504d176917",
+        localDate: "2026-08-15",
+        timeZone: "America/Chicago",
+        status: "open",
+        revision: "5",
+        entries: [entry, recipeEntry],
+        totals: [nutrient],
+        updatedAt: "2026-08-15T13:31:00.000Z",
+      },
+    });
+    expect(diary.entries.map((candidate) => candidate.entryKind)).toEqual(["food", "recipe"]);
+    expect(diary.entries[1]?.entryKind === "recipe" && diary.entries[1].recipe.name).toBe(
+      "Bean stew",
+    );
+  });
+
   it("preserves long exact subnormal nutrient amounts within the 160-character bound", () => {
-    const knownAmount = `0.${"0".repeat(78)}1`;
+    const knownAmount = `0.${"0".repeat(166)}1`;
     const diary = parseDiaryDay({
       data: {
         id: "41b5f2ea-2274-4b98-8b13-96504d176917",
@@ -92,6 +148,33 @@ describe("web diary contract", () => {
       },
     });
     expect(diary.totals[0]?.knownAmount).toBe(knownAmount);
+    expect(knownAmount.length).toBeGreaterThan(160);
+  });
+
+  it("accepts high-precision resolved recipe output without widening request portions", () => {
+    const resolved = `33.${"3".repeat(100)}`;
+    const diary = parseDiaryDay({
+      data: {
+        id: "41b5f2ea-2274-4b98-8b13-96504d176917",
+        localDate: "2026-08-15",
+        timeZone: "America/Chicago",
+        status: "open",
+        revision: "5",
+        entries: [
+          {
+            ...recipeEntry,
+            resolvedGrams: resolved,
+            recipe: { ...recipeEntry.recipe, yieldGrams: resolved },
+          },
+        ],
+        totals: [nutrient],
+        updatedAt: "2026-08-15T13:31:00.000Z",
+      },
+    });
+    expect(diary.entries[0]?.resolvedGrams).toBe(resolved);
+    expect(diary.entries[0]?.entryKind === "recipe" && diary.entries[0].recipe.yieldGrams).toBe(
+      resolved,
+    );
   });
 
   it("requires the immutable serving label in diary responses", () => {

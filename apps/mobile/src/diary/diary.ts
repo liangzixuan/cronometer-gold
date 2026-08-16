@@ -37,27 +37,18 @@ export interface DiaryNutrient {
   };
 }
 
-export interface DiaryEntry {
+export interface DiarySource {
+  readonly code: string;
+  readonly releaseId: string;
+  readonly displayName: string;
+  readonly licenseExpression: string;
+  readonly attributionRequired: boolean;
+  readonly attributionText: string;
+}
+
+interface DiaryEntryCommon {
   readonly id: string;
   readonly revision: string;
-  readonly foodVersionId: string;
-  readonly portion:
-    | {
-        readonly kind: "serving";
-        readonly servingId: string;
-        readonly amount: string;
-        readonly servingLabel: string;
-      }
-    | { readonly kind: "grams"; readonly grams: string };
-  readonly food: { readonly name: string; readonly brandName: string | null };
-  readonly source: {
-    readonly code: string;
-    readonly releaseId: string;
-    readonly displayName: string;
-    readonly licenseExpression: string;
-    readonly attributionRequired: boolean;
-    readonly attributionText: string;
-  };
   readonly mealSlot: MealSlot;
   readonly resolvedGrams: string;
   readonly occurredAt: string;
@@ -67,6 +58,57 @@ export interface DiaryEntry {
   readonly position: number;
   readonly nutrients: readonly DiaryNutrient[];
 }
+
+export interface DiaryFoodEntry extends DiaryEntryCommon {
+  readonly entryKind: "food";
+  readonly foodVersionId: string;
+  readonly recipeVersionId: null;
+  readonly portion:
+    | {
+        readonly kind: "serving";
+        readonly servingId: string;
+        readonly amount: string;
+        readonly servingLabel: string;
+      }
+    | { readonly kind: "grams"; readonly grams: string };
+  readonly food: { readonly name: string; readonly brandName: string | null };
+  readonly recipe: null;
+  readonly source: DiarySource;
+}
+
+export interface DiaryRecipeEntry extends DiaryEntryCommon {
+  readonly entryKind: "recipe";
+  readonly foodVersionId: null;
+  readonly recipeVersionId: string;
+  readonly portion:
+    | { readonly kind: "serving"; readonly amount: string; readonly servingLabel: string }
+    | { readonly kind: "grams"; readonly grams: string };
+  readonly food: null;
+  readonly source: null;
+  readonly sources: readonly DiarySource[];
+  readonly recipe: {
+    readonly id: string;
+    readonly name: string;
+    readonly versionNumber: number;
+    readonly yieldGrams: string;
+    readonly yieldSource: "measured" | "estimated";
+    readonly servingCount: string | null;
+    readonly servingLabel: string | null;
+    readonly calculationVersion: string;
+    readonly retentionPolicy: {
+      readonly code: "identity-retention-default";
+      readonly version: "1";
+      readonly assumption: string;
+    };
+    readonly warnings: readonly {
+      readonly code: string;
+      readonly message: string;
+      readonly nutrientIds: readonly string[];
+    }[];
+  };
+}
+
+export type DiaryEntry = DiaryFoodEntry | DiaryRecipeEntry;
 
 export interface DiaryDay {
   readonly id: string | null;
@@ -88,7 +130,7 @@ export interface DiaryMutationResult {
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/u;
 const DECIMAL = /^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/u;
 const API_POSITIVE_DECIMAL = /^(?=.*[1-9])(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,6})?$/u;
-const API_RESOLVED_DECIMAL = /^(?=.*[1-9])(?:0|[1-9][0-9]{0,23})(?:\.[0-9]{1,12})?$/u;
+const API_RESOLVED_DECIMAL = /^(?=.*[1-9])(?:0|[1-9][0-9]{0,17})(?:\.[0-9]+)?$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const TIME = /^(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\.\d{1,9})?)?$/u;
 
@@ -100,8 +142,8 @@ function text(value: unknown, maximum = 1_000): value is string {
   return typeof value === "string" && value.length > 0 && value.length <= maximum;
 }
 
-function decimal(value: unknown): value is string {
-  return typeof value === "string" && value.length <= 160 && DECIMAL.test(value);
+function aggregateOutputDecimal(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 200 && DECIMAL.test(value);
 }
 
 function positiveApiDecimal(value: unknown): value is string {
@@ -109,7 +151,7 @@ function positiveApiDecimal(value: unknown): value is string {
 }
 
 function positiveResolvedDecimal(value: unknown): value is string {
-  return typeof value === "string" && value.length <= 37 && API_RESOLVED_DECIMAL.test(value);
+  return typeof value === "string" && value.length <= 160 && API_RESOLVED_DECIMAL.test(value);
 }
 
 function isMeal(value: unknown): value is MealSlot {
@@ -313,14 +355,14 @@ export function createOperationId(generator: () => string): string {
   return value;
 }
 
-function parseNutrient(value: unknown): DiaryNutrient {
+export function parseDiaryNutrient(value: unknown): DiaryNutrient {
   if (
     !record(value) ||
     !text(value.nutrientId, 64) ||
     !text(value.code, 100) ||
     !text(value.name, 200) ||
     !text(value.unit, 32) ||
-    !decimal(value.knownAmount) ||
+    !aggregateOutputDecimal(value.knownAmount) ||
     !["complete", "partial", "unknown"].includes(String(value.completeness)) ||
     typeof value.isExact !== "boolean" ||
     !Number.isSafeInteger(value.contributorCount) ||
@@ -383,10 +425,44 @@ function parseUnknownReasonCounts(value: unknown): DiaryNutrient["unknownReasonC
   };
 }
 
-function parsePortion(value: unknown): DiaryEntry["portion"] {
+function exactEntryKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  return Object.keys(value).length === expected.length && expected.every((key) => key in value);
+}
+
+function parseSource(value: unknown): DiarySource {
+  if (
+    !record(value) ||
+    !exactEntryKeys(value, [
+      "code",
+      "releaseId",
+      "displayName",
+      "licenseExpression",
+      "attributionRequired",
+      "attributionText",
+    ]) ||
+    !(typeof value.code === "string" && /^[A-Z][A-Z0-9_]{1,31}$/u.test(value.code)) ||
+    !(typeof value.releaseId === "string" && UUID.test(value.releaseId)) ||
+    !text(value.displayName, 200) ||
+    !text(value.licenseExpression, 256) ||
+    typeof value.attributionRequired !== "boolean" ||
+    !text(value.attributionText, 2_000)
+  )
+    throw new TypeError("Diary source provenance was invalid.");
+  return {
+    code: value.code,
+    releaseId: value.releaseId,
+    displayName: value.displayName,
+    licenseExpression: value.licenseExpression,
+    attributionRequired: value.attributionRequired,
+    attributionText: value.attributionText,
+  };
+}
+
+function parseFoodPortion(value: unknown): DiaryFoodEntry["portion"] {
   if (!record(value)) throw new TypeError("A diary portion was invalid.");
   if (
     value.kind === "serving" &&
+    exactEntryKeys(value, ["kind", "servingId", "amount", "servingLabel"]) &&
     typeof value.servingId === "string" &&
     /^[1-9][0-9]{0,19}$/u.test(value.servingId) &&
     positiveApiDecimal(value.amount) &&
@@ -398,9 +474,86 @@ function parsePortion(value: unknown): DiaryEntry["portion"] {
       amount: value.amount,
       servingLabel: value.servingLabel,
     };
-  if (value.kind === "grams" && positiveApiDecimal(value.grams))
+  if (
+    value.kind === "grams" &&
+    exactEntryKeys(value, ["kind", "grams"]) &&
+    positiveApiDecimal(value.grams)
+  )
     return { kind: "grams", grams: value.grams };
   throw new TypeError("A diary portion was invalid.");
+}
+
+function parseRecipePortion(value: unknown): DiaryRecipeEntry["portion"] {
+  if (!record(value)) throw new TypeError("A recipe diary portion was invalid.");
+  if (
+    value.kind === "serving" &&
+    exactEntryKeys(value, ["kind", "amount", "servingLabel"]) &&
+    positiveApiDecimal(value.amount) &&
+    text(value.servingLabel, 100)
+  )
+    return { kind: "serving", amount: value.amount, servingLabel: value.servingLabel };
+  if (
+    value.kind === "grams" &&
+    exactEntryKeys(value, ["kind", "grams"]) &&
+    positiveApiDecimal(value.grams)
+  )
+    return { kind: "grams", grams: value.grams };
+  throw new TypeError("A recipe diary portion was invalid.");
+}
+
+function parseRecipeSnapshot(value: unknown): DiaryRecipeEntry["recipe"] {
+  const warningCodes = new Set([
+    "ESTIMATED_YIELD",
+    "PARTIAL_NUTRIENT_DATA",
+    "RETENTION_FACTORS_DEFAULTED",
+    "YIELD_ABOVE_INPUT_MASS",
+    "YIELD_BELOW_HALF_INPUT_MASS",
+  ]);
+  if (
+    !record(value) ||
+    !exactEntryKeys(value, [
+      "id",
+      "name",
+      "versionNumber",
+      "yieldGrams",
+      "yieldSource",
+      "servingCount",
+      "servingLabel",
+      "calculationVersion",
+      "retentionPolicy",
+      "warnings",
+    ]) ||
+    !(typeof value.id === "string" && UUID.test(value.id)) ||
+    !text(value.name, 200) ||
+    !Number.isSafeInteger(value.versionNumber) ||
+    Number(value.versionNumber) < 1 ||
+    !positiveResolvedDecimal(value.yieldGrams) ||
+    !["measured", "estimated"].includes(String(value.yieldSource)) ||
+    !(value.servingCount === null || positiveApiDecimal(value.servingCount)) ||
+    !(value.servingLabel === null || text(value.servingLabel, 100)) ||
+    (value.servingCount === null) !== (value.servingLabel === null) ||
+    !text(value.calculationVersion, 100) ||
+    !record(value.retentionPolicy) ||
+    !exactEntryKeys(value.retentionPolicy, ["code", "version", "assumption"]) ||
+    value.retentionPolicy.code !== "identity-retention-default" ||
+    value.retentionPolicy.version !== "1" ||
+    !text(value.retentionPolicy.assumption, 500) ||
+    !Array.isArray(value.warnings) ||
+    value.warnings.length > 5 ||
+    !value.warnings.every(
+      (warning) =>
+        record(warning) &&
+        exactEntryKeys(warning, ["code", "message", "nutrientIds"]) &&
+        typeof warning.code === "string" &&
+        warningCodes.has(warning.code) &&
+        text(warning.message, 500) &&
+        Array.isArray(warning.nutrientIds) &&
+        warning.nutrientIds.length <= 256 &&
+        warning.nutrientIds.every((id) => typeof id === "string" && /^[1-9][0-9]{0,19}$/u.test(id)),
+    )
+  )
+    throw new TypeError("A recipe diary snapshot was invalid.");
+  return value as unknown as DiaryRecipeEntry["recipe"];
 }
 
 function parseEntry(value: unknown): DiaryEntry {
@@ -408,18 +561,7 @@ function parseEntry(value: unknown): DiaryEntry {
     !record(value) ||
     !text(value.id, 64) ||
     !/^[1-9]\d*$/u.test(String(value.revision)) ||
-    !(typeof value.foodVersionId === "string" && /^[1-9][0-9]{0,19}$/u.test(value.foodVersionId)) ||
-    !record(value.food) ||
-    !text(value.food.name, 500) ||
-    !(value.food.brandName === null || text(value.food.brandName, 300)) ||
     !isMeal(value.mealSlot) ||
-    !record(value.source) ||
-    !(typeof value.source.code === "string" && /^[A-Z][A-Z0-9_]{1,31}$/u.test(value.source.code)) ||
-    !(typeof value.source.releaseId === "string" && UUID.test(value.source.releaseId)) ||
-    !text(value.source.displayName, 200) ||
-    !text(value.source.licenseExpression, 256) ||
-    typeof value.source.attributionRequired !== "boolean" ||
-    !text(value.source.attributionText, 2_000) ||
     !positiveResolvedDecimal(value.resolvedGrams) ||
     !text(value.occurredAt, 64) ||
     !isLocalDate(value.localDate) ||
@@ -431,21 +573,9 @@ function parseEntry(value: unknown): DiaryEntry {
     value.nutrients.length > 256
   )
     throw new TypeError("A diary entry was invalid.");
-  const portion = parsePortion(value.portion);
-  return {
+  const common = {
     id: value.id,
     revision: String(value.revision),
-    foodVersionId: value.foodVersionId,
-    portion,
-    food: { name: value.food.name, brandName: value.food.brandName },
-    source: {
-      code: value.source.code,
-      releaseId: value.source.releaseId,
-      displayName: value.source.displayName,
-      licenseExpression: value.source.licenseExpression,
-      attributionRequired: value.source.attributionRequired,
-      attributionText: value.source.attributionText,
-    },
     mealSlot: value.mealSlot,
     resolvedGrams: value.resolvedGrams,
     occurredAt: value.occurredAt,
@@ -453,8 +583,99 @@ function parseEntry(value: unknown): DiaryEntry {
     timeZone: value.timeZone,
     localTime: value.localTime,
     position: Number(value.position),
-    nutrients: value.nutrients.map(parseNutrient),
+    nutrients: value.nutrients.map(parseDiaryNutrient),
   };
+  if (
+    value.entryKind === "food" &&
+    exactEntryKeys(value, [
+      "id",
+      "revision",
+      "entryKind",
+      "foodVersionId",
+      "recipeVersionId",
+      "portion",
+      "food",
+      "recipe",
+      "source",
+      "mealSlot",
+      "resolvedGrams",
+      "occurredAt",
+      "localDate",
+      "localTime",
+      "timeZone",
+      "position",
+      "nutrients",
+    ]) &&
+    typeof value.foodVersionId === "string" &&
+    /^[1-9][0-9]{0,19}$/u.test(value.foodVersionId) &&
+    value.recipeVersionId === null &&
+    record(value.food) &&
+    exactEntryKeys(value.food, ["name", "brandName"]) &&
+    text(value.food.name, 500) &&
+    (value.food.brandName === null || text(value.food.brandName, 300)) &&
+    value.recipe === null
+  ) {
+    return {
+      ...common,
+      entryKind: "food",
+      foodVersionId: value.foodVersionId,
+      recipeVersionId: null,
+      portion: parseFoodPortion(value.portion),
+      food: { name: value.food.name, brandName: value.food.brandName },
+      recipe: null,
+      source: parseSource(value.source),
+    };
+  }
+  if (
+    value.entryKind === "recipe" &&
+    exactEntryKeys(value, [
+      "id",
+      "revision",
+      "entryKind",
+      "foodVersionId",
+      "recipeVersionId",
+      "portion",
+      "food",
+      "recipe",
+      "sources",
+      "source",
+      "mealSlot",
+      "resolvedGrams",
+      "occurredAt",
+      "localDate",
+      "localTime",
+      "timeZone",
+      "position",
+      "nutrients",
+    ]) &&
+    value.foodVersionId === null &&
+    typeof value.recipeVersionId === "string" &&
+    UUID.test(value.recipeVersionId) &&
+    value.food === null &&
+    value.source === null &&
+    Array.isArray(value.sources) &&
+    value.sources.length >= 1 &&
+    value.sources.length <= 256
+  ) {
+    const sources = value.sources.map(parseSource);
+    if (
+      new Set(sources.map((source) => `${source.code}\u0000${source.releaseId}`)).size !==
+      sources.length
+    )
+      throw new TypeError("Recipe diary sources were duplicated.");
+    return {
+      ...common,
+      entryKind: "recipe",
+      foodVersionId: null,
+      recipeVersionId: value.recipeVersionId,
+      portion: parseRecipePortion(value.portion),
+      food: null,
+      recipe: parseRecipeSnapshot(value.recipe),
+      sources,
+      source: null,
+    };
+  }
+  throw new TypeError("A diary entry discriminant was invalid.");
 }
 
 export function parseSession(value: unknown): SessionSummary {
@@ -534,7 +755,7 @@ export function parseDiaryDay(value: unknown): DiaryDay {
     status: value.data.status as "open" | "locked",
     revision: String(value.data.revision),
     entries: value.data.entries.map(parseEntry),
-    totals: value.data.totals.map(parseNutrient),
+    totals: value.data.totals.map(parseDiaryNutrient),
     updatedAt: value.data.updatedAt,
   };
 }

@@ -2,5 +2,7 @@ export * from "./auth.js";
 export * from "./diary.js";
 export * from "./error.js";
 export * from "./foods.js";
+export * from "./goals.js";
 export * from "./health.js";
 export * from "./profile.js";
+export * from "./recipes.js";

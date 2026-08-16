@@ -50,6 +50,8 @@ interface DiaryScreenProps {
   readonly requestedDate?: string;
   readonly refreshKey?: string;
   readonly onSearch: (date: string, meal: MealSlot, timeZone: string) => void;
+  readonly onRecipes: () => void;
+  readonly onGoals: () => void;
   readonly onUnauthorized: () => Promise<void>;
 }
 
@@ -66,6 +68,10 @@ function editorFor(entry: DiaryEntry, currentProfileTimeZone: string): Editor {
   };
 }
 
+function entryName(entry: DiaryEntry): string {
+  return entry.entryKind === "food" ? entry.food.name : entry.recipe.name;
+}
+
 export function DiaryScreen({
   apiBase,
   accessToken,
@@ -73,6 +79,8 @@ export function DiaryScreen({
   requestedDate,
   refreshKey,
   onSearch,
+  onRecipes,
+  onGoals,
   onUnauthorized,
 }: DiaryScreenProps) {
   const [date, setDate] = useState(() =>
@@ -174,7 +182,9 @@ export function DiaryScreen({
     const body = {
       portion:
         entry.portion.kind === "serving"
-          ? { kind: "serving", servingId: entry.portion.servingId, amount: editor.quantity }
+          ? entry.entryKind === "food"
+            ? { kind: "serving", servingId: entry.portion.servingId, amount: editor.quantity }
+            : { kind: "serving", amount: editor.quantity }
           : { kind: "grams", grams: editor.quantity },
       mealSlot: editor.mealSlot,
       ...(occurredAt ? { occurredAt } : {}),
@@ -260,7 +270,7 @@ export function DiaryScreen({
   function confirmRemove(entry: DiaryEntry) {
     Alert.alert(
       "Delete diary entry?",
-      `${entry.food.name} will be removed from ${mealLabel(entry.mealSlot)}.`,
+      `${entryName(entry)} will be removed from ${mealLabel(entry.mealSlot)}.`,
       [
         { text: "Cancel", style: "cancel" },
         { text: "Delete", style: "destructive", onPress: () => void remove(entry) },
@@ -277,6 +287,14 @@ export function DiaryScreen({
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
       >
+        <View accessibilityRole="toolbar" style={styles.workspaceNav}>
+          <Pressable accessibilityRole="button" onPress={onRecipes}>
+            <Text style={styles.workspaceLink}>Recipes</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" onPress={onGoals}>
+            <Text style={styles.workspaceLink}>Goals</Text>
+          </Pressable>
+        </View>
         <Text style={styles.kicker}>PRIVATE LOCAL-DAY DIARY</Text>
         <Text accessibilityRole="header" style={styles.title}>
           {date === localDateInTimeZone(new Date(), activeTimeZone) ? "Today" : date}
@@ -373,9 +391,14 @@ export function DiaryScreen({
                   ) : (
                     entries.map((entry) => (
                       <View key={entry.id} style={styles.entryCard}>
-                        <Text style={styles.entryTitle}>{entry.food.name}</Text>
-                        {entry.food.brandName ? (
+                        <Text style={styles.entryTitle}>{entryName(entry)}</Text>
+                        {entry.entryKind === "food" && entry.food.brandName ? (
                           <Text style={styles.entryBrand}>{entry.food.brandName}</Text>
+                        ) : null}
+                        {entry.entryKind === "recipe" ? (
+                          <Text style={styles.entryBrand}>
+                            Recipe version {entry.recipe.versionNumber}
+                          </Text>
                         ) : null}
                         <Text style={styles.entryMeta}>
                           {entry.portion.kind === "serving"
@@ -383,12 +406,38 @@ export function DiaryScreen({
                             : `${entry.portion.grams} g`}{" "}
                           · {entry.localTime.slice(0, 5)} · {entryEnergyDisplay(entry)}
                         </Text>
-                        <Text style={styles.entrySource}>
-                          {entry.source.attributionRequired
-                            ? entry.source.attributionText
-                            : entry.source.displayName}{" "}
-                          · {entry.source.licenseExpression}
-                        </Text>
+                        {entry.entryKind === "food" ? (
+                          <Text style={styles.entrySource}>
+                            {entry.source.attributionRequired
+                              ? entry.source.attributionText
+                              : entry.source.displayName}{" "}
+                            · {entry.source.licenseExpression}
+                          </Text>
+                        ) : (
+                          <View
+                            accessibilityLabel={`Recipe assumptions and source provenance for ${entry.recipe.name}`}
+                          >
+                            <Text style={styles.entrySource}>
+                              {entry.recipe.retentionPolicy.assumption}
+                            </Text>
+                            {entry.recipe.warnings.map((warning) => (
+                              <Text key={warning.code} style={styles.entrySource}>
+                                {warning.message}
+                              </Text>
+                            ))}
+                            {entry.sources.map((source) => (
+                              <Text
+                                key={`${source.code}:${source.releaseId}`}
+                                style={styles.entrySource}
+                              >
+                                {source.attributionRequired
+                                  ? source.attributionText
+                                  : source.displayName}{" "}
+                                · {source.licenseExpression}
+                              </Text>
+                            ))}
+                          </View>
+                        )}
                         {entry.timeZone !== diary.timeZone ? (
                           <Text style={styles.entrySource}>Logged in {entry.timeZone}</Text>
                         ) : null}
@@ -694,4 +743,11 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   zone: { color: palette.muted, fontSize: 12, marginTop: 8 },
+  workspaceLink: {
+    color: palette.forest,
+    fontSize: 13,
+    fontWeight: "800",
+    textDecorationLine: "underline",
+  },
+  workspaceNav: { flexDirection: "row", gap: 18, justifyContent: "flex-end", marginBottom: 14 },
 });

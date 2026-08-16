@@ -77,6 +77,25 @@ describe("nutrient missingness", () => {
     });
   });
 
+  it("rejects coverage sums that cannot remain exact JavaScript integers", () => {
+    const count = 5_000_000_000_000_000;
+    const contribution = {
+      nutrientId: IRON.id,
+      unit: IRON.canonicalUnit,
+      knownAmount: "1",
+      completeness: "complete" as const,
+      isExact: true,
+      contributorCount: count,
+      quantifiedCount: count,
+      traceCount: 0,
+      unknownCount: 0,
+      unknownReasons: {},
+    };
+    expect(() => combineNutrientAggregates(IRON, [contribution, contribution])).toThrowError(
+      expect.objectContaining<Partial<DomainError>>({ code: "INVALID_NUTRIENT_AGGREGATE" }),
+    );
+  });
+
   it("rejects a profile with duplicate nutrient ids", () => {
     expect(() =>
       createNutrientProfile("100", [

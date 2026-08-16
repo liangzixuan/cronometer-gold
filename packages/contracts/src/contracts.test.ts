@@ -4,8 +4,10 @@ import {
   createDiaryEntryRequestSchema,
   diaryDayResponseSchema,
   diaryEntrySchema,
+  diaryFoodEntrySchema,
   diaryMutationResponseSchema,
   diaryNutrientAggregateSchema,
+  diaryRecipeEntrySchema,
   foodAutocompleteResponseSchema,
   foodBarcodeNotFoundSchema,
   foodBarcodeResponseSchema,
@@ -65,7 +67,7 @@ describe("public contracts", () => {
     expect(updateDiaryEntryRequestSchema.properties).not.toHaveProperty("localDate");
     expect(diaryNutrientAggregateSchema.additionalProperties).toBe(false);
     expect(diaryNutrientAggregateSchema.properties).toHaveProperty("knownAmount");
-    expect(diaryNutrientAggregateSchema.properties.knownAmount.maxLength).toBe(160);
+    expect(diaryNutrientAggregateSchema.properties.knownAmount.maxLength).toBe(200);
     expect(diaryNutrientAggregateSchema.properties.unknownReasonCounts.required).toEqual([
       "not_reported",
       "not_analyzed",
@@ -75,13 +77,14 @@ describe("public contracts", () => {
     expect(diaryDayResponseSchema.properties.data.additionalProperties).toBe(false);
     expect(diaryDayResponseSchema.properties.data.properties.entries.maxItems).toBe(50);
     expect(diaryDayResponseSchema.properties.data.properties.totals.maxItems).toBe(256);
-    expect(diaryEntrySchema.properties.nutrients.maxItems).toBe(256);
-    expect(diaryEntrySchema.required).toContain("source");
-    expect(diaryEntrySchema.required).toContain("timeZone");
-    const servingEntryPortion = diaryEntrySchema.properties.portion.oneOf[0];
+    expect(diaryEntrySchema.oneOf).toEqual([diaryFoodEntrySchema, diaryRecipeEntrySchema]);
+    expect(diaryFoodEntrySchema.properties.nutrients.maxItems).toBe(256);
+    expect(diaryFoodEntrySchema.required).toContain("source");
+    expect(diaryFoodEntrySchema.required).toContain("timeZone");
+    const servingEntryPortion = diaryFoodEntrySchema.properties.portion.oneOf[0];
     expect(servingEntryPortion.required).toContain("servingLabel");
     expect(servingEntryPortion.additionalProperties).toBe(false);
-    expect(diaryEntrySchema.properties.source.required).toEqual([
+    expect(diaryFoodEntrySchema.properties.source.required).toEqual([
       "code",
       "displayName",
       "licenseExpression",

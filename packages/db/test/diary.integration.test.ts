@@ -1746,7 +1746,9 @@ async function seedDiaryDayAtCapacity(
   await database.transaction().execute(async (transaction) => {
     await sql`set constraints all deferred`.execute(transaction);
     await sql`
-      with catalogue as materialized (
+      with diary_day as materialized (
+        select local_date, time_zone from diary where id = ${diaryId} and user_id = ${userId}
+      ), catalogue as materialized (
         select *
         from promoted_food_search_catalogue_v1
         where food_version_id = ${foodVersionId}
@@ -1766,10 +1768,11 @@ async function seedDiaryDayAtCapacity(
           generated.entry_id, ${diaryId}, ${userId}, gen_random_uuid(), 'food',
           catalogue.food_version_id, null, null,
           1, 'g', 1,
-          '2026-08-12T17:00:00Z', '12:00:00', 'lunch', generated.ordinal, null,
+          (diary_day.local_date + time '12:00:00') at time zone diary_day.time_zone,
+          '12:00:00', 'lunch', generated.ordinal, null,
           'partial', ${NUTRITION_ENGINE_VERSION},
           generated.revision_id, 1
-        from generated cross join catalogue
+        from generated cross join catalogue cross join diary_day
         returning id, current_revision_id, position
       )
       insert into diary_entry_revision (
@@ -1785,14 +1788,15 @@ async function seedDiaryDayAtCapacity(
         inserted.current_revision_id, inserted.id, ${diaryId}, ${userId}, 1, 'create', 'food',
         catalogue.food_version_id, null, null, 'lunch',
         1, 'g', 1, 'g',
-        '2026-08-12T17:00:00Z', '2026-08-12', '12:00:00', 'America/Chicago',
+        (diary_day.local_date + time '12:00:00') at time zone diary_day.time_zone,
+        diary_day.local_date, '12:00:00', diary_day.time_zone,
         inserted.position, null,
         catalogue.name, catalogue.brand_name, catalogue.source_code,
         catalogue.source_release_id, catalogue.source_display_name,
         catalogue.license_expression, catalogue.attribution_required,
         catalogue.attribution_text, null,
         'partial', ${NUTRITION_ENGINE_VERSION}, ${withFullNutrientVector ? 256 : 0}
-      from inserted cross join catalogue
+      from inserted cross join catalogue cross join diary_day
     `.execute(transaction);
     if (withFullNutrientVector) {
       await sql`

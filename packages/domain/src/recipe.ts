@@ -13,6 +13,24 @@ import {
   scaleNutrientAggregate,
 } from "./nutrients.js";
 
+export const MAX_RECIPE_INGREDIENTS = 50;
+export const MAX_RECIPE_NUTRIENTS = 256;
+export const MAX_RECIPE_NESTING_DEPTH = 10;
+export const MAX_RECIPE_DEPENDENCY_VERSIONS = 500;
+/** PostgreSQL stores every immutable recipe coverage counter as a signed integer. */
+export const MAX_RECIPE_NUTRIENT_COVERAGE_COUNT = 2_147_483_647;
+
+export const DEFAULT_RECIPE_RETENTION_POLICY = deepFreeze({
+  code: "identity-retention-default",
+  version: "1",
+  assumption: "No cooking-retention dataset was applied; omitted factors remain exactly one.",
+} as const);
+
+export interface RecipeDependencyNode {
+  readonly recipeVersionId: string;
+  readonly nestedRecipeVersionIds: readonly string[];
+}
+
 export interface RecipeIngredient {
   readonly id: string;
   readonly name: string;
@@ -39,6 +57,7 @@ export interface RecipeCalculationInput {
 export type RecipeWarningCode =
   | "ESTIMATED_YIELD"
   | "PARTIAL_NUTRIENT_DATA"
+  | "RETENTION_FACTORS_DEFAULTED"
   | "YIELD_ABOVE_INPUT_MASS"
   | "YIELD_BELOW_HALF_INPUT_MASS";
 
@@ -59,6 +78,7 @@ export interface RecipeNutrition {
   readonly totals: readonly NutrientAggregate[];
   readonly per100Grams: readonly NutrientAggregate[];
   readonly perServing: readonly NutrientAggregate[] | null;
+  readonly retentionPolicy: typeof DEFAULT_RECIPE_RETENTION_POLICY;
   readonly warnings: readonly RecipeWarning[];
 }
 
@@ -74,9 +94,19 @@ export function calculateRecipeNutrition(input: RecipeCalculationInput): RecipeN
     "A recipe requires at least one ingredient",
   );
   domainInvariant(
+    input.ingredients.length <= MAX_RECIPE_INGREDIENTS,
+    "INVALID_RECIPE",
+    `A recipe supports at most ${MAX_RECIPE_INGREDIENTS} ingredients`,
+  );
+  domainInvariant(
     input.nutrients.length > 0,
     "INVALID_RECIPE",
     "A recipe requires an explicit expected nutrient set",
+  );
+  domainInvariant(
+    input.nutrients.length <= MAX_RECIPE_NUTRIENTS,
+    "INVALID_RECIPE",
+    `A recipe supports at most ${MAX_RECIPE_NUTRIENTS} nutrients`,
   );
 
   const nutrientIds = new Set(input.nutrients.map((nutrient) => nutrient.id));
@@ -120,6 +150,12 @@ export function calculateRecipeNutrition(input: RecipeCalculationInput): RecipeN
         rawFactor,
         `${ingredient.name} ${aggregate.nutrientId} retention factor`,
       );
+      domainInvariant(
+        decimal(factor).lte(1),
+        "INVALID_RECIPE",
+        "Nutrient retention factors must be between zero and one",
+        { ingredientId: ingredient.id, nutrientId: aggregate.nutrientId, factor },
+      );
       return scaleNutrientAggregate(aggregate, factor);
     });
 
@@ -152,6 +188,17 @@ export function calculateRecipeNutrition(input: RecipeCalculationInput): RecipeN
       }),
     ),
   );
+  for (const aggregate of totals) {
+    domainInvariant(
+      aggregate.contributorCount <= MAX_RECIPE_NUTRIENT_COVERAGE_COUNT &&
+        aggregate.quantifiedCount <= MAX_RECIPE_NUTRIENT_COVERAGE_COUNT &&
+        aggregate.traceCount <= MAX_RECIPE_NUTRIENT_COVERAGE_COUNT &&
+        aggregate.unknownCount <= MAX_RECIPE_NUTRIENT_COVERAGE_COUNT,
+      "INVALID_RECIPE",
+      "Recipe nutrient coverage exceeds the supported immutable counter range",
+      { nutrientId: aggregate.nutrientId },
+    );
+  }
 
   const per100Factor = decimal(100).div(yieldGrams);
   const per100Grams = totals.map((aggregate) => scaleNutrientAggregate(aggregate, per100Factor));
@@ -161,6 +208,23 @@ export function calculateRecipeNutrition(input: RecipeCalculationInput): RecipeN
       : totals.map((aggregate) => scaleNutrientAggregate(aggregate, decimal(1).div(servingCount)));
 
   const warnings: RecipeWarning[] = [];
+  if (
+    input.ingredients.some((ingredient) =>
+      input.nutrients.some((nutrient) => ingredient.retentionFactors?.[nutrient.id] === undefined),
+    )
+  ) {
+    warnings.push({
+      code: "RETENTION_FACTORS_DEFAULTED",
+      message: DEFAULT_RECIPE_RETENTION_POLICY.assumption,
+      nutrientIds: input.nutrients
+        .filter((nutrient) =>
+          input.ingredients.some(
+            (ingredient) => ingredient.retentionFactors?.[nutrient.id] === undefined,
+          ),
+        )
+        .map((nutrient) => nutrient.id),
+    });
+  }
   if (input.finalYield.source === "estimated") {
     warnings.push({
       code: "ESTIMATED_YIELD",
@@ -204,6 +268,7 @@ export function calculateRecipeNutrition(input: RecipeCalculationInput): RecipeN
     totals,
     per100Grams,
     perServing,
+    retentionPolicy: DEFAULT_RECIPE_RETENTION_POLICY,
     warnings,
   });
 }
@@ -211,4 +276,88 @@ export function calculateRecipeNutrition(input: RecipeCalculationInput): RecipeN
 /** Preserve nested-recipe coverage counters rather than flattening missing to 0. */
 export function recipePer100GramProfile(recipe: RecipeNutrition): NutrientProfile {
   return createResolvedNutrientProfile("100", recipe.per100Grams);
+}
+
+/**
+ * Validate the immutable nested-recipe dependency closure before publishing a
+ * revision. Depth counts the root recipe as one. The persistence layer must
+ * load one coherent closure and reject a missing dependency before calling.
+ */
+export function validateRecipeDependencies(
+  rootRecipeVersionId: string,
+  nodes: readonly RecipeDependencyNode[],
+  maximumDepth = MAX_RECIPE_NESTING_DEPTH,
+): void {
+  domainInvariant(
+    rootRecipeVersionId.trim().length > 0,
+    "INVALID_RECIPE",
+    "Root recipe version id is required",
+  );
+  domainInvariant(
+    Number.isSafeInteger(maximumDepth) && maximumDepth > 0,
+    "INVALID_RECIPE",
+    "Recipe maximum depth must be a positive safe integer",
+  );
+  domainInvariant(
+    nodes.length <= MAX_RECIPE_DEPENDENCY_VERSIONS,
+    "INVALID_RECIPE",
+    `Recipe dependency closure supports at most ${MAX_RECIPE_DEPENDENCY_VERSIONS} versions`,
+    { count: nodes.length, maximum: MAX_RECIPE_DEPENDENCY_VERSIONS },
+  );
+
+  const graph = new Map<string, readonly string[]>();
+  for (const node of nodes) {
+    domainInvariant(
+      node.recipeVersionId.trim().length > 0,
+      "INVALID_RECIPE",
+      "Recipe dependency id is required",
+    );
+    domainInvariant(
+      !graph.has(node.recipeVersionId),
+      "INVALID_RECIPE",
+      `Duplicate recipe dependency node: ${node.recipeVersionId}`,
+    );
+    const nested = [...new Set(node.nestedRecipeVersionIds)];
+    domainInvariant(
+      nested.every((id) => id.trim().length > 0),
+      "INVALID_RECIPE",
+      "Nested recipe version ids are required",
+    );
+    graph.set(node.recipeVersionId, nested);
+  }
+  domainInvariant(
+    graph.has(rootRecipeVersionId),
+    "INVALID_RECIPE",
+    "Recipe dependency closure is missing its root",
+  );
+
+  const visiting = new Set<string>();
+  const maximumDepthFrom = new Map<string, number>();
+  const visit = (id: string): number => {
+    if (visiting.has(id)) {
+      throw new DomainError("RECIPE_DEPENDENCY_CYCLE", "Nested recipes must not form a cycle", {
+        recipeVersionId: id,
+      });
+    }
+    const memoized = maximumDepthFrom.get(id);
+    if (memoized !== undefined) return memoized;
+    const dependencies = graph.get(id);
+    domainInvariant(dependencies, "INVALID_RECIPE", `Recipe dependency closure is missing ${id}`, {
+      recipeVersionId: id,
+    });
+    visiting.add(id);
+    let depth = 1;
+    for (const dependency of dependencies) depth = Math.max(depth, 1 + visit(dependency));
+    visiting.delete(id);
+    maximumDepthFrom.set(id, depth);
+    return depth;
+  };
+
+  const depth = visit(rootRecipeVersionId);
+  domainInvariant(
+    depth <= maximumDepth,
+    "RECIPE_NESTING_LIMIT",
+    `Recipe nesting exceeds the supported depth of ${maximumDepth}`,
+    { recipeVersionId: rootRecipeVersionId, depth, maximumDepth },
+  );
 }

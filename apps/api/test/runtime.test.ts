@@ -9,7 +9,7 @@ afterEach(async () => {
 });
 
 describe("production API runtime", () => {
-  it("wires search, auth, profile, and diary services around one owned runtime", () => {
+  it("wires search and every private persistence service around one owned runtime", () => {
     const runtime = createApiSearchRuntime(
       { DATABASE_URL: "postgresql://local.invalid/nutrition", NODE_ENV: "test" },
       {
@@ -27,5 +27,7 @@ describe("production API runtime", () => {
     expect(runtime.profileService).toBeDefined();
     expect(runtime.diaryService).toBeDefined();
     expect(runtime.foodSearchService).toBeDefined();
+    expect(runtime.recipeService).toBeDefined();
+    expect(runtime.goalService).toBeDefined();
   });
 });

@@ -17,6 +17,8 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1",
     "typescript": "7.0.2",
     "vitest": "4.1.10"
   }

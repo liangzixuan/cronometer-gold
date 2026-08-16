@@ -617,6 +617,11 @@ describeDatabase("0004 existing-schema diary upgrade", () => {
           .where("entry.id", "=", invalidServingEntryId)
           .executeTakeFirstOrThrow(),
       ).toEqual({ operation: "delete" });
+      const recipesAndGoalsMigration = await readFile(
+        resolve(import.meta.dirname, "../migrations/0005_recipes_and_goals.sql"),
+        "utf8",
+      );
+      await sql.raw(recipesAndGoalsMigration).execute(database);
       expect(
         await getDiaryDay(database, { localDate: "2026-08-15", userId: user.id }),
       ).toMatchObject({ revision: "0", totalEntries: 2 });

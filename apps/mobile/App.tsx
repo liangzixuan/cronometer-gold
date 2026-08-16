@@ -19,6 +19,9 @@ import {
 } from "./src/auth/secure-session";
 import { DiaryScreen } from "./src/diary/DiaryScreen";
 import { type MealSlot, parseSession, type SessionSummary } from "./src/diary/diary";
+import { authenticatedRoutes } from "./src/navigation/routes";
+import { GoalsScreen } from "./src/recipes/GoalsScreen";
+import { RecipesScreen } from "./src/recipes/RecipesScreen";
 import { FoodSearchScreen } from "./src/search/FoodSearchScreen";
 import { resolveMobileApiBase } from "./src/search/food-search";
 import { palette } from "./src/theme";
@@ -28,6 +31,8 @@ declare const process: { readonly env: { readonly EXPO_PUBLIC_API_URL?: string }
 type RootStackParamList = {
   Today: { readonly date?: string; readonly refreshKey?: string } | undefined;
   Search: { readonly date: string; readonly meal: MealSlot; readonly timeZone: string };
+  Recipes: undefined;
+  Goals: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -47,11 +52,53 @@ function TodayRoute(props: AuthenticatedAppProps) {
     <DiaryScreen
       accessToken={props.accessToken}
       apiBase={props.apiBase}
-      onSearch={(date, meal, timeZone) => navigation.navigate("Search", { date, meal, timeZone })}
+      onSearch={(date, meal, timeZone) =>
+        navigation.navigate(authenticatedRoutes.search, { date, meal, timeZone })
+      }
+      onRecipes={() => navigation.navigate(authenticatedRoutes.recipes)}
+      onGoals={() => navigation.navigate(authenticatedRoutes.goals)}
       onUnauthorized={props.onUnauthorized}
       profileTimeZone={props.session.profile.timeZone}
       {...(route.params?.refreshKey ? { refreshKey: route.params.refreshKey } : {})}
       {...(route.params?.date ? { requestedDate: route.params.date } : {})}
+    />
+  );
+}
+
+function RecipesRoute(props: AuthenticatedAppProps) {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  return (
+    <RecipesScreen
+      accessToken={props.accessToken}
+      apiBase={props.apiBase}
+      onGoals={() => navigation.navigate(authenticatedRoutes.goals)}
+      onLogged={(date) =>
+        navigation.navigate(authenticatedRoutes.today, {
+          date,
+          refreshKey: String(Date.now()),
+        })
+      }
+      onUnauthorized={props.onUnauthorized}
+      profileTimeZone={props.session.profile.timeZone}
+    />
+  );
+}
+
+function GoalsRoute(props: AuthenticatedAppProps) {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  return (
+    <GoalsScreen
+      accessToken={props.accessToken}
+      apiBase={props.apiBase}
+      onDiary={(date) =>
+        navigation.navigate(authenticatedRoutes.today, {
+          date,
+          refreshKey: String(Date.now()),
+        })
+      }
+      onRecipes={() => navigation.navigate(authenticatedRoutes.recipes)}
+      onUnauthorized={props.onUnauthorized}
+      profileTimeZone={props.session.profile.timeZone}
     />
   );
 }
@@ -65,7 +112,12 @@ function SearchRoute(props: AuthenticatedAppProps) {
       apiBase={props.apiBase}
       diaryDate={route.params.date}
       mealSlot={route.params.meal}
-      onAdded={(date) => navigation.navigate("Today", { date, refreshKey: String(Date.now()) })}
+      onAdded={(date) =>
+        navigation.navigate(authenticatedRoutes.today, {
+          date,
+          refreshKey: String(Date.now()),
+        })
+      }
       onUnauthorized={props.onUnauthorized}
       profileTimeZone={route.params.timeZone}
     />
@@ -85,7 +137,7 @@ function AuthenticatedApp(props: AuthenticatedAppProps) {
         }}
       >
         <Stack.Screen
-          name="Today"
+          name={authenticatedRoutes.today}
           options={{
             title: "nutrition/ledger",
             headerRight: () => (
@@ -97,8 +149,14 @@ function AuthenticatedApp(props: AuthenticatedAppProps) {
         >
           {() => <TodayRoute {...props} />}
         </Stack.Screen>
-        <Stack.Screen name="Search" options={{ title: "Add a food" }}>
+        <Stack.Screen name={authenticatedRoutes.search} options={{ title: "Add a food" }}>
           {() => <SearchRoute {...props} />}
+        </Stack.Screen>
+        <Stack.Screen name={authenticatedRoutes.recipes} options={{ title: "Recipes" }}>
+          {() => <RecipesRoute {...props} />}
+        </Stack.Screen>
+        <Stack.Screen name={authenticatedRoutes.goals} options={{ title: "Goals" }}>
+          {() => <GoalsRoute {...props} />}
         </Stack.Screen>
       </Stack.Navigator>
     </NavigationContainer>

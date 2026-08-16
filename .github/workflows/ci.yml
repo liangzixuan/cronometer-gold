@@ -137,10 +137,15 @@ jobs:
           pnpm --filter @nutrition-tracker/db db:migrate
           pnpm --filter @nutrition-tracker/db db:migrate
 
-      - name: Exercise catalogue promotion and rollback
+      - name: Exercise database integration invariants
         env:
           TEST_DATABASE_URL: postgresql://nutrition_local:nutrition_local_only@127.0.0.1:5432/nutrition_tracker
         run: pnpm --filter @nutrition-tracker/db test
+
+      - name: Exercise authenticated API persistence adapters
+        env:
+          TEST_DATABASE_URL: postgresql://nutrition_local:nutrition_local_only@127.0.0.1:5432/nutrition_tracker
+        run: pnpm --filter @nutrition-tracker/api test
 
       - name: Exercise PostgreSQL-to-Meilisearch worker boundary
         env:

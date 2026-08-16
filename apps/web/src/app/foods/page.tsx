@@ -16,7 +16,8 @@ export default function FoodsPage() {
           <Link aria-current="page" href="/foods">
             Foods
           </Link>
-          <span aria-disabled="true">Recipes · soon</span>
+          <Link href="/recipes">Recipes</Link>
+          <Link href="/goals">Goals</Link>
           <span aria-disabled="true">Trends · soon</span>
         </nav>
         <p className="wellnessNote">Wellness information only—not medical advice.</p>

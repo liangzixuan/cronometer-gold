@@ -1,6 +1,7 @@
 import { Kysely, PostgresDialect, sql } from "kysely";
 import { Pool, type PoolConfig } from "pg";
 
+import { discoverMigrations } from "./migrator.js";
 import type { Database } from "./types.js";
 
 export interface DatabaseClientOptions {
@@ -89,7 +90,28 @@ export function createDatabaseFromEnvironment(
 }
 
 export async function assertDatabaseReady(database: Kysely<Database>): Promise<void> {
-  await sql`select 1`.execute(database);
+  const expected = await discoverMigrations();
+  let applied: readonly { readonly checksum: string; readonly name: string }[];
+  try {
+    applied = (
+      await sql<{ checksum: string; name: string }>`
+        select name, checksum
+        from app_schema_migration
+        order by name
+      `.execute(database)
+    ).rows;
+  } catch {
+    throw new Error("Database schema migration ledger is not current");
+  }
+  if (
+    applied.length !== expected.length ||
+    expected.some(
+      (migration, index) =>
+        applied[index]?.name !== migration.name || applied[index]?.checksum !== migration.checksum,
+    )
+  ) {
+    throw new Error("Database schema migration ledger is not current");
+  }
 }
 
 function parsePositiveInteger(value: string | undefined, fallback: number): number {

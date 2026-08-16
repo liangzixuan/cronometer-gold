@@ -49,7 +49,9 @@ export async function startServer(
       config,
       diaryService: runtime.diaryService,
       foodSearchService: runtime.foodSearchService,
+      goalService: runtime.goalService,
       profileService: runtime.profileService,
+      recipeService: runtime.recipeService,
       readinessCheck: runtime.readinessCheck,
     });
     app.addHook("onClose", async () => runtime.close());

@@ -21,8 +21,13 @@ import {
   traceNutrient,
 } from "@nutrition-tracker/domain";
 import { type Kysely, sql, type Transaction } from "kysely";
-
-import type { Database, JsonObject } from "./types.js";
+import {
+  loadRecipeDiaryFacts,
+  RecipeNotFoundError,
+  type RecipeSourceRecord,
+  type RecipeWarningRecord,
+} from "./recipes.js";
+import type { Database, JsonArray, JsonObject } from "./types.js";
 
 export type DiaryPersistenceErrorCode =
   | "DIARY_ENTRY_REVISION_CONFLICT"
@@ -91,7 +96,7 @@ export interface DiaryNutrientAggregateRecord {
   readonly unknownReasons: JsonObject;
 }
 
-export interface DiaryEntryRecord {
+export interface DiaryFoodEntryRecord {
   readonly id: string;
   readonly currentRevision: string;
   readonly operation: "create" | "delete" | "move" | "update";
@@ -129,6 +134,46 @@ export interface DiaryEntryRecord {
   readonly createdAt: string;
 }
 
+export interface DiaryRecipeEntryRecord {
+  readonly id: string;
+  readonly currentRevision: string;
+  readonly operation: "create" | "delete" | "move" | "update";
+  readonly kind: "recipe";
+  readonly occurredAt: string;
+  readonly localDate: string;
+  readonly localTime: string;
+  readonly timeZone: string;
+  readonly mealSlot: DiaryMealSlot;
+  readonly position: number;
+  readonly note: string | null;
+  readonly recipe: {
+    readonly recipeId: string;
+    readonly recipeVersionId: string;
+    readonly versionNumber: number;
+    readonly name: string;
+    readonly yieldGrams: string;
+    readonly yieldSource: "estimated" | "measured";
+    readonly servingCount: string | null;
+    readonly servingLabel: string | null;
+    readonly calculationVersion: string;
+    readonly retentionPolicy: { readonly code: string; readonly version: string };
+    readonly calculationAssumptions: JsonObject;
+    readonly warnings: readonly RecipeWarningRecord[];
+    readonly sources: readonly RecipeSourceRecord[];
+  };
+  readonly portion: {
+    readonly amount: string;
+    readonly inputUnit: "g" | "serving";
+    readonly resolvedGrams: string;
+  };
+  readonly snapshotStatus: "complete" | "partial";
+  readonly snapshotEngineVersion: string;
+  readonly nutrients: readonly DiaryNutrientAggregateRecord[];
+  readonly createdAt: string;
+}
+
+export type DiaryEntryRecord = DiaryFoodEntryRecord | DiaryRecipeEntryRecord;
+
 export interface DiaryDayRevisionRecord {
   readonly localDate: string;
   readonly revision: string;
@@ -138,6 +183,14 @@ export interface DiaryMutationResult {
   readonly replayed: boolean;
   readonly entry: DiaryEntryRecord;
   readonly days: readonly DiaryDayRevisionRecord[];
+}
+
+export interface DiaryFoodMutationResult extends Omit<DiaryMutationResult, "entry"> {
+  readonly entry: DiaryFoodEntryRecord;
+}
+
+export interface DiaryRecipeMutationResult extends Omit<DiaryMutationResult, "entry"> {
+  readonly entry: DiaryRecipeEntryRecord;
 }
 
 export interface DiaryDayRecord {
@@ -177,6 +230,47 @@ export interface UpdateFoodDiaryEntryInput {
   readonly note?: string | null;
 }
 
+export interface CreateRecipeDiaryEntryInput {
+  readonly userId: string;
+  readonly clientOperationId: string;
+  readonly requestDigest: string;
+  readonly occurredAt: string;
+  readonly recipeId: string;
+  readonly recipeVersionId: string;
+  readonly portion:
+    | { readonly kind: "grams"; readonly grams: string }
+    | { readonly kind: "serving"; readonly amount: string };
+  readonly mealSlot: DiaryMealSlot;
+  readonly position?: number;
+  readonly note?: string | null;
+}
+
+export interface UpdateRecipeDiaryEntryInput {
+  readonly userId: string;
+  readonly entryId: string;
+  readonly clientOperationId: string;
+  readonly requestDigest: string;
+  readonly expectedEntryRevision: bigint | number | string;
+  readonly occurredAt?: string;
+  readonly portion?: CreateRecipeDiaryEntryInput["portion"];
+  readonly mealSlot?: DiaryMealSlot;
+  readonly position?: number;
+  readonly note?: string | null;
+}
+
+export interface UpdateDiaryEntryInput {
+  readonly userId: string;
+  readonly entryId: string;
+  readonly clientOperationId: string;
+  readonly requestDigest: string;
+  readonly expectedEntryRevision: bigint | number | string;
+  readonly occurredAt?: string;
+  readonly portion?: DiaryPortionInput | { readonly kind: "serving"; readonly amount: string };
+  readonly mealSlot?: DiaryMealSlot;
+  readonly position?: number;
+  readonly note?: string | null;
+}
+
 export interface DeleteDiaryEntryInput {
   readonly userId: string;
   readonly entryId: string;
@@ -192,7 +286,7 @@ const MAX_NUTRIENT_VECTOR_SIZE = 256;
 export async function createFoodDiaryEntry(
   database: Kysely<Database>,
   input: CreateFoodDiaryEntryInput,
-): Promise<DiaryMutationResult> {
+): Promise<DiaryFoodMutationResult> {
   validateOperationIdentity(input.clientOperationId, input.requestDigest);
   validateMealSlot(input.mealSlot);
   return database
@@ -208,7 +302,10 @@ export async function createFoodDiaryEntry(
         input.requestDigest,
         "create",
       );
-      if (replay) return replay;
+      if (replay) {
+        if (replay.entry.kind !== "food") throw new DiaryIdempotencyConflictError();
+        return { ...replay, entry: replay.entry };
+      }
       const coordinates = deriveLocalCoordinates(input.occurredAt, profile.timeZone);
       const facts = await loadFoodFacts(transaction, input.foodVersionId, input.portion, true);
       const day = await ensureDiaryDay(transaction, input.userId, coordinates, profile.timeZone);
@@ -260,7 +357,104 @@ export async function createFoodDiaryEntry(
       });
       const dayRevision = await incrementDay(transaction, day.id, input.userId);
       const entry = await loadEntryByRevision(transaction, input.userId, revisionId);
-      const result: DiaryMutationResult = {
+      if (entry.kind !== "food") throw new DiaryValidationError("Food diary result is invalid");
+      const result: DiaryFoodMutationResult = {
+        days: [{ localDate: coordinates.localDate, revision: dayRevision }],
+        entry,
+        replayed: false,
+      };
+      await recordOperation(transaction, input, "create", entryId, result);
+      return result;
+    });
+}
+
+export async function createRecipeDiaryEntry(
+  database: Kysely<Database>,
+  input: CreateRecipeDiaryEntryInput,
+): Promise<DiaryRecipeMutationResult> {
+  validateOperationIdentity(input.clientOperationId, input.requestDigest);
+  validateMealSlot(input.mealSlot);
+  return database
+    .transaction()
+    .setIsolationLevel("read committed")
+    .execute(async (transaction) => {
+      await lockUserDiary(transaction, input.userId);
+      const profile = await requireWritableProfile(transaction, input.userId);
+      const replay = await readOperationReplay(
+        transaction,
+        input.userId,
+        input.clientOperationId,
+        input.requestDigest,
+        "create",
+      );
+      if (replay) {
+        if (replay.entry.kind !== "recipe") throw new DiaryIdempotencyConflictError();
+        return { ...replay, entry: replay.entry };
+      }
+      const coordinates = deriveLocalCoordinates(input.occurredAt, profile.timeZone);
+      let facts: Awaited<ReturnType<typeof loadRecipeDiaryFacts>>;
+      try {
+        facts = await loadRecipeDiaryFacts(transaction, {
+          portion: input.portion,
+          recipeId: input.recipeId,
+          recipeVersionId: input.recipeVersionId,
+          requireCurrent: false,
+          userId: input.userId,
+        });
+      } catch (error) {
+        if (error instanceof RecipeNotFoundError) throw new DiaryNotFoundError();
+        throw error;
+      }
+      const day = await ensureDiaryDay(transaction, input.userId, coordinates, profile.timeZone);
+      const [lockedDay] = await lockDiaryDays(transaction, input.userId, [day.id]);
+      if (!lockedDay || lockedDay.status === "locked") throw new DiaryLockedError();
+      await assertDayHasCapacity(transaction, input.userId, day.id);
+      await assertDayNutrientUnion(transaction, input.userId, day.id, facts.nutrients);
+      const entryId = randomUUID();
+      const revisionId = randomUUID();
+      const position = canonicalPosition(input.position ?? 0);
+      await transaction
+        .insertInto("diary_entry")
+        .values({
+          client_operation_id: input.clientOperationId,
+          current_revision_id: revisionId,
+          current_revision_number: "1",
+          diary_id: day.id,
+          entry_kind: "recipe",
+          food_serving_id: null,
+          food_version_id: null,
+          id: entryId,
+          input_unit: facts.inputUnit,
+          local_time: coordinates.localTime,
+          meal_slot: input.mealSlot,
+          note: input.note ?? null,
+          occurred_at: coordinates.occurredAt,
+          position,
+          quantity: facts.enteredAmount,
+          recipe_version_id: facts.recipeVersionId,
+          resolved_grams: facts.resolvedGrams,
+          snapshot_engine_version: facts.calculationVersion,
+          snapshot_status: snapshotStatus(facts.nutrients),
+          user_id: input.userId,
+        })
+        .execute();
+      await insertRecipeDiaryRevision(transaction, {
+        coordinates,
+        dayId: day.id,
+        entryId,
+        facts,
+        mealSlot: input.mealSlot,
+        note: input.note ?? null,
+        operation: "create",
+        position,
+        revisionId,
+        revisionNumber: "1",
+        userId: input.userId,
+      });
+      const dayRevision = await incrementDay(transaction, day.id, input.userId);
+      const entry = await loadEntryByRevision(transaction, input.userId, revisionId);
+      if (entry.kind !== "recipe") throw new DiaryValidationError("Recipe diary result is invalid");
+      const result: DiaryRecipeMutationResult = {
         days: [{ localDate: coordinates.localDate, revision: dayRevision }],
         entry,
         replayed: false,
@@ -273,6 +467,34 @@ export async function createFoodDiaryEntry(
 export async function updateFoodDiaryEntry(
   database: Kysely<Database>,
   input: UpdateFoodDiaryEntryInput,
+): Promise<DiaryFoodMutationResult> {
+  const result = await runDiaryEntryUpdate(database, input, "food");
+  if (result.entry.kind !== "food") throw new DiaryValidationError("Food diary result is invalid");
+  return { ...result, entry: result.entry };
+}
+
+export async function updateRecipeDiaryEntry(
+  database: Kysely<Database>,
+  input: UpdateRecipeDiaryEntryInput,
+): Promise<DiaryRecipeMutationResult> {
+  const result = await runDiaryEntryUpdate(database, input, "recipe");
+  if (result.entry.kind !== "recipe")
+    throw new DiaryValidationError("Recipe diary result is invalid");
+  return { ...result, entry: result.entry };
+}
+
+/** Transaction-safe dispatcher for PATCH when grams alone does not reveal the entry kind. */
+export async function updateDiaryEntry(
+  database: Kysely<Database>,
+  input: UpdateDiaryEntryInput,
+): Promise<DiaryMutationResult> {
+  return runDiaryEntryUpdate(database, input);
+}
+
+async function runDiaryEntryUpdate(
+  database: Kysely<Database>,
+  input: UpdateDiaryEntryInput,
+  expectedKind?: "food" | "recipe",
 ): Promise<DiaryMutationResult> {
   validateOperationIdentity(input.clientOperationId, input.requestDigest);
   if (input.mealSlot !== undefined) validateMealSlot(input.mealSlot);
@@ -292,6 +514,7 @@ export async function updateFoodDiaryEntry(
       if (replay) return replay;
       const head = await loadOwnedHeadForUpdate(transaction, input.userId, input.entryId);
       if (!head || head.operation === "delete") throw new DiaryNotFoundError();
+      if (expectedKind !== undefined && head.kind !== expectedKind) throw new DiaryNotFoundError();
       const expectedRevision = canonicalRevision(input.expectedEntryRevision);
       if (head.revisionNumber !== expectedRevision) throw new DiaryEntryRevisionConflictError();
       const coordinates = input.occurredAt
@@ -310,12 +533,28 @@ export async function updateFoodDiaryEntry(
         targetDay.id,
       ]);
       if (lockedDays.some((day) => day.status === "locked")) throw new DiaryLockedError();
-      const facts = input.portion
-        ? preservePinnedProvenance(
-            await loadFoodFacts(transaction, head.foodVersionId, input.portion, false),
-            head,
-          )
-        : await loadPinnedFacts(transaction, head);
+      const facts =
+        head.kind === "food"
+          ? input.portion
+            ? preservePinnedProvenance(
+                await loadFoodFacts(
+                  transaction,
+                  head.foodVersionId,
+                  toFoodPortion(input.portion),
+                  false,
+                ),
+                head,
+              )
+            : await loadPinnedFacts(transaction, head)
+          : input.portion
+            ? await loadRecipeDiaryFacts(transaction, {
+                portion: toRecipePortion(input.portion),
+                recipeId: head.recipeId,
+                recipeVersionId: head.recipeVersionId,
+                requireCurrent: false,
+                userId: input.userId,
+              })
+            : await loadPinnedRecipeFacts(transaction, head);
       const revisionId = randomUUID();
       const revisionNumber = (BigInt(head.revisionNumber) + 1n).toString();
       const moved = head.diaryId !== targetDay.id;
@@ -327,19 +566,26 @@ export async function updateFoodDiaryEntry(
         facts.nutrients,
         input.entryId,
       );
-      await insertRevision(transaction, {
+      const revisionInput = {
         coordinates,
         dayId: targetDay.id,
         entryId: input.entryId,
         facts,
         mealSlot: input.mealSlot ?? head.mealSlot,
         note: input.note === undefined ? head.note : input.note,
-        operation: moved ? "move" : "update",
+        operation: moved ? ("move" as const) : ("update" as const),
         position: canonicalPosition(input.position ?? head.position),
         revisionId,
         revisionNumber,
         userId: input.userId,
-      });
+      };
+      if (head.kind === "food" && "foodVersionId" in facts) {
+        await insertRevision(transaction, { ...revisionInput, facts });
+      } else if (head.kind === "recipe" && "recipeVersionId" in facts) {
+        await insertRecipeDiaryRevision(transaction, { ...revisionInput, facts });
+      } else {
+        throw new DiaryValidationError("Diary entry facts do not match the entry kind");
+      }
       await transaction
         .updateTable("diary_entry")
         .set({
@@ -392,25 +638,47 @@ export async function deleteDiaryEntry(
       if (!lockedDay || lockedDay.status === "locked") throw new DiaryLockedError();
       const revisionId = randomUUID();
       const revisionNumber = (BigInt(head.revisionNumber) + 1n).toString();
-      const facts = await loadPinnedFacts(transaction, head);
-      await insertRevision(transaction, {
-        coordinates: {
-          localDate: head.localDate,
-          localTime: head.localTime,
-          occurredAt: head.occurredAt,
-          timeZone: head.timeZone,
-        },
-        dayId: head.diaryId,
-        entryId: input.entryId,
-        facts,
-        mealSlot: head.mealSlot,
-        note: head.note,
-        operation: "delete",
-        position: head.position,
-        revisionId,
-        revisionNumber,
-        userId: input.userId,
-      });
+      if (head.kind === "food") {
+        const facts = await loadPinnedFacts(transaction, head);
+        await insertRevision(transaction, {
+          coordinates: {
+            localDate: head.localDate,
+            localTime: head.localTime,
+            occurredAt: head.occurredAt,
+            timeZone: head.timeZone,
+          },
+          dayId: head.diaryId,
+          entryId: input.entryId,
+          facts,
+          mealSlot: head.mealSlot,
+          note: head.note,
+          operation: "delete",
+          position: head.position,
+          revisionId,
+          revisionNumber,
+          userId: input.userId,
+        });
+      } else {
+        const facts = await loadPinnedRecipeFacts(transaction, head);
+        await insertRecipeDiaryRevision(transaction, {
+          coordinates: {
+            localDate: head.localDate,
+            localTime: head.localTime,
+            occurredAt: head.occurredAt,
+            timeZone: head.timeZone,
+          },
+          dayId: head.diaryId,
+          entryId: input.entryId,
+          facts,
+          mealSlot: head.mealSlot,
+          note: head.note,
+          operation: "delete",
+          position: head.position,
+          revisionId,
+          revisionNumber,
+          userId: input.userId,
+        });
+      }
       await transaction
         .updateTable("diary_entry")
         .set({ current_revision_id: revisionId, current_revision_number: revisionNumber })
@@ -441,7 +709,7 @@ export async function getDiaryDay(
     .execute(async (transaction) => readDiaryDaySnapshot(transaction, input));
 }
 
-async function readDiaryDaySnapshot(
+export async function readDiaryDaySnapshot(
   database: Transaction<Database>,
   input: { readonly userId: string; readonly localDate: string },
 ): Promise<DiaryDayRecord> {
@@ -522,7 +790,8 @@ interface FoodFacts {
   readonly attributionText: string;
 }
 
-interface HeadRecord {
+interface FoodHeadRecord {
+  readonly kind: "food";
   readonly diaryId: string;
   readonly revisionId: string;
   readonly revisionNumber: string;
@@ -549,6 +818,39 @@ interface HeadRecord {
   readonly attributionRequired: boolean;
   readonly attributionText: string;
 }
+
+interface RecipeHeadRecord {
+  readonly kind: "recipe";
+  readonly diaryId: string;
+  readonly revisionId: string;
+  readonly revisionNumber: string;
+  readonly operation: "create" | "delete" | "move" | "update";
+  readonly recipeId: string;
+  readonly recipeVersionId: string;
+  readonly recipeVersionNumber: number;
+  readonly recipeName: string;
+  readonly yieldGrams: string;
+  readonly yieldSource: "estimated" | "measured";
+  readonly servingCount: string | null;
+  readonly servingLabel: string | null;
+  readonly enteredAmount: string;
+  readonly inputUnit: "g" | "serving";
+  readonly resolvedGrams: string;
+  readonly occurredAt: string;
+  readonly localDate: string;
+  readonly localTime: string;
+  readonly mealSlot: DiaryMealSlot;
+  readonly position: number;
+  readonly note: string | null;
+  readonly timeZone: string;
+  readonly calculationVersion: string;
+  readonly retentionPolicyCode: string;
+  readonly retentionPolicyVersion: string;
+  readonly calculationAssumptions: JsonObject;
+  readonly warnings: readonly RecipeWarningRecord[];
+}
+
+type HeadRecord = FoodHeadRecord | RecipeHeadRecord;
 
 async function loadFoodFacts(
   transaction: Transaction<Database>,
@@ -786,7 +1088,10 @@ async function lockFoodEligibility(
   if (!release) throw new DiaryValidationError("Food version is unavailable for diary logging");
 }
 
-async function loadPinnedFacts(database: Kysely<Database>, head: HeadRecord): Promise<FoodFacts> {
+async function loadPinnedFacts(
+  database: Kysely<Database>,
+  head: FoodHeadRecord,
+): Promise<FoodFacts> {
   const nutrients = await loadRevisionNutrients(database, head.revisionId);
   return {
     brandName: head.brandName,
@@ -804,6 +1109,32 @@ async function loadPinnedFacts(database: Kysely<Database>, head: HeadRecord): Pr
     licenseExpression: head.licenseExpression,
     attributionRequired: head.attributionRequired,
     attributionText: head.attributionText,
+  };
+}
+
+async function loadPinnedRecipeFacts(
+  database: Kysely<Database>,
+  head: RecipeHeadRecord,
+): Promise<Awaited<ReturnType<typeof loadRecipeDiaryFacts>>> {
+  return {
+    calculationAssumptions: head.calculationAssumptions,
+    calculationVersion: head.calculationVersion,
+    enteredAmount: head.enteredAmount,
+    inputUnit: head.inputUnit,
+    nutrients: await loadRevisionNutrients(database, head.revisionId),
+    recipeId: head.recipeId,
+    recipeName: head.recipeName,
+    recipeVersionId: head.recipeVersionId,
+    recipeVersionNumber: head.recipeVersionNumber,
+    resolvedGrams: head.resolvedGrams,
+    retentionPolicyCode: head.retentionPolicyCode,
+    retentionPolicyVersion: head.retentionPolicyVersion,
+    servingCount: head.servingCount,
+    servingLabel: head.servingLabel,
+    sources: await loadRevisionSources(database, head.revisionId),
+    warnings: head.warnings,
+    yieldGrams: head.yieldGrams,
+    yieldSource: head.yieldSource,
   };
 }
 
@@ -885,6 +1216,110 @@ async function insertRevision(
   }
 }
 
+async function insertRecipeDiaryRevision(
+  transaction: Transaction<Database>,
+  input: {
+    readonly coordinates: Coordinates;
+    readonly dayId: string;
+    readonly entryId: string;
+    readonly facts: Awaited<ReturnType<typeof loadRecipeDiaryFacts>>;
+    readonly mealSlot: DiaryMealSlot;
+    readonly note: string | null;
+    readonly operation: "create" | "delete" | "move" | "update";
+    readonly position: number;
+    readonly revisionId: string;
+    readonly revisionNumber: string;
+    readonly userId: string;
+  },
+): Promise<void> {
+  await transaction
+    .insertInto("diary_entry_revision")
+    .values({
+      attribution_required: null,
+      attribution_text: null,
+      brand_name: null,
+      diary_entry_id: input.entryId,
+      diary_id: input.dayId,
+      entry_kind: "recipe",
+      food_name: null,
+      food_serving_id: null,
+      food_version_id: null,
+      id: input.revisionId,
+      input_unit: input.facts.inputUnit,
+      license_expression: null,
+      local_date: input.coordinates.localDate,
+      local_time: input.coordinates.localTime,
+      meal_slot: input.mealSlot,
+      note: input.note,
+      nutrient_component_count: input.facts.nutrients.length,
+      occurred_at: input.coordinates.occurredAt,
+      operation: input.operation,
+      position: input.position,
+      quantity: input.facts.enteredAmount,
+      recipe_calculation_assumptions: input.facts.calculationAssumptions,
+      recipe_calculation_version: input.facts.calculationVersion,
+      recipe_id: input.facts.recipeId,
+      recipe_name: input.facts.recipeName,
+      recipe_version_number: input.facts.recipeVersionNumber,
+      recipe_retention_policy_code: input.facts.retentionPolicyCode,
+      recipe_retention_policy_version: input.facts.retentionPolicyVersion,
+      recipe_serving_count: input.facts.servingCount,
+      recipe_serving_label: input.facts.servingLabel,
+      recipe_version_id: input.facts.recipeVersionId,
+      recipe_warnings: sql<JsonArray>`${JSON.stringify(input.facts.warnings)}::jsonb`,
+      recipe_yield_grams: input.facts.yieldGrams,
+      recipe_yield_source: input.facts.yieldSource,
+      resolved_quantity: input.facts.resolvedGrams,
+      resolved_unit: "g",
+      revision_number: input.revisionNumber,
+      serving_label: input.facts.servingLabel,
+      snapshot_engine_version: input.facts.calculationVersion,
+      snapshot_status: snapshotStatus(input.facts.nutrients),
+      source_code: null,
+      source_component_count: input.facts.sources.length,
+      source_display_name: null,
+      source_release_id: null,
+      time_zone: input.coordinates.timeZone,
+      user_id: input.userId,
+    })
+    .execute();
+  await transaction
+    .insertInto("diary_entry_revision_nutrient")
+    .values(
+      input.facts.nutrients.map((nutrient) => ({
+        completeness: nutrient.completeness,
+        contributor_count: nutrient.contributorCount,
+        diary_entry_revision_id: input.revisionId,
+        is_exact: nutrient.isExact,
+        known_amount: nutrient.knownAmount,
+        nutrient_code: nutrient.code,
+        nutrient_id: nutrient.nutrientId,
+        nutrient_name: nutrient.name,
+        quantified_count: nutrient.quantifiedCount,
+        trace_count: nutrient.traceCount,
+        unit: nutrient.unit,
+        unknown_count: nutrient.unknownCount,
+        unknown_reasons: nutrient.unknownReasons,
+      })),
+    )
+    .execute();
+  await transaction
+    .insertInto("diary_entry_revision_source")
+    .values(
+      input.facts.sources.map((source) => ({
+        attribution_required: source.attributionRequired,
+        attribution_text: source.attributionText,
+        diary_entry_revision_id: input.revisionId,
+        food_source_id: source.foodSourceId,
+        license_expression: source.licenseExpression,
+        source_code: source.code,
+        source_display_name: source.displayName,
+        source_release_id: source.releaseId,
+      })),
+    )
+    .execute();
+}
+
 async function loadEntryByRevision(
   database: Kysely<Database>,
   userId: string,
@@ -895,6 +1330,7 @@ async function loadEntryByRevision(
     .innerJoin("diary_entry as entry", "entry.id", "revision.diary_entry_id")
     .select([
       "entry.id",
+      "revision.entry_kind",
       "revision.revision_number",
       "revision.operation",
       "revision.food_version_id",
@@ -908,6 +1344,19 @@ async function loadEntryByRevision(
       "revision.attribution_text",
       "revision.food_serving_id",
       "revision.serving_label",
+      "revision.recipe_id",
+      "revision.recipe_version_id",
+      "revision.recipe_name",
+      "revision.recipe_version_number",
+      "revision.recipe_yield_grams",
+      "revision.recipe_yield_source",
+      "revision.recipe_serving_count",
+      "revision.recipe_serving_label",
+      "revision.recipe_calculation_version",
+      "revision.recipe_retention_policy_code",
+      "revision.recipe_retention_policy_version",
+      "revision.recipe_calculation_assumptions",
+      "revision.recipe_warnings",
       "revision.quantity",
       "revision.input_unit",
       "revision.resolved_quantity",
@@ -926,7 +1375,69 @@ async function loadEntryByRevision(
     .where("revision.user_id", "=", userId)
     .executeTakeFirst();
   if (
-    !row?.food_version_id ||
+    row?.entry_kind === "recipe" &&
+    row.recipe_id &&
+    row.recipe_version_id &&
+    row.recipe_name &&
+    row.recipe_version_number !== null &&
+    row.recipe_yield_grams &&
+    row.recipe_yield_source &&
+    row.recipe_calculation_version &&
+    row.recipe_retention_policy_code &&
+    row.recipe_retention_policy_version &&
+    row.recipe_calculation_assumptions &&
+    row.recipe_warnings &&
+    row.quantity &&
+    row.input_unit &&
+    row.resolved_quantity
+  ) {
+    return {
+      createdAt: row.created_at.toISOString(),
+      currentRevision: row.revision_number,
+      id: row.id,
+      kind: "recipe",
+      localDate: normalizeDateOnly(row.local_date),
+      localTime: row.local_time,
+      mealSlot: row.meal_slot as DiaryMealSlot,
+      note: row.note,
+      nutrients: await loadRevisionNutrients(database, revisionId),
+      occurredAt: row.occurred_at.toISOString(),
+      operation: row.operation,
+      portion: {
+        amount: canonicalPositiveDecimal(row.quantity, "snapshot portion amount"),
+        inputUnit: row.input_unit as "g" | "serving",
+        resolvedGrams: canonicalPositiveDecimal(row.resolved_quantity, "snapshot resolved grams"),
+      },
+      position: row.position,
+      recipe: {
+        calculationAssumptions: row.recipe_calculation_assumptions,
+        calculationVersion: row.recipe_calculation_version,
+        name: row.recipe_name,
+        recipeId: row.recipe_id,
+        recipeVersionId: row.recipe_version_id,
+        versionNumber: row.recipe_version_number,
+        retentionPolicy: {
+          code: row.recipe_retention_policy_code,
+          version: row.recipe_retention_policy_version,
+        },
+        servingCount:
+          row.recipe_serving_count === null
+            ? null
+            : canonicalPositiveDecimal(row.recipe_serving_count, "recipe serving count"),
+        servingLabel: row.recipe_serving_label,
+        sources: await loadRevisionSources(database, revisionId),
+        warnings: parseRecipeWarnings(row.recipe_warnings),
+        yieldGrams: canonicalPositiveDecimal(row.recipe_yield_grams, "recipe yield grams"),
+        yieldSource: row.recipe_yield_source,
+      },
+      snapshotEngineVersion: row.snapshot_engine_version,
+      snapshotStatus: row.snapshot_status,
+      timeZone: row.time_zone,
+    };
+  }
+  if (
+    row?.entry_kind !== "food" ||
+    !row.food_version_id ||
     !row.food_name ||
     !row.quantity ||
     !row.input_unit ||
@@ -1005,6 +1516,55 @@ async function loadRevisionNutrients(
   }));
 }
 
+async function loadRevisionSources(
+  database: Kysely<Database>,
+  revisionId: string,
+): Promise<readonly RecipeSourceRecord[]> {
+  const rows = await database
+    .selectFrom("diary_entry_revision_source")
+    .selectAll()
+    .where("diary_entry_revision_id", "=", revisionId)
+    .orderBy("source_code")
+    .orderBy("source_release_id")
+    .limit(MAX_NUTRIENT_VECTOR_SIZE + 1)
+    .execute();
+  if (rows.length < 1 || rows.length > MAX_NUTRIENT_VECTOR_SIZE) {
+    throw new DiaryValidationError("Recipe source snapshot is invalid");
+  }
+  return rows.map((row) => ({
+    attributionRequired: row.attribution_required,
+    attributionText: row.attribution_text,
+    code: row.source_code,
+    displayName: row.source_display_name,
+    foodSourceId: row.food_source_id,
+    licenseExpression: row.license_expression,
+    releaseId: row.source_release_id,
+  }));
+}
+
+function parseRecipeWarnings(value: JsonArray): readonly RecipeWarningRecord[] {
+  return value.map((candidate) => {
+    if (
+      typeof candidate !== "object" ||
+      candidate === null ||
+      Array.isArray(candidate) ||
+      typeof (candidate as JsonObject).code !== "string" ||
+      typeof (candidate as JsonObject).message !== "string" ||
+      !Array.isArray((candidate as JsonObject).nutrientIds) ||
+      ((candidate as JsonObject).nutrientIds as JsonArray).some(
+        (id: unknown) => typeof id !== "string",
+      )
+    ) {
+      throw new DiaryValidationError("Recipe warning snapshot is invalid");
+    }
+    return {
+      code: (candidate as JsonObject).code as string,
+      message: (candidate as JsonObject).message as string,
+      nutrientIds: (candidate as JsonObject).nutrientIds as string[],
+    };
+  });
+}
+
 async function loadOwnedHeadForUpdate(
   transaction: Transaction<Database>,
   userId: string,
@@ -1015,6 +1575,7 @@ async function loadOwnedHeadForUpdate(
     .innerJoin("diary_entry_revision as revision", "revision.id", "entry.current_revision_id")
     .select([
       "entry.diary_id",
+      "revision.entry_kind",
       "revision.id as revision_id",
       "revision.revision_number",
       "revision.operation",
@@ -1029,6 +1590,19 @@ async function loadOwnedHeadForUpdate(
       "revision.attribution_text",
       "revision.food_serving_id",
       "revision.serving_label",
+      "revision.recipe_id",
+      "revision.recipe_version_id",
+      "revision.recipe_name",
+      "revision.recipe_version_number",
+      "revision.recipe_yield_grams",
+      "revision.recipe_yield_source",
+      "revision.recipe_serving_count",
+      "revision.recipe_serving_label",
+      "revision.recipe_calculation_version",
+      "revision.recipe_retention_policy_code",
+      "revision.recipe_retention_policy_version",
+      "revision.recipe_calculation_assumptions",
+      "revision.recipe_warnings",
       "revision.quantity",
       "revision.input_unit",
       "revision.resolved_quantity",
@@ -1045,7 +1619,59 @@ async function loadOwnedHeadForUpdate(
     .forUpdate("entry")
     .executeTakeFirst();
   if (
-    !row?.food_version_id ||
+    row?.entry_kind === "recipe" &&
+    row.recipe_id &&
+    row.recipe_version_id &&
+    row.recipe_name &&
+    row.recipe_version_number !== null &&
+    row.recipe_yield_grams &&
+    row.recipe_yield_source &&
+    row.recipe_calculation_version &&
+    row.recipe_retention_policy_code &&
+    row.recipe_retention_policy_version &&
+    row.recipe_calculation_assumptions &&
+    row.recipe_warnings &&
+    row.quantity &&
+    row.input_unit &&
+    row.resolved_quantity
+  ) {
+    return {
+      calculationAssumptions: row.recipe_calculation_assumptions,
+      calculationVersion: row.recipe_calculation_version,
+      diaryId: row.diary_id,
+      enteredAmount: canonicalPositiveDecimal(row.quantity, "snapshot portion amount"),
+      inputUnit: row.input_unit as "g" | "serving",
+      kind: "recipe",
+      localDate: normalizeDateOnly(row.local_date),
+      localTime: row.local_time,
+      mealSlot: row.meal_slot as DiaryMealSlot,
+      note: row.note,
+      occurredAt: row.occurred_at.toISOString(),
+      operation: row.operation,
+      position: row.position,
+      recipeId: row.recipe_id,
+      recipeName: row.recipe_name,
+      recipeVersionId: row.recipe_version_id,
+      recipeVersionNumber: row.recipe_version_number,
+      resolvedGrams: canonicalPositiveDecimal(row.resolved_quantity, "snapshot resolved grams"),
+      retentionPolicyCode: row.recipe_retention_policy_code,
+      retentionPolicyVersion: row.recipe_retention_policy_version,
+      revisionId: row.revision_id,
+      revisionNumber: row.revision_number,
+      servingCount:
+        row.recipe_serving_count === null
+          ? null
+          : canonicalPositiveDecimal(row.recipe_serving_count, "recipe serving count"),
+      servingLabel: row.recipe_serving_label,
+      timeZone: row.time_zone,
+      warnings: parseRecipeWarnings(row.recipe_warnings),
+      yieldGrams: canonicalPositiveDecimal(row.recipe_yield_grams, "recipe yield grams"),
+      yieldSource: row.recipe_yield_source,
+    };
+  }
+  if (
+    row?.entry_kind !== "food" ||
+    !row.food_version_id ||
     !row.food_name ||
     !row.quantity ||
     !row.input_unit ||
@@ -1065,6 +1691,7 @@ async function loadOwnedHeadForUpdate(
     foodName: row.food_name,
     foodVersionId: row.food_version_id,
     inputUnit: row.input_unit,
+    kind: "food",
     localDate: normalizeDateOnly(row.local_date),
     localTime: row.local_time,
     mealSlot: row.meal_slot as DiaryMealSlot,
@@ -1087,7 +1714,7 @@ async function loadOwnedHeadForUpdate(
   };
 }
 
-function preservePinnedProvenance(facts: FoodFacts, head: HeadRecord): FoodFacts {
+function preservePinnedProvenance(facts: FoodFacts, head: FoodHeadRecord): FoodFacts {
   return {
     ...facts,
     attributionRequired: head.attributionRequired,
@@ -1464,6 +2091,24 @@ function validateMealSlot(value: string): asserts value is DiaryMealSlot {
   if (!(["breakfast", "lunch", "dinner", "snacks"] as const).includes(value as DiaryMealSlot)) {
     throw new DiaryValidationError("mealSlot is invalid");
   }
+}
+
+function toFoodPortion(value: NonNullable<UpdateDiaryEntryInput["portion"]>): DiaryPortionInput {
+  if (value.kind === "grams") return value;
+  if (!("servingId" in value) || typeof value.servingId !== "string") {
+    throw new DiaryValidationError("Food serving portion requires servingId");
+  }
+  return { amount: value.amount, kind: "serving", servingId: value.servingId };
+}
+
+function toRecipePortion(
+  value: NonNullable<UpdateDiaryEntryInput["portion"]>,
+): CreateRecipeDiaryEntryInput["portion"] {
+  if (value.kind === "grams") return value;
+  if ("servingId" in value) {
+    throw new DiaryValidationError("Recipe serving portion must not include a food servingId");
+  }
+  return { amount: value.amount, kind: "serving" };
 }
 
 function validateLocalDate(value: string): void {

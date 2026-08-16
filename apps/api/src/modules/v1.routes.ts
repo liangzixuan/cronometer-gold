@@ -3,13 +3,21 @@ import type { FastifyPluginAsync } from "fastify";
 import { type AuthRoutesOptions, authRoutes } from "./auth/auth.routes.js";
 import { type DiaryRoutesOptions, diaryRoutes } from "./diary/diary.routes.js";
 import { type FoodRoutesOptions, foodRoutes } from "./foods/food.routes.js";
+import {
+  type GoalRoutesOptions,
+  goalRoutes,
+  targetableNutrientRoutes,
+} from "./goals/goal.routes.js";
 import { type ProfileRoutesOptions, profileRoutes } from "./profile/profile.routes.js";
+import { type RecipeRoutesOptions, recipeRoutes } from "./recipes/recipe.routes.js";
 
 export interface V1RoutesOptions
   extends FoodRoutesOptions,
     AuthRoutesOptions,
     ProfileRoutesOptions,
-    DiaryRoutesOptions {}
+    DiaryRoutesOptions,
+    RecipeRoutesOptions,
+    GoalRoutesOptions {}
 
 const versionResponseSchema = {
   type: "object",
@@ -59,5 +67,20 @@ export const v1Routes: FastifyPluginAsync<V1RoutesOptions> = async (app, options
     prefix: "/diary",
     ...(options.authService ? { authService: options.authService } : {}),
     ...(options.diaryService ? { diaryService: options.diaryService } : {}),
+  });
+  void app.register(recipeRoutes, {
+    prefix: "/recipes",
+    ...(options.authService ? { authService: options.authService } : {}),
+    ...(options.recipeService ? { recipeService: options.recipeService } : {}),
+  });
+  void app.register(goalRoutes, {
+    prefix: "/goals",
+    ...(options.authService ? { authService: options.authService } : {}),
+    ...(options.goalService ? { goalService: options.goalService } : {}),
+  });
+  void app.register(targetableNutrientRoutes, {
+    prefix: "/nutrients",
+    ...(options.authService ? { authService: options.authService } : {}),
+    ...(options.goalService ? { goalService: options.goalService } : {}),
   });
 };

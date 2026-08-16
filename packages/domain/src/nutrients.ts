@@ -280,13 +280,33 @@ export function combineNutrientAggregates(
       },
     );
     knownAmount = knownAmount.plus(aggregate.knownAmount);
-    contributorCount += aggregate.contributorCount;
-    quantifiedCount += aggregate.quantifiedCount;
-    traceCount += aggregate.traceCount;
-    unknownCount += aggregate.unknownCount;
+    contributorCount = checkedCoverageSum(
+      contributorCount,
+      aggregate.contributorCount,
+      definition.id,
+      "contributorCount",
+    );
+    quantifiedCount = checkedCoverageSum(
+      quantifiedCount,
+      aggregate.quantifiedCount,
+      definition.id,
+      "quantifiedCount",
+    );
+    traceCount = checkedCoverageSum(traceCount, aggregate.traceCount, definition.id, "traceCount");
+    unknownCount = checkedCoverageSum(
+      unknownCount,
+      aggregate.unknownCount,
+      definition.id,
+      "unknownCount",
+    );
     for (const [reason, count] of Object.entries(aggregate.unknownReasons)) {
       const typedReason = reason as UnknownNutrientReason;
-      unknownReasons[typedReason] = (unknownReasons[typedReason] ?? 0) + (count ?? 0);
+      unknownReasons[typedReason] = checkedCoverageSum(
+        unknownReasons[typedReason] ?? 0,
+        count ?? 0,
+        definition.id,
+        `${typedReason} unknown reason`,
+      );
     }
   }
 
@@ -330,10 +350,19 @@ export function normalizeNutrientAggregate(aggregate: NutrientAggregate): Nutrie
       { nutrientId: aggregate.nutrientId, [name]: count },
     );
   }
+  const classifiedCount = checkedCoverageSum(
+    checkedCoverageSum(
+      aggregate.quantifiedCount,
+      aggregate.traceCount,
+      aggregate.nutrientId,
+      "classified coverage",
+    ),
+    aggregate.unknownCount,
+    aggregate.nutrientId,
+    "classified coverage",
+  );
   domainInvariant(
-    aggregate.contributorCount > 0 &&
-      aggregate.quantifiedCount + aggregate.traceCount + aggregate.unknownCount ===
-        aggregate.contributorCount,
+    aggregate.contributorCount > 0 && classifiedCount === aggregate.contributorCount,
     "INVALID_NUTRIENT_AGGREGATE",
     "Nutrient coverage counters do not reconcile",
     { nutrientId: aggregate.nutrientId },
@@ -349,7 +378,12 @@ export function normalizeNutrientAggregate(aggregate: NutrientAggregate): Nutrie
       "Unknown-reason counters require a supported reason and non-negative integer",
       { nutrientId: aggregate.nutrientId, reason, count },
     );
-    reasonTotal += count;
+    reasonTotal = checkedCoverageSum(
+      reasonTotal,
+      count,
+      aggregate.nutrientId,
+      "unknown reason coverage",
+    );
   }
   domainInvariant(
     reasonTotal === aggregate.unknownCount,
@@ -441,6 +475,22 @@ function buildAggregate(parts: AggregateParts): NutrientAggregate {
     unknownCount: parts.unknownCount,
     unknownReasons: { ...parts.unknownReasons },
   });
+}
+
+function checkedCoverageSum(
+  left: number,
+  right: number,
+  nutrientId: NutrientId,
+  counter: string,
+): number {
+  const sum = left + right;
+  domainInvariant(
+    Number.isSafeInteger(sum),
+    "INVALID_NUTRIENT_AGGREGATE",
+    `${counter} exceeds the exact integer range`,
+    { counter, left, nutrientId, right },
+  );
+  return sum;
 }
 
 function normalizeNutrientValue(value: NutrientValue): NutrientValue {

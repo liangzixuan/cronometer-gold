@@ -6,9 +6,12 @@ import { SESSION_COOKIE } from "./private-api";
 const entry = {
   id: "75d7fa63-4e26-42de-a1f8-0683ce268f62",
   revision: "4",
+  entryKind: "food",
   foodVersionId: "202",
+  recipeVersionId: null,
   portion: { kind: "serving", servingId: "303", amount: "2", servingLabel: "medium apple" },
   food: { name: "Apple", brandName: null },
+  recipe: null,
   source: {
     code: "USDA_FDC",
     releaseId: "ea8c79b4-49b0-4548-8ae6-c1b228317f19",

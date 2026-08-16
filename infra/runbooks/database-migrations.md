@@ -74,6 +74,36 @@ schema has no request digest or result payload. Those keys are therefore treated
 as reservations after upgrade: reuse deterministically returns
 `DIARY_IDEMPOTENCY_CONFLICT`; exact replay is not reconstructable.
 
+## 0005 recipe and goal preflight
+
+`0005_recipes_and_goals.sql` requires the experimental legacy `recipe` and
+`nutrition_goal` root tables to be empty before it creates any new object. The
+old tables do not contain the immutable yield provenance, complete nutrient
+vectors, source attribution, equation inputs, or idempotency digests required by
+the production contracts. The migration therefore aborts before DDL instead of
+inventing that evidence. It takes a write-blocking lock before this check so a
+legacy application instance cannot insert a root between preflight and schema
+conversion; drain old writers and rehearse the lock duration before deployment.
+
+Rehearse the preflight against a restored snapshot. If it fails, export the
+experimental rows, retain the export under the approved data-handling policy,
+and either recreate them through the reviewed APIs after migration or perform a
+separately approved remediation. Retry the whole forward migration after the
+roots are empty. There is no down migration; a failed attempt rolls back with no
+`app_schema_migration` ledger row, and recovery remains a forward repair or a
+verified restore/cutover.
+
+After deployment, API readiness compares the exact ordered migration ledger with
+the bundled files and checksums. A reachable database that is missing `0005`, has
+an extra unknown migration, or records a different checksum remains unready; do
+not bypass this as a rollout shortcut.
+
+Recipe and goal tables add privacy cascades for their owner-controlled data, but
+this migration does not implement whole-account erasure. Existing diary,
+custom-food, audit, and immutable-history edges still require the separately
+reviewed privileged deletion workflow before account-deletion compliance can be
+claimed.
+
 ## Catalogue and diary lock-order audit
 
 Keep the canonical order `source -> food -> version -> release -> nutrient

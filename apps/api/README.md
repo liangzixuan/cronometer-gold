@@ -28,7 +28,10 @@ HTTPS and a scoped `MEILI_SEARCH_KEY`. See `.env.example` for the complete local
 configuration.
 
 `GET /health` is a process liveness check. `GET /ready` invokes the injected
-dependency readiness probe. Domain routes are mounted below `/v1`.
+dependency readiness probe. PostgreSQL readiness compares the complete applied
+migration ledger with every bundled migration name and SHA-256; a reachable but
+stale, missing, or checksum-divergent schema is not ready. Domain routes are
+mounted below `/v1`.
 
 Readiness checks receive an `AbortSignal`, are deadline-bounded, and run
 single-flight. Dependency adapters must also configure driver/query timeouts and

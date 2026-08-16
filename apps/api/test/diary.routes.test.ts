@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { DiaryNutrientAggregate } from "@nutrition-tracker/contracts";
+import type { DiaryNutrientAggregate, DiaryRecipeEntry } from "@nutrition-tracker/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
@@ -11,6 +11,7 @@ import {
   account,
   bearerToken,
   diaryDay,
+  diaryEntry,
   entryId,
   mutationResponse,
   operationId,
@@ -179,6 +180,65 @@ describe("diary routes", () => {
     expect(calls[0]?.[0]).toMatchObject({ userId, entryId, expectedRevision: "3" });
     expect(calls[1]?.[0]).toMatchObject({ userId, entryId, expectedRevision: "4" });
     expect(calls[0]?.[0].requestDigest).not.toBe(calls[1]?.[0].requestDigest);
+  });
+
+  it("edits and serializes a pinned recipe entry through the ordinary diary route", async () => {
+    const recipeVersionId = "d696b6c8-782a-4783-b459-af4698470cf0";
+    const recipeEntry: DiaryRecipeEntry = {
+      ...diaryEntry,
+      entryKind: "recipe",
+      foodVersionId: null,
+      recipeVersionId,
+      portion: { kind: "serving", amount: "1", servingLabel: "bowl" },
+      food: null,
+      recipe: {
+        id: "2a29e851-eab0-4af6-82f2-5ac633420c2b",
+        name: "Porridge",
+        versionNumber: 1,
+        yieldGrams: "100",
+        yieldSource: "measured",
+        servingCount: "1",
+        servingLabel: "bowl",
+        calculationVersion: "nutrition-engine-v1",
+        retentionPolicy: {
+          code: "identity-retention-default",
+          version: "1",
+          assumption:
+            "No cooking-retention dataset was applied; omitted factors remain exactly one.",
+        },
+        warnings: [
+          {
+            code: "RETENTION_FACTORS_DEFAULTED",
+            message: "No cooking-retention dataset was applied.",
+            nutrientIds: ["1008"],
+          },
+        ],
+      },
+      sources: [diaryEntry.source],
+      source: null,
+    };
+    const responseBody = {
+      data: { ...mutationResponse.data, entry: recipeEntry },
+    };
+    const service = diaryStub({ updateEntry: vi.fn(async () => responseBody) });
+    const response = await createTestApp(service).inject({
+      method: "PATCH",
+      url: `/v1/diary/entries/${entryId}`,
+      headers: {
+        ...authHeaders,
+        "idempotency-key": operationId,
+        "if-match": '"3"',
+      },
+      payload: { portion: { kind: "serving", amount: "1" } },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.entry).toEqual(recipeEntry);
+    expect(service.updateEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entryId,
+        patch: { portion: { kind: "serving", amount: "1" } },
+      }),
+    );
   });
 
   it("requires a UUID key and a strong current entry ETag for edits", async () => {

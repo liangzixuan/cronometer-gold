@@ -1,7 +1,7 @@
 import type {
   AuthenticatedAccount,
   DiaryDay,
-  DiaryEntry,
+  DiaryFoodEntry,
   DiaryMutationResponse,
   DiaryNutrientAggregate,
   UserProfile,
@@ -52,12 +52,15 @@ export const nutrient: DiaryNutrientAggregate = {
   },
 };
 
-export const diaryEntry: DiaryEntry = {
+export const diaryEntry: DiaryFoodEntry = {
+  entryKind: "food",
   id: entryId,
   revision: "3",
   foodVersionId: "202",
+  recipeVersionId: null,
   portion: { kind: "serving", servingId: "303", amount: "1.5", servingLabel: "medium apple" },
   food: { name: "Apple", brandName: null },
+  recipe: null,
   mealSlot: "breakfast",
   resolvedGrams: "150",
   occurredAt: "2026-08-15T13:30:00.000Z",
