@@ -18,7 +18,7 @@
     "build": "tsc -p tsconfig.build.json",
     "db:migrate": "tsx src/cli.ts",
     "dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
-    "test": "vitest run",
+    "test": "vitest run --no-file-parallelism",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {

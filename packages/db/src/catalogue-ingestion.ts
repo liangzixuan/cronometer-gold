@@ -315,11 +315,14 @@ export async function registerFoodSourceFromReviewedManifest(
   input: RegisterFoodSourceInput,
 ): Promise<string> {
   requireText(input.code, "code");
-  requireText(input.displayName, "displayName");
+  if (!/^[A-Z][A-Z0-9_]{1,31}$/.test(input.code)) {
+    throw new Error("code must be a canonical uppercase source code");
+  }
+  requireBoundedText(input.displayName, "displayName", 200);
   requireText(input.homepageUrl, "homepageUrl");
-  requireText(input.licenseExpression, "licenseExpression");
+  requireBoundedText(input.licenseExpression, "licenseExpression", 256);
   requireText(input.licenseUrl, "licenseUrl");
-  requireText(input.attributionText, "attributionText");
+  requireBoundedText(input.attributionText, "attributionText", 2_000);
   const reviewedBy = stablePrincipalId(input.rightsReviewedBy, "rightsReviewedBy");
   const inserted = await database
     .insertInto("food_source")
@@ -1555,23 +1558,30 @@ async function replaceActiveBarcodes(
   await closeActiveBarcodes(transaction, sourceId);
   for (const item of materialized) {
     if (!item.gtin) continue;
-    const inserted = await transaction
-      .insertInto("food_barcode")
-      .values({
-        food_id: item.foodId,
-        food_serving_id: null,
-        food_version_id: item.foodVersionId,
-        gtin: item.gtin,
-        market_code: item.marketCode,
-        metadata: { activation: "promotion" },
-        source_release_id: releaseId,
-      })
-      .onConflict((conflict) =>
-        conflict.columns(["gtin", "market_code"]).where("valid_to", "is", null).doNothing(),
+    const inserted = await sql<{ id: string }>`
+      insert into food_barcode (
+        food_id,
+        food_serving_id,
+        food_version_id,
+        gtin,
+        market_code,
+        metadata,
+        source_release_id
+      ) values (
+        ${item.foodId},
+        null,
+        ${item.foodVersionId},
+        ${item.gtin},
+        ${item.marketCode},
+        jsonb_build_object('activation', 'promotion'),
+        ${releaseId}
       )
-      .returning("id")
-      .executeTakeFirst();
-    if (!inserted) {
+      on conflict ((lpad(gtin, 14, '0')), market_code)
+        where valid_to is null
+        do nothing
+      returning id
+    `.execute(transaction);
+    if (!inserted.rows[0]) {
       throw new Error(`GTIN ${item.gtin} became unavailable after validation`);
     }
   }
@@ -1591,7 +1601,7 @@ async function restoreReleaseBarcodes(
     from food_barcode as desired
     join food as desired_food on desired_food.id = desired.food_id
     join food_barcode as active
-      on active.gtin = desired.gtin
+      on lpad(active.gtin, 14, '0') = lpad(desired.gtin, 14, '0')
       and active.market_code = desired.market_code
       and active.valid_to is null
     join food as active_food on active_food.id = active.food_id
@@ -1611,8 +1621,8 @@ async function restoreReleaseBarcodes(
       gtin, market_code, food_id, food_version_id, food_serving_id,
       source_release_id, valid_from, metadata
     )
-    select distinct on (barcode.gtin, barcode.market_code)
-      barcode.gtin,
+    select distinct on (lpad(barcode.gtin, 14, '0'), barcode.market_code)
+      lpad(barcode.gtin, 14, '0'),
       barcode.market_code,
       barcode.food_id,
       barcode.food_version_id,
@@ -1624,7 +1634,11 @@ async function restoreReleaseBarcodes(
     join food as source_food on source_food.id = barcode.food_id
     where source_food.food_source_id = ${sourceId}
       and barcode.source_release_id = ${releaseId}
-    order by barcode.gtin, barcode.market_code, barcode.created_at desc, barcode.id desc
+    order by
+      lpad(barcode.gtin, 14, '0'),
+      barcode.market_code,
+      barcode.created_at desc,
+      barcode.id desc
   `.execute(transaction);
 }
 
@@ -1875,15 +1889,15 @@ async function loadForbiddenGtins(
   database: DatabaseExecutor,
   sourceId: string,
 ): Promise<ReadonlySet<string>> {
-  const rows = await database
-    .selectFrom("food_barcode as barcode")
-    .innerJoin("food", "food.id", "barcode.food_id")
-    .select(["barcode.gtin", "barcode.market_code"])
-    .where("barcode.valid_to", "is", null)
-    .where("food.food_source_id", "is not", null)
-    .where("food.food_source_id", "!=", sourceId)
-    .execute();
-  return new Set(rows.map((row) => `${row.gtin}:${row.market_code}`));
+  const rows = await sql<{ gtin14: string; market_code: string }>`
+    select lpad(barcode.gtin, 14, '0') as gtin14, barcode.market_code
+    from food_barcode as barcode
+    join food on food.id = barcode.food_id
+    where barcode.valid_to is null
+      and food.food_source_id is not null
+      and food.food_source_id <> ${sourceId}
+  `.execute(database);
+  return new Set(rows.rows.map((row) => `${row.gtin14}:${row.market_code}`));
 }
 
 async function selectBatch(database: DatabaseExecutor, batchId: string): Promise<BatchRow> {
@@ -2005,6 +2019,13 @@ function assertSha256(value: string, field: string): void {
 
 function requireText(value: string, field: string): void {
   if (value.trim().length === 0) throw new Error(`${field} is required`);
+}
+
+function requireBoundedText(value: string, field: string, maximumLength: number): void {
+  requireText(value, field);
+  if (Buffer.byteLength(value, "utf8") > maximumLength) {
+    throw new Error(`${field} must contain at most ${maximumLength} UTF-8 bytes`);
+  }
 }
 
 function stablePrincipalId(value: string, field: string): string {

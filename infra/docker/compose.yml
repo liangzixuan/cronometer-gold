@@ -25,7 +25,7 @@ services:
     networks: [nutrition-local]
 
   meilisearch:
-    image: getmeili/meilisearch:v1.32.0
+    image: getmeili/meilisearch:v1.32.0@sha256:61b1c86c459fa52d0653516f573702791e611574737dc76175ae9d2628c911f5
     restart: unless-stopped
     environment:
       MEILI_ENV: ${MEILI_ENV:-development}

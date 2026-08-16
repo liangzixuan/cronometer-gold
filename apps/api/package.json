@@ -14,7 +14,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "dev": "tsx watch --include ../../packages/contracts/dist/**/*.js src/server.ts",
+    "dev": "tsx watch --include ../../packages/contracts/dist/**/*.js --include ../../packages/db/dist/**/*.js --include ../../packages/search/dist/**/*.js src/server.ts",
     "start": "node dist/server.js",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -22,6 +22,8 @@
   },
   "dependencies": {
     "@nutrition-tracker/contracts": "workspace:*",
+    "@nutrition-tracker/db": "workspace:*",
+    "@nutrition-tracker/search": "workspace:*",
     "fastify": "5.12.0",
     "zod": "4.4.3"
   },

@@ -40,6 +40,11 @@ jobs:
       - name: Build all applications and packages
         run: pnpm build
 
+      - name: Exercise the mobile release build preflight
+        env:
+          EXPO_PUBLIC_API_URL: https://api.example.invalid
+        run: pnpm --filter @nutrition-tracker/mobile build:release
+
       - name: Reject high-severity production dependency advisories
         run: pnpm audit:prod
 
@@ -90,6 +95,19 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      meilisearch:
+        image: getmeili/meilisearch:v1.32.0@sha256:61b1c86c459fa52d0653516f573702791e611574737dc76175ae9d2628c911f5
+        env:
+          MEILI_ENV: development
+          MEILI_MASTER_KEY: search-integration-key-20260815
+          MEILI_NO_ANALYTICS: true
+        ports:
+          - 7700:7700
+        options: >-
+          --health-cmd "curl --fail --silent http://127.0.0.1:7700/health"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -123,3 +141,16 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql://nutrition_local:nutrition_local_only@127.0.0.1:5432/nutrition_tracker
         run: pnpm --filter @nutrition-tracker/db test
+
+      - name: Exercise PostgreSQL-to-Meilisearch worker boundary
+        env:
+          TEST_DATABASE_URL: postgresql://nutrition_local:nutrition_local_only@127.0.0.1:5432/nutrition_tracker
+          TEST_MEILI_API_KEY: search-integration-key-20260815
+          TEST_MEILI_URL: http://127.0.0.1:7700
+        run: pnpm --filter @nutrition-tracker/worker test:integration
+
+      - name: Exercise real search index rebuild and queries
+        env:
+          TEST_MEILI_API_KEY: search-integration-key-20260815
+          TEST_MEILI_URL: http://127.0.0.1:7700
+        run: pnpm --filter @nutrition-tracker/search test:integration

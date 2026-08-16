@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ConfigValidationError, loadConfig } from "../src/config.js";
+import { ConfigValidationError, loadApiDependencyConfig, loadConfig } from "../src/config.js";
 
 describe("loadConfig", () => {
   it("applies safe local defaults", () => {
@@ -41,6 +41,59 @@ describe("loadConfig", () => {
         expect.objectContaining({ field: "API_PORT" }),
       ]);
       expect((error as Error).message).not.toContain(invalidPort);
+    }
+  });
+});
+
+describe("loadApiDependencyConfig", () => {
+  it("uses loopback search defaults only outside production", () => {
+    expect(
+      loadApiDependencyConfig({
+        DATABASE_URL: "postgresql://local.invalid/nutrition",
+        NODE_ENV: "development",
+      }),
+    ).toMatchObject({
+      databaseUrl: "postgresql://local.invalid/nutrition",
+      meiliUrl: "http://127.0.0.1:7700",
+      searchDatabaseMaxConcurrency: 4,
+      searchDatabaseMaxQueue: 16,
+      searchRequestTimeoutMs: 5_000,
+    });
+  });
+
+  it("bounds the process-local search database bulkhead configuration", () => {
+    expect(
+      loadApiDependencyConfig({
+        DATABASE_URL: "postgresql://local.invalid/nutrition",
+        NODE_ENV: "development",
+        SEARCH_DB_MAX_CONCURRENCY: "2",
+        SEARCH_DB_MAX_QUEUE: "3",
+      }),
+    ).toMatchObject({ searchDatabaseMaxConcurrency: 2, searchDatabaseMaxQueue: 3 });
+
+    expect(() =>
+      loadApiDependencyConfig({
+        DATABASE_URL: "postgresql://local.invalid/nutrition",
+        SEARCH_DB_MAX_CONCURRENCY: "0",
+      }),
+    ).toThrow(ConfigValidationError);
+  });
+
+  it("requires a scoped key, cursor secret, and TLS in production", () => {
+    try {
+      loadApiDependencyConfig({
+        DATABASE_URL: "postgresql://production.invalid/nutrition",
+        MEILI_URL: "http://search.internal:7700",
+        NODE_ENV: "production",
+      });
+      throw new Error("expected production dependency configuration to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigValidationError);
+      expect((error as ConfigValidationError).issues.map((issue) => issue.field)).toEqual([
+        "SEARCH_CURSOR_SECRET",
+        "MEILI_SEARCH_KEY",
+        "MEILI_URL",
+      ]);
     }
   });
 });

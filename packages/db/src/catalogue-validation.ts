@@ -1,10 +1,15 @@
 import { createHash } from "node:crypto";
 
+import { normalizeGtin14 } from "./food-search.js";
 import type { JsonObject, JsonValue, NutrientValueStatus, ServingUnitKind } from "./types.js";
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const DECIMAL_PATTERN = /^(0|[1-9]\d*)(?:\.(\d*[1-9]))?$/;
-const GTIN_PATTERN = /^(?:\d{8}|\d{12}|\d{13}|\d{14})$/;
+const MAX_FOOD_NAME_LENGTH = 500;
+const MAX_NORMALIZED_FOOD_NAME_LENGTH = 512;
+const MAX_BRAND_NAME_LENGTH = 300;
+const MAX_SERVING_LABEL_LENGTH = 200;
+const MAX_SERVING_UNIT_LENGTH = 50;
 
 export type CatalogueValidationIssueSeverity = "error" | "warning";
 export type CatalogueValidationDisposition =
@@ -261,9 +266,10 @@ export function validateCatalogueRecord(
   }
 
   const identity = objectValue(root.identity);
-  const name = boundedText(identity?.description, 1, 2_000);
+  const name = boundedUtf8Text(identity?.description, 1, MAX_FOOD_NAME_LENGTH);
+  const normalizedName = name ? normalizeSearchText(name) : null;
   const descriptionFr = optionalText(identity?.descriptionFr, 2_000);
-  const brandName = optionalText(identity?.brandOwner, 2_000);
+  const brandName = optionalUtf8Text(identity?.brandOwner, MAX_BRAND_NAME_LENGTH);
   if (!identity || !name) {
     issues.push(
       issue(
@@ -272,6 +278,20 @@ export function validateCatalogueRecord(
         "exclude_record",
         "$.identity.description",
         "Food description is required",
+      ),
+    );
+  }
+  if (
+    normalizedName &&
+    Buffer.byteLength(normalizedName, "utf8") > MAX_NORMALIZED_FOOD_NAME_LENGTH
+  ) {
+    issues.push(
+      issue(
+        "FOOD_NORMALIZED_NAME_TOO_LONG",
+        "error",
+        "exclude_record",
+        "$.identity.description",
+        "Normalized food description exceeds the supported search length",
       ),
     );
   }
@@ -330,10 +350,18 @@ export function validateCatalogueRecord(
 
   const rawGtin = optionalText(identity?.gtin, 32);
   let gtin: string | null = null;
-  const gtinMarketKey = rawGtin && marketCode ? `${rawGtin}:${marketCode}` : null;
-  if (rawGtin && GTIN_PATTERN.test(rawGtin) && !forbiddenGtins.has(gtinMarketKey ?? rawGtin)) {
-    gtin = rawGtin;
-  } else if (rawGtin && forbiddenGtins.has(gtinMarketKey ?? rawGtin)) {
+  let canonicalGtin: string | null = null;
+  if (rawGtin) {
+    try {
+      canonicalGtin = normalizeGtin14(rawGtin);
+    } catch {
+      canonicalGtin = null;
+    }
+  }
+  const gtinMarketKey = canonicalGtin && marketCode ? `${canonicalGtin}:${marketCode}` : null;
+  if (canonicalGtin && !forbiddenGtins.has(gtinMarketKey ?? canonicalGtin)) {
+    gtin = canonicalGtin;
+  } else if (canonicalGtin && forbiddenGtins.has(gtinMarketKey ?? canonicalGtin)) {
     issues.push(
       issue(
         "BARCODE_CROSS_SOURCE_CONFLICT",
@@ -346,17 +374,17 @@ export function validateCatalogueRecord(
   } else if (rawGtin) {
     issues.push(
       issue(
-        "BARCODE_UNSUPPORTED_LENGTH",
+        "BARCODE_INVALID_GTIN",
         "warning",
         "exclude_barcode",
         "$.identity.gtin",
-        "Only GTIN-8, UPC-A, EAN-13, and GTIN-14 values are stored",
+        "Barcode must be a check-digit-valid GTIN-8, UPC-A, EAN-13, or GTIN-14",
       ),
     );
   }
 
   const recordIsValid = !issues.some((entry) => entry.severity === "error");
-  if (!recordIsValid || !name || !sourceRecordId || !sourceDataType || !basis) {
+  if (!recordIsValid || !name || !normalizedName || !sourceRecordId || !sourceDataType || !basis) {
     return {
       ...emptyResult(issues),
       excludedNutrientCount: nutrients.excludedCount,
@@ -383,7 +411,7 @@ export function validateCatalogueRecord(
       languageTag: languageTag as string,
       marketCode: marketCode as string,
       name,
-      normalizedName: normalizeSearchText(name),
+      normalizedName,
       nutrients: nutrients.values,
       servings,
       sourceDataType,
@@ -676,8 +704,8 @@ function validateServings(
     const path = `$.servings[${index}]`;
     const row = objectValue(input[index]);
     const sourceServingKey = boundedText(row?.sourceServingId, 1, 256);
-    const label = boundedText(row?.description, 1, 2_000);
-    const unit = boundedText(row?.unit, 1, 128);
+    const label = boundedUtf8Text(row?.description, 1, MAX_SERVING_LABEL_LENGTH);
+    const unit = boundedUtf8Text(row?.unit, 1, MAX_SERVING_UNIT_LENGTH);
     if (!row || !sourceServingKey || !label || !unit || seen.has(sourceServingKey)) {
       issues.push(
         issue(
@@ -762,6 +790,20 @@ function boundedText(
 function optionalText(value: JsonValue | undefined, maximum: number): string | null {
   if (value === null || value === undefined) return null;
   return boundedText(value, 1, maximum);
+}
+
+function boundedUtf8Text(
+  value: JsonValue | undefined,
+  minimum: number,
+  maximumBytes: number,
+): string | null {
+  const normalized = boundedText(value, minimum, maximumBytes);
+  return normalized && Buffer.byteLength(normalized, "utf8") <= maximumBytes ? normalized : null;
+}
+
+function optionalUtf8Text(value: JsonValue | undefined, maximumBytes: number): string | null {
+  if (value === null || value === undefined) return null;
+  return boundedUtf8Text(value, 1, maximumBytes);
 }
 
 function isoTimestamp(value: JsonValue | undefined): string | null | undefined {

@@ -10,6 +10,7 @@ import Fastify, {
 import { type AppConfig, loadConfig } from "./config.js";
 import { registerErrorHandling } from "./http/error-handler.js";
 import { createLoggerOptions } from "./logging.js";
+import type { FoodSearchService } from "./modules/foods/food.routes.js";
 import { type ReadinessCheck, systemRoutes } from "./modules/system/system.routes.js";
 import { v1Routes } from "./modules/v1.routes.js";
 
@@ -17,6 +18,7 @@ export interface BuildAppOptions {
   config?: AppConfig;
   logger?: FastifyServerOptions["logger"];
   readinessCheck?: ReadinessCheck;
+  foodSearchService?: FoodSearchService;
 }
 
 const defaultReadinessCheck: ReadinessCheck = (_signal) => true;
@@ -69,7 +71,10 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     readinessCheck: options.readinessCheck ?? defaultReadinessCheck,
     readinessTimeoutMs: config.readinessTimeoutMs,
   });
-  void app.register(v1Routes, { prefix: "/v1" });
+  void app.register(v1Routes, {
+    prefix: "/v1",
+    ...(options.foodSearchService ? { foodSearchService: options.foodSearchService } : {}),
+  });
 
   return app;
 }

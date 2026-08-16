@@ -6,6 +6,7 @@ import type { Database } from "./types.js";
 export interface DatabaseClientOptions {
   readonly connectionString: string;
   readonly applicationName?: string;
+  readonly connectionTimeoutMs?: number;
   readonly maxConnections?: number;
   readonly statementTimeoutMs?: number;
   readonly idleTimeoutMs?: number;
@@ -19,6 +20,7 @@ export interface DatabaseClientOptions {
 export function createDatabase(options: DatabaseClientOptions): Kysely<Database> {
   const pool = new Pool({
     application_name: options.applicationName ?? "nutrition-tracker",
+    connectionTimeoutMillis: options.connectionTimeoutMs ?? 5_000,
     connectionString: options.connectionString,
     idleTimeoutMillis: options.idleTimeoutMs ?? 30_000,
     max: options.maxConnections ?? 10,
@@ -40,6 +42,10 @@ export function createDatabaseFromEnvironment(
   }
 
   const maxConnections = parsePositiveInteger(environment.DATABASE_POOL_MAX, 10);
+  const connectionTimeoutMs = parsePositiveInteger(
+    environment.DATABASE_CONNECTION_TIMEOUT_MS,
+    5_000,
+  );
   const statementTimeoutMs = parsePositiveInteger(
     environment.DATABASE_STATEMENT_TIMEOUT_MS,
     15_000,
@@ -47,6 +53,7 @@ export function createDatabaseFromEnvironment(
 
   return createDatabase({
     applicationName: environment.DATABASE_APPLICATION_NAME ?? "nutrition-tracker",
+    connectionTimeoutMs,
     connectionString,
     maxConnections,
     ssl: parseSslMode(environment.DATABASE_SSL_MODE),

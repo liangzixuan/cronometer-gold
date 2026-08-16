@@ -17,7 +17,7 @@ export default function DashboardPage() {
           <a aria-current="page" href="#today">
             Today
           </a>
-          <span aria-disabled="true">Foods · soon</span>
+          <Link href="/foods">Foods</Link>
           <span aria-disabled="true">Recipes · soon</span>
           <span aria-disabled="true">Trends · soon</span>
         </nav>
@@ -42,9 +42,9 @@ export default function DashboardPage() {
               pass review. This shell deliberately does not fabricate nutrition totals.
             </p>
           </div>
-          <button type="button" disabled title="Food ingestion is not connected yet">
-            Add food soon
-          </button>
+          <Link className="emptyDiaryAction" href="/foods">
+            Find a food
+          </Link>
         </section>
 
         <section aria-labelledby="build-title">

@@ -17,28 +17,86 @@
       "passThroughEnv": [
         "API_HOST",
         "API_PORT",
+        "DATABASE_APPLICATION_NAME",
+        "DATABASE_CONNECTION_TIMEOUT_MS",
+        "DATABASE_POOL_MAX",
+        "DATABASE_SSL_MODE",
+        "DATABASE_STATEMENT_TIMEOUT_MS",
+        "DATABASE_URL",
         "LOG_LEVEL",
+        "MEILI_SEARCH_KEY",
+        "MEILI_URL",
         "NODE_ENV",
         "READINESS_TIMEOUT_MS",
+        "SEARCH_CURSOR_SECRET",
+        "SEARCH_DB_MAX_CONCURRENCY",
+        "SEARCH_DB_MAX_QUEUE",
+        "SEARCH_REQUEST_TIMEOUT_MS",
         "SERVICE_VERSION",
         "SHUTDOWN_GRACE_MS"
       ],
       "persistent": true,
-      "with": ["@nutrition-tracker/contracts#dev"]
+      "with": [
+        "@nutrition-tracker/contracts#dev",
+        "@nutrition-tracker/db#dev",
+        "@nutrition-tracker/search#dev"
+      ]
     },
     "@nutrition-tracker/worker#dev": {
       "cache": false,
       "dependsOn": ["^build"],
       "interruptible": true,
       "passThroughEnv": [
+        "DATABASE_APPLICATION_NAME",
+        "DATABASE_CONNECTION_TIMEOUT_MS",
+        "DATABASE_POOL_MAX",
+        "DATABASE_SSL_MODE",
+        "DATABASE_STATEMENT_TIMEOUT_MS",
+        "DATABASE_URL",
         "LOG_LEVEL",
+        "MEILI_ADMIN_KEY",
+        "MEILI_URL",
         "NODE_ENV",
         "POLL_INTERVAL_MS",
+        "SEARCH_REBUILD_BATCH_SIZE",
+        "SEARCH_REBUILD_EVENT_BATCH_SIZE",
+        "SEARCH_REBUILD_SPOOL_DIR",
+        "SEARCH_REBUILD_SPOOL_MAX_BYTES",
+        "SEARCH_REBUILD_SPOOL_MAX_DOCUMENTS",
+        "SEARCH_REBUILD_WORKER_ID",
+        "SEARCH_REQUEST_TIMEOUT_MS",
+        "SEARCH_TASK_TIMEOUT_MS",
         "SERVICE_VERSION",
         "SHUTDOWN_GRACE_MS"
       ],
       "persistent": true,
-      "with": ["@nutrition-tracker/contracts#dev"]
+      "with": [
+        "@nutrition-tracker/contracts#dev",
+        "@nutrition-tracker/db#dev",
+        "@nutrition-tracker/search#dev"
+      ]
+    },
+    "@nutrition-tracker/web#dev": {
+      "cache": false,
+      "interruptible": true,
+      "passThroughEnv": ["API_INTERNAL_URL"],
+      "persistent": true
+    },
+    "@nutrition-tracker/mobile#dev": {
+      "cache": false,
+      "interruptible": true,
+      "passThroughEnv": ["EXPO_PUBLIC_API_URL"],
+      "persistent": true
+    },
+    "@nutrition-tracker/mobile#build": {
+      "dependsOn": ["^build"],
+      "env": ["EXPO_PUBLIC_API_URL"],
+      "outputs": ["dist/**"]
+    },
+    "@nutrition-tracker/web#build": {
+      "dependsOn": ["^build"],
+      "env": ["API_INTERNAL_URL"],
+      "outputs": [".next/**", "!.next/cache/**"]
     },
     "lint": {
       "dependsOn": ["^lint"]

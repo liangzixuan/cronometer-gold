@@ -99,4 +99,22 @@ describe("forward migration discovery", () => {
       "old.status = 'ready' and new.status in ('failed', 'promoting')",
     );
   });
+
+  it("adds a fail-closed promoted food-search read model and supporting indexes", async () => {
+    const migrationSql = await readFile(
+      resolve(import.meta.dirname, "../migrations/0003_promoted_food_search.sql"),
+      "utf8",
+    );
+
+    expect(migrationSql).toContain("create view promoted_food_search_catalogue_v1");
+    expect(migrationSql).toContain("version.id = food.current_version_id");
+    expect(migrationSql).toContain("source.active_release_id = version.source_release_id");
+    expect(migrationSql).toContain("record.validation_status = 'materialized'");
+    expect(migrationSql).toContain("release.status = 'promoted'");
+    expect(migrationSql).toContain("food_version_search_text_trgm_idx");
+    expect(migrationSql).toContain("food_import_record_materialized_version_idx");
+    expect(migrationSql).toContain("food_barcode_gtin14_market_current_idx");
+    expect(migrationSql).toContain("dead_lettered_at");
+    expect(migrationSql).toContain("food_search_rebuild_outbox_pending_idx");
+  });
 });

@@ -17,10 +17,10 @@ as measured zeros.
 2. **Canonical food ingestion core (complete):** release-candidate manifests and
    real-data adapters for USDA FoodData Central and Health Canada CNF, plus
    resumable staging, validation, atomic activation, rollback, and provenance.
-3. **Food search (next):** disposable Meilisearch projection, generic/branded intent,
-   autocomplete, typo tolerance, synonyms, recent/favorite boosts, and barcode
-   exact lookup.
-4. **Diary vertical slice:** account/profile, local-day diary, serving selection,
+3. **Food search (complete):** disposable Meilisearch projection,
+   generic/branded intent, autocomplete, typo tolerance, reviewed synonyms,
+   bounded recent/favorite reranking, and authoritative exact barcode lookup.
+4. **Diary vertical slice (next):** account/profile, local-day diary, serving selection,
    add/edit/delete, meal groups, daily totals, and offline-safe idempotency.
 5. **Recipes and goals:** yield-aware recipe calculation, versioned targets,
    energy equations, nutrient coverage, and explainable recommendations.
@@ -57,9 +57,21 @@ ingestion-core milestone. Tests use
 synthetic approvals only to verify the transaction and historical-snapshot
 invariants; they are not production attestations.
 
+## Food-search boundary
+
+The search index is generated from one coherent promoted-catalogue snapshot,
+versioned, count-verified, and atomically swapped. PostgreSQL remains authoritative
+for source rights and barcode identity. Projection revisions, fail-closed API
+checks, `no-store` responses, and a bounded PostgreSQL fallback prevent an old or
+unpublished index from extending a rights change. The public document excludes
+user and health data and carries reviewed attribution through API, web, and mobile
+surfaces. Search relevance and the PostgreSQL-to-Meilisearch publication path are
+covered by real-service integration tests.
+
 ## Next acceptance target
 
-Food search is complete when a rebuildable index can be generated from the
-promoted PostgreSQL catalogue, exact barcode lookup is deterministic, generic and
-branded keyword search has typo-tolerant ranked results, and relevance/latency
-fixtures pass without exposing quarantined or superseded foods.
+The diary vertical slice is complete when an authenticated user can add, edit,
+move, and delete serving-resolved entries in their profile time zone; retries are
+idempotent; daily exact-decimal nutrient totals preserve unknown/trace semantics;
+and every entry retains the immutable food-version and nutrient snapshot that was
+logged.

@@ -21,6 +21,7 @@ Cronometer source code, content, branding, assets, or proprietary food data.
 - `packages/domain`: pure nutrition, serving, recipe, and snapshot rules
 - `packages/contracts`: transport-neutral API contracts
 - `packages/db`: PostgreSQL schema, Kysely types, and migrations
+- `packages/search`: search contracts, ranking, cursors, and Meilisearch adapter
 - `infra/docker`: local development dependencies
 - `docs/adr`: decisions and non-negotiable boundaries
 - `docs/product`: executable product scope and milestone sequence
@@ -29,6 +30,8 @@ Canonical source onboarding is documented in the
 [`food-source release runbook`](infra/runbooks/food-source-release.md). Checked-in
 USDA and Health Canada candidates are intentionally non-importable until their
 independent acquisition, rights, storage, and nutrient-mapping approvals exist.
+Search projection rebuilds and degraded operation are documented in the
+[`food-search runbook`](infra/runbooks/food-search.md).
 
 ## Prerequisites
 

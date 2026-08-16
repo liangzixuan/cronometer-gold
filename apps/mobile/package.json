@@ -5,10 +5,12 @@
   "main": "expo/AppEntry.js",
   "scripts": {
     "build": "node scripts/run-expo.mjs export --platform all --output-dir dist",
+    "build:release": "node scripts/check-release-env.mjs && node scripts/run-expo.mjs export --platform all --output-dir dist",
     "config:check": "node scripts/check-native-config.mjs",
     "dependencies:check": "node scripts/run-expo.mjs install --check",
     "dev": "node scripts/run-expo.mjs start",
     "lint": "biome lint App.tsx src",
+    "release:check": "node scripts/check-release-env.mjs",
     "start": "node scripts/run-expo.mjs start",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

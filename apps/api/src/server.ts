@@ -3,8 +3,9 @@ import { pathToFileURL } from "node:url";
 import type { FastifyInstance } from "fastify";
 
 import { buildApp } from "./app.js";
-import { ConfigValidationError, loadConfig } from "./config.js";
+import { ConfigValidationError, loadApiDependencyConfig, loadConfig } from "./config.js";
 import { safeErrorName } from "./logging.js";
+import { createApiSearchRuntime } from "./search-runtime.js";
 import { type GracefulShutdown, installGracefulShutdown } from "./shutdown.js";
 
 export interface RunningServer {
@@ -39,7 +40,20 @@ export async function startServer(
   environment: NodeJS.ProcessEnv = process.env,
 ): Promise<RunningServer> {
   const config = loadConfig(environment);
-  const app = buildApp({ config });
+  const dependencyConfig = loadApiDependencyConfig(environment);
+  const runtime = createApiSearchRuntime(environment, dependencyConfig);
+  let app: FastifyInstance;
+  try {
+    app = buildApp({
+      config,
+      foodSearchService: runtime.foodSearchService,
+      readinessCheck: runtime.readinessCheck,
+    });
+    app.addHook("onClose", async () => runtime.close());
+  } catch (error) {
+    await runtime.close();
+    throw error;
+  }
   const shutdown = installGracefulShutdown(app, {
     timeoutMs: config.shutdownGraceMs,
   });

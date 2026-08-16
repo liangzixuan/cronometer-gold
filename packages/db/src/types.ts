@@ -41,6 +41,7 @@ export type DefaultInteger = ColumnType<number, number | undefined, number>;
 export type DefaultValue<Value> = ColumnType<Value, Value | undefined, Value>;
 export type DefaultJson = JSONColumnType<JsonObject, JsonObject | undefined, JsonObject>;
 export type ImmutableJson = JSONColumnType<JsonObject, JsonObject | undefined, never>;
+export type ReadonlyColumn<Value> = ColumnType<Value, never, never>;
 export type NullableImmutableJson = JSONColumnType<
   JsonObject | null,
   JsonObject | null | undefined,
@@ -391,6 +392,34 @@ export interface FoodBarcodeTable {
   created_at: CreatedTimestamp;
 }
 
+/** Read-only columns exposed by promoted_food_search_catalogue_v1. */
+export interface PromotedFoodSearchCatalogueV1Table {
+  food_id: ReadonlyColumn<string>;
+  food_version_id: ReadonlyColumn<string>;
+  version_number: ReadonlyColumn<number>;
+  kind: ReadonlyColumn<"branded" | "generic">;
+  source_food_key: ReadonlyColumn<string>;
+  name: ReadonlyColumn<string>;
+  normalized_name: ReadonlyColumn<string>;
+  brand_name: ReadonlyColumn<string | null>;
+  description: ReadonlyColumn<string | null>;
+  language_tag: ReadonlyColumn<string>;
+  market_code: ReadonlyColumn<string>;
+  data_quality: ReadonlyColumn<Exclude<FoodDataQuality, "quarantined">>;
+  basis_quantity: ReadonlyColumn<string>;
+  basis_unit: ReadonlyColumn<BasisUnit>;
+  source_modified_at: ReadonlyColumn<Date | null>;
+  food_source_id: ReadonlyColumn<string>;
+  source_code: ReadonlyColumn<string>;
+  source_display_name: ReadonlyColumn<string>;
+  license_expression: ReadonlyColumn<string>;
+  attribution_required: ReadonlyColumn<boolean>;
+  attribution_text: ReadonlyColumn<string>;
+  source_release_id: ReadonlyColumn<string>;
+  source_release_key: ReadonlyColumn<string>;
+  source_artifact_sha256: ReadonlyColumn<string>;
+}
+
 export interface RecipeTable {
   id: UuidId;
   owner_user_id: string;
@@ -556,10 +585,18 @@ export interface OutboxEventTable {
   occurred_at: CreatedTimestamp;
   available_at: DefaultTimestamp;
   published_at: NullableTimestamp;
+  dead_lettered_at: NullableTimestamp;
   attempt_count: DefaultInteger;
   locked_at: NullableTimestamp;
   locked_by: string | null;
   last_error: string | null;
+}
+
+export interface FoodSearchProjectionRevisionTable {
+  singleton: boolean;
+  current_revision: Int8;
+  published_revision: NullableInt8;
+  updated_at: UpdatedTimestamp;
 }
 
 export interface Database {
@@ -576,6 +613,7 @@ export interface Database {
   food_import_parser_report: FoodImportParserReportTable;
   food_import_record: FoodImportRecordTable;
   food_nutrient_value: FoodNutrientValueTable;
+  promoted_food_search_catalogue_v1: PromotedFoodSearchCatalogueV1Table;
   food_serving: FoodServingTable;
   food_source: FoodSourceTable;
   food_source_release: FoodSourceReleaseTable;
@@ -587,6 +625,7 @@ export interface Database {
   nutrition_goal_target: NutritionGoalTargetTable;
   nutrition_goal_version: NutritionGoalVersionTable;
   outbox_event: OutboxEventTable;
+  food_search_projection_revision: FoodSearchProjectionRevisionTable;
   recipe: RecipeTable;
   recipe_ingredient: RecipeIngredientTable;
   recipe_version: RecipeVersionTable;

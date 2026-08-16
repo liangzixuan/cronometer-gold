@@ -5,18 +5,23 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "dev": "tsx watch --include ../../packages/contracts/dist/**/*.js src/index.ts",
+    "dev": "tsx watch --include ../../packages/contracts/dist/**/*.js --include ../../packages/db/dist/**/*.js --include ../../packages/search/dist/**/*.js src/index.ts",
     "lint": "biome lint src",
+    "search:rebuild": "tsx src/search-rebuild.ts",
     "start": "node dist/index.js",
     "test": "vitest run",
+    "test:integration": "vitest run src/food-search-worker.integration.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@nutrition-tracker/contracts": "workspace:*",
+    "@nutrition-tracker/db": "workspace:*",
+    "@nutrition-tracker/search": "workspace:*",
     "zod": "4.4.3"
   },
   "devDependencies": {
     "@types/node": "22.20.1",
+    "kysely": "0.29.5",
     "tsx": "4.23.12",
     "typescript": "7.0.2",
     "vitest": "4.1.10"

@@ -45,6 +45,12 @@ importers:
       '@nutrition-tracker/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@nutrition-tracker/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@nutrition-tracker/search':
+        specifier: workspace:*
+        version: link:../../packages/search
       fastify:
         specifier: 5.12.0
         version: 5.12.0
@@ -157,6 +163,12 @@ importers:
       '@nutrition-tracker/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@nutrition-tracker/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@nutrition-tracker/search':
+        specifier: workspace:*
+        version: link:../../packages/search
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -164,6 +176,9 @@ importers:
       '@types/node':
         specifier: 22.20.1
         version: 22.20.1
+      kysely:
+        specifier: 0.29.5
+        version: 0.29.5
       tsx:
         specifier: 4.23.12
         version: 4.23.12
@@ -236,6 +251,18 @@ importers:
       '@types/yauzl':
         specifier: 3.4.0
         version: 3.4.0
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 4.1.10
+        version: 4.1.10(@types/node@22.20.1)(vite@8.2.1(@types/node@22.20.1)(esbuild@0.28.2)(terser@5.50.0)(tsx@4.23.12)(yaml@2.9.0))
+
+  packages/search:
+    devDependencies:
+      '@types/node':
+        specifier: 22.20.1
+        version: 22.20.1
       typescript:
         specifier: 7.0.2
         version: 7.0.2

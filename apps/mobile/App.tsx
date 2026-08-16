@@ -6,6 +6,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
 import { foundationItems } from "./src/foundation";
+import { FoodSearchScreen } from "./src/search/FoodSearchScreen";
 import { palette } from "./src/theme";
 
 type RootStackParamList = {
@@ -28,17 +29,17 @@ function TodayScreen() {
           Your diary, with the uncertainty left visible.
         </Text>
         <Text style={styles.intro}>
-          This first client shell does not invent calories. Search unlocks only after source and
-          nutrient-basis validation are connected.
+          This client does not invent calories. Public food search now exposes promoted catalogue
+          records while diary totals remain intentionally gated.
         </Text>
 
         <Pressable
-          accessibilityHint="Opens the food search foundation screen"
+          accessibilityHint="Opens public food search"
           accessibilityRole="button"
           onPress={() => navigation.navigate("Search")}
           style={({ pressed }) => [styles.action, pressed && styles.actionPressed]}
         >
-          <Text style={styles.actionLabel}>Inspect food-search gate</Text>
+          <Text style={styles.actionLabel}>Search foods</Text>
         </Pressable>
 
         <View style={styles.rule} />
@@ -54,30 +55,6 @@ function TodayScreen() {
         ))}
 
         <Text style={styles.disclaimer}>Wellness information only—not medical advice.</Text>
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
-
-function SearchScreen() {
-  return (
-    <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.kicker}>SEARCH CONTRACT</Text>
-        <Text accessibilityRole="header" style={styles.title}>
-          Personal relevance comes before catalogue popularity.
-        </Text>
-        <Text style={styles.intro}>
-          The production search will separate branded and generic intent, boost recent saved
-          portions, expose source completeness, and record every ranking decision for evaluation.
-        </Text>
-        <View style={styles.notice}>
-          <Text style={styles.noticeTitle}>Not connected yet</Text>
-          <Text style={styles.noticeBody}>
-            FDC and CNF require pinned release manifests and deterministic imports before results
-            can be shown honestly.
-          </Text>
-        </View>
       </ScrollView>
     </SafeAreaView>
   );
@@ -101,7 +78,11 @@ export default function App() {
             name="Today"
             options={{ title: "nutrition/ledger" }}
           />
-          <Stack.Screen component={SearchScreen} name="Search" options={{ title: "Food search" }} />
+          <Stack.Screen
+            component={FoodSearchScreen}
+            name="Search"
+            options={{ title: "Food search" }}
+          />
         </Stack.Navigator>
       </NavigationContainer>
     </SafeAreaProvider>
