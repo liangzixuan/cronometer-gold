@@ -88,6 +88,7 @@ const recipe = {
         resolvedGrams: "80",
         note: null,
         source,
+        foodProvenance: { kind: "public", source },
       },
     ],
     finalYield: { grams: "400", source: "measured", ratioToInputMass: "5" },
@@ -159,8 +160,35 @@ describe("recipe transport schemas", () => {
         },
       }),
     ).toBe(false);
+    const privateIngredient = {
+      ...recipe.currentVersion.ingredients[0],
+      source: null,
+      foodProvenance: {
+        kind: "private_custom",
+        customFoodId: "25000000-0000-4000-8000-000000000001",
+        customFoodVersionNumber: 2,
+      },
+    } as const;
     expect(
-      validateRecipe({ ...recipe, currentVersion: { ...recipe.currentVersion, sources: [] } }),
+      validateRecipe({
+        ...recipe,
+        currentVersion: {
+          ...recipe.currentVersion,
+          ingredients: [privateIngredient],
+          sources: [],
+        },
+      }),
+      JSON.stringify(validateRecipe.errors),
+    ).toBe(true);
+    expect(
+      validateRecipe({
+        ...recipe,
+        currentVersion: {
+          ...recipe.currentVersion,
+          ingredients: [{ ...privateIngredient, source }],
+          sources: [],
+        },
+      }),
     ).toBe(false);
     const scaledAmount = `${"9".repeat(168)}`;
     expect(
@@ -357,6 +385,7 @@ describe("food and recipe diary entry union", () => {
       food: { name: "Oats", brandName: null },
       recipe: null,
       source,
+      foodProvenance: { kind: "public", source },
     };
     expect(validateEntry(food), JSON.stringify(validateEntry.errors)).toBe(true);
     const recipeEntry = {

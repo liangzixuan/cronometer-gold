@@ -74,6 +74,82 @@ does not make direct `app_user` deletion a supported erasure workflow. Legacy
 diary, custom-food, operation, and audit edges still require a separately
 designed privileged privacy-erasure process for the controlled beta.
 
+### 0006 retention compatibility and privacy gate
+
+Migration `0006_retention_features.sql` takes a write-conflicting lock on the
+legacy food roots and fails before any retention DDL when a pre-0006 custom food
+exists. The reserved schema does not contain the immutable version, explicit
+trace/unknown missingness, serving, operation-digest, or owner provenance needed
+by the retention model. Export/remediate those rows and retry the whole migration;
+do not fabricate evidence. The migration also validates the two staged 0002
+reviewer-principal constraints. It is forward-only and has no down migration.
+
+Retention writes preserve exact decimals, immutable version IDs, user ownership,
+active-account gates, and the existing user/source/nutrient/day lock order. Custom
+foods materialize a complete active-registry vector, default to provisional and
+estimated owner-entered provenance, and may feed owner recipes. Archiving blocks
+new recipe dependencies while old recipe and diary snapshots stay readable.
+Platform imports are signed, device/integration/cursor-epoch bound, replay-safe,
+and deduplicated by immutable provider source IDs; device recovery appends a
+rebind revision and begins a null cursor epoch without inferring deletions.
+
+Privacy export capture uses one bounded (five-minute) PostgreSQL 17
+`REPEATABLE READ` transaction to materialize canonical, keyset-ordered rows into
+the immutable DB spool. The callback, 0600 filesystem spool, encryption, and
+object-store I/O run only after that transaction closes. Every entity reconciles
+source/export counts, watermark, and SHA-256 over the exact canonical NDJSON row
+set; diary daily nutrient totals and biometric/import identity counts provide a
+second semantic digest. A closed schema fingerprint makes a new/unclassified DB
+column fail the export before capture instead of silently leaking it.
+Only one queued/running/retryable-failed export may exist per owner; an advisory
+user lock and a partial unique index enforce that rule for repository and raw
+writes. The worker passes its exact spool byte ceiling into
+`withPrivacyExportSnapshot` (bounded by the shared 10 GiB maximum). PostgreSQL
+counts each canonical NDJSON row before insertion, rolls the entire snapshot back
+on overflow, and terminalizes the deterministic failure for governed operator
+requeue instead of repeating the same capture 20 times. Every failed/stale retry
+purges its prior record/entity spool before rebuilding.
+
+Workers must register every JSON/CSV object key with
+`stagePrivacyExportArtifacts` before PUT, then mark the exact job/snapshot/worker
+artifact uploaded. Completion is fenced to that snapshot and promotes only the
+registered keys. All artifacts in one completed job have one common expiry, so a
+completed job cannot expose a partially expired set before that instant. Failed
+uploads become globally claimable cleanup work with stale-lock recovery, a
+20-attempt dead letter, and verified deletion evidence. Workers renew claimed work
+at most every five minutes with `renewRetentionWorkLease`; a PUT in progress also
+uses `renewPrivacyExportStagedArtifactUploadLease`, which atomically extends its
+object fence and owning export-job lease. Loss of either renewal is a hard stop.
+Claim-time and explicit-failure terminal transitions append payload-free durable
+events consumed through `claimRetentionDeadLetterEvents`. Requeueing a terminal
+job or either artifact cleanup requires an external operator-approval digest and
+appends immutable `retention_job_recovery_audit` evidence. Erasure requeue retains
+the original `started_at`, which is the already-appended ledger record time.
+Account erasure atomically cancels staged uploads and enumerates both staged and
+completed keys; completion refuses until the sets and deletion evidence match.
+Before either live erasure or offline restore replay deletes a row, one complete
+typed table policy must exactly match the transitive `app_user` FK graph. Explicit
+entries generate both the subject DELETE and its zero-row reconciliation;
+cascades name an exact all-NOT-NULL constraint and parent path; retained/empty
+exceptions name and validate their exact `SET NULL`/`RESTRICT` relationship. A
+new table, nullable/unrelated cascade, or changed FK action therefore fails before
+the account row can be removed.
+
+Before deleting application rows, the worker must append an encrypted external
+restore-erasure ledger record and supply its reference/digest acknowledgement.
+Only a random receipt, aggregate deletion counts, policy/timestamps, and the
+backup caveat remain locally; subject IDs, locators, request/session evidence,
+object keys, and restore-ledger identifiers are scrubbed. A restored backup must
+run `replayExternalErasureLedgerEntry` for every authenticated external entry and
+require its zero-row reconciliation before serving. The offline process then calls
+`completeDatabaseRestoreReplayAttestation` with an explicit deployment restore
+epoch, reconciled subject count, and digest. Production readiness calls
+`assertDatabaseReady` with that same explicit epoch; it verifies both the complete
+migration ledger and the SHA-256 epoch attestation bound to the current database
+name/OID. The DB library never reads an ambient restore epoch. The external
+encrypted ledger and ciphertext object lifecycle are operational dependencies
+outside PostgreSQL.
+
 ## Client
 
 ```ts

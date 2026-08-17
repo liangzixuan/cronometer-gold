@@ -9,14 +9,22 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.nutritionledger.app",
+      "entitlements": {
+        "com.apple.developer.healthkit": true
+      },
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": false
-        }
+        },
+        "NSHealthShareUsageDescription": "Allow Nutrition Tracker to import weight after you choose to connect Apple Health."
       }
     },
     "android": {
       "allowBackup": false,
+      "permissions": [
+        "android.permission.health.READ_WEIGHT",
+        "android.permission.POST_NOTIFICATIONS"
+      ],
       "blockedPermissions": [
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.SYSTEM_ALERT_WINDOW",
@@ -25,8 +33,51 @@
       ],
       "package": "com.nutritionledger.app"
     },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "compileSdkVersion": 36,
+            "minSdkVersion": 26,
+            "targetSdkVersion": 36
+          }
+        }
+      ],
+      [
+        "@kingstinct/react-native-healthkit",
+        {
+          "NSHealthShareUsageDescription": "Allow Nutrition Tracker to import weight after you choose to connect Apple Health.",
+          "NSHealthUpdateUsageDescription": false,
+          "background": false
+        }
+      ],
+      "react-native-health-connect",
+      "./plugins/with-local-notifications-only.js",
+      [
+        "expo-notifications",
+        {
+          "defaultChannel": "private-reminders",
+          "enableBackgroundRemoteNotifications": false
+        }
+      ],
+      [
+        "expo-secure-store",
+        {
+          "configureAndroidBackup": false,
+          "faceIDPermission": false
+        }
+      ]
+    ],
     "extra": {
-      "productBoundary": "consumer-wellness"
+      "productBoundary": "consumer-wellness",
+      "nativeHealth": {
+        "androidReadRecordTypes": ["Weight"],
+        "deviceSigningKeyAlias": "nutrition-tracker-health-import-v1",
+        "lockScreenNotificationBody": "Time to check in.",
+        "lockScreenNotificationTitle": "Nutrition Tracker",
+        "signedBatchProtocol": "nutrition-tracker-health-import-v1"
+      }
     }
   }
 }

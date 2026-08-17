@@ -78,13 +78,17 @@ describe("public contracts", () => {
     expect(diaryDayResponseSchema.properties.data.properties.entries.maxItems).toBe(50);
     expect(diaryDayResponseSchema.properties.data.properties.totals.maxItems).toBe(256);
     expect(diaryEntrySchema.oneOf).toEqual([diaryFoodEntrySchema, diaryRecipeEntrySchema]);
+    expect(diaryFoodEntrySchema.properties.foodProvenance.oneOf).toHaveLength(2);
     expect(diaryFoodEntrySchema.properties.nutrients.maxItems).toBe(256);
     expect(diaryFoodEntrySchema.required).toContain("source");
+    expect(diaryFoodEntrySchema.required).toContain("foodProvenance");
     expect(diaryFoodEntrySchema.required).toContain("timeZone");
     const servingEntryPortion = diaryFoodEntrySchema.properties.portion.oneOf[0];
     expect(servingEntryPortion.required).toContain("servingLabel");
     expect(servingEntryPortion.additionalProperties).toBe(false);
-    expect(diaryFoodEntrySchema.properties.source.required).toEqual([
+    expect(
+      diaryFoodEntrySchema.properties.foodProvenance.oneOf[0].properties.source.required,
+    ).toEqual([
       "code",
       "displayName",
       "licenseExpression",
@@ -92,6 +96,7 @@ describe("public contracts", () => {
       "attributionText",
       "releaseId",
     ]);
+    expect(diaryFoodEntrySchema.properties.source.anyOf[1].type).toBe("null");
     expect(diaryMutationResponseSchema.properties.data.properties.affectedDays.maxItems).toBe(2);
   });
 });

@@ -101,3 +101,33 @@ export async function proxyDiaryChange(
   });
   return mutationResponse(upstream);
 }
+
+export async function proxyDiaryRepeat(request: Request, entryId: string): Promise<Response> {
+  if (!isTrustedMutationRequest(request)) {
+    return privateJsonError(403, "This diary request did not come from this application.");
+  }
+  const operationId = validatedIdempotencyKey(request);
+  const ifMatch = validatedIfMatch(request);
+  if (!operationId || !ifMatch) {
+    return privateJsonError(
+      400,
+      "The repeat request is missing its source revision or operation key.",
+    );
+  }
+  let body: string;
+  try {
+    body = JSON.stringify(await readBoundedJson(request, 4_096));
+  } catch {
+    return privateJsonError(400, "The repeat request must contain valid JSON.");
+  }
+  const upstream = await authenticatedFetch(request, `/v1/diary/entries/${entryId}/repeat`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "idempotency-key": operationId,
+      "if-match": ifMatch,
+    },
+    body,
+  });
+  return mutationResponse(upstream);
+}

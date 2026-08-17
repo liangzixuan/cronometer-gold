@@ -1,0 +1,13 @@
+{
+  "schemaVersion": "nutrition-tracker-health-release-reviewer-trust-v1",
+  "reviewers": [
+    {
+      "keyId": "zixuan-health-reviewer-2026-08",
+      "principal": "zixuan.liang@oracle.com",
+      "algorithm": "Ed25519",
+      "publicKeySpkiDerBase64": "MCowBQYDK2VwAyEAtrZmLDi1vxjQrcQOS/qkUgtrsIC63e+95OUt66JlAfA=",
+      "validFrom": "2026-08-16T00:00:00.000Z",
+      "validUntil": "2027-08-16T00:00:00.000Z"
+    }
+  ]
+}

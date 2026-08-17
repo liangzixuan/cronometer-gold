@@ -28,11 +28,15 @@ describe("private-route telemetry boundary", () => {
     const logger = { ...createLoggerOptions(config), stream };
     const privateFailure = "private-diary-database-value";
     const authService: AuthService = {
+      reauthenticate: vi.fn(),
       register: vi.fn(),
       login: vi.fn(async () => Promise.reject(new Error(privateFailure))),
       authenticate: vi.fn(async (header) =>
-        header === `Bearer ${bearerToken}` ? { account, userId } : null,
+        header === `Bearer ${bearerToken}`
+          ? { account, userId, sessionTokenHash: "a".repeat(64) }
+          : null,
       ),
+      authenticateErasureRecovery: vi.fn(async () => null),
       logout: vi.fn(),
     };
     const diaryService: DiaryService = {

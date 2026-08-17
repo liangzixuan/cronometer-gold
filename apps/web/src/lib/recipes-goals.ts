@@ -17,6 +17,24 @@ export interface SourceProvenance {
   readonly attributionText: string;
 }
 
+export interface RecipeSourceProvenance extends SourceProvenance {
+  readonly code: string;
+  readonly releaseId: string;
+  readonly attributionRequired: boolean;
+}
+
+export type RecipeFoodProvenance =
+  | { readonly kind: "public"; readonly source: RecipeSourceProvenance }
+  | {
+      readonly kind: "private_custom";
+      readonly customFoodId: string;
+      readonly customFoodVersionNumber: number;
+    };
+
+export type RecipeDraftFoodProvenance =
+  | { readonly kind: "public"; readonly source: SourceProvenance }
+  | Extract<RecipeFoodProvenance, { readonly kind: "private_custom" }>;
+
 export type RecipeNutrient = DiaryNutrient;
 
 export interface RecipeIngredientView {
@@ -37,7 +55,8 @@ export interface RecipeIngredientView {
     | { readonly kind: "grams"; readonly grams: string };
   readonly quantityText: string;
   readonly resolvedGrams: string;
-  readonly source: SourceProvenance | null;
+  readonly source: RecipeSourceProvenance | null;
+  readonly foodProvenance: RecipeFoodProvenance | null;
   readonly note: string | null;
   readonly coverage: Coverage;
 }
@@ -58,11 +77,7 @@ export interface RecipeView {
   readonly inputMassGrams: string;
   readonly ingredients: readonly RecipeIngredientView[];
   /** Deterministic de-duplicated transitive provenance, including nested recipes. */
-  readonly sources: readonly (SourceProvenance & {
-    readonly code: string;
-    readonly releaseId: string;
-    readonly attributionRequired: boolean;
-  })[];
+  readonly sources: readonly RecipeSourceProvenance[];
   readonly nutrientsPer100Grams: readonly RecipeNutrient[];
   readonly nutrientsPerServing: readonly RecipeNutrient[] | null;
   readonly warnings: readonly {
@@ -133,7 +148,8 @@ export type RecipeIngredientDraft =
             readonly amount: string;
           }
         | { readonly kind: "grams"; readonly grams: string };
-      readonly source: SourceProvenance;
+      readonly source: SourceProvenance | null;
+      readonly foodProvenance: RecipeDraftFoodProvenance;
       readonly note: string | null;
     }
   | {
@@ -359,6 +375,51 @@ function source(value: unknown): RecipeView["sources"][number] {
   return value as unknown as RecipeView["sources"][number];
 }
 
+function sameSource(left: RecipeSourceProvenance, right: RecipeSourceProvenance): boolean {
+  return (
+    left.code === right.code &&
+    left.releaseId === right.releaseId &&
+    left.displayName === right.displayName &&
+    left.licenseExpression === right.licenseExpression &&
+    left.attributionRequired === right.attributionRequired &&
+    left.attributionText === right.attributionText
+  );
+}
+
+function foodIngredientProvenance(
+  value: unknown,
+  sourceValue: unknown,
+): { source: RecipeSourceProvenance | null; foodProvenance: RecipeFoodProvenance } {
+  if (!object(value)) throw new TypeError("Recipe food provenance was invalid.");
+  if (value.kind === "public" && exactKeys(value, ["kind", "source"])) {
+    const outerSource = source(sourceValue);
+    const innerSource = source(value.source);
+    if (!sameSource(outerSource, innerSource)) {
+      throw new TypeError("Recipe public food provenance was inconsistent.");
+    }
+    return { source: outerSource, foodProvenance: { kind: "public", source: innerSource } };
+  }
+  if (
+    value.kind === "private_custom" &&
+    exactKeys(value, ["kind", "customFoodId", "customFoodVersionNumber"]) &&
+    sourceValue === null &&
+    typeof value.customFoodId === "string" &&
+    UUID.test(value.customFoodId) &&
+    Number.isSafeInteger(value.customFoodVersionNumber) &&
+    Number(value.customFoodVersionNumber) >= 1
+  ) {
+    return {
+      source: null,
+      foodProvenance: {
+        kind: "private_custom",
+        customFoodId: value.customFoodId,
+        customFoodVersionNumber: Number(value.customFoodVersionNumber),
+      },
+    };
+  }
+  throw new TypeError("Recipe food provenance was invalid.");
+}
+
 function servingPortion(value: unknown): RecipeIngredientView["portion"] {
   if (!object(value) || typeof value.kind !== "string") {
     throw new TypeError("Recipe ingredient portion was invalid.");
@@ -411,6 +472,7 @@ function ingredient(value: unknown, coverage: Coverage): RecipeIngredientView {
         "resolvedGrams",
         "note",
         "source",
+        "foodProvenance",
       ]) ||
       typeof value.foodVersionId !== "string" ||
       !POSITIVE_ID.test(value.foodVersionId) ||
@@ -422,7 +484,7 @@ function ingredient(value: unknown, coverage: Coverage): RecipeIngredientView {
       throw new TypeError("A resolved food ingredient was invalid.");
     }
     const portion = servingPortion(value.portion);
-    const provenance = source(value.source);
+    const provenance = foodIngredientProvenance(value.foodProvenance, value.source);
     return {
       position: Number(value.position),
       kind: "food",
@@ -434,7 +496,8 @@ function ingredient(value: unknown, coverage: Coverage): RecipeIngredientView {
       portion,
       quantityText: portion.kind === "serving" ? portion.amount : portion.grams,
       resolvedGrams: value.resolvedGrams,
-      source: provenance,
+      source: provenance.source,
+      foodProvenance: provenance.foodProvenance,
       note: value.note,
       coverage,
     };
@@ -475,6 +538,7 @@ function ingredient(value: unknown, coverage: Coverage): RecipeIngredientView {
       quantityText: value.grams,
       resolvedGrams: value.resolvedGrams,
       source: null,
+      foodProvenance: null,
       note: value.note,
       coverage,
     };
@@ -563,7 +627,6 @@ function parseRecipe(value: unknown): RecipeView {
     !object(version.nutrition) ||
     !exactKeys(version.nutrition, ["totals", "per100Grams", "perServing"]) ||
     !Array.isArray(version.sources) ||
-    version.sources.length < 1 ||
     version.sources.length > 256 ||
     !object(version.retentionPolicy) ||
     !exactKeys(version.retentionPolicy, ["code", "version", "assumption"]) ||

@@ -5,8 +5,14 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "database:readiness-probe": "node dist/database-readiness-probe.js",
+    "database:readiness-probe:dev": "tsx src/database-readiness-probe.ts",
     "dev": "tsx watch --include ../../packages/contracts/dist/**/*.js --include ../../packages/db/dist/**/*.js --include ../../packages/search/dist/**/*.js src/index.ts",
+    "erasure:restore-replay": "node dist/erasure-ledger-restore.js",
+    "erasure:restore-replay:dev": "tsx src/erasure-ledger-restore.ts",
     "lint": "biome lint src",
+    "retention:requeue": "node dist/retention-requeue.js",
+    "retention:requeue:dev": "tsx src/retention-requeue.ts",
     "search:rebuild": "tsx src/search-rebuild.ts",
     "start": "node dist/index.js",
     "test": "vitest run",
@@ -14,6 +20,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@nutrition-tracker/artifact-store": "workspace:*",
     "@nutrition-tracker/contracts": "workspace:*",
     "@nutrition-tracker/db": "workspace:*",
     "@nutrition-tracker/search": "workspace:*",

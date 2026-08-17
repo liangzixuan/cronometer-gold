@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 
 import type {
   AuthenticatedAccount,
+  ReauthenticationResponse,
   RegisterAccountRequest,
   SessionCreatedResponse,
 } from "@nutrition-tracker/contracts";
@@ -39,19 +40,51 @@ export interface AuthRepository {
     readonly expiresAt: Date;
   }): Promise<void>;
   findActiveSession(tokenHash: string, now: Date): Promise<AuthenticatedAccount | null>;
+  findPendingErasureRecoverySession(
+    tokenHash: string,
+    now: Date,
+  ): Promise<{
+    readonly account: AuthenticatedAccount;
+    readonly erasureJobId: string;
+    readonly executeAfter: Date;
+  } | null>;
   revokeSession(input: { readonly userId: string; readonly tokenHash: string }): Promise<boolean>;
+  createReauthenticationProof(input: {
+    readonly userId: string;
+    readonly sessionTokenHash: string;
+    readonly purpose: "account_export" | "account_erasure";
+    readonly tokenHash: string;
+    readonly expiresAt: Date;
+  }): Promise<void>;
 }
 
 export interface AuthPrincipal {
   readonly userId: string;
   readonly account: AuthenticatedAccount;
+  readonly sessionTokenHash: string;
+}
+
+export interface ErasureRecoveryPrincipal extends AuthPrincipal {
+  readonly erasureJobId: string;
+  readonly executeAfter: Date;
 }
 
 export interface AuthService {
   register(input: RegisterAccountRequest): Promise<SessionCreatedResponse>;
   login(email: string, password: string): Promise<SessionCreatedResponse>;
   authenticate(authorizationHeader: string | undefined): Promise<AuthPrincipal | null>;
+  /** Accepted only by the exact account-erasure POST replay route. */
+  authenticateErasureRecovery(
+    authorizationHeader: string | undefined,
+  ): Promise<ErasureRecoveryPrincipal | null>;
   logout(authorizationHeader: string | undefined, userId: string): Promise<void>;
+  reauthenticate(
+    userId: string,
+    sessionTokenHash: string,
+    normalizedEmail: string,
+    password: string,
+    purpose: "account_export" | "account_erasure",
+  ): Promise<ReauthenticationResponse>;
 }
 
 export class InvalidCredentialsError extends Error {
@@ -110,6 +143,7 @@ export class SecureAuthService implements AuthService {
   readonly #limiter: BoundedAuthRateLimiter;
   readonly #sessionTtlMs: number;
   readonly #clock: () => Date;
+  readonly #reauthenticationTtlMs: number;
   readonly #dummySalt = randomBytes(16).toString("base64url");
   readonly #dummyHash = randomBytes(PASSWORD_SCRYPT_PARAMETERS.keyLength).toString("base64url");
 
@@ -119,12 +153,14 @@ export class SecureAuthService implements AuthService {
     limiter?: BoundedAuthRateLimiter;
     sessionTtlMs?: number;
     clock?: () => Date;
+    reauthenticationTtlMs?: number;
   }) {
     this.#repository = options.repository;
     this.#queue = options.queue ?? new PasswordWorkQueue();
     this.#limiter = options.limiter ?? new BoundedAuthRateLimiter();
     this.#sessionTtlMs = options.sessionTtlMs ?? 30 * 24 * 60 * 60_000;
     this.#clock = options.clock ?? (() => new Date());
+    this.#reauthenticationTtlMs = options.reauthenticationTtlMs ?? 10 * 60_000;
   }
 
   async register(input: RegisterAccountRequest): Promise<SessionCreatedResponse> {
@@ -183,13 +219,72 @@ export class SecureAuthService implements AuthService {
     const token = bearerToken(authorizationHeader);
     if (!token) return null;
     const account = await this.#repository.findActiveSession(sha256(token), this.#clock());
-    return account ? { userId: account.user.id, account } : null;
+    const sessionTokenHash = sha256(token);
+    return account ? { userId: account.user.id, account, sessionTokenHash } : null;
+  }
+
+  async authenticateErasureRecovery(
+    authorizationHeader: string | undefined,
+  ): Promise<ErasureRecoveryPrincipal | null> {
+    const token = bearerToken(authorizationHeader);
+    if (!token) return null;
+    const sessionTokenHash = sha256(token);
+    const recovery = await this.#repository.findPendingErasureRecoverySession(
+      sessionTokenHash,
+      this.#clock(),
+    );
+    return recovery
+      ? {
+          account: recovery.account,
+          erasureJobId: recovery.erasureJobId,
+          executeAfter: recovery.executeAfter,
+          sessionTokenHash,
+          userId: recovery.account.user.id,
+        }
+      : null;
   }
 
   async logout(authorizationHeader: string | undefined, userId: string): Promise<void> {
     const token = bearerToken(authorizationHeader);
     if (!token) return;
     await this.#repository.revokeSession({ userId, tokenHash: sha256(token) });
+  }
+
+  async reauthenticate(
+    userId: string,
+    sessionTokenHash: string,
+    normalizedEmail: string,
+    password: string,
+    purpose: "account_export" | "account_erasure",
+  ): Promise<ReauthenticationResponse> {
+    validatePassword(password);
+    const email = normalizeEmail(normalizedEmail);
+    const key = `reauthenticate:${sha256(userId)}`;
+    if (!this.#limiter.consume(key, this.#clock().getTime())) throw new AuthRateLimitedError();
+    const credential = await this.#repository.findPasswordCredential(email);
+    const valid = await this.#runPasswordWork(() =>
+      verifyPassword(
+        password,
+        credential?.passwordSalt ?? this.#dummySalt,
+        credential?.passwordHash ?? this.#dummyHash,
+        credential?.passwordParameters ?? PASSWORD_SCRYPT_PARAMETERS,
+        this.#queue,
+      ),
+    );
+    if (!credential || credential.account.user.id !== userId || !valid) {
+      throw new InvalidCredentialsError();
+    }
+    const token = randomBytes(32).toString("base64url");
+    const expiresAt = new Date(this.#clock().getTime() + this.#reauthenticationTtlMs);
+    await this.#repository.createReauthenticationProof({
+      userId,
+      sessionTokenHash,
+      purpose,
+      tokenHash: sha256(token),
+      expiresAt,
+    });
+    this.#limiter.reset(key);
+    return { data: { reauthenticationToken: token, expiresAt: expiresAt.toISOString() } };
   }
 
   async #createSession(account: AuthenticatedAccount): Promise<SessionCreatedResponse> {

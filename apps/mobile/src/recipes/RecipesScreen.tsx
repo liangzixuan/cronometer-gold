@@ -123,6 +123,14 @@ export function mobileFoodIngredient(
       licenseExpression: food.source.licenseExpression,
       attributionText: food.source.attributionText,
     },
+    foodProvenance: {
+      kind: "public",
+      source: {
+        displayName: food.source.displayName,
+        licenseExpression: food.source.licenseExpression,
+        attributionText: food.source.attributionText,
+      },
+    },
     note: null,
   };
 }
@@ -177,6 +185,15 @@ function requestBody(builder: Builder) {
     servingCount: builder.servingCount || null,
     servingLabel: builder.servingCount ? builder.servingLabel.trim() || "serving" : null,
   };
+}
+
+function foodIngredientAttribution(
+  ingredient: Extract<RecipeIngredientDraft, { readonly kind: "food" }>,
+): string {
+  if (ingredient.foodProvenance.kind === "private_custom") {
+    return `Owner-entered private custom food, pinned version ${ingredient.foodProvenance.customFoodVersionNumber}`;
+  }
+  return ingredient.source?.attributionText ?? "Public source metadata unavailable";
 }
 
 export function RecipesScreen({
@@ -631,7 +648,7 @@ export function RecipesScreen({
             return (
               <View key={ingredient.clientKey} style={styles.ingredient}>
                 <Text
-                  accessibilityLabel={`${ingredient.name}, ${quantity} ${unit}. ${ingredient.kind === "recipe" ? `Pinned recipe revision ${ingredient.recipeVersionId}` : `Source ${ingredient.source.attributionText}`}.`}
+                  accessibilityLabel={`${ingredient.name}, ${quantity} ${unit}. ${ingredient.kind === "recipe" ? `Pinned recipe revision ${ingredient.recipeVersionId}` : foodIngredientAttribution(ingredient)}.`}
                   style={styles.cardTitle}
                 >
                   {ingredient.name}
@@ -639,7 +656,7 @@ export function RecipesScreen({
                 <Text style={styles.meta}>
                   {ingredient.kind === "recipe"
                     ? `Pinned revision ${ingredient.recipeVersionId}`
-                    : ingredient.source.attributionText}
+                    : foodIngredientAttribution(ingredient)}
                 </Text>
                 <Field
                   label={`Quantity in ${unit}`}

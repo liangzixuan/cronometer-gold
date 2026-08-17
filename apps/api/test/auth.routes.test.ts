@@ -14,6 +14,12 @@ const testConfig = loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" });
 
 function authStub(overrides: Partial<AuthService> = {}): AuthService {
   return {
+    reauthenticate: vi.fn(async () => ({
+      data: {
+        expiresAt: "2026-08-15T00:10:00.000Z",
+        reauthenticationToken: "r".repeat(43),
+      },
+    })),
     register: vi.fn(async () => ({
       data: {
         accessToken: bearerToken,
@@ -29,8 +35,11 @@ function authStub(overrides: Partial<AuthService> = {}): AuthService {
       },
     })),
     authenticate: vi.fn(async (header) =>
-      header === `Bearer ${bearerToken}` ? { userId, account } : null,
+      header === `Bearer ${bearerToken}`
+        ? { userId, account, sessionTokenHash: "a".repeat(64) }
+        : null,
     ),
+    authenticateErasureRecovery: vi.fn(async () => null),
     logout: vi.fn(async () => undefined),
     ...overrides,
   };

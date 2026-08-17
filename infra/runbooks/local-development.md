@@ -25,8 +25,18 @@ curl --fail http://127.0.0.1:9000/minio/health/live
 curl --fail http://127.0.0.1:8025/livez
 ```
 
-Create the bucket named by `S3_BUCKET` in the MinIO console before running a food
-import. Mailpit captures local email at <http://127.0.0.1:8025>.
+The one-shot `minio-bootstrap` service creates two private retention buckets,
+enables versioning only on the append-only erasure ledger, and installs separate
+export-writer, export-reader, ledger-writer, and restore-reader policies. It has
+no application runtime role after a successful exit. The export bucket remains
+unversioned because its random keys are write-once and expiry must remove the
+sole ciphertext rather than leave a recoverable noncurrent version. The
+erasure-ledger writer cannot list or delete ledger entries, and restore-read
+credentials are not passed to either the API or worker.
+
+Create the legacy bucket named by `S3_BUCKET` in the MinIO console only when a
+food-import rehearsal needs it. Mailpit captures local email at
+<http://127.0.0.1:8025>.
 
 ## Stop
 

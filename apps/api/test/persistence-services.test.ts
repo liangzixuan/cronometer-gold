@@ -1,4 +1,5 @@
 import type {
+  DiaryFoodEntryRecord,
   DiaryNutrientAggregateRecord,
   DiaryRecipeEntryRecord,
   NutritionGoalProgressRecord,
@@ -95,6 +96,7 @@ function persistedRecipe(overrides: Partial<RecipeRecord["currentVersion"]> = {}
             servingLabel: null,
             resolvedGrams: "100",
           },
+          foodProvenance: { kind: "public", source: recipeSource },
           source: recipeSource,
         },
       ],
@@ -283,6 +285,7 @@ describe("PostgreSQL API adapters", () => {
       mealSlot: "breakfast",
       position: 0,
       note: null,
+      repeatedFromRevisionId: null,
       recipe: {
         recipeId: "20000000-0000-4000-8000-000000000001",
         recipeVersionId: "20000000-0000-4000-8000-000000000002",
@@ -323,6 +326,64 @@ describe("PostgreSQL API adapters", () => {
         retentionPolicy: retentionAssumptions.retentionPolicy,
       },
     });
+  });
+
+  it("round-trips private custom-food snapshots without fabricated licensing provenance", () => {
+    const record: DiaryFoodEntryRecord = {
+      createdAt: "2026-08-16T12:00:00.000Z",
+      currentRevision: "2",
+      food: {
+        brandName: null,
+        customFoodId: "50000000-0000-4000-8000-000000000001",
+        customFoodVersionNumber: 3,
+        foodVersionId: "901",
+        name: "Private porridge",
+      },
+      foodProvenance: {
+        customFoodId: "50000000-0000-4000-8000-000000000001",
+        kind: "private_custom",
+        statement: "Entered by the owner; not independently verified.",
+        versionNumber: 3,
+      },
+      id: "50000000-0000-4000-8000-000000000002",
+      kind: "food",
+      localDate: "2026-08-16",
+      localTime: "07:00:00",
+      mealSlot: "breakfast",
+      note: null,
+      nutrients: [persistedAggregate()],
+      occurredAt: "2026-08-16T12:00:00.000Z",
+      operation: "create",
+      portion: {
+        amount: "1",
+        inputUnit: "serving",
+        resolvedGrams: "42.125",
+        servingId: "801",
+        servingLabel: "bowl",
+      },
+      position: 0,
+      repeatedFromRevisionId: "70000000-0000-4000-8000-000000000001",
+      snapshotEngineVersion: "nutrition-engine-v1",
+      snapshotStatus: "partial",
+      source: null,
+      timeZone: "America/Chicago",
+    };
+    expect(mapDiaryEntryRecord(record)).toMatchObject({
+      entryKind: "food",
+      foodVersionId: "901",
+      source: null,
+      foodProvenance: {
+        customFoodId: record.food.customFoodId,
+        customFoodVersionNumber: 3,
+        kind: "private_custom",
+      },
+    });
+    expect(() =>
+      mapDiaryEntryRecord({
+        ...record,
+        food: { ...record.food, customFoodVersionNumber: 4 },
+      }),
+    ).toThrow("provenance is inconsistent");
   });
 
   it("verifies and exposes a fully sourced derived goal snapshot", () => {

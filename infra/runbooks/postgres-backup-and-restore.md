@@ -14,6 +14,10 @@ application validation succeed.
 - Pause no service and perform no cutover without the incident/change owner.
 - Treat the dump as sensitive health-adjacent data. Encrypt it, restrict access,
   avoid shell history, and retain it only per policy.
+- The automated drill requires `--dump-directory` and
+  `--dump-protection tmpfs|encrypted_volume`; it refuses generic `/tmp` or an
+  unverified plaintext filesystem. Confirm the declaration matches the actual
+  runner/container mount before execution.
 
 ## Logical backup
 
@@ -61,19 +65,29 @@ Run and save results without exporting payload values:
 2. Compare counts and min/max timestamps for each major table; reconcile expected
    in-flight differences for online logical backups.
 3. Confirm all constraints are validated and required extensions exist.
-4. Run authentication, food detail/search fallback, diary totals, recipe, goal,
+4. Before starting or probing the API, decrypt and replay every external account-
+   erasure ledger entry whose subject exists in the restored snapshot, using the
+   restore-only version-list/exact-version-read principal and historical locator
+   and ledger key rings. Reject missing, ambiguous, truncated, or delete-marker
+   histories; reconcile every replayed subject to zero live rows. Generate a new
+   `DATABASE_RESTORE_EPOCH` for this target—never reuse the source/PITR value—and
+   pass that same epoch to the offline replay command and, only afterward, the API
+   and worker deployments. A restored API and worker must remain unready until
+   this step writes the matching database-name/OID/epoch attestation.
+5. Run authentication, food detail/search fallback, diary totals, recipe, goal,
    outbox, and export smoke tests with synthetic accounts.
-5. Verify current-version pointers reference their own roots and no promoted source
+6. Verify current-version pointers reference their own roots and no promoted source
    release points to a missing artifact.
-6. Verify a sample diary entry renders exclusively from its nutrient snapshot.
-7. Measure actual recovery-point and recovery-time objectives and record gaps.
+7. Verify a sample diary entry renders exclusively from its nutrient snapshot.
+8. Measure actual recovery-point and recovery-time objectives and record gaps.
 
 ## Managed PITR incident outline
 
 1. Declare incident owner and desired recovery timestamp using database and outbox
    evidence; account for clock/time-zone conversion explicitly.
 2. Restore the managed snapshot/PITR stream to a new instance.
-3. Keep writes disabled while the validation checklist runs.
+3. Keep all application traffic disabled while erasure-ledger replay and the
+   validation checklist run.
 4. Reconcile outbox side effects and idempotency keys around the recovery point.
 5. Approve cutover, rotate credentials/endpoints, and monitor error/outbox lag.
 6. Preserve the old instance read-only for the approved evidence window, then use

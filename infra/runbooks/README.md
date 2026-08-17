@@ -7,6 +7,8 @@ production environments.
 - [Local dependencies](./local-development.md)
 - [Forward-only database migrations](./database-migrations.md)
 - [PostgreSQL backup and restore](./postgres-backup-and-restore.md)
+- [Privacy export and account erasure](./privacy-export-and-erasure.md)
+- [Platform-health and reminder release](./platform-health-release.md)
 - [Food-source release promotion](./food-source-release.md)
 - [Official food-source release catalogue](../../docs/ingestion/official-source-releases.md)
 

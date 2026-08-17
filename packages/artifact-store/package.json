@@ -1,0 +1,28 @@
+{
+  "name": "@nutrition-tracker/artifact-store",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Node-only authenticated encrypted artifact storage boundary",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "lint": "biome lint src",
+    "test": "vitest run",
+    "test:integration": "vitest run src/s3-encrypted-artifact-store.integration.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  }
+}

@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import type { AuthService } from "../src/modules/auth/auth-service.js";
+import { assertDiaryEntry } from "../src/modules/diary/diary.routes.js";
 import type { RecipeService } from "../src/modules/recipes/recipe.routes.js";
 import { RecipeCursorServiceError } from "../src/modules/recipes/recipe.routes.js";
 import {
@@ -28,6 +29,7 @@ const recipeVersionId = "d696b6c8-782a-4783-b459-af4698470cf0";
 const secondRecipeVersionId = "f2693690-3803-4a65-97f5-8e856f81f01e";
 const repeatingResolvedGrams = `33.${"3".repeat(150)}`;
 const source = diaryEntry.source;
+const { foodProvenance: _foodProvenance, ...diaryEntryWithoutFoodProvenance } = diaryEntry;
 
 const recipe: Recipe = {
   id: recipeId,
@@ -50,6 +52,7 @@ const recipe: Recipe = {
         resolvedGrams: "100",
         note: null,
         source,
+        foodProvenance: { kind: "public", source },
       },
     ],
     finalYield: { grams: "100", source: "measured", ratioToInputMass: "1" },
@@ -107,7 +110,7 @@ const recipeList: RecipeListResponse = {
 };
 
 const recipeDiaryEntry: DiaryRecipeEntry = {
-  ...diaryEntry,
+  ...diaryEntryWithoutFoodProvenance,
   entryKind: "recipe",
   foodVersionId: null,
   recipeVersionId,
@@ -132,11 +135,15 @@ const recipeDiaryEntry: DiaryRecipeEntry = {
 
 function authStub(): AuthService {
   return {
+    reauthenticate: vi.fn(),
     register: vi.fn(),
     login: vi.fn(),
     authenticate: vi.fn(async (header) =>
-      header === `Bearer ${bearerToken}` ? { userId, account } : null,
+      header === `Bearer ${bearerToken}`
+        ? { userId, account, sessionTokenHash: "a".repeat(64) }
+        : null,
     ),
+    authenticateErasureRecovery: vi.fn(async () => null),
     logout: vi.fn(),
   };
 }
@@ -322,6 +329,7 @@ describe("recipe routes", () => {
   it("pins the exact recipe version in a retry-safe diary log operation", async () => {
     const service = recipeStub();
     const app = createTestApp(service);
+    expect(() => assertDiaryEntry(recipeDiaryEntry)).not.toThrow();
     const body = {
       recipeVersionId,
       portion: { kind: "serving", amount: "1" },
@@ -334,7 +342,7 @@ describe("recipe routes", () => {
       headers: { ...authHeaders, "idempotency-key": operationId },
       payload: body,
     });
-    expect(first.statusCode).toBe(201);
+    expect(first.statusCode, first.body).toBe(201);
     expect(first.json().data.entry).toEqual(recipeDiaryEntry);
     expect(first.json().data.entry.resolvedGrams).toBe(repeatingResolvedGrams);
     const firstDigest = vi.mocked(service.log).mock.calls[0]?.[0].requestDigest;

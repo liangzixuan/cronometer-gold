@@ -420,7 +420,7 @@ export function GoalsClient() {
           <Link aria-current="page" href={`/goals?date=${date}`}>
             Goals
           </Link>
-          <span aria-disabled="true">Trends · soon</span>
+          <Link href="/health">Health & privacy</Link>
         </nav>
         <p className="wellnessNote">General wellness estimates—not medical advice.</p>
       </aside>

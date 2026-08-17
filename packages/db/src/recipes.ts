@@ -19,6 +19,7 @@ import {
   nutrientDatum,
   resolvePortionToGrams,
   traceNutrient,
+  unknownNutrient,
 } from "@nutrition-tracker/domain";
 import { type Kysely, sql, type Transaction } from "kysely";
 
@@ -138,7 +139,14 @@ export type RecipeIngredientRecord =
         readonly servingLabel: string | null;
         readonly resolvedGrams: string;
       };
-      readonly source: RecipeSourceRecord;
+      readonly foodProvenance:
+        | { readonly kind: "public"; readonly source: RecipeSourceRecord }
+        | {
+            readonly kind: "private_custom";
+            readonly customFoodId: string;
+            readonly customFoodVersionNumber: string;
+          };
+      readonly source: RecipeSourceRecord | null;
     }
   | {
       readonly kind: "recipe";
@@ -218,10 +226,19 @@ interface SourceIdentity {
   readonly releaseId: string;
 }
 
-interface FoodDiscovery extends SourceIdentity {
-  readonly foodId: string;
-  readonly foodVersionId: string;
-}
+type FoodDiscovery =
+  | (SourceIdentity & {
+      readonly kind: "public";
+      readonly foodId: string;
+      readonly foodVersionId: string;
+    })
+  | {
+      readonly kind: "private_custom";
+      readonly foodId: string;
+      readonly foodVersionId: string;
+      readonly customFoodId: string;
+      readonly customFoodVersionNumber: string;
+    };
 
 interface MaterializedRecipe {
   readonly draft: RecipeDraft;
@@ -474,7 +491,7 @@ export async function loadRecipeDiaryFacts(
     .select(["food_source_id", "source_release_id"])
     .where("recipe_version_id", "=", input.recipeVersionId)
     .execute();
-  if (sourceRows.length < 1 || sourceRows.length > MAX_SOURCES) {
+  if (sourceRows.length > MAX_SOURCES) {
     throw new RecipeValidationError("Recipe source set is invalid");
   }
   await lockEligibleSources(
@@ -557,7 +574,7 @@ async function materializeRecipe(
         ingredient.kind === "recipe",
     )
     .map((ingredient) => ingredient.recipeVersionId);
-  const foodDiscovery = await discoverFoods(transaction, foodIds);
+  const foodDiscovery = await discoverFoods(transaction, userId, foodIds);
   const nestedClosure = await inspectNestedClosure(transaction, userId, rootRecipeId, nestedIds);
   const nestedSources =
     nestedClosure.versionIds.length === 0
@@ -568,7 +585,11 @@ async function materializeRecipe(
           .where("recipe_version_id", "in", nestedClosure.versionIds)
           .execute();
   const identities = dedupeIdentities([
-    ...foodDiscovery,
+    ...foodDiscovery.flatMap((food) =>
+      food.kind === "public"
+        ? [{ foodSourceId: food.foodSourceId, releaseId: food.releaseId }]
+        : [],
+    ),
     ...nestedSources.map((row) => ({
       foodSourceId: row.food_source_id,
       releaseId: row.source_release_id,
@@ -606,7 +627,10 @@ async function materializeRecipe(
           ingredient,
           position,
           definitions,
-          sourceByIdentity.get(`${discovery.foodSourceId}:${discovery.releaseId}`),
+          discovery,
+          discovery.kind === "public"
+            ? sourceByIdentity.get(`${discovery.foodSourceId}:${discovery.releaseId}`)
+            : undefined,
         ),
       );
     } else {
@@ -709,15 +733,23 @@ async function insertRecipeVersion(
       input.materialized.ingredients.map((ingredient) =>
         ingredient.kind === "food"
           ? {
-              attribution_required: ingredient.source.attributionRequired,
-              attribution_text: ingredient.source.attributionText,
+              attribution_required: ingredient.source?.attributionRequired ?? null,
+              attribution_text: ingredient.source?.attributionText ?? null,
               brand_name: ingredient.food.brandName,
+              custom_food_id:
+                ingredient.foodProvenance.kind === "private_custom"
+                  ? ingredient.foodProvenance.customFoodId
+                  : null,
+              custom_food_version_number:
+                ingredient.foodProvenance.kind === "private_custom"
+                  ? Number(ingredient.foodProvenance.customFoodVersionNumber)
+                  : null,
               food_name: ingredient.food.name,
               food_serving_id: ingredient.portion.servingId,
               food_version_id: ingredient.food.foodVersionId,
               ingredient_kind: "food" as const,
               input_unit: ingredient.portion.inputUnit,
-              license_expression: ingredient.source.licenseExpression,
+              license_expression: ingredient.source?.licenseExpression ?? null,
               nested_recipe_id: null,
               nested_recipe_name: null,
               nested_recipe_version_number: null,
@@ -732,16 +764,18 @@ async function insertRecipeVersion(
               resolved_grams: ingredient.portion.resolvedGrams,
               retention_factor_set: null,
               serving_label: ingredient.portion.servingLabel,
-              source_code: ingredient.source.code,
-              source_display_name: ingredient.source.displayName,
-              source_id: ingredient.source.foodSourceId,
-              source_release_id: ingredient.source.releaseId,
+              source_code: ingredient.source?.code ?? null,
+              source_display_name: ingredient.source?.displayName ?? null,
+              source_id: ingredient.source?.foodSourceId ?? null,
+              source_release_id: ingredient.source?.releaseId ?? null,
               yield_factor: "1",
             }
           : {
               attribution_required: null,
               attribution_text: null,
               brand_name: null,
+              custom_food_id: null,
+              custom_food_version_number: null,
               food_name: null,
               food_serving_id: null,
               food_version_id: null,
@@ -792,25 +826,27 @@ async function insertRecipeVersion(
       })),
     )
     .execute();
-  await transaction
-    .insertInto("recipe_version_source")
-    .values(
-      input.materialized.sources.map((source) => ({
-        attribution_required: source.attributionRequired,
-        attribution_text: source.attributionText,
-        food_source_id: source.foodSourceId,
-        license_expression: source.licenseExpression,
-        recipe_version_id: input.versionId,
-        source_code: source.code,
-        source_display_name: source.displayName,
-        source_release_id: source.releaseId,
-      })),
-    )
-    .execute();
+  if (input.materialized.sources.length)
+    await transaction
+      .insertInto("recipe_version_source")
+      .values(
+        input.materialized.sources.map((source) => ({
+          attribution_required: source.attributionRequired,
+          attribution_text: source.attributionText,
+          food_source_id: source.foodSourceId,
+          license_expression: source.licenseExpression,
+          recipe_version_id: input.versionId,
+          source_code: source.code,
+          source_display_name: source.displayName,
+          source_release_id: source.releaseId,
+        })),
+      )
+      .execute();
 }
 
 async function discoverFoods(
   transaction: Transaction<Database>,
+  userId: string,
   versionIds: readonly string[],
 ): Promise<readonly FoodDiscovery[]> {
   const unique = [...new Set(versionIds)].sort();
@@ -818,21 +854,53 @@ async function discoverFoods(
   const rows = await transaction
     .selectFrom("food_version as version")
     .innerJoin("food", "food.id", "version.food_id")
-    .select(["version.id", "version.food_id", "version.source_release_id", "food.food_source_id"])
+    .leftJoin(
+      "custom_food_version as custom_version",
+      "custom_version.food_version_id",
+      "version.id",
+    )
+    .leftJoin("custom_food", "custom_food.id", "custom_version.custom_food_id")
+    .select([
+      "version.id",
+      "version.food_id",
+      "version.source_release_id",
+      "food.food_source_id",
+      "food.owner_user_id",
+      "food.visibility",
+      "custom_food.id as custom_food_id",
+      "custom_food.status as custom_food_status",
+      "custom_version.version_number as custom_food_version_number",
+    ])
     .where("version.id", "in", unique)
     .execute();
-  if (
-    rows.length !== unique.length ||
-    rows.some((row) => !row.food_source_id || !row.source_release_id)
-  ) {
+  if (rows.length !== unique.length) {
     throw new RecipeValidationError("Food ingredient is unavailable");
   }
-  return rows.map((row) => ({
-    foodId: row.food_id,
-    foodSourceId: row.food_source_id as string,
-    foodVersionId: row.id,
-    releaseId: row.source_release_id as string,
-  }));
+  return rows.map((row): FoodDiscovery => {
+    if (row.food_source_id && row.source_release_id)
+      return {
+        foodId: row.food_id,
+        foodSourceId: row.food_source_id,
+        foodVersionId: row.id,
+        kind: "public",
+        releaseId: row.source_release_id,
+      };
+    if (
+      row.owner_user_id === userId &&
+      row.visibility === "private" &&
+      row.custom_food_id &&
+      row.custom_food_status === "active" &&
+      row.custom_food_version_number
+    )
+      return {
+        customFoodId: row.custom_food_id,
+        customFoodVersionNumber: row.custom_food_version_number,
+        foodId: row.food_id,
+        foodVersionId: row.id,
+        kind: "private_custom",
+      };
+    throw new RecipeValidationError("Food ingredient is unavailable");
+  });
 }
 
 async function lockDiscoveredFoods(
@@ -864,15 +932,34 @@ async function lockDiscoveredFoods(
     }
   }
   const eligible =
-    versionIds.length === 0
+    foods.filter((food) => food.kind === "public").length === 0
       ? []
       : await transaction
           .selectFrom("promoted_food_search_catalogue_v1")
           .select("food_version_id")
-          .where("food_version_id", "in", versionIds)
+          .where(
+            "food_version_id",
+            "in",
+            foods.flatMap((food) => (food.kind === "public" ? [food.foodVersionId] : [])),
+          )
           .execute();
-  if (eligible.length !== versionIds.length) {
+  if (eligible.length !== foods.filter((food) => food.kind === "public").length) {
     throw new RecipeValidationError("Food ingredient is no longer eligible");
+  }
+  const customIds = foods.flatMap((food) =>
+    food.kind === "private_custom" ? [food.customFoodId] : [],
+  );
+  if (customIds.length) {
+    const custom = await transaction
+      .selectFrom("custom_food")
+      .select("id")
+      .where("id", "in", [...new Set(customIds)].sort())
+      .where("status", "=", "active")
+      .orderBy("id")
+      .forShare()
+      .execute();
+    if (custom.length !== new Set(customIds).size)
+      throw new RecipeValidationError("Custom food ingredient is no longer eligible");
   }
 }
 
@@ -882,8 +969,12 @@ async function lockEligibleSources(
   afterSourcesLocked?: () => Promise<void>,
 ): Promise<readonly RecipeSourceRecord[]> {
   const deduped = dedupeIdentities(identities);
-  if (deduped.length < 1 || deduped.length > MAX_SOURCES) {
+  if (deduped.length > MAX_SOURCES) {
     throw new RecipeValidationError("Recipe source set is invalid");
+  }
+  if (deduped.length === 0) {
+    await afterSourcesLocked?.();
+    return [];
   }
   const sourceIds = [...new Set(deduped.map((source) => source.foodSourceId))].sort(
     compareNumericText,
@@ -1040,14 +1131,37 @@ async function materializeFoodIngredient(
   ingredient: Extract<RecipeIngredientInput, { kind: "food" }>,
   position: number,
   definitions: Definitions,
+  discovery: FoodDiscovery,
   source: RecipeSourceRecord | undefined,
 ): Promise<MaterializedIngredient> {
-  if (!source) throw new RecipeValidationError("Food source snapshot is incomplete");
-  const version = await transaction
-    .selectFrom("promoted_food_search_catalogue_v1")
-    .select(["food_version_id", "name", "brand_name", "basis_quantity", "basis_unit"])
-    .where("food_version_id", "=", ingredient.foodVersionId)
-    .executeTakeFirst();
+  if (discovery.kind === "public" && !source)
+    throw new RecipeValidationError("Food source snapshot is incomplete");
+  const version =
+    discovery.kind === "public"
+      ? await transaction
+          .selectFrom("promoted_food_search_catalogue_v1")
+          .select(["food_version_id", "name", "brand_name", "basis_quantity", "basis_unit"])
+          .where("food_version_id", "=", ingredient.foodVersionId)
+          .executeTakeFirst()
+      : await transaction
+          .selectFrom("food_version as version")
+          .innerJoin(
+            "custom_food_version as custom_version",
+            "custom_version.food_version_id",
+            "version.id",
+          )
+          .innerJoin("custom_food", "custom_food.id", "custom_version.custom_food_id")
+          .select([
+            "version.id as food_version_id",
+            "version.name",
+            "version.brand_name",
+            "version.basis_quantity",
+            "version.basis_unit",
+          ])
+          .where("version.id", "=", ingredient.foodVersionId)
+          .where("custom_food.id", "=", discovery.customFoodId)
+          .where("custom_food.status", "=", "active")
+          .executeTakeFirst();
   if (version?.basis_unit !== "g") {
     throw new RecipeValidationError("Food ingredient is unavailable");
   }
@@ -1078,7 +1192,7 @@ async function materializeFoodIngredient(
           id: serving.id,
           label: serving.label,
           reference: { amount: serving.quantity, unit: serving.unit },
-          source: source.code,
+          source: source?.code ?? "user-custom",
         },
       }).grams,
     );
@@ -1086,28 +1200,68 @@ async function materializeFoodIngredient(
     servingId = serving.id;
     servingLabel = serving.label;
   }
-  const values = await transaction
-    .selectFrom("food_nutrient_value as value")
-    .innerJoin("nutrient", "nutrient.id", "value.nutrient_id")
-    .select([
-      "nutrient.code",
-      "nutrient.canonical_unit",
-      "value.amount",
-      "value.basis_quantity",
-      "value.basis_unit",
-      "value.unit",
-      "value.value_status",
-    ])
-    .where("value.food_version_id", "=", ingredient.foodVersionId)
-    .where("nutrient.active", "=", true)
-    .execute();
+  const values =
+    discovery.kind === "public"
+      ? (
+          await transaction
+            .selectFrom("food_nutrient_value as value")
+            .innerJoin("nutrient", "nutrient.id", "value.nutrient_id")
+            .select([
+              "nutrient.code",
+              "nutrient.canonical_unit",
+              "value.amount",
+              "value.basis_quantity",
+              "value.basis_unit",
+              "value.unit",
+              "value.value_status",
+            ])
+            .where("value.food_version_id", "=", ingredient.foodVersionId)
+            .where("nutrient.active", "=", true)
+            .execute()
+        ).map((value) => ({
+          amount: value.amount,
+          basisQuantity: value.basis_quantity,
+          basisUnit: value.basis_unit,
+          canonicalUnit: value.canonical_unit,
+          code: value.code,
+          state: value.value_status === "trace" ? ("trace" as const) : ("quantified" as const),
+          unit: value.unit,
+          unknownReason: null,
+          valueStatus: value.value_status,
+        }))
+      : (
+          await transaction
+            .selectFrom("custom_food_version_nutrient as value")
+            .innerJoin("nutrient", "nutrient.id", "value.nutrient_id")
+            .select([
+              "nutrient.code",
+              "nutrient.canonical_unit",
+              "value.amount_per_100_grams",
+              "value.value_state",
+              "value.unknown_reason",
+              "value.unit",
+            ])
+            .where("value.food_version_id", "=", ingredient.foodVersionId)
+            .where("nutrient.active", "=", true)
+            .execute()
+        ).map((value) => ({
+          amount: value.amount_per_100_grams ?? "0",
+          basisQuantity: "100",
+          basisUnit: "g" as const,
+          canonicalUnit: value.canonical_unit,
+          code: value.code,
+          state: value.value_state,
+          unit: value.unit,
+          unknownReason: value.unknown_reason,
+          valueStatus: "estimated" as const,
+        }));
   const profile = createNutrientProfile(
     version.basis_quantity,
     values.map((value) => {
       if (
-        value.unit !== value.canonical_unit ||
-        value.basis_unit !== "g" ||
-        !decimal(value.basis_quantity).eq(version.basis_quantity)
+        value.unit !== value.canonicalUnit ||
+        value.basisUnit !== "g" ||
+        !decimal(value.basisQuantity).eq(version.basis_quantity)
       ) {
         throw new RecipeValidationError("Food nutrient unit or basis is incompatible");
       }
@@ -1115,9 +1269,11 @@ async function materializeFoodIngredient(
       if (!definition) throw new RecipeValidationError("Nutrient ontology changed during recipe");
       return nutrientDatum(
         definition,
-        value.value_status === "trace"
+        value.state === "trace"
           ? traceNutrient(null)
-          : knownNutrient(value.amount, normalizeQuality(value.value_status)),
+          : value.state === "unknown"
+            ? unknownNutrient(value.unknownReason ?? "not_reported")
+            : knownNutrient(value.amount, normalizeQuality(value.valueStatus)),
       );
     }),
   );
@@ -1132,7 +1288,15 @@ async function materializeFoodIngredient(
     nutrientProfile: profile,
     portion: { amount, inputUnit, resolvedGrams: grams, servingId, servingLabel },
     position,
-    source,
+    foodProvenance:
+      discovery.kind === "public"
+        ? { kind: "public", source: source as RecipeSourceRecord }
+        : {
+            customFoodId: discovery.customFoodId,
+            customFoodVersionNumber: discovery.customFoodVersionNumber,
+            kind: "private_custom",
+          },
+    source: source ?? null,
   };
 }
 
@@ -1235,14 +1399,33 @@ async function loadRecipeVersionRecord(
       row.ingredient_kind === "food" &&
       row.food_version_id &&
       row.food_name &&
-      row.source_id &&
-      row.source_code &&
-      row.source_release_id &&
-      row.source_display_name &&
-      row.license_expression &&
-      row.attribution_required !== null &&
-      row.attribution_text
+      ((row.custom_food_id !== null && row.custom_food_version_number !== null) ||
+        (row.source_id !== null &&
+          row.source_code !== null &&
+          row.source_release_id !== null &&
+          row.source_display_name !== null &&
+          row.license_expression !== null &&
+          row.attribution_required !== null &&
+          row.attribution_text !== null))
     ) {
+      const source =
+        row.source_id &&
+        row.source_code &&
+        row.source_release_id &&
+        row.source_display_name &&
+        row.license_expression &&
+        row.attribution_required !== null &&
+        row.attribution_text !== null
+          ? {
+              attributionRequired: row.attribution_required,
+              attributionText: row.attribution_text,
+              code: row.source_code,
+              displayName: row.source_display_name,
+              foodSourceId: row.source_id,
+              licenseExpression: row.license_expression,
+              releaseId: row.source_release_id,
+            }
+          : null;
       return {
         food: {
           brandName: row.brand_name,
@@ -1250,6 +1433,14 @@ async function loadRecipeVersionRecord(
           name: row.food_name,
         },
         kind: "food",
+        foodProvenance:
+          row.custom_food_id && row.custom_food_version_number !== null
+            ? {
+                customFoodId: row.custom_food_id,
+                customFoodVersionNumber: String(row.custom_food_version_number),
+                kind: "private_custom",
+              }
+            : { kind: "public", source: source as RecipeSourceRecord },
         note: row.note,
         portion: {
           amount: canonicalPositive(row.quantity, "ingredient amount"),
@@ -1259,15 +1450,7 @@ async function loadRecipeVersionRecord(
           servingLabel: row.serving_label,
         },
         position: row.position,
-        source: {
-          attributionRequired: row.attribution_required,
-          attributionText: row.attribution_text,
-          code: row.source_code,
-          displayName: row.source_display_name,
-          foodSourceId: row.source_id,
-          licenseExpression: row.license_expression,
-          releaseId: row.source_release_id,
-        },
+        source,
       };
     }
     if (
@@ -1366,7 +1549,7 @@ async function loadRecipeSources(
     .orderBy("source_release_id")
     .limit(MAX_SOURCES + 1)
     .execute();
-  if (rows.length < 1 || rows.length > MAX_SOURCES) {
+  if (rows.length > MAX_SOURCES) {
     throw new RecipeValidationError("Recipe source set is invalid");
   }
   return rows.map((row) => ({

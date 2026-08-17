@@ -3,6 +3,7 @@ export const authenticatedRoutes = {
   search: "Search",
   recipes: "Recipes",
   goals: "Goals",
+  health: "Health",
 } as const;
 
 export const authenticatedRouteNames = [
@@ -10,6 +11,7 @@ export const authenticatedRouteNames = [
   authenticatedRoutes.search,
   authenticatedRoutes.recipes,
   authenticatedRoutes.goals,
+  authenticatedRoutes.health,
 ] as const;
 
 export type AuthenticatedRouteName = (typeof authenticatedRouteNames)[number];

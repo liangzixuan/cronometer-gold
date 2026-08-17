@@ -1,9 +1,9 @@
 import type {
   AuthenticatedAccount,
   DiaryDay,
-  DiaryFoodEntry,
   DiaryMutationResponse,
   DiaryNutrientAggregate,
+  DiaryPublicFoodEntry,
   UserProfile,
 } from "@nutrition-tracker/contracts";
 
@@ -52,7 +52,7 @@ export const nutrient: DiaryNutrientAggregate = {
   },
 };
 
-export const diaryEntry: DiaryFoodEntry = {
+export const diaryEntry: DiaryPublicFoodEntry = {
   entryKind: "food",
   id: entryId,
   revision: "3",
@@ -74,6 +74,17 @@ export const diaryEntry: DiaryFoodEntry = {
     displayName: "USDA FoodData Central",
     licenseExpression: "CC0-1.0",
     releaseId: "9bc908d2-6362-4a9d-92af-f480c304381b",
+  },
+  foodProvenance: {
+    kind: "public",
+    source: {
+      attributionRequired: true,
+      attributionText: "Data source: USDA FoodData Central",
+      code: "USDA_FDC",
+      displayName: "USDA FoodData Central",
+      licenseExpression: "CC0-1.0",
+      releaseId: "9bc908d2-6362-4a9d-92af-f480c304381b",
+    },
   },
   timeZone: "America/Chicago",
   nutrients: [nutrient],

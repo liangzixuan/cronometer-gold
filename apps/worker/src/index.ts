@@ -1,11 +1,14 @@
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
-import { createDatabaseFromEnvironment } from "@nutrition-tracker/db";
+import { assertDatabaseReady, createDatabaseFromEnvironment } from "@nutrition-tracker/db";
 import { MeilisearchHttpClient } from "@nutrition-tracker/search";
 
-import { parseWorkerConfig, WorkerConfigValidationError } from "./config.js";
+import { parseWorkerConfig, type WorkerConfig, WorkerConfigValidationError } from "./config.js";
 import { type FoodSearchWorkerPollResult, runFoodSearchWorkerPoll } from "./food-search-worker.js";
+import { createRetentionWorkerRepository } from "./retention-database-repository.js";
+import { createRetentionStorageRuntime } from "./retention-storage.js";
+import { type RetentionWorkerEvent, runRetentionWorkerPoll } from "./retention-worker.js";
 import { runWorker } from "./runtime.js";
 
 export interface WorkerFailureEvent {
@@ -21,7 +24,7 @@ export interface StartWorkerOptions {
   readonly onOperationalEvent?: (event: WorkerOperationalEvent) => void;
 }
 
-export interface WorkerOperationalEvent {
+export interface SearchWorkerOperationalEvent {
   readonly event:
     | "search.rebuild.cleanup_pending"
     | "search.rebuild.completed"
@@ -34,6 +37,16 @@ export interface WorkerOperationalEvent {
   readonly cleanupErrorCode?: "DISPLACED_INDEX_DELETE_FAILED";
   readonly cleanupIndexUid?: string;
 }
+
+export type WorkerOperationalEvent =
+  | SearchWorkerOperationalEvent
+  | RetentionWorkerEvent
+  | {
+      readonly event: "worker.poll.slice_failed";
+      readonly level: "warn";
+      readonly slice: "search" | "retention";
+      readonly errorType: string;
+    };
 
 function safeErrorName(error: unknown): string {
   if (error instanceof Error && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/.test(error.name)) {
@@ -57,6 +70,26 @@ export function workerFailureEvent(error: unknown): WorkerFailureEvent {
   };
 }
 
+export async function assertWorkerDatabaseReady(
+  database: ReturnType<typeof createDatabaseFromEnvironment>,
+  config: Pick<WorkerConfig, "DATABASE_RESTORE_EPOCH" | "NODE_ENV">,
+): Promise<void> {
+  if (config.NODE_ENV === "production") {
+    if (!config.DATABASE_RESTORE_EPOCH) {
+      throw new Error("Database restore epoch was not configured");
+    }
+    await assertDatabaseReady(database, {
+      requireRestoreAttestation: true,
+      restoreEpoch: config.DATABASE_RESTORE_EPOCH,
+    });
+    return;
+  }
+  await assertDatabaseReady(database, {
+    requireRestoreAttestation: false,
+    ...(config.DATABASE_RESTORE_EPOCH ? { restoreEpoch: config.DATABASE_RESTORE_EPOCH } : {}),
+  });
+}
+
 export async function startWorker(options: StartWorkerOptions = {}): Promise<void> {
   const environment = options.environment ?? process.env;
   const config = parseWorkerConfig(environment);
@@ -70,15 +103,30 @@ export async function startWorker(options: StartWorkerOptions = {}): Promise<voi
           ...(config.MEILI_ADMIN_KEY === undefined ? {} : { apiKey: config.MEILI_ADMIN_KEY }),
         })
       : undefined;
+  const retentionStorage =
+    options.onPoll === undefined && config.RETENTION_FEATURES_ENABLED
+      ? await createRetentionStorageRuntime(config)
+      : undefined;
   const database =
     options.onPoll === undefined
       ? createDatabaseFromEnvironment({ ...environment, DATABASE_URL: config.DATABASE_URL })
       : undefined;
+  const retentionRepository =
+    database && retentionStorage ? createRetentionWorkerRepository(database) : undefined;
   const emit =
     options.onOperationalEvent ??
     ((event: WorkerOperationalEvent) => {
       process.stdout.write(`${JSON.stringify(event)}\n`);
     });
+
+  if (database) {
+    try {
+      await assertWorkerDatabaseReady(database, config);
+    } catch (error) {
+      await database.destroy();
+      throw error;
+    }
+  }
 
   for (const signal of ["SIGINT", "SIGTERM"] as const) {
     const listener = () => controller.abort(signal);
@@ -95,14 +143,54 @@ export async function startWorker(options: StartWorkerOptions = {}): Promise<voi
         options.onPoll ??
         (async (signal) => {
           if (!database || !client) throw new Error("worker dependencies were not initialized");
-          const result = await runFoodSearchWorkerPoll({
-            client,
-            config,
-            database,
-            signal,
-          });
-          const event = operationalEvent(result);
-          if (event) emit(event);
+          try {
+            const result = await runFoodSearchWorkerPoll({
+              client,
+              config,
+              database,
+              signal,
+            });
+            const event = operationalEvent(result);
+            if (event) emit(event);
+          } catch (error) {
+            emit({
+              errorType: safeErrorName(error),
+              event: "worker.poll.slice_failed",
+              level: "warn",
+              slice: "search",
+            });
+          }
+          if (retentionStorage && retentionRepository) {
+            try {
+              await runRetentionWorkerPoll(
+                {
+                  erasureLedger: retentionStorage.erasureLedger,
+                  exportArtifactStore: retentionStorage.exportArtifactStore,
+                  exportTtlMs: 7 * 86_400_000,
+                  onEvent: emit,
+                  repository: retentionRepository,
+                  spoolMaximumBytes: config.RETENTION_EXPORT_SPOOL_MAX_BYTES,
+                  temporaryDirectory: config.RETENTION_EXPORT_SPOOL_DIR,
+                  uploadLeaseMs: Math.min(
+                    15 * 60_000,
+                    Math.max(
+                      config.EXPORT_ARTIFACT_REQUEST_TIMEOUT_MS * 2,
+                      config.EXPORT_ARTIFACT_REQUEST_TIMEOUT_MS + 30_000,
+                    ),
+                  ),
+                  workerId: config.RETENTION_WORKER_ID,
+                },
+                signal,
+              );
+            } catch (error) {
+              emit({
+                errorType: safeErrorName(error),
+                event: "worker.poll.slice_failed",
+                level: "warn",
+                slice: "retention",
+              });
+            }
+          }
         }),
     });
   } finally {

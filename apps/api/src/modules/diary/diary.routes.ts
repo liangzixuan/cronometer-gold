@@ -241,7 +241,27 @@ export function assertNutrientAggregate(aggregate: DiaryNutrientAggregate): void
 
 export function assertDiaryEntry(entry: DiaryEntry): void {
   for (const nutrient of entry.nutrients) assertNutrientAggregate(nutrient);
-  if (entry.entryKind === "food") return;
+  if (entry.entryKind === "food") {
+    if (entry.foodProvenance.kind === "private_custom") {
+      if (entry.source !== null) {
+        throw new Error("Private custom food must not expose public source provenance");
+      }
+      return;
+    }
+    const source = entry.source;
+    if (
+      source === null ||
+      source.code !== entry.foodProvenance.source.code ||
+      source.releaseId !== entry.foodProvenance.source.releaseId ||
+      source.displayName !== entry.foodProvenance.source.displayName ||
+      source.licenseExpression !== entry.foodProvenance.source.licenseExpression ||
+      source.attributionRequired !== entry.foodProvenance.source.attributionRequired ||
+      source.attributionText !== entry.foodProvenance.source.attributionText
+    ) {
+      throw new Error("Public diary food provenance is inconsistent");
+    }
+    return;
+  }
   if (
     (entry.recipe.servingCount === null) !== (entry.recipe.servingLabel === null) ||
     (entry.portion.kind === "serving" && entry.recipe.servingCount === null) ||

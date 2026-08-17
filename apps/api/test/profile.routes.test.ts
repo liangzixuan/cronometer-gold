@@ -14,11 +14,15 @@ const testConfig = loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" });
 
 function authStub(): AuthService {
   return {
+    reauthenticate: vi.fn(),
     register: vi.fn(),
     login: vi.fn(),
     authenticate: vi.fn(async (header) =>
-      header === `Bearer ${bearerToken}` ? { userId, account } : null,
+      header === `Bearer ${bearerToken}`
+        ? { userId, account, sessionTokenHash: "a".repeat(64) }
+        : null,
     ),
+    authenticateErasureRecovery: vi.fn(async () => null),
     logout: vi.fn(),
   };
 }

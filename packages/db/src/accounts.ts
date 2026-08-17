@@ -68,6 +68,10 @@ export interface SessionRecord {
 export interface AuthenticatedSession extends SessionRecord {
   readonly profile: UserProfileRecord;
 }
+export interface PendingErasureRecoverySession extends AuthenticatedSession {
+  readonly erasureJobId: string;
+  readonly executeAfter: Date;
+}
 
 export interface CreateSessionInput {
   readonly userId: string;
@@ -230,6 +234,53 @@ export async function findActiveSessionByTokenHash(
   return profile ? { ...mapSession(session), profile } : null;
 }
 
+/**
+ * Narrow recovery credential for an exact account-erasure POST replay only.
+ * It must never be accepted by normal authentication middleware.
+ */
+export async function findPendingErasureRecoverySessionByTokenHash(
+  database: Kysely<Database>,
+  input: { readonly tokenHash: string; readonly now: Date | string },
+): Promise<PendingErasureRecoverySession | null> {
+  assertSha256(input.tokenHash, "tokenHash");
+  const now = typeof input.now === "string" ? new Date(input.now) : input.now;
+  if (!Number.isFinite(now.getTime())) throw new Error("now must be a finite instant");
+  const row = await database
+    .selectFrom("user_session as session")
+    .innerJoin("app_user as user", "user.id", "session.user_id")
+    .innerJoin("account_erasure_job as erasure", "erasure.user_id", "user.id")
+    .select([
+      "session.id",
+      "session.user_id",
+      "session.expires_at",
+      "session.last_used_at",
+      "session.revoked_at",
+      "session.created_at",
+      "erasure.id as erasure_job_id",
+      "erasure.execute_after",
+    ])
+    .where("session.token_hash", "=", input.tokenHash)
+    .where("session.revoked_at", "is not", null)
+    .where("session.expires_at", ">", now)
+    .where("user.status", "=", "pending_deletion")
+    .where("user.deleted_at", "is", null)
+    .where("erasure.status", "in", ["queued", "failed", "running"])
+    .whereRef("erasure.recovery_session_token_hash", "=", "session.token_hash")
+    .where("erasure.execute_after", ">", now)
+    .where("erasure.status_capability_expires_at", ">", now)
+    .executeTakeFirst();
+  if (!row) return null;
+  const profile = await selectUserProfile(database, row.user_id, "pending_deletion");
+  return profile
+    ? {
+        ...mapSession(row),
+        erasureJobId: row.erasure_job_id,
+        executeAfter: row.execute_after,
+        profile,
+      }
+    : null;
+}
+
 export async function revokeSession(
   database: Kysely<Database>,
   input: {
@@ -239,14 +290,26 @@ export async function revokeSession(
   },
 ): Promise<boolean> {
   assertSha256(input.tokenHash, "tokenHash");
-  const result = await database
-    .updateTable("user_session")
-    .set({ revoked_at: input.revokedAt ?? sql<Date>`clock_timestamp()` })
-    .where("user_id", "=", input.userId)
-    .where("token_hash", "=", input.tokenHash)
-    .where("revoked_at", "is", null)
-    .executeTakeFirst();
-  return result.numUpdatedRows === 1n;
+  return database.transaction().execute(async (transaction) => {
+    const revokedAt = input.revokedAt ?? sql<Date>`clock_timestamp()`;
+    const result = await transaction
+      .updateTable("user_session")
+      .set({ revoked_at: revokedAt })
+      .where("user_id", "=", input.userId)
+      .where("token_hash", "=", input.tokenHash)
+      .where("revoked_at", "is", null)
+      .executeTakeFirst();
+    if (result.numUpdatedRows === 1n)
+      await transaction
+        .updateTable("reauthentication_proof")
+        .set({ revoked_at: revokedAt })
+        .where("user_id", "=", input.userId)
+        .where("session_token_hash", "=", input.tokenHash)
+        .where("consumed_at", "is", null)
+        .where("revoked_at", "is", null)
+        .execute();
+    return result.numUpdatedRows === 1n;
+  });
 }
 
 export async function getUserProfile(
@@ -322,6 +385,7 @@ export async function updateUserProfile(
 async function selectUserProfile(
   database: Kysely<Database>,
   userId: string,
+  requiredStatus: "active" | "pending_deletion" = "active",
 ): Promise<UserProfileRecord | null> {
   const row = await database
     .selectFrom("user_profile as profile")
@@ -347,7 +411,7 @@ async function selectUserProfile(
       "profile.updated_at",
     ])
     .where("profile.user_id", "=", userId)
-    .where("user.status", "=", "active")
+    .where("user.status", "=", requiredStatus)
     .where("user.deleted_at", "is", null)
     .executeTakeFirst();
   return row

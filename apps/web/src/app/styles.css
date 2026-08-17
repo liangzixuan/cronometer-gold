@@ -1455,6 +1455,161 @@ button:disabled {
   outline-offset: 3px;
 }
 
+.retentionDashboard {
+  display: grid;
+  gap: 24px;
+}
+
+.retentionSection {
+  padding: 28px;
+  border: 1px solid #d9dfd7;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 10px 32px rgba(33, 50, 39, 0.06);
+}
+
+.sectionHeading,
+.retentionColumns,
+.trendTables,
+.privacyGrid,
+.inlineFields,
+.retentionFilters,
+.entryActions {
+  display: flex;
+  gap: 16px;
+}
+
+.sectionHeading {
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.sectionHeading > p {
+  max-width: 48ch;
+  margin: 0;
+  color: #526057;
+}
+
+.retentionColumns,
+.trendTables,
+.privacyGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 22px;
+}
+
+.privacyGrid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.retentionForm,
+.retentionForm label,
+.jobStatus,
+.recordList li > div:first-child {
+  display: grid;
+  gap: 8px;
+}
+
+.retentionForm {
+  align-content: start;
+}
+
+.retentionForm input,
+.retentionForm select,
+.retentionForm textarea,
+.retentionFilters input,
+.retentionFilters select,
+.privacyCenter input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #bcc8bf;
+  border-radius: 9px;
+  background: #fff;
+  color: #1e2922;
+  font: inherit;
+}
+
+.retentionFilters {
+  flex-wrap: wrap;
+  margin-top: 20px;
+  border: 0;
+}
+
+.retentionFilters label {
+  display: grid;
+  min-width: 150px;
+  gap: 7px;
+}
+
+.inlineFields > label {
+  flex: 1;
+}
+
+.recordList,
+.compactList {
+  display: grid;
+  gap: 10px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.recordList li,
+.compactList li,
+.privacyGrid article {
+  padding: 14px;
+  border: 1px solid #e0e5e1;
+  border-radius: 12px;
+  background: #f8faf8;
+}
+
+.recordList li,
+.compactList li {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.recordList small,
+.compactList small,
+.jobStatus small,
+.finePrint {
+  color: #5f6d64;
+}
+
+.nutrientDraftRow {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr auto;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.dayChoices,
+.consentLine {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.consentLine input {
+  width: auto;
+}
+
+.privacyGrid .dangerZone {
+  border-color: #e5b8b8;
+  background: #fff8f8;
+}
+
+.dangerZone .dangerAction {
+  color: #8b1f1f;
+}
+
+.jobStatus a {
+  color: #285f3d;
+  font-weight: 700;
+}
+
 @media (max-width: 760px) {
   .trustBar,
   .cardGrid {
@@ -1512,7 +1667,19 @@ button:disabled {
   }
 
   .recipeWorkspace,
-  .goalWorkspace {
+  .goalWorkspace,
+  .retentionColumns,
+  .trendTables,
+  .privacyGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .sectionHeading,
+  .inlineFields {
+    flex-direction: column;
+  }
+
+  .nutrientDraftRow {
     grid-template-columns: 1fr;
   }
 

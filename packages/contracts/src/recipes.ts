@@ -52,18 +52,33 @@ export interface RecipeDraftRequest {
   readonly servingLabel: string | null;
 }
 
+type ResolvedRecipeFoodIngredientCommon = {
+  readonly kind: "food";
+  readonly position: number;
+  readonly foodVersionId: string;
+  readonly name: string;
+  readonly brandName: string | null;
+  readonly portion: DiaryEntryPortion;
+  readonly resolvedGrams: string;
+  readonly note: string | null;
+};
+
 export type ResolvedRecipeIngredient =
-  | {
-      readonly kind: "food";
-      readonly position: number;
-      readonly foodVersionId: string;
-      readonly name: string;
-      readonly brandName: string | null;
-      readonly portion: DiaryEntryPortion;
-      readonly resolvedGrams: string;
-      readonly note: string | null;
+  | (ResolvedRecipeFoodIngredientCommon & {
       readonly source: DiaryFoodSourceSnapshot;
-    }
+      readonly foodProvenance: {
+        readonly kind: "public";
+        readonly source: DiaryFoodSourceSnapshot;
+      };
+    })
+  | (ResolvedRecipeFoodIngredientCommon & {
+      readonly source: null;
+      readonly foodProvenance: {
+        readonly kind: "private_custom";
+        readonly customFoodId: string;
+        readonly customFoodVersionNumber: number;
+      };
+    })
   | {
       readonly kind: "recipe";
       readonly position: number;
@@ -182,6 +197,9 @@ const nullableText = (maximum: number) => ({
   anyOf: [{ type: "string", minLength: 1, maxLength: maximum }, { type: "null" }],
 });
 const timestampSchema = { type: "string", format: "date-time" } as const;
+// This schema is embedded in both branches of a provenance union. Reusing the
+// exported `$id` in each branch makes strict Ajv resolution ambiguous.
+const resolvedFoodPortionSchema = { oneOf: diaryEntryPortionSchema.oneOf } as const;
 
 const recipeSourceSchema = {
   type: "object",
@@ -272,7 +290,18 @@ export const recipeDraftRequestSchema = {
   },
 } as const;
 
-const foodResolvedIngredientSchema = {
+const foodResolvedIngredientCommonProperties = {
+  kind: { type: "string", const: "food" },
+  position: { type: "integer", minimum: 0, maximum: 49 },
+  foodVersionId: positiveIdentifierSchema,
+  name: { type: "string", minLength: 1, maxLength: 500 },
+  brandName: nullableText(300),
+  portion: resolvedFoodPortionSchema,
+  resolvedGrams: positiveExactDecimalSchema,
+  note: nullableText(500),
+} as const;
+
+const publicFoodResolvedIngredientSchema = {
   type: "object",
   additionalProperties: false,
   required: [
@@ -285,17 +314,48 @@ const foodResolvedIngredientSchema = {
     "resolvedGrams",
     "note",
     "source",
+    "foodProvenance",
   ],
   properties: {
-    kind: { type: "string", const: "food" },
-    position: { type: "integer", minimum: 0, maximum: 49 },
-    foodVersionId: positiveIdentifierSchema,
-    name: { type: "string", minLength: 1, maxLength: 500 },
-    brandName: nullableText(300),
-    portion: diaryEntryPortionSchema,
-    resolvedGrams: positiveExactDecimalSchema,
-    note: nullableText(500),
+    ...foodResolvedIngredientCommonProperties,
     source: recipeSourceSchema,
+    foodProvenance: {
+      type: "object",
+      additionalProperties: false,
+      required: ["kind", "source"],
+      properties: { kind: { type: "string", const: "public" }, source: recipeSourceSchema },
+    },
+  },
+} as const;
+
+const privateFoodResolvedIngredientSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "kind",
+    "position",
+    "foodVersionId",
+    "name",
+    "brandName",
+    "portion",
+    "resolvedGrams",
+    "note",
+    "source",
+    "foodProvenance",
+  ],
+  properties: {
+    ...foodResolvedIngredientCommonProperties,
+    source: { type: "null" },
+    foodProvenance: {
+      type: "object",
+      additionalProperties: false,
+      required: ["kind", "customFoodId", "customFoodVersionNumber"],
+      properties: {
+        kind: { type: "string", const: "private_custom" },
+        customFoodId: uuidSchema,
+        customFoodVersionNumber: { type: "integer", minimum: 1 },
+      },
+    },
   },
 } as const;
 
@@ -328,7 +388,11 @@ const nestedResolvedIngredientSchema = {
 
 export const resolvedRecipeIngredientSchema = {
   $id: "ResolvedRecipeIngredient",
-  oneOf: [foodResolvedIngredientSchema, nestedResolvedIngredientSchema],
+  oneOf: [
+    publicFoodResolvedIngredientSchema,
+    privateFoodResolvedIngredientSchema,
+    nestedResolvedIngredientSchema,
+  ],
 } as const;
 
 export const recipeWarningSchema = {
@@ -503,7 +567,7 @@ export const recipeVersionSchema = {
         },
       },
     },
-    sources: { type: "array", minItems: 1, maxItems: 256, items: recipeSourceSchema },
+    sources: { type: "array", maxItems: 256, items: recipeSourceSchema },
     retentionPolicy: {
       type: "object",
       additionalProperties: false,

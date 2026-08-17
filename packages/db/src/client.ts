@@ -2,6 +2,7 @@ import { Kysely, PostgresDialect, sql } from "kysely";
 import { Pool, type PoolConfig } from "pg";
 
 import { discoverMigrations } from "./migrator.js";
+import { assertDatabaseRestoreReplayReady } from "./restore.js";
 import type { Database } from "./types.js";
 
 export interface DatabaseClientOptions {
@@ -89,7 +90,9 @@ export function createDatabaseFromEnvironment(
   });
 }
 
-export async function assertDatabaseReady(database: Kysely<Database>): Promise<void> {
+export async function assertDatabaseMigrationLedgerReady(
+  database: Kysely<Database>,
+): Promise<void> {
   const expected = await discoverMigrations();
   let applied: readonly { readonly checksum: string; readonly name: string }[];
   try {
@@ -111,6 +114,20 @@ export async function assertDatabaseReady(database: Kysely<Database>): Promise<v
     )
   ) {
     throw new Error("Database schema migration ledger is not current");
+  }
+}
+
+export async function assertDatabaseReady(
+  database: Kysely<Database>,
+  options:
+    | { readonly requireRestoreAttestation: true; readonly restoreEpoch: string }
+    | { readonly requireRestoreAttestation: false; readonly restoreEpoch?: string },
+): Promise<void> {
+  await assertDatabaseMigrationLedgerReady(database);
+  const restoreEpoch = options.restoreEpoch;
+  if (options.requireRestoreAttestation || restoreEpoch !== undefined) {
+    if (restoreEpoch === undefined) throw new Error("Database restore epoch was not configured");
+    await assertDatabaseRestoreReplayReady(database, { restoreEpoch });
   }
 }
 

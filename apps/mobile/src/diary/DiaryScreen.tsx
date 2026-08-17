@@ -28,6 +28,7 @@ import {
   nutrientDisplay,
   parseDiaryDay,
   parseDiaryMutation,
+  quickAddOccurredAt,
   shiftLocalDate,
 } from "./diary";
 
@@ -52,6 +53,7 @@ interface DiaryScreenProps {
   readonly onSearch: (date: string, meal: MealSlot, timeZone: string) => void;
   readonly onRecipes: () => void;
   readonly onGoals: () => void;
+  readonly onHealth: () => void;
   readonly onUnauthorized: () => Promise<void>;
 }
 
@@ -81,6 +83,7 @@ export function DiaryScreen({
   onSearch,
   onRecipes,
   onGoals,
+  onHealth,
   onUnauthorized,
 }: DiaryScreenProps) {
   const [date, setDate] = useState(() =>
@@ -267,6 +270,54 @@ export function DiaryScreen({
     }
   }
 
+  async function repeat(entry: DiaryEntry) {
+    const now = new Date();
+    const targetDate = localDateInTimeZone(now, profileTimeZone);
+    const body = {
+      occurredAt: quickAddOccurredAt(targetDate, profileTimeZone, now),
+      mealSlot: entry.mealSlot,
+    };
+    const key = `repeat:${entry.id}:${entry.revision}:${JSON.stringify(body)}`;
+    setBusyEntry(entry.id);
+    setMessage(`Repeating the pinned ${entryName(entry)} version…`);
+    try {
+      const response = await fetch(
+        apiUrl(apiBase, `/v1/diary/entries/${entry.id}/repeat`).toString(),
+        {
+          method: "POST",
+          headers: authenticatedHeaders(accessToken, {
+            "content-type": "application/json",
+            "idempotency-key": operationId(key),
+            "if-match": `"${entry.revision}"`,
+          }),
+          body: JSON.stringify(body),
+        },
+      );
+      if (response.status === 401) return onUnauthorized();
+      const responseBody = await jsonBody(response);
+      if (response.status === 412) {
+        operationIds.current.delete(key);
+        await load(date);
+        setMessage("The source entry changed. Fresh details were loaded; review before repeating.");
+        return;
+      }
+      if (!response.ok)
+        throw new Error(responseError(responseBody, "The entry could not be repeated."));
+      const mutation = parseDiaryMutation(responseBody);
+      operationIds.current.delete(key);
+      const repeatedDate = mutation.entry?.localDate ?? targetDate;
+      if (repeatedDate === date) await load(date);
+      else setDate(repeatedDate);
+      setMessage("Pinned entry version repeated with fresh authoritative totals.");
+    } catch (caught) {
+      setMessage(
+        `${caught instanceof Error ? caught.message : "The entry could not be repeated."} Choose Repeat again to retry the same operation safely.`,
+      );
+    } finally {
+      setBusyEntry(null);
+    }
+  }
+
   function confirmRemove(entry: DiaryEntry) {
     Alert.alert(
       "Delete diary entry?",
@@ -293,6 +344,9 @@ export function DiaryScreen({
           </Pressable>
           <Pressable accessibilityRole="button" onPress={onGoals}>
             <Text style={styles.workspaceLink}>Goals</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" onPress={onHealth}>
+            <Text style={styles.workspaceLink}>Health & privacy</Text>
           </Pressable>
         </View>
         <Text style={styles.kicker}>PRIVATE LOCAL-DAY DIARY</Text>
@@ -408,10 +462,9 @@ export function DiaryScreen({
                         </Text>
                         {entry.entryKind === "food" ? (
                           <Text style={styles.entrySource}>
-                            {entry.source.attributionRequired
-                              ? entry.source.attributionText
-                              : entry.source.displayName}{" "}
-                            · {entry.source.licenseExpression}
+                            {entry.foodProvenance.kind === "private_custom"
+                              ? `Owner-entered private food · pinned version ${entry.foodProvenance.customFoodVersionNumber}`
+                              : `${entry.foodProvenance.source.attributionRequired ? entry.foodProvenance.source.attributionText : entry.foodProvenance.source.displayName} · ${entry.foodProvenance.source.licenseExpression}`}
                           </Text>
                         ) : (
                           <View
@@ -518,6 +571,15 @@ export function DiaryScreen({
                           </View>
                         ) : (
                           <View style={styles.actionRow}>
+                            <Pressable
+                              accessibilityLabel={`Repeat the pinned ${entryName(entry)} version today`}
+                              accessibilityRole="button"
+                              disabled={busyEntry === entry.id}
+                              onPress={() => void repeat(entry)}
+                              style={styles.secondarySmall}
+                            >
+                              <Text style={styles.secondaryText}>Repeat today</Text>
+                            </Pressable>
                             <Pressable
                               accessibilityRole="button"
                               disabled={busyEntry === entry.id || diary.status === "locked"}

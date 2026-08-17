@@ -59,7 +59,7 @@ interface DiaryEntryCommon {
   readonly nutrients: readonly DiaryNutrient[];
 }
 
-export interface DiaryFoodEntry extends DiaryEntryCommon {
+interface DiaryFoodEntryCommon extends DiaryEntryCommon {
   readonly entryKind: "food";
   readonly foodVersionId: string;
   readonly recipeVersionId: null;
@@ -73,8 +73,23 @@ export interface DiaryFoodEntry extends DiaryEntryCommon {
     | { readonly kind: "grams"; readonly grams: string };
   readonly food: { readonly name: string; readonly brandName: string | null };
   readonly recipe: null;
-  readonly source: DiarySource;
 }
+
+export interface DiaryPublicFoodEntry extends DiaryFoodEntryCommon {
+  readonly source: DiarySource;
+  readonly foodProvenance: { readonly kind: "public"; readonly source: DiarySource };
+}
+
+export interface DiaryPrivateCustomFoodEntry extends DiaryFoodEntryCommon {
+  readonly source: null;
+  readonly foodProvenance: {
+    readonly kind: "private_custom";
+    readonly customFoodId: string;
+    readonly customFoodVersionNumber: number;
+  };
+}
+
+export type DiaryFoodEntry = DiaryPublicFoodEntry | DiaryPrivateCustomFoodEntry;
 
 export interface DiaryRecipeEntry extends DiaryEntryCommon {
   readonly entryKind: "recipe";
@@ -597,6 +612,7 @@ function parseEntry(value: unknown): DiaryEntry {
       "food",
       "recipe",
       "source",
+      "foodProvenance",
       "mealSlot",
       "resolvedGrams",
       "occurredAt",
@@ -615,16 +631,51 @@ function parseEntry(value: unknown): DiaryEntry {
     (value.food.brandName === null || text(value.food.brandName, 300)) &&
     value.recipe === null
   ) {
-    return {
+    const entry = {
       ...common,
-      entryKind: "food",
+      entryKind: "food" as const,
       foodVersionId: value.foodVersionId,
       recipeVersionId: null,
       portion: parseFoodPortion(value.portion),
       food: { name: value.food.name, brandName: value.food.brandName },
       recipe: null,
-      source: parseSource(value.source),
     };
+    if (value.source === null) {
+      if (
+        !record(value.foodProvenance) ||
+        !exactEntryKeys(value.foodProvenance, [
+          "kind",
+          "customFoodId",
+          "customFoodVersionNumber",
+        ]) ||
+        value.foodProvenance.kind !== "private_custom" ||
+        !(
+          typeof value.foodProvenance.customFoodId === "string" &&
+          UUID.test(value.foodProvenance.customFoodId)
+        ) ||
+        !Number.isSafeInteger(value.foodProvenance.customFoodVersionNumber) ||
+        Number(value.foodProvenance.customFoodVersionNumber) < 1
+      )
+        throw new TypeError("Private custom-food provenance was invalid.");
+      return {
+        ...entry,
+        source: null,
+        foodProvenance: {
+          kind: "private_custom",
+          customFoodId: value.foodProvenance.customFoodId,
+          customFoodVersionNumber: Number(value.foodProvenance.customFoodVersionNumber),
+        },
+      };
+    }
+    const source = parseSource(value.source);
+    if (
+      !record(value.foodProvenance) ||
+      !exactEntryKeys(value.foodProvenance, ["kind", "source"]) ||
+      value.foodProvenance.kind !== "public" ||
+      JSON.stringify(parseSource(value.foodProvenance.source)) !== JSON.stringify(source)
+    )
+      throw new TypeError("Public food provenance was invalid.");
+    return { ...entry, source, foodProvenance: { kind: "public", source } };
   }
   if (
     value.entryKind === "recipe" &&

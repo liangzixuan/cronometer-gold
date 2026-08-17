@@ -80,7 +80,7 @@ jobs:
 
   database:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     services:
       postgres:
         image: postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
@@ -129,6 +129,30 @@ jobs:
       - name: Validate local service topology
         run: docker compose -f infra/docker/compose.yml config --quiet
 
+      - name: Bootstrap least-privilege private object storage
+        run: |
+          docker compose -f infra/docker/compose.yml up -d --wait minio
+          docker compose -f infra/docker/compose.yml run --rm --no-deps minio-bootstrap
+
+      - name: Exercise encrypted artifact storage with split credentials
+        env:
+          RUN_ARTIFACT_STORE_INTEGRATION: "1"
+          EXPORT_ARTIFACT_ENDPOINT: http://127.0.0.1:9000
+          EXPORT_ARTIFACT_REGION: us-east-1
+          EXPORT_ARTIFACT_BUCKET: nutrition-private-exports
+          EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID: nutrition_export_writer
+          EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY: nutrition_export_writer_local_only
+          EXPORT_ARTIFACT_READ_ACCESS_KEY_ID: nutrition_export_reader
+          EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY: nutrition_export_reader_local_only
+          ERASURE_REPLAY_LEDGER_ENDPOINT: http://127.0.0.1:9000
+          ERASURE_REPLAY_LEDGER_REGION: us-east-1
+          ERASURE_REPLAY_LEDGER_BUCKET: nutrition-erasure-ledger
+          ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID: nutrition_erasure_writer
+          ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY: nutrition_erasure_writer_local_only
+          ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID: nutrition_erasure_restore
+          ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY: nutrition_erasure_restore_local_only
+        run: pnpm --filter @nutrition-tracker/artifact-store test:integration
+
       - name: Apply and replay database migrations
         env:
           DATABASE_SSL_MODE: disable
@@ -146,6 +170,67 @@ jobs:
         env:
           TEST_DATABASE_URL: postgresql://nutrition_local:nutrition_local_only@127.0.0.1:5432/nutrition_tracker
         run: pnpm --filter @nutrition-tracker/api test
+
+      - name: Rehearse a complete PostgreSQL backup and isolated restore
+        env:
+          ERASURE_REPLAY_LEDGER_BUCKET: nutrition-erasure-ledger
+          ERASURE_REPLAY_LEDGER_CURRENT_KEY_ID: ci-erasure-ledger-v1
+          ERASURE_REPLAY_LEDGER_ENCRYPTION_KEYS: '{"ci-erasure-ledger-v1":"AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI="}'
+          ERASURE_REPLAY_LEDGER_ENDPOINT: http://127.0.0.1:9000
+          ERASURE_REPLAY_LEDGER_LOCATOR_CURRENT_KEY_ID: ci-erasure-locator-v1
+          ERASURE_REPLAY_LEDGER_LOCATOR_HMAC_KEYS: '{"ci-erasure-locator-v1":"AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM="}'
+          ERASURE_REPLAY_LEDGER_REGION: us-east-1
+          ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID: nutrition_erasure_restore
+          ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY: nutrition_erasure_restore_local_only
+          ERASURE_REPLAY_LEDGER_RESTORE_SPOOL_DIR: /dev/shm/nutrition-erasure-restore-ci
+        run: |
+          pnpm --filter @nutrition-tracker/worker... build
+          source_restore_epoch="$(openssl rand -hex 32)"
+          target_restore_epoch="$(openssl rand -hex 32)"
+          if [ "${source_restore_epoch}" = "${target_restore_epoch}" ]; then
+            echo "Restore epochs unexpectedly matched" >&2
+            exit 1
+          fi
+          export DATABASE_SSL_MODE=disable
+          export DATABASE_URL=postgresql://nutrition_local:nutrition_local_only@127.0.0.1:5432/nutrition_tracker
+          export DATABASE_RESTORE_EPOCH="${source_restore_epoch}"
+          pnpm --filter @nutrition-tracker/worker erasure:restore-replay
+          container_id="$(docker ps --filter publish=5432 --quiet)"
+          if [ -z "${container_id}" ] || [ "$(printf '%s\n' "${container_id}" | wc -l)" -ne 1 ]; then
+            echo "Expected exactly one PostgreSQL service container on port 5432" >&2
+            exit 1
+          fi
+          node scripts/postgres-restore-drill.mjs \
+            --container "${container_id}" \
+            --dump-directory /dev/shm \
+            --dump-protection tmpfs \
+            --source-db nutrition_tracker \
+            --target-db nutrition_restore_ci_retention \
+            --user nutrition_local
+          export DATABASE_URL=postgresql://nutrition_local:nutrition_local_only@127.0.0.1:5432/nutrition_restore_ci_retention
+          export DATABASE_RESTORE_EPOCH="${target_restore_epoch}"
+          if pnpm --filter @nutrition-tracker/worker database:readiness-probe; then
+            echo "Restored database became ready before erasure-ledger replay" >&2
+            exit 1
+          fi
+          pnpm --filter @nutrition-tracker/worker erasure:restore-replay
+          pnpm --filter @nutrition-tracker/worker database:readiness-probe
+          TEST_DATABASE_URL="${DATABASE_URL}" pnpm --filter @nutrition-tracker/api test
+
+      - name: Exercise live erasure-ledger replay and API/worker readiness
+        env:
+          ERASURE_REPLAY_LEDGER_BUCKET: nutrition-erasure-ledger
+          ERASURE_REPLAY_LEDGER_ENDPOINT: http://127.0.0.1:9000
+          ERASURE_REPLAY_LEDGER_REGION: us-east-1
+          ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID: nutrition_erasure_restore
+          ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY: nutrition_erasure_restore_local_only
+          ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID: nutrition_erasure_writer
+          ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY: nutrition_erasure_writer_local_only
+          RUN_RETENTION_RESTORE_INTEGRATION: "1"
+          TEST_DATABASE_URL: postgresql://nutrition_local:nutrition_local_only@127.0.0.1:5432/nutrition_tracker
+        run: |
+          pnpm --filter @nutrition-tracker/worker exec vitest run src/erasure-ledger-restore.integration.test.ts
+          pnpm --filter @nutrition-tracker/api exec vitest run test/restore-readiness.integration.test.ts
 
       - name: Exercise PostgreSQL-to-Meilisearch worker boundary
         env:

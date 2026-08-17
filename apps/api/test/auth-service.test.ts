@@ -8,10 +8,12 @@ import { account } from "./fixtures.js";
 
 function repositoryStub(overrides: Partial<AuthRepository> = {}): AuthRepository {
   return {
+    createReauthenticationProof: vi.fn(async () => undefined),
     register: vi.fn(async () => account),
     findPasswordCredential: vi.fn(async () => null),
     createSession: vi.fn(async () => undefined),
     findActiveSession: vi.fn(async () => account),
+    findPendingErasureRecoverySession: vi.fn(async () => null),
     revokeSession: vi.fn(async () => true),
     ...overrides,
   };

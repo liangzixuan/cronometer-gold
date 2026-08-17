@@ -6,7 +6,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import type { AuthService } from "../src/modules/auth/auth-service.js";
-import { DiaryNotFoundServiceError, type DiaryService } from "../src/modules/diary/diary.routes.js";
+import {
+  assertDiaryEntry,
+  DiaryNotFoundServiceError,
+  type DiaryService,
+} from "../src/modules/diary/diary.routes.js";
 import {
   account,
   bearerToken,
@@ -23,11 +27,15 @@ const testConfig = loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" });
 
 function authStub(): AuthService {
   return {
+    reauthenticate: vi.fn(),
     register: vi.fn(),
     login: vi.fn(),
     authenticate: vi.fn(async (header) =>
-      header === `Bearer ${bearerToken}` ? { userId, account } : null,
+      header === `Bearer ${bearerToken}`
+        ? { userId, account, sessionTokenHash: "a".repeat(64) }
+        : null,
     ),
+    authenticateErasureRecovery: vi.fn(async () => null),
     logout: vi.fn(),
   };
 }
@@ -86,7 +94,7 @@ describe("diary routes", () => {
     expect(service.getDay).toHaveBeenCalledWith(
       expect.objectContaining({ userId, localDate: "2026-08-15" }),
     );
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode, response.body).toBe(200);
     expect(response.headers.etag).toBe('"4"');
     expect(response.headers["cache-control"]).toBe("no-store");
     expect(response.json()).toEqual({ data: diaryDay });
@@ -184,8 +192,9 @@ describe("diary routes", () => {
 
   it("edits and serializes a pinned recipe entry through the ordinary diary route", async () => {
     const recipeVersionId = "d696b6c8-782a-4783-b459-af4698470cf0";
+    const { foodProvenance: _foodProvenance, ...diaryEntryWithoutFoodProvenance } = diaryEntry;
     const recipeEntry: DiaryRecipeEntry = {
-      ...diaryEntry,
+      ...diaryEntryWithoutFoodProvenance,
       entryKind: "recipe",
       foodVersionId: null,
       recipeVersionId,
@@ -220,6 +229,7 @@ describe("diary routes", () => {
     const responseBody = {
       data: { ...mutationResponse.data, entry: recipeEntry },
     };
+    expect(() => assertDiaryEntry(recipeEntry)).not.toThrow();
     const service = diaryStub({ updateEntry: vi.fn(async () => responseBody) });
     const response = await createTestApp(service).inject({
       method: "PATCH",
@@ -231,7 +241,7 @@ describe("diary routes", () => {
       },
       payload: { portion: { kind: "serving", amount: "1" } },
     });
-    expect(response.statusCode).toBe(200);
+    expect(response.statusCode, response.body).toBe(200);
     expect(response.json().data.entry).toEqual(recipeEntry);
     expect(service.updateEntry).toHaveBeenCalledWith(
       expect.objectContaining({

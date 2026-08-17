@@ -41,7 +41,7 @@ export async function startServer(
 ): Promise<RunningServer> {
   const config = loadConfig(environment);
   const dependencyConfig = loadApiDependencyConfig(environment);
-  const runtime = createApiSearchRuntime(environment, dependencyConfig);
+  const runtime = await createApiSearchRuntime(environment, dependencyConfig);
   let app: FastifyInstance;
   try {
     app = buildApp({
@@ -52,6 +52,7 @@ export async function startServer(
       goalService: runtime.goalService,
       profileService: runtime.profileService,
       recipeService: runtime.recipeService,
+      ...(runtime.retentionService ? { retentionService: runtime.retentionService } : {}),
       readinessCheck: runtime.readinessCheck,
     });
     app.addHook("onClose", async () => runtime.close());

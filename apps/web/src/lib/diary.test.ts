@@ -50,6 +50,17 @@ const entry = {
     attributionRequired: true,
     attributionText: "Data source: USDA FoodData Central",
   },
+  foodProvenance: {
+    kind: "public",
+    source: {
+      code: "USDA_FDC",
+      releaseId: "ea8c79b4-49b0-4548-8ae6-c1b228317f19",
+      displayName: "USDA FoodData Central",
+      licenseExpression: "CC0-1.0",
+      attributionRequired: true,
+      attributionText: "Data source: USDA FoodData Central",
+    },
+  },
   mealSlot: "breakfast",
   resolvedGrams: "182.000000",
   occurredAt: "2026-08-15T13:30:00.000Z",
@@ -60,8 +71,9 @@ const entry = {
   nutrients: [nutrient],
 } as const;
 
+const { foodProvenance: _publicFoodProvenance, ...entryWithoutFoodProvenance } = entry;
 const recipeEntry = {
-  ...entry,
+  ...entryWithoutFoodProvenance,
   id: "c8a7c76f-3c1d-445c-9160-152e57b29e40",
   entryKind: "recipe" as const,
   foodVersionId: null,
@@ -92,6 +104,19 @@ const recipeEntry = {
   },
   source: null,
   sources: [entry.source],
+} as const;
+
+const privateCustomEntry = {
+  ...entry,
+  id: "a8a7c76f-3c1d-445c-9160-152e57b29e41",
+  foodVersionId: "404",
+  source: null,
+  food: { name: "Owner oats", brandName: null },
+  foodProvenance: {
+    kind: "private_custom" as const,
+    customFoodId: "b8a7c76f-3c1d-445c-9160-152e57b29e42",
+    customFoodVersionNumber: 3,
+  },
 } as const;
 
 describe("web diary contract", () => {
@@ -131,6 +156,20 @@ describe("web diary contract", () => {
     expect(diary.entries[1]?.entryKind === "recipe" && diary.entries[1].recipe.name).toBe(
       "Bean stew",
     );
+  });
+
+  it("accepts owner-entered private food without fabricating a public source", () => {
+    const result = parseDiaryMutation({
+      data: {
+        replayed: true,
+        entry: privateCustomEntry,
+        affectedDays: [{ localDate: "2026-08-15", revision: "6" }],
+      },
+    });
+    expect(result.entry?.entryKind).toBe("food");
+    if (result.entry?.entryKind !== "food") throw new Error("Expected a food entry.");
+    expect(result.entry.foodProvenance).toEqual(privateCustomEntry.foodProvenance);
+    expect(result.entry.source).toBeNull();
   });
 
   it("preserves long exact subnormal nutrient amounts within the 160-character bound", () => {

@@ -15,6 +15,7 @@ import {
   isPositiveDecimal,
   localDateInTimeZone,
   localDateTimeToInstant,
+  localTimeInTimeZone,
   type MealSlot,
   mealLabel,
   mealSlots,
@@ -306,6 +307,59 @@ export function DiaryClient() {
     }
   }
 
+  async function repeatEntry(entry: DiaryEntry) {
+    if (!session) {
+      setMessage("Your profile time zone is required before repeating an entry.");
+      return;
+    }
+    const now = new Date();
+    const targetDate = localDateInTimeZone(now, session.profile.timeZone);
+    const targetTime = localTimeInTimeZone(now, session.profile.timeZone).slice(0, 5);
+    const body = {
+      occurredAt: localDateTimeToInstant(targetDate, targetTime, session.profile.timeZone),
+      mealSlot: entry.mealSlot,
+    };
+    const key = `repeat:${entry.id}:${entry.revision}:${JSON.stringify(body)}`;
+    setMutationBusy(entry.id);
+    setMessage(`Repeating the pinned ${entryName(entry)} version…`);
+    try {
+      const response = await fetch(`/api/diary/entries/${encodeURIComponent(entry.id)}/repeat`, {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "idempotency-key": operationId(key),
+          "if-match": quoteRevision(entry.revision),
+        },
+        body: JSON.stringify(body),
+        cache: "no-store",
+      });
+      if (response.status === 401) return signInAgain();
+      const responseBody = await json(response);
+      if (response.status === 412) {
+        operationIds.current.delete(key);
+        await loadDiary(date);
+        setMessage("The source entry changed. Fresh details were loaded; review before repeating.");
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(responseError(responseBody, "The entry could not be repeated."));
+      }
+      const mutation = parseDiaryMutation(responseBody);
+      operationIds.current.delete(key);
+      const repeatedDate = mutation.entry?.localDate ?? targetDate;
+      if (repeatedDate === date) await loadDiary(date);
+      else setDate(repeatedDate);
+      setMessage("Pinned entry version repeated with fresh authoritative totals.");
+    } catch (error) {
+      setMessage(
+        `${error instanceof Error ? error.message : "The entry could not be repeated."} Choose Repeat again to retry the same operation safely.`,
+      );
+    } finally {
+      setMutationBusy(null);
+    }
+  }
+
   async function signOut() {
     setMutationBusy("logout");
     const confirmed = await confirmBrowserLogout(
@@ -331,7 +385,7 @@ export function DiaryClient() {
           <Link href={`/foods?date=${date}`}>Foods</Link>
           <Link href={`/recipes?date=${date}`}>Recipes</Link>
           <Link href={`/goals?date=${date}`}>Goals</Link>
-          <span aria-disabled="true">Trends · soon</span>
+          <Link href="/health">Health & privacy</Link>
         </nav>
         {session ? <p className="accountIdentity">Signed in as {session.user.email}</p> : null}
         <button
@@ -536,10 +590,9 @@ export function DiaryClient() {
                                   ) : null}
                                   {entry.entryKind === "food" ? (
                                     <small>
-                                      {entry.source.attributionRequired
-                                        ? entry.source.attributionText
-                                        : entry.source.displayName}{" "}
-                                      · {entry.source.licenseExpression}
+                                      {entry.foodProvenance.kind === "private_custom"
+                                        ? `Owner-entered private food · pinned version ${entry.foodProvenance.customFoodVersionNumber}`
+                                        : `${entry.foodProvenance.source.attributionRequired ? entry.foodProvenance.source.attributionText : entry.foodProvenance.source.displayName} · ${entry.foodProvenance.source.licenseExpression}`}
                                     </small>
                                   ) : (
                                     <div className="entryProvenance">
@@ -567,6 +620,13 @@ export function DiaryClient() {
                                     type="button"
                                   >
                                     Edit
+                                  </button>
+                                  <button
+                                    disabled={mutationBusy === entry.id}
+                                    onClick={() => void repeatEntry(entry)}
+                                    type="button"
+                                  >
+                                    {mutationBusy === entry.id ? "Working…" : "Repeat today"}
                                   </button>
                                   <button
                                     className="dangerAction"

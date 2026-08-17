@@ -28,6 +28,7 @@ import {
   type createDatabaseFromEnvironment,
   createFoodDiaryEntry,
   createNutritionGoal,
+  createReauthenticationProof,
   createRecipe,
   createRecipeDiaryEntry,
   createSession,
@@ -45,6 +46,7 @@ import {
   deleteDiaryEntry,
   findActiveSessionByTokenHash,
   findPasswordCredentialByEmail,
+  findPendingErasureRecoverySessionByTokenHash,
   type GoalNutrientDefinitionRecord,
   getCurrentNutritionGoal,
   getDiaryDay,
@@ -227,8 +229,37 @@ export class DatabaseAuthRepository implements AuthRepository {
     return session ? account(session.profile) : null;
   }
 
+  async findPendingErasureRecoverySession(
+    tokenHash: string,
+    now: Date,
+  ): Promise<Awaited<ReturnType<AuthRepository["findPendingErasureRecoverySession"]>>> {
+    const session = await findPendingErasureRecoverySessionByTokenHash(this.#database, {
+      now,
+      tokenHash,
+    });
+    return session
+      ? {
+          account: account(session.profile),
+          erasureJobId: session.erasureJobId,
+          executeAfter: session.executeAfter,
+        }
+      : null;
+  }
+
   async revokeSession(input: Parameters<AuthRepository["revokeSession"]>[0]): Promise<boolean> {
     return revokeSession(this.#database, input);
+  }
+
+  async createReauthenticationProof(
+    input: Parameters<AuthRepository["createReauthenticationProof"]>[0],
+  ): Promise<void> {
+    await createReauthenticationProof(this.#database, {
+      expiresAt: input.expiresAt.toISOString(),
+      purpose: input.purpose,
+      sessionTokenHash: input.sessionTokenHash,
+      tokenHash: input.tokenHash,
+      userId: input.userId,
+    });
   }
 }
 
@@ -338,7 +369,7 @@ function foodPortion(record: DiaryFoodEntryRecord): DiaryEntryPortion {
 }
 
 function foodEntry(record: DiaryFoodEntryRecord): DiaryEntry {
-  return {
+  const common = {
     entryKind: "food",
     food: { brandName: record.food.brandName, name: record.food.name },
     foodVersionId: record.food.foodVersionId,
@@ -354,16 +385,44 @@ function foodEntry(record: DiaryFoodEntryRecord): DiaryEntry {
     revision: record.currentRevision,
     recipe: null,
     recipeVersionId: null,
-    source: {
-      attributionRequired: record.source.attributionRequired,
-      attributionText: record.source.attributionText,
-      code: record.source.code,
-      displayName: record.source.displayName,
-      licenseExpression: record.source.licenseExpression,
-      releaseId: record.source.releaseId,
-    },
     timeZone: record.timeZone,
+  } as const;
+  if (record.foodProvenance.kind === "private_custom") {
+    if (
+      record.source !== null ||
+      record.food.customFoodId !== record.foodProvenance.customFoodId ||
+      record.food.customFoodVersionNumber !== record.foodProvenance.versionNumber ||
+      !Number.isSafeInteger(record.foodProvenance.versionNumber) ||
+      record.foodProvenance.versionNumber < 1
+    ) {
+      throw new TypeError("Private custom-food diary provenance is inconsistent");
+    }
+    return {
+      ...common,
+      source: null,
+      foodProvenance: {
+        customFoodId: record.foodProvenance.customFoodId,
+        customFoodVersionNumber: record.foodProvenance.versionNumber,
+        kind: "private_custom",
+      },
+    };
+  }
+  if (
+    record.source === null ||
+    record.food.customFoodId !== null ||
+    record.food.customFoodVersionNumber !== null
+  ) {
+    throw new TypeError("Public food diary provenance is inconsistent");
+  }
+  const source = {
+    attributionRequired: record.source.attributionRequired,
+    attributionText: record.source.attributionText,
+    code: record.source.code,
+    displayName: record.source.displayName,
+    licenseExpression: record.source.licenseExpression,
+    releaseId: record.source.releaseId,
   };
+  return { ...common, source, foodProvenance: { kind: "public", source } };
 }
 
 function isJsonRecord(value: unknown): value is JsonObject {
@@ -639,7 +698,7 @@ function recipeIngredient(
           : (() => {
               throw new TypeError("Recipe food ingredient serving snapshot is incomplete");
             })();
-    return {
+    const common = {
       kind: "food",
       position: record.position,
       foodVersionId: record.food.foodVersionId,
@@ -648,8 +707,42 @@ function recipeIngredient(
       portion,
       resolvedGrams: record.portion.resolvedGrams,
       note: record.note,
-      source: recipeSource(record.source),
-    };
+    } as const;
+    if (record.foodProvenance.kind === "private_custom") {
+      if (record.source !== null) {
+        throw new TypeError("Private custom recipe food must not contain public provenance");
+      }
+      const customFoodVersionNumber = Number(record.foodProvenance.customFoodVersionNumber);
+      if (!Number.isSafeInteger(customFoodVersionNumber) || customFoodVersionNumber < 1) {
+        throw new TypeError("Private custom recipe food version is invalid");
+      }
+      return {
+        ...common,
+        source: null,
+        foodProvenance: {
+          kind: "private_custom",
+          customFoodId: record.foodProvenance.customFoodId,
+          customFoodVersionNumber,
+        },
+      };
+    }
+    if (record.source === null) {
+      throw new TypeError("Public recipe food provenance is incomplete");
+    }
+    const source = recipeSource(record.source);
+    const provenanceSource = recipeSource(record.foodProvenance.source);
+    if (
+      record.source.foodSourceId !== record.foodProvenance.source.foodSourceId ||
+      source.code !== provenanceSource.code ||
+      source.releaseId !== provenanceSource.releaseId ||
+      source.displayName !== provenanceSource.displayName ||
+      source.licenseExpression !== provenanceSource.licenseExpression ||
+      source.attributionRequired !== provenanceSource.attributionRequired ||
+      source.attributionText !== provenanceSource.attributionText
+    ) {
+      throw new TypeError("Public recipe food provenance is inconsistent");
+    }
+    return { ...common, source, foodProvenance: { kind: "public", source } };
   }
   const nested = record.recipe;
   const versionNumber = Number(nested.versionNumber);

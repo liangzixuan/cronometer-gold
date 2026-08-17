@@ -11,7 +11,7 @@ import { sql, type Transaction } from "kysely";
 import { describe, expect, it } from "vitest";
 
 import {
-  assertDatabaseReady,
+  assertDatabaseMigrationLedgerReady,
   createDatabase,
   createFoodDiaryEntry,
   createNutritionGoal,
@@ -1196,14 +1196,14 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
           .where("client_operation_id", "=", firstGoalOperationId)
           .executeTakeFirst(),
       ).rejects.toMatchObject({ code: "55000" });
-      await assertDatabaseReady(fixture.database);
+      await assertDatabaseMigrationLedgerReady(fixture.database);
       const removedLedger = await sql<{ checksum: string }>`
         delete from app_schema_migration
         where name = '0005_recipes_and_goals.sql'
         returning checksum
       `.execute(fixture.database);
       expect(removedLedger.rows).toHaveLength(1);
-      await expect(assertDatabaseReady(fixture.database)).rejects.toThrow(
+      await expect(assertDatabaseMigrationLedgerReady(fixture.database)).rejects.toThrow(
         "Database schema migration ledger is not current",
       );
       const checksum = removedLedger.rows[0]?.checksum;
@@ -1217,7 +1217,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
         set checksum = ${"0".repeat(64)}
         where name = '0005_recipes_and_goals.sql'
       `.execute(fixture.database);
-      await expect(assertDatabaseReady(fixture.database)).rejects.toThrow(
+      await expect(assertDatabaseMigrationLedgerReady(fixture.database)).rejects.toThrow(
         "Database schema migration ledger is not current",
       );
       await sql`
@@ -1225,7 +1225,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
         set checksum = ${checksum}
         where name = '0005_recipes_and_goals.sql'
       `.execute(fixture.database);
-      await assertDatabaseReady(fixture.database);
+      await assertDatabaseMigrationLedgerReady(fixture.database);
       expect(
         (
           await fixture.database

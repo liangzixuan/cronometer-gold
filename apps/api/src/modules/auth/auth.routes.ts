@@ -4,7 +4,11 @@ import {
   type CurrentAccountResponse,
   currentAccountResponseSchema,
   problemDetailsSchema,
+  type ReauthenticationRequest,
+  type ReauthenticationResponse,
   type RegisterAccountRequest,
+  reauthenticationRequestSchema,
+  reauthenticationResponseSchema,
   registerAccountRequestSchema,
   type SessionCreatedResponse,
   sessionCreatedResponseSchema,
@@ -135,6 +139,44 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (app, opt
       if (!options.authService) throw unavailable();
       try {
         const result = await options.authService.login(request.body.email, request.body.password);
+        reply.header("cache-control", "no-store");
+        return result;
+      } catch (error) {
+        throw mapAuthError(error);
+      }
+    },
+  );
+
+  app.post<{ Body: ReauthenticationRequest }>(
+    "/reauthenticate",
+    {
+      preHandler: requireAuth,
+      preValidation: [
+        rejectUnexpectedQueryKeys([]),
+        rejectUnexpectedBodyKeys(["password", "purpose"]),
+      ],
+      schema: {
+        body: reauthenticationRequestSchema,
+        response: {
+          200: reauthenticationResponseSchema,
+          400: problemDetailsSchema,
+          401: problemDetailsSchema,
+          429: problemDetailsSchema,
+          503: problemDetailsSchema,
+        },
+      },
+    },
+    async (request, reply): Promise<ReauthenticationResponse> => {
+      const principal = authenticatedPrincipal(request);
+      if (!options.authService) throw unavailable();
+      try {
+        const result = await options.authService.reauthenticate(
+          principal.userId,
+          principal.sessionTokenHash,
+          principal.account.user.email,
+          request.body.password,
+          request.body.purpose,
+        );
         reply.header("cache-control", "no-store");
         return result;
       } catch (error) {

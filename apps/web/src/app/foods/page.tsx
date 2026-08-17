@@ -18,7 +18,7 @@ export default function FoodsPage() {
           </Link>
           <Link href="/recipes">Recipes</Link>
           <Link href="/goals">Goals</Link>
-          <span aria-disabled="true">Trends · soon</span>
+          <Link href="/health">Health & privacy</Link>
         </nav>
         <p className="wellnessNote">Wellness information only—not medical advice.</p>
       </aside>

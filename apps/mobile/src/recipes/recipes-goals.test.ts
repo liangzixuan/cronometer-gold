@@ -74,8 +74,11 @@ describe("mobile recipe mutation safety", () => {
 
   it("round-trips a multi-serving ingredient note without inventing per-serving grams", () => {
     const source = {
+      code: "USDA_FDC",
+      releaseId: "eb8a4152-001f-4722-8bf1-8728ef8c14f8",
       displayName: "USDA",
       licenseExpression: "CC0-1.0",
+      attributionRequired: true,
       attributionText: "USDA data",
     };
     const ingredients = recipeDraftIngredients({
@@ -92,6 +95,7 @@ describe("mobile recipe mutation safety", () => {
           quantityText: "2",
           resolvedGrams: "80",
           source,
+          foodProvenance: { kind: "public", source },
           note: "toasted",
           coverage: "complete",
         },

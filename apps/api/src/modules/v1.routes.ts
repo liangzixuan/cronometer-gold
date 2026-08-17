@@ -10,6 +10,7 @@ import {
 } from "./goals/goal.routes.js";
 import { type ProfileRoutesOptions, profileRoutes } from "./profile/profile.routes.js";
 import { type RecipeRoutesOptions, recipeRoutes } from "./recipes/recipe.routes.js";
+import { type RetentionRoutesOptions, retentionRoutes } from "./retention/retention.routes.js";
 
 export interface V1RoutesOptions
   extends FoodRoutesOptions,
@@ -17,7 +18,8 @@ export interface V1RoutesOptions
     ProfileRoutesOptions,
     DiaryRoutesOptions,
     RecipeRoutesOptions,
-    GoalRoutesOptions {}
+    GoalRoutesOptions,
+    RetentionRoutesOptions {}
 
 const versionResponseSchema = {
   type: "object",
@@ -82,5 +84,10 @@ export const v1Routes: FastifyPluginAsync<V1RoutesOptions> = async (app, options
     prefix: "/nutrients",
     ...(options.authService ? { authService: options.authService } : {}),
     ...(options.goalService ? { goalService: options.goalService } : {}),
+  });
+  void app.register(retentionRoutes, {
+    ...(options.authService ? { authService: options.authService } : {}),
+    ...(options.retentionService ? { retentionService: options.retentionService } : {}),
+    ...(options.clock ? { clock: options.clock } : {}),
   });
 };

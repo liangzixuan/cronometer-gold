@@ -21,6 +21,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@nutrition-tracker/artifact-store": "workspace:*",
     "@nutrition-tracker/contracts": "workspace:*",
     "@nutrition-tracker/db": "workspace:*",
     "@nutrition-tracker/domain": "workspace:*",

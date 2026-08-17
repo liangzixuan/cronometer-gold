@@ -97,7 +97,7 @@ export function draftFromRecipe(recipe: RecipeView): BuilderState {
           note: ingredient.note,
         };
       }
-      if (!ingredient.foodVersionId || !ingredient.source) {
+      if (!ingredient.foodVersionId || !ingredient.foodProvenance) {
         throw new TypeError("Food ingredient provenance is missing.");
       }
       return {
@@ -116,6 +116,7 @@ export function draftFromRecipe(recipe: RecipeView): BuilderState {
               }
             : ingredient.portion,
         source: ingredient.source,
+        foodProvenance: ingredient.foodProvenance,
         note: ingredient.note,
       };
     }),
@@ -162,6 +163,17 @@ function ingredientRequest(ingredient: RecipeIngredientDraft, position: number) 
   };
 }
 
+function foodIngredientAttribution(
+  ingredient: Extract<RecipeIngredientDraft, { readonly kind: "food" }>,
+): string {
+  if (ingredient.foodProvenance.kind === "private_custom") {
+    return `Owner-entered private custom food · pinned version ${ingredient.foodProvenance.customFoodVersionNumber}`;
+  }
+  return ingredient.source
+    ? `${ingredient.source.attributionText} · ${ingredient.source.licenseExpression}`
+    : "Public source metadata unavailable";
+}
+
 function foodSource(food: FoodSearchHit) {
   return {
     displayName: food.source.displayName,
@@ -194,6 +206,7 @@ export function foodDraftIngredient(
           }
         : { kind: "grams", grams: "100" },
     source: foodSource(food),
+    foodProvenance: { kind: "public", source: foodSource(food) },
     note: null,
   };
 }
@@ -566,7 +579,7 @@ export function RecipesClient() {
             Recipes
           </Link>
           <Link href={`/goals?date=${date}`}>Goals</Link>
-          <span aria-disabled="true">Trends · soon</span>
+          <Link href="/health">Health & privacy</Link>
         </nav>
         <p className="wellnessNote">Wellness information only—not medical advice.</p>
       </aside>
@@ -744,7 +757,7 @@ export function RecipesClient() {
                           <p className="sourceLine">
                             {ingredient.kind === "recipe"
                               ? `Pinned recipe revision ${ingredient.recipeVersionId}`
-                              : `${ingredient.source.attributionText} · ${ingredient.source.licenseExpression}`}
+                              : foodIngredientAttribution(ingredient)}
                           </p>
                           <label className="formField">
                             <span className="srOnly">{ingredient.name} note</span>

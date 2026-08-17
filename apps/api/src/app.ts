@@ -17,6 +17,7 @@ import type { FoodSearchService } from "./modules/foods/food.routes.js";
 import type { GoalService } from "./modules/goals/goal.routes.js";
 import type { ProfileService } from "./modules/profile/profile.routes.js";
 import type { RecipeService } from "./modules/recipes/recipe.routes.js";
+import type { RetentionService } from "./modules/retention/retention.routes.js";
 import { type ReadinessCheck, systemRoutes } from "./modules/system/system.routes.js";
 import { v1Routes } from "./modules/v1.routes.js";
 
@@ -30,6 +31,8 @@ export interface BuildAppOptions {
   diaryService?: DiaryService;
   recipeService?: RecipeService;
   goalService?: GoalService;
+  retentionService?: RetentionService;
+  retentionClock?: () => Date;
 }
 
 const defaultReadinessCheck: ReadinessCheck = (_signal) => true;
@@ -92,6 +95,8 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     ...(options.diaryService ? { diaryService: options.diaryService } : {}),
     ...(options.recipeService ? { recipeService: options.recipeService } : {}),
     ...(options.goalService ? { goalService: options.goalService } : {}),
+    ...(options.retentionService ? { retentionService: options.retentionService } : {}),
+    ...(options.retentionClock ? { clock: options.retentionClock } : {}),
   });
 
   return app;

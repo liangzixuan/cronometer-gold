@@ -77,16 +77,35 @@ interface DiaryEntryCommon {
   readonly nutrients: readonly DiaryNutrientAggregate[];
 }
 
-export interface DiaryFoodEntry extends DiaryEntryCommon {
+interface DiaryFoodEntryCommon extends DiaryEntryCommon {
   readonly entryKind: "food";
   readonly foodVersionId: string;
   readonly recipeVersionId: null;
   readonly portion: DiaryEntryPortion;
   readonly food: { readonly name: string; readonly brandName: string | null };
   readonly recipe: null;
+}
+
+export interface DiaryPublicFoodEntry extends DiaryFoodEntryCommon {
   /** Immutable source/release and reviewed attribution captured when this revision was logged. */
   readonly source: DiaryFoodSourceSnapshot;
+  readonly foodProvenance: {
+    readonly kind: "public";
+    readonly source: DiaryFoodSourceSnapshot;
+  };
 }
+
+export interface DiaryPrivateCustomFoodEntry extends DiaryFoodEntryCommon {
+  /** Private foods never fabricate public licensing provenance. */
+  readonly source: null;
+  readonly foodProvenance: {
+    readonly kind: "private_custom";
+    readonly customFoodId: string;
+    readonly customFoodVersionNumber: number;
+  };
+}
+
+export type DiaryFoodEntry = DiaryPublicFoodEntry | DiaryPrivateCustomFoodEntry;
 
 export interface DiaryRecipeEntry extends DiaryEntryCommon {
   readonly entryKind: "recipe";
@@ -369,11 +388,32 @@ const foodSourceSnapshotSchema = {
   },
 } as const;
 
+const publicFoodProvenanceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["kind", "source"],
+  properties: {
+    kind: { type: "string", const: "public" },
+    source: foodSourceSnapshotSchema,
+  },
+} as const;
+
+const privateCustomFoodProvenanceSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["kind", "customFoodId", "customFoodVersionNumber"],
+  properties: {
+    kind: { type: "string", const: "private_custom" },
+    customFoodId: uuidSchema,
+    customFoodVersionNumber: { type: "integer", minimum: 1 },
+  },
+} as const;
+
 export const diaryFoodEntrySchema = {
   $id: "DiaryFoodEntry",
   type: "object",
   additionalProperties: false,
-  required: diaryEntryCommonRequired,
+  required: [...diaryEntryCommonRequired, "foodProvenance"],
   properties: {
     ...diaryEntryCommonProperties,
     entryKind: { type: "string", const: "food" },
@@ -392,7 +432,10 @@ export const diaryFoodEntrySchema = {
       },
     },
     recipe: { type: "null" },
-    source: foodSourceSnapshotSchema,
+    source: { anyOf: [foodSourceSnapshotSchema, { type: "null" }] },
+    foodProvenance: {
+      oneOf: [publicFoodProvenanceSchema, privateCustomFoodProvenanceSchema],
+    },
   },
 } as const;
 

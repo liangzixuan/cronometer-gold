@@ -508,6 +508,8 @@ export interface RecipeIngredientTable {
   attribution_required: boolean | null;
   attribution_text: string | null;
   serving_label: string | null;
+  custom_food_id: string | null;
+  custom_food_version_number: number | null;
   nested_recipe_id: string | null;
   nested_recipe_name: string | null;
   nested_recipe_version_number: number | null;
@@ -592,6 +594,9 @@ export interface DiaryEntryTable {
   deleted_at: NullableTimestamp;
   current_revision_id: string;
   current_revision_number: Int8;
+  custom_food_id: string | null;
+  custom_food_version_number: number | null;
+  repeated_from_revision_id: string | null;
 }
 
 export interface DiaryEntryRevisionTable {
@@ -642,6 +647,9 @@ export interface DiaryEntryRevisionTable {
   snapshot_engine_version: string;
   nutrient_component_count: number;
   created_at: CreatedTimestamp;
+  custom_food_id: OptionalImmutable<string | null>;
+  custom_food_version_number: OptionalImmutable<number | null>;
+  repeated_from_revision_id: OptionalImmutable<string | null>;
 }
 
 export interface DiaryEntryRevisionSourceTable {
@@ -811,9 +819,570 @@ export interface FoodSearchProjectionRevisionTable {
   updated_at: UpdatedTimestamp;
 }
 
+export interface UserDataWatermarkTable {
+  user_id: string;
+  revision: DefaultInt8;
+  updated_at: UpdatedTimestamp;
+}
+
+export interface RetentionOperationTable {
+  user_id: string;
+  client_operation_id: string;
+  request_digest: string;
+  feature:
+    | "biometric"
+    | "consent"
+    | "custom_food"
+    | "device"
+    | "erasure"
+    | "export"
+    | "import"
+    | "integration"
+    | "reauth"
+    | "reminder";
+  operation: string;
+  entity_id: string;
+  result_payload: ImmutableJson;
+  created_at: CreatedTimestamp;
+}
+
+export interface CustomFoodTable {
+  id: UuidId;
+  user_id: string;
+  food_id: Int8;
+  current_food_version_id: Int8;
+  current_revision: DefaultInt8;
+  status: DefaultValue<"active" | "archived">;
+  created_at: CreatedTimestamp;
+  updated_at: UpdatedTimestamp;
+  archived_at: NullableTimestamp;
+}
+
+export interface CustomFoodOperationTable {
+  user_id: string;
+  client_operation_id: string;
+  request_digest: string;
+  operation: "archive" | "create" | "revise";
+  custom_food_id: string;
+  result_payload: ImmutableJson;
+  created_at: CreatedTimestamp;
+}
+export interface CustomFoodVersionTable {
+  custom_food_id: string;
+  food_version_id: Int8;
+  version_number: Int8;
+  created_at: CreatedTimestamp;
+}
+export interface CustomFoodVersionNutrientTable {
+  custom_food_id: string;
+  food_version_id: Int8;
+  nutrient_id: Int8;
+  nutrient_code: string;
+  nutrient_name: string;
+  unit: string;
+  value_state: "quantified" | "trace" | "unknown";
+  amount_per_100_grams: NullableNumeric;
+  unknown_reason: "not_analyzed" | "not_applicable" | "not_reported" | "withheld" | null;
+  provenance_statement: string;
+  created_at: CreatedTimestamp;
+}
+
+export interface BiometricDefinitionTable {
+  id: UuidId;
+  user_id: string;
+  current_version_id: string;
+  current_revision: DefaultInt8;
+  status: DefaultValue<"active" | "archived">;
+  created_at: CreatedTimestamp;
+  updated_at: UpdatedTimestamp;
+  archived_at: NullableTimestamp;
+}
+
+export interface BiometricDefinitionVersionTable {
+  id: UuidId;
+  definition_id: string;
+  user_id: string;
+  version_number: Int8;
+  code: string;
+  name: string;
+  canonical_unit: string;
+  dimension: "count" | "duration" | "length" | "mass" | "other" | "temperature";
+  minimum_value: NullableNumeric;
+  maximum_value: NullableNumeric;
+  metadata: ImmutableJson;
+  created_at: CreatedTimestamp;
+}
+
+export interface BiometricDefinitionOperationTable {
+  user_id: string;
+  client_operation_id: string;
+  request_digest: string;
+  operation: "archive" | "create" | "revise";
+  definition_id: string;
+  result_payload: ImmutableJson;
+  created_at: CreatedTimestamp;
+}
+
+export interface BiometricEventTable {
+  id: UuidId;
+  user_id: string;
+  current_revision_id: string;
+  current_revision: DefaultInt8;
+  created_at: CreatedTimestamp;
+  updated_at: UpdatedTimestamp;
+  deleted_at: NullableTimestamp;
+}
+
+export interface BiometricEventRevisionTable {
+  id: UuidId;
+  event_id: string;
+  user_id: string;
+  revision_number: Int8;
+  operation: "create" | "delete" | "update";
+  definition_version_id: string;
+  value: Numeric;
+  canonical_unit: string;
+  measured_at: Timestamp;
+  local_date: DateOnly;
+  local_time: string;
+  time_zone: string;
+  source_kind: "device" | "manual" | "platform";
+  source_device_id: string | null;
+  provider: string | null;
+  external_source_id: string | null;
+  external_revision: string | null;
+  raw_digest: string | null;
+  provenance: ImmutableJson;
+  note: string | null;
+  created_at: CreatedTimestamp;
+}
+
+export interface BiometricEventOperationTable {
+  user_id: string;
+  client_operation_id: string;
+  request_digest: string;
+  operation: "create" | "delete" | "update";
+  event_id: string;
+  result_payload: ImmutableJson;
+  created_at: CreatedTimestamp;
+}
+
+export interface ReminderConsentTable {
+  id: UuidId;
+  user_id: string;
+  current_version_id: string;
+  current_revision: DefaultInt8;
+  status: "granted" | "revoked";
+  created_at: CreatedTimestamp;
+  updated_at: UpdatedTimestamp;
+}
+
+export interface ReminderConsentVersionTable {
+  id: UuidId;
+  consent_id: string;
+  user_id: string;
+  version_number: Int8;
+  status: "granted" | "revoked";
+  policy_version: string;
+  reason: string | null;
+  occurred_at: Timestamp;
+  created_at: CreatedTimestamp;
+}
+
+export interface ReminderScheduleTable {
+  id: UuidId;
+  user_id: string;
+  current_version_id: string;
+  current_revision: DefaultInt8;
+  status: DefaultValue<"active" | "paused" | "revoked">;
+  next_delivery_at: NullableTimestamp;
+  created_at: CreatedTimestamp;
+  updated_at: UpdatedTimestamp;
+  revoked_at: NullableTimestamp;
+}
+
+export interface ReminderScheduleVersionTable {
+  id: UuidId;
+  schedule_id: string;
+  user_id: string;
+  version_number: Int8;
+  schedule_status: "active" | "paused" | "revoked";
+  consent_version_id: string;
+  label: string;
+  channel: "local";
+  time_zone: string;
+  local_time: string;
+  days_of_week: number[];
+  dst_policy: "earliest_offset_skip_gap";
+  notification_title: string;
+  notification_body: string;
+  initial_delivery_at: NullableTimestamp;
+  created_at: CreatedTimestamp;
+}
+
+export interface DeviceRegistrationTable {
+  id: UuidId;
+  user_id: string;
+  revision: DefaultInt8;
+  platform: "android_health_connect" | "apple_healthkit";
+  display_name: string;
+  public_key_spki_base64: string;
+  key_fingerprint: string;
+  key_algorithm: "ES256";
+  proof_signature_digest: string;
+  attestation_status: "not_provided" | "unverified" | "verified";
+  attestation_metadata: DefaultJson;
+  created_at: CreatedTimestamp;
+  updated_at: UpdatedTimestamp;
+  revoked_at: NullableTimestamp;
+}
+
+export interface ReauthenticationProofTable {
+  id: UuidId;
+  user_id: string;
+  session_token_hash: string;
+  purpose: "account_erasure" | "account_export";
+  token_hash: string;
+  expires_at: Timestamp;
+  created_at: CreatedTimestamp;
+  consumed_at: NullableTimestamp;
+  consumed_client_operation_id: string | null;
+  revoked_at: NullableTimestamp;
+}
+
+export interface PlatformIntegrationTable {
+  id: UuidId;
+  user_id: string;
+  device_id: string;
+  platform: "android_health_connect" | "apple_healthkit";
+  current_version_id: string;
+  current_revision: DefaultInt8;
+  status: "connected" | "disconnected";
+  data_type_codes: string[];
+  cursor_epoch: DefaultInt8;
+  current_source_cursor: string | null;
+  consent_granted_at: Timestamp;
+  disconnected_at: NullableTimestamp;
+  last_import_at: NullableTimestamp;
+  created_at: CreatedTimestamp;
+  updated_at: UpdatedTimestamp;
+}
+export interface PlatformIntegrationVersionTable {
+  id: UuidId;
+  integration_id: string;
+  user_id: string;
+  device_id: string;
+  version_number: Int8;
+  status: "connected" | "disconnected";
+  data_type_codes: string[];
+  recorded_at: Timestamp;
+  disconnect_disposition: "delete" | "retain" | null;
+  created_at: CreatedTimestamp;
+}
+export interface PlatformImportBatchTable {
+  id: UuidId;
+  integration_id: string;
+  user_id: string;
+  device_id: string;
+  batch_id: string;
+  cursor_epoch: Int8;
+  source_cursor: string | null;
+  next_source_cursor: string;
+  batch_digest: string;
+  request_digest: string;
+  signature_digest: string;
+  nonce_hash: string;
+  signed_at: Timestamp;
+  record_count: number;
+  result_payload: ImmutableJson;
+  applied_at: CreatedTimestamp;
+}
+
+export interface SecurityChallengeTable {
+  id: UuidId;
+  user_id: string;
+  device_id: string | null;
+  purpose: "device_registration";
+  platform: "android_health_connect" | "apple_healthkit";
+  nonce_hash: string;
+  expires_at: Timestamp;
+  created_at: CreatedTimestamp;
+  consumed_at: NullableTimestamp;
+  revoked_at: NullableTimestamp;
+  proof_signature_digest: string | null;
+}
+
+export interface ReminderDeliveryOutboxTable {
+  id: UuidId;
+  user_id: string;
+  schedule_id: string;
+  schedule_version_id: string;
+  device_id: string | null;
+  scheduled_for: Timestamp;
+  status: DefaultValue<"cancelled" | "failed" | "pending" | "processing" | "succeeded">;
+  notification_title: string;
+  notification_body: string;
+  attempt_count: DefaultInteger;
+  dead_lettered_at: NullableTimestamp;
+  available_at: DefaultTimestamp;
+  locked_at: NullableTimestamp;
+  locked_by: string | null;
+  delivered_at: NullableTimestamp;
+  last_error_code: string | null;
+  created_at: CreatedTimestamp;
+}
+
+export interface PlatformHealthImportTable {
+  id: UuidId;
+  user_id: string;
+  integration_id: string;
+  device_id: string | null;
+  provider: string;
+  external_source_id: string;
+  current_revision_id: string;
+  current_revision: DefaultInt8;
+  state: "active" | "conflict" | "deleted";
+  current_event_id: string | null;
+  created_at: CreatedTimestamp;
+  updated_at: UpdatedTimestamp;
+}
+
+export interface PlatformHealthImportRevisionTable {
+  id: UuidId;
+  import_id: string;
+  user_id: string;
+  revision_number: Int8;
+  operation: "delete" | "upsert";
+  provider_revision: string;
+  provider_modified_at: Timestamp;
+  raw_digest: string;
+  definition_version_id: string | null;
+  measured_at: NullableTimestamp;
+  canonical_value: NullableNumeric;
+  canonical_unit: string | null;
+  biometric_event_revision_id: string | null;
+  provenance: ImmutableJson;
+  received_at: CreatedTimestamp;
+}
+
+export interface PlatformHealthImportConflictTable {
+  id: UuidId;
+  import_id: string;
+  user_id: string;
+  provider_revision: string;
+  provider_modified_at: Timestamp;
+  existing_raw_digest: string;
+  attempted_raw_digest: string;
+  evidence: ImmutableJson;
+  detected_at: CreatedTimestamp;
+}
+
+export interface PrivacyExportJobTable {
+  id: UuidId;
+  user_id: string;
+  client_operation_id: string;
+  request_digest: string;
+  requested_formats: DefaultValue<string[]>;
+  status: DefaultValue<"completed" | "failed" | "queued" | "running">;
+  started_at: NullableTimestamp;
+  expires_at: NullableTimestamp;
+  failure_code: string | null;
+  available_at: DefaultTimestamp;
+  locked_at: NullableTimestamp;
+  locked_by: string | null;
+  attempt_count: DefaultInteger;
+  dead_lettered_at: NullableTimestamp;
+  watermark_revision: NullableInt8;
+  snapshot_id: string | null;
+  snapshot_bytes: NullableInt8;
+  manifest_digest: string | null;
+  entity_count: NullableInt8;
+  semantic_reconciliation_digest: string | null;
+  reconciliation: JsonObject | null;
+  created_at: CreatedTimestamp;
+  updated_at: UpdatedTimestamp;
+  completed_at: NullableTimestamp;
+}
+export interface PrivacyExportEntitySnapshotTable {
+  job_id: string;
+  entity_type: string;
+  source_count: Int8;
+  watermark_revision: Int8;
+  source_record_set_sha256: string;
+}
+export interface PrivacyExportUploadArtifactTable {
+  id: UuidId;
+  job_id: string;
+  snapshot_id: string;
+  format: "csv_zip" | "json";
+  object_key: string;
+  worker_id: string;
+  status: DefaultValue<"cancelled" | "deleted" | "promoted" | "staged" | "uploaded" | "uploading">;
+  staged_at: CreatedTimestamp;
+  available_at: DefaultTimestamp;
+  locked_at: NullableTimestamp;
+  locked_by: string | null;
+  attempt_count: DefaultInteger;
+  dead_lettered_at: NullableTimestamp;
+  last_error_code: string | null;
+  uploaded_at: NullableTimestamp;
+  upload_lease_expires_at: NullableTimestamp;
+  cancelled_at: NullableTimestamp;
+  deleted_at: NullableTimestamp;
+  deletion_evidence_digest: string | null;
+}
+export interface PrivacyExportArtifactTable {
+  id: UuidId;
+  job_id: string;
+  format: "csv_zip" | "json";
+  file_name: string;
+  media_type: "application/json" | "application/zip";
+  object_key: string;
+  plaintext_bytes: Int8;
+  plaintext_sha256: string;
+  ciphertext_bytes: Int8;
+  encryption_key_id: string;
+  expires_at: Timestamp;
+  created_at: CreatedTimestamp;
+}
+export interface PrivacyExportArtifactDeletionTable {
+  artifact_id: string;
+  status: DefaultValue<"completed" | "failed" | "queued" | "running">;
+  available_at: Timestamp;
+  locked_at: NullableTimestamp;
+  locked_by: string | null;
+  attempt_count: DefaultInteger;
+  dead_lettered_at: NullableTimestamp;
+  deletion_evidence_digest: string | null;
+  deleted_at: NullableTimestamp;
+  last_error_code: string | null;
+}
+
+export interface PrivacyExportArtifactTombstoneTable {
+  artifact_id: string;
+  job_id: string;
+  format: "csv_zip" | "json";
+  deleted_at: Timestamp;
+  deletion_evidence_digest: string;
+  created_at: CreatedTimestamp;
+}
+
+export interface PrivacyExportDownloadAuditTable {
+  id: UuidId;
+  job_id: string;
+  user_id: string;
+  format: "csv_zip" | "json";
+  outcome: "failed" | "not_found" | "opened";
+  occurred_at: Timestamp;
+  created_at: CreatedTimestamp;
+}
+
+export interface PrivacyExportRecordTable {
+  job_id: string;
+  ordinal: Int8;
+  entity_type: string;
+  entity_id: string;
+  revision: string | null;
+  deleted: boolean;
+  watermark_revision: Int8;
+  payload: ColumnType<JsonValue, JsonValue, never>;
+  payload_sha256: string;
+}
+
+export interface AccountErasureJobTable {
+  id: UuidId;
+  user_id: string | null;
+  client_operation_id: string | null;
+  request_digest: string | null;
+  status: DefaultValue<"completed" | "failed" | "queued" | "running">;
+  requested_at: CreatedTimestamp;
+  execute_after: Timestamp;
+  available_at: DefaultTimestamp;
+  locked_at: NullableTimestamp;
+  locked_by: string | null;
+  attempt_count: DefaultInteger;
+  dead_lettered_at: NullableTimestamp;
+  last_error_code: string | null;
+  started_at: NullableTimestamp;
+  completed_at: NullableTimestamp;
+  status_capability_hash: string;
+  status_capability_expires_at: Timestamp;
+  recovery_session_token_hash: string | null;
+  restore_locator: string | null;
+  restore_ledger_reference: string | null;
+  restore_ledger_digest: string | null;
+  restore_ledger_acknowledged_at: NullableTimestamp;
+  object_deletion_evidence: JsonObject | null;
+}
+
+export interface AccountErasureReceiptTable {
+  id: UuidId;
+  job_id: string;
+  completed_at: Timestamp;
+  policy_version: string;
+  deleted_counts: ImmutableJson;
+  backup_caveat: string;
+}
+
+export interface DatabaseRestoreAttestationTable {
+  singleton: DefaultValue<boolean>;
+  restore_epoch_hash: string;
+  database_oid: Int8;
+  database_name: string;
+  replayed_subject_count: Int8;
+  reconciliation_digest: string;
+  completed_at: Timestamp;
+  updated_at: UpdatedTimestamp;
+}
+
+export interface RetentionJobRecoveryAuditTable {
+  id: UuidId;
+  recovery_kind:
+    | "account_erasure"
+    | "artifact_deletion"
+    | "privacy_export"
+    | "staged_artifact_deletion";
+  target_id: string;
+  attempt_count_before: number;
+  approval_digest: string;
+  reason_code: "operator_requeue";
+  requeued_at: Timestamp;
+  created_at: CreatedTimestamp;
+}
+
+export interface RetentionDeadLetterEventTable {
+  id: UuidId;
+  recovery_kind:
+    | "account_erasure"
+    | "artifact_deletion"
+    | "privacy_export"
+    | "staged_artifact_deletion";
+  target_id: string;
+  attempt_count: number;
+  occurred_at: Timestamp;
+  status: DefaultValue<"completed" | "pending" | "processing">;
+  locked_at: NullableTimestamp;
+  locked_by: string | null;
+  acknowledged_at: NullableTimestamp;
+  created_at: CreatedTimestamp;
+}
+
 export interface Database {
+  account_erasure_job: AccountErasureJobTable;
+  account_erasure_receipt: AccountErasureReceiptTable;
   app_user: AppUserTable;
   audit_log: AuditLogTable;
+  biometric_definition: BiometricDefinitionTable;
+  biometric_definition_operation: BiometricDefinitionOperationTable;
+  biometric_definition_version: BiometricDefinitionVersionTable;
+  biometric_event: BiometricEventTable;
+  biometric_event_operation: BiometricEventOperationTable;
+  biometric_event_revision: BiometricEventRevisionTable;
+  custom_food: CustomFoodTable;
+  custom_food_operation: CustomFoodOperationTable;
+  custom_food_version: CustomFoodVersionTable;
+  custom_food_version_nutrient: CustomFoodVersionNutrientTable;
+  database_restore_attestation: DatabaseRestoreAttestationTable;
   diary: DiaryTable;
   diary_entry: DiaryEntryTable;
   diary_entry_nutrient_snapshot: DiaryEntryNutrientSnapshotTable;
@@ -842,6 +1411,26 @@ export interface Database {
   nutrition_goal_operation: NutritionGoalOperationTable;
   nutrition_goal_version: NutritionGoalVersionTable;
   outbox_event: OutboxEventTable;
+  platform_health_import: PlatformHealthImportTable;
+  platform_health_import_conflict: PlatformHealthImportConflictTable;
+  platform_health_import_revision: PlatformHealthImportRevisionTable;
+  platform_import_batch: PlatformImportBatchTable;
+  platform_integration: PlatformIntegrationTable;
+  platform_integration_version: PlatformIntegrationVersionTable;
+  privacy_export_job: PrivacyExportJobTable;
+  privacy_export_entity_snapshot: PrivacyExportEntitySnapshotTable;
+  privacy_export_upload_artifact: PrivacyExportUploadArtifactTable;
+  privacy_export_artifact: PrivacyExportArtifactTable;
+  privacy_export_artifact_deletion: PrivacyExportArtifactDeletionTable;
+  privacy_export_artifact_tombstone: PrivacyExportArtifactTombstoneTable;
+  privacy_export_download_audit: PrivacyExportDownloadAuditTable;
+  privacy_export_record: PrivacyExportRecordTable;
+  reminder_consent: ReminderConsentTable;
+  reminder_consent_version: ReminderConsentVersionTable;
+  reminder_delivery_outbox: ReminderDeliveryOutboxTable;
+  reminder_schedule: ReminderScheduleTable;
+  reminder_schedule_version: ReminderScheduleVersionTable;
+  security_challenge: SecurityChallengeTable;
   food_search_projection_revision: FoodSearchProjectionRevisionTable;
   recipe: RecipeTable;
   recipe_ingredient: RecipeIngredientTable;
@@ -849,9 +1438,15 @@ export interface Database {
   recipe_version: RecipeVersionTable;
   recipe_version_nutrient: RecipeVersionNutrientTable;
   recipe_version_source: RecipeVersionSourceTable;
+  reauthentication_proof: ReauthenticationProofTable;
+  retention_operation: RetentionOperationTable;
+  retention_job_recovery_audit: RetentionJobRecoveryAuditTable;
+  retention_dead_letter_event: RetentionDeadLetterEventTable;
   source_nutrient_map: SourceNutrientMapTable;
   source_nutrient_map_revision: SourceNutrientMapRevisionTable;
   user_profile: UserProfileTable;
   user_password_credential: UserPasswordCredentialTable;
   user_session: UserSessionTable;
+  user_data_watermark: UserDataWatermarkTable;
+  device_registration: DeviceRegistrationTable;
 }

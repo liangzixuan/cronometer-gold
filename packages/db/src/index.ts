@@ -6,8 +6,10 @@ export {
   createSession,
   findActiveSessionByTokenHash,
   findPasswordCredentialByEmail,
+  findPendingErasureRecoverySessionByTokenHash,
   getUserProfile,
   type PasswordCredentialRecord,
+  type PendingErasureRecoverySession,
   ProfileRevisionConflictError,
   type RegisterPasswordAccountInput,
   registerPasswordAccount,
@@ -66,6 +68,7 @@ export {
   validateCatalogueRecord,
 } from "./catalogue-validation.js";
 export {
+  assertDatabaseMigrationLedgerReady,
   assertDatabaseReady,
   createDatabase,
   createDatabaseFromEnvironment,
@@ -98,6 +101,8 @@ export {
   DiaryValidationError,
   deleteDiaryEntry,
   getDiaryDay,
+  type RepeatDiaryEntryInput,
+  repeatDiaryEntry,
   type UpdateDiaryEntryInput,
   type UpdateFoodDiaryEntryInput,
   type UpdateRecipeDiaryEntryInput,
@@ -213,4 +218,11 @@ export {
   type ReviseRecipeInput,
   reviseRecipe,
 } from "./recipes.js";
+export {
+  assertDatabaseRestoreReplayReady,
+  type CompleteDatabaseRestoreReplayAttestationInput,
+  completeDatabaseRestoreReplayAttestation,
+  type DatabaseRestoreAttestationRecord,
+} from "./restore.js";
+export * from "./retention.js";
 export type * from "./types.js";

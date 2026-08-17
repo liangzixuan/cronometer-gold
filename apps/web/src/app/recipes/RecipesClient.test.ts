@@ -51,9 +51,23 @@ describe("web recipe builder state", () => {
           quantityText: "2",
           resolvedGrams: "80",
           source: {
+            code: "USDA_FDC",
+            releaseId: "eb8a4152-001f-4722-8bf1-8728ef8c14f8",
             displayName: "USDA FoodData Central",
             licenseExpression: "CC0-1.0",
+            attributionRequired: true,
             attributionText: "Data source: USDA FoodData Central",
+          },
+          foodProvenance: {
+            kind: "public",
+            source: {
+              code: "USDA_FDC",
+              releaseId: "eb8a4152-001f-4722-8bf1-8728ef8c14f8",
+              displayName: "USDA FoodData Central",
+              licenseExpression: "CC0-1.0",
+              attributionRequired: true,
+              attributionText: "Data source: USDA FoodData Central",
+            },
           },
           note: "Toast first",
           coverage: "complete",

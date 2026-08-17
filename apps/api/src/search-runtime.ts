@@ -12,6 +12,7 @@ import { DatabaseBackedFoodSearchService } from "./modules/foods/search-service.
 import type { GoalService } from "./modules/goals/goal.routes.js";
 import type { ProfileService } from "./modules/profile/profile.routes.js";
 import type { RecipeService } from "./modules/recipes/recipe.routes.js";
+import type { RetentionService } from "./modules/retention/retention.routes.js";
 import {
   DatabaseAuthRepository,
   DatabaseDiaryService,
@@ -19,6 +20,8 @@ import {
   DatabaseProfileService,
   DatabaseRecipeService,
 } from "./persistence-services.js";
+import { createApiRetentionArtifactRuntime } from "./retention-artifact-runtime.js";
+import { DatabaseRetentionService } from "./retention-persistence-service.js";
 
 export interface ApiSearchRuntime {
   readonly authService: AuthService;
@@ -27,14 +30,15 @@ export interface ApiSearchRuntime {
   readonly goalService: GoalService;
   readonly profileService: ProfileService;
   readonly recipeService: RecipeService;
+  readonly retentionService?: RetentionService;
   readonly readinessCheck: () => Promise<boolean>;
   close(): Promise<void>;
 }
 
-export function createApiSearchRuntime(
+export async function createApiSearchRuntime(
   environment: NodeJS.ProcessEnv,
   config: ApiDependencyConfig,
-): ApiSearchRuntime {
+): Promise<ApiSearchRuntime> {
   // Validate all pure search configuration before allocating the database pool.
   const client = new MeilisearchHttpClient({
     host: config.meiliUrl,
@@ -45,6 +49,9 @@ export function createApiSearchRuntime(
     backend: new MeilisearchFoodSearchBackend({ client }),
     cursorSecret: config.cursorSecret,
   });
+  const retentionArtifacts = config.retention
+    ? await createApiRetentionArtifactRuntime(config.retention)
+    : null;
   const database = createDatabaseFromEnvironment({
     ...environment,
     DATABASE_URL: config.databaseUrl,
@@ -52,6 +59,17 @@ export function createApiSearchRuntime(
   const authService = new SecureAuthService({
     repository: new DatabaseAuthRepository(database),
   });
+
+  const retentionService =
+    config.retention && retentionArtifacts
+      ? new DatabaseRetentionService({
+          artifacts: retentionArtifacts,
+          database,
+          deviceChallengeHmacKey: config.retention.deviceChallengeHmacKey,
+          erasureLedgerLocatorKeyRing: config.retention.erasureLedgerLocatorKeyRing,
+          erasureStatusCapabilityHmacKey: config.retention.erasureStatusCapabilityHmacKey,
+        })
+      : undefined;
 
   return {
     authService,
@@ -65,8 +83,22 @@ export function createApiSearchRuntime(
     goalService: new DatabaseGoalService(database),
     profileService: new DatabaseProfileService(database),
     recipeService: new DatabaseRecipeService(database),
+    ...(retentionService ? { retentionService } : {}),
     async readinessCheck() {
-      await assertDatabaseReady(database);
+      if (config.requireDatabaseRestoreAttestation) {
+        if (!config.databaseRestoreEpoch) {
+          throw new Error("Database restore epoch was not configured");
+        }
+        await assertDatabaseReady(database, {
+          requireRestoreAttestation: true,
+          restoreEpoch: config.databaseRestoreEpoch,
+        });
+      } else {
+        await assertDatabaseReady(database, {
+          requireRestoreAttestation: false,
+          ...(config.databaseRestoreEpoch ? { restoreEpoch: config.databaseRestoreEpoch } : {}),
+        });
+      }
       return true;
     },
     async close() {

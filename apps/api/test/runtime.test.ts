@@ -9,13 +9,16 @@ afterEach(async () => {
 });
 
 describe("production API runtime", () => {
-  it("wires search and every private persistence service around one owned runtime", () => {
-    const runtime = createApiSearchRuntime(
+  it("wires search and every private persistence service around one owned runtime", async () => {
+    const runtime = await createApiSearchRuntime(
       { DATABASE_URL: "postgresql://local.invalid/nutrition", NODE_ENV: "test" },
       {
         cursorSecret: "test-cursor-secret-that-is-longer-than-thirty-two-bytes",
+        databaseRestoreEpoch: null,
         databaseUrl: "postgresql://local.invalid/nutrition",
         meiliUrl: "http://127.0.0.1:7700",
+        retention: null,
+        requireDatabaseRestoreAttestation: false,
         searchDatabaseMaxConcurrency: 2,
         searchDatabaseMaxQueue: 2,
         searchRequestTimeoutMs: 100,
