@@ -1,0 +1,9 @@
+{
+  "log-driver": "local",
+  "log-opts": {
+    "max-file": "5",
+    "max-size": "20m"
+  },
+  "live-restore": true,
+  "no-new-privileges": true
+}

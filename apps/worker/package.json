@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "database:readiness-probe": "node dist/database-readiness-probe.js",
@@ -11,9 +14,12 @@
     "erasure:restore-replay": "node dist/erasure-ledger-restore.js",
     "erasure:restore-replay:dev": "tsx src/erasure-ledger-restore.ts",
     "lint": "biome lint src",
+    "object-storage:credential-canary": "node dist/object-storage-credential-canary.js",
+    "object-storage:credential-canary:dev": "tsx src/object-storage-credential-canary.ts",
     "retention:requeue": "node dist/retention-requeue.js",
     "retention:requeue:dev": "tsx src/retention-requeue.ts",
     "search:rebuild": "tsx src/search-rebuild.ts",
+    "search:rebuild:prod": "node dist/search-rebuild.js",
     "start": "node dist/index.js",
     "test": "vitest run",
     "test:integration": "vitest run src/food-search-worker.integration.test.ts",

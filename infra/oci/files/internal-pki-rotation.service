@@ -1,0 +1,11 @@
+[Unit]
+Description=Rotate Cronometer Gold internal TLS leaf certificates before expiry
+After=docker.service
+OnFailure=nutrition-release-failure-containment.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/nutrition-prepare-internal-pki rotate-if-needed 30
+SuccessExitStatus=75
+TimeoutStartSec=10min
+TimeoutStopSec=10min

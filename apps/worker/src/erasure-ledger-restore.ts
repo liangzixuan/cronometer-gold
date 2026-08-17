@@ -10,6 +10,7 @@ import {
   EncryptedErasureReplayLedger,
   type ErasureReplayLedgerEntry,
   erasureReplayLedgerEntryDigest,
+  OciNativeObjectVersionResolver,
   parseArtifactEncryptionKeyRing,
   parseErasureLedgerLocatorKeyRing,
   S3RawArtifactStore,
@@ -22,6 +23,9 @@ import {
   reconcileErasedAccountRows,
   replayExternalErasureLedgerEntry,
 } from "@nutrition-tracker/db";
+
+import { loadOciApiSigningPrivateKey } from "./oci-api-key-file.js";
+import { assertOciS3CompatibilityEndpoint } from "./oci-object-storage-config.js";
 
 type RestoreDatabase = ReturnType<typeof createDatabaseFromEnvironment>;
 
@@ -164,6 +168,52 @@ function restoreEpoch(environment: NodeJS.ProcessEnv): string {
   return value;
 }
 
+async function restoreVersionResolver(
+  environment: NodeJS.ProcessEnv,
+  input: {
+    readonly bucket: string;
+    readonly endpoint: string;
+    readonly region: string;
+    readonly requestTimeoutMs: number;
+  },
+): Promise<OciNativeObjectVersionResolver | undefined> {
+  const provider =
+    environment.ERASURE_REPLAY_LEDGER_RESTORE_VERSION_LIST_PROVIDER ??
+    (environment.NODE_ENV === "production" ? undefined : "s3_compatible");
+  if (provider === undefined) {
+    throw new Error(
+      "Missing restore configuration: ERASURE_REPLAY_LEDGER_RESTORE_VERSION_LIST_PROVIDER",
+    );
+  }
+  if (provider === "s3_compatible") {
+    if (environment.NODE_ENV === "production") {
+      throw new Error("Production restore requires the OCI native object version inventory");
+    }
+    return undefined;
+  }
+  if (provider !== "oci_native") {
+    throw new Error("Invalid restore object version inventory provider");
+  }
+  const namespace = required(environment, "ERASURE_REPLAY_LEDGER_RESTORE_OCI_NAMESPACE");
+  assertOciS3CompatibilityEndpoint({
+    endpoint: input.endpoint,
+    namespace,
+    region: input.region,
+  });
+  return new OciNativeObjectVersionResolver({
+    bucket: input.bucket,
+    fingerprint: required(environment, "ERASURE_REPLAY_LEDGER_RESTORE_OCI_KEY_FINGERPRINT"),
+    namespace,
+    privateKeyPem: await loadOciApiSigningPrivateKey(
+      required(environment, "ERASURE_REPLAY_LEDGER_RESTORE_OCI_PRIVATE_KEY_FILE"),
+    ),
+    region: input.region,
+    requestTimeoutMs: input.requestTimeoutMs,
+    tenancyOcid: required(environment, "ERASURE_REPLAY_LEDGER_RESTORE_OCI_TENANCY_OCID"),
+    userOcid: required(environment, "ERASURE_REPLAY_LEDGER_RESTORE_OCI_USER_OCID"),
+  });
+}
+
 /** Offline pre-traffic restore phase. Runtimes remain unready until this commits. */
 export async function replayAndAttestErasureLedgerRestore(input: {
   readonly database: RestoreDatabase;
@@ -218,7 +268,8 @@ export async function runErasureLedgerRestoreFromEnvironment(
   environment: NodeJS.ProcessEnv = process.env,
 ): Promise<ErasureRestoreResult> {
   const databaseRestoreEpoch = restoreEpoch(environment);
-  const endpoint = new URL(required(environment, "ERASURE_REPLAY_LEDGER_ENDPOINT"));
+  const endpointValue = required(environment, "ERASURE_REPLAY_LEDGER_ENDPOINT");
+  const endpoint = new URL(endpointValue);
   if (environment.NODE_ENV === "production" && endpoint.protocol !== "https:") {
     throw new Error("HTTPS erasure replay ledger storage is required in production");
   }
@@ -252,18 +303,29 @@ export async function runErasureLedgerRestoreFromEnvironment(
     ),
   });
 
+  const bucket = required(environment, "ERASURE_REPLAY_LEDGER_BUCKET");
+  const region = required(environment, "ERASURE_REPLAY_LEDGER_REGION");
+  const requestTimeoutMs = positiveInteger(
+    environment.ERASURE_REPLAY_LEDGER_RESTORE_REQUEST_TIMEOUT_MS,
+    30_000,
+    300_000,
+  );
+  const singletonVersionResolver = await restoreVersionResolver(environment, {
+    bucket,
+    endpoint: endpointValue,
+    region,
+    requestTimeoutMs,
+  });
+
   const rawStore = new S3RawArtifactStore({
     accessKeyId: required(environment, "ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID"),
-    bucket: required(environment, "ERASURE_REPLAY_LEDGER_BUCKET"),
+    bucket,
     endpoint: endpoint.href,
     readVersionPolicy: "require_singleton",
-    region: required(environment, "ERASURE_REPLAY_LEDGER_REGION"),
-    requestTimeoutMs: positiveInteger(
-      environment.ERASURE_REPLAY_LEDGER_RESTORE_REQUEST_TIMEOUT_MS,
-      30_000,
-      300_000,
-    ),
+    region,
+    requestTimeoutMs,
     secretAccessKey: required(environment, "ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY"),
+    ...(singletonVersionResolver ? { singletonVersionResolver } : {}),
     ...(environment.ERASURE_REPLAY_LEDGER_RESTORE_SESSION_TOKEN
       ? { sessionToken: environment.ERASURE_REPLAY_LEDGER_RESTORE_SESSION_TOKEN }
       : {}),

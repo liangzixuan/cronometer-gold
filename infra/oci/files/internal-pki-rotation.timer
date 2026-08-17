@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Cronometer Gold internal TLS certificate expiry check
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=2h
+
+[Install]
+WantedBy=timers.target

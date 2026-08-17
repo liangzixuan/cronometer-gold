@@ -8,6 +8,8 @@ import {
 import { MAX_PRIVACY_EXPORT_SNAPSHOT_BYTES } from "@nutrition-tracker/db";
 import { z } from "zod";
 
+import { isOciS3CompatibilityEndpoint } from "./oci-object-storage-config.js";
+
 const workerConfigSchema = z.object({
   DATABASE_RESTORE_EPOCH: z
     .string()
@@ -61,6 +63,9 @@ const workerConfigSchema = z.object({
     .trim()
     .min(1)
     .default("/tmp/nutrition-tracker-encrypted-exports"),
+  EXPORT_ARTIFACT_DELETE_VERSION_POLICY: z
+    .enum(["latest", "suspended_null"])
+    .default("suspended_null"),
   EXPORT_ARTIFACT_ENCRYPTION_KEYS: z.string().min(1).max(32_768).optional(),
   EXPORT_ARTIFACT_ENDPOINT: z.url().optional(),
   EXPORT_ARTIFACT_REGION: z
@@ -251,6 +256,14 @@ export function parseWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig 
       productionIssues.push({ field: "EXPORT_ARTIFACT_ENDPOINT" });
     } else if (new URL(result.data.EXPORT_ARTIFACT_ENDPOINT).protocol !== "https:") {
       productionIssues.push({ field: "EXPORT_ARTIFACT_ENDPOINT" });
+    }
+    if (
+      environment.EXPORT_ARTIFACT_DELETE_VERSION_POLICY === undefined ||
+      (result.data.EXPORT_ARTIFACT_ENDPOINT &&
+        isOciS3CompatibilityEndpoint(result.data.EXPORT_ARTIFACT_ENDPOINT) &&
+        result.data.EXPORT_ARTIFACT_DELETE_VERSION_POLICY !== "latest")
+    ) {
+      productionIssues.push({ field: "EXPORT_ARTIFACT_DELETE_VERSION_POLICY" });
     }
     if (!result.data.ERASURE_REPLAY_LEDGER_ENDPOINT) {
       productionIssues.push({ field: "ERASURE_REPLAY_LEDGER_ENDPOINT" });

@@ -15,6 +15,10 @@ const nextConfig: NextConfig = {
   async headers() {
     return [{ headers: [...browserSecurityHeaders], source: "/:path*" }];
   },
+  output: "standalone",
+  outputFileTracingIncludes: {
+    "/*": ["../../node_modules/.pnpm/@swc+helpers@*/node_modules/@swc/helpers/esm/**/*"],
+  },
   poweredByHeader: false,
   reactStrictMode: true,
 };

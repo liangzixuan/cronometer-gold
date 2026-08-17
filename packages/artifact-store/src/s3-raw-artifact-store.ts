@@ -41,6 +41,8 @@ export interface S3RawArtifactStoreOptions {
   readonly requestTimeoutMs?: number;
   /** Restore-only mode: reject missing, multiple, truncated or delete-marker version history. */
   readonly readVersionPolicy?: "latest" | "require_singleton";
+  /** Optional native provider for the restore-only singleton history check. */
+  readonly singletonVersionResolver?: SingletonObjectVersionResolver;
   /** Export-only deletion of the sole null version in a versioning-suspended bucket. */
   readonly deleteVersionPolicy?: "latest" | "suspended_null";
 }
@@ -110,6 +112,34 @@ export interface S3ObjectVersion {
   readonly deleteMarker: boolean;
   readonly isLatest: boolean;
   readonly versionId: string;
+}
+
+/**
+ * Resolves the only admissible immutable object version for an offline restore.
+ * Implementations must reject incomplete history, delete markers, and ambiguity.
+ */
+export interface SingletonObjectVersionResolver {
+  resolveSingletonVersion(input: {
+    readonly objectKey: string;
+    readonly signal?: AbortSignal;
+  }): Promise<{ readonly versionId: string } | null>;
+}
+
+/** Validates that an exact version GET returned the requested live object version. */
+export function assertS3ExactVersionResponse(input: {
+  readonly deleteMarkerHeader?: string | readonly string[];
+  readonly requestedVersionId: string;
+  readonly statusCode: number | undefined;
+  readonly versionIdHeader?: string | readonly string[];
+}): void {
+  if (
+    input.statusCode !== 200 ||
+    typeof input.versionIdHeader !== "string" ||
+    input.versionIdHeader !== input.requestedVersionId ||
+    (input.deleteMarkerHeader !== undefined && input.deleteMarkerHeader !== "false")
+  ) {
+    throw new S3ArtifactStoreVersionConflictError();
+  }
 }
 
 interface StrictXmlNode {
@@ -316,6 +346,7 @@ export class S3RawArtifactStore implements RawArtifactStore {
   readonly #requestTimeoutMs: number;
   readonly #readVersionPolicy: "latest" | "require_singleton";
   readonly #deleteVersionPolicy: "latest" | "suspended_null";
+  readonly #singletonVersionResolver: SingletonObjectVersionResolver | undefined;
 
   constructor(options: S3RawArtifactStoreOptions) {
     const endpoint = new URL(options.endpoint);
@@ -345,6 +376,10 @@ export class S3RawArtifactStore implements RawArtifactStore {
     this.#requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
     this.#readVersionPolicy = options.readVersionPolicy ?? "latest";
     this.#deleteVersionPolicy = options.deleteVersionPolicy ?? "latest";
+    this.#singletonVersionResolver = options.singletonVersionResolver;
+    if (this.#singletonVersionResolver && this.#readVersionPolicy !== "require_singleton") {
+      throw new TypeError("A singleton version resolver is restore-only");
+    }
     if (
       !Number.isSafeInteger(this.#requestTimeoutMs) ||
       this.#requestTimeoutMs < 100 ||
@@ -493,12 +528,10 @@ export class S3RawArtifactStore implements RawArtifactStore {
     readonly signal?: AbortSignal;
   }): Promise<{ readonly stream: Readable; readonly contentLength: number } | null> {
     if (this.#readVersionPolicy === "require_singleton") {
-      const versions = await this.listObjectVersions(input);
-      if (versions.length === 0) return null;
-      const version = versions[0];
-      if (!version || versions.length !== 1 || version.deleteMarker || !version.isLatest) {
-        throw new S3ArtifactStoreVersionConflictError();
-      }
+      const version = this.#singletonVersionResolver
+        ? await this.#singletonVersionResolver.resolveSingletonVersion(input)
+        : await this.#resolveS3SingletonVersion(input);
+      if (!version) return null;
       const opened = await this.#openObject({
         ...input,
         versionId: version.versionId,
@@ -507,6 +540,19 @@ export class S3RawArtifactStore implements RawArtifactStore {
       return opened;
     }
     return this.#openObject(input);
+  }
+
+  async #resolveS3SingletonVersion(input: {
+    readonly objectKey: string;
+    readonly signal?: AbortSignal;
+  }): Promise<{ readonly versionId: string } | null> {
+    const versions = await this.listObjectVersions(input);
+    if (versions.length === 0) return null;
+    const version = versions[0];
+    if (!version || versions.length !== 1 || version.deleteMarker || !version.isLatest) {
+      throw new S3ArtifactStoreVersionConflictError();
+    }
+    return { versionId: version.versionId };
   }
 
   async #openObject(input: {
@@ -530,6 +576,23 @@ export class S3RawArtifactStore implements RawArtifactStore {
     });
     operation.request.end();
     const response = await operation.response;
+    if (input.versionId !== undefined) {
+      try {
+        assertS3ExactVersionResponse({
+          ...(response.headers["x-amz-delete-marker"] === undefined
+            ? {}
+            : { deleteMarkerHeader: response.headers["x-amz-delete-marker"] }),
+          requestedVersionId: input.versionId,
+          statusCode: response.statusCode,
+          ...(response.headers["x-amz-version-id"] === undefined
+            ? {}
+            : { versionIdHeader: response.headers["x-amz-version-id"] }),
+        });
+      } catch (error) {
+        response.destroy();
+        throw error;
+      }
+    }
     if (response.statusCode === 404) {
       await drain(response);
       return null;

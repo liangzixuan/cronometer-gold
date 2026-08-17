@@ -1,0 +1,12 @@
+[Unit]
+Description=Fail closed on controlled-beta object-egress firewall drift
+Requires=docker.service firewalld.service
+After=docker.service firewalld.service
+OnFailure=nutrition-release-failure-containment.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/nutrition-object-egress-firewall-watchdog
+SuccessExitStatus=3
+TimeoutStartSec=15min
+TimeoutStopSec=2min

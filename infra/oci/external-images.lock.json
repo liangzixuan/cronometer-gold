@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-08-17",
+  "policy": {
+    "platform": "linux/arm64",
+    "scanner": "Trivy",
+    "scannerVersion": "v0.74.0",
+    "databaseUpdatedAt": "2026-08-17T00:56:15Z",
+    "severities": ["HIGH", "CRITICAL"],
+    "includeUnfixed": true,
+    "ignorePolicy": "explicit-empty"
+  },
+  "images": {
+    "MEILI_IMAGE": {
+      "repository": "docker.io/getmeili/meilisearch",
+      "version": "v1.53.1",
+      "platform": "linux/arm64",
+      "digest": "sha256:8d6643d86d71fad6ad3cba92cde7ccfce9e4d6c384bda67598eb553571c32431",
+      "arm64Digest": "sha256:b4a0a1f9545ae1dd8e12a750fa4416ef3f4b421ed0758c430d0c46182ad233ee",
+      "ref": "docker.io/getmeili/meilisearch@sha256:8d6643d86d71fad6ad3cba92cde7ccfce9e4d6c384bda67598eb553571c32431",
+      "approved": true,
+      "scan": {
+        "critical": 0,
+        "high": 0,
+        "total": 0,
+        "result": "passed"
+      },
+      "provenance": {
+        "method": "sigstore-keyless",
+        "containerSignature": "verified",
+        "sourceRepository": "https://github.com/meilisearch/meilisearch",
+        "sourceRevision": "577f7af28942b71782eab1e59f44ad8296ce0a92",
+        "sourcePath": "Dockerfile",
+        "expectedRuntime": {
+          "descriptorAnnotations": {},
+          "labels": {
+            "org.opencontainers.image.revision": "577f7af28942b71782eab1e59f44ad8296ce0a92",
+            "org.opencontainers.image.source": "https://github.com/meilisearch/meilisearch",
+            "org.opencontainers.image.version": "v1.53.1"
+          },
+          "environment": ["MEILI_SERVER_PROVIDER=docker"]
+        },
+        "certificateIdentity": "https://github.com/meilisearch/meilisearch/.github/workflows/publish-docker-images.yml@refs/tags/v1.53.1",
+        "certificateOidcIssuer": "https://token.actions.githubusercontent.com",
+        "evidence": [
+          "https://github.com/meilisearch/meilisearch/blob/577f7af28942b71782eab1e59f44ad8296ce0a92/.github/workflows/publish-docker-images.yml",
+          "https://github.com/meilisearch/meilisearch/blob/577f7af28942b71782eab1e59f44ad8296ce0a92/Dockerfile",
+          "https://github.com/meilisearch/meilisearch/releases/tag/v1.53.1"
+        ],
+        "review": "Cosign verifies the exact index digest with a Fulcio certificate for the tagged Meilisearch release workflow, the GitHub Actions OIDC issuer, and transparency-log inclusion."
+      }
+    }
+  }
+}

@@ -42,3 +42,18 @@ docker compose --env-file .env -f infra/docker/compose.yml down
 
 Deleting named volumes is destructive and intentionally omitted from normal
 instructions. Follow the restore runbook before replacing database state.
+
+## Published OCI runtimes
+
+`caddy.Dockerfile` and `postgres.Dockerfile` are OCI controlled-beta supply-chain
+inputs, not replacements for the developer services above. The default-branch
+container workflow publishes each one to its own GHCR package only after an
+exact ARM64 scan, provenance, runtime identity, and behavior checks pass.
+
+The Caddy image is a UID/GID-1000 scratch runtime. Deployment drops all
+capabilities, adds only `NET_BIND_SERVICE`, mounts the reviewed Caddyfile, and
+presents writable `/data` and `/config` directories owned by 1000. The
+PostgreSQL image is fixed to UID/GID 70 and has no gosu binary. Deployment must
+pre-own PGDATA and the `/run/postgresql` and `/tmp` tmpfs mounts as 70. See
+`docs/quality/container-supply-chain.md` for the exact source, dependency, and
+scan evidence.

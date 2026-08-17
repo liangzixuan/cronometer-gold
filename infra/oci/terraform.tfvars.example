@@ -1,0 +1,36 @@
+# This example contains no secrets. Copy it to terraform.tfvars (gitignored).
+tenancy_ocid = "ocid1.tenancy.oc1..replace"
+base_domain  = "example.com"
+
+# Explicit existing GRAD695 network resources. The module reads these and does
+# not change their default route table, DHCP options, or default security list.
+existing_vcn_ocid              = "ocid1.vcn.oc1.iad.replace"
+existing_internet_gateway_ocid = "ocid1.internetgateway.oc1.iad.replace"
+
+# Review and pin an Oracle Linux 9 platform image compatible with
+# VM.Standard.A1.Flex. Never substitute a moving "latest" lookup.
+image_ocid = "ocid1.image.oc1.iad.replace"
+
+# Refresh this complete list from the live VCN immediately before plan/apply.
+known_subnet_cidrs = ["10.0.0.0/24"]
+
+# Use a current operator egress address. Never use 0.0.0.0/0.
+admin_cidrs = ["203.0.113.10/32"]
+
+# Public key only. Keep the matching private key outside this repository.
+ssh_authorized_keys = [
+  "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIReplaceWithARealPublicKey operator@example",
+]
+
+# Leave false for validate/review. Set true only after completing every cost,
+# capacity, DNS, recovery, and non-HA prerequisite in README.md.
+acknowledge_non_ha_and_possible_charges = false
+
+# Default: create a dedicated free compartment. To reuse one instead:
+# create_compartment         = false
+# existing_compartment_ocid = "ocid1.compartment.oc1..replace"
+
+# OCI DNS is disabled by default and may incur charges. Manage the A records at
+# the existing DNS provider, or explicitly configure an existing OCI zone.
+# create_oci_dns_records = true
+# dns_zone_name_or_id    = "example.com"

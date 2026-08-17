@@ -12,6 +12,9 @@
       "default": "./dist/index.js"
     }
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "dev": "tsx watch --include ../../packages/contracts/dist/**/*.js --include ../../packages/db/dist/**/*.js --include ../../packages/search/dist/**/*.js src/server.ts",

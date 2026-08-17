@@ -1,0 +1,33 @@
+#cloud-config
+package_update: false
+
+write_files:
+  - path: /var/lib/cloud/nutrition-bootstrap-files.json.xz.b85
+    owner: root:root
+    permissions: "0600"
+    content: "${bootstrap_bundle_base85}"
+  - path: /var/lib/cloud/nutrition-bootstrap-files.sha256
+    owner: root:root
+    permissions: "0600"
+    content: "${bootstrap_payload_sha256}\n"
+  - path: /usr/local/sbin/nutrition-unpack-bootstrap
+    owner: root:root
+    permissions: "0750"
+    content: |
+      ${indent(6, unpacker)}
+
+runcmd:
+  - [/usr/local/sbin/nutrition-unpack-bootstrap]
+  - [mkdir, -p, /etc/nutrition-tracker/pki]
+  - [chmod, "0700", /etc/nutrition-tracker, /etc/nutrition-tracker/pki]
+  - [/usr/local/sbin/nutrition-configure-host-firewall]
+  - [systemctl, daemon-reload]
+  - [systemctl, reload, sshd]
+  - [/usr/local/sbin/nutrition-prepare-storage]
+  - [systemctl, enable, --now, nutrition-container-runtime-bootstrap.service]
+  - [systemctl, enable, --now, nutrition-object-egress-firewall.service]
+  - [systemctl, enable, --now, nutrition-object-egress-firewall-watchdog.timer]
+  - [/usr/local/sbin/nutrition-instance-identity, bind-initial]
+  - [systemctl, enable, --now, nutrition-internal-pki-rotation.timer]
+
+final_message: "OCI pilot host bootstrap finished. The application is intentionally disabled pending secrets, internal PKI, images, DNS, migrations, and restore attestation."

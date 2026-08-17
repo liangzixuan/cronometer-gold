@@ -1,0 +1,44 @@
+{
+	email {$ACME_EMAIL}
+	admin off
+}
+
+{$API_FQDN} {
+	@internalReady {
+		method GET
+		path /ready
+		remote_ip private_ranges
+	}
+	handle @internalReady {
+		reverse_proxy api:4000
+	}
+	@betaAllowed remote_ip {$BETA_ALLOWED_CIDRS}
+	handle @betaAllowed {
+		encode zstd gzip
+		reverse_proxy api:4000
+		header {
+			-Server
+			X-Content-Type-Options nosniff
+			X-Frame-Options DENY
+			Referrer-Policy no-referrer
+		}
+	}
+	respond "Not Found" 404
+}
+
+{$WEB_FQDN} {
+	@betaAllowed remote_ip {$BETA_ALLOWED_CIDRS}
+	handle @betaAllowed {
+		encode zstd gzip
+		# The web container shares the API network namespace, so both ports are
+		# reachable through the api service name without weakening API_INTERNAL_URL.
+		reverse_proxy api:3000
+		header -Server
+	}
+	respond "Not Found" 404
+}
+
+https://meili.internal:8443 {
+	tls /run/internal-pki/meili/server.crt /run/internal-pki/meili/server.key
+	reverse_proxy meilisearch:7700
+}

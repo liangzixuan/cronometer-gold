@@ -1,0 +1,10 @@
+[Unit]
+Description=Contain an uncommitted Cronometer Gold controlled-beta release
+After=docker.service
+Before=nutrition-tracker.service nutrition-internal-pki-rotation.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/nutrition-contain-failed-release
+TimeoutStartSec=15min
+TimeoutStopSec=2min

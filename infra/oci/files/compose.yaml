@@ -1,0 +1,351 @@
+name: cronometer-gold-beta
+
+x-compat-object-host: &compat-object-host
+  - "${OCI_COMPAT_HOST:-invalid.invalid}:${OCI_COMPAT_IPV4:-127.0.0.1}"
+x-native-object-host: &native-object-host
+  - "${OCI_COMPAT_HOST:-invalid.invalid}:${OCI_COMPAT_IPV4:-127.0.0.1}"
+  - "${OCI_NATIVE_HOST:-native.invalid}:${OCI_NATIVE_IPV4:-127.0.0.1}"
+
+x-app-security: &app-security
+  init: true
+  user: "1000:1000"
+  read_only: true
+  # The guarded systemd orchestrator is the sole application starter. Docker
+  # must not auto-start copied app containers from a restored boot volume.
+  restart: "no"
+  pids_limit: 256
+  security_opt:
+    - no-new-privileges:true
+
+services:
+  caddy:
+    image: ${CADDY_IMAGE}
+    user: "1000:1000"
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL}
+      API_FQDN: ${API_FQDN}
+      WEB_FQDN: ${WEB_FQDN}
+      BETA_ALLOWED_CIDRS: ${BETA_ALLOWED_CIDRS}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "127.0.0.1:8443:8443"
+    volumes:
+      - /opt/nutrition-tracker/Caddyfile:/etc/caddy/Caddyfile:ro,Z
+      - /etc/nutrition-tracker/pki/meili:/run/internal-pki/meili:ro,Z
+      - /var/lib/nutrition-tracker/caddy/data:/data:Z
+      - /var/lib/nutrition-tracker/caddy/config:/config:Z
+    networks:
+      edge: {}
+      backend:
+        aliases:
+          - meili.internal
+    cpus: "0.25"
+    mem_limit: 256m
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "caddy", "validate", "--config", "/etc/caddy/Caddyfile"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  postgres:
+    image: ${POSTGRES_IMAGE}
+    user: "70:70"
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/run/postgres-tls/server.crt
+      - -c
+      - ssl_key_file=/run/postgres-tls/server.key
+      - -c
+      - ssl_ca_file=/run/internal-ca/ca.crt
+      - -c
+      - ssl_min_protocol_version=TLSv1.2
+    env_file:
+      - /etc/nutrition-tracker/database.env
+    tmpfs:
+      - /run/postgresql:rw,noexec,nosuid,size=64m,uid=70,gid=70,mode=3775
+      - /tmp:rw,noexec,nosuid,size=64m,uid=70,gid=70,mode=1770
+    volumes:
+      - /var/lib/nutrition-tracker/postgres:/var/lib/postgresql/data:Z
+      - /etc/nutrition-tracker/pki/postgres:/run/postgres-tls:ro,z
+      - /etc/nutrition-tracker/pki/trust:/run/internal-ca:ro,z
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} -h 127.0.0.1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    networks: [backend]
+    cpus: "0.75"
+    mem_limit: 2g
+    pids_limit: 256
+
+  meilisearch:
+    image: ${MEILI_IMAGE}
+    user: "1000:1000"
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    env_file:
+      - /etc/nutrition-tracker/meili.env
+    environment:
+      MEILI_ENV: production
+      MEILI_NO_ANALYTICS: "true"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    volumes:
+      - /var/lib/nutrition-tracker/meili:/meili_data:Z
+    networks: [backend]
+    cpus: "0.75"
+    mem_limit: 2560m
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:7700/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  api:
+    <<: *app-security
+    image: ${API_IMAGE}
+    profiles: [application]
+    env_file:
+      - /etc/nutrition-tracker/runtime.env
+      - /etc/nutrition-tracker/database.env
+      - /etc/nutrition-tracker/api.env
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: "4000"
+      NODE_EXTRA_CA_CERTS: /run/internal-ca/ca.crt
+    dns: [127.0.0.1]
+    extra_hosts: *compat-object-host
+    depends_on:
+      postgres:
+        condition: service_healthy
+      caddy:
+        condition: service_started
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m,uid=1000,gid=1000
+    volumes:
+      - /etc/nutrition-tracker/pki/trust:/run/internal-ca:ro,z
+      - /var/lib/nutrition-tracker/export-read-spool:/var/lib/nutrition-tracker/export-read-spool:Z
+    networks:
+      backend: {}
+      object_egress:
+        gw_priority: 1
+    cpus: "0.50"
+    mem_limit: 768m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/ready').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  web:
+    <<: *app-security
+    image: ${WEB_IMAGE}
+    profiles: [application]
+    environment:
+      API_INTERNAL_URL: http://127.0.0.1:4000
+      HOSTNAME: 0.0.0.0
+      NODE_ENV: production
+      PORT: "3000"
+      WEB_PUBLIC_ORIGIN: https://${WEB_FQDN}
+    depends_on:
+      api:
+        condition: service_started
+    network_mode: service:api
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000
+    cpus: "0.40"
+    mem_limit: 768m
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  worker:
+    <<: *app-security
+    image: ${WORKER_IMAGE}
+    profiles: [application]
+    env_file:
+      - /etc/nutrition-tracker/runtime.env
+      - /etc/nutrition-tracker/database.env
+      - /etc/nutrition-tracker/worker.env
+    environment:
+      NODE_EXTRA_CA_CERTS: /run/internal-ca/ca.crt
+    dns: [127.0.0.1]
+    extra_hosts: *compat-object-host
+    depends_on:
+      postgres:
+        condition: service_healthy
+      caddy:
+        condition: service_started
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m,uid=1000,gid=1000
+    volumes:
+      - /etc/nutrition-tracker/pki/trust:/run/internal-ca:ro,z
+      - /var/lib/nutrition-tracker/export-spool:/var/lib/nutrition-tracker/export-spool:Z
+      - /var/lib/nutrition-tracker/search-spool:/var/lib/nutrition-tracker/search-spool:Z
+    networks:
+      backend: {}
+      object_egress:
+        gw_priority: 1
+    cpus: "0.60"
+    mem_limit: 1536m
+    healthcheck:
+      test: ["CMD", "node", "dist/database-readiness-probe.js"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
+
+  migrate:
+    <<: *app-security
+    image: ${MIGRATOR_IMAGE}
+    profiles: [operations]
+    restart: "no"
+    command: ["node", "dist/cli.js"]
+    env_file:
+      - /etc/nutrition-tracker/runtime.env
+      - /etc/nutrition-tracker/database.env
+    environment:
+      NODE_EXTRA_CA_CERTS: /run/internal-ca/ca.crt
+    depends_on:
+      postgres:
+        condition: service_healthy
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000
+    volumes:
+      - /etc/nutrition-tracker/pki/trust:/run/internal-ca:ro,z
+    networks: [backend]
+    cpus: "0.50"
+    mem_limit: 1024m
+
+  object-storage-live-canary:
+    <<: *app-security
+    image: ${WORKER_IMAGE}
+    profiles: [operations]
+    restart: "no"
+    command: ["node", "dist/object-storage-credential-canary.js"]
+    env_file:
+      - /etc/nutrition-tracker/runtime.env
+      - /etc/nutrition-tracker/api.env
+      - /etc/nutrition-tracker/worker.env
+      - /etc/nutrition-tracker/restore.env
+    dns: [127.0.0.1]
+    extra_hosts: *native-object-host
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000
+    volumes:
+      - /etc/nutrition-tracker/oci/restore-private-key.pem:/run/oci/restore-private-key.pem:ro,z
+    networks:
+      object_egress:
+        gw_priority: 1
+    cpus: "0.25"
+    mem_limit: 512m
+
+  object-egress-negative-canary:
+    <<: *app-security
+    image: ${WORKER_IMAGE}
+    profiles: [operations]
+    restart: "no"
+    command:
+      - node
+      - -e
+      - >-
+        const net=require('node:net');let done=false;
+        const finish=(code)=>{if(done)return;done=true;socket.destroy();process.exit(code)};
+        const socket=net.connect({host:'1.1.1.1',port:443});
+        socket.setTimeout(3000,()=>finish(0));socket.on('error',()=>finish(0));
+        socket.on('connect',()=>{console.error('Unexpected arbitrary object-egress access');finish(1)});
+    networks:
+      object_egress:
+        gw_priority: 1
+    cpus: "0.10"
+    mem_limit: 128m
+
+  erasure-restore-attestation:
+    <<: *app-security
+    image: ${WORKER_IMAGE}
+    profiles: [operations]
+    restart: "no"
+    command: ["node", "dist/erasure-ledger-restore.js"]
+    env_file:
+      - /etc/nutrition-tracker/runtime.env
+      - /etc/nutrition-tracker/database.env
+      - /etc/nutrition-tracker/restore.env
+    environment:
+      NODE_EXTRA_CA_CERTS: /run/internal-ca/ca.crt
+    dns: [127.0.0.1]
+    extra_hosts: *native-object-host
+    depends_on:
+      postgres:
+        condition: service_healthy
+      caddy:
+        condition: service_started
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m,uid=1000,gid=1000
+      - /var/lib/nutrition-tracker/erasure-restore-spool:rw,noexec,nosuid,size=512m,uid=1000,gid=1000
+    volumes:
+      - /etc/nutrition-tracker/pki/trust:/run/internal-ca:ro,z
+      - /etc/nutrition-tracker/oci/restore-private-key.pem:/run/oci/restore-private-key.pem:ro,z
+    networks:
+      backend: {}
+      object_egress:
+        gw_priority: 1
+    cpus: "0.50"
+    mem_limit: 1024m
+
+  database-readiness:
+    <<: *app-security
+    image: ${WORKER_IMAGE}
+    profiles: [operations]
+    restart: "no"
+    command: ["node", "dist/database-readiness-probe.js"]
+    env_file:
+      - /etc/nutrition-tracker/runtime.env
+      - /etc/nutrition-tracker/database.env
+    environment:
+      NODE_EXTRA_CA_CERTS: /run/internal-ca/ca.crt
+    depends_on:
+      postgres:
+        condition: service_healthy
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000
+    volumes:
+      - /etc/nutrition-tracker/pki/trust:/run/internal-ca:ro,z
+    networks: [backend]
+    cpus: "0.25"
+    mem_limit: 512m
+
+networks:
+  edge: {}
+  backend:
+    internal: true
+  object_egress:
+    name: cronometer-gold-beta-object-egress
+    driver: bridge
+    internal: false
+    ipam:
+      config:
+        - subnet: 172.31.255.0/28

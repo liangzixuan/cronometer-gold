@@ -1,0 +1,7 @@
+{
+  "backupId": "REPLACE_BOOT_VOLUME_BACKUP_OCID",
+  "backupPolicyId": "REPLACE_TERRAFORM_OUTPUT_BOOT_VOLUME_BACKUP_POLICY_ID",
+  "restoreDrillAt": "REPLACE_RFC3339_UTC_TIMESTAMP",
+  "restoreDrillResult": "passed",
+  "sourceCommit": "REPLACE_FULL_40_CHARACTER_GIT_SHA"
+}

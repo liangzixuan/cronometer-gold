@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { EncryptedArtifactStore } from "./artifact-encryption.js";
 import {
+  assertS3ExactVersionResponse,
   S3ArtifactStoreTimeoutError,
   S3ArtifactStoreVersionConflictError,
   S3RawArtifactStore,
@@ -178,6 +179,7 @@ describe("S3-compatible encrypted artifact hook", () => {
       }
       response.statusCode = 200;
       response.setHeader("content-length", ciphertext.byteLength);
+      response.setHeader("x-amz-version-id", "version-one");
       response.end(ciphertext);
     });
     servers.push(server);
@@ -236,6 +238,83 @@ describe("S3-compatible encrypted artifact hook", () => {
     await expect(store.open({ objectKey: "erasure-ledger/v1/key/abc.enc" })).rejects.toBeInstanceOf(
       S3ArtifactStoreVersionConflictError,
     );
+  });
+
+  it("uses an injected native inventory only for resolution and keeps the exact read on S3 compatibility", async () => {
+    const requests: string[] = [];
+    const server = createServer((request, response) => {
+      requests.push(request.url ?? "");
+      response.statusCode = 404;
+      response.end();
+    });
+    servers.push(server);
+    await new Promise<void>((resolvePromise) => server.listen(0, "127.0.0.1", resolvePromise));
+    const port = (server.address() as AddressInfo).port;
+    const store = new S3RawArtifactStore({
+      accessKeyId: "restore-access",
+      bucket: "erasure-ledger",
+      endpoint: `http://127.0.0.1:${port}`,
+      readVersionPolicy: "require_singleton",
+      region: "us-east-1",
+      secretAccessKey: "restore-secret",
+      singletonVersionResolver: {
+        resolveSingletonVersion: async () => ({ versionId: "oci-version-one" }),
+      },
+    });
+    await expect(store.open({ objectKey: "erasure-ledger/v1/key/abc.enc" })).rejects.toBeInstanceOf(
+      S3ArtifactStoreVersionConflictError,
+    );
+    expect(requests).toEqual([
+      "/erasure-ledger/erasure-ledger/v1/key/abc.enc?versionId=oci-version-one",
+    ]);
+  });
+
+  it("accepts only an exact 200 response bound to the requested live version", () => {
+    expect(() =>
+      assertS3ExactVersionResponse({
+        requestedVersionId: "version-one",
+        statusCode: 200,
+        versionIdHeader: "version-one",
+      }),
+    ).not.toThrow();
+    expect(() =>
+      assertS3ExactVersionResponse({
+        deleteMarkerHeader: "false",
+        requestedVersionId: "version-one",
+        statusCode: 200,
+        versionIdHeader: "version-one",
+      }),
+    ).not.toThrow();
+  });
+
+  it.each([
+    { label: "missing version header", statusCode: 200 },
+    { label: "mismatched version", statusCode: 200, versionIdHeader: "version-two" },
+    {
+      label: "multiple version headers",
+      statusCode: 200,
+      versionIdHeader: ["version-one", "version-two"],
+    },
+    {
+      deleteMarkerHeader: "true",
+      label: "delete marker",
+      statusCode: 200,
+      versionIdHeader: "version-one",
+    },
+    {
+      deleteMarkerHeader: ["false", "true"],
+      label: "multiple delete-marker headers",
+      statusCode: 200,
+      versionIdHeader: "version-one",
+    },
+    { label: "partial response", statusCode: 206, versionIdHeader: "version-one" },
+  ])("rejects exact-version response with $label", (input) => {
+    expect(() =>
+      assertS3ExactVersionResponse({
+        requestedVersionId: "version-one",
+        ...input,
+      }),
+    ).toThrow(S3ArtifactStoreVersionConflictError);
   });
 
   it("rejects incomplete, ambiguous, and noncanonical version-list XML", async () => {

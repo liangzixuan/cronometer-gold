@@ -1,0 +1,14 @@
+[Unit]
+Description=Install the pinned deployment's Docker CE runtime prerequisites
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/install-nutrition-docker-ce
+RemainAfterExit=yes
+TimeoutStartSec=20min
+TimeoutStopSec=2min
+
+[Install]
+WantedBy=multi-user.target

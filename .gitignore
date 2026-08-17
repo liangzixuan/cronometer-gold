@@ -32,5 +32,7 @@ data/exports/
 
 # logs and caches
 *.log
+*.py[cod]
+__pycache__/
 .turbo/
 tmp/

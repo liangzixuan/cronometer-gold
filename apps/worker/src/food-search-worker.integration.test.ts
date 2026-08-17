@@ -192,13 +192,13 @@ async function seedCatalogue(database: Parameters<typeof runMigrations>[0]): Pro
         food_source_id: source.id,
         media_type: "application/json",
         parser_version: "worker-search-fixture@1",
-        promoted_at: "2026-08-15T13:00:00Z",
+        promoted_at: null,
         published_on: "2026-08-15",
         record_counts: { fixture: true },
         release_key: "worker-release-1",
         rights_manifest_sha256: "e".repeat(64),
         rights_manifest_uri: "repo://worker-search-rights.json",
-        status: "promoted",
+        status: "imported",
         upstream_schema_version: "fixture-v1",
         validation_summary: { fixture: true },
       })
@@ -248,6 +248,11 @@ async function seedCatalogue(database: Parameters<typeof runMigrations>[0]): Pro
       sequence: 1,
       sourceFoodKey: "forbidden-oatmeal",
     });
+    await transaction
+      .updateTable("food_source_release")
+      .set({ promoted_at: "2026-08-15T13:00:00Z", status: "promoted" })
+      .where("id", "=", release.id)
+      .execute();
     await transaction
       .updateTable("food_source")
       .set({ active_release_id: release.id })

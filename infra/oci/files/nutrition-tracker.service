@@ -1,0 +1,29 @@
+[Unit]
+Description=Cronometer Gold controlled-beta application stack
+Requires=docker.service nutrition-object-egress-firewall.service
+After=docker.service nutrition-object-egress-firewall.service network-online.target
+Wants=network-online.target
+OnFailure=nutrition-release-failure-containment.service
+ConditionPathExists=/etc/nutrition-tracker/deploy.env
+ConditionPathExists=/etc/nutrition-tracker/runtime.env
+ConditionPathExists=/etc/nutrition-tracker/database.env
+ConditionPathExists=/etc/nutrition-tracker/api.env
+ConditionPathExists=/etc/nutrition-tracker/worker.env
+ConditionPathExists=/etc/nutrition-tracker/oci/restore-private-key.pem
+ConditionPathExists=/etc/nutrition-tracker/meili.env
+ConditionPathExists=/etc/nutrition-tracker/restore.env
+ConditionPathExists=/etc/nutrition-tracker/backup-restore-evidence.json
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/nutrition-tracker
+ExecStartPre=/usr/local/sbin/nutrition-prepare-internal-pki verify 14
+ExecStartPre=/usr/local/sbin/nutrition-instance-identity verify-runtime
+ExecStart=/usr/local/sbin/nutrition-release-orchestrator start
+ExecStop=/usr/local/sbin/nutrition-release-orchestrator stop
+TimeoutStartSec=30min
+TimeoutStopSec=2min
+
+[Install]
+WantedBy=multi-user.target

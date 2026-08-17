@@ -36,7 +36,7 @@ function rawStore(
             "EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID",
           ),
           bucket: required(config.EXPORT_ARTIFACT_BUCKET, "EXPORT_ARTIFACT_BUCKET"),
-          deleteVersionPolicy: "suspended_null",
+          deleteVersionPolicy: config.EXPORT_ARTIFACT_DELETE_VERSION_POLICY,
           endpoint: required(config.EXPORT_ARTIFACT_ENDPOINT, "EXPORT_ARTIFACT_ENDPOINT"),
           region: required(config.EXPORT_ARTIFACT_REGION, "EXPORT_ARTIFACT_REGION"),
           requestTimeoutMs: config.EXPORT_ARTIFACT_REQUEST_TIMEOUT_MS,
