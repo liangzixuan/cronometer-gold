@@ -1,0 +1,25 @@
+{
+  "cli": {
+    "version": "22.0.0",
+    "requireCommit": true,
+    "appVersionSource": "local",
+    "promptToConfigurePushNotifications": false
+  },
+  "build": {
+    "production": {
+      "distribution": "store",
+      "credentialsSource": "remote",
+      "environment": "production",
+      "node": "22.13.0",
+      "corepack": true,
+      "pnpm": "11.19.0",
+      "autoIncrement": false,
+      "android": {
+        "buildType": "app-bundle"
+      },
+      "ios": {
+        "simulator": false
+      }
+    }
+  }
+}

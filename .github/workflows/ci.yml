@@ -40,10 +40,10 @@ jobs:
       - name: Build all applications and packages
         run: pnpm build
 
-      - name: Exercise the mobile release build preflight
+      - name: Exercise the mobile release readiness state
         env:
-          EXPO_PUBLIC_API_URL: https://api.example.invalid
-        run: pnpm --filter @nutrition-tracker/mobile build:release
+          EXPO_PUBLIC_API_URL: ${{ vars.EXPO_PUBLIC_API_URL }}
+        run: pnpm --filter @nutrition-tracker/mobile ci:release-state
 
       - name: Reject high-severity production dependency advisories
         run: pnpm audit:prod

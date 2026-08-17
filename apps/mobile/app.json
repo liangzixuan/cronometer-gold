@@ -2,6 +2,7 @@
   "expo": {
     "name": "Nutrition Tracker",
     "slug": "nutrition-tracker",
+    "owner": "zixuanliang",
     "version": "0.1.0",
     "platforms": ["ios", "android"],
     "orientation": "default",
@@ -77,6 +78,9 @@
         "lockScreenNotificationBody": "Time to check in.",
         "lockScreenNotificationTitle": "Nutrition Tracker",
         "signedBatchProtocol": "nutrition-tracker-health-import-v1"
+      },
+      "eas": {
+        "projectId": "14022636-ab56-468c-94f6-d6106addde42"
       }
     }
   }
