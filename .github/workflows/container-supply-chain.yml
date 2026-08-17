@@ -759,7 +759,7 @@ jobs:
             psql 'host=127.0.0.1 dbname=runtime_contract user=runtime_contract sslmode=require' \
               --no-psqlrc --no-align --tuples-only --quiet --command \
               "SELECT value || ':' || (SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()) FROM runtime_contract;")"
-          test "${tls_result}" = 'initialized-once:t'
+          test "${tls_result}" = 'initialized-once:true'
           docker exec "${container}" sh -ceu \
             'test "$(id -u):$(id -g)" = 70:70; test ! -e /usr/local/bin/gosu'
           docker stop --time 15 "${container}" >/dev/null
