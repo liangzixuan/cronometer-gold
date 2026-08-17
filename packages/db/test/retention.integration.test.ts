@@ -33,6 +33,7 @@ import {
   createRecipeDiaryEntry,
   createReminderSchedule,
   createSession,
+  discoverMigrations,
   executeAccountErasureJob,
   failAccountErasureJob,
   failPrivacyExportJob,
@@ -74,6 +75,16 @@ const databaseUrl = process.env.TEST_DATABASE_URL;
 const describeDatabase = databaseUrl ? describe : describe.skip;
 const digest = (character: string) => character.repeat(64);
 const TEST_EXPORT_SNAPSHOT_BYTES = 32 * 1_024 * 1_024;
+const RETENTION_FIXTURE_YEAR = 2500;
+
+/**
+ * Keep authorization and asynchronous-work fixtures deterministic and safely
+ * ahead of PostgreSQL's real clock. Diary, DST, biometric, reminder, and
+ * imported-health dates intentionally remain on their domain-specific timeline.
+ */
+function retentionInstant(monthDayAndTime: string, yearOffset = 0): string {
+  return `${RETENTION_FIXTURE_YEAR + yearOffset}-${monthDayAndTime}`;
+}
 
 describeDatabase("retention persistence", { timeout: 15_000 }, () => {
   it("fails 0006 before DDL for legacy custom roots, then upgrades cleanly after remediation", async () => {
@@ -123,6 +134,18 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       expect(blocked.rows[0]?.table_name).toBeNull();
       await database.deleteFrom("food").where("owner_user_id", "=", owner.id).execute();
       await sql.raw(migration).execute(database);
+      await sql`
+        create table app_schema_migration (
+          name text primary key,
+          checksum text not null check (checksum ~ '^[0-9a-f]{64}$'),
+          applied_at timestamptz not null default clock_timestamp()
+        )
+      `.execute(database);
+      for (const applied of await discoverMigrations())
+        await sql`
+          insert into app_schema_migration (name, checksum)
+          values (${applied.name}, ${applied.checksum})
+        `.execute(database);
       const validations = await sql<{ conname: string; convalidated: boolean }>`
         select conname,convalidated
         from pg_constraint
@@ -151,7 +174,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       ).rejects.toThrow("Database restore replay attestation is not current");
       await expect(
         completeDatabaseRestoreReplayAttestation(database, {
-          completedAt: "2026-08-16T00:00:00Z",
+          completedAt: retentionInstant("08-16T00:00:00Z"),
           reconciliationDigest: digest("0"),
           replayedSubjectCount: 0,
           restoreEpoch: initialEpoch,
@@ -530,7 +553,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
     try {
       const challenge = await createDeviceChallenge(fixture.database, {
         clientOperationId: randomUUID(),
-        expiresAt: "2027-01-01T00:00:00Z",
+        expiresAt: retentionInstant("01-01T00:00:00Z", 1),
         nonceHash: digest("a"),
         platform: "apple_healthkit",
         requestDigest: digest("b"),
@@ -686,7 +709,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       });
       const replacementChallenge = await createDeviceChallenge(fixture.database, {
         clientOperationId: randomUUID(),
-        expiresAt: "2027-01-01T00:00:00Z",
+        expiresAt: retentionInstant("01-01T00:00:00Z", 1),
         nonceHash: digest("1"),
         platform: "apple_healthkit",
         requestDigest: digest("2"),
@@ -785,12 +808,12 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       const exportSessionHash = digest("9");
       const exportProofHash = digest("a");
       await createSession(fixture.database, {
-        expiresAt: "2027-01-01T00:00:00Z",
+        expiresAt: retentionInstant("01-01T00:00:00Z", 1),
         tokenHash: exportSessionHash,
         userId: fixture.owner.userId,
       });
       await createReauthenticationProof(fixture.database, {
-        expiresAt: "2026-08-17T00:00:00Z",
+        expiresAt: retentionInstant("08-17T00:00:00Z"),
         purpose: "account_export",
         sessionTokenHash: exportSessionHash,
         tokenHash: exportProofHash,
@@ -805,7 +828,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         userId: fixture.owner.userId,
       });
       await claimPrivacyExportJobs(fixture.database, {
-        now: "2026-08-16T14:00:00Z",
+        now: retentionInstant("08-16T14:00:00Z"),
         workerId: "import-export-worker",
       });
       const securityRows: PrivacyExportRecord[] = [];
@@ -891,9 +914,9 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       await beginPrivacyExportStagedArtifactUpload(fixture.database, {
         artifactId: abandoned.id,
         jobId: exportJob.job.id,
-        leaseExpiresAt: "2026-08-16T14:10:00Z",
+        leaseExpiresAt: retentionInstant("08-16T14:10:00Z"),
         snapshotId: securitySnapshotId,
-        startedAt: "2026-08-16T14:01:00Z",
+        startedAt: retentionInstant("08-16T14:01:00Z"),
         userId: fixture.owner.userId,
         workerId: "import-export-worker",
       });
@@ -901,12 +924,12 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         artifactId: abandoned.id,
         jobId: exportJob.job.id,
         snapshotId: securitySnapshotId,
-        uploadedAt: "2026-08-16T14:02:00Z",
+        uploadedAt: retentionInstant("08-16T14:02:00Z"),
         userId: fixture.owner.userId,
         workerId: "import-export-worker",
       });
       const [reclaimed] = await claimPrivacyExportJobs(fixture.database, {
-        now: "2026-08-16T14:16:00Z",
+        now: retentionInstant("08-16T14:16:00Z"),
         workerId: "retry-export-worker",
       });
       expect(reclaimed?.id).toBe(exportJob.job.id);
@@ -938,24 +961,24 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       await beginPrivacyExportStagedArtifactUpload(fixture.database, {
         artifactId: retryArtifact.id,
         jobId: exportJob.job.id,
-        leaseExpiresAt: "2026-08-16T14:25:00Z",
+        leaseExpiresAt: retentionInstant("08-16T14:25:00Z"),
         snapshotId: retrySnapshotId,
-        startedAt: "2026-08-16T14:16:30Z",
+        startedAt: retentionInstant("08-16T14:16:30Z"),
         userId: fixture.owner.userId,
         workerId: "retry-export-worker",
       });
       await renewPrivacyExportStagedArtifactUploadLease(fixture.database, {
         artifactId: retryArtifact.id,
         jobId: exportJob.job.id,
-        leaseExpiresAt: "2026-08-16T14:35:00Z",
-        renewedAt: "2026-08-16T14:20:00Z",
+        leaseExpiresAt: retentionInstant("08-16T14:35:00Z"),
+        renewedAt: retentionInstant("08-16T14:20:00Z"),
         snapshotId: retrySnapshotId,
         userId: fixture.owner.userId,
         workerId: "retry-export-worker",
       });
       expect(
         await claimPrivacyExportJobs(fixture.database, {
-          now: "2026-08-16T14:28:00Z",
+          now: retentionInstant("08-16T14:28:00Z"),
           workerId: "competing-export-worker",
         }),
       ).toEqual([]);
@@ -963,12 +986,18 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         artifactId: retryArtifact.id,
         jobId: exportJob.job.id,
         snapshotId: retrySnapshotId,
-        uploadedAt: "2026-08-16T14:32:00Z",
+        uploadedAt: retentionInstant("08-16T14:32:00Z"),
         userId: fixture.owner.userId,
         workerId: "retry-export-worker",
       });
       const retryCompletion = {
-        artifacts: [exportArtifact("json", "2026-08-20T00:00:00Z", "exports/owner/retry.json.enc")],
+        artifacts: [
+          exportArtifact(
+            "json",
+            retentionInstant("08-20T00:00:00Z"),
+            "exports/owner/retry.json.enc",
+          ),
+        ],
         jobId: exportJob.job.id,
         manifestDigest: digest("e"),
         reconciliation: {
@@ -992,7 +1021,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         completePrivacyExportJob(fixture.database, retryCompletion),
       ).rejects.toMatchObject({ code: "EXPORT_NOT_READY" });
       const [cleanup] = await claimCancelledPrivacyExportStagedArtifacts(fixture.database, {
-        now: "2026-08-16T14:18:00Z",
+        now: retentionInstant("08-16T14:33:00Z"),
         workerId: "staged-cleaner",
       });
       expect(cleanup).toMatchObject({
@@ -1001,7 +1030,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       });
       await completePrivacyExportStagedArtifactDeletion(fixture.database, {
         artifactId: abandoned.id,
-        deletedAt: "2026-08-16T14:18:30Z",
+        deletedAt: retentionInstant("08-16T14:33:30Z"),
         deletionEvidenceDigest: digest("f"),
         workerId: "staged-cleaner",
       });
@@ -1019,7 +1048,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
     try {
       const sessionTokenHash = digest("1");
       await createSession(fixture.database, {
-        expiresAt: "2027-01-01T00:00:00Z",
+        expiresAt: retentionInstant("01-01T00:00:00Z", 1),
         tokenHash: sessionTokenHash,
         userId: fixture.owner.userId,
       });
@@ -1043,7 +1072,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       ] as const;
       for (const input of inputs)
         await createReauthenticationProof(fixture.database, {
-          expiresAt: "2026-08-18T00:00:00Z",
+          expiresAt: retentionInstant("08-18T00:00:00Z"),
           purpose: "account_export",
           sessionTokenHash,
           tokenHash: input.proofTokenHash,
@@ -1080,7 +1109,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       ).rejects.toMatchObject({ code: "23505" });
 
       const [claimed] = await claimPrivacyExportJobs(fixture.database, {
-        now: "2026-08-16T14:00:00Z",
+        now: retentionInstant("08-16T14:00:00Z"),
         workerId: "capacity-worker",
       });
       expect(claimed?.id).toBe(winnerAttempt.value.job.id);
@@ -1115,17 +1144,17 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         await failPrivacyExportJob(fixture.database, {
           failureKind: "snapshot_too_large",
           jobId: winnerAttempt.value.job.id,
-          retryAt: "2026-08-16T14:05:00Z",
+          retryAt: retentionInstant("08-16T14:05:00Z"),
           workerId: "capacity-worker",
         }),
       ).toEqual({ attemptCount: 20, deadLettered: true, retryScheduled: false });
       await requeueDeadLetteredPrivacyExportJob(fixture.database, {
         approvalDigest: digest("7"),
         jobId: winnerAttempt.value.job.id,
-        requeuedAt: "2026-08-16T14:05:30Z",
+        requeuedAt: retentionInstant("08-16T14:05:30Z"),
       });
       const [retried] = await claimPrivacyExportJobs(fixture.database, {
-        now: "2026-08-16T14:06:00Z",
+        now: retentionInstant("08-16T14:06:00Z"),
         workerId: "capacity-retry-worker",
       });
       expect(retried?.id).toBe(winnerAttempt.value.job.id);
@@ -1152,12 +1181,12 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
     try {
       const sessionTokenHash = digest("1");
       await createSession(fixture.database, {
-        expiresAt: "2027-01-01T00:00:00Z",
+        expiresAt: retentionInstant("01-01T00:00:00Z", 1),
         tokenHash: sessionTokenHash,
         userId: fixture.owner.userId,
       });
       await createReauthenticationProof(fixture.database, {
-        expiresAt: "2026-08-18T00:00:00Z",
+        expiresAt: retentionInstant("08-18T00:00:00Z"),
         purpose: "account_export",
         sessionTokenHash,
         tokenHash: digest("2"),
@@ -1172,7 +1201,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         userId: fixture.owner.userId,
       });
       const [exportClaim] = await claimPrivacyExportJobs(fixture.database, {
-        now: "2026-08-17T01:00:00Z",
+        now: retentionInstant("08-17T01:00:00Z"),
         workerId: "dead-letter-worker",
       });
       expect(exportClaim?.id).toBe(exportMutation.job.id);
@@ -1185,7 +1214,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         await failPrivacyExportJob(fixture.database, {
           failureKind: "retryable",
           jobId: exportMutation.job.id,
-          retryAt: "2026-08-17T01:10:00Z",
+          retryAt: retentionInstant("08-17T01:10:00Z"),
           workerId: "dead-letter-worker",
         }),
       ).toEqual({ attemptCount: 20, deadLettered: true, retryScheduled: false });
@@ -1193,12 +1222,12 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         requeueDeadLetteredPrivacyExportJob(fixture.database, {
           approvalDigest: digest("4"),
           jobId: exportMutation.job.id,
-          requeuedAt: "2026-08-17T01:11:00Z",
+          requeuedAt: retentionInstant("08-17T01:11:00Z"),
         }),
       ).resolves.toMatchObject({ id: exportMutation.job.id, status: "queued" });
 
       const [crashClaim] = await claimPrivacyExportJobs(fixture.database, {
-        now: "2026-08-17T01:12:00Z",
+        now: retentionInstant("08-17T01:12:00Z"),
         workerId: "crashed-export-worker",
       });
       expect(crashClaim?.id).toBe(exportMutation.job.id);
@@ -1209,29 +1238,29 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         .execute();
       await renewRetentionWorkLease(fixture.database, {
         kind: "privacy_export",
-        renewedAt: "2026-08-17T01:13:00Z",
+        renewedAt: retentionInstant("08-17T01:13:00Z"),
         targetId: exportMutation.job.id,
         workerId: "crashed-export-worker",
       });
       expect(
         await claimPrivacyExportJobs(fixture.database, {
-          now: "2026-08-17T01:20:00Z",
+          now: retentionInstant("08-17T01:20:00Z"),
           workerId: "replacement-export-worker",
         }),
       ).toEqual([]);
       expect(
         await claimPrivacyExportJobs(fixture.database, {
-          now: "2026-08-17T01:30:00Z",
+          now: retentionInstant("08-17T01:30:00Z"),
           workerId: "replacement-export-worker",
         }),
       ).toEqual([]);
       await requeueDeadLetteredPrivacyExportJob(fixture.database, {
         approvalDigest: digest("a"),
         jobId: exportMutation.job.id,
-        requeuedAt: "2026-08-17T01:31:00Z",
+        requeuedAt: retentionInstant("08-17T01:31:00Z"),
       });
       const [artifactJobClaim] = await claimPrivacyExportJobs(fixture.database, {
-        now: "2026-08-17T01:32:00Z",
+        now: retentionInstant("08-17T01:32:00Z"),
         workerId: "artifact-fixture-worker",
       });
       expect(artifactJobClaim?.id).toBe(exportMutation.job.id);
@@ -1239,11 +1268,11 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         .insertInto("privacy_export_upload_artifact")
         .values({
           attempt_count: 20,
-          cancelled_at: "2026-08-17T01:33:00Z",
+          cancelled_at: retentionInstant("08-17T01:33:00Z"),
           format: "csv_zip",
           job_id: exportMutation.job.id,
           object_key: "exports/dead-letter/abandoned.zip.enc",
-          locked_at: "2026-08-17T02:00:00Z",
+          locked_at: retentionInstant("08-17T02:00:00Z"),
           locked_by: "crashed-stage-cleaner",
           snapshot_id: "dead-letter-snapshot",
           status: "cancelled",
@@ -1256,7 +1285,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         .values({
           ciphertext_bytes: "1",
           encryption_key_id: "test-key",
-          expires_at: "2026-08-17T02:00:00Z",
+          expires_at: retentionInstant("08-17T02:00:00Z"),
           file_name: "export.json.enc",
           format: "json",
           job_id: exportMutation.job.id,
@@ -1272,8 +1301,8 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         .values({
           artifact_id: completedArtifact.id,
           attempt_count: 20,
-          available_at: "2026-08-17T02:00:00Z",
-          locked_at: "2026-08-17T02:00:00Z",
+          available_at: retentionInstant("08-17T02:00:00Z"),
+          locked_at: retentionInstant("08-17T02:00:00Z"),
           locked_by: "crashed-artifact-cleaner",
           status: "running",
         })
@@ -1281,61 +1310,61 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       await fixture.database
         .updateTable("privacy_export_job")
         .set({
-          completed_at: "2026-08-17T01:34:00Z",
-          expires_at: "2026-08-17T02:00:00Z",
+          completed_at: retentionInstant("08-17T01:34:00Z"),
+          expires_at: retentionInstant("08-17T02:00:00Z"),
           status: "completed",
         })
         .where("id", "=", exportMutation.job.id)
         .execute();
       expect(
         await claimCancelledPrivacyExportStagedArtifacts(fixture.database, {
-          now: "2026-08-17T02:01:00Z",
+          now: retentionInstant("08-17T02:01:00Z"),
           workerId: "replacement-stage-cleaner",
         }),
       ).toEqual([]);
       expect(
         await claimExpiredPrivacyExportArtifacts(fixture.database, {
-          now: "2026-08-17T02:01:00Z",
+          now: retentionInstant("08-17T02:01:00Z"),
           workerId: "replacement-artifact-cleaner",
         }),
       ).toEqual([]);
       await renewRetentionWorkLease(fixture.database, {
         kind: "staged_artifact_deletion",
-        renewedAt: "2026-08-17T02:01:00Z",
+        renewedAt: retentionInstant("08-17T02:01:00Z"),
         targetId: cancelledStage.id,
         workerId: "crashed-stage-cleaner",
       });
       await renewRetentionWorkLease(fixture.database, {
         kind: "artifact_deletion",
-        renewedAt: "2026-08-17T02:01:00Z",
+        renewedAt: retentionInstant("08-17T02:01:00Z"),
         targetId: completedArtifact.id,
         workerId: "crashed-artifact-cleaner",
       });
       expect(
         await claimCancelledPrivacyExportStagedArtifacts(fixture.database, {
-          now: "2026-08-17T02:20:00Z",
+          now: retentionInstant("08-17T02:20:00Z"),
           workerId: "replacement-stage-cleaner",
         }),
       ).toEqual([]);
       expect(
         await claimExpiredPrivacyExportArtifacts(fixture.database, {
-          now: "2026-08-17T02:20:00Z",
+          now: retentionInstant("08-17T02:20:00Z"),
           workerId: "replacement-artifact-cleaner",
         }),
       ).toEqual([]);
       await requeueDeadLetteredPrivacyExportStagedArtifactDeletion(fixture.database, {
         approvalDigest: digest("c"),
         artifactId: cancelledStage.id,
-        requeuedAt: "2026-08-17T02:02:00Z",
+        requeuedAt: retentionInstant("08-17T02:21:00Z"),
       });
       await requeueDeadLetteredPrivacyExportArtifactDeletion(fixture.database, {
         approvalDigest: digest("d"),
         artifactId: completedArtifact.id,
-        requeuedAt: "2026-08-17T02:02:00Z",
+        requeuedAt: retentionInstant("08-17T02:21:00Z"),
       });
 
       await createReauthenticationProof(fixture.database, {
-        expiresAt: "2026-08-18T00:00:00Z",
+        expiresAt: retentionInstant("08-18T00:00:00Z"),
         purpose: "account_erasure",
         sessionTokenHash,
         tokenHash: digest("5"),
@@ -1343,18 +1372,18 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       });
       const erasure = await requestAccountErasure(fixture.database, {
         clientOperationId: randomUUID(),
-        executeAfter: "2026-08-17T01:12:00Z",
+        executeAfter: retentionInstant("08-17T02:22:00Z"),
         proofTokenHash: digest("5"),
         requestDigest: digest("6"),
-        requestedAt: "2026-08-17T01:11:30Z",
+        requestedAt: retentionInstant("08-17T02:21:30Z"),
         restoreLocator: digest("7"),
         sessionTokenHash,
-        statusCapabilityExpiresAt: "2026-09-16T00:00:00Z",
+        statusCapabilityExpiresAt: retentionInstant("09-16T00:00:00Z"),
         statusCapabilityHash: digest("8"),
         userId: fixture.owner.userId,
       });
       const [erasureClaim] = await claimAccountErasureJobs(fixture.database, {
-        now: "2026-08-17T01:12:00Z",
+        now: retentionInstant("08-17T02:22:00Z"),
         workerId: "dead-letter-worker",
       });
       expect(erasureClaim?.id).toBe(erasure.job.id);
@@ -1367,14 +1396,14 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         await failAccountErasureJob(fixture.database, {
           errorCode: "OBJECT_STORE_UNAVAILABLE",
           jobId: erasure.job.id,
-          retryAt: "2026-08-17T01:20:00Z",
+          retryAt: retentionInstant("08-17T02:30:00Z"),
           workerId: "dead-letter-worker",
         }),
       ).toEqual({ attemptCount: 20, deadLettered: true, retryScheduled: false });
       const requeuedErasure = await requeueDeadLetteredAccountErasureJob(fixture.database, {
         approvalDigest: digest("9"),
         jobId: erasure.job.id,
-        requeuedAt: "2026-08-17T01:21:00Z",
+        requeuedAt: retentionInstant("08-17T02:31:00Z"),
       });
       expect(requeuedErasure).toMatchObject({
         id: erasure.job.id,
@@ -1382,7 +1411,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         status: "queued",
       });
       const [crashedErasure] = await claimAccountErasureJobs(fixture.database, {
-        now: "2026-08-17T01:22:00Z",
+        now: retentionInstant("08-17T02:32:00Z"),
         workerId: "crashed-erasure-worker",
       });
       expect(crashedErasure?.id).toBe(erasure.job.id);
@@ -1393,26 +1422,26 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         .execute();
       await renewRetentionWorkLease(fixture.database, {
         kind: "account_erasure",
-        renewedAt: "2026-08-17T01:23:00Z",
+        renewedAt: retentionInstant("08-17T02:33:00Z"),
         targetId: erasure.job.id,
         workerId: "crashed-erasure-worker",
       });
       expect(
         await claimAccountErasureJobs(fixture.database, {
-          now: "2026-08-17T01:30:00Z",
+          now: retentionInstant("08-17T02:40:00Z"),
           workerId: "replacement-erasure-worker",
         }),
       ).toEqual([]);
       expect(
         await claimAccountErasureJobs(fixture.database, {
-          now: "2026-08-17T01:40:00Z",
+          now: retentionInstant("08-17T02:50:00Z"),
           workerId: "replacement-erasure-worker",
         }),
       ).toEqual([]);
       const requeuedAfterCrash = await requeueDeadLetteredAccountErasureJob(fixture.database, {
         approvalDigest: digest("e"),
         jobId: erasure.job.id,
-        requeuedAt: "2026-08-17T01:41:00Z",
+        requeuedAt: retentionInstant("08-17T02:51:00Z"),
       });
       expect(requeuedAfterCrash.startedAt).toBe(erasureClaim?.startedAt);
       expect(
@@ -1423,7 +1452,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       ).toEqual({ count: "6" });
       const deadLetters = await claimRetentionDeadLetterEvents(fixture.database, {
         limit: 10,
-        now: "2026-08-17T03:00:00Z",
+        now: retentionInstant("08-17T03:00:00Z"),
         workerId: "retention-alert-worker",
       });
       expect(deadLetters.map((event) => event.recoveryKind).sort()).toEqual([
@@ -1434,7 +1463,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       ]);
       for (const event of deadLetters)
         await acknowledgeRetentionDeadLetterEvent(fixture.database, {
-          acknowledgedAt: "2026-08-17T03:01:00Z",
+          acknowledgedAt: retentionInstant("08-17T03:01:00Z"),
           eventId: event.id,
           workerId: "retention-alert-worker",
         });
@@ -1452,7 +1481,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
     try {
       const sessionHash = digest("9");
       await createSession(fixture.database, {
-        expiresAt: "2027-01-01T00:00:00Z",
+        expiresAt: retentionInstant("01-01T00:00:00Z", 1),
         tokenHash: sessionHash,
         userId: fixture.owner.userId,
       });
@@ -1493,7 +1522,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         .execute();
       const exportProof = digest("a");
       await createReauthenticationProof(fixture.database, {
-        expiresAt: "2026-08-17T00:00:00Z",
+        expiresAt: retentionInstant("08-17T00:00:00Z"),
         purpose: "account_export",
         sessionTokenHash: sessionHash,
         tokenHash: exportProof,
@@ -1508,7 +1537,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         userId: fixture.owner.userId,
       });
       const [claimedExport] = await claimPrivacyExportJobs(fixture.database, {
-        now: "2026-08-16T14:00:00Z",
+        now: retentionInstant("08-16T14:00:00Z"),
         workerId: "privacy-worker",
       });
       expect(claimedExport).toMatchObject({
@@ -1547,7 +1576,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       expect(exported).toHaveLength(
         snapshots.reduce((sum, snapshot) => sum + Number(snapshot.sourceCount), 0),
       );
-      const expiry = "2026-08-18T00:00:00Z";
+      const expiry = retentionInstant("08-18T00:00:00Z");
       const completionInput = {
         artifacts: [
           exportArtifact("json", expiry, "exports/owner/export.json.enc"),
@@ -1586,9 +1615,9 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         await beginPrivacyExportStagedArtifactUpload(fixture.database, {
           artifactId: artifact.id,
           jobId: exportMutation.job.id,
-          leaseExpiresAt: "2026-08-16T14:10:00Z",
+          leaseExpiresAt: retentionInstant("08-16T14:10:00Z"),
           snapshotId,
-          startedAt: "2026-08-16T14:04:00Z",
+          startedAt: retentionInstant("08-16T14:04:00Z"),
           userId: fixture.owner.userId,
           workerId: "privacy-worker",
         });
@@ -1596,7 +1625,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
           artifactId: artifact.id,
           jobId: exportMutation.job.id,
           snapshotId,
-          uploadedAt: "2026-08-16T14:05:00Z",
+          uploadedAt: retentionInstant("08-16T14:05:00Z"),
           userId: fixture.owner.userId,
           workerId: "privacy-worker",
         });
@@ -1606,7 +1635,11 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
           ...completionInput,
           artifacts: [
             completionInput.artifacts[0],
-            exportArtifact("csv", "2026-09-18T00:00:00Z", "exports/owner/export.zip.enc"),
+            exportArtifact(
+              "csv",
+              retentionInstant("09-18T00:00:00Z"),
+              "exports/owner/export.zip.enc",
+            ),
           ],
         }),
       ).rejects.toMatchObject({ code: "VALIDATION" });
@@ -1641,19 +1674,19 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       await recordPrivacyExportArtifactDownloadAudit(fixture.database, {
         format: "json",
         jobId: completedExport.id,
-        occurredAt: "2026-08-16T14:06:00Z",
+        occurredAt: retentionInstant("08-16T14:06:00Z"),
         outcome: "opened",
         userId: fixture.owner.userId,
       });
       const expired = await claimExpiredPrivacyExportArtifacts(fixture.database, {
-        now: "2026-08-19T00:00:00Z",
+        now: retentionInstant("08-19T00:00:00Z"),
         workerId: "artifact-cleaner",
       });
       expect(expired).toHaveLength(2);
       for (const artifact of expired.filter((candidate) => candidate.format === "json"))
         await completePrivacyExportArtifactDeletion(fixture.database, {
           artifactId: artifact.artifactId,
-          deletedAt: "2026-08-19T00:01:00Z",
+          deletedAt: retentionInstant("08-19T00:01:00Z"),
           deletionEvidenceDigest: digest("d"),
           workerId: "artifact-cleaner",
         });
@@ -1675,7 +1708,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
 
       const crashedExportProof = digest("6");
       await createReauthenticationProof(fixture.database, {
-        expiresAt: "2026-08-17T00:00:00Z",
+        expiresAt: retentionInstant("08-17T00:00:00Z"),
         purpose: "account_export",
         sessionTokenHash: sessionHash,
         tokenHash: crashedExportProof,
@@ -1690,7 +1723,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         userId: fixture.owner.userId,
       });
       await claimPrivacyExportJobs(fixture.database, {
-        now: "2026-08-19T00:02:00Z",
+        now: retentionInstant("08-19T00:02:00Z"),
         workerId: "privacy-worker",
       });
       let crashedSnapshotId = "";
@@ -1724,9 +1757,9 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         await beginPrivacyExportStagedArtifactUpload(fixture.database, {
           artifactId: artifact.id,
           jobId: crashedExport.job.id,
-          leaseExpiresAt: "2026-08-19T00:12:30Z",
+          leaseExpiresAt: retentionInstant("08-19T00:12:30Z"),
           snapshotId: crashedSnapshotId,
-          startedAt: "2026-08-19T00:02:30Z",
+          startedAt: retentionInstant("08-19T00:02:30Z"),
           userId: fixture.owner.userId,
           workerId: "privacy-worker",
         });
@@ -1735,7 +1768,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
 
       const erasureProof = digest("e");
       await createReauthenticationProof(fixture.database, {
-        expiresAt: "2026-08-17T00:00:00Z",
+        expiresAt: retentionInstant("08-20T00:00:00Z"),
         purpose: "account_erasure",
         sessionTokenHash: sessionHash,
         tokenHash: erasureProof,
@@ -1743,13 +1776,13 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       });
       const erasureInput = {
         clientOperationId: randomUUID(),
-        executeAfter: "2026-08-16T15:00:00Z",
+        executeAfter: retentionInstant("08-19T00:02:50Z"),
         proofTokenHash: erasureProof,
         requestDigest: digest("f"),
-        requestedAt: "2026-08-16T14:30:00Z",
+        requestedAt: retentionInstant("08-19T00:02:40Z"),
         restoreLocator: digest("1"),
         sessionTokenHash: sessionHash,
-        statusCapabilityExpiresAt: "2026-09-16T00:00:00Z",
+        statusCapabilityExpiresAt: retentionInstant("09-19T00:00:00Z"),
         statusCapabilityHash: digest("2"),
         userId: fixture.owner.userId,
       } as const;
@@ -1760,12 +1793,12 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       });
       expect(
         await findPendingErasureRecoverySessionByTokenHash(fixture.database, {
-          now: "2026-08-16T14:31:00Z",
+          now: retentionInstant("08-19T00:02:45Z"),
           tokenHash: sessionHash,
         }),
       ).toMatchObject({ erasureJobId: queued.job.id, userId: fixture.owner.userId });
       const [claimedErasure] = await claimAccountErasureJobs(fixture.database, {
-        now: "2026-08-16T15:01:00Z",
+        now: retentionInstant("08-19T00:02:51Z"),
         workerId: "erasure-worker",
       });
       if (!claimedErasure) throw new Error("Expected erasure job claim");
@@ -1777,7 +1810,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
           attempt_count_before: 20,
           reason_code: "operator_requeue",
           recovery_kind: "account_erasure",
-          requeued_at: "2026-08-16T15:01:00Z",
+          requeued_at: retentionInstant("08-19T00:02:51Z"),
           target_id: claimedErasure.id,
         })
         .execute();
@@ -1785,7 +1818,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         .insertInto("retention_dead_letter_event")
         .values({
           attempt_count: 20,
-          occurred_at: "2026-08-16T15:01:00Z",
+          occurred_at: retentionInstant("08-19T00:02:51Z"),
           recovery_kind: "account_erasure",
           target_id: claimedErasure.id,
         })
@@ -1794,7 +1827,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         fixture.database,
         {
           erasureJobId: claimedErasure.id,
-          now: "2026-08-19T00:03:00Z",
+          now: retentionInstant("08-19T00:03:00Z"),
           userId: fixture.owner.userId,
           workerId: "erasure-worker",
         },
@@ -1804,7 +1837,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       ]);
       await expect(
         executeAccountErasureJob(fixture.database, {
-          completedAt: "2026-08-19T00:03:20Z",
+          completedAt: retentionInstant("08-19T00:03:20Z"),
           evidence: {
             objectDeletionEvidence: {
               artifacts: initialErasureArtifacts.map((artifact) => ({
@@ -1813,7 +1846,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
                 objectKey: artifact.objectKey,
               })),
             },
-            restoreLedgerAcknowledgedAt: "2026-08-19T00:03:10Z",
+            restoreLedgerAcknowledgedAt: retentionInstant("08-19T00:03:10Z"),
             restoreLedgerDigest: digest("4"),
             restoreLedgerReference: "external-ledger-entry-1",
           },
@@ -1826,14 +1859,14 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
           artifactId: slowPutArtifact.id,
           jobId: crashedExport.job.id,
           snapshotId: crashedSnapshotId,
-          uploadedAt: "2026-08-19T00:03:30Z",
+          uploadedAt: retentionInstant("08-19T00:03:30Z"),
           userId: fixture.owner.userId,
           workerId: "privacy-worker",
         }),
       ).rejects.toMatchObject({ code: "EXPORT_NOT_READY" });
       const erasureArtifacts = await listAccountPrivacyExportArtifactsForErasure(fixture.database, {
         erasureJobId: claimedErasure.id,
-        now: "2026-08-19T00:12:31Z",
+        now: retentionInstant("08-19T00:12:31Z"),
         userId: fixture.owner.userId,
         workerId: "erasure-worker",
       });
@@ -1845,12 +1878,12 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       for (const artifact of erasureArtifacts.filter((artifact) => artifact.source === "staged"))
         await completePrivacyExportStagedArtifactDeletion(fixture.database, {
           artifactId: artifact.artifactId,
-          deletedAt: "2026-08-19T00:13:00Z",
+          deletedAt: retentionInstant("08-19T00:13:00Z"),
           deletionEvidenceDigest: digest("8"),
           workerId: "erasure-worker",
         });
       const finalErasureInput = {
-        completedAt: "2026-08-19T00:14:00Z",
+        completedAt: retentionInstant("08-19T00:14:00Z"),
         evidence: {
           objectDeletionEvidence: {
             artifacts: erasureArtifacts
@@ -1861,7 +1894,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
                 objectKey: artifact.objectKey,
               })),
           },
-          restoreLedgerAcknowledgedAt: "2026-08-19T00:13:30Z",
+          restoreLedgerAcknowledgedAt: retentionInstant("08-19T00:13:30Z"),
           restoreLedgerDigest: digest("4"),
           restoreLedgerReference: "external-ledger-entry-1",
         },
@@ -1969,12 +2002,12 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       const restoreSessionHash = digest("b");
       const restoreProofHash = digest("c");
       await createSession(fixture.database, {
-        expiresAt: "2027-01-01T00:00:00Z",
+        expiresAt: retentionInstant("01-01T00:00:00Z", 1),
         tokenHash: restoreSessionHash,
         userId: fixture.other.userId,
       });
       await createReauthenticationProof(fixture.database, {
-        expiresAt: "2026-08-21T00:00:00Z",
+        expiresAt: retentionInstant("08-21T00:00:00Z"),
         purpose: "account_erasure",
         sessionTokenHash: restoreSessionHash,
         tokenHash: restoreProofHash,
@@ -1982,20 +2015,20 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       });
       const restoreWindowJob = await requestAccountErasure(fixture.database, {
         clientOperationId: randomUUID(),
-        executeAfter: "2026-08-20T01:00:00Z",
+        executeAfter: retentionInstant("08-20T01:00:00Z"),
         proofTokenHash: restoreProofHash,
         requestDigest: digest("d"),
-        requestedAt: "2026-08-20T00:30:00Z",
+        requestedAt: retentionInstant("08-20T00:30:00Z"),
         restoreLocator: digest("e"),
         sessionTokenHash: restoreSessionHash,
-        statusCapabilityExpiresAt: "2026-09-20T00:00:00Z",
+        statusCapabilityExpiresAt: retentionInstant("09-20T00:00:00Z"),
         statusCapabilityHash: digest("f"),
         userId: fixture.other.userId,
       });
       const reconciliation = await replayExternalErasureLedgerEntry(fixture.database, {
         ackDigest: digest("5"),
         ledgerEntryId: "external-ledger-replay-other",
-        recordedAt: "2026-08-16T16:00:00Z",
+        recordedAt: retentionInstant("08-20T01:30:00Z"),
         subjectUserId: fixture.other.userId,
       });
       expect(reconciliation.reconciled).toBe(true);
@@ -2011,7 +2044,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         assertDatabaseRestoreReplayReady(fixture.database, { restoreEpoch }),
       ).rejects.toThrow("Database restore replay attestation is not current");
       await completeDatabaseRestoreReplayAttestation(fixture.database, {
-        completedAt: "2026-08-20T02:00:00Z",
+        completedAt: retentionInstant("08-20T02:00:00Z"),
         reconciliationDigest: digest("a"),
         replayedSubjectCount: 1,
         restoreEpoch,

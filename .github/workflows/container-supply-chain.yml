@@ -755,11 +755,11 @@ jobs:
             --env POSTGRES_USER=runtime_contract \
             --env POSTGRES_PASSWORD=first-password \
             --volume "${init_sql}:/docker-entrypoint-initdb.d/001-runtime-contract.sql:ro"
-          docker exec --env PGPASSWORD=first-password "${container}" \
+          tls_result="$(docker exec --env PGPASSWORD=first-password "${container}" \
             psql 'host=127.0.0.1 dbname=runtime_contract user=runtime_contract sslmode=require' \
-              --no-psqlrc --tuples-only --command \
-              "SELECT value || ':' || (SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()) FROM runtime_contract;" | \
-            grep -Eq 'initialized-once:t'
+              --no-psqlrc --no-align --tuples-only --quiet --command \
+              "SELECT value || ':' || (SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()) FROM runtime_contract;")"
+          test "${tls_result}" = 'initialized-once:t'
           docker exec "${container}" sh -ceu \
             'test "$(id -u):$(id -g)" = 70:70; test ! -e /usr/local/bin/gosu'
           docker stop --time 15 "${container}" >/dev/null
@@ -769,10 +769,11 @@ jobs:
             --env POSTGRES_DB=runtime_contract \
             --env POSTGRES_USER=runtime_contract \
             --env POSTGRES_PASSWORD=must-not-reinitialize
-          docker exec --env PGPASSWORD=first-password "${container}" \
+          restart_result="$(docker exec --env PGPASSWORD=first-password "${container}" \
             psql 'host=127.0.0.1 dbname=runtime_contract user=runtime_contract sslmode=require' \
-              --no-psqlrc --tuples-only --command 'SELECT value FROM runtime_contract;' | \
-            grep -Eq 'initialized-once'
+              --no-psqlrc --no-align --tuples-only --quiet --command \
+              'SELECT value FROM runtime_contract;')"
+          test "${restart_result}" = 'initialized-once'
 
       - name: Record GitHub build provenance
         if: steps.existing.outputs.exists != 'true'
