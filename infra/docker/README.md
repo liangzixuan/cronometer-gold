@@ -30,9 +30,10 @@ those credentials are never passed to the API or worker. Create the legacy
 `S3_BUCKET` manually only when a food-import rehearsal needs it.
 
 All published ports bind to loopback. The checked-in credentials are deliberately
-weak and must never appear in a shared, staging, or production deployment. CI and
-production use digest-pinned images after registry and licence review; local-only
-image tags remain a developer convenience where explicitly documented.
+weak and must never appear in a shared or OCI controlled-beta deployment. CI and
+the controlled-beta environment use digest-pinned images after registry and
+licence review; local-only image tags remain a developer convenience where
+explicitly documented.
 
 Stop without deleting state:
 
@@ -45,10 +46,18 @@ instructions. Follow the restore runbook before replacing database state.
 
 ## Published OCI runtimes
 
-`caddy.Dockerfile` and `postgres.Dockerfile` are OCI controlled-beta supply-chain
-inputs, not replacements for the developer services above. The default-branch
-container workflow publishes each one to its own GHCR package only after an
-exact ARM64 scan, provenance, runtime identity, and behavior checks pass.
+The four application Dockerfiles, `caddy.Dockerfile`, and `postgres.Dockerfile`
+are OCI controlled-beta supply-chain inputs, not replacements for the developer
+services above. The default-branch container workflow publishes each one to its
+own GHCR package only after an exact ARM64 scan, provenance, runtime identity,
+and behavior checks pass.
+
+Application builds use the pinned full Node image only as a builder. Final app
+stages use the signed, digest-pinned Distroless Node.js 22 Debian 13 runtime, add
+only the deployment tree plus the UID/GID-1000 identity files, and contain no npm
+or shell. Their empty entrypoint preserves the OCI command overrides; `/nodejs/bin`
+is explicit in `PATH`. See `docs/quality/container-supply-chain.md` for the exact
+index/ARM64 digests, signature identity, inventory gate, and scan boundary.
 
 The Caddy image is a UID/GID-1000 scratch runtime. Deployment drops all
 capabilities, adds only `NET_BIND_SERVICE`, mounts the reviewed Caddyfile, and

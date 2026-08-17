@@ -582,6 +582,10 @@ assert '"org.opencontainers.image.source": "https://github.com/liangzixuan/crono
 assert '"org.opencontainers.image.version": f"sha-{revision}"' in image_admission
 assert '"io.cronometer.runtime.contract": "uid-gid-1000-net-bind-service"' in image_admission
 assert '"io.cronometer.runtime.contract": "uid-gid-70-preowned-pgdata-and-tmpfs"' in image_admission
+assert "distroless-node22-debian13-uid-gid-1000-empty-entrypoint" in image_admission
+assert "sha256:939d6f1671529d230f50b563578e9b5d206af58f038b10ebd7e1233023d4e167" in image_admission
+assert "keyless@distroless.iam.gserviceaccount.com" in image_admission
+assert "https://accounts.google.com" in image_admission
 
 compression_fixture = {
     f"/etc/nutrition-tracker/fixture-{index}": {
@@ -663,6 +667,163 @@ for variable, repository in {
     )
 image_admission_namespace = {"__name__": "image_admission_contract"}
 exec(compile(image_admission, "image-admission-contract", "exec"), image_admission_namespace)
+
+app_environment = {
+    "HOME=/home/node",
+    "NODE_ENV=production",
+    "PATH=/nodejs/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt",
+}
+app_labels = {
+    "io.cronometer.runtime.contract": (
+        "distroless-node22-debian13-uid-gid-1000-empty-entrypoint"
+    ),
+    "io.cronometer.upstream.image": "gcr.io/distroless/nodejs22-debian13:nonroot",
+    "io.cronometer.upstream.image.digest": (
+        "sha256:939d6f1671529d230f50b563578e9b5d206af58f038b10ebd7e1233023d4e167"
+    ),
+    "io.cronometer.upstream.node.version": "22.23.2",
+    "io.cronometer.upstream.signature.identity": (
+        "keyless@distroless.iam.gserviceaccount.com"
+    ),
+    "io.cronometer.upstream.signature.issuer": "https://accounts.google.com",
+}
+
+
+def app_config(component, command, ports, environment, healthcheck, entrypoint=None):
+    return {
+        "User": "1000:1000",
+        "Entrypoint": entrypoint,
+        "Cmd": command,
+        "WorkingDir": "/app",
+        "Volumes": None,
+        "StopSignal": None,
+        "Shell": None,
+        "ExposedPorts": ports,
+        "Healthcheck": healthcheck,
+        "Env": sorted(environment),
+        "Labels": app_labels | {"io.cronometer.runtime.component": component},
+    }
+
+
+api_healthcheck = {
+    "Test": [
+        "CMD",
+        "/nodejs/bin/node",
+        "-e",
+        (
+            "fetch('http://127.0.0.1:' + (process.env.API_PORT || '3001') + "
+            "'/ready').then((response) => { if (!response.ok) process.exit(1) })"
+            ".catch(() => process.exit(1))"
+        ),
+    ],
+    "Interval": 30_000_000_000,
+    "Timeout": 5_000_000_000,
+    "StartPeriod": 30_000_000_000,
+    "Retries": 3,
+}
+web_healthcheck = {
+    "Test": [
+        "CMD",
+        "/nodejs/bin/node",
+        "-e",
+        (
+            "fetch('http://127.0.0.1:' + (process.env.PORT || '3000') + "
+            "'/').then((response) => { if (!response.ok) process.exit(1) })"
+            ".catch(() => process.exit(1))"
+        ),
+    ],
+    "Interval": 30_000_000_000,
+    "Timeout": 5_000_000_000,
+    "StartPeriod": 30_000_000_000,
+    "Retries": 3,
+}
+app_configs = {
+    "API_IMAGE": app_config(
+        "api",
+        ["/nodejs/bin/node", "--enable-source-maps", "dist/server.js"],
+        {"3001/tcp": {}},
+        app_environment | {"API_HOST=0.0.0.0", "API_PORT=3001"},
+        api_healthcheck,
+        [],
+    ),
+    "WORKER_IMAGE": app_config(
+        "worker",
+        ["/nodejs/bin/node", "--enable-source-maps", "dist/index.js"],
+        None,
+        app_environment,
+        {
+            "Test": ["CMD", "/nodejs/bin/node", "dist/database-readiness-probe.js"],
+            "Interval": 60_000_000_000,
+            "Timeout": 10_000_000_000,
+            "StartPeriod": 30_000_000_000,
+            "Retries": 3,
+        },
+        [],
+    ),
+    "MIGRATOR_IMAGE": app_config(
+        "migrator",
+        ["/nodejs/bin/node", "--enable-source-maps", "dist/cli.js"],
+        None,
+        app_environment,
+        {"Test": ["NONE"]},
+    ),
+    "WEB_IMAGE": app_config(
+        "web",
+        ["/nodejs/bin/node", "apps/web/server.js"],
+        {"3000/tcp": {}},
+        app_environment
+        | {"HOSTNAME=0.0.0.0", "NEXT_TELEMETRY_DISABLED=1", "PORT=3000"},
+        web_healthcheck,
+        [],
+    ),
+}
+require_runtime_contract = image_admission_namespace["require_repository_runtime_contract"]
+for variable, config in app_configs.items():
+    require_runtime_contract(variable, copy.deepcopy(config))
+
+
+def assert_app_contract_blocked(variable, config, reason):
+    try:
+        require_runtime_contract(variable, config)
+    except SystemExit as error:
+        assert "reviewed" in str(error)
+    else:
+        raise AssertionError(f"app runtime admission accepted {reason}")
+
+
+node_options = copy.deepcopy(app_configs["API_IMAGE"])
+node_options["Env"].append("NODE_OPTIONS=--require=/app/runtime-hook.js")
+assert_app_contract_blocked("API_IMAGE", node_options, "an injected NODE_OPTIONS value")
+
+wrong_command = copy.deepcopy(app_configs["WORKER_IMAGE"])
+wrong_command["Cmd"][-1] = "dist/unreviewed.js"
+assert_app_contract_blocked("WORKER_IMAGE", wrong_command, "an unreviewed command")
+
+wrong_health_timing = copy.deepcopy(app_configs["WEB_IMAGE"])
+wrong_health_timing["Healthcheck"]["Timeout"] = 1_000_000_000
+assert_app_contract_blocked("WEB_IMAGE", wrong_health_timing, "changed health timing")
+
+extra_port = copy.deepcopy(app_configs["API_IMAGE"])
+extra_port["ExposedPorts"]["9999/tcp"] = {}
+assert_app_contract_blocked("API_IMAGE", extra_port, "an extra exposed port")
+
+wrong_base_digest = copy.deepcopy(app_configs["MIGRATOR_IMAGE"])
+wrong_base_digest["Labels"]["io.cronometer.upstream.image.digest"] = "sha256:" + "b" * 64
+assert_app_contract_blocked("MIGRATOR_IMAGE", wrong_base_digest, "a changed base digest")
+
+wrong_signature = copy.deepcopy(app_configs["WORKER_IMAGE"])
+wrong_signature["Labels"]["io.cronometer.upstream.signature.identity"] = "attacker@example.invalid"
+assert_app_contract_blocked("WORKER_IMAGE", wrong_signature, "a changed signature identity")
+
+wrong_issuer = copy.deepcopy(app_configs["WEB_IMAGE"])
+wrong_issuer["Labels"]["io.cronometer.upstream.signature.issuer"] = "https://example.invalid"
+assert_app_contract_blocked("WEB_IMAGE", wrong_issuer, "a changed signature issuer")
+
+inherited_entrypoint = copy.deepcopy(app_configs["API_IMAGE"])
+inherited_entrypoint["Entrypoint"] = ["/nodejs/bin/node"]
+assert_app_contract_blocked("API_IMAGE", inherited_entrypoint, "the inherited Node entrypoint")
+
 with tempfile.TemporaryDirectory() as temporary_directory:
     temporary = pathlib.Path(temporary_directory)
     deploy_path = temporary / "deploy.env"

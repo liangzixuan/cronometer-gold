@@ -78,35 +78,45 @@ export function deriveDiaryLocalCoordinates(
 ): DiaryLocalCoordinates {
   const canonicalInstant = canonicalRfc3339Instant(occurredAt, "occurredAt");
   const canonicalZone = canonicalIanaTimeZone(timeZone);
+  const instant = new Date(canonicalInstant);
   const parts = new Intl.DateTimeFormat("en-US-u-ca-iso8601-nu-latn", {
     timeZone: canonicalZone,
-    era: "short",
-    year: "numeric",
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
     hourCycle: "h23",
-  }).formatToParts(new Date(canonicalInstant));
+  }).formatToParts(instant);
   const values = new Map(parts.map((part) => [part.type, part.value]));
-  const era = requiredPart(values, "era");
-  const yearPart = requiredPart(values, "year");
   const month = requiredPart(values, "month");
   const day = requiredPart(values, "day");
   const hour = requiredPart(values, "hour");
   const minute = requiredPart(values, "minute");
   const second = requiredPart(values, "second");
-  const milliseconds = new Date(canonicalInstant).getUTCMilliseconds();
-  const localYear = /^\d+$/.test(yearPart) ? Number(yearPart) : Number.NaN;
-  if (era !== "AD" || !Number.isSafeInteger(localYear) || localYear < 1 || localYear > 9999) {
+  const localMonth = /^\d{2}$/.test(month) ? Number(month) : Number.NaN;
+  // An IANA offset can move an instant by at most one calendar day. Infer the
+  // local year only at the December/January boundary so this remains stable
+  // across ICU releases that omit the requested localized era part.
+  let localYear = instant.getUTCFullYear();
+  const utcMonth = instant.getUTCMonth() + 1;
+  if (utcMonth === 1 && localMonth === 12) localYear -= 1;
+  if (utcMonth === 12 && localMonth === 1) localYear += 1;
+  if (
+    !Number.isSafeInteger(localMonth) ||
+    localMonth < 1 ||
+    localMonth > 12 ||
+    localYear < 1 ||
+    localYear > 9999
+  ) {
     throw new DomainError(
       "INVALID_DATE",
       "occurredAt resolves outside the supported local calendar range",
-      { occurredAt: canonicalInstant, timeZone: canonicalZone, era, year: yearPart },
+      { occurredAt: canonicalInstant, timeZone: canonicalZone },
     );
   }
   const year = String(localYear).padStart(4, "0");
+  const milliseconds = instant.getUTCMilliseconds();
 
   return deepFreeze({
     occurredAt: canonicalInstant,

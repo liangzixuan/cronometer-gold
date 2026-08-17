@@ -22,6 +22,100 @@ REPOSITORY_IMAGES = {
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 REFERENCE = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}")
 
+APP_RUNTIME_LABELS = {
+    "io.cronometer.runtime.contract": (
+        "distroless-node22-debian13-uid-gid-1000-empty-entrypoint"
+    ),
+    "io.cronometer.upstream.image": "gcr.io/distroless/nodejs22-debian13:nonroot",
+    "io.cronometer.upstream.image.digest": (
+        "sha256:939d6f1671529d230f50b563578e9b5d206af58f038b10ebd7e1233023d4e167"
+    ),
+    "io.cronometer.upstream.node.version": "22.23.2",
+    "io.cronometer.upstream.signature.identity": (
+        "keyless@distroless.iam.gserviceaccount.com"
+    ),
+    "io.cronometer.upstream.signature.issuer": "https://accounts.google.com",
+}
+APP_RUNTIME_ENVIRONMENT = {
+    "HOME=/home/node",
+    "NODE_ENV=production",
+    "PATH=/nodejs/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt",
+}
+APP_RUNTIME_CONTRACTS = {
+    "API_IMAGE": {
+        "component": "api",
+        "cmd": ["/nodejs/bin/node", "--enable-source-maps", "dist/server.js"],
+        "ports": {"3001/tcp": {}},
+        "environment": APP_RUNTIME_ENVIRONMENT | {
+            "API_HOST=0.0.0.0",
+            "API_PORT=3001",
+        },
+        "healthcheck": {
+            "Test": [
+                "CMD",
+                "/nodejs/bin/node",
+                "-e",
+                (
+                    "fetch('http://127.0.0.1:' + (process.env.API_PORT || '3001') + "
+                    "'/ready').then((response) => { if (!response.ok) process.exit(1) })"
+                    ".catch(() => process.exit(1))"
+                ),
+            ],
+            "Interval": 30_000_000_000,
+            "Timeout": 5_000_000_000,
+            "StartPeriod": 30_000_000_000,
+            "Retries": 3,
+        },
+    },
+    "WORKER_IMAGE": {
+        "component": "worker",
+        "cmd": ["/nodejs/bin/node", "--enable-source-maps", "dist/index.js"],
+        "ports": None,
+        "environment": APP_RUNTIME_ENVIRONMENT,
+        "healthcheck": {
+            "Test": ["CMD", "/nodejs/bin/node", "dist/database-readiness-probe.js"],
+            "Interval": 60_000_000_000,
+            "Timeout": 10_000_000_000,
+            "StartPeriod": 30_000_000_000,
+            "Retries": 3,
+        },
+    },
+    "MIGRATOR_IMAGE": {
+        "component": "migrator",
+        "cmd": ["/nodejs/bin/node", "--enable-source-maps", "dist/cli.js"],
+        "ports": None,
+        "environment": APP_RUNTIME_ENVIRONMENT,
+        "healthcheck": {"Test": ["NONE"]},
+    },
+    "WEB_IMAGE": {
+        "component": "web",
+        "cmd": ["/nodejs/bin/node", "apps/web/server.js"],
+        "ports": {"3000/tcp": {}},
+        "environment": APP_RUNTIME_ENVIRONMENT | {
+            "HOSTNAME=0.0.0.0",
+            "NEXT_TELEMETRY_DISABLED=1",
+            "PORT=3000",
+        },
+        "healthcheck": {
+            "Test": [
+                "CMD",
+                "/nodejs/bin/node",
+                "-e",
+                (
+                    "fetch('http://127.0.0.1:' + (process.env.PORT || '3000') + "
+                    "'/').then((response) => { if (!response.ok) process.exit(1) })"
+                    ".catch(() => process.exit(1))"
+                ),
+            ],
+            "Interval": 30_000_000_000,
+            "Timeout": 5_000_000_000,
+            "StartPeriod": 30_000_000_000,
+            "Retries": 3,
+        },
+    },
+}
+
 
 def fail(message):
     raise SystemExit(message)
@@ -109,8 +203,33 @@ def command_json(arguments, description):
 
 def require_repository_runtime_contract(variable, config):
     labels = config.get("Labels") or {}
-    environment = set(config.get("Env") or [])
-    if variable == "CADDY_IMAGE":
+    environment_entries = config.get("Env") or []
+    if not isinstance(environment_entries, list) or any(
+        not isinstance(entry, str) for entry in environment_entries
+    ):
+        fail(f"{variable} environment differs from the reviewed runtime contract")
+    environment = set(environment_entries)
+    if variable in APP_RUNTIME_CONTRACTS:
+        contract = APP_RUNTIME_CONTRACTS[variable]
+        exact = {
+            "User": "1000:1000",
+            "Cmd": contract["cmd"],
+            "WorkingDir": "/app",
+            "Volumes": None,
+            "StopSignal": None,
+            "Shell": None,
+            "ExposedPorts": contract["ports"],
+            "Healthcheck": contract["healthcheck"],
+        }
+        expected_labels = APP_RUNTIME_LABELS | {
+            "io.cronometer.runtime.component": contract["component"],
+        }
+        expected_environment = contract["environment"]
+        if config.get("Entrypoint") not in (None, []):
+            fail(f"{variable} process identity or filesystem contract differs from the reviewed runtime")
+        if len(environment_entries) != len(expected_environment) or environment != expected_environment:
+            fail(f"{variable} environment differs from the reviewed runtime contract")
+    elif variable == "CADDY_IMAGE":
         exact = {
             "User": "1000:1000",
             "Entrypoint": ["/usr/bin/caddy"],

@@ -26,6 +26,13 @@ describe("diary time boundaries", () => {
     expect(daylight.occurredAt).not.toBe(standard.occurredAt);
   });
 
+  it("derives the local year across a UTC year boundary without localized era text", () => {
+    expect(deriveDiaryLocalCoordinates("2026-01-01T00:15:00Z", "America/Chicago")).toMatchObject({
+      localDate: "2025-12-31",
+      localTime: "18:15:00",
+    });
+  });
+
   it("pads early Common Era local years to four digits", () => {
     expect(deriveDiaryLocalCoordinates("0001-01-01T12:00:00Z", "UTC")).toMatchObject({
       localDate: "0001-01-01",

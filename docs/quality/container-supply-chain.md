@@ -15,6 +15,11 @@ fix. The job supplies an explicit empty ignore file, so a repository-level Trivy
 ignore file cannot silently waive findings. A scan or vulnerability-database
 failure fails the job.
 
+For the four Node applications, a second exact-digest Trivy inventory uses
+`--list-all-pkgs` and requires component-specific packages and versions from the
+checked-in manifests. This prevents a zero-finding result from being accepted if
+the scanner did not discover the deployed application libraries.
+
 The publication path deliberately disables reusable action, BuildKit, and Trivy
 caches. The slower cold build avoids restoring executable or build-layer state
 that was not produced inside the current release job.
@@ -40,6 +45,42 @@ OCI deployment must consume the recorded digest, not a mutable convenience tag:
 ```text
 ghcr.io/<owner>/<repository>-api@sha256:<digest>
 ```
+
+## Repository-owned application runtimes
+
+The API, worker, migrator, and web builds retain the exact
+`node:22-bookworm-slim` index digest only as a build stage. npm and the
+checksum-pinned pnpm archive install dependencies and compile artifacts there;
+that stage is not copied into a published runtime. Vulnerabilities in builder
+operating-system packages or build-only npm tooling remain relevant to build
+provenance and dependency maintenance, but they do not describe the final image
+that Trivy admits for deployment.
+
+Each final application stage derives from the signed Distroless Node.js 22 on
+Debian 13 `nonroot` index
+`sha256:939d6f1671529d230f50b563578e9b5d206af58f038b10ebd7e1233023d4e167`.
+Its expected ARM64 child is
+`sha256:806e2fa26e3cec196e986cb206f44f07070d211c028389c79091fd440cb75882`.
+Before building, CI verifies the exact index with Cosign identity
+`keyless@distroless.iam.gserviceaccount.com`, issuer
+`https://accounts.google.com`, and then binds the unique Linux ARM64 descriptor
+to that child digest.
+
+The derived runtimes add only the built application tree and minimal UID/GID
+1000 `node` passwd/group/home records. They explicitly clear Distroless's Node
+entrypoint so OCI command overrides keep their existing semantics, expose
+`/nodejs/bin` through `PATH`, and retain the Distroless CA bundle and TZDB. They
+contain neither npm nor a shell. CI checks the exact command and health metadata,
+then runs each final image with a read-only root, no capabilities, and only a
+UID-owned `/tmp` tmpfs. The runtime check covers UID/GID and `os.userInfo()`, CA
+bundle readability, Chicago winter/summer timezone transitions, application
+entrypoint syntax/imports, absence of npm and `/bin/sh`, and actual Next
+standalone startup.
+
+The OCI controlled-beta deployment continues to run all four applications as
+`1000:1000`, with read-only roots and reviewed writable tmpfs/bind mounts. This
+contract is synthetic-reviewer-only and does not make the environment suitable
+for real health data.
 
 ## Repository-owned system runtimes
 
@@ -77,11 +118,13 @@ empty ignore file, HIGH/CRITICAL severities, and unfixed findings included:
 
 | Candidate | Exact local image ID | Critical | High |
 | --- | --- | ---: | ---: |
+| signed Distroless Node.js 22 Debian 13 ARM64 base | `sha256:80f3e8b3e4a681d9666c32c6e8f210b18206f6c8a180283ce0d536f132bbabcd` | 0 | 0 |
 | repository PostgreSQL 17.11 | `sha256:ff1588d49ac2dc64d7cfd3a8f3d9c80934676cf3bb71608a0e04a0668a631029` | 0 | 0 |
 | repository Caddy v2.11.4 plus reviewed dependency patches | `sha256:9891b652cf8f41aec8b2ce9a83c080eff8562df7dbe5d720dc80a91459de155a` | 0 | 0 |
 
-These local IDs are reproducibility evidence, not deployment references or
-approval. BuildKit provenance makes the GitHub-built index digest distinct. A
+The Distroless row is base-selection evidence, not evidence for any derived app
+image. These local IDs are reproducibility evidence, not deployment references
+or approval. BuildKit provenance makes the GitHub-built index digest distinct. A
 commit is eligible only when the workflow builds the exact source commit, the
 current Trivy database still reports zero HIGH/CRITICAL findings, the runtime
 identity and behavior checks pass, GitHub records matching provenance, and the
