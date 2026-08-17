@@ -673,10 +673,10 @@ jobs:
             -subj '/CN=meili.internal' \
             -keyout "${pki_dir}/server.key" \
             -out "${pki_dir}/server.crt" >/dev/null 2>&1
-          sudo chown 1000:1000 "${pki_dir}/server.key" "${pki_dir}/server.crt"
           chmod 0755 "${pki_dir}"
           chmod 0600 "${pki_dir}/server.key"
           chmod 0644 "${pki_dir}/server.crt"
+          sudo chown 1000:1000 "${pki_dir}/server.key" "${pki_dir}/server.crt"
           docker run --rm --platform linux/arm64 --read-only --cap-drop ALL \
             --env ACME_EMAIL=reviewer@example.invalid \
             --env API_FQDN=api.example.invalid \
@@ -723,10 +723,10 @@ jobs:
             -subj '/CN=localhost' \
             -keyout "${tls_dir}/server.key" \
             -out "${tls_dir}/server.crt" >/dev/null 2>&1
-          sudo chown 70:70 "${tls_dir}/server.key" "${tls_dir}/server.crt"
           chmod 0755 "${tls_dir}"
           chmod 0600 "${tls_dir}/server.key"
           chmod 0644 "${tls_dir}/server.crt"
+          sudo chown 70:70 "${tls_dir}/server.key" "${tls_dir}/server.crt"
           docker volume create "${volume}" >/dev/null
 
           start_database() {
