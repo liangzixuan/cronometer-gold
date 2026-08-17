@@ -112,6 +112,15 @@ never enter Terraform variables, cloud-init, state, shell arguments, or Git.
 | Reserved public IPv4 | One | Required for stable DNS; recheck current pricing and limits. |
 | OCI DNS | Disabled | Existing-provider A records are preferred; OCI zones/queries may charge. |
 
+Oracle currently documents 1,500 A1 OCPU-hours and 9,000 A1 GB-hours per
+month for an Always-Free-only tenancy in its home region, shared across A1 VM,
+bare-metal, and Container Instances. One continuously running 2-OCPU, 12-GB
+instance consumes 1,488 OCPU-hours and 8,928 GB-hours in a 31-day month,
+leaving only 12 OCPU-hours and 72 GB-hours of margin. Before applying, prove
+that `us-ashburn-1` is the tenancy home region. Do not overlap another A1
+allocation, including during recovery, unless the live usage and billing model
+prove that the combined allocation remains free.
+
 Free Tier is a billing program, not a Terraform property. If the requirement is
 Free-Tier-only, stop on quota, capacity, or pricing uncertainty. Oracle may
 reclaim an idle Always Free A1 instance when the published seven-day
