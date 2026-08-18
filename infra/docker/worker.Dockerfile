@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7@sha256:a57df69d0ea827fb7266491f2813635de6f17269be881f696fbfdf2d83dda33e
 
 ARG NODE_BUILD_IMAGE=node:22-bookworm-slim@sha256:d649c27dae7ba0137b3cef5dd75baa422c08dc3d9e3fc0c23dfb172dc3cc6436
-ARG NODE_RUNTIME_IMAGE=gcr.io/distroless/nodejs22-debian13:nonroot@sha256:939d6f1671529d230f50b563578e9b5d206af58f038b10ebd7e1233023d4e167
+ARG NODE_RUNTIME_IMAGE
 
 FROM ${NODE_BUILD_IMAGE} AS build
 
@@ -39,14 +39,11 @@ RUN --mount=type=cache,id=nutrition-pnpm-worker-v1,target=/pnpm/store,sharing=lo
     find /opt/deploy/worker -exec touch -h -d @0 {} +
 
 FROM ${NODE_RUNTIME_IMAGE} AS runtime
+ARG NODE_RUNTIME_IMAGE
 
 LABEL io.cronometer.runtime.component="worker" \
-      io.cronometer.runtime.contract="distroless-node22-debian13-uid-gid-1000-empty-entrypoint" \
-      io.cronometer.upstream.image="gcr.io/distroless/nodejs22-debian13:nonroot" \
-      io.cronometer.upstream.image.digest="sha256:939d6f1671529d230f50b563578e9b5d206af58f038b10ebd7e1233023d4e167" \
-      io.cronometer.upstream.node.version="22.23.2" \
-      io.cronometer.upstream.signature.identity="keyless@distroless.iam.gserviceaccount.com" \
-      io.cronometer.upstream.signature.issuer="https://accounts.google.com"
+      io.cronometer.upstream.node-runtime.ref="${NODE_RUNTIME_IMAGE}" \
+      io.cronometer.runtime.contract="patched-node22.23.2-openssl3.5.7-08e7756-base-nossl-debian13-uid-gid-1000-empty-entrypoint"
 
 ENV HOME=/home/node
 ENV NODE_ENV=production

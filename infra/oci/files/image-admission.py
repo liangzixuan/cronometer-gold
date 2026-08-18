@@ -21,20 +21,84 @@ REPOSITORY_IMAGES = {
 }
 DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 REFERENCE = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}")
+NODE_RUNTIME_REFERENCE = re.compile(
+    r"ghcr\.io/liangzixuan/cronometer-gold-node-runtime@sha256:[0-9a-f]{64}"
+)
 
 APP_RUNTIME_LABELS = {
     "io.cronometer.runtime.contract": (
-        "distroless-node22-debian13-uid-gid-1000-empty-entrypoint"
-    ),
-    "io.cronometer.upstream.image": "gcr.io/distroless/nodejs22-debian13:nonroot",
-    "io.cronometer.upstream.image.digest": (
-        "sha256:939d6f1671529d230f50b563578e9b5d206af58f038b10ebd7e1233023d4e167"
+        "patched-node22.23.2-openssl3.5.7-08e7756-base-nossl-debian13-uid-gid-1000-empty-entrypoint"
     ),
     "io.cronometer.upstream.node.version": "22.23.2",
-    "io.cronometer.upstream.signature.identity": (
+    "io.cronometer.upstream.node.source": (
+        "https://nodejs.org/dist/v22.23.2/node-v22.23.2.tar.xz"
+    ),
+    "io.cronometer.upstream.node.source.sha256": (
+        "bbe768df8d5815d7fa76124052985332452e0a4742d39f32027550d1aab8f6fb"
+    ),
+    "io.cronometer.upstream.node.source.manifest.sha256": (
+        "778ac5b2fcdbd68d9c0ae9f4310674faa3af0910bd0d18e7f6597787c40a3e39"
+    ),
+    "io.cronometer.upstream.node.source.manifest.signature.sha256": (
+        "169f1452c14cd653247408352f1534b9f31e3d13f9c6399c3977368095e11eda"
+    ),
+    "io.cronometer.upstream.node.source.signature.fingerprint": (
+        "CC68F5A3106FF448322E48ED27F5E38D5B0A215F"
+    ),
+    "io.cronometer.upstream.node.release.tag-object": (
+        "490a9fef8f8adcda5a95bd6f96035b05cb43fe5b"
+    ),
+    "io.cronometer.upstream.node.release.commit": (
+        "aa4c77582be995286fc6e00aaf530dc7ade102a9"
+    ),
+    "io.cronometer.upstream.node.release.signer.source.commit": (
+        "43d7b8e5d41e87a3721d416f14fb86a68aeec1ce"
+    ),
+    "io.cronometer.upstream.node.release.signer.material.sha256": (
+        "e31e1aa40a8331f01d753cef475f7b9eab934fc25f5f0b36995bfd80bd66ad27"
+    ),
+    "io.cronometer.upstream.openssl.version": "3.5.7",
+    "io.cronometer.upstream.openssl.fix.cve": "CVE-2026-14456",
+    "io.cronometer.upstream.openssl.fix.advisory": (
+        "https://openssl-library.org/news/secadv/20260813.txt"
+    ),
+    "io.cronometer.upstream.openssl.fix.commit": (
+        "08e7756c3900bcfd77a720e7b74e27d6e4ed01a9"
+    ),
+    "io.cronometer.upstream.openssl.fix.patch.sha256": (
+        "3b4f3ff1e9d26ca3dd75f6d98cc5d30c7dbfc03892e4bc0037a7e14bec8c5087"
+    ),
+    "io.cronometer.upstream.node.builder.image": (
+        "docker.io/library/python:3.12.14-bookworm"
+    ),
+    "io.cronometer.upstream.node.builder.image.digest": (
+        "sha256:80f5d259a5969c86f6c92145d572de4a68c68e0edd28d4367dec0fb411b42af3"
+    ),
+    "io.cronometer.upstream.node.builder.image.arm64.digest": (
+        "sha256:b6e215e1d3d8787fe1e0f1507c7d2418b16fe19acef77cf971b2d965570ced41"
+    ),
+    "io.cronometer.upstream.cxx.image": (
+        "gcr.io/distroless/nodejs22-debian13:nonroot"
+    ),
+    "io.cronometer.upstream.cxx.image.digest": (
+        "sha256:939d6f1671529d230f50b563578e9b5d206af58f038b10ebd7e1233023d4e167"
+    ),
+    "io.cronometer.upstream.cxx.image.arm64.digest": (
+        "sha256:806e2fa26e3cec196e986cb206f44f07070d211c028389c79091fd440cb75882"
+    ),
+    "io.cronometer.upstream.base.image": (
+        "gcr.io/distroless/base-nossl-debian13:nonroot"
+    ),
+    "io.cronometer.upstream.base.image.digest": (
+        "sha256:86554c46a420d507ff2d678fd261ab8691fba4875a20302f38a49e684b42a33f"
+    ),
+    "io.cronometer.upstream.base.image.arm64.digest": (
+        "sha256:ab7e729cfe775ce5f251b2d28b45e88b70e0582cdbadd1aa1f99a41601f11f3b"
+    ),
+    "io.cronometer.upstream.distroless.signature.identity": (
         "keyless@distroless.iam.gserviceaccount.com"
     ),
-    "io.cronometer.upstream.signature.issuer": "https://accounts.google.com",
+    "io.cronometer.upstream.distroless.signature.issuer": "https://accounts.google.com",
 }
 APP_RUNTIME_ENVIRONMENT = {
     "HOME=/home/node",
@@ -225,6 +289,12 @@ def require_repository_runtime_contract(variable, config):
             "io.cronometer.runtime.component": contract["component"],
         }
         expected_environment = contract["environment"]
+        node_runtime_reference = labels.get("io.cronometer.upstream.node-runtime.ref")
+        if (
+            not isinstance(node_runtime_reference, str)
+            or not NODE_RUNTIME_REFERENCE.fullmatch(node_runtime_reference)
+        ):
+            fail(f"{variable} patched Node runtime reference differs from the reviewed contract")
         if config.get("Entrypoint") not in (None, []):
             fail(f"{variable} process identity or filesystem contract differs from the reviewed runtime")
         if len(environment_entries) != len(expected_environment) or environment != expected_environment:

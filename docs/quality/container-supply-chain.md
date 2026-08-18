@@ -1,24 +1,37 @@
 # Container supply chain
 
-The `container supply chain` workflow builds the API, worker, migrator, web,
-Caddy, and PostgreSQL runtime images for `linux/arm64`. It runs on pushes to the
-default branch and can also be started manually from that branch. It never
+The `container supply chain` workflow produces seven repository-owned
+`linux/arm64` artifacts: a dedicated patched Node runtime, four application
+images, Caddy, and PostgreSQL. The Node runtime is a build input for the four
+applications, not a seventh deployment image. The workflow runs on pushes to
+the default branch and can also be started manually from that branch. It never
 deploys infrastructure or updates a running environment.
 
 ## Publication boundary
 
-Each matrix job builds an OCI image index by digest without creating a tag. The
-build includes maximum-mode BuildKit provenance and a Syft SPDX SBOM. Trivy then
-scans the exact digest and fails on any HIGH or CRITICAL operating-system or
-application-library vulnerability, including vulnerabilities without a published
-fix. The job supplies an explicit empty ignore file, so a repository-level Trivy
-ignore file cannot silently waive findings. A scan or vulnerability-database
-failure fails the job.
+The dedicated Node producer runs natively on GitHub's `ubuntu-24.04-arm`
+runner. After that producer publishes a passing digest, each application build
+receives only its digest-qualified
+`ghcr.io/<owner>/<repository>-node-runtime@sha256:<digest>` output through the
+required `NODE_RUNTIME_IMAGE` build argument. There is no application
+Dockerfile default to fall back to. The Caddy and PostgreSQL jobs are independent
+of the Node producer, so a Node source build failure does not prevent those
+unrelated system-runtime checks from running.
 
-For the four Node applications, a second exact-digest Trivy inventory uses
-`--list-all-pkgs` and requires component-specific packages and versions from the
-checked-in manifests. This prevents a zero-finding result from being accepted if
-the scanner did not discover the deployed application libraries.
+Each producer builds an OCI image index by digest without first creating a tag.
+The build includes maximum-mode BuildKit provenance and a Syft SPDX SBOM. Trivy
+then scans the exact digest with OS and library scanners and fails unless both
+HIGH and CRITICAL counts are zero, including vulnerabilities without a
+published fix. Every scan receives an explicit empty ignore file, so neither a
+repository `.trivyignore` nor an undocumented exception can waive a finding. A
+scan, inventory, or vulnerability-database failure fails the job.
+
+The Node producer also requires a complete package inventory and exact binary
+checks before publication. The four applications run their own exact-digest
+Trivy inventories with `--list-all-pkgs` and require component-specific packages
+and versions from checked-in manifests. These checks prevent a zero-finding
+result from being accepted when the scanner did not discover the expected
+runtime or application libraries.
 
 The publication path deliberately disables reusable action, BuildKit, and Trivy
 caches. The slower cold build avoids restoring executable or build-layer state
@@ -46,6 +59,75 @@ OCI deployment must consume the recorded digest, not a mutable convenience tag:
 ghcr.io/<owner>/<repository>-api@sha256:<digest>
 ```
 
+## Repository-owned patched Node runtime
+
+`infra/docker/node-runtime.Dockerfile` builds Node.js v22.23.2 from the official
+source archive instead of copying the vulnerable executable from an existing
+runtime. The source archive SHA-256 is
+`bbe768df8d5815d7fa76124052985332452e0a4742d39f32027550d1aab8f6fb`.
+The checked manifest and detached signature are independently pinned as
+`778ac5b2fcdbd68d9c0ae9f4310674faa3af0910bd0d18e7f6597787c40a3e39`
+and
+`169f1452c14cd653247408352f1534b9f31e3d13f9c6399c3977368095e11eda`.
+The build imports only the repository-pinned Node release key with fingerprint
+`CC68F5A3106FF448322E48ED27F5E38D5B0A215F`, verifies the detached signature
+over `SHASUMS256.txt`, and then verifies the one exact manifest entry for the
+source archive. Provenance labels also bind release tag object
+`490a9fef8f8adcda5a95bd6f96035b05cb43fe5b`, release commit
+`aa4c77582be995286fc6e00aaf530dc7ade102a9`, release-signer source commit
+`43d7b8e5d41e87a3721d416f14fb86a68aeec1ce`, and the checked-in signer-material
+checksum.
+
+Node v22.23.2 vendors OpenSSL 3.5.7. The OpenSSL security advisory dated
+2026-08-13 identifies abbreviated commit `08e7756` as the 3.5-branch fix for
+CVE-2026-14456. The patch resolves that abbreviation to full commit
+`08e7756c3900bcfd77a720e7b74e27d6e4ed01a9`. The commit itself and its GitHub
+`.patch` are **not signed**; the authority is the official advisory naming the
+abbreviation. The downloaded full-commit patch is therefore independently
+pinned by SHA-256
+`3b4f3ff1e9d26ca3dd75f6d98cc5d30c7dbfc03892e4bc0037a7e14bec8c5087`.
+The build checks the patch's commit header and seven-path diff, applies the six
+code/template paths present in Node's vendored OpenSSL tree, and adds the
+corresponding `SSL_VALUE_QUIC_MAX_PENDING_CONNS` macro to all three generated
+ARM64 headers (`asm`, `asm_avx2`, and `no-asm`). Forward and reverse patch checks
+must both pass.
+
+The source build uses the pinned Python 3.12.14 Bookworm builder index
+`sha256:80f5d259a5969c86f6c92145d572de4a68c68e0edd28d4367dec0fb411b42af3`
+and its unique ARM64 child
+`sha256:b6e215e1d3d8787fe1e0f1507c7d2418b16fe19acef77cf971b2d965570ced41`.
+CI resolves that index-to-child relationship before building. The final
+filesystem starts from the signed Distroless Debian 13 `base-nossl` `nonroot`
+index
+`sha256:86554c46a420d507ff2d678fd261ab8691fba4875a20302f38a49e684b42a33f`
+and ARM64 child
+`sha256:ab7e729cfe775ce5f251b2d28b45e88b70e0582cdbadd1aa1f99a41601f11f3b`.
+It copies only the exact `libgcc_s`/`libstdc++` runtime files and package metadata
+from the signed Distroless Node index
+`sha256:939d6f1671529d230f50b563578e9b5d206af58f038b10ebd7e1233023d4e167`
+and ARM64 child
+`sha256:806e2fa26e3cec196e986cb206f44f07070d211c028389c79091fd440cb75882`.
+CI verifies both Distroless indexes with Cosign identity
+`keyless@distroless.iam.gserviceaccount.com`, issuer
+`https://accounts.google.com`, and their unique ARM64 child digests.
+
+OpenSSL remains statically embedded in the newly built Node executable; removing
+a dynamically installed `libssl3t64` package alone would not remediate it. CI
+therefore checks the exact Node/OpenSSL versions, the absence of dynamic
+`libssl`/`libcrypto` dependencies, the complete ELF `NEEDED` allowlist and ARM64
+interpreter, and both internal max-pending-channel symbols introduced by the
+patch. In this exact Node source configuration,
+`process.config.variables.openssl_quic` and `node_shared_openssl` are both
+`false`, and the public experimental QUIC flag/module is absent. Those values
+are asserted as observed source-build properties; they are not treated as proof
+that the vulnerable internal OpenSSL code was absent. The symbol and patch
+checks provide that evidence.
+
+The producer must then pass the zero-HIGH/zero-CRITICAL no-ignore Trivy gate,
+runtime/package inventory, CA and timezone behavior, no-shell check, SBOM,
+provenance attestation, immutable commit-tag verification, and digest output.
+Until those checks pass in GitHub Actions, the design is not release approval.
+
 ## Repository-owned application runtimes
 
 The API, worker, migrator, and web builds retain the exact
@@ -56,26 +138,23 @@ operating-system packages or build-only npm tooling remain relevant to build
 provenance and dependency maintenance, but they do not describe the final image
 that Trivy admits for deployment.
 
-Each final application stage derives from the signed Distroless Node.js 22 on
-Debian 13 `nonroot` index
-`sha256:939d6f1671529d230f50b563578e9b5d206af58f038b10ebd7e1233023d4e167`.
-Its expected ARM64 child is
-`sha256:806e2fa26e3cec196e986cb206f44f07070d211c028389c79091fd440cb75882`.
-Before building, CI verifies the exact index with Cosign identity
-`keyless@distroless.iam.gserviceaccount.com`, issuer
-`https://accounts.google.com`, and then binds the unique Linux ARM64 descriptor
-to that child digest.
+Each application Dockerfile requires the dedicated Node runtime by immutable
+digest and adds only the built application tree and minimal UID/GID 1000 `node`
+passwd/group/home records. It does not independently select or reconstruct Node,
+OpenSSL, the C++ libraries, or the Distroless base. The final application label
+records the exact injected Node-runtime GHCR digest; inherited labels retain all
+source, signature, patch, builder, C++ source, base, and ARM64 child provenance.
+OCI admission rejects a tag, another repository, a missing digest, or any
+changed inherited provenance label.
 
-The derived runtimes add only the built application tree and minimal UID/GID
-1000 `node` passwd/group/home records. They explicitly clear Distroless's Node
-entrypoint so OCI command overrides keep their existing semantics, expose
-`/nodejs/bin` through `PATH`, and retain the Distroless CA bundle and TZDB. They
-contain neither npm nor a shell. CI checks the exact command and health metadata,
-then runs each final image with a read-only root, no capabilities, and only a
-UID-owned `/tmp` tmpfs. The runtime check covers UID/GID and `os.userInfo()`, CA
-bundle readability, Chicago winter/summer timezone transitions, application
-entrypoint syntax/imports, absence of npm and `/bin/sh`, and actual Next
-standalone startup.
+The applications explicitly keep an empty entrypoint so OCI command overrides
+retain their existing semantics and expose `/nodejs/bin` through `PATH`. They
+contain neither npm nor a shell. CI checks exact provenance labels, command, and
+health metadata, then runs each final image with a read-only root, no
+capabilities, and only a UID-owned `/tmp` tmpfs. The runtime check covers UID/GID
+and `os.userInfo()`, CA bundle readability, Chicago winter/summer timezone
+transitions, application entrypoint syntax/imports, absence of npm and
+`/bin/sh`, and actual Next standalone startup.
 
 The OCI controlled-beta deployment continues to run all four applications as
 `1000:1000`, with read-only roots and reviewed writable tmpfs/bind mounts. This
@@ -112,23 +191,32 @@ module versions. Caddy runs as `1000:1000`. The OCI controlled-beta runtime must
 drop all capabilities, add only `NET_BIND_SERVICE`, and present writable `/data`
 and `/config` mounts owned by `1000:1000`.
 
-The 2026-08-17 local reproduction used Trivy v0.74.0 with database update
-`2026-08-17T06:55:37Z`, `linux/arm64`, OS and library scanners, an explicit
-empty ignore file, HIGH/CRITICAL severities, and unfixed findings included:
+The 2026-08-18 `base-nossl` composition experiment is explicitly rejected as
+remediation evidence. It removed the dynamically installed `libssl3t64` package,
+so Trivy no longer reported that package's CVE-2026-14456 record, but it copied
+the original Node executable with its unpatched statically embedded OpenSSL
+3.5.7. Debian/Trivy classified that package record as HIGH and fix-deferred,
+while the upstream OpenSSL advisory classifies the underlying issue as Low; the
+strict repository gate remains zero HIGH/CRITICAL and does not use either
+classification as a waiver. A zero scanner result caused only by hiding the
+package record is not a release gate. The dedicated source-built runtime and its
+binary/symbol checks replace that design; only its GitHub-produced digest can
+satisfy the current policy.
+
+The 2026-08-17 system-runtime reproduction used the same policy with database
+update `2026-08-17T06:55:37Z`:
 
 | Candidate | Exact local image ID | Critical | High |
 | --- | --- | ---: | ---: |
-| signed Distroless Node.js 22 Debian 13 ARM64 base | `sha256:80f3e8b3e4a681d9666c32c6e8f210b18206f6c8a180283ce0d536f132bbabcd` | 0 | 0 |
 | repository PostgreSQL 17.11 | `sha256:ff1588d49ac2dc64d7cfd3a8f3d9c80934676cf3bb71608a0e04a0668a631029` | 0 | 0 |
 | repository Caddy v2.11.4 plus reviewed dependency patches | `sha256:9891b652cf8f41aec8b2ce9a83c080eff8562df7dbe5d720dc80a91459de155a` | 0 | 0 |
 
-The Distroless row is base-selection evidence, not evidence for any derived app
-image. These local IDs are reproducibility evidence, not deployment references
-or approval. BuildKit provenance makes the GitHub-built index digest distinct. A
-commit is eligible only when the workflow builds the exact source commit, the
-current Trivy database still reports zero HIGH/CRITICAL findings, the runtime
-identity and behavior checks pass, GitHub records matching provenance, and the
-immutable GHCR commit tag resolves to that scanned digest.
+The system-runtime local IDs are reproducibility evidence, not deployment
+references or approval. BuildKit provenance makes the GitHub-built index digest
+distinct. A commit is eligible only when the workflow builds the exact source
+commit, the current Trivy database still reports zero HIGH/CRITICAL findings,
+the runtime identity and behavior checks pass, GitHub records matching
+provenance, and the immutable GHCR commit tag resolves to that scanned digest.
 
 Local runtime checks also passed the repository's exact OCI Caddyfile with its
 automatic-HTTPS routes and internal certificate, a UID-1000 bind to port 80
@@ -165,7 +253,8 @@ single-node, non-HA environment remains limited to synthetic reviewer data.
 - If the repository or organization restricts Actions, allow the exact pinned
   revisions named in `.github/workflows/container-supply-chain.yml`, including
   the transitive actions pinned by Trivy and GitHub's attestation action.
-- Protect the default branch and require all six repository-image checks and the
+- Protect the default branch and require all seven repository-artifact checks
+  (the Node producer, four applications, Caddy, and PostgreSQL) plus the
   Meilisearch external-image check before treating a commit as releasable.
 
 GHCR package visibility and pull authentication are deployment prerequisites.
@@ -186,7 +275,9 @@ gh attestation verify \
   --repo '<owner>/<repository>'
 ```
 
-Then record all six repository component digests plus the locked Meilisearch
-digest in the release evidence, and configure OCI to pull only those
-digest-qualified references. Promotion or rollback is a separate, explicitly
-authorized operation.
+Then record the dedicated Node-runtime digest, all six deployment component
+digests, and the locked Meilisearch digest in the release evidence. Configure
+OCI to pull only the six deployment components and Meilisearch by immutable
+digest; the Node-runtime artifact remains transitive build evidence and is not a
+Compose service. Promotion or rollback is a separate, explicitly authorized
+operation.

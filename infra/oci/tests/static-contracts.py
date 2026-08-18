@@ -17,6 +17,7 @@ import types
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = ROOT.parents[1]
 compose = (ROOT / "files/compose.yaml").read_text(encoding="utf-8")
 orchestrator = (ROOT / "files/release-orchestrator.sh").read_text(encoding="utf-8")
 caddyfile = (ROOT / "files/Caddyfile").read_text(encoding="utf-8")
@@ -50,7 +51,168 @@ deploy_example = (ROOT / "templates/deploy.env.example.tftpl").read_text(encodin
 runtime_example = (ROOT / "templates/runtime.env.example.tftpl").read_text(encoding="utf-8")
 restore_example = (ROOT / "templates/restore.env.example.tftpl").read_text(encoding="utf-8")
 external_lock = json.loads((ROOT / "external-images.lock.json").read_text(encoding="utf-8"))
+container_supply_chain = (
+    REPOSITORY_ROOT / ".github/workflows/container-supply-chain.yml"
+).read_text(encoding="utf-8")
+application_dockerfiles = {
+    component: (REPOSITORY_ROOT / f"infra/docker/{component}.Dockerfile").read_text(
+        encoding="utf-8"
+    )
+    for component in ("api", "worker", "migrator", "web")
+}
+node_runtime_dockerfile = (
+    REPOSITORY_ROOT / "infra/docker/node-runtime.Dockerfile"
+).read_text(encoding="utf-8")
+node_release_key = (
+    REPOSITORY_ROOT
+    / "infra/docker/node-release-CC68F5A3106FF448322E48ED27F5E38D5B0A215F.asc"
+).read_bytes()
 assert set(external_lock) == {"schemaVersion", "reviewedAt", "policy", "images"}
+
+node_source_sha256 = "bbe768df8d5815d7fa76124052985332452e0a4742d39f32027550d1aab8f6fb"
+node_manifest_sha256 = "778ac5b2fcdbd68d9c0ae9f4310674faa3af0910bd0d18e7f6597787c40a3e39"
+node_manifest_signature_sha256 = (
+    "169f1452c14cd653247408352f1534b9f31e3d13f9c6399c3977368095e11eda"
+)
+node_signer_fingerprint = "CC68F5A3106FF448322E48ED27F5E38D5B0A215F"
+node_builder_digest = "sha256:80f5d259a5969c86f6c92145d572de4a68c68e0edd28d4367dec0fb411b42af3"
+node_builder_arm64_digest = (
+    "sha256:b6e215e1d3d8787fe1e0f1507c7d2418b16fe19acef77cf971b2d965570ced41"
+)
+node_cxx_digest = "sha256:939d6f1671529d230f50b563578e9b5d206af58f038b10ebd7e1233023d4e167"
+node_cxx_arm64_digest = (
+    "sha256:806e2fa26e3cec196e986cb206f44f07070d211c028389c79091fd440cb75882"
+)
+node_base_digest = "sha256:86554c46a420d507ff2d678fd261ab8691fba4875a20302f38a49e684b42a33f"
+node_base_arm64_digest = (
+    "sha256:ab7e729cfe775ce5f251b2d28b45e88b70e0582cdbadd1aa1f99a41601f11f3b"
+)
+openssl_fix_commit = "08e7756c3900bcfd77a720e7b74e27d6e4ed01a9"
+openssl_patch_sha256 = "3b4f3ff1e9d26ca3dd75f6d98cc5d30c7dbfc03892e4bc0037a7e14bec8c5087"
+
+assert hashlib.sha256(node_release_key).hexdigest() == (
+    "e31e1aa40a8331f01d753cef475f7b9eab934fc25f5f0b36995bfd80bd66ad27"
+)
+for expected_input in (
+    node_source_sha256,
+    node_manifest_sha256,
+    node_manifest_signature_sha256,
+    node_signer_fingerprint,
+    node_builder_digest,
+    node_builder_arm64_digest,
+    node_cxx_digest,
+    node_cxx_arm64_digest,
+    node_base_digest,
+    node_base_arm64_digest,
+    openssl_fix_commit,
+    openssl_patch_sha256,
+):
+    assert expected_input in node_runtime_dockerfile
+assert "https://nodejs.org/dist/v22.23.2/node-v22.23.2.tar.xz" in node_runtime_dockerfile
+assert "https://nodejs.org/dist/v22.23.2/SHASUMS256.txt" in node_runtime_dockerfile
+assert "https://nodejs.org/dist/v22.23.2/SHASUMS256.txt.sig" in node_runtime_dockerfile
+assert "https://openssl-library.org/news/secadv/20260813.txt" in node_runtime_dockerfile
+assert "process.config.variables.node_shared_openssl, false" in node_runtime_dockerfile
+assert "process.config.variables.openssl_quic, false" in node_runtime_dockerfile
+assert "OSSL_QUIC_server_method" in node_runtime_dockerfile
+assert "ossl_quic_port_get_max_pending_channels" in node_runtime_dockerfile
+assert "ossl_quic_port_set_max_pending_channels" in node_runtime_dockerfile
+assert 'jobs="$(nproc)"' in node_runtime_dockerfile
+assert 'case "${jobs}" in \'\'|*[!0-9]*) exit 1 ;; esac' in node_runtime_dockerfile
+assert 'test "${jobs}" -ge 2' in node_runtime_dockerfile
+assert 'make -j"${jobs}"' in node_runtime_dockerfile
+assert "make -j2" not in node_runtime_dockerfile
+assert node_runtime_dockerfile.count("#define SSL_VALUE_QUIC_MAX_PENDING_CONNS 16") == 2
+for patched_code_path in (
+    "include/internal/quic_port.h",
+    "include/openssl/ssl.h.in",
+    "ssl/quic/quic_impl.c",
+    "ssl/quic/quic_port.c",
+    "ssl/quic/quic_port_local.h",
+    "util/other.syms",
+):
+    assert node_runtime_dockerfile.count(f"--include={patched_code_path}") == 3
+for generated_header in ("asm", "asm_avx2", "no-asm"):
+    assert (
+        f"deps/openssl/config/archs/linux-aarch64/{generated_header}/include/openssl/ssl.h"
+        in node_runtime_dockerfile
+    )
+for runtime_artifact in (
+    "libgcc_s.so.1",
+    "libstdc++.so.6",
+    "libstdc++.so.6.0.33",
+    "/var/lib/dpkg/status.d/gcc-14-base",
+    "/var/lib/dpkg/status.d/libgcc-s1",
+    "/var/lib/dpkg/status.d/libstdc++6",
+):
+    assert runtime_artifact in node_runtime_dockerfile
+assert "COPY --from=cxx-runtime-source /usr/lib/aarch64-linux-gnu/libssl" not in node_runtime_dockerfile
+
+for dockerfile in application_dockerfiles.values():
+    assert dockerfile.count("ARG NODE_RUNTIME_IMAGE") == 2
+    assert "ARG NODE_RUNTIME_IMAGE=" not in dockerfile
+    assert "FROM ${NODE_RUNTIME_IMAGE} AS runtime" in dockerfile
+    assert 'io.cronometer.upstream.node-runtime.ref="${NODE_RUNTIME_IMAGE}"' in dockerfile
+    assert "NODE_RUNTIME_SOURCE_IMAGE" not in dockerfile
+    assert "NODE_RUNTIME_BASE_IMAGE" not in dockerfile
+    assert "COPY --from=node-runtime-source" not in dockerfile
+    assert (
+        "patched-node22.23.2-openssl3.5.7-08e7756-base-nossl-debian13-uid-gid-1000-empty-entrypoint"
+        in dockerfile
+    )
+
+for expected_input in (
+    node_source_sha256,
+    node_manifest_sha256,
+    node_manifest_signature_sha256,
+    node_signer_fingerprint,
+    node_builder_digest,
+    node_builder_arm64_digest,
+    node_cxx_digest,
+    node_cxx_arm64_digest,
+    node_base_digest,
+    node_base_arm64_digest,
+    openssl_fix_commit,
+    openssl_patch_sha256,
+):
+    assert expected_input in container_supply_chain
+
+
+def workflow_job(name: str) -> str:
+    match = re.search(
+        rf"(?ms)^  {re.escape(name)}:\n(.*?)(?=^  [a-z][a-z0-9-]*:\n|\Z)",
+        container_supply_chain,
+    )
+    if match is None:
+        raise AssertionError(f"missing container supply-chain job {name}")
+    return match.group(1)
+
+
+node_runtime_job = workflow_job("build-node-runtime")
+application_image_job = workflow_job("build-scan-publish-apps")
+service_image_job = workflow_job("build-scan-publish-services")
+assert "runs-on: ubuntu-24.04-arm" in node_runtime_job
+assert "timeout-minutes: 180" in node_runtime_job
+assert "setup-qemu-action" not in node_runtime_job
+assert "digest: ${{ steps.export.outputs.digest }}" in node_runtime_job
+assert "ref: ${{ steps.export.outputs.ref }}" in node_runtime_job
+assert node_runtime_job.rfind("- name: Export the verified patched Node runtime") > node_runtime_job.rfind(
+    "- name: Verify the immutable commit tag"
+)
+assert "needs: build-node-runtime" in application_image_job
+assert "NODE_RUNTIME_IMAGE=${{ needs.build-node-runtime.outputs.ref }}" in application_image_job
+assert all(f"component: {component}" in application_image_job for component in application_dockerfiles)
+assert "component: caddy\n" not in application_image_job
+assert "component: postgres\n" not in application_image_job
+assert "Exercise the Caddy non-root" not in application_image_job
+assert "Exercise PostgreSQL init" not in application_image_job
+assert "needs:" not in service_image_job
+assert "component: caddy" in service_image_job
+assert "component: postgres" in service_image_job
+assert "Exercise the Caddy non-root" in service_image_job
+assert "Exercise PostgreSQL init" in service_image_job
+assert all(f"component: {component}\n" not in service_image_job for component in application_dockerfiles)
+assert container_supply_chain.count("verify_distroless_index ") == 2
 
 
 def service(name: str) -> str:
@@ -582,8 +744,26 @@ assert '"org.opencontainers.image.source": "https://github.com/liangzixuan/crono
 assert '"org.opencontainers.image.version": f"sha-{revision}"' in image_admission
 assert '"io.cronometer.runtime.contract": "uid-gid-1000-net-bind-service"' in image_admission
 assert '"io.cronometer.runtime.contract": "uid-gid-70-preowned-pgdata-and-tmpfs"' in image_admission
-assert "distroless-node22-debian13-uid-gid-1000-empty-entrypoint" in image_admission
-assert "sha256:939d6f1671529d230f50b563578e9b5d206af58f038b10ebd7e1233023d4e167" in image_admission
+assert (
+    "patched-node22.23.2-openssl3.5.7-08e7756-base-nossl-debian13-uid-gid-1000-empty-entrypoint"
+    in image_admission
+)
+for expected_input in (
+    node_source_sha256,
+    node_manifest_sha256,
+    node_manifest_signature_sha256,
+    node_signer_fingerprint,
+    node_builder_digest,
+    node_builder_arm64_digest,
+    node_cxx_digest,
+    node_cxx_arm64_digest,
+    node_base_digest,
+    node_base_arm64_digest,
+    openssl_fix_commit,
+    openssl_patch_sha256,
+):
+    assert expected_input in image_admission
+assert "cronometer-gold-node-runtime@sha256:[0-9a-f]{64}" in image_admission
 assert "keyless@distroless.iam.gserviceaccount.com" in image_admission
 assert "https://accounts.google.com" in image_admission
 
@@ -676,17 +856,63 @@ app_environment = {
 }
 app_labels = {
     "io.cronometer.runtime.contract": (
-        "distroless-node22-debian13-uid-gid-1000-empty-entrypoint"
+        "patched-node22.23.2-openssl3.5.7-08e7756-base-nossl-debian13-uid-gid-1000-empty-entrypoint"
     ),
-    "io.cronometer.upstream.image": "gcr.io/distroless/nodejs22-debian13:nonroot",
-    "io.cronometer.upstream.image.digest": (
-        "sha256:939d6f1671529d230f50b563578e9b5d206af58f038b10ebd7e1233023d4e167"
+    "io.cronometer.upstream.node-runtime.ref": (
+        "ghcr.io/liangzixuan/cronometer-gold-node-runtime@sha256:" + "c" * 64
     ),
     "io.cronometer.upstream.node.version": "22.23.2",
-    "io.cronometer.upstream.signature.identity": (
+    "io.cronometer.upstream.node.source": (
+        "https://nodejs.org/dist/v22.23.2/node-v22.23.2.tar.xz"
+    ),
+    "io.cronometer.upstream.node.source.sha256": node_source_sha256,
+    "io.cronometer.upstream.node.source.manifest.sha256": node_manifest_sha256,
+    "io.cronometer.upstream.node.source.manifest.signature.sha256": (
+        node_manifest_signature_sha256
+    ),
+    "io.cronometer.upstream.node.source.signature.fingerprint": (
+        node_signer_fingerprint
+    ),
+    "io.cronometer.upstream.node.release.tag-object": (
+        "490a9fef8f8adcda5a95bd6f96035b05cb43fe5b"
+    ),
+    "io.cronometer.upstream.node.release.commit": (
+        "aa4c77582be995286fc6e00aaf530dc7ade102a9"
+    ),
+    "io.cronometer.upstream.node.release.signer.source.commit": (
+        "43d7b8e5d41e87a3721d416f14fb86a68aeec1ce"
+    ),
+    "io.cronometer.upstream.node.release.signer.material.sha256": (
+        "e31e1aa40a8331f01d753cef475f7b9eab934fc25f5f0b36995bfd80bd66ad27"
+    ),
+    "io.cronometer.upstream.openssl.version": "3.5.7",
+    "io.cronometer.upstream.openssl.fix.cve": "CVE-2026-14456",
+    "io.cronometer.upstream.openssl.fix.advisory": (
+        "https://openssl-library.org/news/secadv/20260813.txt"
+    ),
+    "io.cronometer.upstream.openssl.fix.commit": openssl_fix_commit,
+    "io.cronometer.upstream.openssl.fix.patch.sha256": openssl_patch_sha256,
+    "io.cronometer.upstream.node.builder.image": (
+        "docker.io/library/python:3.12.14-bookworm"
+    ),
+    "io.cronometer.upstream.node.builder.image.digest": node_builder_digest,
+    "io.cronometer.upstream.node.builder.image.arm64.digest": (
+        node_builder_arm64_digest
+    ),
+    "io.cronometer.upstream.cxx.image": (
+        "gcr.io/distroless/nodejs22-debian13:nonroot"
+    ),
+    "io.cronometer.upstream.cxx.image.digest": node_cxx_digest,
+    "io.cronometer.upstream.cxx.image.arm64.digest": node_cxx_arm64_digest,
+    "io.cronometer.upstream.base.image": (
+        "gcr.io/distroless/base-nossl-debian13:nonroot"
+    ),
+    "io.cronometer.upstream.base.image.digest": node_base_digest,
+    "io.cronometer.upstream.base.image.arm64.digest": node_base_arm64_digest,
+    "io.cronometer.upstream.distroless.signature.identity": (
         "keyless@distroless.iam.gserviceaccount.com"
     ),
-    "io.cronometer.upstream.signature.issuer": "https://accounts.google.com",
+    "io.cronometer.upstream.distroless.signature.issuer": "https://accounts.google.com",
 }
 
 
@@ -809,15 +1035,83 @@ extra_port["ExposedPorts"]["9999/tcp"] = {}
 assert_app_contract_blocked("API_IMAGE", extra_port, "an extra exposed port")
 
 wrong_base_digest = copy.deepcopy(app_configs["MIGRATOR_IMAGE"])
-wrong_base_digest["Labels"]["io.cronometer.upstream.image.digest"] = "sha256:" + "b" * 64
+wrong_base_digest["Labels"]["io.cronometer.upstream.base.image.digest"] = "sha256:" + "b" * 64
 assert_app_contract_blocked("MIGRATOR_IMAGE", wrong_base_digest, "a changed base digest")
 
+wrong_base_child = copy.deepcopy(app_configs["API_IMAGE"])
+wrong_base_child["Labels"]["io.cronometer.upstream.base.image.arm64.digest"] = (
+    "sha256:" + "b" * 64
+)
+assert_app_contract_blocked("API_IMAGE", wrong_base_child, "a changed base ARM64 child digest")
+
+wrong_source_sha = copy.deepcopy(app_configs["API_IMAGE"])
+wrong_source_sha["Labels"]["io.cronometer.upstream.node.source.sha256"] = "b" * 64
+assert_app_contract_blocked("API_IMAGE", wrong_source_sha, "a changed Node source checksum")
+
+wrong_manifest_sha = copy.deepcopy(app_configs["WORKER_IMAGE"])
+wrong_manifest_sha["Labels"]["io.cronometer.upstream.node.source.manifest.sha256"] = "b" * 64
+assert_app_contract_blocked("WORKER_IMAGE", wrong_manifest_sha, "a changed release manifest checksum")
+
+wrong_manifest_signature_sha = copy.deepcopy(app_configs["WEB_IMAGE"])
+wrong_manifest_signature_sha["Labels"][
+    "io.cronometer.upstream.node.source.manifest.signature.sha256"
+] = "b" * 64
+assert_app_contract_blocked(
+    "WEB_IMAGE", wrong_manifest_signature_sha, "a changed manifest signature checksum"
+)
+
 wrong_signature = copy.deepcopy(app_configs["WORKER_IMAGE"])
-wrong_signature["Labels"]["io.cronometer.upstream.signature.identity"] = "attacker@example.invalid"
-assert_app_contract_blocked("WORKER_IMAGE", wrong_signature, "a changed signature identity")
+wrong_signature["Labels"]["io.cronometer.upstream.node.source.signature.fingerprint"] = (
+    "0" * 40
+)
+assert_app_contract_blocked("WORKER_IMAGE", wrong_signature, "a changed release signer fingerprint")
+
+wrong_patch_commit = copy.deepcopy(app_configs["MIGRATOR_IMAGE"])
+wrong_patch_commit["Labels"]["io.cronometer.upstream.openssl.fix.commit"] = "0" * 40
+assert_app_contract_blocked("MIGRATOR_IMAGE", wrong_patch_commit, "a changed OpenSSL fix commit")
+
+wrong_patch_sha = copy.deepcopy(app_configs["API_IMAGE"])
+wrong_patch_sha["Labels"]["io.cronometer.upstream.openssl.fix.patch.sha256"] = "0" * 64
+assert_app_contract_blocked("API_IMAGE", wrong_patch_sha, "a changed OpenSSL patch checksum")
+
+wrong_cxx_child = copy.deepcopy(app_configs["WORKER_IMAGE"])
+wrong_cxx_child["Labels"]["io.cronometer.upstream.cxx.image.arm64.digest"] = (
+    "sha256:" + "b" * 64
+)
+assert_app_contract_blocked("WORKER_IMAGE", wrong_cxx_child, "a changed C++ ARM64 child digest")
+
+wrong_builder_child = copy.deepcopy(app_configs["WEB_IMAGE"])
+wrong_builder_child["Labels"]["io.cronometer.upstream.node.builder.image.arm64.digest"] = (
+    "sha256:" + "b" * 64
+)
+assert_app_contract_blocked("WEB_IMAGE", wrong_builder_child, "a changed builder ARM64 child digest")
+
+wrong_node_runtime_repository = copy.deepcopy(app_configs["API_IMAGE"])
+wrong_node_runtime_repository["Labels"]["io.cronometer.upstream.node-runtime.ref"] = (
+    "ghcr.io/attacker/node-runtime@sha256:" + "c" * 64
+)
+assert_app_contract_blocked(
+    "API_IMAGE", wrong_node_runtime_repository, "a Node runtime from another repository"
+)
+
+tagged_node_runtime = copy.deepcopy(app_configs["WORKER_IMAGE"])
+tagged_node_runtime["Labels"]["io.cronometer.upstream.node-runtime.ref"] = (
+    "ghcr.io/liangzixuan/cronometer-gold-node-runtime:latest"
+)
+assert_app_contract_blocked("WORKER_IMAGE", tagged_node_runtime, "a tagged Node runtime reference")
+
+wrong_distroless_identity = copy.deepcopy(app_configs["MIGRATOR_IMAGE"])
+wrong_distroless_identity["Labels"]["io.cronometer.upstream.distroless.signature.identity"] = (
+    "attacker@example.invalid"
+)
+assert_app_contract_blocked(
+    "MIGRATOR_IMAGE", wrong_distroless_identity, "a changed Distroless signature identity"
+)
 
 wrong_issuer = copy.deepcopy(app_configs["WEB_IMAGE"])
-wrong_issuer["Labels"]["io.cronometer.upstream.signature.issuer"] = "https://example.invalid"
+wrong_issuer["Labels"]["io.cronometer.upstream.distroless.signature.issuer"] = (
+    "https://example.invalid"
+)
 assert_app_contract_blocked("WEB_IMAGE", wrong_issuer, "a changed signature issuer")
 
 inherited_entrypoint = copy.deepcopy(app_configs["API_IMAGE"])

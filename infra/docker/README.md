@@ -46,18 +46,38 @@ instructions. Follow the restore runbook before replacing database state.
 
 ## Published OCI runtimes
 
-The four application Dockerfiles, `caddy.Dockerfile`, and `postgres.Dockerfile`
-are OCI controlled-beta supply-chain inputs, not replacements for the developer
-services above. The default-branch container workflow publishes each one to its
-own GHCR package only after an exact ARM64 scan, provenance, runtime identity,
-and behavior checks pass.
+The default-branch supply chain produces seven repository-owned ARM64 artifacts:
+the dedicated `node-runtime.Dockerfile`, the four application Dockerfiles,
+`caddy.Dockerfile`, and `postgres.Dockerfile`. These are OCI controlled-beta
+inputs, not replacements for the developer services above. The Node runtime is
+an intermediate build artifact; only the other six become deployment images.
+Every artifact must pass its exact-digest scan, inventory, identity, provenance,
+and behavior gates before receiving an immutable commit tag.
 
-Application builds use the pinned full Node image only as a builder. Final app
-stages use the signed, digest-pinned Distroless Node.js 22 Debian 13 runtime, add
-only the deployment tree plus the UID/GID-1000 identity files, and contain no npm
-or shell. Their empty entrypoint preserves the OCI command overrides; `/nodejs/bin`
-is explicit in `PATH`. See `docs/quality/container-supply-chain.md` for the exact
-index/ARM64 digests, signature identity, inventory gate, and scan boundary.
+`node-runtime.Dockerfile` builds Node.js v22.23.2 on a native ARM runner from the
+official source archive after verifying the signed Node release manifest and its
+one exact archive checksum. It applies the checksum-pinned full OpenSSL commit
+`08e7756c3900bcfd77a720e7b74e27d6e4ed01a9` patch whose `08e7756`
+abbreviation is named by the official CVE-2026-14456 advisory. That OpenSSL
+commit and patch are not signed; the official advisory and the independently
+pinned patch checksum are the trust inputs. The final runtime uses signed,
+index-and-ARM64-child-pinned Distroless
+`base-nossl`, adds only the patched Node executable and exact C++ runtime files,
+and must pass an explicit-empty-ignore, zero-HIGH/zero-CRITICAL Trivy gate plus
+ELF and patch-symbol checks.
+
+Each application Dockerfile has a required, no-default `NODE_RUNTIME_IMAGE`
+build argument. The workflow injects only the passing, digest-qualified
+`ghcr.io/<owner>/<repository>-node-runtime@sha256:<digest>` output. The app image
+records that exact reference and inherits the Node source, signature, OpenSSL
+patch, builder, C++ source, base, and ARM64 child labels enforced by OCI
+admission. App stages add only the deployment tree plus UID/GID-1000 identity
+files and contain no npm or shell. Their empty entrypoint preserves OCI command
+overrides; `/nodejs/bin` is explicit in `PATH`. Caddy and PostgreSQL publish in
+independent jobs and do not wait for the Node producer.
+
+See `docs/quality/container-supply-chain.md` for the complete provenance pins,
+inventory gates, rejected prior composition, and scan boundary.
 
 The Caddy image is a UID/GID-1000 scratch runtime. Deployment drops all
 capabilities, adds only `NET_BIND_SERVICE`, mounts the reviewed Caddyfile, and

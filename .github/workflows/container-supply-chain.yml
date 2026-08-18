@@ -11,9 +11,546 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build-scan-publish:
+  build-node-runtime:
+    name: build, scan, publish (node-runtime)
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+    permissions:
+      attestations: write # Record the scanned runtime digest in GitHub's attestation store.
+      contents: read # Check out source and the exact upstream Node tag without repository credentials.
+      id-token: write # Issue the short-lived identity used to sign the attestation.
+      packages: write # Push digest-only content, the commit tag, and registry attestation to GHCR.
+    outputs:
+      digest: ${{ steps.export.outputs.digest }}
+      ref: ${{ steps.export.outputs.ref }}
+    env:
+      NODE_SOURCE_BUILD_IMAGE: docker.io/library/python:3.12.14-bookworm@sha256:80f5d259a5969c86f6c92145d572de4a68c68e0edd28d4367dec0fb411b42af3
+      NODE_SOURCE_BUILD_ARM64_DIGEST: sha256:b6e215e1d3d8787fe1e0f1507c7d2418b16fe19acef77cf971b2d965570ced41
+      NODE_CPP_RUNTIME_SOURCE_IMAGE: gcr.io/distroless/nodejs22-debian13:nonroot@sha256:939d6f1671529d230f50b563578e9b5d206af58f038b10ebd7e1233023d4e167
+      NODE_CPP_RUNTIME_SOURCE_ARM64_DIGEST: sha256:806e2fa26e3cec196e986cb206f44f07070d211c028389c79091fd440cb75882
+      NODE_RUNTIME_BASE_IMAGE: gcr.io/distroless/base-nossl-debian13:nonroot@sha256:86554c46a420d507ff2d678fd261ab8691fba4875a20302f38a49e684b42a33f
+      NODE_RUNTIME_BASE_ARM64_DIGEST: sha256:ab7e729cfe775ce5f251b2d28b45e88b70e0582cdbadd1aa1f99a41601f11f3b
+      NODE_RELEASE_FINGERPRINT: CC68F5A3106FF448322E48ED27F5E38D5B0A215F
+      NODE_RELEASE_SIGNER_SHA256: e31e1aa40a8331f01d753cef475f7b9eab934fc25f5f0b36995bfd80bd66ad27
+      NODE_RELEASE_TAG_OBJECT: 490a9fef8f8adcda5a95bd6f96035b05cb43fe5b
+      NODE_RELEASE_COMMIT: aa4c77582be995286fc6e00aaf530dc7ade102a9
+      NODE_SOURCE_SHA256: bbe768df8d5815d7fa76124052985332452e0a4742d39f32027550d1aab8f6fb
+      NODE_SHASUMS_SHA256: 778ac5b2fcdbd68d9c0ae9f4310674faa3af0910bd0d18e7f6597787c40a3e39
+      NODE_SHASUMS_SIGNATURE_SHA256: 169f1452c14cd653247408352f1534b9f31e3d13f9c6399c3977368095e11eda
+      OPENSSL_FIX_COMMIT: 08e7756c3900bcfd77a720e7b74e27d6e4ed01a9
+      OPENSSL_FIX_PATCH_SHA256: 3b4f3ff1e9d26ca3dd75f6d98cc5d30c7dbfc03892e4bc0037a7e14bec8c5087
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Check out the signed Node release tag
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
+          path: .upstream/node
+          persist-credentials: false
+          ref: v22.23.2
+          repository: nodejs/node
+
+      - name: Verify native ARM64 execution
+        run: |
+          set -euo pipefail
+          test "${RUNNER_ARCH}" = ARM64
+          test "$(uname -m)" = aarch64
+
+      - name: Verify the signed Node source and exact OpenSSL fix
+        env:
+          KEY_FILE: infra/docker/node-release-CC68F5A3106FF448322E48ED27F5E38D5B0A215F.asc
+        run: |
+          set -euo pipefail
+          release_dir="${RUNNER_TEMP}/node-release"
+          keyring_dir="${RUNNER_TEMP}/node-release-keyring"
+          install -d -m 0700 "${release_dir}" "${keyring_dir}"
+
+          test "$(sha256sum "${KEY_FILE}" | awk '{ print $1 }')" = "${NODE_RELEASE_SIGNER_SHA256}"
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            --output "${release_dir}/release-key.asc" \
+            https://raw.githubusercontent.com/nodejs/release-keys/43d7b8e5d41e87a3721d416f14fb86a68aeec1ce/keys/CC68F5A3106FF448322E48ED27F5E38D5B0A215F.asc
+          test "$(sha256sum "${release_dir}/release-key.asc" | awk '{ print $1 }')" = "${NODE_RELEASE_SIGNER_SHA256}"
+          cmp "${KEY_FILE}" "${release_dir}/release-key.asc"
+          test "$(gpg --batch --with-colons --import-options show-only --import "${KEY_FILE}" | awk -F: '$1 == "pub" { count++ } END { print count + 0 }')" = 1
+          test "$(gpg --batch --with-colons --import-options show-only --import "${KEY_FILE}" | awk -F: '$1 == "fpr" { print $10; exit }')" = "${NODE_RELEASE_FINGERPRINT}"
+          gpg --batch --homedir "${keyring_dir}" --import "${KEY_FILE}"
+
+          test "$(git -C .upstream/node rev-parse refs/tags/v22.23.2)" = "${NODE_RELEASE_TAG_OBJECT}"
+          test "$(git -C .upstream/node rev-parse 'refs/tags/v22.23.2^{}')" = "${NODE_RELEASE_COMMIT}"
+          GNUPGHOME="${keyring_dir}" git -C .upstream/node -c gpg.program=gpg verify-tag v22.23.2
+
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            --output "${release_dir}/SHASUMS256.txt" \
+            https://nodejs.org/dist/v22.23.2/SHASUMS256.txt
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            --output "${release_dir}/SHASUMS256.txt.sig" \
+            https://nodejs.org/dist/v22.23.2/SHASUMS256.txt.sig
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            --output "${release_dir}/node-v22.23.2.tar.xz" \
+            https://nodejs.org/dist/v22.23.2/node-v22.23.2.tar.xz
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            --output "${release_dir}/CVE-2026-14456.patch" \
+            "https://github.com/openssl/openssl/commit/${OPENSSL_FIX_COMMIT}.patch"
+          curl --proto '=https' --tlsv1.2 --fail --location --silent --show-error \
+            --output "${release_dir}/openssl-advisory.txt" \
+            https://openssl-library.org/news/secadv/20260813.txt
+
+          test "$(sha256sum "${release_dir}/SHASUMS256.txt" | awk '{ print $1 }')" = "${NODE_SHASUMS_SHA256}"
+          test "$(sha256sum "${release_dir}/SHASUMS256.txt.sig" | awk '{ print $1 }')" = "${NODE_SHASUMS_SIGNATURE_SHA256}"
+          test "$(sha256sum "${release_dir}/node-v22.23.2.tar.xz" | awk '{ print $1 }')" = "${NODE_SOURCE_SHA256}"
+          test "$(sha256sum "${release_dir}/CVE-2026-14456.patch" | awk '{ print $1 }')" = "${OPENSSL_FIX_PATCH_SHA256}"
+
+          status_file="${release_dir}/signature.status"
+          gpgv --keyring "${keyring_dir}/pubring.kbx" --status-fd 1 \
+            "${release_dir}/SHASUMS256.txt.sig" \
+            "${release_dir}/SHASUMS256.txt" > "${status_file}"
+          test "$(awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { count++ } END { print count + 0 }' "${status_file}")" = 1
+          test "$(awk '$1 == "[GNUPG:]" && $2 == "VALIDSIG" { print $3 ":" $12 }' "${status_file}")" = "${NODE_RELEASE_FINGERPRINT}:${NODE_RELEASE_FINGERPRINT}"
+
+          expected_checksum="${NODE_SOURCE_SHA256}  node-v22.23.2.tar.xz"
+          test "$(grep -Fxc "${expected_checksum}" "${release_dir}/SHASUMS256.txt")" = 1
+          (cd "${release_dir}" && grep -Fx "${expected_checksum}" SHASUMS256.txt | sha256sum --check --strict -)
+          test "$(sed -n '1s/^From \([0-9a-f]\{40\}\) .*$/\1/p' "${release_dir}/CVE-2026-14456.patch")" = "${OPENSSL_FIX_COMMIT}"
+          grep -Fq 'CVE-2026-14456' "${release_dir}/openssl-advisory.txt"
+          grep -Fq 'and 08e7756 (for 3.5)' "${release_dir}/openssl-advisory.txt"
+          sed -n 's#^diff --git a/\([^ ]*\) b/.*#\1#p' "${release_dir}/CVE-2026-14456.patch" > "${release_dir}/patch-paths.actual"
+          diff -u - "${release_dir}/patch-paths.actual" <<'EOF'
+          doc/man3/SSL_get_value_uint.pod
+          include/internal/quic_port.h
+          include/openssl/ssl.h.in
+          ssl/quic/quic_impl.c
+          ssl/quic/quic_port.c
+          ssl/quic/quic_port_local.h
+          util/other.syms
+          EOF
+
+      - name: Set up pinned Buildx and BuildKit
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          version: v0.36.1
+          driver-opts: image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+          cache-binary: false
+
+      - name: Install Cosign for Distroless verification
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+
+      - name: Verify pinned builder and signed Distroless inputs
+        run: |
+          set -euo pipefail
+          verify_arm64_index() {
+            local name="$1"
+            local ref="$2"
+            local arm64_digest="$3"
+            local index_file="${RUNNER_TEMP}/${name}-index.json"
+
+            docker buildx imagetools inspect "${ref}" --raw > "${index_file}"
+            jq -e --arg arm64_digest "${arm64_digest}" '
+              .schemaVersion == 2 and
+              .mediaType == "application/vnd.oci.image.index.v1+json" and
+              ([.manifests[] | select(
+                .platform.os == "linux" and
+                .platform.architecture == "arm64" and
+                (.platform.variant == null or .platform.variant == "v8")
+              )] | length == 1) and
+              ([.manifests[] | select(
+                .platform.os == "linux" and
+                .platform.architecture == "arm64" and
+                (.platform.variant == null or .platform.variant == "v8")
+              )][0].digest == $arm64_digest)
+            ' "${index_file}" >/dev/null
+          }
+
+          verify_distroless_index() {
+            local name="$1"
+            local ref="$2"
+            local arm64_digest="$3"
+            local verification_file="${RUNNER_TEMP}/${name}-cosign-verification.json"
+
+            cosign verify \
+              --certificate-oidc-issuer https://accounts.google.com \
+              --certificate-identity keyless@distroless.iam.gserviceaccount.com \
+              --output json \
+              "${ref}" > "${verification_file}"
+            jq -e 'type == "array" and length > 0' "${verification_file}" >/dev/null
+            verify_arm64_index "${name}" "${ref}" "${arm64_digest}"
+          }
+
+          verify_arm64_index node-source-builder "${NODE_SOURCE_BUILD_IMAGE}" "${NODE_SOURCE_BUILD_ARM64_DIGEST}"
+          verify_distroless_index node-cpp-runtime-source "${NODE_CPP_RUNTIME_SOURCE_IMAGE}" "${NODE_CPP_RUNTIME_SOURCE_ARM64_DIGEST}"
+          verify_distroless_index node-runtime-base "${NODE_RUNTIME_BASE_IMAGE}" "${NODE_RUNTIME_BASE_ARM64_DIGEST}"
+
+      - name: Resolve lowercase GHCR image name
+        id: image
+        env:
+          IMAGE_OWNER: ${{ github.repository_owner }}
+          IMAGE_REPOSITORY: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+          owner_lower="$(printf '%s' "${IMAGE_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          repository_lower="$(printf '%s' "${IMAGE_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          printf 'name=ghcr.io/%s/%s-node-runtime\n' "${owner_lower}" "${repository_lower}" >> "${GITHUB_OUTPUT}"
+
+      - name: Log in to GHCR with the job token
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve an existing immutable commit tag
+        id: existing
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          published_ref="${IMAGE}:sha-${REVISION}"
+          inspect_error="${RUNNER_TEMP}/existing-manifest-error.txt"
+
+          if existing_manifest="$(docker buildx imagetools inspect "${published_ref}" --format '{{json .Manifest}}' 2>"${inspect_error}")"; then
+            existing_digest="$(printf '%s' "${existing_manifest}" | jq -er '.digest | select(test("^sha256:[0-9a-f]{64}$"))')"
+            printf 'exists=true\n' >> "${GITHUB_OUTPUT}"
+            printf 'digest=%s\n' "${existing_digest}" >> "${GITHUB_OUTPUT}"
+          else
+            if ! grep -Eiq 'manifest unknown|not found' "${inspect_error}"; then
+              echo "Could not safely determine whether ${published_ref} exists." >&2
+              sed -n '1,20p' "${inspect_error}" >&2
+              exit 1
+            fi
+            printf 'exists=false\n' >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Build and push patched Node runtime by digest
+        id: build
+        if: steps.existing.outputs.exists != 'true'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: infra/docker/node-runtime.Dockerfile
+          target: runtime
+          platforms: linux/arm64
+          pull: true
+          build-args: |
+            NODE_SOURCE_BUILD_IMAGE=${{ env.NODE_SOURCE_BUILD_IMAGE }}
+            NODE_CPP_RUNTIME_SOURCE_IMAGE=${{ env.NODE_CPP_RUNTIME_SOURCE_IMAGE }}
+            NODE_RUNTIME_BASE_IMAGE=${{ env.NODE_RUNTIME_BASE_IMAGE }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.title=${{ github.event.repository.name }}-node-runtime
+            org.opencontainers.image.version=sha-${{ github.sha }}
+          outputs: type=image,name=${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=true
+          provenance: mode=max
+          sbom: generator=docker.io/docker/buildkit-syft-scanner@sha256:79e7b013cbec16bbb436f312819a49a4a57752b2270c1a9332ae1a10fcc82a68
+
+      - name: Select the patched runtime candidate digest
+        id: candidate
+        env:
+          BUILT_DIGEST: ${{ steps.build.outputs.digest }}
+          EXISTING_DIGEST: ${{ steps.existing.outputs.digest }}
+          EXISTING_TAG: ${{ steps.existing.outputs.exists }}
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: |
+          set -euo pipefail
+          if [ "${EXISTING_TAG}" = true ]; then
+            digest="${EXISTING_DIGEST}"
+          else
+            digest="${BUILT_DIGEST}"
+          fi
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo 'Patched runtime candidate digest is missing or malformed.' >&2
+            exit 1
+          }
+          printf 'digest=%s\n' "${digest}" >> "${GITHUB_OUTPUT}"
+          printf 'ref=%s@%s\n' "${IMAGE}" "${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify patched runtime identity, binary, and symbols
+        env:
+          IMAGE_REF: ${{ steps.candidate.outputs.ref }}
+          REPOSITORY_NAME: ${{ github.event.repository.name }}
+          REVISION: ${{ github.sha }}
+          SOURCE: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          index_file="${RUNNER_TEMP}/node-runtime-candidate-index.json"
+          image_file="${RUNNER_TEMP}/node-runtime-candidate-image.json"
+          docker buildx imagetools inspect "${IMAGE_REF}" --raw > "${index_file}"
+          jq -e '
+            .schemaVersion == 2 and
+            (.manifests | type == "array") and
+            ([.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64")] | length == 1) and
+            (all(.manifests[];
+              (.platform.os == "linux" and .platform.architecture == "arm64") or
+              (.platform.os == "unknown" and .platform.architecture == "unknown")))
+          ' "${index_file}" >/dev/null
+          runtime_digest="$(jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest | select(test("^sha256:[0-9a-f]{64}$"))' "${index_file}")"
+          runtime_ref="${IMAGE_REF%@*}@${runtime_digest}"
+          docker pull --platform linux/arm64 "${runtime_ref}" >/dev/null
+          docker image inspect "${runtime_ref}" --format '{{json .}}' | \
+            jq '{os: .Os, architecture: .Architecture, config: .Config}' > "${image_file}"
+
+          jq -e \
+            --arg revision "${REVISION}" \
+            --arg source "${SOURCE}" \
+            --arg title "${REPOSITORY_NAME}-node-runtime" \
+            --arg version "sha-${REVISION}" '
+              .os == "linux" and
+              .architecture == "arm64" and
+              .config.User == "65532:65532" and
+              .config.Entrypoint == null and
+              .config.Cmd == ["/nodejs/bin/node"] and
+              .config.Shell == null and
+              .config.Labels["org.opencontainers.image.revision"] == $revision and
+              .config.Labels["org.opencontainers.image.source"] == $source and
+              .config.Labels["org.opencontainers.image.title"] == $title and
+              .config.Labels["org.opencontainers.image.version"] == $version and
+              .config.Labels["io.cronometer.runtime.component"] == "node-runtime" and
+              .config.Labels["io.cronometer.runtime.contract"] == "patched-node22.23.2-openssl3.5.7-08e7756-base-nossl-debian13-arm64" and
+              .config.Labels["io.cronometer.upstream.node.version"] == "22.23.2" and
+              .config.Labels["io.cronometer.upstream.node.source"] == "https://nodejs.org/dist/v22.23.2/node-v22.23.2.tar.xz" and
+              .config.Labels["io.cronometer.upstream.node.source.sha256"] == "bbe768df8d5815d7fa76124052985332452e0a4742d39f32027550d1aab8f6fb" and
+              .config.Labels["io.cronometer.upstream.node.source.manifest.sha256"] == "778ac5b2fcdbd68d9c0ae9f4310674faa3af0910bd0d18e7f6597787c40a3e39" and
+              .config.Labels["io.cronometer.upstream.node.source.manifest.signature.sha256"] == "169f1452c14cd653247408352f1534b9f31e3d13f9c6399c3977368095e11eda" and
+              .config.Labels["io.cronometer.upstream.node.source.signature.fingerprint"] == "CC68F5A3106FF448322E48ED27F5E38D5B0A215F" and
+              .config.Labels["io.cronometer.upstream.node.release.tag-object"] == "490a9fef8f8adcda5a95bd6f96035b05cb43fe5b" and
+              .config.Labels["io.cronometer.upstream.node.release.commit"] == "aa4c77582be995286fc6e00aaf530dc7ade102a9" and
+              .config.Labels["io.cronometer.upstream.node.release.signer.source.commit"] == "43d7b8e5d41e87a3721d416f14fb86a68aeec1ce" and
+              .config.Labels["io.cronometer.upstream.node.release.signer.material.sha256"] == "e31e1aa40a8331f01d753cef475f7b9eab934fc25f5f0b36995bfd80bd66ad27" and
+              .config.Labels["io.cronometer.upstream.openssl.version"] == "3.5.7" and
+              .config.Labels["io.cronometer.upstream.openssl.fix.cve"] == "CVE-2026-14456" and
+              .config.Labels["io.cronometer.upstream.openssl.fix.advisory"] == "https://openssl-library.org/news/secadv/20260813.txt" and
+              .config.Labels["io.cronometer.upstream.openssl.fix.commit"] == "08e7756c3900bcfd77a720e7b74e27d6e4ed01a9" and
+              .config.Labels["io.cronometer.upstream.openssl.fix.patch.sha256"] == "3b4f3ff1e9d26ca3dd75f6d98cc5d30c7dbfc03892e4bc0037a7e14bec8c5087" and
+              .config.Labels["io.cronometer.upstream.node.builder.image"] == "docker.io/library/python:3.12.14-bookworm" and
+              .config.Labels["io.cronometer.upstream.node.builder.image.digest"] == "sha256:80f5d259a5969c86f6c92145d572de4a68c68e0edd28d4367dec0fb411b42af3" and
+              .config.Labels["io.cronometer.upstream.node.builder.image.arm64.digest"] == "sha256:b6e215e1d3d8787fe1e0f1507c7d2418b16fe19acef77cf971b2d965570ced41" and
+              .config.Labels["io.cronometer.upstream.cxx.image"] == "gcr.io/distroless/nodejs22-debian13:nonroot" and
+              .config.Labels["io.cronometer.upstream.cxx.image.digest"] == "sha256:939d6f1671529d230f50b563578e9b5d206af58f038b10ebd7e1233023d4e167" and
+              .config.Labels["io.cronometer.upstream.cxx.image.arm64.digest"] == "sha256:806e2fa26e3cec196e986cb206f44f07070d211c028389c79091fd440cb75882" and
+              .config.Labels["io.cronometer.upstream.base.image"] == "gcr.io/distroless/base-nossl-debian13:nonroot" and
+              .config.Labels["io.cronometer.upstream.base.image.digest"] == "sha256:86554c46a420d507ff2d678fd261ab8691fba4875a20302f38a49e684b42a33f" and
+              .config.Labels["io.cronometer.upstream.base.image.arm64.digest"] == "sha256:ab7e729cfe775ce5f251b2d28b45e88b70e0582cdbadd1aa1f99a41601f11f3b" and
+              .config.Labels["io.cronometer.upstream.distroless.signature.identity"] == "keyless@distroless.iam.gserviceaccount.com" and
+              .config.Labels["io.cronometer.upstream.distroless.signature.issuer"] == "https://accounts.google.com" and
+              (.config.Env | index("PATH=/nodejs/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")) != null and
+              (.config.Env | index("SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt")) != null
+            ' "${image_file}" >/dev/null
+
+          docker run --rm --platform linux/arm64 --read-only --cap-drop ALL \
+            --entrypoint /nodejs/bin/node "${runtime_ref}" -e '
+              const assert = require("node:assert/strict");
+              const fs = require("node:fs");
+              const tls = require("node:tls");
+              assert.equal(process.version, "v22.23.2");
+              assert.equal(process.platform, "linux");
+              assert.equal(process.arch, "arm64");
+              assert.equal(process.versions.openssl, "3.5.7");
+              assert.equal(process.config.variables.node_shared_openssl, false);
+              assert.equal(process.config.variables.openssl_quic, false);
+              assert.equal(process.allowedNodeEnvironmentFlags.has("--experimental-quic"), false);
+              assert.equal(require("node:module").builtinModules.includes("quic"), false);
+              assert.equal(process.getuid(), 65532);
+              assert.equal(process.getgid(), 65532);
+              assert.equal(fs.existsSync(process.env.SSL_CERT_FILE), true);
+              const certificateBundle = fs.readFileSync(process.env.SSL_CERT_FILE, "utf8");
+              assert.match(certificateBundle, /-----BEGIN CERTIFICATE-----/);
+              tls.createSecureContext({ ca: certificateBundle });
+              assert.equal(fs.statSync("/usr/share/zoneinfo/America/Chicago").isFile(), true);
+              const chicago = new Intl.DateTimeFormat("en-US", {
+                timeZone: "America/Chicago",
+                hour: "2-digit",
+                hourCycle: "h23",
+                timeZoneName: "shortOffset",
+              });
+              const coordinate = (instant) => Object.fromEntries(
+                chicago.formatToParts(new Date(instant)).map((part) => [part.type, part.value]),
+              );
+              assert.deepEqual(
+                { hour: coordinate("2026-01-15T12:00:00Z").hour,
+                  zone: coordinate("2026-01-15T12:00:00Z").timeZoneName },
+                { hour: "06", zone: "GMT-6" },
+              );
+              assert.deepEqual(
+                { hour: coordinate("2026-07-15T12:00:00Z").hour,
+                  zone: coordinate("2026-07-15T12:00:00Z").timeZoneName },
+                { hour: "07", zone: "GMT-5" },
+              );
+              for (const path of ["/bin/sh", "/usr/bin/npm", "/nodejs/bin/npm"]) {
+                assert.equal(fs.existsSync(path), false, `${path} must not ship`);
+              }
+            '
+
+          binary="${RUNNER_TEMP}/node-v22.23.2-patched"
+          extraction_container="node-runtime-extract-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          trap 'docker rm --force "${extraction_container}" >/dev/null 2>&1 || true' EXIT
+          docker create --platform linux/arm64 --name "${extraction_container}" "${runtime_ref}" >/dev/null
+          docker cp "${extraction_container}:/nodejs/bin/node" "${binary}"
+          docker rm "${extraction_container}" >/dev/null
+          trap - EXIT
+          test "$(nm -D "${binary}" | awk '$3 == "OSSL_QUIC_server_method" { count++ } END { print count + 0 }')" = 1
+          test "$(nm -D "${binary}" | awk '$3 == "ossl_quic_port_get_max_pending_channels" { count++ } END { print count + 0 }')" = 1
+          test "$(nm -D "${binary}" | awk '$3 == "ossl_quic_port_set_max_pending_channels" { count++ } END { print count + 0 }')" = 1
+          readelf -h "${binary}" | grep -Eq 'Machine:[[:space:]]+AArch64'
+          readelf -d "${binary}" | sed -n 's/.*Shared library: \[\([^]]*\)\]/\1/p' | sort > "${RUNNER_TEMP}/node-needed.actual"
+          printf '%s\n' libc.so.6 libdl.so.2 libgcc_s.so.1 libm.so.6 libpthread.so.0 libstdc++.so.6 | sort > "${RUNNER_TEMP}/node-needed.expected"
+          diff -u "${RUNNER_TEMP}/node-needed.expected" "${RUNNER_TEMP}/node-needed.actual"
+          if grep -Eq '^lib(ssl|crypto)' "${RUNNER_TEMP}/node-needed.actual"; then
+            echo 'The patched Node binary unexpectedly links shared OpenSSL libraries.' >&2
+            exit 1
+          fi
+          test "$(readelf -l "${binary}" | sed -n 's/.*Requesting program interpreter: \([^]]*\)\].*/\1/p')" = /lib/ld-linux-aarch64.so.1
+
+      - name: Initialize an explicit empty vulnerability-ignore policy
+        run: install -m 600 /dev/null "${RUNNER_TEMP}/empty.trivyignore"
+
+      - name: Fail closed on patched runtime high or critical vulnerabilities
+        env:
+          TRIVY_PLATFORM: linux/arm64
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          scan-type: image
+          image-ref: ${{ steps.candidate.outputs.ref }}
+          scanners: vuln
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          trivyignores: ${{ runner.temp }}/empty.trivyignore
+          exit-code: "1"
+          format: table
+          hide-progress: true
+          timeout: 15m
+          cache: false
+
+      - name: Inventory patched runtime packages with Trivy
+        env:
+          TRIVY_PLATFORM: linux/arm64
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          skip-setup-trivy: true
+          scan-type: image
+          image-ref: ${{ steps.candidate.outputs.ref }}
+          scanners: vuln
+          vuln-type: os,library
+          severity: UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL
+          ignore-unfixed: false
+          trivyignores: ${{ runner.temp }}/empty.trivyignore
+          list-all-pkgs: true
+          exit-code: "0"
+          format: json
+          output: ${{ runner.temp }}/node-runtime-trivy-inventory.json
+          hide-progress: true
+          timeout: 15m
+          cache: false
+
+      - name: Assert patched runtime inventory
+        env:
+          INVENTORY_FILE: ${{ runner.temp }}/node-runtime-trivy-inventory.json
+        run: |
+          set -euo pipefail
+          jq -e '
+            def package($name): any(.Results[]?.Packages[]?; .Name == $name);
+            package("gcc-14-base") and
+            package("libgcc-s1") and
+            package("libstdc++6") and
+            (package("libssl3t64") | not) and
+            (package("libssl3") | not) and
+            (package("openssl") | not) and
+            (any(.Results[]?.Vulnerabilities[]?; .VulnerabilityID == "CVE-2026-14456") | not)
+          ' "${INVENTORY_FILE}" >/dev/null
+
+      - name: Record GitHub build provenance
+        if: steps.existing.outputs.exists != 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.candidate.outputs.digest }}
+          push-to-registry: true
+
+      - name: Verify GitHub build provenance
+        env:
+          DIGEST: ${{ steps.candidate.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ steps.image.outputs.name }}
+          REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            if gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml" \
+              --signer-digest "${GITHUB_WORKFLOW_SHA}" \
+              --source-digest "${REVISION}" \
+              --source-ref "${GITHUB_REF}" \
+              --predicate-type 'https://slsa.dev/provenance/v1' \
+              --deny-self-hosted-runners; then
+              exit 0
+            fi
+            [ "${attempt}" -lt 5 ] || break
+            sleep 5
+          done
+          echo 'The patched runtime digest has no matching trusted build-provenance attestation.' >&2
+          exit 1
+
+      - name: Create the immutable commit tag
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          DIGEST: ${{ steps.candidate.outputs.digest }}
+          IMAGE: ${{ steps.image.outputs.name }}
+          REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          docker buildx imagetools create --tag "${IMAGE}:sha-${REVISION}" "${IMAGE}@${DIGEST}"
+
+      - name: Verify the immutable commit tag
+        env:
+          DIGEST: ${{ steps.candidate.outputs.digest }}
+          IMAGE: ${{ steps.image.outputs.name }}
+          REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          published_manifest="$(docker buildx imagetools inspect "${IMAGE}:sha-${REVISION}" --format '{{json .Manifest}}')"
+          published_digest="$(printf '%s' "${published_manifest}" | jq -er '.digest | select(test("^sha256:[0-9a-f]{64}$"))')"
+          test "${published_digest}" = "${DIGEST}"
+
+      - name: Summarize the verified patched runtime
+        env:
+          DIGEST: ${{ steps.candidate.outputs.digest }}
+          IMAGE: ${{ steps.image.outputs.name }}
+          REVISION: ${{ github.sha }}
+        run: |
+          {
+            printf "### node-runtime container\n\n"
+            printf -- "- Tag: \`%s:sha-%s\`\n" "${IMAGE}" "${REVISION}"
+            printf -- "- Digest: \`%s\`\n" "${DIGEST}"
+            printf -- "- Platform: \`linux/arm64\` (native build)\n"
+            printf -- "- Node/OpenSSL: \`v22.23.2 / 3.5.7 + 08e7756\`\n"
+            printf -- "- Deployment: intermediate runtime only; not deployed directly\n"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Export the verified patched Node runtime
+        id: export
+        env:
+          DIGEST: ${{ steps.candidate.outputs.digest }}
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: |
+          set -euo pipefail
+          [[ "${DIGEST}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "${DIGEST}" >> "${GITHUB_OUTPUT}"
+          printf 'ref=%s@%s\n' "${IMAGE}" "${DIGEST}" >> "${GITHUB_OUTPUT}"
+
+  build-scan-publish-apps:
     name: build, scan, publish (${{ matrix.component }})
     if: github.ref_name == github.event.repository.default_branch
+    needs: build-node-runtime
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
@@ -33,55 +570,23 @@ jobs:
             dockerfile: infra/docker/migrator.Dockerfile
           - component: web
             dockerfile: infra/docker/web.Dockerfile
-          - component: caddy
-            dockerfile: infra/docker/caddy.Dockerfile
-          - component: postgres
-            dockerfile: infra/docker/postgres.Dockerfile
     steps:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           persist-credentials: false
 
-      - name: Check out the signed Caddy release tag
-        if: matrix.component == 'caddy'
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          fetch-depth: 1
-          path: .upstream/caddy
-          persist-credentials: false
-          ref: v2.11.4
-          repository: caddyserver/caddy
-
-      - name: Verify the exact Caddy tag signature and source commit
-        if: matrix.component == 'caddy'
-        env:
-          EXPECTED_COMMIT: e2eee6a7fce366321294c9c2a79f3146891dcbdf
-          EXPECTED_KEY: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID3Tb+AnHxmAtAWkwT3FgDQ8DzO6b0dejvgqEPQ7PS39
-          EXPECTED_TAG_OBJECT: 8ec11a4b7e39a5fd00da2fc5cb9b543e31fd7926
-          SIGNERS_FILE: infra/docker/caddy-v2.11.4.allowed_signers
-        run: |
-          set -euo pipefail
-          test "$(wc -l < "${SIGNERS_FILE}" | tr -d '[:space:]')" = 1
-          actual_key="$(awk 'NF == 3 { print $2 " " $3 }' "${SIGNERS_FILE}")"
-          test "${actual_key}" = "${EXPECTED_KEY}"
-          test "$(git -C .upstream/caddy rev-parse refs/tags/v2.11.4)" = "${EXPECTED_TAG_OBJECT}"
-          test "$(git -C .upstream/caddy rev-parse 'refs/tags/v2.11.4^{}')" = "${EXPECTED_COMMIT}"
-          git -C .upstream/caddy \
-            -c "gpg.ssh.allowedSignersFile=${GITHUB_WORKSPACE}/${SIGNERS_FILE}" \
-            verify-tag v2.11.4
-
       - name: Resolve lowercase GHCR image name
         id: image
         env:
           COMPONENT: ${{ matrix.component }}
-          OWNER: ${{ github.repository_owner }}
-          REPOSITORY: ${{ github.event.repository.name }}
+          IMAGE_OWNER: ${{ github.repository_owner }}
+          IMAGE_REPOSITORY: ${{ github.event.repository.name }}
         run: |
           set -euo pipefail
-          owner="$(printf '%s' "${OWNER}" | tr '[:upper:]' '[:lower:]')"
-          repository="$(printf '%s' "${REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
-          printf 'name=ghcr.io/%s/%s-%s\n' "${owner}" "${repository}" "${COMPONENT}" >> "${GITHUB_OUTPUT}"
+          owner_lower="$(printf '%s' "${IMAGE_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          repository_lower="$(printf '%s' "${IMAGE_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          printf 'name=ghcr.io/%s/%s-%s\n' "${owner_lower}" "${repository_lower}" "${COMPONENT}" >> "${GITHUB_OUTPUT}"
 
       - name: Install ARM64 emulator
         uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
@@ -96,39 +601,6 @@ jobs:
           version: v0.36.1
           driver-opts: image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
           cache-binary: false
-
-      - name: Install Cosign for the Node runtime-base verification
-        if: matrix.component == 'api' || matrix.component == 'worker' || matrix.component == 'migrator' || matrix.component == 'web'
-        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        with:
-          cosign-release: v3.1.3
-
-      - name: Verify the signed Node runtime index and ARM64 child
-        if: matrix.component == 'api' || matrix.component == 'worker' || matrix.component == 'migrator' || matrix.component == 'web'
-        env:
-          NODE_RUNTIME_ARM64_DIGEST: sha256:806e2fa26e3cec196e986cb206f44f07070d211c028389c79091fd440cb75882
-          NODE_RUNTIME_REF: gcr.io/distroless/nodejs22-debian13@sha256:939d6f1671529d230f50b563578e9b5d206af58f038b10ebd7e1233023d4e167
-        run: |
-          set -euo pipefail
-          verification_file="${RUNNER_TEMP}/distroless-cosign-verification.json"
-          index_file="${RUNNER_TEMP}/distroless-index.json"
-
-          cosign verify \
-            --certificate-oidc-issuer https://accounts.google.com \
-            --certificate-identity keyless@distroless.iam.gserviceaccount.com \
-            --output json \
-            "${NODE_RUNTIME_REF}" > "${verification_file}"
-          jq -e 'type == "array" and length > 0' "${verification_file}" >/dev/null
-
-          docker buildx imagetools inspect "${NODE_RUNTIME_REF}" --raw > "${index_file}"
-          jq -e --arg arm64_digest "${NODE_RUNTIME_ARM64_DIGEST}" '
-            .schemaVersion == 2 and
-            .mediaType == "application/vnd.oci.image.index.v1+json" and
-            ([.manifests[] |
-              select(.platform.os == "linux" and .platform.architecture == "arm64")] | length == 1) and
-            ([.manifests[] |
-              select(.platform.os == "linux" and .platform.architecture == "arm64")][0].digest == $arm64_digest)
-          ' "${index_file}" >/dev/null
 
       - name: Log in to GHCR with the job token
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -170,6 +642,8 @@ jobs:
           target: runtime
           platforms: linux/arm64
           pull: true
+          build-args: |
+            NODE_RUNTIME_IMAGE=${{ needs.build-node-runtime.outputs.ref }}
           labels: |
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
@@ -204,6 +678,7 @@ jobs:
         env:
           COMPONENT: ${{ matrix.component }}
           IMAGE_REF: ${{ steps.candidate.outputs.ref }}
+          NODE_RUNTIME_REF: ${{ needs.build-node-runtime.outputs.ref }}
           REPOSITORY_NAME: ${{ github.event.repository.name }}
           REVISION: ${{ github.sha }}
           SOURCE: ${{ github.server_url }}/${{ github.repository }}
@@ -257,7 +732,7 @@ jobs:
 
           case "${COMPONENT}" in
             api|worker|migrator|web)
-              jq -e --arg component "${COMPONENT}" '
+              jq -e --arg component "${COMPONENT}" --arg node_runtime_ref "${NODE_RUNTIME_REF}" '
                 .config.User == "1000:1000" and
                 .config.Entrypoint == null and
                 .config.WorkingDir == "/app" and
@@ -265,52 +740,34 @@ jobs:
                 .config.StopSignal == null and
                 .config.Shell == null and
                 .config.Labels["io.cronometer.runtime.component"] == $component and
-                .config.Labels["io.cronometer.runtime.contract"] == "distroless-node22-debian13-uid-gid-1000-empty-entrypoint" and
-                .config.Labels["io.cronometer.upstream.image"] == "gcr.io/distroless/nodejs22-debian13:nonroot" and
-                .config.Labels["io.cronometer.upstream.image.digest"] == "sha256:939d6f1671529d230f50b563578e9b5d206af58f038b10ebd7e1233023d4e167" and
+                .config.Labels["io.cronometer.runtime.contract"] == "patched-node22.23.2-openssl3.5.7-08e7756-base-nossl-debian13-uid-gid-1000-empty-entrypoint" and
+                .config.Labels["io.cronometer.upstream.node-runtime.ref"] == $node_runtime_ref and
+                .config.Labels["io.cronometer.upstream.node.source"] == "https://nodejs.org/dist/v22.23.2/node-v22.23.2.tar.xz" and
+                .config.Labels["io.cronometer.upstream.node.source.sha256"] == "bbe768df8d5815d7fa76124052985332452e0a4742d39f32027550d1aab8f6fb" and
+                .config.Labels["io.cronometer.upstream.node.source.manifest.sha256"] == "778ac5b2fcdbd68d9c0ae9f4310674faa3af0910bd0d18e7f6597787c40a3e39" and
+                .config.Labels["io.cronometer.upstream.node.source.manifest.signature.sha256"] == "169f1452c14cd653247408352f1534b9f31e3d13f9c6399c3977368095e11eda" and
+                .config.Labels["io.cronometer.upstream.node.source.signature.fingerprint"] == "CC68F5A3106FF448322E48ED27F5E38D5B0A215F" and
+                .config.Labels["io.cronometer.upstream.node.release.tag-object"] == "490a9fef8f8adcda5a95bd6f96035b05cb43fe5b" and
+                .config.Labels["io.cronometer.upstream.node.release.commit"] == "aa4c77582be995286fc6e00aaf530dc7ade102a9" and
+                .config.Labels["io.cronometer.upstream.node.release.signer.source.commit"] == "43d7b8e5d41e87a3721d416f14fb86a68aeec1ce" and
+                .config.Labels["io.cronometer.upstream.node.release.signer.material.sha256"] == "e31e1aa40a8331f01d753cef475f7b9eab934fc25f5f0b36995bfd80bd66ad27" and
+                .config.Labels["io.cronometer.upstream.node.builder.image"] == "docker.io/library/python:3.12.14-bookworm" and
+                .config.Labels["io.cronometer.upstream.node.builder.image.digest"] == "sha256:80f5d259a5969c86f6c92145d572de4a68c68e0edd28d4367dec0fb411b42af3" and
+                .config.Labels["io.cronometer.upstream.node.builder.image.arm64.digest"] == "sha256:b6e215e1d3d8787fe1e0f1507c7d2418b16fe19acef77cf971b2d965570ced41" and
+                .config.Labels["io.cronometer.upstream.cxx.image"] == "gcr.io/distroless/nodejs22-debian13:nonroot" and
+                .config.Labels["io.cronometer.upstream.cxx.image.digest"] == "sha256:939d6f1671529d230f50b563578e9b5d206af58f038b10ebd7e1233023d4e167" and
+                .config.Labels["io.cronometer.upstream.cxx.image.arm64.digest"] == "sha256:806e2fa26e3cec196e986cb206f44f07070d211c028389c79091fd440cb75882" and
+                .config.Labels["io.cronometer.upstream.base.image"] == "gcr.io/distroless/base-nossl-debian13:nonroot" and
+                .config.Labels["io.cronometer.upstream.base.image.digest"] == "sha256:86554c46a420d507ff2d678fd261ab8691fba4875a20302f38a49e684b42a33f" and
+                .config.Labels["io.cronometer.upstream.base.image.arm64.digest"] == "sha256:ab7e729cfe775ce5f251b2d28b45e88b70e0582cdbadd1aa1f99a41601f11f3b" and
                 .config.Labels["io.cronometer.upstream.node.version"] == "22.23.2" and
-                .config.Labels["io.cronometer.upstream.signature.identity"] == "keyless@distroless.iam.gserviceaccount.com" and
-                .config.Labels["io.cronometer.upstream.signature.issuer"] == "https://accounts.google.com"
-              ' "${image_file}" >/dev/null
-              ;;
-            caddy)
-              jq -e '
-                .config.User == "1000:1000" and
-                .config.Entrypoint == ["/usr/bin/caddy"] and
-                .config.Cmd == ["run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"] and
-                .config.WorkingDir == "/srv" and
-                .config.Volumes == {"/config": {}, "/data": {}} and
-                .config.ExposedPorts == {"2019/tcp": {}, "443/tcp": {}, "443/udp": {}, "80/tcp": {}} and
-                .config.Labels["io.cronometer.runtime.component"] == "caddy" and
-                .config.Labels["io.cronometer.runtime.contract"] == "uid-gid-1000-net-bind-service" and
-                .config.Labels["io.cronometer.upstream.source"] == "https://github.com/caddyserver/caddy" and
-                .config.Labels["io.cronometer.upstream.source.revision"] == "e2eee6a7fce366321294c9c2a79f3146891dcbdf" and
-                .config.Labels["io.cronometer.upstream.source.tag-object"] == "8ec11a4b7e39a5fd00da2fc5cb9b543e31fd7926" and
-                .config.Labels["io.cronometer.upstream.version"] == "v2.11.4" and
-                .config.Labels["io.cronometer.upstream.vulnerability-patches"] == "golang.org/x/net=v0.56.0,golang.org/x/text=v0.39.0,google.golang.org/grpc=v1.82.1" and
-                (.config.Env | index("HOME=/home/caddy")) != null and
-                (.config.Env | index("PATH=/usr/bin")) != null and
-                (.config.Env | index("SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt")) != null and
-                (.config.Env | index("XDG_CONFIG_HOME=/config")) != null and
-                (.config.Env | index("XDG_DATA_HOME=/data")) != null
-              ' "${image_file}" >/dev/null
-              ;;
-            postgres)
-              jq -e '
-                .config.User == "70:70" and
-                .config.Entrypoint == ["docker-entrypoint.sh"] and
-                .config.Cmd == ["postgres"] and
-                .config.StopSignal == "SIGINT" and
-                .config.Volumes == {"/var/lib/postgresql/data": {}} and
-                .config.ExposedPorts == {"5432/tcp": {}} and
-                .config.Healthcheck.Test[0] == "CMD-SHELL" and
-                .config.Labels["io.cronometer.runtime.component"] == "postgres" and
-                .config.Labels["io.cronometer.runtime.contract"] == "uid-gid-70-preowned-pgdata-and-tmpfs" and
-                .config.Labels["io.cronometer.upstream.image"] == "docker.io/library/postgres:17.11-alpine3.24" and
-                .config.Labels["io.cronometer.upstream.image.digest"] == "sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73" and
-                .config.Labels["io.cronometer.upstream.version"] == "17.11" and
-                (.config.Env | index("GOSU_VERSION=")) != null and
-                (.config.Env | index("PG_VERSION=17.11")) != null
+                .config.Labels["io.cronometer.upstream.openssl.version"] == "3.5.7" and
+                .config.Labels["io.cronometer.upstream.openssl.fix.cve"] == "CVE-2026-14456" and
+                .config.Labels["io.cronometer.upstream.openssl.fix.advisory"] == "https://openssl-library.org/news/secadv/20260813.txt" and
+                .config.Labels["io.cronometer.upstream.openssl.fix.commit"] == "08e7756c3900bcfd77a720e7b74e27d6e4ed01a9" and
+                .config.Labels["io.cronometer.upstream.openssl.fix.patch.sha256"] == "3b4f3ff1e9d26ca3dd75f6d98cc5d30c7dbfc03892e4bc0037a7e14bec8c5087" and
+                .config.Labels["io.cronometer.upstream.distroless.signature.identity"] == "keyless@distroless.iam.gserviceaccount.com" and
+                .config.Labels["io.cronometer.upstream.distroless.signature.issuer"] == "https://accounts.google.com"
               ' "${image_file}" >/dev/null
               ;;
           esac
@@ -444,7 +901,9 @@ jobs:
           jq -e --arg component "${COMPONENT}" '
             def package($name; $version):
               any(.Results[]?.Packages[]?; .Name == $name and .Version == $version);
-            if $component == "api" then
+            (any(.Results[]?.Packages[]?; .Name == "libssl3t64" or .Name == "libssl3") | not) and
+            (any(.Results[]?.Vulnerabilities[]?; .VulnerabilityID == "CVE-2026-14456") | not) and
+            (if $component == "api" then
               package("fastify"; "5.12.0") and
               package("zod"; "4.4.3") and
               package("pg"; "8.23.0")
@@ -462,7 +921,7 @@ jobs:
               package("sharp"; "0.35.3") and
               package("@img/sharp-linux-arm64"; "0.35.3")
             else false
-            end
+            end)
           ' "${INVENTORY_FILE}" >/dev/null
 
       - name: Exercise the distroless Node runtime contract
@@ -484,6 +943,11 @@ jobs:
               const os = require("node:os");
               const tls = require("node:tls");
               assert.equal(process.version, "v22.23.2");
+              assert.equal(process.versions.openssl, "3.5.7");
+              assert.equal(process.config.variables.node_shared_openssl, false);
+              assert.equal(process.config.variables.openssl_quic, false);
+              assert.equal(process.allowedNodeEnvironmentFlags.has("--experimental-quic"), false);
+              assert.equal(require("node:module").builtinModules.includes("quic"), false);
               assert.equal(process.getuid(), 1000);
               assert.equal(process.getgid(), 1000);
               const user = os.userInfo();
@@ -653,6 +1117,339 @@ jobs:
               ;;
           esac
 
+      - name: Record GitHub build provenance
+        if: steps.existing.outputs.exists != 'true'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.candidate.outputs.digest }}
+          push-to-registry: true
+
+      - name: Verify GitHub build provenance
+        env:
+          DIGEST: ${{ steps.candidate.outputs.digest }}
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ steps.image.outputs.name }}
+          REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5; do
+            if gh attestation verify "oci://${IMAGE}@${DIGEST}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/container-supply-chain.yml" \
+              --signer-digest "${GITHUB_WORKFLOW_SHA}" \
+              --source-digest "${REVISION}" \
+              --source-ref "${GITHUB_REF}" \
+              --predicate-type 'https://slsa.dev/provenance/v1' \
+              --deny-self-hosted-runners; then
+              exit 0
+            fi
+            [ "${attempt}" -lt 5 ] || break
+            sleep 5
+          done
+          echo 'The candidate digest has no matching trusted build-provenance attestation.' >&2
+          exit 1
+
+      - name: Create the immutable commit tag
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          DIGEST: ${{ steps.candidate.outputs.digest }}
+          IMAGE: ${{ steps.image.outputs.name }}
+          REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          published_ref="${IMAGE}:sha-${REVISION}"
+          docker buildx imagetools create --tag "${published_ref}" "${IMAGE}@${DIGEST}"
+
+      - name: Verify the immutable commit tag
+        id: publish
+        env:
+          DIGEST: ${{ steps.candidate.outputs.digest }}
+          IMAGE: ${{ steps.image.outputs.name }}
+          REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          published_ref="${IMAGE}:sha-${REVISION}"
+
+          published_manifest="$(docker buildx imagetools inspect "${published_ref}" --format '{{json .Manifest}}')"
+          published_digest="$(printf '%s' "${published_manifest}" | jq -er '.digest | select(test("^sha256:[0-9a-f]{64}$"))')"
+          if [ "${published_digest}" != "${DIGEST}" ]; then
+            echo "Published digest ${published_digest} does not match the scanned digest ${DIGEST}." >&2
+            exit 1
+          fi
+
+          printf 'ref=%s\n' "${published_ref}" >> "${GITHUB_OUTPUT}"
+
+      - name: Summarize the deployable digest
+        env:
+          COMPONENT: ${{ matrix.component }}
+          DIGEST: ${{ steps.candidate.outputs.digest }}
+          PUBLISHED_REF: ${{ steps.publish.outputs.ref }}
+        run: |
+          {
+            printf "### %s container\n\n" "${COMPONENT}"
+            printf -- "- Tag: \`%s\`\n" "${PUBLISHED_REF}"
+            printf -- "- Digest: \`%s\`\n" "${DIGEST}"
+            printf -- "- Platform: \`linux/arm64\`\n"
+            printf -- "- Deployment: not performed by this workflow\n"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+  build-scan-publish-services:
+    name: build, scan, publish (${{ matrix.component }})
+    if: github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      attestations: write # Record the scanned image digest in GitHub's attestation store.
+      contents: read # Check out the source commit without persisting credentials.
+      id-token: write # Issue the short-lived identity used to sign the attestation.
+      packages: write # Push digest-only content, the commit tag, and registry attestation to GHCR.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: caddy
+            dockerfile: infra/docker/caddy.Dockerfile
+          - component: postgres
+            dockerfile: infra/docker/postgres.Dockerfile
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Check out the signed Caddy release tag
+        if: matrix.component == 'caddy'
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 1
+          path: .upstream/caddy
+          persist-credentials: false
+          ref: v2.11.4
+          repository: caddyserver/caddy
+
+      - name: Verify the exact Caddy tag signature and source commit
+        if: matrix.component == 'caddy'
+        env:
+          EXPECTED_COMMIT: e2eee6a7fce366321294c9c2a79f3146891dcbdf
+          EXPECTED_KEY: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAID3Tb+AnHxmAtAWkwT3FgDQ8DzO6b0dejvgqEPQ7PS39
+          EXPECTED_TAG_OBJECT: 8ec11a4b7e39a5fd00da2fc5cb9b543e31fd7926
+          SIGNERS_FILE: infra/docker/caddy-v2.11.4.allowed_signers
+        run: |
+          set -euo pipefail
+          test "$(wc -l < "${SIGNERS_FILE}" | tr -d '[:space:]')" = 1
+          actual_key="$(awk 'NF == 3 { print $2 " " $3 }' "${SIGNERS_FILE}")"
+          test "${actual_key}" = "${EXPECTED_KEY}"
+          test "$(git -C .upstream/caddy rev-parse refs/tags/v2.11.4)" = "${EXPECTED_TAG_OBJECT}"
+          test "$(git -C .upstream/caddy rev-parse 'refs/tags/v2.11.4^{}')" = "${EXPECTED_COMMIT}"
+          git -C .upstream/caddy \
+            -c "gpg.ssh.allowedSignersFile=${GITHUB_WORKSPACE}/${SIGNERS_FILE}" \
+            verify-tag v2.11.4
+
+      - name: Resolve lowercase GHCR image name
+        id: image
+        env:
+          COMPONENT: ${{ matrix.component }}
+          IMAGE_OWNER: ${{ github.repository_owner }}
+          IMAGE_REPOSITORY: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+          owner_lower="$(printf '%s' "${IMAGE_OWNER}" | tr '[:upper:]' '[:lower:]')"
+          repository_lower="$(printf '%s' "${IMAGE_REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          printf 'name=ghcr.io/%s/%s-%s\n' "${owner_lower}" "${repository_lower}" "${COMPONENT}" >> "${GITHUB_OUTPUT}"
+
+      - name: Install ARM64 emulator
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          image: docker.io/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+          platforms: arm64
+          cache-image: false
+
+      - name: Set up pinned Buildx and BuildKit
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          version: v0.36.1
+          driver-opts: image=moby/buildkit@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+          cache-binary: false
+
+      - name: Log in to GHCR with the job token
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve an existing immutable commit tag
+        id: existing
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          REVISION: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          published_ref="${IMAGE}:sha-${REVISION}"
+          inspect_error="${RUNNER_TEMP}/existing-manifest-error.txt"
+          if existing_manifest="$(docker buildx imagetools inspect "${published_ref}" --format '{{json .Manifest}}' 2>"${inspect_error}")"; then
+            existing_digest="$(printf '%s' "${existing_manifest}" | jq -er '.digest | select(test("^sha256:[0-9a-f]{64}$"))')"
+            printf 'exists=true\n' >> "${GITHUB_OUTPUT}"
+            printf 'digest=%s\n' "${existing_digest}" >> "${GITHUB_OUTPUT}"
+          else
+            if ! grep -Eiq 'manifest unknown|not found' "${inspect_error}"; then
+              echo "Could not safely determine whether ${published_ref} exists." >&2
+              sed -n '1,20p' "${inspect_error}" >&2
+              exit 1
+            fi
+            printf 'exists=false\n' >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Build and push by digest with SBOM and provenance
+        id: build
+        if: steps.existing.outputs.exists != 'true'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          target: runtime
+          platforms: linux/arm64
+          pull: true
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.title=${{ github.event.repository.name }}-${{ matrix.component }}
+            org.opencontainers.image.version=sha-${{ github.sha }}
+          outputs: type=image,name=${{ steps.image.outputs.name }},push-by-digest=true,name-canonical=true,push=true
+          provenance: mode=max
+          sbom: generator=docker.io/docker/buildkit-syft-scanner@sha256:79e7b013cbec16bbb436f312819a49a4a57752b2270c1a9332ae1a10fcc82a68
+
+      - name: Select the candidate digest
+        id: candidate
+        env:
+          BUILT_DIGEST: ${{ steps.build.outputs.digest }}
+          EXISTING_DIGEST: ${{ steps.existing.outputs.digest }}
+          EXISTING_TAG: ${{ steps.existing.outputs.exists }}
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: |
+          set -euo pipefail
+          if [ "${EXISTING_TAG}" = true ]; then
+            digest="${EXISTING_DIGEST}"
+          else
+            digest="${BUILT_DIGEST}"
+          fi
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+            echo 'Candidate image digest is missing or malformed.' >&2
+            exit 1
+          }
+          printf 'digest=%s\n' "${digest}" >> "${GITHUB_OUTPUT}"
+          printf 'ref=%s@%s\n' "${IMAGE}" "${digest}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify ARM64 service identity
+        env:
+          COMPONENT: ${{ matrix.component }}
+          IMAGE_REF: ${{ steps.candidate.outputs.ref }}
+          REPOSITORY_NAME: ${{ github.event.repository.name }}
+          REVISION: ${{ github.sha }}
+          SOURCE: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          index_file="${RUNNER_TEMP}/candidate-index.json"
+          image_file="${RUNNER_TEMP}/candidate-image.json"
+          docker buildx imagetools inspect "${IMAGE_REF}" --raw > "${index_file}"
+          jq -e '
+            .schemaVersion == 2 and
+            (.manifests | type == "array") and
+            ([.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64")] | length == 1) and
+            (all(.manifests[];
+              (.platform.os == "linux" and .platform.architecture == "arm64") or
+              (.platform.os == "unknown" and .platform.architecture == "unknown")))
+          ' "${index_file}" >/dev/null
+          runtime_digest="$(jq -er '.manifests[] | select(.platform.os == "linux" and .platform.architecture == "arm64") | .digest | select(test("^sha256:[0-9a-f]{64}$"))' "${index_file}")"
+          runtime_ref="${IMAGE_REF%@*}@${runtime_digest}"
+          for pull_attempt in 1 2 3 4 5; do
+            if docker pull --platform linux/arm64 "${runtime_ref}" >/dev/null; then
+              break
+            fi
+            [ "${pull_attempt}" -lt 5 ] || exit 1
+            sleep "$((pull_attempt * 2))"
+          done
+          docker image inspect "${runtime_ref}" --format '{{json .}}' | \
+            jq '{os: .Os, architecture: .Architecture, config: .Config}' > "${image_file}"
+          jq -e \
+            --arg revision "${REVISION}" \
+            --arg source "${SOURCE}" \
+            --arg title "${REPOSITORY_NAME}-${COMPONENT}" \
+            --arg version "sha-${REVISION}" '
+              .os == "linux" and
+              .architecture == "arm64" and
+              .config.Labels["org.opencontainers.image.revision"] == $revision and
+              .config.Labels["org.opencontainers.image.source"] == $source and
+              .config.Labels["org.opencontainers.image.title"] == $title and
+              .config.Labels["org.opencontainers.image.version"] == $version
+            ' "${image_file}" >/dev/null
+
+          case "${COMPONENT}" in
+            caddy)
+              jq -e '
+                .config.User == "1000:1000" and
+                .config.Entrypoint == ["/usr/bin/caddy"] and
+                .config.Cmd == ["run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"] and
+                .config.WorkingDir == "/srv" and
+                .config.Volumes == {"/config": {}, "/data": {}} and
+                .config.ExposedPorts == {"2019/tcp": {}, "443/tcp": {}, "443/udp": {}, "80/tcp": {}} and
+                .config.Labels["io.cronometer.runtime.component"] == "caddy" and
+                .config.Labels["io.cronometer.runtime.contract"] == "uid-gid-1000-net-bind-service" and
+                .config.Labels["io.cronometer.upstream.source"] == "https://github.com/caddyserver/caddy" and
+                .config.Labels["io.cronometer.upstream.source.revision"] == "e2eee6a7fce366321294c9c2a79f3146891dcbdf" and
+                .config.Labels["io.cronometer.upstream.source.tag-object"] == "8ec11a4b7e39a5fd00da2fc5cb9b543e31fd7926" and
+                .config.Labels["io.cronometer.upstream.version"] == "v2.11.4" and
+                .config.Labels["io.cronometer.upstream.vulnerability-patches"] == "golang.org/x/net=v0.56.0,golang.org/x/text=v0.39.0,google.golang.org/grpc=v1.82.1" and
+                (.config.Env | index("HOME=/home/caddy")) != null and
+                (.config.Env | index("PATH=/usr/bin")) != null and
+                (.config.Env | index("SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt")) != null and
+                (.config.Env | index("XDG_CONFIG_HOME=/config")) != null and
+                (.config.Env | index("XDG_DATA_HOME=/data")) != null
+              ' "${image_file}" >/dev/null
+              ;;
+            postgres)
+              jq -e '
+                .config.User == "70:70" and
+                .config.Entrypoint == ["docker-entrypoint.sh"] and
+                .config.Cmd == ["postgres"] and
+                .config.StopSignal == "SIGINT" and
+                .config.Volumes == {"/var/lib/postgresql/data": {}} and
+                .config.ExposedPorts == {"5432/tcp": {}} and
+                .config.Healthcheck.Test[0] == "CMD-SHELL" and
+                .config.Labels["io.cronometer.runtime.component"] == "postgres" and
+                .config.Labels["io.cronometer.runtime.contract"] == "uid-gid-70-preowned-pgdata-and-tmpfs" and
+                .config.Labels["io.cronometer.upstream.image"] == "docker.io/library/postgres:17.11-alpine3.24" and
+                .config.Labels["io.cronometer.upstream.image.digest"] == "sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73" and
+                .config.Labels["io.cronometer.upstream.version"] == "17.11" and
+                (.config.Env | index("GOSU_VERSION=")) != null and
+                (.config.Env | index("PG_VERSION=17.11")) != null
+              ' "${image_file}" >/dev/null
+              ;;
+          esac
+
+      - name: Initialize an explicit empty vulnerability-ignore policy
+        run: install -m 600 /dev/null "${RUNNER_TEMP}/empty.trivyignore"
+
+      - name: Fail closed on high or critical vulnerabilities
+        env:
+          TRIVY_PLATFORM: linux/arm64
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          scan-type: image
+          image-ref: ${{ steps.candidate.outputs.ref }}
+          scanners: vuln
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          trivyignores: ${{ runner.temp }}/empty.trivyignore
+          exit-code: "1"
+          format: table
+          hide-progress: true
+          timeout: 15m
+          cache: false
+
       - name: Exercise the Caddy non-root, validation, and bind contract
         if: matrix.component == 'caddy'
         env:
@@ -816,8 +1613,7 @@ jobs:
           REVISION: ${{ github.sha }}
         run: |
           set -euo pipefail
-          published_ref="${IMAGE}:sha-${REVISION}"
-          docker buildx imagetools create --tag "${published_ref}" "${IMAGE}@${DIGEST}"
+          docker buildx imagetools create --tag "${IMAGE}:sha-${REVISION}" "${IMAGE}@${DIGEST}"
 
       - name: Verify the immutable commit tag
         id: publish
@@ -828,14 +1624,9 @@ jobs:
         run: |
           set -euo pipefail
           published_ref="${IMAGE}:sha-${REVISION}"
-
           published_manifest="$(docker buildx imagetools inspect "${published_ref}" --format '{{json .Manifest}}')"
           published_digest="$(printf '%s' "${published_manifest}" | jq -er '.digest | select(test("^sha256:[0-9a-f]{64}$"))')"
-          if [ "${published_digest}" != "${DIGEST}" ]; then
-            echo "Published digest ${published_digest} does not match the scanned digest ${DIGEST}." >&2
-            exit 1
-          fi
-
+          test "${published_digest}" = "${DIGEST}"
           printf 'ref=%s\n' "${published_ref}" >> "${GITHUB_OUTPUT}"
 
       - name: Summarize the deployable digest
