@@ -5,11 +5,13 @@ personal OCI tenancy in `us-ashburn-1`. Nothing here has been applied. Terraform
 has a false-by-default apply acknowledgement, and this runbook is not
 authorization to create cloud resources.
 
-> **Current hard blocker (2026-08-17): do not apply or start the stack.** A base
-> domain and explicit Free-Tier-only billing confirmation have not been
-> supplied, and the six repository-image workflow digests for one reviewed
-> commit have not been recorded in `deploy.env`. No resource was planned,
-> applied, or created while preparing this module.
+> **Current hard blocker (2026-08-18): do not apply or start the stack.** The
+> owner selected `nourishing.app` and accepted the synthetic-only, single-node,
+> Free-Tier-only boundary, but the six repository-image workflow digests for one
+> reviewed commit have not yet been published and captured for later host
+> installation, and the live OCI inventory must be refreshed after
+> reauthentication. No resource was planned, applied, or created while preparing
+> this module.
 
 ## Admission boundary
 
@@ -129,14 +131,18 @@ recovery readiness, but do not generate artificial load to evade that policy.
 
 ## Prerequisites before any plan
 
-1. The owner explicitly accepts the non-HA pilot and billing policy. No such
-   confirmation has been supplied yet.
-2. Choose an owned base domain. Release origins are
-   `https://api.<domain>` and `https://app.<domain>` by default.
+1. The owner explicitly accepts the non-HA pilot and billing policy. The owner
+   supplied that confirmation on 2026-08-17 for the exact synthetic-only,
+   single-node, Free-Tier-only scope; reconfirm it if the scope changes.
+2. The owned base domain is `nourishing.app`. The planned release origins are
+   `https://api.nourishing.app` and `https://app.nourishing.app`; neither is
+   live or trusted until the post-apply DNS, ACME, and readiness checks pass.
 3. Create one Ed25519 SSH keypair. Only the public key (maximum 512 characters)
    enters `terraform.tfvars`.
 4. Record the operator's current public `/32` for SSH and every synthetic
-   reviewer's current public egress CIDR. SSH from `0.0.0.0/0` is rejected.
+   reviewer's current public egress CIDR. The owner designated the same single
+   current operator `/32` for both roles on 2026-08-17; revalidate it immediately
+   before planning and host start. SSH from `0.0.0.0/0` is rejected.
 5. Recheck limits, pricing, active A1 capacity, reserved IPv4, block storage,
    backups, Object Storage, IAM-user/key quotas, and the namespace in
    `us-ashburn-1`; create a budget alert outside this module.

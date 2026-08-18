@@ -5,6 +5,7 @@
 crash.log
 crash.*.log
 terraform.tfvars
+deploy.env
 *.auto.tfvars
 *.auto.tfvars.json
 __pycache__/
