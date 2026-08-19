@@ -2,38 +2,6 @@ data "oci_objectstorage_namespace" "current" {
   compartment_id = var.tenancy_ocid
 }
 
-# The regional Object Storage service CIDR keeps bucket traffic on OCI's
-# network fabric. It is deliberately more specific than the existing IGW
-# default route, which remains necessary for ACME and reviewed image pulls.
-data "oci_core_services" "object_storage" {
-  filter {
-    name   = "name"
-    values = ["OCI IAD Object Storage"]
-  }
-}
-
-resource "oci_core_service_gateway" "object_storage" {
-  compartment_id = local.target_compartment_id
-  display_name   = "${var.name_prefix}-object-storage-service-gateway"
-  freeform_tags  = local.tags
-  vcn_id         = data.oci_core_vcn.existing.id
-
-  services {
-    service_id = data.oci_core_services.object_storage.services[0].id
-  }
-
-  depends_on = [terraform_data.apply_guardrails]
-
-  lifecycle {
-    prevent_destroy = true
-
-    precondition {
-      condition     = length(data.oci_core_services.object_storage.services) == 1
-      error_message = "OCI IAD Object Storage must resolve to exactly one regional service CIDR before the service gateway can be created."
-    }
-  }
-}
-
 resource "oci_objectstorage_bucket" "exports" {
   access_type           = "NoPublicAccess"
   auto_tiering          = "Disabled"
@@ -108,6 +76,7 @@ resource "oci_identity_user" "object_storage_role" {
 
   compartment_id = var.tenancy_ocid
   description    = each.value.description
+  email          = var.object_storage_role_emails[each.key]
   freeform_tags  = local.tags
   name           = "${var.name_prefix}-os-${replace(each.key, "_", "-")}"
 

@@ -189,6 +189,32 @@ variable "ssh_authorized_keys" {
   }
 }
 
+variable "object_storage_role_emails" {
+  description = "Four distinct monitored primary email addresses required by OCI IAM identity domains for the non-console Object Storage service users."
+  type = object({
+    export_reader  = string
+    export_writer  = string
+    ledger_writer  = string
+    ledger_restore = string
+  })
+  sensitive = true
+  nullable  = false
+
+  validation {
+    condition = (
+      length(toset([
+        for email in values(var.object_storage_role_emails) : lower(trimspace(email))
+        ])) == 4 && alltrue([
+        for email in values(var.object_storage_role_emails) :
+        email == trimspace(email) &&
+        length(email) <= 254 &&
+        can(regex("^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z]{2,63}$", email))
+      ])
+    )
+    error_message = "object_storage_role_emails must contain four distinct, trimmed, valid email addresses for export_reader, export_writer, ledger_writer, and ledger_restore."
+  }
+}
+
 variable "compute_shape" {
   description = "Always Free-eligible Arm flexible shape. Other shapes are rejected by design."
   type        = string

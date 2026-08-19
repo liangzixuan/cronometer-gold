@@ -55,8 +55,7 @@ output "object_storage" {
     s3_endpoint        = local.object_s3_endpoint
     export_bucket_name = oci_objectstorage_bucket.exports.name
     ledger_bucket_name = oci_objectstorage_bucket.ledger.name
-    service_gateway_id = oci_core_service_gateway.object_storage.id
-    service_cidr       = data.oci_core_services.object_storage.services[0].cidr_block
+    public_cidrs       = local.object_storage_public_cidrs
   }
 }
 

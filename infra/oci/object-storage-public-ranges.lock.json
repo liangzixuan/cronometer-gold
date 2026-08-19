@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "url": "https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json",
+    "lastUpdatedTimestamp": "2026-07-27T06:55:33.696145",
+    "retrievedAt": "2026-08-19T07:40:28Z",
+    "sha256": "7c38b64fbc0942ef9b91b84042643e2a8d1d942a97808d7fd11eaf37c6e4fd99"
+  },
+  "review": {
+    "reviewedAt": "2026-08-19T07:40:28Z",
+    "region": "us-ashburn-1",
+    "requiredTag": "OBJECT_STORAGE",
+    "expectedCidrCount": 2
+  },
+  "objectStoragePublicCidrs": ["134.70.24.0/21", "134.70.32.0/22"]
+}

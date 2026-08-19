@@ -22,6 +22,16 @@ ssh_authorized_keys = [
   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIReplaceWithARealPublicKey operator@example",
 ]
 
+# OCI identity domains require a unique primary email for every IAM user. These
+# users cannot sign in to the Console, but the addresses must still be distinct
+# and monitored. Plus-address tags may route all four to one supporting mailbox.
+object_storage_role_emails = {
+  export_reader  = "operator+nutrition-export-reader@example.com"
+  export_writer  = "operator+nutrition-export-writer@example.com"
+  ledger_writer  = "operator+nutrition-ledger-writer@example.com"
+  ledger_restore = "operator+nutrition-ledger-restore@example.com"
+}
+
 # Leave false for validate/review. Set true only after completing every cost,
 # capacity, DNS, recovery, and non-HA prerequisite in README.md.
 acknowledge_non_ha_and_possible_charges = false

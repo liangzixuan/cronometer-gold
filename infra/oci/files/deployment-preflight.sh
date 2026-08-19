@@ -207,9 +207,9 @@ coordinates = json.loads(pathlib.Path(sys.argv[5]).read_text(encoding="utf-8"))
 expected_coordinate_keys = {
     "schemaVersion", "endpoint", "compatHost", "nativeHost", "region", "namespace",
     "exportBucket", "ledgerBucket", "restoreUserOcid", "tenancyOcid", "bridgeCidr",
-    "serviceCidr",
+    "objectStoragePublicCidrs",
 }
-if set(coordinates) != expected_coordinate_keys or coordinates["schemaVersion"] != 2:
+if set(coordinates) != expected_coordinate_keys or coordinates["schemaVersion"] != 3:
     raise SystemExit("Object Storage coordinates have an unexpected schema")
 if coordinates["region"] != "us-ashburn-1":
     raise SystemExit("OCI Object Storage region must remain us-ashburn-1")
@@ -225,12 +225,23 @@ if coordinates["nativeHost"] != expected_native:
     raise SystemExit("OCI native Object Storage host is invalid")
 if coordinates["bridgeCidr"] != "172.31.255.0/28":
     raise SystemExit("Object-egress bridge CIDR is invalid")
+public_cidr_values = coordinates["objectStoragePublicCidrs"]
+if (
+    not isinstance(public_cidr_values, list)
+    or len(public_cidr_values) != 2
+    or any(not isinstance(item, str) for item in public_cidr_values)
+):
+    raise SystemExit("Object Storage public CIDRs must contain exactly two strings")
+if public_cidr_values != sorted(public_cidr_values) or len(public_cidr_values) != len(set(public_cidr_values)):
+    raise SystemExit("Object Storage public CIDRs must be sorted and unique")
 try:
-    service_cidr = ipaddress.ip_network(coordinates["serviceCidr"], strict=True)
+    public_cidrs = [ipaddress.ip_network(item, strict=True) for item in public_cidr_values]
 except ValueError as error:
-    raise SystemExit("Object Storage service CIDR is invalid") from error
-if service_cidr.version != 4 or not service_cidr.is_global:
-    raise SystemExit("Object Storage service CIDR must be a public IPv4 network")
+    raise SystemExit("Object Storage public CIDRs are invalid") from error
+if any(network.version != 4 or not network.is_global or str(network) != item for item, network in zip(public_cidr_values, public_cidrs)):
+    raise SystemExit("Object Storage public CIDRs must be canonical public IPv4 networks")
+if any(left.overlaps(right) for index, left in enumerate(public_cidrs) for right in public_cidrs[index + 1:]):
+    raise SystemExit("Object Storage public CIDRs may not overlap")
 
 coordinate_mirrors = (
     ("EXPORT_ARTIFACT_ENDPOINT", "endpoint"),
@@ -339,16 +350,39 @@ for line in pathlib.Path(sys.argv[1]).read_text(encoding="ascii").splitlines():
 if set(entries) != {"OCI_COMPAT_HOST", "OCI_COMPAT_IPV4", "OCI_NATIVE_HOST", "OCI_NATIVE_IPV4"}:
     raise SystemExit("Object Storage host map has an unexpected schema")
 coordinates = json.loads(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"))
+expected_coordinate_keys = {
+    "schemaVersion", "endpoint", "compatHost", "nativeHost", "region", "namespace",
+    "exportBucket", "ledgerBucket", "restoreUserOcid", "tenancyOcid", "bridgeCidr",
+    "objectStoragePublicCidrs",
+}
+if set(coordinates) != expected_coordinate_keys or coordinates["schemaVersion"] != 3:
+    raise SystemExit("Object Storage coordinates have an unexpected schema")
 if entries["OCI_COMPAT_HOST"] != coordinates["compatHost"] or entries["OCI_NATIVE_HOST"] != coordinates["nativeHost"]:
     raise SystemExit("Object Storage host map differs from Terraform coordinates")
-service = ipaddress.ip_network(coordinates["serviceCidr"], strict=True)
+public_cidr_values = coordinates["objectStoragePublicCidrs"]
+if (
+    not isinstance(public_cidr_values, list)
+    or len(public_cidr_values) != 2
+    or any(not isinstance(item, str) for item in public_cidr_values)
+    or public_cidr_values != sorted(public_cidr_values)
+    or len(public_cidr_values) != len(set(public_cidr_values))
+):
+    raise SystemExit("Object Storage public CIDRs must contain the sorted unique reviewed pair")
+try:
+    public_cidrs = [ipaddress.ip_network(item, strict=True) for item in public_cidr_values]
+except ValueError as error:
+    raise SystemExit("Object Storage public CIDRs are invalid") from error
+if any(network.version != 4 or not network.is_global or str(network) != item for item, network in zip(public_cidr_values, public_cidrs)):
+    raise SystemExit("Object Storage public CIDRs must be canonical public IPv4 networks")
+if any(left.overlaps(right) for index, left in enumerate(public_cidrs) for right in public_cidrs[index + 1:]):
+    raise SystemExit("Object Storage public CIDRs may not overlap")
 for key in ("OCI_COMPAT_IPV4", "OCI_NATIVE_IPV4"):
     try:
         address = ipaddress.ip_address(entries[key])
     except ValueError as error:
         raise SystemExit(f"{key} is not a canonical IP address") from error
-    if address.version != 4 or address not in service:
-        raise SystemExit(f"{key} is outside the Terraform-frozen Object Storage service CIDR")
+    if address.version != 4 or not any(address in network for network in public_cidrs):
+        raise SystemExit(f"{key} is outside the Terraform-frozen Object Storage public CIDRs")
 PY
 
 while IFS='=' read -r host_key host_value; do

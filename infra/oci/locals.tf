@@ -2,15 +2,17 @@ locals {
   parent_compartment_id = coalesce(var.parent_compartment_ocid, var.tenancy_ocid)
   target_compartment_id = var.create_compartment ? oci_identity_compartment.pilot[0].id : var.existing_compartment_ocid
 
-  availability_domain = data.oci_identity_availability_domains.available.availability_domains[var.availability_domain_index].name
-  api_fqdn            = "${var.api_subdomain}.${lower(var.base_domain)}"
-  web_fqdn            = "${var.web_subdomain}.${lower(var.base_domain)}"
-  export_bucket_name  = "${var.name_prefix}-private-exports"
-  ledger_bucket_name  = "${var.name_prefix}-erasure-ledger"
-  object_s3_endpoint  = "https://${data.oci_objectstorage_namespace.current.namespace}.compat.objectstorage.${var.region}.oci.customer-oci.com"
-  object_compat_host  = "${data.oci_objectstorage_namespace.current.namespace}.compat.objectstorage.${var.region}.oci.customer-oci.com"
-  object_native_host  = "objectstorage.${var.region}.oraclecloud.com"
-  object_bridge_cidr  = "172.31.255.0/28"
+  availability_domain               = data.oci_identity_availability_domains.available.availability_domains[var.availability_domain_index].name
+  api_fqdn                          = "${var.api_subdomain}.${lower(var.base_domain)}"
+  web_fqdn                          = "${var.web_subdomain}.${lower(var.base_domain)}"
+  export_bucket_name                = "${var.name_prefix}-private-exports"
+  ledger_bucket_name                = "${var.name_prefix}-erasure-ledger"
+  object_s3_endpoint                = "https://${data.oci_objectstorage_namespace.current.namespace}.compat.objectstorage.${var.region}.oci.customer-oci.com"
+  object_compat_host                = "${data.oci_objectstorage_namespace.current.namespace}.compat.objectstorage.${var.region}.oci.customer-oci.com"
+  object_native_host                = "objectstorage.${var.region}.oraclecloud.com"
+  object_bridge_cidr                = "172.31.255.0/28"
+  object_storage_public_ranges_lock = jsondecode(file("${path.module}/object-storage-public-ranges.lock.json"))
+  object_storage_public_cidrs       = sort(local.object_storage_public_ranges_lock.objectStoragePublicCidrs)
   operator_helper_digests = {
     "bootstrap-meili-keys.sh"               = filesha256("${path.module}/files/bootstrap-meili-keys.sh")
     "deployment-preflight.sh"               = filesha256("${path.module}/files/deployment-preflight.sh")
@@ -111,18 +113,18 @@ locals {
     }
     "/etc/nutrition-tracker/object-storage-coordinates.json" = {
       content = jsonencode({
-        schemaVersion   = 2
-        endpoint        = local.object_s3_endpoint
-        compatHost      = local.object_compat_host
-        nativeHost      = local.object_native_host
-        region          = var.region
-        namespace       = data.oci_objectstorage_namespace.current.namespace
-        exportBucket    = local.export_bucket_name
-        ledgerBucket    = local.ledger_bucket_name
-        restoreUserOcid = oci_identity_user.object_storage_role["ledger_restore"].id
-        tenancyOcid     = var.tenancy_ocid
-        bridgeCidr      = local.object_bridge_cidr
-        serviceCidr     = data.oci_core_services.object_storage.services[0].cidr_block
+        schemaVersion            = 3
+        endpoint                 = local.object_s3_endpoint
+        compatHost               = local.object_compat_host
+        nativeHost               = local.object_native_host
+        region                   = var.region
+        namespace                = data.oci_objectstorage_namespace.current.namespace
+        exportBucket             = local.export_bucket_name
+        ledgerBucket             = local.ledger_bucket_name
+        restoreUserOcid          = oci_identity_user.object_storage_role["ledger_restore"].id
+        tenancyOcid              = var.tenancy_ocid
+        bridgeCidr               = local.object_bridge_cidr
+        objectStoragePublicCidrs = local.object_storage_public_cidrs
       })
       mode = "0644"
     }
@@ -265,6 +267,40 @@ resource "terraform_data" "apply_guardrails" {
         image.approved && image.scan.critical == 0 && image.scan.high == 0 && image.scan.total == 0 && image.scan.result == "passed"
       ])
       error_message = "Apply is blocked because one or more checked-in external runtime images are unapproved or have HIGH/CRITICAL findings. Update reviewed evidence and pass supply-chain CI; do not override this gate."
+    }
+
+    precondition {
+      condition = try(
+        local.object_storage_public_ranges_lock.schemaVersion == 1 &&
+        local.object_storage_public_ranges_lock.source.url == "https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json" &&
+        can(regex("^[0-9a-f]{64}$", local.object_storage_public_ranges_lock.source.sha256)) &&
+        can(regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+$", local.object_storage_public_ranges_lock.source.lastUpdatedTimestamp)) &&
+        can(regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+Z$", local.object_storage_public_ranges_lock.source.retrievedAt)) &&
+        local.object_storage_public_ranges_lock.review.region == var.region &&
+        local.object_storage_public_ranges_lock.review.requiredTag == "OBJECT_STORAGE" &&
+        local.object_storage_public_ranges_lock.review.reviewedAt == local.object_storage_public_ranges_lock.source.retrievedAt &&
+        local.object_storage_public_ranges_lock.review.expectedCidrCount == 2 &&
+        length(local.object_storage_public_cidrs) == 2 &&
+        length(toset(local.object_storage_public_cidrs)) == 2 &&
+        tolist(local.object_storage_public_ranges_lock.objectStoragePublicCidrs) == local.object_storage_public_cidrs &&
+        local.object_storage_public_cidrs == tolist(["134.70.24.0/21", "134.70.32.0/22"]) &&
+        alltrue([
+          for cidr in local.object_storage_public_cidrs :
+          can(regex("^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}/(?:[0-9]|[12][0-9]|3[0-2])$", cidr)) &&
+          cidr == "${cidrhost(cidr, 0)}/${split("/", cidr)[1]}"
+        ]),
+        false,
+      )
+      error_message = "Apply is blocked because the checked-in OCI Object Storage public-range lock is malformed, unsorted, noncanonical, or not the exact reviewed Ashburn pair."
+    }
+
+    precondition {
+      condition = try(
+        timecmp(local.object_storage_public_ranges_lock.review.reviewedAt, plantimestamp()) <= 0 &&
+        timecmp(timeadd(local.object_storage_public_ranges_lock.review.reviewedAt, "168h"), plantimestamp()) >= 0,
+        false,
+      )
+      error_message = "Apply is blocked because the OCI public Object Storage ranges were not reviewed against Oracle's current publication within the last 168 hours."
     }
 
     precondition {

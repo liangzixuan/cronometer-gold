@@ -27,7 +27,7 @@ EXPECTED_KEYS = {
     "restoreUserOcid",
     "tenancyOcid",
     "bridgeCidr",
-    "serviceCidr",
+    "objectStoragePublicCidrs",
 }
 
 
@@ -42,7 +42,7 @@ def read_coordinates() -> dict:
     if (metadata.st_uid, metadata.st_gid, stat.S_IMODE(metadata.st_mode)) != (0, 0, 0o644):
         fail("Object Storage coordinates must be root:root mode 0644")
     data = json.loads(COORDINATES.read_text(encoding="utf-8"))
-    if set(data) != EXPECTED_KEYS or data["schemaVersion"] != 2:
+    if set(data) != EXPECTED_KEYS or data["schemaVersion"] != 3:
         fail("Object Storage coordinates have an unexpected schema")
     endpoint = urllib.parse.urlsplit(data["endpoint"])
     if endpoint.scheme != "https" or endpoint.hostname != data["compatHost"] or endpoint.port is not None or endpoint.path not in ("", "/"):
@@ -51,6 +51,22 @@ def read_coordinates() -> dict:
     if data["nativeHost"] != expected_native:
         fail("Native OCI Object Storage hostname differs from the region")
     return data
+
+
+def public_networks(values: object) -> tuple[ipaddress.IPv4Network, ...]:
+    if not isinstance(values, list) or len(values) != 2 or any(not isinstance(value, str) for value in values):
+        fail("Object Storage public CIDRs must contain exactly two strings")
+    if values != sorted(values) or len(values) != len(set(values)):
+        fail("Object Storage public CIDRs must be sorted and unique")
+    try:
+        networks = tuple(ipaddress.ip_network(value, strict=True) for value in values)
+    except ValueError as error:
+        fail(f"Object Storage public CIDRs are invalid: {error}")
+    if any(network.version != 4 or not network.is_global or str(network) != value for value, network in zip(values, networks)):
+        fail("Object Storage public CIDRs must be canonical public IPv4 networks")
+    if any(left.overlaps(right) for index, left in enumerate(networks) for right in networks[index + 1 :]):
+        fail("Object Storage public CIDRs may not overlap")
+    return networks
 
 
 def reject_bridge_overlap(bridge: ipaddress.IPv4Network) -> None:
@@ -83,7 +99,7 @@ def reject_bridge_overlap(bridge: ipaddress.IPv4Network) -> None:
                 fail(f"Object-egress bridge {bridge} overlaps Docker network {network.get('Name')}")
 
 
-def resolve(host: str, service: ipaddress.IPv4Network) -> str:
+def resolve(host: str, allowed_networks: tuple[ipaddress.IPv4Network, ...]) -> str:
     try:
         answers = sorted(
             {
@@ -96,9 +112,13 @@ def resolve(host: str, service: ipaddress.IPv4Network) -> str:
         fail(f"Could not resolve {host}: {error}")
     if not answers:
         fail(f"No IPv4 address resolved for {host}")
-    outside = [address for address in answers if ipaddress.ip_address(address) not in service]
+    outside = [
+        address
+        for address in answers
+        if not any(ipaddress.ip_address(address) in network for network in allowed_networks)
+    ]
     if outside:
-        fail(f"{host} resolved outside the Terraform-frozen Object Storage service CIDR: {outside}")
+        fail(f"{host} resolved outside the Terraform-frozen Object Storage public CIDRs: {outside}")
     return answers[0]
 
 
@@ -131,18 +151,16 @@ def main() -> None:
         fail("Run this gate as root")
     data = read_coordinates()
     bridge = ipaddress.ip_network(data["bridgeCidr"], strict=True)
-    service = ipaddress.ip_network(data["serviceCidr"], strict=True)
+    networks = public_networks(data["objectStoragePublicCidrs"])
     if str(bridge) != "172.31.255.0/28" or bridge.version != 4:
         fail("Object-egress bridge CIDR differs from the reviewed fixed subnet")
-    if service.version != 4 or not service.is_global:
-        fail("Object Storage service CIDR must be a canonical public IPv4 network")
     reject_bridge_overlap(bridge)
     write_environment(
         {
             "OCI_COMPAT_HOST": data["compatHost"],
-            "OCI_COMPAT_IPV4": resolve(data["compatHost"], service),
+            "OCI_COMPAT_IPV4": resolve(data["compatHost"], networks),
             "OCI_NATIVE_HOST": data["nativeHost"],
-            "OCI_NATIVE_IPV4": resolve(data["nativeHost"], service),
+            "OCI_NATIVE_IPV4": resolve(data["nativeHost"], networks),
         }
     )
 

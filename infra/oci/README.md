@@ -1,17 +1,15 @@
 # OCI controlled-beta pilot
 
 This directory defines a single-node, non-HA, **synthetic-data-only** pilot in a
-personal OCI tenancy in `us-ashburn-1`. Nothing here has been applied. Terraform
-has a false-by-default apply acknowledgement, and this runbook is not
-authorization to create cloud resources.
+personal OCI tenancy in `us-ashburn-1`. Terraform has a false-by-default apply
+acknowledgement, and this runbook is not blanket authorization to create cloud
+resources.
 
-> **Current hard blocker (2026-08-18): do not apply or start the stack.** The
-> owner selected `nourishing.app` and accepted the synthetic-only, single-node,
-> Free-Tier-only boundary, but the six repository-image workflow digests for one
-> reviewed commit have not yet been published and captured for later host
-> installation, and the live OCI inventory must be refreshed after
-> reauthentication. No resource was planned, applied, or created while preparing
-> this module.
+Applying this module creates cloud resources. Always use a freshly reviewed
+saved plan and stop on any capacity, quota, pricing, shape, storage, region, or
+resource deviation. A partially failed apply can leave protected prerequisites
+in Terraform state; reconcile that state and produce a new zero-destroy plan
+instead of reusing the failed saved plan.
 
 ## Admission boundary
 
@@ -41,33 +39,44 @@ attaching the VCN's default security list, route table, or DHCP options. Refresh
 the complete `known_subnet_cidrs` list immediately before every plan; the module
 rejects overlap among the reviewed aligned `/24`s.
 
-The route table sends the Terraform-resolved `OCI IAD Object Storage` service
-CIDR through a module-owned Service Gateway and retains the existing Internet
-Gateway default for ACME, image pulls, and host administration. Object-using
-containers are additionally isolated on the fixed `172.31.255.0/28` Docker
-bridge. At every guarded start, the host resolves exactly the S3 compatibility
-and native Object Storage hostnames, rejects any IPv4 answer outside the frozen
-service CIDR, and atomically supplies one pinned address for each hostname.
+The tenancy's Service Gateway quota is zero. The route table therefore uses the
+existing Internet Gateway for ACME, image pulls, host administration, and the
+regional public OCI Object Storage endpoints over TLS. The VM receives exactly
+one reserved public IP; no NAT Gateway or Service Gateway is created.
+Object-using containers are additionally isolated on the fixed
+`172.31.255.0/28` Docker bridge. At every guarded start, the host resolves
+exactly the S3 compatibility and native Object Storage hostnames, rejects any
+IPv4 answer outside the two reviewed regional public Object Storage CIDRs, and
+atomically supplies one pinned address for each hostname.
 Those containers have no external DNS resolver. A first-position `FORWARD` rule
-allows only established and new TCP/443 connections to the service CIDR, then
+allows only established and new TCP/443 connections to those two CIDRs, then
 rejects everything else. A direct-IP negative canary and the built
 worker Object Storage canary run before migration. Caddy retains independent
 edge networking for ACME; database-only operations remain on the internal
 backend network.
 
 A 15-second systemd watchdog asserts the unique first-position parent hook and
-all three reviewed chain rules. Docker or firewalld restarts reapply the gate.
+all five reviewed chain rules. Docker or firewalld restarts reapply the gate.
 If reload or rule drift removes or reorders it while live-restore retains
 containers, the watchdog immediately installs a first-position bridge reject,
 then stops and proves the whole stack absent before repairing and rechecking.
 The repaired-drift exit is an explicit successful watchdog outcome so the
 calendar timer keeps recurring. This bounds detection but does not turn the
-coarse service-CIDR rule into origin or tenancy containment.
+coarse public-range rule into origin or tenancy containment.
 
-This is only coarse **OCI service-CIDR containment**. It is not an exact-origin,
+`object-storage-public-ranges.lock.json` records the official publication URL,
+full-source SHA-256, upstream timestamp, retrieval/review time, region, required
+tag, and exact sorted CIDRs. Terraform rejects a plan when that review is more
+than 168 hours old. If Oracle's publication changes after first boot, stop the
+stack and obtain a separately reviewed on-host coordinate/firewall refresh
+procedure before restarting it. Updating instance metadata does not rerun
+cloud-init, so a metadata-only Terraform apply is not sufficient. Never widen
+or merge the published CIDRs merely to avoid that maintenance step.
+
+This is only coarse **OCI public-range containment**. It is not an exact-origin,
 namespace, tenancy, or data-exfiltration boundary: a compromised container could
 address another OCI Object Storage frontend or a pre-authenticated request in
-the same allowed service CIDR. Preflight therefore requires
+the same allowed public CIDRs. Preflight therefore requires
 `OCI_PILOT_DATA_CLASSIFICATION=synthetic-reviewer-only`. Every device and
 physical-evidence test must use deliberately synthetic HealthKit or Health
 Connect records; personal, nutrition, and health data are a hard release
@@ -105,7 +114,7 @@ never enter Terraform variables, cloud-init, state, shell arguments, or Git.
 | Compartment | New dedicated compartment | No direct charge; contained services may charge. |
 | Existing VCN/Internet Gateway | Read only | Shared with an unrelated workload; this is logical, not VCN-level, isolation. |
 | Subnet, route table, explicit security list, NSG | New | Normally no direct charge; confirm current pricing. |
-| Object Storage Service Gateway | One | No direct gateway charge is expected; storage/requests/egress may charge. |
+| Object Storage network path | Existing Internet Gateway to regional public TLS endpoints | The tenancy has zero Service Gateway quota. Storage, requests, and transfer usage can still charge outside current allowances. |
 | Object Storage buckets | Two private Standard buckets | Export usage and every retained ledger version consume quota and can charge. No cross-region copy is configured. |
 | IAM roles | Four users, groups, memberships, policies | No direct charge expected; tenancy identity limits still apply. |
 | `VM.Standard.A1.Flex` | 2 OCPU, 12 GB | Intended for Always Free, but capacity and eligibility are not guaranteed. Never substitute a paid shape. |
@@ -139,21 +148,28 @@ recovery readiness, but do not generate artificial load to evade that policy.
    live or trusted until the post-apply DNS, ACME, and readiness checks pass.
 3. Create one Ed25519 SSH keypair. Only the public key (maximum 512 characters)
    enters `terraform.tfvars`.
-4. Record the operator's current public `/32` for SSH and every synthetic
+4. Supply four distinct, monitored primary emails for the non-console Object
+   Storage IAM users. OCI identity domains require uniqueness. A mailbox that
+   supports plus addressing can route four role-tagged addresses to one inbox.
+5. Record the operator's current public `/32` for SSH and every synthetic
    reviewer's current public egress CIDR. The owner designated the same single
    current operator `/32` for both roles on 2026-08-17; revalidate it immediately
    before planning and host start. SSH from `0.0.0.0/0` is rejected.
-5. Recheck limits, pricing, active A1 capacity, reserved IPv4, block storage,
+6. Recheck limits, pricing, active A1 capacity, reserved IPv4, block storage,
    backups, Object Storage, IAM-user/key quotas, and the namespace in
    `us-ashburn-1`; create a budget alert outside this module.
-6. Re-read the GRAD695 VCN, enabled Internet Gateway, and every live subnet.
-7. Pin a reviewed Oracle Linux 9 Arm image OCID.
-8. Publish immutable `linux/arm64` images for API, web, worker, migrator, Caddy,
+7. Download Oracle's current `public_ip_ranges.json`, verify its full-file hash,
+   and review the sorted `OBJECT_STORAGE` CIDRs for `us-ashburn-1` against
+   `object-storage-public-ranges.lock.json`. The lock review must be no more
+   than 168 hours old when planning. Oracle recommends polling at least weekly.
+8. Re-read the GRAD695 VCN, enabled Internet Gateway, and every live subnet.
+9. Pin a reviewed Oracle Linux 9 Arm image OCID.
+10. Publish immutable `linux/arm64` images for API, web, worker, migrator, Caddy,
    and PostgreSQL from one reviewed container supply-chain workflow commit.
    Record all six digest-qualified GHCR references. Make those packages public
    or install a narrowly scoped read-only pull credential in root's Docker
    credential store. Never use an Actions job token.
-9. Install Terraform 1.5.7, OCI provider 7.32.0, external provider 2.3.5, and
+11. Install Terraform 1.5.7, OCI provider 7.32.0, external provider 2.3.5, and
    Python 3 with standard-library `lzma` on the planning workstation.
 
 Refresh the personal security-token session, then verify the selected network.
@@ -193,11 +209,11 @@ terraform plan -out=cronometer-gold-beta.tfplan
 terraform show cronometer-gold-beta.tfplan
 ```
 
-The plan must create no second VCN or Internet Gateway, NAT Gateway, load
-balancer, WAF, managed database, Vault key, DNS zone, or paid shape. It must
-create exactly one Service Gateway, two private buckets with the versioning
-settings above, four least-privilege IAM role sets, one 100 GB encrypted boot
-volume, and one same-region two-day daily backup policy. It must not contain
+The plan must create no second VCN or Internet Gateway, Service Gateway, NAT
+Gateway, load balancer, WAF, managed database, Vault key, DNS zone, or paid
+shape. It must create two private buckets with the versioning settings above,
+four least-privilege IAM role sets, one 100 GB encrypted boot volume, and one
+same-region two-day daily backup policy. It must not contain
 Customer Secret Keys, API private keys, or changes to existing resources. Only
 then may an authorized operator apply the saved plan. If A1 capacity is absent,
 try a reviewed availability-domain index; never change the shape.
@@ -346,7 +362,8 @@ At each start the orchestrator:
    one-shot containers, then proves they are absent.
 2. Verifies the current OCI instance identity and admitted restore epoch.
 3. Resolves the two Object Storage hosts on the host, proves every answer is in
-   the frozen service CIDR, rejects bridge overlap, and pins the host map.
+   one of the two reviewed public Object Storage CIDRs, rejects bridge overlap,
+   and pins the host map.
 4. Runs early preflight, including exact firewall, credential/keyring, storage,
    backup, PKI, runtime, image-lock, platform, and Compose checks.
 5. Starts Caddy, PostgreSQL, and Meilisearch and bootstraps scoped Meilisearch
@@ -424,7 +441,8 @@ monitoring, deployment promotion, and incident response are approved.
 - [Object Storage bucket Terraform resource](https://docs.oracle.com/en-us/iaas/tools/terraform-provider-oci/latest/docs/r/objectstorage_bucket.html)
 - [S3 compatibility API and dedicated endpoints](https://docs.oracle.com/en-us/iaas/Content/Object/Tasks/s3compatibleapi.htm)
 - [Object Storage IAM permissions and policy conditions](https://docs.oracle.com/en-us/iaas/Content/Identity/Reference/objectstoragepolicyreference.htm)
-- [Service Gateway routing](https://docs.oracle.com/en-us/iaas/Content/Network/Tasks/servicegateway.htm)
+- [OCI public IP ranges](https://docs.oracle.com/en-us/iaas/Content/General/Concepts/addressranges.htm)
+- [Public-IP Internet Gateway requirements](https://docs.oracle.com/en-us/iaas/Content/Network/Tasks/managingpublicIPs.htm)
 - [Customer Secret Key lifecycle and limits](https://docs.oracle.com/en-us/iaas/Content/Identity/access/working-with-customer-secret-keys.htm)
 - [API signing keys](https://docs.oracle.com/en-us/iaas/Content/API/Concepts/apisigningkey.htm)
 - [Always Free resource limits](https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm)

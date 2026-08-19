@@ -28,12 +28,6 @@ resource "oci_core_route_table" "edge" {
     network_entity_id = var.existing_internet_gateway_ocid
   }
 
-  route_rules {
-    destination       = data.oci_core_services.object_storage.services[0].cidr_block
-    destination_type  = "SERVICE_CIDR_BLOCK"
-    network_entity_id = oci_core_service_gateway.object_storage.id
-  }
-
   depends_on = [terraform_data.apply_guardrails]
 
   lifecycle {

@@ -47,6 +47,11 @@ compute_tf = (ROOT / "compute.tf").read_text(encoding="utf-8")
 network_tf = (ROOT / "network.tf").read_text(encoding="utf-8")
 object_storage_tf = (ROOT / "object-storage.tf").read_text(encoding="utf-8")
 variables_tf = (ROOT / "variables.tf").read_text(encoding="utf-8")
+outputs_tf = (ROOT / "outputs.tf").read_text(encoding="utf-8")
+tfvars_example = (ROOT / "terraform.tfvars.example").read_text(encoding="utf-8")
+object_storage_public_ranges_lock = json.loads(
+    (ROOT / "object-storage-public-ranges.lock.json").read_text(encoding="utf-8")
+)
 deploy_example = (ROOT / "templates/deploy.env.example.tftpl").read_text(encoding="utf-8")
 runtime_example = (ROOT / "templates/runtime.env.example.tftpl").read_text(encoding="utf-8")
 restore_example = (ROOT / "templates/restore.env.example.tftpl").read_text(encoding="utf-8")
@@ -445,7 +450,7 @@ assert 'resource "oci_objectstorage_bucket" "ledger"' in object_storage_tf
 assert object_storage_tf.count('access_type           = "NoPublicAccess"') == 2
 assert object_storage_tf.count('versioning            = "Disabled"') == 1
 assert object_storage_tf.count('versioning            = "Enabled"') == 1
-assert object_storage_tf.count("prevent_destroy = true") >= 6
+assert object_storage_tf.count("prevent_destroy = true") == 5
 assert 'resource "oci_identity_customer_secret_key"' not in object_storage_tf
 assert 'resource "oci_identity_api_key"' not in object_storage_tf
 assert 'object_prefix      = "exports/v1/*"' in object_storage_tf
@@ -463,9 +468,64 @@ assert 'object_permissions = ["OBJECT_CREATE", "OBJECT_READ"]' in role_contract(
 assert 'object_permissions = ["OBJECT_INSPECT", "OBJECT_READ"]' in role_contract("ledger_restore", None)
 assert "target.bucket.name='${each.value.bucket_name}'" in object_storage_tf
 assert "target.object.name='${each.value.object_prefix}'" in object_storage_tf
-assert "SERVICE_CIDR_BLOCK" in network_tf and "oci_core_service_gateway.object_storage.id" in network_tf
-assert 'object_bridge_cidr  = "172.31.255.0/28"' in locals_tf
-assert "serviceCidr" in locals_tf and "compatHost" in locals_tf and "nativeHost" in locals_tf
+assert 'email          = var.object_storage_role_emails[each.key]' in object_storage_tf
+assert 'variable "object_storage_role_emails"' in variables_tf
+assert "sensitive = true" in variables_tf
+assert "nullable  = false" in variables_tf
+for role in ("export_reader", "export_writer", "ledger_writer", "ledger_restore"):
+    assert f"{role}  = string" in variables_tf or f"{role} = string" in variables_tf
+for role in ("export_reader", "export_writer", "ledger_writer", "ledger_restore"):
+    assert f'{role}  = "operator+nutrition-' in tfvars_example or f'{role} = "operator+nutrition-' in tfvars_example
+assert network_tf.count("route_rules {") == 1
+assert 'destination       = "0.0.0.0/0"' in network_tf
+assert 'destination_type  = "CIDR_BLOCK"' in network_tf
+assert "network_entity_id = var.existing_internet_gateway_ocid" in network_tf
+assert "SERVICE_CIDR_BLOCK" not in network_tf
+assert 'resource "oci_core_service_gateway"' not in object_storage_tf
+assert "oci_core_service_gateway" not in outputs_tf
+assert "service_gateway_id" not in outputs_tf
+assert "public_cidrs" in outputs_tf
+assert "data.oci_core_services" not in locals_tf
+assert "data.oci_core_services" not in object_storage_tf
+assert "serviceCidr" not in locals_tf
+assert "objectStoragePublicCidrs" in locals_tf
+assert 'jsondecode(file("${path.module}/object-storage-public-ranges.lock.json"))' in locals_tf
+assert "168h" in locals_tf and "plantimestamp()" in locals_tf
+assert (
+    "tolist(local.object_storage_public_ranges_lock.objectStoragePublicCidrs) == "
+    "local.object_storage_public_cidrs"
+    in locals_tf
+)
+assert (
+    'local.object_storage_public_cidrs == tolist(["134.70.24.0/21", '
+    '"134.70.32.0/22"])'
+    in locals_tf
+)
+assert set(object_storage_public_ranges_lock) == {
+    "schemaVersion",
+    "source",
+    "review",
+    "objectStoragePublicCidrs",
+}
+assert object_storage_public_ranges_lock["schemaVersion"] == 1
+assert object_storage_public_ranges_lock["source"] == {
+    "url": "https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json",
+    "lastUpdatedTimestamp": "2026-07-27T06:55:33.696145",
+    "retrievedAt": "2026-08-19T07:40:28Z",
+    "sha256": "7c38b64fbc0942ef9b91b84042643e2a8d1d942a97808d7fd11eaf37c6e4fd99",
+}
+assert object_storage_public_ranges_lock["review"] == {
+    "reviewedAt": "2026-08-19T07:40:28Z",
+    "region": "us-ashburn-1",
+    "requiredTag": "OBJECT_STORAGE",
+    "expectedCidrCount": 2,
+}
+public_cidr_fixtures = ("134.70.24.0/21", "134.70.32.0/22")
+assert object_storage_public_ranges_lock["objectStoragePublicCidrs"] == list(
+    public_cidr_fixtures
+)
+assert re.search(r'object_bridge_cidr\s+= "172\.31\.255\.0/28"', locals_tf)
+assert "compatHost" in locals_tf and "nativeHost" in locals_tf
 
 assert "iptables -I FORWARD 1" in object_egress_firewall
 assert "--dport 443" in object_egress_firewall
@@ -501,10 +561,13 @@ assert start_body.rindex("nutrition-assert-object-egress-firewall") < start_body
 )
 assert 'socket.getaddrinfo(host, 443, socket.AF_INET, socket.SOCK_STREAM)' in object_egress_preparer
 assert 'OUTPUT = OUTPUT_DIRECTORY / "object-storage-hosts.env"' in object_egress_preparer
-assert "outside the Terraform-frozen Object Storage service CIDR" in object_egress_preparer
+assert "outside the Terraform-frozen Object Storage public CIDRs" in object_egress_preparer
 assert "Object-egress bridge" in object_egress_preparer
 assert "network.subnet_of(bridge)" in object_egress_preparer
 assert "candidate.version == bridge.version" in object_egress_preparer
+assert 'data["schemaVersion"] != 3' in object_egress_preparer
+assert "serviceCidr" not in object_egress_preparer
+assert 'data["objectStoragePublicCidrs"]' in object_egress_preparer
 assert "/usr/local/sbin/nutrition-assert-object-egress-firewall" in preflight
 assert "Object Storage host map differs from Terraform coordinates" in preflight
 
@@ -727,30 +790,87 @@ with tempfile.TemporaryDirectory() as pki_temporary_directory:
 
 # The shared firewall assertion must reject missing/reordered parent hooks and
 # any inverted or extra match token even when all expected tokens are present.
+preparer_namespace = {"__name__": "object_egress_preparer_contract"}
+exec(compile(object_egress_preparer, "object-egress-preparer-contract", "exec"), preparer_namespace)
+preparer_networks = preparer_namespace["public_networks"](list(public_cidr_fixtures))
+original_getaddrinfo = preparer_namespace["socket"].getaddrinfo
+try:
+    preparer_namespace["socket"].getaddrinfo = lambda *_args, **_kwargs: [
+        (2, 1, 6, "", ("134.70.24.1", 443)),
+        (2, 1, 6, "", ("134.70.32.1", 443)),
+    ]
+    assert (
+        preparer_namespace["resolve"]("objectstorage.us-ashburn-1.oraclecloud.com", preparer_networks)
+        == "134.70.24.1"
+    )
+    preparer_namespace["socket"].getaddrinfo = lambda *_args, **_kwargs: [
+        (2, 1, 6, "", ("134.70.24.1", 443)),
+        (2, 1, 6, "", ("8.8.8.8", 443)),
+    ]
+    try:
+        preparer_namespace["resolve"](
+            "objectstorage.us-ashburn-1.oraclecloud.com", preparer_networks
+        )
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("a mixed in-range/out-of-range DNS answer must fail closed")
+finally:
+    preparer_namespace["socket"].getaddrinfo = original_getaddrinfo
+
 firewall_namespace = {"__name__": "object_egress_firewall_contract"}
 exec(compile(object_egress_assertion, "object-egress-firewall-contract", "exec"), firewall_namespace)
 bridge_fixture = "172.31.255.0/28"
-service_fixture = "134.70.0.0/17"
 chain_fixture = firewall_namespace["CHAIN"]
 jump_fixture = ["-A", "FORWARD", "-s", bridge_fixture, "-j", chain_fixture]
-rules_fixture = [
-    ["-A", chain_fixture, "-d", service_fixture, "-p", "tcp", "-m", "tcp", "--dport", "443", "-m", "conntrack", "--ctstate", "ESTABLISHED", "-j", "ACCEPT"],
-    ["-A", chain_fixture, "-d", service_fixture, "-p", "tcp", "-m", "tcp", "--dport", "443", "-m", "conntrack", "--ctstate", "NEW", "-j", "ACCEPT"],
-    ["-A", chain_fixture, "-j", "REJECT", "--reject-with", "icmp-port-unreachable"],
-]
-firewall_namespace["verify"]([jump_fixture], rules_fixture, bridge_fixture, service_fixture)
+rules_fixture = []
+for public_cidr_fixture in public_cidr_fixtures:
+    rules_fixture.extend(
+        [
+            ["-A", chain_fixture, "-d", public_cidr_fixture, "-p", "tcp", "-m", "tcp", "--dport", "443", "-m", "conntrack", "--ctstate", "ESTABLISHED", "-j", "ACCEPT"],
+            ["-A", chain_fixture, "-d", public_cidr_fixture, "-p", "tcp", "-m", "tcp", "--dport", "443", "-m", "conntrack", "--ctstate", "NEW", "-j", "ACCEPT"],
+        ]
+    )
+rules_fixture.append(
+    ["-A", chain_fixture, "-j", "REJECT", "--reject-with", "icmp-port-unreachable"]
+)
+firewall_namespace["verify"](
+    [jump_fixture], rules_fixture, bridge_fixture, public_cidr_fixtures
+)
+assert tuple(
+    str(network)
+    for network in firewall_namespace["public_networks"](list(public_cidr_fixtures))
+) == public_cidr_fixtures
+for invalid_public_cidrs in (
+    list(reversed(public_cidr_fixtures)),
+    [public_cidr_fixtures[0], public_cidr_fixtures[0]],
+    ["10.0.0.0/8", public_cidr_fixtures[1]],
+    ["2001:db8::/32", public_cidr_fixtures[1]],
+):
+    try:
+        firewall_namespace["public_networks"](invalid_public_cidrs)
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError("invalid Object Storage public CIDRs must fail closed")
 blocked_firewall_fixtures = (
     ([], rules_fixture),
     ([["-A", "FORWARD", "-j", "ACCEPT"], jump_fixture], rules_fixture),
     ([jump_fixture, jump_fixture], rules_fixture),
     ([jump_fixture], rules_fixture[:-1]),
-    ([jump_fixture], [["-A", chain_fixture, "-m", "conntrack", "--ctstate", "ESTABLISHED", "-j", "ACCEPT"], rules_fixture[1], rules_fixture[2]]),
-    ([jump_fixture], [rules_fixture[0], rules_fixture[1][:2] + ["!"] + rules_fixture[1][2:], rules_fixture[2]]),
-    ([jump_fixture], [rules_fixture[0], rules_fixture[1][:-2] + ["!", "-j", "ACCEPT"], rules_fixture[2]]),
+    ([jump_fixture], [["-A", chain_fixture, "-m", "conntrack", "--ctstate", "ESTABLISHED", "-j", "ACCEPT"], *rules_fixture[1:]]),
+    ([jump_fixture], [rules_fixture[0], rules_fixture[1][:2] + ["!"] + rules_fixture[1][2:], *rules_fixture[2:]]),
+    ([jump_fixture], [rules_fixture[0], rules_fixture[1][:-2] + ["!", "-j", "ACCEPT"], *rules_fixture[2:]]),
+    ([jump_fixture], [rules_fixture[2], rules_fixture[3], rules_fixture[0], rules_fixture[1], rules_fixture[4]]),
 )
 for forward_fixture, egress_fixture in blocked_firewall_fixtures:
     try:
-        firewall_namespace["verify"](forward_fixture, egress_fixture, bridge_fixture, service_fixture)
+        firewall_namespace["verify"](
+            forward_fixture,
+            egress_fixture,
+            bridge_fixture,
+            public_cidr_fixtures,
+        )
     except SystemExit:
         pass
     else:
