@@ -89,6 +89,17 @@ node_base_arm64_digest = (
 )
 openssl_fix_commit = "08e7756c3900bcfd77a720e7b74e27d6e4ed01a9"
 openssl_patch_sha256 = "3b4f3ff1e9d26ca3dd75f6d98cc5d30c7dbfc03892e4bc0037a7e14bec8c5087"
+node_needed_libraries = sorted(
+    (
+        "ld-linux-aarch64.so.1",
+        "libc.so.6",
+        "libdl.so.2",
+        "libgcc_s.so.1",
+        "libm.so.6",
+        "libpthread.so.0",
+        "libstdc++.so.6",
+    )
+)
 
 assert hashlib.sha256(node_release_key).hexdigest() == (
     "e31e1aa40a8331f01d753cef475f7b9eab934fc25f5f0b36995bfd80bd66ad27"
@@ -122,6 +133,21 @@ assert 'case "${jobs}" in \'\'|*[!0-9]*) exit 1 ;; esac' in node_runtime_dockerf
 assert 'test "${jobs}" -ge 2' in node_runtime_dockerfile
 assert 'make -j"${jobs}"' in node_runtime_dockerfile
 assert "make -j2" not in node_runtime_dockerfile
+docker_needed_match = re.search(
+    r"readelf -d /opt/nodejs/bin/node.*?printf '%s\\n'(?P<needed>.*?)"
+    r"\| sort > /tmp/node-needed\.expected;",
+    node_runtime_dockerfile,
+    re.DOTALL,
+)
+assert docker_needed_match is not None
+assert sorted(
+    re.findall(
+        r"(?:ld|lib)[A-Za-z0-9_+.-]+\.so(?:\.[0-9]+)+",
+        docker_needed_match.group("needed"),
+    )
+) == node_needed_libraries
+assert "Requesting program interpreter" in node_runtime_dockerfile
+assert "= /lib/ld-linux-aarch64.so.1" in node_runtime_dockerfile
 assert node_runtime_dockerfile.count("#define SSL_VALUE_QUIC_MAX_PENDING_CONNS 16") == 2
 for patched_code_path in (
     "include/internal/quic_port.h",
@@ -194,6 +220,21 @@ service_image_job = workflow_job("build-scan-publish-services")
 assert "runs-on: ubuntu-24.04-arm" in node_runtime_job
 assert "timeout-minutes: 180" in node_runtime_job
 assert "setup-qemu-action" not in node_runtime_job
+workflow_needed_match = re.search(
+    r'readelf -d "\$\{binary\}".*?printf \'%s\\n\'(?P<needed>.*?)'
+    r'\| sort > "\$\{RUNNER_TEMP\}/node-needed\.expected"',
+    node_runtime_job,
+    re.DOTALL,
+)
+assert workflow_needed_match is not None
+assert sorted(
+    re.findall(
+        r"(?:ld|lib)[A-Za-z0-9_+.-]+\.so(?:\.[0-9]+)+",
+        workflow_needed_match.group("needed"),
+    )
+) == node_needed_libraries
+assert "Requesting program interpreter" in node_runtime_job
+assert "= /lib/ld-linux-aarch64.so.1" in node_runtime_job
 assert "digest: ${{ steps.export.outputs.digest }}" in node_runtime_job
 assert "ref: ${{ steps.export.outputs.ref }}" in node_runtime_job
 assert node_runtime_job.rfind("- name: Export the verified patched Node runtime") > node_runtime_job.rfind(

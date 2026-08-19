@@ -98,6 +98,7 @@ RUN set -eux; \
     test "$(nm -D /opt/nodejs/bin/node | awk '$3 == "ossl_quic_port_set_max_pending_channels" { count++ } END { print count + 0 }')" = 1; \
     readelf -d /opt/nodejs/bin/node | sed -n 's/.*Shared library: \[\([^]]*\)\]/\1/p' | sort > /tmp/node-needed.actual; \
     printf '%s\n' \
+      ld-linux-aarch64.so.1 \
       libc.so.6 \
       libdl.so.2 \
       libgcc_s.so.1 \

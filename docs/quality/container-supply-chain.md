@@ -114,9 +114,9 @@ CI verifies both Distroless indexes with Cosign identity
 OpenSSL remains statically embedded in the newly built Node executable; removing
 a dynamically installed `libssl3t64` package alone would not remediate it. CI
 therefore checks the exact Node/OpenSSL versions, the absence of dynamic
-`libssl`/`libcrypto` dependencies, the complete ELF `NEEDED` allowlist and ARM64
-interpreter, and both internal max-pending-channel symbols introduced by the
-patch. In this exact Node source configuration,
+`libssl`/`libcrypto` dependencies, the complete seven-entry ELF `NEEDED`
+allowlist and ARM64 interpreter, and both internal max-pending-channel symbols
+introduced by the patch. In this exact Node source configuration,
 `process.config.variables.openssl_quic` and `node_shared_openssl` are both
 `false`, and the public experimental QUIC flag/module is absent. Those values
 are asserted as observed source-build properties; they are not treated as proof
