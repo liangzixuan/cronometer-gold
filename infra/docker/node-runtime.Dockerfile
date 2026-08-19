@@ -100,12 +100,10 @@ RUN set -eux; \
     printf '%s\n' \
       ld-linux-aarch64.so.1 \
       libc.so.6 \
-      libdl.so.2 \
       libgcc_s.so.1 \
       libm.so.6 \
-      libpthread.so.0 \
       libstdc++.so.6 | sort > /tmp/node-needed.expected; \
-    cmp /tmp/node-needed.expected /tmp/node-needed.actual; \
+    diff -u /tmp/node-needed.expected /tmp/node-needed.actual; \
     if grep -Eq '^lib(ssl|crypto)' /tmp/node-needed.actual; then \
       echo 'The patched Node binary unexpectedly links shared OpenSSL libraries.' >&2; \
       exit 1; \

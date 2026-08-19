@@ -399,7 +399,7 @@ jobs:
           test "$(nm -D "${binary}" | awk '$3 == "ossl_quic_port_set_max_pending_channels" { count++ } END { print count + 0 }')" = 1
           readelf -h "${binary}" | grep -Eq 'Machine:[[:space:]]+AArch64'
           readelf -d "${binary}" | sed -n 's/.*Shared library: \[\([^]]*\)\]/\1/p' | sort > "${RUNNER_TEMP}/node-needed.actual"
-          printf '%s\n' ld-linux-aarch64.so.1 libc.so.6 libdl.so.2 libgcc_s.so.1 libm.so.6 libpthread.so.0 libstdc++.so.6 | sort > "${RUNNER_TEMP}/node-needed.expected"
+          printf '%s\n' ld-linux-aarch64.so.1 libc.so.6 libgcc_s.so.1 libm.so.6 libstdc++.so.6 | sort > "${RUNNER_TEMP}/node-needed.expected"
           diff -u "${RUNNER_TEMP}/node-needed.expected" "${RUNNER_TEMP}/node-needed.actual"
           if grep -Eq '^lib(ssl|crypto)' "${RUNNER_TEMP}/node-needed.actual"; then
             echo 'The patched Node binary unexpectedly links shared OpenSSL libraries.' >&2

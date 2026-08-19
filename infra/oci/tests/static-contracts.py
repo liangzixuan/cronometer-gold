@@ -93,10 +93,8 @@ node_needed_libraries = sorted(
     (
         "ld-linux-aarch64.so.1",
         "libc.so.6",
-        "libdl.so.2",
         "libgcc_s.so.1",
         "libm.so.6",
-        "libpthread.so.0",
         "libstdc++.so.6",
     )
 )
@@ -146,6 +144,8 @@ assert sorted(
         docker_needed_match.group("needed"),
     )
 ) == node_needed_libraries
+assert "diff -u /tmp/node-needed.expected /tmp/node-needed.actual" in node_runtime_dockerfile
+assert "cmp /tmp/node-needed.expected /tmp/node-needed.actual" not in node_runtime_dockerfile
 assert "Requesting program interpreter" in node_runtime_dockerfile
 assert "= /lib/ld-linux-aarch64.so.1" in node_runtime_dockerfile
 assert node_runtime_dockerfile.count("#define SSL_VALUE_QUIC_MAX_PENDING_CONNS 16") == 2
@@ -233,6 +233,10 @@ assert sorted(
         workflow_needed_match.group("needed"),
     )
 ) == node_needed_libraries
+assert (
+    'diff -u "${RUNNER_TEMP}/node-needed.expected" "${RUNNER_TEMP}/node-needed.actual"'
+    in node_runtime_job
+)
 assert "Requesting program interpreter" in node_runtime_job
 assert "= /lib/ld-linux-aarch64.so.1" in node_runtime_job
 assert "digest: ${{ steps.export.outputs.digest }}" in node_runtime_job
