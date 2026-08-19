@@ -98,6 +98,35 @@ resource "oci_identity_user_capabilities_management" "object_storage_role" {
   user_id                      = oci_identity_user.object_storage_role[each.key].id
 }
 
+# Provider 7.32.0 can read all seven effective IAM user capabilities, but its
+# capability-management resource cannot write the DB-password or OAuth2-client
+# flags. Read the effective user only after the supported five flags settle and
+# fail closed unless the full least-privilege tuple matches.
+data "oci_identity_user" "object_storage_role_effective_capabilities" {
+  for_each = local.object_storage_roles
+
+  user_id = oci_identity_user.object_storage_role[each.key].id
+
+  depends_on = [oci_identity_user_capabilities_management.object_storage_role]
+
+  lifecycle {
+    postcondition {
+      condition = try(
+        length(self.capabilities) == 1 &&
+        self.capabilities[0].can_use_api_keys == each.value.can_use_api_keys &&
+        self.capabilities[0].can_use_auth_tokens == false &&
+        self.capabilities[0].can_use_console_password == false &&
+        self.capabilities[0].can_use_customer_secret_keys == true &&
+        self.capabilities[0].can_use_db_credentials == false &&
+        self.capabilities[0].can_use_oauth2client_credentials == false &&
+        self.capabilities[0].can_use_smtp_credentials == false,
+        false,
+      )
+      error_message = "Effective IAM capabilities for ${each.key} exceed the reviewed Object Storage role: only Customer Secret Keys, plus API keys for ledger_restore, may be enabled; Auth Token, Console Password, DB Credentials, OAuth2 Client Credentials, and SMTP Credentials must be disabled."
+    }
+  }
+}
+
 resource "oci_identity_group" "object_storage_role" {
   for_each = local.object_storage_roles
 

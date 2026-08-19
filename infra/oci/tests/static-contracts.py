@@ -49,6 +49,7 @@ object_storage_tf = (ROOT / "object-storage.tf").read_text(encoding="utf-8")
 variables_tf = (ROOT / "variables.tf").read_text(encoding="utf-8")
 outputs_tf = (ROOT / "outputs.tf").read_text(encoding="utf-8")
 tfvars_example = (ROOT / "terraform.tfvars.example").read_text(encoding="utf-8")
+readme = (ROOT / "README.md").read_text(encoding="utf-8")
 object_storage_public_ranges_lock = json.loads(
     (ROOT / "object-storage-public-ranges.lock.json").read_text(encoding="utf-8")
 )
@@ -466,12 +467,56 @@ assert 'object_permissions = ["OBJECT_READ"]' in role_contract("export_reader", 
 assert 'object_permissions = ["OBJECT_CREATE", "OBJECT_READ", "OBJECT_DELETE"]' in role_contract("export_writer", "ledger_writer")
 assert 'object_permissions = ["OBJECT_CREATE", "OBJECT_READ"]' in role_contract("ledger_writer", "ledger_restore")
 assert 'object_permissions = ["OBJECT_INSPECT", "OBJECT_READ"]' in role_contract("ledger_restore", None)
+for role, next_role in (
+    ("export_reader", "export_writer"),
+    ("export_writer", "ledger_writer"),
+    ("ledger_writer", "ledger_restore"),
+):
+    assert "can_use_api_keys   = false" in role_contract(role, next_role)
+assert "can_use_api_keys   = true" in role_contract("ledger_restore", None)
 assert "target.bucket.name='${each.value.bucket_name}'" in object_storage_tf
 assert "target.object.name='${each.value.object_prefix}'" in object_storage_tf
 assert 'email          = var.object_storage_role_emails[each.key]' in object_storage_tf
 assert 'variable "object_storage_role_emails"' in variables_tf
 assert "sensitive = true" in variables_tf
 assert "nullable  = false" in variables_tf
+capability_management = object_storage_tf.split(
+    'resource "oci_identity_user_capabilities_management" "object_storage_role" {', 1
+)[1].split('\ndata "oci_identity_user" "object_storage_role_effective_capabilities" {', 1)[0]
+assert "can_use_api_keys             = each.value.can_use_api_keys" in capability_management
+assert "can_use_auth_tokens          = false" in capability_management
+assert "can_use_console_password     = false" in capability_management
+assert "can_use_customer_secret_keys = true" in capability_management
+assert "can_use_smtp_credentials     = false" in capability_management
+assert "can_use_db_credentials" not in capability_management
+assert "can_use_oauth2client_credentials" not in capability_management
+capability_readback = object_storage_tf.split(
+    'data "oci_identity_user" "object_storage_role_effective_capabilities" {', 1
+)[1].split('\nresource "oci_identity_group" "object_storage_role" {', 1)[0]
+assert "for_each = local.object_storage_roles" in capability_readback
+assert "user_id = oci_identity_user.object_storage_role[each.key].id" in capability_readback
+assert "depends_on = [oci_identity_user_capabilities_management.object_storage_role]" in capability_readback
+assert "condition = try(" in capability_readback
+for capability_contract in (
+    "self.capabilities[0].can_use_api_keys == each.value.can_use_api_keys",
+    "self.capabilities[0].can_use_auth_tokens == false",
+    "self.capabilities[0].can_use_console_password == false",
+    "self.capabilities[0].can_use_customer_secret_keys == true",
+    "self.capabilities[0].can_use_db_credentials == false",
+    "self.capabilities[0].can_use_oauth2client_credentials == false",
+    "self.capabilities[0].can_use_smtp_credentials == false",
+):
+    assert capability_contract in capability_readback
+assert "length(self.capabilities) == 1" in capability_readback
+assert (
+    "self.capabilities[0].can_use_smtp_credentials == false,\n"
+    "        false,\n"
+    "      )"
+    in capability_readback
+)
+assert "Effective IAM capabilities" in capability_readback
+assert "cannot manage DB-password or OAuth2-client capabilities" in " ".join(readme.split())
+assert "hard-fails unless the complete seven-capability tuple matches" in readme
 for role in ("export_reader", "export_writer", "ledger_writer", "ledger_restore"):
     assert f"{role}  = string" in variables_tf or f"{role} = string" in variables_tf
 for role in ("export_reader", "export_writer", "ledger_writer", "ledger_restore"):
@@ -481,6 +526,23 @@ assert 'destination       = "0.0.0.0/0"' in network_tf
 assert 'destination_type  = "CIDR_BLOCK"' in network_tf
 assert "network_entity_id = var.existing_internet_gateway_ocid" in network_tf
 assert "SERVICE_CIDR_BLOCK" not in network_tf
+assert 'variable "known_subnet_cidrs"' in variables_tf
+assert "Complete reviewed set of live VCN subnet CIDRs not owned by this module" in variables_tf
+assert "Before an initial plan, include every pre-existing subnet" in variables_tf
+assert "Before a recovery replan, exclude public_subnet_cidr only after verifying" in variables_tf
+assert "observed non-module 10.0.0.0/24 subnet" in variables_tf
+assert "complete set of live VCN subnet CIDRs not owned by this module" in tfvars_example
+assert "An initial plan includes every pre-existing subnet" in tfvars_example
+assert "exactly the state-managed oci_core_subnet.edge" in tfvars_example
+assert "Before an initial plan, include every" in readme
+assert "On a recovery replan, exclude `public_subnet_cidr`" in readme
+assert "CIDR exactly match state-managed" in readme
+assert "`oci_core_subnet.edge`; include it otherwise" in readme
+assert "guard rejects a proposed CIDR used by any other live subnet" in readme
+assert (
+    "condition     = !contains(var.known_subnet_cidrs, var.public_subnet_cidr)"
+    in locals_tf
+)
 assert 'resource "oci_core_service_gateway"' not in object_storage_tf
 assert "oci_core_service_gateway" not in outputs_tf
 assert "service_gateway_id" not in outputs_tf

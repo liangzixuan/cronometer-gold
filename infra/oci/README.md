@@ -36,8 +36,12 @@ The personal tenancy has one Internet Gateway, already attached to the unrelated
 requires that VCN and gateway by explicit OCID. It creates a new aligned `/24`
 subnet, route table, deny-by-default security list, and NSG without changing or
 attaching the VCN's default security list, route table, or DHCP options. Refresh
-the complete `known_subnet_cidrs` list immediately before every plan; the module
-rejects overlap among the reviewed aligned `/24`s.
+`known_subnet_cidrs` immediately before every plan as the complete set of live
+VCN subnet CIDRs not owned by this module. Before an initial plan, include every
+pre-existing live subnet. On a recovery replan, exclude `public_subnet_cidr`
+only after verifying the live subnet's OCID and CIDR exactly match state-managed
+`oci_core_subnet.edge`; include it otherwise. The unchanged overlap
+guard rejects a proposed CIDR used by any other live subnet.
 
 The tenancy's Service Gateway quota is zero. The route table therefore uses the
 existing Internet Gateway for ACME, image pulls, host administration, and the
@@ -106,6 +110,15 @@ Terraform creates IAM users, groups, memberships, capability flags, and
 policies, but **never** creates a Customer Secret Key or API signing key. Those
 secrets are created and rotated by the offline operator procedure below and
 never enter Terraform variables, cloud-init, state, shell arguments, or Git.
+
+OCI provider 7.32.0 can read but cannot manage DB-password or OAuth2-client
+capabilities on these users. On initial creation or replacement, require both
+credential lists to be empty, disable both capabilities through OCI IAM, and
+replan. Terraform reads each user after its supported capability update and
+hard-fails unless the complete seven-capability tuple matches: Customer Secret
+Keys for all four roles, API keys only for ledger-restore, and every other
+capability disabled. Never bypass this readback with a provisioner or a second
+resource that also owns the user.
 
 ## Planned resources and possible charges
 

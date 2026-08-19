@@ -151,7 +151,7 @@ variable "public_subnet_cidr" {
 }
 
 variable "known_subnet_cidrs" {
-  description = "Complete reviewed list of subnet CIDRs already present in the VCN. Refresh it from OCI immediately before plan/apply; it is used to reject overlap."
+  description = "Complete reviewed set of live VCN subnet CIDRs not owned by this module. Before an initial plan, include every pre-existing subnet. Before a recovery replan, exclude public_subnet_cidr only after verifying its live subnet is exactly the state-managed oci_core_subnet.edge."
   type        = set(string)
   default     = ["10.0.0.0/24"]
 
@@ -159,7 +159,7 @@ variable "known_subnet_cidrs" {
     condition = contains(var.known_subnet_cidrs, "10.0.0.0/24") && alltrue([
       for cidr in var.known_subnet_cidrs : can(regex("^10\\.0\\.(?:0|[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-4])\\.0/24$", cidr))
     ])
-    error_message = "known_subnet_cidrs must include the observed 10.0.0.0/24 subnet and list only aligned /24 ranges inside the reviewed VCN."
+    error_message = "known_subnet_cidrs must include the observed non-module 10.0.0.0/24 subnet and contain only aligned /24 CIDRs for live VCN subnets not owned by this module."
   }
 }
 

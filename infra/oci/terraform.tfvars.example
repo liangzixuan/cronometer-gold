@@ -11,7 +11,10 @@ existing_internet_gateway_ocid = "ocid1.internetgateway.oc1.iad.replace"
 # VM.Standard.A1.Flex. Never substitute a moving "latest" lookup.
 image_ocid = "ocid1.image.oc1.iad.replace"
 
-# Refresh this complete list from the live VCN immediately before plan/apply.
+# Refresh this complete set of live VCN subnet CIDRs not owned by this module
+# before every plan. An initial plan includes every pre-existing subnet. On a
+# recovery replan, exclude public_subnet_cidr only after proving its live subnet
+# is exactly the state-managed oci_core_subnet.edge.
 known_subnet_cidrs = ["10.0.0.0/24"]
 
 # Use a current operator egress address. Never use 0.0.0.0/0.
