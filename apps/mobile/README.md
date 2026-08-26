@@ -150,7 +150,10 @@ check requires the confirmation to be true and requires explicit
 match the record; implicit toolchain defaults cannot reach a signed build. The
 checked-in health-reviewer trust list is intentionally empty until a genuinely
 independent reviewer key is onboarded. Signed evidence and submission remain
-blocked until then; a reviewer key is never an app-signing credential.
+blocked until then; a reviewer key is never an app-signing credential. Ordinary
+configuration checks still validate every active or inactive trust entry and
+reject key-ID or public-key reuse within or across the separate health and
+deployment reviewer stores.
 
 ## Signed physical-device development
 

@@ -1,15 +1,19 @@
 import { execFileSync } from "node:child_process";
-import { createHash, createPublicKey, verify } from "node:crypto";
+import { createHash, verify } from "node:crypto";
 import { lstatSync, readFileSync } from "node:fs";
 import { isIP } from "node:net";
 import { extname, isAbsolute, normalize } from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { canonicalJson } from "@nutrition-tracker/contracts";
+import {
+  RELEASE_DEPLOYMENT_REVIEWER_TRUST_SCHEMA,
+  reviewerKeyWasActiveAt,
+  validateReviewerTrustStore,
+} from "./reviewer-trust.mjs";
 
 export const RELEASE_DEPLOYMENT_SCHEMA = "nutrition-tracker-release-deployment-v4";
-export const RELEASE_DEPLOYMENT_REVIEWER_TRUST_SCHEMA =
-  "nutrition-tracker-release-deployment-reviewer-trust-v1";
+export { RELEASE_DEPLOYMENT_REVIEWER_TRUST_SCHEMA } from "./reviewer-trust.mjs";
 export const RELEASE_DEPLOYMENT_UNCONFIRMED_MESSAGE =
   "The exact API deployment platform and origin must be confirmed before release.";
 export const RELEASE_EXPECTED_BLOCK_EXIT_CODE = 42;
@@ -228,64 +232,16 @@ function defaultDeploymentReviewerTrustStore() {
   );
 }
 
-function parseDeploymentReviewerTrustStore(trustStore, reviewedAt) {
-  assertExactKeys(trustStore, ["reviewers", "schemaVersion"], "deployment reviewer trust store");
-  if (trustStore.schemaVersion !== RELEASE_DEPLOYMENT_REVIEWER_TRUST_SCHEMA) {
-    throw new TypeError("Deployment reviewer trust-store schema is unsupported.");
-  }
-  if (!Array.isArray(trustStore.reviewers) || trustStore.reviewers.length > 20) {
-    throw new TypeError("Deployment reviewer trust store must contain at most 20 keys.");
-  }
-  const seen = new Set();
-  return trustStore.reviewers.map((reviewer, index) => {
-    const name = `deployment reviewer trust store.reviewers[${index}]`;
-    assertExactKeys(
-      reviewer,
-      ["algorithm", "keyId", "principal", "publicKeySpkiDerBase64", "validFrom", "validUntil"],
-      name,
-    );
-    if (
-      typeof reviewer.keyId !== "string" ||
-      !SAFE_KEY_ID.test(reviewer.keyId) ||
-      seen.has(reviewer.keyId)
-    ) {
-      throw new TypeError(`${name}.keyId was invalid or duplicated.`);
-    }
-    seen.add(reviewer.keyId);
-    assertSafeIdentifier(reviewer.principal, `${name}.principal`);
-    if (reviewer.algorithm !== "Ed25519") {
-      throw new TypeError(`${name}.algorithm must be Ed25519.`);
-    }
-    const validFrom = parseCanonicalInstant(reviewer.validFrom, `${name}.validFrom`);
-    const validUntil = parseCanonicalInstant(reviewer.validUntil, `${name}.validUntil`);
-    if (validUntil < validFrom) throw new TypeError(`${name} validity interval was inverted.`);
-    const der = decodeCanonicalBase64(
-      reviewer.publicKeySpkiDerBase64,
-      `${name}.publicKeySpkiDerBase64`,
-      256,
-    );
-    let publicKey;
-    try {
-      publicKey = createPublicKey({ key: der, format: "der", type: "spki" });
-    } catch {
-      throw new TypeError(`${name} was not a valid SPKI public key.`);
-    }
-    if (publicKey.asymmetricKeyType !== "ed25519") {
-      throw new TypeError(`${name} was not an Ed25519 public key.`);
-    }
-    return {
-      ...reviewer,
-      active: validFrom <= reviewedAt && reviewedAt <= validUntil,
-      publicKey,
-    };
-  });
-}
-
 function verifyDeploymentReviewerAttestation(deployment, trustStore) {
   const reviewedAt = parseCanonicalInstant(deployment.reviewedAt, "Release deployment reviewedAt");
-  const reviewers = parseDeploymentReviewerTrustStore(trustStore, reviewedAt);
+  const reviewers = validateReviewerTrustStore(trustStore, {
+    expectedSchema: RELEASE_DEPLOYMENT_REVIEWER_TRUST_SCHEMA,
+    label: "deployment reviewer trust store",
+  });
   const trusted = reviewers.find(
-    (reviewer) => reviewer.active && reviewer.keyId === deployment.reviewerAttestation.keyId,
+    (reviewer) =>
+      reviewer.keyId === deployment.reviewerAttestation.keyId &&
+      reviewerKeyWasActiveAt(reviewer, reviewedAt),
   );
   if (!trusted?.publicKey || trusted.principal !== deployment.reviewedBy) {
     throw new TypeError(

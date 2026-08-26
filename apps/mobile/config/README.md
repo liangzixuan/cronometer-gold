@@ -76,6 +76,14 @@ and algorithm; only `reviewerAttestation.signatureBase64` is excluded from its
 own signed payload. Private keys and unsigned or synthetic "passed" manifests
 must never be created by ordinary CI or stored here.
 
+Ordinary mobile configuration checks validate both reviewer trust stores even
+when release numbering or deployment evidence is still blocked. Every active,
+expired, or future entry must have exact fields, a canonical nonempty validity
+interval, and a canonical Ed25519 SPKI public key. Key IDs and public-key
+material are unique across both stores as well as within each store; rotation
+requires a new ID and a new keypair. Empty stores remain structurally valid so
+the intentional release blocker is distinguishable from malformed trust.
+
 Initial onboarding and later key rotation are reviewed code changes. Confirm the
 reviewer is independent of the device operator and repository release operator,
 then add their Ed25519 SPKI public key with a non-overlapping key ID and bounded
@@ -110,7 +118,7 @@ record, a self-review, or an untrusted signer cannot confirm deployment.
 
 Initial onboarding and rotation use the same Ed25519 SPKI, bounded validity, and
 reviewed-source-control rules as the health trust root, but require an
-independent deployment-review role. Store no private key or report in this
-directory. Reports may contain sensitive network-access evidence even after
-redaction, so keep local/EAS files mode `0600`, place GitHub inline base64 only
+independent deployment-review role and distinct key material. Store no private
+key or report in this directory. Reports may contain sensitive network-access
+evidence even after redaction, so keep local/EAS files mode `0600`, place GitHub inline base64 only
 in Actions secrets, and never print report bytes.

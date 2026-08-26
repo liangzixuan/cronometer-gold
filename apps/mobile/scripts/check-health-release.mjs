@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { createHash, createPublicKey, verify } from "node:crypto";
+import { createHash, verify } from "node:crypto";
 import {
   closeSync,
   createReadStream,
@@ -16,10 +16,14 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { canonicalJson } from "@nutrition-tracker/contracts";
 
 import { validatePhysicalDeviceApiUrl } from "./physical-device-api-url.mjs";
+import {
+  HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA,
+  reviewerKeyWasActiveAt,
+  validateReviewerTrustStore,
+} from "./reviewer-trust.mjs";
 
 export const HEALTH_RELEASE_EVIDENCE_SCHEMA = "nutrition-tracker-health-release-evidence-v4";
-export const HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA =
-  "nutrition-tracker-health-release-reviewer-trust-v1";
+export { HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA } from "./reviewer-trust.mjs";
 export const PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA =
   "nutrition-tracker-physical-device-relay-report-v1";
 
@@ -767,55 +771,6 @@ function assertDevice(device, platform, testedArtifact) {
   }
 }
 
-function parseTrustStore(trustStore, reviewedAt) {
-  assertExactKeys(trustStore, ["schemaVersion", "reviewers"], "reviewer trust store");
-  if (trustStore.schemaVersion !== HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA) {
-    throw new TypeError("Reviewer trust-store schema is unsupported.");
-  }
-  if (!Array.isArray(trustStore.reviewers) || trustStore.reviewers.length > 20) {
-    throw new TypeError("Reviewer trust store must contain at most 20 keys.");
-  }
-  const seen = new Set();
-  return trustStore.reviewers.map((reviewer, index) => {
-    const name = `reviewer trust store.reviewers[${index}]`;
-    assertExactKeys(
-      reviewer,
-      ["keyId", "principal", "algorithm", "publicKeySpkiDerBase64", "validFrom", "validUntil"],
-      name,
-    );
-    if (
-      typeof reviewer.keyId !== "string" ||
-      !SAFE_KEY_ID.test(reviewer.keyId) ||
-      seen.has(reviewer.keyId)
-    ) {
-      throw new TypeError(`${name}.keyId was invalid or duplicated.`);
-    }
-    seen.add(reviewer.keyId);
-    assertSafeIdentifier(reviewer.principal, `${name}.principal`);
-    if (reviewer.algorithm !== "Ed25519") throw new TypeError(`${name}.algorithm must be Ed25519.`);
-    const validFrom = parseInstant(reviewer.validFrom, `${name}.validFrom`);
-    const validUntil = parseInstant(reviewer.validUntil, `${name}.validUntil`);
-    if (validFrom > reviewedAt || reviewedAt > validUntil) {
-      return { ...reviewer, active: false, publicKey: null };
-    }
-    const der = decodeStandardBase64(
-      reviewer.publicKeySpkiDerBase64,
-      `${name}.publicKeySpkiDerBase64`,
-      256,
-    );
-    let publicKey;
-    try {
-      publicKey = createPublicKey({ key: der, format: "der", type: "spki" });
-    } catch {
-      throw new TypeError(`${name} was not a valid SPKI public key.`);
-    }
-    if (publicKey.asymmetricKeyType !== "ed25519") {
-      throw new TypeError(`${name} was not an Ed25519 public key.`);
-    }
-    return { ...reviewer, active: true, publicKey };
-  });
-}
-
 function verifyReviewerAttestation(manifest, trustStore, reviewedAt) {
   assertExactKeys(
     manifest.reviewerAttestation,
@@ -835,9 +790,14 @@ function verifyReviewerAttestation(manifest, trustStore, reviewedAt) {
     128,
   );
   if (signature.length !== 64) throw new TypeError("Reviewer attestation signature was invalid.");
-  const reviewers = parseTrustStore(trustStore, reviewedAt);
+  const reviewers = validateReviewerTrustStore(trustStore, {
+    expectedSchema: HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA,
+    label: "health reviewer trust store",
+  });
   const trusted = reviewers.find(
-    (reviewer) => reviewer.keyId === manifest.reviewerAttestation.keyId && reviewer.active,
+    (reviewer) =>
+      reviewer.keyId === manifest.reviewerAttestation.keyId &&
+      reviewerKeyWasActiveAt(reviewer, reviewedAt),
   );
   if (!trusted?.publicKey || trusted.principal !== manifest.reviewedBy) {
     throw new TypeError("Reviewer attestation does not match an active checked-in trusted key.");

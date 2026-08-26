@@ -1,6 +1,13 @@
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
+import defaultHealthReviewerTrustStore from "../config/health-release-reviewers.json" with {
+  type: "json",
+};
+import defaultDeploymentReviewerTrustStore from "../config/release-deployment-reviewers.json" with {
+  type: "json",
+};
+
 import {
   ExpectedReleaseBlockError,
   RELEASE_EXPECTED_BLOCK_EXIT_CODE,
@@ -8,6 +15,7 @@ import {
   validateReleaseDeploymentPolicy,
 } from "./check-release-env.mjs";
 import { EAS_PROJECT_ID } from "./eas-build-contract.mjs";
+import { validateReviewerTrustStores } from "./reviewer-trust.mjs";
 
 const RELEASE_NUMBERING_SCHEMA = "nutrition-tracker-release-numbering-v1";
 const IOS_BUILD_NUMBER = /^[1-9]\d{0,3}(?:\.(?:0|[1-9]\d?)){0,2}$/u;
@@ -18,12 +26,25 @@ function assert(condition, message) {
 }
 
 export function validateEasReleaseConfig(
-  { appConfig, easConfig, packageConfig, releaseDeployment, releaseNumbering },
+  {
+    appConfig,
+    deploymentReviewerTrustStore = defaultDeploymentReviewerTrustStore,
+    easConfig,
+    healthReviewerTrustStore = defaultHealthReviewerTrustStore,
+    packageConfig,
+    releaseDeployment,
+    releaseNumbering,
+  },
   { requireConfirmedNumbering = false } = {},
 ) {
   const expo = appConfig?.expo;
   const physicalDevice = easConfig?.build?.["physical-device"];
   const production = easConfig?.build?.production;
+
+  validateReviewerTrustStores({
+    deployment: deploymentReviewerTrustStore,
+    health: healthReviewerTrustStore,
+  });
 
   assert(expo?.owner === "zixuanliang", "Expo owner must remain pinned to zixuanliang.");
   assert(
@@ -227,7 +248,13 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
       import("../config/release-numbering.json", { with: { type: "json" } }),
     ]);
     validateEasReleaseConfig(
-      { appConfig, easConfig, packageConfig, releaseDeployment, releaseNumbering },
+      {
+        appConfig,
+        easConfig,
+        packageConfig,
+        releaseDeployment,
+        releaseNumbering,
+      },
       { requireConfirmedNumbering: arguments_.includes("--release") },
     );
     process.stdout.write("EAS release configuration is valid.\n");

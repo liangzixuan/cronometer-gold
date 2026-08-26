@@ -1,7 +1,11 @@
+import { generateKeyPairSync } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 
 import appConfig from "../app.json";
+import healthReviewerTrustStore from "../config/health-release-reviewers.json";
 import releaseDeployment from "../config/release-deployment.json";
+import deploymentReviewerTrustStore from "../config/release-deployment-reviewers.json";
 import releaseNumbering from "../config/release-numbering.json";
 import easConfig from "../eas.json";
 import packageConfig from "../package.json";
@@ -14,7 +18,9 @@ import {
 function configuration() {
   return structuredClone({
     appConfig,
+    deploymentReviewerTrustStore,
     easConfig,
+    healthReviewerTrustStore,
     packageConfig,
     releaseDeployment,
     releaseNumbering,
@@ -30,6 +36,43 @@ describe("EAS signed build configuration", () => {
     const config = configuration();
     config.easConfig.cli.requireCommit = false;
     expect(() => validateEasReleaseConfig(config)).toThrow(/committed Git tree/u);
+  });
+
+  it("validates inactive reviewer roots during ordinary configuration checks", () => {
+    const config = configuration();
+    config.healthReviewerTrustStore.reviewers.push({
+      algorithm: "Ed25519",
+      keyId: "future-health-reviewer",
+      principal: "independent.health.reviewer@example.test",
+      publicKeySpkiDerBase64: Buffer.from("not-a-public-key").toString("base64"),
+      validFrom: "2027-01-01T00:00:00.000Z",
+      validUntil: "2028-01-01T00:00:00.000Z",
+    });
+    expect(() => validateEasReleaseConfig(config)).toThrow(/valid SPKI public key/u);
+  });
+
+  it("rejects reviewer key material reused across health and deployment trust", () => {
+    const config = configuration();
+    const publicKeySpkiDerBase64 = generateKeyPairSync("ed25519")
+      .publicKey.export({ format: "der", type: "spki" })
+      .toString("base64");
+    config.healthReviewerTrustStore.reviewers.push({
+      algorithm: "Ed25519",
+      keyId: "health-reviewer-2026",
+      principal: "independent.health.reviewer@example.test",
+      publicKeySpkiDerBase64,
+      validFrom: "2026-01-01T00:00:00.000Z",
+      validUntil: "2027-01-01T00:00:00.000Z",
+    });
+    config.deploymentReviewerTrustStore.reviewers.push({
+      algorithm: "Ed25519",
+      keyId: "deployment-reviewer-2026",
+      principal: "independent.deployment.reviewer@example.test",
+      publicKeySpkiDerBase64,
+      validFrom: "2026-01-01T00:00:00.000Z",
+      validUntil: "2027-01-01T00:00:00.000Z",
+    });
+    expect(() => validateEasReleaseConfig(config)).toThrow(/public key material is reused across/u);
   });
 
   it.each([

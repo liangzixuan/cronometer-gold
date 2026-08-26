@@ -846,7 +846,13 @@ describe("native health release evidence", () => {
       ...trustStore,
       reviewers: [
         ...trustStore.reviewers,
-        { ...trustStore.reviewers[0], keyId: "release-reviewer-2026-02" },
+        {
+          ...trustStore.reviewers[0],
+          keyId: "release-reviewer-2026-02",
+          publicKeySpkiDerBase64: wrongKeys.publicKey
+            .export({ format: "der", type: "spki" })
+            .toString("base64"),
+        },
       ],
     };
     await expect(
@@ -857,6 +863,28 @@ describe("native health release evidence", () => {
         releaseRuntime,
       ),
     ).rejects.toThrow(/signature verification/u);
+
+    const malformedInactiveTrustStore = {
+      ...trustStore,
+      reviewers: [
+        ...trustStore.reviewers,
+        {
+          ...trustStore.reviewers[0],
+          keyId: "future-release-reviewer-2027",
+          publicKeySpkiDerBase64: Buffer.from("not-a-public-key").toString("base64"),
+          validFrom: "2027-01-01T00:00:00.000Z",
+          validUntil: "2028-01-01T00:00:00.000Z",
+        },
+      ],
+    };
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(),
+        checkTime,
+        malformedInactiveTrustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/valid SPKI public key/u);
   });
 
   it("rejects tampering even when the caller recomputes the JSON checksum", async () => {

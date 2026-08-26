@@ -431,7 +431,13 @@ describe("confirmed release platform and origin", () => {
       ...reviewerTrustStore,
       reviewers: [
         ...reviewerTrustStore.reviewers,
-        { ...reviewerTrustStore.reviewers[0], keyId: alternateKeyId },
+        {
+          ...reviewerTrustStore.reviewers[0],
+          keyId: alternateKeyId,
+          publicKeySpkiDerBase64: wrongReviewerKeys.publicKey
+            .export({ format: "der", type: "spki" })
+            .toString("base64"),
+        },
       ],
     };
     expect(() =>
@@ -442,6 +448,28 @@ describe("confirmed release platform and origin", () => {
         sameKeyAlternateIdTrustStore,
       ),
     ).toThrow(/signature verification/u);
+
+    const malformedInactiveTrustStore = {
+      ...reviewerTrustStore,
+      reviewers: [
+        ...reviewerTrustStore.reviewers,
+        {
+          ...reviewerTrustStore.reviewers[0],
+          keyId: "future-deployment-reviewer-2027",
+          publicKeySpkiDerBase64: Buffer.from("not-a-public-key").toString("base64"),
+          validFrom: "2027-01-01T00:00:00.000Z",
+          validUntil: "2028-01-01T00:00:00.000Z",
+        },
+      ],
+    };
+    expect(() =>
+      validateReleaseDeployment(
+        deploymentEnvironment(confirmed),
+        unconfirmed,
+        releaseRuntime(),
+        malformedInactiveTrustStore,
+      ),
+    ).toThrow(/valid SPKI public key/u);
   });
 
   it("rejects deployment self-review even when casing differs", () => {
