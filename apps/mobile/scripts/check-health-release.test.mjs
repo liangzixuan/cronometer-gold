@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   HEALTH_RELEASE_EVIDENCE_SCHEMA,
   HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA,
+  PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA,
   validateHealthReleaseEvidence,
 } from "./check-health-release.mjs";
 
@@ -44,6 +45,7 @@ const wrongKeys = generateKeyPairSync("ed25519");
 const reviewerPrincipal = "independent.reviewer@example.test";
 const reviewerKeyId = "release-reviewer-2026-01";
 const gitCommit = "a".repeat(40);
+const physicalDeviceApiOrigin = "https://nutrition-api.tail1234.ts.net";
 
 const buildIds = {
   physicalDevice: {
@@ -71,6 +73,100 @@ const artifactDigests = {
   physicalDevice: { ios: "b".repeat(64), android: "c".repeat(64) },
   production: { ios: "d".repeat(64), android: "e".repeat(64) },
 };
+
+const inventoriedNon443TcpPorts = [
+  22, 80, 1025, 2181, 4000, 4566, 5432, 7700, 8025, 8080, 8081, 9000, 9001, 9092,
+];
+
+function relayProbe(testedEasBuildId) {
+  return {
+    testedEasBuildId,
+    phoneAlias:
+      testedEasBuildId === buildIds.physicalDevice.ios
+        ? "nutrition-tracker-phone-1"
+        : "nutrition-tracker-phone-2",
+    observedAt:
+      testedEasBuildId === buildIds.physicalDevice.ios
+        ? "2026-08-16T07:30:00.000Z"
+        : "2026-08-16T07:45:00.000Z",
+    policySha256: "4".repeat(64),
+    configurationLogEventSha256: "5".repeat(64),
+    publicCaAndHostname: "passed",
+    readyHttpStatus: 200,
+    openTcpPorts: [443],
+    blockedTcpPorts: [...inventoriedNon443TcpPorts],
+    tailscaleDisabledHttps: "blocked",
+  };
+}
+
+function physicalDeviceRelayReport() {
+  return {
+    schemaVersion: PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA,
+    apiOrigin: physicalDeviceApiOrigin,
+    startedAt: "2026-08-16T07:00:00.000Z",
+    completedAt: "2026-08-16T08:30:00.000Z",
+    preflight: {
+      firstConnectionShieldsUp: "passed",
+      initialServeAndFunnelStatus: "empty",
+      incomingAccessHeldUntilPolicyTests: "passed",
+      macIdentityRevalidated: "passed",
+      iosIdentityRevalidated: "passed",
+      androidIdentityRevalidated: "passed",
+      shieldsUpStatusSha256: "7".repeat(64),
+      initialServeStatusSha256: "8".repeat(64),
+      initialFunnelStatusSha256: "8".repeat(64),
+      identityStatusSha256: "9".repeat(64),
+      accessControlTimelineSha256: "d".repeat(64),
+    },
+    serve: {
+      mode: "foreground",
+      httpsPort: 443,
+      handlerPath: "/",
+      upstream: "http://127.0.0.1:4000",
+      persistentConfiguration: "empty",
+      foregroundSessionCount: 1,
+      funnelEnabled: false,
+      serveStatusSha256: "3".repeat(64),
+      funnelStatusSha256: "3".repeat(64),
+    },
+    tailnetAccess: {
+      policySha256: "4".repeat(64),
+      configurationLogEventSha256: "5".repeat(64),
+      approvedPhoneAliases: ["nutrition-tracker-phone-1", "nutrition-tracker-phone-2"],
+      testedPhonesToMacTcp443Only: "passed",
+      noOverlappingAclOrGrant: "passed",
+      policyTests: "passed",
+      unapprovedPeerHttps443: "blocked",
+    },
+    listenerInventory: {
+      snapshotSha256: "6".repeat(64),
+      requiredServicesIpv4Loopback: "passed",
+      inventoriedNon443TcpPorts: [...inventoriedNon443TcpPorts],
+      wildcardNon443TcpPorts: [2181, 8080, 9092],
+    },
+    deviceProbes: {
+      ios: relayProbe(buildIds.physicalDevice.ios),
+      android: relayProbe(buildIds.physicalDevice.android),
+    },
+    teardown: {
+      serveAndFunnelStatus: "empty",
+      shieldsUpRestored: "passed",
+      macDisconnected: "passed",
+      serveStatusSha256: "a".repeat(64),
+      funnelStatusSha256: "a".repeat(64),
+      shieldsUpStatusSha256: "b".repeat(64),
+      disconnectStatusSha256: "c".repeat(64),
+    },
+  };
+}
+
+function relayReportBytes(report = physicalDeviceRelayReport()) {
+  return Buffer.from(`${canonicalJson(report)}\n`, "utf8");
+}
+
+function relayReportDigest(report = physicalDeviceRelayReport()) {
+  return createHash("sha256").update(relayReportBytes(report)).digest("hex");
+}
 
 const trustStore = {
   schemaVersion: HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA,
@@ -104,7 +200,7 @@ function reviewedArtifact({ artifactType, buildProfile, digest, easBuildId, plat
   };
 }
 
-function unsignedManifest() {
+function unsignedManifest(report = physicalDeviceRelayReport()) {
   return {
     schemaVersion: HEALTH_RELEASE_EVIDENCE_SCHEMA,
     appVersion: "0.1.0",
@@ -191,28 +287,41 @@ function unsignedManifest() {
         matrix: { ...matrix },
       },
     },
+    physicalDeviceApiRelay: {
+      apiOrigin: physicalDeviceApiOrigin,
+      reportSha256: relayReportDigest(report),
+    },
   };
 }
 
 function attest(unsigned = unsignedManifest(), privateKey = reviewerKeys.privateKey) {
-  const signature = sign(null, Buffer.from(canonicalJson(unsigned), "utf8"), privateKey);
+  const signedAttestation = {
+    keyId: reviewerKeyId,
+    algorithm: "Ed25519",
+  };
+  const signature = sign(
+    null,
+    Buffer.from(canonicalJson({ ...unsigned, reviewerAttestation: signedAttestation }), "utf8"),
+    privateKey,
+  );
   return {
     ...unsigned,
     reviewerAttestation: {
-      keyId: reviewerKeyId,
-      algorithm: "Ed25519",
+      ...signedAttestation,
       signatureBase64: signature.toString("base64"),
     },
   };
 }
 
-function environmentFor(manifest = attest()) {
-  const raw = JSON.stringify(manifest);
+function environmentFor(manifest = attest(), report = physicalDeviceRelayReport()) {
+  const raw = `${canonicalJson(manifest)}\n`;
   return {
     NUTRITION_HEALTH_RELEASE_EVIDENCE_JSON: raw,
     NUTRITION_HEALTH_RELEASE_EVIDENCE_SHA256: createHash("sha256")
       .update(raw, "utf8")
       .digest("hex"),
+    NUTRITION_PHYSICAL_DEVICE_API_ORIGIN: physicalDeviceApiOrigin,
+    NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_BASE64: relayReportBytes(report).toString("base64"),
     NUTRITION_IOS_PHYSICAL_DEVICE_BUILD_ID: manifest.artifacts.physicalDevice.ios.easBuildId,
     NUTRITION_IOS_PHYSICAL_DEVICE_ARTIFACT_PATH: artifactPaths.physicalDevice.ios,
     NUTRITION_ANDROID_PHYSICAL_DEVICE_BUILD_ID:
@@ -277,8 +386,399 @@ describe("native health release evidence", () => {
       manifestSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
       gitCommit,
       artifactSha256: artifactDigests,
+      physicalDeviceApiRelay: {
+        apiOrigin: physicalDeviceApiOrigin,
+        reportSha256: relayReportDigest(),
+      },
       reviewerKeyId,
     });
+  });
+
+  it("requires signed v4 relay evidence with exact keys", async () => {
+    const legacy = unsignedManifest();
+    legacy.schemaVersion = "nutrition-tracker-health-release-evidence-v3";
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(legacy)),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/health-release-evidence-v4/u);
+
+    const missing = unsignedManifest();
+    delete missing.physicalDeviceApiRelay;
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(missing)),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/physicalDeviceApiRelay/u);
+
+    const extra = unsignedManifest();
+    extra.physicalDeviceApiRelay.provider = "tailscale-serve";
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(extra)),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/manifest\.physicalDeviceApiRelay must contain exactly/u);
+  });
+
+  it("binds one reviewed ts.net origin and the exact canonical relay-report bytes", async () => {
+    await expect(
+      validateHealthReleaseEvidence(
+        {
+          ...environmentFor(),
+          NUTRITION_PHYSICAL_DEVICE_API_ORIGIN: "https://other.tail1234.ts.net",
+        },
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/exactly pin/u);
+
+    const wrongOriginReport = physicalDeviceRelayReport();
+    wrongOriginReport.apiOrigin = "https://other.tail1234.ts.net";
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(unsignedManifest(wrongOriginReport)), wrongOriginReport),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/origin must match/u);
+
+    const unsafeOriginReport = physicalDeviceRelayReport();
+    unsafeOriginReport.apiOrigin = "https://api.github.com";
+    const unsafeOriginManifest = unsignedManifest(unsafeOriginReport);
+    unsafeOriginManifest.physicalDeviceApiRelay.apiOrigin = unsafeOriginReport.apiOrigin;
+    await expect(
+      validateHealthReleaseEvidence(
+        {
+          ...environmentFor(attest(unsafeOriginManifest), unsafeOriginReport),
+          NUTRITION_PHYSICAL_DEVICE_API_ORIGIN: unsafeOriginReport.apiOrigin,
+        },
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/machine.*tailnet.*ts\.net/u);
+
+    const changedReport = physicalDeviceRelayReport();
+    changedReport.teardown.shieldsUpRestored = "failed";
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(), changedReport),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/SHA-256/u);
+  });
+
+  it("requires exactly one bounded canonical relay-report input", async () => {
+    const base = environmentFor();
+    const absent = { ...base };
+    delete absent.NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_BASE64;
+    await expect(
+      validateHealthReleaseEvidence(absent, checkTime, trustStore, releaseRuntime),
+    ).rejects.toThrow(/exactly one/u);
+
+    await expect(
+      validateHealthReleaseEvidence(
+        {
+          ...base,
+          NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_PATH: "/tmp/relay-report.json",
+        },
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/exactly one/u);
+
+    await expect(
+      validateHealthReleaseEvidence(
+        {
+          ...base,
+          NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_BASE64: "A".repeat(87_388),
+        },
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/canonical padded standard base64/u);
+
+    const report = physicalDeviceRelayReport();
+    const noncanonical = Buffer.from(JSON.stringify(report), "utf8");
+    const noncanonicalManifest = unsignedManifest(report);
+    noncanonicalManifest.physicalDeviceApiRelay.reportSha256 = createHash("sha256")
+      .update(noncanonical)
+      .digest("hex");
+    await expect(
+      validateHealthReleaseEvidence(
+        {
+          ...environmentFor(attest(noncanonicalManifest), report),
+          NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_BASE64: noncanonical.toString("base64"),
+        },
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/canonical field order/u);
+  });
+
+  it("requires the signed v4 manifest itself to use canonical unambiguous JSON", async () => {
+    const manifest = attest();
+    const noncanonical = JSON.stringify(manifest);
+    await expect(
+      validateHealthReleaseEvidence(
+        {
+          ...environmentFor(manifest),
+          NUTRITION_HEALTH_RELEASE_EVIDENCE_JSON: noncanonical,
+          NUTRITION_HEALTH_RELEASE_EVIDENCE_SHA256: createHash("sha256")
+            .update(noncanonical)
+            .digest("hex"),
+        },
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/canonical field order/u);
+
+    const canonical = canonicalJson(manifest);
+    const duplicateKey = `{"schemaVersion":"nutrition-tracker-health-release-evidence-v3",${canonical.slice(1)}`;
+    await expect(
+      validateHealthReleaseEvidence(
+        {
+          ...environmentFor(manifest),
+          NUTRITION_HEALTH_RELEASE_EVIDENCE_JSON: duplicateKey,
+          NUTRITION_HEALTH_RELEASE_EVIDENCE_SHA256: createHash("sha256")
+            .update(duplicateKey)
+            .digest("hex"),
+        },
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/canonical field order/u);
+  });
+
+  it("accepts only a stable mode-0600 regular relay-report path", async () => {
+    const bytes = relayReportBytes();
+    const environment = environmentFor();
+    delete environment.NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_BASE64;
+    environment.NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_PATH = "/tmp/relay-report.json";
+    const stableStat = {
+      dev: 7,
+      ino: 901,
+      isFile: () => true,
+      mode: 0o100600,
+      mtimeMs: 1234,
+      size: bytes.length,
+      uid: typeof process.getuid === "function" ? process.getuid() : undefined,
+    };
+    await expect(
+      validateHealthReleaseEvidence(environment, checkTime, trustStore, {
+        ...releaseRuntime,
+        readRelayReport: () => ({ after: stableStat, before: stableStat, bytes }),
+      }),
+    ).resolves.toMatchObject({
+      physicalDeviceApiRelay: { reportSha256: relayReportDigest() },
+    });
+
+    for (const [label, stat] of [
+      ["symlink", { ...stableStat, isFile: () => false }],
+      ["broad mode", { ...stableStat, mode: 0o100644 }],
+      ["empty", { ...stableStat, size: 0 }],
+      ["oversize", { ...stableStat, size: 65_537 }],
+    ]) {
+      await expect(
+        validateHealthReleaseEvidence(environment, checkTime, trustStore, {
+          ...releaseRuntime,
+          readRelayReport: () => ({ after: stat, before: stat, bytes }),
+        }),
+        label,
+      ).rejects.toThrow(/mode-0600 regular JSON file/u);
+    }
+
+    await expect(
+      validateHealthReleaseEvidence(environment, checkTime, trustStore, {
+        ...releaseRuntime,
+        readRelayReport: () => ({
+          before: stableStat,
+          after: { ...stableStat, ino: 902 },
+          bytes,
+        }),
+      }),
+    ).rejects.toThrow(/changed while/u);
+  });
+
+  it("rejects weakened Serve, policy, inventory, probe, and teardown claims", async () => {
+    const cases = [
+      [
+        "first connection exposed",
+        (report) => (report.preflight.firstConnectionShieldsUp = "failed"),
+        /firstConnectionShieldsUp/u,
+      ],
+      [
+        "initial Serve present",
+        (report) => (report.preflight.initialServeAndFunnelStatus = "present"),
+        /initialServeAndFunnelStatus/u,
+      ],
+      [
+        "incoming enabled early",
+        (report) => (report.preflight.incomingAccessHeldUntilPolicyTests = "failed"),
+        /incomingAccessHeldUntilPolicyTests/u,
+      ],
+      [
+        "phone identity not revalidated",
+        (report) => (report.preflight.androidIdentityRevalidated = "failed"),
+        /androidIdentityRevalidated/u,
+      ],
+      [
+        "Funnel enabled",
+        (report) => (report.serve.funnelEnabled = true),
+        /no persistent Serve or Funnel/u,
+      ],
+      [
+        "wrong upstream",
+        (report) => (report.serve.upstream = "http://127.0.0.1:4566"),
+        /exact API loopback/u,
+      ],
+      [
+        "broad policy",
+        (report) => (report.tailnetAccess.testedPhonesToMacTcp443Only = "failed"),
+        /testedPhonesToMacTcp443Only/u,
+      ],
+      [
+        "overlap",
+        (report) => (report.tailnetAccess.noOverlappingAclOrGrant = "failed"),
+        /noOverlappingAclOrGrant/u,
+      ],
+      [
+        "unapproved peer",
+        (report) => (report.tailnetAccess.unapprovedPeerHttps443 = "allowed"),
+        /unapprovedPeerHttps443/u,
+      ],
+      [
+        "one-phone policy",
+        (report) => report.tailnetAccess.approvedPhoneAliases.pop(),
+        /exactly the reviewed iOS and Android phone aliases/u,
+      ],
+      [
+        "swapped phone alias",
+        (report) => (report.deviceProbes.ios.phoneAlias = "nutrition-tracker-phone-2"),
+        /distinct reviewed ios phone/u,
+      ],
+      [
+        "probe changed policy",
+        (report) => (report.deviceProbes.android.policySha256 = "d".repeat(64)),
+        /same reviewed two-phone policy/u,
+      ],
+      [
+        "missing baseline",
+        (report) => report.listenerInventory.inventoriedNon443TcpPorts.shift(),
+        /denied TCP\/22/u,
+      ],
+      [
+        "wildcard outside inventory",
+        (report) => report.listenerInventory.wildcardNon443TcpPorts.push(65535),
+        /subset/u,
+      ],
+      [
+        "extra open port",
+        (report) => report.deviceProbes.ios.openTcpPorts.push(4000),
+        /only TCP\/443/u,
+      ],
+      [
+        "probe mismatch",
+        (report) => report.deviceProbes.android.blockedTcpPorts.pop(),
+        /complete listener inventory/u,
+      ],
+      [
+        "wrong build",
+        (report) => (report.deviceProbes.ios.testedEasBuildId = buildIds.production.ios),
+        /bind the ios physical artifact/u,
+      ],
+      [
+        "CA failure",
+        (report) => (report.deviceProbes.android.publicCaAndHostname = "failed"),
+        /publicCaAndHostname/u,
+      ],
+      [
+        "off-tailnet access",
+        (report) => (report.deviceProbes.android.tailscaleDisabledHttps = "reachable"),
+        /tailscaleDisabledHttps/u,
+      ],
+      [
+        "teardown failure",
+        (report) => (report.teardown.serveAndFunnelStatus = "present"),
+        /serveAndFunnelStatus/u,
+      ],
+      [
+        "Mac not disconnected",
+        (report) => (report.teardown.macDisconnected = "failed"),
+        /macDisconnected/u,
+      ],
+      [
+        "missing teardown source digest",
+        (report) => (report.teardown.shieldsUpStatusSha256 = "not-a-digest"),
+        /shieldsUpStatusSha256/u,
+      ],
+    ];
+    for (const [label, mutate, message] of cases) {
+      const report = physicalDeviceRelayReport();
+      mutate(report);
+      await expect(
+        validateHealthReleaseEvidence(
+          environmentFor(attest(unsignedManifest(report)), report),
+          checkTime,
+          trustStore,
+          releaseRuntime,
+        ),
+        label,
+      ).rejects.toThrow(message);
+    }
+  });
+
+  it("requires a fresh relay capture and rejects forbidden report payload keys", async () => {
+    const staleCapture = physicalDeviceRelayReport();
+    staleCapture.startedAt = "2026-08-14T07:30:00.000Z";
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(unsignedManifest(staleCapture)), staleCapture),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/span at most 24 hours/u);
+
+    const teardownBeforeExecution = physicalDeviceRelayReport();
+    teardownBeforeExecution.completedAt = "2026-08-16T07:59:59.000Z";
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(unsignedManifest(teardownBeforeExecution)), teardownBeforeExecution),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/contain execution/u);
+
+    const leaked = physicalDeviceRelayReport();
+    leaked.tailnetAccess.token = "must-not-be-recorded";
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(unsignedManifest(leaked)), leaked),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/must not contain/u);
   });
 
   it("hashes each physical-device and production artifact independently", async () => {
@@ -322,6 +822,24 @@ describe("native health release evidence", () => {
         releaseRuntime,
       ),
     ).rejects.toThrow(/trusted key/u);
+
+    const relabeled = attest();
+    relabeled.reviewerAttestation.keyId = "release-reviewer-2026-02";
+    const sameKeyAlternateIdTrustStore = {
+      ...trustStore,
+      reviewers: [
+        ...trustStore.reviewers,
+        { ...trustStore.reviewers[0], keyId: "release-reviewer-2026-02" },
+      ],
+    };
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(relabeled),
+        checkTime,
+        sameKeyAlternateIdTrustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/signature verification/u);
   });
 
   it("rejects tampering even when the caller recomputes the JSON checksum", async () => {
@@ -517,6 +1035,17 @@ describe("native health release evidence", () => {
         releaseRuntime,
       ),
     ).rejects.toThrow(/older/u);
+
+    const revivedOldExecution = unsignedManifest();
+    revivedOldExecution.executedAt = "2026-06-01T08:00:00.000Z";
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(revivedOldExecution)),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/execution is older/u);
 
     const selfUnsigned = unsignedManifest();
     selfUnsigned.reviewedBy = selfUnsigned.executedBy;

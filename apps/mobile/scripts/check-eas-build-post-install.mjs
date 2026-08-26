@@ -2,41 +2,15 @@ import { spawnSync } from "node:child_process";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
-import { validateReleaseApiUrl } from "./check-release-env.mjs";
+import { validatePhysicalDeviceApiUrl } from "./physical-device-api-url.mjs";
 
 const PHYSICAL_DEVICE_PROFILE = "physical-device";
 const PRODUCTION_PROFILE = "production";
-const FORBIDDEN_BACKEND_HOST_TOKENS = new Set([
-  "localstack",
-  "meilisearch",
-  "postgres",
-  "postgresql",
-]);
-
 function assert(condition, message) {
   if (!condition) throw new TypeError(message);
 }
 
-export function validatePhysicalDeviceApiUrl(value) {
-  const url = validateReleaseApiUrl(value);
-  const configured = value.trim();
-
-  assert(
-    url.port === "",
-    "Physical-device EXPO_PUBLIC_API_URL must use the default HTTPS port; never expose an API or backend service port.",
-  );
-  assert(
-    configured === url.origin,
-    "Physical-device EXPO_PUBLIC_API_URL must be an exact canonical HTTPS origin.",
-  );
-
-  const hostname = url.hostname.toLowerCase();
-  assert(
-    ![...FORBIDDEN_BACKEND_HOST_TOKENS].some((token) => hostname.includes(token)),
-    "Physical-device EXPO_PUBLIC_API_URL must identify the authenticated API, never LocalStack, Postgres, or Meilisearch.",
-  );
-  return url;
-}
+export { validatePhysicalDeviceApiUrl } from "./physical-device-api-url.mjs";
 
 export function resolveEasPostInstallPlan(environment) {
   const profile = environment?.EAS_BUILD_PROFILE;

@@ -21,6 +21,7 @@ LSOF = "/usr/sbin/lsof"
 MAX_LSOF_BYTES = 1_048_576
 TAILSCALE_NETWORK = ipaddress.ip_network("100.64.0.0/10")
 PHONE_ALIAS = "nutrition-tracker-phone"
+MAX_PHONE_COUNT = 2
 MAC_ALIAS = "nutrition-tracker-mac"
 HTTPS_PORT = 443
 
@@ -154,15 +155,27 @@ def discover_listeners(
 
 
 def build_phone_policy(
-    phone_ip: str,
+    phone_ips: str | Sequence[str],
     mac_ip: str,
     listeners: Sequence[Listener],
 ) -> dict[str, object]:
-    canonical_phone_ip = _parse_tailscale_ipv4(phone_ip, "phone IP")
+    requested_phone_ips = (phone_ips,) if isinstance(phone_ips, str) else tuple(phone_ips)
+    if not 1 <= len(requested_phone_ips) <= MAX_PHONE_COUNT:
+        raise PhonePolicyError("Supply one or two exact physical-phone Tailscale IPv4 addresses.")
+    canonical_phone_ips = tuple(
+        _parse_tailscale_ipv4(phone_ip, f"phone IP {index}")
+        for index, phone_ip in enumerate(requested_phone_ips, start=1)
+    )
     canonical_mac_ip = _parse_tailscale_ipv4(mac_ip, "Mac IP")
-    if canonical_phone_ip == canonical_mac_ip:
-        raise PhonePolicyError("The phone and Mac must have distinct Tailscale IPv4 addresses.")
+    if len(set((*canonical_phone_ips, canonical_mac_ip))) != len(canonical_phone_ips) + 1:
+        raise PhonePolicyError("Every phone and the Mac must have a distinct Tailscale IPv4 address.")
     _assert_required_loopback_services(listeners)
+
+    phone_aliases = (
+        (PHONE_ALIAS,)
+        if len(canonical_phone_ips) == 1
+        else tuple(f"{PHONE_ALIAS}-{index}" for index in range(1, len(canonical_phone_ips) + 1))
+    )
 
     denied_ports = sorted(
         BASELINE_DENIED_TCP_PORTS
@@ -173,11 +186,11 @@ def build_phone_policy(
         "acls": [],
         "hosts": {
             MAC_ALIAS: canonical_mac_ip,
-            PHONE_ALIAS: canonical_phone_ip,
+            **dict(zip(phone_aliases, canonical_phone_ips, strict=True)),
         },
         "grants": [
             {
-                "src": [PHONE_ALIAS],
+                "src": list(phone_aliases),
                 "dst": [MAC_ALIAS],
                 "ip": ["tcp:443"],
             }
@@ -185,23 +198,27 @@ def build_phone_policy(
         "nodeAttrs": [],
         "ssh": [],
         "tests": [
-            {
-                "src": PHONE_ALIAS,
-                "proto": "tcp",
-                "accept": [f"{MAC_ALIAS}:443"],
-                "deny": denied_destinations,
-            },
-            {
-                "src": PHONE_ALIAS,
-                "proto": "udp",
-                "deny": [f"{MAC_ALIAS}:443", *denied_destinations],
-            },
+            test
+            for alias in phone_aliases
+            for test in (
+                {
+                    "src": alias,
+                    "proto": "tcp",
+                    "accept": [f"{MAC_ALIAS}:443"],
+                    "deny": denied_destinations,
+                },
+                {
+                    "src": alias,
+                    "proto": "udp",
+                    "deny": [f"{MAC_ALIAS}:443", *denied_destinations],
+                },
+            )
         ],
     }
 
 
-def render_phone_policy(phone_ip: str, mac_ip: str) -> str:
-    policy = build_phone_policy(phone_ip, mac_ip, discover_listeners())
+def render_phone_policy(phone_ips: Sequence[str], mac_ip: str) -> str:
+    policy = build_phone_policy(phone_ips, mac_ip, discover_listeners())
     return f"{json.dumps(policy, indent=2, sort_keys=True)}\n"
 
 
@@ -211,7 +228,12 @@ def _parser() -> argparse.ArgumentParser:
             "Render, but never apply, a deny-by-default Tailscale policy for the exact phone and Mac."
         )
     )
-    parser.add_argument("--phone-ip", required=True, help="Exact physical-phone Tailscale IPv4")
+    parser.add_argument(
+        "--phone-ip",
+        action="append",
+        required=True,
+        help="Exact physical-phone Tailscale IPv4; repeat once for a second platform",
+    )
     parser.add_argument("--mac-ip", required=True, help="Exact Mac Tailscale IPv4")
     return parser
 

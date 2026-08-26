@@ -9,7 +9,7 @@ change. The release-evidence and submission gates therefore fail closed today;
 the repository operator must not add their own key or invent a replacement
 principal merely to clear the milestone.
 
-The v3 evidence manifest separates binaries by role. `artifacts.physicalDevice`
+The v4 evidence manifest separates binaries by role. `artifacts.physicalDevice`
 contains the exact internally distributed iOS IPA and Android APK whose EAS
 build IDs appear in the physical-device rows. `artifacts.production` contains
 the exact store-distribution iOS IPA and Android AAB considered for release.
@@ -21,16 +21,21 @@ native versions must match for each platform; and every EAS build ID, expected
 digest, normalized absolute path, actual digest, and available filesystem
 `dev`/`ino` identity must be pairwise distinct. Paths are checked with `lstat`,
 so symbolic links are not artifacts. The reviewer signature covers the complete
-artifact and device matrix. Same-source production artifacts are release
+artifact/device matrix and `physicalDeviceApiRelay`, which pins the exact
+private `.ts.net` API origin and the SHA-256 of its independently reviewed relay
+report. Same-source production artifacts are release
 provenance, not a claim that the internal binaries and store binaries are
 byte-equivalent.
 
 The portable verifier does not extract the EAS build ID, source commit, native
 version, or signing certificate from IPA/APK/AAB internals. Before signing, the
 independent reviewer must compare those claims with authoritative EAS build
-metadata and platform signing-tool output. Missing that independent comparison
-is an operational release blocker; a digest-shaped signing identity is not by
-itself proof of the signer.
+metadata and platform signing-tool output. The reviewer must likewise prove that
+both physical-device build records used the exact signed
+`physicalDeviceApiRelay.apiOrigin` in the EAS `preview` environment; URL-shape
+validation does not establish the value embedded in an already-built binary.
+Missing that independent comparison is an operational release blocker; a
+digest-shaped signing identity is not by itself proof of the signer.
 
 Validation also requires the exact downloaded binaries and EAS build IDs to be
 pinned outside the manifest:
@@ -44,13 +49,30 @@ pinned outside the manifest:
 - `NUTRITION_ANDROID_PRODUCTION_ARTIFACT_PATH` and
   `NUTRITION_ANDROID_PRODUCTION_BUILD_ID`
 
+The private API origin is independently pinned as
+`NUTRITION_PHYSICAL_DEVICE_API_ORIGIN`; it must byte-match the signed canonical
+`https://<machine>.<tailnet>.ts.net` origin. Supply the exact canonical relay
+report through exactly one of
+`NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_BASE64` or a normalized absolute
+mode-`0600` `.json` path in `NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_PATH`.
+The path is opened once with no-follow/nonblocking flags, must be owned by the
+current operator, and is read through a 64-KiB bound. Its signed digest and
+strict v1 schema bind first-connect Shields Up, empty initial Serve/Funnel,
+incoming access held until policy tests pass, revalidated identities, the one
+foreground Serve session, exact TCP/443-to-`127.0.0.1:4000` graph, disabled
+Funnel, one reviewed two-phone policy/configuration event, listener inventory,
+both alias/build-bound probes, negative-access checks, and timed attended
+teardown/disconnect. The verifier parses those claims rather than accepting an
+opaque digest.
+
 The manifest JSON itself and its exact SHA-256 are supplied as
 `NUTRITION_HEALTH_RELEASE_EVIDENCE_JSON` and
 `NUTRITION_HEALTH_RELEASE_EVIDENCE_SHA256`. The device operator and reviewer
-must be different principals. The reviewer signs canonical JSON for every
-manifest field except `reviewerAttestation` with the private Ed25519 key whose
-public key is in the trust store. Private keys and unsigned or synthetic
-"passed" manifests must never be created by ordinary CI or stored here.
+must be different principals. The manifest bytes themselves must be canonical
+JSON. The reviewer signs every manifest field, including the attestation key ID
+and algorithm; only `reviewerAttestation.signatureBase64` is excluded from its
+own signed payload. Private keys and unsigned or synthetic "passed" manifests
+must never be created by ordinary CI or stored here.
 
 Initial onboarding and later key rotation are reviewed code changes. Confirm the
 reviewer is independent of the device operator and repository release operator,
@@ -58,9 +80,11 @@ then add their Ed25519 SPKI public key with a non-overlapping key ID and bounded
 validity interval. Obtain independent approval, and remove an old key only after
 every manifest signed during its validity window has expired. Never store a
 private key, test result, health sample, device identifier, cursor, token, or
-signature fixture in this folder. The v3 release manifest is signed outside
+signature fixture in this folder. The v4 release manifest is signed outside
 ordinary CI and pins the physical IPA, physical APK, production IPA, and
-production AAB digests and EAS build IDs to one Git commit.
+production AAB digests and EAS build IDs to one Git commit, one reviewed private
+API origin, and one exact relay-report digest. v3 manifests fail closed and must
+be recollected and re-signed; relay state is never inferred during migration.
 
 ## Deployment reviewer trust
 

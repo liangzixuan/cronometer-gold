@@ -230,7 +230,7 @@ cannot weaken or replace that path.
 
 ## Reviewed artifact evidence and submission
 
-The external v3 evidence manifest has four separate binary roles. The device
+The external v4 evidence manifest has four separate binary roles. The device
 matrix is attached to the exact `physical-device` IPA and APK installed on the
 iPhone and Android phone. The same reviewer-signed manifest separately binds the
 exact production IPA and AAB, including their EAS build IDs, source commit,
@@ -238,21 +238,30 @@ native build numbers, signing-identity fingerprints, and SHA-256 digests. The
 four builds must come from one clean commit and share the source-controlled
 native version for each platform. Their expected digests, normalized absolute
 paths, actual digests, and available filesystem identities must also be
-pairwise distinct, and symbolic links are rejected. A matching commit does not
+pairwise distinct, and symbolic links are rejected. It also signs the exact
+private `.ts.net` origin plus the digest of the canonical relay report that
+proves first-connect containment, foreground Serve, no Funnel, exact loopback
+upstream, one two-phone tailnet policy, both alias/build-bound readiness probes,
+negative reachability, and timed teardown/disconnect.
+A matching commit does not
 assert that an internal binary and a store binary are byte-equivalent.
 
 The portable verifier deliberately does not guess EAS provenance or extract
 platform signing certificates from the downloaded archives. Before signing the
 manifest, the independent reviewer must compare the claimed EAS IDs, source
 commits, native versions, and signing-identity fingerprints with authoritative
-EAS metadata and platform signing tools. Until that comparison exists, release
+EAS metadata and platform signing tools. They must also compare the signed
+private origin with the exact EAS `preview` environment recorded for both
+physical-device builds; the verifier cannot extract that build-time value from
+the archives. Until that comparison exists, release
 remains operationally blocked even if every value has the right shape.
 
 Ordinary `production` EAS compilation intentionally runs `release:check`, not
 `release:health-evidence`: the latter cannot exist until the four binaries have
 been produced, installed where applicable, tested, downloaded, and independently
-reviewed. After those steps, supply the v3 manifest and all four absolute
-artifact paths/build-ID pins listed in `config/README.md`, then verify it:
+reviewed. After those steps, supply the v4 manifest, exact relay report/origin
+pins, and all four absolute artifact paths/build-ID pins listed in
+`config/README.md`, then verify it:
 
 ```sh
 pnpm release:health-evidence

@@ -17,6 +17,7 @@ export const RELEASE_DEPLOYMENT_UNCONFIRMED_CODE =
   "NUTRITION_RELEASE_BLOCK:DEPLOYMENT_EVIDENCE_UNCONFIRMED";
 export const RELEASE_NUMBERING_UNCONFIRMED_CODE =
   "NUTRITION_RELEASE_BLOCK:IDENTIFIER_HISTORY_UNCONFIRMED";
+export const RELEASE_API_ORIGIN = "https://api.nourishing.app";
 
 export class ExpectedReleaseBlockError extends TypeError {
   constructor(code, message) {
@@ -498,7 +499,7 @@ function isPublicDnsTarget(hostname) {
   );
 }
 
-export function validateReleaseApiUrl(value) {
+export function validatePublicHttpsApiUrl(value) {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new TypeError("EXPO_PUBLIC_API_URL is required for a mobile release build.");
   }
@@ -523,6 +524,16 @@ export function validateReleaseApiUrl(value) {
   ) {
     throw new TypeError(
       "EXPO_PUBLIC_API_URL must be a credential-free, public-DNS, non-loopback, non-documentation HTTPS origin.",
+    );
+  }
+  return url;
+}
+
+export function validateReleaseApiUrl(value) {
+  const url = validatePublicHttpsApiUrl(value);
+  if (value.trim() !== RELEASE_API_ORIGIN || url.origin !== RELEASE_API_ORIGIN) {
+    throw new TypeError(
+      `EXPO_PUBLIC_API_URL must exactly match the owned origin ${RELEASE_API_ORIGIN}.`,
     );
   }
   return url;
@@ -574,9 +585,12 @@ export function validateReleaseDeploymentRecord(record) {
       serviceImages: null,
     };
   }
-  const url = validateReleaseApiUrl(record.apiOrigin);
+  const url = validatePublicHttpsApiUrl(record.apiOrigin);
   if (record.apiOrigin !== url.origin) {
     throw new TypeError("The confirmed API origin must be a canonical HTTPS origin.");
+  }
+  if (url.origin !== RELEASE_API_ORIGIN) {
+    throw new TypeError(`The confirmed API origin must equal ${RELEASE_API_ORIGIN}.`);
   }
   if (typeof record.serviceGitCommit !== "string" || !GIT_COMMIT.test(record.serviceGitCommit)) {
     throw new TypeError(

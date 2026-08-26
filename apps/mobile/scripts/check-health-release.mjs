@@ -1,17 +1,32 @@
 import { execFileSync } from "node:child_process";
 import { createHash, createPublicKey, verify } from "node:crypto";
-import { createReadStream, lstatSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  createReadStream,
+  constants as fsConstants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+} from "node:fs";
 import { extname, isAbsolute, normalize } from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { canonicalJson } from "@nutrition-tracker/contracts";
 
-export const HEALTH_RELEASE_EVIDENCE_SCHEMA = "nutrition-tracker-health-release-evidence-v3";
+import { validatePhysicalDeviceApiUrl } from "./physical-device-api-url.mjs";
+
+export const HEALTH_RELEASE_EVIDENCE_SCHEMA = "nutrition-tracker-health-release-evidence-v4";
 export const HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA =
   "nutrition-tracker-health-release-reviewer-trust-v1";
+export const PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA =
+  "nutrition-tracker-physical-device-relay-report-v1";
 
 const MAX_MANIFEST_BYTES = 32_768;
+const MAX_RELAY_REPORT_BYTES = 65_536;
 const MAX_EVIDENCE_AGE_MS = 30 * 24 * 60 * 60 * 1_000;
+const MAX_RELAY_SESSION_MS = 24 * 60 * 60 * 1_000;
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1_000;
 const SHA256_HEX = /^[0-9a-f]{64}$/u;
 const GIT_COMMIT = /^[0-9a-f]{40}$/u;
@@ -22,6 +37,13 @@ const SAFE_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/u;
 const IOS_BUILD_NUMBER = /^[1-9]\d{0,3}(?:\.(?:0|[1-9]\d?)){0,2}$/u;
 const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 const STANDARD_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
+const BASELINE_DENIED_TCP_PORTS = Object.freeze([
+  22, 80, 1025, 2181, 4000, 4566, 5432, 7700, 8025, 8080, 8081, 9000, 9001, 9092,
+]);
+const PHYSICAL_PHONE_ALIASES = Object.freeze([
+  "nutrition-tracker-phone-1",
+  "nutrition-tracker-phone-2",
+]);
 
 const artifactSpecifications = [
   {
@@ -149,7 +171,13 @@ function parseInstant(value, name) {
 }
 
 function decodeStandardBase64(value, name, maximumBytes) {
-  if (typeof value !== "string" || value.length === 0 || !STANDARD_BASE64.test(value)) {
+  const maximumEncodedLength = Math.ceil(maximumBytes / 3) * 4;
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > maximumEncodedLength ||
+    !STANDARD_BASE64.test(value)
+  ) {
     throw new TypeError(`${name} must be canonical padded standard base64.`);
   }
   const bytes = Buffer.from(value, "base64");
@@ -188,6 +216,386 @@ function assertEasBuildId(value, name) {
   if (typeof value !== "string" || !EAS_BUILD_ID.test(value)) {
     throw new TypeError(`${name} must be an exact lowercase EAS build ID.`);
   }
+}
+
+function assertSha256(value, name) {
+  if (typeof value !== "string" || !SHA256_HEX.test(value)) {
+    throw new TypeError(`${name} must be one lowercase SHA-256 digest.`);
+  }
+}
+
+function assertExactResult(value, expected, name) {
+  if (value !== expected) throw new TypeError(`${name} must equal ${expected}.`);
+}
+
+function assertSortedPortArray(value, name, { allowEmpty = false, allowHttps = false } = {}) {
+  if (!Array.isArray(value) || (!allowEmpty && value.length < 1) || value.length > 1_024) {
+    throw new TypeError(`${name} must be a bounded TCP-port array.`);
+  }
+  let previous = 0;
+  for (const port of value) {
+    if (
+      !Number.isInteger(port) ||
+      port < 1 ||
+      port > 65_535 ||
+      (!allowHttps && port === 443) ||
+      port <= previous
+    ) {
+      throw new TypeError(`${name} must contain unique ascending TCP ports in range.`);
+    }
+    previous = port;
+  }
+  return value;
+}
+
+function assertPhysicalDeviceApiRelay(relay, environment) {
+  assertExactKeys(relay, ["apiOrigin", "reportSha256"], "manifest.physicalDeviceApiRelay");
+  const url = validatePhysicalDeviceApiUrl(relay.apiOrigin);
+  if (relay.apiOrigin !== url.origin) {
+    throw new TypeError("manifest.physicalDeviceApiRelay.apiOrigin must be canonical.");
+  }
+  if (environment.NUTRITION_PHYSICAL_DEVICE_API_ORIGIN !== relay.apiOrigin) {
+    throw new TypeError(
+      "NUTRITION_PHYSICAL_DEVICE_API_ORIGIN must exactly pin the reviewed physical-device API origin.",
+    );
+  }
+  assertSha256(relay.reportSha256, "manifest.physicalDeviceApiRelay.reportSha256");
+  return relay;
+}
+
+function assertRelayProbe(
+  probe,
+  platform,
+  artifact,
+  inventoriedPorts,
+  tailnetAccess,
+  startedAt,
+  executedAt,
+) {
+  const name = `physical-device relay report.deviceProbes.${platform}`;
+  assertExactKeys(
+    probe,
+    [
+      "testedEasBuildId",
+      "phoneAlias",
+      "observedAt",
+      "policySha256",
+      "configurationLogEventSha256",
+      "publicCaAndHostname",
+      "readyHttpStatus",
+      "openTcpPorts",
+      "blockedTcpPorts",
+      "tailscaleDisabledHttps",
+    ],
+    name,
+  );
+  assertEasBuildId(probe.testedEasBuildId, `${name}.testedEasBuildId`);
+  if (probe.testedEasBuildId !== artifact.easBuildId) {
+    throw new TypeError(`${name}.testedEasBuildId must bind the ${platform} physical artifact.`);
+  }
+  const expectedAlias = platform === "ios" ? PHYSICAL_PHONE_ALIASES[0] : PHYSICAL_PHONE_ALIASES[1];
+  if (probe.phoneAlias !== expectedAlias) {
+    throw new TypeError(`${name}.phoneAlias must bind the distinct reviewed ${platform} phone.`);
+  }
+  const observedAt = parseInstant(probe.observedAt, `${name}.observedAt`);
+  if (observedAt < startedAt || observedAt > executedAt) {
+    throw new TypeError(`${name}.observedAt must fall inside the reviewed active test session.`);
+  }
+  if (
+    probe.policySha256 !== tailnetAccess.policySha256 ||
+    probe.configurationLogEventSha256 !== tailnetAccess.configurationLogEventSha256
+  ) {
+    throw new TypeError(`${name} must bind the same reviewed two-phone policy and event.`);
+  }
+  assertExactResult(probe.publicCaAndHostname, "passed", `${name}.publicCaAndHostname`);
+  if (probe.readyHttpStatus !== 200) {
+    throw new TypeError(`${name}.readyHttpStatus must equal 200.`);
+  }
+  if (
+    !Array.isArray(probe.openTcpPorts) ||
+    probe.openTcpPorts.length !== 1 ||
+    probe.openTcpPorts[0] !== 443
+  ) {
+    throw new TypeError(`${name}.openTcpPorts must contain only TCP/443.`);
+  }
+  assertSortedPortArray(probe.blockedTcpPorts, `${name}.blockedTcpPorts`);
+  if (
+    probe.blockedTcpPorts.length !== inventoriedPorts.length ||
+    probe.blockedTcpPorts.some((port, index) => port !== inventoriedPorts[index])
+  ) {
+    throw new TypeError(`${name}.blockedTcpPorts must equal the complete listener inventory.`);
+  }
+  assertExactResult(probe.tailscaleDisabledHttps, "blocked", `${name}.tailscaleDisabledHttps`);
+}
+
+function validatePhysicalDeviceRelayReport(report, relay, artifacts, executedAt, reviewedAt) {
+  assertExactKeys(
+    report,
+    [
+      "schemaVersion",
+      "apiOrigin",
+      "startedAt",
+      "completedAt",
+      "preflight",
+      "serve",
+      "tailnetAccess",
+      "listenerInventory",
+      "deviceProbes",
+      "teardown",
+    ],
+    "physical-device relay report",
+  );
+  if (report.schemaVersion !== PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA) {
+    throw new TypeError(
+      `physical-device relay report.schemaVersion must equal ${PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA}.`,
+    );
+  }
+  const reportOrigin = validatePhysicalDeviceApiUrl(report.apiOrigin);
+  if (report.apiOrigin !== reportOrigin.origin || report.apiOrigin !== relay.apiOrigin) {
+    throw new TypeError("Physical-device relay report API origin must match signed evidence.");
+  }
+  const startedAt = parseInstant(report.startedAt, "physical-device relay report.startedAt");
+  const completedAt = parseInstant(report.completedAt, "physical-device relay report.completedAt");
+  if (
+    startedAt > executedAt ||
+    executedAt > completedAt ||
+    completedAt > reviewedAt ||
+    completedAt - startedAt > MAX_RELAY_SESSION_MS
+  ) {
+    throw new TypeError(
+      "Physical-device relay timing must contain execution, finish before review, and span at most 24 hours.",
+    );
+  }
+
+  assertExactKeys(
+    report.preflight,
+    [
+      "firstConnectionShieldsUp",
+      "initialServeAndFunnelStatus",
+      "incomingAccessHeldUntilPolicyTests",
+      "macIdentityRevalidated",
+      "iosIdentityRevalidated",
+      "androidIdentityRevalidated",
+      "shieldsUpStatusSha256",
+      "initialServeStatusSha256",
+      "initialFunnelStatusSha256",
+      "identityStatusSha256",
+      "accessControlTimelineSha256",
+    ],
+    "physical-device relay report.preflight",
+  );
+  for (const field of [
+    "firstConnectionShieldsUp",
+    "incomingAccessHeldUntilPolicyTests",
+    "macIdentityRevalidated",
+    "iosIdentityRevalidated",
+    "androidIdentityRevalidated",
+  ]) {
+    assertExactResult(
+      report.preflight[field],
+      "passed",
+      `physical-device relay report.preflight.${field}`,
+    );
+  }
+  assertExactResult(
+    report.preflight.initialServeAndFunnelStatus,
+    "empty",
+    "physical-device relay report.preflight.initialServeAndFunnelStatus",
+  );
+  for (const field of [
+    "shieldsUpStatusSha256",
+    "initialServeStatusSha256",
+    "initialFunnelStatusSha256",
+    "identityStatusSha256",
+    "accessControlTimelineSha256",
+  ]) {
+    assertSha256(report.preflight[field], `physical-device relay report.preflight.${field}`);
+  }
+
+  assertExactKeys(
+    report.serve,
+    [
+      "mode",
+      "httpsPort",
+      "handlerPath",
+      "upstream",
+      "persistentConfiguration",
+      "foregroundSessionCount",
+      "funnelEnabled",
+      "serveStatusSha256",
+      "funnelStatusSha256",
+    ],
+    "physical-device relay report.serve",
+  );
+  assertExactResult(report.serve.mode, "foreground", "physical-device relay report.serve.mode");
+  if (
+    report.serve.httpsPort !== 443 ||
+    report.serve.handlerPath !== "/" ||
+    report.serve.upstream !== "http://127.0.0.1:4000" ||
+    report.serve.persistentConfiguration !== "empty" ||
+    report.serve.foregroundSessionCount !== 1 ||
+    report.serve.funnelEnabled !== false
+  ) {
+    throw new TypeError(
+      "Physical-device relay report must prove one foreground HTTPS/443 root proxy to exact API loopback with no persistent Serve or Funnel.",
+    );
+  }
+  assertSha256(
+    report.serve.serveStatusSha256,
+    "physical-device relay report.serve.serveStatusSha256",
+  );
+  assertSha256(
+    report.serve.funnelStatusSha256,
+    "physical-device relay report.serve.funnelStatusSha256",
+  );
+
+  assertExactKeys(
+    report.tailnetAccess,
+    [
+      "policySha256",
+      "configurationLogEventSha256",
+      "approvedPhoneAliases",
+      "testedPhonesToMacTcp443Only",
+      "noOverlappingAclOrGrant",
+      "policyTests",
+      "unapprovedPeerHttps443",
+    ],
+    "physical-device relay report.tailnetAccess",
+  );
+  assertSha256(
+    report.tailnetAccess.policySha256,
+    "physical-device relay report.tailnetAccess.policySha256",
+  );
+  assertSha256(
+    report.tailnetAccess.configurationLogEventSha256,
+    "physical-device relay report.tailnetAccess.configurationLogEventSha256",
+  );
+  if (
+    !Array.isArray(report.tailnetAccess.approvedPhoneAliases) ||
+    report.tailnetAccess.approvedPhoneAliases.length !== PHYSICAL_PHONE_ALIASES.length ||
+    report.tailnetAccess.approvedPhoneAliases.some(
+      (alias, index) => alias !== PHYSICAL_PHONE_ALIASES[index],
+    )
+  ) {
+    throw new TypeError(
+      "Physical-device relay policy must bind exactly the reviewed iOS and Android phone aliases.",
+    );
+  }
+  for (const field of ["testedPhonesToMacTcp443Only", "noOverlappingAclOrGrant", "policyTests"]) {
+    assertExactResult(
+      report.tailnetAccess[field],
+      "passed",
+      `physical-device relay report.tailnetAccess.${field}`,
+    );
+  }
+  assertExactResult(
+    report.tailnetAccess.unapprovedPeerHttps443,
+    "blocked",
+    "physical-device relay report.tailnetAccess.unapprovedPeerHttps443",
+  );
+
+  assertExactKeys(
+    report.listenerInventory,
+    [
+      "snapshotSha256",
+      "requiredServicesIpv4Loopback",
+      "inventoriedNon443TcpPorts",
+      "wildcardNon443TcpPorts",
+    ],
+    "physical-device relay report.listenerInventory",
+  );
+  assertSha256(
+    report.listenerInventory.snapshotSha256,
+    "physical-device relay report.listenerInventory.snapshotSha256",
+  );
+  assertExactResult(
+    report.listenerInventory.requiredServicesIpv4Loopback,
+    "passed",
+    "physical-device relay report.listenerInventory.requiredServicesIpv4Loopback",
+  );
+  const inventoriedPorts = assertSortedPortArray(
+    report.listenerInventory.inventoriedNon443TcpPorts,
+    "physical-device relay report.listenerInventory.inventoriedNon443TcpPorts",
+  );
+  for (const required of BASELINE_DENIED_TCP_PORTS) {
+    if (!inventoriedPorts.includes(required)) {
+      throw new TypeError(
+        `Physical-device relay listener inventory must include denied TCP/${required}.`,
+      );
+    }
+  }
+  const wildcardPorts = assertSortedPortArray(
+    report.listenerInventory.wildcardNon443TcpPorts,
+    "physical-device relay report.listenerInventory.wildcardNon443TcpPorts",
+    { allowEmpty: true },
+  );
+  if (wildcardPorts.some((port) => !inventoriedPorts.includes(port))) {
+    throw new TypeError(
+      "Physical-device relay wildcard listeners must be a subset of the complete inventory.",
+    );
+  }
+
+  assertExactKeys(
+    report.deviceProbes,
+    ["ios", "android"],
+    "physical-device relay report.deviceProbes",
+  );
+  assertRelayProbe(
+    report.deviceProbes.ios,
+    "ios",
+    artifacts.physicalDevice.ios,
+    inventoriedPorts,
+    report.tailnetAccess,
+    startedAt,
+    executedAt,
+  );
+  assertRelayProbe(
+    report.deviceProbes.android,
+    "android",
+    artifacts.physicalDevice.android,
+    inventoriedPorts,
+    report.tailnetAccess,
+    startedAt,
+    executedAt,
+  );
+
+  assertExactKeys(
+    report.teardown,
+    [
+      "serveAndFunnelStatus",
+      "shieldsUpRestored",
+      "macDisconnected",
+      "serveStatusSha256",
+      "funnelStatusSha256",
+      "shieldsUpStatusSha256",
+      "disconnectStatusSha256",
+    ],
+    "physical-device relay report.teardown",
+  );
+  assertExactResult(
+    report.teardown.serveAndFunnelStatus,
+    "empty",
+    "physical-device relay report.teardown.serveAndFunnelStatus",
+  );
+  assertExactResult(
+    report.teardown.shieldsUpRestored,
+    "passed",
+    "physical-device relay report.teardown.shieldsUpRestored",
+  );
+  assertExactResult(
+    report.teardown.macDisconnected,
+    "passed",
+    "physical-device relay report.teardown.macDisconnected",
+  );
+  for (const field of [
+    "serveStatusSha256",
+    "funnelStatusSha256",
+    "shieldsUpStatusSha256",
+    "disconnectStatusSha256",
+  ]) {
+    assertSha256(report.teardown[field], `physical-device relay report.teardown.${field}`);
+  }
+  return report;
 }
 
 function assertArtifact(artifact, specification, manifestCommit) {
@@ -433,7 +841,8 @@ function verifyReviewerAttestation(manifest, trustStore, reviewedAt) {
   if (!trusted?.publicKey || trusted.principal !== manifest.reviewedBy) {
     throw new TypeError("Reviewer attestation does not match an active checked-in trusted key.");
   }
-  const { reviewerAttestation: _signature, ...signedManifest } = manifest;
+  const { signatureBase64: _signature, ...signedAttestation } = manifest.reviewerAttestation;
+  const signedManifest = { ...manifest, reviewerAttestation: signedAttestation };
   if (
     !verify(null, Buffer.from(canonicalJson(signedManifest), "utf8"), trusted.publicKey, signature)
   ) {
@@ -495,6 +904,177 @@ function checkedArtifactPath(value, extension, name, statArtifact) {
   return { filesystemIdentity, path: value };
 }
 
+function relayReportFileIdentity(stat) {
+  const dev = stat.dev;
+  const ino = stat.ino;
+  if (
+    ((typeof dev === "number" && Number.isSafeInteger(dev) && dev >= 0) ||
+      (typeof dev === "bigint" && dev >= 0n)) &&
+    ((typeof ino === "number" && Number.isSafeInteger(ino) && ino > 0) ||
+      (typeof ino === "bigint" && ino > 0n))
+  ) {
+    return `${dev}:${ino}`;
+  }
+  return null;
+}
+
+function checkedRelayReportPath(value) {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > 4_096 ||
+    value.includes("\0") ||
+    !isAbsolute(value) ||
+    normalize(value) !== value ||
+    extname(value).toLowerCase() !== ".json"
+  ) {
+    throw new TypeError(
+      "NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_PATH must be an explicit normalized absolute .json path.",
+    );
+  }
+  return value;
+}
+
+function assertRelayReportStat(stat, name) {
+  if (
+    stat === null ||
+    typeof stat !== "object" ||
+    typeof stat.isFile !== "function" ||
+    !stat.isFile() ||
+    stat.size < 1 ||
+    stat.size > MAX_RELAY_REPORT_BYTES ||
+    !Number.isSafeInteger(stat.size) ||
+    typeof stat.mode !== "number" ||
+    (stat.mode & 0o777) !== 0o600 ||
+    relayReportFileIdentity(stat) === null
+  ) {
+    throw new TypeError(`${name} must identify one bounded mode-0600 regular JSON file.`);
+  }
+  const expectedUid = typeof process.getuid === "function" ? process.getuid() : null;
+  if (expectedUid !== null && stat.uid !== expectedUid) {
+    throw new TypeError(`${name} must be owned by the current release operator.`);
+  }
+  return {
+    identity: relayReportFileIdentity(stat),
+    mode: stat.mode & 0o777,
+    mtimeMs: typeof stat.mtimeMs === "number" ? stat.mtimeMs : null,
+    size: stat.size,
+  };
+}
+
+function readBoundedRelayReport(path) {
+  if (typeof fsConstants.O_NOFOLLOW !== "number" || typeof fsConstants.O_NONBLOCK !== "number") {
+    throw new TypeError("Safe no-follow relay-report file access is unavailable.");
+  }
+  const flags =
+    fsConstants.O_RDONLY |
+    fsConstants.O_NOFOLLOW |
+    fsConstants.O_NONBLOCK |
+    (fsConstants.O_CLOEXEC ?? 0);
+  let descriptor;
+  try {
+    descriptor = openSync(path, flags);
+    const before = fstatSync(descriptor);
+    assertRelayReportStat(before, "Physical-device relay report");
+    const buffer = Buffer.alloc(MAX_RELAY_REPORT_BYTES + 1);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const count = readSync(descriptor, buffer, offset, buffer.length - offset, null);
+      if (count === 0) break;
+      offset += count;
+    }
+    const after = fstatSync(descriptor);
+    return { after, before, bytes: buffer.subarray(0, offset) };
+  } catch (error) {
+    if (error instanceof TypeError) throw error;
+    throw new TypeError("Unable to safely read the physical-device relay report.", {
+      cause: error,
+    });
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+function validateRelayReportReadResult(value) {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    !(Buffer.isBuffer(value.bytes) || value.bytes instanceof Uint8Array)
+  ) {
+    throw new TypeError("Physical-device relay report reader must return bounded exact bytes.");
+  }
+  const before = assertRelayReportStat(value.before, "Physical-device relay report pre-read stat");
+  const after = assertRelayReportStat(value.after, "Physical-device relay report post-read stat");
+  const bytes = Buffer.from(value.bytes);
+  if (
+    bytes.length !== before.size ||
+    bytes.length !== after.size ||
+    before.identity !== after.identity ||
+    before.mode !== after.mode ||
+    (before.mtimeMs !== null && after.mtimeMs !== before.mtimeMs)
+  ) {
+    throw new TypeError("Physical-device relay report changed while it was being reviewed.");
+  }
+  return bytes;
+}
+
+function readPhysicalDeviceRelayReport(
+  environment,
+  relay,
+  artifacts,
+  executedAt,
+  reviewedAt,
+  runtime,
+) {
+  const inline = environment.NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_BASE64;
+  const path = environment.NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_PATH;
+  const hasInline = typeof inline === "string" && inline.length > 0;
+  const hasPath = typeof path === "string" && path.length > 0;
+  if (hasInline === hasPath) {
+    throw new TypeError(
+      "Supply physical-device relay evidence through exactly one bounded base64 value or absolute report path.",
+    );
+  }
+
+  let bytes;
+  if (hasInline) {
+    bytes = decodeStandardBase64(
+      inline,
+      "NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_BASE64",
+      MAX_RELAY_REPORT_BYTES,
+    );
+  } else {
+    const checked = checkedRelayReportPath(path);
+    bytes = validateRelayReportReadResult(runtime.readRelayReport(checked));
+  }
+
+  const actualDigest = createHash("sha256").update(bytes).digest("hex");
+  if (actualDigest !== relay.reportSha256) {
+    throw new TypeError("Physical-device relay report SHA-256 does not match signed evidence.");
+  }
+  const text = bytes.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(bytes)) {
+    throw new TypeError("Physical-device relay report must use valid UTF-8.");
+  }
+  let report;
+  try {
+    report = JSON.parse(text);
+  } catch {
+    throw new TypeError("Physical-device relay report is not valid JSON.");
+  }
+  const canonical = canonicalJson(report);
+  if (text !== canonical && text !== `${canonical}\n`) {
+    throw new TypeError(
+      "Physical-device relay report JSON must use canonical field order and encoding.",
+    );
+  }
+  rejectHealthPayloadEvidence(report, "physical-device relay report");
+  return {
+    report: validatePhysicalDeviceRelayReport(report, relay, artifacts, executedAt, reviewedAt),
+    reportSha256: actualDigest,
+  };
+}
+
 function defaultReleaseRuntime() {
   return {
     gitHead() {
@@ -510,6 +1090,7 @@ function defaultReleaseRuntime() {
       });
     },
     hashArtifact: streamSha256,
+    readRelayReport: readBoundedRelayReport,
     statArtifact: lstatSync,
   };
 }
@@ -545,6 +1126,12 @@ export async function validateHealthReleaseEvidence(
   } catch {
     throw new TypeError("Health release evidence is not valid JSON.");
   }
+  const canonicalManifest = canonicalJson(manifest);
+  if (raw !== canonicalManifest && raw !== `${canonicalManifest}\n`) {
+    throw new TypeError(
+      "Health release evidence JSON must use canonical field order and encoding.",
+    );
+  }
   rejectHealthPayloadEvidence(manifest);
   assertExactKeys(
     manifest,
@@ -558,6 +1145,7 @@ export async function validateHealthReleaseEvidence(
       "reviewedAt",
       "artifacts",
       "devices",
+      "physicalDeviceApiRelay",
       "reviewerAttestation",
     ],
     "manifest",
@@ -586,11 +1174,15 @@ export async function validateHealthReleaseEvidence(
   if (nowTime - reviewedAt > MAX_EVIDENCE_AGE_MS) {
     throw new TypeError("Signed-device evidence is older than 30 days and must be rerun.");
   }
+  if (nowTime - executedAt > MAX_EVIDENCE_AGE_MS) {
+    throw new TypeError("Physical-device execution is older than 30 days and must be rerun.");
+  }
 
   assertArtifacts(manifest.artifacts, manifest.gitCommit);
   assertExactKeys(manifest.devices, ["ios", "android"], "manifest.devices");
   assertDevice(manifest.devices.ios, "ios", manifest.artifacts.physicalDevice.ios);
   assertDevice(manifest.devices.android, "android", manifest.artifacts.physicalDevice.android);
+  const relay = assertPhysicalDeviceApiRelay(manifest.physicalDeviceApiRelay, environment);
   verifyReviewerAttestation(manifest, trustStore, reviewedAt);
 
   const actualGitHead = runtime.gitHead();
@@ -600,6 +1192,14 @@ export async function validateHealthReleaseEvidence(
   if (runtime.gitStatus().trim() !== "") {
     throw new TypeError("Signed-device health release verification requires a clean Git tree.");
   }
+  const relayEvidence = readPhysicalDeviceRelayReport(
+    environment,
+    relay,
+    manifest.artifacts,
+    executedAt,
+    reviewedAt,
+    runtime,
+  );
   const checkedArtifacts = artifactSpecifications.map((specification) => {
     const artifact = manifest.artifacts[specification.role][specification.platform];
     const checkedPath = checkedArtifactPath(
@@ -654,6 +1254,10 @@ export async function validateHealthReleaseEvidence(
         ios: manifest.artifacts.production.ios.artifactSha256,
         android: manifest.artifacts.production.android.artifactSha256,
       },
+    },
+    physicalDeviceApiRelay: {
+      apiOrigin: relay.apiOrigin,
+      reportSha256: relayEvidence.reportSha256,
     },
     reviewerKeyId: manifest.reviewerAttestation.keyId,
   };

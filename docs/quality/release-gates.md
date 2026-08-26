@@ -80,6 +80,15 @@ package boundaries.
   independent reviewer compares claimed build/signing metadata with EAS and
   platform-tool output because archive hashing alone does not extract it; a
   Metro export is not native evidence.
+- The signed physical-device manifest pins the exact private `.ts.net` API
+  origin and exact canonical relay-report bytes. That report proves attended
+  first-connect Shields Up, empty initial Serve/Funnel, verified identities and
+  policy-before-access sequencing, foreground Serve on HTTPS/443 to
+  `127.0.0.1:4000`, Funnel disabled, one tested two-phone policy with no
+  overlapping grant, both alias/EAS-build-bound `/ready` probes, all inventoried
+  non-443 listeners blocked, unapproved/off-tailnet denial, and timed clean
+  teardown/disconnect. A generic public HTTPS URL or opaque report hash does not
+  clear this gate.
 - Browser and installed-device smoke tests render, navigate, and exercise the
   authenticated and unauthenticated states of every P0 client flow.
 - Store identifiers, icons, splash assets, signing ownership, and disclosure

@@ -215,8 +215,14 @@ describe("mobile release API preflight", () => {
     expect(() => validateReleaseApiUrl(value)).toThrow(/public-DNS/u);
   });
 
-  it("accepts an explicit HTTPS origin", () => {
-    expect(validateReleaseApiUrl("https://api.github.com").href).toBe("https://api.github.com/");
+  it("accepts only the owned canonical production API origin", () => {
+    expect(validateReleaseApiUrl("https://api.nourishing.app").href).toBe(
+      "https://api.nourishing.app/",
+    );
+    expect(() => validateReleaseApiUrl("https://api.github.com")).toThrow(
+      /exactly match the owned origin https:\/\/api\.nourishing\.app/u,
+    );
+    expect(() => validateReleaseApiUrl("https://api.nourishing.app:444")).toThrow(/exactly match/u);
   });
 });
 
@@ -461,7 +467,7 @@ describe("confirmed release platform and origin", () => {
         releaseRuntime(),
         reviewerTrustStore,
       ),
-    ).toThrow(/signature verification/u);
+    ).toThrow(/signature verification|must equal https:\/\/api\.nourishing\.app/u);
   });
 
   it("hashes both exact bounded report byte strings", () => {

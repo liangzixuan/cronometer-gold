@@ -91,6 +91,49 @@ class PhonePolicyTests(unittest.TestCase):
                 with self.assertRaises(POLICY.PhonePolicyError):
                     POLICY.build_phone_policy(phone_ip, mac_ip, listeners)
 
+        for phone_ips in (
+            [],
+            ["100.64.0.10", "100.64.0.10"],
+            ["100.64.0.10", "100.64.0.20", "100.64.0.30"],
+        ):
+            with self.subTest(phone_ips=phone_ips):
+                with self.assertRaises(POLICY.PhonePolicyError):
+                    POLICY.build_phone_policy(phone_ips, "100.64.0.20", listeners)
+
+    def test_renders_both_physical_phones_in_one_exact_grant(self) -> None:
+        policy = POLICY.build_phone_policy(
+            ["100.64.0.10", "100.64.0.11"],
+            "100.64.0.20",
+            self.listeners("*:65343"),
+        )
+        self.assertEqual(
+            policy["hosts"],
+            {
+                "nutrition-tracker-mac": "100.64.0.20",
+                "nutrition-tracker-phone-1": "100.64.0.10",
+                "nutrition-tracker-phone-2": "100.64.0.11",
+            },
+        )
+        self.assertEqual(
+            policy["grants"],
+            [
+                {
+                    "src": ["nutrition-tracker-phone-1", "nutrition-tracker-phone-2"],
+                    "dst": ["nutrition-tracker-mac"],
+                    "ip": ["tcp:443"],
+                }
+            ],
+        )
+        self.assertEqual(
+            [(test["src"], test["proto"]) for test in policy["tests"]],
+            [
+                ("nutrition-tracker-phone-1", "tcp"),
+                ("nutrition-tracker-phone-1", "udp"),
+                ("nutrition-tracker-phone-2", "tcp"),
+                ("nutrition-tracker-phone-2", "udp"),
+            ],
+        )
+
     def test_requires_every_application_service_on_exact_ipv4_loopback(self) -> None:
         for missing_port in sorted(POLICY.REQUIRED_LOOPBACK_PORTS):
             endpoints = tuple(

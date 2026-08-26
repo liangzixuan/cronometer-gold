@@ -59,13 +59,19 @@ Render the proposal locally:
 
 ```sh
 python3 -B infra/tailscale/phone_policy.py \
-  --phone-ip <EXACT_PHONE_TAILSCALE_IPV4> \
+  --phone-ip <EXACT_IOS_PHONE_TAILSCALE_IPV4> \
+  --phone-ip <EXACT_ANDROID_PHONE_TAILSCALE_IPV4> \
   --mac-ip <EXACT_MAC_TAILSCALE_IPV4>
 ```
 
+For attended development with only one phone, supply `--phone-ip` once. The
+signed two-platform matrix requires both exact phones in the same rendered and
+reviewed policy; do not swap one phone rule for another between probes because a
+policy change invalidates earlier evidence.
+
 The renderer writes JSON only to stdout and never applies the policy. Do not
 redirect it into the repository. It emits an empty legacy `acls` list, one
-exact-IP host alias for each device, one `tcp:443` grant, no SSH or Funnel node
+exact-IP host alias for each supplied device, one `tcp:443` grant, no SSH or Funnel node
 attributes, and positive/negative policy tests for the current listener set.
 
 Use the complete output as a policy only for a dedicated test tailnet whose
@@ -130,3 +136,36 @@ a stop condition. Restore Shields Up with the installed client's reviewed
 command, require `tailscale get --json shields-up` to return true, and then
 disconnect the Mac. A new listener, policy change, device re-enrollment, IP
 change, or Serve change invalidates the evidence and requires the checks again.
+
+## Retain the reviewed relay report
+
+After teardown, create one canonical compact JSON report outside the repository
+using schema `nutrition-tracker-physical-device-relay-report-v1`. It must record
+the exact `.ts.net` origin and session start/completion times. Preflight fields
+and source-capture digests prove first-connect Shields Up, initially empty
+Serve/Funnel, incoming access held until policy tests passed, and revalidated
+Mac/iPhone/Android identities. The active fields bind the foreground Serve
+graph, disabled Funnel, exact two-phone aliases, one full-policy/configuration
+event digest shared by both build probes, complete non-443 listener inventory,
+CA and `/ready` success, TCP/443-only results, blocked ports, and off-tailnet
+denial. Teardown fields and source digests prove empty Serve/Funnel, restored
+Shields Up, and Mac disconnect. The verifier requires
+`startedAt <= executedAt <= completedAt <= reviewedAt` and a session no longer
+than 24 hours.
+
+Keep the report owned by the current operator and mode `0600` in ignored
+`.local-data/release`, or supply its exact bytes later as secret base64. Do not
+include raw status/configuration output,
+Tailscale IPs, node IDs, user identities, auth keys, tokens, health payloads, or
+device identifiers in the normalized report; retain any sensitive source
+captures only in the independently controlled review location. The external
+reviewer verifies those source captures before signing their hashes and the
+complete v4 health manifest.
+
+At release verification, set
+`NUTRITION_PHYSICAL_DEVICE_API_ORIGIN` to the exact origin and provide exactly one
+of `NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_PATH` or
+`NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_BASE64`. The signed
+`physicalDeviceApiRelay.reportSha256` must match the exact report bytes. Never
+reuse the production `EXPO_PUBLIC_API_URL` as this pin: the production and
+private-device builds intentionally use different origins.
