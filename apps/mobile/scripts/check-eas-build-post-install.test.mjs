@@ -42,7 +42,7 @@ describe("EAS profile-aware post-install checks", () => {
   );
 
   it.each(["ios", "android"])(
-    "allows only the standalone %s physical-device profile to use its internal gate",
+    "requires the standalone %s physical-device profile to use its numbering-aware precompile gate",
     (platform) => {
       const runScript = vi.fn();
       expect(
@@ -57,10 +57,11 @@ describe("EAS profile-aware post-install checks", () => {
       ).toEqual({
         apiOrigin: "https://nutrition-api.tail1234.ts.net",
         profile: "physical-device",
-        script: "config:check",
+        script: "physical-device:check",
       });
       expect(runScript).toHaveBeenCalledOnce();
-      expect(runScript).toHaveBeenCalledWith("config:check");
+      expect(runScript).toHaveBeenCalledWith("physical-device:check");
+      expect(runScript).not.toHaveBeenCalledWith("config:check");
     },
   );
 

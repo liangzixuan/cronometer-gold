@@ -165,6 +165,11 @@ export function validateEasReleaseConfig(
     "Standalone EAS checks must build their workspace contract dependency first.",
   );
   assert(
+    packageConfig?.scripts?.["physical-device:check"] ===
+      `${CONTRACTS_BUILD} && node scripts/check-eas-config.mjs --release && node scripts/check-native-config.mjs`,
+    "The physical-device precompile must enforce confirmed numbering and the generated-native configuration before compilation.",
+  );
+  assert(
     packageConfig?.scripts?.["release:check"] ===
       `${CONTRACTS_BUILD} && node scripts/check-eas-config.mjs --release && node scripts/check-release-env.mjs && node scripts/check-native-config.mjs`,
     "The reviewed release preflight must not be replaced or weakened.",

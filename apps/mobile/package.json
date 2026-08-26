@@ -13,6 +13,7 @@
     "eas-build-post-install": "pnpm --filter @nutrition-tracker/contracts build && node scripts/check-eas-build-post-install.mjs",
     "eas:check": "pnpm --filter @nutrition-tracker/contracts build && node scripts/check-eas-config.mjs",
     "lint": "biome lint App.tsx src",
+    "physical-device:check": "pnpm --filter @nutrition-tracker/contracts build && node scripts/check-eas-config.mjs --release && node scripts/check-native-config.mjs",
     "release:check": "pnpm --filter @nutrition-tracker/contracts build && node scripts/check-eas-config.mjs --release && node scripts/check-release-env.mjs && node scripts/check-native-config.mjs",
     "release:health-evidence": "pnpm --filter @nutrition-tracker/contracts build && node scripts/check-health-release.mjs",
     "release:submit": "pnpm --filter @nutrition-tracker/contracts build && node scripts/submit-reviewed-release.mjs",

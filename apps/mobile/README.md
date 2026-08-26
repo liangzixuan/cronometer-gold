@@ -157,12 +157,16 @@ that decision and remains false with null build numbers by default. The release
 check requires the confirmation to be true and requires explicit
 `ios.buildNumber` and `android.versionCode` values in `app.json` that exactly
 match the record; implicit toolchain defaults cannot reach a signed build. The
-checked-in health-reviewer trust list is intentionally empty until a genuinely
-independent reviewer key is onboarded. Signed evidence and submission remain
-blocked until then; a reviewer key is never an app-signing credential. Ordinary
-configuration checks still validate every active or inactive trust entry and
-reject key-ID or public-key reuse within or across the separate health and
-deployment reviewer stores.
+`physical-device` post-install route enforces that numbering-only release gate
+through the exact checked-in `physical-device:check` command without claiming
+that the private relay is the production deployment. Ordinary `config:check`
+remains usable while numbering is intentionally unconfirmed. The checked-in
+health-reviewer trust list is intentionally empty until a genuinely independent
+reviewer key is onboarded. Signed evidence and submission remain blocked until
+then; a reviewer key is never an app-signing credential. Ordinary configuration
+checks still validate every active or inactive trust entry and reject key-ID or
+public-key reuse within or across the separate health and deployment reviewer
+stores.
 
 ## Signed physical-device development
 
@@ -233,10 +237,10 @@ eas build --platform android --profile physical-device
 The APK is for internal device development only. Production remains a Play
 Store AAB, which is not directly installable, and final release evidence must
 still bind the exact production-signed store artifact. The internal
-gate runs the checked-in EAS and generated-native configuration checks plus the
-strict private-device HTTPS-origin check. It intentionally does not claim that
-a private development API is the confirmed production deployment. Selecting
-`production` still routes to the exact deployment, identifier-history,
+gate runs the confirmed-numbering, checked-in EAS, and generated-native
+configuration checks plus the strict private-device HTTPS-origin check. It does
+not claim that a private development API is the confirmed production deployment.
+Selecting `production` still routes to the exact deployment, identifier-history,
 version-number, native-health, and transport release gate; the internal profile
 cannot weaken or replace that path.
 

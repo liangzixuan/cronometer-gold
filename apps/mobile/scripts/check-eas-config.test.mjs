@@ -186,6 +186,11 @@ describe("EAS signed build configuration", () => {
     ],
     ["eas:check", "node scripts/check-eas-config.mjs", /Standalone EAS/u],
     [
+      "physical-device:check",
+      "node scripts/check-eas-config.mjs --release && node scripts/check-native-config.mjs",
+      /physical-device precompile/u,
+    ],
+    [
       "release:check",
       "node scripts/check-eas-config.mjs --release && node scripts/check-release-env.mjs && node scripts/check-native-config.mjs",
       /release preflight/u,
@@ -204,6 +209,13 @@ describe("EAS signed build configuration", () => {
     const config = configuration();
     config.packageConfig.scripts[script] = replacement;
     expect(() => validateEasReleaseConfig(config)).toThrow(message);
+  });
+
+  it("rejects a physical-device precompile that omits confirmed numbering", () => {
+    const config = configuration();
+    config.packageConfig.scripts["physical-device:check"] =
+      "pnpm --filter @nutrition-tracker/contracts build && node scripts/check-eas-config.mjs && node scripts/check-native-config.mjs";
+    expect(() => validateEasReleaseConfig(config)).toThrow(/physical-device precompile/u);
   });
 
   it("rejects bypassing the reviewed four-artifact submission gate", () => {

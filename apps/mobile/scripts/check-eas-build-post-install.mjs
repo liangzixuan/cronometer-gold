@@ -18,7 +18,7 @@ export function resolveEasPostInstallPlan(environment) {
   }
   if (profile === PHYSICAL_DEVICE_PROFILE) {
     const apiOrigin = validatePhysicalDeviceApiUrl(environment.EXPO_PUBLIC_API_URL).origin;
-    return { apiOrigin, profile, script: "config:check" };
+    return { apiOrigin, profile, script: "physical-device:check" };
   }
   throw new TypeError(
     "Unsupported EAS_BUILD_PROFILE; only production and physical-device may compile.",

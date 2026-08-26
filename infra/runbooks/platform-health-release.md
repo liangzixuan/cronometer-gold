@@ -27,6 +27,10 @@ Metro export is not native release evidence.
   requests, operating-system schedules, logs, and receipts.
 - The production API origin is explicit HTTPS, backup is disabled, transport
   security remains strict, and health/device payload logging is denied.
+- Every signed internal IPA/APK precompile requires confirmed identifier history
+  and exact source-controlled iOS/Android native versions. Its dedicated gate
+  deliberately does not require or claim the production deployment attestation;
+  ordinary configuration checks remain available while numbering is unresolved.
 
 ## Signed-device matrix
 
