@@ -71,6 +71,7 @@ PROXY_VARIABLES = {
     "https_proxy",
     "no_proxy",
 }
+DEVELOPMENT_PROCESS_CONTROL_VARIABLES = {"NODE_OPTIONS"}
 
 
 class LocalStackDevelopmentError(RuntimeError):
@@ -166,6 +167,7 @@ def sanitized_environment(source: Mapping[str, str]) -> dict[str, str]:
         if key not in PROXY_VARIABLES
         and not key.startswith("AWS_")
         and not key.startswith("LOCALSTACK_")
+        and key.upper() not in DEVELOPMENT_PROCESS_CONTROL_VARIABLES
     }
 
 
@@ -1850,6 +1852,7 @@ def prohibited_dotenv_variables(path: Path) -> set[str]:
             uppercase_name.startswith("AWS_")
             or uppercase_name.startswith("LOCALSTACK_")
             or uppercase_name in {value.upper() for value in PROXY_VARIABLES}
+            or uppercase_name in DEVELOPMENT_PROCESS_CONTROL_VARIABLES
         ):
             prohibited.add(name)
     return prohibited
@@ -1871,7 +1874,7 @@ def run_development(environment: Mapping[str, str]) -> int:
     prohibited_variables = prohibited_dotenv_variables(root_environment_file)
     if prohibited_variables:
         raise LocalStackDevelopmentError(
-            "root .env must not declare AWS, LocalStack, or proxy control variables: "
+            "root .env must not declare AWS, LocalStack, proxy, or process control variables: "
             + ", ".join(sorted(prohibited_variables, key=str.upper))
         )
     port = effective_gateway_port(environment)
@@ -1897,6 +1900,8 @@ def run_development(environment: Mapping[str, str]) -> int:
             "turbo",
             "run",
             "dev",
+            "--filter=@nutrition-tracker/api",
+            "--filter=@nutrition-tracker/worker",
         ],
         description="LocalStack-backed development tasks",
         environment=child_environment,

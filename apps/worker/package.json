@@ -10,7 +10,7 @@
     "build": "tsc -p tsconfig.build.json",
     "database:readiness-probe": "node dist/database-readiness-probe.js",
     "database:readiness-probe:dev": "tsx src/database-readiness-probe.ts",
-    "dev": "tsx watch --include ../../packages/contracts/dist/**/*.js --include ../../packages/db/dist/**/*.js --include ../../packages/search/dist/**/*.js src/index.ts",
+    "dev": "node ../../scripts/polling-tsx-watch.mjs --include ../../packages/artifact-store/dist/**/*.js --include ../../packages/contracts/dist/**/*.js --include ../../packages/db/dist/**/*.js --include ../../packages/domain/dist/**/*.js --include ../../packages/search/dist/**/*.js src/index.ts",
     "erasure:restore-replay": "node dist/erasure-ledger-restore.js",
     "erasure:restore-replay:dev": "tsx src/erasure-ledger-restore.ts",
     "lint": "biome lint src",

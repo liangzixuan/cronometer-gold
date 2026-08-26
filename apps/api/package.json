@@ -17,7 +17,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "dev": "tsx watch --include ../../packages/contracts/dist/**/*.js --include ../../packages/db/dist/**/*.js --include ../../packages/search/dist/**/*.js src/server.ts",
+    "dev": "node ../../scripts/polling-tsx-watch.mjs --include ../../packages/artifact-store/dist/**/*.js --include ../../packages/contracts/dist/**/*.js --include ../../packages/db/dist/**/*.js --include ../../packages/domain/dist/**/*.js --include ../../packages/search/dist/**/*.js src/server.ts",
     "start": "node dist/server.js",
     "test": "vitest run",
     "test:watch": "vitest",

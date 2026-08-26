@@ -123,13 +123,23 @@ catchable, signal-masked cleanup path. Its generated files are:
 The directory is mode `0700`; all three files are mode `0600` and already excluded by
 `.gitignore`. They contain synthetic LocalStack access material, not the
 Developer Auth Token or root credentials. `dev:localstack` loads only
-`runtime.env`, after first rejecting any `AWS_*`, `LOCALSTACK_*`, or proxy
-control assignment in the root `.env`. It also strips those variables from the
-ambient environment before starting the repository development tasks:
+`runtime.env`, after first rejecting any `AWS_*`, `LOCALSTACK_*`, proxy-control,
+or `NODE_OPTIONS` assignment in the root `.env`. It also strips those variables
+from the ambient environment. Each of the seven repo-owned watcher launchers
+disables FSEvents only in its watcher process and configures exact polling. The
+five package watchers rerun the pinned native TypeScript compiler as a one-shot
+child, avoiding that compiler's nonfunctional FSEvents watch backend. The
+command starts only the API and worker plus their required artifact-store,
+contracts, database, domain, and search package watchers:
 
 ```sh
 pnpm dev:localstack
 ```
+
+The guarded command deliberately does not start the web app or Expo/Metro. Run
+either client separately when needed, with its reviewed API origin. This keeps
+an unrelated client port or file-watcher failure from terminating the
+LocalStack-backed API and worker.
 
 The application override sets both retention stores to `s3`, keeps export
 version deletion on `suspended_null`, and points the host API/worker at literal

@@ -204,6 +204,7 @@ class PersistentLocalStackUnitTest(unittest.TestCase):
                 "LOCALSTACK_AUTH_TOKEN": "token",
                 "LOCALSTACK_GATEWAY_PORT": "4566",
                 "HTTPS_PROXY": "https://proxy.invalid",
+                "NODE_OPTIONS": "--require=/unsafe/preload.cjs",
                 "EXPO_PUBLIC_API_URL": "https://api.example.org",
             }
         )
@@ -380,6 +381,7 @@ class PersistentLocalStackUnitTest(unittest.TestCase):
                         "LOCALSTACK_GATEWAY_PORT: 14566",
                         "LOCALSTACK_AUTH_TOKEN: secret",
                         "https_proxy: https://proxy.invalid",
+                        "NODE_OPTIONS: --require=/unsafe/preload.cjs",
                     )
                 )
                 + "\n",
@@ -393,9 +395,146 @@ class PersistentLocalStackUnitTest(unittest.TestCase):
                     "LOCALSTACK_GATEWAY_PORT",
                     "LOCALSTACK_AUTH_TOKEN",
                     "https_proxy",
+                    "NODE_OPTIONS",
                 },
             )
             self.assertTrue(PROFILE.dotenv_declares_localstack_token(path))
+
+    def test_run_starts_only_api_worker_and_required_package_watchers(self) -> None:
+        class FakeSession:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+        with tempfile.TemporaryDirectory() as directory:
+            repository_root = Path(directory)
+            root_environment_file = repository_root / ".env"
+            runtime_environment_file = repository_root / "runtime.env"
+            root_environment_file.write_text("NODE_ENV=development\n", encoding="utf-8")
+            runtime_environment_file.write_text("EXPORT_ARTIFACT_STORE=s3\n", encoding="utf-8")
+            sanitized_child_environment = {
+                "PATH": "/opt/homebrew/bin:/usr/bin",
+                "EXPO_PUBLIC_API_URL": "https://phone.invalid",
+            }
+            with (
+                mock.patch.object(PROFILE, "REPOSITORY_ROOT", repository_root),
+                mock.patch.object(
+                    PROFILE, "RUNTIME_ENVIRONMENT_FILE", runtime_environment_file
+                ),
+                mock.patch.object(PROFILE, "effective_gateway_port", return_value=4566),
+                mock.patch.object(PROFILE.shutil, "which", return_value="/pnpm"),
+                mock.patch.object(PROFILE, "DockerSession", return_value=FakeSession()),
+                mock.patch.object(
+                    PROFILE,
+                    "running_profile",
+                    return_value=("a" * 64, "http://127.0.0.1:4566"),
+                ),
+                mock.patch.object(PROFILE, "verify_existing_profile"),
+                mock.patch.object(
+                    PROFILE,
+                    "sanitized_environment",
+                    side_effect=lambda _environment: dict(
+                        sanitized_child_environment
+                    ),
+                ),
+                mock.patch.object(
+                    PROFILE, "run_process_group", return_value=73
+                ) as run_process_group,
+            ):
+                self.assertEqual(PROFILE.run_development({"PATH": "/usr/bin"}), 73)
+
+        arguments = run_process_group.call_args.args[0]
+        self.assertEqual(
+            arguments,
+            [
+                "/pnpm",
+                "exec",
+                "dotenv",
+                "--override",
+                "-e",
+                str(root_environment_file),
+                "-e",
+                str(runtime_environment_file),
+                "--",
+                "turbo",
+                "run",
+                "dev",
+                "--filter=@nutrition-tracker/api",
+                "--filter=@nutrition-tracker/worker",
+            ],
+        )
+        self.assertNotIn("@nutrition-tracker/mobile", arguments)
+        self.assertNotIn("@nutrition-tracker/web", arguments)
+        child_environment = sanitized_child_environment
+        self.assertEqual(
+            run_process_group.call_args.kwargs,
+            {
+                "description": "LocalStack-backed development tasks",
+                "environment": child_environment,
+                "timeout_seconds": None,
+            },
+        )
+
+    def test_run_graph_exactly_binds_required_server_watchers(self) -> None:
+        turbo = json.loads((ROOT / "turbo.json").read_text(encoding="utf-8"))
+        self.assertNotIn("globalPassThroughEnv", turbo)
+        required_watchers = [
+            "@nutrition-tracker/artifact-store#dev",
+            "@nutrition-tracker/contracts#dev",
+            "@nutrition-tracker/db#dev",
+            "@nutrition-tracker/domain#dev",
+            "@nutrition-tracker/search#dev",
+        ]
+        for task_name in (
+            "@nutrition-tracker/api#dev",
+            "@nutrition-tracker/worker#dev",
+        ):
+            self.assertEqual(turbo["tasks"][task_name]["with"], required_watchers)
+        self.assertIn(
+            "EXPORT_ARTIFACT_DELETE_VERSION_POLICY",
+            turbo["tasks"]["@nutrition-tracker/worker#dev"]["passThroughEnv"],
+        )
+        for package in (ROOT / "apps" / "api", ROOT / "apps" / "worker"):
+            package_json = json.loads(
+                (package / "package.json").read_text(encoding="utf-8")
+            )
+            self.assertIn(
+                "node ../../scripts/polling-tsx-watch.mjs",
+                package_json["scripts"]["dev"],
+            )
+            self.assertIn(
+                "--include ../../packages/artifact-store/dist/**/*.js",
+                package_json["scripts"]["dev"],
+            )
+            self.assertIn(
+                "--include ../../packages/domain/dist/**/*.js",
+                package_json["scripts"]["dev"],
+            )
+        package_watch_command = (
+            "node ../../scripts/polling-tsx-watch.mjs "
+            '--include "src/**/*.ts" --include package.json '
+            "--include tsconfig.build.json --include tsconfig.json "
+            "--include ../../tsconfig.base.json "
+            "../../scripts/watch-typescript-build.mjs"
+        )
+        for package_name in ("artifact-store", "contracts", "domain", "search"):
+            package = ROOT / "packages" / package_name
+            package_json = json.loads(
+                (package / "package.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(package_json["scripts"]["dev"], package_watch_command)
+        db_package = json.loads(
+            (ROOT / "packages" / "db" / "package.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            db_package["scripts"]["dev"],
+            package_watch_command.replace(
+                "--include package.json",
+                '--include "../domain/dist/**/*.d.ts" --include package.json',
+            ),
+        )
 
     def test_create_user_failure_does_not_delete_an_unowned_user(self) -> None:
         class FakeAws:

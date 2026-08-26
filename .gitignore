@@ -18,6 +18,14 @@ apps/web/next-env.d.ts
 *.pem
 *.key
 
+# mobile signing credentials and provisioning profiles
+*.p8
+*.p12
+*.jks
+*.keystore
+*.mobileprovision
+credentials.json
+
 # local service data
 .local-data/
 data/raw/

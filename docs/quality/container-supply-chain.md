@@ -274,9 +274,21 @@ single-node, non-HA environment remains limited to synthetic reviewer data.
 - If the repository or organization restricts Actions, allow the exact pinned
   revisions named in `.github/workflows/container-supply-chain.yml`, including
   the transitive actions pinned by Trivy and GitHub's attestation action.
-- Protect the default branch and require all seven repository-artifact checks
-  (the Node producer, four applications, Caddy, and PostgreSQL) plus the
-  Meilisearch external-image check before treating a commit as releasable.
+- Protect the default branch with the always-running `quality`, `secrets`, and
+  `database` checks from `.github/workflows/ci.yml`. Do not configure the
+  container job names as pull-request required checks while this workflow
+  remains push-only with a default-branch job condition: GitHub reports a job
+  skipped by its condition as `Success`, so a feature-branch push could satisfy
+  that setting without executing the container gate.
+- Treat all seven repository-artifact results (the Node producer, four
+  applications, Caddy, and PostgreSQL) plus the Meilisearch external-image
+  result as mandatory **post-merge release evidence** for the exact default-
+  branch commit. A commit is not releasable until those eight real jobs execute
+  and pass. Redesign the workflow to run an explicit fail-closed pull-request
+  lane before adding any container job name to pre-merge branch protection.
+
+GitHub documents the skipped-job result behavior in
+[Using conditions to control job execution](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-jobs-with-conditions).
 
 GHCR package visibility and pull authentication are deployment prerequisites.
 Packages are private by default even when the source repository is public. Either

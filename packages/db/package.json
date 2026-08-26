@@ -18,7 +18,7 @@
     "build": "tsc -p tsconfig.build.json",
     "db:migrate": "tsx src/cli.ts",
     "db:migrate:prod": "node dist/cli.js",
-    "dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
+    "dev": "node ../../scripts/polling-tsx-watch.mjs --include \"src/**/*.ts\" --include \"../domain/dist/**/*.d.ts\" --include package.json --include tsconfig.build.json --include tsconfig.json --include ../../tsconfig.base.json ../../scripts/watch-typescript-build.mjs",
     "test": "vitest run --no-file-parallelism",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

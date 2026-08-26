@@ -14,7 +14,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "dev": "tsc -p tsconfig.build.json --watch --preserveWatchOutput",
+    "dev": "node ../../scripts/polling-tsx-watch.mjs --include \"src/**/*.ts\" --include package.json --include tsconfig.build.json --include tsconfig.json --include ../../tsconfig.base.json ../../scripts/watch-typescript-build.mjs",
     "lint": "biome lint src",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
