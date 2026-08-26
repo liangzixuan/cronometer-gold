@@ -9,7 +9,7 @@ change. The release-evidence and submission gates therefore fail closed today;
 the repository operator must not add their own key or invent a replacement
 principal merely to clear the milestone.
 
-The v4 evidence manifest separates binaries by role. `artifacts.physicalDevice`
+The v5 evidence manifest separates binaries by role. `artifacts.physicalDevice`
 contains the exact internally distributed iOS IPA and Android APK whose EAS
 build IDs appear in the physical-device rows. `artifacts.production` contains
 the exact store-distribution iOS IPA and Android AAB considered for release.
@@ -21,9 +21,12 @@ native versions must match for each platform; and every EAS build ID, expected
 digest, normalized absolute path, actual digest, and available filesystem
 `dev`/`ino` identity must be pairwise distinct. Paths are checked with `lstat`,
 so symbolic links are not artifacts. The reviewer signature covers the complete
-artifact/device matrix and `physicalDeviceApiRelay`, which pins the exact
+artifact/device matrix, `physicalDeviceApiRelay`, and `p0ClientSmoke`. The relay pins the exact
 private `.ts.net` API origin and the SHA-256 of its independently reviewed relay
-report. The signed `appVersion` must equal `app.json`, and every signed native
+report. The P0 binding pins the same exact API origin and SHA-256 of the
+synthetic-only browser/iOS/Android smoke candidate described in
+[`infra/runbooks/p0-client-smoke.md`](../../../infra/runbooks/p0-client-smoke.md).
+The signed `appVersion` must equal `app.json`, and every signed native
 build version must equal the explicitly confirmed values in both `app.json` and
 `release-numbering.json`; unconfirmed identifier history fails closed. Same-source production artifacts are release
 provenance, not a claim that the internal binaries and store binaries are
@@ -59,13 +62,23 @@ report through exactly one of
 mode-`0600` `.json` path in `NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_PATH`.
 The path is opened once with no-follow/nonblocking flags, must be owned by the
 current operator, and is read through a 64-KiB bound. Its signed digest and
-strict v1 schema bind first-connect Shields Up, empty initial Serve/Funnel,
+strict v2 schema bind first-connect Shields Up, empty initial Serve/Funnel,
 incoming access held until policy tests pass, revalidated identities, the one
 foreground Serve session, exact TCP/443-to-`127.0.0.1:4000` graph, disabled
 Funnel, one reviewed two-phone policy/configuration event, listener inventory,
 both alias/build-bound probes, negative-access checks, and timed attended
 teardown/disconnect. The verifier parses those claims rather than accepting an
 opaque digest.
+
+Supply the exact canonical P0 smoke candidate through exactly one of
+`NUTRITION_P0_CLIENT_SMOKE_REPORT_BASE64` or a normalized absolute mode-`0600`
+`.json` path in `NUTRITION_P0_CLIENT_SMOKE_REPORT_PATH`. The no-follow path read
+is current-user-owned and bounded to 256 KiB. The verifier requires the exact
+synthetic-only classification, unsigned trust marker, commit, private origin,
+physical-device EAS build IDs, timing, ordered 18-flow inventory, and protected
+source-capture hashes. Those structural assertions remain unauthenticated until
+the independent reviewer reconciles the protected raw captures, reruns the
+normalizer, and signs their exact report digest in the complete v5 manifest.
 
 The manifest JSON itself and its exact SHA-256 are supplied as
 `NUTRITION_HEALTH_RELEASE_EVIDENCE_JSON` and
@@ -90,11 +103,12 @@ then add their Ed25519 SPKI public key with a non-overlapping key ID and bounded
 validity interval. Obtain independent approval, and remove an old key only after
 every manifest signed during its validity window has expired. Never store a
 private key, test result, health sample, device identifier, cursor, token, or
-signature fixture in this folder. The v4 release manifest is signed outside
+signature fixture in this folder. The v5 release manifest is signed outside
 ordinary CI and pins the physical IPA, physical APK, production IPA, and
 production AAB digests and EAS build IDs to one Git commit, one reviewed private
-API origin, and one exact relay-report digest. v3 manifests fail closed and must
-be recollected and re-signed; relay state is never inferred during migration.
+API origin, one exact relay-report digest, and one exact P0 smoke-candidate
+digest. v4 and older manifests fail closed and must be recollected and
+re-signed; relay or smoke state is never inferred during migration.
 
 ## Deployment reviewer trust
 

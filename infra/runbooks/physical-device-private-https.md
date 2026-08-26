@@ -269,7 +269,7 @@ Tailscale IPs, node IDs, user identities, auth keys, tokens, health payloads, or
 device identifiers in the normalized candidate; retain any sensitive source
 captures only in the independently controlled review location. The candidate
 alone is rejected as release authority. Only after the independent reviewer
-checks every exact source byte may they sign the complete v4 health manifest;
+checks every exact source byte may they sign the complete v5 health manifest;
 that trusted Ed25519 signature binds the candidate's exact SHA-256 digest,
 trust-boundary marker, and all-18 source bundle digest.
 

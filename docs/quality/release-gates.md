@@ -107,7 +107,12 @@ package boundaries.
   teardown/disconnect. A generic public HTTPS URL or opaque report hash does not
   clear this gate.
 - Browser and installed-device smoke tests render, navigate, and exercise the
-  authenticated and unauthenticated states of every P0 client flow.
+  authenticated and unauthenticated states of every P0 client flow with
+  synthetic data. The canonical unsigned candidate must bind the exact commit,
+  private API origin, physical iOS/Android EAS build IDs, timing, ordered flow
+  results, and protected source-capture hashes. It clears the gate only when an
+  independent reviewer reconciles the raw captures, reruns the normalizer, and
+  signs the candidate's exact digest in the v5 health manifest.
 - Store identifiers, icons, splash assets, signing ownership, and disclosure
   contact are approved before the first TestFlight/Play upload.
 - VoiceOver, TalkBack, keyboard, reduced-motion, and contrast reviews cover every

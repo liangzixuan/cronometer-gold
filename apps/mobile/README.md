@@ -254,7 +254,7 @@ cannot weaken or replace that path.
 
 ## Reviewed artifact evidence and submission
 
-The external v4 evidence manifest has four separate binary roles. The device
+The external v5 evidence manifest has four separate binary roles. The device
 matrix is attached to the exact `physical-device` IPA and APK installed on the
 iPhone and Android phone. The same reviewer-signed manifest separately binds the
 exact production IPA and AAB, including their EAS build IDs, source commit,
@@ -271,6 +271,11 @@ private `.ts.net` origin plus the digest of the canonical relay report that
 proves first-connect containment, foreground Serve, no Funnel, exact loopback
 upstream, one two-phone tailnet policy, both alias/build-bound readiness probes,
 negative reachability, and timed teardown/disconnect.
+It also binds the exact canonical synthetic-only P0 smoke candidate covering
+the ordered browser, physical iOS, and physical Android flow inventory against
+that same API origin. The candidate's `passed` assertions are not authenticated
+until the independent reviewer reconciles the protected raw captures, reruns
+the normalizer, and signs the complete manifest.
 A matching commit does not
 assert that an internal binary and a store binary are byte-equivalent.
 
@@ -290,9 +295,17 @@ been produced, installed where applicable, tested, downloaded, and independently
 reviewed. Before either profile runs its post-install gate, the hook requires
 Expo's cloud-build markers and exact pinned project ID, canonical build ID,
 platform, profile, and full Git commit; local EAS builds cannot satisfy this
-release context. After those steps, supply the v4 manifest, exact relay report/origin
-pins, and all four absolute artifact paths/build-ID pins listed in
+release context. After those steps, supply the v5 manifest, exact relay and P0
+smoke reports/origin pins, and all four absolute artifact paths/build-ID pins listed in
 `config/README.md`, then verify it:
+
+Follow [the P0 client-smoke runbook](../../infra/runbooks/p0-client-smoke.md).
+The signed `p0ClientSmoke.apiOrigin` must equal the relay origin and its
+`reportSha256` must bind the exact candidate bytes. Supply those bytes through
+exactly one of `NUTRITION_P0_CLIENT_SMOKE_REPORT_PATH` or
+`NUTRITION_P0_CLIENT_SMOKE_REPORT_BASE64`; the path form must be an absolute,
+normalized, current-user-owned mode-`0600` regular file opened without following
+symlinks.
 
 ```sh
 pnpm release:health-evidence

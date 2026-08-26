@@ -7,6 +7,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   HEALTH_RELEASE_EVIDENCE_SCHEMA,
   HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA,
+  P0_CLIENT_SMOKE_FLOW_IDS,
+  P0_CLIENT_SMOKE_REPORT_SCHEMA,
   PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA,
   validateHealthReleaseEvidence,
 } from "./check-health-release.mjs";
@@ -187,6 +189,64 @@ function relayReportDigest(report = physicalDeviceRelayReport()) {
   return createHash("sha256").update(relayReportBytes(report)).digest("hex");
 }
 
+function p0ClientResults() {
+  return P0_CLIENT_SMOKE_FLOW_IDS.map((flowId, index) => ({
+    flowId,
+    outcome: "passed",
+    observedAt: `2026-08-16T07:${String(index + 1).padStart(2, "0")}:00.000Z`,
+  }));
+}
+
+function p0ClientSmokeReport() {
+  const clients = {
+    browser: {
+      captureSha256: "7".repeat(64),
+      testedEasBuildId: null,
+      capturedAt: "2026-08-16T07:18:00.000Z",
+      results: p0ClientResults(),
+    },
+    ios: {
+      captureSha256: "8".repeat(64),
+      testedEasBuildId: buildIds.physicalDevice.ios,
+      capturedAt: "2026-08-16T07:18:00.000Z",
+      results: p0ClientResults(),
+    },
+    android: {
+      captureSha256: "9".repeat(64),
+      testedEasBuildId: buildIds.physicalDevice.android,
+      capturedAt: "2026-08-16T07:18:00.000Z",
+      results: p0ClientResults(),
+    },
+  };
+  const sourceCaptureBundleDigest = createHash("sha256").update(
+    "nutrition-tracker-p0-client-smoke-source-capture-bundle-v1\n",
+  );
+  for (const role of ["browser", "ios", "android"]) {
+    sourceCaptureBundleDigest.update(`${role}\n${clients[role].captureSha256}\n`);
+  }
+  return {
+    schemaVersion: P0_CLIENT_SMOKE_REPORT_SCHEMA,
+    trustBoundary:
+      "unsigned-structural-candidate-requires-independent-ed25519-health-manifest-review",
+    dataClassification: "synthetic-only",
+    sourceCaptureBundleSha256: sourceCaptureBundleDigest.digest("hex"),
+    gitCommit,
+    apiOrigin: physicalDeviceApiOrigin,
+    startedAt: "2026-08-16T07:00:00.000Z",
+    executedAt: "2026-08-16T08:00:00.000Z",
+    completedAt: "2026-08-16T08:30:00.000Z",
+    clients,
+  };
+}
+
+function p0ClientSmokeReportBytes(report = p0ClientSmokeReport()) {
+  return Buffer.from(`${canonicalJson(report)}\n`, "utf8");
+}
+
+function p0ClientSmokeReportDigest(report = p0ClientSmokeReport()) {
+  return createHash("sha256").update(p0ClientSmokeReportBytes(report)).digest("hex");
+}
+
 const trustStore = {
   schemaVersion: HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA,
   reviewers: [
@@ -219,7 +279,10 @@ function reviewedArtifact({ artifactType, buildProfile, digest, easBuildId, plat
   };
 }
 
-function unsignedManifest(report = physicalDeviceRelayReport()) {
+function unsignedManifest(
+  report = physicalDeviceRelayReport(),
+  smokeReport = p0ClientSmokeReport(),
+) {
   return {
     schemaVersion: HEALTH_RELEASE_EVIDENCE_SCHEMA,
     appVersion: "0.1.0",
@@ -310,6 +373,10 @@ function unsignedManifest(report = physicalDeviceRelayReport()) {
       apiOrigin: physicalDeviceApiOrigin,
       reportSha256: relayReportDigest(report),
     },
+    p0ClientSmoke: {
+      apiOrigin: physicalDeviceApiOrigin,
+      reportSha256: p0ClientSmokeReportDigest(smokeReport),
+    },
   };
 }
 
@@ -332,7 +399,11 @@ function attest(unsigned = unsignedManifest(), privateKey = reviewerKeys.private
   };
 }
 
-function environmentFor(manifest = attest(), report = physicalDeviceRelayReport()) {
+function environmentFor(
+  manifest = attest(),
+  report = physicalDeviceRelayReport(),
+  smokeReport = p0ClientSmokeReport(),
+) {
   const raw = `${canonicalJson(manifest)}\n`;
   return {
     NUTRITION_HEALTH_RELEASE_EVIDENCE_JSON: raw,
@@ -341,6 +412,8 @@ function environmentFor(manifest = attest(), report = physicalDeviceRelayReport(
       .digest("hex"),
     NUTRITION_PHYSICAL_DEVICE_API_ORIGIN: physicalDeviceApiOrigin,
     NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_BASE64: relayReportBytes(report).toString("base64"),
+    NUTRITION_P0_CLIENT_SMOKE_REPORT_BASE64:
+      p0ClientSmokeReportBytes(smokeReport).toString("base64"),
     NUTRITION_IOS_PHYSICAL_DEVICE_BUILD_ID: manifest.artifacts.physicalDevice.ios.easBuildId,
     NUTRITION_IOS_PHYSICAL_DEVICE_ARTIFACT_PATH: artifactPaths.physicalDevice.ios,
     NUTRITION_ANDROID_PHYSICAL_DEVICE_BUILD_ID:
@@ -410,13 +483,17 @@ describe("native health release evidence", () => {
         apiOrigin: physicalDeviceApiOrigin,
         reportSha256: relayReportDigest(),
       },
+      p0ClientSmoke: {
+        apiOrigin: physicalDeviceApiOrigin,
+        reportSha256: p0ClientSmokeReportDigest(),
+      },
       reviewerKeyId,
     });
   });
 
-  it("requires signed v4 relay evidence with exact keys", async () => {
+  it("requires signed v5 relay and P0 smoke evidence with exact keys", async () => {
     const legacy = unsignedManifest();
-    legacy.schemaVersion = "nutrition-tracker-health-release-evidence-v3";
+    legacy.schemaVersion = "nutrition-tracker-health-release-evidence-v4";
     await expect(
       validateHealthReleaseEvidence(
         environmentFor(attest(legacy)),
@@ -424,7 +501,7 @@ describe("native health release evidence", () => {
         trustStore,
         releaseRuntime,
       ),
-    ).rejects.toThrow(/health-release-evidence-v4/u);
+    ).rejects.toThrow(/health-release-evidence-v5/u);
 
     const missing = unsignedManifest();
     delete missing.physicalDeviceApiRelay;
@@ -447,6 +524,17 @@ describe("native health release evidence", () => {
         releaseRuntime,
       ),
     ).rejects.toThrow(/manifest\.physicalDeviceApiRelay must contain exactly/u);
+
+    const missingSmoke = unsignedManifest();
+    delete missingSmoke.p0ClientSmoke;
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(missingSmoke)),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/p0ClientSmoke/u);
   });
 
   it("binds one reviewed ts.net origin and the exact canonical relay-report bytes", async () => {
@@ -587,7 +675,143 @@ describe("native health release evidence", () => {
     ).rejects.toThrow(/canonical field order/u);
   });
 
-  it("requires the signed v4 manifest itself to use canonical unambiguous JSON", async () => {
+  it("binds an unsigned synthetic P0 smoke candidate through the signed v5 manifest", async () => {
+    const mutations = [
+      [
+        "wrong trust marker",
+        (report) => (report.trustBoundary = "trusted"),
+        /unsigned structural candidate/u,
+      ],
+      [
+        "wrong classification",
+        (report) => (report.dataClassification = "production"),
+        /synthetic-only/u,
+      ],
+      [
+        "wrong source commit",
+        (report) => (report.gitCommit = "f".repeat(40)),
+        /manifest\.gitCommit/u,
+      ],
+      [
+        "wrong private origin",
+        (report) => (report.apiOrigin = "https://other.tail1234.ts.net"),
+        /origin must match/u,
+      ],
+      [
+        "wrong iOS physical build",
+        (report) => (report.clients.ios.testedEasBuildId = buildIds.physicalDevice.android),
+        /reviewed physical build/u,
+      ],
+      [
+        "missing flow",
+        (report) => report.clients.browser.results.pop(),
+        /exact ordered P0 flow inventory/u,
+      ],
+      [
+        "reordered flow",
+        (report) => report.clients.ios.results.reverse(),
+        /ordered structural pass assertion/u,
+      ],
+      [
+        "failed flow",
+        (report) => (report.clients.android.results[4].outcome = "failed"),
+        /ordered structural pass assertion/u,
+      ],
+      [
+        "nonmonotonic flow",
+        (report) =>
+          (report.clients.browser.results[5].observedAt =
+            report.clients.browser.results[3].observedAt),
+        /ordered structural pass assertion/u,
+      ],
+      [
+        "wrong final capture time",
+        (report) => (report.clients.ios.capturedAt = "2026-08-16T07:17:00.000Z"),
+        /final ordered observation/u,
+      ],
+      [
+        "execution drift",
+        (report) => (report.executedAt = "2026-08-16T07:59:00.000Z"),
+        /exactly bind signed execution/u,
+      ],
+      [
+        "duplicate raw capture hash",
+        (report) => (report.clients.android.captureSha256 = report.clients.ios.captureSha256),
+        /distinct raw capture bytes/u,
+      ],
+    ];
+    for (const [label, mutate, expected] of mutations) {
+      const smokeReport = p0ClientSmokeReport();
+      mutate(smokeReport);
+      const manifest = attest(unsignedManifest(physicalDeviceRelayReport(), smokeReport));
+      await expect(
+        validateHealthReleaseEvidence(
+          environmentFor(manifest, physicalDeviceRelayReport(), smokeReport),
+          checkTime,
+          trustStore,
+          releaseRuntime,
+        ),
+        label,
+      ).rejects.toThrow(expected);
+    }
+  });
+
+  it("rejects malformed P0 smoke source binding and forbidden identifiers", async () => {
+    for (const mutate of [
+      (report) => delete report.sourceCaptureBundleSha256,
+      (report) => (report.sourceCaptureBundleSha256 = "not-a-digest"),
+      (report) => (report.sourceCaptureBundleSha256 = "0".repeat(64)),
+      (report) => (report.clients.browser.deviceId = "forbidden-device"),
+    ]) {
+      const smokeReport = p0ClientSmokeReport();
+      mutate(smokeReport);
+      const manifest = attest(unsignedManifest(physicalDeviceRelayReport(), smokeReport));
+      await expect(
+        validateHealthReleaseEvidence(
+          environmentFor(manifest, physicalDeviceRelayReport(), smokeReport),
+          checkTime,
+          trustStore,
+          releaseRuntime,
+        ),
+      ).rejects.toThrow(/sourceCaptureBundleSha256|must not contain/u);
+    }
+  });
+
+  it("requires exactly one bounded canonical P0 smoke-report input", async () => {
+    const base = environmentFor();
+    const absent = { ...base };
+    delete absent.NUTRITION_P0_CLIENT_SMOKE_REPORT_BASE64;
+    await expect(
+      validateHealthReleaseEvidence(absent, checkTime, trustStore, releaseRuntime),
+    ).rejects.toThrow(/exactly one/u);
+
+    await expect(
+      validateHealthReleaseEvidence(
+        { ...base, NUTRITION_P0_CLIENT_SMOKE_REPORT_PATH: "/tmp/p0-client-smoke.json" },
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/exactly one/u);
+
+    const smokeReport = p0ClientSmokeReport();
+    const noncanonical = Buffer.from(JSON.stringify(smokeReport), "utf8");
+    const manifest = unsignedManifest(physicalDeviceRelayReport(), smokeReport);
+    manifest.p0ClientSmoke.reportSha256 = createHash("sha256").update(noncanonical).digest("hex");
+    await expect(
+      validateHealthReleaseEvidence(
+        {
+          ...environmentFor(attest(manifest), physicalDeviceRelayReport(), smokeReport),
+          NUTRITION_P0_CLIENT_SMOKE_REPORT_BASE64: noncanonical.toString("base64"),
+        },
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/canonical field order/u);
+  });
+
+  it("requires the signed v5 manifest itself to use canonical unambiguous JSON", async () => {
     const manifest = attest();
     const noncanonical = JSON.stringify(manifest);
     await expect(
@@ -667,6 +891,55 @@ describe("native health release evidence", () => {
         readRelayReport: () => ({
           before: stableStat,
           after: { ...stableStat, ino: 902 },
+          bytes,
+        }),
+      }),
+    ).rejects.toThrow(/changed while/u);
+  });
+
+  it("accepts only a stable mode-0600 regular P0 smoke-report path", async () => {
+    const bytes = p0ClientSmokeReportBytes();
+    const environment = environmentFor();
+    delete environment.NUTRITION_P0_CLIENT_SMOKE_REPORT_BASE64;
+    environment.NUTRITION_P0_CLIENT_SMOKE_REPORT_PATH = "/tmp/p0-client-smoke.json";
+    const stableStat = {
+      dev: 7,
+      ino: 903,
+      isFile: () => true,
+      mode: 0o100600,
+      mtimeMs: 1234,
+      size: bytes.length,
+      uid: typeof process.getuid === "function" ? process.getuid() : undefined,
+    };
+    await expect(
+      validateHealthReleaseEvidence(environment, checkTime, trustStore, {
+        ...releaseRuntime,
+        readP0ClientSmokeReport: () => ({ after: stableStat, before: stableStat, bytes }),
+      }),
+    ).resolves.toMatchObject({
+      p0ClientSmoke: { reportSha256: p0ClientSmokeReportDigest() },
+    });
+
+    for (const stat of [
+      { ...stableStat, isFile: () => false },
+      { ...stableStat, mode: 0o100644 },
+      { ...stableStat, size: 0 },
+      { ...stableStat, size: 262_145 },
+    ]) {
+      await expect(
+        validateHealthReleaseEvidence(environment, checkTime, trustStore, {
+          ...releaseRuntime,
+          readP0ClientSmokeReport: () => ({ after: stat, before: stat, bytes }),
+        }),
+      ).rejects.toThrow(/mode-0600 regular JSON file/u);
+    }
+
+    await expect(
+      validateHealthReleaseEvidence(environment, checkTime, trustStore, {
+        ...releaseRuntime,
+        readP0ClientSmokeReport: () => ({
+          before: stableStat,
+          after: { ...stableStat, ino: 904 },
           bytes,
         }),
       }),

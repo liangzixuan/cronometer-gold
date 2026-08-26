@@ -22,16 +22,43 @@ import {
   validateReviewerTrustStore,
 } from "./reviewer-trust.mjs";
 
-export const HEALTH_RELEASE_EVIDENCE_SCHEMA = "nutrition-tracker-health-release-evidence-v4";
+export const HEALTH_RELEASE_EVIDENCE_SCHEMA = "nutrition-tracker-health-release-evidence-v5";
 export { HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA } from "./reviewer-trust.mjs";
 export const PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA =
   "nutrition-tracker-physical-device-relay-report-v2";
+export const P0_CLIENT_SMOKE_REPORT_SCHEMA = "nutrition-tracker-p0-client-smoke-report-v1";
 const PHYSICAL_DEVICE_RELAY_TRUST_BOUNDARY =
   "unsigned-structural-candidate-requires-independent-ed25519-manifest-review";
+const P0_CLIENT_SMOKE_TRUST_BOUNDARY =
+  "unsigned-structural-candidate-requires-independent-ed25519-health-manifest-review";
+const P0_CLIENT_SMOKE_DATA_CLASSIFICATION = "synthetic-only";
+const P0_CLIENT_SMOKE_SOURCE_CAPTURE_BUNDLE_SCHEMA =
+  "nutrition-tracker-p0-client-smoke-source-capture-bundle-v1";
+export const P0_CLIENT_SMOKE_FLOW_IDS = Object.freeze([
+  "unauthenticated-entry",
+  "register",
+  "sign-in",
+  "session-restore",
+  "unauthorized-session-rejection",
+  "food-search",
+  "diary-add-edit-delete",
+  "diary-repeat",
+  "recipe-create-revise-log",
+  "goal-create-revise-progress",
+  "retention-trends",
+  "custom-food-create-revise-log",
+  "biometric-create-edit-delete",
+  "reminder-create-pause-revoke",
+  "account-export-download",
+  "sign-out-private-cleanup",
+  "account-erasure",
+  "erasure-status-after-session-revocation",
+]);
 
 const RELEASE_NUMBERING_SCHEMA = "nutrition-tracker-release-numbering-v1";
 const MAX_MANIFEST_BYTES = 32_768;
 const MAX_RELAY_REPORT_BYTES = 65_536;
+const MAX_P0_CLIENT_SMOKE_REPORT_BYTES = 262_144;
 const MAX_EVIDENCE_AGE_MS = 30 * 24 * 60 * 60 * 1_000;
 const MAX_RELAY_SESSION_MS = 24 * 60 * 60 * 1_000;
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1_000;
@@ -268,6 +295,16 @@ function assertPhysicalDeviceApiRelay(relay, environment) {
   }
   assertSha256(relay.reportSha256, "manifest.physicalDeviceApiRelay.reportSha256");
   return relay;
+}
+
+function assertP0ClientSmoke(smoke) {
+  assertExactKeys(smoke, ["apiOrigin", "reportSha256"], "manifest.p0ClientSmoke");
+  const url = validatePhysicalDeviceApiUrl(smoke.apiOrigin);
+  if (smoke.apiOrigin !== url.origin) {
+    throw new TypeError("manifest.p0ClientSmoke.apiOrigin must be canonical.");
+  }
+  assertSha256(smoke.reportSha256, "manifest.p0ClientSmoke.reportSha256");
+  return smoke;
 }
 
 function assertRelayProbe(
@@ -634,6 +671,146 @@ export function validateUnsignedRelayCandidateStructureForReview(
   reviewedAt,
 ) {
   return validatePhysicalDeviceRelayReport(candidate, relay, artifacts, executedAt, reviewedAt);
+}
+
+function validateP0ClientSmokeReport(
+  report,
+  smoke,
+  manifestCommit,
+  artifacts,
+  executedAt,
+  reviewedAt,
+) {
+  assertExactKeys(
+    report,
+    [
+      "schemaVersion",
+      "trustBoundary",
+      "dataClassification",
+      "sourceCaptureBundleSha256",
+      "gitCommit",
+      "apiOrigin",
+      "startedAt",
+      "executedAt",
+      "completedAt",
+      "clients",
+    ],
+    "P0 client-smoke report",
+  );
+  if (report.schemaVersion !== P0_CLIENT_SMOKE_REPORT_SCHEMA) {
+    throw new TypeError(
+      `P0 client-smoke report.schemaVersion must equal ${P0_CLIENT_SMOKE_REPORT_SCHEMA}.`,
+    );
+  }
+  if (report.trustBoundary !== P0_CLIENT_SMOKE_TRUST_BOUNDARY) {
+    throw new TypeError(
+      "P0 client-smoke report must remain an unsigned structural candidate until independent Ed25519 health-manifest review.",
+    );
+  }
+  if (report.dataClassification !== P0_CLIENT_SMOKE_DATA_CLASSIFICATION) {
+    throw new TypeError("P0 client-smoke report must be explicitly synthetic-only.");
+  }
+  assertSha256(
+    report.sourceCaptureBundleSha256,
+    "P0 client-smoke report.sourceCaptureBundleSha256",
+  );
+  if (report.gitCommit !== manifestCommit) {
+    throw new TypeError("P0 client-smoke report.gitCommit must equal manifest.gitCommit.");
+  }
+  const reportOrigin = validatePhysicalDeviceApiUrl(report.apiOrigin);
+  if (report.apiOrigin !== reportOrigin.origin || report.apiOrigin !== smoke.apiOrigin) {
+    throw new TypeError("P0 client-smoke report API origin must match signed evidence.");
+  }
+  const startedAt = parseInstant(report.startedAt, "P0 client-smoke report.startedAt");
+  const reportExecutedAt = parseInstant(report.executedAt, "P0 client-smoke report.executedAt");
+  const completedAt = parseInstant(report.completedAt, "P0 client-smoke report.completedAt");
+  if (
+    startedAt > executedAt ||
+    reportExecutedAt !== executedAt ||
+    executedAt > completedAt ||
+    completedAt > reviewedAt ||
+    completedAt - startedAt > MAX_RELAY_SESSION_MS
+  ) {
+    throw new TypeError(
+      "P0 client-smoke timing must exactly bind signed execution, finish before review, and span at most 24 hours.",
+    );
+  }
+
+  assertExactKeys(report.clients, ["browser", "ios", "android"], "P0 client-smoke report.clients");
+  const captureDigests = new Set();
+  const sourceCaptureBundleDigest = createHash("sha256").update(
+    `${P0_CLIENT_SMOKE_SOURCE_CAPTURE_BUNDLE_SCHEMA}\n`,
+  );
+  for (const role of ["browser", "ios", "android"]) {
+    const client = report.clients[role];
+    const name = `P0 client-smoke report.clients.${role}`;
+    assertExactKeys(client, ["captureSha256", "testedEasBuildId", "capturedAt", "results"], name);
+    assertSha256(client.captureSha256, `${name}.captureSha256`);
+    if (captureDigests.has(client.captureSha256)) {
+      throw new TypeError("Every P0 client-smoke role must bind distinct raw capture bytes.");
+    }
+    captureDigests.add(client.captureSha256);
+    sourceCaptureBundleDigest.update(`${role}\n${client.captureSha256}\n`);
+    const expectedBuildId = role === "browser" ? null : artifacts.physicalDevice[role].easBuildId;
+    if (client.testedEasBuildId !== expectedBuildId) {
+      throw new TypeError(`${name}.testedEasBuildId must bind the reviewed physical build.`);
+    }
+    if (
+      !Array.isArray(client.results) ||
+      client.results.length !== P0_CLIENT_SMOKE_FLOW_IDS.length
+    ) {
+      throw new TypeError(`${name}.results must contain the exact ordered P0 flow inventory.`);
+    }
+    let previousObservation = startedAt;
+    for (const [index, flowId] of P0_CLIENT_SMOKE_FLOW_IDS.entries()) {
+      const result = client.results[index];
+      const resultName = `${name}.results[${index}]`;
+      assertExactKeys(result, ["flowId", "outcome", "observedAt"], resultName);
+      const observedAt = parseInstant(result.observedAt, `${resultName}.observedAt`);
+      if (
+        result.flowId !== flowId ||
+        result.outcome !== "passed" ||
+        observedAt < previousObservation ||
+        observedAt > executedAt
+      ) {
+        throw new TypeError(`${resultName} must be one ordered structural pass assertion.`);
+      }
+      previousObservation = observedAt;
+    }
+    const capturedAt = parseInstant(client.capturedAt, `${name}.capturedAt`);
+    if (capturedAt !== previousObservation) {
+      throw new TypeError(`${name}.capturedAt must equal its final ordered observation.`);
+    }
+  }
+  if (sourceCaptureBundleDigest.digest("hex") !== report.sourceCaptureBundleSha256) {
+    throw new TypeError(
+      "P0 client-smoke report.sourceCaptureBundleSha256 must bind the fixed ordered capture digests.",
+    );
+  }
+  return report;
+}
+
+/**
+ * Structural review aid only. This does not authenticate a smoke candidate or
+ * replace validateHealthReleaseEvidence's trusted Ed25519 manifest gate.
+ */
+export function validateUnsignedP0ClientSmokeCandidateStructureForReview(
+  candidate,
+  smoke,
+  manifestCommit,
+  artifacts,
+  executedAt,
+  reviewedAt,
+) {
+  rejectHealthPayloadEvidence(candidate, "P0 client-smoke report");
+  return validateP0ClientSmokeReport(
+    candidate,
+    smoke,
+    manifestCommit,
+    artifacts,
+    executedAt,
+    reviewedAt,
+  );
 }
 
 function assertArtifact(artifact, specification, manifestCommit) {
@@ -1145,6 +1322,169 @@ function readPhysicalDeviceRelayReport(
   };
 }
 
+function checkedP0ClientSmokeReportPath(value) {
+  if (
+    typeof value !== "string" ||
+    value.length < 1 ||
+    value.length > 4_096 ||
+    value.includes("\0") ||
+    !isAbsolute(value) ||
+    normalize(value) !== value ||
+    extname(value).toLowerCase() !== ".json"
+  ) {
+    throw new TypeError(
+      "NUTRITION_P0_CLIENT_SMOKE_REPORT_PATH must be an explicit normalized absolute .json path.",
+    );
+  }
+  return value;
+}
+
+function assertP0ClientSmokeReportStat(stat, name) {
+  if (
+    stat === null ||
+    typeof stat !== "object" ||
+    typeof stat.isFile !== "function" ||
+    !stat.isFile() ||
+    stat.size < 1 ||
+    stat.size > MAX_P0_CLIENT_SMOKE_REPORT_BYTES ||
+    !Number.isSafeInteger(stat.size) ||
+    typeof stat.mode !== "number" ||
+    (stat.mode & 0o777) !== 0o600 ||
+    relayReportFileIdentity(stat) === null
+  ) {
+    throw new TypeError(`${name} must identify one bounded mode-0600 regular JSON file.`);
+  }
+  const expectedUid = typeof process.getuid === "function" ? process.getuid() : null;
+  if (expectedUid !== null && stat.uid !== expectedUid) {
+    throw new TypeError(`${name} must be owned by the current release operator.`);
+  }
+  return {
+    identity: relayReportFileIdentity(stat),
+    mode: stat.mode & 0o777,
+    mtimeMs: typeof stat.mtimeMs === "number" ? stat.mtimeMs : null,
+    size: stat.size,
+  };
+}
+
+function readBoundedP0ClientSmokeReport(path) {
+  if (typeof fsConstants.O_NOFOLLOW !== "number" || typeof fsConstants.O_NONBLOCK !== "number") {
+    throw new TypeError("Safe no-follow P0 client-smoke report file access is unavailable.");
+  }
+  const flags =
+    fsConstants.O_RDONLY |
+    fsConstants.O_NOFOLLOW |
+    fsConstants.O_NONBLOCK |
+    (fsConstants.O_CLOEXEC ?? 0);
+  let descriptor;
+  try {
+    descriptor = openSync(path, flags);
+    const before = fstatSync(descriptor);
+    assertP0ClientSmokeReportStat(before, "P0 client-smoke report");
+    const buffer = Buffer.alloc(MAX_P0_CLIENT_SMOKE_REPORT_BYTES + 1);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const count = readSync(descriptor, buffer, offset, buffer.length - offset, null);
+      if (count === 0) break;
+      offset += count;
+    }
+    const after = fstatSync(descriptor);
+    return { after, before, bytes: buffer.subarray(0, offset) };
+  } catch (error) {
+    if (error instanceof TypeError) throw error;
+    throw new TypeError("Unable to safely read the P0 client-smoke report.", { cause: error });
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+function validateP0ClientSmokeReadResult(value) {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    !(Buffer.isBuffer(value.bytes) || value.bytes instanceof Uint8Array)
+  ) {
+    throw new TypeError("P0 client-smoke report reader must return bounded exact bytes.");
+  }
+  const before = assertP0ClientSmokeReportStat(
+    value.before,
+    "P0 client-smoke report pre-read stat",
+  );
+  const after = assertP0ClientSmokeReportStat(value.after, "P0 client-smoke report post-read stat");
+  const bytes = Buffer.from(value.bytes);
+  if (
+    bytes.length !== before.size ||
+    bytes.length !== after.size ||
+    before.identity !== after.identity ||
+    before.mode !== after.mode ||
+    (before.mtimeMs !== null && after.mtimeMs !== before.mtimeMs)
+  ) {
+    throw new TypeError("P0 client-smoke report changed while it was being reviewed.");
+  }
+  return bytes;
+}
+
+function readP0ClientSmokeReport(
+  environment,
+  smoke,
+  manifestCommit,
+  artifacts,
+  executedAt,
+  reviewedAt,
+  runtime,
+) {
+  const inline = environment.NUTRITION_P0_CLIENT_SMOKE_REPORT_BASE64;
+  const path = environment.NUTRITION_P0_CLIENT_SMOKE_REPORT_PATH;
+  const hasInline = typeof inline === "string" && inline.length > 0;
+  const hasPath = typeof path === "string" && path.length > 0;
+  if (hasInline === hasPath) {
+    throw new TypeError(
+      "Supply P0 client-smoke evidence through exactly one bounded base64 value or absolute report path.",
+    );
+  }
+
+  let bytes;
+  if (hasInline) {
+    bytes = decodeStandardBase64(
+      inline,
+      "NUTRITION_P0_CLIENT_SMOKE_REPORT_BASE64",
+      MAX_P0_CLIENT_SMOKE_REPORT_BYTES,
+    );
+  } else {
+    const checked = checkedP0ClientSmokeReportPath(path);
+    bytes = validateP0ClientSmokeReadResult(runtime.readP0ClientSmokeReport(checked));
+  }
+  const actualDigest = createHash("sha256").update(bytes).digest("hex");
+  if (actualDigest !== smoke.reportSha256) {
+    throw new TypeError("P0 client-smoke report SHA-256 does not match signed evidence.");
+  }
+  const text = bytes.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(bytes)) {
+    throw new TypeError("P0 client-smoke report must use valid UTF-8.");
+  }
+  let report;
+  try {
+    report = JSON.parse(text);
+  } catch {
+    throw new TypeError("P0 client-smoke report is not valid JSON.");
+  }
+  const canonical = canonicalJson(report);
+  if (text !== canonical && text !== `${canonical}\n`) {
+    throw new TypeError("P0 client-smoke report JSON must use canonical field order and encoding.");
+  }
+  rejectHealthPayloadEvidence(report, "P0 client-smoke report");
+  return {
+    report: validateP0ClientSmokeReport(
+      report,
+      smoke,
+      manifestCommit,
+      artifacts,
+      executedAt,
+      reviewedAt,
+    ),
+    reportSha256: actualDigest,
+  };
+}
+
 function defaultReleaseRuntime() {
   return {
     gitHead() {
@@ -1161,6 +1501,7 @@ function defaultReleaseRuntime() {
     },
     hashArtifact: streamSha256,
     readReleaseMetadata: defaultReleaseMetadata,
+    readP0ClientSmokeReport: readBoundedP0ClientSmokeReport,
     readRelayReport: readBoundedRelayReport,
     statArtifact: lstatSync,
   };
@@ -1217,6 +1558,7 @@ export async function validateHealthReleaseEvidence(
       "artifacts",
       "devices",
       "physicalDeviceApiRelay",
+      "p0ClientSmoke",
       "reviewerAttestation",
     ],
     "manifest",
@@ -1254,6 +1596,12 @@ export async function validateHealthReleaseEvidence(
   assertDevice(manifest.devices.ios, "ios", manifest.artifacts.physicalDevice.ios);
   assertDevice(manifest.devices.android, "android", manifest.artifacts.physicalDevice.android);
   const relay = assertPhysicalDeviceApiRelay(manifest.physicalDeviceApiRelay, environment);
+  const p0ClientSmoke = assertP0ClientSmoke(manifest.p0ClientSmoke);
+  if (p0ClientSmoke.apiOrigin !== relay.apiOrigin) {
+    throw new TypeError(
+      "manifest.p0ClientSmoke.apiOrigin must equal manifest.physicalDeviceApiRelay.apiOrigin.",
+    );
+  }
   verifyReviewerAttestation(manifest, trustStore, reviewedAt);
 
   if (typeof runtime.readReleaseMetadata !== "function") {
@@ -1271,6 +1619,15 @@ export async function validateHealthReleaseEvidence(
   const relayEvidence = readPhysicalDeviceRelayReport(
     environment,
     relay,
+    manifest.artifacts,
+    executedAt,
+    reviewedAt,
+    runtime,
+  );
+  const p0ClientSmokeEvidence = readP0ClientSmokeReport(
+    environment,
+    p0ClientSmoke,
+    manifest.gitCommit,
     manifest.artifacts,
     executedAt,
     reviewedAt,
@@ -1334,6 +1691,10 @@ export async function validateHealthReleaseEvidence(
     physicalDeviceApiRelay: {
       apiOrigin: relay.apiOrigin,
       reportSha256: relayEvidence.reportSha256,
+    },
+    p0ClientSmoke: {
+      apiOrigin: p0ClientSmoke.apiOrigin,
+      reportSha256: p0ClientSmokeEvidence.reportSha256,
     },
     reviewerKeyId: manifest.reviewerAttestation.keyId,
   };

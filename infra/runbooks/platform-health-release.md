@@ -104,20 +104,28 @@ The signed manifest must mark all 26 checked keys in
 must include the measured 10,000-revision/100-signed-record protected-journal
 round trip. Do not infer these measurements from unit tests. The device row's
 `testedEasBuildId` must equal the corresponding internal IPA/APK artifact ID.
-The signed v4 `physicalDeviceApiRelay` must also pin the exact reviewed `.ts.net`
+The signed v5 `physicalDeviceApiRelay` must also pin the exact reviewed `.ts.net`
 origin and canonical relay-report SHA-256. The report must bind both of those
 same EAS build IDs to successful public-CA `/ready` probes and prove the exact
 first-connect Shields-Up boundary, initially empty Serve/Funnel, identity
 revalidation, foreground TCP/443 loopback proxy, disabled Funnel, one tested
 non-overlapping two-phone policy shared by both aliases, denied listener
 inventory/unapproved peer/off-tailnet access, and timed clean teardown/disconnect.
-An HTTPS-shaped URL alone is not evidence.
+An HTTPS-shaped URL alone is not evidence. The same v5 manifest must bind the
+exact synthetic-only P0 client-smoke candidate for browser, physical iOS, and
+physical Android as described in [the P0 smoke runbook](./p0-client-smoke.md).
+The signed `p0ClientSmoke.apiOrigin` must equal the relay origin and its
+`reportSha256` must bind the candidate's exact bytes. Supply exactly one of
+`NUTRITION_P0_CLIENT_SMOKE_REPORT_PATH` or
+`NUTRITION_P0_CLIENT_SMOKE_REPORT_BASE64`; the path must satisfy the documented
+absolute mode-`0600` no-follow contract. The candidate alone is not authenticated
+release evidence.
 
 ## Artifact binding and promotion
 
 Build the production iOS IPA and Android AAB from the same clean Git commit and
 the same source-controlled native build number/version code as the tested
-internal artifacts. The independently reviewed v4 manifest binds four distinct
+internal artifacts. The independently reviewed v5 manifest binds four distinct
 EAS builds: internal iOS IPA, internal Android APK, production iOS IPA, and
 production Android AAB. Each entry includes its exact role/profile/type, EAS ID,
 source commit, native version, signing-identity fingerprint, and file SHA-256.
