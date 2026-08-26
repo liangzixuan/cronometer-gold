@@ -1,0 +1,81 @@
+import { execFileSync } from "node:child_process";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { canonicalJson } from "@nutrition-tracker/contracts";
+import { describe, expect, it } from "vitest";
+
+import {
+  validateHealthReleaseEvidence,
+  validateUnsignedRelayCandidateStructureForReview,
+} from "./check-health-release.mjs";
+
+const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
+const normalizer = join(repositoryRoot, "infra", "tailscale", "relay_evidence.py");
+const iosBuildId = "11111111-1111-4111-8111-111111111111";
+const androidBuildId = "22222222-2222-4222-8222-222222222222";
+
+describe("Tailscale relay review-package normalizer trust boundary", () => {
+  it("emits only an unsigned candidate that the public verifier rejects without a signed manifest", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "nutrition-relay-compat-"));
+    try {
+      const indexPath = execFileSync(
+        "python3",
+        [
+          "-B",
+          "-c",
+          [
+            "import sys",
+            "from pathlib import Path",
+            "from infra.tailscale.tests.test_relay_evidence import CaptureBundle",
+            "print(CaptureBundle(Path(sys.argv[1])).write())",
+          ].join("; "),
+          directory,
+        ],
+        { cwd: repositoryRoot, encoding: "utf8" },
+      ).trim();
+      const reportBytes = execFileSync(
+        "python3",
+        ["-B", normalizer, "--capture-index", indexPath, "--acknowledge-unsigned-candidate"],
+        { cwd: repositoryRoot, encoding: "utf8" },
+      );
+      const report = JSON.parse(reportBytes);
+      expect(reportBytes).toBe(`${canonicalJson(report)}\n`);
+      expect(report.schemaVersion).toBe("nutrition-tracker-physical-device-relay-report-v2");
+      expect(report.trustBoundary).toBe(
+        "unsigned-structural-candidate-requires-independent-ed25519-manifest-review",
+      );
+      expect(report.sourceCaptureBundleSha256).toMatch(/^[0-9a-f]{64}$/u);
+      expect(
+        validateUnsignedRelayCandidateStructureForReview(
+          report,
+          { apiOrigin: report.apiOrigin },
+          {
+            physicalDevice: {
+              ios: { easBuildId: iosBuildId },
+              android: { easBuildId: androidBuildId },
+            },
+          },
+          Date.parse("2026-08-26T00:08:00.000Z"),
+          Date.parse("2026-08-26T00:11:00.000Z"),
+        ),
+      ).toEqual(report);
+
+      const reportPath = join(directory, "unsigned-relay-candidate.json");
+      writeFileSync(reportPath, reportBytes, { mode: 0o600 });
+      chmodSync(reportPath, 0o600);
+      await expect(
+        validateHealthReleaseEvidence({
+          NUTRITION_PHYSICAL_DEVICE_API_ORIGIN: report.apiOrigin,
+          NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_PATH: reportPath,
+        }),
+      ).rejects.toThrow(
+        "Signed-device health release evidence is absent. Supply a cryptographically reviewed physical-device manifest.",
+      );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});

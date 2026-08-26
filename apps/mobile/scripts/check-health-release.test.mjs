@@ -118,8 +118,11 @@ function relayProbe(testedEasBuildId) {
 function physicalDeviceRelayReport() {
   return {
     schemaVersion: PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA,
+    trustBoundary: "unsigned-structural-candidate-requires-independent-ed25519-manifest-review",
+    sourceCaptureBundleSha256: "e".repeat(64),
     apiOrigin: physicalDeviceApiOrigin,
     startedAt: "2026-08-16T07:00:00.000Z",
+    executedAt: "2026-08-16T08:00:00.000Z",
     completedAt: "2026-08-16T08:30:00.000Z",
     preflight: {
       firstConnectionShieldsUp: "passed",
@@ -498,6 +501,41 @@ describe("native health release evidence", () => {
     ).rejects.toThrow(/SHA-256/u);
   });
 
+  it("requires the unsigned v2 trust marker and complete source-capture digest", async () => {
+    const wrongBoundary = physicalDeviceRelayReport();
+    wrongBoundary.trustBoundary = "trusted";
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(unsignedManifest(wrongBoundary)), wrongBoundary),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/unsigned structural candidate/u);
+
+    const missingDigest = physicalDeviceRelayReport();
+    delete missingDigest.sourceCaptureBundleSha256;
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(unsignedManifest(missingDigest)), missingDigest),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/must contain exactly/u);
+
+    const malformedDigest = physicalDeviceRelayReport();
+    malformedDigest.sourceCaptureBundleSha256 = "not-a-digest";
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(unsignedManifest(malformedDigest)), malformedDigest),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/sourceCaptureBundleSha256/u);
+  });
+
   it("requires exactly one bounded canonical relay-report input", async () => {
     const base = environmentFor();
     const absent = { ...base };
@@ -784,7 +822,18 @@ describe("native health release evidence", () => {
         trustStore,
         releaseRuntime,
       ),
-    ).rejects.toThrow(/contain execution/u);
+    ).rejects.toThrow(/exactly bind signed execution/u);
+
+    const mismatchedExecution = physicalDeviceRelayReport();
+    mismatchedExecution.executedAt = "2026-08-16T08:00:01.000Z";
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(unsignedManifest(mismatchedExecution)), mismatchedExecution),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/exactly bind signed execution/u);
 
     const leaked = physicalDeviceRelayReport();
     leaked.tailnetAccess.token = "must-not-be-recorded";

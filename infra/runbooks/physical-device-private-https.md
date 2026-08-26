@@ -82,7 +82,11 @@ this exact phone reach this Mac. Merely appending the narrow grant to a default
 allow-all or other overlapping rule is unsafe. The admin console must accept all
 policy tests before incoming connections are enabled. Capture the reviewed
 policy hash and configuration-log event outside source control; never automate a
-tailnet-wide policy replacement from this repository.
+tailnet-wide policy replacement from this repository. A merged existing-tailnet
+policy is limited to attended development and does not qualify for a normalized
+release candidate: the fail-closed normalizer requires a dedicated test tailnet
+whose complete policy exactly equals the generated two-phone policy, with no
+unrelated ACL or grant.
 
 Only after the reviewed policy is saved, all built-in policy tests pass, and the
 phone identity is revalidated may the operator run the installed client's
@@ -137,30 +141,137 @@ command, require `tailscale get --json shields-up` to return true, and then
 disconnect the Mac. A new listener, policy change, device re-enrollment, IP
 change, or Serve change invalidates the evidence and requires the checks again.
 
-## Retain the reviewed relay report
+## Prepare an unsigned review candidate
 
-After teardown, create one canonical compact JSON report outside the repository
-using schema `nutrition-tracker-physical-device-relay-report-v1`. It must record
-the exact `.ts.net` origin and session start/completion times. Preflight fields
-and source-capture digests prove first-connect Shields Up, initially empty
+`infra/tailscale/relay_evidence.py` is a read-only structural normalizer, not an
+evidence collector, authenticator, or release authority. Its `passed` and
+`blocked` values mean only that the supplied review-package fields are
+internally consistent. They are not authenticated observations. The normalizer
+never invokes Tailscale, installs or authenticates a client, applies policy,
+toggles Shields Up, starts/stops Serve or Funnel, or creates a signature.
+Use the complete [relay review-package v1 reference](../tailscale/relay-review-package-v1.md)
+for every exact role, envelope field, raw source, and reconciliation step; do
+not infer a schema from the tests.
+
+Before normalization, an independent trusted reviewer must preserve the exact command
+stdout and physical-device probe exports in a reviewer-controlled mode-`0700`
+directory with `umask 077`. Capture the relevant state with the already
+installed, reviewed client; these commands are run manually by the reviewer,
+never by the normalizer:
+
+```sh
+tailscale get --json shields-up > preflight-shields.raw.json
+tailscale status --json > preflight-status.raw.json
+tailscale serve status --json > preflight-serve.raw.json
+tailscale funnel status --json > preflight-funnel.raw.json
+# Repeat status, Shields Up, Serve, and Funnel captures during active testing
+# and teardown, using distinct files. Preserve the full reviewed policy,
+# configuration-log event, lsof -Fpn inventory, and both device probe exports.
+```
+
+Do not reconstruct raw stdout, reuse another session, or convert an observed
+failure into a `passed` field. The reviewer compares every structural envelope
+to its exact raw source, including both build-bound phone probe exports and the
+full configuration-log event, then reruns the normalizer over the settled input
+bytes immediately before signing. Raw captures remain outside the repository
+and are retained with the signed review package.
+
+The review-package index uses schema
+`nutrition-tracker-tailscale-relay-review-package-v1`, contains the exact
+`trustBoundary` value
+`unsigned-structural-candidate-requires-independent-ed25519-manifest-review`,
+and contains no reviewer identity or `reviewedAt` claim. Its remaining exact
+fields are `apiOrigin`, `startedAt`, `executedAt`, `completedAt`, `buildIds`
+(`ios` and `android`), and `captures`. The independent reviewer supplies
+`reviewedBy` and `reviewedAt` only in the later signed health manifest. The
+`captures` map contains these exact absolute paths:
+
+- `preflightShields`, `preflightServe`, `preflightFunnel`, and
+  `preflightIdentities`;
+- `accessTimeline`, `activeShields`, `activeServe`, `activeFunnel`, and
+  `activeIdentities`;
+- `policy`, `configurationEvent`, and the raw bounded `listenerSnapshot` from
+  the already reviewed `lsof -Fpn` inventory;
+- `iosProbe` and `androidProbe`; and
+- `teardownServe`, `teardownFunnel`, `teardownShields`, and
+  `teardownDisconnect`.
+
+The index and every input must be a distinct current-user-owned regular file,
+mode `0600`, within its byte bound, and readable with no-follow semantics. All
+paths are absolute and normalized. A symlink, duplicate inode, special file,
+duplicate JSON key, floating/non-finite number, changed file, missing field, or
+extra field is rejected. JSON observation envelopes use the exact
+`nutrition-tracker-tailscale-<kind>-capture-v1` schema declared by the
+normalizer. Preserve sensitive Tailscale IPs, node IDs, and principals only in
+these protected inputs. The identity envelopes bind the exact Mac, iOS, and
+Android alias/node/principal/IP/private-DNS tuples at preflight, active testing,
+and disconnect; the API origin must equal the reviewed Mac DNS identity. The
+full `policy` capture is the complete reviewed policy JSON,
+not a selected rule: the normalizer reconstructs the two-phone policy from the
+identity and listener captures and rejects a default allow, extra ACL/grant,
+missing negative test, or any overlap. The access timeline binds the policy
+and configuration-event byte hashes and structurally requires Shields Up to
+remain enabled until policy tests and identity revalidation completed.
+
+Serve/Funnel observation envelopes must preserve exact empty-object `{}` values
+for persistent `TCP`, `Web`, `Services`, and `AllowFunnel`; arrays are rejected.
+The active Serve foreground list
+must contain exactly one `foreground` HTTPS/443 root handler to
+`http://127.0.0.1:4000`, with `allowFunnel: false` and no services; the active
+Funnel observation may repeat that graph or have an empty foreground list.
+Preflight and teardown foreground lists must be empty. The two build-bound phone probes
+must bind their distinct EAS build IDs and exact identities to the
+same policy/configuration event, public-CA hostname success, `/ready` HTTP 200,
+only open TCP/443, every inventoried denied port blocked, and HTTPS blocked with
+Tailscale disabled.
+
+The v2 candidate includes the exact unsigned trust-boundary marker and
+`sourceCaptureBundleSha256`, plus the index's exact `executedAt`. That digest
+domain-separates
+`nutrition-tracker-tailscale-relay-source-capture-bundle-v1` and hashes, in the
+exact role order listed above, each role name plus the SHA-256 of its complete
+input bytes. It therefore binds all 18 normalized inputs, including both probe
+captures, without copying sensitive source content into the candidate.
+
+From the repository root, emit the canonical redacted unsigned structural candidate into
+an ignored, private location. The command writes only canonical
+`nutrition-tracker-physical-device-relay-report-v2` bytes to stdout and a fixed
+unsigned-candidate warning to stderr; rejection never writes partial candidate
+bytes:
+
+```sh
+(umask 077; python3 -B infra/tailscale/relay_evidence.py \
+  --capture-index /absolute/review/capture-index.json \
+  --acknowledge-unsigned-candidate \
+  > /absolute/ignored/.local-data/release/physical-device-relay-report.json)
+```
+
+Confirm the resulting candidate is current-user-owned mode `0600`. Never point the
+index at source-control files, and never use a capture from another attended
+session. The resulting candidate remains outside the repository and records the
+exact `.ts.net` origin and session start/execution/completion times. Preflight fields
+and source-capture digests structurally record first-connect Shields Up, initially empty
 Serve/Funnel, incoming access held until policy tests passed, and revalidated
 Mac/iPhone/Android identities. The active fields bind the foreground Serve
 graph, disabled Funnel, exact two-phone aliases, one full-policy/configuration
 event digest shared by both build probes, complete non-443 listener inventory,
 CA and `/ready` success, TCP/443-only results, blocked ports, and off-tailnet
-denial. Teardown fields and source digests prove empty Serve/Funnel, restored
+denial. Teardown fields and source digests structurally record empty Serve/Funnel, restored
 Shields Up, and Mac disconnect. The verifier requires
-`startedAt <= executedAt <= completedAt <= reviewedAt` and a session no longer
-than 24 hours.
+`startedAt <= executedAt <= completedAt <= reviewedAt`, requires candidate
+`executedAt` to equal the independently signed manifest's `executedAt` exactly,
+and allows a session no longer than 24 hours.
 
-Keep the report owned by the current operator and mode `0600` in ignored
+Keep the candidate owned by the current operator and mode `0600` in ignored
 `.local-data/release`, or supply its exact bytes later as secret base64. Do not
 include raw status/configuration output,
 Tailscale IPs, node IDs, user identities, auth keys, tokens, health payloads, or
-device identifiers in the normalized report; retain any sensitive source
-captures only in the independently controlled review location. The external
-reviewer verifies those source captures before signing their hashes and the
-complete v4 health manifest.
+device identifiers in the normalized candidate; retain any sensitive source
+captures only in the independently controlled review location. The candidate
+alone is rejected as release authority. Only after the independent reviewer
+checks every exact source byte may they sign the complete v4 health manifest;
+that trusted Ed25519 signature binds the candidate's exact SHA-256 digest,
+trust-boundary marker, and all-18 source bundle digest.
 
 At release verification, set
 `NUTRITION_PHYSICAL_DEVICE_API_ORIGIN` to the exact origin and provide exactly one

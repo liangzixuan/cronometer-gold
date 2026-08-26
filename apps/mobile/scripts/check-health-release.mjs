@@ -25,7 +25,9 @@ import {
 export const HEALTH_RELEASE_EVIDENCE_SCHEMA = "nutrition-tracker-health-release-evidence-v4";
 export { HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA } from "./reviewer-trust.mjs";
 export const PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA =
-  "nutrition-tracker-physical-device-relay-report-v1";
+  "nutrition-tracker-physical-device-relay-report-v2";
+const PHYSICAL_DEVICE_RELAY_TRUST_BOUNDARY =
+  "unsigned-structural-candidate-requires-independent-ed25519-manifest-review";
 
 const RELEASE_NUMBERING_SCHEMA = "nutrition-tracker-release-numbering-v1";
 const MAX_MANIFEST_BYTES = 32_768;
@@ -338,8 +340,11 @@ function validatePhysicalDeviceRelayReport(report, relay, artifacts, executedAt,
     report,
     [
       "schemaVersion",
+      "trustBoundary",
+      "sourceCaptureBundleSha256",
       "apiOrigin",
       "startedAt",
+      "executedAt",
       "completedAt",
       "preflight",
       "serve",
@@ -355,20 +360,34 @@ function validatePhysicalDeviceRelayReport(report, relay, artifacts, executedAt,
       `physical-device relay report.schemaVersion must equal ${PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA}.`,
     );
   }
+  if (report.trustBoundary !== PHYSICAL_DEVICE_RELAY_TRUST_BOUNDARY) {
+    throw new TypeError(
+      "physical-device relay report must remain an unsigned structural candidate until independent Ed25519 manifest review.",
+    );
+  }
+  assertSha256(
+    report.sourceCaptureBundleSha256,
+    "physical-device relay report.sourceCaptureBundleSha256",
+  );
   const reportOrigin = validatePhysicalDeviceApiUrl(report.apiOrigin);
   if (report.apiOrigin !== reportOrigin.origin || report.apiOrigin !== relay.apiOrigin) {
     throw new TypeError("Physical-device relay report API origin must match signed evidence.");
   }
   const startedAt = parseInstant(report.startedAt, "physical-device relay report.startedAt");
+  const reportExecutedAt = parseInstant(
+    report.executedAt,
+    "physical-device relay report.executedAt",
+  );
   const completedAt = parseInstant(report.completedAt, "physical-device relay report.completedAt");
   if (
     startedAt > executedAt ||
+    reportExecutedAt !== executedAt ||
     executedAt > completedAt ||
     completedAt > reviewedAt ||
     completedAt - startedAt > MAX_RELAY_SESSION_MS
   ) {
     throw new TypeError(
-      "Physical-device relay timing must contain execution, finish before review, and span at most 24 hours.",
+      "Physical-device relay timing must exactly bind signed execution, finish before review, and span at most 24 hours.",
     );
   }
 
@@ -601,6 +620,20 @@ function validatePhysicalDeviceRelayReport(report, relay, artifacts, executedAt,
     assertSha256(report.teardown[field], `physical-device relay report.teardown.${field}`);
   }
   return report;
+}
+
+/**
+ * Structural review aid only. This does not authenticate a relay candidate or
+ * replace validateHealthReleaseEvidence's trusted Ed25519 manifest gate.
+ */
+export function validateUnsignedRelayCandidateStructureForReview(
+  candidate,
+  relay,
+  artifacts,
+  executedAt,
+  reviewedAt,
+) {
+  return validatePhysicalDeviceRelayReport(candidate, relay, artifacts, executedAt, reviewedAt);
 }
 
 function assertArtifact(artifact, specification, manifestCommit) {
