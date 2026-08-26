@@ -99,7 +99,7 @@ be recollected and re-signed; relay state is never inferred during migration.
 ## Deployment reviewer trust
 
 `release-deployment-reviewers.json` is a separate trust root for the external
-v5 deployment attestation. It must never reuse a health-evidence key merely for
+v6 deployment attestation. It must never reuse a health-evidence key merely for
 convenience. Its reviewer list is intentionally empty, so `release:check`, EAS
 production compilation, and reviewed submission remain blocked until a genuinely
 independent deployment reviewer is onboarded through a reviewed code change.
@@ -114,10 +114,50 @@ key ID, and algorithm; only `signatureBase64` is outside its own signed payload.
 `deployedBy` and `reviewedBy` must be different principals under a
 case-insensitive comparison. The verifier additionally reads and hashes the
 exact bounded report bytes, then requires their canonical structured schemas to
-cross-bind the origin, commit, fresh TLS/readiness proof, and unchanged
-source-restricted access proof. Version-4 records and opaque result-only reports
+cross-bind the origin, commit, fresh TLS/readiness result, access-policy digest,
+and probe results. The reviewer-access v2 report carries the independent
+reviewer's redacted assertion of `IPv4`, one network,
+`globally-routable-unicast`, and prefix length `32`, plus their assertion that the
+sensitive policy artifact was unchanged during the probes. It contains no source
+address or CIDR. The release verifier checks the exact assertion, canonical
+report bytes, digest binding, and deployment signature; it cannot derive the
+address's routability or inspect the live policy from redacted data. Version-5
+deployment records, reviewer-access v1 reports, and opaque result-only reports
 fail closed. A digest string without valid report bytes, an unsigned record, a
 self-review, or an untrusted signer cannot confirm deployment.
+
+### Reviewer-access collection and signing contract
+
+The independent deployment reviewer must collect the v2 assertion from the live
+system; a deployment operator's summary is not sufficient:
+
+1. In a private review record, name the exact effective Caddy/provider
+   access-policy artifact and its read-only export source, then fetch it directly.
+   If multiple enforcement layers can allow the app, include every named layer in
+   that artifact. Keep the artifact mode `0600` outside the repository and report.
+2. Obtain the expected reviewer source independently and normalize it to canonical
+   dotted-decimal IPv4. Inspect the complete artifact and confirm that the only
+   app-allow source is that address with prefix length `32`, that it is globally
+   routable unicast, and that no second, broader, IPv6, wildcard, proxy, private,
+   reserved, documentation, link-local, or multicast app-allow source exists.
+3. Parse the named JSON artifact with duplicate keys rejected and serialize it as
+   UTF-8 `canonicalJson` (Unicode code-point object-key order, array order
+   preserved, no whitespace or trailing newline). A screenshot, hand-written
+   summary, non-JSON export, or hash supplied by the operator is not acceptable.
+   Compute lowercase SHA-256 over those exact bytes before either probe and use it
+   as `accessPolicySha256`.
+4. Run the approved-source `GET /ready` check and the unapproved-source blocked-
+   connectivity check. Immediately re-fetch the same named live artifact through
+   the same read-only source, parse and canonicalize it identically, and compute
+   SHA-256 again. Any retrieval, parsing, inspection, or digest mismatch fails the
+   review.
+5. Only after the two digests match may the reviewer set the exact redacted
+   `accessPolicyShape`, set `policyUnchangedDuringProbes` to `passed`, finalize the
+   canonical reviewer-access report, bind its exact SHA-256 in
+   `reviewerAccessEvidenceSha256`, and sign the v6 deployment record. The actual
+   source address and sensitive policy artifact remain only in the private review
+   record, never in the report, deployment record, repository, CI output, or EAS
+   input.
 
 Initial onboarding and rotation use the same Ed25519 SPKI, bounded validity, and
 reviewed-source-control rules as the health trust root, but require an

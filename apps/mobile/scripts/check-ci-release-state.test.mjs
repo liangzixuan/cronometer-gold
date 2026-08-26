@@ -48,6 +48,12 @@ const reviewerAccessReport = Buffer.from(
     startedAt: "2026-08-25T17:40:00.000Z",
     completedAt: "2026-08-25T17:50:00.000Z",
     accessPolicySha256: "8".repeat(64),
+    accessPolicyShape: {
+      addressFamily: "IPv4",
+      allowedNetworkCount: 1,
+      networkScope: "globally-routable-unicast",
+      prefixLength: 32,
+    },
     policyUnchangedDuringProbes: "passed",
     approvedSourceProbe: {
       method: "GET",

@@ -55,6 +55,12 @@ function reviewerAccessReportValue() {
     startedAt: "2026-08-25T17:40:00.000Z",
     completedAt: "2026-08-25T17:50:00.000Z",
     accessPolicySha256: "8".repeat(64),
+    accessPolicyShape: {
+      addressFamily: "IPv4",
+      allowedNetworkCount: 1,
+      networkScope: "globally-routable-unicast",
+      prefixLength: 32,
+    },
     policyUnchangedDuringProbes: "passed",
     approvedSourceProbe: {
       method: "GET",
@@ -424,12 +430,12 @@ describe("confirmed release platform and origin", () => {
     expect(() =>
       validateReleaseDeploymentRecord({ ...unconfirmed, deploymentPlatform: "unknown" }),
     ).toThrow(/platform/u);
-    expect(() =>
-      validateReleaseDeploymentRecord({
-        ...confirmed,
-        schemaVersion: "nutrition-tracker-release-deployment-v4",
-      }),
-    ).toThrow(/v5/u);
+    for (const schemaVersion of [
+      "nutrition-tracker-release-deployment-v4",
+      "nutrition-tracker-release-deployment-v5",
+    ]) {
+      expect(() => validateReleaseDeploymentRecord({ ...confirmed, schemaVersion })).toThrow(/v6/u);
+    }
   });
 
   it("requires the exact six digest-qualified service image repositories", () => {
@@ -651,6 +657,12 @@ describe("confirmed release platform and origin", () => {
       /nutrition-tracker-release-external-https-report-v1/u,
     );
 
+    const legacyAccessReport = reviewerAccessReportValue();
+    legacyAccessReport.schemaVersion = "nutrition-tracker-release-reviewer-access-report-v1";
+    expect(() => validateReportValues(externalHttpsReportValue(), legacyAccessReport)).toThrow(
+      /nutrition-tracker-release-reviewer-access-report-v2/u,
+    );
+
     expect(() => validateReportBytes(reviewerAccessReport, externalHttpsReport)).toThrow(
       /external HTTPS report must contain exactly/u,
     );
@@ -807,7 +819,7 @@ describe("confirmed release platform and origin", () => {
     ).toThrow(/before deployment review and release verification/u);
   });
 
-  it("requires one unchanged access policy with approved success and blocked unapproved connectivity", () => {
+  it("requires the reviewer's unchanged-policy assertion and exact probe outcomes", () => {
     const cases = [
       [
         "invalid policy digest",
@@ -858,6 +870,50 @@ describe("confirmed release platform and origin", () => {
       mutate(report);
       expect(() => validateReportValues(externalHttpsReportValue(), report), label).toThrow(
         message,
+      );
+    }
+  });
+
+  it("requires the signed redacted assertion of one globally routable IPv4 /32", () => {
+    const invalidShapes = [
+      ["IPv6", 1, "globally-routable-unicast", 128],
+      ["IPv4", 0, "globally-routable-unicast", 32],
+      ["IPv4", 2, "globally-routable-unicast", 32],
+      ["IPv4", "1", "globally-routable-unicast", 32],
+      ["IPv4", 1, "globally-routable-unicast", 24],
+      ["IPv4", 1, "globally-routable-unicast", 31],
+      ["IPv4", 1, "globally-routable-unicast", 33],
+      ["IPv4", 1, "globally-routable-unicast", "32"],
+      ["IPv4", 1, "private", 32],
+      ["IPv4", 1, "reserved", 32],
+      ["IPv4", 1, "documentation", 32],
+      ["IPv4", 1, "multicast", 32],
+      ["IPv4", 1, "link-local", 32],
+    ];
+    for (const [addressFamily, allowedNetworkCount, networkScope, prefixLength] of invalidShapes) {
+      const report = reviewerAccessReportValue();
+      report.accessPolicyShape = {
+        addressFamily,
+        allowedNetworkCount,
+        networkScope,
+        prefixLength,
+      };
+      expect(() => validateReportValues(externalHttpsReportValue(), report)).toThrow(
+        /exactly one globally routable unicast IPv4 \/32/u,
+      );
+    }
+
+    const missingShape = reviewerAccessReportValue();
+    delete missingShape.accessPolicyShape;
+    expect(() => validateReportValues(externalHttpsReportValue(), missingShape)).toThrow(
+      /must contain exactly/u,
+    );
+
+    for (const leakedField of ["sourceAddress", "networkCidr"]) {
+      const report = reviewerAccessReportValue();
+      report.accessPolicyShape[leakedField] = "198.51.100.1/32";
+      expect(() => validateReportValues(externalHttpsReportValue(), report)).toThrow(
+        /accessPolicyShape must contain exactly/u,
       );
     }
   });

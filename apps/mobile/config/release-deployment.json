@@ -1,5 +1,5 @@
 {
-  "schemaVersion": "nutrition-tracker-release-deployment-v5",
+  "schemaVersion": "nutrition-tracker-release-deployment-v6",
   "deploymentPlatform": "azure",
   "deploymentConfirmed": false,
   "apiOrigin": null,

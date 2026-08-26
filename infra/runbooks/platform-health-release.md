@@ -6,16 +6,48 @@ Metro export is not native release evidence.
 
 ## Configuration gate
 
-- Production compilation first requires a reviewer-signed v5 deployment
+- Production compilation first requires a reviewer-signed v6 deployment
   attestation and the exact canonical external-HTTPS and reviewer-access report
   bytes. Their strict schemas cross-bind the signed origin and commit to fresh
-  public-TLS `/ready` success, one unchanged access policy, approved-source
-  readiness, and blocked unapproved-source connectivity. Distinct signed
-  deployment-operator and reviewer principals and an active independent key from
-  the separate deployment trust store remain mandatory.
+  public-TLS `/ready` success, an independently reviewed policy-artifact digest,
+  a redacted assertion of one global-unicast IPv4 `/32`, approved-source
+  readiness, and blocked unapproved-source connectivity without storing source
+  addresses. The verifier checks that exact signed assertion; it cannot derive
+  routability or the live policy's contents from the redacted report. Distinct
+  signed deployment-operator and reviewer principals and an active independent
+  key from the separate deployment trust store remain mandatory.
   That store is intentionally empty today, so production EAS compilation and
   submission remain blocked. Never substitute an operator-owned key, an unsigned
   digest list, or synthetic report bytes.
+
+### Reviewer-access evidence collection
+
+The independent deployment reviewer performs this sequence before signing:
+
+1. In a private record, name and directly fetch the sensitive effective
+   Caddy/provider access-policy artifact through a read-only source. Include every
+   enforcement layer that can allow the app, keep the artifact mode `0600`, and
+   never place it or its source address in the repository or redacted report.
+2. Obtain the expected reviewer source independently, normalize it to canonical
+   dotted-decimal IPv4, and inspect the full artifact. Require exactly one
+   app-allow source equal to that globally routable unicast IPv4 with prefix
+   length `32`; reject every extra, broader, IPv6, wildcard, proxy, private,
+   reserved, documentation, link-local, or multicast app-allow source.
+3. Reject duplicate-key or non-JSON exports. Serialize the named artifact to
+   UTF-8 `canonicalJson` with Unicode code-point object-key order, preserved array
+   order, no whitespace, and no trailing newline. Before the probes, compute
+   lowercase SHA-256 over those exact canonical bytes for `accessPolicySha256`.
+   Do not accept a screenshot, summary, or operator-supplied digest.
+4. Run approved `GET /ready` and unapproved blocked-connectivity probes. Then
+   immediately re-fetch the same named live artifact from the same source,
+   re-inspect and re-canonicalize it identically, and require the same SHA-256.
+   Any fetch, parse, inspection, or digest mismatch stops the release.
+5. Only then set the exact redacted `accessPolicyShape`, set
+   `policyUnchangedDuringProbes` to `passed`, hash the canonical reviewer-access
+   report into `reviewerAccessEvidenceSha256`, and sign the v6 deployment record.
+   Retain the actual address and sensitive artifact only in the private review
+   record; never copy them to the report, signed deployment, CI/EAS inputs, logs,
+   or repository.
 
 - iOS has the HealthKit capability and a specific `NSHealthShareUsageDescription`.
   No write purpose string or data type is declared while the product is read-only.

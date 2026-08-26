@@ -20,11 +20,11 @@ import {
   validateReviewerTrustStore,
 } from "./reviewer-trust.mjs";
 
-export const RELEASE_DEPLOYMENT_SCHEMA = "nutrition-tracker-release-deployment-v5";
+export const RELEASE_DEPLOYMENT_SCHEMA = "nutrition-tracker-release-deployment-v6";
 export const RELEASE_EXTERNAL_HTTPS_REPORT_SCHEMA =
   "nutrition-tracker-release-external-https-report-v1";
 export const RELEASE_REVIEWER_ACCESS_REPORT_SCHEMA =
-  "nutrition-tracker-release-reviewer-access-report-v1";
+  "nutrition-tracker-release-reviewer-access-report-v2";
 export { RELEASE_DEPLOYMENT_REVIEWER_TRUST_SCHEMA } from "./reviewer-trust.mjs";
 export const RELEASE_DEPLOYMENT_UNCONFIRMED_MESSAGE =
   "The exact API deployment platform and origin must be confirmed before release.";
@@ -235,6 +235,7 @@ function validateReviewerAccessReport(report, deployment, reviewedAt, verifiedAt
   assertExactKeys(
     report,
     [
+      "accessPolicyShape",
       "accessPolicySha256",
       "apiOrigin",
       "approvedSourceProbe",
@@ -254,6 +255,21 @@ function validateReviewerAccessReport(report, deployment, reviewedAt, verifiedAt
   }
   assertReportContext(report, deployment, name);
   assertSha256(report.accessPolicySha256, `${name}.accessPolicySha256`);
+  assertExactKeys(
+    report.accessPolicyShape,
+    ["addressFamily", "allowedNetworkCount", "networkScope", "prefixLength"],
+    `${name}.accessPolicyShape`,
+  );
+  if (
+    report.accessPolicyShape.addressFamily !== "IPv4" ||
+    report.accessPolicyShape.allowedNetworkCount !== 1 ||
+    report.accessPolicyShape.networkScope !== "globally-routable-unicast" ||
+    report.accessPolicyShape.prefixLength !== 32
+  ) {
+    throw new TypeError(
+      `${name}.accessPolicyShape must declare the signed reviewer's assertion of exactly one globally routable unicast IPv4 /32 without recording its address.`,
+    );
+  }
   if (report.policyUnchangedDuringProbes !== "passed") {
     throw new TypeError(`${name}.policyUnchangedDuringProbes must equal passed.`);
   }

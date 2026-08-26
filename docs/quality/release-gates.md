@@ -49,8 +49,12 @@ package boundaries.
 - The reviewer-signed deployment record binds distinct exact canonical reports,
   not opaque result hashes. The external report proves fresh public-chain,
   hostname, certificate-lifetime, and exact `/ready` routing for the signed
-  origin/commit. The access report proves the same unchanged source policy lets
-  the approved reviewer reach readiness while an unapproved source is blocked.
+  origin/commit. The access report carries the independent reviewer's signed
+  assertion that the sensitive live policy contained exactly one globally
+  routable unicast IPv4 `/32`, plus the canonical policy-artifact digest claimed
+  unchanged across approved-readiness and blocked-unapproved-source probes. The
+  redacted report stores neither source address; the verifier validates the exact
+  assertion and signature but cannot derive routability from the redacted data.
 - Every profile, diary, biometric, report, and integration route enforces a
   server-side session/ownership check; unauthenticated and cross-user access
   tests fail closed.
