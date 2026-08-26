@@ -35,6 +35,14 @@ object_storage_role_emails = {
   ledger_restore = "operator+nutrition-ledger-restore@example.com"
 }
 
+# Azure-compute pivot only. Keep this disabled/null until an Azure static public
+# IPv4 exists. The current OCI root still desires the retired A1 compute graph,
+# so do not enable these values until a reviewed storage-only state migration is
+# implemented and a fresh plan proves exactly one network-source create plus
+# four in-place policy restrictions with no compute or unrelated action.
+restrict_object_storage_to_azure_egress = false
+azure_object_storage_egress_cidr        = null
+
 # Leave false for validate/review. Set true only after completing every cost,
 # capacity, DNS, recovery, and non-HA prerequisite in README.md.
 acknowledge_non_ha_and_possible_charges = false

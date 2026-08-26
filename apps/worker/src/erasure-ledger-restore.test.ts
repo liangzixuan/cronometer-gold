@@ -1,7 +1,7 @@
 import type { ErasureReplayLedgerEntry } from "@nutrition-tracker/artifact-store";
 import { describe, expect, it, vi } from "vitest";
 
-import { replayErasureLedgerSubjects } from "./erasure-ledger-restore.js";
+import { replayErasureLedgerSubjects, restoreVersionResolver } from "./erasure-ledger-restore.js";
 
 const first = "10000000-0000-4000-8000-000000000001";
 const second = "20000000-0000-4000-8000-000000000002";
@@ -12,6 +12,44 @@ async function* subjects() {
 }
 
 describe("offline erasure replay", () => {
+  it("permits an explicit strict S3-compatible inventory in production without OCI configuration", async () => {
+    await expect(
+      restoreVersionResolver(
+        {
+          ERASURE_REPLAY_LEDGER_RESTORE_VERSION_LIST_PROVIDER: "s3_compatible",
+          NODE_ENV: "production",
+        },
+        {
+          bucket: "nutrition-erasure-ledger",
+          endpoint: "https://objects.example.test",
+          region: "us-east-1",
+          requestTimeoutMs: 30_000,
+        },
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it("fails closed when production version inventory is absent or unknown", async () => {
+    const input = {
+      bucket: "nutrition-erasure-ledger",
+      endpoint: "https://objects.example.test",
+      region: "us-east-1",
+      requestTimeoutMs: 30_000,
+    };
+    await expect(restoreVersionResolver({ NODE_ENV: "production" }, input)).rejects.toThrow(
+      "Missing restore configuration: ERASURE_REPLAY_LEDGER_RESTORE_VERSION_LIST_PROVIDER",
+    );
+    await expect(
+      restoreVersionResolver(
+        {
+          ERASURE_REPLAY_LEDGER_RESTORE_VERSION_LIST_PROVIDER: "latest",
+          NODE_ENV: "production",
+        },
+        input,
+      ),
+    ).rejects.toThrow("Invalid restore object version inventory provider");
+  });
+
   it("probes every restored subject with bounded concurrency and applies only authenticated tombstones", async () => {
     let active = 0;
     let maximumActive = 0;

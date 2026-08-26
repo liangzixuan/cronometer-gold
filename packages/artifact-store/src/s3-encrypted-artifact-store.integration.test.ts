@@ -58,8 +58,12 @@ describe.skipIf(!enabled)("live S3 encrypted artifact boundary", () => {
       process.env.EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY ?? "nutrition_export_reader_local_only",
     );
     const adminRaw = rawStore(
-      process.env.MINIO_ROOT_USER ?? "nutrition_local",
-      process.env.MINIO_ROOT_PASSWORD ?? "nutrition_local_password_only",
+      process.env.ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID ??
+        process.env.MINIO_ROOT_USER ??
+        "nutrition_local",
+      process.env.ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY ??
+        process.env.MINIO_ROOT_PASSWORD ??
+        "nutrition_local_password_only",
     );
     const keyRing = {
       currentKeyId: "integration-export-key-v1",
@@ -154,8 +158,12 @@ describe.skipIf(!enabled)("live S3 encrypted artifact boundary", () => {
       { bucket, readVersionPolicy: "require_singleton" },
     );
     const adminRaw = rawStore(
-      process.env.MINIO_ROOT_USER ?? "nutrition_local",
-      process.env.MINIO_ROOT_PASSWORD ?? "nutrition_local_password_only",
+      process.env.ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID ??
+        process.env.MINIO_ROOT_USER ??
+        "nutrition_local",
+      process.env.ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY ??
+        process.env.MINIO_ROOT_PASSWORD ??
+        "nutrition_local_password_only",
       { bucket },
     );
     const keyRing = {

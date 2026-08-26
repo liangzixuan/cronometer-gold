@@ -1,0 +1,46 @@
+{
+	email {$ACME_EMAIL}
+	admin off
+	auto_https disable_redirects
+}
+
+http://{$API_FQDN} {
+	respond "Not Found" 404
+}
+
+http://{$WEB_FQDN} {
+	respond "Not Found" 404
+}
+
+{$API_FQDN} {
+	@internalReady {
+		method GET
+		path /ready
+		remote_ip private_ranges
+	}
+	handle @internalReady {
+		reverse_proxy api:4000
+	}
+	@betaAllowed remote_ip {$BETA_ALLOWED_CIDRS}
+	handle @betaAllowed {
+		encode zstd gzip
+		reverse_proxy api:4000
+		header {
+			-Server
+			X-Content-Type-Options nosniff
+			X-Frame-Options DENY
+			Referrer-Policy no-referrer
+		}
+	}
+	respond "Not Found" 404
+}
+
+{$WEB_FQDN} {
+	@betaAllowed remote_ip {$BETA_ALLOWED_CIDRS}
+	handle @betaAllowed {
+		encode zstd gzip
+		reverse_proxy api:3000
+		header -Server
+	}
+	respond "Not Found" 404
+}

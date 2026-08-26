@@ -6,6 +6,18 @@
     "promptToConfigurePushNotifications": false
   },
   "build": {
+    "physical-device": {
+      "extends": "production",
+      "distribution": "internal",
+      "environment": "preview",
+      "developmentClient": false,
+      "android": {
+        "buildType": "apk"
+      },
+      "ios": {
+        "simulator": false
+      }
+    },
     "production": {
       "distribution": "store",
       "credentialsSource": "remote",

@@ -13,6 +13,9 @@ ADR with a new ADR instead of rewriting its decision.
 | [0005](./0005-authenticated-diary-and-session-boundary.md) | Authenticated diary and session boundary | Accepted |
 | [0006](./0006-versioned-recipes-and-explainable-goals.md) | Versioned recipes and explainable goals | Accepted |
 | [0007](./0007-retention-privacy-and-platform-health.md) | Retention, privacy operations, and platform-health imports | Accepted |
+| [0008](./0008-on-demand-azure-arm-beta-pivot.md) | On-demand Azure ARM synthetic-beta pivot | Accepted for implementation |
+| [0009](./0009-ephemeral-localstack-s3-iam-fixture.md) | Ephemeral LocalStack S3/IAM development fixture | Accepted for local implementation |
+| [0010](./0010-persistent-localstack-development-profile.md) | Attended persistent LocalStack development profile | Accepted for local implementation |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

@@ -23,6 +23,8 @@ Cronometer source code, content, branding, assets, or proprietary food data.
 - `packages/db`: PostgreSQL schema, Kysely types, and migrations
 - `packages/search`: search contracts, ranking, cursors, and Meilisearch adapter
 - `infra/docker`: local development dependencies
+- `infra/azure`: fail-closed Azure ARM VM pivot (planning only until reviewed)
+- `infra/localstack`: ephemeral S3/IAM compatibility tests (never hosting)
 - `docs/adr`: decisions and non-negotiable boundaries
 - `docs/product`: executable product scope and milestone sequence
 

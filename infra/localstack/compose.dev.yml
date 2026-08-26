@@ -1,0 +1,41 @@
+name: nutrition-tracker-localstack-development-${LOCALSTACK_PROFILE_NAMESPACE:?wrapper-required}
+
+services:
+  localstack:
+    image: localstack/localstack:2026.7.5@sha256:0d74e1d2d7ce13a3cb25fc64cf15eb225f1c95c762e56e057bc6a9ed0ed29306
+    restart: "no"
+    environment:
+      LOCALSTACK_AUTH_TOKEN: ${LOCALSTACK_AUTH_TOKEN-}
+      SERVICES: s3,iam,sts
+      EAGER_SERVICE_LOADING: "1"
+      ENFORCE_IAM: "1"
+      IAM_SOFT_MODE: "0"
+      PERSISTENCE: "1"
+      S3_SKIP_SIGNATURE_VALIDATION: "1"
+      PARITY_AWS_ACCESS_KEY_ID: "0"
+      LOCALSTACK_RESPONSE_HEADER_ENABLED: "1"
+      DISABLE_EVENTS: "1"
+      AWS_DEFAULT_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    ports:
+      - "127.0.0.1:${LOCALSTACK_GATEWAY_PORT:-4566}:4566"
+    volumes:
+      - localstack-state:/var/lib/localstack
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl --fail --silent http://127.0.0.1:4566/_localstack/health >/dev/null",
+        ]
+      interval: 2s
+      timeout: 2s
+      retries: 45
+      start_period: 15s
+    pids_limit: 512
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  localstack-state:
+    name: nutrition-tracker-localstack-development-state-${LOCALSTACK_PROFILE_NAMESPACE:?wrapper-required}

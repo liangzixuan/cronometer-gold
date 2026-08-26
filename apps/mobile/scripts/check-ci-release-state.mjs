@@ -3,12 +3,12 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 
 import {
-  RELEASE_DEPLOYMENT_UNCONFIRMED_MESSAGE,
+  hasExternalReleaseDeploymentEvidence,
+  RELEASE_DEPLOYMENT_UNCONFIRMED_CODE,
+  RELEASE_EXPECTED_BLOCK_EXIT_CODE,
+  RELEASE_NUMBERING_UNCONFIRMED_CODE,
   validateReleaseDeployment,
 } from "./check-release-env.mjs";
-
-const UNCONFIRMED_MESSAGE =
-  "Package-identifier history and explicit native build numbers must be confirmed before release.";
 
 function combinedOutput(result) {
   return `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim();
@@ -18,33 +18,49 @@ export function checkCiReleaseState(
   releaseNumbering,
   releaseDeployment,
   environment,
-  runScript = (script) =>
-    spawnSync("pnpm", [script], {
+  runCommand = (command, arguments_) =>
+    spawnSync(command, arguments_, {
       encoding: "utf8",
       env: environment,
       maxBuffer: 20_000_000,
     }),
+  deploymentRuntime,
+  deploymentReviewerTrustStore,
 ) {
   const expectedBlocker =
     releaseNumbering?.identifierHistoryConfirmed !== true
-      ? UNCONFIRMED_MESSAGE
-      : releaseDeployment?.ociDeploymentConfirmed !== true
-        ? RELEASE_DEPLOYMENT_UNCONFIRMED_MESSAGE
+      ? {
+          arguments: ["scripts/check-eas-config.mjs", "--release", "--machine-readable"],
+          code: RELEASE_NUMBERING_UNCONFIRMED_CODE,
+        }
+      : !hasExternalReleaseDeploymentEvidence(environment)
+        ? {
+            arguments: ["scripts/check-release-env.mjs", "--machine-readable"],
+            code: RELEASE_DEPLOYMENT_UNCONFIRMED_CODE,
+          }
         : null;
   if (expectedBlocker !== null) {
-    const result = runScript("release:check");
+    const result = runCommand(process.execPath, expectedBlocker.arguments);
     if (result.error) throw result.error;
-    const output = combinedOutput(result);
-    if (result.status !== 1 || !output.includes(expectedBlocker)) {
+    if (
+      result.status !== RELEASE_EXPECTED_BLOCK_EXIT_CODE ||
+      result.stdout !== `${expectedBlocker.code}\n` ||
+      result.stderr !== ""
+    ) {
       throw new TypeError(
-        "Unconfirmed release state must fail only at its exact checked-in release gate.",
+        "Unconfirmed release state must emit only its exact structured checked-in release blocker.",
       );
     }
     return { mode: "expected-block", output: "" };
   }
 
-  validateReleaseDeployment(environment, releaseDeployment);
-  const result = runScript("build:release");
+  validateReleaseDeployment(
+    environment,
+    releaseDeployment,
+    deploymentRuntime,
+    deploymentReviewerTrustStore,
+  );
+  const result = runCommand("pnpm", ["build:release"]);
   if (result.error) throw result.error;
   if (result.status !== 0) {
     throw new TypeError(`Confirmed mobile release preflight failed:\n${combinedOutput(result)}`);

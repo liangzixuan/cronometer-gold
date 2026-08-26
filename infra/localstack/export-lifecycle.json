@@ -1,0 +1,17 @@
+{
+  "Rules": [
+    {
+      "ID": "localstack-export-integration-expiry",
+      "Status": "Enabled",
+      "Filter": {
+        "Prefix": "integration/"
+      },
+      "Expiration": {
+        "Days": 1
+      },
+      "AbortIncompleteMultipartUpload": {
+        "DaysAfterInitiation": 1
+      }
+    }
+  ]
+}

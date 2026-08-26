@@ -38,14 +38,47 @@ Create the legacy bucket named by `S3_BUCKET` in the MinIO console only when a
 food-import rehearsal needs it. Mailpit captures local email at
 <http://127.0.0.1:8025>.
 
+## Opt-in persistent LocalStack retention profile
+
+MinIO remains the default dependency and mandatory authenticated-secret test
+lane. To make the host API and worker use persistent LocalStack S3/IAM state for
+an attended synthetic-data session, start the guarded profile after the normal
+dependencies:
+
+```sh
+pnpm infra:localstack:up
+pnpm infra:localstack:status
+pnpm dev:localstack
+```
+
+`infra:localstack:up` prompts non-echoingly for a Developer Auth Token when it is
+not already exported. It never accepts the token as an argument or writes it.
+The generated mode-`0600` profile and runtime overrides below
+`.local-data/localstack` retain the selected loopback port and point only the
+API/worker retention adapters at LocalStack; PostgreSQL, Meilisearch, MinIO, and
+Mailpit remain unchanged. Later commands reuse the retained port and reject a
+conflicting explicit value. `infra:localstack:status` verifies state without
+provisioning or rewriting it. See
+[`infra/localstack/README.md`](../localstack/README.md) for bootstrap, drift, and
+physical-phone boundaries.
+
+Run the live persistent-state compatibility check while the service is running:
+
+```sh
+pnpm test:localstack:dev
+```
+
 ## Stop
 
 ```sh
 docker compose --env-file .env -f infra/docker/compose.yml down
+pnpm infra:localstack:down
 ```
 
-This preserves named volumes. Do not add `--volumes` unless the exact local data
-has been inspected and disposable loss is intended.
+These commands preserve named volumes. The LocalStack command removes its
+token-bearing container but retains its synthetic state and generated role
+files. Do not add `--volumes` unless the exact local data has been inspected and
+disposable loss is intended.
 
 ## Common failures
 

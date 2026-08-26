@@ -39,6 +39,8 @@ resource "oci_objectstorage_bucket" "ledger" {
 }
 
 locals {
+  azure_object_storage_network_source_name = "${var.name_prefix}-azure-os-egress"
+
   object_storage_roles = {
     export_reader = {
       bucket_name        = local.export_bucket_name
@@ -150,10 +152,61 @@ resource "oci_identity_user_group_membership" "object_storage_role" {
   user_id        = oci_identity_user.object_storage_role[each.key].id
 }
 
+# This resource is absent by default. It may be added only after Azure has
+# allocated the beta VM's static public IPv4 and a fresh, independently audited
+# OCI plan proves that no retired A1 compute resource or unrelated change is in
+# the graph. "none" prevents service on-behalf-of requests from bypassing the
+# single public /32. The immutable name and prevent_destroy guard make removal
+# an explicit source-code and state-migration event rather than a toggle.
+resource "oci_identity_network_source" "azure_object_storage_egress" {
+  for_each = var.restrict_object_storage_to_azure_egress && var.azure_object_storage_egress_cidr != null ? {
+    azure = var.azure_object_storage_egress_cidr
+  } : {}
+
+  compartment_id     = var.tenancy_ocid
+  description        = "Azure controlled-beta static egress allowed to use the four Object Storage roles"
+  freeform_tags      = local.tags
+  name               = local.azure_object_storage_network_source_name
+  public_source_list = [each.value]
+  services           = ["none"]
+
+  depends_on = [terraform_data.apply_guardrails]
+
+  lifecycle {
+    prevent_destroy = true
+
+    postcondition {
+      condition     = self.state == "ACTIVE"
+      error_message = "The Azure Object Storage network source must be ACTIVE before any role policy can reference it."
+    }
+  }
+}
+
+locals {
+  object_storage_network_source_conditions = (
+    var.restrict_object_storage_to_azure_egress && var.azure_object_storage_egress_cidr != null
+    ? ["request.networkSource.name='${local.azure_object_storage_network_source_name}'"]
+    : []
+  )
+
+  object_storage_role_policy_conditions = {
+    for role_name, role in local.object_storage_roles : role_name => concat(
+      [
+        "target.bucket.name='${role.bucket_name}'",
+        "target.object.name='${role.object_prefix}'",
+      ],
+      local.object_storage_network_source_conditions,
+      ["any {${join(", ", [for permission in role.object_permissions : "request.permission='${permission}'"])}}"],
+    )
+  }
+}
+
 # request.permission conditions express the exact adapter contract. Known-key
 # S3 operations need no bucket permission. In particular, ledger_writer has
 # neither OBJECT_OVERWRITE nor OBJECT_DELETE, and only ledger_restore has
-# OBJECT_INSPECT so the native API can ListObjectVersions.
+# OBJECT_INSPECT so the native API can ListObjectVersions. When the optional
+# Azure binding is enabled, the same all{} condition also requires the request
+# to originate in the one ACTIVE network source above.
 resource "oci_identity_policy" "object_storage_role" {
   for_each = local.object_storage_roles
 
@@ -162,11 +215,12 @@ resource "oci_identity_policy" "object_storage_role" {
   freeform_tags  = local.tags
   name           = "${var.name_prefix}-os-${replace(each.key, "_", "-")}-policy"
   statements = [
-    "Allow group id ${oci_identity_group.object_storage_role[each.key].id} to manage objects in compartment id ${local.target_compartment_id} where all {target.bucket.name='${each.value.bucket_name}', target.object.name='${each.value.object_prefix}', any {${join(", ", [for permission in each.value.object_permissions : "request.permission='${permission}'"])}}}",
+    "Allow group id ${oci_identity_group.object_storage_role[each.key].id} to manage objects in compartment id ${local.target_compartment_id} where all {${join(", ", local.object_storage_role_policy_conditions[each.key])}}",
   ]
 
   depends_on = [
     oci_identity_user_group_membership.object_storage_role,
+    oci_identity_network_source.azure_object_storage_egress,
     oci_objectstorage_bucket.exports,
     oci_objectstorage_bucket.ledger,
   ]

@@ -22,6 +22,30 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: 1.5.7
+
+      - name: Validate the Azure infrastructure pivot
+        run: |
+          terraform -chdir=infra/azure init -backend=false -lockfile=readonly
+          terraform -chdir=infra/azure fmt -check -recursive
+          terraform -chdir=infra/azure validate
+          python3 infra/azure/tests/static-contracts.py
+          python3 -m unittest discover -s infra/azure/tests -p 'test_*.py'
+          python3 infra/azure/files/tests/static-contracts.py
+
+      - name: Validate the OCI controlled-beta infrastructure
+        run: |
+          terraform -chdir=infra/oci init -backend=false -lockfile=readonly
+          terraform -chdir=infra/oci fmt -check -recursive
+          terraform -chdir=infra/oci validate
+          python3 infra/oci/tests/static-contracts.py
+
+      - name: Validate the opt-in LocalStack fixture
+        run: python3 -B -m unittest discover -s infra/localstack/tests -p 'test_*.py'
+
       - name: Install pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
 
@@ -43,6 +67,9 @@ jobs:
       - name: Exercise the mobile release readiness state
         env:
           EXPO_PUBLIC_API_URL: ${{ vars.EXPO_PUBLIC_API_URL }}
+          NUTRITION_RELEASE_DEPLOYMENT_EVIDENCE_JSON: ${{ vars.NUTRITION_RELEASE_DEPLOYMENT_EVIDENCE_JSON }}
+          NUTRITION_RELEASE_EXTERNAL_HTTPS_REPORT_BASE64: ${{ secrets.NUTRITION_RELEASE_EXTERNAL_HTTPS_REPORT_BASE64 }}
+          NUTRITION_RELEASE_REVIEWER_ACCESS_REPORT_BASE64: ${{ secrets.NUTRITION_RELEASE_REVIEWER_ACCESS_REPORT_BASE64 }}
         run: pnpm --filter @nutrition-tracker/mobile ci:release-state
 
       - name: Reject high-severity production dependency advisories

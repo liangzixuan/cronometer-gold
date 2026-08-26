@@ -5,14 +5,23 @@ The development client chooses a platform-safe loopback API address when
 Simulator uses `127.0.0.1:4000`. Do not put either loopback value in the shared
 root `.env`, because an explicit value overrides that platform selection.
 
+A physical phone cannot use either emulator address and must never connect to a
+LocalStack port. For an attended local development session, keep the API and all
+dependencies on Mac loopback and provide a separately authenticated, publicly
+trusted HTTPS route whose only upstream is `127.0.0.1:4000`. Set that route as
+`EXPO_PUBLIC_API_URL` only for the mobile development process. An Expo/Metro
+tunnel serves the bundle and does not expose the API. The opt-in persistent
+LocalStack profile changes only the API/worker artifact backend; it is not an
+API ingress or release deployment.
+
 A distributable build must provide a credential-free, non-loopback HTTPS origin
 and use the release script:
 
 ```sh
-EXPO_PUBLIC_API_URL="$DEPLOYED_OCI_API_ORIGIN" pnpm --filter @nutrition-tracker/mobile build:release
+EXPO_PUBLIC_API_URL="$DEPLOYED_API_ORIGIN" pnpm --filter @nutrition-tracker/mobile build:release
 ```
 
-Set `DEPLOYED_OCI_API_ORIGIN` from the verified deployment output; do not use a
+Set `DEPLOYED_API_ORIGIN` from the verified deployment output; do not use a
 documentation or loopback hostname.
 
 `release:check` performs the same configuration preflight without exporting the
@@ -27,21 +36,103 @@ Run EAS commands from this directory. `eas.json` pins EAS CLI 22.0.0, Node
 22.13.0, pnpm 11.19.0, source-controlled app versions, and the production store
 outputs: an iOS device IPA and an Android app bundle.
 
-The production profile deliberately contains no API placeholder. After the OCI
-origin exists and passes its release checks, set
-`config/release-deployment.json` to `ociDeploymentConfirmed: true` and record its
-canonical HTTPS origin. Then create a **plaintext**, project-level
+The production profile deliberately contains no API placeholder. The deployment
+policy pins the reviewed target platform (`azure` during the current pivot, or
+`oci` for the retained legacy path). The version-4 checked-in
+`config/release-deployment.json` file is permanently an unconfirmed template:
+`deploymentConfirmed` remains `false` and every evidence field remains `null`.
+Do not put a commit hash in that tracked file. A Git commit includes the file's
+contents, so a file containing its own final commit hash would be an impossible
+self-reference rather than release evidence.
+
+After the real origin passes its release checks, create a canonical external
+deployment-evidence JSON record that binds all of the following:
+
+- the canonical HTTPS API origin and target platform;
+- the exact clean Git commit deployed by the six services;
+- digest-qualified `ghcr.io/liangzixuan/cronometer-gold-{api,web,worker,migrator,caddy,postgres}`
+  image references with no tag fallback; and
+- distinct SHA-256 digests for redacted external-HTTPS and reviewer-access
+  evidence reports, the deployment-operator principal, the independent reviewer
+  principal, and canonical UTC review time.
+
+The external-HTTPS report must prove the public certificate chain, hostname,
+expiry, routing, and readiness through the claimed origin. The reviewer-access
+report must prove the approved reviewer source succeeds and an unapproved source
+fails closed. Keep those redacted reports with the release evidence; never put
+tokens, health values, reviewer identifiers, source addresses, or credentials in
+them. The external record uses the same schema as the policy, sets
+`deploymentConfirmed` to `true`, and includes distinct `deployedBy` and
+`reviewedBy` principals plus an Ed25519 `reviewerAttestation`. Their comparison
+is case-insensitive. The signature covers canonical JSON for every deployment
+field, including both principals, the reviewer key ID, and algorithm; only
+`signatureBase64` is excluded from its own signed payload. Its key must be active
+in the separate `config/release-deployment-reviewers.json` trust store and its
+principal must equal `reviewedBy`.
+
+That trust store is intentionally empty today. Production release checks remain
+blocked until a genuinely independent deployment reviewer public key is
+onboarded through reviewed source control. Never add the repository or deployment
+operator's key and never invent a principal to clear the gate.
+
+The signed record must use the exact checked field order, compact encoding, and
+an optional single trailing newline. Supply it at release time through exactly
+one of these inputs:
+
+```sh
+NUTRITION_RELEASE_DEPLOYMENT_EVIDENCE_JSON='<canonical-one-line-json>'
+# or
+NUTRITION_RELEASE_DEPLOYMENT_EVIDENCE_PATH="$PWD/.local-data/release/deployment-evidence.json"
+```
+
+Supply each exact redacted report independently through either one normalized,
+absolute, mode-`0600` JSON file path or one canonical padded base64 byte string;
+never set both forms for one report:
+
+```sh
+NUTRITION_RELEASE_EXTERNAL_HTTPS_REPORT_PATH="$PWD/.local-data/release/external-https.json"
+NUTRITION_RELEASE_REVIEWER_ACCESS_REPORT_PATH="$PWD/.local-data/release/reviewer-access.json"
+# CI-only alternatives use the corresponding *_REPORT_BASE64 variables.
+```
+
+The verifier accepts only bounded regular files (maximum 64 KiB), rejects a
+shared path or a file that changes between stat and read, hashes the exact bytes,
+and compares both actual SHA-256 values to the signed record. It never prints
+report content. In GitHub Actions the two inline base64 values are secrets, not
+repository variables. In EAS, prefer protected file-secret variables whose
+values are the two report paths. The signed deployment JSON may be a non-secret
+variable only after confirming it contains no sensitive report content.
+
+`.local-data` is ignored; keep the file mode `0600`. In EAS, use a protected
+environment value or file variable rather than committing the record. A release
+check rejects absent or dual inputs, noncanonical JSON, an untrusted or invalid
+reviewer signature, missing or mismatched report bytes, evidence older than 24
+hours, a dirty local tree, a deployed commit other than the actual local Git
+`HEAD` or EAS Build's exact `EAS_BUILD_GIT_COMMIT_HASH`, an arbitrary image
+repository, or a missing service digest. EAS archives do not contain `.git`, so
+the remote post-install check deliberately uses that EAS-provided source commit
+and never weakens the local clean-tree check. Only a valid external attestation
+and its exact report bytes can request confirmation; a checked-in boolean or
+digest-shaped string can never approve release.
+
+Then create a **plaintext**, project-level
 `EXPO_PUBLIC_API_URL` variable in the EAS `production` environment with that
 exact value. The value is public client configuration, not a secret. A mandatory
-EAS post-install hook runs `release:check`; an absent, unsafe, or mismatched
-origin therefore stops the job before native compilation.
+profile-aware EAS post-install hook runs the unchanged `release:check` for the
+production profile; an absent, unsafe, or mismatched origin therefore stops a
+production job before native compilation. Missing and unknown profile names are
+also rejected rather than receiving a permissive default.
 
-CI reads the same public origin from the GitHub repository variable
-`EXPO_PUBLIC_API_URL`. While identifier history is unconfirmed, CI instead
-requires the release check to fail at that exact gate. If numbering is confirmed
-first, it requires the exact unconfirmed-deployment blocker instead. Only after
-both records are confirmed does the CI step require the real variable, verify it
-equals the checked-in OCI origin, and run the full release preflight and export;
+CI reads the same public origin and nonsensitive signed deployment JSON from
+GitHub repository variables; report base64 bytes come only from GitHub Actions
+secrets. While identifier history is unconfirmed, CI invokes the exact numbering
+check in machine mode. If numbering is confirmed first, it invokes the exact
+deployment check. An expected blocker is accepted only as its dedicated exit
+status plus one exact machine-readable stdout line and empty stderr; a human
+message containing the blocker alongside another failure cannot pass.
+Only after numbering, an independently trusted v4 attestation, and both exact
+reports are present does the CI step require the real origin, verify it equals
+the externally reviewed origin, and run the full release preflight and export;
 it has no placeholder or bypass origin.
 
 Before starting a paid or quota-consuming build, validate the linked profile:
@@ -57,5 +148,121 @@ that decision and remains false with null build numbers by default. The release
 check requires the confirmation to be true and requires explicit
 `ios.buildNumber` and `android.versionCode` values in `app.json` that exactly
 match the record; implicit toolchain defaults cannot reach a signed build. The
-checked-in health-reviewer public key authenticates independent physical-device
-evidence; it is not an app-signing credential.
+checked-in health-reviewer trust list is intentionally empty until a genuinely
+independent reviewer key is onboarded. Signed evidence and submission remain
+blocked until then; a reviewer key is never an app-signing credential.
+
+## Signed physical-device development
+
+The `physical-device` profile is a standalone, production-like internal build
+for testing the real HealthKit, Health Connect, and local-notification
+integrations. It inherits the production signing source, pinned toolchain, and
+local versioning, but produces an internally distributed iOS device IPA or a
+directly installable Android APK. It is intentionally not an Expo development
+client, so it does not depend on a Metro server after installation and includes
+the same compiled HealthKit, Health Connect, and local-notification integrations
+as production.
+The repository-wide `requireCommit` setting also makes EAS reject an
+uncommitted worktree for this profile.
+
+Do not put the phone-facing API URL in `eas.json`, `.env`, or a build command.
+Create a **plaintext**, project-level `EXPO_PUBLIC_API_URL` variable in the EAS
+`preview` environment. `EXPO_PUBLIC_` values are public app configuration,
+never secrets. For Mac-hosted development, use a stable Tailscale HTTPS name on
+the default TLS port and keep the phone on the same tailnet. Terminate HTTPS at
+that single API ingress and forward it to the Mac-loopback API. LocalStack,
+Postgres, and Meilisearch must remain private server-side dependencies; never
+expose their hostnames or ports to the phone or an internet tunnel. The
+post-install gate rejects missing values, HTTP, loopback/IP/local targets,
+credentials, paths, non-default ports, and hostnames that identify those
+backing services.
+
+Inspect the resolved profiles before consuming build quota:
+
+```sh
+eas config --platform ios --profile physical-device
+eas config --platform android --profile physical-device
+```
+
+For iOS, the normal internal-distribution path uses ad hoc provisioning. This
+profile does not request enterprise provisioning. A paid Apple Developer
+Program membership is required, and each phone UDID must be registered
+**before** the build and included in that build's provisioning profile:
+
+```sh
+eas device:create
+eas device:list
+eas build --platform ios --profile physical-device
+```
+
+Adding a phone later requires a new build or re-sign with a refreshed ad hoc
+provisioning profile; a previously generated IPA does not gain the new UDID.
+For non-interactive builds that reuse EAS-managed credentials, use EAS's
+`--refresh-ad-hoc-provisioning-profile` option after registering the device.
+Internal-build download URLs are unauthenticated by default, so require Expo
+account authentication for internal distributions in the project settings and
+share them only with approved testers.
+
+For Android, the profile explicitly generates a signed APK, which can be
+downloaded and installed directly after the tester approves installation from
+that source:
+
+```sh
+eas build --platform android --profile physical-device
+```
+
+The APK is for internal device development only. Production remains a Play
+Store AAB, which is not directly installable, and final release evidence must
+still bind the exact production-signed store artifact. The internal
+gate runs the checked-in EAS and generated-native configuration checks plus the
+strict private-device HTTPS-origin check. It intentionally does not claim that
+a private development API is the confirmed production deployment. Selecting
+`production` still routes to the exact deployment, identifier-history,
+version-number, native-health, and transport release gate; the internal profile
+cannot weaken or replace that path.
+
+## Reviewed artifact evidence and submission
+
+The external v3 evidence manifest has four separate binary roles. The device
+matrix is attached to the exact `physical-device` IPA and APK installed on the
+iPhone and Android phone. The same reviewer-signed manifest separately binds the
+exact production IPA and AAB, including their EAS build IDs, source commit,
+native build numbers, signing-identity fingerprints, and SHA-256 digests. The
+four builds must come from one clean commit and share the source-controlled
+native version for each platform. Their expected digests, normalized absolute
+paths, actual digests, and available filesystem identities must also be
+pairwise distinct, and symbolic links are rejected. A matching commit does not
+assert that an internal binary and a store binary are byte-equivalent.
+
+The portable verifier deliberately does not guess EAS provenance or extract
+platform signing certificates from the downloaded archives. Before signing the
+manifest, the independent reviewer must compare the claimed EAS IDs, source
+commits, native versions, and signing-identity fingerprints with authoritative
+EAS metadata and platform signing tools. Until that comparison exists, release
+remains operationally blocked even if every value has the right shape.
+
+Ordinary `production` EAS compilation intentionally runs `release:check`, not
+`release:health-evidence`: the latter cannot exist until the four binaries have
+been produced, installed where applicable, tested, downloaded, and independently
+reviewed. After those steps, supply the v3 manifest and all four absolute
+artifact paths/build-ID pins listed in `config/README.md`, then verify it:
+
+```sh
+pnpm release:health-evidence
+```
+
+Do not run a direct `eas submit` for a reviewed release. The checked-in wrapper
+accepts only one exact production EAS build ID, reruns the deployment/numbering/
+native release preflight, reruns the four-artifact evidence verifier, and invokes
+EAS only if both pass:
+
+```sh
+pnpm release:submit --platform ios --id "$NUTRITION_IOS_PRODUCTION_BUILD_ID"
+pnpm release:submit --platform android --id "$NUTRITION_ANDROID_PRODUCTION_BUILD_ID"
+```
+
+The wrapper strips the evidence variables before launching EAS. Keep the
+downloaded IPA/APK/IPA/AAB and signed manifest outside the repository. TestFlight
+and a Play internal-testing track are still required to smoke the store-delivered
+production builds; the internal matrix alone is not evidence of store packaging
+or store re-signing behavior.

@@ -155,7 +155,7 @@ describe("S3-compatible encrypted artifact hook", () => {
   });
 
   it("restore-only reads an exact version and fails closed on version or delete-marker ambiguity", async () => {
-    let state: "good" | "not_latest" | "ambiguous" = "good";
+    let state: "good" | "not_latest" | "ambiguous" | "null_version" = "good";
     const ciphertext = Buffer.from("singleton-version-ciphertext");
     const server = createServer((request, response) => {
       const url = new URL(request.url ?? "/", "http://s3.test");
@@ -163,8 +163,9 @@ describe("S3-compatible encrypted artifact hook", () => {
         response.statusCode = 200;
         response.setHeader("content-type", "application/xml");
         response.end(
-          `<ListVersionsResult><IsTruncated>false</IsTruncated>` +
-            `<Version><Key>erasure-ledger/v1/key/abc.enc</Key><VersionId>version-one</VersionId><IsLatest>${state === "good" ? "true" : "false"}</IsLatest></Version>` +
+          `<?xml version='1.0' encoding='utf-8'?>\n` +
+            `<ListVersionsResult><IsTruncated>false</IsTruncated>` +
+            `<Version><Key>erasure-ledger/v1/key/abc.enc</Key><VersionId>${state === "null_version" ? "null" : "version-one"}</VersionId><IsLatest>${state === "not_latest" ? "false" : "true"}</IsLatest></Version>` +
             (state === "ambiguous"
               ? `<DeleteMarker><Key>erasure-ledger/v1/key/abc.enc</Key><VersionId>delete-two</VersionId><IsLatest>true</IsLatest></DeleteMarker>`
               : "") +
@@ -193,6 +194,9 @@ describe("S3-compatible encrypted artifact hook", () => {
       region: "us-east-1",
       secretAccessKey: "restore-secret",
     });
+    await expect(
+      store.resolveSingletonVersion({ objectKey: "erasure-ledger/v1/key/abc.enc" }),
+    ).resolves.toEqual({ versionId: "version-one" });
     const opened = required(
       await store.open({ objectKey: "erasure-ledger/v1/key/abc.enc" }),
       "Missing versioned ledger object",
@@ -203,6 +207,10 @@ describe("S3-compatible encrypted artifact hook", () => {
       S3ArtifactStoreVersionConflictError,
     );
     state = "ambiguous";
+    await expect(store.open({ objectKey: "erasure-ledger/v1/key/abc.enc" })).rejects.toBeInstanceOf(
+      S3ArtifactStoreVersionConflictError,
+    );
+    state = "null_version";
     await expect(store.open({ objectKey: "erasure-ledger/v1/key/abc.enc" })).rejects.toBeInstanceOf(
       S3ArtifactStoreVersionConflictError,
     );
@@ -346,6 +354,7 @@ describe("S3-compatible encrypted artifact hook", () => {
         `<Version><Key>erasure-ledger/v1/key/abc.enc</Key><VersionId>version-one</VersionId><IsLatest>true</IsLatest>` +
         `</ListVersionsResult>`,
       `<?xml version="1.1" encoding="UTF-8"?><ListVersionsResult><IsTruncated>false</IsTruncated></ListVersionsResult>`,
+      `<?XML VERSION="1.0" ENCODING="UTF-8"?><ListVersionsResult><IsTruncated>false</IsTruncated></ListVersionsResult>`,
     ];
     for (const candidate of malformedDocuments) {
       document = candidate;

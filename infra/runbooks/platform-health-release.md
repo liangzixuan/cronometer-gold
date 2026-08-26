@@ -6,6 +6,14 @@ Metro export is not native release evidence.
 
 ## Configuration gate
 
+- Production compilation first requires a reviewer-signed v4 deployment
+  attestation, the exact redacted external-HTTPS and reviewer-access report
+  bytes, distinct signed deployment-operator and reviewer principals, and an
+  active independent key from the separate deployment trust store.
+  That store is intentionally empty today, so production EAS compilation and
+  submission remain blocked. Never substitute an operator-owned key, an unsigned
+  digest list, or synthetic report bytes.
+
 - iOS has the HealthKit capability and a specific `NSHealthShareUsageDescription`.
   No write purpose string or data type is declared while the product is read-only.
 - Android declares only `READ_WEIGHT`, the required Health Connect availability
@@ -20,7 +28,8 @@ Metro export is not native release evidence.
 ## Signed-device matrix
 
 Run on one supported physical iPhone and one supported physical Android device
-using clean preview binaries signed by the release owner:
+using the exact clean `physical-device` EAS IPA and APK signed by the release
+owner. Record each exact EAS build ID before installing it:
 
 1. Create the device key in the platform keystore and register only its public
    key after signing the server challenge. Verify a copied or expired challenge,
@@ -51,10 +60,51 @@ batch/receipt IDs, pass/fail, and timestamps. Do not record health values,
 provider record IDs, signatures, public keys, tokens, or screenshots containing
 personal data.
 
+The signed manifest must mark all 26 checked keys in
+`apps/mobile/scripts/check-health-release.mjs` as passed for both device rows and
+must include the measured 10,000-revision/100-signed-record protected-journal
+round trip. Do not infer these measurements from unit tests. The device row's
+`testedEasBuildId` must equal the corresponding internal IPA/APK artifact ID.
+
+## Artifact binding and promotion
+
+Build the production iOS IPA and Android AAB from the same clean Git commit and
+the same source-controlled native build number/version code as the tested
+internal artifacts. The independently reviewed v3 manifest binds four distinct
+EAS builds: internal iOS IPA, internal Android APK, production iOS IPA, and
+production Android AAB. Each entry includes its exact role/profile/type, EAS ID,
+source commit, native version, signing-identity fingerprint, and file SHA-256.
+The release verifier independently hashes four explicit absolute paths and
+checks four separately supplied build-ID pins. The four expected and actual
+digests, normalized paths, and available filesystem identities must be pairwise
+distinct; symbolic links are rejected.
+
+Archive hashing does not itself extract EAS provenance, native versions, or
+platform signing certificates. Before signing, the independent reviewer must
+compare those manifest claims with authoritative EAS metadata and platform
+signing-tool output. If that comparison is absent, keep the release blocked.
+
+The physical matrix proves the internal IPA/APK rows only. It does not claim the
+production IPA/AAB are byte-equivalent. Smoke the production builds through
+TestFlight and a Play internal-testing track before wider beta distribution.
+Only after the external reviewer signs the manifest should the release operator
+run `pnpm release:health-evidence`, followed by the fail-closed
+`pnpm release:submit --platform <ios|android> --id <exact-production-eas-id>`
+wrapper. A direct `eas submit` bypasses the reviewed release procedure and is
+not permitted.
+
+The checked-in reviewer trust list is intentionally empty at present, so these
+verification and submission commands must remain blocked. Onboard a genuinely
+independent reviewer's Ed25519 public key through reviewed source control before
+collecting or accepting a release attestation. The repository/device operator's
+own key is not an independent review and must not be trusted for this gate.
+
 ## Blocking rule
 
-The milestone is not cleared for a signed beta when either physical-device row is
-missing, a capability/declaration differs from the checked configuration, a
-health value appears in notification or telemetry output, or update/delete/
-disconnect/key-revocation behavior is not proven. File the result as a release
-blocker; never replace it with a simulator or mocked-adapter pass.
+The milestone is not cleared for a signed beta when either physical-device row
+or any of the four exact artifact bindings is missing, a capability/declaration
+differs from the checked configuration, a health value appears in notification
+or telemetry output, or update/delete/disconnect/key-revocation behavior is not
+proven. An empty reviewer trust list or an operator-owned reviewer key is also a
+release blocker. File the result as a release blocker; never replace it with a
+simulator, mocked-adapter pass, self-review, or same-commit assumption.

@@ -332,5 +332,10 @@ resource "terraform_data" "apply_guardrails" {
       condition     = !var.create_oci_dns_records || var.dns_zone_name_or_id != null
       error_message = "dns_zone_name_or_id is required when create_oci_dns_records is true."
     }
+
+    precondition {
+      condition     = var.restrict_object_storage_to_azure_egress == (var.azure_object_storage_egress_cidr != null)
+      error_message = "The OCI Object Storage network-source binding is atomic: set restrict_object_storage_to_azure_egress=true together with exactly one reviewed Azure public IPv4 /32, or leave the switch false and the CIDR null."
+    }
   }
 }

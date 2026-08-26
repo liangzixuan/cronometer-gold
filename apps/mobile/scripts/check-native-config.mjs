@@ -138,8 +138,8 @@ const packageJson = JSON.parse(
 const exactDependencies = {
   "@kingstinct/react-native-healthkit": "14.0.2",
   "@sbaiahmed1/react-native-biometrics": "0.16.0",
-  "expo-build-properties": "57.0.12",
-  "expo-notifications": "57.0.12",
+  "expo-build-properties": "57.0.14",
+  "expo-notifications": "57.0.14",
   "react-native-health-connect": "4.1.3",
   "react-native-nitro-modules": "0.36.5",
 };

@@ -1,5 +1,14 @@
 {
-  "schemaVersion": "nutrition-tracker-release-deployment-v1",
-  "ociDeploymentConfirmed": false,
-  "apiOrigin": null
+  "schemaVersion": "nutrition-tracker-release-deployment-v4",
+  "deploymentPlatform": "azure",
+  "deploymentConfirmed": false,
+  "apiOrigin": null,
+  "serviceGitCommit": null,
+  "serviceImages": null,
+  "deployedBy": null,
+  "externalHttpsEvidenceSha256": null,
+  "reviewerAccessEvidenceSha256": null,
+  "reviewedBy": null,
+  "reviewerAttestation": null,
+  "reviewedAt": null
 }

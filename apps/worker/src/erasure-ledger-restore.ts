@@ -14,6 +14,7 @@ import {
   parseArtifactEncryptionKeyRing,
   parseErasureLedgerLocatorKeyRing,
   S3RawArtifactStore,
+  type SingletonObjectVersionResolver,
 } from "@nutrition-tracker/artifact-store";
 import {
   assertDatabaseMigrationLedgerReady,
@@ -168,7 +169,7 @@ function restoreEpoch(environment: NodeJS.ProcessEnv): string {
   return value;
 }
 
-async function restoreVersionResolver(
+export async function restoreVersionResolver(
   environment: NodeJS.ProcessEnv,
   input: {
     readonly bucket: string;
@@ -176,7 +177,7 @@ async function restoreVersionResolver(
     readonly region: string;
     readonly requestTimeoutMs: number;
   },
-): Promise<OciNativeObjectVersionResolver | undefined> {
+): Promise<SingletonObjectVersionResolver | undefined> {
   const provider =
     environment.ERASURE_REPLAY_LEDGER_RESTORE_VERSION_LIST_PROVIDER ??
     (environment.NODE_ENV === "production" ? undefined : "s3_compatible");
@@ -186,9 +187,6 @@ async function restoreVersionResolver(
     );
   }
   if (provider === "s3_compatible") {
-    if (environment.NODE_ENV === "production") {
-      throw new Error("Production restore requires the OCI native object version inventory");
-    }
     return undefined;
   }
   if (provider !== "oci_native") {

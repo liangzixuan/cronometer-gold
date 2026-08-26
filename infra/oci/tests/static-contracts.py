@@ -451,11 +451,82 @@ assert 'resource "oci_objectstorage_bucket" "ledger"' in object_storage_tf
 assert object_storage_tf.count('access_type           = "NoPublicAccess"') == 2
 assert object_storage_tf.count('versioning            = "Disabled"') == 1
 assert object_storage_tf.count('versioning            = "Enabled"') == 1
-assert object_storage_tf.count("prevent_destroy = true") == 5
+assert object_storage_tf.count("prevent_destroy = true") == 6
 assert 'resource "oci_identity_customer_secret_key"' not in object_storage_tf
 assert 'resource "oci_identity_api_key"' not in object_storage_tf
 assert 'object_prefix      = "exports/v1/*"' in object_storage_tf
 assert 'object_prefix      = "erasure-ledger/v1/*"' in object_storage_tf
+assert 'variable "restrict_object_storage_to_azure_egress"' in variables_tf
+assert 'variable "azure_object_storage_egress_cidr"' in variables_tf
+assert "default     = false" in variables_tf.split(
+    'variable "restrict_object_storage_to_azure_egress"', 1
+)[1].split('\n}', 1)[0]
+azure_egress_variable = variables_tf.split(
+    'variable "azure_object_storage_egress_cidr"', 1
+)[1].split('\n}\n', 1)[0]
+for contract in (
+    "default     = null",
+    "nullable    = true",
+    'var.azure_object_storage_egress_cidr == "${cidrhost(var.azure_object_storage_egress_cidr, 0)}/32"',
+    "carrier-grade NAT",
+):
+    assert contract in azure_egress_variable
+assert (
+    "var.restrict_object_storage_to_azure_egress == "
+    "(var.azure_object_storage_egress_cidr != null)"
+) in locals_tf
+
+network_source = object_storage_tf.split(
+    'resource "oci_identity_network_source" "azure_object_storage_egress" {', 1
+)[1].split('\n}\n\nlocals {', 1)[0]
+for contract in (
+    "var.restrict_object_storage_to_azure_egress && var.azure_object_storage_egress_cidr != null",
+    "azure = var.azure_object_storage_egress_cidr",
+    "compartment_id     = var.tenancy_ocid",
+    "name               = local.azure_object_storage_network_source_name",
+    "public_source_list = [each.value]",
+    'services           = ["none"]',
+    "depends_on = [terraform_data.apply_guardrails]",
+    "prevent_destroy = true",
+    'self.state == "ACTIVE"',
+):
+    assert contract in network_source
+network_conditions = object_storage_tf.split(
+    "object_storage_network_source_conditions = (", 1
+)[1].split("\n  )", 1)[0]
+assert "var.restrict_object_storage_to_azure_egress" in network_conditions
+assert "var.azure_object_storage_egress_cidr != null" in network_conditions
+assert "request.networkSource.name='${local.azure_object_storage_network_source_name}'" in network_conditions
+assert ": []" in network_conditions
+assert 'azure_object_storage_network_source_name = "${var.name_prefix}-azure-os-egress"' in object_storage_tf
+policy_conditions = object_storage_tf.split(
+    "object_storage_role_policy_conditions = {", 1
+)[1].split("\n  }\n}", 1)[0]
+for contract in (
+    "for role_name, role in local.object_storage_roles",
+    '"target.bucket.name=\'${role.bucket_name}\'"',
+    '"target.object.name=\'${role.object_prefix}\'"',
+    "local.object_storage_network_source_conditions",
+    '"any {${join(\", \", [for permission in role.object_permissions : \"request.permission=\'${permission}\'\"])}}"',
+):
+    assert contract in policy_conditions
+policy_resource = object_storage_tf.split(
+    'resource "oci_identity_policy" "object_storage_role" {', 1
+)[1]
+assert "for_each = local.object_storage_roles" in policy_resource
+assert "local.object_storage_role_policy_conditions[each.key]" in policy_resource
+assert "oci_identity_network_source.azure_object_storage_egress," in object_storage_tf
+assert object_storage_tf.count("request.networkSource.name=") == 1
+assert "virtual_source_list" not in network_source
+assert network_source.count("public_source_list") == 1
+assert network_source.count("services") == 1
+assert "ordinary full plan" in readme
+assert "Do not use `-target`" in readme
+assert "one network-source create and four in-place policy" in readme
+assert "first prove denial from an address outside the" in readme
+assert "require the Azure-source allow" in readme
+assert "restrict_object_storage_to_azure_egress = false" in tfvars_example
+assert "azure_object_storage_egress_cidr        = null" in tfvars_example
 
 def role_contract(role: str, next_role: str | None) -> str:
     start = object_storage_tf.index(f"    {role} = {{")
@@ -474,8 +545,8 @@ for role, next_role in (
 ):
     assert "can_use_api_keys   = false" in role_contract(role, next_role)
 assert "can_use_api_keys   = true" in role_contract("ledger_restore", None)
-assert "target.bucket.name='${each.value.bucket_name}'" in object_storage_tf
-assert "target.object.name='${each.value.object_prefix}'" in object_storage_tf
+assert "target.bucket.name='${role.bucket_name}'" in object_storage_tf
+assert "target.object.name='${role.object_prefix}'" in object_storage_tf
 assert 'email          = var.object_storage_role_emails[each.key]' in object_storage_tf
 assert 'variable "object_storage_role_emails"' in variables_tf
 assert "sensitive = true" in variables_tf

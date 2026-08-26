@@ -120,6 +120,62 @@ Keys for all four roles, API keys only for ledger-restore, and every other
 capability disabled. Never bypass this readback with a provisioner or a second
 resource that also owns the user.
 
+### Optional Azure egress network source
+
+The compute pivot keeps these two buckets and four role identities in OCI. The
+Terraform source now has an inert, fail-closed path for restricting every one
+of the four role-policy statements to the Azure VM's eventual static public
+IPv4. Its defaults are deliberately:
+
+```hcl
+restrict_object_storage_to_azure_egress = false
+azure_object_storage_egress_cidr        = null
+```
+
+With those defaults, no network source exists and the rendered policy strings
+remain byte-for-byte equivalent to the already-managed bucket, prefix, and
+permission conditions. Terraform rejects a half-configured pair. The CIDR must
+be one canonical, publicly routable IPv4 `/32`; private, loopback, link-local,
+carrier-grade NAT, documentation, multicast, and reserved ranges are rejected.
+
+When enabled, Terraform creates exactly one tenancy-root
+`oci_identity_network_source` with the Azure `/32` as its sole
+`public_source_list` entry and `services = ["none"]`. The latter is mandatory:
+Oracle documents that the default `all` permits service on-behalf-of requests
+whose source addresses can differ from the public list. Each existing role
+policy then gains this condition inside its existing `all {}` expression:
+
+```text
+request.networkSource.name='<name-prefix>-azure-os-egress'
+```
+
+The policy resource has an explicit dependency on the network source, and its
+postcondition requires the source to be `ACTIVE`. Creation therefore precedes
+policy restriction. The source has `prevent_destroy`; disabling the switch
+after creation is intentionally blocked rather than silently broadening the
+four policies or deleting their authorization boundary.
+
+**Activation is not yet authorized or mechanically safe in this Terraform
+root.** The current state contains the retained storage/IAM/network
+prerequisites but no A1 instance, VNIC, boot volume, reserved public IP, or
+backup assignment. The current configuration still desires that retired A1
+compute graph, so an ordinary full plan that merely sets the two Azure-binding
+variables would also retry OCI compute. Do not use `-target` to hide those
+actions. First implement and review a storage-only OCI desired-state mode (or a
+separate, explicit state migration), then require a fresh plan whose only
+resource actions are one network-source create and four in-place policy
+restrictions, with zero destroys and no compute action.
+
+Before that future apply, also prove from live IAM inventory that the four
+users have no additional group membership or policy grant that could bypass
+these statements. Do not install or reinstall their credentials on Azure until
+all four updated statements are read back with the network-source condition.
+With the rotated credentials, first prove denial from an address outside the
+network source, then deliver them to Azure and require the Azure-source allow
+canary before application start. Before releasing or replacing the Azure static
+IP, stop the runtime and revoke the corresponding credentials; update the `/32`
+only through another reviewed in-place plan.
+
 ## Planned resources and possible charges
 
 | Resource | Reviewed default | Cost / quota warning |
@@ -454,6 +510,8 @@ monitoring, deployment promotion, and incident response are approved.
 - [Object Storage bucket Terraform resource](https://docs.oracle.com/en-us/iaas/tools/terraform-provider-oci/latest/docs/r/objectstorage_bucket.html)
 - [S3 compatibility API and dedicated endpoints](https://docs.oracle.com/en-us/iaas/Content/Object/Tasks/s3compatibleapi.htm)
 - [Object Storage IAM permissions and policy conditions](https://docs.oracle.com/en-us/iaas/Content/Identity/Reference/objectstoragepolicyreference.htm)
+- [Managing OCI network sources](https://docs.oracle.com/en-us/iaas/Content/Identity/Tasks/managingnetworksources.htm)
+- [OCI Terraform network-source resource](https://docs.oracle.com/en-us/iaas/tools/terraform-provider-oci/latest/docs/r/identity_network_source.html)
 - [OCI public IP ranges](https://docs.oracle.com/en-us/iaas/Content/General/Concepts/addressranges.htm)
 - [Public-IP Internet Gateway requirements](https://docs.oracle.com/en-us/iaas/Content/Network/Tasks/managingpublicIPs.htm)
 - [Customer Secret Key lifecycle and limits](https://docs.oracle.com/en-us/iaas/Content/Identity/access/working-with-customer-secret-keys.htm)

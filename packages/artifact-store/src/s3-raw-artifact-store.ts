@@ -149,7 +149,7 @@ interface StrictXmlNode {
   text: string;
 }
 
-const XML_DECLARATION = '<?xml version="1.0" encoding="UTF-8"?>';
+const XML_DECLARATION = /^<\?xml version=(["'])1\.0\1 encoding=(["'])[Uu][Tt][Ff]-8\2\?>/;
 const S3_XML_NAMESPACE = 'xmlns="http://s3.amazonaws.com/doc/2006-03-01/"';
 const VALID_XML_ENTITY = /&(amp|apos|gt|lt|quot|#(?:[0-9]+|x[0-9a-fA-F]+));/g;
 
@@ -193,8 +193,9 @@ function xmlText(value: string): string {
 function parseStrictXmlDocument(xml: string): StrictXmlNode {
   let source = xml.trim();
   if (source.startsWith("<?xml")) {
-    if (!source.startsWith(XML_DECLARATION)) versionConflict();
-    source = source.slice(XML_DECLARATION.length).trimStart();
+    const declaration = XML_DECLARATION.exec(source);
+    if (!declaration) versionConflict();
+    source = source.slice(declaration[0].length).trimStart();
   }
   if (source.includes("<!") || source.includes("<?")) versionConflict();
 
@@ -335,7 +336,7 @@ function parseObjectVersionsXml(xml: string, exactObjectKey: string): readonly S
   return versions;
 }
 
-export class S3RawArtifactStore implements RawArtifactStore {
+export class S3RawArtifactStore implements RawArtifactStore, SingletonObjectVersionResolver {
   readonly #endpoint: URL;
   readonly #region: string;
   readonly #bucket: string;
@@ -530,7 +531,7 @@ export class S3RawArtifactStore implements RawArtifactStore {
     if (this.#readVersionPolicy === "require_singleton") {
       const version = this.#singletonVersionResolver
         ? await this.#singletonVersionResolver.resolveSingletonVersion(input)
-        : await this.#resolveS3SingletonVersion(input);
+        : await this.resolveSingletonVersion(input);
       if (!version) return null;
       const opened = await this.#openObject({
         ...input,
@@ -542,14 +543,21 @@ export class S3RawArtifactStore implements RawArtifactStore {
     return this.#openObject(input);
   }
 
-  async #resolveS3SingletonVersion(input: {
+  /** Resolves a strict singleton through the S3-compatible ListObjectVersions API. */
+  async resolveSingletonVersion(input: {
     readonly objectKey: string;
     readonly signal?: AbortSignal;
   }): Promise<{ readonly versionId: string } | null> {
     const versions = await this.listObjectVersions(input);
     if (versions.length === 0) return null;
     const version = versions[0];
-    if (!version || versions.length !== 1 || version.deleteMarker || !version.isLatest) {
+    if (
+      !version ||
+      versions.length !== 1 ||
+      version.deleteMarker ||
+      !version.isLatest ||
+      version.versionId === "null"
+    ) {
       throw new S3ArtifactStoreVersionConflictError();
     }
     return { versionId: version.versionId };

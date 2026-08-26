@@ -71,8 +71,15 @@ package boundaries.
 - Goal progress proves lower-bound semantics with incomplete nutrient panels and
   never labels an unknown contribution as measured zero or exact completion.
 - Export, account deletion, backup restore, and search reindex drills pass.
-- Signed Android and iOS preview binaries compile from clean native projects and
-  pass a device smoke test; a Metro export alone is not native-build evidence.
+- Signed internal Android APK and iOS IPA binaries compile from one clean commit
+  and pass the physical-device matrix. A reviewer-signed manifest separately
+  binds the exact production Android AAB and iOS IPA from that commit by EAS
+  build ID, native version, signing identity, and SHA-256; same-source binaries
+  are not presumed byte-equivalent. All four paths, actual digests, and available
+  filesystem identities are distinct, with symbolic links rejected. The
+  independent reviewer compares claimed build/signing metadata with EAS and
+  platform-tool output because archive hashing alone does not extract it; a
+  Metro export is not native evidence.
 - Browser and installed-device smoke tests render, navigate, and exercise the
   authenticated and unauthenticated states of every P0 client flow.
 - Store identifiers, icons, splash assets, signing ownership, and disclosure

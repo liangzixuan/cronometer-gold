@@ -1,0 +1,58 @@
+# This file is intentionally non-runnable. Copy it to ignored terraform.tfvars,
+# replace every REPLACE marker from fresh read-only Azure checks, and keep the
+# acknowledgement empty until the independently reviewed plan is acceptable.
+
+subscription_id = "REPLACE_WITH_AZURE_FOR_STUDENTS_SUBSCRIPTION_UUID"
+name_prefix     = "nutrition-beta"
+
+deployment_acknowledgement = ""
+
+admin_ipv4_cidr        = "REPLACE_WITH_CURRENT_DIRECT_PUBLIC_IPV4/32"
+beta_allowed_ipv4_cidr = "REPLACE_WITH_THE_SAME_CURRENT_DIRECT_PUBLIC_IPV4/32"
+ssh_public_key          = "REPLACE_WITH_ONE_ED25519_OPENSSH_PUBLIC_KEY"
+
+ubuntu_image_version = "REPLACE_WITH_EXACT_LIVE_EASTUS2_IMAGE_VERSION"
+
+alert_contact_emails               = ["REPLACE_WITH_MONITORED_EMAIL"]
+first_session_shutdown_deadline_utc = "REPLACE_WITH_RFC3339_DEADLINE_BETWEEN_ONE_AND_FOUR_HOURS_AFTER_PLAN_AND_APPLY"
+monthly_budget_amount_usd          = 20
+budget_start_date_utc              = "REPLACE_WITH_FIRST_UTC_IN_CURRENT_MONTH"
+
+live_preflight = {
+  checked_at_utc         = "REPLACE_WITH_FRESH_RFC3339_UTC_TIMESTAMP"
+  subscription_id       = "REPLACE_WITH_THE_SAME_SUBSCRIPTION_UUID"
+  subscription_state    = "REPLACE_WITH_LIVE_SUBSCRIPTION_STATE"
+  subscription_quota_id = "REPLACE_WITH_LIVE_SUBSCRIPTION_QUOTA_ID"
+  spending_limit        = "REPLACE_WITH_LIVE_SPENDING_LIMIT"
+  remaining_credit_usd  = 0
+  credit_currency       = "USD"
+  credit_expires_at_utc = "REPLACE_WITH_LIVE_STUDENT_CREDIT_EXPIRY_RFC3339"
+  checked_location      = "eastus2"
+
+  vm_sku              = "Standard_E2ps_v5"
+  vm_sku_available    = false
+  vm_sku_restrictions = ["REPLACE_WITH_LIVE_RESTRICTIONS_OR_USE_AN_EMPTY_SET"]
+  vm_vcpus                    = 0
+  vm_memory_gb                = 0
+  vm_cpu_architecture         = "REPLACE_WITH_LIVE_CPU_ARCHITECTURE"
+  vm_hyperv_generations       = ["REPLACE_WITH_LIVE_HYPERV_GENERATIONS"]
+  vm_trusted_launch_disabled  = true
+  regional_vcpu_remaining     = 0
+  epsv5_family_vcpu_remaining = 0
+
+  image_publisher = "Canonical"
+  image_offer     = "ubuntu-24_04-lts"
+  image_sku       = "server-arm64"
+  image_version   = "REPLACE_WITH_THE_SAME_EXACT_IMAGE_VERSION"
+  image_available = false
+  image_architecture      = "REPLACE_WITH_LIVE_IMAGE_ARCHITECTURE"
+  image_hyperv_generation = "REPLACE_WITH_LIVE_HYPERV_GENERATION"
+  image_security_types    = ["REPLACE_WITH_LIVE_SECURITY_TYPE_VALUES"]
+  image_plan_required     = true
+  image_location          = "REPLACE_WITH_LIVE_IMAGE_LOCATION"
+  image_state             = "REPLACE_WITH_LIVE_IMAGE_STATE"
+
+  registered_resource_providers = [
+    "REPLACE_WITH_THE_COMPLETE_LIVE_REGISTERED_PROVIDER_SET_REQUIRED_BY_README",
+  ]
+}

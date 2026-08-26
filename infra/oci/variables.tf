@@ -215,6 +215,29 @@ variable "object_storage_role_emails" {
   }
 }
 
+variable "restrict_object_storage_to_azure_egress" {
+  description = "Fail-closed switch for binding all four Object Storage role policies to one OCI Network Source containing only azure_object_storage_egress_cidr. Leave false until the Azure static public IPv4 exists and a separate reviewed OCI migration plan contains no compute retry or unrelated action."
+  type        = bool
+  default     = false
+}
+
+variable "azure_object_storage_egress_cidr" {
+  description = "Canonical public IPv4 /32 assigned to the Azure beta VM. Null is mandatory while restrict_object_storage_to_azure_egress is false."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition = var.azure_object_storage_egress_cidr == null || try(
+      can(regex("^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}/32$", var.azure_object_storage_egress_cidr)) &&
+      var.azure_object_storage_egress_cidr == "${cidrhost(var.azure_object_storage_egress_cidr, 0)}/32" &&
+      length(regexall("^(?:(?:0|10|127)\\.|100\\.(?:6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\\.|169\\.254\\.|172\\.(?:1[6-9]|2[0-9]|3[01])\\.|192\\.(?:0\\.0|0\\.2|88\\.99|168)\\.|198\\.(?:1[89]|51\\.100)\\.|203\\.0\\.113\\.|(?:22[4-9]|2[3-4][0-9]|25[0-5])\\.)", var.azure_object_storage_egress_cidr)) == 0,
+      false,
+    )
+    error_message = "azure_object_storage_egress_cidr must be null or one canonical, publicly routable IPv4 /32; private, loopback, link-local, carrier-grade NAT, documentation, multicast, and reserved ranges are rejected."
+  }
+}
+
 variable "compute_shape" {
   description = "Always Free-eligible Arm flexible shape. Other shapes are rejected by design."
   type        = string

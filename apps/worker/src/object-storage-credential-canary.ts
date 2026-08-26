@@ -47,6 +47,7 @@ export interface ObjectStorageCredentialCanaryConfiguration {
   readonly restoreFingerprint: string;
   readonly restoreTenancyOcid: string;
   readonly restoreUserOcid: string;
+  readonly versionListProvider: "oci_native";
 }
 
 export interface ObjectStorageCredentialCanaryClients {
@@ -98,6 +99,35 @@ function requiredEnvironment(
 function requiredLiteral(environment: NodeJS.ProcessEnv, name: string, expected: string): void {
   if (environment[name] !== expected) {
     throw new ObjectStorageCredentialCanaryError(`${name} must be ${expected}`);
+  }
+}
+
+function versionListProvider(environment: NodeJS.ProcessEnv): "oci_native" | "s3_compatible" {
+  const value = environment.ERASURE_REPLAY_LEDGER_RESTORE_VERSION_LIST_PROVIDER;
+  if (value !== "oci_native" && value !== "s3_compatible") {
+    throw new ObjectStorageCredentialCanaryError(
+      "ERASURE_REPLAY_LEDGER_RESTORE_VERSION_LIST_PROVIDER must be oci_native or s3_compatible",
+    );
+  }
+  return value;
+}
+
+function assertHttpsS3Endpoint(endpoint: string, name: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(endpoint);
+  } catch {
+    throw new ObjectStorageCredentialCanaryError(`Missing or invalid ${name}`);
+  }
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash ||
+    (parsed.pathname !== "/" && parsed.pathname !== "")
+  ) {
+    throw new ObjectStorageCredentialCanaryError(`${name} must be a bare HTTPS endpoint`);
   }
 }
 
@@ -174,27 +204,38 @@ export async function loadObjectStorageCredentialCanaryConfiguration(
   requiredLiteral(environment, "EXPORT_ARTIFACT_STORE", "s3");
   requiredLiteral(environment, "EXPORT_ARTIFACT_DELETE_VERSION_POLICY", "latest");
   requiredLiteral(environment, "ERASURE_REPLAY_LEDGER_STORE", "s3");
-  requiredLiteral(environment, "ERASURE_REPLAY_LEDGER_RESTORE_VERSION_LIST_PROVIDER", "oci_native");
+  const provider = versionListProvider(environment);
+  if (provider === "s3_compatible") {
+    throw new ObjectStorageCredentialCanaryError(
+      "Generic S3 production canary is blocked until export-bucket version state and exact cleanup are reviewed",
+    );
+  }
 
-  const namespace = requiredEnvironment(
-    environment,
-    "ERASURE_REPLAY_LEDGER_RESTORE_OCI_NAMESPACE",
-    100,
-  );
   const exportEndpoint = requiredEnvironment(environment, "EXPORT_ARTIFACT_ENDPOINT", 2_048);
   const exportRegion = requiredEnvironment(environment, "EXPORT_ARTIFACT_REGION", 64);
   const ledgerEndpoint = requiredEnvironment(environment, "ERASURE_REPLAY_LEDGER_ENDPOINT", 2_048);
   const ledgerRegion = requiredEnvironment(environment, "ERASURE_REPLAY_LEDGER_REGION", 64);
-  assertOciS3CompatibilityEndpoint({
-    endpoint: exportEndpoint,
-    namespace,
-    region: exportRegion,
-  });
-  assertOciS3CompatibilityEndpoint({
-    endpoint: ledgerEndpoint,
-    namespace,
-    region: ledgerRegion,
-  });
+  let namespace: string | undefined;
+  if (provider === "oci_native") {
+    namespace = requiredEnvironment(
+      environment,
+      "ERASURE_REPLAY_LEDGER_RESTORE_OCI_NAMESPACE",
+      100,
+    );
+    assertOciS3CompatibilityEndpoint({
+      endpoint: exportEndpoint,
+      namespace,
+      region: exportRegion,
+    });
+    assertOciS3CompatibilityEndpoint({
+      endpoint: ledgerEndpoint,
+      namespace,
+      region: ledgerRegion,
+    });
+  } else {
+    assertHttpsS3Endpoint(exportEndpoint, "EXPORT_ARTIFACT_ENDPOINT");
+    assertHttpsS3Endpoint(ledgerEndpoint, "ERASURE_REPLAY_LEDGER_ENDPOINT");
+  }
 
   const exportReader = credential(
     environment,
@@ -230,7 +271,7 @@ export async function loadObjectStorageCredentialCanaryConfiguration(
     );
   }
 
-  return {
+  const baseConfiguration = {
     exportBucket,
     exportEndpoint,
     exportReader,
@@ -241,11 +282,19 @@ export async function loadObjectStorageCredentialCanaryConfiguration(
     ledgerRegion,
     ledgerRestore,
     ledgerWriter,
+    requestTimeoutMs: requestTimeout(environment),
+  };
+  if (namespace === undefined) {
+    throw new ObjectStorageCredentialCanaryError(
+      "Missing or invalid ERASURE_REPLAY_LEDGER_RESTORE_OCI_NAMESPACE",
+    );
+  }
+  return {
+    ...baseConfiguration,
     namespace,
     privateKeyPem: await loadPrivateKey(
       requiredEnvironment(environment, "ERASURE_REPLAY_LEDGER_RESTORE_OCI_PRIVATE_KEY_FILE", 4_096),
     ),
-    requestTimeoutMs: requestTimeout(environment),
     restoreFingerprint: requiredEnvironment(
       environment,
       "ERASURE_REPLAY_LEDGER_RESTORE_OCI_KEY_FINGERPRINT",
@@ -261,6 +310,7 @@ export async function loadObjectStorageCredentialCanaryConfiguration(
       "ERASURE_REPLAY_LEDGER_RESTORE_OCI_USER_OCID",
       300,
     ),
+    versionListProvider: provider,
   };
 }
 
@@ -305,7 +355,8 @@ export function createObjectStorageCredentialCanaryClients(
       region: configuration.ledgerRegion,
       requestTimeoutMs: configuration.requestTimeoutMs,
     });
-  const resolver = new OciNativeObjectVersionResolver({
+  const ledgerRestore = new S3RawArtifactStore(ledgerOptions(configuration.ledgerRestore));
+  const resolver: SingletonObjectVersionResolver = new OciNativeObjectVersionResolver({
     bucket: configuration.ledgerBucket,
     fingerprint: configuration.restoreFingerprint,
     namespace: configuration.namespace,
@@ -326,7 +377,7 @@ export function createObjectStorageCredentialCanaryClients(
     exportReader: new S3RawArtifactStore(exportOptions(configuration.exportReader)),
     exportWriter: new S3RawArtifactStore(exportOptions(configuration.exportWriter)),
     exportWriterLedger: new S3RawArtifactStore(ledgerOptions(configuration.exportWriter)),
-    ledgerRestore: new S3RawArtifactStore(ledgerOptions(configuration.ledgerRestore)),
+    ledgerRestore,
     ledgerRestoreExport: new S3RawArtifactStore(exportOptions(configuration.ledgerRestore)),
     ledgerVersionResolver: resolver,
     ledgerWriter: new S3RawArtifactStore(ledgerOptions(configuration.ledgerWriter)),
@@ -523,18 +574,18 @@ export async function runObjectStorageCredentialCanary(
     await readAndVerify(clients.exportWriter, exportObject, payload);
     await readAndVerify(clients.exportReader, exportObject, payload);
     await readAndVerify(clients.ledgerWriter, ledgerObject, payload);
-    const nativeVersion = await clients.ledgerVersionResolver.resolveSingletonVersion({
+    const inventoryVersion = await clients.ledgerVersionResolver.resolveSingletonVersion({
       objectKey: ledgerObject,
     });
-    if (!nativeVersion) {
-      throw canaryError("Native OCI inventory did not return the ledger canary version");
+    if (!inventoryVersion) {
+      throw canaryError("Version inventory did not return the ledger canary version");
     }
     const frozenResolver: SingletonObjectVersionResolver = {
       resolveSingletonVersion: async ({ objectKey }) => {
         if (objectKey !== ledgerObject) {
           throw canaryError("Exact-version restore requested an unexpected object key");
         }
-        return nativeVersion;
+        return inventoryVersion;
       },
     };
     const exactLedgerRestore = clients.createExactLedgerRestore(frozenResolver);
@@ -547,10 +598,10 @@ export async function runObjectStorageCredentialCanary(
           objectKey: ledgerObject,
         });
       } catch (error) {
-        throw canaryError("Native OCI inventory changed after a denied ledger operation", error);
+        throw canaryError("Version inventory changed after a denied ledger operation", error);
       }
-      if (!currentVersion || currentVersion.versionId !== nativeVersion.versionId) {
-        throw canaryError("Native OCI inventory changed after a denied ledger operation");
+      if (!currentVersion || currentVersion.versionId !== inventoryVersion.versionId) {
+        throw canaryError("Version inventory changed after a denied ledger operation");
       }
       await verifyLedgerExact();
     };

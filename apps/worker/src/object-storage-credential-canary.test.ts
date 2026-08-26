@@ -16,7 +16,7 @@ import {
 const token = Buffer.alloc(12, 1).toString("hex");
 const exportObject = `exports/v1/.credential-canary/${token}`;
 const ledgerObject = `erasure-ledger/v1/.credential-canary/${token}`;
-const versionId = "native-version-1";
+const versionId = "inventory-version-1";
 
 async function body(source: Readable): Promise<Buffer> {
   const chunks: Buffer[] = [];
@@ -55,8 +55,8 @@ function unusedStore(): ObjectStorageCredentialCanaryStore {
 interface FakeCanary {
   readonly clients: ObjectStorageCredentialCanaryClients;
   readonly exportObjects: Map<string, Buffer>;
+  readonly inventoryCalls: { count: number };
   readonly ledgerObjects: Map<string, Buffer>;
-  readonly nativeCalls: { count: number };
   setLedgerDeleteBehavior(behavior: "deny" | "delete-marker"): void;
   setOverwriteStatus(statusCode: number): void;
 }
@@ -64,7 +64,7 @@ interface FakeCanary {
 function fakeCanary(): FakeCanary {
   const exportObjects = new Map<string, Buffer>();
   const ledgerObjects = new Map<string, Buffer>();
-  const nativeCalls = { count: 0 };
+  const inventoryCalls = { count: 0 };
   let overwriteStatus = 412;
   let ledgerDeleteBehavior: "deny" | "delete-marker" = "deny";
   let ledgerDeleteMarker = false;
@@ -104,11 +104,11 @@ function fakeCanary(): FakeCanary {
       ledgerObjects.set(objectKey, await body(source));
     },
   };
-  const nativeResolver: SingletonObjectVersionResolver = {
+  const inventoryResolver: SingletonObjectVersionResolver = {
     resolveSingletonVersion: async ({ objectKey }) => {
-      nativeCalls.count += 1;
+      inventoryCalls.count += 1;
       if (!exportObjects.has(exportObject)) {
-        throw new Error("Native inventory ran before the export target existed");
+        throw new Error("Version inventory ran before the export target existed");
       }
       if (objectKey !== ledgerObject || !ledgerObjects.has(objectKey)) return null;
       if (ledgerDeleteMarker) throw denied(409);
@@ -156,14 +156,14 @@ function fakeCanary(): FakeCanary {
         throw denied();
       },
     },
-    ledgerVersionResolver: nativeResolver,
+    ledgerVersionResolver: inventoryResolver,
     ledgerWriter,
   };
   return {
     clients,
     exportObjects,
+    inventoryCalls,
     ledgerObjects,
-    nativeCalls,
     setLedgerDeleteBehavior: (behavior) => {
       ledgerDeleteBehavior = behavior;
     },
@@ -177,15 +177,38 @@ function deterministicRandom(size: number): Buffer {
   return Buffer.alloc(size, size === 12 ? 1 : 2);
 }
 
-describe("OCI Object Storage credential canary", () => {
-  it("proves both objects, strict denials, native exact-version reads, and export cleanup", async () => {
+function baseProductionEnvironment(endpoint: string, region: string): NodeJS.ProcessEnv {
+  return {
+    ERASURE_REPLAY_LEDGER_BUCKET: "nutrition-erasure-ledger",
+    ERASURE_REPLAY_LEDGER_ENDPOINT: endpoint,
+    ERASURE_REPLAY_LEDGER_REGION: region,
+    ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID: "restore-access-id-4",
+    ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY: "restore-secret-key-4",
+    ERASURE_REPLAY_LEDGER_STORE: "s3",
+    ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID: "ledger-access-id-3",
+    ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY: "ledger-secret-key-3",
+    EXPORT_ARTIFACT_BUCKET: "nutrition-private-exports",
+    EXPORT_ARTIFACT_DELETE_VERSION_POLICY: "latest",
+    EXPORT_ARTIFACT_ENDPOINT: endpoint,
+    EXPORT_ARTIFACT_READ_ACCESS_KEY_ID: "reader-access-id-1",
+    EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY: "reader-secret-key-1",
+    EXPORT_ARTIFACT_REGION: region,
+    EXPORT_ARTIFACT_STORE: "s3",
+    EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID: "writer-access-id-2",
+    EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY: "writer-secret-key-2",
+    NODE_ENV: "production",
+  };
+}
+
+describe("Object Storage credential canary", () => {
+  it("proves both objects, strict denials, exact-version reads, and export cleanup", async () => {
     const fake = fakeCanary();
     await expect(
       runObjectStorageCredentialCanary(fake.clients, deterministicRandom),
     ).resolves.toEqual({ exportCleanupVerified: true, ledgerCanaryRetained: true });
     expect(fake.exportObjects.size).toBe(0);
     expect(fake.ledgerObjects.has(ledgerObject)).toBe(true);
-    expect(fake.nativeCalls.count).toBeGreaterThanOrEqual(4);
+    expect(fake.inventoryCalls.count).toBeGreaterThanOrEqual(4);
   });
 
   it("accepts an immutable 412 overwrite only after the authorized object remains readable", async () => {
@@ -211,7 +234,7 @@ describe("OCI Object Storage credential canary", () => {
     fake.setLedgerDeleteBehavior("delete-marker");
     await expect(
       runObjectStorageCredentialCanary(fake.clients, deterministicRandom),
-    ).rejects.toThrow("Native OCI inventory changed after a denied ledger operation");
+    ).rejects.toThrow("Version inventory changed after a denied ledger operation");
     expect(fake.exportObjects.size).toBe(0);
     expect(fake.ledgerObjects.has(ledgerObject)).toBe(true);
   });
@@ -221,31 +244,14 @@ describe("OCI Object Storage credential canary", () => {
     const region = "us-ashburn-1";
     const endpoint = "https://axaxnpcrorw5.compat.objectstorage.us-ashburn-1.oci.customer-oci.com";
     const environment: NodeJS.ProcessEnv = {
-      ERASURE_REPLAY_LEDGER_BUCKET: "nutrition-erasure-ledger",
-      ERASURE_REPLAY_LEDGER_ENDPOINT: endpoint,
-      ERASURE_REPLAY_LEDGER_REGION: region,
-      ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID: "restore-access-id-4",
+      ...baseProductionEnvironment(endpoint, region),
       ERASURE_REPLAY_LEDGER_RESTORE_OCI_KEY_FINGERPRINT:
         "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00",
       ERASURE_REPLAY_LEDGER_RESTORE_OCI_NAMESPACE: namespace,
       ERASURE_REPLAY_LEDGER_RESTORE_OCI_PRIVATE_KEY_FILE: "/run/oci/restore-private-key.pem",
       ERASURE_REPLAY_LEDGER_RESTORE_OCI_TENANCY_OCID: "ocid1.tenancy.oc1..aaaaaaaaaaaaaaaa",
       ERASURE_REPLAY_LEDGER_RESTORE_OCI_USER_OCID: "ocid1.user.oc1..bbbbbbbbbbbbbbbb",
-      ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY: "restore-secret-key-4",
       ERASURE_REPLAY_LEDGER_RESTORE_VERSION_LIST_PROVIDER: "oci_native",
-      ERASURE_REPLAY_LEDGER_STORE: "s3",
-      ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID: "ledger-access-id-3",
-      ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY: "ledger-secret-key-3",
-      EXPORT_ARTIFACT_BUCKET: "nutrition-private-exports",
-      EXPORT_ARTIFACT_DELETE_VERSION_POLICY: "latest",
-      EXPORT_ARTIFACT_ENDPOINT: endpoint,
-      EXPORT_ARTIFACT_READ_ACCESS_KEY_ID: "reader-access-id-1",
-      EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY: "reader-secret-key-1",
-      EXPORT_ARTIFACT_REGION: region,
-      EXPORT_ARTIFACT_STORE: "s3",
-      EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID: "writer-access-id-2",
-      EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY: "writer-secret-key-2",
-      NODE_ENV: "production",
     };
     const loadedPaths: string[] = [];
     const configuration = await loadObjectStorageCredentialCanaryConfiguration(
@@ -256,6 +262,10 @@ describe("OCI Object Storage credential canary", () => {
       },
     );
     expect(loadedPaths).toEqual(["/run/oci/restore-private-key.pem"]);
+    expect(configuration.versionListProvider).toBe("oci_native");
+    if (configuration.versionListProvider !== "oci_native") {
+      throw new Error("Expected OCI native canary configuration");
+    }
     expect(configuration.privateKeyPem).toBe("private-key-material");
     expect(configuration.exportReader.accessKeyId).toBe("reader-access-id-1");
     await expect(
@@ -264,5 +274,35 @@ describe("OCI Object Storage credential canary", () => {
         async () => "private-key-material",
       ),
     ).rejects.toThrow("EXPORT_ARTIFACT_STORE must be s3");
+  });
+
+  it("blocks a generic S3 production canary until versioned export cleanup is reviewed", async () => {
+    const environment: NodeJS.ProcessEnv = {
+      ...baseProductionEnvironment("https://objects.example.test", "us-east-1"),
+      ERASURE_REPLAY_LEDGER_RESTORE_VERSION_LIST_PROVIDER: "s3_compatible",
+    };
+    let privateKeyLoads = 0;
+    await expect(
+      loadObjectStorageCredentialCanaryConfiguration(environment, async () => {
+        privateKeyLoads += 1;
+        throw new Error("Generic S3 configuration must not load an OCI API key");
+      }),
+    ).rejects.toThrow("export-bucket version state and exact cleanup are reviewed");
+    expect(privateKeyLoads).toBe(0);
+  });
+
+  it("fails closed on an absent or unknown production version inventory provider", async () => {
+    const environment = baseProductionEnvironment("https://objects.example.test", "us-east-1");
+    await expect(loadObjectStorageCredentialCanaryConfiguration(environment)).rejects.toThrow(
+      "ERASURE_REPLAY_LEDGER_RESTORE_VERSION_LIST_PROVIDER must be oci_native or s3_compatible",
+    );
+    await expect(
+      loadObjectStorageCredentialCanaryConfiguration({
+        ...environment,
+        ERASURE_REPLAY_LEDGER_RESTORE_VERSION_LIST_PROVIDER: "latest",
+      }),
+    ).rejects.toThrow(
+      "ERASURE_REPLAY_LEDGER_RESTORE_VERSION_LIST_PROVIDER must be oci_native or s3_compatible",
+    );
   });
 });

@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
 import { createHash, createPublicKey, verify } from "node:crypto";
-import { createReadStream, readFileSync, statSync } from "node:fs";
+import { createReadStream, lstatSync, readFileSync } from "node:fs";
 import { extname, isAbsolute, normalize } from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { canonicalJson } from "@nutrition-tracker/contracts";
 
-export const HEALTH_RELEASE_EVIDENCE_SCHEMA = "nutrition-tracker-health-release-evidence-v2";
+export const HEALTH_RELEASE_EVIDENCE_SCHEMA = "nutrition-tracker-health-release-evidence-v3";
 export const HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA =
   "nutrition-tracker-health-release-reviewer-trust-v1";
 
@@ -15,11 +15,56 @@ const MAX_EVIDENCE_AGE_MS = 30 * 24 * 60 * 60 * 1_000;
 const MAX_CLOCK_SKEW_MS = 5 * 60 * 1_000;
 const SHA256_HEX = /^[0-9a-f]{64}$/u;
 const GIT_COMMIT = /^[0-9a-f]{40}$/u;
+const EAS_BUILD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:@/+ -]{2,127}$/u;
 const SAFE_KEY_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/u;
 const SAFE_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/u;
+const IOS_BUILD_NUMBER = /^[1-9]\d{0,3}(?:\.(?:0|[1-9]\d?)){0,2}$/u;
 const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 const STANDARD_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
+
+const artifactSpecifications = [
+  {
+    artifactType: "ipa",
+    buildIdEnvironment: "NUTRITION_IOS_PHYSICAL_DEVICE_BUILD_ID",
+    buildProfile: "physical-device",
+    extension: ".ipa",
+    label: "physical-device iOS IPA",
+    pathEnvironment: "NUTRITION_IOS_PHYSICAL_DEVICE_ARTIFACT_PATH",
+    platform: "ios",
+    role: "physicalDevice",
+  },
+  {
+    artifactType: "apk",
+    buildIdEnvironment: "NUTRITION_ANDROID_PHYSICAL_DEVICE_BUILD_ID",
+    buildProfile: "physical-device",
+    extension: ".apk",
+    label: "physical-device Android APK",
+    pathEnvironment: "NUTRITION_ANDROID_PHYSICAL_DEVICE_ARTIFACT_PATH",
+    platform: "android",
+    role: "physicalDevice",
+  },
+  {
+    artifactType: "ipa",
+    buildIdEnvironment: "NUTRITION_IOS_PRODUCTION_BUILD_ID",
+    buildProfile: "production",
+    extension: ".ipa",
+    label: "production iOS IPA",
+    pathEnvironment: "NUTRITION_IOS_PRODUCTION_ARTIFACT_PATH",
+    platform: "ios",
+    role: "production",
+  },
+  {
+    artifactType: "aab",
+    buildIdEnvironment: "NUTRITION_ANDROID_PRODUCTION_BUILD_ID",
+    buildProfile: "production",
+    extension: ".aab",
+    label: "production Android AAB",
+    pathEnvironment: "NUTRITION_ANDROID_PRODUCTION_ARTIFACT_PATH",
+    platform: "android",
+    role: "production",
+  },
+];
 
 const commonMatrixKeys = [
   "inContextPermission",
@@ -139,7 +184,107 @@ function rejectHealthPayloadEvidence(value, path = "manifest") {
   }
 }
 
-function assertDevice(device, platform) {
+function assertEasBuildId(value, name) {
+  if (typeof value !== "string" || !EAS_BUILD_ID.test(value)) {
+    throw new TypeError(`${name} must be an exact lowercase EAS build ID.`);
+  }
+}
+
+function assertArtifact(artifact, specification, manifestCommit) {
+  const name = `manifest.artifacts.${specification.role}.${specification.platform}`;
+  assertExactKeys(
+    artifact,
+    [
+      "artifactSha256",
+      "artifactType",
+      "buildProfile",
+      "easBuildId",
+      "nativeBuildVersion",
+      "platform",
+      "signingIdentitySha256",
+      "sourceCommit",
+    ],
+    name,
+  );
+  if (
+    artifact.platform !== specification.platform ||
+    artifact.buildProfile !== specification.buildProfile ||
+    artifact.artifactType !== specification.artifactType
+  ) {
+    throw new TypeError(
+      `${name} must be the ${specification.buildProfile} ${specification.platform} ${specification.artifactType} artifact.`,
+    );
+  }
+  assertEasBuildId(artifact.easBuildId, `${name}.easBuildId`);
+  if (artifact.sourceCommit !== manifestCommit) {
+    throw new TypeError(`${name}.sourceCommit must equal manifest.gitCommit.`);
+  }
+  if (typeof artifact.artifactSha256 !== "string" || !SHA256_HEX.test(artifact.artifactSha256)) {
+    throw new TypeError(`${name}.artifactSha256 must bind the exact signed binary.`);
+  }
+  if (
+    typeof artifact.signingIdentitySha256 !== "string" ||
+    !SHA256_HEX.test(artifact.signingIdentitySha256)
+  ) {
+    throw new TypeError(`${name}.signingIdentitySha256 must bind the signing identity.`);
+  }
+  if (specification.platform === "ios") {
+    if (
+      typeof artifact.nativeBuildVersion !== "string" ||
+      !IOS_BUILD_NUMBER.test(artifact.nativeBuildVersion)
+    ) {
+      throw new TypeError(`${name}.nativeBuildVersion must be the exact iOS build number.`);
+    }
+  } else if (
+    !Number.isInteger(artifact.nativeBuildVersion) ||
+    artifact.nativeBuildVersion < 1 ||
+    artifact.nativeBuildVersion > 2_100_000_000
+  ) {
+    throw new TypeError(`${name}.nativeBuildVersion must be the exact Android version code.`);
+  }
+  return artifact;
+}
+
+function assertArtifacts(artifacts, manifestCommit) {
+  assertExactKeys(artifacts, ["physicalDevice", "production"], "manifest.artifacts");
+  assertExactKeys(
+    artifacts.physicalDevice,
+    ["ios", "android"],
+    "manifest.artifacts.physicalDevice",
+  );
+  assertExactKeys(artifacts.production, ["ios", "android"], "manifest.artifacts.production");
+
+  const buildIds = new Set();
+  const artifactDigests = new Set();
+  for (const specification of artifactSpecifications) {
+    const artifact = assertArtifact(
+      artifacts[specification.role][specification.platform],
+      specification,
+      manifestCommit,
+    );
+    if (buildIds.has(artifact.easBuildId)) {
+      throw new TypeError("Every reviewed artifact must have a distinct exact EAS build ID.");
+    }
+    buildIds.add(artifact.easBuildId);
+    if (artifactDigests.has(artifact.artifactSha256)) {
+      throw new TypeError("Every reviewed artifact must have a distinct exact SHA-256 digest.");
+    }
+    artifactDigests.add(artifact.artifactSha256);
+  }
+
+  for (const platform of ["ios", "android"]) {
+    if (
+      artifacts.physicalDevice[platform].nativeBuildVersion !==
+      artifacts.production[platform].nativeBuildVersion
+    ) {
+      throw new TypeError(
+        `The physical-device and production ${platform} artifacts must use the same source-controlled native build version.`,
+      );
+    }
+  }
+}
+
+function assertDevice(device, platform, testedArtifact) {
   assertExactKeys(
     device,
     [
@@ -147,8 +292,7 @@ function assertDevice(device, platform) {
       "physicalDevice",
       "model",
       "osVersion",
-      "appBuildId",
-      "artifactSha256",
+      "testedEasBuildId",
       "declarations",
       "matrix",
       "healthJournalBenchmark",
@@ -162,9 +306,11 @@ function assertDevice(device, platform) {
   }
   assertSafeIdentifier(device.model, `manifest.devices.${platform}.model`);
   assertSafeIdentifier(device.osVersion, `manifest.devices.${platform}.osVersion`);
-  assertSafeIdentifier(device.appBuildId, `manifest.devices.${platform}.appBuildId`);
-  if (typeof device.artifactSha256 !== "string" || !SHA256_HEX.test(device.artifactSha256)) {
-    throw new TypeError(`manifest.devices.${platform}.artifactSha256 must bind the signed binary.`);
+  assertEasBuildId(device.testedEasBuildId, `manifest.devices.${platform}.testedEasBuildId`);
+  if (device.testedEasBuildId !== testedArtifact.easBuildId) {
+    throw new TypeError(
+      `manifest.devices.${platform}.testedEasBuildId must bind the physical-device artifact.`,
+    );
   }
   const declarations =
     platform === "ios"
@@ -328,7 +474,25 @@ function checkedArtifactPath(value, extension, name, statArtifact) {
   if (!stat.isFile() || stat.size < 1 || stat.size > 4 * 1_024 * 1_024 * 1_024) {
     throw new TypeError(`${name} must be a bounded regular signed-binary file.`);
   }
-  return value;
+  let filesystemIdentity = null;
+  if (
+    typeof stat.dev === "number" &&
+    typeof stat.ino === "number" &&
+    Number.isSafeInteger(stat.dev) &&
+    Number.isSafeInteger(stat.ino) &&
+    stat.dev >= 0 &&
+    stat.ino > 0
+  ) {
+    filesystemIdentity = `${stat.dev}:${stat.ino}`;
+  } else if (
+    typeof stat.dev === "bigint" &&
+    typeof stat.ino === "bigint" &&
+    stat.dev >= 0n &&
+    stat.ino > 0n
+  ) {
+    filesystemIdentity = `${stat.dev}:${stat.ino}`;
+  }
+  return { filesystemIdentity, path: value };
 }
 
 function defaultReleaseRuntime() {
@@ -346,7 +510,7 @@ function defaultReleaseRuntime() {
       });
     },
     hashArtifact: streamSha256,
-    statArtifact: statSync,
+    statArtifact: lstatSync,
   };
 }
 
@@ -392,6 +556,7 @@ export async function validateHealthReleaseEvidence(
       "executedAt",
       "reviewedBy",
       "reviewedAt",
+      "artifacts",
       "devices",
       "reviewerAttestation",
     ],
@@ -422,9 +587,10 @@ export async function validateHealthReleaseEvidence(
     throw new TypeError("Signed-device evidence is older than 30 days and must be rerun.");
   }
 
+  assertArtifacts(manifest.artifacts, manifest.gitCommit);
   assertExactKeys(manifest.devices, ["ios", "android"], "manifest.devices");
-  assertDevice(manifest.devices.ios, "ios");
-  assertDevice(manifest.devices.android, "android");
+  assertDevice(manifest.devices.ios, "ios", manifest.artifacts.physicalDevice.ios);
+  assertDevice(manifest.devices.android, "android", manifest.artifacts.physicalDevice.android);
   verifyReviewerAttestation(manifest, trustStore, reviewedAt);
 
   const actualGitHead = runtime.gitHead();
@@ -434,53 +600,61 @@ export async function validateHealthReleaseEvidence(
   if (runtime.gitStatus().trim() !== "") {
     throw new TypeError("Signed-device health release verification requires a clean Git tree.");
   }
-  const iosPath = checkedArtifactPath(
-    environment.NUTRITION_IOS_HEALTH_RELEASE_ARTIFACT_PATH,
-    ".ipa",
-    "NUTRITION_IOS_HEALTH_RELEASE_ARTIFACT_PATH",
-    runtime.statArtifact,
+  const checkedArtifacts = artifactSpecifications.map((specification) => {
+    const artifact = manifest.artifacts[specification.role][specification.platform];
+    const checkedPath = checkedArtifactPath(
+      environment[specification.pathEnvironment],
+      specification.extension,
+      specification.pathEnvironment,
+      runtime.statArtifact,
+    );
+    if (environment[specification.buildIdEnvironment] !== artifact.easBuildId) {
+      throw new TypeError(
+        `The ${specification.label} EAS build ID does not match reviewed evidence.`,
+      );
+    }
+    return { artifact, ...checkedPath, specification };
+  });
+  const artifactPaths = checkedArtifacts.map(({ path }) => path);
+  if (new Set(artifactPaths).size !== artifactPaths.length) {
+    throw new TypeError("Every reviewed artifact must use a distinct normalized absolute path.");
+  }
+  const filesystemIdentities = checkedArtifacts
+    .map(({ filesystemIdentity }) => filesystemIdentity)
+    .filter((identity) => identity !== null);
+  if (new Set(filesystemIdentities).size !== filesystemIdentities.length) {
+    throw new TypeError("Every reviewed artifact must identify a distinct filesystem file.");
+  }
+  const actualDigests = await Promise.all(
+    checkedArtifacts.map(({ path }) => runtime.hashArtifact(path)),
   );
-  const androidPath = checkedArtifactPath(
-    environment.NUTRITION_ANDROID_HEALTH_RELEASE_ARTIFACT_PATH,
-    ".aab",
-    "NUTRITION_ANDROID_HEALTH_RELEASE_ARTIFACT_PATH",
-    runtime.statArtifact,
-  );
-  const [actualIosSha256, actualAndroidSha256] = await Promise.all([
-    runtime.hashArtifact(iosPath),
-    runtime.hashArtifact(androidPath),
-  ]);
-  if (!SHA256_HEX.test(actualIosSha256) || !SHA256_HEX.test(actualAndroidSha256)) {
-    throw new TypeError("A signed-binary digest was not lowercase SHA-256 hex.");
+  if (new Set(actualDigests).size !== actualDigests.length) {
+    throw new TypeError("Every reviewed artifact file must have a distinct actual SHA-256 digest.");
   }
-  if (actualIosSha256 !== manifest.devices.ios.artifactSha256) {
-    throw new TypeError("The actual IPA digest does not match reviewed evidence.");
-  }
-  if (actualAndroidSha256 !== manifest.devices.android.artifactSha256) {
-    throw new TypeError("The actual AAB digest does not match reviewed evidence.");
-  }
-
-  const pins = [
-    [
-      "iOS build ID",
-      environment.NUTRITION_IOS_HEALTH_RELEASE_BUILD_ID,
-      manifest.devices.ios.appBuildId,
-    ],
-    [
-      "Android build ID",
-      environment.NUTRITION_ANDROID_HEALTH_RELEASE_BUILD_ID,
-      manifest.devices.android.appBuildId,
-    ],
-  ];
-  for (const [name, supplied, reviewed] of pins) {
-    if (supplied !== reviewed)
-      throw new TypeError(`The release ${name} does not match reviewed evidence.`);
+  for (const [index, actualDigest] of actualDigests.entries()) {
+    const { artifact, specification } = checkedArtifacts[index];
+    if (!SHA256_HEX.test(actualDigest)) {
+      throw new TypeError(`${specification.label} did not produce a lowercase SHA-256 digest.`);
+    }
+    if (actualDigest !== artifact.artifactSha256) {
+      throw new TypeError(
+        `The actual ${specification.label} digest does not match reviewed evidence.`,
+      );
+    }
   }
   return {
     manifestSha256: actualManifestDigest,
     gitCommit: manifest.gitCommit,
-    iosArtifactSha256: manifest.devices.ios.artifactSha256,
-    androidArtifactSha256: manifest.devices.android.artifactSha256,
+    artifactSha256: {
+      physicalDevice: {
+        ios: manifest.artifacts.physicalDevice.ios.artifactSha256,
+        android: manifest.artifacts.physicalDevice.android.artifactSha256,
+      },
+      production: {
+        ios: manifest.artifacts.production.ios.artifactSha256,
+        android: manifest.artifacts.production.android.artifactSha256,
+      },
+    },
     reviewerKeyId: manifest.reviewerAttestation.keyId,
   };
 }

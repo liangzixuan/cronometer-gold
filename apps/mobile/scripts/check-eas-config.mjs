@@ -1,11 +1,17 @@
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
-import { validateReleaseDeploymentRecord } from "./check-release-env.mjs";
+import {
+  ExpectedReleaseBlockError,
+  RELEASE_EXPECTED_BLOCK_EXIT_CODE,
+  RELEASE_NUMBERING_UNCONFIRMED_CODE,
+  validateReleaseDeploymentPolicy,
+} from "./check-release-env.mjs";
 
 const EAS_PROJECT_ID = "14022636-ab56-468c-94f6-d6106addde42";
 const RELEASE_NUMBERING_SCHEMA = "nutrition-tracker-release-numbering-v1";
 const IOS_BUILD_NUMBER = /^[1-9]\d{0,3}(?:\.(?:0|[1-9]\d?)){0,2}$/u;
+const CONTRACTS_BUILD = "pnpm --filter @nutrition-tracker/contracts build";
 
 function assert(condition, message) {
   if (!condition) throw new TypeError(message);
@@ -16,6 +22,7 @@ export function validateEasReleaseConfig(
   { requireConfirmedNumbering = false } = {},
 ) {
   const expo = appConfig?.expo;
+  const physicalDevice = easConfig?.build?.["physical-device"];
   const production = easConfig?.build?.production;
 
   assert(expo?.owner === "zixuanliang", "Expo owner must remain pinned to zixuanliang.");
@@ -35,7 +42,7 @@ export function validateEasReleaseConfig(
   );
   assert(
     easConfig?.cli?.requireCommit === true,
-    "EAS release builds must require a committed Git tree.",
+    "Every EAS build must require a committed Git tree.",
   );
   assert(
     easConfig?.cli?.promptToConfigurePushNotifications === false,
@@ -67,10 +74,91 @@ export function validateEasReleaseConfig(
   );
   assert(production?.ios?.simulator === false, "Production iOS output must be a device IPA.");
   assert(
-    packageConfig?.scripts?.["eas-build-post-install"] === "pnpm release:check",
-    "EAS must run the release environment and native configuration checks before compilation.",
+    physicalDevice?.extends === "production",
+    "The physical-device profile must inherit the reviewed production toolchain.",
   );
-  validateReleaseDeploymentRecord(releaseDeployment);
+  assert(
+    physicalDevice?.distribution === "internal",
+    "The physical-device profile must use signed internal distribution.",
+  );
+  assert(
+    physicalDevice?.developmentClient === false,
+    "The physical-device profile must remain a standalone signed app, not a development client.",
+  );
+  assert(
+    physicalDevice?.environment === "preview",
+    "The physical-device profile must load the isolated EAS preview environment.",
+  );
+  assert(
+    !Object.hasOwn(physicalDevice ?? {}, "env"),
+    "Do not commit a physical-device API origin in eas.json; use the EAS preview environment.",
+  );
+  assert(
+    (physicalDevice?.credentialsSource ?? production?.credentialsSource) === "remote",
+    "Physical-device signing credentials must come from the EAS credential store.",
+  );
+  assert(
+    (physicalDevice?.node ?? production?.node) === "22.13.0" &&
+      (physicalDevice?.corepack ?? production?.corepack) === true &&
+      (physicalDevice?.pnpm ?? production?.pnpm) === "11.19.0",
+    "The physical-device profile must preserve the pinned production Node, Corepack, and pnpm toolchain.",
+  );
+  assert(
+    (physicalDevice?.autoIncrement ?? production?.autoIncrement) === false,
+    "The physical-device profile must not mutate locally controlled app versions.",
+  );
+  assert(
+    physicalDevice?.android?.buildType === "apk",
+    "Physical-device Android output must be a directly installable APK.",
+  );
+  assert(
+    physicalDevice?.android?.withoutCredentials !== true,
+    "Physical-device Android output must retain signing credentials.",
+  );
+  assert(
+    physicalDevice?.ios?.simulator === false,
+    "Physical-device iOS output must be a signed device IPA.",
+  );
+  assert(
+    physicalDevice?.ios?.withoutCredentials !== true,
+    "Physical-device iOS output must retain signing credentials.",
+  );
+  assert(
+    packageConfig?.scripts?.["eas-build-post-install"] ===
+      `${CONTRACTS_BUILD} && node scripts/check-eas-build-post-install.mjs`,
+    "EAS must run the fail-closed profile-aware checks before compilation.",
+  );
+  assert(
+    packageConfig?.scripts?.["ci:release-state"] ===
+      `${CONTRACTS_BUILD} && node scripts/check-ci-release-state.mjs`,
+    "CI release-state checks must build their workspace contract dependency first.",
+  );
+  assert(
+    packageConfig?.scripts?.["config:check"] ===
+      `${CONTRACTS_BUILD} && node scripts/check-native-config.mjs && node scripts/check-eas-config.mjs`,
+    "Mobile configuration checks must build their workspace contract dependency first.",
+  );
+  assert(
+    packageConfig?.scripts?.["eas:check"] ===
+      `${CONTRACTS_BUILD} && node scripts/check-eas-config.mjs`,
+    "Standalone EAS checks must build their workspace contract dependency first.",
+  );
+  assert(
+    packageConfig?.scripts?.["release:check"] ===
+      `${CONTRACTS_BUILD} && node scripts/check-eas-config.mjs --release && node scripts/check-release-env.mjs && node scripts/check-native-config.mjs`,
+    "The reviewed release preflight must not be replaced or weakened.",
+  );
+  assert(
+    packageConfig?.scripts?.["release:health-evidence"] ===
+      `${CONTRACTS_BUILD} && node scripts/check-health-release.mjs`,
+    "The reviewer-signed four-artifact evidence verifier must not be replaced or weakened.",
+  );
+  assert(
+    packageConfig?.scripts?.["release:submit"] ===
+      `${CONTRACTS_BUILD} && node scripts/submit-reviewed-release.mjs`,
+    "Production submission must remain behind the reviewed four-artifact evidence wrapper.",
+  );
+  validateReleaseDeploymentPolicy(releaseDeployment);
 
   assert(
     releaseNumbering?.schemaVersion === RELEASE_NUMBERING_SCHEMA,
@@ -111,15 +199,19 @@ export function validateEasReleaseConfig(
     );
   }
   if (requireConfirmedNumbering) {
-    assert(
-      releaseNumbering.identifierHistoryConfirmed,
-      "Package-identifier history and explicit native build numbers must be confirmed before release.",
-    );
+    if (!releaseNumbering.identifierHistoryConfirmed) {
+      throw new ExpectedReleaseBlockError(
+        RELEASE_NUMBERING_UNCONFIRMED_CODE,
+        "Package-identifier history and explicit native build numbers must be confirmed before release.",
+      );
+    }
   }
 }
 
 const entrypoint = process.argv[1];
 if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
+  const arguments_ = process.argv.slice(2);
+  const machineReadable = arguments_.includes("--machine-readable");
   try {
     const [
       { default: appConfig },
@@ -136,12 +228,17 @@ if (entrypoint && import.meta.url === pathToFileURL(entrypoint).href) {
     ]);
     validateEasReleaseConfig(
       { appConfig, easConfig, packageConfig, releaseDeployment, releaseNumbering },
-      { requireConfirmedNumbering: process.argv.slice(2).includes("--release") },
+      { requireConfirmedNumbering: arguments_.includes("--release") },
     );
     process.stdout.write("EAS release configuration is valid.\n");
   } catch (error) {
-    const message = error instanceof Error ? error.message : "EAS release configuration failed.";
-    process.stderr.write(`${message}\n`);
-    process.exitCode = 1;
+    if (machineReadable && error instanceof ExpectedReleaseBlockError) {
+      process.stdout.write(`${error.code}\n`);
+      process.exitCode = RELEASE_EXPECTED_BLOCK_EXIT_CODE;
+    } else {
+      const message = error instanceof Error ? error.message : "EAS release configuration failed.";
+      process.stderr.write(`${message}\n`);
+      process.exitCode = 1;
+    }
   }
 }

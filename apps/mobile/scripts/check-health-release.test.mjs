@@ -1,7 +1,8 @@
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { canonicalJson } from "@nutrition-tracker/contracts";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   HEALTH_RELEASE_EVIDENCE_SCHEMA,
@@ -42,6 +43,34 @@ const reviewerKeys = generateKeyPairSync("ed25519");
 const wrongKeys = generateKeyPairSync("ed25519");
 const reviewerPrincipal = "independent.reviewer@example.test";
 const reviewerKeyId = "release-reviewer-2026-01";
+const gitCommit = "a".repeat(40);
+
+const buildIds = {
+  physicalDevice: {
+    ios: "11111111-1111-4111-8111-111111111111",
+    android: "22222222-2222-4222-8222-222222222222",
+  },
+  production: {
+    ios: "33333333-3333-4333-8333-333333333333",
+    android: "44444444-4444-4444-8444-444444444444",
+  },
+};
+
+const artifactPaths = {
+  physicalDevice: {
+    ios: "/tmp/reviewed-physical-device.ipa",
+    android: "/tmp/reviewed-physical-device.apk",
+  },
+  production: {
+    ios: "/tmp/reviewed-production.ipa",
+    android: "/tmp/reviewed-production.aab",
+  },
+};
+
+const artifactDigests = {
+  physicalDevice: { ios: "b".repeat(64), android: "c".repeat(64) },
+  production: { ios: "d".repeat(64), android: "e".repeat(64) },
+};
 
 const trustStore = {
   schemaVersion: HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA,
@@ -58,24 +87,73 @@ const trustStore = {
     },
   ],
 };
+const checkedInTrustStore = JSON.parse(
+  readFileSync(new URL("../config/health-release-reviewers.json", import.meta.url), "utf8"),
+);
+
+function reviewedArtifact({ artifactType, buildProfile, digest, easBuildId, platform }) {
+  return {
+    platform,
+    buildProfile,
+    artifactType,
+    easBuildId,
+    sourceCommit: gitCommit,
+    nativeBuildVersion: platform === "ios" ? "1" : 1,
+    signingIdentitySha256: platform === "ios" ? "1".repeat(64) : "2".repeat(64),
+    artifactSha256: digest,
+  };
+}
 
 function unsignedManifest() {
   return {
     schemaVersion: HEALTH_RELEASE_EVIDENCE_SCHEMA,
     appVersion: "0.1.0",
-    gitCommit: "a".repeat(40),
+    gitCommit,
     executedBy: "release.operator@example.test",
     executedAt: "2026-08-16T08:00:00.000Z",
     reviewedBy: reviewerPrincipal,
     reviewedAt: "2026-08-16T09:00:00.000Z",
+    artifacts: {
+      physicalDevice: {
+        ios: reviewedArtifact({
+          artifactType: "ipa",
+          buildProfile: "physical-device",
+          digest: artifactDigests.physicalDevice.ios,
+          easBuildId: buildIds.physicalDevice.ios,
+          platform: "ios",
+        }),
+        android: reviewedArtifact({
+          artifactType: "apk",
+          buildProfile: "physical-device",
+          digest: artifactDigests.physicalDevice.android,
+          easBuildId: buildIds.physicalDevice.android,
+          platform: "android",
+        }),
+      },
+      production: {
+        ios: reviewedArtifact({
+          artifactType: "ipa",
+          buildProfile: "production",
+          digest: artifactDigests.production.ios,
+          easBuildId: buildIds.production.ios,
+          platform: "ios",
+        }),
+        android: reviewedArtifact({
+          artifactType: "aab",
+          buildProfile: "production",
+          digest: artifactDigests.production.android,
+          easBuildId: buildIds.production.android,
+          platform: "android",
+        }),
+      },
+    },
     devices: {
       ios: {
         platform: "ios",
         physicalDevice: true,
         model: "iPhone 17 Pro",
         osVersion: "iOS 19.6.1",
-        appBuildId: "ios-release-20260816.1",
-        artifactSha256: "b".repeat(64),
+        testedEasBuildId: buildIds.physicalDevice.ios,
         declarations: {
           healthKitCapability: "passed",
           readOnlyBodyWeightPurpose: "passed",
@@ -96,8 +174,7 @@ function unsignedManifest() {
         physicalDevice: true,
         model: "Pixel 10 Pro",
         osVersion: "Android 16",
-        appBuildId: "android-release-20260816.1",
-        artifactSha256: "c".repeat(64),
+        testedEasBuildId: buildIds.physicalDevice.android,
         declarations: {
           healthConnectManifest: "passed",
           playBodyWeightDeclaration: "passed",
@@ -136,19 +213,42 @@ function environmentFor(manifest = attest()) {
     NUTRITION_HEALTH_RELEASE_EVIDENCE_SHA256: createHash("sha256")
       .update(raw, "utf8")
       .digest("hex"),
-    NUTRITION_IOS_HEALTH_RELEASE_BUILD_ID: manifest.devices.ios.appBuildId,
-    NUTRITION_IOS_HEALTH_RELEASE_ARTIFACT_PATH: "/tmp/reviewed-release.ipa",
-    NUTRITION_ANDROID_HEALTH_RELEASE_BUILD_ID: manifest.devices.android.appBuildId,
-    NUTRITION_ANDROID_HEALTH_RELEASE_ARTIFACT_PATH: "/tmp/reviewed-release.aab",
+    NUTRITION_IOS_PHYSICAL_DEVICE_BUILD_ID: manifest.artifacts.physicalDevice.ios.easBuildId,
+    NUTRITION_IOS_PHYSICAL_DEVICE_ARTIFACT_PATH: artifactPaths.physicalDevice.ios,
+    NUTRITION_ANDROID_PHYSICAL_DEVICE_BUILD_ID:
+      manifest.artifacts.physicalDevice.android.easBuildId,
+    NUTRITION_ANDROID_PHYSICAL_DEVICE_ARTIFACT_PATH: artifactPaths.physicalDevice.android,
+    NUTRITION_IOS_PRODUCTION_BUILD_ID: manifest.artifacts.production.ios.easBuildId,
+    NUTRITION_IOS_PRODUCTION_ARTIFACT_PATH: artifactPaths.production.ios,
+    NUTRITION_ANDROID_PRODUCTION_BUILD_ID: manifest.artifacts.production.android.easBuildId,
+    NUTRITION_ANDROID_PRODUCTION_ARTIFACT_PATH: artifactPaths.production.android,
   };
 }
 
 const checkTime = new Date("2026-08-17T00:00:00.000Z");
+const orderedArtifactPaths = [
+  artifactPaths.physicalDevice.ios,
+  artifactPaths.physicalDevice.android,
+  artifactPaths.production.ios,
+  artifactPaths.production.android,
+];
 const releaseRuntime = {
-  gitHead: () => "a".repeat(40),
+  gitHead: () => gitCommit,
   gitStatus: () => "",
-  statArtifact: () => ({ isFile: () => true, size: 123 }),
-  hashArtifact: async (path) => (path.endsWith(".ipa") ? "b".repeat(64) : "c".repeat(64)),
+  statArtifact: (path) => ({
+    dev: 7,
+    ino: orderedArtifactPaths.indexOf(path) + 101,
+    isFile: () => true,
+    size: 123,
+  }),
+  hashArtifact: async (path) => {
+    for (const role of ["physicalDevice", "production"]) {
+      for (const platform of ["ios", "android"]) {
+        if (path === artifactPaths[role][platform]) return artifactDigests[role][platform];
+      }
+    }
+    throw new TypeError(`Unexpected artifact path ${path}`);
+  },
 };
 
 describe("native health release evidence", () => {
@@ -158,16 +258,51 @@ describe("native health release evidence", () => {
     ).rejects.toThrow(/absent/u);
   });
 
-  it("accepts distinct pinned iOS/AAB artifacts with a trusted independent signature", async () => {
+  it("keeps the checked-in trust root blocked until an independent reviewer is onboarded", async () => {
+    expect(checkedInTrustStore.reviewers).toEqual([]);
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(),
+        checkTime,
+        checkedInTrustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/trusted key/u);
+  });
+
+  it("accepts four role-specific artifacts with trusted physical-device evidence", async () => {
     await expect(
       validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, releaseRuntime),
     ).resolves.toEqual({
       manifestSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
-      gitCommit: "a".repeat(40),
-      iosArtifactSha256: "b".repeat(64),
-      androidArtifactSha256: "c".repeat(64),
+      gitCommit,
+      artifactSha256: artifactDigests,
       reviewerKeyId,
     });
+  });
+
+  it("hashes each physical-device and production artifact independently", async () => {
+    const hashArtifact = vi.fn(releaseRuntime.hashArtifact);
+    await validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+      ...releaseRuntime,
+      hashArtifact,
+    });
+    expect(hashArtifact.mock.calls.map(([path]) => path)).toEqual([
+      artifactPaths.physicalDevice.ios,
+      artifactPaths.physicalDevice.android,
+      artifactPaths.production.ios,
+      artifactPaths.production.android,
+    ]);
+
+    await expect(
+      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+        ...releaseRuntime,
+        hashArtifact: async (path) =>
+          path === artifactPaths.production.android
+            ? "f".repeat(64)
+            : releaseRuntime.hashArtifact(path),
+      }),
+    ).rejects.toThrow(/production Android AAB digest/u);
   });
 
   it("rejects a claimed reviewer identity signed by the wrong or an untrusted key", async () => {
@@ -202,30 +337,172 @@ describe("native health release evidence", () => {
     ).rejects.toThrow(/deletedWeightReconciliation|signature/u);
   });
 
-  it("rejects swapping a separately signed platform artifact", async () => {
-    const reviewed = attest();
-    const environment = environmentFor(reviewed);
-    const swapped = {
-      ...reviewed,
-      devices: {
-        ios: {
-          ...reviewed.devices.ios,
-          artifactSha256: reviewed.devices.android.artifactSha256,
-        },
-        android: {
-          ...reviewed.devices.android,
-          artifactSha256: reviewed.devices.ios.artifactSha256,
-        },
-      },
-    };
-    const raw = JSON.stringify(swapped);
-    environment.NUTRITION_HEALTH_RELEASE_EVIDENCE_JSON = raw;
-    environment.NUTRITION_HEALTH_RELEASE_EVIDENCE_SHA256 = createHash("sha256")
-      .update(raw, "utf8")
-      .digest("hex");
+  it("binds device results only to physical-device IPA/APK builds", async () => {
+    const wrongArtifactType = unsignedManifest();
+    wrongArtifactType.artifacts.physicalDevice.android.artifactType = "aab";
     await expect(
-      validateHealthReleaseEvidence(environment, checkTime, trustStore, releaseRuntime),
-    ).rejects.toThrow(/signature verification/u);
+      validateHealthReleaseEvidence(
+        environmentFor(attest(wrongArtifactType)),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/physical-device android apk artifact/u);
+
+    const productionBuildClaim = unsignedManifest();
+    productionBuildClaim.devices.android.testedEasBuildId = buildIds.production.android;
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(productionBuildClaim)),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/bind the physical-device artifact/u);
+  });
+
+  it("binds every artifact to a distinct EAS build, commit, native version, and signer", async () => {
+    const wrongCommit = unsignedManifest();
+    wrongCommit.artifacts.production.ios.sourceCommit = "f".repeat(40);
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(wrongCommit)),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/sourceCommit must equal/u);
+
+    const duplicateBuild = unsignedManifest();
+    duplicateBuild.artifacts.production.ios.easBuildId = buildIds.physicalDevice.ios;
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(duplicateBuild)),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/distinct exact EAS build ID/u);
+
+    const mismatchedVersion = unsignedManifest();
+    mismatchedVersion.artifacts.production.android.nativeBuildVersion = 2;
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(mismatchedVersion)),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/same source-controlled native build version/u);
+
+    const invalidSigner = unsignedManifest();
+    invalidSigner.artifacts.production.android.signingIdentitySha256 = "not-a-fingerprint";
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(invalidSigner)),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/signingIdentitySha256/u);
+
+    const duplicateDigest = unsignedManifest();
+    duplicateDigest.artifacts.production.ios.artifactSha256 =
+      duplicateDigest.artifacts.physicalDevice.ios.artifactSha256;
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(duplicateDigest)),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/distinct exact SHA-256 digest/u);
+  });
+
+  it("rejects same paths, hardlinks, symlinks, and duplicate actual artifact bytes", async () => {
+    await expect(
+      validateHealthReleaseEvidence(
+        {
+          ...environmentFor(),
+          NUTRITION_IOS_PRODUCTION_ARTIFACT_PATH: artifactPaths.physicalDevice.ios,
+        },
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/distinct normalized absolute path/u);
+
+    await expect(
+      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+        ...releaseRuntime,
+        statArtifact: (path) => ({
+          ...releaseRuntime.statArtifact(path),
+          ino:
+            path === artifactPaths.production.ios
+              ? releaseRuntime.statArtifact(artifactPaths.physicalDevice.ios).ino
+              : releaseRuntime.statArtifact(path).ino,
+        }),
+      }),
+    ).rejects.toThrow(/distinct filesystem file/u);
+
+    await expect(
+      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+        ...releaseRuntime,
+        statArtifact: (path) => ({
+          ...releaseRuntime.statArtifact(path),
+          isFile: () => path !== artifactPaths.production.android,
+          isSymbolicLink: () => path === artifactPaths.production.android,
+        }),
+      }),
+    ).rejects.toThrow(/bounded regular signed-binary file/u);
+
+    await expect(
+      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+        ...releaseRuntime,
+        hashArtifact: async (path) =>
+          path === artifactPaths.production.ios
+            ? artifactDigests.physicalDevice.ios
+            : releaseRuntime.hashArtifact(path),
+      }),
+    ).rejects.toThrow(/distinct actual SHA-256 digest/u);
+  });
+
+  it("requires role-specific file extensions and exact build-ID environment pins", async () => {
+    await expect(
+      validateHealthReleaseEvidence(
+        {
+          ...environmentFor(),
+          NUTRITION_ANDROID_PHYSICAL_DEVICE_ARTIFACT_PATH: "/tmp/not-the-tested-build.aab",
+        },
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/absolute \.apk path/u);
+
+    await expect(
+      validateHealthReleaseEvidence(
+        {
+          ...environmentFor(),
+          NUTRITION_IOS_PRODUCTION_ARTIFACT_PATH: "/tmp/../tmp/reviewed-production.ipa",
+        },
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/normalized absolute \.ipa path/u);
+
+    await expect(
+      validateHealthReleaseEvidence(
+        {
+          ...environmentFor(),
+          NUTRITION_IOS_PRODUCTION_BUILD_ID: buildIds.physicalDevice.ios,
+        },
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/production iOS IPA EAS build ID/u);
   });
 
   it("rejects stale evidence, self-review, and health payload fields", async () => {
@@ -259,7 +536,7 @@ describe("native health release evidence", () => {
     ).rejects.toThrow(/must not contain/u);
   });
 
-  it("binds evidence to the actual Git tree and refuses dirty or newer trees", async () => {
+  it("binds evidence to the actual clean Git tree", async () => {
     await expect(
       validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
         ...releaseRuntime,
@@ -272,20 +549,5 @@ describe("native health release evidence", () => {
         gitStatus: () => " M apps/mobile/App.tsx\n",
       }),
     ).rejects.toThrow(/clean Git tree/u);
-  });
-
-  it("hashes the supplied IPA and AAB and rejects swapped or altered binaries", async () => {
-    await expect(
-      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
-        ...releaseRuntime,
-        hashArtifact: async (path) => (path.endsWith(".ipa") ? "c".repeat(64) : "b".repeat(64)),
-      }),
-    ).rejects.toThrow(/actual IPA digest/u);
-    await expect(
-      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
-        ...releaseRuntime,
-        hashArtifact: async (path) => (path.endsWith(".ipa") ? "d".repeat(64) : "c".repeat(64)),
-      }),
-    ).rejects.toThrow(/actual IPA digest/u);
   });
 });
