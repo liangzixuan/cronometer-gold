@@ -46,6 +46,9 @@ jobs:
       - name: Validate the opt-in LocalStack fixture
         run: python3 -B -m unittest discover -s infra/localstack/tests -p 'test_*.py'
 
+      - name: Validate the physical-device private-tailnet policy renderer
+        run: python3 -B -m unittest discover -s infra/tailscale/tests -p 'test_*.py'
+
       - name: Install pnpm
         uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
 

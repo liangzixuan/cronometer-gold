@@ -177,6 +177,13 @@ post-install gate rejects missing values, HTTP, loopback/IP/local targets,
 credentials, paths, non-default ports, and hostnames that identify those
 backing services.
 
+Before joining the phone, follow the
+[physical-device private-HTTPS runbook](../../infra/runbooks/physical-device-private-https.md).
+Tailscale's initial allow-all policy is not an application firewall: apply and
+test the exact phone-to-Mac `tcp:443` grant first, and audit every overlapping
+ACL/grant. The checked-in renderer only proposes a deny-by-default policy for
+human review; it never installs a client or mutates a tailnet.
+
 Inspect the resolved profiles before consuming build quota:
 
 ```sh

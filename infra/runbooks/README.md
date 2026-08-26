@@ -9,6 +9,7 @@ production environments.
 - [PostgreSQL backup and restore](./postgres-backup-and-restore.md)
 - [Privacy export and account erasure](./privacy-export-and-erasure.md)
 - [Platform-health and reminder release](./platform-health-release.md)
+- [Physical-device private HTTPS](./physical-device-private-https.md)
 - [Food-source release promotion](./food-source-release.md)
 - [Official food-source release catalogue](../../docs/ingestion/official-source-releases.md)
 
