@@ -263,7 +263,10 @@ remains operationally blocked even if every value has the right shape.
 Ordinary `production` EAS compilation intentionally runs `release:check`, not
 `release:health-evidence`: the latter cannot exist until the four binaries have
 been produced, installed where applicable, tested, downloaded, and independently
-reviewed. After those steps, supply the v4 manifest, exact relay report/origin
+reviewed. Before either profile runs its post-install gate, the hook requires
+Expo's cloud-build markers and exact pinned project ID, canonical build ID,
+platform, profile, and full Git commit; local EAS builds cannot satisfy this
+release context. After those steps, supply the v4 manifest, exact relay report/origin
 pins, and all four absolute artifact paths/build-ID pins listed in
 `config/README.md`, then verify it:
 

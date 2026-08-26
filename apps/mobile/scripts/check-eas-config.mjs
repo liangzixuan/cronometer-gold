@@ -7,8 +7,8 @@ import {
   RELEASE_NUMBERING_UNCONFIRMED_CODE,
   validateReleaseDeploymentPolicy,
 } from "./check-release-env.mjs";
+import { EAS_PROJECT_ID } from "./eas-build-contract.mjs";
 
-const EAS_PROJECT_ID = "14022636-ab56-468c-94f6-d6106addde42";
 const RELEASE_NUMBERING_SCHEMA = "nutrition-tracker-release-numbering-v1";
 const IOS_BUILD_NUMBER = /^[1-9]\d{0,3}(?:\.(?:0|[1-9]\d?)){0,2}$/u;
 const CONTRACTS_BUILD = "pnpm --filter @nutrition-tracker/contracts build";

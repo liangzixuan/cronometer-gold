@@ -2,22 +2,16 @@ import { spawnSync } from "node:child_process";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
 
+import { validateEasCloudBuildContext } from "./eas-build-contract.mjs";
 import { validatePhysicalDeviceApiUrl } from "./physical-device-api-url.mjs";
 
 const PHYSICAL_DEVICE_PROFILE = "physical-device";
 const PRODUCTION_PROFILE = "production";
-function assert(condition, message) {
-  if (!condition) throw new TypeError(message);
-}
 
 export { validatePhysicalDeviceApiUrl } from "./physical-device-api-url.mjs";
 
 export function resolveEasPostInstallPlan(environment) {
-  const profile = environment?.EAS_BUILD_PROFILE;
-  assert(
-    typeof profile === "string" && profile.length > 0,
-    "EAS_BUILD_PROFILE is required for every EAS post-install check.",
-  );
+  const { profile } = validateEasCloudBuildContext(environment);
 
   if (profile === PRODUCTION_PROFILE) {
     return { profile, script: "release:check" };
@@ -27,7 +21,7 @@ export function resolveEasPostInstallPlan(environment) {
     return { apiOrigin, profile, script: "config:check" };
   }
   throw new TypeError(
-    `Unsupported EAS_BUILD_PROFILE ${JSON.stringify(profile)}; only production and physical-device may compile.`,
+    "Unsupported EAS_BUILD_PROFILE; only production and physical-device may compile.",
   );
 }
 

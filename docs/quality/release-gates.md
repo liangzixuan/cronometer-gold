@@ -84,6 +84,10 @@ package boundaries.
   independent reviewer compares claimed build/signing metadata with EAS and
   platform-tool output because archive hashing alone does not extract it; a
   Metro export is not native evidence.
+- Every signed EAS binary is produced by the pinned Expo project on the EAS
+  cloud runner. Post-install checks reject absent or malformed build IDs,
+  platforms, profiles, and commit hashes before invoking a release script; a
+  local EAS build cannot substitute for this provenance.
 - The signed physical-device manifest pins the exact private `.ts.net` API
   origin and exact canonical relay-report bytes. That report proves attended
   first-connect Shields Up, empty initial Serve/Funnel, verified identities and
