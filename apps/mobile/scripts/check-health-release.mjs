@@ -23,6 +23,7 @@ export const HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA =
 export const PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA =
   "nutrition-tracker-physical-device-relay-report-v1";
 
+const RELEASE_NUMBERING_SCHEMA = "nutrition-tracker-release-numbering-v1";
 const MAX_MANIFEST_BYTES = 32_768;
 const MAX_RELAY_REPORT_BYTES = 65_536;
 const MAX_EVIDENCE_AGE_MS = 30 * 24 * 60 * 60 * 1_000;
@@ -859,6 +860,82 @@ function defaultTrustStore() {
   );
 }
 
+function defaultReleaseMetadata() {
+  const appConfig = JSON.parse(
+    readFileSync(fileURLToPath(new URL("../app.json", import.meta.url)), "utf8"),
+  );
+  const releaseNumbering = JSON.parse(
+    readFileSync(
+      fileURLToPath(new URL("../config/release-numbering.json", import.meta.url)),
+      "utf8",
+    ),
+  );
+  return { appConfig, releaseNumbering };
+}
+
+function assertSourceControlledReleaseMetadata(manifest, metadata) {
+  assertExactKeys(
+    metadata,
+    ["appConfig", "releaseNumbering"],
+    "source-controlled release metadata",
+  );
+  const appConfig = assertPlainRecord(metadata.appConfig, "source-controlled app config");
+  const expo = assertPlainRecord(appConfig.expo, "source-controlled app config.expo");
+  if (
+    typeof expo.version !== "string" ||
+    !SAFE_VERSION.test(expo.version) ||
+    manifest.appVersion !== expo.version
+  ) {
+    throw new TypeError("manifest.appVersion must equal the exact source-controlled app version.");
+  }
+
+  const numbering = metadata.releaseNumbering;
+  assertExactKeys(
+    numbering,
+    ["schemaVersion", "identifierHistoryConfirmed", "iosBuildNumber", "androidVersionCode"],
+    "source-controlled release numbering",
+  );
+  if (numbering.schemaVersion !== RELEASE_NUMBERING_SCHEMA) {
+    throw new TypeError("Source-controlled release-numbering schema is unsupported.");
+  }
+  if (numbering.identifierHistoryConfirmed !== true) {
+    throw new TypeError(
+      "Package-identifier history and source-controlled native build versions must be confirmed before signed-device release evidence can pass.",
+    );
+  }
+  if (
+    typeof numbering.iosBuildNumber !== "string" ||
+    !IOS_BUILD_NUMBER.test(numbering.iosBuildNumber) ||
+    expo.ios?.buildNumber !== numbering.iosBuildNumber
+  ) {
+    throw new TypeError(
+      "The app config and release-numbering record must agree on one confirmed iOS build number.",
+    );
+  }
+  if (
+    !Number.isInteger(numbering.androidVersionCode) ||
+    numbering.androidVersionCode < 1 ||
+    numbering.androidVersionCode > 2_100_000_000 ||
+    expo.android?.versionCode !== numbering.androidVersionCode
+  ) {
+    throw new TypeError(
+      "The app config and release-numbering record must agree on one confirmed Android version code.",
+    );
+  }
+  for (const role of ["physicalDevice", "production"]) {
+    if (manifest.artifacts[role].ios.nativeBuildVersion !== numbering.iosBuildNumber) {
+      throw new TypeError(
+        `manifest.artifacts.${role}.ios.nativeBuildVersion must equal the confirmed source-controlled iOS build number.`,
+      );
+    }
+    if (manifest.artifacts[role].android.nativeBuildVersion !== numbering.androidVersionCode) {
+      throw new TypeError(
+        `manifest.artifacts.${role}.android.nativeBuildVersion must equal the confirmed source-controlled Android version code.`,
+      );
+    }
+  }
+}
+
 const REPOSITORY_ROOT = fileURLToPath(new URL("../../../", import.meta.url));
 
 async function streamSha256(path) {
@@ -1090,6 +1167,7 @@ function defaultReleaseRuntime() {
       });
     },
     hashArtifact: streamSha256,
+    readReleaseMetadata: defaultReleaseMetadata,
     readRelayReport: readBoundedRelayReport,
     statArtifact: lstatSync,
   };
@@ -1184,6 +1262,11 @@ export async function validateHealthReleaseEvidence(
   assertDevice(manifest.devices.android, "android", manifest.artifacts.physicalDevice.android);
   const relay = assertPhysicalDeviceApiRelay(manifest.physicalDeviceApiRelay, environment);
   verifyReviewerAttestation(manifest, trustStore, reviewedAt);
+
+  if (typeof runtime.readReleaseMetadata !== "function") {
+    throw new TypeError("Source-controlled release metadata reader is unavailable.");
+  }
+  assertSourceControlledReleaseMetadata(manifest, runtime.readReleaseMetadata());
 
   const actualGitHead = runtime.gitHead();
   if (!GIT_COMMIT.test(actualGitHead) || actualGitHead !== manifest.gitCommit) {

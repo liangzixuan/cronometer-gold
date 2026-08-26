@@ -74,6 +74,22 @@ const artifactDigests = {
   production: { ios: "d".repeat(64), android: "e".repeat(64) },
 };
 
+const confirmedReleaseMetadata = {
+  appConfig: {
+    expo: {
+      version: "0.1.0",
+      ios: { buildNumber: "1" },
+      android: { versionCode: 1 },
+    },
+  },
+  releaseNumbering: {
+    schemaVersion: "nutrition-tracker-release-numbering-v1",
+    identifierHistoryConfirmed: true,
+    iosBuildNumber: "1",
+    androidVersionCode: 1,
+  },
+};
+
 const inventoriedNon443TcpPorts = [
   22, 80, 1025, 2181, 4000, 4566, 5432, 7700, 8025, 8080, 8081, 9000, 9001, 9092,
 ];
@@ -344,6 +360,7 @@ const orderedArtifactPaths = [
 const releaseRuntime = {
   gitHead: () => gitCommit,
   gitStatus: () => "",
+  readReleaseMetadata: () => structuredClone(confirmedReleaseMetadata),
   statArtifact: (path) => ({
     dev: 7,
     ino: orderedArtifactPaths.indexOf(path) + 101,
@@ -935,6 +952,87 @@ describe("native health release evidence", () => {
         releaseRuntime,
       ),
     ).rejects.toThrow(/distinct exact SHA-256 digest/u);
+  });
+
+  it("binds signed app and native versions to confirmed source-controlled release metadata", async () => {
+    const wrongAppVersion = unsignedManifest();
+    wrongAppVersion.appVersion = "0.2.0";
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(wrongAppVersion)),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/exact source-controlled app version/u);
+
+    await expect(
+      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+        ...releaseRuntime,
+        readReleaseMetadata: () => ({
+          appConfig: {
+            expo: {
+              version: "0.1.0",
+              ios: {},
+              android: {},
+            },
+          },
+          releaseNumbering: {
+            schemaVersion: "nutrition-tracker-release-numbering-v1",
+            identifierHistoryConfirmed: false,
+            iosBuildNumber: null,
+            androidVersionCode: null,
+          },
+        }),
+      }),
+    ).rejects.toThrow(/must be confirmed/u);
+
+    const wrongIosBuild = unsignedManifest();
+    wrongIosBuild.artifacts.physicalDevice.ios.nativeBuildVersion = "2";
+    wrongIosBuild.artifacts.production.ios.nativeBuildVersion = "2";
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(wrongIosBuild)),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/confirmed source-controlled iOS build number/u);
+
+    const wrongAndroidBuild = unsignedManifest();
+    wrongAndroidBuild.artifacts.physicalDevice.android.nativeBuildVersion = 2;
+    wrongAndroidBuild.artifacts.production.android.nativeBuildVersion = 2;
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(wrongAndroidBuild)),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/confirmed source-controlled Android version code/u);
+
+    await expect(
+      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+        ...releaseRuntime,
+        readReleaseMetadata: () => {
+          const metadata = structuredClone(confirmedReleaseMetadata);
+          metadata.appConfig.expo.ios.buildNumber = "2";
+          return metadata;
+        },
+      }),
+    ).rejects.toThrow(/app config and release-numbering record.*iOS build number/u);
+
+    await expect(
+      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+        ...releaseRuntime,
+        readReleaseMetadata: () => {
+          const metadata = structuredClone(confirmedReleaseMetadata);
+          metadata.releaseNumbering.androidVersionCode = 0;
+          metadata.appConfig.expo.android.versionCode = 0;
+          return metadata;
+        },
+      }),
+    ).rejects.toThrow(/confirmed Android version code/u);
   });
 
   it("rejects same paths, hardlinks, symlinks, and duplicate actual artifact bytes", async () => {

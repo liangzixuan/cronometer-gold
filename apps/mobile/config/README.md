@@ -23,7 +23,9 @@ digest, normalized absolute path, actual digest, and available filesystem
 so symbolic links are not artifacts. The reviewer signature covers the complete
 artifact/device matrix and `physicalDeviceApiRelay`, which pins the exact
 private `.ts.net` API origin and the SHA-256 of its independently reviewed relay
-report. Same-source production artifacts are release
+report. The signed `appVersion` must equal `app.json`, and every signed native
+build version must equal the explicitly confirmed values in both `app.json` and
+`release-numbering.json`; unconfirmed identifier history fails closed. Same-source production artifacts are release
 provenance, not a claim that the internal binaries and store binaries are
 byte-equivalent.
 

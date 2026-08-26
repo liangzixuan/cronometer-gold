@@ -236,7 +236,11 @@ iPhone and Android phone. The same reviewer-signed manifest separately binds the
 exact production IPA and AAB, including their EAS build IDs, source commit,
 native build numbers, signing-identity fingerprints, and SHA-256 digests. The
 four builds must come from one clean commit and share the source-controlled
-native version for each platform. Their expected digests, normalized absolute
+native version for each platform. The signed app version must exactly match
+`app.json`; both platforms' signed native versions must match the explicitly
+confirmed values in `app.json` and `config/release-numbering.json`. Unconfirmed
+package-identifier history blocks this evidence verifier as well as the earlier
+release preflight. Their expected digests, normalized absolute
 paths, actual digests, and available filesystem identities must also be
 pairwise distinct, and symbolic links are rejected. It also signs the exact
 private `.ts.net` origin plus the digest of the canonical relay report that

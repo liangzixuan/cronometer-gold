@@ -77,6 +77,10 @@ package boundaries.
   build ID, native version, signing identity, and SHA-256; same-source binaries
   are not presumed byte-equivalent. All four paths, actual digests, and available
   filesystem identities are distinct, with symbolic links rejected. The
+  manifest app version and both platforms' native build versions exactly match
+  the source-controlled app config and confirmed release-numbering record;
+  unconfirmed package-identifier history cannot clear signed-device evidence.
+  The
   independent reviewer compares claimed build/signing metadata with EAS and
   platform-tool output because archive hashing alone does not extract it; a
   Metro export is not native evidence.
