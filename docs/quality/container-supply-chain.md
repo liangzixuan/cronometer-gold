@@ -19,12 +19,22 @@ of the Node producer, so a Node source build failure does not prevent those
 unrelated system-runtime checks from running.
 
 Each producer builds an OCI image index by digest without first creating a tag.
-The build includes maximum-mode BuildKit provenance and a Syft SPDX SBOM. Trivy
-then scans the exact digest with OS and library scanners and fails unless both
+The build explicitly requests maximum-mode SLSA v1 BuildKit provenance and a
+Syft SPDX SBOM. Trivy then scans the exact digest with OS and library scanners
+and fails unless both
 HIGH and CRITICAL counts are zero, including vulnerabilities without a
-published fix. Every scan receives an explicit empty ignore file, so neither a
-repository `.trivyignore` nor an undocumented exception can waive a finding. A
-scan, inventory, or vulnerability-database failure fails the job.
+published fix. Before scanning, a checked-in verifier requires exactly one
+`linux/arm64` runtime descriptor and its exact BuildKit OCI attestation artifact,
+whose subject is that runtime and which has one SPDX in-toto predicate layer and
+one SLSA v1 provenance predicate layer. It also fetches the actual payloads and
+requires a nonempty SPDX 2.3 document plus the nonempty BuildKit SLSA v1
+`buildDefinition` and `runDetails`. Missing, duplicated, empty, differently
+referenced, or differently typed attestations fail closed for both a new build
+and an existing commit tag. Every
+scan receives an explicit empty ignore file, so neither a repository
+`.trivyignore` nor an undocumented exception can waive a finding. A scan,
+inventory, vulnerability-database, or attestation-verification failure fails
+the job.
 
 The Node producer also requires a complete package inventory and exact binary
 checks before publication. The four applications run their own exact-digest
@@ -49,9 +59,9 @@ resolves to the digest Trivy scanned. This matters because maximum-mode
 provenance makes a rebuilt image index intentionally invocation-specific. On a
 same-commit retry, an existing tag is reused only after its GitHub-hosted build
 attestation, workflow/source identity, single `linux/arm64` runtime descriptor,
-OCI labels, and current vulnerability scan all pass. Failed first builds may
-leave untagged registry content for GHCR garbage collection, but they do not
-create a deployable tag.
+exact SPDX/SLSA BuildKit predicates, OCI labels, and current vulnerability scan
+all pass. Failed first builds may leave untagged registry content for GHCR
+garbage collection, but they do not create a deployable tag.
 
 OCI deployment must consume the recorded digest, not a mutable convenience tag:
 
@@ -237,7 +247,13 @@ resolves that exact index, verifies the child configuration and keyless Cosign
 signature, scans the current digest with the same strict Trivy policy, and
 requires the reviewed approval bit. Unknown-platform descriptors are accepted
 only for attestations that refer back to a real runtime descriptor in the same
-index.
+index. The lock validator accepts only the reviewed Meilisearch repository and
+tag identity with a verified Sigstore keyless signature from the GitHub Actions
+OIDC issuer. The pinned Cosign 3.1.3 verifier explicitly requires the Sigstore
+v0.3 new-bundle path used by the image's OCI 1.1 DSSE
+`https://sigstore.dev/cosign/sign/v1` referrers and checks that the signed
+in-toto subject is the exact locked index digest; an unsigned-container review
+cannot satisfy this gate.
 
 Caddy and PostgreSQL deployment references now point to the repository-owned
 GHCR digests described above. OCI Object Storage replaces the MinIO OCI runtime;
