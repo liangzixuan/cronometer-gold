@@ -38,7 +38,7 @@ outputs: an iOS device IPA and an Android app bundle.
 
 The production profile deliberately contains no API placeholder. The deployment
 policy pins the reviewed target platform (`azure` during the current pivot, or
-`oci` for the retained legacy path). The version-4 checked-in
+`oci` for the retained legacy path). The version-5 checked-in
 `config/release-deployment.json` file is permanently an unconfirmed template:
 `deploymentConfirmed` remains `false` and every evidence field remains `null`.
 Do not put a commit hash in that tracked file. A Git commit includes the file's
@@ -56,12 +56,16 @@ deployment-evidence JSON record that binds all of the following:
   evidence reports, the deployment-operator principal, the independent reviewer
   principal, and canonical UTC review time.
 
-The external-HTTPS report must prove the public certificate chain, hostname,
-expiry, routing, and readiness through the claimed origin. The reviewer-access
-report must prove the approved reviewer source succeeds and an unapproved source
-fails closed. Keep those redacted reports with the release evidence; never put
-tokens, health values, reviewer identifiers, source addresses, or credentials in
-them. The external record uses the same schema as the policy, sets
+The canonical `nutrition-tracker-release-external-https-report-v1` report binds
+the exact origin and service commit, a fresh observation, successful public
+chain and hostname validation, the leaf-certificate digest and sufficient
+expiry, and exact `GET /ready` HTTP 200 `{ "status": "ok" }` routing. The
+canonical `nutrition-tracker-release-reviewer-access-report-v1` binds that same
+origin and commit to one fresh, unchanged access-policy digest, the approved
+source's successful readiness response, and blocked connectivity from an
+unapproved source. Keep those redacted reports with the release evidence; never
+put tokens, health values, reviewer identifiers, source addresses, or
+credentials in them. The external record uses the same schema as the policy, sets
 `deploymentConfirmed` to `true`, and includes distinct `deployedBy` and
 `reviewedBy` principals plus an Ed25519 `reviewerAttestation`. Their comparison
 is case-insensitive. The signature covers canonical JSON for every deployment
@@ -95,10 +99,13 @@ NUTRITION_RELEASE_REVIEWER_ACCESS_REPORT_PATH="$PWD/.local-data/release/reviewer
 # CI-only alternatives use the corresponding *_REPORT_BASE64 variables.
 ```
 
-The verifier accepts only bounded regular files (maximum 64 KiB), rejects a
-shared path or a file that changes between stat and read, hashes the exact bytes,
-and compares both actual SHA-256 values to the signed record. It never prints
-report content. In GitHub Actions the two inline base64 values are secrets, not
+The verifier opens each path once with no-follow/nonblocking flags and accepts
+only current-operator-owned mode-`0600` regular files (maximum 64 KiB). It
+rejects shared paths, shared filesystem identities, or metadata changes across
+the bounded descriptor read. It then hashes the exact bytes, compares both
+SHA-256 values to the signed record, and parses the strict canonical schemas
+above. It never prints report content. In GitHub Actions the two inline base64
+values are secrets, not
 repository variables. In EAS, prefer protected file-secret variables whose
 values are the two report paths. The signed deployment JSON may be a non-secret
 variable only after confirming it contains no sensitive report content.
@@ -113,7 +120,9 @@ repository, or a missing service digest. EAS archives do not contain `.git`, so
 the remote post-install check deliberately uses that EAS-provided source commit
 and never weakens the local clean-tree check. Only a valid external attestation
 and its exact report bytes can request confirmation; a checked-in boolean or
-digest-shaped string can never approve release.
+digest-shaped string can never approve release. Version-4 deployment records
+and opaque passed-report payloads fail closed; collect both structured reports
+again and re-sign rather than inferring missing claims.
 
 Then create a **plaintext**, project-level
 `EXPO_PUBLIC_API_URL` variable in the EAS `production` environment with that
@@ -130,7 +139,7 @@ check in machine mode. If numbering is confirmed first, it invokes the exact
 deployment check. An expected blocker is accepted only as its dedicated exit
 status plus one exact machine-readable stdout line and empty stderr; a human
 message containing the blocker alongside another failure cannot pass.
-Only after numbering, an independently trusted v4 attestation, and both exact
+Only after numbering, an independently trusted v5 attestation, and both exact
 reports are present does the CI step require the real origin, verify it equals
 the externally reviewed origin, and run the full release preflight and export;
 it has no placeholder or bypass origin.

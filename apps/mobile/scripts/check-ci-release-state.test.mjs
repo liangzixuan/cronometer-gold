@@ -10,7 +10,9 @@ import {
   RELEASE_DEPLOYMENT_SCHEMA,
   RELEASE_DEPLOYMENT_UNCONFIRMED_CODE,
   RELEASE_EXPECTED_BLOCK_EXIT_CODE,
+  RELEASE_EXTERNAL_HTTPS_REPORT_SCHEMA,
   RELEASE_NUMBERING_UNCONFIRMED_CODE,
+  RELEASE_REVIEWER_ACCESS_REPORT_SCHEMA,
 } from "./check-release-env.mjs";
 
 const serviceGitCommit = "a".repeat(40);
@@ -18,8 +20,48 @@ const deploymentOperator = "deployment.operator@example.test";
 const reviewerKeys = generateKeyPairSync("ed25519");
 const reviewerPrincipal = "independent.deployment.reviewer@example.test";
 const reviewerKeyId = "deployment-reviewer-2026-01";
-const externalHttpsReport = Buffer.from('{"result":"passed","type":"external-https"}\n');
-const reviewerAccessReport = Buffer.from('{"result":"passed","type":"reviewer-access"}\n');
+const externalHttpsReport = Buffer.from(
+  `${canonicalJson({
+    schemaVersion: RELEASE_EXTERNAL_HTTPS_REPORT_SCHEMA,
+    apiOrigin: "https://api.nourishing.app",
+    serviceGitCommit,
+    observedAt: "2026-08-25T17:30:00.000Z",
+    tls: {
+      publicChainValidation: "passed",
+      hostnameValidation: "passed",
+      leafCertificateSha256: "7".repeat(64),
+      notAfter: "2026-08-27T18:00:00.000Z",
+    },
+    ready: {
+      method: "GET",
+      path: "/ready",
+      httpStatus: 200,
+      response: { status: "ok" },
+    },
+  })}\n`,
+);
+const reviewerAccessReport = Buffer.from(
+  `${canonicalJson({
+    schemaVersion: RELEASE_REVIEWER_ACCESS_REPORT_SCHEMA,
+    apiOrigin: "https://api.nourishing.app",
+    serviceGitCommit,
+    startedAt: "2026-08-25T17:40:00.000Z",
+    completedAt: "2026-08-25T17:50:00.000Z",
+    accessPolicySha256: "8".repeat(64),
+    policyUnchangedDuringProbes: "passed",
+    approvedSourceProbe: {
+      method: "GET",
+      path: "/ready",
+      httpStatus: 200,
+      response: { status: "ok" },
+    },
+    unapprovedSourceProbe: {
+      method: "GET",
+      path: "/ready",
+      connectionOutcome: "blocked",
+    },
+  })}\n`,
+);
 const deploymentReviewerTrustStore = {
   schemaVersion: RELEASE_DEPLOYMENT_REVIEWER_TRUST_SCHEMA,
   reviewers: [
@@ -90,7 +132,6 @@ const deploymentRuntime = {
   readEvidence: () => "",
   readReport: () => Buffer.alloc(0),
   statEvidence: () => ({ isFile: () => true, size: 1 }),
-  statReport: () => ({ isFile: () => true, size: 1 }),
 };
 const deploymentEvidenceJson = JSON.stringify({
   schemaVersion: RELEASE_DEPLOYMENT_SCHEMA,

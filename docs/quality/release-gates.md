@@ -46,6 +46,11 @@ package boundaries.
   The independently locked Meilisearch image must pass the same current scan and
   its upstream-signature gate, as described in
   [the container supply-chain runbook](./container-supply-chain.md).
+- The reviewer-signed deployment record binds distinct exact canonical reports,
+  not opaque result hashes. The external report proves fresh public-chain,
+  hostname, certificate-lifetime, and exact `/ready` routing for the signed
+  origin/commit. The access report proves the same unchanged source policy lets
+  the approved reviewer reach readiness while an unapproved source is blocked.
 - Every profile, diary, biometric, report, and integration route enforces a
   server-side session/ownership check; unauthenticated and cross-user access
   tests fail closed.

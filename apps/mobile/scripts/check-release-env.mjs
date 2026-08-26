@@ -1,6 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { createHash, verify } from "node:crypto";
-import { lstatSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  constants as fsConstants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+} from "node:fs";
 import { isIP } from "node:net";
 import { extname, isAbsolute, normalize } from "node:path";
 import process from "node:process";
@@ -12,7 +20,11 @@ import {
   validateReviewerTrustStore,
 } from "./reviewer-trust.mjs";
 
-export const RELEASE_DEPLOYMENT_SCHEMA = "nutrition-tracker-release-deployment-v4";
+export const RELEASE_DEPLOYMENT_SCHEMA = "nutrition-tracker-release-deployment-v5";
+export const RELEASE_EXTERNAL_HTTPS_REPORT_SCHEMA =
+  "nutrition-tracker-release-external-https-report-v1";
+export const RELEASE_REVIEWER_ACCESS_REPORT_SCHEMA =
+  "nutrition-tracker-release-reviewer-access-report-v1";
 export { RELEASE_DEPLOYMENT_REVIEWER_TRUST_SCHEMA } from "./reviewer-trust.mjs";
 export const RELEASE_DEPLOYMENT_UNCONFIRMED_MESSAGE =
   "The exact API deployment platform and origin must be confirmed before release.";
@@ -51,12 +63,14 @@ const reportSpecifications = [
     digestField: "externalHttpsEvidenceSha256",
     label: "external HTTPS report",
     pathEnvironment: "NUTRITION_RELEASE_EXTERNAL_HTTPS_REPORT_PATH",
+    validate: validateExternalHttpsReport,
   },
   {
     base64Environment: "NUTRITION_RELEASE_REVIEWER_ACCESS_REPORT_BASE64",
     digestField: "reviewerAccessEvidenceSha256",
     label: "reviewer-access report",
     pathEnvironment: "NUTRITION_RELEASE_REVIEWER_ACCESS_REPORT_PATH",
+    validate: validateReviewerAccessReport,
   },
 ];
 
@@ -100,7 +114,13 @@ function assertSafeIdentifier(value, name) {
 }
 
 function decodeCanonicalBase64(value, name, maximumBytes) {
-  if (typeof value !== "string" || value.length === 0 || !STANDARD_BASE64.test(value)) {
+  const maximumEncodedLength = Math.ceil(maximumBytes / 3) * 4;
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > maximumEncodedLength ||
+    !STANDARD_BASE64.test(value)
+  ) {
     throw new TypeError(`${name} must be canonical padded standard base64.`);
   }
   const bytes = Buffer.from(value, "base64");
@@ -130,6 +150,146 @@ function validateServiceImages(value) {
   return validated;
 }
 
+function assertSha256(value, name) {
+  if (typeof value !== "string" || !SHA256_HEX.test(value)) {
+    throw new TypeError(`${name} must be one lowercase SHA-256 digest.`);
+  }
+}
+
+function assertReportContext(report, deployment, name) {
+  if (report.apiOrigin !== deployment.apiOrigin) {
+    throw new TypeError(`${name}.apiOrigin must equal the signed deployment API origin.`);
+  }
+  if (report.serviceGitCommit !== deployment.serviceGitCommit) {
+    throw new TypeError(`${name}.serviceGitCommit must equal the signed deployment commit.`);
+  }
+}
+
+function assertFreshReportInstant(value, reviewedAt, verifiedAt, name) {
+  const timestamp = parseCanonicalInstant(value, name);
+  if (
+    timestamp > reviewedAt ||
+    reviewedAt - timestamp > MAX_REVIEW_AGE_MS ||
+    verifiedAt - timestamp > MAX_REVIEW_AGE_MS
+  ) {
+    throw new TypeError(
+      `${name} must fall within the 24 hours before deployment review and release verification.`,
+    );
+  }
+  return timestamp;
+}
+
+function assertReadyProbe(probe, name) {
+  assertExactKeys(probe, ["httpStatus", "method", "path", "response"], name);
+  assertExactKeys(probe.response, ["status"], `${name}.response`);
+  if (
+    probe.method !== "GET" ||
+    probe.path !== "/ready" ||
+    probe.httpStatus !== 200 ||
+    probe.response.status !== "ok"
+  ) {
+    throw new TypeError(`${name} must prove exact GET /ready HTTP 200 status-ok routing.`);
+  }
+}
+
+function validateExternalHttpsReport(report, deployment, reviewedAt, verifiedAt) {
+  const name = "external HTTPS report";
+  assertExactKeys(
+    report,
+    ["apiOrigin", "observedAt", "ready", "schemaVersion", "serviceGitCommit", "tls"],
+    name,
+  );
+  if (report.schemaVersion !== RELEASE_EXTERNAL_HTTPS_REPORT_SCHEMA) {
+    throw new TypeError(
+      `${name}.schemaVersion must equal ${RELEASE_EXTERNAL_HTTPS_REPORT_SCHEMA}.`,
+    );
+  }
+  assertReportContext(report, deployment, name);
+  const observedAt = assertFreshReportInstant(
+    report.observedAt,
+    reviewedAt,
+    verifiedAt,
+    `${name}.observedAt`,
+  );
+  assertExactKeys(
+    report.tls,
+    ["hostnameValidation", "leafCertificateSha256", "notAfter", "publicChainValidation"],
+    `${name}.tls`,
+  );
+  if (report.tls.publicChainValidation !== "passed" || report.tls.hostnameValidation !== "passed") {
+    throw new TypeError(`${name}.tls must prove the public chain and hostname.`);
+  }
+  assertSha256(report.tls.leafCertificateSha256, `${name}.tls.leafCertificateSha256`);
+  const notAfter = parseCanonicalInstant(report.tls.notAfter, `${name}.tls.notAfter`);
+  if (notAfter <= observedAt || notAfter < reviewedAt + MAX_REVIEW_AGE_MS) {
+    throw new TypeError(
+      `${name}.tls.notAfter must remain valid throughout the release-review window.`,
+    );
+  }
+  assertReadyProbe(report.ready, `${name}.ready`);
+  return report;
+}
+
+function validateReviewerAccessReport(report, deployment, reviewedAt, verifiedAt) {
+  const name = "reviewer-access report";
+  assertExactKeys(
+    report,
+    [
+      "accessPolicySha256",
+      "apiOrigin",
+      "approvedSourceProbe",
+      "completedAt",
+      "policyUnchangedDuringProbes",
+      "schemaVersion",
+      "serviceGitCommit",
+      "startedAt",
+      "unapprovedSourceProbe",
+    ],
+    name,
+  );
+  if (report.schemaVersion !== RELEASE_REVIEWER_ACCESS_REPORT_SCHEMA) {
+    throw new TypeError(
+      `${name}.schemaVersion must equal ${RELEASE_REVIEWER_ACCESS_REPORT_SCHEMA}.`,
+    );
+  }
+  assertReportContext(report, deployment, name);
+  assertSha256(report.accessPolicySha256, `${name}.accessPolicySha256`);
+  if (report.policyUnchangedDuringProbes !== "passed") {
+    throw new TypeError(`${name}.policyUnchangedDuringProbes must equal passed.`);
+  }
+  const startedAt = assertFreshReportInstant(
+    report.startedAt,
+    reviewedAt,
+    verifiedAt,
+    `${name}.startedAt`,
+  );
+  const completedAt = assertFreshReportInstant(
+    report.completedAt,
+    reviewedAt,
+    verifiedAt,
+    `${name}.completedAt`,
+  );
+  if (completedAt < startedAt) {
+    throw new TypeError(`${name} time interval must not be inverted.`);
+  }
+  assertReadyProbe(report.approvedSourceProbe, `${name}.approvedSourceProbe`);
+  assertExactKeys(
+    report.unapprovedSourceProbe,
+    ["connectionOutcome", "method", "path"],
+    `${name}.unapprovedSourceProbe`,
+  );
+  if (
+    report.unapprovedSourceProbe.method !== "GET" ||
+    report.unapprovedSourceProbe.path !== "/ready" ||
+    report.unapprovedSourceProbe.connectionOutcome !== "blocked"
+  ) {
+    throw new TypeError(
+      `${name}.unapprovedSourceProbe must prove blocked GET /ready connectivity.`,
+    );
+  }
+  return report;
+}
+
 function defaultReleaseRuntime() {
   return {
     gitHead() {
@@ -151,12 +311,9 @@ function defaultReleaseRuntime() {
       return readFileSync(path, "utf8");
     },
     readReport(path) {
-      return readFileSync(path);
+      return readBoundedReport(path);
     },
     statEvidence(path) {
-      return lstatSync(path);
-    },
-    statReport(path) {
       return lstatSync(path);
     },
   };
@@ -268,7 +425,7 @@ function verifyDeploymentReviewerAttestation(deployment, trustStore) {
   }
 }
 
-function checkedReportPath(value, name, statReport) {
+function checkedReportPath(value, name) {
   if (
     typeof value !== "string" ||
     value.length < 1 ||
@@ -280,11 +437,102 @@ function checkedReportPath(value, name, statReport) {
   ) {
     throw new TypeError(`${name} must be an explicit normalized absolute .json path.`);
   }
-  const stat = statReport(value);
-  if (!stat.isFile() || stat.size < 1 || stat.size > MAX_REPORT_BYTES) {
-    throw new TypeError(`${name} must identify one bounded regular report file.`);
+  return value;
+}
+
+function reportFileIdentity(stat) {
+  const dev = stat.dev;
+  const ino = stat.ino;
+  if (
+    ((typeof dev === "number" && Number.isSafeInteger(dev) && dev >= 0) ||
+      (typeof dev === "bigint" && dev >= 0n)) &&
+    ((typeof ino === "number" && Number.isSafeInteger(ino) && ino > 0) ||
+      (typeof ino === "bigint" && ino > 0n))
+  ) {
+    return `${dev}:${ino}`;
   }
-  return { path: value, size: stat.size };
+  return null;
+}
+
+function assertReportFileStat(stat, name) {
+  if (
+    stat === null ||
+    typeof stat !== "object" ||
+    typeof stat.isFile !== "function" ||
+    !stat.isFile() ||
+    !Number.isSafeInteger(stat.size) ||
+    stat.size < 1 ||
+    stat.size > MAX_REPORT_BYTES ||
+    typeof stat.mode !== "number" ||
+    (stat.mode & 0o777) !== 0o600 ||
+    reportFileIdentity(stat) === null
+  ) {
+    throw new TypeError(`${name} must identify one bounded mode-0600 regular JSON file.`);
+  }
+  const expectedUid = typeof process.getuid === "function" ? process.getuid() : null;
+  if (expectedUid !== null && stat.uid !== expectedUid) {
+    throw new TypeError(`${name} must be owned by the current release operator.`);
+  }
+  return {
+    identity: reportFileIdentity(stat),
+    mode: stat.mode & 0o777,
+    mtimeMs: typeof stat.mtimeMs === "number" ? stat.mtimeMs : null,
+    size: stat.size,
+  };
+}
+
+function readBoundedReport(path) {
+  if (typeof fsConstants.O_NOFOLLOW !== "number" || typeof fsConstants.O_NONBLOCK !== "number") {
+    throw new TypeError("Safe no-follow deployment-report file access is unavailable.");
+  }
+  const flags =
+    fsConstants.O_RDONLY |
+    fsConstants.O_NOFOLLOW |
+    fsConstants.O_NONBLOCK |
+    (fsConstants.O_CLOEXEC ?? 0);
+  let descriptor;
+  try {
+    descriptor = openSync(path, flags);
+    const before = fstatSync(descriptor);
+    assertReportFileStat(before, "Deployment report");
+    const buffer = Buffer.alloc(MAX_REPORT_BYTES + 1);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const count = readSync(descriptor, buffer, offset, buffer.length - offset, null);
+      if (count === 0) break;
+      offset += count;
+    }
+    const after = fstatSync(descriptor);
+    return { after, before, bytes: buffer.subarray(0, offset) };
+  } catch (error) {
+    if (error instanceof TypeError) throw error;
+    throw new TypeError("Unable to safely read the deployment report.", { cause: error });
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+function validateReportReadResult(value, name) {
+  if (
+    value === null ||
+    typeof value !== "object" ||
+    !(Buffer.isBuffer(value.bytes) || value.bytes instanceof Uint8Array)
+  ) {
+    throw new TypeError(`${name} reader must return bounded exact bytes.`);
+  }
+  const before = assertReportFileStat(value.before, `${name} pre-read stat`);
+  const after = assertReportFileStat(value.after, `${name} post-read stat`);
+  const bytes = Buffer.from(value.bytes);
+  if (
+    bytes.length !== before.size ||
+    bytes.length !== after.size ||
+    before.identity !== after.identity ||
+    before.mode !== after.mode ||
+    (before.mtimeMs !== null && after.mtimeMs !== before.mtimeMs)
+  ) {
+    throw new TypeError(`${name} changed while it was being reviewed.`);
+  }
+  return { bytes, identity: before.identity };
 }
 
 function readReportBytes(environment, specification, runtime) {
@@ -300,21 +548,35 @@ function readReportBytes(environment, specification, runtime) {
   if (hasInline) {
     return {
       bytes: decodeCanonicalBase64(inline, specification.base64Environment, MAX_REPORT_BYTES),
+      identity: null,
     };
   }
-  const checked = checkedReportPath(path, specification.pathEnvironment, runtime.statReport);
-  const value = runtime.readReport(checked.path);
-  if (!(Buffer.isBuffer(value) || value instanceof Uint8Array)) {
-    throw new TypeError(`${specification.label} reader must return exact bytes.`);
-  }
-  const bytes = Buffer.from(value);
-  if (bytes.length !== checked.size || bytes.length < 1 || bytes.length > MAX_REPORT_BYTES) {
-    throw new TypeError(`${specification.label} changed while it was being reviewed.`);
-  }
-  return { bytes, path: checked.path };
+  const checked = checkedReportPath(path, specification.pathEnvironment);
+  return {
+    ...validateReportReadResult(runtime.readReport(checked), specification.label),
+    path: checked,
+  };
 }
 
-function verifyDeploymentReports(environment, deployment, runtime) {
+function parseCanonicalReport(bytes, specification) {
+  const text = bytes.toString("utf8");
+  if (!Buffer.from(text, "utf8").equals(bytes)) {
+    throw new TypeError(`${specification.label} must use valid UTF-8.`);
+  }
+  let report;
+  try {
+    report = JSON.parse(text);
+  } catch {
+    throw new TypeError(`${specification.label} is not valid JSON.`);
+  }
+  const canonical = canonicalJson(report);
+  if (text !== canonical && text !== `${canonical}\n`) {
+    throw new TypeError(`${specification.label} JSON must use canonical field order and encoding.`);
+  }
+  return report;
+}
+
+function verifyDeploymentReports(environment, deployment, runtime, verifiedAt) {
   const reports = reportSpecifications.map((specification) => ({
     ...readReportBytes(environment, specification, runtime),
     specification,
@@ -324,11 +586,23 @@ function verifyDeploymentReports(environment, deployment, runtime) {
       "External HTTPS and reviewer-access evidence must use distinct report files.",
     );
   }
+  if (reports[0].identity !== null && reports[0].identity === reports[1].identity) {
+    throw new TypeError(
+      "External HTTPS and reviewer-access evidence must use distinct report files.",
+    );
+  }
+  const reviewedAt = parseCanonicalInstant(deployment.reviewedAt, "Release deployment reviewedAt");
   for (const { bytes, specification } of reports) {
     const actual = createHash("sha256").update(bytes).digest("hex");
     if (actual !== deployment[specification.digestField]) {
       throw new TypeError(`${specification.label} SHA-256 does not match reviewed evidence.`);
     }
+    specification.validate(
+      parseCanonicalReport(bytes, specification),
+      deployment,
+      reviewedAt,
+      verifiedAt,
+    );
   }
 }
 
@@ -653,7 +927,7 @@ export function validateReleaseDeployment(
       "Release deployment evidence is older than 24 hours and must be reviewed again.",
     );
   }
-  verifyDeploymentReports(environment, deployment, runtime);
+  verifyDeploymentReports(environment, deployment, runtime, nowTime);
   return configured;
 }
 

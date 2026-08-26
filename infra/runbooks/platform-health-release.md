@@ -6,10 +6,13 @@ Metro export is not native release evidence.
 
 ## Configuration gate
 
-- Production compilation first requires a reviewer-signed v4 deployment
-  attestation, the exact redacted external-HTTPS and reviewer-access report
-  bytes, distinct signed deployment-operator and reviewer principals, and an
-  active independent key from the separate deployment trust store.
+- Production compilation first requires a reviewer-signed v5 deployment
+  attestation and the exact canonical external-HTTPS and reviewer-access report
+  bytes. Their strict schemas cross-bind the signed origin and commit to fresh
+  public-TLS `/ready` success, one unchanged access policy, approved-source
+  readiness, and blocked unapproved-source connectivity. Distinct signed
+  deployment-operator and reviewer principals and an active independent key from
+  the separate deployment trust store remain mandatory.
   That store is intentionally empty today, so production EAS compilation and
   submission remain blocked. Never substitute an operator-owned key, an unsigned
   digest list, or synthetic report bytes.

@@ -99,7 +99,7 @@ be recollected and re-signed; relay state is never inferred during migration.
 ## Deployment reviewer trust
 
 `release-deployment-reviewers.json` is a separate trust root for the external
-v4 deployment attestation. It must never reuse a health-evidence key merely for
+v5 deployment attestation. It must never reuse a health-evidence key merely for
 convenience. Its reviewer list is intentionally empty, so `release:check`, EAS
 production compilation, and reviewed submission remain blocked until a genuinely
 independent deployment reviewer is onboarded through a reviewed code change.
@@ -113,12 +113,16 @@ reviewer-access report SHA-256 values, reviewer principal, review time, reviewer
 key ID, and algorithm; only `signatureBase64` is outside its own signed payload.
 `deployedBy` and `reviewedBy` must be different principals under a
 case-insensitive comparison. The verifier additionally reads and hashes the
-exact bounded report bytes. A digest string without those bytes, an unsigned
-record, a self-review, or an untrusted signer cannot confirm deployment.
+exact bounded report bytes, then requires their canonical structured schemas to
+cross-bind the origin, commit, fresh TLS/readiness proof, and unchanged
+source-restricted access proof. Version-4 records and opaque result-only reports
+fail closed. A digest string without valid report bytes, an unsigned record, a
+self-review, or an untrusted signer cannot confirm deployment.
 
 Initial onboarding and rotation use the same Ed25519 SPKI, bounded validity, and
 reviewed-source-control rules as the health trust root, but require an
 independent deployment-review role and distinct key material. Store no private
 key or report in this directory. Reports may contain sensitive network-access
-evidence even after redaction, so keep local/EAS files mode `0600`, place GitHub inline base64 only
-in Actions secrets, and never print report bytes.
+evidence even after redaction, so keep local/EAS files mode `0600`; path input is
+accepted only through one owner-checked, no-follow bounded descriptor read.
+Place GitHub inline base64 only in Actions secrets, and never print report bytes.
