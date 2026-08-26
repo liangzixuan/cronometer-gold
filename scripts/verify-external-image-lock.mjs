@@ -5,7 +5,11 @@ import { pathToFileURL } from "node:url";
 const SHA256_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const GIT_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-const ISO_INSTANT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+const REVIEWED_INDEX_DIGEST =
+  "sha256:8d6643d86d71fad6ad3cba92cde7ccfce9e4d6c384bda67598eb553571c32431";
+const REVIEWED_ARM64_DIGEST =
+  "sha256:b4a0a1f9545ae1dd8e12a750fa4416ef3f4b421ed0758c430d0c46182ad233ee";
+const REVIEWED_SOURCE_REVISION = "577f7af28942b71782eab1e59f44ad8296ce0a92";
 
 function containsControlCharacter(value) {
   return [...value].some((character) => {
@@ -36,16 +40,6 @@ function assertCanonicalDate(value, label) {
   const parsed = new Date(`${value}T00:00:00Z`);
   if (!Number.isFinite(parsed.valueOf()) || parsed.toISOString().slice(0, 10) !== value) {
     throw new TypeError(`${label} must be a real calendar date.`);
-  }
-}
-
-function assertCanonicalInstant(value, label) {
-  if (typeof value !== "string" || !ISO_INSTANT_PATTERN.test(value)) {
-    throw new TypeError(`${label} must be a canonical UTC instant.`);
-  }
-  const parsed = new Date(value);
-  if (!Number.isFinite(parsed.valueOf()) || parsed.toISOString().replace(".000Z", "Z") !== value) {
-    throw new TypeError(`${label} must be a real canonical UTC instant.`);
   }
 }
 
@@ -86,38 +80,29 @@ function assertStringMap(value, label) {
   }
 }
 
-export function validateExternalImageLock(lock) {
-  assertExactKeys(lock, ["schemaVersion", "reviewedAt", "policy", "images"], "Image lock");
-  if (lock.schemaVersion !== 1) throw new TypeError("Image lock schemaVersion must be 1.");
-  assertCanonicalDate(lock.reviewedAt, "Image lock reviewedAt");
-
-  assertExactKeys(
-    lock.policy,
-    [
-      "platform",
-      "scanner",
-      "scannerVersion",
-      "databaseUpdatedAt",
-      "severities",
-      "includeUnfixed",
-      "ignorePolicy",
-    ],
-    "Image lock policy",
-  );
-  if (
-    lock.policy.platform !== "linux/arm64" ||
-    lock.policy.scanner !== "Trivy" ||
-    lock.policy.scannerVersion !== "v0.74.0" ||
-    lock.policy.includeUnfixed !== true ||
-    lock.policy.ignorePolicy !== "explicit-empty" ||
-    !Array.isArray(lock.policy.severities) ||
-    lock.policy.severities.length !== 2 ||
-    lock.policy.severities[0] !== "HIGH" ||
-    lock.policy.severities[1] !== "CRITICAL"
-  ) {
-    throw new TypeError("Image lock policy does not match the strict ARM64 Trivy contract.");
+function assertHttpsEvidence(value, label) {
+  if (!Array.isArray(value) || value.length < 2 || new Set(value).size !== value.length) {
+    throw new TypeError(`${label} must contain at least two distinct evidence URLs.`);
   }
-  assertCanonicalInstant(lock.policy.databaseUpdatedAt, "Image lock databaseUpdatedAt");
+  value.forEach((entry, index) => {
+    assertHttpsUrl(entry, `${label}[${index}]`);
+  });
+}
+
+export function validateExternalImageLock(lock) {
+  assertExactKeys(
+    lock,
+    ["schemaVersion", "reviewedAt", "purpose", "platform", "images"],
+    "Image lock",
+  );
+  if (lock.schemaVersion !== 2) throw new TypeError("Image lock schemaVersion must be 2.");
+  assertCanonicalDate(lock.reviewedAt, "Image lock reviewedAt");
+  if (
+    lock.purpose !== "derivative-bootstrap-input-and-isolated-synthetic-ci-fixture" ||
+    lock.platform !== "linux/arm64"
+  ) {
+    throw new TypeError("Image lock must be restricted to ARM64 upstream build inputs.");
+  }
 
   assertExactKeys(lock.images, ["MEILI_IMAGE"], "Image lock images");
   const image = assertPlainObject(lock.images.MEILI_IMAGE, "MEILI_IMAGE");
@@ -130,42 +115,85 @@ export function validateExternalImageLock(lock) {
       "digest",
       "arm64Digest",
       "ref",
-      "approved",
-      "scan",
+      "usage",
+      "directDeploymentApproved",
+      "remediation",
       "provenance",
     ],
     "MEILI_IMAGE",
   );
   if (
     image.repository !== "docker.io/getmeili/meilisearch" ||
-    typeof image.version !== "string" ||
-    !/^v\d+\.\d+\.\d+$/.test(image.version) ||
+    image.version !== "v1.53.1" ||
     image.platform !== "linux/arm64" ||
     typeof image.digest !== "string" ||
     !SHA256_PATTERN.test(image.digest) ||
+    image.digest !== REVIEWED_INDEX_DIGEST ||
     typeof image.arm64Digest !== "string" ||
     !SHA256_PATTERN.test(image.arm64Digest) ||
+    image.arm64Digest !== REVIEWED_ARM64_DIGEST ||
     image.ref !== `${image.repository}@${image.digest}` ||
-    typeof image.approved !== "boolean"
+    image.usage !== "derivative-bootstrap-input-and-isolated-synthetic-ci-fixture" ||
+    image.directDeploymentApproved !== false
   ) {
-    throw new TypeError("MEILI_IMAGE identity does not match the immutable ARM64 contract.");
+    throw new TypeError("MEILI_IMAGE must remain an immutable, non-deployable ARM64 build input.");
   }
 
-  assertExactKeys(image.scan, ["critical", "high", "total", "result"], "MEILI_IMAGE scan");
-  for (const field of ["critical", "high", "total"]) {
-    if (!Number.isSafeInteger(image.scan[field]) || image.scan[field] < 0) {
-      throw new TypeError(`MEILI_IMAGE scan.${field} must be a nonnegative integer.`);
+  const remediation = assertPlainObject(image.remediation, "MEILI_IMAGE remediation");
+  assertExactKeys(
+    remediation,
+    ["derivativeRepository", "findings", "requiredPackages", "evidence", "review"],
+    "MEILI_IMAGE remediation",
+  );
+  if (remediation.derivativeRepository !== "ghcr.io/liangzixuan/cronometer-gold-meilisearch") {
+    throw new TypeError("MEILI_IMAGE derivative repository is not the reviewed GHCR package.");
+  }
+  const expectedFindings = [
+    {
+      vulnerability: "CVE-2026-14456",
+      severity: "HIGH",
+      package: "libcrypto3",
+      installedVersion: "3.5.7-r0",
+      fixedVersion: "3.5.8-r0",
+    },
+    {
+      vulnerability: "CVE-2026-14456",
+      severity: "HIGH",
+      package: "libssl3",
+      installedVersion: "3.5.7-r0",
+      fixedVersion: "3.5.8-r0",
+    },
+  ];
+  if (!Array.isArray(remediation.findings) || remediation.findings.length !== 2) {
+    throw new TypeError("MEILI_IMAGE remediation must retain the two reviewed findings.");
+  }
+  remediation.findings.forEach((finding, index) => {
+    assertExactKeys(
+      finding,
+      ["vulnerability", "severity", "package", "installedVersion", "fixedVersion"],
+      `MEILI_IMAGE remediation finding ${index}`,
+    );
+    if (JSON.stringify(finding) !== JSON.stringify(expectedFindings[index])) {
+      throw new TypeError("MEILI_IMAGE remediation finding differs from hosted scan evidence.");
     }
-  }
-  if (image.scan.total !== image.scan.critical + image.scan.high) {
-    throw new TypeError("MEILI_IMAGE scan total must equal critical plus high findings.");
-  }
+  });
   if (
-    (image.approved && (image.scan.total !== 0 || image.scan.result !== "passed")) ||
-    (!image.approved && image.scan.result !== "blocked")
+    !Array.isArray(remediation.requiredPackages) ||
+    remediation.requiredPackages.length !== 2 ||
+    remediation.requiredPackages[0] !== "libcrypto3=3.5.8-r0" ||
+    remediation.requiredPackages[1] !== "libssl3=3.5.8-r0"
   ) {
-    throw new TypeError("MEILI_IMAGE approval and vulnerability result disagree.");
+    throw new TypeError("MEILI_IMAGE remediation packages must remain exactly pinned.");
   }
+  assertHttpsEvidence(remediation.evidence, "MEILI_IMAGE remediation evidence");
+  if (
+    remediation.evidence[0] !==
+      "https://gitlab.alpinelinux.org/alpine/aports/-/commit/1b80b7c3bf5ba3f13eb748ae953d9215d5a4bb62" ||
+    remediation.evidence[1] !== "https://openssl-library.org/news/secadv/20260813.txt"
+  ) {
+    throw new TypeError("MEILI_IMAGE remediation evidence differs from the reviewed sources.");
+  }
+  assertSafeString(remediation.review, "MEILI_IMAGE remediation review", 80);
 
   const provenance = assertPlainObject(image.provenance, "MEILI_IMAGE provenance");
   assertExactKeys(
@@ -187,24 +215,18 @@ export function validateExternalImageLock(lock) {
   if (provenance.method !== "sigstore-keyless" || provenance.containerSignature !== "verified") {
     throw new TypeError("MEILI_IMAGE requires a verified Sigstore keyless container signature.");
   }
-  if (provenance.sourceRepository !== "https://github.com/meilisearch/meilisearch") {
-    throw new TypeError(
-      "MEILI_IMAGE source repository must be the reviewed Meilisearch repository.",
-    );
-  }
   if (
+    provenance.sourceRepository !== "https://github.com/meilisearch/meilisearch" ||
     typeof provenance.sourceRevision !== "string" ||
-    !GIT_SHA_PATTERN.test(provenance.sourceRevision)
+    !GIT_SHA_PATTERN.test(provenance.sourceRevision) ||
+    provenance.sourceRevision !== REVIEWED_SOURCE_REVISION ||
+    provenance.sourcePath !== "Dockerfile"
   ) {
-    throw new TypeError("MEILI_IMAGE source revision must be a full lowercase Git SHA.");
+    throw new TypeError("MEILI_IMAGE source identity differs from the reviewed release.");
   }
-  assertSafeString(provenance.sourcePath, "MEILI_IMAGE sourcePath");
   const expectedIdentity =
-    `https://github.com/meilisearch/meilisearch/.github/workflows/` +
+    "https://github.com/meilisearch/meilisearch/.github/workflows/" +
     `publish-docker-images.yml@refs/tags/${image.version}`;
-  if (typeof provenance.certificateIdentity === "string") {
-    assertSafeString(provenance.certificateIdentity, "MEILI_IMAGE certificateIdentity");
-  }
   if (
     provenance.certificateIdentity !== expectedIdentity ||
     provenance.certificateOidcIssuer !== "https://token.actions.githubusercontent.com"
@@ -237,13 +259,19 @@ export function validateExternalImageLock(lock) {
   ) {
     throw new TypeError("MEILI_IMAGE expected environment must match the reviewed Docker runtime.");
   }
-  if (!Array.isArray(provenance.evidence) || provenance.evidence.length < 2) {
-    throw new TypeError("MEILI_IMAGE provenance requires at least two evidence URLs.");
+  assertHttpsEvidence(provenance.evidence, "MEILI_IMAGE provenance evidence");
+  const expectedEvidence = [
+    `https://github.com/meilisearch/meilisearch/blob/${REVIEWED_SOURCE_REVISION}/.github/workflows/publish-docker-images.yml`,
+    `https://github.com/meilisearch/meilisearch/blob/${REVIEWED_SOURCE_REVISION}/Dockerfile`,
+    "https://github.com/meilisearch/meilisearch/releases/tag/v1.53.1",
+  ];
+  if (
+    provenance.evidence.length !== expectedEvidence.length ||
+    provenance.evidence.some((entry, index) => entry !== expectedEvidence[index])
+  ) {
+    throw new TypeError("MEILI_IMAGE provenance evidence differs from the reviewed release.");
   }
-  provenance.evidence.forEach((value, index) => {
-    assertHttpsUrl(value, `MEILI_IMAGE evidence[${index}]`);
-  });
-  assertSafeString(provenance.review, "MEILI_IMAGE review", 41);
+  assertSafeString(provenance.review, "MEILI_IMAGE provenance review", 80);
 
   return image;
 }

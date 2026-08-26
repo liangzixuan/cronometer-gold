@@ -99,6 +99,7 @@ services:
     user: "1000:1000"
     restart: unless-stopped
     read_only: true
+    cap_drop: [ALL]
     security_opt:
       - no-new-privileges:true
     env_file:

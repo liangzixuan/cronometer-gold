@@ -234,8 +234,8 @@ recovery readiness, but do not generate artificial load to evade that policy.
 8. Re-read the GRAD695 VCN, enabled Internet Gateway, and every live subnet.
 9. Pin a reviewed Oracle Linux 9 Arm image OCID.
 10. Publish immutable `linux/arm64` images for API, web, worker, migrator, Caddy,
-   and PostgreSQL from one reviewed container supply-chain workflow commit.
-   Record all six digest-qualified GHCR references. Make those packages public
+   PostgreSQL, and the patched Meilisearch derivative from one reviewed container
+   supply-chain workflow commit. Record all seven digest-qualified GHCR references. Make those packages public
    or install a narrowly scoped read-only pull credential in root's Docker
    credential store. Never use an Actions job token.
 11. Install Terraform 1.5.7, OCI provider 7.32.0, external provider 2.3.5, and
@@ -328,7 +328,7 @@ sudo /usr/local/sbin/nutrition-prepare-internal-pki verify 14
 ```
 
 Install the initial internally consistent secret files using the exact full Git
-commit represented by all six repository-owned runtime images:
+commit represented by all seven repository-owned runtime images:
 
 ```sh
 sudo /usr/local/sbin/nutrition-install-initial-secrets \
@@ -343,8 +343,10 @@ overwrite any managed target. Only scoped Meilisearch and OCI credential markers
 remain for their dedicated installers.
 
 Complete `deploy.env` from its example with the real domains, ACME email,
-reviewer allowlist, the approved locked Meilisearch reference, and all six
-repository image digests from the exact `SERVICE_VERSION` workflow run. Local
+reviewer allowlist, and all seven repository image digests—including the patched
+Meilisearch derivative—from the exact `SERVICE_VERSION` workflow run. The
+upstream Meilisearch lock is build provenance and must never appear in
+`deploy.env`. Local
 image IDs are not deployment evidence. Install a root-owned
 mode-`0600` `backup-restore-evidence.json` containing the assigned policy, an
 `AVAILABLE` boot-volume backup OCID, the exact `SERVICE_VERSION`, and a successful
@@ -434,7 +436,7 @@ At each start the orchestrator:
    one of the two reviewed public Object Storage CIDRs, rejects bridge overlap,
    and pins the host map.
 4. Runs early preflight, including exact firewall, credential/keyring, storage,
-   backup, PKI, runtime, image-lock, platform, and Compose checks.
+   backup, PKI, runtime-image admission, platform, and Compose checks.
 5. Starts Caddy, PostgreSQL, and Meilisearch and bootstraps scoped Meilisearch
    keys, then repeats full preflight.
 6. Proves an arbitrary direct-IP HTTPS connection from the object bridge is

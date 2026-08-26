@@ -8,18 +8,15 @@ import subprocess
 import sys
 
 
-EXTERNAL = {
-    "MEILI_IMAGE": "docker.io/getmeili/meilisearch",
-}
 REPOSITORY_IMAGES = {
     "CADDY_IMAGE": ("ghcr.io/liangzixuan/cronometer-gold-caddy", "caddy"),
     "POSTGRES_IMAGE": ("ghcr.io/liangzixuan/cronometer-gold-postgres", "postgres"),
+    "MEILI_IMAGE": ("ghcr.io/liangzixuan/cronometer-gold-meilisearch", "meilisearch"),
     "API_IMAGE": ("ghcr.io/liangzixuan/cronometer-gold-api", "api"),
     "WEB_IMAGE": ("ghcr.io/liangzixuan/cronometer-gold-web", "web"),
     "WORKER_IMAGE": ("ghcr.io/liangzixuan/cronometer-gold-worker", "worker"),
     "MIGRATOR_IMAGE": ("ghcr.io/liangzixuan/cronometer-gold-migrator", "migrator"),
 }
-DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 REFERENCE = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}")
 NODE_RUNTIME_REFERENCE = re.compile(
     r"ghcr\.io/liangzixuan/cronometer-gold-node-runtime@sha256:[0-9a-f]{64}"
@@ -197,65 +194,13 @@ def read_env(filename):
     return values
 
 
-def load_lock(filename):
-    lock = json.loads(pathlib.Path(filename).read_text(encoding="utf-8"))
-    if set(lock) != {"schemaVersion", "sourceLockSha256", "reviewedAt", "policy", "images"}:
-        fail("External runtime-lock projection has unexpected top-level fields")
-    if lock["schemaVersion"] != 1 or not re.fullmatch(r"[0-9a-f]{64}", lock["sourceLockSha256"]):
-        fail("External runtime-lock projection schema or source digest is invalid")
-    policy = lock["policy"]
-    if set(policy) != {
-        "platform", "scanner", "scannerVersion", "databaseUpdatedAt", "severities",
-        "includeUnfixed", "ignorePolicy",
-    } or (
-        policy["platform"], policy["scanner"], policy["scannerVersion"],
-        policy["severities"], policy["includeUnfixed"], policy["ignorePolicy"],
-    ) != ("linux/arm64", "Trivy", "v0.74.0", ["HIGH", "CRITICAL"], True, "explicit-empty"):
-        fail("External image lock scan policy is not the reviewed policy")
-    if set(lock["images"]) != set(EXTERNAL):
-        fail("External image lock has an unexpected image set")
-    return lock
-
-
-def validate(deploy_file, lock_file):
+def validate(deploy_file):
     deploy = read_env(deploy_file)
-    lock = load_lock(lock_file)
-    blocked = []
-    for variable, repository in EXTERNAL.items():
-        image = lock["images"][variable]
-        if set(image) != {
-            "repository", "version", "platform", "digest", "arm64Digest", "ref",
-            "approved", "scan",
-        }:
-            fail(f"{variable} has unexpected lock fields")
-        scan = image["scan"]
-        if (
-            image["repository"] != repository
-            or image["platform"] != "linux/arm64"
-            or not isinstance(image["version"], str)
-            or not image["version"]
-            or not DIGEST.fullmatch(image["digest"])
-            or not DIGEST.fullmatch(image["arm64Digest"])
-            or image["ref"] != f'{repository}@{image["digest"]}'
-            or deploy.get(variable) != image["ref"]
-        ):
-            fail(f"{variable} does not exactly match its reviewed repository, platform, and digests")
-        if set(scan) != {"critical", "high", "total", "result"} or any(
-            type(scan.get(key)) is not int or scan[key] < 0 for key in ("critical", "high", "total")
-        ) or scan["total"] != scan["critical"] + scan["high"]:
-            fail(f"{variable} vulnerability evidence is invalid")
-        if image["approved"] is not True or scan != {
-            "critical": 0, "high": 0, "total": 0, "result": "passed",
-        }:
-            blocked.append(f'{variable} ({scan["critical"]} critical, {scan["high"]} high)')
-
     for variable, (repository, _component) in REPOSITORY_IMAGES.items():
         reference = deploy.get(variable, "")
         if not REFERENCE.fullmatch(reference) or not reference.startswith(f"{repository}@"):
             fail(f"{variable} must use its exact GHCR package at an immutable digest")
-    if blocked:
-        fail("External dependency admission is blocked: " + "; ".join(blocked))
-    return deploy, lock
+    return deploy
 
 
 def command_json(arguments, description):
@@ -335,10 +280,13 @@ def require_repository_runtime_contract(variable, config):
         }
         expected_labels = {
             "io.cronometer.runtime.component": "postgres",
-            "io.cronometer.runtime.contract": "uid-gid-70-preowned-pgdata-and-tmpfs",
+            "io.cronometer.runtime.contract": "openssl-3.5.8-r0-uid-gid-70-preowned-pgdata-and-tmpfs",
             "io.cronometer.upstream.image": "docker.io/library/postgres:17.11-alpine3.24",
             "io.cronometer.upstream.image.digest": "sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
+            "io.cronometer.upstream.image.arm64.digest": "sha256:dfc2780980fe6ca2d158bfe4342660db5e4c6431fb969088e543430d09f8d0f2",
             "io.cronometer.upstream.version": "17.11",
+            "io.cronometer.runtime.openssl-packages": "libcrypto3=3.5.8-r0,libssl3=3.5.8-r0",
+            "io.cronometer.runtime.openssl-upgrade-trigger": "CVE-2026-14456",
         }
         expected_environment = {
             "GOSU_VERSION=",
@@ -348,8 +296,48 @@ def require_repository_runtime_contract(variable, config):
         healthcheck = (config.get("Healthcheck") or {}).get("Test") or []
         if not healthcheck or healthcheck[0] != "CMD-SHELL":
             fail("POSTGRES_IMAGE healthcheck differs from the repository runtime contract")
+    elif variable == "MEILI_IMAGE":
+        exact = {
+            "User": "1000:1000",
+            "Entrypoint": ["tini", "--"],
+            "Cmd": ["/bin/sh", "-c", "/bin/meilisearch"],
+            "WorkingDir": "/meili_data",
+            "Volumes": None,
+            "StopSignal": None,
+            "Shell": None,
+            "ExposedPorts": {"7700/tcp": {}},
+            "Healthcheck": {
+                "Test": [
+                    "CMD-SHELL",
+                    "curl --fail --silent http://127.0.0.1:7700/health >/dev/null || exit 1",
+                ],
+                "Interval": 10_000_000_000,
+                "Timeout": 5_000_000_000,
+                "StartPeriod": 20_000_000_000,
+                "Retries": 6,
+            },
+        }
+        expected_labels = {
+            "io.cronometer.runtime.component": "meilisearch",
+            "io.cronometer.runtime.contract": "v1.53.1-openssl-3.5.8-r0-uid-gid-1000",
+            "io.cronometer.upstream.image": "docker.io/getmeili/meilisearch:v1.53.1",
+            "io.cronometer.upstream.image.digest": "sha256:8d6643d86d71fad6ad3cba92cde7ccfce9e4d6c384bda67598eb553571c32431",
+            "io.cronometer.upstream.image.arm64.digest": "sha256:b4a0a1f9545ae1dd8e12a750fa4416ef3f4b421ed0758c430d0c46182ad233ee",
+            "io.cronometer.upstream.source": "https://github.com/meilisearch/meilisearch",
+            "io.cronometer.upstream.source.revision": "577f7af28942b71782eab1e59f44ad8296ce0a92",
+            "io.cronometer.upstream.version": "v1.53.1",
+            "io.cronometer.runtime.openssl-packages": "libcrypto3=3.5.8-r0,libssl3=3.5.8-r0",
+            "io.cronometer.runtime.openssl-upgrade-trigger": "CVE-2026-14456",
+        }
+        expected_environment = {
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "MEILI_HTTP_ADDR=0.0.0.0:7700",
+            "MEILI_SERVER_PROVIDER=docker",
+        }
+        if len(environment_entries) != len(expected_environment) or environment != expected_environment:
+            fail("MEILI_IMAGE environment differs from the repository runtime contract")
     else:
-        return
+        fail(f"{variable} has no reviewed repository runtime contract")
     if any(config.get(key) != value for key, value in exact.items()):
         fail(f"{variable} process identity or filesystem contract differs from the reviewed runtime")
     if any(labels.get(key) != value for key, value in expected_labels.items()):
@@ -358,54 +346,39 @@ def require_repository_runtime_contract(variable, config):
         fail(f"{variable} environment differs from the reviewed runtime contract")
 
 
-def inspect_images(deploy_file, runtime_file, lock_file):
-    deploy, lock = validate(deploy_file, lock_file)
+def inspect_images(deploy_file, runtime_file):
+    deploy = validate(deploy_file)
     runtime = read_env(runtime_file)
     revision = runtime.get("SERVICE_VERSION", "")
     if not re.fullmatch(r"[0-9a-f]{40}", revision):
         fail("SERVICE_VERSION must be a full Git SHA before image inspection")
 
-    for variable in EXTERNAL:
-        image = lock["images"][variable]
-        index = command_json(
-            ["docker", "buildx", "imagetools", "inspect", deploy[variable], "--raw"], variable
-        )
-        children = [
-            descriptor for descriptor in index.get("manifests", [])
-            if descriptor.get("platform", {}).get("os") == "linux"
-            and descriptor.get("platform", {}).get("architecture") == "arm64"
-            and descriptor.get("platform", {}).get("variant") in (None, "", "v8")
-        ]
-        if len(children) != 1 or children[0].get("digest") != image["arm64Digest"]:
-            fail(f"{variable} does not resolve to its uniquely reviewed ARM64 child")
-
-    for variable in (*EXTERNAL, *REPOSITORY_IMAGES):
+    for variable in REPOSITORY_IMAGES:
         inspected = command_json(["docker", "image", "inspect", deploy[variable]], variable)
         if len(inspected) != 1 or (inspected[0].get("Os"), inspected[0].get("Architecture")) != (
             "linux", "arm64",
         ):
             fail(f"{variable} is not a pulled linux/arm64 runtime image")
         labels = inspected[0].get("Config", {}).get("Labels") or {}
-        if variable in REPOSITORY_IMAGES:
-            component = REPOSITORY_IMAGES[variable][1]
-            expected = {
-                "org.opencontainers.image.revision": revision,
-                "org.opencontainers.image.source": "https://github.com/liangzixuan/cronometer-gold",
-                "org.opencontainers.image.title": f"cronometer-gold-{component}",
-                "org.opencontainers.image.version": f"sha-{revision}",
-            }
-            if any(labels.get(key) != value for key, value in expected.items()):
-                fail(f"{variable} source, revision, title, or version differs from the release contract")
-            require_repository_runtime_contract(variable, inspected[0].get("Config", {}))
+        component = REPOSITORY_IMAGES[variable][1]
+        expected = {
+            "org.opencontainers.image.revision": revision,
+            "org.opencontainers.image.source": "https://github.com/liangzixuan/cronometer-gold",
+            "org.opencontainers.image.title": f"cronometer-gold-{component}",
+            "org.opencontainers.image.version": f"sha-{revision}",
+        }
+        if any(labels.get(key) != value for key, value in expected.items()):
+            fail(f"{variable} source, revision, title, or version differs from the release contract")
+        require_repository_runtime_contract(variable, inspected[0].get("Config", {}))
 
 
 def main():
-    if len(sys.argv) == 4 and sys.argv[1] == "validate":
-        validate(sys.argv[2], sys.argv[3])
-    elif len(sys.argv) == 5 and sys.argv[1] == "inspect":
-        inspect_images(sys.argv[2], sys.argv[3], sys.argv[4])
+    if len(sys.argv) == 3 and sys.argv[1] == "validate":
+        validate(sys.argv[2])
+    elif len(sys.argv) == 4 and sys.argv[1] == "inspect":
+        inspect_images(sys.argv[2], sys.argv[3])
     else:
-        fail("Usage: nutrition-image-admission validate <deploy.env> <lock.json> | inspect <deploy.env> <runtime.env> <lock.json>")
+        fail("Usage: nutrition-image-admission validate <deploy.env> | inspect <deploy.env> <runtime.env>")
 
 
 if __name__ == "__main__":

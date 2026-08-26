@@ -56,6 +56,13 @@ class AzureRuntimeStaticContracts(unittest.TestCase):
         self.assertNotIn("restart: unless-stopped", compose)
         self.assertIn('restart: "no"', compose)
 
+    def test_meilisearch_drops_all_linux_capabilities(self) -> None:
+        block = service_blocks(text("compose.yaml"))["meilisearch"]
+        self.assertIn('user: "1000:1000"', block)
+        self.assertIn("read_only: true", block)
+        self.assertIn("cap_drop: [ALL]", block)
+        self.assertIn("no-new-privileges:true", block)
+
     def test_compute_only_object_storage_contract_is_explicit(self) -> None:
         compose = text("compose.yaml")
         runtime = text("runtime.env.example")
@@ -121,21 +128,20 @@ class AzureRuntimeStaticContracts(unittest.TestCase):
     def test_preflight_reuses_strict_image_admission(self) -> None:
         preflight = text("deployment-preflight.py")
         self.assertIn("IMAGE_ADMISSION_SHA256", preflight)
-        self.assertIn("IMAGE_LOCK_SHA256", preflight)
+        self.assertNotIn("IMAGE_LOCK_SHA256", preflight)
         self.assertIn('"validate"', preflight)
         self.assertIn('"inspect"', preflight)
         admission = (REPOSITORY_ROOT / "infra/oci/files/image-admission.py").read_text(encoding="utf-8")
         self.assertIn('"linux", "arm64",', admission)
-        self.assertIn("uniquely reviewed ARM64 child", admission)
         self.assertIn("require_repository_runtime_contract", admission)
         admission_digest = hashlib.sha256(
             (REPOSITORY_ROOT / "infra/oci/files/image-admission.py").read_bytes()
         ).hexdigest()
-        lock_digest = hashlib.sha256(
-            (REPOSITORY_ROOT / "infra/oci/external-images.lock.json").read_bytes()
-        ).hexdigest()
         self.assertIn(admission_digest, preflight)
-        self.assertIn(lock_digest, preflight)
+        self.assertIn(
+            '"MEILI_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-meilisearch"',
+            preflight,
+        )
 
     def test_preflight_validates_both_caddy_configs_without_network(self) -> None:
         preflight = text("deployment-preflight.py")

@@ -30,38 +30,6 @@ locals {
     var.freeform_tags,
   )
 
-  # CI owns the verbose evidence lock. The host needs only the enforcement
-  # projection below; embedding prose and evidence URLs would exceed OCI's
-  # cumulative metadata limit. The full-lock digest binds the projection back
-  # to the reviewed source file.
-  external_image_lock = jsondecode(file("${path.module}/external-images.lock.json"))
-  external_runtime_image_lock = {
-    schemaVersion    = local.external_image_lock.schemaVersion
-    sourceLockSha256 = filesha256("${path.module}/external-images.lock.json")
-    reviewedAt       = local.external_image_lock.reviewedAt
-    policy = {
-      platform          = local.external_image_lock.policy.platform
-      scanner           = local.external_image_lock.policy.scanner
-      scannerVersion    = local.external_image_lock.policy.scannerVersion
-      databaseUpdatedAt = local.external_image_lock.policy.databaseUpdatedAt
-      severities        = local.external_image_lock.policy.severities
-      includeUnfixed    = local.external_image_lock.policy.includeUnfixed
-      ignorePolicy      = local.external_image_lock.policy.ignorePolicy
-    }
-    images = {
-      for image_variable, image in local.external_image_lock.images : image_variable => {
-        repository  = image.repository
-        version     = image.version
-        platform    = image.platform
-        digest      = image.digest
-        arm64Digest = image.arm64Digest
-        ref         = image.ref
-        approved    = image.approved
-        scan        = image.scan
-      }
-    }
-  }
-
   # Cloud-init metadata has a hard cumulative 32 KiB ceiling in OCI. Packing
   # the reviewed, non-secret host files into one compressed JSON object avoids
   # the per-file YAML and transport overhead while retaining explicit modes.
@@ -180,10 +148,6 @@ locals {
       content = file("${path.module}/files/compose.yaml")
       mode    = "0644"
     }
-    "/opt/nutrition-tracker/external-images.lock.json" = {
-      content = jsonencode(local.external_runtime_image_lock)
-      mode    = "0644"
-    }
     "/usr/local/sbin/install-nutrition-docker-ce" = {
       content = file("${path.module}/files/install-docker-ce.sh")
       mode    = "0750"
@@ -259,14 +223,6 @@ resource "terraform_data" "apply_guardrails" {
     precondition {
       condition     = var.acknowledge_non_ha_and_possible_charges
       error_message = "Apply is locked. Recheck OCI limits/pricing and set acknowledge_non_ha_and_possible_charges=true only if the non-HA pilot and possible charges are accepted."
-    }
-
-    precondition {
-      condition = alltrue([
-        for image in values(local.external_image_lock.images) :
-        image.approved && image.scan.critical == 0 && image.scan.high == 0 && image.scan.total == 0 && image.scan.result == "passed"
-      ])
-      error_message = "Apply is blocked because one or more checked-in external runtime images are unapproved or have HIGH/CRITICAL findings. Update reviewed evidence and pass supply-chain CI; do not override this gate."
     }
 
     precondition {

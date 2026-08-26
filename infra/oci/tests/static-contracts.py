@@ -73,7 +73,10 @@ node_release_key = (
     REPOSITORY_ROOT
     / "infra/docker/node-release-CC68F5A3106FF448322E48ED27F5E38D5B0A215F.asc"
 ).read_bytes()
-assert set(external_lock) == {"schemaVersion", "reviewedAt", "policy", "images"}
+assert set(external_lock) == {
+    "schemaVersion", "reviewedAt", "purpose", "platform", "images",
+}
+assert external_lock["schemaVersion"] == 2
 
 node_source_sha256 = "bbe768df8d5815d7fa76124052985332452e0a4742d39f32027550d1aab8f6fb"
 node_manifest_sha256 = "778ac5b2fcdbd68d9c0ae9f4310674faa3af0910bd0d18e7f6597787c40a3e39"
@@ -257,11 +260,13 @@ assert "component: caddy\n" not in application_image_job
 assert "component: postgres\n" not in application_image_job
 assert "Exercise the Caddy non-root" not in application_image_job
 assert "Exercise PostgreSQL init" not in application_image_job
-assert "needs:" not in service_image_job
+assert "needs: validate-external-images" in service_image_job
 assert "component: caddy" in service_image_job
 assert "component: postgres" in service_image_job
+assert "component: meilisearch" in service_image_job
 assert "Exercise the Caddy non-root" in service_image_job
 assert "Exercise PostgreSQL init" in service_image_job
+assert "Exercise the Meilisearch non-root" in service_image_job
 assert all(f"component: {component}\n" not in service_image_job for component in application_dockerfiles)
 assert container_supply_chain.count("verify_distroless_index ") == 2
 
@@ -312,6 +317,8 @@ assert 'user: "1000:1000"' in service("caddy")
 assert "cap_drop: [ALL]" in service("caddy")
 assert "cap_add: [NET_BIND_SERVICE]" in service("caddy")
 assert 'user: "70:70"' in service("postgres")
+assert 'user: "1000:1000"' in service("meilisearch")
+assert "cap_drop: [ALL]" in service("meilisearch")
 assert "/var/lib/nutrition-tracker/postgres:/var/lib/postgresql/data:Z" in service("postgres")
 assert "/run/postgresql:rw,noexec,nosuid,size=64m,uid=70,gid=70,mode=3775" in service("postgres")
 assert "/tmp:rw,noexec,nosuid,size=64m,uid=70,gid=70,mode=1770" in service("postgres")
@@ -401,7 +408,6 @@ expected_bootstrap_modes = {
     "/etc/systemd/system/nutrition-tracker.service": "0644",
     "/opt/nutrition-tracker/Caddyfile": "0644",
     "/opt/nutrition-tracker/compose.yaml": "0644",
-    "/opt/nutrition-tracker/external-images.lock.json": "0644",
     "/usr/local/sbin/install-nutrition-docker-ce": "0750",
     "/usr/local/sbin/nutrition-assert-object-egress-firewall": "0750",
     "/usr/local/sbin/nutrition-configure-host-firewall": "0750",
@@ -428,9 +434,8 @@ assert "  - path: /usr/local/sbin/nutrition-unpack-bootstrap" in cloud_init
 assert cloud_init.index("[/usr/local/sbin/nutrition-unpack-bootstrap]") < cloud_init.index(
     "nutrition-configure-host-firewall"
 )
-assert "sourceLockSha256 = filesha256" in locals_tf
-assert "content = jsonencode(local.external_runtime_image_lock)" in locals_tf
-assert "image.approved && image.scan.critical == 0" in locals_tf
+assert "external_runtime_image_lock" not in locals_tf
+assert "/opt/nutrition-tracker/external-images.lock.json" not in locals_tf
 assert "metadata_payload_size_bytes <= 30000" in compute_tf
 assert 'regex("^[ -~]+$", trimspace(key))' in variables_tf
 assert "printable-ASCII OpenSSH public key" in variables_tf
@@ -1011,14 +1016,25 @@ for forward_fixture, egress_fixture in blocked_firewall_fixtures:
 
 external_variables = {"MEILI_IMAGE"}
 assert set(external_lock["images"]) == external_variables
-for variable, image in external_lock["images"].items():
-    assert f"{variable}={image['ref']}" in deploy_example
-assert all(image["approved"] is True and image["scan"] == {
-    "critical": 0, "high": 0, "total": 0, "result": "passed",
-} for image in external_lock["images"].values())
+meili_upstream = external_lock["images"]["MEILI_IMAGE"]
+assert external_lock["platform"] == "linux/arm64"
+assert external_lock["purpose"] == (
+    "derivative-bootstrap-input-and-isolated-synthetic-ci-fixture"
+)
+assert meili_upstream["directDeploymentApproved"] is False
+assert meili_upstream["usage"] == (
+    "derivative-bootstrap-input-and-isolated-synthetic-ci-fixture"
+)
+assert meili_upstream["remediation"]["derivativeRepository"] == (
+    "ghcr.io/liangzixuan/cronometer-gold-meilisearch"
+)
+assert meili_upstream["remediation"]["requiredPackages"] == [
+    "libcrypto3=3.5.8-r0", "libssl3=3.5.8-r0",
+]
 for variable, repository in {
     "CADDY_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-caddy",
     "POSTGRES_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-postgres",
+    "MEILI_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-meilisearch",
     "API_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-api",
     "WEB_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-web",
     "WORKER_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-worker",
@@ -1035,13 +1051,21 @@ assert preflight.index("docker pull --platform linux/arm64") < preflight.index(
 assert preflight.index("nutrition-image-admission inspect") < preflight.index(
     "/usr/bin/docker compose"
 )
-assert "does not exactly match its reviewed repository" in image_admission
-assert "does not resolve to its uniquely reviewed ARM64 child" in image_admission
+assert "must use its exact GHCR package at an immutable digest" in image_admission
 assert '"org.opencontainers.image.revision": revision' in image_admission
 assert '"org.opencontainers.image.source": "https://github.com/liangzixuan/cronometer-gold"' in image_admission
 assert '"org.opencontainers.image.version": f"sha-{revision}"' in image_admission
 assert '"io.cronometer.runtime.contract": "uid-gid-1000-net-bind-service"' in image_admission
-assert '"io.cronometer.runtime.contract": "uid-gid-70-preowned-pgdata-and-tmpfs"' in image_admission
+assert (
+    '"io.cronometer.runtime.contract": '
+    '"openssl-3.5.8-r0-uid-gid-70-preowned-pgdata-and-tmpfs"'
+    in image_admission
+)
+assert (
+    '"io.cronometer.runtime.contract": '
+    '"v1.53.1-openssl-3.5.8-r0-uid-gid-1000"'
+    in image_admission
+)
 assert (
     "patched-node22.23.2-openssl3.5.7-08e7756-base-nossl-debian13-uid-gid-1000-empty-entrypoint"
     in image_admission
@@ -1090,51 +1114,14 @@ assert transport_fixture["/etc/nutrition-tracker/fixture-0"]["content"] == (
     "#!/bin/sh\necho ready\n"
 )
 
-# Execute the embedded admission parser against the compact host projection.
-# Approved Meilisearch evidence must pass; a changed approval/scan must block
-# before any image pull.
-runtime_lock = {
-    "schemaVersion": external_lock["schemaVersion"],
-    "sourceLockSha256": hashlib.sha256(
-        (ROOT / "external-images.lock.json").read_bytes()
-    ).hexdigest(),
-    "reviewedAt": external_lock["reviewedAt"],
-    "policy": {
-        key: external_lock["policy"][key]
-        for key in (
-            "platform",
-            "scanner",
-            "scannerVersion",
-            "databaseUpdatedAt",
-            "severities",
-            "includeUnfixed",
-            "ignorePolicy",
-        )
-    },
-    "images": {
-        variable: {
-            key: image[key]
-            for key in (
-                "repository",
-                "version",
-                "platform",
-                "digest",
-                "arm64Digest",
-                "ref",
-                "approved",
-                "scan",
-            )
-        }
-        for variable, image in external_lock["images"].items()
-    },
-}
-assert set(runtime_lock) == {
-    "schemaVersion", "sourceLockSha256", "reviewedAt", "policy", "images",
-}
+# Execute the provider-neutral admission parser against seven repository-owned
+# immutable runtime references. The upstream lock is CI-only bootstrap evidence
+# and is deliberately absent from host admission.
 deploy_fixture = deploy_example
 for variable, repository in {
     "CADDY_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-caddy",
     "POSTGRES_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-postgres",
+    "MEILI_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-meilisearch",
     "API_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-api",
     "WEB_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-web",
     "WORKER_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-worker",
@@ -1306,6 +1293,122 @@ require_runtime_contract = image_admission_namespace["require_repository_runtime
 for variable, config in app_configs.items():
     require_runtime_contract(variable, copy.deepcopy(config))
 
+postgres_config = {
+    "User": "70:70",
+    "Entrypoint": ["docker-entrypoint.sh"],
+    "Cmd": ["postgres"],
+    "StopSignal": "SIGINT",
+    "Volumes": {"/var/lib/postgresql/data": {}},
+    "ExposedPorts": {"5432/tcp": {}},
+    "Healthcheck": {"Test": ["CMD-SHELL", "pg_isready"]},
+    "Env": ["GOSU_VERSION=", "PGDATA=/var/lib/postgresql/data", "PG_VERSION=17.11"],
+    "Labels": {
+        "io.cronometer.runtime.component": "postgres",
+        "io.cronometer.runtime.contract": (
+            "openssl-3.5.8-r0-uid-gid-70-preowned-pgdata-and-tmpfs"
+        ),
+        "io.cronometer.upstream.image": "docker.io/library/postgres:17.11-alpine3.24",
+        "io.cronometer.upstream.image.digest": (
+            "sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73"
+        ),
+        "io.cronometer.upstream.image.arm64.digest": (
+            "sha256:dfc2780980fe6ca2d158bfe4342660db5e4c6431fb969088e543430d09f8d0f2"
+        ),
+        "io.cronometer.upstream.version": "17.11",
+        "io.cronometer.runtime.openssl-packages": (
+            "libcrypto3=3.5.8-r0,libssl3=3.5.8-r0"
+        ),
+        "io.cronometer.runtime.openssl-upgrade-trigger": "CVE-2026-14456",
+    },
+}
+meili_config = {
+    "User": "1000:1000",
+    "Entrypoint": ["tini", "--"],
+    "Cmd": ["/bin/sh", "-c", "/bin/meilisearch"],
+    "WorkingDir": "/meili_data",
+    "Volumes": None,
+    "StopSignal": None,
+    "Shell": None,
+    "ExposedPorts": {"7700/tcp": {}},
+    "Healthcheck": {
+        "Test": [
+            "CMD-SHELL",
+            "curl --fail --silent http://127.0.0.1:7700/health >/dev/null || exit 1",
+        ],
+        "Interval": 10_000_000_000,
+        "Timeout": 5_000_000_000,
+        "StartPeriod": 20_000_000_000,
+        "Retries": 6,
+    },
+    "Env": [
+        "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        "MEILI_HTTP_ADDR=0.0.0.0:7700",
+        "MEILI_SERVER_PROVIDER=docker",
+    ],
+    "Labels": {
+        "io.cronometer.runtime.component": "meilisearch",
+        "io.cronometer.runtime.contract": "v1.53.1-openssl-3.5.8-r0-uid-gid-1000",
+        "io.cronometer.upstream.image": "docker.io/getmeili/meilisearch:v1.53.1",
+        "io.cronometer.upstream.image.digest": (
+            "sha256:8d6643d86d71fad6ad3cba92cde7ccfce9e4d6c384bda67598eb553571c32431"
+        ),
+        "io.cronometer.upstream.image.arm64.digest": (
+            "sha256:b4a0a1f9545ae1dd8e12a750fa4416ef3f4b421ed0758c430d0c46182ad233ee"
+        ),
+        "io.cronometer.upstream.source": "https://github.com/meilisearch/meilisearch",
+        "io.cronometer.upstream.source.revision": (
+            "577f7af28942b71782eab1e59f44ad8296ce0a92"
+        ),
+        "io.cronometer.upstream.version": "v1.53.1",
+        "io.cronometer.runtime.openssl-packages": (
+            "libcrypto3=3.5.8-r0,libssl3=3.5.8-r0"
+        ),
+        "io.cronometer.runtime.openssl-upgrade-trigger": "CVE-2026-14456",
+    },
+}
+require_runtime_contract("POSTGRES_IMAGE", copy.deepcopy(postgres_config))
+require_runtime_contract("MEILI_IMAGE", copy.deepcopy(meili_config))
+
+
+def assert_service_contract_blocked(variable, config, reason):
+    try:
+        require_runtime_contract(variable, config)
+    except SystemExit:
+        pass
+    else:
+        raise AssertionError(f"service runtime admission accepted {reason}")
+
+
+wrong_postgres_packages = copy.deepcopy(postgres_config)
+wrong_postgres_packages["Labels"]["io.cronometer.runtime.openssl-packages"] = (
+    "libcrypto3=3.5.7-r0,libssl3=3.5.7-r0"
+)
+assert_service_contract_blocked(
+    "POSTGRES_IMAGE", wrong_postgres_packages, "vulnerable PostgreSQL OpenSSL packages"
+)
+
+wrong_meili_user = copy.deepcopy(meili_config)
+wrong_meili_user["User"] = ""
+assert_service_contract_blocked("MEILI_IMAGE", wrong_meili_user, "a root Meilisearch runtime")
+
+wrong_meili_health = copy.deepcopy(meili_config)
+wrong_meili_health["Healthcheck"]["Test"][-1] = "true"
+assert_service_contract_blocked("MEILI_IMAGE", wrong_meili_health, "a bypassed healthcheck")
+
+wrong_meili_environment = copy.deepcopy(meili_config)
+wrong_meili_environment["Env"].append("UNREVIEWED=1")
+assert_service_contract_blocked(
+    "MEILI_IMAGE", wrong_meili_environment, "an added Meilisearch environment variable"
+)
+
+wrong_meili_base = copy.deepcopy(meili_config)
+wrong_meili_base["Labels"]["io.cronometer.upstream.image.digest"] = "sha256:" + "0" * 64
+assert_service_contract_blocked("MEILI_IMAGE", wrong_meili_base, "another upstream digest")
+
+assert_service_contract_blocked(
+    "UNREVIEWED_IMAGE", copy.deepcopy(meili_config), "an unreviewed repository variable"
+)
+
 
 def assert_app_contract_blocked(variable, config, reason):
     try:
@@ -1419,23 +1522,20 @@ assert_app_contract_blocked("API_IMAGE", inherited_entrypoint, "the inherited No
 with tempfile.TemporaryDirectory() as temporary_directory:
     temporary = pathlib.Path(temporary_directory)
     deploy_path = temporary / "deploy.env"
-    lock_path = temporary / "external-images.lock.json"
     deploy_path.write_text(deploy_fixture, encoding="utf-8")
-    lock_path.write_text(json.dumps(runtime_lock), encoding="utf-8")
-    image_admission_namespace["validate"](str(deploy_path), str(lock_path))
+    image_admission_namespace["validate"](str(deploy_path))
 
-    blocked_lock = copy.deepcopy(runtime_lock)
-    blocked_lock["images"]["MEILI_IMAGE"]["approved"] = False
-    blocked_lock["images"]["MEILI_IMAGE"]["scan"] = {
-        "critical": 0, "high": 1, "total": 1, "result": "blocked",
-    }
-    lock_path.write_text(json.dumps(blocked_lock), encoding="utf-8")
+    docker_hub_meili = deploy_fixture.replace(
+        "MEILI_IMAGE=ghcr.io/liangzixuan/cronometer-gold-meilisearch@",
+        "MEILI_IMAGE=docker.io/getmeili/meilisearch@",
+    )
+    deploy_path.write_text(docker_hub_meili, encoding="utf-8")
     try:
-        image_admission_namespace["validate"](str(deploy_path), str(lock_path))
+        image_admission_namespace["validate"](str(deploy_path))
     except SystemExit as error:
-        assert str(error).startswith("External dependency admission is blocked:")
+        assert str(error) == "MEILI_IMAGE must use its exact GHCR package at an immutable digest"
     else:
-        raise AssertionError("unapproved external dependency evidence must block deployment")
+        raise AssertionError("Docker Hub Meilisearch must be rejected for deployment")
 
 # Exercise the root-only atomic unpacker in a temporary allowlisted tree. The
 # ownership syscalls are stubbed because this regression runs unprivileged; the

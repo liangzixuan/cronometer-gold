@@ -1,9 +1,10 @@
 # Container supply chain
 
-The `container supply chain` workflow produces seven repository-owned
+The `container supply chain` workflow produces eight repository-owned
 `linux/arm64` artifacts: a dedicated patched Node runtime, four application
-images, Caddy, and PostgreSQL. The Node runtime is a build input for the four
-applications, not a seventh deployment image. The workflow runs on pushes to
+images, Caddy, PostgreSQL, and a patched Meilisearch derivative. The Node runtime
+is a build input for the four applications, not an eighth deployment image. The
+workflow runs on pushes to
 the default branch and can also be started manually from that branch. It never
 deploys infrastructure or updates a running environment.
 
@@ -14,9 +15,12 @@ runner. After that producer publishes a passing digest, each application build
 receives only its digest-qualified
 `ghcr.io/<owner>/<repository>-node-runtime@sha256:<digest>` output through the
 required `NODE_RUNTIME_IMAGE` build argument. There is no application
-Dockerfile default to fall back to. The Caddy and PostgreSQL jobs are independent
-of the Node producer, so a Node source build failure does not prevent those
-unrelated system-runtime checks from running.
+Dockerfile default to fall back to. The Caddy, PostgreSQL, and Meilisearch jobs
+are independent of the Node producer, so a Node source build failure does not
+prevent those unrelated system-runtime checks from running. The system-runtime
+matrix depends on the read-only Meilisearch upstream-input validation job; this
+prevents any service tag from being created when the signed upstream trust gate
+fails.
 
 Each producer builds an OCI image index by digest without first creating a tag.
 The build explicitly requests maximum-mode SLSA v1 BuildKit provenance and a
@@ -183,13 +187,27 @@ Alpine 3.24 index
 `sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73`.
 The expected ARM64 child is
 `sha256:dfc2780980fe6ca2d158bfe4342660db5e4c6431fb969088e543430d09f8d0f2`.
-The parent review found 22 HIGH/CRITICAL records, all Go standard-library
-records attached to `/usr/local/bin/gosu`; its Alpine packages had none. The
-derivative deletes gosu and fixes the final user to `70:70`, which makes the
-official entrypoint's root-only privilege-switch branch unreachable while
-retaining its initialization, init-script, existing-cluster, TLS, stop-signal,
-and health semantics. The OCI controlled-beta runtime must present PGDATA and the
-`/var/run/postgresql` and `/tmp` tmpfs mounts pre-owned by `70:70`.
+An earlier review found Go standard-library records attached to
+`/usr/local/bin/gosu`; the derivative deletes gosu and fixes the final user to
+`70:70`, which makes the official entrypoint's root-only privilege-switch branch
+unreachable. The 2026-08-26 hosted ARM64 scan then reported two HIGH findings,
+one each for Alpine `libcrypto3` and `libssl3` 3.5.7-r0. The derivative now
+installs exactly 3.5.8-r0 for both packages and asserts their full APK inventory
+records before the final strict scan. It retains PostgreSQL initialization,
+init-script, existing-cluster, TLS, stop-signal, and health semantics. The
+controlled-beta runtime must present PGDATA and the `/var/run/postgresql` and
+`/tmp` tmpfs mounts pre-owned by `70:70`.
+
+`infra/docker/meilisearch.Dockerfile` derives only from the signed v1.53.1 index
+`sha256:8d6643d86d71fad6ad3cba92cde7ccfce9e4d6c384bda67598eb553571c32431`;
+its expected ARM64 child is
+`sha256:b4a0a1f9545ae1dd8e12a750fa4416ef3f4b421ed0758c430d0c46182ad233ee`.
+That upstream child has the same two 3.5.7-r0 OpenSSL package findings. The
+repository derivative installs exactly `libcrypto3=3.5.8-r0` and
+`libssl3=3.5.8-r0`, runs as `1000:1000`, and adds an exact local healthcheck.
+CI checks the binary version, complete package records, non-root/read-only
+behavior, health response, final zero-HIGH/zero-CRITICAL scan, SBOM, BuildKit
+provenance, GitHub attestation, and immutable commit tag.
 
 `infra/docker/caddy.Dockerfile` builds Caddy v2.11.4 from commit
 `e2eee6a7fce366321294c9c2a79f3146891dcbdf`. CI checks that annotated tag
@@ -238,28 +256,32 @@ automatic-HTTPS routes and internal certificate, a UID-1000 bind to port 80
 with only `NET_BIND_SERVICE`, and PostgreSQL first initialization plus init SQL,
 TLS-required SQL, image health, and an existing-cluster restart as UID 70.
 
-## External runtime image boundary
+## Signed upstream bootstrap boundary
 
-Meilisearch is the only upstream runtime reference in
-`infra/oci/external-images.lock.json`. Its entry locks both the upstream
-multi-platform index digest and the expected `linux/arm64` child digest. CI
-resolves that exact index, verifies the child configuration and keyless Cosign
-signature, scans the current digest with the same strict Trivy policy, and
-requires the reviewed approval bit. Unknown-platform descriptors are accepted
-only for attestations that refer back to a real runtime descriptor in the same
-index. The lock validator accepts only the reviewed Meilisearch repository and
-tag identity with a verified Sigstore keyless signature from the GitHub Actions
-OIDC issuer. The pinned Cosign 3.1.3 verifier explicitly requires the Sigstore
-v0.3 new-bundle path used by the image's OCI 1.1 DSSE
-`https://sigstore.dev/cosign/sign/v1` referrers and checks that the signed
-in-toto subject is the exact locked index digest; an unsigned-container review
-cannot satisfy this gate.
+`infra/oci/external-images.lock.json` is CI evidence for the exact signed
+Meilisearch input; it is not installed on a host and cannot authorize a runtime.
+The schema records `directDeploymentApproved: false`, the exact index and ARM64
+child, the two hosted HIGH findings, and the required 3.5.8-r0 package fixes. A
+read-only job resolves the exact index and child configuration before the
+repository service matrix can start. It verifies the keyless Cosign signature
+for the tagged Meilisearch release workflow and GitHub Actions OIDC issuer. The
+Meilisearch publisher repeats the exact lock, Dockerfile `FROM`, child identity,
+and signature checks before receiving GHCR credentials or building.
 
-Caddy and PostgreSQL deployment references now point to the repository-owned
-GHCR digests described above. OCI Object Storage replaces the MinIO OCI runtime;
-MinIO remains only a local/CI compatibility fixture. No external-image
-approval or successful container scan authorizes real health data. The current
-single-node, non-HA environment remains limited to synthetic reviewer data.
+The first derivative-producing commit has one explicitly bounded bootstrap
+exception: `.github/workflows/ci.yml` may run that exact upstream digest only as
+an isolated synthetic database-test fixture on the native `ubuntu-24.04-arm`
+runner. A static contract binds the fixture to that job, runner, and exact signed
+index, whose reviewed ARM64 child is recorded in the lock. It receives no
+production secrets or real health data and is not deployment evidence. After
+the first patched GHCR derivative tag exists, a follow-up commit must pin that
+exact ARM64 derivative digest in CI and narrow the lock to build-input-only use.
+
+Caddy, PostgreSQL, and Meilisearch deployment references all point to
+repository-owned GHCR digests. OCI Object Storage replaces the MinIO hosted
+runtime; MinIO remains only a local/CI compatibility fixture. No build, scan, or
+attestation authorizes real health data. The current single-node, non-HA
+environment remains limited to synthetic reviewer data.
 
 ## Required GitHub configuration
 
@@ -280,11 +302,11 @@ single-node, non-HA environment remains limited to synthetic reviewer data.
   remains push-only with a default-branch job condition: GitHub reports a job
   skipped by its condition as `Success`, so a feature-branch push could satisfy
   that setting without executing the container gate.
-- Treat all seven repository-artifact results (the Node producer, four
-  applications, Caddy, and PostgreSQL) plus the Meilisearch external-image
-  result as mandatory **post-merge release evidence** for the exact default-
-  branch commit. A commit is not releasable until those eight real jobs execute
-  and pass. Redesign the workflow to run an explicit fail-closed pull-request
+- Treat all eight repository-artifact results (the Node producer, four
+  applications, Caddy, PostgreSQL, and Meilisearch) plus the read-only upstream
+  input-validation result as mandatory **post-merge release evidence** for the
+  exact default-branch commit. A commit is not releasable until those nine real
+  jobs execute and pass. Redesign the workflow to run an explicit fail-closed pull-request
   lane before adding any container job name to pre-merge branch protection.
 
 GitHub documents the skipped-job result behavior in
@@ -308,9 +330,9 @@ gh attestation verify \
   --repo '<owner>/<repository>'
 ```
 
-Then record the dedicated Node-runtime digest, all six deployment component
-digests, and the locked Meilisearch digest in the release evidence. Configure
-OCI to pull only the six deployment components and Meilisearch by immutable
-digest; the Node-runtime artifact remains transitive build evidence and is not a
-Compose service. Promotion or rollback is a separate, explicitly authorized
-operation.
+Then record the dedicated Node-runtime digest and all seven repository-owned
+deployment component digests in the release evidence. Configure the host to pull
+only those seven components by immutable digest; the upstream Meilisearch lock
+is provenance input, not a deployment reference, and the Node-runtime artifact
+remains transitive build evidence rather than a Compose service. Promotion or
+rollback is a separate, explicitly authorized operation.

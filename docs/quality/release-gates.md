@@ -40,11 +40,12 @@ package boundaries.
 
 ## Controlled beta
 
-- API, worker, migrator, web, Caddy, and PostgreSQL `linux/arm64` images are built
-  from the release commit, pass the fail-closed HIGH/CRITICAL vulnerability gate,
-  carry SBOM and provenance attestations, and are deployed by recorded digest.
-  The independently locked Meilisearch image must pass the same current scan and
-  its upstream-signature gate, as described in
+- API, worker, migrator, web, Caddy, PostgreSQL, and the patched Meilisearch
+  derivative are repository-built `linux/arm64` images from the release commit,
+  pass the fail-closed HIGH/CRITICAL vulnerability gate, carry SBOM and
+  provenance attestations, and are deployed by recorded digest. The signed
+  upstream Meilisearch lock is non-deployable build provenance; its identity and
+  signature gate must pass before the derivative service matrix starts, as described in
   [the container supply-chain runbook](./container-supply-chain.md).
 - The reviewer-signed deployment record binds distinct exact canonical reports,
   not opaque result hashes. The external report proves fresh public-chain,

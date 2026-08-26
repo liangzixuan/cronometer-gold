@@ -3,12 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { validateExternalImageLock } from "./verify-external-image-lock.mjs";
-import {
-  assertStepOrder,
-  assertUnconditionalStep,
-  workflowJob,
-  workflowStep,
-} from "./workflow-contract-helpers.mjs";
+import { assertStepOrder, workflowJob, workflowStep } from "./workflow-contract-helpers.mjs";
 
 const reviewedLock = JSON.parse(
   readFileSync(new URL("../infra/oci/external-images.lock.json", import.meta.url), "utf8"),
@@ -17,150 +12,81 @@ const workflow = readFileSync(
   new URL("../.github/workflows/container-supply-chain.yml", import.meta.url),
   "utf8",
 );
+const ciWorkflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+const meiliDockerfile = readFileSync(
+  new URL("../infra/docker/meilisearch.Dockerfile", import.meta.url),
+  "utf8",
+);
 
 function cloneLock() {
   return structuredClone(reviewedLock);
 }
 
-const enforcementMappings = [
-  ["LOCK_OUTCOME", "steps.lock.outcome"],
-  ["RUNTIME_OUTCOME", "steps.runtime.outcome"],
-  ["SCAN_OUTCOME", "steps.scan.outcome"],
-  ["PROVENANCE_OUTCOME", "steps.provenance.outcome"],
-  ["APPROVED", "steps.lock.outputs.approved"],
-];
-
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function assertExactEnforcementMappings(step) {
-  for (const [environmentName, producer] of enforcementMappings) {
-    const expectedLine = `          ${environmentName}: \${{ ${producer} }}`;
-    assert.match(
-      step,
-      new RegExp(`^${escapeRegExp(expectedLine)}$`, "m"),
-      `${environmentName} must be sourced only from ${producer}`,
-    );
-  }
-}
-
-test("accepts the exact reviewed signed Meilisearch lock", () => {
-  assert.equal(validateExternalImageLock(cloneLock()).ref, reviewedLock.images.MEILI_IMAGE.ref);
-});
-
-test("binds lock validation to explicit bundle verification and final enforcement", () => {
-  const job = workflowJob(workflow, "validate-external-images");
-  const validate = workflowStep(job, "Validate and resolve the reviewed image lock");
-  const installCosign = workflowStep(job, "Install pinned Cosign for signed upstream images");
-  const verify = workflowStep(job, "Verify upstream provenance evidence");
-  const enforce = workflowStep(job, "Enforce current scan, provenance, and reviewed approval");
-
-  assertStepOrder(job, [
-    "Validate and resolve the reviewed image lock",
-    "Install pinned Cosign for signed upstream images",
-    "Verify upstream provenance evidence",
-    "Enforce current scan, provenance, and reviewed approval",
-  ]);
-
-  assertUnconditionalStep(validate, "external lock validation");
-  assert.match(validate, /^ {8}id: lock$/m);
-  assert.match(validate, /^ {10}node scripts\/verify-external-image-lock\.mjs "\$\{LOCK_FILE\}"$/m);
-
-  assertUnconditionalStep(installCosign, "Cosign installation");
-  assert.match(
-    installCosign,
-    /^ {8}uses: sigstore\/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4\.1\.2$/m,
+test("accepts the exact signed, non-deployable Meilisearch bootstrap lock", () => {
+  const image = validateExternalImageLock(cloneLock());
+  assert.equal(image.ref, reviewedLock.images.MEILI_IMAGE.ref);
+  assert.equal(image.directDeploymentApproved, false);
+  assert.equal(
+    reviewedLock.purpose,
+    "derivative-bootstrap-input-and-isolated-synthetic-ci-fixture",
   );
-  assert.match(installCosign, /^ {10}cosign-release: v3\.1\.3$/m);
-
-  assertUnconditionalStep(verify, "upstream bundle verification");
-  assert.match(verify, /^ {8}id: provenance$/m);
-  assert.match(
-    verify,
-    /^ {10}CERTIFICATE_IDENTITY: \$\{\{ steps\.lock\.outputs\.certificate_identity \}\}$/m,
-  );
-  assert.match(
-    verify,
-    /^ {10}CERTIFICATE_OIDC_ISSUER: \$\{\{ steps\.lock\.outputs\.certificate_oidc_issuer \}\}$/m,
-  );
-  assert.match(verify, /^ {10}DIGEST: \$\{\{ steps\.lock\.outputs\.digest \}\}$/m);
-  assert.match(verify, /^ {10}IMAGE_REF: \$\{\{ steps\.lock\.outputs\.ref \}\}$/m);
-  assert.equal(verify.match(/^ {10}cosign verify \\$/gm)?.length, 1);
-  assert.match(verify, /^ {12}--new-bundle-format=true \\$/m);
-  assert.match(verify, /^ {12}--certificate-identity "\$\{CERTIFICATE_IDENTITY\}" \\$/m);
-  assert.match(verify, /^ {12}--certificate-oidc-issuer "\$\{CERTIFICATE_OIDC_ISSUER\}" \\$/m);
-  assert.match(verify, /^ {10}jq -e --arg digest "\$\{DIGEST\}" '$/m);
-  assert.match(
-    verify,
-    /^ {14}\.critical\.type == "https:\/\/sigstore\.dev\/cosign\/sign\/v1" and$/m,
-  );
-  assert.match(verify, /^ {14}\.critical\.image\["docker-manifest-digest"\] == \$digest\)$/m);
-  assert.match(verify, /^ {10}' "\$\{verification_file\}" >\/dev\/null$/m);
-  assert.doesNotMatch(
-    verify,
-    /--(?:insecure-ignore-sct|insecure-ignore-tlog|allow-insecure-registry|new-bundle-format=false)/,
-  );
-
-  assert.match(enforce, /^ {8}if: always\(\)$/m);
-  assert.doesNotMatch(enforce, /^ {8}continue-on-error:/m);
-  assertExactEnforcementMappings(enforce);
-  for (const outcome of ["LOCK_OUTCOME", "PROVENANCE_OUTCOME", "RUNTIME_OUTCOME", "SCAN_OUTCOME"]) {
-    assert.match(
-      enforce,
-      new RegExp(`^ {10}if \\[ "\\$\\{${outcome}\\}" != 'success' \\]; then$`, "m"),
-    );
-  }
-  assert.match(enforce, /^ {10}if \[ "\$\{APPROVED\}" != 'true' \]; then$/m);
-  assert.match(enforce, /^ {10}if \[ "\$\{failed\}" = 'true' \]; then$/m);
-  assert.match(enforce, /^ {12}exit 1$/m);
-  assert.doesNotMatch(workflow, /reviewed-unsigned-container/);
-});
-
-test("rejects every final enforcement producer miswire", () => {
-  const job = workflowJob(workflow, "validate-external-images");
-  const enforce = workflowStep(job, "Enforce current scan, provenance, and reviewed approval");
-  const wrongProducers = [
-    "steps.scan.outcome",
-    "steps.lock.outcome",
-    "steps.provenance.outcome",
-    "steps.runtime.outcome",
-    "steps.lock.outputs.ref",
-  ];
-
-  for (const [[environmentName, producer], wrongProducer] of enforcementMappings.map(
-    (mapping, index) => [mapping, wrongProducers[index]],
-  )) {
-    const expectedLine = `          ${environmentName}: \${{ ${producer} }}`;
-    const wrongLine = `          ${environmentName}: \${{ ${wrongProducer} }}`;
-    assert.notEqual(producer, wrongProducer);
-    assert.equal(enforce.split(expectedLine).length - 1, 1);
-
-    const miswired = enforce.replace(expectedLine, wrongLine);
-    assert.throws(
-      () => assertExactEnforcementMappings(miswired),
-      new RegExp(`${environmentName} must be sourced only from ${escapeRegExp(producer)}`),
-    );
-  }
-});
-
-test("rejects the legacy reviewed unsigned-container bypass", () => {
-  const lock = cloneLock();
-  lock.images.MEILI_IMAGE.provenance.method = "reviewed-unsigned-container";
-  lock.images.MEILI_IMAGE.provenance.containerSignature = "unavailable";
-  lock.images.MEILI_IMAGE.provenance.certificateIdentity = null;
-  lock.images.MEILI_IMAGE.provenance.certificateOidcIssuer = null;
-
-  assert.throws(
-    () => validateExternalImageLock(lock),
-    /verified Sigstore keyless container signature/,
+  assert.equal(
+    image.remediation.derivativeRepository,
+    "ghcr.io/liangzixuan/cronometer-gold-meilisearch",
   );
 });
 
-test("rejects an unverified signature and another OIDC issuer", () => {
-  const unverified = cloneLock();
-  unverified.images.MEILI_IMAGE.provenance.containerSignature = "unavailable";
-  assert.throws(() => validateExternalImageLock(unverified), /verified Sigstore keyless/);
+test("rejects deployment approval, widened usage, and weakened remediation", () => {
+  const approved = cloneLock();
+  approved.images.MEILI_IMAGE.directDeploymentApproved = true;
+  assert.throws(() => validateExternalImageLock(approved), /non-deployable ARM64 build input/);
+
+  const widened = cloneLock();
+  widened.images.MEILI_IMAGE.usage = "runtime";
+  assert.throws(() => validateExternalImageLock(widened), /non-deployable ARM64 build input/);
+
+  const wrongPurpose = cloneLock();
+  wrongPurpose.purpose = "runtime-approval";
+  assert.throws(() => validateExternalImageLock(wrongPurpose), /ARM64 upstream build inputs/);
+
+  const wrongDerivative = cloneLock();
+  wrongDerivative.images.MEILI_IMAGE.remediation.derivativeRepository =
+    "ghcr.io/attacker/meilisearch";
+  assert.throws(() => validateExternalImageLock(wrongDerivative), /reviewed GHCR package/);
+
+  const wrongFix = cloneLock();
+  wrongFix.images.MEILI_IMAGE.remediation.requiredPackages[1] = "libssl3=3.5.7-r0";
+  assert.throws(() => validateExternalImageLock(wrongFix), /exactly pinned/);
+
+  const missingFinding = cloneLock();
+  missingFinding.images.MEILI_IMAGE.remediation.findings.pop();
+  assert.throws(() => validateExternalImageLock(missingFinding), /two reviewed findings/);
+
+  const wrongIndex = cloneLock();
+  wrongIndex.images.MEILI_IMAGE.digest = `sha256:${"0".repeat(64)}`;
+  wrongIndex.images.MEILI_IMAGE.ref = `${wrongIndex.images.MEILI_IMAGE.repository}@${wrongIndex.images.MEILI_IMAGE.digest}`;
+  assert.throws(() => validateExternalImageLock(wrongIndex), /non-deployable ARM64 build input/);
+
+  const wrongChild = cloneLock();
+  wrongChild.images.MEILI_IMAGE.arm64Digest = `sha256:${"0".repeat(64)}`;
+  assert.throws(() => validateExternalImageLock(wrongChild), /non-deployable ARM64 build input/);
+});
+
+test("rejects an unsigned image, another source, issuer, identity, or runtime label", () => {
+  const unsigned = cloneLock();
+  unsigned.images.MEILI_IMAGE.provenance.containerSignature = "unavailable";
+  assert.throws(() => validateExternalImageLock(unsigned), /verified Sigstore keyless/);
+
+  const wrongSource = cloneLock();
+  wrongSource.images.MEILI_IMAGE.provenance.sourceRepository = "https://example.invalid/repo";
+  assert.throws(() => validateExternalImageLock(wrongSource), /source identity/);
+
+  const wrongSourceRevision = cloneLock();
+  wrongSourceRevision.images.MEILI_IMAGE.provenance.sourceRevision = "0".repeat(40);
+  wrongSourceRevision.images.MEILI_IMAGE.provenance.expectedRuntime.labels[
+    "org.opencontainers.image.revision"
+  ] = "0".repeat(40);
+  assert.throws(() => validateExternalImageLock(wrongSourceRevision), /source identity/);
 
   const wrongIssuer = cloneLock();
   wrongIssuer.images.MEILI_IMAGE.provenance.certificateOidcIssuer = "https://example.invalid";
@@ -168,33 +94,122 @@ test("rejects an unverified signature and another OIDC issuer", () => {
     () => validateExternalImageLock(wrongIssuer),
     /certificate identity or OIDC issuer/,
   );
-});
 
-test("binds the certificate identity and runtime labels to the reviewed source tag", () => {
   const wrongIdentity = cloneLock();
   wrongIdentity.images.MEILI_IMAGE.provenance.certificateIdentity =
-    "https://github.com/another/project/.github/workflows/release.yml@refs/tags/v1.53.1";
+    "https://github.com/meilisearch/meilisearch/.github/workflows/other.yml@refs/tags/v1.53.1";
   assert.throws(
     () => validateExternalImageLock(wrongIdentity),
     /certificate identity or OIDC issuer/,
   );
-
-  const wrongWorkflow = cloneLock();
-  wrongWorkflow.images.MEILI_IMAGE.provenance.certificateIdentity =
-    "https://github.com/meilisearch/meilisearch/.github/workflows/another.yml@refs/tags/v1.53.1";
-  assert.throws(
-    () => validateExternalImageLock(wrongWorkflow),
-    /certificate identity or OIDC issuer/,
-  );
-
-  const unsafeIdentity = cloneLock();
-  unsafeIdentity.images.MEILI_IMAGE.provenance.certificateIdentity =
-    "https://github.com/meilisearch/meilisearch/.github/workflows/publish\n-docker-images.yml@refs/tags/v1.53.1";
-  assert.throws(() => validateExternalImageLock(unsafeIdentity), /certificateIdentity/);
 
   const wrongRevision = cloneLock();
   wrongRevision.images.MEILI_IMAGE.provenance.expectedRuntime.labels[
     "org.opencontainers.image.revision"
   ] = "0".repeat(40);
   assert.throws(() => validateExternalImageLock(wrongRevision), /expected labels/);
+});
+
+test("hardcodes the exact locked upstream input in the derivative Dockerfile", () => {
+  const image = validateExternalImageLock(cloneLock());
+  assert.match(
+    meiliDockerfile,
+    new RegExp(`^FROM ${image.ref.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} AS runtime$`, "m"),
+  );
+  assert.doesNotMatch(meiliDockerfile, /^ARG .*MEILI/m);
+  assert.doesNotMatch(meiliDockerfile, /^FROM \$\{/m);
+  for (const requiredPackage of image.remediation.requiredPackages) {
+    assert.match(meiliDockerfile, new RegExp(requiredPackage.replace("=", "=")));
+  }
+});
+
+test("confines the temporary CI fixture to the native ARM64 database job", () => {
+  const image = validateExternalImageLock(cloneLock());
+  const database = workflowJob(ciWorkflow, "database");
+  const exactFixtureLine = `        image: ${image.ref}`;
+
+  assert.match(database, /^ {4}runs-on: ubuntu-24\.04-arm$/m);
+  assert.equal(
+    database.split("\n").filter((line) => line === exactFixtureLine).length,
+    1,
+    "the database job must use the reviewed upstream index exactly once",
+  );
+  assert.equal(
+    ciWorkflow.split("\n").filter((line) => line === exactFixtureLine).length,
+    1,
+    "the reviewed upstream index must not escape the database job",
+  );
+  assert.doesNotMatch(ciWorkflow, /getmeili\/meilisearch:v1\.53\.1/);
+});
+
+test("gates the Meilisearch publisher before credentials, lookup, and build", () => {
+  const services = workflowJob(workflow, "build-scan-publish-services");
+  const apps = workflowJob(workflow, "build-scan-publish-apps");
+  const install = workflowStep(
+    services,
+    "Install pinned Cosign for the Meilisearch upstream input",
+  );
+  const verify = workflowStep(
+    services,
+    "Verify the locked Meilisearch build input before building",
+  );
+
+  assert.match(install, /^ {8}if: matrix\.component == 'meilisearch'$/m);
+  assert.match(
+    install,
+    /^ {8}uses: sigstore\/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4\.1\.2$/m,
+  );
+  assert.match(install, /^ {10}cosign-release: v3\.1\.3$/m);
+  assert.match(verify, /^ {8}if: matrix\.component == 'meilisearch'$/m);
+  assert.match(verify, /node scripts\/verify-external-image-lock\.mjs "\$\{LOCK_FILE\}"/);
+  assert.match(verify, /grep -Fx "FROM \$\{image_ref\} AS runtime"/);
+  assert.match(verify, /--arg expected_arm64 "\$\{arm64_digest\}"/);
+  assert.match(verify, /\$arm64_descriptors\[0\]\.digest == \$expected_arm64/);
+  assert.doesNotMatch(verify, /\bas \$arm64\b/);
+  assert.match(verify, /--new-bundle-format=true/);
+  assert.match(verify, /--certificate-identity "\$\{certificate_identity\}"/);
+  assert.match(verify, /--certificate-oidc-issuer "\$\{certificate_oidc_issuer\}"/);
+  assert.match(verify, /critical\.image\["docker-manifest-digest"\] == \$expected_digest/);
+  assert.doesNotMatch(
+    verify,
+    /--(?:insecure-ignore-sct|insecure-ignore-tlog|allow-insecure-registry|new-bundle-format=false)/,
+  );
+  assertStepOrder(services, [
+    "Set up pinned Buildx and BuildKit",
+    "Install pinned Cosign for the Meilisearch upstream input",
+    "Verify the locked Meilisearch build input before building",
+    "Log in to GHCR with the job token",
+    "Resolve an existing immutable commit tag",
+    "Build and push by digest with SBOM and provenance",
+  ]);
+  assert.doesNotMatch(apps, /locked Meilisearch build input/);
+  assert.match(services, /^ {4}needs: validate-external-images$/m);
+});
+
+test("keeps the read-only upstream evidence job fail closed", () => {
+  const job = workflowJob(workflow, "validate-external-images");
+  const validate = workflowStep(job, "Validate and resolve the reviewed image lock");
+  const runtime = workflowStep(job, "Verify the locked index and ARM64 runtime identity");
+  const provenance = workflowStep(job, "Verify upstream provenance evidence");
+  const enforce = workflowStep(job, "Enforce locked upstream identity and provenance");
+
+  assert.match(job, /^ {4}permissions:\n {6}contents: read /m);
+  assert.match(validate, /^ {8}id: lock$/m);
+  assert.match(validate, /\.directDeploymentApproved/);
+  assert.match(runtime, /\$arm64\[0\]\.digest == \$expected\.arm64Digest/);
+  assert.match(provenance, /--new-bundle-format=true/);
+  assert.match(enforce, /^ {8}if: always\(\)$/m);
+  assert.match(
+    enforce,
+    /^ {10}DIRECT_DEPLOYMENT_APPROVED: \$\{\{ steps\.lock\.outputs\.direct_deployment_approved \}\}$/m,
+  );
+  assert.match(enforce, /if \[ "\$\{DIRECT_DEPLOYMENT_APPROVED\}" != 'false' \]; then/);
+  assert.doesNotMatch(enforce, /SCAN_OUTCOME|steps\.scan/);
+  assertStepOrder(job, [
+    "Validate and resolve the reviewed image lock",
+    "Verify the locked index and ARM64 runtime identity",
+    "Install pinned Cosign for signed upstream images",
+    "Verify upstream provenance evidence",
+    "Enforce locked upstream identity and provenance",
+  ]);
 });

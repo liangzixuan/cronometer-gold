@@ -29,9 +29,10 @@ readiness, and ports 80/443 prepared for Caddy—not a public certificate.
   credentials. Restore explicitly uses `oci_native` version inventory and the
   API signing key is mounted only into the two offline operations.
 - The provider-neutral admission helper verifies the exact repositories,
-  immutable digests, unique reviewed ARM64 child, image provenance labels,
-  process identities, runtime contracts, and the external-image vulnerability
-  lock. The preflight never pulls an image.
+  immutable digests, ARM64 platform, image provenance labels, process identities,
+  and runtime contracts for all seven repository-owned deployment images. The
+  signed upstream Meilisearch lock is CI-only bootstrap evidence and is never a
+  host authorization file. The preflight never pulls an image.
 - The data directories must live on the separately mounted preserved data disk;
   both storage helpers require that mount to resolve through Azure's LUN-0 data
   link and match a separately reviewed filesystem UUID and disk serial. Neither
@@ -97,7 +98,7 @@ The intended host paths are:
 | `prepare-storage.sh`, `prepare-internal-pki.sh` | `/usr/local/sbin/` | `root:root 0750` |
 | each `*.env.example` | `/etc/nutrition-tracker/` | `root:root 0600` |
 | rendered `*.env` | `/etc/nutrition-tracker/` | `root:root 0600` |
-| reviewed image admission + external lock | `/opt/nutrition-tracker/` | `0750`, `0644` |
+| reviewed image-admission helper | `/opt/nutrition-tracker/image-admission.py` | `root:root 0750` |
 | reviewed Object Storage coordinates | `/etc/nutrition-tracker/object-storage-coordinates.json` | `root:root 0644` |
 | 168-hour reviewed public-range lock | `/opt/nutrition-tracker/object-storage-public-ranges.lock.json` | `root:root 0644` |
 | Terraform-reviewed shared SSH/beta `/32` | `/etc/nutrition-tracker/expected-reviewer-cidr` | `root:root 0644` |
@@ -105,10 +106,11 @@ The intended host paths are:
 | fresh exact host map | `/run/nutrition-tracker/object-storage-hosts.env` | `root:root 0600` |
 | offline restore API key | `/etc/nutrition-tracker/oci/restore-private-key.pem` | `1000:1000 0400` |
 
-The image admission files are the provider-neutral portions currently located
-at `infra/oci/files/image-admission.py` and
-`infra/oci/external-images.lock.json`; the preflight pins their reviewed source
-hashes. Do not copy compute, instance-identity, DNS, firewall, or systemd files.
+The provider-neutral image-admission source is currently located at
+`infra/oci/files/image-admission.py`; the preflight pins its reviewed source
+hash. Do not install `infra/oci/external-images.lock.json` on the host—it
+explicitly withholds direct deployment approval. Do not copy compute,
+instance-identity, DNS, firewall, or systemd files.
 
 The operator must identify the Terraform-attached data disk through
 `/dev/disk/azure/data/by-lun/0` or `/dev/disk/azure/scsi1/lun0`, partition and

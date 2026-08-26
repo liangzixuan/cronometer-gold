@@ -32,10 +32,10 @@ const reviewedActionCounts = new Map([
   [BUILD_ACTION, 3],
   [BUILDX_ACTION, 4],
   [CHECKOUT_ACTION, 6],
-  [COSIGN_ACTION, 2],
+  [COSIGN_ACTION, 3],
   [LOGIN_ACTION, 3],
   [QEMU_ACTION, 2],
-  [TRIVY_ACTION, 6],
+  [TRIVY_ACTION, 5],
 ]);
 
 const criticalControlKeys = [
@@ -243,12 +243,7 @@ function assertOnlyReviewedPublicationCommands(source) {
 function assertOnlyReviewedIgnorePolicyReferences(source) {
   const expectedCounts = new Map([
     [`run: install -m 600 /dev/null "${shellVariable("RUNNER_TEMP")}/empty.trivyignore"`, 3],
-    [
-      `run: install -m 600 /dev/null "${shellVariable("RUNNER_TEMP")}/external.empty.trivyignore"`,
-      1,
-    ],
     [`trivyignores: ${githubExpression("runner.temp")}/empty.trivyignore`, 5],
-    [`trivyignores: ${githubExpression("runner.temp")}/external.empty.trivyignore`, 1],
   ]);
   const actualCounts = new Map();
   for (const line of source.split("\n")) {
@@ -549,54 +544,32 @@ test("exact-binds every repository publisher toolchain, scan, and provenance gat
   for (const family of publisherFamilies) assertPublisherFamily(family);
 });
 
-test("exact-binds the external Meilisearch Buildx and current Trivy gate", () => {
-  const job = workflowJob(workflow, "validate-external-images");
-  const initializeIgnore = workflowStep(
-    job,
-    "Initialize an explicit empty vulnerability-ignore policy",
-  );
-  const scan = workflowStep(job, "Scan the exact locked ARM64 image");
+test("exact-binds the reviewed service matrix and fail-closed component dispatch", () => {
+  const job = workflowJob(workflow, "build-scan-publish-services");
+  const identity = workflowStep(job, "Verify ARM64 service identity");
+  const build = workflowStep(job, "Build and push by digest with SBOM and provenance");
 
-  assertExactMapping(job, "    permissions:", [["contents", "read"]], "external-image permissions");
-  assertPinnedBuildx(job, "external image");
-
-  assertUnconditionalStep(initializeIgnore, "external-image empty Trivy ignore setup");
-  assertExactScalar(
-    initializeIgnore,
-    8,
-    "run",
-    `install -m 600 /dev/null "${shellVariable("RUNNER_TEMP")}/external.empty.trivyignore"`,
-    "external-image empty Trivy ignore setup",
-  );
-  assertExactScalar(scan, 8, "id", "scan", "external-image strict Trivy scan");
-  assertExactScalar(scan, 8, "continue-on-error", "true", "external-image strict Trivy scan");
-  assertMissingScalar(scan, 8, "if", "external-image strict Trivy scan");
-  assertStrictTrivyScan(
-    scan,
-    publisherTrivySettings.map(([key, value]) => [
-      key,
-      key === "image-ref"
-        ? githubExpression("steps.lock.outputs.ref")
-        : key === "trivyignores"
-          ? `${githubExpression("runner.temp")}/external.empty.trivyignore`
-          : value,
-    ]),
-    "external-image strict Trivy scan",
-  );
-  assertAdjacentSteps(
-    job,
-    "Initialize an explicit empty vulnerability-ignore policy",
-    "Scan the exact locked ARM64 image",
-  );
+  for (const component of ["caddy", "postgres", "meilisearch"]) {
+    assert.match(job, new RegExp(`^ {10}- component: ${component}$`, "m"));
+  }
+  assert.equal(job.match(/^ {10}- component:/gm)?.length, 3);
+  assert.match(job, /^ {12}dockerfile: infra\/docker\/meilisearch\.Dockerfile$/m);
+  assert.match(identity, /^ {12}\*\)$/m);
+  assert.match(identity, /Unreviewed service component: \$\{COMPONENT\}/);
+  assert.match(identity, /^ {14}exit 1$/m);
+  assert.match(identity, /libcrypto3-3\.5\.8-r0 aarch64 \{openssl\}/);
+  assert.match(identity, /libssl3-3\.5\.8-r0 aarch64 \{openssl\}/);
   assertStepOrder(job, [
-    "Set up pinned Buildx and BuildKit",
-    "Verify the locked index and ARM64 runtime identity",
+    "Verify the locked Meilisearch build input before building",
+    "Log in to GHCR with the job token",
+    "Build and push by digest with SBOM and provenance",
+    "Verify ARM64 service identity",
     "Initialize an explicit empty vulnerability-ignore policy",
-    "Scan the exact locked ARM64 image",
-    "Install pinned Cosign for signed upstream images",
-    "Verify upstream provenance evidence",
-    "Enforce current scan, provenance, and reviewed approval",
+    "Fail closed on high or critical vulnerabilities",
+    "Record GitHub build provenance",
+    "Create the immutable commit tag",
   ]);
+  assertPublisherBuild(build, "service producer");
 });
 
 test("structural bindings reject commented and duplicated security controls", () => {
@@ -631,12 +604,12 @@ test("structural bindings reject commented and duplicated security controls", ()
 });
 
 test("restricted workflow syntax rejects quoted control keys and alternate actions", () => {
-  const quotedContinueOnError = workflow.replace(
-    "        continue-on-error: true",
-    '        "continue-on-error": true',
+  const quotedSeverity = workflow.replace(
+    "          severity: HIGH,CRITICAL",
+    '          "severity": HIGH,CRITICAL',
   );
   assert.throws(
-    () => assertRestrictedWorkflowSyntax(quotedContinueOnError),
+    () => assertRestrictedWorkflowSyntax(quotedSeverity),
     /canonical unquoted YAML syntax/u,
   );
 

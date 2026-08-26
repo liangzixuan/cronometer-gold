@@ -4,7 +4,6 @@ set -euo pipefail
 deploy_env=/etc/nutrition-tracker/deploy.env
 runtime_env=/etc/nutrition-tracker/runtime.env
 compose_file=/opt/nutrition-tracker/compose.yaml
-dependency_lock=/opt/nutrition-tracker/external-images.lock.json
 object_hosts_env=/run/nutrition-tracker/object-storage-hosts.env
 mode=${1:-full}
 [[ "$mode" == "early" || "$mode" == "full" ]] || {
@@ -51,12 +50,6 @@ for service in http https; do
 done
 
 /usr/local/sbin/nutrition-assert-object-egress-firewall
-
-[[ -f "$dependency_lock" ]] || { echo "Missing external dependency lock" >&2; exit 1; }
-[[ "$(stat -c '%U:%G:%a' "$dependency_lock")" == "root:root:644" ]] || {
-  echo "External dependency lock must be root:root mode 0644" >&2
-  exit 1
-}
 
 helper_manifest=/etc/nutrition-tracker/operator-helper-digests.json
 [[ "$(stat -c '%U:%G:%a' "$helper_manifest")" == "root:root:644" ]] || {
@@ -495,15 +488,16 @@ openssl pkey -check -noout -in "$restore_private_key" >/dev/null 2>&1 || {
   exit 1
 }
 
-/usr/local/sbin/nutrition-image-admission validate "$deploy_env" "$dependency_lock"
+/usr/local/sbin/nutrition-image-admission validate "$deploy_env"
 
-# No image is pulled or executed until the exact dependency lock is approved.
+# No image is pulled or executed until every deployable reference passes exact
+# repository and immutable-digest admission.
 for image_variable in CADDY_IMAGE POSTGRES_IMAGE MEILI_IMAGE API_IMAGE WEB_IMAGE WORKER_IMAGE MIGRATOR_IMAGE; do
   image_reference=$(sed -n "s/^${image_variable}=//p" "$deploy_env")
   docker pull --platform linux/arm64 "$image_reference" >/dev/null
 done
 
-/usr/local/sbin/nutrition-image-admission inspect "$deploy_env" "$runtime_env" "$dependency_lock"
+/usr/local/sbin/nutrition-image-admission inspect "$deploy_env" "$runtime_env"
 
 /usr/bin/docker compose \
   --env-file "$deploy_env" \

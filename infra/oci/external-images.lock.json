@@ -1,15 +1,8 @@
 {
-  "schemaVersion": 1,
-  "reviewedAt": "2026-08-17",
-  "policy": {
-    "platform": "linux/arm64",
-    "scanner": "Trivy",
-    "scannerVersion": "v0.74.0",
-    "databaseUpdatedAt": "2026-08-17T00:56:15Z",
-    "severities": ["HIGH", "CRITICAL"],
-    "includeUnfixed": true,
-    "ignorePolicy": "explicit-empty"
-  },
+  "schemaVersion": 2,
+  "reviewedAt": "2026-08-26",
+  "purpose": "derivative-bootstrap-input-and-isolated-synthetic-ci-fixture",
+  "platform": "linux/arm64",
   "images": {
     "MEILI_IMAGE": {
       "repository": "docker.io/getmeili/meilisearch",
@@ -18,12 +11,32 @@
       "digest": "sha256:8d6643d86d71fad6ad3cba92cde7ccfce9e4d6c384bda67598eb553571c32431",
       "arm64Digest": "sha256:b4a0a1f9545ae1dd8e12a750fa4416ef3f4b421ed0758c430d0c46182ad233ee",
       "ref": "docker.io/getmeili/meilisearch@sha256:8d6643d86d71fad6ad3cba92cde7ccfce9e4d6c384bda67598eb553571c32431",
-      "approved": true,
-      "scan": {
-        "critical": 0,
-        "high": 0,
-        "total": 0,
-        "result": "passed"
+      "usage": "derivative-bootstrap-input-and-isolated-synthetic-ci-fixture",
+      "directDeploymentApproved": false,
+      "remediation": {
+        "derivativeRepository": "ghcr.io/liangzixuan/cronometer-gold-meilisearch",
+        "findings": [
+          {
+            "vulnerability": "CVE-2026-14456",
+            "severity": "HIGH",
+            "package": "libcrypto3",
+            "installedVersion": "3.5.7-r0",
+            "fixedVersion": "3.5.8-r0"
+          },
+          {
+            "vulnerability": "CVE-2026-14456",
+            "severity": "HIGH",
+            "package": "libssl3",
+            "installedVersion": "3.5.7-r0",
+            "fixedVersion": "3.5.8-r0"
+          }
+        ],
+        "requiredPackages": ["libcrypto3=3.5.8-r0", "libssl3=3.5.8-r0"],
+        "evidence": [
+          "https://gitlab.alpinelinux.org/alpine/aports/-/commit/1b80b7c3bf5ba3f13eb748ae953d9215d5a4bb62",
+          "https://openssl-library.org/news/secadv/20260813.txt"
+        ],
+        "review": "The hosted strict ARM64 scan reported one HIGH finding for each installed OpenSSL runtime package. During the one-time derivative bootstrap, this signed digest may be used only as the derivative build input and as the isolated synthetic database-test fixture on a native ARM64 runner; it is prohibited from beta deployment. The container workflow must install the exact fixed packages and scan the final derivative with an explicit empty ignore policy before creating its deployable immutable tag. Once that tag exists, the CI fixture must move to the exact repository derivative digest and this exception must be removed."
       },
       "provenance": {
         "method": "sigstore-keyless",
@@ -47,7 +60,7 @@
           "https://github.com/meilisearch/meilisearch/blob/577f7af28942b71782eab1e59f44ad8296ce0a92/Dockerfile",
           "https://github.com/meilisearch/meilisearch/releases/tag/v1.53.1"
         ],
-        "review": "Cosign verifies the exact index digest with a Fulcio certificate for the tagged Meilisearch release workflow, the GitHub Actions OIDC issuer, and transparency-log inclusion."
+        "review": "Cosign verifies the exact index digest with a Fulcio certificate for the tagged Meilisearch release workflow, the GitHub Actions OIDC issuer, and transparency-log inclusion. This provenance review does not authorize direct deployment of the vulnerable upstream image."
       }
     }
   }

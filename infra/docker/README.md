@@ -46,11 +46,11 @@ instructions. Follow the restore runbook before replacing database state.
 
 ## Published OCI runtimes
 
-The default-branch supply chain produces seven repository-owned ARM64 artifacts:
+The default-branch supply chain produces eight repository-owned ARM64 artifacts:
 the dedicated `node-runtime.Dockerfile`, the four application Dockerfiles,
-`caddy.Dockerfile`, and `postgres.Dockerfile`. These are OCI controlled-beta
+`caddy.Dockerfile`, `postgres.Dockerfile`, and `meilisearch.Dockerfile`. These are controlled-beta
 inputs, not replacements for the developer services above. The Node runtime is
-an intermediate build artifact; only the other six become deployment images.
+an intermediate build artifact; the other seven become deployment images.
 Every artifact must pass its exact-digest scan, inventory, identity, provenance,
 and behavior gates before receiving an immutable commit tag.
 
@@ -74,7 +74,9 @@ patch, builder, C++ source, base, and ARM64 child labels enforced by OCI
 admission. App stages add only the deployment tree plus UID/GID-1000 identity
 files and contain no npm or shell. Their empty entrypoint preserves OCI command
 overrides; `/nodejs/bin` is explicit in `PATH`. Caddy and PostgreSQL publish in
-independent jobs and do not wait for the Node producer.
+an independent service matrix with Meilisearch and do not wait for the Node
+producer. That matrix does wait for the read-only signed Meilisearch upstream
+input gate.
 
 See `docs/quality/container-supply-chain.md` for the complete provenance pins,
 inventory gates, rejected prior composition, and scan boundary.
@@ -85,4 +87,7 @@ presents writable `/data` and `/config` directories owned by 1000. The
 PostgreSQL image is fixed to UID/GID 70 and has no gosu binary. Deployment must
 pre-own PGDATA and the `/run/postgresql` and `/tmp` tmpfs mounts as 70. See
 `docs/quality/container-supply-chain.md` for the exact source, dependency, and
-scan evidence.
+scan evidence. The Meilisearch derivative is fixed to UID/GID 1000 and upgrades
+the upstream ARM64 image's `libcrypto3` and `libssl3` packages to exactly
+3.5.8-r0 before its strict final scan; only its repository-owned GHCR digest is
+deployable.

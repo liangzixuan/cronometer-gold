@@ -27,7 +27,6 @@ COMPOSE_FILE = pathlib.Path("/opt/nutrition-tracker/compose.yaml")
 PUBLIC_CADDYFILE = pathlib.Path("/opt/nutrition-tracker/Caddyfile")
 INTERNAL_CADDYFILE = pathlib.Path("/opt/nutrition-tracker/Caddyfile.internal")
 IMAGE_ADMISSION = pathlib.Path("/opt/nutrition-tracker/image-admission.py")
-IMAGE_LOCK = pathlib.Path("/opt/nutrition-tracker/external-images.lock.json")
 OBJECT_COORDINATES = CONFIG_ROOT / "object-storage-coordinates.json"
 OBJECT_HOSTS = pathlib.Path("/run/nutrition-tracker/object-storage-hosts.env")
 PUBLIC_RANGE_LOCK = pathlib.Path("/opt/nutrition-tracker/object-storage-public-ranges.lock.json")
@@ -47,7 +46,7 @@ VALIDATOR_NAME_PREFIX = "nutrition-azure-caddy-validator"
 ACKNOWLEDGEMENT = "I_ACCEPT_SYNTHETIC_ONLY_SINGLE_SERVER_NON_HA_BETA"
 ENVIRONMENTS = ("deploy", "runtime", "database", "api", "worker", "meili", "restore")
 IMAGE_REPOSITORIES = {
-    "MEILI_IMAGE": "docker.io/getmeili/meilisearch",
+    "MEILI_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-meilisearch",
     "CADDY_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-caddy",
     "POSTGRES_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-postgres",
     "API_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-api",
@@ -55,8 +54,7 @@ IMAGE_REPOSITORIES = {
     "WORKER_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-worker",
     "MIGRATOR_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-migrator",
 }
-IMAGE_ADMISSION_SHA256 = "de0b2a29dc5996d665d358d0b3336f9abc64ce007f9ac70718233bfd16c36a73"
-IMAGE_LOCK_SHA256 = "32803600e5a49c96dd4083035dd2458c8b208f2f85187f767ad4b2c9f28dcd69"
+IMAGE_ADMISSION_SHA256 = "ed030a95c55a15de1094c3ae1e631522925593b62eeceb7695afef778beed8f5"
 PUBLIC_RANGE_LOCK_SHA256 = "44124af92774cb3766b001a706425b4582cfefa660b815efafcd35c2b1ed81ed"
 IMAGE_REFERENCE = re.compile(r"[^@\s]+@sha256:[0-9a-f]{64}")
 FQDN = re.compile(r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
@@ -624,14 +622,11 @@ def assert_object_storage(environments: dict[str, dict[str, str]]) -> None:
 
 def assert_image_admission(deploy_path: pathlib.Path, runtime_path: pathlib.Path) -> None:
     require_regular_file(IMAGE_ADMISSION, 0o750)
-    require_regular_file(IMAGE_LOCK, 0o644)
     if hashlib.sha256(IMAGE_ADMISSION.read_bytes()).hexdigest() != IMAGE_ADMISSION_SHA256:
         fail("Installed provider-neutral image admission helper differs from reviewed source")
-    if hashlib.sha256(IMAGE_LOCK.read_bytes()).hexdigest() != IMAGE_LOCK_SHA256:
-        fail("Installed external image lock differs from reviewed source")
-    command(["python3", str(IMAGE_ADMISSION), "validate", str(deploy_path), str(IMAGE_LOCK)], "image reference admission")
+    command(["python3", str(IMAGE_ADMISSION), "validate", str(deploy_path)], "image reference admission")
     command(
-        ["python3", str(IMAGE_ADMISSION), "inspect", str(deploy_path), str(runtime_path), str(IMAGE_LOCK)],
+        ["python3", str(IMAGE_ADMISSION), "inspect", str(deploy_path), str(runtime_path)],
         "linux/arm64 image provenance and runtime contracts",
     )
 
