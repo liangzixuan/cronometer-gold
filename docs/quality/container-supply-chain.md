@@ -209,6 +209,15 @@ CI checks the binary version, complete package records, non-root/read-only
 behavior, health response, final zero-HIGH/zero-CRITICAL scan, SBOM, BuildKit
 provenance, GitHub attestation, and immutable commit tag.
 
+The system-runtime matrix runs on GitHub's native `ubuntu-24.04-arm` runner and
+fails unless both `RUNNER_ARCH=ARM64` and `uname -m=aarch64` are true before
+credentials or builds are used. The earlier x64/QEMU lane reached the exact
+ARM64 Meilisearch candidate but QEMU returned `ENOSYS` for `get_robust_list`
+while the heed/LMDB auth lock was initialized. Native execution removes that
+emulator boundary without relaxing the non-root user, read-only filesystem,
+capability drop, UID-owned data tmpfs, exact health response, vulnerability,
+provenance, or immutable-tag gates.
+
 `infra/docker/caddy.Dockerfile` builds Caddy v2.11.4 from commit
 `e2eee6a7fce366321294c9c2a79f3146891dcbdf`. CI checks that annotated tag
 object `8ec11a4b7e39a5fd00da2fc5cb9b543e31fd7926` resolves to that commit and

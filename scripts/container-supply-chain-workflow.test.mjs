@@ -22,6 +22,15 @@ const BUILDKIT_IMAGE =
 const COSIGN_ACTION = "sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6";
 const LOGIN_ACTION = "docker/login-action@dbcb813823bdd20940b903addbd779551569679f";
 const QEMU_ACTION = "docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8";
+const QEMU_IMAGE =
+  "docker.io/tonistiigi/binfmt@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0";
+const NATIVE_ARM_SERVICE_GUARD = [
+  "      - name: Verify native ARM64 execution",
+  "        run: |",
+  "          set -euo pipefail",
+  `          test "\${RUNNER_ARCH}" = ARM64`,
+  '          test "$(uname -m)" = aarch64',
+].join("\n");
 const SBOM_GENERATOR =
   "docker.io/docker/buildkit-syft-scanner@sha256:79e7b013cbec16bbb436f312819a49a4a57752b2270c1a9332ae1a10fcc82a68";
 const TRIVY_ACTION = "aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25";
@@ -34,7 +43,7 @@ const reviewedActionCounts = new Map([
   [CHECKOUT_ACTION, 6],
   [COSIGN_ACTION, 3],
   [LOGIN_ACTION, 3],
-  [QEMU_ACTION, 2],
+  [QEMU_ACTION, 1],
   [TRIVY_ACTION, 5],
 ]);
 
@@ -56,6 +65,7 @@ const criticalControlKeys = [
   "pull",
   "push-to-registry",
   "run",
+  "runs-on",
   "sbom",
   "severity",
   "shell",
@@ -340,6 +350,18 @@ function assertExactMappingScalar(source, header, key, expected, label) {
   assertExactScalar(block, leadingSpaces(header) + 2, key, expected, label);
 }
 
+function assertNativeArmServiceBoundary(job, label) {
+  assertExactScalar(job, 4, "runs-on", "ubuntu-24.04-arm", label);
+  assert.doesNotMatch(job, /setup-qemu-action/u, `${label} must not install QEMU`);
+  const guard = workflowStep(job, "Verify native ARM64 execution");
+  assertUnconditionalStep(guard, `${label} native execution guard`);
+  assert.equal(
+    guard.trimEnd(),
+    NATIVE_ARM_SERVICE_GUARD,
+    `${label} native execution guard changed`,
+  );
+}
+
 function assertPinnedBuildx(job, label) {
   const step = workflowStep(job, "Set up pinned Buildx and BuildKit");
   assertUnconditionalStep(step, `${label} Buildx setup`);
@@ -544,11 +566,30 @@ test("exact-binds every repository publisher toolchain, scan, and provenance gat
   for (const family of publisherFamilies) assertPublisherFamily(family);
 });
 
+test("confines the sole pinned ARM64 emulator to application images", () => {
+  const job = workflowJob(workflow, "build-scan-publish-apps");
+  const emulator = workflowStep(job, "Install ARM64 emulator");
+
+  assertUnconditionalStep(emulator, "application image ARM64 emulator");
+  assertExactScalar(emulator, 8, "uses", QEMU_ACTION, "application image ARM64 emulator");
+  assertExactMapping(
+    emulator,
+    "        with:",
+    [
+      ["image", QEMU_IMAGE],
+      ["platforms", "arm64"],
+      ["cache-image", "false"],
+    ],
+    "application image ARM64 emulator inputs",
+  );
+});
+
 test("exact-binds the reviewed service matrix and fail-closed component dispatch", () => {
   const job = workflowJob(workflow, "build-scan-publish-services");
   const identity = workflowStep(job, "Verify ARM64 service identity");
   const build = workflowStep(job, "Build and push by digest with SBOM and provenance");
 
+  assertNativeArmServiceBoundary(job, "service image publisher");
   for (const component of ["caddy", "postgres", "meilisearch"]) {
     assert.match(job, new RegExp(`^ {10}- component: ${component}$`, "m"));
   }
@@ -560,6 +601,7 @@ test("exact-binds the reviewed service matrix and fail-closed component dispatch
   assert.match(identity, /libcrypto3-3\.5\.8-r0 aarch64 \{openssl\}/);
   assert.match(identity, /libssl3-3\.5\.8-r0 aarch64 \{openssl\}/);
   assertStepOrder(job, [
+    "Verify native ARM64 execution",
     "Verify the locked Meilisearch build input before building",
     "Log in to GHCR with the job token",
     "Build and push by digest with SBOM and provenance",
@@ -570,6 +612,30 @@ test("exact-binds the reviewed service matrix and fail-closed component dispatch
     "Create the immutable commit tag",
   ]);
   assertPublisherBuild(build, "service producer");
+});
+
+test("rejects native ARM service-boundary bypasses", () => {
+  const job = workflowJob(workflow, "build-scan-publish-services");
+  const guard = workflowStep(job, "Verify native ARM64 execution");
+  const duplicateRunner = job.replace(
+    "    runs-on: ubuntu-24.04-arm",
+    "    runs-on: ubuntu-24.04-arm\n    runs-on: ubuntu-24.04-arm",
+  );
+  assert.throws(() => assertNativeArmServiceBoundary(duplicateRunner, "fixture"));
+
+  const bypasses = [
+    guard.replace("        run: |", "        if: false\n        run: |"),
+    guard.replace("        run: |", "        continue-on-error: true\n        run: |"),
+    guard.replace("          set -euo pipefail", "          exit 0\n          set -euo pipefail"),
+    guard.replace(
+      '          test "$(uname -m)" = aarch64',
+      '          test "$(uname -m)" = aarch64 || true',
+    ),
+  ];
+  for (const bypass of bypasses) {
+    const mutated = job.replace(guard, bypass);
+    assert.throws(() => assertNativeArmServiceBoundary(mutated, "fixture"));
+  }
 });
 
 test("structural bindings reject commented and duplicated security controls", () => {

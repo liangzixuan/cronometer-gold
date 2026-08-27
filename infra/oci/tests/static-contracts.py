@@ -229,6 +229,11 @@ service_image_job = workflow_job("build-scan-publish-services")
 assert "runs-on: ubuntu-24.04-arm" in node_runtime_job
 assert "timeout-minutes: 180" in node_runtime_job
 assert "setup-qemu-action" not in node_runtime_job
+assert "runs-on: ubuntu-24.04-arm" in service_image_job
+assert "setup-qemu-action" not in service_image_job
+assert "- name: Verify native ARM64 execution" in service_image_job
+assert 'test "${RUNNER_ARCH}" = ARM64' in service_image_job
+assert 'test "$(uname -m)" = aarch64' in service_image_job
 workflow_needed_match = re.search(
     r'readelf -d "\$\{binary\}".*?printf \'%s\\n\'(?P<needed>.*?)'
     r'\| sort > "\$\{RUNNER_TEMP\}/node-needed\.expected"',

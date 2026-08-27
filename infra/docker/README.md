@@ -76,7 +76,9 @@ files and contain no npm or shell. Their empty entrypoint preserves OCI command
 overrides; `/nodejs/bin` is explicit in `PATH`. Caddy and PostgreSQL publish in
 an independent service matrix with Meilisearch and do not wait for the Node
 producer. That matrix does wait for the read-only signed Meilisearch upstream
-input gate.
+input gate, runs on a native `ubuntu-24.04-arm` runner, and fails closed if the
+runner is not ARM64. The native boundary is required for Meilisearch's
+heed/LMDB lock initialization and does not weaken any runtime or release gate.
 
 See `docs/quality/container-supply-chain.md` for the complete provenance pins,
 inventory gates, rejected prior composition, and scan boundary.
