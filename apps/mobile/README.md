@@ -38,7 +38,7 @@ outputs: an iOS device IPA and an Android app bundle.
 
 The production profile deliberately contains no API placeholder. The deployment
 policy pins the reviewed target platform (`azure` during the current pivot, or
-`oci` for the retained legacy path). The version-6 checked-in
+`oci` for the retained legacy path). The version-7 checked-in
 `config/release-deployment.json` file is permanently an unconfirmed template:
 `deploymentConfirmed` remains `false` and every evidence field remains `null`.
 Do not put a commit hash in that tracked file. A Git commit includes the file's
@@ -49,9 +49,10 @@ After the real origin passes its release checks, create a canonical external
 deployment-evidence JSON record that binds all of the following:
 
 - the canonical HTTPS API origin and target platform;
-- the exact clean Git commit deployed by the six services;
-- digest-qualified `ghcr.io/liangzixuan/cronometer-gold-{api,web,worker,migrator,caddy,postgres}`
-  image references with no tag fallback; and
+- the exact clean Git commit deployed by the seven services;
+- digest-qualified
+  `ghcr.io/liangzixuan/cronometer-gold-{api,web,worker,migrator,caddy,postgres,meilisearch}`
+  image references, including the exact Meilisearch digest, with no tag fallback; and
 - distinct SHA-256 digests for redacted external-HTTPS and reviewer-access
   evidence reports, the deployment-operator principal, the independent reviewer
   principal, and canonical UTC review time.
@@ -127,8 +128,8 @@ repository, or a missing service digest. EAS archives do not contain `.git`, so
 the remote post-install check deliberately uses that EAS-provided source commit
 and never weakens the local clean-tree check. Only a valid external attestation
 and its exact report bytes can request confirmation; a checked-in boolean or
-digest-shaped string can never approve release. Version-5 deployment records,
-version-1 reviewer-access reports, and opaque passed-report payloads fail closed;
+digest-shaped string can never approve release. Version-6 and older deployment
+records, version-1 reviewer-access reports, and opaque passed-report payloads fail closed;
 collect both structured reports again and re-sign rather than inferring missing
 claims.
 
@@ -147,7 +148,7 @@ check in machine mode. If numbering is confirmed first, it invokes the exact
 deployment check. An expected blocker is accepted only as its dedicated exit
 status plus one exact machine-readable stdout line and empty stderr; a human
 message containing the blocker alongside another failure cannot pass.
-Only after numbering, an independently trusted v6 attestation, and both exact
+Only after numbering, an independently trusted v7 attestation, and both exact
 reports are present does the CI step require the real origin, verify it equals
 the externally reviewed origin, and run the full release preflight and export;
 it has no placeholder or bypass origin.

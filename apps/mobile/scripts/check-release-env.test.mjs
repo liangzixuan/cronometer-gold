@@ -111,10 +111,12 @@ const checkedInReviewerTrustStore = JSON.parse(
 
 function serviceImages() {
   return Object.fromEntries(
-    ["api", "web", "worker", "migrator", "caddy", "postgres"].map((component, index) => [
-      component,
-      `ghcr.io/liangzixuan/cronometer-gold-${component}@sha256:${String(index + 1).repeat(64)}`,
-    ]),
+    ["api", "web", "worker", "migrator", "caddy", "postgres", "meilisearch"].map(
+      (component, index) => [
+        component,
+        `ghcr.io/liangzixuan/cronometer-gold-${component}@sha256:${String(index + 1).repeat(64)}`,
+      ],
+    ),
   );
 }
 
@@ -156,7 +158,7 @@ function canonicalEvidence(deployment) {
     apiOrigin: deployment.apiOrigin,
     serviceGitCommit: deployment.serviceGitCommit,
     serviceImages: Object.fromEntries(
-      ["api", "web", "worker", "migrator", "caddy", "postgres"].map((component) => [
+      ["api", "web", "worker", "migrator", "caddy", "postgres", "meilisearch"].map((component) => [
         component,
         deployment.serviceImages[component],
       ]),
@@ -433,14 +435,15 @@ describe("confirmed release platform and origin", () => {
     for (const schemaVersion of [
       "nutrition-tracker-release-deployment-v4",
       "nutrition-tracker-release-deployment-v5",
+      "nutrition-tracker-release-deployment-v6",
     ]) {
-      expect(() => validateReleaseDeploymentRecord({ ...confirmed, schemaVersion })).toThrow(/v6/u);
+      expect(() => validateReleaseDeploymentRecord({ ...confirmed, schemaVersion })).toThrow(/v7/u);
     }
   });
 
-  it("requires the exact six digest-qualified service image repositories", () => {
+  it("requires the exact seven digest-qualified service image repositories", () => {
     const missing = serviceImages();
-    delete missing.worker;
+    delete missing.meilisearch;
     expect(() => validateReleaseDeploymentRecord({ ...confirmed, serviceImages: missing })).toThrow(
       /exactly/u,
     );
@@ -457,7 +460,7 @@ describe("confirmed release platform and origin", () => {
         ...confirmed,
         serviceImages: {
           ...serviceImages(),
-          api: `ghcr.io/attacker/cronometer-gold-api@sha256:${"1".repeat(64)}`,
+          meilisearch: `ghcr.io/attacker/cronometer-gold-meilisearch@sha256:${"1".repeat(64)}`,
         },
       }),
     ).toThrow(/exact GHCR repository/u);
@@ -467,7 +470,7 @@ describe("confirmed release platform and origin", () => {
         ...confirmed,
         serviceImages: {
           ...serviceImages(),
-          api: "ghcr.io/liangzixuan/cronometer-gold-api:latest",
+          meilisearch: "ghcr.io/liangzixuan/cronometer-gold-meilisearch:latest",
         },
       }),
     ).toThrow(/sha256 digest/u);

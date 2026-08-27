@@ -113,7 +113,7 @@ re-signed; relay or smoke state is never inferred during migration.
 ## Deployment reviewer trust
 
 `release-deployment-reviewers.json` is a separate trust root for the external
-v6 deployment attestation. It must never reuse a health-evidence key merely for
+v7 deployment attestation. It must never reuse a health-evidence key merely for
 convenience. Its reviewer list is intentionally empty, so `release:check`, EAS
 production compilation, and reviewed submission remain blocked until a genuinely
 independent deployment reviewer is onboarded through a reviewed code change.
@@ -121,7 +121,8 @@ Do not add a repository, deployment, or device operator's key and do not invent 
 replacement identity.
 
 The deployment reviewer signs canonical JSON containing the complete confirmed
-platform, API origin, release commit, six digest-qualified service images,
+platform, API origin, release commit, seven digest-qualified service images
+(`api`, `web`, `worker`, `migrator`, `caddy`, `postgres`, and `meilisearch`),
 deployment-operator principal (`deployedBy`), exact external-HTTPS and
 reviewer-access report SHA-256 values, reviewer principal, review time, reviewer
 key ID, and algorithm; only `signatureBase64` is outside its own signed payload.
@@ -135,9 +136,9 @@ reviewer's redacted assertion of `IPv4`, one network,
 sensitive policy artifact was unchanged during the probes. It contains no source
 address or CIDR. The release verifier checks the exact assertion, canonical
 report bytes, digest binding, and deployment signature; it cannot derive the
-address's routability or inspect the live policy from redacted data. Version-5
-deployment records, reviewer-access v1 reports, and opaque result-only reports
-fail closed. A digest string without valid report bytes, an unsigned record, a
+address's routability or inspect the live policy from redacted data. Version-6
+and older deployment records, reviewer-access v1 reports, and opaque result-only
+reports fail closed. A digest string without valid report bytes, an unsigned record, a
 self-review, or an untrusted signer cannot confirm deployment.
 
 ### Reviewer-access collection and signing contract
@@ -168,7 +169,7 @@ system; a deployment operator's summary is not sufficient:
 5. Only after the two digests match may the reviewer set the exact redacted
    `accessPolicyShape`, set `policyUnchangedDuringProbes` to `passed`, finalize the
    canonical reviewer-access report, bind its exact SHA-256 in
-   `reviewerAccessEvidenceSha256`, and sign the v6 deployment record. The actual
+   `reviewerAccessEvidenceSha256`, and sign the v7 deployment record. The actual
    source address and sensitive policy artifact remain only in the private review
    record, never in the report, deployment record, repository, CI output, or EAS
    input.

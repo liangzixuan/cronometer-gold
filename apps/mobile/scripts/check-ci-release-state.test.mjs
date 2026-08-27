@@ -84,10 +84,12 @@ const deploymentReviewerTrustStore = {
   ],
 };
 const serviceImages = Object.fromEntries(
-  ["api", "web", "worker", "migrator", "caddy", "postgres"].map((component, index) => [
-    component,
-    `ghcr.io/liangzixuan/cronometer-gold-${component}@sha256:${String(index + 1).repeat(64)}`,
-  ]),
+  ["api", "web", "worker", "migrator", "caddy", "postgres", "meilisearch"].map(
+    (component, index) => [
+      component,
+      `ghcr.io/liangzixuan/cronometer-gold-${component}@sha256:${String(index + 1).repeat(64)}`,
+    ],
+  ),
 );
 const unconfirmedDeployment = {
   schemaVersion: RELEASE_DEPLOYMENT_SCHEMA,

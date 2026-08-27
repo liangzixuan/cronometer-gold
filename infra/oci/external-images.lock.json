@@ -1,7 +1,7 @@
 {
   "schemaVersion": 2,
   "reviewedAt": "2026-08-26",
-  "purpose": "derivative-bootstrap-input-and-isolated-synthetic-ci-fixture",
+  "purpose": "derivative-bootstrap-input-only",
   "platform": "linux/arm64",
   "images": {
     "MEILI_IMAGE": {
@@ -11,7 +11,7 @@
       "digest": "sha256:8d6643d86d71fad6ad3cba92cde7ccfce9e4d6c384bda67598eb553571c32431",
       "arm64Digest": "sha256:b4a0a1f9545ae1dd8e12a750fa4416ef3f4b421ed0758c430d0c46182ad233ee",
       "ref": "docker.io/getmeili/meilisearch@sha256:8d6643d86d71fad6ad3cba92cde7ccfce9e4d6c384bda67598eb553571c32431",
-      "usage": "derivative-bootstrap-input-and-isolated-synthetic-ci-fixture",
+      "usage": "derivative-bootstrap-input-only",
       "directDeploymentApproved": false,
       "remediation": {
         "derivativeRepository": "ghcr.io/liangzixuan/cronometer-gold-meilisearch",
@@ -36,7 +36,7 @@
           "https://gitlab.alpinelinux.org/alpine/aports/-/commit/1b80b7c3bf5ba3f13eb748ae953d9215d5a4bb62",
           "https://openssl-library.org/news/secadv/20260813.txt"
         ],
-        "review": "The hosted strict ARM64 scan reported one HIGH finding for each installed OpenSSL runtime package. During the one-time derivative bootstrap, this signed digest may be used only as the derivative build input and as the isolated synthetic database-test fixture on a native ARM64 runner; it is prohibited from beta deployment. The container workflow must install the exact fixed packages and scan the final derivative with an explicit empty ignore policy before creating its deployable immutable tag. Once that tag exists, the CI fixture must move to the exact repository derivative digest and this exception must be removed."
+        "review": "The hosted strict ARM64 scan reported one HIGH finding for each installed OpenSSL runtime package. The signed upstream digest is restricted to the repository derivative build input and is prohibited from CI runtime fixtures and beta deployment. Hosted container run 33029133377 for source commit e46b91afe7d875c74e0ce27f5e129edfb8efc70d produced, scanned, attested, and immutably tagged the patched Meilisearch derivative; CI must consume that exact GHCR index digest. The container workflow must continue to install the exact fixed packages and scan the final derivative with an explicit empty ignore policy before creating any deployable immutable tag."
       },
       "provenance": {
         "method": "sigstore-keyless",

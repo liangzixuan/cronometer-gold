@@ -18,6 +18,7 @@ import types
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = ROOT.parents[1]
+ci_workflow = (REPOSITORY_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 compose = (ROOT / "files/compose.yaml").read_text(encoding="utf-8")
 orchestrator = (ROOT / "files/release-orchestrator.sh").read_text(encoding="utf-8")
 caddyfile = (ROOT / "files/Caddyfile").read_text(encoding="utf-8")
@@ -1023,19 +1024,49 @@ external_variables = {"MEILI_IMAGE"}
 assert set(external_lock["images"]) == external_variables
 meili_upstream = external_lock["images"]["MEILI_IMAGE"]
 assert external_lock["platform"] == "linux/arm64"
-assert external_lock["purpose"] == (
-    "derivative-bootstrap-input-and-isolated-synthetic-ci-fixture"
-)
+assert external_lock["purpose"] == "derivative-bootstrap-input-only"
 assert meili_upstream["directDeploymentApproved"] is False
-assert meili_upstream["usage"] == (
-    "derivative-bootstrap-input-and-isolated-synthetic-ci-fixture"
-)
+assert meili_upstream["usage"] == "derivative-bootstrap-input-only"
 assert meili_upstream["remediation"]["derivativeRepository"] == (
     "ghcr.io/liangzixuan/cronometer-gold-meilisearch"
 )
 assert meili_upstream["remediation"]["requiredPackages"] == [
     "libcrypto3=3.5.8-r0", "libssl3=3.5.8-r0",
 ]
+database_job_match = re.search(
+    r"(?ms)^  database:\n.*?(?=^  [a-z][a-z0-9_-]*:\n|\Z)",
+    ci_workflow,
+)
+assert database_job_match is not None
+database_job = database_job_match.group(0)
+ci_postgres_ref = (
+    "ghcr.io/liangzixuan/cronometer-gold-postgres@"
+    "sha256:8619f613a586a1bbeee096cc229cbdcf18e9bf12f8d1b1e5c2f517b5be210e74"
+)
+ci_meili_ref = (
+    "ghcr.io/liangzixuan/cronometer-gold-meilisearch@"
+    "sha256:d05ad0c8303b284c587b9b2167adad4fdd9705d7b011ea983ddba5f22cc548fa"
+)
+assert re.findall(r"(?m)^    runs-on: (.+)$", database_job) == [
+    "ubuntu-24.04-arm",
+]
+assert re.findall(r"(?m)^    services:$", database_job) == ["    services:"]
+assert re.findall(
+    r"(?m)^      ([a-zA-Z0-9_-]+):$",
+    database_job,
+) == ["postgres", "meilisearch"]
+assert re.findall(r"(?m)^        image: (.+)$", database_job) == [
+    ci_postgres_ref, ci_meili_ref,
+]
+for ci_service_ref in (ci_postgres_ref, ci_meili_ref):
+    assert database_job.count(f"image: {ci_service_ref}") == 1
+    assert ci_workflow.count(ci_service_ref) == 1
+assert meili_upstream["ref"] not in ci_workflow
+assert (
+    "postgres:17.11-alpine3.24@"
+    "sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73"
+    not in ci_workflow
+)
 for variable, repository in {
     "CADDY_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-caddy",
     "POSTGRES_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-postgres",
@@ -1120,8 +1151,8 @@ assert transport_fixture["/etc/nutrition-tracker/fixture-0"]["content"] == (
 )
 
 # Execute the provider-neutral admission parser against seven repository-owned
-# immutable runtime references. The upstream lock is CI-only bootstrap evidence
-# and is deliberately absent from host admission.
+# immutable runtime references. The upstream lock is derivative-build evidence only
+# and is deliberately absent from runtime admission.
 deploy_fixture = deploy_example
 for variable, repository in {
     "CADDY_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-caddy",

@@ -6,10 +6,12 @@ Metro export is not native release evidence.
 
 ## Configuration gate
 
-- Production compilation first requires a reviewer-signed v6 deployment
-  attestation and the exact canonical external-HTTPS and reviewer-access report
-  bytes. Their strict schemas cross-bind the signed origin and commit to fresh
-  public-TLS `/ready` success, an independently reviewed policy-artifact digest,
+- Production compilation first requires a reviewer-signed v7 deployment
+  attestation binding the exact digest-qualified `api`, `web`, `worker`,
+  `migrator`, `caddy`, `postgres`, and `meilisearch` GHCR images, plus the exact
+  canonical external-HTTPS and reviewer-access report bytes. Their strict schemas
+  cross-bind the signed origin and commit to fresh public-TLS `/ready` success,
+  an independently reviewed policy-artifact digest,
   a redacted assertion of one global-unicast IPv4 `/32`, approved-source
   readiness, and blocked unapproved-source connectivity without storing source
   addresses. The verifier checks that exact signed assertion; it cannot derive
@@ -44,7 +46,7 @@ The independent deployment reviewer performs this sequence before signing:
    Any fetch, parse, inspection, or digest mismatch stops the release.
 5. Only then set the exact redacted `accessPolicyShape`, set
    `policyUnchangedDuringProbes` to `passed`, hash the canonical reviewer-access
-   report into `reviewerAccessEvidenceSha256`, and sign the v6 deployment record.
+   report into `reviewerAccessEvidenceSha256`, and sign the v7 deployment record.
    Retain the actual address and sensitive artifact only in the private review
    record; never copy them to the report, signed deployment, CI/EAS inputs, logs,
    or repository.

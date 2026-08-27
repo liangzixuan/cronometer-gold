@@ -20,7 +20,7 @@ import {
   validateReviewerTrustStore,
 } from "./reviewer-trust.mjs";
 
-export const RELEASE_DEPLOYMENT_SCHEMA = "nutrition-tracker-release-deployment-v6";
+export const RELEASE_DEPLOYMENT_SCHEMA = "nutrition-tracker-release-deployment-v7";
 export const RELEASE_EXTERNAL_HTTPS_REPORT_SCHEMA =
   "nutrition-tracker-release-external-https-report-v1";
 export const RELEASE_REVIEWER_ACCESS_REPORT_SCHEMA =
@@ -44,7 +44,15 @@ export class ExpectedReleaseBlockError extends TypeError {
 }
 
 const RELEASE_DEPLOYMENT_PLATFORMS = new Set(["azure", "oci"]);
-const SERVICE_IMAGE_COMPONENTS = ["api", "web", "worker", "migrator", "caddy", "postgres"];
+const SERVICE_IMAGE_COMPONENTS = [
+  "api",
+  "web",
+  "worker",
+  "migrator",
+  "caddy",
+  "postgres",
+  "meilisearch",
+];
 const SERVICE_IMAGE_REPOSITORY_PREFIX = "ghcr.io/liangzixuan/cronometer-gold-";
 const GIT_COMMIT = /^[0-9a-f]{40}$/u;
 const SHA256_HEX = /^[0-9a-f]{64}$/u;

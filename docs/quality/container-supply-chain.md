@@ -277,14 +277,22 @@ for the tagged Meilisearch release workflow and GitHub Actions OIDC issuer. The
 Meilisearch publisher repeats the exact lock, Dockerfile `FROM`, child identity,
 and signature checks before receiving GHCR credentials or building.
 
-The first derivative-producing commit has one explicitly bounded bootstrap
-exception: `.github/workflows/ci.yml` may run that exact upstream digest only as
-an isolated synthetic database-test fixture on the native `ubuntu-24.04-arm`
-runner. A static contract binds the fixture to that job, runner, and exact signed
-index, whose reviewed ARM64 child is recorded in the lock. It receives no
-production secrets or real health data and is not deployment evidence. After
-the first patched GHCR derivative tag exists, a follow-up commit must pin that
-exact ARM64 derivative digest in CI and narrow the lock to build-input-only use.
+Hosted container supply-chain run `33029133377` for source commit
+`e46b91afe7d875c74e0ce27f5e129edfb8efc70d` produced the repository derivatives
+and evidence required for this follow-up change to close the one-time upstream
+CI fixture exception. Its native ARM64 service jobs passed the runner guard,
+runtime identity and behavior checks, explicit empty-ignore HIGH/CRITICAL scans,
+BuildKit provenance, GitHub attestation, and immutable-tag verification. This
+follow-up therefore binds database CI to the resulting repository-owned indexes:
+
+- PostgreSQL: `ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:8619f613a586a1bbeee096cc229cbdcf18e9bf12f8d1b1e5c2f517b5be210e74`
+- Meilisearch: `ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:d05ad0c8303b284c587b9b2167adad4fdd9705d7b011ea983ddba5f22cc548fa`
+
+The signed upstream Meilisearch digest remains build-input evidence only; it is
+prohibited from CI runtime fixtures and beta deployment. A later hosted native
+ARM64 database job must still prove service startup and the complete database,
+API, backup/restore, erasure, worker, and search integration sequence before this
+source pin can be treated as green CI evidence.
 
 Caddy, PostgreSQL, and Meilisearch deployment references all point to
 repository-owned GHCR digests. OCI Object Storage replaces the MinIO hosted

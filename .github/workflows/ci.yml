@@ -115,7 +115,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: postgres:17.11-alpine3.24@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+        image: ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:8619f613a586a1bbeee096cc229cbdcf18e9bf12f8d1b1e5c2f517b5be210e74
         env:
           POSTGRES_DB: nutrition_tracker
           POSTGRES_PASSWORD: nutrition_local_only
@@ -128,7 +128,7 @@ jobs:
           --health-timeout 5s
           --health-retries 20
       meilisearch:
-        image: docker.io/getmeili/meilisearch@sha256:8d6643d86d71fad6ad3cba92cde7ccfce9e4d6c384bda67598eb553571c32431
+        image: ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:d05ad0c8303b284c587b9b2167adad4fdd9705d7b011ea983ddba5f22cc548fa
         env:
           MEILI_ENV: development
           MEILI_MASTER_KEY: search-integration-key-20260815

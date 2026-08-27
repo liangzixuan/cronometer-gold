@@ -18,18 +18,62 @@ const meiliDockerfile = readFileSync(
   "utf8",
 );
 
+const REPOSITORY_POSTGRES_CI_REF =
+  "ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:8619f613a586a1bbeee096cc229cbdcf18e9bf12f8d1b1e5c2f517b5be210e74";
+const REPOSITORY_MEILI_CI_REF =
+  "ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:d05ad0c8303b284c587b9b2167adad4fdd9705d7b011ea983ddba5f22cc548fa";
+const UPSTREAM_POSTGRES_CI_REF =
+  "postgres:17.11-alpine3.24@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73";
+
 function cloneLock() {
   return structuredClone(reviewedLock);
 }
 
-test("accepts the exact signed, non-deployable Meilisearch bootstrap lock", () => {
+function workflowMappingBlock(source, key, indentation) {
+  const lines = source.split("\n");
+  const header = `${" ".repeat(indentation)}${key}:`;
+  const starts = lines.flatMap((line, index) => (line === header ? [index] : []));
+  assert.equal(starts.length, 1, `${key} mapping must be defined exactly once`);
+
+  const start = starts[0];
+  const relativeEnd = lines.slice(start + 1).findIndex((line) => {
+    if (line.trim() === "") return false;
+    return (line.match(/^ */u)?.[0].length ?? 0) <= indentation;
+  });
+  const end = relativeEnd === -1 ? lines.length : start + 1 + relativeEnd;
+  return lines.slice(start, end).join("\n");
+}
+
+function assertExactScalar(block, indentation, key, expected, label) {
+  const prefix = `${" ".repeat(indentation)}${key}:`;
+  const matches = block.split("\n").filter((line) => line.startsWith(prefix));
+  assert.deepEqual(matches, [`${prefix} ${expected}`], `${label} must define one exact ${key}`);
+}
+
+function assertDatabaseServiceBoundary(job) {
+  assertExactScalar(job, 4, "runs-on", "ubuntu-24.04-arm", "database job");
+  const services = workflowMappingBlock(job, "services", 4);
+  const serviceNames = services.split("\n").flatMap((line) => {
+    const match = /^ {6}([a-zA-Z0-9_-]+):$/u.exec(line);
+    return match ? [match[1]] : [];
+  });
+  assert.deepEqual(
+    serviceNames,
+    ["postgres", "meilisearch"],
+    "database services must remain exact",
+  );
+
+  const postgres = workflowMappingBlock(services, "postgres", 6);
+  const meilisearch = workflowMappingBlock(services, "meilisearch", 6);
+  assertExactScalar(postgres, 8, "image", REPOSITORY_POSTGRES_CI_REF, "PostgreSQL service");
+  assertExactScalar(meilisearch, 8, "image", REPOSITORY_MEILI_CI_REF, "Meilisearch service");
+}
+
+test("accepts the exact signed, non-deployable Meilisearch build-input lock", () => {
   const image = validateExternalImageLock(cloneLock());
   assert.equal(image.ref, reviewedLock.images.MEILI_IMAGE.ref);
   assert.equal(image.directDeploymentApproved, false);
-  assert.equal(
-    reviewedLock.purpose,
-    "derivative-bootstrap-input-and-isolated-synthetic-ci-fixture",
-  );
+  assert.equal(reviewedLock.purpose, "derivative-bootstrap-input-only");
   assert.equal(
     image.remediation.derivativeRepository,
     "ghcr.io/liangzixuan/cronometer-gold-meilisearch",
@@ -123,23 +167,58 @@ test("hardcodes the exact locked upstream input in the derivative Dockerfile", (
   }
 });
 
-test("confines the temporary CI fixture to the native ARM64 database job", () => {
-  const image = validateExternalImageLock(cloneLock());
+test("binds database CI exclusively to immutable repository derivatives on native ARM64", () => {
+  const upstreamMeili = validateExternalImageLock(cloneLock());
   const database = workflowJob(ciWorkflow, "database");
-  const exactFixtureLine = `        image: ${image.ref}`;
 
   assert.match(database, /^ {4}runs-on: ubuntu-24\.04-arm$/m);
-  assert.equal(
-    database.split("\n").filter((line) => line === exactFixtureLine).length,
-    1,
-    "the database job must use the reviewed upstream index exactly once",
+  assertDatabaseServiceBoundary(database);
+  for (const repositoryRef of [REPOSITORY_POSTGRES_CI_REF, REPOSITORY_MEILI_CI_REF]) {
+    const exactServiceLine = `        image: ${repositoryRef}`;
+    assert.equal(
+      database.split("\n").filter((line) => line === exactServiceLine).length,
+      1,
+      "the database job must use each reviewed repository index exactly once",
+    );
+    assert.equal(
+      ciWorkflow.split("\n").filter((line) => line === exactServiceLine).length,
+      1,
+      "each reviewed repository index must remain confined to the database job",
+    );
+  }
+  assert.ok(!ciWorkflow.includes(upstreamMeili.ref));
+  assert.ok(!ciWorkflow.includes(UPSTREAM_POSTGRES_CI_REF));
+  assert.doesNotMatch(
+    ciWorkflow,
+    /image: ghcr\.io\/liangzixuan\/cronometer-gold-(?:postgres|meilisearch):/,
   );
-  assert.equal(
-    ciWorkflow.split("\n").filter((line) => line === exactFixtureLine).length,
-    1,
-    "the reviewed upstream index must not escape the database job",
-  );
-  assert.doesNotMatch(ciWorkflow, /getmeili\/meilisearch:v1\.53\.1/);
+  assert.doesNotMatch(ciWorkflow, /image: docker\.io\/getmeili\/meilisearch/);
+});
+
+test("rejects database runner and service-image overrides", () => {
+  const database = workflowJob(ciWorkflow, "database");
+  const attacker = `ghcr.io/attacker/service@sha256:${"0".repeat(64)}`;
+  const mutations = [
+    database.replace(
+      "    runs-on: ubuntu-24.04-arm",
+      "    runs-on: ubuntu-24.04-arm\n    runs-on: ubuntu-latest",
+    ),
+    database.replace(
+      `        image: ${REPOSITORY_POSTGRES_CI_REF}`,
+      `        image: ${REPOSITORY_POSTGRES_CI_REF}\n        image: ${attacker}`,
+    ),
+    database.replace(REPOSITORY_POSTGRES_CI_REF, attacker),
+    database.replace(REPOSITORY_MEILI_CI_REF, attacker),
+    database.replace(
+      "      meilisearch:",
+      `      attacker:\n        image: ${attacker}\n      meilisearch:`,
+    ),
+    database.replace("    services:", "    services:\n    services:"),
+  ];
+
+  for (const mutated of mutations) {
+    assert.throws(() => assertDatabaseServiceBoundary(mutated));
+  }
 });
 
 test("gates the Meilisearch publisher before credentials, lookup, and build", () => {

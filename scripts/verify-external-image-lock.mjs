@@ -97,10 +97,7 @@ export function validateExternalImageLock(lock) {
   );
   if (lock.schemaVersion !== 2) throw new TypeError("Image lock schemaVersion must be 2.");
   assertCanonicalDate(lock.reviewedAt, "Image lock reviewedAt");
-  if (
-    lock.purpose !== "derivative-bootstrap-input-and-isolated-synthetic-ci-fixture" ||
-    lock.platform !== "linux/arm64"
-  ) {
+  if (lock.purpose !== "derivative-bootstrap-input-only" || lock.platform !== "linux/arm64") {
     throw new TypeError("Image lock must be restricted to ARM64 upstream build inputs.");
   }
 
@@ -133,7 +130,7 @@ export function validateExternalImageLock(lock) {
     !SHA256_PATTERN.test(image.arm64Digest) ||
     image.arm64Digest !== REVIEWED_ARM64_DIGEST ||
     image.ref !== `${image.repository}@${image.digest}` ||
-    image.usage !== "derivative-bootstrap-input-and-isolated-synthetic-ci-fixture" ||
+    image.usage !== "derivative-bootstrap-input-only" ||
     image.directDeploymentApproved !== false
   ) {
     throw new TypeError("MEILI_IMAGE must remain an immutable, non-deployable ARM64 build input.");
