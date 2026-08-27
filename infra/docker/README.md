@@ -32,8 +32,8 @@ those credentials are never passed to the API or worker. Create the legacy
 All published ports bind to loopback. The checked-in credentials are deliberately
 weak and must never appear in a shared or OCI controlled-beta deployment. CI and
 the controlled-beta environment use digest-pinned images after registry and
-licence review; local-only image tags remain a developer convenience where
-explicitly documented.
+licence review. Local Compose also retains human-readable tags alongside exact
+digests so version intent and immutable image bytes are both explicit.
 
 Stop without deleting state:
 
