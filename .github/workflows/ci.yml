@@ -136,6 +136,7 @@ jobs:
         ports:
           - 7700:7700
         options: >-
+          --tmpfs /meili_data:uid=1000,gid=1000,mode=0700
           --health-cmd "curl --fail --silent http://127.0.0.1:7700/health"
           --health-interval 5s
           --health-timeout 5s

@@ -37,7 +37,8 @@ function workflowMappingBlock(source, key, indentation) {
 
   const start = starts[0];
   const relativeEnd = lines.slice(start + 1).findIndex((line) => {
-    if (line.trim() === "") return false;
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("#")) return false;
     return (line.match(/^ */u)?.[0].length ?? 0) <= indentation;
   });
   const end = relativeEnd === -1 ? lines.length : start + 1 + relativeEnd;
@@ -53,10 +54,14 @@ function assertExactScalar(block, indentation, key, expected, label) {
 function assertDatabaseServiceBoundary(job) {
   assertExactScalar(job, 4, "runs-on", "ubuntu-24.04-arm", "database job");
   const services = workflowMappingBlock(job, "services", 4);
-  const serviceNames = services.split("\n").flatMap((line) => {
+  const serviceNames = [];
+  for (const line of services.split("\n")) {
+    const currentIndentation = line.match(/^ */u)?.[0].length ?? 0;
+    if (line.trim() === "" || currentIndentation !== 6) continue;
     const match = /^ {6}([a-zA-Z0-9_-]+):$/u.exec(line);
-    return match ? [match[1]] : [];
-  });
+    assert.ok(match, "database services must use canonical bare mapping keys");
+    serviceNames.push(match[1]);
+  }
   assert.deepEqual(
     serviceNames,
     ["postgres", "meilisearch"],
@@ -67,6 +72,26 @@ function assertDatabaseServiceBoundary(job) {
   const meilisearch = workflowMappingBlock(services, "meilisearch", 6);
   assertExactScalar(postgres, 8, "image", REPOSITORY_POSTGRES_CI_REF, "PostgreSQL service");
   assertExactScalar(meilisearch, 8, "image", REPOSITORY_MEILI_CI_REF, "Meilisearch service");
+  assert.equal(
+    meilisearch,
+    [
+      "      meilisearch:",
+      `        image: ${REPOSITORY_MEILI_CI_REF}`,
+      "        env:",
+      "          MEILI_ENV: development",
+      "          MEILI_MASTER_KEY: search-integration-key-20260815",
+      "          MEILI_NO_ANALYTICS: true",
+      "        ports:",
+      "          - 7700:7700",
+      "        options: >-",
+      "          --tmpfs /meili_data:uid=1000,gid=1000,mode=0700",
+      '          --health-cmd "curl --fail --silent http://127.0.0.1:7700/health"',
+      "          --health-interval 5s",
+      "          --health-timeout 5s",
+      "          --health-retries 20",
+    ].join("\n"),
+    "Meilisearch service must remain one exact canonical mapping",
+  );
 }
 
 test("accepts the exact signed, non-deployable Meilisearch build-input lock", () => {
@@ -195,7 +220,7 @@ test("binds database CI exclusively to immutable repository derivatives on nativ
   assert.doesNotMatch(ciWorkflow, /image: docker\.io\/getmeili\/meilisearch/);
 });
 
-test("rejects database runner and service-image overrides", () => {
+test("rejects database runner and service-boundary overrides", () => {
   const database = workflowJob(ciWorkflow, "database");
   const attacker = `ghcr.io/attacker/service@sha256:${"0".repeat(64)}`;
   const mutations = [
@@ -213,7 +238,60 @@ test("rejects database runner and service-image overrides", () => {
       "      meilisearch:",
       `      attacker:\n        image: ${attacker}\n      meilisearch:`,
     ),
+    database.replace(
+      "      meilisearch:",
+      `      "attacker":\n        image: ${attacker}\n      meilisearch:`,
+    ),
     database.replace("    services:", "    services:\n    services:"),
+    database.replace(
+      "          MEILI_NO_ANALYTICS: true",
+      "          MEILI_NO_ANALYTICS: true\n          MEILI_DB_PATH: /tmp",
+    ),
+    database.replace(
+      "          MEILI_NO_ANALYTICS: true",
+      "          MEILI_NO_ANALYTICS: true\n        # Keep the default database path.\n          MEILI_DB_PATH: /tmp",
+    ),
+    database.replace("          - 7700:7700", "          - 7700:80"),
+    database.replace(
+      "        ports:\n          - 7700:7700",
+      "        volumes:\n          - /tmp/meili_data:/meili_data\n        ports:\n          - 7700:7700",
+    ),
+    database.replace(
+      "        ports:\n          - 7700:7700",
+      '        "volumes":\n          - /tmp/meili_data:/meili_data\n        ports:\n          - 7700:7700',
+    ),
+    database.replace(
+      '          --health-cmd "curl --fail --silent http://127.0.0.1:7700/health"\n          --health-interval 5s\n          --health-timeout 5s\n          --health-retries 20',
+      '          --health-cmd "curl --fail --silent http://127.0.0.1:7700/health"\n          --health-interval 5s\n          --health-timeout 5s\n          --health-retries 20\n     # Hide a sibling key behind a shallow comment.\n        "volumes":\n          - /tmp/meili_data:/meili_data',
+    ),
+    database.replace(
+      "        ports:\n          - 7700:7700\n        options: >-",
+      "        ports:\n          - 7700:7700\n        entrypoint: /bin/sh\n        options: >-",
+    ),
+    database.replace(
+      "        ports:\n          - 7700:7700\n        options: >-",
+      "        ports:\n          - 7700:7700\n        command: /bin/sh\n        options: >-",
+    ),
+    database.replace("          --tmpfs /meili_data:uid=1000,gid=1000,mode=0700\n", ""),
+    database.replace("uid=1000,gid=1000", "uid=0,gid=1000"),
+    database.replace("uid=1000,gid=1000", "uid=1000,gid=0"),
+    database.replace("mode=0700", "mode=0777"),
+    database.replace(
+      "--tmpfs /meili_data:uid=1000,gid=1000,mode=0700",
+      "--volume /tmp/meili_data:/meili_data",
+    ),
+    database.replace(
+      "          --tmpfs /meili_data:uid=1000,gid=1000,mode=0700",
+      "          --tmpfs /meili_data:uid=1000,gid=1000,mode=0700\n          --user 0:0",
+    ),
+    database.replace(
+      "          --tmpfs /meili_data:uid=1000,gid=1000,mode=0700",
+      "          --tmpfs /meili_data:uid=1000,gid=1000,mode=0700\n          --privileged",
+    ),
+    database.replace(
+      "          --tmpfs /meili_data:uid=1000,gid=1000,mode=0700",
+      "          --tmpfs /meili_data:uid=1000,gid=1000,mode=0700\n          -v /tmp/meili_data:/meili_data",
+    ),
   ];
 
   for (const mutated of mutations) {

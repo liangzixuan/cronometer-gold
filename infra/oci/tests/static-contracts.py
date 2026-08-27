@@ -1051,12 +1051,41 @@ assert re.findall(r"(?m)^    runs-on: (.+)$", database_job) == [
     "ubuntu-24.04-arm",
 ]
 assert re.findall(r"(?m)^    services:$", database_job) == ["    services:"]
-assert re.findall(
-    r"(?m)^      ([a-zA-Z0-9_-]+):$",
+ci_services_match = re.search(
+    r"(?ms)^    services:\n(?P<body>.*?)(?=^    [a-zA-Z0-9_-]+:\n|\Z)",
     database_job,
-) == ["postgres", "meilisearch"]
+)
+assert ci_services_match is not None
+ci_services = ci_services_match.group("body")
+assert [
+    line
+    for line in ci_services.splitlines()
+    if line.strip() and len(line) - len(line.lstrip(" ")) == 6
+] == ["      postgres:", "      meilisearch:"]
 assert re.findall(r"(?m)^        image: (.+)$", database_job) == [
     ci_postgres_ref, ci_meili_ref,
+]
+ci_meili_service_match = re.search(
+    r"(?ms)^      meilisearch:\n.*?(?=^      [a-zA-Z0-9_-]+:\n|^    [a-zA-Z0-9_-]+:\n|\Z)",
+    database_job,
+)
+assert ci_meili_service_match is not None
+ci_meili_service = ci_meili_service_match.group(0)
+assert ci_meili_service.splitlines() == [
+    "      meilisearch:",
+    f"        image: {ci_meili_ref}",
+    "        env:",
+    "          MEILI_ENV: development",
+    "          MEILI_MASTER_KEY: search-integration-key-20260815",
+    "          MEILI_NO_ANALYTICS: true",
+    "        ports:",
+    "          - 7700:7700",
+    "        options: >-",
+    "          --tmpfs /meili_data:uid=1000,gid=1000,mode=0700",
+    '          --health-cmd "curl --fail --silent http://127.0.0.1:7700/health"',
+    "          --health-interval 5s",
+    "          --health-timeout 5s",
+    "          --health-retries 20",
 ]
 for ci_service_ref in (ci_postgres_ref, ci_meili_ref):
     assert database_job.count(f"image: {ci_service_ref}") == 1
