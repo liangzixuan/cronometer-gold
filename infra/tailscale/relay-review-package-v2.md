@@ -1,37 +1,39 @@
-# Relay review-package v2 design reference
+# Relay review-package v2 contract reference
 
-> **Design reference only — unsupported and blocked.**
+> **Offline framework implemented — production adapter and live use blocked.**
 >
-> No checked-in renderer, normalizer, validator, fixture, or release gate accepts
-> this schema yet. This document authorizes no Tailscale, firewall, listener,
-> policy, phone, certificate, or EAS action. Do not create a candidate from it
-> until the implementation and negative tests land together.
+> Checked-in code handles this schema only through an explicit tested version
+> adapter; the immutable production registry is empty. This document authorizes
+> no Tailscale, firewall, listener, policy, phone, certificate, or EAS action. Do
+> not normalize authentic captures until exact Windows output corpora and a
+> production adapter are independently reviewed, and do not run a live phase
+> without its separate explicit approval.
 
-This is the proposed complete transcription contract for
+This is the current complete transcription contract for
 `nutrition-tracker-tailscale-relay-review-package-v2`. It describes a Windows
 11 host running WSL2 Ubuntu and Docker Desktop with Tailscale on Windows only.
 It is not an evidence collector, runnable checklist, or authority to expose a
 service.
 
-The future normalizer will remain structural only. It will authenticate neither
-the raw source nor a reviewer and will emit only an unsigned
+The normalizer remains structural only. It authenticates neither the raw source
+nor a reviewer and emits only an unsigned
 `nutrition-tracker-physical-device-relay-report-v3` candidate. The unchanged v5
 health manifest may bind the exact v3 report bytes only after independent
 review. A v5 manifest that binds a legacy v2 report must fail closed.
 
 ## Review-package index
 
-The v2 index will retain the exact unsigned trust-boundary marker:
+The v2 index retains the exact unsigned trust-boundary marker:
 
 ```text
 unsigned-structural-candidate-requires-independent-ed25519-manifest-review
 ```
 
-It will include the current session times, origin, distinct iOS and Android
+It includes the current session times, origin, distinct iOS and Android
 build IDs, and one protected path for every role in the normative matrix below.
 The protected `hostBoundary` capture is the sole authoritative host-boundary
 object; the index contains only its path, not a second inline copy. That capture
-has this exact proposed payload:
+has this exact payload:
 
 ```json
 {
@@ -59,6 +61,7 @@ version identifiers and hashes that reveal no protected device identity.
 | Preflight | Serve/Funnel | `preflightServe`, `preflightFunnel` |
 | Preflight | Host/runtime | `preflightWindowsListeners`, `preflightWindowsFirewall`, `preflightHyperVFirewall`, `preflightForwarding`, `preflightWslListeners`, `preflightDockerPorts` |
 | Policy | Proposal/application | `policyProposal`, `policy`, `policyTests`, `configurationEvent`, `policyGate` |
+| Active | Current policy | `activePolicyState` |
 | Active | Incoming/identity | `activeIncoming`, `activeIdentities` |
 | Active | Serve/Funnel | `activeServe`, `activeFunnel` |
 | Active | Host/runtime | `activeEnvironment`, `activeWindowsListeners`, `activeWindowsFirewall`, `activeHyperVFirewall`, `activeForwarding`, `activeWslListeners`, `activeDockerPorts` |
@@ -67,10 +70,12 @@ version identifiers and hashes that reveal no protected device identity.
 | Restart | Post-restart/pre-exposure | `restartPreExposureIncoming`, `restartPreExposureServe`, `restartPreExposureFunnel`, `restartPreExposureIdentities` |
 | Restart | Host/runtime | `restartEnvironment`, `restartWindowsListeners`, `restartWindowsFirewall`, `restartHyperVFirewall`, `restartForwarding`, `restartWslListeners`, `restartDockerPorts` |
 | Restart | Local readiness | `restartWslReadyProbe`, `restartWindowsReadyProbe` |
-| Restart | Re-enabled relay | `restartActiveIncoming`, `restartActiveServe`, `restartActiveFunnel`, `restartActiveIdentities` |
+| Restart | Re-enabled relay | `restartPolicyState`, `restartActiveIncoming`, `restartActiveServe`, `restartActiveFunnel`, `restartActiveIdentities` |
 | Restart | Reachability | `restartIosProbe`, `restartAndroidProbe`, `restartUnapprovedTailnetProbe`, `restartLanProbe` |
-| Teardown | Tailscale | `teardownIncoming`, `teardownServe`, `teardownFunnel`, `teardownDisconnect` |
+| Teardown | Tailscale | `teardownIncoming`, `teardownServe`, `teardownFunnel` |
 | Teardown | Restoration | `teardownEnvironment`, `teardownWindowsListeners`, `teardownWindowsFirewall`, `teardownHyperVFirewall`, `teardownForwarding`, `teardownWslListeners`, `teardownDockerPorts` |
+| Teardown | Current policy | `teardownPolicyState` |
+| Teardown | Disconnect | `teardownDisconnect` |
 | Completion | Immutable binding | `sessionLedger` |
 
 The required capture-role set is the union of the non-empty matrix cells for
@@ -138,6 +143,10 @@ set is the sorted union of the complete listener inventory and at least TCP
 22, 80, 1025, 2181, 4000, 4566, 5432, 7700, 8025, 8080, 8081, 9000, 9001,
 9092. Only private Tailscale HTTPS TCP/443 may be phone-reachable.
 
+Each approved phone's rendered TCP policy test must deny exactly the complete
+sorted non-443 boundary inventory above. A missing custom listener or any extra
+deny destination is policy drift and blocks normalization.
+
 ## Serve, Funnel, incoming, policy, and identity
 
 Before schema implementation, capture the exact installed Windows Tailscale
@@ -170,6 +179,15 @@ revalidated before incoming access or Serve probes can begin. Active incoming
 and Serve state must both be captured before any approved or denied probe. No
 interval may exist in which incoming access is enabled under default,
 overlapping, untested, or identity-stale policy.
+
+The version adapter must independently normalize the exact current policy
+revision and complete policy snapshot in `activePolicyState`,
+`restartPolicyState`, and `teardownPolicyState`. Every snapshot hash-links the
+applied policy and configuration event and must equal both their exact policy
+bytes and revision without drift. `policyGate` hash-links the active snapshot
+before incoming access, `coldRestartEvent` hash-links the restart snapshot
+after boundary/readiness recovery and before re-enablement, and the final
+ledger binds the teardown snapshot after restoration and before disconnect.
 
 The completion-phase `sessionLedger` is created only after teardown. It
 hash-links and time-orders every preceding phase capture, including all active
@@ -232,11 +250,11 @@ or teardown mismatch blocks the candidate.
 
 ## Bundle, candidate, and migration
 
-The future source bundle will domain-separate
+The implemented source bundle domain-separates
 `nutrition-tracker-tailscale-relay-source-capture-bundle-v2` and hash, in matrix
 order, every role name plus the SHA-256 of its complete bytes, with the final
 `sessionLedger` binding all preceding entries. The v3 candidate
-will include the exact unsigned trust-boundary marker, bundle digest, session
+includes the exact unsigned trust-boundary marker, bundle digest, session
 times, exact distinct iOS/Android build IDs, hashes of the active and restart
 phone-probe roles, host-topology conclusions, separate listener/firewall/
 forwarding hashes, restart result, host-neutral result names, and redacted
@@ -267,16 +285,17 @@ protected capture index and every approved-phone readiness probe bind that same
 origin before redaction. An origin mismatch must fail even when the report
 digest and every other structural field are valid.
 
-The implemented macOS generation is review package
+The retired historical macOS generation used review package
 `nutrition-tracker-tailscale-relay-review-package-v1`, source bundle
 `nutrition-tracker-tailscale-relay-source-capture-bundle-v1`, and normalized
-report `nutrition-tracker-physical-device-relay-report-v2`. The proposed Windows
-generation is review package v2, source bundle v2, and normalized report v3.
-None of the implemented generation can be upgraded, relabeled, supplemented,
-or partially reused; adoption requires a new continuous Windows session and
-complete recollection of every matrix role.
+report `nutrition-tracker-physical-device-relay-report-v2`. That path is not
+implemented by current tooling and is rejected by the v3-only verifier. The
+implemented offline Windows generation is review package v2, source bundle v2,
+and normalized report v3. Historical Mac material cannot be upgraded,
+relabeled, supplemented, or partially reused; adoption requires a new
+continuous Windows session and complete recollection of every matrix role.
 
-The proposed atomic validator cutover deliberately makes health manifest
+The atomic validator cutover deliberately makes health manifest
 `nutrition-tracker-health-release-evidence-v5` accept report v3 and reject its
 formerly accepted report v2. The outer schema stays v5 because its signed
 `physicalDeviceApiRelay` wire shape remains the same origin and exact report
@@ -286,6 +305,7 @@ not match `apiOriginCommitmentSha256`. The empty checked-in health-reviewer
 store keeps this compatibility cutover blocked from live release use until a
 real reviewer is separately approved.
 
-Until that atomic implementation is committed and reviewed, this reference is
-only a threat-model and schema proposal. It cannot clear a release gate or the
+The offline implementation is structural only. Its immutable production adapter
+registry remains empty; no exact Windows output corpus, authentic capture, or
+reviewer signature is checked in. It cannot clear a live release gate or the
 Windows physical-phone blocker.

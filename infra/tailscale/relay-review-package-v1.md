@@ -2,25 +2,27 @@
 
 > **Legacy macOS-only reference — never use on Windows or WSL2.**
 >
-> This reference is coupled to `nutrition-tracker-mac`, `/usr/sbin/lsof`,
-> protected Tailscale IP command arguments, and the current v1 fixed role map.
-> It cannot represent the Windows-host/WSL2/Docker Desktop boundary. Do not
-> rename, translate, supplement, or reuse a v1 session as v2; Windows evidence
-> requires a complete new session after the v2 implementation and tests exist.
+> **HISTORICAL RECORD — NON-EXECUTABLE AND NON-RELEASE-COMPATIBLE.**
+>
+> Do not use this file with current tooling or execute it as a workflow. It is
+> coupled to `nutrition-tracker-mac`, `/usr/sbin/lsof`, removed CLI arguments,
+> the historical v1 role map, and relay report v2. The implemented offline
+> Windows framework accepts review-package v2 and emits report v3, but its
+> production adapter registry remains empty and live use remains blocked. The
+> current mobile verifier accepts v3 only and explicitly rejects v2. Never
+> rename, translate, supplement, or reuse v1 bytes as v2; there is no migration
+> or compatibility path.
 
-This is the complete transcription reference for
+This is the historical transcription reference for
 `nutrition-tracker-tailscale-relay-review-package-v1`. It is deliberately
-Markdown, not an accepted capture or index. Every value shown in angle brackets
-is invalid until an independent reviewer replaces it from the exact raw source.
-Do not copy a result word from this document; compare the raw source first.
+Markdown, not an accepted capture or index, and it cannot produce current
+release evidence. Every placeholder remains invalid. Do not populate,
+normalize, sign, or submit this package.
 
-The normalizer checks internal structure and continuity only. It does not
-authenticate Tailscale, a phone, an EAS build, an administrator, or the raw
-source. The reviewer keeps the raw files separately, creates these envelopes in
-a mode-`0700` review directory with `umask 077`, reruns the normalizer, compares
-the candidate bytes and bundle digest, and only then signs the outer v4 health
-manifest. Hashes below are lowercase SHA-256 of the exact referenced bytes,
-including their final newline when present.
+The retired v1 normalizer checked structure only; the current normalizer does
+not read this schema. The material below is preserved solely to interpret
+archived evidence. It describes a v4-manifest/v2-report path that is
+incompatible with the current v5-manifest/v3-report gate.
 
 ## Review-package index
 
@@ -123,9 +125,8 @@ attestations, not facts derived by the normalizer.
 
 ## Reviewer completion
 
-The reviewer must check the raw-to-envelope mapping, recompute every referenced
-hash, run the normalizer with `--acknowledge-unsigned-candidate`, and compare its
-exact canonical bytes with the candidate supplied to the release gate. The
-candidate remains untrusted until the reviewer signs the v4 health manifest
-that binds its SHA-256. The manifest's `executedAt` must exactly equal the
-candidate's `executedAt`; `reviewedAt` is created only when that review finishes.
+Historically, a reviewer checked raw-to-envelope mapping and compared a
+canonical v2 candidate before signing a v4 health manifest. That path is
+retired. The current v5 verifier rejects v2, the current normalizer rejects v1,
+and this reference cannot create release evidence. Do not run current tools
+against these bytes or relabel them as a newer schema.

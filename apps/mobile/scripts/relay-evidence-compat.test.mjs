@@ -16,9 +16,16 @@ const repositoryRoot = fileURLToPath(new URL("../../../", import.meta.url));
 const normalizer = join(repositoryRoot, "infra", "tailscale", "relay_evidence.py");
 const iosBuildId = "11111111-1111-4111-8111-111111111111";
 const androidBuildId = "22222222-2222-4222-8222-222222222222";
+const physicalDeviceApiOrigin = "https://relay.example.ts.net";
+const sourceCommit = "a".repeat(40);
+const syntheticRelayVersionAdapter = Object.freeze({
+  adapterId: "synthetic-windows-contract-v1",
+  tailscaleClientVersion: "0.0.0-test",
+  tailscaleDaemonVersion: "0.0.0-test",
+});
 
-describe("Tailscale relay review-package normalizer trust boundary", () => {
-  it("emits only an unsigned candidate that the public verifier rejects without a signed manifest", async () => {
+describe("Windows Tailscale relay review-package normalizer trust boundary", () => {
+  it("emits v3 only through a test adapter and remains rejected without a signed manifest", async () => {
     const directory = mkdtempSync(join(tmpdir(), "nutrition-relay-compat-"));
     try {
       const indexPath = execFileSync(
@@ -27,9 +34,9 @@ describe("Tailscale relay review-package normalizer trust boundary", () => {
           "-B",
           "-c",
           [
-            "import sys",
             "from pathlib import Path",
             "from infra.tailscale.tests.test_relay_evidence import CaptureBundle",
+            "import sys",
             "print(CaptureBundle(Path(sys.argv[1])).write())",
           ].join("; "),
           directory,
@@ -38,37 +45,71 @@ describe("Tailscale relay review-package normalizer trust boundary", () => {
       ).trim();
       const reportBytes = execFileSync(
         "python3",
-        ["-B", normalizer, "--capture-index", indexPath, "--acknowledge-unsigned-candidate"],
+        [
+          "-B",
+          "-c",
+          [
+            "from infra.tailscale.tests.test_relay_evidence import normalize_synthetic",
+            "from pathlib import Path",
+            "import sys",
+            "sys.stdout.buffer.write(normalize_synthetic(Path(sys.argv[1])))",
+          ].join("; "),
+          indexPath,
+        ],
         { cwd: repositoryRoot, encoding: "utf8" },
       );
       const report = JSON.parse(reportBytes);
       expect(reportBytes).toBe(`${canonicalJson(report)}\n`);
-      expect(report.schemaVersion).toBe("nutrition-tracker-physical-device-relay-report-v2");
+      expect(report.schemaVersion).toBe("nutrition-tracker-physical-device-relay-report-v3");
+      expect(report).not.toHaveProperty("apiOrigin");
+      expect(report.apiOriginCommitmentSha256).toBe(
+        "324c46636c4c63c6dd63502c753892fcc8cdbce343fd0d760fa29417397ee19e",
+      );
       expect(report.trustBoundary).toBe(
         "unsigned-structural-candidate-requires-independent-ed25519-manifest-review",
       );
+      expect(report.sourceCommit).toBe(sourceCommit);
       expect(report.sourceCaptureBundleSha256).toMatch(/^[0-9a-f]{64}$/u);
       expect(
         validateUnsignedRelayCandidateStructureForReview(
           report,
-          { apiOrigin: report.apiOrigin },
+          { apiOrigin: physicalDeviceApiOrigin },
+          sourceCommit,
           {
             physicalDevice: {
               ios: { easBuildId: iosBuildId },
               android: { easBuildId: androidBuildId },
             },
           },
-          Date.parse("2026-08-26T00:08:00.000Z"),
-          Date.parse("2026-08-26T00:11:00.000Z"),
+          Date.parse(report.executedAt),
+          Date.parse(report.completedAt) + 60_000,
+          [syntheticRelayVersionAdapter],
         ),
       ).toEqual(report);
+
+      let cliFailure;
+      try {
+        execFileSync(
+          "python3",
+          ["-B", normalizer, "--capture-index", indexPath, "--acknowledge-unsigned-candidate"],
+          { cwd: repositoryRoot, encoding: "utf8" },
+        );
+      } catch (error) {
+        cliFailure = error;
+      }
+      expect(cliFailure).toBeDefined();
+      expect(cliFailure.status).toBe(1);
+      expect(cliFailure.stdout).toBe("");
+      expect(cliFailure.stderr).toContain(
+        "The exact Windows Tailscale version/output adapter is not supported.",
+      );
 
       const reportPath = join(directory, "unsigned-relay-candidate.json");
       writeFileSync(reportPath, reportBytes, { mode: 0o600 });
       chmodSync(reportPath, 0o600);
       await expect(
         validateHealthReleaseEvidence({
-          NUTRITION_PHYSICAL_DEVICE_API_ORIGIN: report.apiOrigin,
+          NUTRITION_PHYSICAL_DEVICE_API_ORIGIN: physicalDeviceApiOrigin,
           NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_PATH: reportPath,
         }),
       ).rejects.toThrow(

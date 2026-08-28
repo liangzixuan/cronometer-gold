@@ -1,183 +1,119 @@
 # Physical-device private HTTPS
 
-> **PLATFORM STOP — legacy macOS-only runbook.**
+> **HISTORICAL RECORD — NON-EXECUTABLE AND NON-RELEASE-COMPATIBLE.**
 >
-> Do not apply this runbook, its commands, `phone_policy.py`, or relay
-> review-package v1 on Windows or WSL2. They assume a Mac host,
-> `/usr/sbin/lsof`, `nutrition-tracker-mac`, and a single-host listener
-> boundary. On Windows, use the
-> [proposed Windows-host/WSL2 design](./physical-device-windows-wsl2-private-https.md);
-> it remains blocked until its renderer, normalizer, schemas, fixtures, tests,
-> and independent review are implemented.
+> Do not execute any command in this file on any platform. This archived Mac
+> workflow assumes `/usr/sbin/lsof`, `nutrition-tracker-mac`, removed CLI
+> arguments, review-package v1, and relay report v2. The current normalizer
+> accepts only Windows review-package v2 and emits relay report v3; the current
+> mobile verifier accepts v3 only and explicitly rejects v2. There is no
+> supported conversion or compatibility mode. The checked-in
+> [Windows-host/WSL2 offline framework](./physical-device-windows-wsl2-private-https.md)
+> is implemented, but its production adapter registry is empty and all live
+> use remains blocked pending reviewed production adapters, authentic evidence,
+> and separate explicit approvals.
 
-This is an attended development path for the signed `physical-device` IPA and
-APK. It is not public hosting, a production deployment, or a substitute for the
-controlled-beta HTTPS and deployment evidence gates.
+The remainder is preserved only as a historical design record. Imperative
+language and shell blocks below are not current instructions and cannot produce
+accepted release evidence.
 
-## Non-negotiable boundaries
+## Historical boundary summary
 
-- Install Tailscale and join devices only after explicit operator approval.
-- Never use Tailscale Funnel. Serve must remain private to the tailnet.
-- Keep the API on `127.0.0.1:4000`; LocalStack, PostgreSQL, Meilisearch, MinIO,
-  Mailpit, Kafka, ZooKeeper, and Metro remain loopback-only or unreachable from
-  the phone.
-- The phone-to-Mac grant is exactly `tcp:443`. Tailscale grants are additive, so
-  a narrower grant does not override an existing broad ACL or grant.
-- Name.com DNS remains unchanged. Use only the reviewed `.ts.net` name.
-- Do not create, print, or store a reusable Tailscale auth key for this workflow.
+The retired design kept the API and every backing dependency on Mac loopback,
+limited the private phone path to TCP/443, prohibited public tunneling, and left
+Name.com DNS unchanged. It also treated additive tailnet access as unsafe unless
+all overlapping access was independently excluded. Enrollment, policy changes,
+incoming access, certificate issuance, and reusable authentication material all
+required controls outside the normalizer. These statements describe archived
+constraints only and authorize no current action.
 
-A new tailnet starts with a default allow-all policy. Tailscale Serve does not
-hide other host listeners from an otherwise authorized peer. On this Mac,
-Kafka, ZooKeeper, Java, and macOS services may listen on wildcard ports, so the
-Mac's very first connection must use the installed client's reviewed equivalent
-of `tailscale up --shields-up`. Do not connect normally and enable Shields Up
-later: that creates an exposure window. Immediately prove
-`tailscale get --json shields-up` is true before the phone joins. If the
-installed client cannot establish its first connection with Shields Up already
-enabled, stop and rebind every wildcard/non-loopback listener before enrollment.
+The historical threat model accounted for default allow-all tailnet policy,
+additive grants, wildcard Mac listeners, and an exposure window during initial
+enrollment. Incoming connections remained blocked until the reviewed policy and
+device identities were established. It also recorded that issuing private-host
+HTTPS certificates permanently disclosed machine and tailnet DNS names through
+Certificate Transparency. Exact client invocations are intentionally absent
+because the retired workflow is not executable.
 
-Enabling Tailscale HTTPS permanently publishes the complete machine and tailnet
-DNS name in Certificate Transparency logs. Rename a sensitive machine and choose
-an acceptable tailnet DNS name before the first certificate is issued.
+## Historical local-service preparation (do not execute)
 
-## Prepare the local services
+Historically, the operator started local dependencies and the API, then proved
+that the API and every dependency remained on exact IPv4 loopback. The retired
+commands are intentionally omitted; use the current Windows runbook only for
+its blocked offline contract and not as authority for a live action.
 
-Start the ordinary dependencies, LocalStack profile, and API. Prove that the
-phone-facing API and every application dependency still use exact IPv4
-loopback:
+The retired renderer required the API and backing-service ports to remain on
+IPv4 loopback while TCP/443 was unused, and it inventoried other listeners so
+the historical policy tests could detect overlap. Current Windows boundary
+evidence is defined only by the blocked v2/v3 contract.
 
-```sh
-pnpm infra:up
-pnpm infra:localstack:status
-curl --fail --silent --show-error http://127.0.0.1:4000/ready
-```
+## Historical policy rendering and review (do not execute)
 
-The policy renderer fails unless TCP 4000, 4566, 5432, 7700, 9000, and 9001
-are each bound only to `127.0.0.1`, and TCP/443 is unused. It also inventories
-every current TCP listener so Tailscale's built-in policy tests reject any
-overlapping access to those ports.
+Historically, incoming connections stayed blocked while identities and the
+complete tailnet policy were independently reviewed. Stable device addresses,
+identity records, policy tests, and the absence of overlapping grants were all
+part of that review. Exact client discovery and identity commands are omitted.
 
-## Render and review the tailnet policy
-
-Keep incoming connections blocked while the Mac and phone first join the
-tailnet. Inspect `tailscale up --help`, `tailscale set --help`, the installed
-client, and the admin console before use. Record the exact, stable Tailscale
-IPv4 address for each device and verify the phone identity with `tailscale
-whois` immediately before applying policy.
-
-Render the proposal locally:
-
-```sh
-python3 -B infra/tailscale/phone_policy.py \
-  --phone-ip <EXACT_IOS_PHONE_TAILSCALE_IPV4> \
-  --phone-ip <EXACT_ANDROID_PHONE_TAILSCALE_IPV4> \
-  --mac-ip <EXACT_MAC_TAILSCALE_IPV4>
-```
-
-For attended development with only one phone, supply `--phone-ip` once. The
-signed two-platform matrix requires both exact phones in the same rendered and
-reviewed policy; do not swap one phone rule for another between probes because a
-policy change invalidates earlier evidence.
+The retired renderer accepted protected Mac address inputs through options that
+have since been removed. Current `phone_policy.py` accepts only a protected
+input file for the host-neutral Windows v2 contract and has no Mac or v1
+compatibility mode. Historical values cannot be translated or relabeled as a
+current input.
 
 The renderer writes JSON only to stdout and never applies the policy. Do not
 redirect it into the repository. It emits an empty legacy `acls` list, one
 exact-IP host alias for each supplied device, one `tcp:443` grant, no SSH or Funnel node
 attributes, and positive/negative policy tests for the current listener set.
 
-Use the complete output as a policy only for a dedicated test tailnet whose
-existing policy was independently reviewed. For an existing tailnet, export and
-review the complete current policy, merge the aliases/grant/tests without
-removing unrelated required access, and remove every ACL or grant that also lets
-this exact phone reach this Mac. Merely appending the narrow grant to a default
-allow-all or other overlapping rule is unsafe. The admin console must accept all
-policy tests before incoming connections are enabled. Capture the reviewed
-policy hash and configuration-log event outside source control; never automate a
-tailnet-wide policy replacement from this repository. A merged existing-tailnet
-policy is limited to attended development and does not qualify for a normalized
-release candidate: the fail-closed normalizer requires a dedicated test tailnet
-whose complete policy exactly equals the generated two-phone policy, with no
-unrelated ACL or grant.
+The retired proposal represented a dedicated test-tailnet policy only. The
+historical review rejected default allow rules, extra grants, missing negative
+tests, and any policy mutation between phone probes. It preserved the full
+policy hash and configuration event outside source control. Incoming access was
+enabled only after policy tests and identity review, and client-side incoming
+blocking state was recorded before and after that transition. No current policy
+may be generated, applied, or inferred from this summary.
 
-Only after the reviewed policy is saved, all built-in policy tests pass, and the
-phone identity is revalidated may the operator run the installed client's
-reviewed equivalent of `tailscale set --shields-up=false`. Require
-`tailscale get --json shields-up` to return false before the positive Serve
-probe; the client preference otherwise overrides the tailnet grant and blocks
-all incoming traffic.
+## Historical Serve configuration and verification (do not execute)
 
-## Configure and verify Serve
+The historical flow placed one attended foreground private-HTTPS relay on
+TCP/443 with the sole upstream at Mac loopback port 4000. Its exact invocation
+is intentionally omitted. The retired process kept the terminal attached and
+prohibited a background relay that could survive interruption or client
+restart.
 
-Review `tailscale serve --help` from the installed, pinned client before use.
-Require both Serve and Funnel status to be empty before proceeding. For current
-clients, run attended foreground private HTTPS on the default port with the sole
-upstream `http://127.0.0.1:4000`:
+The historical verification reconciled reviewed identities with one private
+foreground HTTPS relay, no public relay state, public-CA hostname validation,
+exact readiness, TCP/443-only phone reachability, blocked backing-service
+ports, and denial when the phone left the tailnet. Its teardown recorded empty
+relay state, restored incoming blocking, and Mac disconnection. Any listener,
+policy, identity, address, or relay change invalidated the entire session.
 
-```sh
-tailscale serve --https=443 http://127.0.0.1:4000
-```
+No origin from that workflow may be placed in mobile configuration or release
+evidence. The current verifier rejects its v2 report, and the exact historical
+client invocations are intentionally absent.
 
-Keep that terminal attached throughout testing. Do not use `--bg`; background
-Serve survives an interrupted shell and can resume after client restarts.
+## Historical unsigned-candidate process (obsolete; do not execute)
 
-Before building, independently require all of the following:
+The retired Mac workflow used review-package v1 to produce relay report v2.
+Current `infra/tailscale/relay_evidence.py` does neither: it accepts only the
+protected Windows review-package v2 contract and emits only relay report v3.
+It deliberately has no v1 parser, compatibility mode, or migration path, and
+the mobile verifier rejects v2 before exact-key parsing. Do not invoke the
+current normalizer on v1 inputs. The
+[relay review-package v1 reference](../tailscale/relay-review-package-v1.md) is
+retained only to explain historical artifacts; it is not an input contract for
+current code.
 
-1. `tailscale status --json` is running and binds the reviewed Mac and phone
-   identities to the exact policy IPs.
-2. In `tailscale serve status --json`, the persistent top-level `TCP`, `Web`,
-   `Services`, and `AllowFunnel` fields are absent or empty. `Foreground` has
-   exactly one session, and that session contains only HTTPS TCP/443, one root
-   handler, and the exact `http://127.0.0.1:4000` proxy. Its `AllowFunnel` and
-   `Services` fields are also absent or empty.
-3. `tailscale funnel status --json` may report the same foreground Serve graph;
-   it must have no enabled `AllowFunnel` entry at either the top level or inside
-   the sole foreground session. Do not treat non-empty JSON alone as evidence
-   that Funnel is enabled.
-4. The phone validates the public CA and hostname and receives exact HTTP 200
-   readiness through `https://<reviewed-machine>.<reviewed-tailnet>.ts.net/ready`.
-5. From the phone or another exact authorized peer, every inventoried non-443
-   TCP port is unreachable. Explicitly include 22, 80, 4000, 4566, 5432, 7700,
-   8025, 8080, 8081, 9000, 9001, and 9092. With Tailscale disabled on the phone,
-   the HTTPS origin must also be unreachable.
+Both the retired and current normalizers are structural only: neither collects
+or authenticates evidence, controls Tailscale, applies policy, changes incoming
+state, starts Serve or Funnel, or creates a signature.
 
-Only after those checks pass may the exact canonical HTTPS origin be stored as
-the plaintext project-level `EXPO_PUBLIC_API_URL` in the EAS `preview`
-environment. Never place it in source, and never expose a backing-service port.
-
-After attended testing, stop the exact foreground Serve with Ctrl-C and prove
-both Serve and Funnel status are empty. Do not run a broad reset that could
-erase unrelated pre-existing configuration; non-empty initial state was already
-a stop condition. Restore Shields Up with the installed client's reviewed
-command, require `tailscale get --json shields-up` to return true, and then
-disconnect the Mac. A new listener, policy change, device re-enrollment, IP
-change, or Serve change invalidates the evidence and requires the checks again.
-
-## Prepare an unsigned review candidate
-
-`infra/tailscale/relay_evidence.py` is a read-only structural normalizer, not an
-evidence collector, authenticator, or release authority. Its `passed` and
-`blocked` values mean only that the supplied review-package fields are
-internally consistent. They are not authenticated observations. The normalizer
-never invokes Tailscale, installs or authenticates a client, applies policy,
-toggles Shields Up, starts/stops Serve or Funnel, or creates a signature.
-Use the complete [relay review-package v1 reference](../tailscale/relay-review-package-v1.md)
-for every exact role, envelope field, raw source, and reconciliation step; do
-not infer a schema from the tests.
-
-Before normalization, an independent trusted reviewer must preserve the exact command
-stdout and physical-device probe exports in a reviewer-controlled mode-`0700`
-directory with `umask 077`. Capture the relevant state with the already
-installed, reviewed client; these commands are run manually by the reviewer,
-never by the normalizer:
-
-```sh
-tailscale get --json shields-up > preflight-shields.raw.json
-tailscale status --json > preflight-status.raw.json
-tailscale serve status --json > preflight-serve.raw.json
-tailscale funnel status --json > preflight-funnel.raw.json
-# Repeat status, Shields Up, Serve, and Funnel captures during active testing
-# and teardown, using distinct files. Preserve the full reviewed policy,
-# configuration-log event, lsof -Fpn inventory, and both device probe exports.
-```
+Historically, an independent reviewer preserved distinct raw Shields Up,
+identity/status, Serve, Funnel, policy, configuration-log, listener, and phone
+probe captures in a private reviewer-controlled directory. Exact capture
+commands are intentionally omitted because this v1 package is not accepted by
+current tooling and cannot produce release evidence. No current capture may be
+reconstructed from this description.
 
 Do not reconstruct raw stdout, reuse another session, or convert an observed
 failure into a `passed` field. The reviewer compares every structural envelope
@@ -235,28 +171,19 @@ same policy/configuration event, public-CA hostname success, `/ready` HTTP 200,
 only open TCP/443, every inventoried denied port blocked, and HTTPS blocked with
 Tailscale disabled.
 
-The v2 candidate includes the exact unsigned trust-boundary marker and
-`sourceCaptureBundleSha256`, plus the index's exact `executedAt`. That digest
+The obsolete v2 candidate included the exact unsigned trust-boundary marker and
+`sourceCaptureBundleSha256`, plus the index's exact `executedAt`. Its digest
 domain-separates
 `nutrition-tracker-tailscale-relay-source-capture-bundle-v1` and hashes, in the
 exact role order listed above, each role name plus the SHA-256 of its complete
 input bytes. It therefore binds all 18 normalized inputs, including both probe
 captures, without copying sensitive source content into the candidate.
 
-From the repository root, emit the canonical redacted unsigned structural candidate into
-an ignored, private location. The command writes only canonical
-`nutrition-tracker-physical-device-relay-report-v2` bytes to stdout and a fixed
-unsigned-candidate warning to stderr; rejection never writes partial candidate
-bytes:
-
-```sh
-(umask 077; python3 -B infra/tailscale/relay_evidence.py \
-  --capture-index /absolute/review/capture-index.json \
-  --acknowledge-unsigned-candidate \
-  > /absolute/ignored/.local-data/release/physical-device-relay-report.json)
-```
-
-Confirm the resulting candidate is current-user-owned mode `0600`. Never point the
+The obsolete v1-to-v2 invocation is intentionally omitted. Current
+`relay_evidence.py --capture-index` requires a protected Windows v2 index and
+rejects v1. Do not adapt, relabel, or supplement a Mac v1 package to make it
+parse as v2. Historically, the resulting candidate had to be current-user-owned
+mode `0600`. Never point the
 index at source-control files, and never use a capture from another attended
 session. The resulting candidate remains outside the repository and records the
 exact `.ts.net` origin and session start/execution/completion times. Preflight fields
@@ -268,9 +195,10 @@ event digest shared by both build probes, complete non-443 listener inventory,
 CA and `/ready` success, TCP/443-only results, blocked ports, and off-tailnet
 denial. Teardown fields and source digests structurally record empty Serve/Funnel, restored
 Shields Up, and Mac disconnect. The verifier requires
-`startedAt <= executedAt <= completedAt <= reviewedAt`, requires candidate
-`executedAt` to equal the independently signed manifest's `executedAt` exactly,
-and allows a session no longer than 24 hours.
+`startedAt <= executedAt < completedAt < reviewedAt`, requires a current v3
+candidate's `executedAt` to equal the independently signed manifest's
+`executedAt` exactly, and allows a session no longer than 24 hours. It rejects
+the historical v2 candidate before parsing its exact keys.
 
 Keep the candidate owned by the current operator and mode `0600` in ignored
 `.local-data/release`, or supply its exact bytes later as secret base64. Do not
@@ -283,10 +211,8 @@ checks every exact source byte may they sign the complete v5 health manifest;
 that trusted Ed25519 signature binds the candidate's exact SHA-256 digest,
 trust-boundary marker, and all-18 source bundle digest.
 
-At release verification, set
-`NUTRITION_PHYSICAL_DEVICE_API_ORIGIN` to the exact origin and provide exactly one
-of `NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_PATH` or
-`NUTRITION_PHYSICAL_DEVICE_RELAY_REPORT_BASE64`. The signed
-`physicalDeviceApiRelay.reportSha256` must match the exact report bytes. Never
-reuse the production `EXPO_PUBLIC_API_URL` as this pin: the production and
-private-device builds intentionally use different origins.
+Do not supply a historical Mac v2 candidate through the current relay-report
+path or base64 environment inputs. Those gate inputs are reserved for a
+compatible Windows v3 report whose exact bytes match the signed
+`physicalDeviceApiRelay.reportSha256`; live production evidence remains blocked
+as stated in the Windows runbook.

@@ -6,13 +6,13 @@ Simulator uses `127.0.0.1:4000`. Do not put either loopback value in the shared
 root `.env`, because an explicit value overrides that platform selection.
 
 A physical phone cannot use either emulator address and must never connect to a
-LocalStack port. For an attended local development session, keep the API and all
-dependencies on Mac loopback and provide a separately authenticated, publicly
-trusted HTTPS route whose only upstream is `127.0.0.1:4000`. Set that route as
-`EXPO_PUBLIC_API_URL` only for the mobile development process. An Expo/Metro
-tunnel serves the bundle and does not expose the API. The opt-in persistent
-LocalStack profile changes only the API/worker artifact backend; it is not an
-API ingress or release deployment.
+LocalStack port. The former Mac-hosted local-phone route is retired and rejected
+by the current release verifier. The only current physical-phone design is the
+blocked Windows-host/WSL2 v3 path linked below; it is an offline contract, not
+authority to expose a listener or connect a phone. An Expo/Metro tunnel serves
+the bundle and does not expose the API. The opt-in persistent LocalStack profile
+changes only the API/worker artifact backend; it is never an API ingress, phone
+endpoint, or release deployment.
 
 A distributable build must provide a credential-free, non-loopback HTTPS origin
 and use the release script:
@@ -190,24 +190,18 @@ as production.
 The repository-wide `requireCommit` setting also makes EAS reject an
 uncommitted worktree for this profile.
 
-Do not put the phone-facing API URL in `eas.json`, `.env`, or a build command.
-Create a **plaintext**, project-level `EXPO_PUBLIC_API_URL` variable in the EAS
-`preview` environment. `EXPO_PUBLIC_` values are public app configuration,
-never secrets. For Mac-hosted development, use a stable Tailscale HTTPS name on
-the default TLS port and keep the phone on the same tailnet. Terminate HTTPS at
-that single API ingress and forward it to the Mac-loopback API. LocalStack,
-Postgres, and Meilisearch must remain private server-side dependencies; never
-expose their hostnames or ports to the phone or an internet tunnel. The
-post-install gate rejects missing values, HTTP, loopback/IP/local targets,
-credentials, paths, non-default ports, and hostnames that identify those
-backing services.
+The former Mac-hosted private-HTTPS workflow is retired, non-executable, and
+non-release-compatible. Its v1 review package produced a v2 relay report that
+the current v3-only verifier rejects. Do not use that workflow to configure an
+API origin, join a tailnet, expose a listener, collect evidence, or prepare a
+build.
 
-Before joining the phone, follow the
-[physical-device private-HTTPS runbook](../../infra/runbooks/physical-device-private-https.md).
-Tailscale's initial allow-all policy is not an application firewall: apply and
-test the exact phone-to-Mac `tcp:443` grant first, and audit every overlapping
-ACL/grant. The checked-in renderer only proposes a deny-by-default policy for
-human review; it never installs a client or mutates a tailnet.
+The only current design is the blocked
+[Windows-host/WSL2 v3 runbook](../../infra/runbooks/physical-device-windows-wsl2-private-https.md)
+and its [v2 review-package/v3 report contract](../../infra/tailscale/relay-review-package-v2.md).
+They document an offline framework only: the production adapter registry is
+empty, live use remains blocked, and neither reference authorizes Tailscale,
+firewall, listener, phone, certificate, Docker-boundary, or EAS action.
 
 Inspect the resolved profiles before consuming build quota:
 

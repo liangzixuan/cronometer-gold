@@ -10,6 +10,7 @@ import {
   P0_CLIENT_SMOKE_FLOW_IDS,
   P0_CLIENT_SMOKE_REPORT_SCHEMA,
   PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA,
+  physicalDeviceApiOriginCommitmentSha256,
   validateHealthReleaseEvidence,
 } from "./check-health-release.mjs";
 
@@ -48,6 +49,11 @@ const reviewerPrincipal = "independent.reviewer@example.test";
 const reviewerKeyId = "release-reviewer-2026-01";
 const gitCommit = "a".repeat(40);
 const physicalDeviceApiOrigin = "https://nutrition-api.tail1234.ts.net";
+const syntheticRelayVersionAdapter = Object.freeze({
+  adapterId: "synthetic-windows-contract-v1",
+  tailscaleClientVersion: "0.0.0-test",
+  tailscaleDaemonVersion: "0.0.0-test",
+});
 
 const buildIds = {
   physicalDevice: {
@@ -96,88 +102,211 @@ const inventoriedNon443TcpPorts = [
   22, 80, 1025, 2181, 4000, 4566, 5432, 7700, 8025, 8080, 8081, 9000, 9001, 9092,
 ];
 
-function relayProbe(testedEasBuildId) {
+const readyBodySha256 = "a29ee2b15c494311c52521766e44af56a3ad2248e7a8ab465e5206463c13d288";
+
+function captureDigest(index) {
+  return index.toString(16).padStart(64, "0");
+}
+
+function boundaryPhase(environmentSha256, offset) {
   return {
-    testedEasBuildId,
-    phoneAlias:
-      testedEasBuildId === buildIds.physicalDevice.ios
-        ? "nutrition-tracker-phone-1"
-        : "nutrition-tracker-phone-2",
-    observedAt:
-      testedEasBuildId === buildIds.physicalDevice.ios
-        ? "2026-08-16T07:30:00.000Z"
-        : "2026-08-16T07:45:00.000Z",
-    policySha256: "4".repeat(64),
-    configurationLogEventSha256: "5".repeat(64),
+    environmentSha256,
+    windowsListenersSha256: captureDigest(offset),
+    windowsFirewallSha256: captureDigest(offset + 1),
+    hyperVFirewallSha256: captureDigest(offset + 2),
+    forwardingSha256: captureDigest(offset + 3),
+    wslListenersSha256: captureDigest(offset + 4),
+    dockerPortsSha256: captureDigest(offset + 5),
+  };
+}
+
+function approvedRelayProbe(phase, platform) {
+  const isActive = phase === "active";
+  const isIos = platform === "ios";
+  const offset = isActive ? 80 : 120;
+  const minutes = isActive ? (isIos ? 20 : 22) : isIos ? 55 : 56;
+  return {
+    testedEasBuildId: buildIds.physicalDevice[platform],
+    phoneAlias: isIos ? "nutrition-tracker-phone-1" : "nutrition-tracker-phone-2",
+    observedAt: `2026-08-16T07:${minutes}:00.000Z`,
+    captureSha256: captureDigest(offset + (isIos ? 0 : 1)),
     publicCaAndHostname: "passed",
     readyHttpStatus: 200,
+    readyBodySha256,
     openTcpPorts: [443],
     blockedTcpPorts: [...inventoriedNon443TcpPorts],
+    directWindowsWslDockerTargets: "blocked",
     tailscaleDisabledHttps: "blocked",
   };
 }
 
+function deniedRelayProbe(phase) {
+  const isActive = phase === "active";
+  return {
+    observedAt: `2026-08-16T07:${isActive ? "24" : "57"}:00.000Z`,
+    captureSha256: captureDigest(isActive ? 82 : 122),
+    httpsPort: "blocked",
+    blockedTcpPorts: [...inventoriedNon443TcpPorts],
+  };
+}
+
+function lanRelayProbe(phase) {
+  const isActive = phase === "active";
+  return {
+    observedAt: `2026-08-16T07:${isActive ? "26" : "58"}:00.000Z`,
+    captureSha256: captureDigest(isActive ? 83 : 123),
+    httpsPort: "blocked",
+    blockedTcpPorts: [...inventoriedNon443TcpPorts],
+    windowsWslDockerTargets: "blocked",
+    ipv4AndIpv6Paths: "blocked",
+  };
+}
+
+function relayDeviceProbes(phase) {
+  return {
+    ios: approvedRelayProbe(phase, "ios"),
+    android: approvedRelayProbe(phase, "android"),
+    unapprovedTailnet: deniedRelayProbe(phase),
+    lan: lanRelayProbe(phase),
+  };
+}
+
 function physicalDeviceRelayReport() {
+  const sessionEnvironmentSha256 = captureDigest(10);
+  const activeEnvironmentSha256 = captureDigest(11);
+  const restartEnvironmentSha256 = captureDigest(12);
+  const teardownEnvironmentSha256 = captureDigest(13);
   return {
     schemaVersion: PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA,
     trustBoundary: "unsigned-structural-candidate-requires-independent-ed25519-manifest-review",
-    sourceCaptureBundleSha256: "e".repeat(64),
-    apiOrigin: physicalDeviceApiOrigin,
+    sourceCaptureBundleSha256: captureDigest(1),
+    apiOriginCommitmentSha256: "edc56416dfbb4d570d7eae27b291115365d2e274e06c48fed792a48294f4b87c",
+    sourceCommit: gitCommit,
     startedAt: "2026-08-16T07:00:00.000Z",
     executedAt: "2026-08-16T08:00:00.000Z",
     completedAt: "2026-08-16T08:30:00.000Z",
-    preflight: {
-      firstConnectionShieldsUp: "passed",
-      initialServeAndFunnelStatus: "empty",
-      incomingAccessHeldUntilPolicyTests: "passed",
-      macIdentityRevalidated: "passed",
-      iosIdentityRevalidated: "passed",
-      androidIdentityRevalidated: "passed",
-      shieldsUpStatusSha256: "7".repeat(64),
-      initialServeStatusSha256: "8".repeat(64),
-      initialFunnelStatusSha256: "8".repeat(64),
-      identityStatusSha256: "9".repeat(64),
-      accessControlTimelineSha256: "d".repeat(64),
+    buildIds: { ...buildIds.physicalDevice },
+    hostTopology: {
+      relayNode: "windows-host",
+      applicationNode: "wsl2-ubuntu",
+      containerProvider: "docker-desktop-wsl-integration",
+      tailscalePlacement: "windows-host-only",
+      apiBind: "127.0.0.1:4000",
+      serveUpstream: "http://127.0.0.1:4000",
+      wslNetworkingMode: "nat",
+      hostBoundarySha256: captureDigest(2),
     },
-    serve: {
-      mode: "foreground",
+    versionAdapter: {
+      adapterId: syntheticRelayVersionAdapter.adapterId,
+      windowsVersion: "10.0.26100.4946",
+      wslVersion: "2.5.10.0",
+      ubuntuVersion: "24.04.3",
+      dockerDesktopVersion: "4.45.0",
+      dockerEngineVersion: "28.3.3",
+      tailscaleClientVersion: syntheticRelayVersionAdapter.tailscaleClientVersion,
+      tailscaleDaemonVersion: syntheticRelayVersionAdapter.tailscaleDaemonVersion,
+      clientHelpSha256: captureDigest(3),
+      daemonHelpSha256: captureDigest(4),
+      rawStatusSha256: captureDigest(5),
+      sessionEnvironmentSha256,
+      activeEnvironmentSha256,
+      restartEnvironmentSha256,
+      teardownEnvironmentSha256,
+    },
+    policy: {
+      approvedPhoneAliases: ["nutrition-tracker-phone-1", "nutrition-tracker-phone-2"],
+      incomingAccessHeldUntilPolicyTests: "passed",
+      relayHostIdentityRevalidated: "passed",
+      testedPhonesToRelayHostTcp443Only: "passed",
+      noOverlappingAclOrGrant: "passed",
+      policyTests: "passed",
+      proposalCaptureSha256: captureDigest(50),
+      appliedCaptureSha256: captureDigest(51),
+      testsCaptureSha256: captureDigest(52),
+      configurationEventCaptureSha256: captureDigest(53),
+      gateCaptureSha256: captureDigest(54),
+    },
+    boundaryEvidence: {
+      preflight: boundaryPhase(sessionEnvironmentSha256, 20),
+      active: boundaryPhase(activeEnvironmentSha256, 30),
+      restart: boundaryPhase(restartEnvironmentSha256, 40),
+      teardown: boundaryPhase(teardownEnvironmentSha256, 60),
+    },
+    active: {
+      incoming: "enabled",
+      serve: "attended-foreground",
+      funnel: "disabled",
       httpsPort: 443,
       handlerPath: "/",
       upstream: "http://127.0.0.1:4000",
-      persistentConfiguration: "empty",
-      foregroundSessionCount: 1,
-      funnelEnabled: false,
-      serveStatusSha256: "3".repeat(64),
-      funnelStatusSha256: "3".repeat(64),
-    },
-    tailnetAccess: {
-      policySha256: "4".repeat(64),
-      configurationLogEventSha256: "5".repeat(64),
-      approvedPhoneAliases: ["nutrition-tracker-phone-1", "nutrition-tracker-phone-2"],
-      testedPhonesToMacTcp443Only: "passed",
-      noOverlappingAclOrGrant: "passed",
-      policyTests: "passed",
-      unapprovedPeerHttps443: "blocked",
-    },
-    listenerInventory: {
-      snapshotSha256: "6".repeat(64),
-      requiredServicesIpv4Loopback: "passed",
       inventoriedNon443TcpPorts: [...inventoriedNon443TcpPorts],
-      wildcardNon443TcpPorts: [2181, 8080, 9092],
+      incomingCaptureSha256: captureDigest(70),
+      serveCaptureSha256: captureDigest(71),
+      funnelCaptureSha256: captureDigest(72),
+      identitiesCaptureSha256: captureDigest(73),
+      deviceProbes: relayDeviceProbes("active"),
     },
-    deviceProbes: {
-      ios: relayProbe(buildIds.physicalDevice.ios),
-      android: relayProbe(buildIds.physicalDevice.android),
+    restart: {
+      preShutdown: {
+        incoming: "disabled",
+        serve: "disabled",
+        funnel: "disabled",
+        incomingCaptureSha256: captureDigest(90),
+        serveCaptureSha256: captureDigest(91),
+        funnelCaptureSha256: captureDigest(92),
+      },
+      preExposure: {
+        incoming: "disabled",
+        serve: "disabled",
+        funnel: "disabled",
+        relayHostIdentityRevalidated: "passed",
+        incomingCaptureSha256: captureDigest(93),
+        serveCaptureSha256: captureDigest(94),
+        funnelCaptureSha256: captureDigest(95),
+        identitiesCaptureSha256: captureDigest(96),
+      },
+      localReadiness: {
+        wsl: {
+          observedAt: "2026-08-16T07:45:00.000Z",
+          captureSha256: captureDigest(110),
+          httpStatus: 200,
+          bodySha256: readyBodySha256,
+        },
+        windows: {
+          observedAt: "2026-08-16T07:47:00.000Z",
+          captureSha256: captureDigest(111),
+          httpStatus: 200,
+          bodySha256: readyBodySha256,
+        },
+        migrationsCurrent: "passed",
+      },
+      reenabledRelay: {
+        incoming: "enabled",
+        serve: "attended-foreground",
+        funnel: "disabled",
+        relayHostIdentityRevalidated: "passed",
+        incomingCaptureSha256: captureDigest(100),
+        serveCaptureSha256: captureDigest(101),
+        funnelCaptureSha256: captureDigest(102),
+        identitiesCaptureSha256: captureDigest(103),
+      },
+      deviceProbes: relayDeviceProbes("restart"),
+      coldRestartEventSha256: captureDigest(104),
+      sourceProcessContinuity: "passed",
+      routeRecovered: "passed",
     },
     teardown: {
-      serveAndFunnelStatus: "empty",
-      shieldsUpRestored: "passed",
-      macDisconnected: "passed",
-      serveStatusSha256: "a".repeat(64),
-      funnelStatusSha256: "a".repeat(64),
-      shieldsUpStatusSha256: "b".repeat(64),
-      disconnectStatusSha256: "c".repeat(64),
+      incoming: "disabled",
+      serve: "disabled",
+      funnel: "disabled",
+      relayHostDisconnected: "passed",
+      boundaryRestored: "passed",
+      incomingCaptureSha256: captureDigest(130),
+      serveCaptureSha256: captureDigest(131),
+      funnelCaptureSha256: captureDigest(132),
+      disconnectCaptureSha256: captureDigest(133),
     },
+    sessionLedgerSha256: captureDigest(140),
   };
 }
 
@@ -434,6 +563,7 @@ const orderedArtifactPaths = [
   artifactPaths.production.android,
 ];
 const releaseRuntime = {
+  relayVersionAdapters: Object.freeze([syntheticRelayVersionAdapter]),
   gitHead: () => gitCommit,
   gitStatus: () => "",
   readReleaseMetadata: () => structuredClone(confirmedReleaseMetadata),
@@ -537,7 +667,11 @@ describe("native health release evidence", () => {
     ).rejects.toThrow(/p0ClientSmoke/u);
   });
 
-  it("binds one reviewed ts.net origin and the exact canonical relay-report bytes", async () => {
+  it("binds the signed origin to the v3 commitment and exact canonical report bytes", async () => {
+    expect(physicalDeviceApiOriginCommitmentSha256("https://relay.example.ts.net")).toBe(
+      "324c46636c4c63c6dd63502c753892fcc8cdbce343fd0d760fa29417397ee19e",
+    );
+
     await expect(
       validateHealthReleaseEvidence(
         {
@@ -551,7 +685,7 @@ describe("native health release evidence", () => {
     ).rejects.toThrow(/exactly pin/u);
 
     const wrongOriginReport = physicalDeviceRelayReport();
-    wrongOriginReport.apiOrigin = "https://other.tail1234.ts.net";
+    wrongOriginReport.apiOriginCommitmentSha256 = captureDigest(999);
     await expect(
       validateHealthReleaseEvidence(
         environmentFor(attest(unsignedManifest(wrongOriginReport)), wrongOriginReport),
@@ -559,17 +693,27 @@ describe("native health release evidence", () => {
         trustStore,
         releaseRuntime,
       ),
-    ).rejects.toThrow(/origin must match/u);
+    ).rejects.toThrow(/API-origin commitment must match/u);
 
-    const unsafeOriginReport = physicalDeviceRelayReport();
-    unsafeOriginReport.apiOrigin = "https://api.github.com";
-    const unsafeOriginManifest = unsignedManifest(unsafeOriginReport);
-    unsafeOriginManifest.physicalDeviceApiRelay.apiOrigin = unsafeOriginReport.apiOrigin;
+    const rawOriginReport = physicalDeviceRelayReport();
+    rawOriginReport.apiOrigin = physicalDeviceApiOrigin;
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(unsignedManifest(rawOriginReport)), rawOriginReport),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/must contain exactly/u);
+
+    const unsafeOriginManifest = unsignedManifest();
+    unsafeOriginManifest.physicalDeviceApiRelay.apiOrigin = "https://api.github.com";
     await expect(
       validateHealthReleaseEvidence(
         {
-          ...environmentFor(attest(unsafeOriginManifest), unsafeOriginReport),
-          NUTRITION_PHYSICAL_DEVICE_API_ORIGIN: unsafeOriginReport.apiOrigin,
+          ...environmentFor(attest(unsafeOriginManifest)),
+          NUTRITION_PHYSICAL_DEVICE_API_ORIGIN:
+            unsafeOriginManifest.physicalDeviceApiRelay.apiOrigin,
         },
         checkTime,
         trustStore,
@@ -578,7 +722,7 @@ describe("native health release evidence", () => {
     ).rejects.toThrow(/machine.*tailnet.*ts\.net/u);
 
     const changedReport = physicalDeviceRelayReport();
-    changedReport.teardown.shieldsUpRestored = "failed";
+    changedReport.teardown.boundaryRestored = "failed";
     await expect(
       validateHealthReleaseEvidence(
         environmentFor(attest(), changedReport),
@@ -589,7 +733,58 @@ describe("native health release evidence", () => {
     ).rejects.toThrow(/SHA-256/u);
   });
 
-  it("requires the unsigned v2 trust marker and complete source-capture digest", async () => {
+  it("accepts v5 plus v3 and rejects a legacy v2 report before exact-key parsing", async () => {
+    await expect(
+      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, releaseRuntime),
+    ).resolves.toMatchObject({
+      physicalDeviceApiRelay: { apiOrigin: physicalDeviceApiOrigin },
+    });
+
+    const legacyReport = {
+      schemaVersion: "nutrition-tracker-physical-device-relay-report-v2",
+      apiOrigin: physicalDeviceApiOrigin,
+      deliberatelyWrongKeys: true,
+    };
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(unsignedManifest(legacyReport)), legacyReport),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/Legacy physical-device relay report v2 is rejected/u);
+
+    await expect(
+      validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+        ...releaseRuntime,
+        relayVersionAdapters: [],
+      }),
+    ).rejects.toThrow(/unsupported Tailscale adapter\/version tuple/u);
+
+    for (const relayVersionAdapters of [
+      [
+        {
+          ...syntheticRelayVersionAdapter,
+          adapterId: "synthetic/windows-contract-v1",
+        },
+      ],
+      [
+        {
+          ...syntheticRelayVersionAdapter,
+          tailscaleClientVersion: "0.0.0 test",
+        },
+      ],
+    ]) {
+      await expect(
+        validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
+          ...releaseRuntime,
+          relayVersionAdapters,
+        }),
+      ).rejects.toThrow(/adapter-ID syntax|version syntax/u);
+    }
+  });
+
+  it("requires the unsigned v3 trust marker and complete source-capture digest", async () => {
     const wrongBoundary = physicalDeviceRelayReport();
     wrongBoundary.trustBoundary = "trusted";
     await expect(
@@ -754,6 +949,24 @@ describe("native health release evidence", () => {
         label,
       ).rejects.toThrow(expected);
     }
+  });
+
+  it("requires P0 smoke completion to precede manifest review strictly", async () => {
+    const smokeReport = p0ClientSmokeReport();
+    const relayReport = physicalDeviceRelayReport();
+    const reviewedAt = unsignedManifest(relayReport, smokeReport).reviewedAt;
+    smokeReport.completedAt = reviewedAt;
+    const manifest = unsignedManifest(relayReport, smokeReport);
+    expect(smokeReport.completedAt).toBe(manifest.reviewedAt);
+
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(manifest), relayReport, smokeReport),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/finish before review/u);
   });
 
   it("rejects malformed P0 smoke source binding and forbidden identifiers", async () => {
@@ -946,117 +1159,347 @@ describe("native health release evidence", () => {
     ).rejects.toThrow(/changed while/u);
   });
 
-  it("rejects weakened Serve, policy, inventory, probe, and teardown claims", async () => {
+  it("rejects weakened v3 topology, policy, boundary, probe, restart, and teardown claims", async () => {
     const cases = [
       [
-        "first connection exposed",
-        (report) => (report.preflight.firstConnectionShieldsUp = "failed"),
-        /firstConnectionShieldsUp/u,
+        "unexpected raw origin",
+        (report) => (report.apiOrigin = physicalDeviceApiOrigin),
+        /must contain exactly/u,
       ],
       [
-        "initial Serve present",
-        (report) => (report.preflight.initialServeAndFunnelStatus = "present"),
-        /initialServeAndFunnelStatus/u,
+        "source commit mismatch",
+        (report) => (report.sourceCommit = "b".repeat(40)),
+        /sourceCommit must equal the signed manifest\.gitCommit/u,
       ],
       [
-        "incoming enabled early",
-        (report) => (report.preflight.incomingAccessHeldUntilPolicyTests = "failed"),
+        "unsupported adapter ID",
+        (report) => (report.versionAdapter.adapterId = "unknown-windows-contract-v1"),
+        /unsupported Tailscale adapter\/version tuple/u,
+      ],
+      [
+        "unsupported client version",
+        (report) => (report.versionAdapter.tailscaleClientVersion = "0.0.1-test"),
+        /unsupported Tailscale adapter\/version tuple/u,
+      ],
+      [
+        "unsupported daemon version",
+        (report) => (report.versionAdapter.tailscaleDaemonVersion = "0.0.1-test"),
+        /unsupported Tailscale adapter\/version tuple/u,
+      ],
+      [
+        "wrong relay node",
+        (report) => (report.hostTopology.relayNode = "wsl2"),
+        /hostTopology\.relayNode/u,
+      ],
+      [
+        "unsupported WSL mode",
+        (report) => (report.hostTopology.wslNetworkingMode = "bridged"),
+        /wslNetworkingMode/u,
+      ],
+      [
+        "missing version identity",
+        (report) => (report.versionAdapter.tailscaleDaemonVersion = ""),
+        /version syntax/u,
+      ],
+      [
+        "Windows path in version",
+        (report) => (report.versionAdapter.windowsVersion = "C:\\Windows"),
+        /version syntax/u,
+      ],
+      [
+        "principal in version",
+        (report) => (report.versionAdapter.wslVersion = "admin@example.test"),
+        /version syntax/u,
+      ],
+      [
+        "slash in version",
+        (report) => (report.versionAdapter.ubuntuVersion = "24.04/test"),
+        /version syntax/u,
+      ],
+      [
+        "space in version",
+        (report) => (report.versionAdapter.dockerDesktopVersion = "4.45.0 stable"),
+        /version syntax/u,
+      ],
+      [
+        "overlong version",
+        (report) => (report.versionAdapter.dockerEngineVersion = "v".repeat(65)),
+        /version syntax/u,
+      ],
+      [
+        "invalid adapter path",
+        (report) => (report.versionAdapter.adapterId = "../adapter"),
+        /adapter-ID syntax/u,
+      ],
+      [
+        "invalid adapter principal",
+        (report) => (report.versionAdapter.adapterId = "user@example.test"),
+        /adapter-ID syntax/u,
+      ],
+      [
+        "invalid adapter space",
+        (report) => (report.versionAdapter.adapterId = "adapter id"),
+        /adapter-ID syntax/u,
+      ],
+      [
+        "overlong adapter ID",
+        (report) => (report.versionAdapter.adapterId = `a${"b".repeat(64)}`),
+        /adapter-ID syntax/u,
+      ],
+      [
+        "environment capture not bound",
+        (report) => (report.boundaryEvidence.active.environmentSha256 = captureDigest(999)),
+        /bind version-adapter evidence/u,
+      ],
+      [
+        "incoming enabled before policy",
+        (report) => (report.policy.incomingAccessHeldUntilPolicyTests = "failed"),
         /incomingAccessHeldUntilPolicyTests/u,
       ],
       [
-        "phone identity not revalidated",
-        (report) => (report.preflight.androidIdentityRevalidated = "failed"),
-        /androidIdentityRevalidated/u,
-      ],
-      [
-        "Funnel enabled",
-        (report) => (report.serve.funnelEnabled = true),
-        /no persistent Serve or Funnel/u,
-      ],
-      [
-        "wrong upstream",
-        (report) => (report.serve.upstream = "http://127.0.0.1:4566"),
-        /exact API loopback/u,
+        "relay identity not revalidated",
+        (report) => (report.policy.relayHostIdentityRevalidated = "failed"),
+        /relayHostIdentityRevalidated/u,
       ],
       [
         "broad policy",
-        (report) => (report.tailnetAccess.testedPhonesToMacTcp443Only = "failed"),
-        /testedPhonesToMacTcp443Only/u,
+        (report) => (report.policy.testedPhonesToRelayHostTcp443Only = "failed"),
+        /testedPhonesToRelayHostTcp443Only/u,
       ],
       [
-        "overlap",
-        (report) => (report.tailnetAccess.noOverlappingAclOrGrant = "failed"),
+        "overlapping policy",
+        (report) => (report.policy.noOverlappingAclOrGrant = "failed"),
         /noOverlappingAclOrGrant/u,
       ],
-      [
-        "unapproved peer",
-        (report) => (report.tailnetAccess.unapprovedPeerHttps443 = "allowed"),
-        /unapprovedPeerHttps443/u,
-      ],
+      ["policy tests failed", (report) => (report.policy.policyTests = "failed"), /policyTests/u],
       [
         "one-phone policy",
-        (report) => report.tailnetAccess.approvedPhoneAliases.pop(),
-        /exactly the reviewed iOS and Android phone aliases/u,
+        (report) => report.policy.approvedPhoneAliases.pop(),
+        /reviewed phone aliases/u,
+      ],
+      [
+        "malformed policy gate",
+        (report) => (report.policy.gateCaptureSha256 = "not-a-digest"),
+        /gateCaptureSha256/u,
+      ],
+      [
+        "incomplete active boundary",
+        (report) => delete report.boundaryEvidence.active.dockerPortsSha256,
+        /boundaryEvidence\.active must contain exactly/u,
+      ],
+      [
+        "malformed teardown boundary",
+        (report) => (report.boundaryEvidence.teardown.forwardingSha256 = "bad"),
+        /boundaryEvidence\.teardown\.forwardingSha256/u,
+      ],
+      [
+        "reused boundary capture",
+        (report) =>
+          (report.boundaryEvidence.active.windowsListenersSha256 =
+            report.boundaryEvidence.preflight.windowsListenersSha256),
+        /candidate capture roles cannot be reused/u,
+      ],
+      [
+        "reused active state capture",
+        (report) =>
+          (report.restart.preShutdown.incomingCaptureSha256 = report.active.incomingCaptureSha256),
+        /candidate capture roles cannot be reused/u,
+      ],
+      ["Funnel enabled", (report) => (report.active.funnel = "enabled"), /active\.funnel/u],
+      [
+        "wrong upstream",
+        (report) => (report.active.upstream = "http://127.0.0.1:4566"),
+        /active route/u,
+      ],
+      [
+        "missing baseline port",
+        (report) => report.active.inventoriedNon443TcpPorts.shift(),
+        /include TCP\/22/u,
       ],
       [
         "swapped phone alias",
-        (report) => (report.deviceProbes.ios.phoneAlias = "nutrition-tracker-phone-2"),
+        (report) => (report.active.deviceProbes.ios.phoneAlias = "nutrition-tracker-phone-2"),
         /distinct reviewed ios phone/u,
       ],
       [
-        "probe changed policy",
-        (report) => (report.deviceProbes.android.policySha256 = "d".repeat(64)),
-        /same reviewed two-phone policy/u,
-      ],
-      [
-        "missing baseline",
-        (report) => report.listenerInventory.inventoriedNon443TcpPorts.shift(),
-        /denied TCP\/22/u,
-      ],
-      [
-        "wildcard outside inventory",
-        (report) => report.listenerInventory.wildcardNon443TcpPorts.push(65535),
-        /subset/u,
-      ],
-      [
         "extra open port",
-        (report) => report.deviceProbes.ios.openTcpPorts.push(4000),
+        (report) => report.active.deviceProbes.ios.openTcpPorts.push(4000),
         /only TCP\/443/u,
       ],
       [
         "probe mismatch",
-        (report) => report.deviceProbes.android.blockedTcpPorts.pop(),
-        /complete listener inventory/u,
+        (report) => report.active.deviceProbes.android.blockedTcpPorts.pop(),
+        /complete denied-port inventory/u,
       ],
       [
-        "wrong build",
-        (report) => (report.deviceProbes.ios.testedEasBuildId = buildIds.production.ios),
+        "wrong active build",
+        (report) =>
+          (report.active.deviceProbes.ios.testedEasBuildId = buildIds.physicalDevice.android),
         /bind the ios physical artifact/u,
       ],
       [
-        "CA failure",
-        (report) => (report.deviceProbes.android.publicCaAndHostname = "failed"),
-        /publicCaAndHostname/u,
+        "wrong readiness body",
+        (report) => (report.active.deviceProbes.android.readyBodySha256 = captureDigest(999)),
+        /readyBodySha256/u,
+      ],
+      [
+        "direct target reachable",
+        (report) => (report.active.deviceProbes.ios.directWindowsWslDockerTargets = "reachable"),
+        /directWindowsWslDockerTargets/u,
       ],
       [
         "off-tailnet access",
-        (report) => (report.deviceProbes.android.tailscaleDisabledHttps = "reachable"),
+        (report) => (report.active.deviceProbes.android.tailscaleDisabledHttps = "reachable"),
         /tailscaleDisabledHttps/u,
       ],
       [
-        "teardown failure",
-        (report) => (report.teardown.serveAndFunnelStatus = "present"),
-        /serveAndFunnelStatus/u,
+        "unapproved peer reached HTTPS",
+        (report) => (report.active.deviceProbes.unapprovedTailnet.httpsPort = "reachable"),
+        /unapprovedTailnet\.httpsPort/u,
       ],
       [
-        "Mac not disconnected",
-        (report) => (report.teardown.macDisconnected = "failed"),
-        /macDisconnected/u,
+        "unapproved peer missed a denied port",
+        (report) => report.active.deviceProbes.unapprovedTailnet.blockedTcpPorts.pop(),
+        /complete denied-port inventory/u,
       ],
       [
-        "missing teardown source digest",
-        (report) => (report.teardown.shieldsUpStatusSha256 = "not-a-digest"),
-        /shieldsUpStatusSha256/u,
+        "LAN target reachable",
+        (report) => (report.active.deviceProbes.lan.windowsWslDockerTargets = "reachable"),
+        /windowsWslDockerTargets/u,
+      ],
+      [
+        "LAN address family omitted",
+        (report) => (report.active.deviceProbes.lan.ipv4AndIpv6Paths = "failed"),
+        /ipv4AndIpv6Paths/u,
+      ],
+      [
+        "restart began while incoming enabled",
+        (report) => (report.restart.preShutdown.incoming = "enabled"),
+        /restart\.preShutdown\.incoming/u,
+      ],
+      [
+        "restart identity stale",
+        (report) => (report.restart.preExposure.relayHostIdentityRevalidated = "failed"),
+        /restart\.preExposure\.relayHostIdentityRevalidated/u,
+      ],
+      [
+        "migrations stale",
+        (report) => (report.restart.localReadiness.migrationsCurrent = "failed"),
+        /migrationsCurrent/u,
+      ],
+      [
+        "WSL readiness failed",
+        (report) => (report.restart.localReadiness.wsl.httpStatus = 500),
+        /localReadiness\.wsl\.httpStatus/u,
+      ],
+      [
+        "Windows readiness body changed",
+        (report) => (report.restart.localReadiness.windows.bodySha256 = captureDigest(999)),
+        /localReadiness\.windows\.bodySha256/u,
+      ],
+      [
+        "relay not re-enabled",
+        (report) => (report.restart.reenabledRelay.serve = "disabled"),
+        /reenabledRelay\.serve/u,
+      ],
+      [
+        "wrong restart build",
+        (report) =>
+          (report.restart.deviceProbes.ios.testedEasBuildId = buildIds.physicalDevice.android),
+        /bind the ios physical artifact/u,
+      ],
+      [
+        "restart route not recovered",
+        (report) => (report.restart.routeRecovered = "failed"),
+        /routeRecovered/u,
+      ],
+      [
+        "source process changed",
+        (report) => (report.restart.sourceProcessContinuity = "failed"),
+        /sourceProcessContinuity/u,
+      ],
+      [
+        "reused active probe capture",
+        (report) =>
+          (report.restart.deviceProbes.ios.captureSha256 =
+            report.active.deviceProbes.ios.captureSha256),
+        /candidate capture roles cannot be reused/u,
+      ],
+      [
+        "swapped active phone times",
+        (report) => (report.active.deviceProbes.ios.observedAt = "2026-08-16T07:23:00.000Z"),
+        /Active probe observations must be strictly ordered/u,
+      ],
+      [
+        "equal active phone times",
+        (report) =>
+          (report.active.deviceProbes.android.observedAt =
+            report.active.deviceProbes.ios.observedAt),
+        /Active probe observations must be strictly ordered/u,
+      ],
+      [
+        "swapped restart readiness times",
+        (report) => (report.restart.localReadiness.wsl.observedAt = "2026-08-16T07:48:00.000Z"),
+        /Restart readiness and probe observations must be strictly ordered/u,
+      ],
+      [
+        "equal restart phone times",
+        (report) =>
+          (report.restart.deviceProbes.android.observedAt =
+            report.restart.deviceProbes.ios.observedAt),
+        /Restart readiness and probe observations must be strictly ordered/u,
+      ],
+      [
+        "active and restart phases share a timestamp",
+        (report) =>
+          (report.active.deviceProbes.lan.observedAt =
+            report.restart.localReadiness.wsl.observedAt),
+        /Active probes must finish before post-restart/u,
+      ],
+      [
+        "active probe after restart readiness",
+        (report) => (report.active.deviceProbes.lan.observedAt = "2026-08-16T07:50:00.000Z"),
+        /Active probes must finish/u,
+      ],
+      [
+        "restart probe before readiness",
+        (report) => (report.restart.localReadiness.windows.observedAt = "2026-08-16T07:59:00.000Z"),
+        /Restart readiness and probe observations must be strictly ordered/u,
+      ],
+      [
+        "restart probe equals signed execution",
+        (report) => (report.restart.deviceProbes.lan.observedAt = report.executedAt),
+        /Restart probes must finish before signed relay execution/u,
+      ],
+      [
+        "report build mismatch",
+        (report) => (report.buildIds.ios = buildIds.physicalDevice.android),
+        /buildIds\.ios.*signed physical artifact/u,
+      ],
+      [
+        "teardown incoming enabled",
+        (report) => (report.teardown.incoming = "enabled"),
+        /teardown\.incoming/u,
+      ],
+      [
+        "relay host not disconnected",
+        (report) => (report.teardown.relayHostDisconnected = "failed"),
+        /relayHostDisconnected/u,
+      ],
+      [
+        "boundary not restored",
+        (report) => (report.teardown.boundaryRestored = "failed"),
+        /boundaryRestored/u,
+      ],
+      [
+        "malformed disconnect capture",
+        (report) => (report.teardown.disconnectCaptureSha256 = "not-a-digest"),
+        /disconnectCaptureSha256/u,
+      ],
+      [
+        "malformed session ledger",
+        (report) => (report.sessionLedgerSha256 = "not-a-digest"),
+        /sessionLedgerSha256/u,
       ],
     ];
     for (const [label, mutate, message] of cases) {
@@ -1072,6 +1515,40 @@ describe("native health release evidence", () => {
         label,
       ).rejects.toThrow(message);
     }
+  });
+
+  it("requires relay completion to follow signed execution strictly", async () => {
+    const equalExecutionAndCompletion = physicalDeviceRelayReport();
+    equalExecutionAndCompletion.completedAt = equalExecutionAndCompletion.executedAt;
+
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(
+          attest(unsignedManifest(equalExecutionAndCompletion)),
+          equalExecutionAndCompletion,
+        ),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/exactly bind signed execution/u);
+  });
+
+  it("requires relay completion to precede manifest review strictly", async () => {
+    const report = physicalDeviceRelayReport();
+    const reviewedAt = unsignedManifest(report).reviewedAt;
+    report.completedAt = reviewedAt;
+    const manifest = unsignedManifest(report);
+    expect(report.completedAt).toBe(manifest.reviewedAt);
+
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(manifest), report),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      ),
+    ).rejects.toThrow(/finish before review/u);
   });
 
   it("requires a fresh relay capture and rejects forbidden report payload keys", async () => {
@@ -1109,7 +1586,7 @@ describe("native health release evidence", () => {
     ).rejects.toThrow(/exactly bind signed execution/u);
 
     const leaked = physicalDeviceRelayReport();
-    leaked.tailnetAccess.token = "must-not-be-recorded";
+    leaked.policy.token = "must-not-be-recorded";
     await expect(
       validateHealthReleaseEvidence(
         environmentFor(attest(unsignedManifest(leaked)), leaked),
@@ -1118,6 +1595,30 @@ describe("native health release evidence", () => {
         releaseRuntime,
       ),
     ).rejects.toThrow(/must not contain/u);
+  });
+
+  it("never reflects attacker-controlled evidence keys in forbidden-payload errors", async () => {
+    const secretBearingParentKey = "parent-secret-do-not-echo-7f4b2f";
+    const nestedSecret = "nested-secret-do-not-echo-a832c1";
+    const report = physicalDeviceRelayReport();
+    report[secretBearingParentKey] = { token: nestedSecret };
+    let failure;
+    try {
+      await validateHealthReleaseEvidence(
+        environmentFor(attest(unsignedManifest(report)), report),
+        checkTime,
+        trustStore,
+        releaseRuntime,
+      );
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(TypeError);
+    expect(failure.message).toBe(
+      "Release evidence must not contain health payloads, identifiers, keys, or tokens.",
+    );
+    expect(failure.message).not.toContain(secretBearingParentKey);
+    expect(failure.message).not.toContain(nestedSecret);
   });
 
   it("hashes each physical-device and production artifact independently", async () => {

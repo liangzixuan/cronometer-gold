@@ -1,14 +1,16 @@
 # Windows-host/WSL2 physical-device private HTTPS
 
-> **STOP — proposed design, not an executable runbook.**
+> **STOP — offline framework implemented; live use remains blocked.**
 >
-> No current code accepts relay review-package v2 or relay report v3. This
-> document authorizes no Tailscale, firewall, listener, policy, phone,
+> Checked-in code structurally normalizes review-package v2 and accepts relay
+> report v3, but the production version-adapter registry is deliberately empty.
+> This document authorizes no Tailscale, firewall, listener, policy, phone,
 > certificate, Docker-boundary, or EAS action. Read
 > [ADR 0011](../../docs/adr/0011-windows-host-wsl2-private-phone-relay.md)
 > and the [v2 design reference](../tailscale/relay-review-package-v2.md). The
-> path remains blocked until implementation, adversarial tests, and independent
-> review land together.
+> path remains blocked until exact Windows output corpora, reviewed production
+> adapters/collectors, authentic evidence, and separate live-phase approvals
+> exist.
 
 This document defines the evidence that a future attended Windows workflow must
 produce. It is not public hosting, a production deployment, or a substitute for
@@ -17,8 +19,9 @@ only.
 
 ## Authorization boundary
 
-This checked-in design permits offline documentation, schema, fixture, and test
-work only. It does not permit installing or authenticating Tailscale, joining a
+This checked-in path permits offline documentation, schema, fixture, test,
+renderer, normalizer, and validator work only. It does not permit installing or
+authenticating Tailscale, joining a
 tailnet, changing policy or firewall state, enabling incoming connections,
 starting Serve, requesting a certificate, connecting a phone, running a probe,
 or invoking EAS.
@@ -27,27 +30,27 @@ Each future live phase needs explicit operator approval after the exact command,
 version, target, expected state change, recovery path, and evidence location are
 reviewed. A commit or push approval does not authorize any live phase.
 
-## Required implementation before use
+## Remaining implementation before live use
 
-Before this can become executable, one atomic implementation must provide:
+The checked-in offline cutover now provides the non-collecting renderer and
+normalizer, exact v2/v3 schemas, matrix-derived roles, protected-file checks,
+synthetic positive/adversarial fixtures, no-execution tests, the v3-only mobile
+validator cutover, and independent source review. It does not make this runbook
+executable. They cannot execute PowerShell, `wsl.exe`, Docker, Tailscale,
+browsers, probes, or administrative commands.
 
-1. a host-neutral policy renderer and structural normalizer that only read
-   protected files and write canonical output;
-2. review-package v2, source-bundle v2, and relay-report v3 schemas with exact
-   field sets, role order, size bounds, file ownership/mode checks, and
-   canonical JSON rules;
-3. tested adapters for the exact supported Windows Tailscale client and daemon
-   versions and their incoming, Serve, Funnel, status, help, and disconnect
-   output;
-4. independently specified collectors for Windows listeners, Defender and
-   Hyper-V firewalls, forwarding/HNS, WSL listeners, and every Docker publish;
-5. positive and adversarial fixtures for every phase/evidence-matrix role;
-6. source tests proving the renderer and normalizer cannot execute PowerShell,
-   `wsl.exe`, Docker, Tailscale, browsers, probes, or administrative commands
-   and cannot accept protected identifiers as arguments;
-7. an atomic mobile/release verifier cutover that accepts only relay report v3
-   and rejects legacy v2 without field renaming or fallback; and
-8. independent security review of the complete producer/verifier/test diff.
+Before live use, a separately reviewed follow-up must provide:
+
+1. tested production adapters for the exact installed Windows Tailscale client
+   and daemon versions and their incoming, Serve, Funnel, status, help, and
+   disconnect output;
+2. independently specified collectors/parsers for Windows listeners, Defender
+   and Hyper-V firewalls, forwarding/HNS, WSL listeners, and every Docker
+   publish;
+3. authentic mode-protected captures from one new continuous attended Windows
+   session, with no Mac or synthetic observation reused; and
+4. independent review of those exact adapters, collectors, captures, and the
+   proposed live commands before any state or exposure changes.
 
 The existing macOS renderer, normalizer, v1 package, v2 report, and runbook do
 not satisfy these requirements.
@@ -119,7 +122,7 @@ ordering. Teardown blocks incoming first and disconnects the relay last.
 
 ## Version-driven Windows Serve and Funnel review
 
-Do not copy macOS commands or assume a Windows socket shape. The implemented
+Do not copy macOS commands or assume a Windows socket shape. A future production
 adapter must be selected from the exact captured client and daemon versions and
 must derive canonical state from exact raw output. An unknown version, missing
 field, ambiguous state, or unsupported shape stops the session.
@@ -192,7 +195,7 @@ filesystem whose Linux ownership/mode/no-follow guarantees cannot be proven.
 Never store captures in `.env`, logs, tickets, chat, shell arguments, or command
 history. Never copy Mac captures into the Windows session.
 
-The eventual normalizer may emit only canonical redacted report v3 bytes and a
+The normalizer emits only canonical redacted report v3 bytes and a
 fixed unsigned warning. The candidate is not authenticated evidence. A complete
 new Windows session is required; v1 inputs or v2 reports cannot be converted,
 renamed, supplemented, or partially reused.
@@ -230,8 +233,8 @@ renamed, supplemented, or partially reused.
 This runbook remains non-executable until all boxes can be checked by a separate
 reviewed change and approved attended session:
 
-- [ ] The atomic renderer/normalizer/verifier implementation and adversarial
-  tests are committed and independently reviewed.
+- [x] The atomic renderer/normalizer/verifier implementation and adversarial
+  tests are present in this change and independently reviewed.
 - [ ] Exact Windows, WSL, Docker, Tailscale, networking, firewall, and
   forwarding versions/shapes are supported by tested adapters.
 - [ ] Separate approval was obtained for every live mutation and probe phase.

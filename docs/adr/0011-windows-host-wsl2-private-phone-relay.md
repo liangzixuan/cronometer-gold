@@ -1,6 +1,7 @@
 # ADR 0011: Define a Windows-host/WSL2 private physical-phone relay boundary
 
-- Status: Proposed; implementation and all phone exposure remain blocked
+- Status: Accepted for offline contract implementation; the production adapter,
+  authentic evidence, and all phone exposure remain blocked
 - Date: 2026-08-27
 - Scope: synthetic-data-only physical-device development on Windows 11, WSL2
   Ubuntu, and Docker Desktop
@@ -34,11 +35,13 @@ configuration rather than assumed from the macOS evidence model.
 
 ## Decision
 
-Define a proposed Windows-only v2 review package and v3 normalized report. This
-decision authorizes no install, join, authentication, policy, firewall,
-listener, certificate, phone, EAS, or other external action. The path remains
-blocked until its renderer, normalizer, validators, fixtures, negative tests,
-and independent review are implemented together and pass.
+Implement an offline Windows-only v2 review package and v3 normalized report.
+The renderer, structural normalizer, mobile validator cutover, synthetic
+fixtures, adversarial tests, and independent source review land atomically. The
+production adapter registry remains empty until exact Windows Tailscale and
+boundary-output corpora are captured and independently reviewed. This decision
+authorizes no install, join, authentication, policy, firewall, listener,
+certificate, phone, EAS, or other external action.
 
 The implemented contract must:
 
@@ -120,8 +123,9 @@ The Windows evidence surface is intentionally larger than the macOS surface.
 Sensitive raw captures remain outside Git and OneDrive, while a canonical
 candidate contains only hashes and redacted conclusions. A full cold restart
 and physical probes are expensive, attended steps and cannot be inferred from
-static tests. The existing macOS implementation stays intact until an atomic
-producer/verifier cutover explicitly retires it.
+static tests. The macOS producer remains historical evidence only; the atomic
+mobile verifier cutover accepts Windows report v3 and rejects legacy report v2
+without conversion or fallback.
 
 The route exposes only the API through private HTTPS. LocalStack and every
 application dependency remain loopback-only, and neither private relay success
@@ -145,7 +149,8 @@ nor LocalStack success can satisfy public deployment or signed-release gates.
 
 ## Review triggers
 
-Review this decision before implementing the renderer or normalizer; changing
+Review this decision before registering a production adapter or running a live
+phase; changing
 the host OS, WSL distribution or networking mode, Docker provider, Tailscale
 placement/version/output adapter, Serve/Funnel behavior, firewall or forwarding
 model, role matrix, protected ports, API bind/upstream, identity model, outer

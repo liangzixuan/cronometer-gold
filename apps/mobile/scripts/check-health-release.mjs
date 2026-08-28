@@ -25,7 +25,11 @@ import {
 export const HEALTH_RELEASE_EVIDENCE_SCHEMA = "nutrition-tracker-health-release-evidence-v5";
 export { HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA } from "./reviewer-trust.mjs";
 export const PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA =
+  "nutrition-tracker-physical-device-relay-report-v3";
+const LEGACY_PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA =
   "nutrition-tracker-physical-device-relay-report-v2";
+const PHYSICAL_DEVICE_API_ORIGIN_COMMITMENT_DOMAIN =
+  "nutrition-tracker-physical-device-api-origin-v1";
 export const P0_CLIENT_SMOKE_REPORT_SCHEMA = "nutrition-tracker-p0-client-smoke-report-v1";
 const PHYSICAL_DEVICE_RELAY_TRUST_BOUNDARY =
   "unsigned-structural-candidate-requires-independent-ed25519-manifest-review";
@@ -68,16 +72,21 @@ const EAS_BUILD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:@/+ -]{2,127}$/u;
 const SAFE_KEY_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/u;
 const SAFE_VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/u;
+const RELAY_ADAPTER_ID = /^[a-z0-9][a-z0-9._-]{2,63}$/u;
+const RELAY_VERSION = /^[A-Za-z0-9][A-Za-z0-9._+()-]{0,63}$/u;
 const IOS_BUILD_NUMBER = /^[1-9]\d{0,3}(?:\.(?:0|[1-9]\d?)){0,2}$/u;
 const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
 const STANDARD_BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
 const BASELINE_DENIED_TCP_PORTS = Object.freeze([
   22, 80, 1025, 2181, 4000, 4566, 5432, 7700, 8025, 8080, 8081, 9000, 9001, 9092,
 ]);
+const READY_BODY_SHA256 = "a29ee2b15c494311c52521766e44af56a3ad2248e7a8ab465e5206463c13d288";
+const WSL_NETWORKING_MODES = new Set(["nat", "mirrored"]);
 const PHYSICAL_PHONE_ALIASES = Object.freeze([
   "nutrition-tracker-phone-1",
   "nutrition-tracker-phone-2",
 ]);
+const PRODUCTION_RELAY_VERSION_ADAPTERS = Object.freeze([]);
 
 const artifactSpecifications = [
   {
@@ -228,10 +237,10 @@ function assertPassedMatrix(matrix, name) {
   }
 }
 
-function rejectHealthPayloadEvidence(value, path = "manifest") {
+function rejectHealthPayloadEvidence(value) {
   if (Array.isArray(value)) {
-    value.forEach((child, index) => {
-      rejectHealthPayloadEvidence(child, `${path}[${index}]`);
+    value.forEach((child) => {
+      rejectHealthPayloadEvidence(child);
     });
     return;
   }
@@ -239,10 +248,10 @@ function rejectHealthPayloadEvidence(value, path = "manifest") {
   for (const [key, child] of Object.entries(value)) {
     if (forbiddenEvidenceKeys.has(key)) {
       throw new TypeError(
-        `${path}.${key} must not contain health payloads, identifiers, keys, or tokens.`,
+        "Release evidence must not contain health payloads, identifiers, keys, or tokens.",
       );
     }
-    rejectHealthPayloadEvidence(child, `${path}.${key}`);
+    rejectHealthPayloadEvidence(child);
   }
 }
 
@@ -307,53 +316,77 @@ function assertP0ClientSmoke(smoke) {
   return smoke;
 }
 
-function assertRelayProbe(
-  probe,
-  platform,
-  artifact,
-  inventoriedPorts,
-  tailnetAccess,
-  startedAt,
-  executedAt,
-) {
-  const name = `physical-device relay report.deviceProbes.${platform}`;
+export function physicalDeviceApiOriginCommitmentSha256(canonicalOrigin) {
+  const url = validatePhysicalDeviceApiUrl(canonicalOrigin);
+  if (canonicalOrigin !== url.origin) {
+    throw new TypeError("Physical-device API origin commitment requires a canonical origin.");
+  }
+  return createHash("sha256")
+    .update(`${PHYSICAL_DEVICE_API_ORIGIN_COMMITMENT_DOMAIN}\n${canonicalOrigin}\n`, "utf8")
+    .digest("hex");
+}
+
+function assertCompleteDeniedPorts(value, inventoriedPorts, name) {
+  const blockedPorts = assertSortedPortArray(value, name);
+  if (
+    blockedPorts.length !== inventoriedPorts.length ||
+    blockedPorts.some((port, index) => port !== inventoriedPorts[index])
+  ) {
+    throw new TypeError(`${name} must equal the complete denied-port inventory.`);
+  }
+}
+
+function assertObservedAt(value, name, startedAt, executedAt) {
+  const observedAt = parseInstant(value, name);
+  if (observedAt < startedAt || observedAt > executedAt) {
+    throw new TypeError(`${name} must fall inside the reviewed relay session.`);
+  }
+  return observedAt;
+}
+
+function assertStrictObservationOrder(observations, message) {
+  for (let index = 1; index < observations.length; index += 1) {
+    if (observations[index - 1].observedAt >= observations[index].observedAt) {
+      throw new TypeError(message);
+    }
+  }
+}
+
+function assertApprovedRelayProbe(probe, platform, buildId, inventoriedPorts, times, phase) {
+  const name = `physical-device relay report.${phase}.deviceProbes.${platform}`;
   assertExactKeys(
     probe,
     [
       "testedEasBuildId",
       "phoneAlias",
       "observedAt",
-      "policySha256",
-      "configurationLogEventSha256",
+      "captureSha256",
       "publicCaAndHostname",
       "readyHttpStatus",
+      "readyBodySha256",
       "openTcpPorts",
       "blockedTcpPorts",
+      "directWindowsWslDockerTargets",
       "tailscaleDisabledHttps",
     ],
     name,
   );
   assertEasBuildId(probe.testedEasBuildId, `${name}.testedEasBuildId`);
-  if (probe.testedEasBuildId !== artifact.easBuildId) {
+  if (probe.testedEasBuildId !== buildId) {
     throw new TypeError(`${name}.testedEasBuildId must bind the ${platform} physical artifact.`);
   }
   const expectedAlias = platform === "ios" ? PHYSICAL_PHONE_ALIASES[0] : PHYSICAL_PHONE_ALIASES[1];
   if (probe.phoneAlias !== expectedAlias) {
     throw new TypeError(`${name}.phoneAlias must bind the distinct reviewed ${platform} phone.`);
   }
-  const observedAt = parseInstant(probe.observedAt, `${name}.observedAt`);
-  if (observedAt < startedAt || observedAt > executedAt) {
-    throw new TypeError(`${name}.observedAt must fall inside the reviewed active test session.`);
-  }
-  if (
-    probe.policySha256 !== tailnetAccess.policySha256 ||
-    probe.configurationLogEventSha256 !== tailnetAccess.configurationLogEventSha256
-  ) {
-    throw new TypeError(`${name} must bind the same reviewed two-phone policy and event.`);
-  }
+  const observedAt = assertObservedAt(probe.observedAt, `${name}.observedAt`, ...times);
+  assertSha256(probe.captureSha256, `${name}.captureSha256`);
   assertExactResult(probe.publicCaAndHostname, "passed", `${name}.publicCaAndHostname`);
   if (probe.readyHttpStatus !== 200) {
     throw new TypeError(`${name}.readyHttpStatus must equal 200.`);
+  }
+  if (probe.readyBodySha256 !== READY_BODY_SHA256) {
+    throw new TypeError(`${name}.readyBodySha256 must bind the exact {"status":"ok"} bytes.`);
   }
   if (
     !Array.isArray(probe.openTcpPorts) ||
@@ -362,41 +395,362 @@ function assertRelayProbe(
   ) {
     throw new TypeError(`${name}.openTcpPorts must contain only TCP/443.`);
   }
-  assertSortedPortArray(probe.blockedTcpPorts, `${name}.blockedTcpPorts`);
-  if (
-    probe.blockedTcpPorts.length !== inventoriedPorts.length ||
-    probe.blockedTcpPorts.some((port, index) => port !== inventoriedPorts[index])
-  ) {
-    throw new TypeError(`${name}.blockedTcpPorts must equal the complete listener inventory.`);
-  }
+  assertCompleteDeniedPorts(probe.blockedTcpPorts, inventoriedPorts, `${name}.blockedTcpPorts`);
+  assertExactResult(
+    probe.directWindowsWslDockerTargets,
+    "blocked",
+    `${name}.directWindowsWslDockerTargets`,
+  );
   assertExactResult(probe.tailscaleDisabledHttps, "blocked", `${name}.tailscaleDisabledHttps`);
+  return { captureSha256: probe.captureSha256, name, observedAt };
 }
 
-function validatePhysicalDeviceRelayReport(report, relay, artifacts, executedAt, reviewedAt) {
+function assertDeniedRelayProbe(probe, inventoriedPorts, times, phase) {
+  const name = `physical-device relay report.${phase}.deviceProbes.unapprovedTailnet`;
+  assertExactKeys(probe, ["observedAt", "captureSha256", "httpsPort", "blockedTcpPorts"], name);
+  const observedAt = assertObservedAt(probe.observedAt, `${name}.observedAt`, ...times);
+  assertSha256(probe.captureSha256, `${name}.captureSha256`);
+  assertExactResult(probe.httpsPort, "blocked", `${name}.httpsPort`);
+  assertCompleteDeniedPorts(probe.blockedTcpPorts, inventoriedPorts, `${name}.blockedTcpPorts`);
+  return { captureSha256: probe.captureSha256, name, observedAt };
+}
+
+function assertLanRelayProbe(probe, inventoriedPorts, times, phase) {
+  const name = `physical-device relay report.${phase}.deviceProbes.lan`;
+  assertExactKeys(
+    probe,
+    [
+      "observedAt",
+      "captureSha256",
+      "httpsPort",
+      "blockedTcpPorts",
+      "windowsWslDockerTargets",
+      "ipv4AndIpv6Paths",
+    ],
+    name,
+  );
+  const observedAt = assertObservedAt(probe.observedAt, `${name}.observedAt`, ...times);
+  assertSha256(probe.captureSha256, `${name}.captureSha256`);
+  assertExactResult(probe.httpsPort, "blocked", `${name}.httpsPort`);
+  assertCompleteDeniedPorts(probe.blockedTcpPorts, inventoriedPorts, `${name}.blockedTcpPorts`);
+  assertExactResult(probe.windowsWslDockerTargets, "blocked", `${name}.windowsWslDockerTargets`);
+  assertExactResult(probe.ipv4AndIpv6Paths, "blocked", `${name}.ipv4AndIpv6Paths`);
+  return { captureSha256: probe.captureSha256, name, observedAt };
+}
+
+function assertRelayDeviceProbes(probes, buildIds, inventoriedPorts, times, phase) {
+  const name = `physical-device relay report.${phase}.deviceProbes`;
+  assertExactKeys(probes, ["ios", "android", "unapprovedTailnet", "lan"], name);
+  return [
+    assertApprovedRelayProbe(probes.ios, "ios", buildIds.ios, inventoriedPorts, times, phase),
+    assertApprovedRelayProbe(
+      probes.android,
+      "android",
+      buildIds.android,
+      inventoriedPorts,
+      times,
+      phase,
+    ),
+    assertDeniedRelayProbe(probes.unapprovedTailnet, inventoriedPorts, times, phase),
+    assertLanRelayProbe(probes.lan, inventoriedPorts, times, phase),
+  ];
+}
+
+function assertReadinessProbe(probe, name, times) {
+  assertExactKeys(probe, ["observedAt", "captureSha256", "httpStatus", "bodySha256"], name);
+  const observedAt = assertObservedAt(probe.observedAt, `${name}.observedAt`, ...times);
+  assertSha256(probe.captureSha256, `${name}.captureSha256`);
+  if (probe.httpStatus !== 200) {
+    throw new TypeError(`${name}.httpStatus must equal 200.`);
+  }
+  if (probe.bodySha256 !== READY_BODY_SHA256) {
+    throw new TypeError(`${name}.bodySha256 must bind the exact {"status":"ok"} bytes.`);
+  }
+  return { captureSha256: probe.captureSha256, name, observedAt };
+}
+
+function assertRelayHostTopology(topology) {
+  const name = "physical-device relay report.hostTopology";
+  assertExactKeys(
+    topology,
+    [
+      "relayNode",
+      "applicationNode",
+      "containerProvider",
+      "tailscalePlacement",
+      "apiBind",
+      "serveUpstream",
+      "wslNetworkingMode",
+      "hostBoundarySha256",
+    ],
+    name,
+  );
+  for (const [field, expected] of Object.entries({
+    relayNode: "windows-host",
+    applicationNode: "wsl2-ubuntu",
+    containerProvider: "docker-desktop-wsl-integration",
+    tailscalePlacement: "windows-host-only",
+    apiBind: "127.0.0.1:4000",
+    serveUpstream: "http://127.0.0.1:4000",
+  })) {
+    assertExactResult(topology[field], expected, `${name}.${field}`);
+  }
+  if (!WSL_NETWORKING_MODES.has(topology.wslNetworkingMode)) {
+    throw new TypeError(`${name}.wslNetworkingMode must equal nat or mirrored.`);
+  }
+  assertSha256(topology.hostBoundarySha256, `${name}.hostBoundarySha256`);
+}
+
+function assertRelayVersionAdapter(adapter, supportedAdapters) {
+  const name = "physical-device relay report.versionAdapter";
+  const versionFields = [
+    "windowsVersion",
+    "wslVersion",
+    "ubuntuVersion",
+    "dockerDesktopVersion",
+    "dockerEngineVersion",
+    "tailscaleClientVersion",
+    "tailscaleDaemonVersion",
+  ];
+  const hashFields = [
+    "clientHelpSha256",
+    "daemonHelpSha256",
+    "rawStatusSha256",
+    "sessionEnvironmentSha256",
+    "activeEnvironmentSha256",
+    "restartEnvironmentSha256",
+    "teardownEnvironmentSha256",
+  ];
+  assertExactKeys(adapter, ["adapterId", ...versionFields, ...hashFields], name);
+  if (typeof adapter.adapterId !== "string" || !RELAY_ADAPTER_ID.test(adapter.adapterId)) {
+    throw new TypeError(`${name}.adapterId must match the exact bounded adapter-ID syntax.`);
+  }
+  for (const field of versionFields) {
+    if (typeof adapter[field] !== "string" || !RELAY_VERSION.test(adapter[field])) {
+      throw new TypeError(`${name}.${field} must match the exact bounded version syntax.`);
+    }
+  }
+  for (const field of hashFields) assertSha256(adapter[field], `${name}.${field}`);
+
+  if (!Array.isArray(supportedAdapters)) {
+    throw new TypeError(
+      "Physical-device relay version-adapter registry must be an explicit array.",
+    );
+  }
+  const adapterIds = new Set();
+  for (const [index, supported] of supportedAdapters.entries()) {
+    const supportedName = `physical-device relay version-adapter registry[${index}]`;
+    assertExactKeys(
+      supported,
+      ["adapterId", "tailscaleClientVersion", "tailscaleDaemonVersion"],
+      supportedName,
+    );
+    if (typeof supported.adapterId !== "string" || !RELAY_ADAPTER_ID.test(supported.adapterId)) {
+      throw new TypeError(
+        `${supportedName}.adapterId must match the exact bounded adapter-ID syntax.`,
+      );
+    }
+    for (const field of ["tailscaleClientVersion", "tailscaleDaemonVersion"]) {
+      if (typeof supported[field] !== "string" || !RELAY_VERSION.test(supported[field])) {
+        throw new TypeError(
+          `${supportedName}.${field} must match the exact bounded version syntax.`,
+        );
+      }
+    }
+    if (adapterIds.has(supported.adapterId)) {
+      throw new TypeError("Physical-device relay version-adapter registry IDs must be unique.");
+    }
+    adapterIds.add(supported.adapterId);
+  }
+  if (
+    !supportedAdapters.some(
+      (supported) =>
+        supported.adapterId === adapter.adapterId &&
+        supported.tailscaleClientVersion === adapter.tailscaleClientVersion &&
+        supported.tailscaleDaemonVersion === adapter.tailscaleDaemonVersion,
+    )
+  ) {
+    throw new TypeError(
+      "Physical-device relay report uses an unsupported Tailscale adapter/version tuple.",
+    );
+  }
+}
+
+function assertRelayPolicy(policy) {
+  const name = "physical-device relay report.policy";
+  const resultFields = [
+    "incomingAccessHeldUntilPolicyTests",
+    "relayHostIdentityRevalidated",
+    "testedPhonesToRelayHostTcp443Only",
+    "noOverlappingAclOrGrant",
+    "policyTests",
+  ];
+  const hashFields = [
+    "proposalCaptureSha256",
+    "appliedCaptureSha256",
+    "testsCaptureSha256",
+    "configurationEventCaptureSha256",
+    "gateCaptureSha256",
+  ];
+  assertExactKeys(policy, ["approvedPhoneAliases", ...resultFields, ...hashFields], name);
+  if (
+    !Array.isArray(policy.approvedPhoneAliases) ||
+    policy.approvedPhoneAliases.length !== PHYSICAL_PHONE_ALIASES.length ||
+    policy.approvedPhoneAliases.some((alias, index) => alias !== PHYSICAL_PHONE_ALIASES[index])
+  ) {
+    throw new TypeError(
+      "Physical-device relay policy must bind exactly the reviewed phone aliases.",
+    );
+  }
+  for (const field of resultFields) assertExactResult(policy[field], "passed", `${name}.${field}`);
+  for (const field of hashFields) assertSha256(policy[field], `${name}.${field}`);
+}
+
+function assertBoundaryEvidence(boundaryEvidence, versionAdapter) {
+  const name = "physical-device relay report.boundaryEvidence";
+  const phases = ["preflight", "active", "restart", "teardown"];
+  const fields = [
+    "environmentSha256",
+    "windowsListenersSha256",
+    "windowsFirewallSha256",
+    "hyperVFirewallSha256",
+    "forwardingSha256",
+    "wslListenersSha256",
+    "dockerPortsSha256",
+  ];
+  const environmentBindings = {
+    preflight: versionAdapter.sessionEnvironmentSha256,
+    active: versionAdapter.activeEnvironmentSha256,
+    restart: versionAdapter.restartEnvironmentSha256,
+    teardown: versionAdapter.teardownEnvironmentSha256,
+  };
+  assertExactKeys(boundaryEvidence, phases, name);
+  for (const phase of phases) {
+    assertExactKeys(boundaryEvidence[phase], fields, `${name}.${phase}`);
+    for (const field of fields)
+      assertSha256(boundaryEvidence[phase][field], `${name}.${phase}.${field}`);
+    if (boundaryEvidence[phase].environmentSha256 !== environmentBindings[phase]) {
+      throw new TypeError(`${name}.${phase}.environmentSha256 must bind version-adapter evidence.`);
+    }
+  }
+}
+
+function assertDistinctCaptureRoles(captures) {
+  const seen = new Map();
+  for (const [name, digest] of captures) {
+    const reusedBy = seen.get(digest);
+    if (reusedBy !== undefined) {
+      throw new TypeError(
+        `${name} must use a distinct capture from ${reusedBy}; candidate capture roles cannot be reused.`,
+      );
+    }
+    seen.set(digest, name);
+  }
+}
+
+function assertDisabledRelayState(value, name, { identity = false } = {}) {
+  const expectedKeys = [
+    "incoming",
+    "serve",
+    "funnel",
+    "incomingCaptureSha256",
+    "serveCaptureSha256",
+    "funnelCaptureSha256",
+  ];
+  if (identity) expectedKeys.push("relayHostIdentityRevalidated", "identitiesCaptureSha256");
+  assertExactKeys(value, expectedKeys, name);
+  for (const field of ["incoming", "serve", "funnel"]) {
+    assertExactResult(value[field], "disabled", `${name}.${field}`);
+  }
+  if (identity) {
+    assertExactResult(
+      value.relayHostIdentityRevalidated,
+      "passed",
+      `${name}.relayHostIdentityRevalidated`,
+    );
+    assertSha256(value.identitiesCaptureSha256, `${name}.identitiesCaptureSha256`);
+  }
+  for (const field of ["incomingCaptureSha256", "serveCaptureSha256", "funnelCaptureSha256"]) {
+    assertSha256(value[field], `${name}.${field}`);
+  }
+}
+
+function assertEnabledRelayState(value, name) {
+  assertExactKeys(
+    value,
+    [
+      "incoming",
+      "serve",
+      "funnel",
+      "relayHostIdentityRevalidated",
+      "incomingCaptureSha256",
+      "serveCaptureSha256",
+      "funnelCaptureSha256",
+      "identitiesCaptureSha256",
+    ],
+    name,
+  );
+  assertExactResult(value.incoming, "enabled", `${name}.incoming`);
+  assertExactResult(value.serve, "attended-foreground", `${name}.serve`);
+  assertExactResult(value.funnel, "disabled", `${name}.funnel`);
+  assertExactResult(
+    value.relayHostIdentityRevalidated,
+    "passed",
+    `${name}.relayHostIdentityRevalidated`,
+  );
+  for (const field of [
+    "incomingCaptureSha256",
+    "serveCaptureSha256",
+    "funnelCaptureSha256",
+    "identitiesCaptureSha256",
+  ]) {
+    assertSha256(value[field], `${name}.${field}`);
+  }
+}
+
+function validatePhysicalDeviceRelayReport(
+  report,
+  relay,
+  manifestCommit,
+  artifacts,
+  executedAt,
+  reviewedAt,
+  supportedAdapters,
+) {
+  assertPlainRecord(report, "physical-device relay report");
+  if (report.schemaVersion === LEGACY_PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA) {
+    throw new TypeError(
+      "Legacy physical-device relay report v2 is rejected; recollect Windows v3 evidence.",
+    );
+  }
+  if (report.schemaVersion !== PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA) {
+    throw new TypeError(
+      `physical-device relay report.schemaVersion must equal ${PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA}.`,
+    );
+  }
   assertExactKeys(
     report,
     [
       "schemaVersion",
       "trustBoundary",
       "sourceCaptureBundleSha256",
-      "apiOrigin",
+      "apiOriginCommitmentSha256",
+      "sourceCommit",
       "startedAt",
       "executedAt",
       "completedAt",
-      "preflight",
-      "serve",
-      "tailnetAccess",
-      "listenerInventory",
-      "deviceProbes",
+      "buildIds",
+      "hostTopology",
+      "versionAdapter",
+      "policy",
+      "boundaryEvidence",
+      "active",
+      "restart",
       "teardown",
+      "sessionLedgerSha256",
     ],
     "physical-device relay report",
   );
-  if (report.schemaVersion !== PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA) {
-    throw new TypeError(
-      `physical-device relay report.schemaVersion must equal ${PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA}.`,
-    );
-  }
   if (report.trustBoundary !== PHYSICAL_DEVICE_RELAY_TRUST_BOUNDARY) {
     throw new TypeError(
       "physical-device relay report must remain an unsigned structural candidate until independent Ed25519 manifest review.",
@@ -406,9 +760,22 @@ function validatePhysicalDeviceRelayReport(report, relay, artifacts, executedAt,
     report.sourceCaptureBundleSha256,
     "physical-device relay report.sourceCaptureBundleSha256",
   );
-  const reportOrigin = validatePhysicalDeviceApiUrl(report.apiOrigin);
-  if (report.apiOrigin !== reportOrigin.origin || report.apiOrigin !== relay.apiOrigin) {
-    throw new TypeError("Physical-device relay report API origin must match signed evidence.");
+  assertSha256(report.sessionLedgerSha256, "physical-device relay report.sessionLedgerSha256");
+  if (!GIT_COMMIT.test(report.sourceCommit) || report.sourceCommit !== manifestCommit) {
+    throw new TypeError(
+      "Physical-device relay report.sourceCommit must equal the signed manifest.gitCommit.",
+    );
+  }
+  assertSha256(
+    report.apiOriginCommitmentSha256,
+    "physical-device relay report.apiOriginCommitmentSha256",
+  );
+  if (
+    report.apiOriginCommitmentSha256 !== physicalDeviceApiOriginCommitmentSha256(relay.apiOrigin)
+  ) {
+    throw new TypeError(
+      "Physical-device relay report API-origin commitment must match signed evidence.",
+    );
   }
   const startedAt = parseInstant(report.startedAt, "physical-device relay report.startedAt");
   const reportExecutedAt = parseInstant(
@@ -419,243 +786,284 @@ function validatePhysicalDeviceRelayReport(report, relay, artifacts, executedAt,
   if (
     startedAt > executedAt ||
     reportExecutedAt !== executedAt ||
-    executedAt > completedAt ||
-    completedAt > reviewedAt ||
+    executedAt >= completedAt ||
+    completedAt >= reviewedAt ||
     completedAt - startedAt > MAX_RELAY_SESSION_MS
   ) {
     throw new TypeError(
       "Physical-device relay timing must exactly bind signed execution, finish before review, and span at most 24 hours.",
     );
   }
+  const times = [startedAt, executedAt];
 
-  assertExactKeys(
-    report.preflight,
-    [
-      "firstConnectionShieldsUp",
-      "initialServeAndFunnelStatus",
-      "incomingAccessHeldUntilPolicyTests",
-      "macIdentityRevalidated",
-      "iosIdentityRevalidated",
-      "androidIdentityRevalidated",
-      "shieldsUpStatusSha256",
-      "initialServeStatusSha256",
-      "initialFunnelStatusSha256",
-      "identityStatusSha256",
-      "accessControlTimelineSha256",
-    ],
-    "physical-device relay report.preflight",
-  );
-  for (const field of [
-    "firstConnectionShieldsUp",
-    "incomingAccessHeldUntilPolicyTests",
-    "macIdentityRevalidated",
-    "iosIdentityRevalidated",
-    "androidIdentityRevalidated",
-  ]) {
-    assertExactResult(
-      report.preflight[field],
-      "passed",
-      `physical-device relay report.preflight.${field}`,
+  assertExactKeys(report.buildIds, ["ios", "android"], "physical-device relay report.buildIds");
+  for (const platform of ["ios", "android"]) {
+    assertEasBuildId(
+      report.buildIds[platform],
+      `physical-device relay report.buildIds.${platform}`,
     );
+    if (report.buildIds[platform] !== artifacts.physicalDevice[platform].easBuildId) {
+      throw new TypeError(
+        `physical-device relay report.buildIds.${platform} must bind the signed physical artifact.`,
+      );
+    }
   }
-  assertExactResult(
-    report.preflight.initialServeAndFunnelStatus,
-    "empty",
-    "physical-device relay report.preflight.initialServeAndFunnelStatus",
-  );
-  for (const field of [
-    "shieldsUpStatusSha256",
-    "initialServeStatusSha256",
-    "initialFunnelStatusSha256",
-    "identityStatusSha256",
-    "accessControlTimelineSha256",
-  ]) {
-    assertSha256(report.preflight[field], `physical-device relay report.preflight.${field}`);
+  if (report.buildIds.ios === report.buildIds.android) {
+    throw new TypeError("Physical-device relay report must bind distinct iOS and Android builds.");
   }
 
+  assertRelayHostTopology(report.hostTopology);
+  assertRelayVersionAdapter(report.versionAdapter, supportedAdapters);
+  assertRelayPolicy(report.policy);
+  assertBoundaryEvidence(report.boundaryEvidence, report.versionAdapter);
+
+  const activeName = "physical-device relay report.active";
   assertExactKeys(
-    report.serve,
+    report.active,
     [
-      "mode",
+      "incoming",
+      "serve",
+      "funnel",
       "httpsPort",
       "handlerPath",
       "upstream",
-      "persistentConfiguration",
-      "foregroundSessionCount",
-      "funnelEnabled",
-      "serveStatusSha256",
-      "funnelStatusSha256",
-    ],
-    "physical-device relay report.serve",
-  );
-  assertExactResult(report.serve.mode, "foreground", "physical-device relay report.serve.mode");
-  if (
-    report.serve.httpsPort !== 443 ||
-    report.serve.handlerPath !== "/" ||
-    report.serve.upstream !== "http://127.0.0.1:4000" ||
-    report.serve.persistentConfiguration !== "empty" ||
-    report.serve.foregroundSessionCount !== 1 ||
-    report.serve.funnelEnabled !== false
-  ) {
-    throw new TypeError(
-      "Physical-device relay report must prove one foreground HTTPS/443 root proxy to exact API loopback with no persistent Serve or Funnel.",
-    );
-  }
-  assertSha256(
-    report.serve.serveStatusSha256,
-    "physical-device relay report.serve.serveStatusSha256",
-  );
-  assertSha256(
-    report.serve.funnelStatusSha256,
-    "physical-device relay report.serve.funnelStatusSha256",
-  );
-
-  assertExactKeys(
-    report.tailnetAccess,
-    [
-      "policySha256",
-      "configurationLogEventSha256",
-      "approvedPhoneAliases",
-      "testedPhonesToMacTcp443Only",
-      "noOverlappingAclOrGrant",
-      "policyTests",
-      "unapprovedPeerHttps443",
-    ],
-    "physical-device relay report.tailnetAccess",
-  );
-  assertSha256(
-    report.tailnetAccess.policySha256,
-    "physical-device relay report.tailnetAccess.policySha256",
-  );
-  assertSha256(
-    report.tailnetAccess.configurationLogEventSha256,
-    "physical-device relay report.tailnetAccess.configurationLogEventSha256",
-  );
-  if (
-    !Array.isArray(report.tailnetAccess.approvedPhoneAliases) ||
-    report.tailnetAccess.approvedPhoneAliases.length !== PHYSICAL_PHONE_ALIASES.length ||
-    report.tailnetAccess.approvedPhoneAliases.some(
-      (alias, index) => alias !== PHYSICAL_PHONE_ALIASES[index],
-    )
-  ) {
-    throw new TypeError(
-      "Physical-device relay policy must bind exactly the reviewed iOS and Android phone aliases.",
-    );
-  }
-  for (const field of ["testedPhonesToMacTcp443Only", "noOverlappingAclOrGrant", "policyTests"]) {
-    assertExactResult(
-      report.tailnetAccess[field],
-      "passed",
-      `physical-device relay report.tailnetAccess.${field}`,
-    );
-  }
-  assertExactResult(
-    report.tailnetAccess.unapprovedPeerHttps443,
-    "blocked",
-    "physical-device relay report.tailnetAccess.unapprovedPeerHttps443",
-  );
-
-  assertExactKeys(
-    report.listenerInventory,
-    [
-      "snapshotSha256",
-      "requiredServicesIpv4Loopback",
       "inventoriedNon443TcpPorts",
-      "wildcardNon443TcpPorts",
+      "incomingCaptureSha256",
+      "serveCaptureSha256",
+      "funnelCaptureSha256",
+      "identitiesCaptureSha256",
+      "deviceProbes",
     ],
-    "physical-device relay report.listenerInventory",
+    activeName,
   );
-  assertSha256(
-    report.listenerInventory.snapshotSha256,
-    "physical-device relay report.listenerInventory.snapshotSha256",
-  );
-  assertExactResult(
-    report.listenerInventory.requiredServicesIpv4Loopback,
-    "passed",
-    "physical-device relay report.listenerInventory.requiredServicesIpv4Loopback",
-  );
+  assertExactResult(report.active.incoming, "enabled", `${activeName}.incoming`);
+  assertExactResult(report.active.serve, "attended-foreground", `${activeName}.serve`);
+  assertExactResult(report.active.funnel, "disabled", `${activeName}.funnel`);
+  if (
+    report.active.httpsPort !== 443 ||
+    report.active.handlerPath !== "/" ||
+    report.active.upstream !== "http://127.0.0.1:4000"
+  ) {
+    throw new TypeError(
+      "Physical-device relay active route must be attended HTTPS/443 root proxy to exact API loopback.",
+    );
+  }
+  for (const field of [
+    "incomingCaptureSha256",
+    "serveCaptureSha256",
+    "funnelCaptureSha256",
+    "identitiesCaptureSha256",
+  ]) {
+    assertSha256(report.active[field], `${activeName}.${field}`);
+  }
   const inventoriedPorts = assertSortedPortArray(
-    report.listenerInventory.inventoriedNon443TcpPorts,
-    "physical-device relay report.listenerInventory.inventoriedNon443TcpPorts",
+    report.active.inventoriedNon443TcpPorts,
+    `${activeName}.inventoriedNon443TcpPorts`,
   );
   for (const required of BASELINE_DENIED_TCP_PORTS) {
     if (!inventoriedPorts.includes(required)) {
       throw new TypeError(
-        `Physical-device relay listener inventory must include denied TCP/${required}.`,
+        `Physical-device relay denied-port inventory must include TCP/${required}.`,
       );
     }
   }
-  const wildcardPorts = assertSortedPortArray(
-    report.listenerInventory.wildcardNon443TcpPorts,
-    "physical-device relay report.listenerInventory.wildcardNon443TcpPorts",
-    { allowEmpty: true },
+  const activeProbes = assertRelayDeviceProbes(
+    report.active.deviceProbes,
+    report.buildIds,
+    inventoriedPorts,
+    times,
+    "active",
   );
-  if (wildcardPorts.some((port) => !inventoriedPorts.includes(port))) {
-    throw new TypeError(
-      "Physical-device relay wildcard listeners must be a subset of the complete inventory.",
-    );
+
+  const restartName = "physical-device relay report.restart";
+  assertExactKeys(
+    report.restart,
+    [
+      "preShutdown",
+      "preExposure",
+      "localReadiness",
+      "reenabledRelay",
+      "deviceProbes",
+      "coldRestartEventSha256",
+      "sourceProcessContinuity",
+      "routeRecovered",
+    ],
+    restartName,
+  );
+  assertDisabledRelayState(report.restart.preShutdown, `${restartName}.preShutdown`);
+  assertDisabledRelayState(report.restart.preExposure, `${restartName}.preExposure`, {
+    identity: true,
+  });
+  assertExactKeys(
+    report.restart.localReadiness,
+    ["wsl", "windows", "migrationsCurrent"],
+    `${restartName}.localReadiness`,
+  );
+  assertExactResult(
+    report.restart.localReadiness.migrationsCurrent,
+    "passed",
+    `${restartName}.localReadiness.migrationsCurrent`,
+  );
+  const restartReadiness = [
+    assertReadinessProbe(
+      report.restart.localReadiness.wsl,
+      `${restartName}.localReadiness.wsl`,
+      times,
+    ),
+    assertReadinessProbe(
+      report.restart.localReadiness.windows,
+      `${restartName}.localReadiness.windows`,
+      times,
+    ),
+  ];
+  assertEnabledRelayState(report.restart.reenabledRelay, `${restartName}.reenabledRelay`);
+  const restartProbes = assertRelayDeviceProbes(
+    report.restart.deviceProbes,
+    report.buildIds,
+    inventoriedPorts,
+    times,
+    "restart",
+  );
+  assertSha256(report.restart.coldRestartEventSha256, `${restartName}.coldRestartEventSha256`);
+  assertExactResult(
+    report.restart.sourceProcessContinuity,
+    "passed",
+    `${restartName}.sourceProcessContinuity`,
+  );
+  assertExactResult(report.restart.routeRecovered, "passed", `${restartName}.routeRecovered`);
+
+  assertStrictObservationOrder(
+    activeProbes,
+    "Active probe observations must be strictly ordered iOS, Android, unapproved tailnet, then LAN.",
+  );
+  const restartObservations = [...restartReadiness, ...restartProbes];
+  assertStrictObservationOrder(
+    restartObservations,
+    "Restart readiness and probe observations must be strictly ordered WSL, Windows, iOS, Android, unapproved tailnet, then LAN.",
+  );
+  if (
+    startedAt >= activeProbes[0].observedAt ||
+    activeProbes[activeProbes.length - 1].observedAt >= restartObservations[0].observedAt
+  ) {
+    throw new TypeError("Active probes must finish before post-restart local readiness evidence.");
+  }
+  if (restartObservations[restartObservations.length - 1].observedAt >= executedAt) {
+    throw new TypeError("Restart probes must finish before signed relay execution.");
   }
 
-  assertExactKeys(
-    report.deviceProbes,
-    ["ios", "android"],
-    "physical-device relay report.deviceProbes",
-  );
-  assertRelayProbe(
-    report.deviceProbes.ios,
-    "ios",
-    artifacts.physicalDevice.ios,
-    inventoriedPorts,
-    report.tailnetAccess,
-    startedAt,
-    executedAt,
-  );
-  assertRelayProbe(
-    report.deviceProbes.android,
-    "android",
-    artifacts.physicalDevice.android,
-    inventoriedPorts,
-    report.tailnetAccess,
-    startedAt,
-    executedAt,
-  );
-
+  const teardownName = "physical-device relay report.teardown";
   assertExactKeys(
     report.teardown,
     [
-      "serveAndFunnelStatus",
-      "shieldsUpRestored",
-      "macDisconnected",
-      "serveStatusSha256",
-      "funnelStatusSha256",
-      "shieldsUpStatusSha256",
-      "disconnectStatusSha256",
+      "incoming",
+      "serve",
+      "funnel",
+      "relayHostDisconnected",
+      "boundaryRestored",
+      "incomingCaptureSha256",
+      "serveCaptureSha256",
+      "funnelCaptureSha256",
+      "disconnectCaptureSha256",
     ],
-    "physical-device relay report.teardown",
+    teardownName,
   );
-  assertExactResult(
-    report.teardown.serveAndFunnelStatus,
-    "empty",
-    "physical-device relay report.teardown.serveAndFunnelStatus",
-  );
-  assertExactResult(
-    report.teardown.shieldsUpRestored,
-    "passed",
-    "physical-device relay report.teardown.shieldsUpRestored",
-  );
-  assertExactResult(
-    report.teardown.macDisconnected,
-    "passed",
-    "physical-device relay report.teardown.macDisconnected",
-  );
-  for (const field of [
-    "serveStatusSha256",
-    "funnelStatusSha256",
-    "shieldsUpStatusSha256",
-    "disconnectStatusSha256",
-  ]) {
-    assertSha256(report.teardown[field], `physical-device relay report.teardown.${field}`);
+  for (const field of ["incoming", "serve", "funnel"]) {
+    assertExactResult(report.teardown[field], "disabled", `${teardownName}.${field}`);
   }
+  assertExactResult(
+    report.teardown.relayHostDisconnected,
+    "passed",
+    `${teardownName}.relayHostDisconnected`,
+  );
+  assertExactResult(report.teardown.boundaryRestored, "passed", `${teardownName}.boundaryRestored`);
+  for (const field of [
+    "incomingCaptureSha256",
+    "serveCaptureSha256",
+    "funnelCaptureSha256",
+    "disconnectCaptureSha256",
+  ]) {
+    assertSha256(report.teardown[field], `${teardownName}.${field}`);
+  }
+
+  const captureRoles = [
+    ["hostTopology.hostBoundarySha256", report.hostTopology.hostBoundarySha256],
+    ...[
+      "sessionEnvironmentSha256",
+      "activeEnvironmentSha256",
+      "restartEnvironmentSha256",
+      "teardownEnvironmentSha256",
+    ].map((field) => [`versionAdapter.${field}`, report.versionAdapter[field]]),
+    ...[
+      "proposalCaptureSha256",
+      "appliedCaptureSha256",
+      "testsCaptureSha256",
+      "configurationEventCaptureSha256",
+      "gateCaptureSha256",
+    ].map((field) => [`policy.${field}`, report.policy[field]]),
+  ];
+  for (const phase of ["preflight", "active", "restart", "teardown"]) {
+    for (const field of [
+      "windowsListenersSha256",
+      "windowsFirewallSha256",
+      "hyperVFirewallSha256",
+      "forwardingSha256",
+      "wslListenersSha256",
+      "dockerPortsSha256",
+    ]) {
+      captureRoles.push([
+        `boundaryEvidence.${phase}.${field}`,
+        report.boundaryEvidence[phase][field],
+      ]);
+    }
+  }
+  for (const field of [
+    "incomingCaptureSha256",
+    "serveCaptureSha256",
+    "funnelCaptureSha256",
+    "identitiesCaptureSha256",
+  ]) {
+    captureRoles.push([`active.${field}`, report.active[field]]);
+  }
+  for (const probe of activeProbes) {
+    captureRoles.push([`${probe.name}.captureSha256`, probe.captureSha256]);
+  }
+  for (const field of ["incomingCaptureSha256", "serveCaptureSha256", "funnelCaptureSha256"]) {
+    captureRoles.push([`restart.preShutdown.${field}`, report.restart.preShutdown[field]]);
+  }
+  for (const field of [
+    "incomingCaptureSha256",
+    "serveCaptureSha256",
+    "funnelCaptureSha256",
+    "identitiesCaptureSha256",
+  ]) {
+    captureRoles.push([`restart.preExposure.${field}`, report.restart.preExposure[field]]);
+  }
+  for (const readiness of restartReadiness) {
+    captureRoles.push([`${readiness.name}.captureSha256`, readiness.captureSha256]);
+  }
+  for (const field of [
+    "incomingCaptureSha256",
+    "serveCaptureSha256",
+    "funnelCaptureSha256",
+    "identitiesCaptureSha256",
+  ]) {
+    captureRoles.push([`restart.reenabledRelay.${field}`, report.restart.reenabledRelay[field]]);
+  }
+  for (const probe of restartProbes) {
+    captureRoles.push([`${probe.name}.captureSha256`, probe.captureSha256]);
+  }
+  captureRoles.push(["restart.coldRestartEventSha256", report.restart.coldRestartEventSha256]);
+  for (const field of [
+    "incomingCaptureSha256",
+    "serveCaptureSha256",
+    "funnelCaptureSha256",
+    "disconnectCaptureSha256",
+  ]) {
+    captureRoles.push([`teardown.${field}`, report.teardown[field]]);
+  }
+  captureRoles.push(["sessionLedgerSha256", report.sessionLedgerSha256]);
+  assertDistinctCaptureRoles(captureRoles);
+
   return report;
 }
 
@@ -666,11 +1074,21 @@ function validatePhysicalDeviceRelayReport(report, relay, artifacts, executedAt,
 export function validateUnsignedRelayCandidateStructureForReview(
   candidate,
   relay,
+  manifestCommit,
   artifacts,
   executedAt,
   reviewedAt,
+  supportedAdapters = PRODUCTION_RELAY_VERSION_ADAPTERS,
 ) {
-  return validatePhysicalDeviceRelayReport(candidate, relay, artifacts, executedAt, reviewedAt);
+  return validatePhysicalDeviceRelayReport(
+    candidate,
+    relay,
+    manifestCommit,
+    artifacts,
+    executedAt,
+    reviewedAt,
+    supportedAdapters,
+  );
 }
 
 function validateP0ClientSmokeReport(
@@ -728,7 +1146,7 @@ function validateP0ClientSmokeReport(
     startedAt > executedAt ||
     reportExecutedAt !== executedAt ||
     executedAt > completedAt ||
-    completedAt > reviewedAt ||
+    completedAt >= reviewedAt ||
     completedAt - startedAt > MAX_RELAY_SESSION_MS
   ) {
     throw new TypeError(
@@ -802,7 +1220,7 @@ export function validateUnsignedP0ClientSmokeCandidateStructureForReview(
   executedAt,
   reviewedAt,
 ) {
-  rejectHealthPayloadEvidence(candidate, "P0 client-smoke report");
+  rejectHealthPayloadEvidence(candidate);
   return validateP0ClientSmokeReport(
     candidate,
     smoke,
@@ -1268,6 +1686,7 @@ function validateRelayReportReadResult(value) {
 function readPhysicalDeviceRelayReport(
   environment,
   relay,
+  manifestCommit,
   artifacts,
   executedAt,
   reviewedAt,
@@ -1315,9 +1734,17 @@ function readPhysicalDeviceRelayReport(
       "Physical-device relay report JSON must use canonical field order and encoding.",
     );
   }
-  rejectHealthPayloadEvidence(report, "physical-device relay report");
+  rejectHealthPayloadEvidence(report);
   return {
-    report: validatePhysicalDeviceRelayReport(report, relay, artifacts, executedAt, reviewedAt),
+    report: validatePhysicalDeviceRelayReport(
+      report,
+      relay,
+      manifestCommit,
+      artifacts,
+      executedAt,
+      reviewedAt,
+      runtime.relayVersionAdapters,
+    ),
     reportSha256: actualDigest,
   };
 }
@@ -1471,7 +1898,7 @@ function readP0ClientSmokeReport(
   if (text !== canonical && text !== `${canonical}\n`) {
     throw new TypeError("P0 client-smoke report JSON must use canonical field order and encoding.");
   }
-  rejectHealthPayloadEvidence(report, "P0 client-smoke report");
+  rejectHealthPayloadEvidence(report);
   return {
     report: validateP0ClientSmokeReport(
       report,
@@ -1487,6 +1914,7 @@ function readP0ClientSmokeReport(
 
 function defaultReleaseRuntime() {
   return {
+    relayVersionAdapters: PRODUCTION_RELAY_VERSION_ADAPTERS,
     gitHead() {
       return execFileSync("git", ["rev-parse", "HEAD"], {
         cwd: REPOSITORY_ROOT,
@@ -1619,6 +2047,7 @@ export async function validateHealthReleaseEvidence(
   const relayEvidence = readPhysicalDeviceRelayReport(
     environment,
     relay,
+    manifest.gitCommit,
     manifest.artifacts,
     executedAt,
     reviewedAt,
