@@ -1,5 +1,15 @@
 # Physical-device private HTTPS
 
+> **PLATFORM STOP — legacy macOS-only runbook.**
+>
+> Do not apply this runbook, its commands, `phone_policy.py`, or relay
+> review-package v1 on Windows or WSL2. They assume a Mac host,
+> `/usr/sbin/lsof`, `nutrition-tracker-mac`, and a single-host listener
+> boundary. On Windows, use the
+> [proposed Windows-host/WSL2 design](./physical-device-windows-wsl2-private-https.md);
+> it remains blocked until its renderer, normalizer, schemas, fixtures, tests,
+> and independent review are implemented.
+
 This is an attended development path for the signed `physical-device` IPA and
 APK. It is not public hosting, a production deployment, or a substitute for the
 controlled-beta HTTPS and deployment evidence gates.

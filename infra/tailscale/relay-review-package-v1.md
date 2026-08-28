@@ -1,5 +1,13 @@
 # Relay review-package v1 reference
 
+> **Legacy macOS-only reference — never use on Windows or WSL2.**
+>
+> This reference is coupled to `nutrition-tracker-mac`, `/usr/sbin/lsof`,
+> protected Tailscale IP command arguments, and the current v1 fixed role map.
+> It cannot represent the Windows-host/WSL2/Docker Desktop boundary. Do not
+> rename, translate, supplement, or reuse a v1 session as v2; Windows evidence
+> requires a complete new session after the v2 implementation and tests exist.
+
 This is the complete transcription reference for
 `nutrition-tracker-tailscale-relay-review-package-v1`. It is deliberately
 Markdown, not an accepted capture or index. Every value shown in angle brackets
