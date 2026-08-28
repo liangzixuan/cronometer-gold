@@ -14,7 +14,9 @@ WORKDIR /workspace
 ADD --checksum=sha256:b9e49603540d04107b98e93917a30e6114970d403c23e40309a44ea9c2bca7fd \
     https://registry.npmjs.org/pnpm/-/pnpm-11.19.0.tgz /tmp/pnpm.tgz
 
-RUN npm install --global --ignore-scripts /tmp/pnpm.tgz && rm /tmp/pnpm.tgz
+RUN npm install --global --ignore-scripts /tmp/pnpm.tgz && \
+    rm /tmp/pnpm.tgz && \
+    test "$(pnpm --version)" = 11.19.0
 
 RUN install -d -m 0755 /opt/runtime-root/etc && \
     install -d -o 1000 -g 1000 -m 0755 /opt/runtime-root/home/node && \
@@ -33,7 +35,8 @@ RUN install -d -m 0755 /opt/runtime-root/etc && \
 COPY . .
 
 RUN --mount=type=cache,id=nutrition-pnpm-web-v1,target=/pnpm/store,sharing=locked \
-    pnpm install --frozen-lockfile --filter @nutrition-tracker/web... && \
+    test "$(pnpm --version)" = 11.19.0 && \
+    pnpm install --frozen-lockfile --strict-peer-dependencies --filter @nutrition-tracker/web... && \
     pnpm --filter @nutrition-tracker/web build && \
     find apps/web/.next/standalone apps/web/.next/static -exec touch -h -d @0 {} +
 

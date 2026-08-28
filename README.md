@@ -37,19 +37,42 @@ Search projection rebuilds and degraded operation are documented in the
 
 ## Prerequisites
 
-- Node.js 22.13 or newer
-- pnpm 11.19 or newer
+- Node.js satisfying the source requirement `>=22.13.0`
+- Corepack with exact pnpm `11.19.0`
 - Docker with Compose for local infrastructure
+
+### Toolchain roles
+
+| Role | Version | Boundary |
+| --- | --- | --- |
+| General source | Node `>=22.13.0` | Minimum accepted by the root package |
+| Hosted CI | Node `22` | Current major channel used by both CI jobs |
+| Hardened container evidence | Node `22.23.2` | Patched, source-built runtime with separate provenance gates |
+| Package manager | pnpm `11.19.0` | Exact version selected by the root package and Corepack |
+| Mobile cloud builds | EAS CLI `22.0.0`; Node `22.13.0`; pnpm `11.19.0` | Mobile-only EAS compatibility pins |
+
+These Node values are intentionally distinct and must not be unified: the root
+declares a source minimum, CI follows the supported Node 22 major, the hardened
+container binds reviewed binary evidence, and EAS uses its mobile compatibility
+pin. The EAS CLI is not a baseline development prerequisite; install exact
+version `22.0.0` only when approved mobile build work begins.
 
 ## Getting started
 
 ```sh
 install -m 600 .env.example .env
-pnpm install
+corepack enable
+corepack install
+test "$(pnpm --version)" = "11.19.0"
+pnpm install --frozen-lockfile --strict-peer-dependencies
 pnpm infra:up
 pnpm db:migrate
 pnpm dev
 ```
+
+Dependency installation must use the official HTTPS registry with normal TLS
+verification. Do not disable certificate checks or substitute an unrelated
+mirror to make installation pass.
 
 The root scripts are the release baseline:
 

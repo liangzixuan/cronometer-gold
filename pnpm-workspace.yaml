@@ -4,6 +4,7 @@ packages:
 
 autoInstallPeers: true
 engineStrict: true
+pmOnFail: error
 saveExact: true
 strictPeerDependencies: true
 
