@@ -21,3 +21,14 @@ supportedArchitectures:
 allowBuilds:
   esbuild: true
   sharp: true
+
+# Approved for the coordinated Expo 57.0.18 compatibility release. Remove
+# after 2026-08-29T10:50:37.297Z, when the newest entry is 24 hours old.
+minimumReleaseAgeExclude:
+  - '@expo/cli@57.0.20'
+  - '@expo/env@2.4.3'
+  - '@expo/fingerprint@0.20.11'
+  - '@expo/metro-config@57.0.12'
+  - expo-constants@57.0.16
+  - expo-font@57.0.2
+  - expo@57.0.18
