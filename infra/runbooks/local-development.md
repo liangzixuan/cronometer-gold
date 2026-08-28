@@ -5,11 +5,22 @@
 From the repository root:
 
 ```sh
-cp .env.example .env
-docker compose --env-file .env -f infra/docker/compose.yml config --quiet
-docker compose --env-file .env -f infra/docker/compose.yml up -d --wait
+install -m 600 .env.example .env
+pnpm infra:config
+pnpm infra:up
 pnpm --filter @nutrition-tracker/db db:migrate
 ```
+
+The startup wrapper accepts no arguments and first requires `.env` to be an
+owned, regular, single-link mode-`0600` file. It rejects every ambient Docker or
+Compose override, requires Docker Desktop's Linux server through
+`/var/run/docker.sock`, and binds the exact `nutrition-tracker-local` project.
+Before mutation, it captures without printing the rendered five-service model
+and validates its named volumes, read-only MinIO policy mount, health checks, and
+loopback port mappings. It then waits for the four persistent services, runs the
+MinIO bootstrap as a separate removable one-shot, and checks the effective host
+ports afterward. It never deletes named volumes or prints the rendered
+environment.
 
 The checked-in values are laptop-only credentials. Bindings are limited to
 `127.0.0.1`; do not expose them on a LAN or public interface.
@@ -17,13 +28,15 @@ The checked-in values are laptop-only credentials. Bindings are limited to
 ## Verify
 
 ```sh
-docker compose --env-file .env -f infra/docker/compose.yml ps
-docker compose --env-file .env -f infra/docker/compose.yml exec postgres \
-  pg_isready -U nutrition_local -d nutrition_tracker
+pnpm infra:status
 curl --fail http://127.0.0.1:7700/health
-curl --fail http://127.0.0.1:9000/minio/health/live
+curl --fail http://127.0.0.1:9000/minio/health/ready
 curl --fail http://127.0.0.1:8025/livez
 ```
+
+The guarded status command repeats the effective model, project, engine,
+health, and loopback-port checks without changing container state or printing
+interpolated values.
 
 The one-shot `minio-bootstrap` service creates two private retention buckets,
 enables versioning only on the append-only erasure ledger, and installs separate
@@ -71,14 +84,15 @@ pnpm test:localstack:dev
 ## Stop
 
 ```sh
-docker compose --env-file .env -f infra/docker/compose.yml down
+pnpm infra:down
 pnpm infra:localstack:down
 ```
 
-These commands preserve named volumes. The LocalStack command removes its
-token-bearing container but retains its synthetic state and generated role
-files. Do not add `--volumes` unless the exact local data has been inspected and
-disposable loss is intended.
+The Compose shutdown wrapper repeats the environment-file, Docker Desktop, and
+fixed-project boundary and accepts no arguments. These commands preserve named
+volumes. The LocalStack command removes its token-bearing container but retains
+its synthetic state and generated role files. Do not add `--volumes` unless the
+exact local data has been inspected and disposable loss is intended.
 
 ## Common failures
 

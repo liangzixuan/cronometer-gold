@@ -5,11 +5,26 @@ Meilisearch is a disposable projection, MinIO holds raw import/test artifacts, a
 Mailpit captures email without delivering it.
 
 ```sh
-cp .env.example .env
-docker compose --env-file .env -f infra/docker/compose.yml up -d --wait
+install -m 600 .env.example .env
+pnpm infra:up
 pnpm --filter @nutrition-tracker/db db:migrate
-docker compose --env-file .env -f infra/docker/compose.yml ps
+pnpm infra:status
 ```
+
+`pnpm infra:up` accepts no arguments. Before contacting Docker, it requires `.env`
+to be an owned, regular, single-link mode-`0600` file. It rejects every ambient
+Docker or Compose override, binds the exact `nutrition-tracker-local` project,
+and requires Docker Desktop's Linux server through `/var/run/docker.sock`. It
+captures the rendered Compose model without printing interpolated values and
+validates the exact five-service, named-volume, read-only policy-mount, health,
+and loopback-port topology before starting anything. It waits at most 300
+seconds for PostgreSQL, Meilisearch, MinIO, and Mailpit, runs `minio-bootstrap`
+as a separate removable one-shot, and verifies the four persistent services and
+their effective published ports afterward.
+
+`pnpm infra:status` accepts no arguments and repeats the same environment-file,
+Docker Desktop, fixed-project, rendered-model, and healthy loopback-port checks
+without changing container state or printing the rendered environment.
 
 Local endpoints:
 
@@ -35,14 +50,16 @@ the controlled-beta environment use digest-pinned images after registry and
 licence review. Local Compose also retains human-readable tags alongside exact
 digests so version intent and immutable image bytes are both explicit.
 
-Stop without deleting state:
+Stop through the same Docker Desktop, environment-file, and fixed-project
+boundary without deleting state:
 
 ```sh
-docker compose --env-file .env -f infra/docker/compose.yml down
+pnpm infra:down
 ```
 
-Deleting named volumes is destructive and intentionally omitted from normal
-instructions. Follow the restore runbook before replacing database state.
+The shutdown wrapper accepts no arguments and never requests volume or orphan
+removal. Deleting named volumes is destructive and intentionally omitted from
+normal instructions. Follow the restore runbook before replacing database state.
 
 ## Published OCI runtimes
 

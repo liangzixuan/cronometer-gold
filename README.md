@@ -44,7 +44,7 @@ Search projection rebuilds and degraded operation are documented in the
 ## Getting started
 
 ```sh
-cp .env.example .env
+install -m 600 .env.example .env
 pnpm install
 pnpm infra:up
 pnpm db:migrate
