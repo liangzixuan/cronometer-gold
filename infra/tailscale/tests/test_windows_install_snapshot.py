@@ -120,6 +120,9 @@ DRIVER_PATH = r"C:\Windows\System32\drivers\testtailscale.sys"
 CATALOG_PATH = (
     r"C:\Windows\System32\DriverStore\FileRepository\testtailscale\testtailscale.cat"
 )
+COLLECTOR_SOURCE_IDENTITY_SHA256 = (
+    "de6d21f37b1922dbfb8d22e27932443c190ca0985e5d524774feb14b4e26fb18"
+)
 
 
 def _artifacts() -> tuple[SNAPSHOT.ArtifactExpectation, ...]:
@@ -154,7 +157,7 @@ def _test_corpus() -> SNAPSHOT.InstallArtifactCorpus:
             b"synthetic-corpus-review-source-bundle"
         ).hexdigest(),
         collector_schema=SNAPSHOT.COLLECTOR_SCHEMA,
-        collector_source_sha256=hashlib.sha256(b"synthetic-collector-source").hexdigest(),
+        collector_source_sha256=COLLECTOR_SOURCE_IDENTITY_SHA256,
         tailscale_version=SNAPSHOT.EXPECTED_TAILSCALE_VERSION,
         artifacts=_artifacts(),
         service_path=DAEMON_PATH,

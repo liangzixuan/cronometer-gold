@@ -8,6 +8,11 @@
 > host, run an installer, authenticate Tailscale, authorize an installation, or
 > clear the physical-phone gate. Function-level corpus injection accepts only
 > synthetic `test-` fixtures.
+>
+> `windows_install_collector.ps1` is a source-only scaffold.
+> Its production path fails before corpus parsing or snapshot construction and
+> contains no host query, process invocation, network request, or file write.
+> It has not been executed against Windows and is not a production collector.
 
 This contract covers only a future attended installation-only transition on
 the Windows host. It does not cover login, tailnet enrollment, incoming access,
@@ -89,6 +94,27 @@ structural candidate. `productionArtifactCorpusMatched` means only that an
 immutable production registry entry matched; it never means installation or
 live use was authorized.
 
+## Source-only collector scaffold
+
+The checked-in PowerShell scaffold freezes the collector schema, ordered raw
+roles, domain-separated commitments, canonical synthetic snapshot shape, exact
+MSI record, redaction surface, and production fail-closed gate. Only an explicit
+`-SyntheticFixture` parameter can reach construction. That path accepts a
+bounded, canonical JSON envelope from standard input containing only a
+challenge and a `test-` artifact corpus; neither value is accepted on the
+command line. The embedded collector source identity is the SHA-256 of the
+exact LF source after replacing the single embedded identity digest with 64 zero
+bytes. Static Python tests bind the test corpus to that identity, separately pin
+the complete collector source and security-surface hashes, reject added
+output/host-command surfaces, and validate the corresponding Python fixtures
+without running PowerShell.
+
+This is reviewable source, not host evidence. No PowerShell collector path was
+run on this machine, no protected raw source was captured, and no production
+corpus or parser was registered. Future production work must replace the
+fail-closed branch in a separately reviewed change, authenticate its exact
+source and parser bundle, and retain the output and no-mutation boundaries.
+
 ## Protected handling and remaining blockers
 
 Any future raw bundle and snapshots belong in a current-user-owned mode-0700
@@ -103,8 +129,9 @@ Before a production corpus can be registered, all of these remain required:
    published checksum and Authenticode signature;
 2. derive and independently review all five artifact hashes, signers, fixed
    paths, service command, and immutable external review-source bundle;
-3. implement and review the exact collector plus every parser corpus, including
-   complete elevated Windows firewall/Hyper-V/HNS evidence without mutation;
+3. extend and review the source-only scaffold into the exact production
+   collector plus every parser corpus, including complete elevated Windows
+   firewall/Hyper-V/HNS evidence without mutation;
 4. capture and approve this machine's exact safe host, listener, and boundary
    baseline; and
 5. land the production corpus in a separate reviewed change, then obtain or

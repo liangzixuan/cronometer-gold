@@ -32,11 +32,15 @@ Each future live phase needs explicit operator approval after the exact command,
 version, target, expected state change, recovery path, and evidence location are
 reviewed. A commit or push approval does not authorize any live phase.
 
-The pure installation-snapshot v2 validator is implemented with synthetic
-adversarial tests, but no production artifact/parser corpus or executable host
-collector is registered. Its manifest never authorizes installation. An exact
-package pin or prior operator approval cannot substitute for the missing corpus,
-collector, protected raw bundle, and pre/post boundary proof.
+The pure installation-snapshot v2 validator and a source-only PowerShell
+collector scaffold are implemented with synthetic adversarial tests.
+The scaffold's production path fails before corpus parsing or construction and
+contains no host-query or process-execution path. It has not been run against
+Windows. No production artifact/parser corpus or executable production host
+collector is registered, and its manifest never authorizes installation. An
+exact package pin or prior operator approval cannot substitute for the missing
+corpus, authenticated collector/parser bundle, protected raw bundle, and
+pre/post boundary proof.
 
 ## Remaining implementation before live use
 
