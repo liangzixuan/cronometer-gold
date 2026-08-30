@@ -17,7 +17,7 @@ MODULE = ROOT / "infra" / "tailscale" / "windows_install_snapshot.py"
 CHALLENGE = "0123456789abcdef0123456789abcdef"
 OTHER_CHALLENGE = "fedcba9876543210fedcba9876543210"
 BOOT_COMMITMENT = hashlib.sha256(b"synthetic-boot-session").hexdigest()
-SYNTHETIC_RAW_DOMAIN = "nutrition-tracker-windows-tailscale-install-synthetic-raw-v1"
+SYNTHETIC_RAW_DOMAIN = "nutrition-tracker-windows-tailscale-install-synthetic-raw-v2"
 
 
 def _canonical(value: object) -> bytes:
@@ -116,26 +116,82 @@ INSTALLER_PATH = (
     r"C:\ProgramData\NutritionTracker\TestFixtures\test-tailscale-1.102.3.msi"
 )
 CLIENT_PATH = r"C:\Program Files\Tailscale Test\tailscale.exe"
+GUI_PATH = r"C:\Program Files\Tailscale Test\tailscale-ipn.exe"
 DAEMON_PATH = r"C:\Program Files\Tailscale Test\tailscaled.exe"
+DRIVER_LIBRARY_PATH = r"C:\Program Files\Tailscale Test\wintun.dll"
+DRIVER_INF_PATH = r"C:\Windows\INF\oem999.inf"
 DRIVER_PATH = r"C:\Windows\System32\drivers\testtailscale.sys"
 CATALOG_PATH = (
     r"C:\Windows\System32\DriverStore\FileRepository\testtailscale\testtailscale.cat"
 )
 COLLECTOR_SOURCE_IDENTITY_SHA256 = (
-    "de6d21f37b1922dbfb8d22e27932443c190ca0985e5d524774feb14b4e26fb18"
+    "fa971ddabb08c62f844a30ecd6cc387abe947ff63626e7a1d3aad1458323a215"
 )
 
 
 def _artifacts() -> tuple[SNAPSHOT.ArtifactExpectation, ...]:
-    paths = (INSTALLER_PATH, CLIENT_PATH, DAEMON_PATH, DRIVER_PATH, CATALOG_PATH)
-    hashes = (SNAPSHOT.EXPECTED_INSTALLER_SHA256, "1" * 64, "2" * 64, "3" * 64, "4" * 64)
-    signers = ("a" * 64, "b" * 64, "c" * 64, "d" * 64, "e" * 64)
-    return tuple(
-        SNAPSHOT.ArtifactExpectation(role, path, digest, "Valid", signer)
-        for role, path, digest, signer in zip(
-            SNAPSHOT.ARTIFACT_ROLES, paths, hashes, signers, strict=True
-        )
+    paths = (
+        INSTALLER_PATH,
+        CLIENT_PATH,
+        GUI_PATH,
+        DAEMON_PATH,
+        DRIVER_LIBRARY_PATH,
+        DRIVER_INF_PATH,
+        DRIVER_PATH,
+        CATALOG_PATH,
     )
+    hashes = (
+        SNAPSHOT.EXPECTED_INSTALLER_SHA256,
+        "1" * 64,
+        "2" * 64,
+        "3" * 64,
+        "4" * 64,
+        "5" * 64,
+        "6" * 64,
+        "7" * 64,
+    )
+    signer_digests = tuple(character * 64 for character in "abcdef01")
+    timestamp_digests = tuple(character * 64 for character in "23456789")
+    artifacts: list[SNAPSHOT.ArtifactExpectation] = []
+    for index, (role, path, digest, signer, timestamp) in enumerate(
+        zip(
+            SNAPSHOT.ARTIFACT_ROLES,
+            paths,
+            hashes,
+            signer_digests,
+            timestamp_digests,
+            strict=True,
+        )
+    ):
+        authenticode = None
+        if role != "driverInf":
+            authenticode = SNAPSHOT.AuthenticodeExpectation(
+                kind=(
+                    "signed-catalog" if role == "catalog" else "embedded-authenticode"
+                ),
+                verification_status="Valid",
+                signer_leaf_certificate_der_sha256=signer,
+                timestamp_leaf_certificate_der_sha256=timestamp,
+                timestamp_utc=f"2021-10-17T04:31:{index:02d}.000Z",
+            )
+        catalog_membership = None
+        if role in ("driverInf", "driver"):
+            catalog_membership = SNAPSHOT.CatalogMembershipExpectation(
+                verification_status="Valid",
+                catalog_role="catalog",
+                member_digest_algorithm="sha1",
+                member_digest=("a" if role == "driverInf" else "b") * 40,
+            )
+        artifacts.append(
+            SNAPSHOT.ArtifactExpectation(
+                role=role,
+                path=path,
+                sha256=digest,
+                authenticode=authenticode,
+                catalog_membership=catalog_membership,
+            )
+        )
+    return tuple(artifacts)
 
 
 def _source_corpora() -> tuple[SNAPSHOT.SourceCorpusExpectation, ...]:
@@ -151,7 +207,7 @@ def _source_corpora() -> tuple[SNAPSHOT.SourceCorpusExpectation, ...]:
 
 def _test_corpus() -> SNAPSHOT.InstallArtifactCorpus:
     return SNAPSHOT.InstallArtifactCorpus(
-        corpus_id="test-windows-tailscale-1.102.3-v1",
+        corpus_id="test-windows-tailscale-1.102.3-v2",
         corpus_kind="test",
         schema_version=SNAPSHOT.INSTALL_ARTIFACT_CORPUS_SCHEMA,
         review_source_bundle_sha256=hashlib.sha256(
@@ -263,14 +319,39 @@ def _safety_state() -> dict[str, bool]:
     }
 
 
-def _artifact_values() -> list[dict[str, str]]:
+def _artifact_values() -> list[dict[str, object]]:
     return [
         {
             "role": artifact.role,
             "path": artifact.path,
             "sha256": artifact.sha256,
-            "signatureStatus": artifact.signature_status,
-            "signerIdentitySha256": artifact.signer_identity_sha256,
+            "authenticode": (
+                {
+                    "kind": artifact.authenticode.kind,
+                    "verificationStatus": artifact.authenticode.verification_status,
+                    "signerLeafCertificateDerSha256": (
+                        artifact.authenticode.signer_leaf_certificate_der_sha256
+                    ),
+                    "timestampLeafCertificateDerSha256": (
+                        artifact.authenticode.timestamp_leaf_certificate_der_sha256
+                    ),
+                    "timestampUtc": artifact.authenticode.timestamp_utc,
+                }
+                if artifact.authenticode is not None
+                else None
+            ),
+            "catalogMembership": (
+                {
+                    "verificationStatus": artifact.catalog_membership.verification_status,
+                    "catalogRole": artifact.catalog_membership.catalog_role,
+                    "memberDigestAlgorithm": (
+                        artifact.catalog_membership.member_digest_algorithm
+                    ),
+                    "memberDigest": artifact.catalog_membership.member_digest,
+                }
+                if artifact.catalog_membership is not None
+                else None
+            ),
         }
         for artifact in TEST_CORPUS.artifacts
     ]
@@ -348,6 +429,10 @@ def _postinstall() -> dict[str, object]:
             "adapter": {
                 "adapterClass": "tailscale-tunnel-adapter",
                 "status": "down",
+                "driverInfPath": DRIVER_INF_PATH,
+                "driverInfSha256": TEST_CORPUS.artifacts[
+                    SNAPSHOT.ARTIFACT_ROLES.index("driverInf")
+                ].sha256,
                 "driverPath": DRIVER_PATH,
                 "driverSha256": driver.sha256,
                 "catalogPath": CATALOG_PATH,
@@ -405,6 +490,8 @@ EXPECTED_IMPORTS = {
 }
 EXPECTED_CLASSES = {
     "WindowsInstallSnapshotError",
+    "AuthenticodeExpectation",
+    "CatalogMembershipExpectation",
     "ArtifactExpectation",
     "SourceCorpusExpectation",
     "InstallArtifactCorpus",
@@ -478,7 +565,7 @@ EXPECTED_MANIFEST_FIELDS = {
     "trustBoundary",
 }
 EXPECTED_MODULE_SHA256 = (
-    "ab12f41cb33389f7b0a79f9a05cc892966261413ad9f0187393e45f2ac8cde5f"
+    "d10acd619b70927a7a073c8b534914f38a34737741bccea303242deae0a0272e"
 )
 EXPECTED_MANIFEST_VALUE_EXPRESSIONS = (
     ("schemaVersion", "CORPUS_MANIFEST_SCHEMA"),
@@ -721,6 +808,70 @@ class WindowsInstallSnapshotTests(unittest.TestCase):
         with self.assertRaises(SNAPSHOT.WindowsInstallSnapshotError):
             _validate(*args, **kwargs)  # type: ignore[arg-type]
 
+    def test_exact_generation_matrix_and_artifact_roles_are_frozen(self) -> None:
+        self.assertEqual(
+            SNAPSHOT.ARTIFACT_ROLES,
+            (
+                "installer",
+                "client",
+                "gui",
+                "daemon",
+                "driverLibrary",
+                "driverInf",
+                "driver",
+                "catalog",
+            ),
+        )
+        self.assertEqual(
+            SNAPSHOT.SNAPSHOT_SCHEMA,
+            "nutrition-tracker-windows-tailscale-install-snapshot-v3",
+        )
+        self.assertEqual(
+            SNAPSHOT.CORPUS_MANIFEST_SCHEMA,
+            "nutrition-tracker-windows-tailscale-install-corpus-manifest-v3",
+        )
+        self.assertEqual(
+            SNAPSHOT.INSTALL_ARTIFACT_CORPUS_SCHEMA,
+            "nutrition-tracker-windows-tailscale-install-artifact-corpus-v2",
+        )
+        self.assertEqual(
+            SNAPSHOT.COLLECTOR_SCHEMA,
+            "nutrition-tracker-windows-tailscale-install-collector-v2",
+        )
+        self.assertEqual(
+            SNAPSHOT.CHALLENGE_DOMAIN,
+            "nutrition-tracker-windows-tailscale-install-challenge-v1",
+        )
+        self.assertEqual(
+            SNAPSHOT.SESSION_DOMAIN,
+            "nutrition-tracker-windows-tailscale-install-session-v2",
+        )
+        self.assertEqual(
+            SNAPSHOT.CAPTURE_DOMAIN,
+            "nutrition-tracker-windows-tailscale-install-raw-capture-v2",
+        )
+        self.assertEqual(
+            SYNTHETIC_RAW_DOMAIN,
+            "nutrition-tracker-windows-tailscale-install-synthetic-raw-v2",
+        )
+        self.assertEqual(
+            dict(SNAPSHOT.SOURCE_SCHEMAS),
+            {
+                "hostEnvironment": "nutrition-tracker-windows-tailscale-install-host-environment-raw-v1",
+                "tailscaleInstall": "nutrition-tracker-windows-tailscale-install-tailscale-install-raw-v2",
+                "installerInvocation": "nutrition-tracker-windows-tailscale-install-installer-invocation-raw-v1",
+                "installerResult": "nutrition-tracker-windows-tailscale-install-installer-result-raw-v1",
+                "listeners": "nutrition-tracker-windows-tailscale-install-listeners-raw-v1",
+                "windowsFirewall": "nutrition-tracker-windows-tailscale-install-windows-firewall-raw-v1",
+                "hyperVFirewall": "nutrition-tracker-windows-tailscale-install-hyper-v-firewall-raw-v1",
+                "forwarding": "nutrition-tracker-windows-tailscale-install-forwarding-raw-v1",
+                "hns": "nutrition-tracker-windows-tailscale-install-hns-raw-v1",
+                "docker": "nutrition-tracker-windows-tailscale-install-docker-raw-v1",
+                "services": "nutrition-tracker-windows-tailscale-install-services-raw-v1",
+                "adapters": "nutrition-tracker-windows-tailscale-install-adapters-raw-v2",
+            },
+        )
+
     def test_valid_test_pair_emits_redacted_deterministic_manifest(self) -> None:
         preinstall = _preinstall()
         postinstall = _postinstall()
@@ -791,12 +942,31 @@ class WindowsInstallSnapshotTests(unittest.TestCase):
             CHALLENGE,
             INSTALLER_PATH,
             CLIENT_PATH,
+            GUI_PATH,
             DAEMON_PATH,
+            DRIVER_LIBRARY_PATH,
+            DRIVER_INF_PATH,
             DRIVER_PATH,
             CATALOG_PATH,
+            *(artifact.sha256 for artifact in TEST_CORPUS.artifacts[1:]),
             *(
-                artifact.signer_identity_sha256
+                value
                 for artifact in TEST_CORPUS.artifacts
+                for value in (
+                    artifact.authenticode.signer_leaf_certificate_der_sha256
+                    if artifact.authenticode is not None
+                    else None,
+                    artifact.authenticode.timestamp_leaf_certificate_der_sha256
+                    if artifact.authenticode is not None
+                    else None,
+                    artifact.authenticode.timestamp_utc
+                    if artifact.authenticode is not None
+                    else None,
+                    artifact.catalog_membership.member_digest
+                    if artifact.catalog_membership is not None
+                    else None,
+                )
+                if value is not None
             ),
         ):
             self.assertNotIn(protected.encode(), first)
@@ -835,18 +1005,50 @@ class WindowsInstallSnapshotTests(unittest.TestCase):
                 self.assertIsNone(caught.exception.__cause__)
                 self.assertIsNone(caught.exception.__context__)
 
-    def test_corpus_binds_every_artifact_hash_signer_status_and_path(self) -> None:
+    def test_corpus_binds_every_artifact_path_hash_and_signature_evidence(self) -> None:
         mutations: list[SNAPSHOT.InstallArtifactCorpus] = []
         for index, artifact in enumerate(TEST_CORPUS.artifacts):
             for field, value in (
                 ("sha256", "f" * 64),
-                ("signer_identity_sha256", "0" * 64),
-                ("signature_status", "UnknownError"),
                 ("path", artifact.path + ".moved"),
             ):
                 artifacts = list(TEST_CORPUS.artifacts)
                 artifacts[index] = replace(artifact, **{field: value})
                 mutations.append(replace(TEST_CORPUS, artifacts=tuple(artifacts)))
+            if artifact.authenticode is not None:
+                for field, value in (
+                    (
+                        "kind",
+                        "embedded-authenticode"
+                        if artifact.authenticode.kind == "signed-catalog"
+                        else "signed-catalog",
+                    ),
+                    ("verification_status", "UnknownError"),
+                    ("signer_leaf_certificate_der_sha256", "f" * 64),
+                    ("timestamp_leaf_certificate_der_sha256", "1" * 64),
+                    ("timestamp_utc", "2021-10-17T04:31:59.000Z"),
+                ):
+                    artifacts = list(TEST_CORPUS.artifacts)
+                    artifacts[index] = replace(
+                        artifact,
+                        authenticode=replace(artifact.authenticode, **{field: value}),
+                    )
+                    mutations.append(replace(TEST_CORPUS, artifacts=tuple(artifacts)))
+            if artifact.catalog_membership is not None:
+                for field, value in (
+                    ("verification_status", "UnknownError"),
+                    ("catalog_role", "driver"),
+                    ("member_digest_algorithm", "sha256"),
+                    ("member_digest", "c" * 40),
+                ):
+                    artifacts = list(TEST_CORPUS.artifacts)
+                    artifacts[index] = replace(
+                        artifact,
+                        catalog_membership=replace(
+                            artifact.catalog_membership, **{field: value}
+                        ),
+                    )
+                    mutations.append(replace(TEST_CORPUS, artifacts=tuple(artifacts)))
         daemon = TEST_CORPUS.artifacts[SNAPSHOT.ARTIFACT_ROLES.index("daemon")]
         daemon_case_alias = daemon.path[:3] + daemon.path[3:].swapcase()
         case_alias_artifacts = list(TEST_CORPUS.artifacts)
@@ -855,7 +1057,6 @@ class WindowsInstallSnapshotTests(unittest.TestCase):
             case_alias_artifacts[client_index],
             path=daemon_case_alias,
             sha256=daemon.sha256,
-            signer_identity_sha256=daemon.signer_identity_sha256,
         )
         mutations.append(
             replace(TEST_CORPUS, artifacts=tuple(case_alias_artifacts))
@@ -892,6 +1093,71 @@ class WindowsInstallSnapshotTests(unittest.TestCase):
                     corpora=MappingProxyType({corpus.corpus_id: corpus})
                 )
 
+    def test_corpus_rejects_missing_extra_or_misclassified_signature_evidence(self) -> None:
+        driver_inf_index = SNAPSHOT.ARTIFACT_ROLES.index("driverInf")
+        driver_index = SNAPSHOT.ARTIFACT_ROLES.index("driver")
+        installer_index = SNAPSHOT.ARTIFACT_ROLES.index("installer")
+        catalog_index = SNAPSHOT.ARTIFACT_ROLES.index("catalog")
+        driver_inf = TEST_CORPUS.artifacts[driver_inf_index]
+        driver = TEST_CORPUS.artifacts[driver_index]
+        installer = TEST_CORPUS.artifacts[installer_index]
+        catalog = TEST_CORPUS.artifacts[catalog_index]
+        assert driver.authenticode is not None
+        assert driver.catalog_membership is not None
+        assert installer.authenticode is not None
+        assert catalog.authenticode is not None
+
+        corpus_mutations: list[SNAPSHOT.InstallArtifactCorpus] = []
+        artifact_mutations = (
+            (driver_inf_index, replace(driver_inf, authenticode=driver.authenticode)),
+            (driver_index, replace(driver, authenticode=None)),
+            (driver_index, replace(driver, catalog_membership=None)),
+            (
+                installer_index,
+                replace(installer, catalog_membership=driver.catalog_membership),
+            ),
+            (
+                catalog_index,
+                replace(
+                    catalog,
+                    authenticode=replace(
+                        catalog.authenticode, kind="embedded-authenticode"
+                    ),
+                ),
+            ),
+            (
+                catalog_index,
+                replace(catalog, catalog_membership=driver.catalog_membership),
+            ),
+        )
+        for index, mutation in artifact_mutations:
+            artifacts = list(TEST_CORPUS.artifacts)
+            artifacts[index] = mutation
+            corpus_mutations.append(
+                replace(TEST_CORPUS, artifacts=tuple(artifacts))
+            )
+        corpus_mutations.extend(
+            (
+                replace(TEST_CORPUS, artifacts=TEST_CORPUS.artifacts[:-1]),
+                replace(
+                    TEST_CORPUS,
+                    artifacts=TEST_CORPUS.artifacts + (TEST_CORPUS.artifacts[-1],),
+                ),
+                replace(
+                    TEST_CORPUS,
+                    artifacts=(
+                        TEST_CORPUS.artifacts[1],
+                        TEST_CORPUS.artifacts[0],
+                        *TEST_CORPUS.artifacts[2:],
+                    ),
+                ),
+            )
+        )
+        for corpus in corpus_mutations:
+            with self.subTest(corpus=corpus):
+                with self.assertRaises(SNAPSHOT.WindowsInstallSnapshotError):
+                    SNAPSHOT._assert_corpus(corpus, production_registry=False)
+
     def test_snapshot_artifacts_service_and_adapter_must_equal_corpus(self) -> None:
         postinstall = _postinstall()
         postinstall["tailscaleInstall"]["artifacts"][1]["sha256"] = "f" * 64  # type: ignore[index]
@@ -907,6 +1173,35 @@ class WindowsInstallSnapshotTests(unittest.TestCase):
         postinstall = _postinstall()
         postinstall["tailscaleInstall"]["adapter"]["status"] = "up"  # type: ignore[index]
         self.assert_rejected(postinstall=postinstall)
+
+        postinstall = _postinstall()
+        postinstall["tailscaleInstall"]["adapter"]["tailnetAddressPresent"] = 0  # type: ignore[index]
+        self.assert_rejected(postinstall=postinstall)
+
+        postinstall = _postinstall()
+        postinstall["tailscaleInstall"]["artifacts"][0]["authenticode"][  # type: ignore[index]
+            "verificationStatus"
+        ] = "UnknownError"
+        self.assert_rejected(postinstall=postinstall)
+
+        postinstall = _postinstall()
+        postinstall["tailscaleInstall"]["artifacts"][6]["catalogMembership"][  # type: ignore[index]
+            "memberDigest"
+        ] = "c" * 40
+        self.assert_rejected(postinstall=postinstall)
+
+        for field, value in (
+            ("driverInfPath", DRIVER_PATH),
+            ("driverInfSha256", "f" * 64),
+            ("driverPath", DRIVER_INF_PATH),
+            ("driverSha256", "e" * 64),
+            ("catalogPath", DRIVER_PATH),
+            ("catalogSha256", "d" * 64),
+        ):
+            postinstall = _postinstall()
+            postinstall["tailscaleInstall"]["adapter"][field] = value  # type: ignore[index]
+            with self.subTest(adapter_field=field):
+                self.assert_rejected(postinstall=postinstall)
 
     def test_live_expected_challenge_is_mandatory_and_not_replayable(self) -> None:
         self.assert_rejected(challenge=OTHER_CHALLENGE)
@@ -930,6 +1225,12 @@ class WindowsInstallSnapshotTests(unittest.TestCase):
 
         preinstall = _preinstall()
         preinstall["session"]["sequence"] = 2  # type: ignore[index]
+        self.assert_rejected(preinstall=preinstall)
+
+        preinstall = _preinstall()
+        preinstall["session"]["sequence"] = True  # type: ignore[index]
+        for role in SNAPSHOT.RAW_SOURCE_ROLES:
+            _refresh_raw_source_commitment(preinstall, role)
         self.assert_rejected(preinstall=preinstall)
 
         postinstall = _postinstall()

@@ -2,7 +2,7 @@
 <#
 Offline Windows Tailscale install-evidence collector scaffold.
 
-Contract: this source emits only the v2 snapshot consumed by
+Contract: this source emits only the v3 snapshot consumed by
 windows_install_snapshot.py. The production path intentionally fails before
 host inspection while the immutable production corpus registry is empty.
 The explicit SyntheticFixture path exists only to freeze canonicalization,
@@ -23,18 +23,18 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$script:CollectorSourceSha256 = 'de6d21f37b1922dbfb8d22e27932443c190ca0985e5d524774feb14b4e26fb18'
+$script:CollectorSourceSha256 = 'fa971ddabb08c62f844a30ecd6cc387abe947ff63626e7a1d3aad1458323a215'
 
 # BEGIN SECURITY-CRITICAL COLLECTOR SURFACE
-$script:SnapshotSchema = 'nutrition-tracker-windows-tailscale-install-snapshot-v2'
-$script:ArtifactCorpusSchema = 'nutrition-tracker-windows-tailscale-install-artifact-corpus-v1'
-$script:CollectorSchema = 'nutrition-tracker-windows-tailscale-install-collector-v1'
+$script:SnapshotSchema = 'nutrition-tracker-windows-tailscale-install-snapshot-v3'
+$script:ArtifactCorpusSchema = 'nutrition-tracker-windows-tailscale-install-artifact-corpus-v2'
+$script:CollectorSchema = 'nutrition-tracker-windows-tailscale-install-collector-v2'
 $script:ExpectedVersion = '1.102.3'
 $script:ExpectedInstallerSha256 = '03ac8183c6e3ce276e9b44281ebe7e4c02aef28a971034ca170c4b665df42dce'
 $script:ChallengeDomain = 'nutrition-tracker-windows-tailscale-install-challenge-v1'
-$script:SessionDomain = 'nutrition-tracker-windows-tailscale-install-session-v1'
-$script:CaptureDomain = 'nutrition-tracker-windows-tailscale-install-raw-capture-v1'
-$script:SyntheticRawDomain = 'nutrition-tracker-windows-tailscale-install-synthetic-raw-v1'
+$script:SessionDomain = 'nutrition-tracker-windows-tailscale-install-session-v2'
+$script:CaptureDomain = 'nutrition-tracker-windows-tailscale-install-raw-capture-v2'
+$script:SyntheticRawDomain = 'nutrition-tracker-windows-tailscale-install-synthetic-raw-v2'
 $script:MsiExecPath = 'C:\Windows\System32\msiexec.exe'
 $script:MsiArguments = @(
     '/qn',
@@ -44,7 +44,10 @@ $script:MsiArguments = @(
     'TS_UNATTENDEDMODE=never',
     'TS_INSTALLUPDATES=never'
 )
-$script:ArtifactRoles = @('installer', 'client', 'daemon', 'driver', 'catalog')
+$script:ArtifactRoles = @(
+    'installer', 'client', 'gui', 'daemon',
+    'driverLibrary', 'driverInf', 'driver', 'catalog'
+)
 $script:RawRoles = @(
     'hostEnvironment', 'tailscaleInstall', 'installerInvocation',
     'installerResult', 'listeners', 'windowsFirewall', 'hyperVFirewall',
@@ -52,7 +55,7 @@ $script:RawRoles = @(
 )
 $script:SourceSchemas = [ordered]@{
     hostEnvironment = 'nutrition-tracker-windows-tailscale-install-host-environment-raw-v1'
-    tailscaleInstall = 'nutrition-tracker-windows-tailscale-install-tailscale-install-raw-v1'
+    tailscaleInstall = 'nutrition-tracker-windows-tailscale-install-tailscale-install-raw-v2'
     installerInvocation = 'nutrition-tracker-windows-tailscale-install-installer-invocation-raw-v1'
     installerResult = 'nutrition-tracker-windows-tailscale-install-installer-result-raw-v1'
     listeners = 'nutrition-tracker-windows-tailscale-install-listeners-raw-v1'
@@ -62,7 +65,7 @@ $script:SourceSchemas = [ordered]@{
     hns = 'nutrition-tracker-windows-tailscale-install-hns-raw-v1'
     docker = 'nutrition-tracker-windows-tailscale-install-docker-raw-v1'
     services = 'nutrition-tracker-windows-tailscale-install-services-raw-v1'
-    adapters = 'nutrition-tracker-windows-tailscale-install-adapters-raw-v1'
+    adapters = 'nutrition-tracker-windows-tailscale-install-adapters-raw-v2'
 }
 
 function Stop-Collector {
@@ -88,6 +91,12 @@ function ConvertTo-SortedNode {
     if ($null -eq $Value) { return $null }
     if ($Value -is [string] -or $Value -is [bool] -or $Value -is [int] -or $Value -is [long]) {
         return $Value
+    }
+    if ($Value -is [datetime]) {
+        return $Value.ToUniversalTime().ToString(
+            'yyyy-MM-ddTHH:mm:ss.fffZ',
+            [System.Globalization.CultureInfo]::InvariantCulture
+        )
     }
     if ($Value -is [System.Collections.IDictionary]) {
         $result = [ordered]@{}
@@ -131,6 +140,75 @@ function Assert-Sha256 {
     if ($Value -isnot [string] -or $Value -cnotmatch '\A[0-9a-f]{64}\z') { Stop-Collector }
 }
 
+function Assert-Sha1 {
+    param([AllowNull()] [object] $Value)
+    if ($Value -isnot [string] -or $Value -cnotmatch '\A[0-9a-f]{40}\z') { Stop-Collector }
+}
+
+function Assert-AuthenticodeExpectation {
+    param(
+        [AllowNull()] [object] $Value,
+        [Parameter(Mandatory)] [string] $ExpectedKind
+    )
+    if ($ExpectedKind -ceq 'none') {
+        if ($null -ne $Value) { Stop-Collector }
+        return
+    }
+    if ($Value -isnot [pscustomobject]) { Stop-Collector }
+    Assert-ExactProperties -Value $Value -Names @(
+        'kind', 'verificationStatus', 'signerLeafCertificateDerSha256',
+        'timestampLeafCertificateDerSha256', 'timestampUtc'
+    )
+    if (
+        $Value.kind -isnot [string] -or
+        $Value.verificationStatus -isnot [string] -or
+        $Value.kind -cne $ExpectedKind -or
+        $Value.verificationStatus -cne 'Valid'
+    ) { Stop-Collector }
+    Assert-Sha256 -Value $Value.signerLeafCertificateDerSha256
+    Assert-Sha256 -Value $Value.timestampLeafCertificateDerSha256
+    if ($Value.timestampUtc -is [datetime]) {
+        $Value.timestampUtc = $Value.timestampUtc.ToUniversalTime().ToString(
+            'yyyy-MM-ddTHH:mm:ss.fffZ',
+            [System.Globalization.CultureInfo]::InvariantCulture
+        )
+    }
+    if ($Value.timestampUtc -isnot [string] -or $Value.timestampUtc -cnotmatch '\A\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\z') { Stop-Collector }
+    try {
+        $parsedTimestamp = [datetime]::ParseExact(
+            $Value.timestampUtc,
+            'yyyy-MM-ddTHH:mm:ss.fffZ',
+            [System.Globalization.CultureInfo]::InvariantCulture,
+            [System.Globalization.DateTimeStyles]::AssumeUniversal -bor [System.Globalization.DateTimeStyles]::AdjustToUniversal
+        )
+    } catch { Stop-Collector }
+    if ($parsedTimestamp.ToString('yyyy-MM-ddTHH:mm:ss.fffZ', [System.Globalization.CultureInfo]::InvariantCulture) -cne $Value.timestampUtc) { Stop-Collector }
+}
+
+function Assert-CatalogMembershipExpectation {
+    param(
+        [AllowNull()] [object] $Value,
+        [Parameter(Mandatory)] [bool] $Required
+    )
+    if (-not $Required) {
+        if ($null -ne $Value) { Stop-Collector }
+        return
+    }
+    if ($Value -isnot [pscustomobject]) { Stop-Collector }
+    Assert-ExactProperties -Value $Value -Names @(
+        'verificationStatus', 'catalogRole', 'memberDigestAlgorithm', 'memberDigest'
+    )
+    if (
+        $Value.verificationStatus -isnot [string] -or
+        $Value.catalogRole -isnot [string] -or
+        $Value.memberDigestAlgorithm -isnot [string] -or
+        $Value.verificationStatus -cne 'Valid' -or
+        $Value.catalogRole -cne 'catalog' -or
+        $Value.memberDigestAlgorithm -cne 'sha1'
+    ) { Stop-Collector }
+    Assert-Sha1 -Value $Value.memberDigest
+}
+
 function Read-BoundedStandardInput {
     param([Parameter(Mandatory)] [int] $MaximumCharacters)
     if ($MaximumCharacters -lt 2 -or $MaximumCharacters -gt 131072) { Stop-Collector }
@@ -169,9 +247,19 @@ function Read-TestArtifactCorpus {
         'approvedHostEnvironmentSha256', 'approvedListenerInventorySha256',
         'approvedBoundaryStateSha256', 'sourceCorpora', 'artifactCorpusSha256'
     )
-    if ($corpus.corpusKind -cne 'test' -or $corpus.corpusId -cnotmatch '\Atest-[a-z0-9._-]{0,59}\z') { Stop-Collector }
-    if ($corpus.schemaVersion -cne $script:ArtifactCorpusSchema -or $corpus.collectorSchema -cne $script:CollectorSchema) { Stop-Collector }
-    if ($corpus.tailscaleVersion -cne $script:ExpectedVersion) { Stop-Collector }
+    if (
+        $corpus.corpusKind -isnot [string] -or
+        $corpus.corpusId -isnot [string] -or
+        $corpus.corpusKind -cne 'test' -or
+        $corpus.corpusId -cnotmatch '\Atest-[a-z0-9._-]{0,59}\z'
+    ) { Stop-Collector }
+    if (
+        $corpus.schemaVersion -isnot [string] -or
+        $corpus.collectorSchema -isnot [string] -or
+        $corpus.schemaVersion -cne $script:ArtifactCorpusSchema -or
+        $corpus.collectorSchema -cne $script:CollectorSchema
+    ) { Stop-Collector }
+    if ($corpus.tailscaleVersion -isnot [string] -or $corpus.tailscaleVersion -cne $script:ExpectedVersion) { Stop-Collector }
     foreach ($digest in @(
         $corpus.reviewSourceBundleSha256, $corpus.collectorSourceSha256,
         $corpus.approvedHostEnvironmentSha256, $corpus.approvedListenerInventorySha256,
@@ -183,8 +271,8 @@ function Read-TestArtifactCorpus {
     $pathIdentities = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
     for ($index = 0; $index -lt $script:ArtifactRoles.Count; $index += 1) {
         $artifact = $corpus.artifacts[$index]
-        Assert-ExactProperties -Value $artifact -Names @('role', 'path', 'sha256', 'signatureStatus', 'signerIdentitySha256')
-        if ($artifact.role -cne $script:ArtifactRoles[$index]) { Stop-Collector }
+        Assert-ExactProperties -Value $artifact -Names @('role', 'path', 'sha256', 'authenticode', 'catalogMembership')
+        if ($artifact.role -isnot [string] -or $artifact.role -cne $script:ArtifactRoles[$index]) { Stop-Collector }
         $path = $artifact.path
         $segments = @()
         if ($path -is [string] -and $path.Length -ge 3) {
@@ -208,11 +296,19 @@ function Read-TestArtifactCorpus {
         }
         if (-not $pathIdentities.Add($artifact.path)) { Stop-Collector }
         Assert-Sha256 -Value $artifact.sha256
-        Assert-Sha256 -Value $artifact.signerIdentitySha256
-        if ($artifact.signatureStatus -cne 'Valid') { Stop-Collector }
+        $expectedAuthenticodeKind = if ($artifact.role -ceq 'driverInf') {
+            'none'
+        } elseif ($artifact.role -ceq 'catalog') {
+            'signed-catalog'
+        } else {
+            'embedded-authenticode'
+        }
+        Assert-AuthenticodeExpectation -Value $artifact.authenticode -ExpectedKind $expectedAuthenticodeKind
+        $requiresCatalogMembership = $artifact.role -ceq 'driverInf' -or $artifact.role -ceq 'driver'
+        Assert-CatalogMembershipExpectation -Value $artifact.catalogMembership -Required $requiresCatalogMembership
     }
     if ($corpus.artifacts[0].sha256 -cne $script:ExpectedInstallerSha256) { Stop-Collector }
-    if (-not [System.StringComparer]::Ordinal.Equals($corpus.servicePath, $corpus.artifacts[2].path)) { Stop-Collector }
+    if (-not [System.StringComparer]::Ordinal.Equals($corpus.servicePath, $corpus.artifacts[3].path)) { Stop-Collector }
     if (@($corpus.serviceArgv).Count -lt 1 -or @($corpus.serviceArgv).Count -gt 8 -or -not [System.StringComparer]::Ordinal.Equals($corpus.serviceArgv[0], $corpus.servicePath)) { Stop-Collector }
     foreach ($argument in @($corpus.serviceArgv)) {
         if ($argument -isnot [string] -or $argument.Length -lt 1 -or $argument.Length -gt 260 -or $argument -match '[\x00-\x1f]') { Stop-Collector }
@@ -223,7 +319,12 @@ function Read-TestArtifactCorpus {
         $source = $corpus.sourceCorpora[$index]
         Assert-ExactProperties -Value $source -Names @('role', 'schemaVersion', 'parserCorpusSha256')
         $role = $script:RawRoles[$index]
-        if ($source.role -cne $role -or $source.schemaVersion -cne $script:SourceSchemas[$role]) { Stop-Collector }
+        if (
+            $source.role -isnot [string] -or
+            $source.schemaVersion -isnot [string] -or
+            $source.role -cne $role -or
+            $source.schemaVersion -cne $script:SourceSchemas[$role]
+        ) { Stop-Collector }
         Assert-Sha256 -Value $source.parserCorpusSha256
     }
 
@@ -306,8 +407,8 @@ function New-SyntheticSnapshot {
         $tailscaleInstall = [ordered]@{
             installed = $true; clientVersion = $Corpus.tailscaleVersion; daemonVersion = $Corpus.tailscaleVersion
             artifacts = @($Corpus.artifacts); residualState = $null; safetyState = $safety
-            service = [ordered]@{ serviceClass = 'tailscale-windows-service'; path = $Corpus.servicePath; argv = @($Corpus.serviceArgv); status = 'running'; startType = 'automatic'; accountClass = 'local-system'; binarySha256 = $Corpus.artifacts[2].sha256 }
-            adapter = [ordered]@{ adapterClass = 'tailscale-tunnel-adapter'; status = 'down'; driverPath = $Corpus.artifacts[3].path; driverSha256 = $Corpus.artifacts[3].sha256; catalogPath = $Corpus.artifacts[4].path; catalogSha256 = $Corpus.artifacts[4].sha256; tailnetAddressPresent = $false }
+            service = [ordered]@{ serviceClass = 'tailscale-windows-service'; path = $Corpus.servicePath; argv = @($Corpus.serviceArgv); status = 'running'; startType = 'automatic'; accountClass = 'local-system'; binarySha256 = $Corpus.artifacts[3].sha256 }
+            adapter = [ordered]@{ adapterClass = 'tailscale-tunnel-adapter'; status = 'down'; driverInfPath = $Corpus.artifacts[5].path; driverInfSha256 = $Corpus.artifacts[5].sha256; driverPath = $Corpus.artifacts[6].path; driverSha256 = $Corpus.artifacts[6].sha256; catalogPath = $Corpus.artifacts[7].path; catalogSha256 = $Corpus.artifacts[7].sha256; tailnetAddressPresent = $false }
         }
         $installerResult = [ordered]@{ exitCode = 0; processExitObserved = $true; restartRequired = $false; restartInitiated = $false; uiLaunched = $false }
     }

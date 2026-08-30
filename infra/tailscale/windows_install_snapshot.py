@@ -19,21 +19,21 @@ from types import MappingProxyType
 from typing import Any, NoReturn
 
 
-SNAPSHOT_SCHEMA = "nutrition-tracker-windows-tailscale-install-snapshot-v2"
+SNAPSHOT_SCHEMA = "nutrition-tracker-windows-tailscale-install-snapshot-v3"
 CORPUS_MANIFEST_SCHEMA = (
-    "nutrition-tracker-windows-tailscale-install-corpus-manifest-v2"
+    "nutrition-tracker-windows-tailscale-install-corpus-manifest-v3"
 )
 INSTALL_ARTIFACT_CORPUS_SCHEMA = (
-    "nutrition-tracker-windows-tailscale-install-artifact-corpus-v1"
+    "nutrition-tracker-windows-tailscale-install-artifact-corpus-v2"
 )
-COLLECTOR_SCHEMA = "nutrition-tracker-windows-tailscale-install-collector-v1"
+COLLECTOR_SCHEMA = "nutrition-tracker-windows-tailscale-install-collector-v2"
 EXPECTED_TAILSCALE_VERSION = "1.102.3"
 EXPECTED_INSTALLER_SHA256 = (
     "03ac8183c6e3ce276e9b44281ebe7e4c02aef28a971034ca170c4b665df42dce"
 )
 CHALLENGE_DOMAIN = "nutrition-tracker-windows-tailscale-install-challenge-v1"
-SESSION_DOMAIN = "nutrition-tracker-windows-tailscale-install-session-v1"
-CAPTURE_DOMAIN = "nutrition-tracker-windows-tailscale-install-raw-capture-v1"
+SESSION_DOMAIN = "nutrition-tracker-windows-tailscale-install-session-v2"
+CAPTURE_DOMAIN = "nutrition-tracker-windows-tailscale-install-raw-capture-v2"
 TRUST_BOUNDARY = (
     "offline-corpus-candidate-only-no-install-tailnet-or-production-authorization"
 )
@@ -50,13 +50,23 @@ MAX_MONOTONIC_MILLISECONDS = 7 * 24 * 60 * 60 * 1_000
 MAX_JSON_DEPTH = 16
 
 SHA256_HEX = re.compile(r"^[0-9a-f]{64}$")
+SHA1_HEX = re.compile(r"^[0-9a-f]{40}$")
 CHALLENGE_HEX = re.compile(r"^[0-9a-f]{32}$")
 SAFE_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+()-]{0,63}$")
 SAFE_CORPUS_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{2,63}$")
 ISO_INSTANT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
 SAFE_WINDOWS_PATH = re.compile(r"^[A-Z]:\\[^\x00-\x1f\"*?<>|:]{1,239}$")
 
-ARTIFACT_ROLES = ("installer", "client", "daemon", "driver", "catalog")
+ARTIFACT_ROLES = (
+    "installer",
+    "client",
+    "gui",
+    "daemon",
+    "driverLibrary",
+    "driverInf",
+    "driver",
+    "catalog",
+)
 RAW_SOURCE_ROLES = (
     "hostEnvironment",
     "tailscaleInstall",
@@ -76,7 +86,7 @@ SOURCE_SCHEMAS: Mapping[str, str] = MappingProxyType(
         role: (
             "nutrition-tracker-windows-tailscale-install-"
             + re.sub(r"(?<!^)(?=[A-Z])", "-", role).lower()
-            + "-raw-v1"
+            + ("-raw-v2" if role in ("tailscaleInstall", "adapters") else "-raw-v1")
         )
         for role in RAW_SOURCE_ROLES
     }
@@ -113,12 +123,29 @@ class WindowsInstallSnapshotError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class AuthenticodeExpectation:
+    kind: str
+    verification_status: str
+    signer_leaf_certificate_der_sha256: str
+    timestamp_leaf_certificate_der_sha256: str
+    timestamp_utc: str
+
+
+@dataclass(frozen=True)
+class CatalogMembershipExpectation:
+    verification_status: str
+    catalog_role: str
+    member_digest_algorithm: str
+    member_digest: str
+
+
+@dataclass(frozen=True)
 class ArtifactExpectation:
     role: str
     path: str
     sha256: str
-    signature_status: str
-    signer_identity_sha256: str
+    authenticode: AuthenticodeExpectation | None
+    catalog_membership: CatalogMembershipExpectation | None
 
 
 @dataclass(frozen=True)
@@ -343,8 +370,35 @@ def _corpus_value(corpus: InstallArtifactCorpus) -> dict[str, Any]:
                 "role": artifact.role,
                 "path": artifact.path,
                 "sha256": artifact.sha256,
-                "signatureStatus": artifact.signature_status,
-                "signerIdentitySha256": artifact.signer_identity_sha256,
+                "authenticode": (
+                    {
+                        "kind": artifact.authenticode.kind,
+                        "verificationStatus": artifact.authenticode.verification_status,
+                        "signerLeafCertificateDerSha256": (
+                            artifact.authenticode.signer_leaf_certificate_der_sha256
+                        ),
+                        "timestampLeafCertificateDerSha256": (
+                            artifact.authenticode.timestamp_leaf_certificate_der_sha256
+                        ),
+                        "timestampUtc": artifact.authenticode.timestamp_utc,
+                    }
+                    if artifact.authenticode is not None
+                    else None
+                ),
+                "catalogMembership": (
+                    {
+                        "verificationStatus": (
+                            artifact.catalog_membership.verification_status
+                        ),
+                        "catalogRole": artifact.catalog_membership.catalog_role,
+                        "memberDigestAlgorithm": (
+                            artifact.catalog_membership.member_digest_algorithm
+                        ),
+                        "memberDigest": artifact.catalog_membership.member_digest,
+                    }
+                    if artifact.catalog_membership is not None
+                    else None
+                ),
             }
             for artifact in corpus.artifacts
         ],
@@ -414,12 +468,51 @@ def _assert_corpus(
         path = _assert_windows_path(artifact.path, "artifact path")
         paths.append(path)
         digest = _assert_sha256(artifact.sha256, "artifact sha256")
-        _assert_sha256(
-            artifact.signer_identity_sha256,
-            "artifact signerIdentitySha256",
+        expected_authenticode_kind = (
+            None
+            if artifact.role == "driverInf"
+            else "signed-catalog"
+            if artifact.role == "catalog"
+            else "embedded-authenticode"
         )
-        if artifact.signature_status != "Valid":
-            _fail("Every corpus artifact signature status must be exactly Valid.")
+        if expected_authenticode_kind is None:
+            if artifact.authenticode is not None:
+                _fail("The driver INF must not claim embedded Authenticode evidence.")
+        else:
+            authenticode = artifact.authenticode
+            if not isinstance(authenticode, AuthenticodeExpectation):
+                _fail("An artifact is missing immutable Authenticode evidence.")
+            if authenticode.kind != expected_authenticode_kind:
+                _fail("An artifact uses the wrong Authenticode evidence kind.")
+            if authenticode.verification_status != "Valid":
+                _fail("Every Authenticode verification status must be exactly Valid.")
+            _assert_sha256(
+                authenticode.signer_leaf_certificate_der_sha256,
+                "artifact signerLeafCertificateDerSha256",
+            )
+            _assert_sha256(
+                authenticode.timestamp_leaf_certificate_der_sha256,
+                "artifact timestampLeafCertificateDerSha256",
+            )
+            _instant(authenticode.timestamp_utc, "artifact timestampUtc")
+
+        requires_catalog_membership = artifact.role in ("driverInf", "driver")
+        membership = artifact.catalog_membership
+        if requires_catalog_membership:
+            if not isinstance(membership, CatalogMembershipExpectation):
+                _fail("A driver artifact is missing immutable catalog membership.")
+            if membership.verification_status != "Valid":
+                _fail("Every catalog membership status must be exactly Valid.")
+            if membership.catalog_role != "catalog":
+                _fail("Catalog membership must bind the exact catalog role.")
+            if membership.member_digest_algorithm != "sha1":
+                _fail("Catalog membership must use the reviewed SHA-1 member digest.")
+            if not isinstance(membership.member_digest, str) or not SHA1_HEX.fullmatch(
+                membership.member_digest
+            ):
+                _fail("Catalog membership must bind one lowercase SHA-1 digest.")
+        elif membership is not None:
+            _fail("Only the driver INF and driver may carry catalog membership.")
         if artifact.role == "installer" and digest != EXPECTED_INSTALLER_SHA256:
             _fail("The corpus installer is not the exact approved MSI.")
     if len(paths) != len({path.casefold() for path in paths}):
@@ -607,8 +700,12 @@ def _assert_session(
     if session["sessionCommitmentSha256"] != expected_session_sha256:
         _fail("The snapshot session commitment is inconsistent.")
     expected_sequence = 1 if phase == "preinstall" else 2
-    if session["sequence"] != expected_sequence:
-        _fail("The snapshot sequence is not the exact phase sequence.")
+    _assert_integer(
+        session["sequence"],
+        "session.sequence",
+        expected_sequence,
+        expected_sequence,
+    )
     monotonic_milliseconds = _assert_integer(
         session["monotonicMilliseconds"],
         "session.monotonicMilliseconds",
@@ -714,14 +811,39 @@ def _assert_host_environment(
     return environment
 
 
-def _expected_artifact_values(corpus: InstallArtifactCorpus) -> list[dict[str, str]]:
+def _expected_artifact_values(corpus: InstallArtifactCorpus) -> list[dict[str, Any]]:
     return [
         {
             "role": artifact.role,
             "path": artifact.path,
             "sha256": artifact.sha256,
-            "signatureStatus": artifact.signature_status,
-            "signerIdentitySha256": artifact.signer_identity_sha256,
+            "authenticode": (
+                {
+                    "kind": artifact.authenticode.kind,
+                    "verificationStatus": artifact.authenticode.verification_status,
+                    "signerLeafCertificateDerSha256": (
+                        artifact.authenticode.signer_leaf_certificate_der_sha256
+                    ),
+                    "timestampLeafCertificateDerSha256": (
+                        artifact.authenticode.timestamp_leaf_certificate_der_sha256
+                    ),
+                    "timestampUtc": artifact.authenticode.timestamp_utc,
+                }
+                if artifact.authenticode is not None
+                else None
+            ),
+            "catalogMembership": (
+                {
+                    "verificationStatus": artifact.catalog_membership.verification_status,
+                    "catalogRole": artifact.catalog_membership.catalog_role,
+                    "memberDigestAlgorithm": (
+                        artifact.catalog_membership.member_digest_algorithm
+                    ),
+                    "memberDigest": artifact.catalog_membership.member_digest,
+                }
+                if artifact.catalog_membership is not None
+                else None
+            ),
         }
         for artifact in corpus.artifacts
     ]
@@ -809,6 +931,8 @@ def _assert_adapter(value: Any, corpus: InstallArtifactCorpus) -> dict[str, Any]
         (
             "adapterClass",
             "status",
+            "driverInfPath",
+            "driverInfSha256",
             "driverPath",
             "driverSha256",
             "catalogPath",
@@ -817,11 +941,18 @@ def _assert_adapter(value: Any, corpus: InstallArtifactCorpus) -> dict[str, Any]
         ),
         "tailscaleInstall.adapter",
     )
+    driver_inf = corpus.artifacts[ARTIFACT_ROLES.index("driverInf")]
     driver = corpus.artifacts[ARTIFACT_ROLES.index("driver")]
     catalog = corpus.artifacts[ARTIFACT_ROLES.index("catalog")]
+    _assert_bool(
+        adapter["tailnetAddressPresent"],
+        "tailscaleInstall.adapter.tailnetAddressPresent",
+    )
     if adapter != {
         "adapterClass": "tailscale-tunnel-adapter",
         "status": "down",
+        "driverInfPath": driver_inf.path,
+        "driverInfSha256": driver_inf.sha256,
         "driverPath": driver.path,
         "driverSha256": driver.sha256,
         "catalogPath": catalog.path,

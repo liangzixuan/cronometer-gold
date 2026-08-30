@@ -176,9 +176,7 @@ def _resolve_powershell(
     )
 
 
-def _fixture_input_for_challenge(challenge: str) -> bytes:
-    corpus = SNAPSHOT._corpus_value(FIXTURES.TEST_CORPUS)
-    corpus["artifactCorpusSha256"] = FIXTURES._corpus_sha256()
+def _canonical_fixture_input(corpus: dict[str, object], challenge: str) -> bytes:
     fixture = FIXTURES._canonical(
         {"artifactCorpus": corpus, "challenge": challenge}
     )
@@ -191,8 +189,21 @@ def _fixture_input_for_challenge(challenge: str) -> bytes:
     return fixture
 
 
+def _fixture_input_for_challenge(challenge: str) -> bytes:
+    corpus = SNAPSHOT._corpus_value(FIXTURES.TEST_CORPUS)
+    corpus["artifactCorpusSha256"] = FIXTURES._corpus_sha256()
+    return _canonical_fixture_input(corpus, challenge)
+
+
 def _fixture_input() -> bytes:
     return _fixture_input_for_challenge(FIXTURES.CHALLENGE)
+
+
+def _fixture_input_with_array_corpus_kind() -> bytes:
+    corpus = SNAPSHOT._corpus_value(FIXTURES.TEST_CORPUS)
+    corpus["corpusKind"] = ["test"]
+    corpus["artifactCorpusSha256"] = FIXTURES._commitment(corpus)
+    return _canonical_fixture_input(corpus, FIXTURES.CHALLENGE)
 
 
 def _fixture_leak_tokens(
@@ -372,6 +383,23 @@ def _proof() -> dict[str, object]:
         ),
         environment=environment,
     )
+    array_scalar_input = _fixture_input_with_array_corpus_kind()
+    _run_negative_case(
+        executable,
+        collector_argument,
+        case_name="array-shaped-corpus-kind",
+        fixture_input=array_scalar_input,
+        leak_tokens=_fixture_leak_tokens(
+            array_scalar_input,
+            reviewed_public_bytes=(
+                GENERIC_FAILURE_MARKER,
+                STATIC.SOURCE.encode("utf-8"),
+                str(STATIC.COLLECTOR).encode("utf-8"),
+                collector_argument.encode("utf-8"),
+            ),
+        ),
+        environment=environment,
+    )
     oversize_marker = b"oversize-test-only-input"
     oversize_input = oversize_marker + (b"x" * (131073 - len(oversize_marker)))
     oversize_leak_tokens = tuple(
@@ -427,7 +455,7 @@ def _proof() -> dict[str, object]:
         "collectorSha256": STATIC.COLLECTOR_SHA256,
         "manifestBytes": len(manifest),
         "manifestSha256": hashlib.sha256(manifest).hexdigest(),
-        "negativeCasesRun": 2,
+        "negativeCasesRun": 3,
         "postinstallBytes": len(produced["postinstall"]),
         "postinstallSha256": hashlib.sha256(produced["postinstall"]).hexdigest(),
         "powerShellExecutableSha256": executable_sha256,

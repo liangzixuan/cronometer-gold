@@ -1,13 +1,5 @@
-# Windows Tailscale installation snapshot v2
+# Windows Tailscale installation snapshot v3
 
-> **HISTORICAL RECORD — NON-EXECUTABLE AND SUPERSEDED.**
->
-> Do not use this v2 contract with the current validator or collector. It is
-> retained only to interpret archived v2 evidence. Current structure and
-> generation identifiers are defined by
-> [`windows-install-snapshot-v3.md`](windows-install-snapshot-v3.md); the v3
-> production registry also remains empty and live installation remains blocked.
->
 > **STOP — structural validator only; production installation evidence remains
 > blocked.**
 >
@@ -30,14 +22,34 @@ manifest field.
 
 ## Fixed package and command boundary
 
-The current reviewed package pin is Windows amd64 Tailscale `1.102.3`, MSI
+The current reviewed generations are artifact corpus
+`nutrition-tracker-windows-tailscale-install-artifact-corpus-v2` and collector
+`nutrition-tracker-windows-tailscale-install-collector-v2`. The reviewed
+package pin is Windows amd64 Tailscale `1.102.3`, MSI
 SHA-256
 `03ac8183c6e3ce276e9b44281ebe7e4c02aef28a971034ca170c4b665df42dce`.
 That pin is necessary but not sufficient: a production artifact corpus must
-also bind the exact installer, client, daemon, driver, and catalog paths,
-digests, signature status, and signer-identity digests, plus the exact service
-path and argument vector. Artifact paths must also remain distinct under
-Windows case-insensitive path comparison.
+also bind exactly eight ordered roles: `installer`, `client`, `gui`, `daemon`,
+`driverLibrary`, `driverInf`, `driver`, and `catalog`. Every role binds one
+canonical Windows path and SHA-256 digest. Authenticode evidence binds its
+verification kind and status, the SHA-256 digests of the exact signer and
+timestamp leaf-certificate DER bytes, and the canonical signed timestamp.
+Catalog membership separately binds the explicit catalog role and SHA-1 member
+digest for `driverInf` and `driver`. The INF must not claim an embedded
+signature; the driver must carry both embedded-signature and catalog-membership
+evidence; and the catalog must use `signed-catalog`. All remaining
+non-INF/non-catalog roles, including the MSI, require
+`embedded-authenticode`. Missing, extra, reordered, self-referential, or
+misclassified evidence fails closed. The corpus also binds the exact service
+path and argument vector. Artifact paths must remain distinct under Windows
+case-insensitive path comparison.
+
+| Role | Authenticode evidence | Catalog membership |
+| --- | --- | --- |
+| `installer`, `client`, `gui`, `daemon`, `driverLibrary` | `embedded-authenticode` | `null` |
+| `driverInf` | `null` | `Valid`, role `catalog`, SHA-1 member digest |
+| `driver` | `embedded-authenticode` | `Valid`, role `catalog`, SHA-1 member digest |
+| `catalog` | `signed-catalog` | `null` |
 
 The only planned installation command shape is:
 
@@ -53,7 +65,7 @@ argument order, property, result, or elevation claim fails closed.
 ## Snapshot and freshness contract
 
 Each canonical
-`nutrition-tracker-windows-tailscale-install-snapshot-v2` has exactly:
+`nutrition-tracker-windows-tailscale-install-snapshot-v3` has exactly:
 
 - `schemaVersion`, `phase`, and canonical millisecond UTC `capturedAt`;
 - `session` and all 12 `rawSources`;
@@ -76,6 +88,13 @@ digest, and session/phase/sequence capture commitment. Those commitments are
 not signatures and do not authenticate a collector; the exact collector and
 protected raw-source bundle still require independent review.
 
+The `tailscaleInstall` and `adapters` raw roles use their `raw-v2` schemas
+because they must carry the complete eight-role evidence and explicit
+INF/SYS/catalog adapter bindings. Raw roles whose shapes did not change remain
+at `raw-v1`. Session, capture, and synthetic-raw commitment domains are `v2`;
+the unchanged challenge domain remains `v1`. Inputs from earlier generations
+cannot be relabeled or converted.
+
 ## Install-only safety invariants
 
 Preinstall must prove Tailscale absent, including product registration,
@@ -84,6 +103,8 @@ tasks, firewall rules, DNS policy, routes, UI processes, and update mechanisms.
 
 Postinstall permits only the exact corpus artifacts, one exact running
 automatic Local System service, and one exact tunnel adapter in `down` state.
+The adapter must bind the corpus-reviewed INF, SYS, and catalog paths and
+SHA-256 digests independently; swapping any of the three fails closed.
 It requires no login, tailnet identity, Serve, Funnel, tailnet route, tailnet
 DNS, UI process, update mechanism, incoming permission, or tailnet address.
 
@@ -97,7 +118,7 @@ non-Tailscale service, and non-Tailscale adapter commitments must equal one
 independently reviewed baseline before and after installation.
 
 The output
-`nutrition-tracker-windows-tailscale-install-corpus-manifest-v2` is a redacted
+`nutrition-tracker-windows-tailscale-install-corpus-manifest-v3` is a redacted
 structural candidate. `productionArtifactCorpusMatched` means only that an
 immutable production registry entry matched; it never means installation or
 live use was authorized.
@@ -131,7 +152,8 @@ discovery never invokes it. It builds the exact canonical `test-` envelope in
 memory, invokes two fresh `-SyntheticFixture` processes per phase without a
 shell or temporary file, requires byte-for-byte equality with independently
 constructed Python snapshots, and then validates the pair. It also proves
-fail-closed behavior for a canonical invalid challenge and an in-memory
+fail-closed behavior for a canonical invalid challenge, a canonical committed
+corpus with an array-shaped `corpusKind`, and an in-memory
 131,073-ASCII-character input. Failure checks reject every eight-byte fragment
 derived from string values in the canonical invalid envelope and every raw
 eight-byte sliding window in the oversized input, except overlaps already
@@ -167,10 +189,12 @@ or installer logs in Git, chat, shell history, `.env`, tickets, or synced paths.
 
 Before a production corpus can be registered, all of these remain required:
 
-1. download the exact official MSI with strict TLS and independently verify its
-   published checksum and Authenticode signature;
-2. derive and independently review all five artifact hashes, signers, fixed
-   paths, service command, and immutable external review-source bundle;
+1. retain the exact official MSI and extracted artifacts in protected local
+   evidence, with strict-TLS provenance, hashes, Authenticode, kernel-policy,
+   timestamp, and explicit catalog-membership checks independently reviewed;
+2. capture and independently review all eight artifacts at their exact
+   postinstall Windows paths, the service command, and the immutable external
+   review-source bundle; host-assigned INF/catalog paths must never be guessed;
 3. extend and review the source-only scaffold into the exact production
    collector plus every parser corpus, including complete elevated Windows
    firewall/Hyper-V/HNS evidence without mutation;
@@ -180,6 +204,7 @@ Before a production corpus can be registered, all of these remain required:
    reconfirm explicit approval for the exact elevated MSI action and recovery
    command.
 
-The step-1 offline download is corpus acquisition only and never authorizes
-execution. Until steps 2 through 5 are complete, do not install on the strength
-of this validator, and do not treat synthetic tests as host evidence.
+The completed offline acquisition and verification is corpus research only and
+never authorizes execution. Until steps 2 through 5 are complete, do not
+install on the strength of this validator, and do not treat synthetic tests as
+host evidence.

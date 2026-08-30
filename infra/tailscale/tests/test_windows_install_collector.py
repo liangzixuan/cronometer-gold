@@ -19,7 +19,7 @@ PRODUCER_CHECK = (
     / "tests"
     / "windows_install_collector_producer_check.py"
 )
-CONTRACT = ROOT / "infra" / "tailscale" / "windows-install-snapshot-v2.md"
+CONTRACT = ROOT / "infra" / "tailscale" / "windows-install-snapshot-v3.md"
 BEGIN = "# BEGIN SECURITY-CRITICAL COLLECTOR SURFACE\n"
 END = "# END SECURITY-CRITICAL COLLECTOR SURFACE\n"
 COLLECTOR_SOURCE_IDENTITY_PATTERN = re.compile(
@@ -37,12 +37,12 @@ SOURCE = COLLECTOR.read_text(encoding="utf-8")
 CI_SOURCE = CI_WORKFLOW.read_text(encoding="utf-8")
 PRODUCER_SOURCE = PRODUCER_CHECK.read_text(encoding="utf-8")
 CONTRACT_SOURCE = CONTRACT.read_text(encoding="utf-8")
-PRODUCER_CHECK_SHA256 = "e5d6be4f47f4b9e2e41587059c060b82c655fcaf28e98b6ec3a45a387f2243af"
-COLLECTOR_SHA256 = "b693eb082f583694a52e0ea3cf5311f531b27eb5e2397afe7014fc96d46a0417"
+PRODUCER_CHECK_SHA256 = "4ec204e7f7b756e76ddbee681629ecb77f842a3363e858846ceb02635d7ad2e7"
+COLLECTOR_SHA256 = "4f9012c6d83b1df6d64d3023d86ddb98ec35b62a0c290be11d8c24ee81a5d44f"
 COLLECTOR_SOURCE_IDENTITY_SHA256 = (
-    "de6d21f37b1922dbfb8d22e27932443c190ca0985e5d524774feb14b4e26fb18"
+    "fa971ddabb08c62f844a30ecd6cc387abe947ff63626e7a1d3aad1458323a215"
 )
-SECURITY_SURFACE_SHA256 = "8722f7cb06f48c553f145a24161378fde82c6bc3d963985f5a8fcb1c44e32f4f"
+SECURITY_SURFACE_SHA256 = "f998737b853f3a5c2e832253892bfa908b6e97648e95441bd9fa6cebc71cb542"
 
 
 def _normalized_collector_source(source: str) -> tuple[str, str] | None:
@@ -163,6 +163,26 @@ class WindowsInstallCollectorTests(unittest.TestCase):
             FIXTURES.TEST_CORPUS.collector_source_sha256,
             COLLECTOR_SOURCE_IDENTITY_SHA256,
         )
+        artifact_roles_match = re.search(
+            r"\$script:ArtifactRoles = @\(\n(?P<body>.*?)\n\)",
+            SOURCE,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(artifact_roles_match)
+        assert artifact_roles_match is not None
+        self.assertEqual(
+            tuple(re.findall(r"'([^']+)'", artifact_roles_match.group("body"))),
+            (
+                "installer",
+                "client",
+                "gui",
+                "daemon",
+                "driverLibrary",
+                "driverInf",
+                "driver",
+                "catalog",
+            ),
+        )
         raw_roles_match = re.search(
             r"\$script:RawRoles = @\(\n(?P<body>.*?)\n\)",
             SOURCE,
@@ -176,6 +196,27 @@ class WindowsInstallCollectorTests(unittest.TestCase):
         )
         for role in SNAPSHOT.RAW_SOURCE_ROLES:
             self.assertIn(f"{role} = '{SNAPSHOT.SOURCE_SCHEMAS[role]}'", SOURCE)
+        for literal in (
+            "$script:ArtifactCorpusSchema = 'nutrition-tracker-windows-tailscale-install-artifact-corpus-v2'",
+            "$script:CollectorSchema = 'nutrition-tracker-windows-tailscale-install-collector-v2'",
+            "$script:ChallengeDomain = 'nutrition-tracker-windows-tailscale-install-challenge-v1'",
+            "$script:SessionDomain = 'nutrition-tracker-windows-tailscale-install-session-v2'",
+            "$script:CaptureDomain = 'nutrition-tracker-windows-tailscale-install-raw-capture-v2'",
+            "$script:SyntheticRawDomain = 'nutrition-tracker-windows-tailscale-install-synthetic-raw-v2'",
+        ):
+            self.assertIn(literal, SOURCE)
+        for field in (
+            "authenticode",
+            "catalogMembership",
+            "signerLeafCertificateDerSha256",
+            "timestampLeafCertificateDerSha256",
+            "timestampUtc",
+            "memberDigestAlgorithm",
+            "memberDigest",
+            "driverInfPath",
+            "driverInfSha256",
+        ):
+            self.assertIn(field, SOURCE)
 
     def test_production_gate_precedes_all_corpus_parsing_and_construction(self) -> None:
         gate = SOURCE.index("if (-not $SyntheticFixture) { Stop-Collector }")
@@ -284,7 +325,8 @@ class WindowsInstallCollectorTests(unittest.TestCase):
         self.assertIn('"-SyntheticFixture",', PRODUCER_SOURCE)
         self.assertIn('if first != second or first != expected[phase]:', PRODUCER_SOURCE)
         self.assertIn("productionArtifactCorpusMatched", PRODUCER_SOURCE)
-        self.assertIn('"negativeCasesRun": 2,', PRODUCER_SOURCE)
+        self.assertIn('"negativeCasesRun": 3,', PRODUCER_SOURCE)
+        self.assertIn('case_name="array-shaped-corpus-kind",', PRODUCER_SOURCE)
         self.assertIn('"powerShellExecutableSha256": executable_sha256,', PRODUCER_SOURCE)
         self.assertIn('"powerShellRuntime": runtime_kind,', PRODUCER_SOURCE)
         self.assertIn("reviewed_public_bytes=(", PRODUCER_SOURCE)

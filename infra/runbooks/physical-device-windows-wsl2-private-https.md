@@ -8,7 +8,7 @@
 > certificate, Docker-boundary, or EAS action. Read
 > [ADR 0011](../../docs/adr/0011-windows-host-wsl2-private-phone-relay.md)
 > and the [v2 design reference](../tailscale/relay-review-package-v2.md). The
-> installation-only [snapshot v2 contract](../tailscale/windows-install-snapshot-v2.md)
+> installation-only [snapshot v3 contract](../tailscale/windows-install-snapshot-v3.md)
 > is also structural and has an empty production corpus registry. The
 > path remains blocked until exact Windows output corpora, reviewed production
 > adapters/collectors, authentic evidence, and separate live-phase approvals
@@ -32,7 +32,7 @@ Each future live phase needs explicit operator approval after the exact command,
 version, target, expected state change, recovery path, and evidence location are
 reviewed. A commit or push approval does not authorize any live phase.
 
-The pure installation-snapshot v2 validator and a source-only PowerShell
+The pure installation-snapshot v3 validator and a source-only PowerShell
 collector scaffold are implemented with synthetic adversarial tests.
 The scaffold's production path fails before corpus parsing or construction and
 contains no host-query or process-execution path. It has not been run against
