@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,13 +20,24 @@ const androidBuildId = "22222222-2222-4222-8222-222222222222";
 const physicalDeviceApiOrigin = "https://relay.example.ts.net";
 const sourceCommit = "a".repeat(40);
 const syntheticRelayVersionAdapter = Object.freeze({
-  adapterId: "synthetic-windows-contract-v1",
+  adapterId: "test-synthetic-windows-contract-v1",
+  adapterKind: "test",
+  platform: "windows-host",
+  corpusSchemaVersion: "nutrition-tracker-tailscale-windows-output-corpus-v1",
+  corpusSha256: "b5408c3681e21ef7533ef6e0b064437e867254d28e7d35f7bd010f66c3f432b7",
+  windowsVersion: "11.0.26100",
+  wslVersion: "2.5.10.0",
+  ubuntuVersion: "24.04",
+  dockerDesktopVersion: "4.44.3",
+  dockerEngineVersion: "29.0.0",
   tailscaleClientVersion: "0.0.0-test",
   tailscaleDaemonVersion: "0.0.0-test",
+  clientHelpSha256: createHash("sha256").update("client-help").digest("hex"),
+  daemonHelpSha256: createHash("sha256").update("daemon-help").digest("hex"),
 });
 
 describe("Windows Tailscale relay review-package normalizer trust boundary", () => {
-  it("emits v3 only through a test adapter and remains rejected without a signed manifest", async () => {
+  it("emits v4 only through a test adapter and remains rejected without a signed manifest", async () => {
     const directory = mkdtempSync(join(tmpdir(), "nutrition-relay-compat-"));
     try {
       const indexPath = execFileSync(
@@ -60,7 +72,8 @@ describe("Windows Tailscale relay review-package normalizer trust boundary", () 
       );
       const report = JSON.parse(reportBytes);
       expect(reportBytes).toBe(`${canonicalJson(report)}\n`);
-      expect(report.schemaVersion).toBe("nutrition-tracker-physical-device-relay-report-v3");
+      expect(report.schemaVersion).toBe("nutrition-tracker-physical-device-relay-report-v4");
+      expect(report.versionAdapter).toMatchObject(syntheticRelayVersionAdapter);
       expect(report).not.toHaveProperty("apiOrigin");
       expect(report.apiOriginCommitmentSha256).toBe(
         "324c46636c4c63c6dd63502c753892fcc8cdbce343fd0d760fa29417397ee19e",

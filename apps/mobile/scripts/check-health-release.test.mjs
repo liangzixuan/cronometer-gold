@@ -49,10 +49,21 @@ const reviewerPrincipal = "independent.reviewer@example.test";
 const reviewerKeyId = "release-reviewer-2026-01";
 const gitCommit = "a".repeat(40);
 const physicalDeviceApiOrigin = "https://nutrition-api.tail1234.ts.net";
-const syntheticRelayVersionAdapter = Object.freeze({
+const supportedRelayVersionAdapter = Object.freeze({
   adapterId: "synthetic-windows-contract-v1",
+  adapterKind: "production",
+  platform: "windows-host",
+  corpusSchemaVersion: "nutrition-tracker-tailscale-windows-output-corpus-v1",
+  corpusSha256: "f".repeat(64),
+  windowsVersion: "10.0.26100.4946",
+  wslVersion: "2.5.10.0",
+  ubuntuVersion: "24.04.3",
+  dockerDesktopVersion: "4.45.0",
+  dockerEngineVersion: "28.3.3",
   tailscaleClientVersion: "0.0.0-test",
   tailscaleDaemonVersion: "0.0.0-test",
+  clientHelpSha256: captureDigest(3),
+  daemonHelpSha256: captureDigest(4),
 });
 
 const buildIds = {
@@ -197,16 +208,20 @@ function physicalDeviceRelayReport() {
       hostBoundarySha256: captureDigest(2),
     },
     versionAdapter: {
-      adapterId: syntheticRelayVersionAdapter.adapterId,
-      windowsVersion: "10.0.26100.4946",
-      wslVersion: "2.5.10.0",
-      ubuntuVersion: "24.04.3",
-      dockerDesktopVersion: "4.45.0",
-      dockerEngineVersion: "28.3.3",
-      tailscaleClientVersion: syntheticRelayVersionAdapter.tailscaleClientVersion,
-      tailscaleDaemonVersion: syntheticRelayVersionAdapter.tailscaleDaemonVersion,
-      clientHelpSha256: captureDigest(3),
-      daemonHelpSha256: captureDigest(4),
+      adapterId: supportedRelayVersionAdapter.adapterId,
+      adapterKind: supportedRelayVersionAdapter.adapterKind,
+      platform: supportedRelayVersionAdapter.platform,
+      corpusSchemaVersion: supportedRelayVersionAdapter.corpusSchemaVersion,
+      corpusSha256: supportedRelayVersionAdapter.corpusSha256,
+      windowsVersion: supportedRelayVersionAdapter.windowsVersion,
+      wslVersion: supportedRelayVersionAdapter.wslVersion,
+      ubuntuVersion: supportedRelayVersionAdapter.ubuntuVersion,
+      dockerDesktopVersion: supportedRelayVersionAdapter.dockerDesktopVersion,
+      dockerEngineVersion: supportedRelayVersionAdapter.dockerEngineVersion,
+      tailscaleClientVersion: supportedRelayVersionAdapter.tailscaleClientVersion,
+      tailscaleDaemonVersion: supportedRelayVersionAdapter.tailscaleDaemonVersion,
+      clientHelpSha256: supportedRelayVersionAdapter.clientHelpSha256,
+      daemonHelpSha256: supportedRelayVersionAdapter.daemonHelpSha256,
       rawStatusSha256: captureDigest(5),
       sessionEnvironmentSha256,
       activeEnvironmentSha256,
@@ -563,7 +578,7 @@ const orderedArtifactPaths = [
   artifactPaths.production.android,
 ];
 const releaseRuntime = {
-  relayVersionAdapters: Object.freeze([syntheticRelayVersionAdapter]),
+  relayVersionAdapters: Object.freeze([supportedRelayVersionAdapter]),
   gitHead: () => gitCommit,
   gitStatus: () => "",
   readReleaseMetadata: () => structuredClone(confirmedReleaseMetadata),
@@ -667,7 +682,7 @@ describe("native health release evidence", () => {
     ).rejects.toThrow(/p0ClientSmoke/u);
   });
 
-  it("binds the signed origin to the v3 commitment and exact canonical report bytes", async () => {
+  it("binds the signed origin to the v4 commitment and exact canonical report bytes", async () => {
     expect(physicalDeviceApiOriginCommitmentSha256("https://relay.example.ts.net")).toBe(
       "324c46636c4c63c6dd63502c753892fcc8cdbce343fd0d760fa29417397ee19e",
     );
@@ -733,46 +748,77 @@ describe("native health release evidence", () => {
     ).rejects.toThrow(/SHA-256/u);
   });
 
-  it("accepts v5 plus v3 and rejects a legacy v2 report before exact-key parsing", async () => {
+  it("accepts v5 plus relay v4 and rejects legacy v2/v3 before exact-key parsing", async () => {
     await expect(
       validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, releaseRuntime),
     ).resolves.toMatchObject({
       physicalDeviceApiRelay: { apiOrigin: physicalDeviceApiOrigin },
     });
 
-    const legacyReport = {
-      schemaVersion: "nutrition-tracker-physical-device-relay-report-v2",
-      apiOrigin: physicalDeviceApiOrigin,
-      deliberatelyWrongKeys: true,
-    };
-    await expect(
-      validateHealthReleaseEvidence(
-        environmentFor(attest(unsignedManifest(legacyReport)), legacyReport),
-        checkTime,
-        trustStore,
-        releaseRuntime,
-      ),
-    ).rejects.toThrow(/Legacy physical-device relay report v2 is rejected/u);
+    for (const schemaVersion of [
+      "nutrition-tracker-physical-device-relay-report-v2",
+      "nutrition-tracker-physical-device-relay-report-v3",
+    ]) {
+      const legacyReport = {
+        schemaVersion,
+        apiOrigin: physicalDeviceApiOrigin,
+        deliberatelyWrongKeys: true,
+      };
+      await expect(
+        validateHealthReleaseEvidence(
+          environmentFor(attest(unsignedManifest(legacyReport)), legacyReport),
+          checkTime,
+          trustStore,
+          releaseRuntime,
+        ),
+      ).rejects.toThrow(/Legacy physical-device relay report v2\/v3 is rejected/u);
+    }
 
     await expect(
       validateHealthReleaseEvidence(environmentFor(), checkTime, trustStore, {
         ...releaseRuntime,
         relayVersionAdapters: [],
       }),
-    ).rejects.toThrow(/unsupported Tailscale adapter\/version tuple/u);
+    ).rejects.toThrow(/unsupported Tailscale adapter\/corpus\/environment\/version\/help tuple/u);
 
-    for (const relayVersionAdapters of [
+    for (const [relayVersionAdapters, message] of [
       [
-        {
-          ...syntheticRelayVersionAdapter,
-          adapterId: "synthetic/windows-contract-v1",
-        },
+        [
+          {
+            ...supportedRelayVersionAdapter,
+            adapterId: "synthetic/windows-contract-v1",
+          },
+        ],
+        /adapter-ID syntax/u,
       ],
       [
-        {
-          ...syntheticRelayVersionAdapter,
-          tailscaleClientVersion: "0.0.0 test",
-        },
+        [
+          {
+            ...supportedRelayVersionAdapter,
+            tailscaleClientVersion: "0.0.0 test",
+          },
+        ],
+        /version syntax/u,
+      ],
+      [
+        [{ ...supportedRelayVersionAdapter, adapterKind: "test" }],
+        /kind and adapter-ID namespace/u,
+      ],
+      [
+        [{ ...supportedRelayVersionAdapter, platform: "wsl2-ubuntu" }],
+        /platform must equal windows-host/u,
+      ],
+      [
+        [{ ...supportedRelayVersionAdapter, corpusSchemaVersion: "legacy" }],
+        /corpusSchemaVersion must equal/u,
+      ],
+      [
+        [{ ...supportedRelayVersionAdapter, corpusSha256: "0".repeat(63) }],
+        /corpusSha256 must be one lowercase SHA-256 digest/u,
+      ],
+      [
+        [{ ...supportedRelayVersionAdapter, clientHelpSha256: "0".repeat(63) }],
+        /clientHelpSha256 must be one lowercase SHA-256 digest/u,
       ],
     ]) {
       await expect(
@@ -780,11 +826,32 @@ describe("native health release evidence", () => {
           ...releaseRuntime,
           relayVersionAdapters,
         }),
-      ).rejects.toThrow(/adapter-ID syntax|version syntax/u);
+      ).rejects.toThrow(message);
     }
   });
 
-  it("requires the unsigned v3 trust marker and complete source-capture digest", async () => {
+  it("rejects test-kind relay evidence even when runtime injects its exact adapter", async () => {
+    const report = physicalDeviceRelayReport();
+    const testAdapter = Object.freeze({
+      ...supportedRelayVersionAdapter,
+      adapterId: "test-synthetic-windows-contract-v1",
+      adapterKind: "test",
+    });
+    Object.assign(report.versionAdapter, testAdapter);
+    await expect(
+      validateHealthReleaseEvidence(
+        environmentFor(attest(unsignedManifest(report)), report),
+        checkTime,
+        trustStore,
+        {
+          ...releaseRuntime,
+          relayVersionAdapters: [testAdapter],
+        },
+      ),
+    ).rejects.toThrow(/must use a production version adapter/u);
+  });
+
+  it("requires the unsigned v4 trust marker and complete source-capture digest", async () => {
     const wrongBoundary = physicalDeviceRelayReport();
     wrongBoundary.trustBoundary = "trusted";
     await expect(
@@ -1159,7 +1226,7 @@ describe("native health release evidence", () => {
     ).rejects.toThrow(/changed while/u);
   });
 
-  it("rejects weakened v3 topology, policy, boundary, probe, restart, and teardown claims", async () => {
+  it("rejects weakened v4 topology, adapter, policy, boundary, probe, restart, and teardown claims", async () => {
     const cases = [
       [
         "unexpected raw origin",
@@ -1174,17 +1241,72 @@ describe("native health release evidence", () => {
       [
         "unsupported adapter ID",
         (report) => (report.versionAdapter.adapterId = "unknown-windows-contract-v1"),
-        /unsupported Tailscale adapter\/version tuple/u,
+        /unsupported Tailscale adapter\/corpus\/environment\/version\/help tuple/u,
       ],
       [
         "unsupported client version",
         (report) => (report.versionAdapter.tailscaleClientVersion = "0.0.1-test"),
-        /unsupported Tailscale adapter\/version tuple/u,
+        /unsupported Tailscale adapter\/corpus\/environment\/version\/help tuple/u,
       ],
       [
         "unsupported daemon version",
         (report) => (report.versionAdapter.tailscaleDaemonVersion = "0.0.1-test"),
-        /unsupported Tailscale adapter\/version tuple/u,
+        /unsupported Tailscale adapter\/corpus\/environment\/version\/help tuple/u,
+      ],
+      [
+        "unsupported Windows version",
+        (report) => (report.versionAdapter.windowsVersion = "10.0.26100.4947"),
+        /unsupported Tailscale adapter\/corpus\/environment\/version\/help tuple/u,
+      ],
+      [
+        "unsupported WSL version",
+        (report) => (report.versionAdapter.wslVersion = "2.5.10.1"),
+        /unsupported Tailscale adapter\/corpus\/environment\/version\/help tuple/u,
+      ],
+      [
+        "unsupported Ubuntu version",
+        (report) => (report.versionAdapter.ubuntuVersion = "24.04.4"),
+        /unsupported Tailscale adapter\/corpus\/environment\/version\/help tuple/u,
+      ],
+      [
+        "unsupported Docker Desktop version",
+        (report) => (report.versionAdapter.dockerDesktopVersion = "4.45.1"),
+        /unsupported Tailscale adapter\/corpus\/environment\/version\/help tuple/u,
+      ],
+      [
+        "unsupported Docker Engine version",
+        (report) => (report.versionAdapter.dockerEngineVersion = "28.3.4"),
+        /unsupported Tailscale adapter\/corpus\/environment\/version\/help tuple/u,
+      ],
+      [
+        "adapter kind and ID namespace mismatch",
+        (report) => (report.versionAdapter.adapterKind = "test"),
+        /kind and adapter-ID namespace/u,
+      ],
+      [
+        "unsupported adapter platform",
+        (report) => (report.versionAdapter.platform = "wsl2-ubuntu"),
+        /platform must equal windows-host/u,
+      ],
+      [
+        "unsupported corpus schema",
+        (report) => (report.versionAdapter.corpusSchemaVersion = "legacy"),
+        /corpusSchemaVersion must equal/u,
+      ],
+      [
+        "unsupported corpus digest",
+        (report) => (report.versionAdapter.corpusSha256 = "e".repeat(64)),
+        /unsupported Tailscale adapter\/corpus\/environment\/version\/help tuple/u,
+      ],
+      [
+        "unsupported client help digest",
+        (report) => (report.versionAdapter.clientHelpSha256 = "e".repeat(64)),
+        /unsupported Tailscale adapter\/corpus\/environment\/version\/help tuple/u,
+      ],
+      [
+        "unsupported daemon help digest",
+        (report) => (report.versionAdapter.daemonHelpSha256 = "e".repeat(64)),
+        /unsupported Tailscale adapter\/corpus\/environment\/version\/help tuple/u,
       ],
       [
         "wrong relay node",

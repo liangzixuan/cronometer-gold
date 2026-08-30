@@ -5,8 +5,8 @@
 > Do not execute any command in this file on any platform. This archived Mac
 > workflow assumes `/usr/sbin/lsof`, `nutrition-tracker-mac`, removed CLI
 > arguments, review-package v1, and relay report v2. The current normalizer
-> accepts only Windows review-package v2 and emits relay report v3; the current
-> mobile verifier accepts v3 only and explicitly rejects v2. There is no
+> accepts only Windows review-package v2 and emits relay report v4; the current
+> mobile verifier accepts v4 only and explicitly rejects v2 and v3. There is no
 > supported conversion or compatibility mode. The checked-in
 > [Windows-host/WSL2 offline framework](./physical-device-windows-wsl2-private-https.md)
 > is implemented, but its production adapter registry is empty and all live
@@ -45,7 +45,7 @@ its blocked offline contract and not as authority for a live action.
 The retired renderer required the API and backing-service ports to remain on
 IPv4 loopback while TCP/443 was unused, and it inventoried other listeners so
 the historical policy tests could detect overlap. Current Windows boundary
-evidence is defined only by the blocked v2/v3 contract.
+evidence is defined only by the blocked review-package-v2/report-v4 contract.
 
 ## Historical policy rendering and review (do not execute)
 
@@ -96,9 +96,9 @@ client invocations are intentionally absent.
 
 The retired Mac workflow used review-package v1 to produce relay report v2.
 Current `infra/tailscale/relay_evidence.py` does neither: it accepts only the
-protected Windows review-package v2 contract and emits only relay report v3.
+protected Windows review-package v2 contract and emits only relay report v4.
 It deliberately has no v1 parser, compatibility mode, or migration path, and
-the mobile verifier rejects v2 before exact-key parsing. Do not invoke the
+the mobile verifier rejects v2 and v3 before exact-key parsing. Do not invoke the
 current normalizer on v1 inputs. The
 [relay review-package v1 reference](../tailscale/relay-review-package-v1.md) is
 retained only to explain historical artifacts; it is not an input contract for
@@ -195,7 +195,7 @@ event digest shared by both build probes, complete non-443 listener inventory,
 CA and `/ready` success, TCP/443-only results, blocked ports, and off-tailnet
 denial. Teardown fields and source digests structurally record empty Serve/Funnel, restored
 Shields Up, and Mac disconnect. The verifier requires
-`startedAt <= executedAt < completedAt < reviewedAt`, requires a current v3
+`startedAt <= executedAt < completedAt < reviewedAt`, requires a current v4
 candidate's `executedAt` to equal the independently signed manifest's
 `executedAt` exactly, and allows a session no longer than 24 hours. It rejects
 the historical v2 candidate before parsing its exact keys.
@@ -213,6 +213,6 @@ trust-boundary marker, and all-18 source bundle digest.
 
 Do not supply a historical Mac v2 candidate through the current relay-report
 path or base64 environment inputs. Those gate inputs are reserved for a
-compatible Windows v3 report whose exact bytes match the signed
+compatible Windows v4 report whose exact bytes match the signed
 `physicalDeviceApiRelay.reportSha256`; live production evidence remains blocked
 as stated in the Windows runbook.

@@ -8,7 +8,7 @@ root `.env`, because an explicit value overrides that platform selection.
 A physical phone cannot use either emulator address and must never connect to a
 LocalStack port. The former Mac-hosted local-phone route is retired and rejected
 by the current release verifier. The only current physical-phone design is the
-blocked Windows-host/WSL2 v3 path linked below; it is an offline contract, not
+blocked Windows-host/WSL2 v4 path linked below; it is an offline contract, not
 authority to expose a listener or connect a phone. An Expo/Metro tunnel serves
 the bundle and does not expose the API. The opt-in persistent LocalStack profile
 changes only the API/worker artifact backend; it is never an API ingress, phone
@@ -192,13 +192,13 @@ uncommitted worktree for this profile.
 
 The former Mac-hosted private-HTTPS workflow is retired, non-executable, and
 non-release-compatible. Its v1 review package produced a v2 relay report that
-the current v3-only verifier rejects. Do not use that workflow to configure an
+the current v4-only verifier rejects. Do not use that workflow to configure an
 API origin, join a tailnet, expose a listener, collect evidence, or prepare a
 build.
 
 The only current design is the blocked
-[Windows-host/WSL2 v3 runbook](../../infra/runbooks/physical-device-windows-wsl2-private-https.md)
-and its [v2 review-package/v3 report contract](../../infra/tailscale/relay-review-package-v2.md).
+[Windows-host/WSL2 v4 runbook](../../infra/runbooks/physical-device-windows-wsl2-private-https.md)
+and its [v2 review-package/v4 report contract](../../infra/tailscale/relay-review-package-v2.md).
 They document an offline framework only: the production adapter registry is
 empty, live use remains blocked, and neither reference authorizes Tailscale,
 firewall, listener, phone, certificate, Docker-boundary, or EAS action.

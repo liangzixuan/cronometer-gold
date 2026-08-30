@@ -99,14 +99,14 @@ package boundaries.
   platforms, profiles, and commit hashes before invoking a release script; a
   local EAS build cannot substitute for this provenance.
 - The signed physical-device manifest pins the exact private `.ts.net` API
-  origin and exact canonical relay-report bytes. That report proves attended
-  first-connect Shields Up, empty initial Serve/Funnel, verified identities and
-  policy-before-access sequencing, foreground Serve on HTTPS/443 to
+  origin and exact canonical relay-report bytes. That report proves incoming
+  access remained disabled until the reviewed policy and identity gates passed,
+  empty initial Serve/Funnel, foreground Serve on HTTPS/443 to
   `127.0.0.1:4000`, Funnel disabled, one tested two-phone policy with no
   overlapping grant, both alias/EAS-build-bound `/ready` probes, all inventoried
-  non-443 listeners blocked, unapproved/off-tailnet denial, and timed clean
-  teardown/disconnect. A generic public HTTPS URL or opaque report hash does not
-  clear this gate.
+  non-443 listeners blocked, separate unapproved-tailnet and LAN-boundary denial,
+  and timed clean teardown/disconnect. A generic public HTTPS URL or opaque
+  report hash does not clear this gate.
 - Browser and installed-device smoke tests render, navigate, and exercise the
   authenticated and unauthenticated states of every P0 client flow with
   synthetic data. The canonical unsigned candidate must bind the exact commit,

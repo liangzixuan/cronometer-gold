@@ -17,9 +17,9 @@ service.
 
 The normalizer remains structural only. It authenticates neither the raw source
 nor a reviewer and emits only an unsigned
-`nutrition-tracker-physical-device-relay-report-v3` candidate. The unchanged v5
-health manifest may bind the exact v3 report bytes only after independent
-review. A v5 manifest that binds a legacy v2 report must fail closed.
+`nutrition-tracker-physical-device-relay-report-v4` candidate. The unchanged v5
+health manifest may bind the exact v4 report bytes only after independent
+review. A v5 manifest that binds a legacy v2 or v3 report must fail closed.
 
 ## Review-package index
 
@@ -147,9 +147,54 @@ Each approved phone's rendered TCP policy test must deny exactly the complete
 sorted non-443 boundary inventory above. A missing custom listener or any extra
 deny destination is policy drift and blocks normalization.
 
+## Version-adapter and output-corpus binding
+
+Report v4 adds an exact cross-language adapter and corpus commitment. The
+adapter platform is `windows-host`, and the corpus schema is exactly
+`nutrition-tracker-tailscale-windows-output-corpus-v1`. A production adapter
+has kind `production` and a non-`test-` ID. An injected structural-test adapter
+has kind `test` and an ID beginning with `test-`. The immutable production
+registry remains empty; producer-normalization test injection cannot register or
+exercise a production adapter.
+
+The canonical corpus manifest has exactly these fields:
+
+- `schemaVersion`, `adapterId`, `adapterKind`, and `platform`;
+- `roleSamples`;
+- `windowsVersion`, `wslVersion`, `ubuntuVersion`,
+  `dockerDesktopVersion`, and `dockerEngineVersion`;
+- `tailscaleClientVersion` and `tailscaleDaemonVersion`; and
+- `clientHelpSha256` and `daemonHelpSha256`.
+
+`roleSamples` currently contains 72 entries in the order derived from the
+normative matrix, exactly one for every required capture role; the matrix, not
+the numeric count, remains authoritative. Each entry has exactly
+`role`, `sourceSha256`, and `normalizedSha256`. The adapter corpus retains the
+exact protected raw-source bytes and an immutable expected normalized result
+for each role. During adapter validation, every role normalizer must reproduce
+that expected result from those bytes. The normalized-result commitment uses
+schema `nutrition-tracker-tailscale-normalized-corpus-result-v1` and binds
+exactly the role, session ID, canonical capture time, source digest, raw-output
+digest, and normalized-observation digest. A missing, reordered, unparsable,
+mutated, or non-reproducible sample fails closed.
+
+The report's `versionAdapter` exposes the corpus schema and digest plus the
+adapter ID/kind/platform, all seven exact environment and Tailscale versions,
+and both help digests. The mobile v4 consumer compares every one of those
+fields with one exact registry entry; matching an adapter ID or Tailscale
+version alone is insufficient. It also rejects test-kind adapters on the signed
+release path even if a caller injects an otherwise matching test registry.
+Report v2 and v3 inputs are legacy and rejected before exact v4 parsing.
+
+The corpus still does not authenticate a live observation or reviewer. A
+future production registration must additionally review the exact Windows
+PowerShell build/culture and every collector/parser source that forms the
+protected output; those facts are not silently inferred from the current
+report fields.
+
 ## Serve, Funnel, incoming, policy, and identity
 
-Before schema implementation, capture the exact installed Windows Tailscale
+Before production-adapter implementation, capture the exact installed Windows Tailscale
 client and daemon versions plus raw help and status output. A tested adapter
 must derive canonical incoming, Serve, and Funnel observations from that exact
 version. Unknown versions, unsupported fields, ambiguous state, or data loss
@@ -200,7 +245,7 @@ blocked while WSL, Docker, migrations, listeners, firewalls, forwarding, and
 local readiness are re-proven. Only the same reviewed policy, identities, and
 version adapter may re-establish attended Serve and incoming access for the
 distinct restart probes. Teardown blocks incoming first, disables Serve and
-Funnel, proves restoration, and disconnects the Windows relay last. The v3
+Funnel, proves restoration, and disconnects the Windows relay last. The v4
 candidate exposes the host-neutral result `incomingAccessHeldUntilPolicyTests`.
 
 ## Reachability contracts
@@ -253,12 +298,12 @@ or teardown mismatch blocks the candidate.
 The implemented source bundle domain-separates
 `nutrition-tracker-tailscale-relay-source-capture-bundle-v2` and hash, in matrix
 order, every role name plus the SHA-256 of its complete bytes, with the final
-`sessionLedger` binding all preceding entries. The v3 candidate
+`sessionLedger` binding all preceding entries. The v4 candidate
 includes the exact unsigned trust-boundary marker, bundle digest, session
 times, exact distinct iOS/Android build IDs, hashes of the active and restart
 phone-probe roles, host-topology conclusions, separate listener/firewall/
 forwarding hashes, restart result, host-neutral result names, and redacted
-conclusions only. The v3 consumer must compare both build IDs with the exact
+conclusions only. The v4 consumer must compare both build IDs with the exact
 already verified signed artifact records; a missing, swapped, or mismatched
 build or probe binding fails closed.
 
@@ -279,7 +324,7 @@ nutrition-tracker-physical-device-api-origin-v1\n<canonical-api-origin>\n
 The fixed test vector for canonical origin `https://relay.example.ts.net` is
 `324c46636c4c63c6dd63502c753892fcc8cdbce343fd0d760fa29417397ee19e`.
 
-The v3 consumer must recompute that commitment from the already validated,
+The v4 consumer must recompute that commitment from the already validated,
 signed v5 `physicalDeviceApiRelay.apiOrigin` and require an exact match. The
 protected capture index and every approved-phone readiness probe bind that same
 origin before redaction. An origin mismatch must fail even when the report
@@ -289,18 +334,18 @@ The retired historical macOS generation used review package
 `nutrition-tracker-tailscale-relay-review-package-v1`, source bundle
 `nutrition-tracker-tailscale-relay-source-capture-bundle-v1`, and normalized
 report `nutrition-tracker-physical-device-relay-report-v2`. That path is not
-implemented by current tooling and is rejected by the v3-only verifier. The
+implemented by current tooling and is rejected by the v4-only verifier. The
 implemented offline Windows generation is review package v2, source bundle v2,
-and normalized report v3. Historical Mac material cannot be upgraded,
+and normalized report v4. Historical Mac material cannot be upgraded,
 relabeled, supplemented, or partially reused; adoption requires a new
 continuous Windows session and complete recollection of every matrix role.
 
 The atomic validator cutover deliberately makes health manifest
-`nutrition-tracker-health-release-evidence-v5` accept report v3 and reject its
-formerly accepted report v2. The outer schema stays v5 because its signed
+`nutrition-tracker-health-release-evidence-v5` accept report v4 and reject its
+formerly accepted reports v2 and v3. The outer schema stays v5 because its signed
 `physicalDeviceApiRelay` wire shape remains the same origin and exact report
 digest; inner report parsing is already fail-closed. Tests must prove v5 plus
-v3 acceptance, v5 plus v2 rejection, and rejection when the signed origin does
+v4 acceptance, v5 plus v2/v3 rejection, and rejection when the signed origin does
 not match `apiOriginCommitmentSha256`. The empty checked-in health-reviewer
 store keeps this compatibility cutover blocked from live release use until a
 real reviewer is separately approved.

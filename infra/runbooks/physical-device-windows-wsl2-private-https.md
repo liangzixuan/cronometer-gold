@@ -3,11 +3,13 @@
 > **STOP — offline framework implemented; live use remains blocked.**
 >
 > Checked-in code structurally normalizes review-package v2 and accepts relay
-> report v3, but the production version-adapter registry is deliberately empty.
+> report v4, but the production version-adapter registry is deliberately empty.
 > This document authorizes no Tailscale, firewall, listener, policy, phone,
 > certificate, Docker-boundary, or EAS action. Read
 > [ADR 0011](../../docs/adr/0011-windows-host-wsl2-private-phone-relay.md)
 > and the [v2 design reference](../tailscale/relay-review-package-v2.md). The
+> installation-only [snapshot v2 contract](../tailscale/windows-install-snapshot-v2.md)
+> is also structural and has an empty production corpus registry. The
 > path remains blocked until exact Windows output corpora, reviewed production
 > adapters/collectors, authentic evidence, and separate live-phase approvals
 > exist.
@@ -30,11 +32,17 @@ Each future live phase needs explicit operator approval after the exact command,
 version, target, expected state change, recovery path, and evidence location are
 reviewed. A commit or push approval does not authorize any live phase.
 
+The pure installation-snapshot v2 validator is implemented with synthetic
+adversarial tests, but no production artifact/parser corpus or executable host
+collector is registered. Its manifest never authorizes installation. An exact
+package pin or prior operator approval cannot substitute for the missing corpus,
+collector, protected raw bundle, and pre/post boundary proof.
+
 ## Remaining implementation before live use
 
 The checked-in offline cutover now provides the non-collecting renderer and
-normalizer, exact v2/v3 schemas, matrix-derived roles, protected-file checks,
-synthetic positive/adversarial fixtures, no-execution tests, the v3-only mobile
+normalizer, exact v2/v4 schemas, matrix-derived roles, protected-file checks,
+synthetic positive/adversarial fixtures, no-execution tests, the v4-only mobile
 validator cutover, and independent source review. It does not make this runbook
 executable. They cannot execute PowerShell, `wsl.exe`, Docker, Tailscale,
 browsers, probes, or administrative commands.
@@ -195,9 +203,9 @@ filesystem whose Linux ownership/mode/no-follow guarantees cannot be proven.
 Never store captures in `.env`, logs, tickets, chat, shell arguments, or command
 history. Never copy Mac captures into the Windows session.
 
-The normalizer emits only canonical redacted report v3 bytes and a
+The normalizer emits only canonical redacted report v4 bytes and a
 fixed unsigned warning. The candidate is not authenticated evidence. A complete
-new Windows session is required; v1 inputs or v2 reports cannot be converted,
+new Windows session is required; v1 inputs or v2/v3 reports cannot be converted,
 renamed, supplemented, or partially reused.
 
 ## Explicit stop rules

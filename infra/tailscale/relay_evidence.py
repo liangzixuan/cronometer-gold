@@ -1,4 +1,4 @@
-"""Normalize a protected Windows/WSL2 relay review package into an unsigned v3 candidate.
+"""Normalize a protected Windows/WSL2 relay review package into an unsigned v4 candidate.
 
 The module is deliberately non-collecting.  It reads reviewer-supplied files,
 validates structural and continuity contracts, and emits redacted canonical
@@ -33,9 +33,13 @@ except ModuleNotFoundError:  # Direct ``python infra/tailscale/relay_evidence.py
     from phone_policy import build_phone_policy, parse_phone_policy_input  # type: ignore[no-redef]
 
 
-REPORT_SCHEMA = "nutrition-tracker-physical-device-relay-report-v3"
+REPORT_SCHEMA = "nutrition-tracker-physical-device-relay-report-v4"
 REVIEW_PACKAGE_SCHEMA = "nutrition-tracker-tailscale-relay-review-package-v2"
 SOURCE_CAPTURE_BUNDLE_SCHEMA = "nutrition-tracker-tailscale-relay-source-capture-bundle-v2"
+ADAPTER_CORPUS_SCHEMA = "nutrition-tracker-tailscale-windows-output-corpus-v1"
+NORMALIZED_CORPUS_RESULT_SCHEMA = "nutrition-tracker-tailscale-normalized-corpus-result-v1"
+ADAPTER_PLATFORM = "windows-host"
+TEST_ADAPTER_PREFIX = "test-"
 UNSIGNED_TRUST_BOUNDARY = (
     "unsigned-structural-candidate-requires-independent-ed25519-manifest-review"
 )
@@ -50,6 +54,8 @@ READY_BODY_SHA256 = hashlib.sha256(READY_BODY).hexdigest()
 MAX_INDEX_BYTES = 131_072
 MAX_CAPTURE_BYTES = 4 * 1_048_576
 MAX_RAW_SOURCE_BYTES = 3 * 1_048_576
+MAX_CORPUS_MANIFEST_BYTES = 131_072
+MAX_JSON_NESTING = 64
 MAX_SESSION_SECONDS = 24 * 60 * 60
 MAX_MOUNTINFO_BYTES = 1_048_576
 PHONE_ALIASES = ("nutrition-tracker-phone-1", "nutrition-tracker-phone-2")
@@ -384,7 +390,11 @@ def _fail(message: str) -> NoReturn:
 
 
 def _exact_keys(value: Any, expected: Sequence[str], name: str) -> dict[str, Any]:
-    if not isinstance(value, dict) or set(value) != set(expected):
+    if (
+        not isinstance(value, dict)
+        or len(expected) != len(set(expected))
+        or set(value) != set(expected)
+    ):
         _fail(f"{name} does not have the exact reviewed fields.")
     return value
 
@@ -402,26 +412,79 @@ def _reject_non_integer_number(_value: str) -> NoReturn:
     _fail("JSON input numbers must be strict finite integers.")
 
 
+def _bounded_integer(value: str) -> int:
+    if len(value) > 20:
+        _fail("JSON input integers must fit the signed 64-bit range.")
+    parsed = int(value)
+    if parsed < -(2**63) or parsed > 2**63 - 1:
+        _fail("JSON input integers must fit the signed 64-bit range.")
+    return parsed
+
+
+def _assert_bounded_json_nesting(raw: bytes) -> None:
+    if not isinstance(raw, bytes) or not raw or len(raw) > MAX_CAPTURE_BYTES:
+        _fail("A protected JSON input is empty or exceeds its bounded size.")
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in raw:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 0x5C:
+                escaped = True
+            elif byte == 0x22:
+                in_string = False
+        elif byte == 0x22:
+            in_string = True
+        elif byte in {0x5B, 0x7B}:
+            depth += 1
+            if depth > MAX_JSON_NESTING:
+                _fail("A protected JSON input exceeds the bounded nesting depth.")
+        elif byte in {0x5D, 0x7D}:
+            depth -= 1
+
+
 def _json(raw: bytes, name: str) -> dict[str, Any]:
+    _assert_bounded_json_nesting(raw)
+    value: Any = None
+    parse_failed = False
     try:
         value = json.loads(
             raw.decode("utf-8", errors="strict"),
             object_pairs_hook=_reject_duplicate_keys,
+            parse_int=_bounded_integer,
             parse_float=_reject_non_integer_number,
             parse_constant=_reject_non_integer_number,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise RelayEvidenceError(f"{name} is not strict UTF-8 JSON.") from error
+    except (RecursionError, UnicodeDecodeError, ValueError):
+        parse_failed = True
+    if parse_failed:
+        _fail(f"{name} is not strict UTF-8 JSON.")
     if not isinstance(value, dict):
         _fail(f"{name} must be a JSON object.")
     return value
 
 
 def _canonical(value: Any) -> bytes:
-    return (
-        json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"), sort_keys=True)
-        + "\n"
-    ).encode("utf-8")
+    encoded: bytes | None = None
+    encode_failed = False
+    try:
+        encoded = (
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            + "\n"
+        ).encode("utf-8")
+    except (OverflowError, RecursionError, TypeError, UnicodeEncodeError, ValueError):
+        encode_failed = True
+    if encode_failed or encoded is None or len(encoded) > MAX_CAPTURE_BYTES:
+        _fail("A protected value cannot be encoded as bounded canonical JSON.")
+    return encoded
 
 
 def _canonical_json(raw: bytes, name: str) -> dict[str, Any]:
@@ -444,10 +507,14 @@ def _assert_sha(value: Any, name: str) -> str:
 def _instant(value: Any, name: str) -> datetime:
     if not isinstance(value, str) or not ISO_INSTANT.fullmatch(value):
         _fail(f"{name} must be a canonical UTC instant with milliseconds.")
+    parsed: datetime | None = None
+    parse_failed = False
     try:
         parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%fZ").replace(tzinfo=timezone.utc)
-    except ValueError as error:
-        raise RelayEvidenceError(f"{name} is not a real instant.") from error
+    except ValueError:
+        parse_failed = True
+    if parse_failed or parsed is None:
+        _fail(f"{name} is not a real instant.")
     if parsed.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z" != value:
         _fail(f"{name} is not canonical.")
     return parsed
@@ -475,7 +542,9 @@ class CaptureRecord:
     role: str
     raw: bytes
     identity: tuple[int, int]
+    session_id: str
     captured_at: datetime
+    captured_at_text: str
     source: bytes
     observation: dict[str, Any]
     schema_version: str
@@ -486,12 +555,55 @@ class CaptureRecord:
 
 
 @dataclass(frozen=True)
-class VersionAdapter:
-    adapter_id: str
+class AdapterCorpusSample:
+    role: str
+    raw_source: bytes
+    expected: NormalizedObservation
+
+
+@dataclass(frozen=True)
+class AdapterCorpusMetadata:
+    adapter_kind: str
+    platform: str
+    schema_version: str
+    windows_version: str
+    wsl_version: str
+    ubuntu_version: str
+    docker_desktop_version: str
+    docker_engine_version: str
     tailscale_client_version: str
     tailscale_daemon_version: str
-    validated_roles: frozenset[str]
-    validate: Callable[[str, bytes, Mapping[str, Any]], None]
+    client_help_sha256: str
+    daemon_help_sha256: str
+    samples: tuple[AdapterCorpusSample, ...]
+    corpus_manifest: bytes
+
+    @property
+    def corpus_sha256(self) -> str:
+        return _sha(self.corpus_manifest)
+
+
+@dataclass(frozen=True)
+class NormalizedObservation:
+    role: str
+    session_id: str
+    captured_at: str
+    source_sha256: str
+    raw_output: bytes
+    observation_json: bytes
+
+
+@dataclass(frozen=True)
+class RoleNormalizer:
+    role: str
+    normalize: Callable[[bytes], NormalizedObservation]
+
+
+@dataclass(frozen=True)
+class VersionAdapter:
+    adapter_id: str
+    corpus: AdapterCorpusMetadata
+    role_normalizers: tuple[RoleNormalizer, ...]
 
 
 # Deliberately empty. Tests inject a synthetic adapter through the function API;
@@ -510,18 +622,27 @@ def _decode_mount_field(value: str) -> str:
 def _native_linux_filesystem(path: Path) -> None:
     if sys.platform != "linux":
         _fail("Protected relay review packages require a native Linux filesystem.")
+    device = 0
+    raw = b""
+    inspection_failed = False
     try:
         device = path.stat().st_dev
         with open("/proc/self/mountinfo", "rb", buffering=0) as mount_file:
             raw = mount_file.read(MAX_MOUNTINFO_BYTES + 1)
-    except OSError as error:
-        raise RelayEvidenceError("The review filesystem type cannot be established.") from error
+    except OSError:
+        inspection_failed = True
+    if inspection_failed:
+        _fail("The review filesystem type cannot be established.")
     if not raw or len(raw) > MAX_MOUNTINFO_BYTES:
         _fail("The bounded Linux mount inventory is unavailable.")
+    text = ""
+    decode_failed = False
     try:
         text = raw.decode("utf-8", errors="strict")
-    except UnicodeDecodeError as error:
-        raise RelayEvidenceError("The Linux mount inventory is not UTF-8.") from error
+    except UnicodeDecodeError:
+        decode_failed = True
+    if decode_failed:
+        _fail("The Linux mount inventory is not UTF-8.")
     expected_device = f"{os.major(device)}:{os.minor(device)}"
     candidates: list[tuple[int, str]] = []
     for line in text.splitlines():
@@ -548,6 +669,8 @@ def _native_linux_filesystem(path: Path) -> None:
 
 
 def _filesystem_magic(descriptor: int) -> int:
+    filesystem_magic: int | None = None
+    inspection_failed = False
     try:
         libc = ctypes.CDLL(None, use_errno=True)
         fstatfs = libc.fstatfs
@@ -556,11 +679,12 @@ def _filesystem_magic(descriptor: int) -> int:
         result = _StatFs()
         if fstatfs(descriptor, ctypes.byref(result)) != 0:
             raise OSError(ctypes.get_errno(), "fstatfs failed")
-        return int(result.f_type) & 0xFFFFFFFF
-    except (AttributeError, OSError, TypeError, ValueError) as error:
-        raise RelayEvidenceError(
-            "The opened review filesystem type cannot be established safely."
-        ) from error
+        filesystem_magic = int(result.f_type) & 0xFFFFFFFF
+    except (AttributeError, OSError, TypeError, ValueError):
+        inspection_failed = True
+    if inspection_failed or filesystem_magic is None:
+        _fail("The opened review filesystem type cannot be established safely.")
+    return filesystem_magic
 
 
 def _contains_git_metadata(path: Path) -> bool:
@@ -578,10 +702,14 @@ def _contains_git_metadata(path: Path) -> bool:
 def _checked_review_directory(index_path_value: str) -> tuple[Path, str, os.stat_result]:
     if not isinstance(index_path_value, str):
         _fail("The capture index path is absent.")
+    encoded = b""
+    encoding_failed = False
     try:
         encoded = os.fsencode(index_path_value)
-    except UnicodeEncodeError as error:
-        raise RelayEvidenceError("The capture index path encoding is invalid.") from error
+    except UnicodeEncodeError:
+        encoding_failed = True
+    if encoding_failed:
+        _fail("The capture index path encoding is invalid.")
     if not encoded or b"\x00" in encoded or len(encoded) > 4096:
         _fail("The capture index path violates the bounded path contract.")
     index_path = Path(index_path_value)
@@ -592,12 +720,16 @@ def _checked_review_directory(index_path_value: str) -> tuple[Path, str, os.stat
         _fail("The review directory must not be below /mnt or a Windows-mounted tree.")
     if any("onedrive" in part.casefold() for part in review_directory.parts):
         _fail("The review directory must be outside OneDrive and synced paths.")
+    directory_lstat: os.stat_result | None = None
+    inspection_failed = False
     try:
         directory_lstat = review_directory.lstat()
         if review_directory.resolve(strict=True) != review_directory:
             _fail("The review directory and its ancestors must not use symbolic links.")
-    except (OSError, ValueError) as error:
-        raise RelayEvidenceError("The review directory cannot be inspected safely.") from error
+    except (OSError, ValueError):
+        inspection_failed = True
+    if inspection_failed or directory_lstat is None:
+        _fail("The review directory cannot be inspected safely.")
     if (
         stat.S_ISLNK(directory_lstat.st_mode)
         or not stat.S_ISDIR(directory_lstat.st_mode)
@@ -632,6 +764,10 @@ def _open_review_directory(
     directory_flag = getattr(os, "O_DIRECTORY", None)
     if not isinstance(no_follow, int) or not isinstance(directory_flag, int):
         _fail("This platform cannot enforce no-follow review-directory reads.")
+    descriptor: int | None = None
+    inspected: os.stat_result | None = None
+    path_after: os.stat_result | None = None
+    inspection_failed = False
     try:
         descriptor = os.open(
             path,
@@ -639,8 +775,15 @@ def _open_review_directory(
         )
         inspected = os.fstat(descriptor)
         path_after = os.lstat(path)
-    except OSError as error:
-        raise RelayEvidenceError("The protected review directory cannot be opened safely.") from error
+    except OSError:
+        inspection_failed = True
+    if inspection_failed or descriptor is None or inspected is None or path_after is None:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        _fail("The protected review directory cannot be opened safely.")
     if (
         not stat.S_ISDIR(inspected.st_mode)
         or stat.S_IMODE(inspected.st_mode) != 0o700
@@ -678,18 +821,27 @@ def _secure_read_at(
     label: str,
     maximum: int,
 ) -> tuple[bytes, tuple[int, int], tuple[int, int, int, int, int, int, int, int]]:
+    encoded_name = b""
+    encoding_failed = False
+    if isinstance(name, str):
+        try:
+            encoded_name = os.fsencode(name)
+        except UnicodeEncodeError:
+            encoding_failed = True
     if (
         not isinstance(name, str)
         or not name
         or name in {".", ".."}
         or "/" in name
         or "\x00" in name
-        or len(os.fsencode(name)) > 255
+        or encoding_failed
+        or len(encoded_name) > 255
     ):
         _fail(f"{label} must be a direct bounded child of the review directory.")
     no_follow = getattr(os, "O_NOFOLLOW", None)
     if not isinstance(no_follow, int):
         _fail("This platform cannot enforce no-follow capture reads.")
+    read_failed = False
     try:
         before = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
         descriptor = os.open(
@@ -738,8 +890,10 @@ def _secure_read_at(
             os.close(descriptor)
     except RelayEvidenceError:
         raise
-    except (OSError, ValueError) as error:
-        raise RelayEvidenceError(f"{label} could not be read safely.") from error
+    except (OSError, ValueError):
+        read_failed = True
+    if read_failed:
+        _fail(f"{label} could not be read safely.")
 
 
 
@@ -749,16 +903,22 @@ def _assert_stable_entry_at(
     expected_state: tuple[int, int, int, int, int, int, int, int],
     label: str,
 ) -> None:
+    current: os.stat_result | None = None
+    inspection_failed = False
     try:
         current = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
-    except (OSError, ValueError) as error:
-        raise RelayEvidenceError(f"{label} cannot be re-inspected safely.") from error
+    except (OSError, ValueError):
+        inspection_failed = True
+    if inspection_failed or current is None:
+        _fail(f"{label} cannot be re-inspected safely.")
     if _file_state(current) != expected_state:
         _fail(f"{label} changed after its protected read.")
 
 def _capture_filename(path_value: Any, review_directory: Path, role: str) -> str:
     if not isinstance(path_value, str):
         _fail(f"{role} capture path is absent.")
+    path: Path | None = None
+    path_failed = False
     try:
         path = Path(path_value)
         if (
@@ -768,8 +928,10 @@ def _capture_filename(path_value: Any, review_directory: Path, role: str) -> str
             or path.name in {"", ".", ".."}
         ):
             _fail(f"{role} capture must be a normalized absolute direct child of the review directory.")
-    except (OSError, ValueError) as error:
-        raise RelayEvidenceError(f"{role} capture path is invalid.") from error
+    except (OSError, ValueError):
+        path_failed = True
+    if path_failed or path is None:
+        _fail(f"{role} capture path is invalid.")
     return path.name
 
 
@@ -782,10 +944,14 @@ def _decode_raw_source(value: dict[str, Any], role: str) -> bytes:
         or not STANDARD_BASE64.fullmatch(encoded)
     ):
         _fail(f"{role}.rawSourceBase64 must be bounded canonical padded base64.")
+    raw = b""
+    decode_failed = False
     try:
         raw = base64.b64decode(encoded, validate=True)
-    except (binascii.Error, ValueError) as error:
-        raise RelayEvidenceError(f"{role}.rawSourceBase64 is invalid.") from error
+    except (binascii.Error, ValueError):
+        decode_failed = True
+    if decode_failed:
+        _fail(f"{role}.rawSourceBase64 is invalid.")
     if not raw or len(raw) > MAX_RAW_SOURCE_BYTES or base64.b64encode(raw).decode("ascii") != encoded:
         _fail(f"{role}.rawSourceBase64 is empty, noncanonical, or oversized.")
     if _sha(raw) != _assert_sha(value["rawSourceSha256"], f"{role}.rawSourceSha256"):
@@ -873,6 +1039,111 @@ def _observation_fields(role: str) -> tuple[str, ...]:
     raise RuntimeError(f"No observation schema was declared for {role}.")
 
 
+def _core_observation_fields(role: str) -> tuple[str, ...]:
+    fields = _observation_fields(role)
+    core_owned: set[str] = set()
+    if role in ADAPTER_ROLES:
+        core_owned.add("adapterId")
+    if role not in {"hostBoundary", "sessionLedger"}:
+        core_owned.add("hostBoundarySha256")
+    if role == "policy":
+        core_owned.add("proposalCaptureSha256")
+    if role == "policyTests":
+        core_owned.update(("proposalCaptureSha256", "appliedCaptureSha256"))
+    if role == "configurationEvent":
+        core_owned.add("appliedCaptureSha256")
+    if role == "policyGate":
+        core_owned.update(
+            (
+                "proposalCaptureSha256",
+                "appliedCaptureSha256",
+                "testsCaptureSha256",
+                "configurationEventCaptureSha256",
+                "currentPolicyCaptureSha256",
+                "identitiesCaptureSha256",
+            )
+        )
+    if role in POLICY_STATE_ROLES:
+        core_owned.update(("appliedCaptureSha256", "configurationEventCaptureSha256"))
+    if role in APPROVED_PROBE_ROLES:
+        core_owned.update(
+            ("policyGateSha256", "relayHostIdentitySha256", "phoneIdentitySha256")
+        )
+    if role in UNAPPROVED_PROBE_ROLES or role in LAN_PROBE_ROLES:
+        core_owned.add("policyGateSha256")
+    if role in READINESS_ROLES:
+        core_owned.update(("sourceHead", "apiProcessSha256", "apiCwdSha256"))
+    if role == "coldRestartEvent":
+        core_owned.update(
+            ("preShutdown", "postRestart", "sourceHead", "apiProcessSha256", "apiCwdSha256")
+        )
+    if role == "sessionLedger":
+        core_owned.add("entries")
+    # Identity, peer-class, policy-revision, canonical-state, and event-ID hashes
+    # remain source-owned: core validates their shape and cross-capture continuity,
+    # but only a version adapter can derive them from protected system output.
+    return tuple(field for field in fields if field in core_owned)
+
+
+def _source_observation_fields(role: str) -> tuple[str, ...]:
+    fields = _observation_fields(role)
+    core_owned = set(_core_observation_fields(role))
+    source_owned = tuple(field for field in fields if field not in core_owned)
+    if (
+        core_owned & set(source_owned)
+        or core_owned | set(source_owned) != set(fields)
+        or len(core_owned) + len(source_owned) != len(fields)
+    ):
+        raise RuntimeError(f"Observation field ownership is incomplete for {role}.")
+    return source_owned
+
+
+def _assert_observation_field_ownership() -> None:
+    for role in CAPTURE_NAMES:
+        _source_observation_fields(role)
+
+
+_assert_observation_field_ownership()
+
+
+def _normalized_observation_sha256(
+    value: NormalizedObservation,
+    role: str,
+    raw_source: bytes,
+) -> str:
+    if (
+        not isinstance(value, NormalizedObservation)
+        or value.role != role
+        or not isinstance(value.session_id, str)
+        or not UUID.fullmatch(value.session_id)
+        or not isinstance(value.captured_at, str)
+        or value.source_sha256 != _sha(raw_source)
+        or not isinstance(value.raw_output, bytes)
+        or not value.raw_output
+        or len(value.raw_output) > MAX_RAW_SOURCE_BYTES
+        or not isinstance(value.observation_json, bytes)
+        or not value.observation_json
+        or len(value.observation_json) > MAX_CAPTURE_BYTES
+    ):
+        _fail("A corpus normalizer result does not bind its exact role and source bytes.")
+    _instant(value.captured_at, f"{role} corpus capturedAt")
+    _exact_keys(
+        _canonical_json(value.observation_json, f"{role} corpus normalized observation"),
+        _source_observation_fields(role),
+        f"{role} corpus normalized observation",
+    )
+    commitment = {
+        "schemaVersion": NORMALIZED_CORPUS_RESULT_SCHEMA,
+        "role": role,
+        "sessionId": value.session_id,
+        "capturedAt": value.captured_at,
+        "sourceSha256": value.source_sha256,
+        "rawOutputSha256": _sha(value.raw_output),
+        "observationSha256": _sha(value.observation_json),
+    }
+    return _sha(_canonical(commitment))
+
+
 def _parse_capture(role: str, raw: bytes, identity: tuple[int, int], session_id: str) -> CaptureRecord:
     envelope = _exact_keys(
         _canonical_json(raw, f"{role} capture"),
@@ -890,17 +1161,152 @@ def _parse_capture(role: str, raw: bytes, identity: tuple[int, int], session_id:
         role=role,
         raw=raw,
         identity=identity,
+        session_id=envelope["sessionId"],
         captured_at=captured_at,
+        captured_at_text=envelope["capturedAt"],
         source=_decode_raw_source(envelope, role),
         observation=observation,
         schema_version=expected_schema,
     )
 
 
+def _assert_adapter_metadata(adapter: VersionAdapter, expected_kind: str) -> None:
+    if not isinstance(adapter, VersionAdapter):
+        _fail("The selected version adapter has an unsupported immutable shape.")
+    if not isinstance(adapter.adapter_id, str) or not SAFE_ADAPTER_ID.fullmatch(adapter.adapter_id):
+        _fail("The selected version adapter ID is not bounded and canonical.")
+    corpus = adapter.corpus
+    if not isinstance(corpus, AdapterCorpusMetadata):
+        _fail("The selected version adapter corpus metadata is not immutable.")
+    if expected_kind not in {"production", "test"} or corpus.adapter_kind != expected_kind:
+        _fail("The selected version adapter kind does not match its registry boundary.")
+    is_test_identifier = adapter.adapter_id[: len(TEST_ADAPTER_PREFIX)] == TEST_ADAPTER_PREFIX
+    if is_test_identifier != (expected_kind == "test"):
+        _fail("Test and production version-adapter identifiers must remain distinguishable.")
+    if corpus.platform != ADAPTER_PLATFORM or corpus.schema_version != ADAPTER_CORPUS_SCHEMA:
+        _fail("The selected version adapter does not bind the exact Windows corpus platform.")
+    _assert_sha(corpus.client_help_sha256, "version adapter clientHelpSha256")
+    _assert_sha(corpus.daemon_help_sha256, "version adapter daemonHelpSha256")
+    for field, value in (
+        ("windowsVersion", corpus.windows_version),
+        ("wslVersion", corpus.wsl_version),
+        ("ubuntuVersion", corpus.ubuntu_version),
+        ("dockerDesktopVersion", corpus.docker_desktop_version),
+        ("dockerEngineVersion", corpus.docker_engine_version),
+        ("tailscaleClientVersion", corpus.tailscale_client_version),
+        ("tailscaleDaemonVersion", corpus.tailscale_daemon_version),
+    ):
+        if not isinstance(value, str) or not SAFE_VERSION.fullmatch(value):
+            _fail(f"The selected version adapter {field} is not exact and bounded.")
+    if (
+        not isinstance(corpus.corpus_manifest, bytes)
+        or not corpus.corpus_manifest
+        or len(corpus.corpus_manifest) > MAX_CORPUS_MANIFEST_BYTES
+    ):
+        _fail("The selected version adapter corpus manifest is not immutable and bounded.")
+    if (
+        not isinstance(adapter.role_normalizers, tuple)
+        or len(adapter.role_normalizers) != len(CAPTURE_NAMES)
+        or any(
+            not isinstance(normalizer, RoleNormalizer) or not callable(normalizer.normalize)
+            for normalizer in adapter.role_normalizers
+        )
+        or tuple(normalizer.role for normalizer in adapter.role_normalizers) != CAPTURE_NAMES
+    ):
+        _fail("The selected review-package adapter does not normalize every protected role in order.")
+    if (
+        not isinstance(corpus.samples, tuple)
+        or len(corpus.samples) != len(CAPTURE_NAMES)
+        or any(
+            not isinstance(sample, AdapterCorpusSample)
+            or sample.role != role
+            or not isinstance(sample.raw_source, bytes)
+            or not sample.raw_source
+            or len(sample.raw_source) > MAX_RAW_SOURCE_BYTES
+            or not isinstance(sample.expected, NormalizedObservation)
+            for role, sample in zip(CAPTURE_NAMES, corpus.samples, strict=True)
+        )
+    ):
+        _fail("The selected version adapter corpus samples do not bind every role in order.")
+    role_samples: list[dict[str, str]] = []
+    corpus_validation_failed = False
+    try:
+        for role, sample, normalizer in zip(
+            CAPTURE_NAMES,
+            corpus.samples,
+            adapter.role_normalizers,
+            strict=True,
+        ):
+            expected_sha256 = _normalized_observation_sha256(
+                sample.expected,
+                role,
+                sample.raw_source,
+            )
+            actual = normalizer.normalize(sample.raw_source)
+            actual_sha256 = _normalized_observation_sha256(
+                actual,
+                role,
+                sample.raw_source,
+            )
+            if actual != sample.expected or actual_sha256 != expected_sha256:
+                corpus_validation_failed = True
+            role_samples.append(
+                {
+                    "role": role,
+                    "sourceSha256": _sha(sample.raw_source),
+                    "normalizedSha256": expected_sha256,
+                }
+            )
+    except Exception:
+        corpus_validation_failed = True
+    if corpus_validation_failed:
+        _fail("The selected version adapter cannot reproduce its exact reviewed corpus outputs.")
+    manifest = _exact_keys(
+        _canonical_json(corpus.corpus_manifest, "version adapter corpus manifest"),
+        (
+            "schemaVersion",
+            "adapterId",
+            "adapterKind",
+            "platform",
+            "roleSamples",
+            "windowsVersion",
+            "wslVersion",
+            "ubuntuVersion",
+            "dockerDesktopVersion",
+            "dockerEngineVersion",
+            "tailscaleClientVersion",
+            "tailscaleDaemonVersion",
+            "clientHelpSha256",
+            "daemonHelpSha256",
+        ),
+        "version adapter corpus manifest",
+    )
+    expected_manifest = {
+        "schemaVersion": corpus.schema_version,
+        "adapterId": adapter.adapter_id,
+        "adapterKind": corpus.adapter_kind,
+        "platform": corpus.platform,
+        "roleSamples": role_samples,
+        "windowsVersion": corpus.windows_version,
+        "wslVersion": corpus.wsl_version,
+        "ubuntuVersion": corpus.ubuntu_version,
+        "dockerDesktopVersion": corpus.docker_desktop_version,
+        "dockerEngineVersion": corpus.docker_engine_version,
+        "tailscaleClientVersion": corpus.tailscale_client_version,
+        "tailscaleDaemonVersion": corpus.tailscale_daemon_version,
+        "clientHelpSha256": corpus.client_help_sha256,
+        "daemonHelpSha256": corpus.daemon_help_sha256,
+    }
+    if manifest != expected_manifest:
+        _fail("The selected version adapter corpus manifest does not bind its exact metadata.")
+    _assert_sha(corpus.corpus_sha256, "version adapter corpusSha256")
+
+
 def _assert_versions_and_environment(
     records: Mapping[str, CaptureRecord],
     host_boundary_sha256: str,
     adapters: Mapping[str, VersionAdapter],
+    expected_adapter_kind: str,
 ) -> VersionAdapter:
     session = records["sessionEnvironment"].observation
     adapter_id = session["adapterId"]
@@ -943,15 +1349,22 @@ def _assert_versions_and_environment(
     adapter = adapters.get(adapter_id)
     if adapter is None:
         _fail("The exact Windows Tailscale version/output adapter is not supported.")
+    _assert_adapter_metadata(adapter, expected_adapter_kind)
+    corpus = adapter.corpus
     if (
         adapter.adapter_id != adapter_id
-        or adapter.tailscale_client_version != session["tailscaleClientVersion"]
-        or adapter.tailscale_daemon_version != session["tailscaleDaemonVersion"]
+        or corpus.windows_version != session["windowsVersion"]
+        or corpus.wsl_version != session["wslVersion"]
+        or corpus.ubuntu_version != session["ubuntuVersion"]
+        or corpus.docker_desktop_version != session["dockerDesktopVersion"]
+        or corpus.docker_engine_version != session["dockerEngineVersion"]
+        or corpus.tailscale_client_version != session["tailscaleClientVersion"]
+        or corpus.tailscale_daemon_version != session["tailscaleDaemonVersion"]
+        or corpus.client_help_sha256 != session["clientHelpSha256"]
+        or corpus.daemon_help_sha256 != session["daemonHelpSha256"]
     ):
-        _fail("The selected Tailscale adapter does not bind the captured client and daemon versions.")
-    if adapter.validated_roles != frozenset(CAPTURE_NAMES):
         _fail(
-            "The selected review-package adapter does not explicitly cover every protected role."
+            "The selected Tailscale adapter does not bind the captured environment and help corpora."
         )
 
     stable_fields = (
@@ -1005,21 +1418,46 @@ def _assert_host_boundary(record: CaptureRecord) -> dict[str, Any]:
 
 def _assert_adapter_observations(
     records: Mapping[str, CaptureRecord], adapter: VersionAdapter, host_boundary_sha256: str
-) -> None:
-    for role in CAPTURE_NAMES:
+) -> Mapping[str, NormalizedObservation]:
+    normalized_results: dict[str, NormalizedObservation] = {}
+    for role, normalizer in zip(CAPTURE_NAMES, adapter.role_normalizers, strict=True):
         record = records[role]
         if role in ADAPTER_ROLES:
             if record.observation["adapterId"] != adapter.adapter_id:
                 _fail(f"{role} selected a different Tailscale adapter.")
             if record.observation["hostBoundarySha256"] != host_boundary_sha256:
                 _fail(f"{role} does not bind the sole hostBoundary capture.")
-        adapter_failed = False
+        source_fields = _source_observation_fields(role)
+        normalized: dict[str, Any] | None = None
+        accepted: NormalizedObservation | None = None
         try:
-            adapter.validate(role, record.source, record.observation)
+            derived = normalizer.normalize(record.source)
+            if (
+                isinstance(derived, NormalizedObservation)
+                and derived.role == role
+                and derived.session_id == record.session_id
+                and derived.captured_at == record.captured_at_text
+                and derived.source_sha256 == _sha(record.source)
+                and isinstance(derived.raw_output, bytes)
+                and 0 < len(derived.raw_output) <= MAX_RAW_SOURCE_BYTES
+                and isinstance(derived.observation_json, bytes)
+                and 0 < len(derived.observation_json) <= MAX_CAPTURE_BYTES
+            ):
+                normalized = _exact_keys(
+                    _canonical_json(
+                        derived.observation_json,
+                        f"{role} raw-derived observation",
+                    ),
+                    source_fields,
+                    f"{role} raw-derived observation",
+                )
+                accepted = derived
         except Exception:
-            adapter_failed = True
-        if adapter_failed:
+            normalized = None
+        expected = {field: record.observation[field] for field in source_fields}
+        if normalized is None or normalized != expected or accepted is None:
             _fail(f"{role} raw output failed its exact version adapter.")
+        normalized_results[role] = accepted
 
     for role, expected_state in INCOMING_STATES.items():
         if records[role].observation["state"] != expected_state:
@@ -1085,6 +1523,7 @@ def _assert_adapter_observations(
             _fail("Teardown identity continuity changed before disconnect.")
     if teardown["relayHostConnected"] is not False or teardown["phonesConnected"] is not True:
         _fail("Teardown does not prove the Windows relay host disconnected last.")
+    return MappingProxyType(normalized_results)
 
 
 def _sorted_ports(value: Any, name: str, *, require_baseline: bool) -> list[int]:
@@ -1152,6 +1591,7 @@ def _assert_boundaries(
 
 def _assert_policy(
     records: Mapping[str, CaptureRecord],
+    normalized_results: Mapping[str, NormalizedObservation],
     host_boundary_sha256: str,
     boundary_ports: list[int],
 ) -> None:
@@ -1159,8 +1599,12 @@ def _assert_policy(
     proposal_observation = proposal.observation
     if proposal_observation["hostBoundarySha256"] != host_boundary_sha256:
         _fail("policyProposal does not bind hostBoundary.")
-    if proposal.source != _canonical(proposal_observation["policyInput"]):
+    if normalized_results["policyProposal"].raw_output != _canonical(
+        proposal_observation["policyInput"]
+    ):
         _fail("policyProposal raw source must be the exact canonical protected policy input.")
+    expected_policy: dict[str, Any] | None = None
+    policy_failed = False
     try:
         parsed = parse_phone_policy_input(proposal_observation["policyInput"])
         expected_policy = build_phone_policy(
@@ -1168,8 +1612,10 @@ def _assert_policy(
             parsed.relay_host_tailscale_ipv4,
             parsed.listeners,
         )
-    except Exception as error:
-        raise RelayEvidenceError("policyProposal cannot form the exact host-neutral phone policy.") from error
+    except Exception:
+        policy_failed = True
+    if policy_failed or expected_policy is None:
+        _fail("policyProposal cannot form the exact host-neutral phone policy.")
     if proposal_observation["policy"] != expected_policy:
         _fail("policyProposal does not equal the pure host-neutral renderer output.")
 
@@ -1189,7 +1635,7 @@ def _assert_policy(
     applied = records["policy"]
     if (
         applied.observation["policy"] != expected_policy
-        or applied.source != _canonical(expected_policy)
+        or normalized_results["policy"].raw_output != _canonical(expected_policy)
         or applied.observation["proposalCaptureSha256"] != proposal.sha256
         or applied.observation["hostBoundarySha256"] != host_boundary_sha256
     ):
@@ -1466,7 +1912,9 @@ def _assert_reachability(
 
 
 def _assert_restart(
-    records: Mapping[str, CaptureRecord], host_boundary_sha256: str
+    records: Mapping[str, CaptureRecord],
+    normalized_results: Mapping[str, NormalizedObservation],
+    host_boundary_sha256: str,
 ) -> None:
     restart_environment = records["restartEnvironment"].observation
     for role in READINESS_ROLES:
@@ -1522,11 +1970,14 @@ def _assert_restart(
     }
     if any(observation[field] != value for field, value in expected_results.items()):
         _fail("coldRestartEvent does not prove clean source/process, migrations, and Docker continuity.")
-    if event.source != _canonical(observation):
+    if normalized_results["coldRestartEvent"].raw_output != _canonical(observation):
         _fail("coldRestartEvent raw source must be its exact canonical ordered event record.")
 
 
-def _assert_session_ledger(records: Mapping[str, CaptureRecord]) -> None:
+def _assert_session_ledger(
+    records: Mapping[str, CaptureRecord],
+    normalized_results: Mapping[str, NormalizedObservation],
+) -> None:
     ledger = records["sessionLedger"]
     entries = ledger.observation["entries"]
     preceding_roles = CAPTURE_NAMES[:-1]
@@ -1542,7 +1993,7 @@ def _assert_session_ledger(records: Mapping[str, CaptureRecord]) -> None:
         }
         if exact != expected:
             _fail("sessionLedger is missing, reordered, cross-session, or hash-inconsistent.")
-    if ledger.source != _canonical({"entries": entries}):
+    if normalized_results["sessionLedger"].raw_output != _canonical({"entries": entries}):
         _fail("sessionLedger raw source must be the exact canonical preceding-entry ledger.")
 
 
@@ -1634,8 +2085,10 @@ def _report_candidate(
     records: Mapping[str, CaptureRecord],
     host_boundary: Mapping[str, Any],
     ports: list[int],
+    adapter: VersionAdapter,
 ) -> dict[str, Any]:
     environment = records["sessionEnvironment"].observation
+    corpus = adapter.corpus
     return {
         "schemaVersion": REPORT_SCHEMA,
         "trustBoundary": UNSIGNED_TRUST_BOUNDARY,
@@ -1652,6 +2105,10 @@ def _report_candidate(
         },
         "versionAdapter": {
             "adapterId": environment["adapterId"],
+            "adapterKind": corpus.adapter_kind,
+            "platform": corpus.platform,
+            "corpusSchemaVersion": corpus.schema_version,
+            "corpusSha256": corpus.corpus_sha256,
             "windowsVersion": environment["windowsVersion"],
             "wslVersion": environment["wslVersion"],
             "ubuntuVersion": environment["ubuntuVersion"],
@@ -1852,15 +2309,21 @@ def normalize_relay_report_candidate(
         ) != host_boundary_sha256:
             _fail(f"{role} does not hash-link the sole authoritative hostBoundary capture.")
     selected_adapters = PRODUCTION_VERSION_ADAPTERS if adapters is None else adapters
-    adapter = _assert_versions_and_environment(records, host_boundary_sha256, selected_adapters)
-    _assert_adapter_observations(records, adapter, host_boundary_sha256)
+    expected_adapter_kind = "production" if adapters is None else "test"
+    adapter = _assert_versions_and_environment(
+        records,
+        host_boundary_sha256,
+        selected_adapters,
+        expected_adapter_kind,
+    )
+    normalized_results = _assert_adapter_observations(records, adapter, host_boundary_sha256)
     ports = _assert_boundaries(records, host_boundary_sha256)
-    _assert_policy(records, host_boundary_sha256, ports)
+    _assert_policy(records, normalized_results, host_boundary_sha256, ports)
     _assert_timing(records, started, executed, completed)
     _assert_reachability(records, build_ids, index["apiOrigin"], ports, host_boundary_sha256)
-    _assert_restart(records, host_boundary_sha256)
-    _assert_session_ledger(records)
-    return _canonical(_report_candidate(index, records, host_boundary, ports))
+    _assert_restart(records, normalized_results, host_boundary_sha256)
+    _assert_session_ledger(records, normalized_results)
+    return _canonical(_report_candidate(index, records, host_boundary, ports, adapter))
 
 
 class _QuietArgumentParser(argparse.ArgumentParser):
@@ -1893,8 +2356,8 @@ def _parser() -> argparse.ArgumentParser:
 def main(arguments: Sequence[str] | None = None) -> int:
     try:
         parsed = _parser().parse_args(arguments)
-        candidate = normalize_relay_report_candidate(parsed.capture_index)
-        sys.stdout.buffer.write(candidate)
+        normalized_output = normalize_relay_report_candidate(parsed.capture_index)
+        sys.stdout.buffer.write(normalized_output)
         sys.stderr.write(
             "Unsigned structural candidate only; independent trusted Ed25519 manifest review remains required.\n"
         )

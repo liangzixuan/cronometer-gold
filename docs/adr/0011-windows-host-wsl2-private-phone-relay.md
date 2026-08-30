@@ -35,7 +35,7 @@ configuration rather than assumed from the macOS evidence model.
 
 ## Decision
 
-Implement an offline Windows-only v2 review package and v3 normalized report.
+Implement an offline Windows-only v2 review package and v4 normalized report.
 The renderer, structural normalizer, mobile validator cutover, synthetic
 fixtures, adversarial tests, and independent source review land atomically. The
 production adapter registry remains empty until exact Windows Tailscale and
@@ -124,8 +124,8 @@ Sensitive raw captures remain outside Git and OneDrive, while a canonical
 candidate contains only hashes and redacted conclusions. A full cold restart
 and physical probes are expensive, attended steps and cannot be inferred from
 static tests. The macOS producer remains historical evidence only; the atomic
-mobile verifier cutover accepts Windows report v3 and rejects legacy report v2
-without conversion or fallback.
+mobile verifier cutover accepts Windows report v4 and rejects legacy reports v2
+and v3 without conversion or fallback.
 
 The route exposes only the API through private HTTPS. LocalStack and every
 application dependency remain loopback-only, and neither private relay success

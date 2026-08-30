@@ -25,9 +25,15 @@ import {
 export const HEALTH_RELEASE_EVIDENCE_SCHEMA = "nutrition-tracker-health-release-evidence-v5";
 export { HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA } from "./reviewer-trust.mjs";
 export const PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA =
-  "nutrition-tracker-physical-device-relay-report-v3";
-const LEGACY_PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA =
-  "nutrition-tracker-physical-device-relay-report-v2";
+  "nutrition-tracker-physical-device-relay-report-v4";
+const LEGACY_PHYSICAL_DEVICE_RELAY_REPORT_SCHEMAS = new Set([
+  "nutrition-tracker-physical-device-relay-report-v2",
+  "nutrition-tracker-physical-device-relay-report-v3",
+]);
+const PHYSICAL_DEVICE_RELAY_ADAPTER_CORPUS_SCHEMA =
+  "nutrition-tracker-tailscale-windows-output-corpus-v1";
+const PHYSICAL_DEVICE_RELAY_ADAPTER_PLATFORM = "windows-host";
+const PHYSICAL_DEVICE_RELAY_TEST_ADAPTER_PREFIX = "test-";
 const PHYSICAL_DEVICE_API_ORIGIN_COMMITMENT_DOMAIN =
   "nutrition-tracker-physical-device-api-origin-v1";
 export const P0_CLIENT_SMOKE_REPORT_SCHEMA = "nutrition-tracker-p0-client-smoke-report-v1";
@@ -501,8 +507,24 @@ function assertRelayHostTopology(topology) {
   assertSha256(topology.hostBoundarySha256, `${name}.hostBoundarySha256`);
 }
 
-function assertRelayVersionAdapter(adapter, supportedAdapters) {
+function assertRelayVersionAdapter(adapter, supportedAdapters, allowTestAdapters) {
   const name = "physical-device relay report.versionAdapter";
+  const adapterBindingFields = [
+    "adapterId",
+    "adapterKind",
+    "platform",
+    "corpusSchemaVersion",
+    "corpusSha256",
+    "windowsVersion",
+    "wslVersion",
+    "ubuntuVersion",
+    "dockerDesktopVersion",
+    "dockerEngineVersion",
+    "tailscaleClientVersion",
+    "tailscaleDaemonVersion",
+    "clientHelpSha256",
+    "daemonHelpSha256",
+  ];
   const versionFields = [
     "windowsVersion",
     "wslVersion",
@@ -521,15 +543,46 @@ function assertRelayVersionAdapter(adapter, supportedAdapters) {
     "restartEnvironmentSha256",
     "teardownEnvironmentSha256",
   ];
-  assertExactKeys(adapter, ["adapterId", ...versionFields, ...hashFields], name);
+  assertExactKeys(
+    adapter,
+    [
+      "adapterId",
+      "adapterKind",
+      "platform",
+      "corpusSchemaVersion",
+      "corpusSha256",
+      ...versionFields,
+      ...hashFields,
+    ],
+    name,
+  );
   if (typeof adapter.adapterId !== "string" || !RELAY_ADAPTER_ID.test(adapter.adapterId)) {
     throw new TypeError(`${name}.adapterId must match the exact bounded adapter-ID syntax.`);
   }
+  if (adapter.adapterKind !== "production" && adapter.adapterKind !== "test") {
+    throw new TypeError(`${name}.adapterKind must equal production or test.`);
+  }
+  const hasTestIdentifier = adapter.adapterId.startsWith(PHYSICAL_DEVICE_RELAY_TEST_ADAPTER_PREFIX);
+  if (hasTestIdentifier !== (adapter.adapterKind === "test")) {
+    throw new TypeError(`${name} kind and adapter-ID namespace must match exactly.`);
+  }
+  if (!allowTestAdapters && adapter.adapterKind !== "production") {
+    throw new TypeError(
+      "Signed physical-device relay evidence must use a production version adapter.",
+    );
+  }
+  assertExactResult(adapter.platform, PHYSICAL_DEVICE_RELAY_ADAPTER_PLATFORM, `${name}.platform`);
+  assertExactResult(
+    adapter.corpusSchemaVersion,
+    PHYSICAL_DEVICE_RELAY_ADAPTER_CORPUS_SCHEMA,
+    `${name}.corpusSchemaVersion`,
+  );
   for (const field of versionFields) {
     if (typeof adapter[field] !== "string" || !RELAY_VERSION.test(adapter[field])) {
       throw new TypeError(`${name}.${field} must match the exact bounded version syntax.`);
     }
   }
+  assertSha256(adapter.corpusSha256, `${name}.corpusSha256`);
   for (const field of hashFields) assertSha256(adapter[field], `${name}.${field}`);
 
   if (!Array.isArray(supportedAdapters)) {
@@ -540,22 +593,40 @@ function assertRelayVersionAdapter(adapter, supportedAdapters) {
   const adapterIds = new Set();
   for (const [index, supported] of supportedAdapters.entries()) {
     const supportedName = `physical-device relay version-adapter registry[${index}]`;
-    assertExactKeys(
-      supported,
-      ["adapterId", "tailscaleClientVersion", "tailscaleDaemonVersion"],
-      supportedName,
-    );
+    assertExactKeys(supported, adapterBindingFields, supportedName);
     if (typeof supported.adapterId !== "string" || !RELAY_ADAPTER_ID.test(supported.adapterId)) {
       throw new TypeError(
         `${supportedName}.adapterId must match the exact bounded adapter-ID syntax.`,
       );
     }
-    for (const field of ["tailscaleClientVersion", "tailscaleDaemonVersion"]) {
+    if (supported.adapterKind !== "production" && supported.adapterKind !== "test") {
+      throw new TypeError(`${supportedName}.adapterKind must equal production or test.`);
+    }
+    if (
+      supported.adapterId.startsWith(PHYSICAL_DEVICE_RELAY_TEST_ADAPTER_PREFIX) !==
+      (supported.adapterKind === "test")
+    ) {
+      throw new TypeError(`${supportedName} kind and adapter-ID namespace must match exactly.`);
+    }
+    assertExactResult(
+      supported.platform,
+      PHYSICAL_DEVICE_RELAY_ADAPTER_PLATFORM,
+      `${supportedName}.platform`,
+    );
+    assertExactResult(
+      supported.corpusSchemaVersion,
+      PHYSICAL_DEVICE_RELAY_ADAPTER_CORPUS_SCHEMA,
+      `${supportedName}.corpusSchemaVersion`,
+    );
+    for (const field of versionFields) {
       if (typeof supported[field] !== "string" || !RELAY_VERSION.test(supported[field])) {
         throw new TypeError(
           `${supportedName}.${field} must match the exact bounded version syntax.`,
         );
       }
+    }
+    for (const field of ["corpusSha256", "clientHelpSha256", "daemonHelpSha256"]) {
+      assertSha256(supported[field], `${supportedName}.${field}`);
     }
     if (adapterIds.has(supported.adapterId)) {
       throw new TypeError("Physical-device relay version-adapter registry IDs must be unique.");
@@ -563,15 +634,12 @@ function assertRelayVersionAdapter(adapter, supportedAdapters) {
     adapterIds.add(supported.adapterId);
   }
   if (
-    !supportedAdapters.some(
-      (supported) =>
-        supported.adapterId === adapter.adapterId &&
-        supported.tailscaleClientVersion === adapter.tailscaleClientVersion &&
-        supported.tailscaleDaemonVersion === adapter.tailscaleDaemonVersion,
+    !supportedAdapters.some((supported) =>
+      adapterBindingFields.every((field) => supported[field] === adapter[field]),
     )
   ) {
     throw new TypeError(
-      "Physical-device relay report uses an unsupported Tailscale adapter/version tuple.",
+      "Physical-device relay report uses an unsupported Tailscale adapter/corpus/environment/version/help tuple.",
     );
   }
 }
@@ -716,11 +784,12 @@ function validatePhysicalDeviceRelayReport(
   executedAt,
   reviewedAt,
   supportedAdapters,
+  allowTestAdapters = false,
 ) {
   assertPlainRecord(report, "physical-device relay report");
-  if (report.schemaVersion === LEGACY_PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA) {
+  if (LEGACY_PHYSICAL_DEVICE_RELAY_REPORT_SCHEMAS.has(report.schemaVersion)) {
     throw new TypeError(
-      "Legacy physical-device relay report v2 is rejected; recollect Windows v3 evidence.",
+      "Legacy physical-device relay report v2/v3 is rejected; recollect Windows v4 evidence.",
     );
   }
   if (report.schemaVersion !== PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA) {
@@ -813,7 +882,7 @@ function validatePhysicalDeviceRelayReport(
   }
 
   assertRelayHostTopology(report.hostTopology);
-  assertRelayVersionAdapter(report.versionAdapter, supportedAdapters);
+  assertRelayVersionAdapter(report.versionAdapter, supportedAdapters, allowTestAdapters);
   assertRelayPolicy(report.policy);
   assertBoundaryEvidence(report.boundaryEvidence, report.versionAdapter);
 
@@ -1088,6 +1157,7 @@ export function validateUnsignedRelayCandidateStructureForReview(
     executedAt,
     reviewedAt,
     supportedAdapters,
+    true,
   );
 }
 

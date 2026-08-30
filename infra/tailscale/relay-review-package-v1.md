@@ -7,9 +7,9 @@
 > Do not use this file with current tooling or execute it as a workflow. It is
 > coupled to `nutrition-tracker-mac`, `/usr/sbin/lsof`, removed CLI arguments,
 > the historical v1 role map, and relay report v2. The implemented offline
-> Windows framework accepts review-package v2 and emits report v3, but its
+> Windows framework accepts review-package v2 and emits report v4, but its
 > production adapter registry remains empty and live use remains blocked. The
-> current mobile verifier accepts v3 only and explicitly rejects v2. Never
+> current mobile verifier accepts v4 only and explicitly rejects v2 and v3. Never
 > rename, translate, supplement, or reuse v1 bytes as v2; there is no migration
 > or compatibility path.
 
@@ -22,7 +22,7 @@ normalize, sign, or submit this package.
 The retired v1 normalizer checked structure only; the current normalizer does
 not read this schema. The material below is preserved solely to interpret
 archived evidence. It describes a v4-manifest/v2-report path that is
-incompatible with the current v5-manifest/v3-report gate.
+incompatible with the current v5-manifest/v4-report gate.
 
 ## Review-package index
 
