@@ -11,6 +11,14 @@ from infra.tailscale.tests import test_windows_install_snapshot as FIXTURES
 
 ROOT = Path(__file__).resolve().parents[3]
 COLLECTOR = ROOT / "infra" / "tailscale" / "windows_install_collector.ps1"
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+PRODUCER_CHECK = (
+    ROOT
+    / "infra"
+    / "tailscale"
+    / "tests"
+    / "windows_install_collector_producer_check.py"
+)
 CONTRACT = ROOT / "infra" / "tailscale" / "windows-install-snapshot-v2.md"
 BEGIN = "# BEGIN SECURITY-CRITICAL COLLECTOR SURFACE\n"
 END = "# END SECURITY-CRITICAL COLLECTOR SURFACE\n"
@@ -26,7 +34,10 @@ def _security_surface(source: str) -> str:
 
 
 SOURCE = COLLECTOR.read_text(encoding="utf-8")
+CI_SOURCE = CI_WORKFLOW.read_text(encoding="utf-8")
+PRODUCER_SOURCE = PRODUCER_CHECK.read_text(encoding="utf-8")
 CONTRACT_SOURCE = CONTRACT.read_text(encoding="utf-8")
+PRODUCER_CHECK_SHA256 = "e5d6be4f47f4b9e2e41587059c060b82c655fcaf28e98b6ec3a45a387f2243af"
 COLLECTOR_SHA256 = "b693eb082f583694a52e0ea3cf5311f531b27eb5e2397afe7014fc96d46a0417"
 COLLECTOR_SOURCE_IDENTITY_SHA256 = (
     "de6d21f37b1922dbfb8d22e27932443c190ca0985e5d524774feb14b4e26fb18"
@@ -241,6 +252,70 @@ class WindowsInstallCollectorTests(unittest.TestCase):
         )
         self.assertIn(SNAPSHOT.CORPUS_MANIFEST_SCHEMA.encode(), result)
         self.assertNotIn(FIXTURES.CHALLENGE.encode(), result)
+
+    def test_explicit_producer_check_has_a_bounded_no_shell_boundary(self) -> None:
+        self.assertEqual(
+            hashlib.sha256(PRODUCER_SOURCE.encode("utf-8")).hexdigest(),
+            PRODUCER_CHECK_SHA256,
+        )
+        for forbidden in (
+            "shell=True",
+            "os.system",
+            "os.popen",
+            "Popen(",
+            "tempfile",
+            "NamedTemporaryFile",
+            ".write_text(",
+            ".write_bytes(",
+        ):
+            self.assertNotIn(forbidden, PRODUCER_SOURCE)
+        producer_source_casefold = PRODUCER_SOURCE.casefold()
+        for forbidden in (
+            '"-executionpolicy"',
+            '"-command"',
+            '"-encodedcommand"',
+        ):
+            self.assertNotIn(forbidden, producer_source_casefold)
+        self.assertEqual(PRODUCER_SOURCE.count('"-File",'), 2)
+        self.assertEqual(PRODUCER_SOURCE.count('"-SyntheticFixture",'), 2)
+        self.assertIn('input_bytes=fixture_input,', PRODUCER_SOURCE)
+        self.assertIn('"-NoProfile",', PRODUCER_SOURCE)
+        self.assertIn('"-NonInteractive",', PRODUCER_SOURCE)
+        self.assertIn('"-SyntheticFixture",', PRODUCER_SOURCE)
+        self.assertIn('if first != second or first != expected[phase]:', PRODUCER_SOURCE)
+        self.assertIn("productionArtifactCorpusMatched", PRODUCER_SOURCE)
+        self.assertIn('"negativeCasesRun": 2,', PRODUCER_SOURCE)
+        self.assertIn('"powerShellExecutableSha256": executable_sha256,', PRODUCER_SOURCE)
+        self.assertIn('"powerShellRuntime": runtime_kind,', PRODUCER_SOURCE)
+        self.assertIn("reviewed_public_bytes=(", PRODUCER_SOURCE)
+        self.assertIn("STATIC.SOURCE.encode(\"utf-8\")", PRODUCER_SOURCE)
+        self.assertIn("range(len(oversize_input) - 7)", PRODUCER_SOURCE)
+        self.assertIn("leak_tokens=oversize_leak_tokens,", PRODUCER_SOURCE)
+        self.assertIn(
+            "if _sha256_file(Path(executable)) != executable_sha256:",
+            PRODUCER_SOURCE,
+        )
+        for injection_prefix in (
+            '"corehost_",',
+            '"dotnet_",',
+            '"dyld_",',
+            '"ld_",',
+            '"powershell_",',
+            '"psmodule",',
+        ):
+            self.assertIn(injection_prefix, PRODUCER_SOURCE)
+        for injection_variable in (
+            "__PSLockdownPolicy",
+            "PSExecutionPolicyPreference",
+        ):
+            self.assertIn(injection_variable, PRODUCER_SOURCE)
+        self.assertEqual(
+            CI_SOURCE.count(
+                "python3 -B -m "
+                "infra.tailscale.tests.windows_install_collector_producer_check"
+            ),
+            1,
+        )
 
     def test_contract_documentation_states_non_authorizing_boundary(self) -> None:
         self.assertIn("production path intentionally fails before\nhost inspection", SOURCE)

@@ -109,11 +109,45 @@ the complete collector source and security-surface hashes, reject added
 output/host-command surfaces, and validate the corresponding Python fixtures
 without running PowerShell.
 
-This is reviewable source, not host evidence. No PowerShell collector path was
-run on this machine, no protected raw source was captured, and no production
-corpus or parser was registered. Future production work must replace the
-fail-closed branch in a separately reviewed change, authenticate its exact
-source and parser bundle, and retain the output and no-mutation boundaries.
+This remains reviewable synthetic-contract evidence, not Windows-host
+evidence. The explicit proof below executes only the `-SyntheticFixture`
+PowerShell path; it does not execute a Windows-host or production collector
+path, capture any protected raw source, or register a production corpus or
+parser. Future production work must replace the fail-closed branch in a
+separately reviewed change, authenticate its exact source and parser bundle,
+and retain the output and no-mutation boundaries.
+
+The explicit cross-language producer proof is
+`tests/windows_install_collector_producer_check.py`. Generic unit-test
+discovery never invokes it. It builds the exact canonical `test-` envelope in
+memory, invokes two fresh `-SyntheticFixture` processes per phase without a
+shell or temporary file, requires byte-for-byte equality with independently
+constructed Python snapshots, and then validates the pair. It also proves
+fail-closed behavior for a canonical invalid challenge and an in-memory
+131,073-ASCII-character input. Failure checks reject every eight-byte fragment
+derived from string values in the canonical invalid envelope and every raw
+eight-byte sliding window in the oversized input, except overlaps already
+present in the exact reviewed collector source, fixed generic failure marker,
+or resolved script path. The child environment removes all inherited
+`COREHOST_*`, `DOTNET_*`, `DYLD_*`, `LD_*`, and PowerShell
+module/policy/cache runtime-injection variables, and the compact result
+identifies the resolved absolute PowerShell executable by SHA-256 and
+classifies its runtime. The executable is rehashed after the proof processes
+before that identity is emitted.
+
+Run the proof only with PowerShell 7.4 or newer and a policy that accepts the
+exact reviewed script. Never use an execution-policy bypass; if signature
+policy rejects the source, stop and use a signed source or a separately
+approved native WSL PowerShell runtime. A `native-linux` result proves the
+cross-language synthetic contract, not Windows-host execution-policy or
+signature-policy compatibility. The hosted quality job invokes the same
+module explicitly and fails if its native PowerShell boundary is unavailable.
+
+From the repository root, invoke the proof explicitly as a module:
+
+```text
+python3 -B -m infra.tailscale.tests.windows_install_collector_producer_check
+```
 
 ## Protected handling and remaining blockers
 

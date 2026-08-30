@@ -17,6 +17,7 @@ MODULE = ROOT / "infra" / "tailscale" / "windows_install_snapshot.py"
 CHALLENGE = "0123456789abcdef0123456789abcdef"
 OTHER_CHALLENGE = "fedcba9876543210fedcba9876543210"
 BOOT_COMMITMENT = hashlib.sha256(b"synthetic-boot-session").hexdigest()
+SYNTHETIC_RAW_DOMAIN = "nutrition-tracker-windows-tailscale-install-synthetic-raw-v1"
 
 
 def _canonical(value: object) -> bytes:
@@ -205,7 +206,15 @@ def _raw_sources(phase: str, session: dict[str, object]) -> dict[str, object]:
     result: dict[str, object] = {}
     for role in SNAPSHOT.RAW_SOURCE_ROLES:
         expectation = by_role[role]
-        raw_sha256 = hashlib.sha256(f"{phase}:{role}".encode()).hexdigest()
+        raw_sha256 = SNAPSHOT._domain_commitment(
+            SYNTHETIC_RAW_DOMAIN,
+            [
+                phase,
+                str(session["sequence"]),
+                role,
+                str(session["sessionCommitmentSha256"]),
+            ],
+        )
         result[role] = {
             "schemaVersion": expectation.schema_version,
             "rawSha256": raw_sha256,

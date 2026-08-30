@@ -42,6 +42,13 @@ exact package pin or prior operator approval cannot substitute for the missing
 corpus, authenticated collector/parser bundle, protected raw bundle, and
 pre/post boundary proof.
 
+The explicit synthetic producer proof must also pass under an accepted
+PowerShell policy without an execution-policy bypass before any production
+collector work. Its digest-only result must identify the resolved PowerShell
+executable and runtime class. A native-Linux result is test evidence for the
+cross-language contract; it is never Windows-host signature-policy or host
+evidence.
+
 ## Remaining implementation before live use
 
 The checked-in offline cutover now provides the non-collecting renderer and
