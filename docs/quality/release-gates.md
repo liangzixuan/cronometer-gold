@@ -38,6 +38,25 @@ package boundaries.
   diary nutrient snapshot.
 - The product renders unknown, trace, imputed, and label-rounded values distinctly.
 
+## Local retention privacy drill
+
+After the guarded local dependencies are healthy and migrations are current, run:
+
+```sh
+pnpm retention:privacy-drill
+```
+
+Before parsing, the command opens `.env` without following symbolic links and
+requires an owner-only, single-link regular file. Those file values take
+precedence without expansion for the whole drill. A no-I/O preflight accepts
+only the matching synthetic loopback PostgreSQL and MinIO Compose targets,
+strips ambient artifact-admin credential overrides, and then executes the
+split-credential encrypted-artifact checks before the real API/worker export and
+account-erasure flow. It is never a cloud, public-hosting, physical-phone, or
+production-data command. The drill deletes its export artifacts and scratch
+database schema, but intentionally retains the immutable encrypted
+erasure-ledger tombstone as local recovery evidence.
+
 ## Controlled beta
 
 - API, worker, migrator, web, Caddy, PostgreSQL, and the patched Meilisearch

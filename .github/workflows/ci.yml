@@ -217,6 +217,31 @@ jobs:
           TEST_DATABASE_URL: postgresql://nutrition_local:nutrition_local_only@127.0.0.1:5432/nutrition_tracker
         run: pnpm --filter @nutrition-tracker/api test
 
+      - name: Drill retention export and erasure production wiring
+        env:
+          RUN_RETENTION_WORKER_INTEGRATION: "1"
+          POSTGRES_DB: nutrition_tracker
+          POSTGRES_PASSWORD: nutrition_local_only
+          POSTGRES_PORT: "5432"
+          POSTGRES_USER: nutrition_local
+          TEST_DATABASE_URL: postgresql://nutrition_local:nutrition_local_only@127.0.0.1:5432/nutrition_tracker
+          MINIO_API_PORT: "9000"
+          EXPORT_ARTIFACT_ENDPOINT: http://127.0.0.1:9000
+          EXPORT_ARTIFACT_REGION: us-east-1
+          EXPORT_ARTIFACT_BUCKET: nutrition-private-exports
+          EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID: nutrition_export_writer
+          EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY: nutrition_export_writer_local_only
+          EXPORT_ARTIFACT_READ_ACCESS_KEY_ID: nutrition_export_reader
+          EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY: nutrition_export_reader_local_only
+          ERASURE_REPLAY_LEDGER_ENDPOINT: http://127.0.0.1:9000
+          ERASURE_REPLAY_LEDGER_REGION: us-east-1
+          ERASURE_REPLAY_LEDGER_BUCKET: nutrition-erasure-ledger
+          ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID: nutrition_erasure_writer
+          ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY: nutrition_erasure_writer_local_only
+          ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID: nutrition_erasure_restore
+          ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY: nutrition_erasure_restore_local_only
+        run: pnpm --filter @nutrition-tracker/api test:retention-integration
+
       - name: Rehearse a complete PostgreSQL backup and isolated restore
         env:
           ERASURE_REPLAY_LEDGER_BUCKET: nutrition-erasure-ledger
