@@ -57,6 +57,20 @@ than timing assumptions:
 - <https://www.meilisearch.com/docs/capabilities/indexing/tasks_and_batches/monitor_tasks>
 - <https://www.meilisearch.com/docs/resources/internals/indexes>
 
+## Credential boundary
+
+The API receives only the fixed search key (`search` on `foods`). The worker's
+`MEILI_ADMIN_KEY` is a mutation key limited to
+`indexes.create`, `indexes.get`, `indexes.delete`, `indexes.swap`,
+`documents.add`, `settings.update`, and `stats.get` on `foods*`; it has no
+search, task, or key-management action. Task observation is deliberately split
+to `MEILI_TASK_OBSERVER_KEY`, whose only action is `tasks.get`. Its index scope
+is `*` because Meilisearch index-swap task records have no index UID and are
+otherwise hidden from an index-scoped key. The HTTP adapter uses this observer
+only for `/tasks/:uid` polling and uses the mutation or search key on every
+other route. All three scoped keys are distinct from one another and from the
+master bootstrap key.
+
 ## Relevance contract
 
 Searchable attributes are intentionally bounded and ordered: normalized food name,

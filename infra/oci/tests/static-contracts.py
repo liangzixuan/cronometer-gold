@@ -23,6 +23,8 @@ compose = (ROOT / "files/compose.yaml").read_text(encoding="utf-8")
 orchestrator = (ROOT / "files/release-orchestrator.sh").read_text(encoding="utf-8")
 caddyfile = (ROOT / "files/Caddyfile").read_text(encoding="utf-8")
 preflight = (ROOT / "files/deployment-preflight.sh").read_text(encoding="utf-8")
+meili_bootstrap = (ROOT / "files/bootstrap-meili-keys.sh").read_text(encoding="utf-8")
+worker_environment_example = (ROOT / "files/worker.env.example").read_text(encoding="utf-8")
 image_admission = (ROOT / "files/image-admission.py").read_text(encoding="utf-8")
 initial_secrets = (ROOT / "files/install-initial-secrets.py").read_text(encoding="utf-8")
 object_credential_installer = (ROOT / "files/install-object-storage-credentials.py").read_text(encoding="utf-8")
@@ -286,12 +288,149 @@ def service(name: str) -> str:
     return match.group(1)
 
 
+def integer_constant(source: str, name: str) -> int:
+    match = re.search(rf"\b{re.escape(name)}\s*=\s*([0-9][0-9_]*)\s*;", source)
+    if match is None:
+        raise AssertionError(f"missing exact integer constant: {name}")
+    return int(match.group(1).replace("_", ""))
+
+
+def stop_grace_period_ms(block: str) -> int:
+    matches = re.findall(r"(?m)^    stop_grace_period: ([1-9][0-9]*)s$", block)
+    if len(matches) != 1:
+        raise AssertionError("service must have exactly one integer-second stop grace period")
+    return int(matches[0]) * 1_000
+
+
+def environment_keys(source: str) -> set[str]:
+    keys = []
+    for line in source.splitlines():
+        match = re.match(r"^([A-Z][A-Z0-9_]*)=", line)
+        if match is None:
+            continue
+        key = match.group(1)
+        assert key not in keys, f"duplicate environment key in example: {key}"
+        keys.append(key)
+    return set(keys)
+
+
+def compose_environment(block: str) -> dict[str, str]:
+    lines = block.splitlines()
+    start = lines.index("    environment:") + 1
+    result = {}
+    for line in lines[start:]:
+        if not line.startswith("      ") or line.startswith("        "):
+            break
+        key, separator, value = line.strip().partition(":")
+        assert separator and re.fullmatch(r"[A-Z][A-Z0-9_]*", key) and key not in result
+        result[key] = value.strip()
+    return result
+
+
+def canary_consumed_environment_keys() -> set[str]:
+    source = (
+        REPOSITORY_ROOT / "apps/worker/src/object-storage-credential-canary.ts"
+    ).read_text(encoding="utf-8")
+    return set(re.findall(r'["\']([A-Z][A-Z0-9_]+)["\']', source)) | set(
+        re.findall(r"environment\.([A-Z][A-Z0-9_]*)", source)
+    )
+
+
+schema_contract = preflight.split("# BEGIN_ENVIRONMENT_SCHEMA_CONTRACT\n", 1)[1].split(
+    "# END_ENVIRONMENT_SCHEMA_CONTRACT\n", 1
+)[0]
+schema_namespace = {}
+exec(compile(schema_contract, "deployment-preflight-schema-contract", "exec"), schema_namespace)
+environment_key_schemas = schema_namespace["ENVIRONMENT_KEY_SCHEMAS"]
+assert_environment_schema = schema_namespace["assert_environment_schema"]
+environment_examples = {
+    "deploy": deploy_example,
+    "runtime": runtime_example,
+    "database": (ROOT / "files/database.env.example").read_text(encoding="utf-8"),
+    "api": (ROOT / "files/api.env.example").read_text(encoding="utf-8"),
+    "worker": worker_environment_example,
+    "meili": (ROOT / "files/meili.env.example").read_text(encoding="utf-8"),
+    "restore": restore_example,
+}
+example_key_schemas = {
+    name: environment_keys(source) for name, source in environment_examples.items()
+}
+assert environment_key_schemas == example_key_schemas
+for role, keys in example_key_schemas.items():
+    assert_environment_schema(role, keys)
+for role, contaminating_key in (
+    ("api", "MEILI_MASTER_KEY"),
+    ("api", "EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY"),
+    ("worker", "ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY"),
+    ("restore", "MEILI_ADMIN_KEY"),
+):
+    try:
+        assert_environment_schema(role, example_key_schemas[role] | {contaminating_key})
+    except SystemExit as error:
+        assert f"{role} environment schema mismatch" in str(error)
+    else:
+        raise AssertionError(
+            f"{role} environment accepted cross-role key {contaminating_key}"
+        )
+
+
 assert "minio" not in compose.lower()
 assert "minio" not in orchestrator.lower()
 
 application_anchor = compose[: compose.index("services:")]
 assert 'restart: "no"' in application_anchor
 assert "restart: unless-stopped" not in application_anchor
+
+api_config = (REPOSITORY_ROOT / "apps/api/src/config.ts").read_text(encoding="utf-8")
+worker_config = (REPOSITORY_ROOT / "apps/worker/src/config.ts").read_text(encoding="utf-8")
+worker_entrypoint = (REPOSITORY_ROOT / "apps/worker/src/index.ts").read_text(encoding="utf-8")
+local_shutdown_budget = (
+    REPOSITORY_ROOT / "scripts/local-development-shutdown-budget.mjs"
+).read_text(encoding="utf-8")
+assert "SHUTDOWN_GRACE_MS: z.coerce.number().int().min(100).max(300_000)" in api_config
+assert "SHUTDOWN_GRACE_MS: z.coerce.number().int().min(100).max(300_000)" in worker_config
+assert "workerShutdownWatchdogMarginMs = 2_500" in worker_entrypoint
+assert "workerShutdownWatchdogMaximumMs" in worker_entrypoint
+assert "serviceShutdownPhaseMaximum = 2" in local_shutdown_budget
+assert "supervisorTerminationMarginMs = 5_000" in local_shutdown_budget
+assert compose.count("stop_grace_period:") == 2
+assert "    stop_grace_period: 305s" in service("api")
+assert "    stop_grace_period: 610s" in service("worker")
+source_grace_maximum_ms = integer_constant(
+    worker_entrypoint, "workerShutdownGraceMaximumMs"
+)
+worker_phases = integer_constant(worker_entrypoint, "workerGracefulShutdownPhaseCount")
+worker_watchdog_margin_ms = integer_constant(
+    worker_entrypoint, "workerShutdownWatchdogMarginMs"
+)
+shared_phases = integer_constant(local_shutdown_budget, "serviceShutdownPhaseMaximum")
+supervisor_margin_ms = integer_constant(
+    local_shutdown_budget, "supervisorTerminationMarginMs"
+)
+worker_graceful_maximum_ms = source_grace_maximum_ms * worker_phases
+worker_watchdog_maximum_ms = worker_graceful_maximum_ms + worker_watchdog_margin_ms
+local_supervisor_maximum_ms = source_grace_maximum_ms * shared_phases + supervisor_margin_ms
+api_container_deadline_ms = stop_grace_period_ms(service("api"))
+worker_container_deadline_ms = stop_grace_period_ms(service("worker"))
+assert worker_phases == shared_phases
+assert api_container_deadline_ms == source_grace_maximum_ms + supervisor_margin_ms
+assert worker_container_deadline_ms == local_supervisor_maximum_ms + supervisor_margin_ms
+assert source_grace_maximum_ms < api_container_deadline_ms
+assert worker_graceful_maximum_ms < worker_watchdog_maximum_ms
+assert worker_watchdog_maximum_ms < local_supervisor_maximum_ms
+assert local_supervisor_maximum_ms < worker_container_deadline_ms
+for service_name in (
+    "caddy",
+    "postgres",
+    "meilisearch",
+    "web",
+    "migrate",
+    "object-storage-live-canary",
+    "object-egress-negative-canary",
+    "erasure-restore-attestation",
+    "database-readiness",
+):
+    assert "stop_grace_period:" not in service(service_name)
 
 for egress_service in (
     "api",
@@ -333,8 +472,36 @@ live_canary = service("object-storage-live-canary")
 assert 'command: ["node", "dist/object-storage-credential-canary.js"]' in live_canary
 for env_file in ("runtime.env", "api.env", "worker.env", "restore.env"):
     assert f"/etc/nutrition-tracker/{env_file}" in live_canary
+inherited_canary_keys = set().union(
+    *(example_key_schemas[name] for name in ("runtime", "api", "worker", "restore"))
+)
+expected_empty_canary_keys = inherited_canary_keys - canary_consumed_environment_keys()
+projected_canary_environment = compose_environment(live_canary)
+assert set(projected_canary_environment) == expected_empty_canary_keys
+assert {
+    key for key, value in projected_canary_environment.items() if value == '""'
+} == expected_empty_canary_keys
 assert "depends_on:" not in live_canary
 assert "backend" not in live_canary
+
+assert worker_environment_example.count("MEILI_ADMIN_KEY=REPLACE_SCOPED_MEILI_ADMIN_KEY") == 1
+assert (
+    worker_environment_example.count(
+        "MEILI_TASK_OBSERVER_KEY=REPLACE_SCOPED_MEILI_TASK_OBSERVER_KEY"
+    )
+    == 1
+)
+assert meili_bootstrap.count("91bdc613-7bf6-42b2-9244-cb3bffc64e23") == 2
+assert meili_bootstrap.count("d0ee657d-9a00-4187-a18b-3ea5f17f81b0") == 2
+assert (
+    '"actions": ["indexes.create", "indexes.get", "indexes.delete", "indexes.swap", '
+    '"documents.add", "settings.update", "stats.get"]'
+) in meili_bootstrap
+assert '"actions": ["tasks.get"]' in meili_bootstrap
+assert '"tasks.*"' not in meili_bootstrap
+assert re.search(r'"actions": \[[^\]]*keys\.', meili_bootstrap) is None
+assert "assignments_by_environment" in meili_bootstrap
+assert "install_keys(environment_path, assignments)" in meili_bootstrap
 
 negative_canary = service("object-egress-negative-canary")
 assert "host:'1.1.1.1',port:443" in negative_canary
@@ -380,7 +547,25 @@ assert re.search(r"running=\$\(/usr/bin/docker ps -q.*?\) \|\| \{", orchestrator
 start_body = orchestrator.split("  start)\n", 1)[1].split("    ;;", 1)[0]
 assert start_body.index("application_start_attempted=1") < start_body.index('stop api web worker')
 stop_body = orchestrator.split("  stop)\n", 1)[1].split("    ;;", 1)[0]
-assert stop_body.index("application_start_attempted=1") < stop_body.index("stop_stale_operations") < stop_body.index("readiness_committed=1")
+normal_stop_timeouts = re.findall(
+    r'"\$\{compose\[@\]\}" --profile application down --timeout ([1-9][0-9]*)',
+    stop_body,
+)
+assert normal_stop_timeouts == ["610"]
+normal_stop_timeout_ms = int(normal_stop_timeouts[0]) * 1_000
+assert normal_stop_timeout_ms == worker_container_deadline_ms
+assert (
+    stop_body.index("application_start_attempted=1")
+    < stop_body.index("down --timeout 610")
+    < stop_body.index("stop_stale_operations")
+    < stop_body.index("readiness_committed=1")
+)
+systemd_stop_minutes = re.findall(
+    r"(?m)^TimeoutStopSec=([1-9][0-9]*)min$", systemd
+)
+assert systemd_stop_minutes == ["17"]
+systemd_stop_timeout_ms = int(systemd_stop_minutes[0]) * 60_000
+assert normal_stop_timeout_ms < systemd_stop_timeout_ms
 
 assert '@betaAllowed remote_ip {$BETA_ALLOWED_CIDRS}' in caddyfile
 assert "remote_ip private_ranges" in caddyfile
@@ -1079,7 +1264,7 @@ assert ci_meili_service.splitlines() == [
     "          MEILI_MASTER_KEY: search-integration-key-20260815",
     "          MEILI_NO_ANALYTICS: true",
     "        ports:",
-    "          - 7700:7700",
+    '          - "127.0.0.1:7700:7700"',
     "        options: >-",
     "          --tmpfs /meili_data:uid=1000,gid=1000,mode=0700",
     '          --health-cmd "curl --fail --silent http://127.0.0.1:7700/health"',

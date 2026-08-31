@@ -30,6 +30,17 @@ const describeIntegration = databaseUrl && meiliUrl ? describe : describe.skip;
 describeIntegration("food-search worker integration", () => {
   it("rebuilds an eligible PostgreSQL snapshot, swaps it, and acknowledges the outbox event", async () => {
     if (!databaseUrl || !meiliUrl) throw new Error("integration URLs are required");
+    const mutationKey = process.env.MEILI_ADMIN_KEY;
+    const searchKey = process.env.MEILI_SEARCH_KEY;
+    const taskObserverKey = process.env.MEILI_TASK_OBSERVER_KEY;
+    if (!mutationKey || !searchKey || !taskObserverKey) {
+      throw new Error(
+        "MEILI_ADMIN_KEY, MEILI_SEARCH_KEY, and MEILI_TASK_OBSERVER_KEY are required",
+      );
+    }
+    if (new Set([mutationKey, searchKey, taskObserverKey]).size !== 3) {
+      throw new Error("Worker integration Meilisearch credentials must remain split");
+    }
     const bootstrap = createDatabase({ connectionString: databaseUrl, maxConnections: 1 });
     const schemaName = `worker_search_${randomBytes(6).toString("hex")}`;
     await sql`create schema ${sql.id(schemaName)}`.execute(bootstrap);
@@ -38,9 +49,13 @@ describeIntegration("food-search worker integration", () => {
     const database = createDatabase({ connectionString: scopedUrl.toString(), maxConnections: 4 });
     const client = new MeilisearchHttpClient({
       host: meiliUrl,
-      ...(process.env.TEST_MEILI_API_KEY === undefined
-        ? {}
-        : { apiKey: process.env.TEST_MEILI_API_KEY }),
+      apiKey: mutationKey,
+      requestTimeoutMs: 10_000,
+      taskApiKey: taskObserverKey,
+    });
+    const searchClient = new MeilisearchHttpClient({
+      host: meiliUrl,
+      apiKey: searchKey,
       requestTimeoutMs: 10_000,
     });
     const spoolParent = await mkdtemp(join(tmpdir(), "nutrition-search-spool-test-"));
@@ -133,7 +148,7 @@ describeIntegration("food-search worker integration", () => {
       });
 
       const search = new FoodSearchService({
-        backend: new MeilisearchFoodSearchBackend({ client }),
+        backend: new MeilisearchFoodSearchBackend({ client: searchClient }),
         cursorSecret: "worker-integration-cursor-secret-at-least-32-bytes",
       });
       expect((await search.search({ query: "bluebery oatmel" })).hits[0]).toMatchObject({

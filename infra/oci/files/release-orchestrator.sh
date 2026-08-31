@@ -198,8 +198,8 @@ case "$command" in
     ;;
   stop)
     application_start_attempted=1
+    "${compose[@]}" --profile application down --timeout 610
     stop_stale_operations
-    "${compose[@]}" --profile application down --timeout 60
     assert_release_services_stopped
     readiness_committed=1
     ;;

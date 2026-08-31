@@ -28,6 +28,9 @@ export async function runSearchRebuildCommand(
     host: config.MEILI_URL,
     requestTimeoutMs: config.SEARCH_REQUEST_TIMEOUT_MS,
     ...(config.MEILI_ADMIN_KEY === undefined ? {} : { apiKey: config.MEILI_ADMIN_KEY }),
+    ...(config.MEILI_TASK_OBSERVER_KEY === undefined
+      ? {}
+      : { taskApiKey: config.MEILI_TASK_OBSERVER_KEY }),
   });
   const database = createDatabaseFromEnvironment({
     ...environment,

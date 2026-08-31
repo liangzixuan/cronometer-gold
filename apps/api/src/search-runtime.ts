@@ -35,9 +35,14 @@ export interface ApiSearchRuntime {
   close(): Promise<void>;
 }
 
+export interface ApiSearchRuntimeOptions {
+  readonly clock?: () => Date;
+}
+
 export async function createApiSearchRuntime(
   environment: NodeJS.ProcessEnv,
   config: ApiDependencyConfig,
+  options: ApiSearchRuntimeOptions = {},
 ): Promise<ApiSearchRuntime> {
   // Validate all pure search configuration before allocating the database pool.
   const client = new MeilisearchHttpClient({
@@ -50,59 +55,78 @@ export async function createApiSearchRuntime(
     cursorSecret: config.cursorSecret,
   });
   const retentionArtifacts = config.retention
-    ? await createApiRetentionArtifactRuntime(config.retention)
+    ? await createApiRetentionArtifactRuntime(config.retention, {
+        ...(options.clock ? { clock: options.clock } : {}),
+      })
     : null;
   const database = createDatabaseFromEnvironment({
     ...environment,
     DATABASE_URL: config.databaseUrl,
   });
-  const authService = new SecureAuthService({
-    repository: new DatabaseAuthRepository(database),
-  });
-
-  const retentionService =
-    config.retention && retentionArtifacts
-      ? new DatabaseRetentionService({
-          artifacts: retentionArtifacts,
-          database,
-          deviceChallengeHmacKey: config.retention.deviceChallengeHmacKey,
-          erasureLedgerLocatorKeyRing: config.retention.erasureLedgerLocatorKeyRing,
-          erasureStatusCapabilityHmacKey: config.retention.erasureStatusCapabilityHmacKey,
-        })
-      : undefined;
-
-  return {
-    authService,
-    diaryService: new DatabaseDiaryService(database),
-    foodSearchService: new DatabaseBackedFoodSearchService({
-      core,
-      database,
-      maxConcurrentDatabaseOperations: config.searchDatabaseMaxConcurrency,
-      maxQueuedDatabaseOperations: config.searchDatabaseMaxQueue,
-    }),
-    goalService: new DatabaseGoalService(database),
-    profileService: new DatabaseProfileService(database),
-    recipeService: new DatabaseRecipeService(database),
-    ...(retentionService ? { retentionService } : {}),
-    async readinessCheck() {
-      if (config.requireDatabaseRestoreAttestation) {
-        if (!config.databaseRestoreEpoch) {
-          throw new Error("Database restore epoch was not configured");
-        }
-        await assertDatabaseReady(database, {
-          requireRestoreAttestation: true,
-          restoreEpoch: config.databaseRestoreEpoch,
-        });
-      } else {
-        await assertDatabaseReady(database, {
-          requireRestoreAttestation: false,
-          ...(config.databaseRestoreEpoch ? { restoreEpoch: config.databaseRestoreEpoch } : {}),
-        });
-      }
-      return true;
-    },
-    async close() {
-      await database.destroy();
-    },
+  let closePromise: Promise<void> | undefined;
+  const close = () => {
+    closePromise ??= database.destroy();
+    return closePromise;
   };
+
+  try {
+    const authService = new SecureAuthService({
+      repository: new DatabaseAuthRepository(database),
+      ...(options.clock ? { clock: options.clock } : {}),
+    });
+    const retentionService =
+      config.retention && retentionArtifacts
+        ? new DatabaseRetentionService({
+            artifacts: retentionArtifacts,
+            database,
+            deviceChallengeHmacKey: config.retention.deviceChallengeHmacKey,
+            erasureLedgerLocatorKeyRing: config.retention.erasureLedgerLocatorKeyRing,
+            erasureStatusCapabilityHmacKey: config.retention.erasureStatusCapabilityHmacKey,
+            ...(options.clock ? { clock: options.clock } : {}),
+          })
+        : undefined;
+
+    return {
+      authService,
+      diaryService: new DatabaseDiaryService(database),
+      foodSearchService: new DatabaseBackedFoodSearchService({
+        core,
+        database,
+        maxConcurrentDatabaseOperations: config.searchDatabaseMaxConcurrency,
+        maxQueuedDatabaseOperations: config.searchDatabaseMaxQueue,
+      }),
+      goalService: new DatabaseGoalService(database),
+      profileService: new DatabaseProfileService(database),
+      recipeService: new DatabaseRecipeService(database),
+      ...(retentionService ? { retentionService } : {}),
+      async readinessCheck() {
+        if (config.requireDatabaseRestoreAttestation) {
+          if (!config.databaseRestoreEpoch) {
+            throw new Error("Database restore epoch was not configured");
+          }
+          await assertDatabaseReady(database, {
+            requireRestoreAttestation: true,
+            restoreEpoch: config.databaseRestoreEpoch,
+          });
+        } else {
+          await assertDatabaseReady(database, {
+            requireRestoreAttestation: false,
+            ...(config.databaseRestoreEpoch ? { restoreEpoch: config.databaseRestoreEpoch } : {}),
+          });
+        }
+        return true;
+      },
+      close,
+    };
+  } catch (error) {
+    try {
+      await close();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "API dependency construction and database cleanup failed",
+      );
+    }
+    throw error;
+  }
 }

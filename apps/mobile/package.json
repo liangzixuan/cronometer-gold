@@ -9,7 +9,7 @@
     "ci:release-state": "pnpm --filter @nutrition-tracker/contracts build && node scripts/check-ci-release-state.mjs",
     "config:check": "pnpm --filter @nutrition-tracker/contracts build && node scripts/check-native-config.mjs && node scripts/check-eas-config.mjs",
     "dependencies:check": "node scripts/run-expo.mjs install --check",
-    "dev": "node scripts/run-expo.mjs start",
+    "dev": "node scripts/run-expo.mjs start --localhost",
     "eas-build-post-install": "pnpm --filter @nutrition-tracker/contracts build && node scripts/check-eas-build-post-install.mjs",
     "eas:check": "pnpm --filter @nutrition-tracker/contracts build && node scripts/check-eas-config.mjs",
     "lint": "biome lint App.tsx src",
@@ -17,8 +17,8 @@
     "release:check": "pnpm --filter @nutrition-tracker/contracts build && node scripts/check-eas-config.mjs --release && node scripts/check-release-env.mjs && node scripts/check-native-config.mjs",
     "release:health-evidence": "pnpm --filter @nutrition-tracker/contracts build && node scripts/check-health-release.mjs",
     "release:submit": "pnpm --filter @nutrition-tracker/contracts build && node scripts/submit-reviewed-release.mjs",
-    "start": "node scripts/run-expo.mjs start",
-    "test": "vitest run",
+    "start": "node scripts/run-expo.mjs start --localhost",
+    "test": "vitest run --exclude scripts/run-expo.test.mjs && node --test scripts/run-expo.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

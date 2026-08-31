@@ -8,7 +8,7 @@ From the repository root:
 install -m 600 .env.example .env
 pnpm infra:config
 pnpm infra:up
-pnpm --filter @nutrition-tracker/db db:migrate
+pnpm db:migrate
 ```
 
 The startup wrapper accepts no arguments and first requires `.env` to be an
@@ -24,6 +24,20 @@ environment.
 
 The checked-in values are laptop-only credentials. Bindings are limited to
 `127.0.0.1`; do not expose them on a LAN or public interface.
+
+Start the guarded development graph only after the services and migrations are
+ready:
+
+```sh
+pnpm dev
+```
+
+For an API-only readiness session, use `pnpm dev:api`. Both commands open the
+owner-only `.env` without following symlinks, use the Meilisearch master only in
+the local bootstrap orchestrator, and pass the generated scoped search/admin
+keys to Turbo. The application graph does not receive the Meilisearch master or
+MinIO root credentials. A direct workspace-package launcher is not equivalent;
+it must be given the scoped-key overlay explicitly.
 
 ## Verify
 

@@ -49,13 +49,56 @@ pnpm retention:privacy-drill
 Before parsing, the command opens `.env` without following symbolic links and
 requires an owner-only, single-link regular file. Those file values take
 precedence without expansion for the whole drill. A no-I/O preflight accepts
-only the matching synthetic loopback PostgreSQL and MinIO Compose targets,
-strips ambient artifact-admin credential overrides, and then executes the
-split-credential encrypted-artifact checks before the real API/worker export and
-account-erasure flow. It is never a cloud, public-hosting, physical-phone, or
-production-data command. The drill deletes its export artifacts and scratch
-database schema, but intentionally retains the immutable encrypted
-erasure-ledger tombstone as local recovery evidence.
+only the matching synthetic loopback PostgreSQL, MinIO, and Meilisearch Compose
+targets. Each `pnpm` role child receives an exact allowlisted
+environment-variable projection: build receives no service secrets, artifact
+checks receive only split artifact principals, and the retention flow receives
+the API read, worker write, restore-only, scoped search, scoped index-mutation,
+and task-observer principals it needs. MinIO root and the Meilisearch master key
+are not projected into those role children. The master key is used only by the
+scoped-key bootstrap; only the distinct search, mutation, and task-observer keys
+reach the retention test. Known
+artifact-admin, cloud, registry, signing, and private-key environment variables
+are likewise removed at the role-child launch boundary.
+
+The trusted retention-drill `dotenv-cli` loader and orchestrator retain the
+complete ambient plus `.env` environment for the duration of that local command
+so they can validate the fixture and perform the in-process scoped-key
+bootstrap. The drill projection guarantee begins only when that orchestrator
+launches a `pnpm` role child; it is not an isolation claim about the loader or
+orchestrator processes. The guarded development launcher is narrower: its
+trusted process opens the owner-only `.env` with `O_NOFOLLOW`, validates and
+reads that one descriptor without expansion, closes it before launch, and then
+retains the parsed bootstrap authority. Its full-graph `pnpm` child receives
+only the union of reviewed API, worker, web, and mobile runtime fields. The
+API-only child receives exactly the API fields and scoped search key, never the
+worker mutation/admin key or worker task-observer fields.
+
+Both guarded development profiles reject non-loopback API, PostgreSQL,
+Meilisearch, and object-store targets before scoped-key bootstrap. The full
+graph binds Next.js to `127.0.0.1` and runs Expo with `--localhost`; it is not a
+physical-phone, LAN, Tailscale, or public exposure path. The launcher and Expo
+wrapper own isolated child groups and perform bounded signal forwarding and
+reaping. A device-accessible mode remains a separate reviewed and explicitly
+approved future path.
+
+This environment projection is a process-launch policy, not a filesystem or
+credential sandbox. Runtime support variables such as `HOME` remain available,
+and every child still runs as the same operating-system user. It may therefore
+read same-user file-backed credentials, CLI caches, agents, or configuration
+that are reachable through the filesystem even when their environment-variable
+pointers were removed. Use a dedicated clean user, container, or equivalent
+filesystem isolation when evidence must prove those files were inaccessible;
+this drill proves only the documented environment projection and local service
+targets.
+
+The flow creates the same closeable API application runtime used by the server
+entrypoint without opening a listener, proves the exact readiness response, and
+runs two bounded polls through the same combined search/retention worker runtime
+used by the worker entrypoint. It is never a cloud, public-hosting,
+physical-phone, or production-data command. The drill deletes its export
+artifacts and scratch database schema, but intentionally retains the immutable
+encrypted erasure-ledger tombstone as local recovery evidence.
 
 ## Controlled beta
 

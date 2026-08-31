@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { EncryptedArtifactStore } from "./artifact-encryption.js";
 import {
   assertS3ExactVersionResponse,
+  isS3CompatibleArtifactEndpoint,
   S3ArtifactStoreTimeoutError,
   S3ArtifactStoreVersionConflictError,
   S3RawArtifactStore,
@@ -39,6 +40,38 @@ function required<T>(value: T | null | undefined, message: string): T {
 }
 
 describe("S3-compatible encrypted artifact hook", () => {
+  it.each(["http://127.0.0.1:9000", "http://127.0.0.1:9000/", "https://objects.internal.example"])(
+    "accepts the canonical endpoint boundary: %s",
+    (endpoint) => {
+      expect(isS3CompatibleArtifactEndpoint(endpoint)).toBe(true);
+    },
+  );
+
+  it.each([
+    "not a URL",
+    "ftp://objects.internal.example",
+    "http://user:password@127.0.0.1:9000",
+    "http://127.0.0.1:9000/private-bucket",
+    "http://127.0.0.1:9000?target=private",
+    "http://127.0.0.1:9000#private",
+  ])("rejects an unsafe endpoint without echoing it: %s", (endpoint) => {
+    expect(isS3CompatibleArtifactEndpoint(endpoint)).toBe(false);
+    try {
+      new S3RawArtifactStore({
+        accessKeyId: "test-access",
+        bucket: "private-exports",
+        endpoint,
+        region: "us-east-1",
+        secretAccessKey: "test-secret",
+      });
+      throw new Error("expected S3 endpoint validation to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(TypeError);
+      expect((error as Error).message).toBe("Invalid S3-compatible endpoint");
+      expect((error as Error).message).not.toContain(endpoint);
+    }
+  });
+
   it("uses signed bounded PUT/GET/DELETE operations while the object server sees ciphertext only", async () => {
     const objects = new Map<string, Buffer>();
     const authorizations: string[] = [];

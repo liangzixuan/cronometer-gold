@@ -2,6 +2,7 @@ import { isAbsolute, parse, resolve } from "node:path";
 import {
   ArtifactEncryptionConfigurationError,
   ErasureLedgerLocatorConfigurationError,
+  isS3CompatibleArtifactEndpoint,
   parseArtifactEncryptionKeyRing,
   parseErasureLedgerLocatorKeyRing,
 } from "@nutrition-tracker/artifact-store";
@@ -84,6 +85,7 @@ const workerConfigSchema = z.object({
   EXPORT_ARTIFACT_STORE: z.enum(["filesystem", "s3"]).default("filesystem"),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
   MEILI_ADMIN_KEY: z.string().trim().min(16).optional(),
+  MEILI_TASK_OBSERVER_KEY: z.string().trim().min(16).optional(),
   MEILI_URL: z.url().default("http://127.0.0.1:7700"),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   POLL_INTERVAL_MS: z.coerce.number().int().min(100).max(60_000).default(1_000),
@@ -223,6 +225,69 @@ export function parseWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig 
     if (!safeAbsoluteDirectory(result.data.ERASURE_REPLAY_LEDGER_DIRECTORY)) {
       productionIssues.push({ field: "ERASURE_REPLAY_LEDGER_DIRECTORY" });
     }
+    if (result.data.EXPORT_ARTIFACT_STORE === "s3") {
+      for (const field of [
+        "EXPORT_ARTIFACT_ENDPOINT",
+        "EXPORT_ARTIFACT_BUCKET",
+        "EXPORT_ARTIFACT_REGION",
+        "EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID",
+        "EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY",
+      ] as const) {
+        if (!result.data[field]) productionIssues.push({ field });
+      }
+      const exportEndpointValid =
+        result.data.EXPORT_ARTIFACT_ENDPOINT !== undefined &&
+        isS3CompatibleArtifactEndpoint(result.data.EXPORT_ARTIFACT_ENDPOINT);
+      if (result.data.EXPORT_ARTIFACT_ENDPOINT && !exportEndpointValid) {
+        productionIssues.push({ field: "EXPORT_ARTIFACT_ENDPOINT" });
+      }
+      if (
+        exportEndpointValid &&
+        result.data.EXPORT_ARTIFACT_ENDPOINT &&
+        isOciS3CompatibilityEndpoint(result.data.EXPORT_ARTIFACT_ENDPOINT) &&
+        result.data.EXPORT_ARTIFACT_DELETE_VERSION_POLICY !== "latest"
+      ) {
+        productionIssues.push({ field: "EXPORT_ARTIFACT_DELETE_VERSION_POLICY" });
+      }
+    }
+    if (result.data.ERASURE_REPLAY_LEDGER_STORE === "s3") {
+      for (const field of [
+        "ERASURE_REPLAY_LEDGER_ENDPOINT",
+        "ERASURE_REPLAY_LEDGER_BUCKET",
+        "ERASURE_REPLAY_LEDGER_REGION",
+        "ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID",
+        "ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY",
+      ] as const) {
+        if (!result.data[field]) productionIssues.push({ field });
+      }
+      if (
+        result.data.ERASURE_REPLAY_LEDGER_ENDPOINT &&
+        !isS3CompatibleArtifactEndpoint(result.data.ERASURE_REPLAY_LEDGER_ENDPOINT)
+      ) {
+        productionIssues.push({ field: "ERASURE_REPLAY_LEDGER_ENDPOINT" });
+      }
+    }
+    if (
+      result.data.EXPORT_ARTIFACT_STORE === "s3" &&
+      result.data.ERASURE_REPLAY_LEDGER_STORE === "s3"
+    ) {
+      if (
+        result.data.EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID &&
+        result.data.EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID ===
+          result.data.ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID
+      ) {
+        productionIssues.push({ field: "EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID" });
+        productionIssues.push({ field: "ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID" });
+      }
+      if (
+        result.data.EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY &&
+        result.data.EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY ===
+          result.data.ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY
+      ) {
+        productionIssues.push({ field: "EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY" });
+        productionIssues.push({ field: "ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY" });
+      }
+    }
   }
   if (result.data.NODE_ENV === "production") {
     if (!result.data.DATABASE_RESTORE_EPOCH) {
@@ -236,6 +301,17 @@ export function parseWorkerConfig(environment: NodeJS.ProcessEnv): WorkerConfig 
     }
     if (!result.data.MEILI_ADMIN_KEY) {
       productionIssues.push({ field: "MEILI_ADMIN_KEY" });
+    }
+    if (!result.data.MEILI_TASK_OBSERVER_KEY) {
+      productionIssues.push({ field: "MEILI_TASK_OBSERVER_KEY" });
+    }
+    if (
+      result.data.MEILI_ADMIN_KEY &&
+      result.data.MEILI_TASK_OBSERVER_KEY &&
+      result.data.MEILI_ADMIN_KEY === result.data.MEILI_TASK_OBSERVER_KEY
+    ) {
+      productionIssues.push({ field: "MEILI_ADMIN_KEY" });
+      productionIssues.push({ field: "MEILI_TASK_OBSERVER_KEY" });
     }
     if (new URL(result.data.MEILI_URL).protocol !== "https:") {
       productionIssues.push({ field: "MEILI_URL" });

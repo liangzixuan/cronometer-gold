@@ -23,7 +23,10 @@ ExecStartPre=/usr/local/sbin/nutrition-instance-identity verify-runtime
 ExecStart=/usr/local/sbin/nutrition-release-orchestrator start
 ExecStop=/usr/local/sbin/nutrition-release-orchestrator stop
 TimeoutStartSec=30min
-TimeoutStopSec=2min
+# The application stop runs first with a 610-second worker deadline. Retain a
+# larger reviewed outer bound for subsequent stale-operation cleanup and final
+# stopped-service verification without making the unit unbounded.
+TimeoutStopSec=17min
 
 [Install]
 WantedBy=multi-user.target

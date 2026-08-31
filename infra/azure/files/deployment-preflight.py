@@ -45,6 +45,121 @@ VALIDATOR_LABEL_KEY = "com.nutrition-tracker.azure-preflight-validator"
 VALIDATOR_NAME_PREFIX = "nutrition-azure-caddy-validator"
 ACKNOWLEDGEMENT = "I_ACCEPT_SYNTHETIC_ONLY_SINGLE_SERVER_NON_HA_BETA"
 ENVIRONMENTS = ("deploy", "runtime", "database", "api", "worker", "meili", "restore")
+ENVIRONMENT_KEY_SCHEMAS = {
+    "deploy": frozenset(
+        {
+            "ACME_EMAIL",
+            "API_FQDN",
+            "API_IMAGE",
+            "AZURE_OCI_CREDENTIAL_INSTALL_ADMISSION",
+            "AZURE_OCI_EGRESS_ADMISSION",
+            "AZURE_OCI_USAGE_ADMISSION",
+            "AZURE_OFF_HOST_BACKUP_ADMISSION",
+            "BETA_ALLOWED_CIDRS",
+            "CADDY_IMAGE",
+            "MEILI_IMAGE",
+            "MIGRATOR_IMAGE",
+            "POSTGRES_IMAGE",
+            "SYNTHETIC_ONLY_ACKNOWLEDGEMENT",
+            "WEB_FQDN",
+            "WEB_IMAGE",
+            "WORKER_IMAGE",
+        }
+    ),
+    "runtime": frozenset(
+        {
+            "BETA_DATA_CLASSIFICATION",
+            "DATABASE_APPLICATION_NAME",
+            "DATABASE_CONNECTION_TIMEOUT_MS",
+            "DATABASE_POOL_MAX",
+            "DATABASE_SSL_MODE",
+            "DATABASE_STATEMENT_TIMEOUT_MS",
+            "ERASURE_REPLAY_LEDGER_BUCKET",
+            "ERASURE_REPLAY_LEDGER_CURRENT_KEY_ID",
+            "ERASURE_REPLAY_LEDGER_ENDPOINT",
+            "ERASURE_REPLAY_LEDGER_LOCATOR_CURRENT_KEY_ID",
+            "ERASURE_REPLAY_LEDGER_REGION",
+            "ERASURE_REPLAY_LEDGER_STORE",
+            "EXPORT_ARTIFACT_BUCKET",
+            "EXPORT_ARTIFACT_CURRENT_KEY_ID",
+            "EXPORT_ARTIFACT_DELETE_VERSION_POLICY",
+            "EXPORT_ARTIFACT_ENDPOINT",
+            "EXPORT_ARTIFACT_READ_MAX_ARTIFACT_BYTES",
+            "EXPORT_ARTIFACT_READ_MAX_BYTES_PER_WINDOW",
+            "EXPORT_ARTIFACT_READ_MAX_CONCURRENCY",
+            "EXPORT_ARTIFACT_READ_MAX_RESERVED_BYTES",
+            "EXPORT_ARTIFACT_READ_SPOOL_DIR",
+            "EXPORT_ARTIFACT_READ_SPOOL_PROTECTION",
+            "EXPORT_ARTIFACT_REGION",
+            "EXPORT_ARTIFACT_STORE",
+            "LOG_LEVEL",
+            "MEILI_URL",
+            "NODE_ENV",
+            "RETENTION_EXPORT_SPOOL_DIR",
+            "RETENTION_EXPORT_SPOOL_MAX_BYTES",
+            "RETENTION_EXPORT_SPOOL_PROTECTION",
+            "RETENTION_FEATURES_ENABLED",
+            "RETENTION_WORKER_ID",
+            "SEARCH_REBUILD_SPOOL_DIR",
+            "SEARCH_REBUILD_SPOOL_MAX_BYTES",
+            "SEARCH_REBUILD_WORKER_ID",
+            "SERVICE_VERSION",
+        }
+    ),
+    "database": frozenset(
+        {
+            "DATABASE_RESTORE_EPOCH",
+            "DATABASE_URL",
+            "POSTGRES_DB",
+            "POSTGRES_PASSWORD",
+            "POSTGRES_USER",
+        }
+    ),
+    "api": frozenset(
+        {
+            "DEVICE_CHALLENGE_HMAC_KEY",
+            "ERASURE_REPLAY_LEDGER_LOCATOR_HMAC_KEYS",
+            "ERASURE_STATUS_CAPABILITY_HMAC_KEY",
+            "EXPORT_ARTIFACT_ENCRYPTION_KEYS",
+            "EXPORT_ARTIFACT_READ_ACCESS_KEY_ID",
+            "EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY",
+            "MEILI_SEARCH_KEY",
+            "SEARCH_CURSOR_SECRET",
+        }
+    ),
+    "worker": frozenset(
+        {
+            "ERASURE_REPLAY_LEDGER_ENCRYPTION_KEYS",
+            "ERASURE_REPLAY_LEDGER_LOCATOR_HMAC_KEYS",
+            "ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID",
+            "ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY",
+            "EXPORT_ARTIFACT_ENCRYPTION_KEYS",
+            "EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID",
+            "EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY",
+            "MEILI_ADMIN_KEY",
+            "MEILI_TASK_OBSERVER_KEY",
+        }
+    ),
+    "meili": frozenset({"MEILI_MASTER_KEY"}),
+    "restore": frozenset(
+        {
+            "ERASURE_REPLAY_LEDGER_ENCRYPTION_KEYS",
+            "ERASURE_REPLAY_LEDGER_LOCATOR_HMAC_KEYS",
+            "ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID",
+            "ERASURE_REPLAY_LEDGER_RESTORE_MAX_CONCURRENCY",
+            "ERASURE_REPLAY_LEDGER_RESTORE_OCI_KEY_FINGERPRINT",
+            "ERASURE_REPLAY_LEDGER_RESTORE_OCI_NAMESPACE",
+            "ERASURE_REPLAY_LEDGER_RESTORE_OCI_PRIVATE_KEY_FILE",
+            "ERASURE_REPLAY_LEDGER_RESTORE_OCI_TENANCY_OCID",
+            "ERASURE_REPLAY_LEDGER_RESTORE_OCI_USER_OCID",
+            "ERASURE_REPLAY_LEDGER_RESTORE_REQUEST_TIMEOUT_MS",
+            "ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY",
+            "ERASURE_REPLAY_LEDGER_RESTORE_SPOOL_DIR",
+            "ERASURE_REPLAY_LEDGER_RESTORE_SPOOL_PROTECTION",
+            "ERASURE_REPLAY_LEDGER_RESTORE_VERSION_LIST_PROVIDER",
+        }
+    ),
+}
 IMAGE_REPOSITORIES = {
     "MEILI_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-meilisearch",
     "CADDY_IMAGE": "ghcr.io/liangzixuan/cronometer-gold-caddy",
@@ -226,6 +341,20 @@ def read_environment(path: pathlib.Path) -> dict[str, str]:
     return values
 
 
+def assert_environment_schemas(environments: dict[str, dict[str, str]]) -> None:
+    if set(environments) != set(ENVIRONMENT_KEY_SCHEMAS):
+        fail("Deployment environment file set differs from the reviewed role schema")
+    for name, expected in ENVIRONMENT_KEY_SCHEMAS.items():
+        actual = set(environments[name])
+        if actual != expected:
+            missing = ",".join(sorted(expected - actual)) or "none"
+            unexpected = ",".join(sorted(actual - expected)) or "none"
+            fail(
+                f"{name}.env key schema differs from the reviewed role projection; "
+                f"missing={missing}; unexpected={unexpected}"
+            )
+
+
 def required(environment: dict[str, str], key: str) -> str:
     value = environment.get(key)
     if value is None or not value:
@@ -249,7 +378,10 @@ def assert_host() -> None:
 def assert_markers(mode: str, paths: dict[str, pathlib.Path]) -> None:
     allowed = {
         "api": {"MEILI_SEARCH_KEY=REPLACE_SCOPED_MEILI_SEARCH_KEY"},
-        "worker": {"MEILI_ADMIN_KEY=REPLACE_SCOPED_MEILI_ADMIN_KEY"},
+        "worker": {
+            "MEILI_ADMIN_KEY=REPLACE_SCOPED_MEILI_ADMIN_KEY",
+            "MEILI_TASK_OBSERVER_KEY=REPLACE_SCOPED_MEILI_TASK_OBSERVER_KEY",
+        },
     }
     marker = re.compile(r"REPLACE_[A-Z0-9_]+")
     for name, path in paths.items():
@@ -355,6 +487,22 @@ def assert_secrets(environments: dict[str, dict[str, str]]) -> None:
         fail("Every Object Storage secret must contain 32 to 256 non-whitespace characters")
     if len(set(access_ids)) != len(access_ids) or len(set(secrets)) != len(secrets):
         fail("All four least-privilege Object Storage roles must use distinct credential pairs")
+    meili_credentials = [
+        required(environments["meili"], "MEILI_MASTER_KEY"),
+        required(environments["api"], "MEILI_SEARCH_KEY"),
+        required(environments["worker"], "MEILI_ADMIN_KEY"),
+        required(environments["worker"], "MEILI_TASK_OBSERVER_KEY"),
+    ]
+    if any(
+        len(value) < 16
+        or len(value) > 512
+        or value.strip() != value
+        or any(character.isspace() for character in value)
+        for value in meili_credentials
+    ):
+        fail("Every Meilisearch credential must contain 16 to 512 non-whitespace characters")
+    if len(set(meili_credentials)) != len(meili_credentials):
+        fail("Meilisearch master, search, mutation, and task-observer credentials must be distinct")
     export_api = parse_keyring(environments["api"], "EXPORT_ARTIFACT_ENCRYPTION_KEYS")
     export_worker = parse_keyring(environments["worker"], "EXPORT_ARTIFACT_ENCRYPTION_KEYS")
     ledger_worker = parse_keyring(environments["worker"], "ERASURE_REPLAY_LEDGER_ENCRYPTION_KEYS")
@@ -815,6 +963,7 @@ def run_preflight(mode: str, cancellation_scope: TerminationSignalScope) -> None
         require_regular_file(path, 0o600)
     require_regular_file(COMPOSE_FILE, 0o644)
     environments = {name: read_environment(path) for name, path in paths.items()}
+    assert_environment_schemas(environments)
     assert_markers(mode, paths)
     assert_deployment(environments["deploy"])
     assert_runtime(environments)

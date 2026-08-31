@@ -35,6 +35,8 @@ export interface WaitForSearchTaskOptions {
 export interface MeilisearchHttpClientOptions {
   readonly host: string;
   readonly apiKey?: string;
+  /** Used only to observe asynchronous task state; defaults to apiKey for legacy/master callers. */
+  readonly taskApiKey?: string;
   readonly requestTimeoutMs?: number;
   readonly fetch?: FetchImplementation;
 }
@@ -165,10 +167,12 @@ export class MeilisearchHttpClient {
   readonly #fetch: FetchImplementation;
   readonly #host: string;
   readonly #requestTimeoutMs: number;
+  readonly #taskApiKey: string | undefined;
 
   constructor(options: MeilisearchHttpClientOptions) {
     this.#host = validateHost(options.host);
     this.#apiKey = options.apiKey;
+    this.#taskApiKey = options.taskApiKey ?? options.apiKey;
     this.#fetch = options.fetch ?? globalThis.fetch;
     this.#requestTimeoutMs = options.requestTimeoutMs ?? 10_000;
     if (typeof this.#fetch !== "function") {
@@ -179,7 +183,7 @@ export class MeilisearchHttpClient {
     }
   }
 
-  async #request<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  async #request<T>(path: string, options: RequestOptions = {}, apiKey = this.#apiKey): Promise<T> {
     const timed = timeoutSignal(options.signal, this.#requestTimeoutMs);
     try {
       const response = await this.#fetch(`${this.#host}${path}`, {
@@ -187,7 +191,7 @@ export class MeilisearchHttpClient {
         headers: {
           Accept: "application/json",
           ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
-          ...(this.#apiKey === undefined ? {} : { Authorization: `Bearer ${this.#apiKey}` }),
+          ...(apiKey === undefined ? {} : { Authorization: `Bearer ${apiKey}` }),
         },
         ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
         signal: timed.signal,
@@ -368,7 +372,11 @@ export class MeilisearchHttpClient {
     if (!Number.isSafeInteger(taskUid) || taskUid < 0) {
       throw new TypeError("taskUid must be a non-negative safe integer");
     }
-    const task = await this.#request<MeilisearchTask>(`/tasks/${taskUid}`, { signal });
+    const task = await this.#request<MeilisearchTask>(
+      `/tasks/${taskUid}`,
+      { signal },
+      this.#taskApiKey,
+    );
     if (
       task.uid !== taskUid ||
       !["canceled", "enqueued", "failed", "processing", "succeeded"].includes(task.status)

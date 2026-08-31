@@ -18,6 +18,10 @@ export interface RetentionStorageRuntime {
   readonly exportArtifactStore: EncryptedArtifactStore;
 }
 
+export interface RetentionStorageRuntimeOptions {
+  readonly clock?: () => Date;
+}
+
 function required(value: string | undefined, field: string): string {
   if (!value) throw new TypeError(`Missing retention storage setting: ${field}`);
   return value;
@@ -72,6 +76,7 @@ function rawStore(
 
 export async function createRetentionStorageRuntime(
   config: WorkerConfig,
+  options: RetentionStorageRuntimeOptions = {},
 ): Promise<RetentionStorageRuntime> {
   await mkdir(config.RETENTION_EXPORT_SPOOL_DIR, { mode: 0o700, recursive: true });
   const details = await lstat(config.RETENTION_EXPORT_SPOOL_DIR);
@@ -83,6 +88,7 @@ export async function createRetentionStorageRuntime(
     directory: config.RETENTION_EXPORT_SPOOL_DIR,
     olderThanMs: config.RETENTION_EXPORT_SPOOL_MAX_AGE_MS,
     prefix: "nutrition-account-export-",
+    ...(options.clock ? { clock: options.clock } : {}),
   });
   // Both export retry verification and ledger append verification authenticate
   // into this protected directory before exposing plaintext. A process crash can
@@ -91,6 +97,7 @@ export async function createRetentionStorageRuntime(
   await cleanupOrphanedAuthenticatedArtifactSpools({
     directory: config.RETENTION_EXPORT_SPOOL_DIR,
     olderThanMs: config.RETENTION_EXPORT_SPOOL_MAX_AGE_MS,
+    ...(options.clock ? { clock: options.clock } : {}),
   });
 
   const exportArtifactStore = new EncryptedArtifactStore({
@@ -120,6 +127,7 @@ export async function createRetentionStorageRuntime(
         currentKeyId: config.ERASURE_REPLAY_LEDGER_LOCATOR_CURRENT_KEY_ID,
         serializedKeys: config.ERASURE_REPLAY_LEDGER_LOCATOR_HMAC_KEYS,
       }),
+      ...(options.clock ? { clock: options.clock } : {}),
     }),
     exportArtifactStore,
   };

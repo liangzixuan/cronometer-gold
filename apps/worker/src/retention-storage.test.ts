@@ -29,8 +29,13 @@ describe("retention storage runtime", () => {
       mkdir(authenticatedOrphan, { mode: 0o700 }),
       mkdir(recent, { mode: 0o700 }),
     ]);
-    const old = new Date(Date.now() - 2 * 60_000);
-    await Promise.all([utimes(orphan, old, old), utimes(authenticatedOrphan, old, old)]);
+    const clock = new Date("2026-08-30T12:34:56.000Z");
+    const old = new Date(clock.getTime() - 2 * 60_000);
+    await Promise.all([
+      utimes(orphan, old, old),
+      utimes(authenticatedOrphan, old, old),
+      utimes(recent, clock, clock),
+    ]);
     const runtime = await createRetentionStorageRuntime(
       parseWorkerConfig({
         ERASURE_REPLAY_LEDGER_CURRENT_KEY_ID: "ledger-v1",
@@ -51,9 +56,18 @@ describe("retention storage runtime", () => {
         RETENTION_EXPORT_SPOOL_MAX_AGE_MS: "60000",
         RETENTION_FEATURES_ENABLED: "true",
       }),
+      { clock: () => clock },
     );
     expect(runtime.exportArtifactStore).toBeDefined();
     expect(runtime.erasureLedger).toBeDefined();
     expect(await readdir(spool)).toEqual(["nutrition-artifact-read-still-active"]);
+    const subjectUserId = "11111111-1111-4111-8111-111111111111";
+    const receipt = await runtime.erasureLedger.append({
+      jobId: "22222222-2222-4222-8222-222222222222",
+      recordedAt: "2026-08-30T12:30:00.000Z",
+      restoreLocator: runtime.erasureLedger.locatorForSubject(subjectUserId),
+      subjectUserId,
+    });
+    expect(receipt.acknowledgedAt).toBe(clock.toISOString());
   });
 });

@@ -70,6 +70,26 @@ pnpm db:migrate
 pnpm dev
 ```
 
+`pnpm dev` verifies the owner-only `.env` and rejects the run before bootstrap
+unless the API listener, internal API URL, PostgreSQL, Meilisearch, and active
+object-store endpoints and ports are the exact synthetic `127.0.0.1` fixture.
+It provisions fixed scoped Meilisearch search and worker keys, then projects an
+explicit application-runtime allowlist—not the Meilisearch master, MinIO root,
+legacy S3 aliases, restore-only credentials, signing material, private-key
+pointers, or unknown ambient variables—into the development graph. Use
+`pnpm dev:api` for the narrower API-only Turbo graph; that child receives the
+scoped search key but no worker mutation/admin key or worker task-observer
+configuration. Direct package launchers must receive the matching scoped-key
+overlay and must not load bootstrap credentials into application processes.
+
+The guarded full graph also starts Next.js on `127.0.0.1` and Expo in
+`--localhost` mode. It is not a LAN, Tailscale, public, or physical-phone path.
+Any future device-accessible launcher requires a separate reviewed design and
+explicit approval. The launcher and the nested Expo wrapper forward `SIGINT`,
+`SIGTERM`, and `SIGHUP` to isolated child process groups, apply a bounded forced
+termination fallback, await child completion, and preserve meaningful exit or
+signal behavior so shutdown does not leave development descendants running.
+
 Dependency installation must use the official HTTPS registry with normal TLS
 verification. Do not disable certificate checks or substitute an unrelated
 mirror to make installation pass.

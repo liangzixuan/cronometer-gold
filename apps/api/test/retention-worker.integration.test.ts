@@ -2,10 +2,10 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { chmod, lstat, mkdtemp, readdir, rm, statfs } from "node:fs/promises";
 
 import {
-  ArtifactReadBulkhead,
   type EncryptedArtifactMetadata,
   EncryptedArtifactStore,
   EncryptedErasureReplayLedger,
+  parseArtifactEncryptionKeyRing,
   parseErasureLedgerLocatorKeyRing,
   S3RawArtifactStore,
 } from "@nutrition-tracker/artifact-store";
@@ -18,20 +18,17 @@ import {
 import {
   createDatabase,
   getPrivacyExportJob,
+  MAX_PRIVACY_EXPORT_SNAPSHOT_BYTES,
   reconcileErasedAccountRows,
   runMigrations,
 } from "@nutrition-tracker/db";
 import { describe, expect, it } from "vitest";
-import { createRetentionWorkerRepository } from "../../worker/src/retention-database-repository.js";
 import {
-  type RetentionWorkerEvent,
-  runRetentionWorkerPoll,
-} from "../../worker/src/retention-worker.js";
-import { buildApp } from "../src/app.js";
-import { loadConfig } from "../src/config.js";
-import { SecureAuthService } from "../src/modules/auth/auth-service.js";
-import { DatabaseAuthRepository, DatabaseGoalService } from "../src/persistence-services.js";
-import { DatabaseRetentionService } from "../src/retention-persistence-service.js";
+  createWorkerPollRuntime,
+  type WorkerOperationalEvent,
+  type WorkerPollRuntime,
+} from "../../worker/src/worker-runtime.js";
+import { type ApiApplicationRuntime, createApiApplicationRuntime } from "../src/server.js";
 
 const enabled = process.env.RUN_RETENTION_WORKER_INTEGRATION === "1";
 const WORKSPACE_BYTES = 100 * 1_024 * 1_024;
@@ -96,6 +93,30 @@ function localS3Endpoint(value: string, field: string, port: string): string {
   return value;
 }
 
+function localMeiliEndpoint(value: string, port: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("MEILI_URL must use the local Compose Meilisearch target");
+  }
+  const expected = `http://127.0.0.1:${port}`;
+  if (
+    value !== expected ||
+    url.protocol !== "http:" ||
+    url.hostname !== "127.0.0.1" ||
+    url.port !== port ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    (url.pathname !== "" && url.pathname !== "/")
+  ) {
+    throw new Error("MEILI_URL must use the local Compose Meilisearch target");
+  }
+  return value;
+}
+
 function exactValue(value: string, expected: string, field: string): string {
   if (value !== expected) throw new Error(`${field} does not match the local fixture`);
   return value;
@@ -115,6 +136,21 @@ function exactNumber(value: string, field: string): number {
 
 function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+async function createPrivateTmpfsDirectory(prefix: string): Promise<string> {
+  const directory = await mkdtemp(`/dev/shm/${prefix}`);
+  try {
+    await chmod(directory, 0o700);
+    const details = await lstat(directory);
+    expect(details.isDirectory()).toBe(true);
+    expect(details.isSymbolicLink()).toBe(false);
+    expect(details.mode & 0o777).toBe(0o700);
+    return directory;
+  } catch (error) {
+    await rm(directory, { force: true, recursive: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function attemptCleanup(
@@ -143,6 +179,17 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
       required(process.env.MINIO_API_PORT, "MINIO_API_PORT"),
       "MINIO_API_PORT",
     );
+    const meiliPort = exactPort(required(process.env.MEILI_PORT, "MEILI_PORT"), "MEILI_PORT");
+    const meiliUrl = localMeiliEndpoint(required(process.env.MEILI_URL, "MEILI_URL"), meiliPort);
+    const meiliAdminKey = required(process.env.MEILI_ADMIN_KEY, "MEILI_ADMIN_KEY");
+    const meiliSearchKey = required(process.env.MEILI_SEARCH_KEY, "MEILI_SEARCH_KEY");
+    const meiliTaskObserverKey = required(
+      process.env.MEILI_TASK_OBSERVER_KEY,
+      "MEILI_TASK_OBSERVER_KEY",
+    );
+    if (new Set([meiliAdminKey, meiliSearchKey, meiliTaskObserverKey]).size !== 3) {
+      throw new Error("Retention integration Meilisearch roles must remain split");
+    }
     const databaseUrl = localDatabaseUrl(
       required(
         process.env.DATABASE_URL ?? process.env.TEST_DATABASE_URL,
@@ -233,24 +280,26 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
 
     const schemaName = `retention_e2e_${randomBytes(6).toString("hex")}`;
     const trackedExportObjects = new Set<string>();
-    let spoolDirectoryHandle: string | undefined;
+    const spoolDirectoryHandles = new Set<string>();
     let bootstrapHandle: ReturnType<typeof createDatabase> | undefined;
     let databaseHandle: ReturnType<typeof createDatabase> | undefined;
     let exportWriterRawHandle: S3RawArtifactStore | undefined;
-    let appHandle: ReturnType<typeof buildApp> | undefined;
+    let apiRuntimeHandle: ApiApplicationRuntime | undefined;
+    let workerRuntimeHandle: WorkerPollRuntime | undefined;
     let retentionTablesReady = false;
     let operationFailed = false;
     let operationError: unknown;
 
     try {
       expect((await statfs("/dev/shm")).type).toBe(TMPFS_MAGIC);
-      const spoolDirectory = await mkdtemp("/dev/shm/nutrition-retention-integration-");
-      spoolDirectoryHandle = spoolDirectory;
-      await chmod(spoolDirectory, 0o700);
-      const spool = await lstat(spoolDirectory);
-      expect(spool.isDirectory()).toBe(true);
-      expect(spool.isSymbolicLink()).toBe(false);
-      expect(spool.mode & 0o777).toBe(0o700);
+      const apiSpoolDirectory = await createPrivateTmpfsDirectory("nutrition-retention-api-");
+      spoolDirectoryHandles.add(apiSpoolDirectory);
+      const workerSpoolDirectory = await createPrivateTmpfsDirectory("nutrition-retention-worker-");
+      spoolDirectoryHandles.add(workerSpoolDirectory);
+      const restoreSpoolDirectory = await createPrivateTmpfsDirectory(
+        "nutrition-retention-restore-",
+      );
+      spoolDirectoryHandles.add(restoreSpoolDirectory);
 
       const bootstrap = createDatabase({ connectionString: databaseUrl, maxConnections: 1 });
       bootstrapHandle = bootstrap;
@@ -265,6 +314,36 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         maxConnections: 12,
       });
       databaseHandle = database;
+      await runMigrations(database);
+      retentionTablesReady = true;
+
+      const exportKeyId = "retention-integration-export-v1";
+      const ledgerKeyId = "retention-integration-ledger-v1";
+      const locatorKeyId = "retention-integration-locator-v1";
+      const exportEncryptionKeys = JSON.stringify({
+        [exportKeyId]: Buffer.alloc(32, 41).toString("base64"),
+      });
+      const ledgerEncryptionKeys = JSON.stringify({
+        [ledgerKeyId]: Buffer.alloc(32, 42).toString("base64"),
+      });
+      const locatorHmacKeys = JSON.stringify({
+        [locatorKeyId]: Buffer.alloc(32, 43).toString("base64"),
+      });
+      const exportKeyRing = parseArtifactEncryptionKeyRing({
+        currentKeyId: exportKeyId,
+        purpose: "export",
+        serializedKeys: exportEncryptionKeys,
+      });
+      const ledgerKeyRing = parseArtifactEncryptionKeyRing({
+        currentKeyId: ledgerKeyId,
+        purpose: "erasure_replay_ledger",
+        serializedKeys: ledgerEncryptionKeys,
+      });
+      const locatorKeyRing = parseErasureLedgerLocatorKeyRing({
+        currentKeyId: locatorKeyId,
+        serializedKeys: locatorHmacKeys,
+      });
+
       const exportWriterRaw = new S3RawArtifactStore({
         accessKeyId: exportWriteAccessKeyId,
         bucket: exportBucket,
@@ -275,129 +354,136 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         secretAccessKey: exportWriteSecretAccessKey,
       });
       exportWriterRawHandle = exportWriterRaw;
-      const exportReaderRaw = new S3RawArtifactStore({
-        accessKeyId: exportReadAccessKeyId,
-        bucket: exportBucket,
-        endpoint: exportEndpoint,
-        region: exportRegion,
-        requestTimeoutMs: 5_000,
-        secretAccessKey: exportReadSecretAccessKey,
-      });
-      const ledgerWriterRaw = new S3RawArtifactStore({
-        accessKeyId: ledgerWriteAccessKeyId,
-        bucket: ledgerBucket,
-        endpoint: ledgerEndpoint,
-        region: ledgerRegion,
-        requestTimeoutMs: 5_000,
-        secretAccessKey: ledgerWriteSecretAccessKey,
-      });
-      const ledgerRestoreRaw = new S3RawArtifactStore({
-        accessKeyId: ledgerRestoreAccessKeyId,
-        bucket: ledgerBucket,
-        endpoint: ledgerEndpoint,
-        readVersionPolicy: "require_singleton",
-        region: ledgerRegion,
-        requestTimeoutMs: 5_000,
-        secretAccessKey: ledgerRestoreSecretAccessKey,
-      });
-      const exportKeyRing = {
-        currentKeyId: "retention-integration-export-v1",
-        keys: new Map([["retention-integration-export-v1", Buffer.alloc(32, 41)]]),
-        purpose: "export",
-      } as const;
-      const ledgerKeyRing = {
-        currentKeyId: "retention-integration-ledger-v1",
-        keys: new Map([["retention-integration-ledger-v1", Buffer.alloc(32, 42)]]),
-        purpose: "erasure_replay_ledger",
-      } as const;
-      const locatorKeyRing = parseErasureLedgerLocatorKeyRing({
-        currentKeyId: "retention-integration-locator-v1",
-        serializedKeys: JSON.stringify({
-          "retention-integration-locator-v1": Buffer.alloc(32, 43).toString("base64"),
+      const exportVerifier = new EncryptedArtifactStore({
+        keyRing: exportKeyRing,
+        maxPlaintextBytes: WORKSPACE_BYTES,
+        rawStore: new S3RawArtifactStore({
+          accessKeyId: exportReadAccessKeyId,
+          bucket: exportBucket,
+          endpoint: exportEndpoint,
+          region: exportRegion,
+          requestTimeoutMs: 5_000,
+          secretAccessKey: exportReadSecretAccessKey,
         }),
-      });
-      const exportWriter = new EncryptedArtifactStore({
-        keyRing: exportKeyRing,
-        maxPlaintextBytes: WORKSPACE_BYTES,
-        rawStore: exportWriterRaw,
-        temporaryDirectory: spoolDirectory,
-      });
-      const exportReader = new EncryptedArtifactStore({
-        keyRing: exportKeyRing,
-        maxPlaintextBytes: WORKSPACE_BYTES,
-        rawStore: exportReaderRaw,
-        temporaryDirectory: spoolDirectory,
+        temporaryDirectory: apiSpoolDirectory,
       });
       let clock = new Date(Date.now() + 60_000);
-      const ledgerWriter = new EncryptedErasureReplayLedger({
-        artifactStore: new EncryptedArtifactStore({
-          keyRing: ledgerKeyRing,
-          maxPlaintextBytes: 16_384,
-          rawStore: ledgerWriterRaw,
-          temporaryDirectory: spoolDirectory,
-        }),
-        clock: () => clock,
-        locatorKeyRing,
-      });
       const ledgerRestore = new EncryptedErasureReplayLedger({
         artifactStore: new EncryptedArtifactStore({
           keyRing: ledgerKeyRing,
           maxPlaintextBytes: 16_384,
-          rawStore: ledgerRestoreRaw,
-          temporaryDirectory: spoolDirectory,
+          rawStore: new S3RawArtifactStore({
+            accessKeyId: ledgerRestoreAccessKeyId,
+            bucket: ledgerBucket,
+            endpoint: ledgerEndpoint,
+            readVersionPolicy: "require_singleton",
+            region: ledgerRegion,
+            requestTimeoutMs: 5_000,
+            secretAccessKey: ledgerRestoreSecretAccessKey,
+          }),
+          temporaryDirectory: restoreSpoolDirectory,
         }),
         clock: () => clock,
         locatorKeyRing,
       });
-      const authService = new SecureAuthService({
-        clock: () => clock,
-        repository: new DatabaseAuthRepository(database),
-      });
-      const retentionService = new DatabaseRetentionService({
-        artifacts: {
-          bulkhead: new ArtifactReadBulkhead({
-            clock: () => clock.getTime(),
-            maximumArtifactBytes: WORKSPACE_BYTES,
-            maximumBytesPerOwnerPerWindow: 2 * WORKSPACE_BYTES,
-            maximumConcurrentReads: 2,
-            maximumOpensPerOwnerPerWindow: 3,
-            maximumReservedPlaintextBytes: 2 * WORKSPACE_BYTES,
-            rateWindowMs: 60_000,
-          }),
-          store: exportReader,
-        },
-        clock: () => clock,
-        database,
-        deviceChallengeHmacKey: Buffer.alloc(32, 44),
-        erasureLedgerLocatorKeyRing: locatorKeyRing,
-        erasureStatusCapabilityHmacKey: Buffer.alloc(32, 45),
-      });
-      const app = buildApp({
-        authService,
-        config: loadConfig({ LOG_LEVEL: "silent", NODE_ENV: "test" }),
-        goalService: new DatabaseGoalService(database),
-        logger: false,
-        retentionClock: () => clock,
-        retentionService,
-      });
-      appHandle = app;
-      const events: RetentionWorkerEvent[] = [];
-      const workerOptions = {
-        clock: () => clock,
-        erasureLedger: ledgerWriter,
-        exportArtifactStore: exportWriter,
-        exportTtlMs: 7 * 86_400_000,
-        onEvent: (event: RetentionWorkerEvent) => events.push(event),
-        repository: createRetentionWorkerRepository(database),
-        spoolMaximumBytes: WORKSPACE_BYTES,
-        temporaryDirectory: spoolDirectory,
-        uploadLeaseMs: 30_000,
-        workerId: "retention-worker-integration",
-        workLeaseHeartbeatMs: 1_000,
-      } as const;
 
-      await runMigrations(database);
-      retentionTablesReady = true;
+      const apiEnvironment: NodeJS.ProcessEnv = {
+        API_HOST: "127.0.0.1",
+        API_PORT: "3001",
+        DATABASE_SSL_MODE: "disable",
+        DATABASE_URL: scopedUrl.toString(),
+        DEVICE_CHALLENGE_HMAC_KEY: Buffer.alloc(32, 44).toString("base64"),
+        ERASURE_REPLAY_LEDGER_LOCATOR_CURRENT_KEY_ID: locatorKeyId,
+        ERASURE_REPLAY_LEDGER_LOCATOR_HMAC_KEYS: locatorHmacKeys,
+        ERASURE_STATUS_CAPABILITY_HMAC_KEY: Buffer.alloc(32, 45).toString("base64"),
+        EXPORT_ARTIFACT_BUCKET: exportBucket,
+        EXPORT_ARTIFACT_CURRENT_KEY_ID: exportKeyId,
+        EXPORT_ARTIFACT_ENCRYPTION_KEYS: exportEncryptionKeys,
+        EXPORT_ARTIFACT_ENDPOINT: exportEndpoint,
+        EXPORT_ARTIFACT_READ_ACCESS_KEY_ID: exportReadAccessKeyId,
+        EXPORT_ARTIFACT_READ_MAX_ARTIFACT_BYTES: String(MAX_PRIVACY_EXPORT_SNAPSHOT_BYTES),
+        EXPORT_ARTIFACT_READ_MAX_BYTES_PER_WINDOW: String(MAX_PRIVACY_EXPORT_SNAPSHOT_BYTES),
+        EXPORT_ARTIFACT_READ_MAX_CONCURRENCY: "2",
+        EXPORT_ARTIFACT_READ_MAX_DOWNLOADS_PER_WINDOW: "3",
+        EXPORT_ARTIFACT_READ_MAX_RESERVED_BYTES: String(MAX_PRIVACY_EXPORT_SNAPSHOT_BYTES),
+        EXPORT_ARTIFACT_READ_RATE_WINDOW_MS: "60000",
+        EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY: exportReadSecretAccessKey,
+        EXPORT_ARTIFACT_READ_SPOOL_DIR: apiSpoolDirectory,
+        EXPORT_ARTIFACT_READ_SPOOL_MAX_AGE_MS: "60000",
+        EXPORT_ARTIFACT_READ_SPOOL_PROTECTION: "tmpfs",
+        EXPORT_ARTIFACT_REGION: exportRegion,
+        EXPORT_ARTIFACT_REQUEST_TIMEOUT_MS: "5000",
+        EXPORT_ARTIFACT_STORE: "s3",
+        LOG_LEVEL: "silent",
+        MEILI_SEARCH_KEY: meiliSearchKey,
+        MEILI_URL: meiliUrl,
+        NODE_ENV: "test",
+        READINESS_TIMEOUT_MS: "5000",
+        RETENTION_FEATURES_ENABLED: "true",
+        SEARCH_CURSOR_SECRET: Buffer.alloc(32, 46).toString("base64"),
+        SHUTDOWN_GRACE_MS: "10000",
+      };
+      const workerEnvironment: NodeJS.ProcessEnv = {
+        DATABASE_SSL_MODE: "disable",
+        DATABASE_URL: scopedUrl.toString(),
+        ERASURE_REPLAY_LEDGER_BUCKET: ledgerBucket,
+        ERASURE_REPLAY_LEDGER_CURRENT_KEY_ID: ledgerKeyId,
+        ERASURE_REPLAY_LEDGER_DIRECTORY: `${workerSpoolDirectory}/unused-ledger-store`,
+        ERASURE_REPLAY_LEDGER_ENCRYPTION_KEYS: ledgerEncryptionKeys,
+        ERASURE_REPLAY_LEDGER_ENDPOINT: ledgerEndpoint,
+        ERASURE_REPLAY_LEDGER_LOCATOR_CURRENT_KEY_ID: locatorKeyId,
+        ERASURE_REPLAY_LEDGER_LOCATOR_HMAC_KEYS: locatorHmacKeys,
+        ERASURE_REPLAY_LEDGER_REGION: ledgerRegion,
+        ERASURE_REPLAY_LEDGER_STORE: "s3",
+        ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID: ledgerWriteAccessKeyId,
+        ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY: ledgerWriteSecretAccessKey,
+        EXPORT_ARTIFACT_BUCKET: exportBucket,
+        EXPORT_ARTIFACT_CURRENT_KEY_ID: exportKeyId,
+        EXPORT_ARTIFACT_DELETE_VERSION_POLICY: "suspended_null",
+        EXPORT_ARTIFACT_DIRECTORY: `${workerSpoolDirectory}/unused-export-store`,
+        EXPORT_ARTIFACT_ENCRYPTION_KEYS: exportEncryptionKeys,
+        EXPORT_ARTIFACT_ENDPOINT: exportEndpoint,
+        EXPORT_ARTIFACT_REGION: exportRegion,
+        EXPORT_ARTIFACT_REQUEST_TIMEOUT_MS: "5000",
+        EXPORT_ARTIFACT_STORE: "s3",
+        EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID: exportWriteAccessKeyId,
+        EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY: exportWriteSecretAccessKey,
+        LOG_LEVEL: "error",
+        MEILI_ADMIN_KEY: meiliAdminKey,
+        MEILI_TASK_OBSERVER_KEY: meiliTaskObserverKey,
+        MEILI_URL: meiliUrl,
+        NODE_ENV: "test",
+        POLL_INTERVAL_MS: "1000",
+        RETENTION_EXPORT_SPOOL_DIR: workerSpoolDirectory,
+        RETENTION_EXPORT_SPOOL_MAX_AGE_MS: "60000",
+        RETENTION_EXPORT_SPOOL_MAX_BYTES: String(WORKSPACE_BYTES),
+        RETENTION_EXPORT_SPOOL_PROTECTION: "tmpfs",
+        RETENTION_FEATURES_ENABLED: "true",
+        RETENTION_WORKER_ID: "retention-integration-worker",
+        SEARCH_REBUILD_SPOOL_DIR: `${workerSpoolDirectory}/search-rebuild`,
+        SEARCH_REBUILD_WORKER_ID: "retention-integration-search-worker",
+        SERVICE_VERSION: "retention-integration",
+        SHUTDOWN_GRACE_MS: "10000",
+      };
+
+      const apiRuntime = await createApiApplicationRuntime(apiEnvironment, {
+        clock: () => clock,
+        logger: false,
+      });
+      apiRuntimeHandle = apiRuntime;
+      const app = apiRuntime.app;
+      expect(app.server.listening).toBe(false);
+      const events: WorkerOperationalEvent[] = [];
+      const workerRuntime = await createWorkerPollRuntime({
+        clock: () => clock,
+        environment: workerEnvironment,
+        onOperationalEvent: (event) => events.push(event),
+      });
+      workerRuntimeHandle = workerRuntime;
+
+      const readiness = await app.inject({ method: "GET", url: "/ready" });
+      expect(readiness.statusCode).toBe(200);
+      expect(readiness.json()).toEqual({ status: "ok" });
       const password = "correct horse battery staple";
       const email = `retention-e2e-${randomUUID()}@example.invalid`;
       const registration = await app.inject({
@@ -467,7 +553,7 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
       expect(requestedExport.status).toBe("queued");
 
       clock = new Date(Date.now() + 120_000);
-      await runRetentionWorkerPoll(workerOptions);
+      await workerRuntime.pollOnce();
       expect(events).toContainEqual({
         event: "retention.export.completed",
         jobId: requestedExport.id,
@@ -601,13 +687,14 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
       ).toBe(401);
 
       clock = new Date(Date.parse(queuedErasure.erasure.executeAfter) + 60_000);
-      await runRetentionWorkerPoll(workerOptions);
+      await workerRuntime.pollOnce();
       expect(events).toContainEqual({
         event: "retention.erasure.completed",
         jobId: queuedErasure.erasure.id,
         level: "info",
       });
       expect(events.filter((event) => event.level === "warn")).toEqual([]);
+      expect(events.filter((event) => event.event === "worker.poll.slice_failed")).toEqual([]);
 
       expect(
         (
@@ -648,13 +735,13 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
       ).toBe(401);
 
       for (const metadata of persistedMetadata) {
-        const opened = await exportReader.openAuthenticated(metadata);
+        const opened = await exportVerifier.openAuthenticated(metadata);
         await opened?.dispose();
         expect(opened).toBeNull();
       }
       expect(await ledgerRestore.findForSubject({ subjectUserId: userId })).toMatchObject({
         jobId: queuedErasure.erasure.id,
-        restoreLocator: ledgerWriter.locatorForSubject(userId),
+        restoreLocator: ledgerRestore.locatorForSubject(userId),
         subjectUserId: userId,
       });
       const reconciliation = await reconcileErasedAccountRows(database, { userId });
@@ -712,15 +799,25 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
           policy_version: "complete-account-erasure-v1",
         },
       ]);
-      expect(await readdir(spoolDirectory)).toEqual([]);
+      expect(await readdir(apiSpoolDirectory)).toEqual([]);
+      expect(await readdir(workerSpoolDirectory)).toEqual([]);
+      expect(await readdir(restoreSpoolDirectory)).toEqual([]);
     } catch (error) {
       operationFailed = true;
       operationError = error;
     } finally {
       const cleanupErrors: Error[] = [];
-      const app = appHandle;
-      if (app) {
-        await attemptCleanup(cleanupErrors, "close Fastify app", () => app.close());
+      const apiRuntime = apiRuntimeHandle;
+      if (apiRuntime) {
+        await attemptCleanup(cleanupErrors, "close API application runtime", () =>
+          apiRuntime.close(),
+        );
+      }
+      const workerRuntime = workerRuntimeHandle;
+      if (workerRuntime) {
+        await attemptCleanup(cleanupErrors, "close worker poll runtime", () =>
+          workerRuntime.close(),
+        );
       }
 
       const database = databaseHandle;
@@ -759,8 +856,7 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         );
       }
 
-      const spoolDirectory = spoolDirectoryHandle;
-      if (spoolDirectory) {
+      for (const spoolDirectory of spoolDirectoryHandles) {
         await attemptCleanup(cleanupErrors, "remove private spool", () =>
           rm(spoolDirectory, { force: true, recursive: true }),
         );

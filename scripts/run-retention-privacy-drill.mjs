@@ -3,13 +3,117 @@ import { closeSync, constants, fstatSync, openSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { bootstrapScopedMeiliKeys } from "./scoped-meili-keys.mjs";
+
 const scriptPath = fileURLToPath(import.meta.url);
 const repositoryRoot = resolve(dirname(scriptPath), "..");
 const envFile = resolve(repositoryRoot, ".env");
 const dotenvCli = resolve(repositoryRoot, "node_modules/dotenv-cli/cli.js");
 
+const safeRuntimeEnvironmentFields = [
+  "CI",
+  "COLORTERM",
+  "COREPACK_HOME",
+  "FORCE_COLOR",
+  "HOME",
+  "LANG",
+  "LC_ALL",
+  "LC_CTYPE",
+  "LOGNAME",
+  "NODE_EXTRA_CA_CERTS",
+  "NO_COLOR",
+  "NPM_CONFIG_CAFILE",
+  "PATH",
+  "PNPM_HOME",
+  "PNPM_STORE_DIR",
+  "SHELL",
+  "SSL_CERT_DIR",
+  "SSL_CERT_FILE",
+  "TEMP",
+  "TERM",
+  "TMP",
+  "TMPDIR",
+  "TZ",
+  "USER",
+  "XDG_CACHE_HOME",
+  "XDG_CONFIG_HOME",
+  "XDG_DATA_HOME",
+  "XDG_RUNTIME_DIR",
+  "npm_config_cafile",
+  "pnpm_config_store_dir",
+];
+
+const artifactIntegrationEnvironmentFields = [
+  "ERASURE_REPLAY_LEDGER_BUCKET",
+  "ERASURE_REPLAY_LEDGER_ENDPOINT",
+  "ERASURE_REPLAY_LEDGER_REGION",
+  "ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID",
+  "ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY",
+  "ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID",
+  "ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY",
+  "EXPORT_ARTIFACT_BUCKET",
+  "EXPORT_ARTIFACT_ENDPOINT",
+  "EXPORT_ARTIFACT_READ_ACCESS_KEY_ID",
+  "EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY",
+  "EXPORT_ARTIFACT_REGION",
+  "EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID",
+  "EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY",
+];
+
+const retentionIntegrationEnvironmentFields = [
+  "DATABASE_URL",
+  "MEILI_ADMIN_KEY",
+  "MEILI_PORT",
+  "MEILI_SEARCH_KEY",
+  "MEILI_TASK_OBSERVER_KEY",
+  "MEILI_URL",
+  "MINIO_API_PORT",
+  "POSTGRES_DB",
+  "POSTGRES_PASSWORD",
+  "POSTGRES_PORT",
+  "POSTGRES_USER",
+  ...artifactIntegrationEnvironmentFields,
+];
+
+const globallyForbiddenEnvironmentFields = new Set([
+  "ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID",
+  "ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY",
+  "DOCKER_AUTH_CONFIG",
+  "EXPO_TOKEN",
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "HEALTH_REVIEWER_PEM",
+  "HEALTH_REVIEWER_PRIVATE_KEY",
+  "NODE_AUTH_TOKEN",
+  "NPM_TOKEN",
+  "SENTRY_AUTH_TOKEN",
+]);
+const globallyForbiddenEnvironmentPrefixes = [
+  "ANDROID_SIGNING_",
+  "APPLE_SIGNING_",
+  "ARM_",
+  "AWS_",
+  "AZURE_",
+  "CLOUDFLARE_",
+  "EAS_",
+  "GCP_",
+  "GOOGLE_CLOUD_",
+  "KEYSTORE_",
+  "NAMECOM_",
+  "NAME_COM_",
+  "OCI_",
+  "SIGNING_",
+  "TAILSCALE_",
+  "TERRAFORM_",
+  "TF_VAR_",
+];
+
 function required(environment, field) {
-  const value = environment[field];
+  return requiredValue(environment[field], field);
+}
+
+function requiredValue(value, field) {
   if (!value) throw new Error(`Retention privacy drill requires ${field}`);
   return value;
 }
@@ -31,8 +135,58 @@ function parsedUrl(value, boundary) {
   }
 }
 
+function pickEnvironment(environment, fields) {
+  const picked = {};
+  for (const field of fields) {
+    if (environment[field] !== undefined) picked[field] = environment[field];
+  }
+  return picked;
+}
+
+function withoutExternalCredentials(environment) {
+  return Object.fromEntries(
+    Object.entries(environment).filter(
+      ([field]) =>
+        !globallyForbiddenEnvironmentFields.has(field) &&
+        !globallyForbiddenEnvironmentPrefixes.some((prefix) => field.startsWith(prefix)),
+    ),
+  );
+}
+
+function environmentForStep(environment, step) {
+  const sanitized = withoutExternalCredentials(environment);
+  const safeRuntime = pickEnvironment(sanitized, safeRuntimeEnvironmentFields);
+  if (step.args.length === 1 && step.args[0] === "infra:status") {
+    return { ...safeRuntime, ...step.environment };
+  }
+  if (step.environment?.RUN_ARTIFACT_STORE_INTEGRATION === "1") {
+    return {
+      ...safeRuntime,
+      ...pickEnvironment(sanitized, artifactIntegrationEnvironmentFields),
+      ...step.environment,
+    };
+  }
+  if (step.environment?.RUN_RETENTION_WORKER_INTEGRATION === "1") {
+    return {
+      ...safeRuntime,
+      ...pickEnvironment(sanitized, retentionIntegrationEnvironmentFields),
+      ...step.environment,
+    };
+  }
+  return { ...safeRuntime, ...step.environment };
+}
+
 export function assertRetentionPrivacyDrillEnvironment(environment) {
   if (environment.NODE_TLS_REJECT_UNAUTHORIZED) {
+    throw new Error("Retention privacy drill refuses a TLS verification override");
+  }
+  if (
+    [environment.NPM_CONFIG_STRICT_SSL, environment.npm_config_strict_ssl].some(
+      (value) => value?.trim().toLowerCase() === "false",
+    ) ||
+    environment.GIT_SSL_NO_VERIFY ||
+    environment.CURL_INSECURE
+  ) {
     throw new Error("Retention privacy drill refuses a TLS verification override");
   }
   const postgresPort = exactPort(environment, "POSTGRES_PORT");
@@ -78,6 +232,24 @@ export function assertRetentionPrivacyDrillEnvironment(environment) {
   ) {
     throw new Error("Retention privacy drill requires the local MinIO fixture");
   }
+
+  const meiliPort = exactPort(environment, "MEILI_PORT");
+  const meiliUrlValue = required(environment, "MEILI_URL");
+  const meiliUrl = parsedUrl(meiliUrlValue, "Meilisearch Compose");
+  if (
+    meiliUrlValue !== `http://127.0.0.1:${meiliPort}` ||
+    meiliUrl.protocol !== "http:" ||
+    meiliUrl.hostname !== "127.0.0.1" ||
+    meiliUrl.port !== meiliPort ||
+    meiliUrl.username ||
+    meiliUrl.password ||
+    meiliUrl.search ||
+    meiliUrl.hash ||
+    (meiliUrl.pathname !== "" && meiliUrl.pathname !== "/")
+  ) {
+    throw new Error("Retention privacy drill requires the local Meilisearch Compose target");
+  }
+  required(environment, "MEILI_MASTER_KEY");
 
   const credentialIds = [
     required(environment, "MINIO_ROOT_USER"),
@@ -128,16 +300,18 @@ export const retentionPrivacyDrillSteps = [
   },
 ];
 
-export function runRetentionPrivacyDrill(spawn = spawnSync, environment = process.env) {
+export async function runRetentionPrivacyDrill(
+  spawn = spawnSync,
+  environment = process.env,
+  bootstrapMeiliKeys = bootstrapScopedMeiliKeys,
+) {
   assertRetentionPrivacyDrillEnvironment(environment);
-  const localEnvironment = { ...environment };
-  delete localEnvironment.ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID;
-  delete localEnvironment.ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY;
+  let scopedEnvironment = environment;
 
-  for (const step of retentionPrivacyDrillSteps) {
+  for (const [index, step] of retentionPrivacyDrillSteps.entries()) {
     const result = spawn("pnpm", step.args, {
       cwd: repositoryRoot,
-      env: { ...localEnvironment, ...step.environment },
+      env: environmentForStep(scopedEnvironment, step),
       shell: false,
       stdio: "inherit",
     });
@@ -147,6 +321,31 @@ export function runRetentionPrivacyDrill(spawn = spawnSync, environment = proces
     if (result.status !== 0) {
       if (result.signal) throw new Error(`${step.label} stopped on signal ${result.signal}`);
       throw new Error(`${step.label} failed with exit code ${result.status ?? "unknown"}`);
+    }
+    if (index === 0) {
+      const keys = await bootstrapMeiliKeys({
+        endpoint: required(environment, "MEILI_URL"),
+        masterKey: required(environment, "MEILI_MASTER_KEY"),
+        port: required(environment, "MEILI_PORT"),
+      });
+      const searchKey = requiredValue(keys?.MEILI_SEARCH_KEY, "scoped MEILI_SEARCH_KEY");
+      const adminKey = requiredValue(keys?.MEILI_ADMIN_KEY, "scoped MEILI_ADMIN_KEY");
+      const taskObserverKey = requiredValue(
+        keys?.MEILI_TASK_OBSERVER_KEY,
+        "scoped MEILI_TASK_OBSERVER_KEY",
+      );
+      if (
+        new Set([searchKey, adminKey, taskObserverKey]).size !== 3 ||
+        [searchKey, adminKey, taskObserverKey].some((key) => key === environment.MEILI_MASTER_KEY)
+      ) {
+        throw new Error("Retention privacy drill requires split scoped Meilisearch keys");
+      }
+      scopedEnvironment = {
+        ...environment,
+        MEILI_ADMIN_KEY: adminKey,
+        MEILI_SEARCH_KEY: searchKey,
+        MEILI_TASK_OBSERVER_KEY: taskObserverKey,
+      };
     }
   }
 }
@@ -226,7 +425,7 @@ export function runRetentionPrivacyDrillWithPrivateEnv(dependencies = {}) {
 
 if (process.argv[1] && resolve(process.argv[1]) === scriptPath) {
   if (process.argv[2] === "--loaded" && process.argv.length === 3) {
-    runRetentionPrivacyDrill();
+    await runRetentionPrivacyDrill();
   } else if (process.argv.length === 2) {
     runRetentionPrivacyDrillWithPrivateEnv();
   } else {

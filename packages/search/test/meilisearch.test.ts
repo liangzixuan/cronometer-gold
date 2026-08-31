@@ -84,6 +84,39 @@ describe("Meilisearch HTTP adapter", () => {
     expect(foodDocument()).not.toHaveProperty("searchGeneration");
   });
 
+  it("uses the task observer only for task routes and the mutation key everywhere else", async () => {
+    const calls: Array<{ authorization: string | null; path: string }> = [];
+    const client = new MeilisearchHttpClient({
+      host: "http://localhost:7700",
+      apiKey: "scoped-mutation-key",
+      taskApiKey: "scoped-task-observer-key",
+      fetch: vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(String(input));
+        calls.push({
+          authorization: new Headers(init?.headers).get("Authorization"),
+          path: url.pathname,
+        });
+        if (url.pathname.startsWith("/tasks/")) {
+          const uid = Number(url.pathname.slice("/tasks/".length));
+          return jsonResponse({ uid, status: "succeeded" });
+        }
+        return jsonResponse({ taskUid: 17 });
+      }),
+    });
+
+    await expect(client.createIndex("foods__generation__test")).resolves.toBe(17);
+    await expect(client.swapIndexes("foods", "foods__generation__test")).resolves.toBe(17);
+    await expect(client.getTask(17)).resolves.toMatchObject({ uid: 17, status: "succeeded" });
+    await expect(client.waitForTask(18)).resolves.toBeUndefined();
+
+    expect(calls).toEqual([
+      { authorization: "Bearer scoped-mutation-key", path: "/indexes" },
+      { authorization: "Bearer scoped-mutation-key", path: "/swap-indexes" },
+      { authorization: "Bearer scoped-task-observer-key", path: "/tasks/17" },
+      { authorization: "Bearer scoped-task-observer-key", path: "/tasks/18" },
+    ]);
+  });
+
   it("rejects mixed or missing catalogue generation markers", async () => {
     const missing = new MeilisearchHttpClient({
       host: "http://localhost:7700",

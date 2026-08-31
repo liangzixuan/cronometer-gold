@@ -92,10 +92,152 @@ import pathlib
 import re
 import sys
 
+# BEGIN_ENVIRONMENT_SCHEMA_CONTRACT
+ENVIRONMENT_KEY_SCHEMAS = {
+    "deploy": {
+        "ACME_EMAIL",
+        "API_FQDN",
+        "API_IMAGE",
+        "BETA_ALLOWED_CIDRS",
+        "CADDY_IMAGE",
+        "MEILI_IMAGE",
+        "MIGRATOR_IMAGE",
+        "POSTGRES_IMAGE",
+        "WEB_FQDN",
+        "WEB_IMAGE",
+        "WORKER_IMAGE",
+    },
+    "runtime": {
+        "DATABASE_APPLICATION_NAME",
+        "DATABASE_CONNECTION_TIMEOUT_MS",
+        "DATABASE_POOL_MAX",
+        "DATABASE_SSL_MODE",
+        "DATABASE_STATEMENT_TIMEOUT_MS",
+        "ERASURE_REPLAY_LEDGER_BUCKET",
+        "ERASURE_REPLAY_LEDGER_CURRENT_KEY_ID",
+        "ERASURE_REPLAY_LEDGER_ENDPOINT",
+        "ERASURE_REPLAY_LEDGER_LOCATOR_CURRENT_KEY_ID",
+        "ERASURE_REPLAY_LEDGER_REGION",
+        "ERASURE_REPLAY_LEDGER_STORE",
+        "EXPORT_ARTIFACT_BUCKET",
+        "EXPORT_ARTIFACT_CURRENT_KEY_ID",
+        "EXPORT_ARTIFACT_DELETE_VERSION_POLICY",
+        "EXPORT_ARTIFACT_ENDPOINT",
+        "EXPORT_ARTIFACT_READ_MAX_ARTIFACT_BYTES",
+        "EXPORT_ARTIFACT_READ_MAX_BYTES_PER_WINDOW",
+        "EXPORT_ARTIFACT_READ_MAX_CONCURRENCY",
+        "EXPORT_ARTIFACT_READ_MAX_RESERVED_BYTES",
+        "EXPORT_ARTIFACT_READ_SPOOL_DIR",
+        "EXPORT_ARTIFACT_READ_SPOOL_PROTECTION",
+        "EXPORT_ARTIFACT_REGION",
+        "EXPORT_ARTIFACT_STORE",
+        "LOG_LEVEL",
+        "MEILI_URL",
+        "NODE_ENV",
+        "OCI_PILOT_DATA_CLASSIFICATION",
+        "RETENTION_EXPORT_SPOOL_DIR",
+        "RETENTION_EXPORT_SPOOL_MAX_BYTES",
+        "RETENTION_EXPORT_SPOOL_PROTECTION",
+        "RETENTION_FEATURES_ENABLED",
+        "RETENTION_WORKER_ID",
+        "SEARCH_REBUILD_SPOOL_DIR",
+        "SEARCH_REBUILD_SPOOL_MAX_BYTES",
+        "SEARCH_REBUILD_WORKER_ID",
+        "SERVICE_VERSION",
+    },
+    "database": {
+        "DATABASE_RESTORE_EPOCH",
+        "DATABASE_URL",
+        "POSTGRES_DB",
+        "POSTGRES_PASSWORD",
+        "POSTGRES_USER",
+    },
+    "api": {
+        "DEVICE_CHALLENGE_HMAC_KEY",
+        "ERASURE_REPLAY_LEDGER_LOCATOR_HMAC_KEYS",
+        "ERASURE_STATUS_CAPABILITY_HMAC_KEY",
+        "EXPORT_ARTIFACT_ENCRYPTION_KEYS",
+        "EXPORT_ARTIFACT_READ_ACCESS_KEY_ID",
+        "EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY",
+        "MEILI_SEARCH_KEY",
+        "SEARCH_CURSOR_SECRET",
+    },
+    "worker": {
+        "ERASURE_REPLAY_LEDGER_ENCRYPTION_KEYS",
+        "ERASURE_REPLAY_LEDGER_LOCATOR_HMAC_KEYS",
+        "ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID",
+        "ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY",
+        "EXPORT_ARTIFACT_ENCRYPTION_KEYS",
+        "EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID",
+        "EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY",
+        "MEILI_ADMIN_KEY",
+        "MEILI_TASK_OBSERVER_KEY",
+    },
+    "meili": {"MEILI_MASTER_KEY"},
+    "restore": {
+        "ERASURE_REPLAY_LEDGER_ENCRYPTION_KEYS",
+        "ERASURE_REPLAY_LEDGER_LOCATOR_HMAC_KEYS",
+        "ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID",
+        "ERASURE_REPLAY_LEDGER_RESTORE_OCI_KEY_FINGERPRINT",
+        "ERASURE_REPLAY_LEDGER_RESTORE_OCI_NAMESPACE",
+        "ERASURE_REPLAY_LEDGER_RESTORE_OCI_PRIVATE_KEY_FILE",
+        "ERASURE_REPLAY_LEDGER_RESTORE_OCI_TENANCY_OCID",
+        "ERASURE_REPLAY_LEDGER_RESTORE_OCI_USER_OCID",
+        "ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY",
+        "ERASURE_REPLAY_LEDGER_RESTORE_SPOOL_DIR",
+        "ERASURE_REPLAY_LEDGER_RESTORE_SPOOL_PROTECTION",
+        "ERASURE_REPLAY_LEDGER_RESTORE_VERSION_LIST_PROVIDER",
+    },
+}
+
+
+def assert_environment_schema(name, actual_keys):
+    expected_keys = ENVIRONMENT_KEY_SCHEMAS[name]
+    actual_keys = set(actual_keys)
+    missing = sorted(expected_keys - actual_keys)
+    unexpected = sorted(actual_keys - expected_keys)
+    if missing or unexpected:
+        raise SystemExit(
+            f"{name} environment schema mismatch "
+            f"(missing: {missing or 'none'}; unexpected: {unexpected or 'none'})"
+        )
+
+
+# END_ENVIRONMENT_SCHEMA_CONTRACT
+
+
+def read_environment(name, filename):
+    values = {}
+    for line_number, raw_line in enumerate(
+        pathlib.Path(filename).read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = raw_line.partition("=")
+        if not separator or not re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
+            raise SystemExit(f"Invalid {name} environment entry at line {line_number}")
+        if key in values:
+            raise SystemExit(f"Duplicate {key} in {name} environment")
+        values[key] = value
+    return values
+
+
 mode = sys.argv[1]
+environment_names = ("deploy", "runtime", "database", "api", "worker", "meili", "restore")
+environment_paths = dict(zip(environment_names, sys.argv[2:]))
+for environment_name, environment_path in environment_paths.items():
+    assert_environment_schema(
+        environment_name,
+        read_environment(environment_name, environment_path),
+    )
+
 allowed_early = {
     "/etc/nutrition-tracker/api.env": {"MEILI_SEARCH_KEY=REPLACE_SCOPED_MEILI_SEARCH_KEY"},
-    "/etc/nutrition-tracker/worker.env": {"MEILI_ADMIN_KEY=REPLACE_SCOPED_MEILI_ADMIN_KEY"},
+    "/etc/nutrition-tracker/worker.env": {
+        "MEILI_ADMIN_KEY=REPLACE_SCOPED_MEILI_ADMIN_KEY",
+        "MEILI_TASK_OBSERVER_KEY=REPLACE_SCOPED_MEILI_TASK_OBSERVER_KEY",
+    },
 }
 marker = re.compile(r"REPLACE|CHANGE_ME|example\.com")
 for filename in sys.argv[2:]:
@@ -143,6 +285,7 @@ python3 - \
   "$runtime_env" \
   /etc/nutrition-tracker/api.env \
   /etc/nutrition-tracker/worker.env \
+  /etc/nutrition-tracker/meili.env \
   /etc/nutrition-tracker/restore.env \
   /etc/nutrition-tracker/object-storage-coordinates.json <<'PY'
 import base64
@@ -153,7 +296,7 @@ import pathlib
 import re
 import sys
 
-names = ("runtime", "api", "worker", "restore")
+names = ("runtime", "api", "worker", "meili", "restore")
 
 
 def read_env(name, filename):
@@ -173,7 +316,7 @@ def read_env(name, filename):
     return values
 
 
-env = {name: read_env(name, filename) for name, filename in zip(names, sys.argv[1:5])}
+env = {name: read_env(name, filename) for name, filename in zip(names, sys.argv[1:6])}
 
 
 def value(name, key):
@@ -196,7 +339,26 @@ if any(len(item) < 16 or len(item) > 256 or any(character.isspace() for characte
 if len(set(access_ids)) != 4 or len(set(secrets)) != 4:
     raise SystemExit("Every OCI Object Storage principal must use a distinct credential pair")
 
-coordinates = json.loads(pathlib.Path(sys.argv[5]).read_text(encoding="utf-8"))
+meili_credentials = [
+    value("meili", "MEILI_MASTER_KEY"),
+    value("api", "MEILI_SEARCH_KEY"),
+    value("worker", "MEILI_ADMIN_KEY"),
+    value("worker", "MEILI_TASK_OBSERVER_KEY"),
+]
+if any(
+    len(item) < 16
+    or len(item) > 512
+    or item.strip() != item
+    or any(character.isspace() for character in item)
+    for item in meili_credentials
+):
+    raise SystemExit("Meilisearch credentials have an invalid length or whitespace")
+if len(set(meili_credentials)) != len(meili_credentials):
+    raise SystemExit(
+        "Meilisearch master, search, mutation, and task-observer credentials must be distinct"
+    )
+
+coordinates = json.loads(pathlib.Path(sys.argv[6]).read_text(encoding="utf-8"))
 expected_coordinate_keys = {
     "schemaVersion", "endpoint", "compatHost", "nativeHost", "region", "namespace",
     "exportBucket", "ledgerBucket", "restoreUserOcid", "tenancyOcid", "bridgeCidr",

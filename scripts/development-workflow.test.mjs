@@ -4,6 +4,11 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
+import {
+  apiOnlyApplicationRuntimeEnvironmentFields,
+  applicationRuntimeEnvironmentFields,
+  localDevelopmentProfiles,
+} from "./run-local-development.mjs";
 import { workflowJob, workflowStep } from "./workflow-contract-helpers.mjs";
 
 const repositoryRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -629,20 +634,97 @@ test("rejects unsafe getting-started dependency commands", () => {
     "pnpm install --frozen-lockfile --strict-peer-dependencies",
     "pnpm install --no-frozen-lockfile",
   );
-  assert.throws(() => assertReadmeToolchain(mutated), { name: "AssertionError" });
+  assert.throws(() => assertReadmeToolchain(mutated), {
+    name: "AssertionError",
+  });
+});
+
+test("keeps guarded development projections and listeners exact", () => {
+  const turbo = readJson("turbo.json");
+  const apiFields = turbo.tasks?.["@nutrition-tracker/api#dev"]?.passThroughEnv;
+  assert.ok(Array.isArray(apiFields), "API development must declare its runtime environment");
+  assert.deepEqual(
+    [...apiOnlyApplicationRuntimeEnvironmentFields].sort(),
+    [...new Set(apiFields)].sort(),
+    "API-only launcher projection must exactly match the API Turbo boundary",
+  );
+
+  const fullRuntimeTasks = [
+    "@nutrition-tracker/api#dev",
+    "@nutrition-tracker/mobile#dev",
+    "@nutrition-tracker/web#dev",
+    "@nutrition-tracker/worker#dev",
+  ];
+  const fullFields = fullRuntimeTasks.flatMap((taskName) => {
+    const fields = turbo.tasks?.[taskName]?.passThroughEnv;
+    assert.ok(Array.isArray(fields), `${taskName} must declare its runtime environment`);
+    return fields;
+  });
+  assert.deepEqual(
+    [...applicationRuntimeEnvironmentFields].sort(),
+    [...new Set(fullFields)].sort(),
+    "full launcher projection must exactly match the application Turbo boundary",
+  );
+
+  const webPackage = readJson("apps/web/package.json");
+  const mobilePackage = readJson("apps/mobile/package.json");
+  assert.equal(webPackage.scripts?.dev, "next dev --hostname 127.0.0.1");
+  assert.equal(
+    mobilePackage.scripts?.build,
+    "node scripts/run-expo.mjs export --platform all --output-dir dist",
+  );
+  assert.equal(
+    mobilePackage.scripts?.["build:release"],
+    "pnpm release:check && node scripts/run-expo.mjs export --platform all --output-dir dist",
+  );
+  assert.equal(
+    mobilePackage.scripts?.["dependencies:check"],
+    "node scripts/run-expo.mjs install --check",
+  );
+  assert.equal(mobilePackage.scripts?.dev, "node scripts/run-expo.mjs start --localhost");
+  assert.equal(mobilePackage.scripts?.start, "node scripts/run-expo.mjs start --localhost");
+  assert.equal(
+    mobilePackage.scripts?.test,
+    "vitest run --exclude scripts/run-expo.test.mjs && node --test scripts/run-expo.test.mjs",
+  );
 });
 
 test("keeps root development concurrency one slot above persistent workspace tasks", () => {
   const rootPackage = readJson("package.json");
   const turbo = readJson("turbo.json");
   const devCommand = rootPackage.scripts?.dev;
-  assert.equal(typeof devCommand, "string", "root package must define the dev script");
+  assert.equal(
+    devCommand,
+    "node scripts/run-local-development.mjs",
+    "root dev must use the guarded scoped-key launcher",
+  );
+  assert.equal(
+    rootPackage.scripts?.["dev:api"],
+    "node scripts/run-local-development.mjs --api-only",
+    "API-only dev must use the guarded scoped-key launcher",
+  );
+  assert.deepEqual(localDevelopmentProfiles.full.turboArguments.slice(0, 4), [
+    "exec",
+    "turbo",
+    "run",
+    "dev",
+  ]);
+  assert.deepEqual(localDevelopmentProfiles.apiOnly.turboArguments, [
+    "exec",
+    "turbo",
+    "run",
+    "dev",
+    "--filter=@nutrition-tracker/api",
+    "--concurrency=7",
+  ]);
 
-  const commandMatch =
-    /^dotenv -e \.env -- turbo run dev --concurrency=(?<concurrency>[1-9]\d*)$/u.exec(devCommand);
+  const concurrencyArgument = localDevelopmentProfiles.full.turboArguments.find((argument) =>
+    argument.startsWith("--concurrency="),
+  );
+  const commandMatch = /^--concurrency=(?<concurrency>[1-9]\d*)$/u.exec(concurrencyArgument ?? "");
   assert.ok(
     commandMatch?.groups?.concurrency,
-    "root dev must use dotenv and one explicit numeric Turbo concurrency",
+    "root dev must use one explicit numeric Turbo concurrency",
   );
 
   const genericDevTask = turbo.tasks?.dev;

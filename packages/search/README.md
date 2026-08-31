@@ -35,9 +35,12 @@ const search = new FoodSearchService({
 });
 ```
 
-The API should receive a search-only key. The rebuild worker requires a separate admin key capable
-of creating, configuring, swapping, and deleting indexes. TLS is required outside loopback. Never
-log either key or a raw preference collection.
+The API should receive a search-only key. The rebuild worker receives a mutation key scoped to
+`foods*` for creating, configuring, swapping, inspecting, and deleting indexes, plus a distinct
+task-observer key with only `tasks.get` across `*`; the broader index scope is necessary because
+Meilisearch index-swap task records do not carry index UIDs. Pass the observer as `taskApiKey` so it
+is used only by `getTask()` and `waitForTask()`. TLS is required outside loopback. Never log any key
+or a raw preference collection.
 
 `FoodSearchProjectionSource.openSnapshot()` must provide one coherent count-and-row view. The
 production worker materializes that view to a bounded private spool inside a repeatable-read
@@ -58,9 +61,15 @@ server. Use an isolated Meilisearch instance:
 
 ```sh
 TEST_MEILI_URL=http://127.0.0.1:7700 \
-TEST_MEILI_API_KEY=local-test-master-key \
-pnpm --filter @nutrition-tracker/search test:integration
+node node_modules/dotenv-cli/cli.js --override --no-expand \
+  -e /absolute/path/to/owner-only-scoped-meili.env -- \
+  pnpm --filter @nutrition-tracker/search test:integration
 ```
+
+The private file must contain distinct `MEILI_SEARCH_KEY`,
+`MEILI_ADMIN_KEY`, and `MEILI_TASK_OBSERVER_KEY` values created by the
+fixed-policy bootstrap. The integration deliberately does not accept the
+master key as a shortcut.
 
 It rebuilds more than 500 documents in batches and verifies typo search, synonyms, generic/branded
 intent, dynamic kind tie-breaking, autocomplete, barcode equivalence, local preference reranking,

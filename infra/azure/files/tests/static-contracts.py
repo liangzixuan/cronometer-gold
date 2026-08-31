@@ -31,6 +31,20 @@ def text(name: str) -> str:
     return (FILES_ROOT / name).read_text(encoding="utf-8")
 
 
+def integer_constant(source: str, name: str) -> int:
+    match = re.search(rf"\b{re.escape(name)}\s*=\s*([0-9][0-9_]*)\s*;", source)
+    if match is None:
+        raise AssertionError(f"missing exact integer constant: {name}")
+    return int(match.group(1).replace("_", ""))
+
+
+def stop_grace_period_ms(block: str) -> int:
+    matches = re.findall(r"(?m)^    stop_grace_period: ([1-9][0-9]*)s$", block)
+    if len(matches) != 1:
+        raise AssertionError("service must have exactly one integer-second stop grace period")
+    return int(matches[0]) * 1_000
+
+
 def service_blocks(compose: str) -> dict[str, str]:
     services = compose.split("services:\n", 1)[1].split("\nnetworks:\n", 1)[0]
     matches = list(re.finditer(r"^  ([a-z][a-z0-9-]*):\n", services, re.MULTILINE))
@@ -38,6 +52,42 @@ def service_blocks(compose: str) -> dict[str, str]:
         match.group(1): services[match.start() : matches[index + 1].start() if index + 1 < len(matches) else None]
         for index, match in enumerate(matches)
     }
+
+
+def environment_keys(source: str) -> set[str]:
+    keys: list[str] = []
+    for line in source.splitlines():
+        match = re.match(r"^([A-Z][A-Z0-9_]*)=", line)
+        if match is None:
+            continue
+        key = match.group(1)
+        if key in keys:
+            raise AssertionError(f"duplicate environment key in example: {key}")
+        keys.append(key)
+    return set(keys)
+
+
+def compose_environment(block: str) -> dict[str, str]:
+    lines = block.splitlines()
+    start = lines.index("    environment:") + 1
+    result: dict[str, str] = {}
+    for line in lines[start:]:
+        if not line.startswith("      ") or line.startswith("        "):
+            break
+        key, separator, value = line.strip().partition(":")
+        if not separator or not re.fullmatch(r"[A-Z][A-Z0-9_]*", key) or key in result:
+            raise AssertionError(f"invalid Compose environment entry: {line}")
+        result[key] = value.strip()
+    return result
+
+
+def canary_consumed_environment_keys() -> set[str]:
+    source = (
+        REPOSITORY_ROOT / "apps/worker/src/object-storage-credential-canary.ts"
+    ).read_text(encoding="utf-8")
+    return set(re.findall(r'["\']([A-Z][A-Z0-9_]+)["\']', source)) | set(
+        re.findall(r"environment\.([A-Z][A-Z0-9_]*)", source)
+    )
 
 
 class AzureRuntimeStaticContracts(unittest.TestCase):
@@ -56,6 +106,72 @@ class AzureRuntimeStaticContracts(unittest.TestCase):
         self.assertNotIn("restart: unless-stopped", compose)
         self.assertIn('restart: "no"', compose)
 
+    def test_api_and_worker_stop_deadlines_cover_every_source_allowed_grace(self) -> None:
+        compose = text("compose.yaml")
+        blocks = service_blocks(compose)
+        api_config = (REPOSITORY_ROOT / "apps/api/src/config.ts").read_text(encoding="utf-8")
+        worker_config = (REPOSITORY_ROOT / "apps/worker/src/config.ts").read_text(
+            encoding="utf-8"
+        )
+        worker_entrypoint = (REPOSITORY_ROOT / "apps/worker/src/index.ts").read_text(
+            encoding="utf-8"
+        )
+        local_shutdown_budget = (
+            REPOSITORY_ROOT / "scripts/local-development-shutdown-budget.mjs"
+        ).read_text(encoding="utf-8")
+        self.assertIn("SHUTDOWN_GRACE_MS: z.coerce.number().int().min(100).max(300_000)", api_config)
+        self.assertIn(
+            "SHUTDOWN_GRACE_MS: z.coerce.number().int().min(100).max(300_000)",
+            worker_config,
+        )
+        self.assertIn("workerShutdownWatchdogMarginMs = 2_500", worker_entrypoint)
+        self.assertIn("workerShutdownWatchdogMaximumMs", worker_entrypoint)
+        self.assertIn("serviceShutdownPhaseMaximum = 2", local_shutdown_budget)
+        self.assertIn("supervisorTerminationMarginMs = 5_000", local_shutdown_budget)
+        self.assertEqual(compose.count("stop_grace_period:"), 2)
+        self.assertIn("    stop_grace_period: 305s", blocks["api"])
+        self.assertIn("    stop_grace_period: 610s", blocks["worker"])
+        source_grace_maximum_ms = integer_constant(
+            worker_entrypoint, "workerShutdownGraceMaximumMs"
+        )
+        worker_phases = integer_constant(
+            worker_entrypoint, "workerGracefulShutdownPhaseCount"
+        )
+        worker_watchdog_margin_ms = integer_constant(
+            worker_entrypoint, "workerShutdownWatchdogMarginMs"
+        )
+        shared_phases = integer_constant(
+            local_shutdown_budget, "serviceShutdownPhaseMaximum"
+        )
+        supervisor_margin_ms = integer_constant(
+            local_shutdown_budget, "supervisorTerminationMarginMs"
+        )
+        worker_graceful_maximum_ms = source_grace_maximum_ms * worker_phases
+        worker_watchdog_maximum_ms = (
+            worker_graceful_maximum_ms + worker_watchdog_margin_ms
+        )
+        local_supervisor_maximum_ms = (
+            source_grace_maximum_ms * shared_phases + supervisor_margin_ms
+        )
+        api_container_deadline_ms = stop_grace_period_ms(blocks["api"])
+        worker_container_deadline_ms = stop_grace_period_ms(blocks["worker"])
+        self.assertEqual(worker_phases, shared_phases)
+        self.assertEqual(
+            api_container_deadline_ms,
+            source_grace_maximum_ms + supervisor_margin_ms,
+        )
+        self.assertEqual(
+            worker_container_deadline_ms,
+            local_supervisor_maximum_ms + supervisor_margin_ms,
+        )
+        self.assertLess(source_grace_maximum_ms, api_container_deadline_ms)
+        self.assertLess(worker_graceful_maximum_ms, worker_watchdog_maximum_ms)
+        self.assertLess(worker_watchdog_maximum_ms, local_supervisor_maximum_ms)
+        self.assertLess(local_supervisor_maximum_ms, worker_container_deadline_ms)
+        for name, block in blocks.items():
+            if name not in {"api", "worker"}:
+                self.assertNotIn("stop_grace_period:", block, name)
+
     def test_meilisearch_drops_all_linux_capabilities(self) -> None:
         block = service_blocks(text("compose.yaml"))["meilisearch"]
         self.assertIn('user: "1000:1000"', block)
@@ -65,7 +181,10 @@ class AzureRuntimeStaticContracts(unittest.TestCase):
 
     def test_compute_only_object_storage_contract_is_explicit(self) -> None:
         compose = text("compose.yaml")
+        canary = service_blocks(compose)["object-storage-live-canary"]
         runtime = text("runtime.env.example")
+        api = text("api.env.example")
+        worker = text("worker.env.example")
         restore = text("restore.env.example")
         combined = compose + runtime + restore
         self.assertNotIn("minio", combined.lower())
@@ -74,6 +193,63 @@ class AzureRuntimeStaticContracts(unittest.TestCase):
         self.assertIn("object_egress:", compose)
         self.assertIn("172.31.255.0/28", compose)
         self.assertIn("EXPORT_ARTIFACT_REGION=us-ashburn-1", runtime)
+        inherited = set().union(
+            *(environment_keys(source) for source in (runtime, api, worker, restore))
+        )
+        expected_empty = inherited - canary_consumed_environment_keys()
+        projected = compose_environment(canary)
+        self.assertEqual(
+            set(projected),
+            expected_empty | {"NODE_EXTRA_CA_CERTS"},
+        )
+        self.assertEqual(
+            {key for key, value in projected.items() if value == '""'},
+            expected_empty,
+        )
+        self.assertEqual(projected["NODE_EXTRA_CA_CERTS"], "/run/internal-ca/ca.crt")
+
+    def test_environment_role_schemas_match_examples_and_reject_contamination(self) -> None:
+        examples = {
+            name: environment_keys(text(f"{name}.env.example"))
+            for name in PREFLIGHT.ENVIRONMENTS
+        }
+        self.assertEqual(PREFLIGHT.ENVIRONMENT_KEY_SCHEMAS, examples)
+
+        environments = {
+            name: {key: "synthetic-test-value" for key in keys}
+            for name, keys in examples.items()
+        }
+        PREFLIGHT.assert_environment_schemas(environments)
+        contaminations = (
+            ("api", "MEILI_MASTER_KEY"),
+            ("api", "EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY"),
+            ("worker", "ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY"),
+            ("restore", "MEILI_ADMIN_KEY"),
+        )
+        for role, key in contaminations:
+            with self.subTest(role=role, key=key):
+                mutated = {name: values.copy() for name, values in environments.items()}
+                mutated[role][key] = "synthetic-contamination"
+                with self.assertRaisesRegex(SystemExit, rf"{role}\.env key schema differs"):
+                    PREFLIGHT.assert_environment_schemas(mutated)
+
+    def test_worker_meilisearch_roles_remain_distinct_and_fail_closed(self) -> None:
+        worker = text("worker.env.example")
+        preflight = text("deployment-preflight.py")
+        self.assertEqual(
+            worker.count("MEILI_ADMIN_KEY=REPLACE_SCOPED_MEILI_ADMIN_KEY"),
+            1,
+        )
+        self.assertEqual(
+            worker.count(
+                "MEILI_TASK_OBSERVER_KEY=REPLACE_SCOPED_MEILI_TASK_OBSERVER_KEY"
+            ),
+            1,
+        )
+        self.assertIn(
+            "Meilisearch master, search, mutation, and task-observer credentials must be distinct",
+            preflight,
+        )
 
     def test_public_surface_is_only_caddy_and_remains_allowlisted(self) -> None:
         compose = text("compose.yaml")

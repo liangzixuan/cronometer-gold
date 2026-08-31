@@ -1,7 +1,9 @@
 import { mkdir, mkdtemp, readdir, rm, utimes } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 
+import { ArtifactReadRateLimitedError } from "@nutrition-tracker/artifact-store";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { ApiRetentionDependencyConfig } from "../src/config.js";
@@ -25,7 +27,8 @@ describe("API retention artifact runtime", () => {
     const orphan = join(spool, "nutrition-artifact-read-crashed");
     const unrelated = join(spool, "operator-data");
     await Promise.all([mkdir(orphan, { mode: 0o700 }), mkdir(unrelated, { mode: 0o700 })]);
-    const old = new Date(Date.now() - 2 * 60_000);
+    let clock = new Date("2026-08-30T12:34:56.000Z");
+    const old = new Date(clock.getTime() - 2 * 60_000);
     await utimes(orphan, old, old);
     const config: ApiRetentionDependencyConfig = {
       artifactDirectory: encrypted,
@@ -52,7 +55,38 @@ describe("API retention artifact runtime", () => {
       },
       erasureStatusCapabilityHmacKey: Buffer.alloc(32, 3),
     };
-    await createApiRetentionArtifactRuntime(config);
+    const runtime = await createApiRetentionArtifactRuntime(config, { clock: () => clock });
     expect(await readdir(spool)).toEqual(["operator-data"]);
+
+    const payload = Buffer.from('{"fixture":true}\n');
+    const metadata = await runtime.store.put({
+      mediaType: "application/json",
+      objectKey: "exports/runtime-clock.json.enc",
+      plaintextBytes: payload.byteLength,
+      source: Readable.from([payload]),
+    });
+    for (let index = 0; index < 2; index += 1) {
+      const opened = await runtime.bulkhead.openAuthenticated({
+        metadata,
+        ownerKey: "clock-test-owner",
+        store: runtime.store,
+      });
+      await opened?.dispose();
+    }
+    await expect(
+      runtime.bulkhead.openAuthenticated({
+        metadata,
+        ownerKey: "clock-test-owner",
+        store: runtime.store,
+      }),
+    ).rejects.toBeInstanceOf(ArtifactReadRateLimitedError);
+
+    clock = new Date(clock.getTime() + config.artifactReadRateWindowMs);
+    const afterWindow = await runtime.bulkhead.openAuthenticated({
+      metadata,
+      ownerKey: "clock-test-owner",
+      store: runtime.store,
+    });
+    await afterWindow?.dispose();
   });
 });

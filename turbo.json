@@ -108,6 +108,7 @@
         "EXPORT_ARTIFACT_WRITE_SESSION_TOKEN",
         "LOG_LEVEL",
         "MEILI_ADMIN_KEY",
+        "MEILI_TASK_OBSERVER_KEY",
         "MEILI_URL",
         "NODE_ENV",
         "POLL_INTERVAL_MS",

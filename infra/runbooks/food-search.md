@@ -10,7 +10,12 @@ to the shared index.
 - Database migrations are current, including the promoted-food eligibility view.
 - `DATABASE_URL` uses a read-capable service identity with statement timeouts.
 - `MEILI_URL` uses TLS outside loopback.
-- The worker receives an admin key only; the API receives a search-only key.
+- The API receives `MEILI_SEARCH_KEY` with only `search` on `foods`.
+- The worker receives a distinct `MEILI_ADMIN_KEY` mutation key limited to the
+  reviewed create/get/delete/swap, document-add, settings-update, and stats-get
+  actions on `foods*`, plus `MEILI_TASK_OBSERVER_KEY` with only `tasks.get` on
+  `*`. The observer's broad index scope is required because index-swap task
+  records do not carry index UIDs. Neither worker key may manage keys or search.
 - `SEARCH_REBUILD_WORKER_ID` is a stable workload identity, not a person or
   machine-local random value.
 - `SEARCH_REBUILD_SPOOL_DIR` points to a capacity-monitored, encrypted ephemeral
@@ -80,6 +85,33 @@ pnpm --filter @nutrition-tracker/db test
 pnpm --filter @nutrition-tracker/search test:integration
 pnpm verify
 ```
+
+The live Meilisearch integrations require `TEST_MEILI_URL` plus the generated
+`MEILI_SEARCH_KEY`, `MEILI_ADMIN_KEY`, and `MEILI_TASK_OBSERVER_KEY`. Load
+those three scoped values from the owner-only bootstrap output; never substitute
+the master key.
+
+## Legacy mutation-key revocation
+
+The former worker key UID
+`2aac5083-d036-4b24-8bb4-2b9ae77a90f1` includes broader wildcard permissions.
+Creating the new fixed mutation and task-observer keys does not silently delete
+that legacy record. Treat revocation as a separately approved post-readiness
+rollout step:
+
+1. Bootstrap the new fixed keys and atomically install both worker values.
+2. Run the full deployment preflight, one complete rebuild, worker/API
+   readiness, and search assertions using only the three scoped keys.
+3. In an isolated loopback fixture first, delete the legacy UID with a
+   master-authenticated, strict-TLS request; prove the old credential is denied,
+   the new mutation and observer canaries still pass, and readiness remains
+   healthy.
+4. Only after recording that evidence, repeat the exact deletion against the
+   reviewed production endpoint and immediately rerun readiness and search.
+
+Do not auto-revoke during bootstrap: a partially rolled-out worker could still
+depend on the legacy key. Never print the master or scoped key while gathering
+revocation evidence, and never disable TLS verification.
 
 ## Failure and rollback
 

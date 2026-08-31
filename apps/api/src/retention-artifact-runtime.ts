@@ -15,6 +15,10 @@ export interface ApiRetentionArtifactRuntime {
   readonly store: EncryptedArtifactStore;
 }
 
+export interface ApiRetentionArtifactRuntimeOptions {
+  readonly clock?: () => Date;
+}
+
 function required(value: string | undefined, field: string): string {
   if (!value) throw new TypeError(`Missing retention artifact setting: ${field}`);
   return value;
@@ -26,7 +30,9 @@ function required(value: string | undefined, field: string): string {
  */
 export async function createApiRetentionArtifactRuntime(
   config: ApiRetentionDependencyConfig,
+  options: ApiRetentionArtifactRuntimeOptions = {},
 ): Promise<ApiRetentionArtifactRuntime> {
+  const clock = options.clock;
   await mkdir(config.artifactReadSpoolDirectory, { mode: 0o700, recursive: true });
   const spool = await lstat(config.artifactReadSpoolDirectory);
   if (!spool.isDirectory() || spool.isSymbolicLink() || (spool.mode & 0o077) !== 0) {
@@ -36,6 +42,7 @@ export async function createApiRetentionArtifactRuntime(
   await cleanupOrphanedAuthenticatedArtifactSpools({
     directory: config.artifactReadSpoolDirectory,
     olderThanMs: config.artifactReadSpoolMaximumAgeMs,
+    ...(clock ? { clock } : {}),
   });
 
   const rawStore =
@@ -72,6 +79,7 @@ export async function createApiRetentionArtifactRuntime(
       maximumOpensPerOwnerPerWindow: config.artifactReadMaximumDownloadsPerWindow,
       maximumReservedPlaintextBytes: config.artifactReadMaximumReservedBytes,
       rateWindowMs: config.artifactReadRateWindowMs,
+      ...(clock ? { clock: () => clock().getTime() } : {}),
     }),
     store,
   };

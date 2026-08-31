@@ -33,6 +33,8 @@ chmod 0700 "$work_directory"
   printf 'header = "Authorization: Bearer %s"\n' "$master_key"
 } >"$work_directory/curl.conf"
 chmod 0600 "$work_directory/curl.conf"
+printf '%s' "$master_key" >"$work_directory/master-key"
+chmod 0600 "$work_directory/master-key"
 unset master_key
 
 attempt=0
@@ -69,11 +71,22 @@ JSON
 
 cat >"$work_directory/admin-payload.json" <<'JSON'
 {
-  "uid": "2aac5083-d036-4b24-8bb4-2b9ae77a90f1",
-  "name": "cronometer-gold-worker-index-admin",
-  "description": "Food-index administration key for the controlled-beta worker",
-  "actions": ["indexes.*", "documents.*", "settings.*", "tasks.*", "stats.*"],
+  "uid": "91bdc613-7bf6-42b2-9244-cb3bffc64e23",
+  "name": "cronometer-gold-worker-index-mutation-v2",
+  "description": "Food-index mutation key for the controlled-beta worker",
+  "actions": ["indexes.create", "indexes.get", "indexes.delete", "indexes.swap", "documents.add", "settings.update", "stats.get"],
   "indexes": ["foods*"],
+  "expiresAt": null
+}
+JSON
+
+cat >"$work_directory/task-observer-payload.json" <<'JSON'
+{
+  "uid": "d0ee657d-9a00-4187-a18b-3ea5f17f81b0",
+  "name": "cronometer-gold-worker-task-observer",
+  "description": "Task-observer key for the controlled-beta worker",
+  "actions": ["tasks.get"],
+  "indexes": ["*"],
   "expiresAt": null
 }
 JSON
@@ -83,40 +96,53 @@ create_or_read_key \
   "$work_directory/search-payload.json" \
   "$work_directory/search-response.json"
 create_or_read_key \
-  2aac5083-d036-4b24-8bb4-2b9ae77a90f1 \
+  91bdc613-7bf6-42b2-9244-cb3bffc64e23 \
   "$work_directory/admin-payload.json" \
   "$work_directory/admin-response.json"
+create_or_read_key \
+  d0ee657d-9a00-4187-a18b-3ea5f17f81b0 \
+  "$work_directory/task-observer-payload.json" \
+  "$work_directory/task-observer-response.json"
 
 python3 - \
+  "$work_directory/master-key" \
   "$work_directory/search-payload.json" "$work_directory/search-response.json" "$api_env" MEILI_SEARCH_KEY \
-  "$work_directory/admin-payload.json" "$work_directory/admin-response.json" "$worker_env" MEILI_ADMIN_KEY <<'PY'
+  "$work_directory/admin-payload.json" "$work_directory/admin-response.json" "$worker_env" MEILI_ADMIN_KEY \
+  "$work_directory/task-observer-payload.json" "$work_directory/task-observer-response.json" "$worker_env" MEILI_TASK_OBSERVER_KEY <<'PY'
 import json
 import os
 import pathlib
+import re
 import sys
 
 
-def install_key(payload_path: str, response_path: str, environment_path: str, variable: str) -> None:
+def validated_key(payload_path: str, response_path: str) -> str:
     payload = json.loads(pathlib.Path(payload_path).read_text(encoding="utf-8"))
     response = json.loads(pathlib.Path(response_path).read_text(encoding="utf-8"))
-    for field in ("uid", "expiresAt"):
+    for field in ("uid", "name", "description", "expiresAt"):
         if response.get(field) != payload.get(field):
             raise SystemExit(f"Meilisearch key {payload['uid']} has unexpected {field}")
     for field in ("actions", "indexes"):
         if sorted(response.get(field, [])) != sorted(payload.get(field, [])):
             raise SystemExit(f"Meilisearch key {payload['uid']} has unexpected {field}")
     key = response.get("key")
-    if not isinstance(key, str) or len(key) < 16 or "\n" in key:
+    if not isinstance(key, str) or not re.fullmatch(r"[a-f0-9]{64}", key):
         raise SystemExit(f"Meilisearch key {payload['uid']} has an invalid secret")
+    return key
 
+
+def install_keys(environment_path: str, assignments: list[tuple[str, str]]) -> None:
     path = pathlib.Path(environment_path)
     stat = path.stat()
     lines = path.read_text(encoding="utf-8").splitlines()
-    prefix = f"{variable}="
-    matches = [index for index, line in enumerate(lines) if line.startswith(prefix)]
-    if len(matches) != 1:
-        raise SystemExit(f"{environment_path} must contain exactly one {variable} entry")
-    lines[matches[0]] = prefix + key
+    if len({variable for variable, _key in assignments}) != len(assignments):
+        raise SystemExit(f"{environment_path} received a duplicate Meilisearch key assignment")
+    for variable, key in assignments:
+        prefix = f"{variable}="
+        matches = [index for index, line in enumerate(lines) if line.startswith(prefix)]
+        if len(matches) != 1:
+            raise SystemExit(f"{environment_path} must contain exactly one {variable} entry")
+        lines[matches[0]] = prefix + key
     temporary = path.with_name(path.name + ".next")
     temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
     os.chown(temporary, stat.st_uid, stat.st_gid)
@@ -125,10 +151,22 @@ def install_key(payload_path: str, response_path: str, environment_path: str, va
 
 
 arguments = sys.argv[1:]
-if len(arguments) != 8:
+if len(arguments) != 13:
     raise SystemExit("invalid Meilisearch key bootstrap arguments")
-install_key(*arguments[:4])
-install_key(*arguments[4:])
+master_key = pathlib.Path(arguments[0]).read_text(encoding="utf-8")
+specifications = [arguments[index : index + 4] for index in range(1, len(arguments), 4)]
+validated = [
+    (environment_path, variable, validated_key(payload_path, response_path))
+    for payload_path, response_path, environment_path, variable in specifications
+]
+keys = [key for _environment_path, _variable, key in validated]
+if any(key == master_key for key in keys) or len(set(keys)) != len(keys):
+    raise SystemExit("Meilisearch master and scoped role credentials must remain distinct")
+assignments_by_environment: dict[str, list[tuple[str, str]]] = {}
+for environment_path, variable, key in validated:
+    assignments_by_environment.setdefault(environment_path, []).append((variable, key))
+for environment_path, assignments in assignments_by_environment.items():
+    install_keys(environment_path, assignments)
 PY
 
-echo "Meilisearch search-only and worker-admin key policies verified; role files updated without logging secrets."
+echo "Meilisearch search, mutation, and task-observer policies verified; role files updated without logging secrets."

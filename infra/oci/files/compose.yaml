@@ -126,6 +126,7 @@ services:
     <<: *app-security
     image: ${API_IMAGE}
     profiles: [application]
+    stop_grace_period: 305s
     env_file:
       - /etc/nutrition-tracker/runtime.env
       - /etc/nutrition-tracker/database.env
@@ -188,6 +189,7 @@ services:
     <<: *app-security
     image: ${WORKER_IMAGE}
     profiles: [application]
+    stop_grace_period: 610s
     env_file:
       - /etc/nutrition-tracker/runtime.env
       - /etc/nutrition-tracker/database.env
@@ -253,6 +255,44 @@ services:
       - /etc/nutrition-tracker/api.env
       - /etc/nutrition-tracker/worker.env
       - /etc/nutrition-tracker/restore.env
+    environment:
+      DATABASE_APPLICATION_NAME: ""
+      DATABASE_CONNECTION_TIMEOUT_MS: ""
+      DATABASE_POOL_MAX: ""
+      DATABASE_SSL_MODE: ""
+      DATABASE_STATEMENT_TIMEOUT_MS: ""
+      DEVICE_CHALLENGE_HMAC_KEY: ""
+      ERASURE_REPLAY_LEDGER_CURRENT_KEY_ID: ""
+      ERASURE_REPLAY_LEDGER_ENCRYPTION_KEYS: ""
+      ERASURE_REPLAY_LEDGER_LOCATOR_CURRENT_KEY_ID: ""
+      ERASURE_REPLAY_LEDGER_LOCATOR_HMAC_KEYS: ""
+      ERASURE_REPLAY_LEDGER_RESTORE_SPOOL_DIR: ""
+      ERASURE_REPLAY_LEDGER_RESTORE_SPOOL_PROTECTION: ""
+      ERASURE_STATUS_CAPABILITY_HMAC_KEY: ""
+      EXPORT_ARTIFACT_CURRENT_KEY_ID: ""
+      EXPORT_ARTIFACT_ENCRYPTION_KEYS: ""
+      EXPORT_ARTIFACT_READ_MAX_ARTIFACT_BYTES: ""
+      EXPORT_ARTIFACT_READ_MAX_BYTES_PER_WINDOW: ""
+      EXPORT_ARTIFACT_READ_MAX_CONCURRENCY: ""
+      EXPORT_ARTIFACT_READ_MAX_RESERVED_BYTES: ""
+      EXPORT_ARTIFACT_READ_SPOOL_DIR: ""
+      EXPORT_ARTIFACT_READ_SPOOL_PROTECTION: ""
+      LOG_LEVEL: ""
+      MEILI_ADMIN_KEY: ""
+      MEILI_SEARCH_KEY: ""
+      MEILI_TASK_OBSERVER_KEY: ""
+      MEILI_URL: ""
+      OCI_PILOT_DATA_CLASSIFICATION: ""
+      RETENTION_EXPORT_SPOOL_DIR: ""
+      RETENTION_EXPORT_SPOOL_MAX_BYTES: ""
+      RETENTION_EXPORT_SPOOL_PROTECTION: ""
+      RETENTION_FEATURES_ENABLED: ""
+      RETENTION_WORKER_ID: ""
+      SEARCH_CURSOR_SECRET: ""
+      SEARCH_REBUILD_SPOOL_DIR: ""
+      SEARCH_REBUILD_SPOOL_MAX_BYTES: ""
+      SEARCH_REBUILD_WORKER_ID: ""
+      SERVICE_VERSION: ""
     dns: [127.0.0.1]
     extra_hosts: *native-object-host
     tmpfs:

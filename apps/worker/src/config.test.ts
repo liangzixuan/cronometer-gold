@@ -3,6 +3,37 @@ import { describe, expect, it } from "vitest";
 
 import { parseWorkerConfig, WorkerConfigValidationError } from "./config.js";
 
+function localRetentionS3Environment(): Record<string, string> {
+  return {
+    ERASURE_REPLAY_LEDGER_BUCKET: "nutrition-erasure-ledger",
+    ERASURE_REPLAY_LEDGER_CURRENT_KEY_ID: "ledger-key-v1",
+    ERASURE_REPLAY_LEDGER_ENCRYPTION_KEYS: JSON.stringify({
+      "ledger-key-v1": Buffer.alloc(32, 3).toString("base64"),
+    }),
+    ERASURE_REPLAY_LEDGER_ENDPOINT: "http://127.0.0.1:9000",
+    ERASURE_REPLAY_LEDGER_LOCATOR_CURRENT_KEY_ID: "locator-key-v1",
+    ERASURE_REPLAY_LEDGER_LOCATOR_HMAC_KEYS: JSON.stringify({
+      "locator-key-v1": Buffer.alloc(32, 2).toString("base64"),
+    }),
+    ERASURE_REPLAY_LEDGER_REGION: "us-east-1",
+    ERASURE_REPLAY_LEDGER_STORE: "s3",
+    ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID: "ledger-writer",
+    ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY: "ledger-writer-secret",
+    EXPORT_ARTIFACT_BUCKET: "nutrition-private-exports",
+    EXPORT_ARTIFACT_CURRENT_KEY_ID: "export-key-v1",
+    EXPORT_ARTIFACT_ENCRYPTION_KEYS: JSON.stringify({
+      "export-key-v1": Buffer.alloc(32, 1).toString("base64"),
+    }),
+    EXPORT_ARTIFACT_ENDPOINT: "http://127.0.0.1:9000",
+    EXPORT_ARTIFACT_REGION: "us-east-1",
+    EXPORT_ARTIFACT_STORE: "s3",
+    EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID: "export-writer",
+    EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY: "export-writer-secret",
+    RETENTION_EXPORT_SPOOL_DIR: "/tmp/nutrition-retention-config-test-spool",
+    RETENTION_FEATURES_ENABLED: "true",
+  };
+}
+
 describe("worker configuration", () => {
   it("uses bounded local defaults", () => {
     expect(parseWorkerConfig({})).toMatchObject({
@@ -43,6 +74,78 @@ describe("worker configuration", () => {
     ).toThrow(WorkerConfigValidationError);
   });
 
+  it("requires complete, split S3 writer tuples whenever retention is enabled", () => {
+    const environment = localRetentionS3Environment();
+    expect(parseWorkerConfig(environment)).toMatchObject({
+      ERASURE_REPLAY_LEDGER_STORE: "s3",
+      EXPORT_ARTIFACT_STORE: "s3",
+      RETENTION_FEATURES_ENABLED: true,
+    });
+
+    for (const field of [
+      "EXPORT_ARTIFACT_ENDPOINT",
+      "EXPORT_ARTIFACT_BUCKET",
+      "EXPORT_ARTIFACT_REGION",
+      "EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID",
+      "EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY",
+      "ERASURE_REPLAY_LEDGER_ENDPOINT",
+      "ERASURE_REPLAY_LEDGER_BUCKET",
+      "ERASURE_REPLAY_LEDGER_REGION",
+      "ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID",
+      "ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY",
+    ] as const) {
+      const incomplete = { ...environment };
+      delete incomplete[field];
+      expect(() => parseWorkerConfig(incomplete)).toThrow(WorkerConfigValidationError);
+    }
+
+    for (const [exportField, ledgerField] of [
+      ["EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID", "ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID"],
+      ["EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY", "ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY"],
+    ] as const) {
+      expect(() =>
+        parseWorkerConfig({
+          ...environment,
+          [ledgerField]: environment[exportField],
+        }),
+      ).toThrow(WorkerConfigValidationError);
+    }
+  });
+
+  it("requires OCI-compatible export deletion to use the latest-version policy outside production", () => {
+    const environment = {
+      ...localRetentionS3Environment(),
+      EXPORT_ARTIFACT_ENDPOINT:
+        "https://namespace.compat.objectstorage.us-ashburn-1.oci.customer-oci.com",
+    };
+    expect(() => parseWorkerConfig(environment)).toThrow(WorkerConfigValidationError);
+    expect(
+      parseWorkerConfig({
+        ...environment,
+        EXPORT_ARTIFACT_DELETE_VERSION_POLICY: "latest",
+      }).EXPORT_ARTIFACT_DELETE_VERSION_POLICY,
+    ).toBe("latest");
+  });
+
+  it.each([
+    "not a URL",
+    "ftp://objects.internal.example",
+    "http://user:password@127.0.0.1:9000",
+    "http://127.0.0.1:9000/private-bucket",
+    "http://127.0.0.1:9000?target=private",
+    "http://127.0.0.1:9000#private",
+  ])("rejects malformed enabled-S3 endpoints before runtime allocation: %s", (endpoint) => {
+    for (const field of ["EXPORT_ARTIFACT_ENDPOINT", "ERASURE_REPLAY_LEDGER_ENDPOINT"] as const) {
+      try {
+        parseWorkerConfig({ ...localRetentionS3Environment(), [field]: endpoint });
+        throw new Error("expected worker endpoint validation to fail");
+      } catch (error) {
+        expect(error).toBeInstanceOf(WorkerConfigValidationError);
+        expect((error as WorkerConfigValidationError).issues).toEqual([{ field }]);
+      }
+    }
+  });
+
   it("fails closed on missing production database, search, encrypted object store, and restore-ledger secrets", () => {
     try {
       parseWorkerConfig({ NODE_ENV: "production" });
@@ -57,6 +160,7 @@ describe("worker configuration", () => {
         "RETENTION_FEATURES_ENABLED",
         "DATABASE_URL",
         "MEILI_ADMIN_KEY",
+        "MEILI_TASK_OBSERVER_KEY",
         "MEILI_URL",
         "EXPORT_ARTIFACT_STORE",
         "ERASURE_REPLAY_LEDGER_STORE",
@@ -106,6 +210,7 @@ describe("worker configuration", () => {
       EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY: "worker-secret-key",
       EXPORT_ARTIFACT_STORE: "s3",
       MEILI_ADMIN_KEY: "search-admin-key-long-enough",
+      MEILI_TASK_OBSERVER_KEY: "search-task-observer-key-long-enough",
       MEILI_URL: "https://search.internal.example",
       NODE_ENV: "production",
       RETENTION_EXPORT_SPOOL_DIR: "/var/run/nutrition-tracker/export-spool",
@@ -118,6 +223,20 @@ describe("worker configuration", () => {
       EXPORT_ARTIFACT_STORE: "s3",
       RETENTION_FEATURES_ENABLED: true,
     });
+
+    try {
+      parseWorkerConfig({
+        ...environment,
+        MEILI_TASK_OBSERVER_KEY: environment.MEILI_ADMIN_KEY,
+      });
+      throw new Error("expected collapsed production Meilisearch roles to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(WorkerConfigValidationError);
+      expect((error as WorkerConfigValidationError).issues).toEqual([
+        { field: "MEILI_ADMIN_KEY" },
+        { field: "MEILI_TASK_OBSERVER_KEY" },
+      ]);
+    }
 
     const ociEndpoint = "https://namespace.compat.objectstorage.us-ashburn-1.oci.customer-oci.com";
     expect(() =>

@@ -336,6 +336,22 @@ function parseObjectVersionsXml(xml: string, exactObjectKey: string): readonly S
   return versions;
 }
 
+export function isS3CompatibleArtifactEndpoint(value: string): boolean {
+  try {
+    const endpoint = new URL(value);
+    return (
+      ["http:", "https:"].includes(endpoint.protocol) &&
+      !endpoint.username &&
+      !endpoint.password &&
+      !endpoint.search &&
+      !endpoint.hash &&
+      (endpoint.pathname === "/" || endpoint.pathname === "")
+    );
+  } catch {
+    return false;
+  }
+}
+
 export class S3RawArtifactStore implements RawArtifactStore, SingletonObjectVersionResolver {
   readonly #endpoint: URL;
   readonly #region: string;
@@ -350,17 +366,10 @@ export class S3RawArtifactStore implements RawArtifactStore, SingletonObjectVers
   readonly #singletonVersionResolver: SingletonObjectVersionResolver | undefined;
 
   constructor(options: S3RawArtifactStoreOptions) {
-    const endpoint = new URL(options.endpoint);
-    if (
-      !["http:", "https:"].includes(endpoint.protocol) ||
-      endpoint.username ||
-      endpoint.password ||
-      endpoint.search ||
-      endpoint.hash ||
-      (endpoint.pathname !== "/" && endpoint.pathname !== "")
-    ) {
+    if (!isS3CompatibleArtifactEndpoint(options.endpoint)) {
       throw new TypeError("Invalid S3-compatible endpoint");
     }
+    const endpoint = new URL(options.endpoint);
     if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(options.bucket)) {
       throw new TypeError("Invalid artifact bucket");
     }

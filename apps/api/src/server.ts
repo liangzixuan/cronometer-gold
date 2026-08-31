@@ -1,9 +1,14 @@
 import { pathToFileURL } from "node:url";
 
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyServerOptions } from "fastify";
 
 import { buildApp } from "./app.js";
-import { ConfigValidationError, loadApiDependencyConfig, loadConfig } from "./config.js";
+import {
+  type AppConfig,
+  ConfigValidationError,
+  loadApiDependencyConfig,
+  loadConfig,
+} from "./config.js";
 import { safeErrorName } from "./logging.js";
 import { createApiSearchRuntime } from "./search-runtime.js";
 import { type GracefulShutdown, installGracefulShutdown } from "./shutdown.js";
@@ -11,6 +16,17 @@ import { type GracefulShutdown, installGracefulShutdown } from "./shutdown.js";
 export interface RunningServer {
   app: FastifyInstance;
   shutdown: GracefulShutdown;
+}
+
+export interface ApiApplicationRuntime {
+  readonly app: FastifyInstance;
+  readonly config: AppConfig;
+  close(): Promise<void>;
+}
+
+export interface ApiApplicationRuntimeOptions {
+  readonly clock?: () => Date;
+  readonly logger?: FastifyServerOptions["logger"];
 }
 
 export interface BootstrapFailureEvent {
@@ -36,30 +52,83 @@ export function bootstrapFailureEvent(error: unknown): BootstrapFailureEvent {
   };
 }
 
+export async function createApiApplicationRuntime(
+  environment: NodeJS.ProcessEnv = process.env,
+  options: ApiApplicationRuntimeOptions = {},
+): Promise<ApiApplicationRuntime> {
+  const config = loadConfig(environment);
+  const dependencyConfig = loadApiDependencyConfig(environment);
+  const dependencies = await createApiSearchRuntime(environment, dependencyConfig, {
+    ...(options.clock ? { clock: options.clock } : {}),
+  });
+  let dependencyCloseEntered = false;
+  let dependencyClosePromise: Promise<void> | undefined;
+  const closeDependencies = () => {
+    dependencyCloseEntered = true;
+    dependencyClosePromise ??= (async () => {
+      await dependencies.close();
+    })();
+    return dependencyClosePromise;
+  };
+  let app: FastifyInstance | undefined;
+  try {
+    app = buildApp({
+      authService: dependencies.authService,
+      config,
+      diaryService: dependencies.diaryService,
+      foodSearchService: dependencies.foodSearchService,
+      goalService: dependencies.goalService,
+      profileService: dependencies.profileService,
+      recipeService: dependencies.recipeService,
+      ...(options.logger === undefined ? {} : { logger: options.logger }),
+      ...(options.clock ? { retentionClock: options.clock } : {}),
+      ...(dependencies.retentionService ? { retentionService: dependencies.retentionService } : {}),
+      readinessCheck: dependencies.readinessCheck,
+    });
+    app.addHook("onClose", closeDependencies);
+    await app.ready();
+  } catch (error) {
+    const cleanupErrors: unknown[] = [];
+    if (app) {
+      try {
+        await app.close();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    if (!dependencyCloseEntered) {
+      try {
+        await closeDependencies();
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [error, ...cleanupErrors],
+        "API application construction and dependency cleanup failed",
+      );
+    }
+    throw error;
+  }
+
+  let closePromise: Promise<void> | undefined;
+  const application = app;
+  return {
+    app: application,
+    config,
+    close() {
+      closePromise ??= application.close();
+      return closePromise;
+    },
+  };
+}
+
 export async function startServer(
   environment: NodeJS.ProcessEnv = process.env,
 ): Promise<RunningServer> {
-  const config = loadConfig(environment);
-  const dependencyConfig = loadApiDependencyConfig(environment);
-  const runtime = await createApiSearchRuntime(environment, dependencyConfig);
-  let app: FastifyInstance;
-  try {
-    app = buildApp({
-      authService: runtime.authService,
-      config,
-      diaryService: runtime.diaryService,
-      foodSearchService: runtime.foodSearchService,
-      goalService: runtime.goalService,
-      profileService: runtime.profileService,
-      recipeService: runtime.recipeService,
-      ...(runtime.retentionService ? { retentionService: runtime.retentionService } : {}),
-      readinessCheck: runtime.readinessCheck,
-    });
-    app.addHook("onClose", async () => runtime.close());
-  } catch (error) {
-    await runtime.close();
-    throw error;
-  }
+  const runtime = await createApiApplicationRuntime(environment);
+  const { app, config } = runtime;
   const shutdown = installGracefulShutdown(app, {
     timeoutMs: config.shutdownGraceMs,
   });
@@ -84,7 +153,14 @@ export async function startServer(
       },
       "API failed to start",
     );
-    await app.close().catch(() => undefined);
+    try {
+      await runtime.close();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "API failed to start and application cleanup failed",
+      );
+    }
     throw error;
   }
 }

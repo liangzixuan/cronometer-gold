@@ -126,7 +126,7 @@ jobs:
           POSTGRES_PASSWORD: nutrition_local_only
           POSTGRES_USER: nutrition_local
         ports:
-          - 5432:5432
+          - "127.0.0.1:5432:5432"
         options: >-
           --health-cmd "pg_isready -U nutrition_local -d nutrition_tracker"
           --health-interval 5s
@@ -139,7 +139,7 @@ jobs:
           MEILI_MASTER_KEY: search-integration-key-20260815
           MEILI_NO_ANALYTICS: true
         ports:
-          - 7700:7700
+          - "127.0.0.1:7700:7700"
         options: >-
           --tmpfs /meili_data:uid=1000,gid=1000,mode=0700
           --health-cmd "curl --fail --silent http://127.0.0.1:7700/health"
@@ -217,6 +217,21 @@ jobs:
           TEST_DATABASE_URL: postgresql://nutrition_local:nutrition_local_only@127.0.0.1:5432/nutrition_tracker
         run: pnpm --filter @nutrition-tracker/api test
 
+      - name: Bootstrap scoped Meilisearch keys
+        id: retention_meili_bootstrap
+        env:
+          MEILI_MASTER_KEY: search-integration-key-20260815
+          MEILI_PORT: "7700"
+          MEILI_URL: http://127.0.0.1:7700
+        run: |
+          target="${RUNNER_TEMP}/retention-meili.env"
+          node scripts/scoped-meili-keys.mjs --output-file "${target}"
+          identity="$(stat --format='%d:%i' -- "${target}")"
+          {
+            echo "created=true"
+            echo "identity=${identity}"
+          } >> "${GITHUB_OUTPUT}"
+
       - name: Drill retention export and erasure production wiring
         env:
           RUN_RETENTION_WORKER_INTEGRATION: "1"
@@ -226,6 +241,8 @@ jobs:
           POSTGRES_USER: nutrition_local
           TEST_DATABASE_URL: postgresql://nutrition_local:nutrition_local_only@127.0.0.1:5432/nutrition_tracker
           MINIO_API_PORT: "9000"
+          MEILI_PORT: "7700"
+          MEILI_URL: http://127.0.0.1:7700
           EXPORT_ARTIFACT_ENDPOINT: http://127.0.0.1:9000
           EXPORT_ARTIFACT_REGION: us-east-1
           EXPORT_ARTIFACT_BUCKET: nutrition-private-exports
@@ -240,7 +257,13 @@ jobs:
           ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY: nutrition_erasure_writer_local_only
           ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID: nutrition_erasure_restore
           ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY: nutrition_erasure_restore_local_only
-        run: pnpm --filter @nutrition-tracker/api test:retention-integration
+        run: >-
+          node node_modules/dotenv-cli/cli.js
+          -o
+          --no-expand
+          -e "${RUNNER_TEMP}/retention-meili.env"
+          --
+          pnpm --filter @nutrition-tracker/api test:retention-integration
 
       - name: Rehearse a complete PostgreSQL backup and isolated restore
         env:
@@ -305,12 +328,44 @@ jobs:
       - name: Exercise PostgreSQL-to-Meilisearch worker boundary
         env:
           TEST_DATABASE_URL: postgresql://nutrition_local:nutrition_local_only@127.0.0.1:5432/nutrition_tracker
-          TEST_MEILI_API_KEY: search-integration-key-20260815
           TEST_MEILI_URL: http://127.0.0.1:7700
-        run: pnpm --filter @nutrition-tracker/worker test:integration
+        run: >-
+          node node_modules/dotenv-cli/cli.js
+          -o
+          --no-expand
+          -e "${RUNNER_TEMP}/retention-meili.env"
+          --
+          pnpm --filter @nutrition-tracker/worker test:integration
 
       - name: Exercise real search index rebuild and queries
         env:
-          TEST_MEILI_API_KEY: search-integration-key-20260815
           TEST_MEILI_URL: http://127.0.0.1:7700
-        run: pnpm --filter @nutrition-tracker/search test:integration
+        run: >-
+          node node_modules/dotenv-cli/cli.js
+          -o
+          --no-expand
+          -e "${RUNNER_TEMP}/retention-meili.env"
+          --
+          pnpm --filter @nutrition-tracker/search test:integration
+
+      - name: Remove scoped Meilisearch key file
+        if: always()
+        env:
+          RETENTION_MEILI_CREATED: ${{ steps.retention_meili_bootstrap.outputs.created }}
+          RETENTION_MEILI_IDENTITY: ${{ steps.retention_meili_bootstrap.outputs.identity }}
+        run: |
+          target="${RUNNER_TEMP}/retention-meili.env"
+          if [ "${RETENTION_MEILI_CREATED}" != "true" ] || [ ! -e "${target}" ]; then
+            exit 0
+          fi
+          if [ -L "${target}" ] || [ ! -f "${target}" ]; then
+            echo "Refusing to remove replaced scoped Meilisearch key path" >&2
+            exit 1
+          fi
+          identity="$(stat --format='%d:%i' -- "${target}")"
+          links="$(stat --format='%h' -- "${target}")"
+          if [ "${identity}" != "${RETENTION_MEILI_IDENTITY}" ] || [ "${links}" != "1" ]; then
+            echo "Refusing to remove replaced scoped Meilisearch key file" >&2
+            exit 1
+          fi
+          rm -f -- "${target}"

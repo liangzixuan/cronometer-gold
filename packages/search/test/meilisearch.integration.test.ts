@@ -107,11 +107,26 @@ afterAll(async () => {
 describeWithMeili("real Meilisearch behavior", () => {
   it("proves relevance, safety, personalization, atomic replacement, and a latency guardrail", async () => {
     if (testMeiliUrl === undefined) throw new Error("TEST_MEILI_URL is required");
+    const mutationKey = process.env.MEILI_ADMIN_KEY;
+    const searchKey = process.env.MEILI_SEARCH_KEY;
+    const taskObserverKey = process.env.MEILI_TASK_OBSERVER_KEY;
+    if (!mutationKey || !searchKey || !taskObserverKey) {
+      throw new Error(
+        "MEILI_ADMIN_KEY, MEILI_SEARCH_KEY, and MEILI_TASK_OBSERVER_KEY are required",
+      );
+    }
+    if (new Set([mutationKey, searchKey, taskObserverKey]).size !== 3) {
+      throw new Error("Meilisearch integration credentials must remain split");
+    }
     const client = new MeilisearchHttpClient({
       host: testMeiliUrl,
-      ...(process.env.TEST_MEILI_API_KEY === undefined
-        ? {}
-        : { apiKey: process.env.TEST_MEILI_API_KEY }),
+      apiKey: mutationKey,
+      requestTimeoutMs: 10_000,
+      taskApiKey: taskObserverKey,
+    });
+    const searchClient = new MeilisearchHttpClient({
+      host: testMeiliUrl,
+      apiKey: searchKey,
       requestTimeoutMs: 10_000,
     });
     cleanupClient = client;
@@ -141,7 +156,7 @@ describeWithMeili("real Meilisearch behavior", () => {
     expect(firstBuild.excludedCount).toBe(2);
 
     const service = new FoodSearchService({
-      backend: new MeilisearchFoodSearchBackend({ client }),
+      backend: new MeilisearchFoodSearchBackend({ client: searchClient }),
       cursorSecret: "integration-cursor-secret-with-at-least-thirty-two-bytes",
     });
     expect((await service.search({ query: "bananna" })).hits[0]?.foodId).toBe("1");
