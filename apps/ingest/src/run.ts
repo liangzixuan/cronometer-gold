@@ -1,15 +1,18 @@
-import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { createHash, randomBytes } from "node:crypto";
+import { constants } from "node:fs";
+import { link, lstat, mkdir, open, readFile, unlink, writeFile } from "node:fs/promises";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import {
   approveBatch,
+  canonicalJsonChunks,
   createDatabaseFromEnvironment,
   getBatchCheckpoint,
   getSourceNutrientMappingDigest,
   type JsonObject,
   type JsonValue,
   promoteBatch,
+  reconcileCatalogueBatch,
   recordBatchParserReport,
   registerFoodSourceFromReviewedManifest,
   registerSourceNutrientMappings,
@@ -61,7 +64,16 @@ const SOURCE_POLICIES: Readonly<
   ]),
 });
 const WORKSPACE_ROOT = resolve(import.meta.dirname, "../../..");
+const CATALOGUE_RECONCILIATION_REPORT_ROOT = ".local-data/evidence/catalogue-reconciliation";
 const PRINCIPAL_ID_PATTERN = /^[a-z][-a-z0-9._:@/]{2,255}$/;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const CATALOGUE_RECONCILE_OPTIONS = Object.freeze([
+  "batch-id",
+  "expected-current-release-id",
+  "expected-validation-digest",
+  "report-out",
+]);
 
 export async function runCommand(argv: readonly string[], io: CommandIo): Promise<number> {
   try {
@@ -86,6 +98,9 @@ export async function runCommand(argv: readonly string[], io: CommandIo): Promis
       case "catalogue register-source":
         await registerSourceCommand(arguments_.positionals, io);
         return 0;
+      case "catalogue reconcile":
+        await reconcileCommand(argv, arguments_.positionals, arguments_.options, io);
+        return 0;
       case "catalogue approve":
         await approveCommand(arguments_.options, io);
         return 0;
@@ -101,6 +116,179 @@ export async function runCommand(argv: readonly string[], io: CommandIo): Promis
   } catch (error) {
     io.writeError(`${error instanceof Error ? error.message : "Unknown ingestion error"}\n`);
     return 1;
+  }
+}
+
+async function reconcileCommand(
+  argv: readonly string[],
+  positionals: readonly string[],
+  options: Readonly<Record<string, string | true>>,
+  io: CommandIo,
+): Promise<void> {
+  assertExactCatalogueReconcileArguments(argv, positionals, options);
+  const batchId = uuidInput(requiredOption(options, "batch-id"), "--batch-id");
+  const expectedCurrentReleaseValue = requiredOption(options, "expected-current-release-id");
+  const expectedCurrentReleaseId =
+    expectedCurrentReleaseValue === "none"
+      ? null
+      : uuidInput(expectedCurrentReleaseValue, "--expected-current-release-id");
+  const expectedValidationDigest = sha256Input(
+    requiredOption(options, "expected-validation-digest"),
+    "--expected-validation-digest",
+  );
+  const reportOut = requiredOption(options, "report-out");
+  const reportPath = resolveCatalogueReconciliationReportPath(reportOut);
+
+  const database = createDatabaseFromEnvironment(io.environment);
+  await runAfterRequiredCleanup(
+    () =>
+      reconcileCatalogueBatch(database, {
+        batchId,
+        expectedCurrentReleaseId,
+        expectedValidationDigest,
+      }),
+    () => database.destroy(),
+    async (document) => {
+      await writeCatalogueReconciliationReportAtPath(
+        reportPath,
+        document as unknown as JsonValue,
+        WORKSPACE_ROOT,
+      );
+      output(io, {
+        batchId,
+        currentReleaseId: expectedCurrentReleaseId,
+        reconciliationSha256: document.reconciliationSha256,
+        reportPath,
+      });
+    },
+  );
+}
+
+export async function runAfterRequiredCleanup<T>(
+  operation: () => Promise<T>,
+  cleanup: () => Promise<void>,
+  success: (value: T) => Promise<void>,
+): Promise<T> {
+  let operationResult:
+    | { readonly error: unknown; readonly succeeded: false }
+    | { readonly succeeded: true; readonly value: T };
+  try {
+    operationResult = { succeeded: true, value: await operation() };
+  } catch (error) {
+    operationResult = { error, succeeded: false };
+  }
+
+  let cleanupError: unknown;
+  let cleanupFailed = false;
+  try {
+    await cleanup();
+  } catch (error) {
+    cleanupError = error;
+    cleanupFailed = true;
+  }
+
+  if (!operationResult.succeeded) {
+    if (cleanupFailed) {
+      throw new AggregateError(
+        [operationResult.error, cleanupError],
+        "Catalogue reconciliation and required cleanup both failed",
+      );
+    }
+    throw operationResult.error;
+  }
+  if (cleanupFailed) throw cleanupError;
+  await success(operationResult.value);
+  return operationResult.value;
+}
+
+export async function writeCatalogueReconciliationReport(
+  reportOut: string,
+  document: JsonValue,
+  workspaceRoot = WORKSPACE_ROOT,
+): Promise<string> {
+  const reportPath = resolveCatalogueReconciliationReportPath(reportOut, workspaceRoot);
+  await writeCatalogueReconciliationReportAtPath(reportPath, document, workspaceRoot);
+  return reportPath;
+}
+
+async function writeCatalogueReconciliationReportAtPath(
+  reportPath: string,
+  document: JsonValue,
+  workspaceRoot: string,
+): Promise<void> {
+  const userId = currentUserId();
+  const reportParent = dirname(reportPath);
+  await assertTrustedWorkspaceRoot(workspaceRoot, userId);
+  await preparePrivateReportParent(reportParent, workspaceRoot, userId);
+  await assertReportLeafAbsent(reportPath);
+
+  const temporaryPath = resolve(
+    reportParent,
+    `.catalogue-reconciliation-${process.pid}-${randomBytes(16).toString("hex")}.tmp`,
+  );
+  const handle = await open(
+    temporaryPath,
+    constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+    0o600,
+  );
+  let handleOpen = true;
+  let operationFailed = false;
+  let operationError: unknown;
+  let publishingFinalLink = false;
+  try {
+    const statistics = await handle.stat();
+    if (!statistics.isFile() || statistics.uid !== userId || (statistics.mode & 0o777) !== 0o600) {
+      throw new Error(
+        "Catalogue reconciliation temporary report must be a current-user-owned mode-0600 file",
+      );
+    }
+    for (const chunk of canonicalJsonChunks(document)) {
+      await handle.writeFile(chunk, { encoding: "utf8" });
+    }
+    await handle.writeFile("\n", { encoding: "utf8" });
+    await handle.sync();
+    await handle.close();
+    handleOpen = false;
+    publishingFinalLink = true;
+    await link(temporaryPath, reportPath);
+  } catch (error) {
+    operationFailed = true;
+    operationError = error;
+  }
+
+  const cleanupErrors: unknown[] = [];
+  if (handleOpen) {
+    try {
+      await handle.close();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+  }
+  try {
+    await unlink(temporaryPath);
+  } catch (error) {
+    if (!hasErrorCode(error, "ENOENT")) cleanupErrors.push(error);
+  }
+  try {
+    await syncPrivateReportDirectory(reportParent, userId);
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+
+  if (operationFailed || cleanupErrors.length > 0) {
+    let primaryError: unknown;
+    if (operationFailed) {
+      primaryError =
+        publishingFinalLink && hasErrorCode(operationError, "EEXIST")
+          ? new Error("Catalogue reconciliation report already exists; refusing to overwrite it")
+          : operationError;
+    }
+    const failures: unknown[] = [];
+    if (primaryError !== undefined) failures.push(primaryError);
+    else if (operationFailed) failures.push(new Error("Unknown report publication failure"));
+    failures.push(...cleanupErrors);
+    if (failures.length === 1) throw failures[0];
+    throw new AggregateError(failures, "Catalogue reconciliation report publication failed");
   }
 }
 
@@ -768,6 +956,183 @@ function workspacePath(path: string): string {
   return isAbsolute(path) ? path : resolve(WORKSPACE_ROOT, path);
 }
 
+function resolveCatalogueReconciliationReportPath(
+  reportOut: string,
+  workspaceRoot = WORKSPACE_ROOT,
+): string {
+  const normalizedWorkspaceRoot = resolve(workspaceRoot);
+  if (
+    /^[A-Za-z]:[\\/]/.test(normalizedWorkspaceRoot) ||
+    /^\/mnt\/[A-Za-z](?:\/|$)/.test(normalizedWorkspaceRoot)
+  ) {
+    throw new Error("Catalogue reconciliation workspace must reside in the WSL Linux filesystem");
+  }
+  if (
+    isAbsolute(reportOut) ||
+    /^[A-Za-z]:[\\/]/.test(reportOut) ||
+    reportOut.startsWith("\\\\") ||
+    reportOut.includes("\\") ||
+    reportOut.includes("\0")
+  ) {
+    throw new Error(
+      `--report-out must be a relative path beneath ${CATALOGUE_RECONCILIATION_REPORT_ROOT}`,
+    );
+  }
+  const reportRoot = resolve(normalizedWorkspaceRoot, CATALOGUE_RECONCILIATION_REPORT_ROOT);
+  const reportPath = resolve(normalizedWorkspaceRoot, reportOut);
+  const pathWithinRoot = relative(reportRoot, reportPath);
+  if (
+    pathWithinRoot.length === 0 ||
+    pathWithinRoot === ".." ||
+    pathWithinRoot.startsWith(`..${sep}`) ||
+    isAbsolute(pathWithinRoot)
+  ) {
+    throw new Error(
+      `--report-out must name a file beneath ${CATALOGUE_RECONCILIATION_REPORT_ROOT}`,
+    );
+  }
+  return reportPath;
+}
+
+async function assertTrustedWorkspaceRoot(workspaceRoot: string, userId: number): Promise<void> {
+  const statistics = await lstat(workspaceRoot);
+  if (statistics.isSymbolicLink() || !statistics.isDirectory()) {
+    throw new Error("Catalogue reconciliation workspace root must be a real directory");
+  }
+  if (statistics.uid !== userId || (statistics.mode & 0o022) !== 0) {
+    throw new Error(
+      "Catalogue reconciliation workspace root must be current-user-owned and not group/other-writable",
+    );
+  }
+}
+
+async function preparePrivateReportParent(
+  reportParent: string,
+  workspaceRoot: string,
+  userId: number,
+): Promise<void> {
+  const parentWithinWorkspace = relative(workspaceRoot, reportParent);
+  if (
+    parentWithinWorkspace.length === 0 ||
+    parentWithinWorkspace === ".." ||
+    parentWithinWorkspace.startsWith(`..${sep}`) ||
+    isAbsolute(parentWithinWorkspace)
+  ) {
+    throw new Error("Catalogue reconciliation report parent escaped the workspace");
+  }
+
+  let current = workspaceRoot;
+  for (const component of parentWithinWorkspace.split(sep)) {
+    current = resolve(current, component);
+    try {
+      await mkdir(current, { mode: 0o700 });
+    } catch (error) {
+      if (!hasErrorCode(error, "EEXIST")) throw error;
+    }
+    const statistics = await lstat(current);
+    if (statistics.isSymbolicLink() || !statistics.isDirectory()) {
+      throw new Error(
+        `Catalogue reconciliation report parent contains a symbolic link: ${current}`,
+      );
+    }
+    if (statistics.uid !== userId || (statistics.mode & 0o777) !== 0o700) {
+      throw new Error(
+        `Catalogue reconciliation report parent must be current-user-owned with mode 0700: ${current}`,
+      );
+    }
+  }
+}
+
+async function syncPrivateReportDirectory(reportParent: string, userId: number): Promise<void> {
+  const handle = await open(
+    reportParent,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
+  try {
+    const statistics = await handle.stat();
+    if (
+      !statistics.isDirectory() ||
+      statistics.uid !== userId ||
+      (statistics.mode & 0o777) !== 0o700
+    ) {
+      throw new Error(
+        "Catalogue reconciliation report directory must remain current-user-owned with mode 0700",
+      );
+    }
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function assertReportLeafAbsent(reportPath: string): Promise<void> {
+  try {
+    const statistics = await lstat(reportPath);
+    if (statistics.isSymbolicLink()) {
+      throw new Error("Catalogue reconciliation report leaf must not be a symbolic link");
+    }
+    throw new Error("Catalogue reconciliation report already exists; refusing to overwrite it");
+  } catch (error) {
+    if (!hasErrorCode(error, "ENOENT")) throw error;
+  }
+}
+
+function currentUserId(): number {
+  if (typeof process.getuid !== "function") {
+    throw new Error("Catalogue reconciliation reports require POSIX ownership checks");
+  }
+  return process.getuid();
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { readonly code?: unknown }).code === code
+  );
+}
+
+function assertExactCatalogueReconcileArguments(
+  argv: readonly string[],
+  positionals: readonly string[],
+  options: Readonly<Record<string, string | true>>,
+): void {
+  if (positionals.length !== 0) {
+    throw new Error("catalogue reconcile does not accept positional arguments");
+  }
+  const allowed = new Set(CATALOGUE_RECONCILE_OPTIONS);
+  for (const name of Object.keys(options)) {
+    if (!allowed.has(name)) throw new Error(`Unknown catalogue reconcile option: --${name}`);
+  }
+
+  // parseArguments intentionally uses a plain object. Inspect raw option names too
+  // so special names such as __proto__ cannot disappear through object semantics.
+  const tokens = argv[0] === "--" ? argv.slice(1) : argv;
+  for (const token of tokens.slice(2)) {
+    if (token === "--") break;
+    if (!token.startsWith("--")) continue;
+    const name = token.slice(2).split("=", 1)[0];
+    if (!name || !allowed.has(name)) {
+      throw new Error(`Unknown catalogue reconcile option: --${name ?? ""}`);
+    }
+  }
+}
+
+function uuidInput(value: string, field: string): string {
+  if (!UUID_PATTERN.test(value)) {
+    throw new Error(`${field} must be a canonical lowercase UUID`);
+  }
+  return value;
+}
+
+function sha256Input(value: string, field: string): string {
+  if (!SHA256_PATTERN.test(value)) {
+    throw new Error(`${field} must be a lowercase SHA-256 digest`);
+  }
+  return value;
+}
+
 function singlePositional(positionals: readonly string[], label: string): string {
   if (positionals.length !== 1 || !positionals[0]) throw new Error(`Expected exactly one ${label}`);
   return positionals[0];
@@ -862,10 +1227,11 @@ function usage(): string {
     "  ingest catalogue stage-fdc <manifest> --artifact <zip> --cache-dir <path> --extract-dir <path> --manifest-object-uri <s3-uri>",
     "  ingest catalogue mappings <reviewed-mapping.json>",
     "  ingest catalogue register-source <import-ready-manifest>",
+    "  ingest catalogue reconcile --batch-id <uuid> --expected-current-release-id <uuid|none> --expected-validation-digest <lowercase-sha256> --report-out .local-data/evidence/catalogue-reconciliation/<file>",
     "  ingest catalogue approve --batch-id <id> --role <role> --manifest-sha256 <sha> --validation-digest <sha>",
     "  ingest catalogue promote --batch-id <id> [--reason <text>]",
     "  ingest catalogue rollback --source-code <code> --reason <text> (--target-release-id <id>|--deactivate)",
     "",
-    "Release commands derive actor identity from the trusted runner environment; command-line principal overrides are not accepted.",
+    "Authority-changing release commands derive actor identity from the trusted runner environment; command-line principal overrides are not accepted. Catalogue reconciliation is read-only and has no actor.",
   ].join("\n");
 }

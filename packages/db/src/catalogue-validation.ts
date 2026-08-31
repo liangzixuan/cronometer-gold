@@ -26,6 +26,13 @@ export interface CatalogueValidationIssue extends JsonObject {
   readonly severity: CatalogueValidationIssueSeverity;
 }
 
+export interface CatalogueBarcodeEvidence {
+  readonly marketCode: string | null;
+  readonly normalizedGtin: string | null;
+  readonly rawValue: string;
+  readonly sourceFoodKey: string | null;
+}
+
 export interface ValidatedNutrientValue {
   readonly amount: string;
   readonly canonicalUnit: string;
@@ -108,27 +115,97 @@ export interface CatalogueRecordValidationResult {
  * approvals, and imported versions to exactly the bytes represented by JSON.
  */
 export function canonicalJson(value: JsonValue): string {
+  return [...canonicalJsonChunks(value)].join("");
+}
+
+/** Iterate canonical JSON bytes without constructing one catalogue-sized string. */
+export function* canonicalJsonChunks(value: JsonValue): IterableIterator<string> {
+  const targetBytes = 64 * 1024;
+  let buffer = "";
+  let bufferBytes = 0;
+  for (const token of canonicalJsonTokens(value)) {
+    const tokenBytes = Buffer.byteLength(token, "utf8");
+    if (bufferBytes > 0 && bufferBytes + tokenBytes > targetBytes) {
+      yield buffer;
+      buffer = "";
+      bufferBytes = 0;
+    }
+    if (tokenBytes > targetBytes && bufferBytes === 0) {
+      yield token;
+      continue;
+    }
+    buffer += token;
+    bufferBytes += tokenBytes;
+  }
+  if (bufferBytes > 0) yield buffer;
+}
+
+function* canonicalJsonTokens(value: JsonValue): IterableIterator<string> {
   if (value === null || typeof value === "boolean" || typeof value === "string") {
-    return JSON.stringify(value);
+    yield JSON.stringify(value);
+    return;
   }
   if (typeof value === "number") {
     if (!Number.isFinite(value)) {
       throw new Error("Canonical JSON rejects non-finite numbers");
     }
-    return JSON.stringify(Object.is(value, -0) ? 0 : value);
+    yield JSON.stringify(Object.is(value, -0) ? 0 : value);
+    return;
   }
   if (Array.isArray(value)) {
-    return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
+    yield "[";
+    for (let index = 0; index < value.length; index += 1) {
+      if (index > 0) yield ",";
+      const entry = value[index];
+      if (entry === undefined) throw new Error("Canonical JSON array contains an undefined value");
+      yield* canonicalJsonTokens(entry);
+    }
+    yield "]";
+    return;
   }
   const object = value as JsonObject;
-  return `{${Object.keys(object)
-    .sort(compareCodePoints)
-    .map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key] ?? null)}`)
-    .join(",")}}`;
+  yield "{";
+  const keys = Object.keys(object).sort(compareCodePoints);
+  for (let index = 0; index < keys.length; index += 1) {
+    const key = keys[index];
+    if (key === undefined) throw new Error("Canonical JSON object key is unavailable");
+    if (index > 0) yield ",";
+    yield JSON.stringify(key);
+    yield ":";
+    yield* canonicalJsonTokens(object[key] ?? null);
+  }
+  yield "}";
 }
 
 export function sha256CanonicalJson(value: JsonValue): string {
-  return createHash("sha256").update(canonicalJson(value)).digest("hex");
+  const hash = createHash("sha256");
+  for (const chunk of canonicalJsonChunks(value)) hash.update(chunk, "utf8");
+  return hash.digest("hex");
+}
+
+/** Read the normalized barcode identity through the same path used by validation. */
+export function readCatalogueBarcodeEvidence(payload: JsonValue): CatalogueBarcodeEvidence | null {
+  const root = objectValue(payload);
+  const identity = objectValue(root?.identity);
+  const source = objectValue(root?.source);
+  const rawValue = optionalText(identity?.gtin, 32);
+  if (!rawValue) return null;
+  const candidateMarketCode = boundedText(source?.marketCode, 2, 3);
+  let normalizedGtin: string | null;
+  try {
+    normalizedGtin = normalizeGtin14(rawValue);
+  } catch {
+    normalizedGtin = null;
+  }
+  return {
+    marketCode:
+      candidateMarketCode && /^[A-Z0-9]{2,3}$/.test(candidateMarketCode)
+        ? candidateMarketCode
+        : null,
+    normalizedGtin,
+    rawValue,
+    sourceFoodKey: boundedText(source?.sourceRecordId, 1, 256),
+  };
 }
 
 export function validateCatalogueRecord(
@@ -348,16 +425,10 @@ export function validateCatalogueRecord(
   }
   const servings = validateServings(servingsInput ?? [], issues);
 
-  const rawGtin = optionalText(identity?.gtin, 32);
+  const barcodeEvidence = readCatalogueBarcodeEvidence(payload);
+  const rawGtin = barcodeEvidence?.rawValue ?? null;
   let gtin: string | null = null;
-  let canonicalGtin: string | null = null;
-  if (rawGtin) {
-    try {
-      canonicalGtin = normalizeGtin14(rawGtin);
-    } catch {
-      canonicalGtin = null;
-    }
-  }
+  const canonicalGtin = barcodeEvidence?.normalizedGtin ?? null;
   const gtinMarketKey = canonicalGtin && marketCode ? `${canonicalGtin}:${marketCode}` : null;
   if (canonicalGtin && !forbiddenGtins.has(gtinMarketKey ?? canonicalGtin)) {
     gtin = canonicalGtin;

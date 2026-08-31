@@ -41,6 +41,58 @@ See [`infra/runbooks/food-source-release.md`](../../infra/runbooks/food-source-r
 for the release procedure. Database promotion requires three distinct immutable
 approvals bound to the manifest and validation digests.
 
+## Database-only reconciliation evidence
+
+After a batch is frozen by validation, generate its database reconciliation
+document with the exact read-only command:
+
+```sh
+pnpm --filter @nutrition-tracker/ingest cli -- catalogue reconcile \
+  --batch-id <uuid> \
+  --expected-current-release-id <uuid|none> \
+  --expected-validation-digest <lowercase-sha256> \
+  --report-out .local-data/evidence/catalogue-reconciliation/<batch-id>.json
+```
+
+The command accepts no positional arguments or additional options and validates
+every UUID and digest before opening PostgreSQL. It has no trusted actor because
+it grants no approval and performs no promotion. The database comparison is
+bound to the caller's expected current release and validation digest, then
+written as canonical JSON plus one newline. Reports are allowed only beneath the
+ignored repo-local `.local-data/evidence/catalogue-reconciliation` directory;
+absolute paths, traversal outside that root, Windows paths, `/mnt/c` paths, and
+symbolic-link components are rejected. Every directory in the private evidence
+tree must be owned by the current WSL user with mode `0700`. Missing directories
+are created with that mode. The database connection must close successfully
+before publication begins. Canonical bytes are written to a same-directory,
+no-follow, exclusive mode-`0600` temporary file and synchronized; an atomic
+no-clobber hard link publishes the complete inode, the temporary name is removed,
+and the directory is synchronized. An interruption can leave no truncated final
+path, and the command never overwrites an existing report. Standard output is
+written only after publication and contains the batch ID, expected current
+release ID, reconciliation digest, and resolved report path; it never emits a
+`promotionEligible` claim.
+
+Canonical hashing and private report output are incremental, so they do not
+create a second full canonical-JSON string. The current database observation and
+document builder still retain the validated baseline/candidate snapshots and
+result document in memory. Do not describe this command as bounded-memory at
+full-FDC scale or use it for a live release until representative peak-memory and
+footprint evidence passes the separately reviewed release budget.
+
+This document is database-only review evidence. Mapping transitions cover only
+revisions referenced by materialized observations; a full reviewed-registry diff
+and high-impact nutrient outlier review remain separate required evidence. It
+retains the complete accepted baseline- and candidate-barcode assignment
+populations and the complete per-food nutrient-state matrix, so barcode
+transitions, rates, and missingness transitions are independently recomputable.
+Quarantined records are evidence but
+never enter the barcode-rate population. The command also does not inspect or
+approve a Meilisearch generation, search-result
+relevance, zero-result rate, index document count, build time, p95 latency, or
+memory/disk footprint. Retain all of that separate evidence before any
+independent approval or promotion decision.
+
 `catalogue stage-fdc` requires content-addressed, object-locked artifact and
 manifest URIs; the manifest URI must contain the exact manifest SHA-256.
 It checkpoints every committed record chunk. Replaying a
@@ -51,4 +103,8 @@ batch on replay.
 
 Nutrient mappings are never inferred from staged rows. A reviewer supplies a
 mapping file to `catalogue mappings`; the database resolves source nutrient keys
-through that reviewed mapping during validation and materialization.
+through that reviewed mapping during validation and materialization. Promotion
+also freezes the complete sorted active mapping-revision ID set in the immutable
+release validation summary. Historical reconciliation reloads that exact set and
+recomputes its full digest, including warning-excluded and entirely unused
+mappings, while report transition rows remain materialized-observation-only.

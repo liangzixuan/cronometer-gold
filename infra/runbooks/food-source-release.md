@@ -80,11 +80,61 @@ Compare against the current promoted release:
 - quarantined rows and high-impact nutrient outliers;
 - index document count, build time, p95 latency, and memory/disk footprint.
 
-No automated reconciliation command is shipped in the ingestion-core milestone.
-Until that digest-bound report is implemented, these comparisons require
-independently retained review evidence and a live source release must not be
-approved. CNF likewise has a production parser adapter but no operator staging
+For the database-resident comparisons, generate a digest-bound document after
+validation with:
+
+```sh
+pnpm --filter @nutrition-tracker/ingest cli -- catalogue reconcile \
+  --batch-id <uuid> \
+  --expected-current-release-id <uuid|none> \
+  --expected-validation-digest <lowercase-sha256> \
+  --report-out .local-data/evidence/catalogue-reconciliation/<batch-id>.json
+```
+
+This is a read-only evidence command with no actor. It rejects positional,
+missing, repeated, unknown, or malformed arguments before database access,
+requires the caller's exact current-release expectation, and permits output only
+beneath the ignored repo-local `.local-data/evidence/catalogue-reconciliation`
+root. Absolute, escaping, Windows, `/mnt/c`, or symbolic-link paths are refused.
+Every evidence-tree parent must be current-user-owned with mode `0700`; the
+database connection must close successfully before publication begins. The
+canonical report is written and synchronized through a same-directory,
+no-follow, exclusive mode-`0600` temporary inode, atomically published through a
+no-clobber hard link, and followed by temporary-name cleanup and directory
+synchronization. Standard output is emitted only after that sequence succeeds;
+an interruption cannot expose a truncated final report. The command neither
+records an approval nor marks the batch eligible for promotion.
+
+Canonical SHA-256 calculation and report-file writing stream canonical chunks
+and avoid allocating a second full serialized document. The current database
+observer and pure builder still retain the validated baseline/candidate
+snapshots and result object in memory. A live full-FDC reconciliation remains
+blocked until representative peak-memory and footprint evidence passes the
+reviewed release budget; do not infer bounded-memory operation from streaming
+output alone.
+
+The document covers database catalogue records, referenced materialized mapping
+transitions, quarantine evidence, and barcode attempts/rates. Mapping digests
+bind the full reviewed registry, but transition rows are explicitly scoped to
+materialized observations and are not a complete registry diff. It retains the
+complete accepted baseline- and candidate-barcode assignment populations and
+complete per-food nutrient-state matrix so barcode transitions, market rates,
+and missingness transitions can be recomputed exactly; quarantined records
+remain visible but never enter the
+barcode-rate population. Independently
+retain and review the full nutrient-mapping registry diff, high-impact nutrient
+outlier review, and search/index evidence above, including relevance,
+zero-result, document-count, build-time, latency, and footprint results.
+Database reconciliation cannot authorize approval, promotion, or an alias
+switch. CNF likewise has a production parser adapter but no operator staging
 command yet; its first activation remains blocked.
+
+Promotion stores the complete sorted active mapping-revision ID set in the
+immutable release validation summary. Historical baseline verification reloads
+that exact set and recomputes the full registry digest, including revisions used
+only by warning-excluded nutrients and mappings unused by every staged record.
+Older releases without this evidence fail closed and require a separately
+reviewed recovery decision; current mapping state must not be substituted.
 
 Data engineering, product quality, and rights reviewers sign distinct immutable
 role approvals bound to both the manifest SHA-256 and validation-report SHA-256.

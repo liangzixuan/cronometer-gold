@@ -1,11 +1,16 @@
+import { createHash } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 
 import {
   type BatchRecordValidation,
   type BatchValidationPolicy,
+  canonicalJson,
+  canonicalJsonChunks,
   evaluateBatchPolicy,
   type JsonObject,
   type ReviewedCatalogueNutrientMapping,
+  readCatalogueBarcodeEvidence,
   sha256CanonicalJson,
   validateCatalogueRecord,
 } from "../src/index.js";
@@ -80,6 +85,87 @@ function validate(payload: JsonObject | null, mappings = [PROTEIN_MAPPING]) {
 }
 
 describe("catalogue record validation", () => {
+  it("streams byte-identical canonical JSON and SHA-256 evidence", () => {
+    const value: JsonObject = {
+      astral: "food 🫐",
+      control: 'line\nquote"',
+      nested: { z: null, a: [true, -0, "é"] },
+    };
+    const chunks = [...canonicalJsonChunks(value)];
+    const streamedHash = createHash("sha256");
+    for (const chunk of chunks) streamedHash.update(chunk, "utf8");
+
+    expect(chunks.join("")).toBe(canonicalJson(value));
+    expect(streamedHash.digest("hex")).toBe(sha256CanonicalJson(value));
+    expect(canonicalJson(value)).toBe(
+      '{"astral":"food 🫐","control":"line\\nquote\\"","nested":{"a":[true,0,"é"],"z":null}}',
+    );
+  });
+
+  it("streams large canonical documents without changing their bytes or digest", () => {
+    const value: JsonObject = {
+      rows: Array.from({ length: 10_000 }, (_, index) => ({ index, value: `row-${index}` })),
+      scalar: "x".repeat(128 * 1_024 + 1),
+    };
+    const chunks = [...canonicalJsonChunks(value)];
+    const streamedHash = createHash("sha256");
+    for (const chunk of chunks) streamedHash.update(chunk, "utf8");
+
+    expect(chunks.length).toBeGreaterThan(2);
+    expect(chunks.join("")).toBe(canonicalJson(value));
+    expect(streamedHash.digest("hex")).toBe(sha256CanonicalJson(value));
+  });
+
+  it("normalizes retained barcode evidence through the validation text path", () => {
+    expect(
+      readCatalogueBarcodeEvidence(
+        foodPayload({
+          identity: {
+            brandOwner: null,
+            description: "Oats",
+            descriptionFr: null,
+            gtin: "  00000000000017  ",
+          },
+          source: {
+            ...(foodPayload().source as JsonObject),
+            marketCode: "US",
+            sourceRecordId: " 123 ",
+          },
+        }),
+      ),
+    ).toEqual({
+      marketCode: "US",
+      normalizedGtin: "00000000000017",
+      rawValue: "00000000000017",
+      sourceFoodKey: "123",
+    });
+    expect(
+      readCatalogueBarcodeEvidence(
+        foodPayload({
+          identity: {
+            brandOwner: null,
+            description: "Oats",
+            descriptionFr: null,
+            gtin: "  ba\u0301d   value  ",
+          },
+        }),
+      ),
+    ).toMatchObject({ normalizedGtin: null, rawValue: "bád value" });
+    expect(
+      readCatalogueBarcodeEvidence(
+        foodPayload({
+          identity: {
+            brandOwner: null,
+            description: "Oats",
+            descriptionFr: null,
+            gtin: "00000000000017",
+          },
+          source: { ...(foodPayload().source as JsonObject), marketCode: "us" },
+        }),
+      ),
+    ).toMatchObject({ marketCode: null, normalizedGtin: "00000000000017" });
+  });
+
   it("accepts a nutrient-bearing food with no source portions", () => {
     const result = validate(foodPayload());
 

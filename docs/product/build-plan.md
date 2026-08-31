@@ -53,9 +53,17 @@ and tested. A live FDC release has intentionally not been promoted: the checked-
 candidate remains non-importable until two independently authenticated operators
 agree on the streamed artifact, rights review is recorded, immutable object
 storage is provisioned, and the complete nutrient map is reviewed. Current-vs-
-candidate reconciliation tooling and the CNF operator staging command remain
-pre-activation work; their absence blocks a live release but not the completed
-ingestion-core milestone. Tests use
+candidate database reconciliation now atomically emits canonical, digest-bound,
+read-only evidence into a private, symlink-free repo-local `.local-data` evidence
+tree only after database cleanup, without granting approval or promotion
+eligibility. Separate retained full-registry mapping review, high-impact nutrient
+outlier review, search/index evidence, and the CNF operator staging command
+remain pre-activation work; their absence blocks a live release but not the
+completed ingestion-core milestone. Promoted releases freeze the complete active
+mapping-revision set for exact historical revalidation, and canonical report
+hashing/writing is incremental. The database observer and document builder still
+retain full validated snapshots and the result object, so representative
+full-FDC peak-memory evidence remains a live-release blocker. Tests use
 synthetic approvals only to verify the transaction and historical-snapshot
 invariants; they are not production attestations.
 

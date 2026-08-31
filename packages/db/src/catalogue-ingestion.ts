@@ -2,13 +2,27 @@ import { randomUUID } from "node:crypto";
 
 import type { Kysely, Selectable, Transaction } from "kysely";
 import { sql } from "kysely";
-
+import {
+  buildCatalogueReconciliationDocument,
+  type CatalogueReconciliationBuildInput,
+  type CatalogueReconciliationCandidateCounts,
+  type CatalogueReconciliationDocument,
+  type CatalogueReconciliationFoodSnapshot,
+  type CatalogueReconciliationMappingSnapshot,
+  type CatalogueReconciliationNutrientSnapshot,
+  type CatalogueReconciliationQuarantinedRecord,
+  type CatalogueReconciliationRejectedBarcode,
+  type CatalogueReconciliationReleaseEvidence,
+  type CatalogueReconciliationServingSnapshot,
+} from "./catalogue-reconciliation.js";
 import {
   type CatalogueRecordValidationResult,
   type CatalogueValidationIssue,
   canonicalJson,
   type ReviewedCatalogueNutrientMapping,
+  readCatalogueBarcodeEvidence,
   sha256CanonicalJson,
+  type ValidatedCatalogueFood,
   validateCatalogueRecord,
 } from "./catalogue-validation.js";
 import type {
@@ -24,6 +38,8 @@ import type {
 } from "./types.js";
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const PINNED_PARSER_VERSION_PATTERN = /^(.+)\+build\.([0-9a-f]{64})\+mapping\.([0-9a-f]{64})$/;
 const SOURCE_LOCK_NAMESPACE = "nutrition-tracker:catalogue-source:v1";
 const NUTRIENT_REGISTRY_LOCK_NAMESPACE = "nutrition-tracker:active-nutrient-registry:v1";
 
@@ -281,6 +297,12 @@ export interface BatchCheckpoint {
   readonly processedCount: string;
   readonly stage: FoodImportCheckpointStage;
   readonly updatedAt: Date;
+}
+
+export interface ReconcileCatalogueBatchInput {
+  readonly batchId: string;
+  readonly expectedCurrentReleaseId: string | null;
+  readonly expectedValidationDigest: string;
 }
 
 export interface PromoteBatchOptions {
@@ -842,6 +864,119 @@ export async function validateBatch(
   });
 }
 
+/**
+ * Build database-only current-vs-candidate evidence without acquiring locks or
+ * mutating workflow state. The caller must pin both the current release pointer
+ * and the independently observed validation digest.
+ */
+export async function reconcileCatalogueBatch(
+  database: Kysely<Database>,
+  input: ReconcileCatalogueBatchInput,
+): Promise<CatalogueReconciliationDocument> {
+  if (!UUID_PATTERN.test(input.batchId)) throw new Error("batchId must be a canonical UUID");
+  if (
+    input.expectedCurrentReleaseId !== null &&
+    !UUID_PATTERN.test(input.expectedCurrentReleaseId)
+  ) {
+    throw new Error("expectedCurrentReleaseId must be null or a canonical UUID");
+  }
+  assertSha256(input.expectedValidationDigest, "expectedValidationDigest");
+  const buildInput: CatalogueReconciliationBuildInput = await database
+    .transaction()
+    .setIsolationLevel("repeatable read")
+    .setAccessMode("read only")
+    .execute(async (transaction) => {
+      const batch = await selectBatch(transaction, input.batchId);
+      const source = await transaction
+        .selectFrom("food_source")
+        .selectAll()
+        .where("id", "=", batch.food_source_id)
+        .executeTakeFirstOrThrow();
+      if (source.active_release_id !== input.expectedCurrentReleaseId) {
+        throw new Error(
+          `Current release pointer changed: expected ${input.expectedCurrentReleaseId ?? "none"}, found ${source.active_release_id ?? "none"}`,
+        );
+      }
+      assertReconciliationCandidateState(batch);
+      const candidateParser = await loadAndVerifyParserEvidence(transaction, batch, source.code);
+      const candidateObservation = await observeBatchValidation(
+        transaction,
+        batch,
+        normalizePolicy(batch.validation_policy),
+      );
+      const candidateRegistry = candidateObservation.nutrientRegistry;
+      if (candidateRegistry.revisionDigest !== candidateParser.nutrientMappingDigest) {
+        throw new Error(
+          "Candidate nutrient-mapping digest does not match active reviewed mappings",
+        );
+      }
+      const summary = candidateObservation.summary;
+      if (summary.validationDigest !== input.expectedValidationDigest) {
+        throw new Error("Candidate validation digest does not match expectedValidationDigest");
+      }
+      const validatedCandidate = loadAndVerifyCandidateRows(
+        batch,
+        summary,
+        candidateObservation.entries,
+      );
+      assertFrozenCandidateSummary(batch, summary, candidateParser.report);
+
+      const candidateFoods = validatedCandidate.valid.map(({ food, record }) =>
+        reconciliationFoodFromValidated(food, record.source_payload_sha256),
+      );
+      const candidateMappings = mappingSnapshotsFromRegistry(
+        candidateRegistry.mappings,
+        referencedMappingRevisionIds(candidateFoods),
+      );
+      const baseline = input.expectedCurrentReleaseId
+        ? await loadAndVerifyReconciliationBaseline(
+            transaction,
+            source.id,
+            source.code,
+            input.expectedCurrentReleaseId,
+          )
+        : null;
+      const candidateCounts: CatalogueReconciliationCandidateCounts = {
+        parserExcludedNutrients: String(candidateParser.report.excluded_nutrient_count),
+        parserExcludedPortions: String(candidateParser.report.excluded_portion_count),
+        parserExcludedRecords: String(candidateParser.report.excluded_record_count),
+        stagedQuarantined: String(validatedCandidate.quarantined.length),
+        stagedValid: String(validatedCandidate.valid.length),
+      };
+      const quarantinedRecords: CatalogueReconciliationQuarantinedRecord[] =
+        validatedCandidate.quarantined.map(({ record, result }) => ({
+          canonicalPayloadSha256: record.canonical_payload_sha256,
+          issues: result.issues,
+          sourceRecordKey: record.source_record_key,
+        }));
+
+      return {
+        baseline: baseline?.evidence ?? null,
+        baselineFoods: baseline?.foods ?? [],
+        baselineMappings: baseline?.mappings ?? [],
+        candidate: {
+          artifactBytes: String(batch.artifact_bytes),
+          artifactSha256: batch.artifact_sha256,
+          batchId: batch.id,
+          nutrientMappingDigest: candidateParser.nutrientMappingDigest,
+          parserBuildSha256: candidateParser.parserBuildSha256,
+          parserReportSha256: candidateParser.report.report_sha256,
+          parserVersion: batch.parser_version,
+          releaseKey: batch.release_key,
+          rightsManifestSha256: batch.rights_manifest_sha256,
+          validationDigest: summary.validationDigest,
+        },
+        candidateCounts,
+        candidateFoods,
+        candidateMappings,
+        quarantinedRecords,
+        rejectedCandidateBarcodes: validatedCandidate.rejectedBarcodes,
+        sourceCode: source.code,
+      };
+    });
+  return buildCatalogueReconciliationDocument(buildInput);
+}
+
 /** Bind a human/service approval to the exact post-validation digest. */
 export async function approveBatch(
   database: Kysely<Database>,
@@ -961,15 +1096,22 @@ export async function promoteBatch(
       throw new Error("Promotion policy requires distinct approval principals");
     }
 
-    const release = await createOrLoadRelease(transaction, initialBatch, summary);
+    const nutrientRegistry = await loadNutrientMappings(transaction, source.id);
+    if (nutrientRegistry.revisionDigest !== summary.nutrientMappingDigest) {
+      throw new Error("Approved validation no longer matches the reviewed nutrient registry");
+    }
+    const release = await createOrLoadRelease(
+      transaction,
+      initialBatch,
+      summary,
+      nutrientRegistry.revisionIds,
+    );
     await transaction
       .updateTable("food_import_batch")
       .set({ release_id: release.id, status: "promoting" })
       .where("id", "=", initialBatch.id)
       .execute();
 
-    const nutrientRegistry = await loadNutrientMappings(transaction, source.id);
-    const forbiddenGtins = await loadForbiddenGtins(transaction, source.id);
     const validRecords = await transaction
       .selectFrom("food_import_record")
       .selectAll()
@@ -980,6 +1122,7 @@ export async function promoteBatch(
     if (validRecords.length !== summary.validCount) {
       throw new Error("Validated record count changed before promotion");
     }
+    const forbiddenGtins = await loadForbiddenGtins(transaction, source.id, validRecords);
 
     const materialized: Array<{
       foodId: string;
@@ -1143,11 +1286,1038 @@ export async function rollbackSourceRelease(
   });
 }
 
+interface PinnedParserEvidence {
+  readonly nutrientMappingDigest: string;
+  readonly parserBuildSha256: string;
+  readonly parserPackageVersion: string;
+  readonly report: Selectable<FoodImportParserReportTable>;
+}
+
+interface ValidatedReconciliationRecord {
+  readonly record: RecordRow;
+  readonly result: CatalogueRecordValidationResult;
+}
+
+interface ValidatedReconciliationFood extends ValidatedReconciliationRecord {
+  readonly food: ValidatedCatalogueFood;
+}
+
+interface LoadedNutrientMappings {
+  readonly mappings: ReadonlyMap<string, ReviewedCatalogueNutrientMapping>;
+  readonly revisionDigest: string;
+  readonly revisionIds: readonly string[];
+}
+
+interface BatchValidationObservation {
+  readonly entries: readonly ValidatedReconciliationRecord[];
+  readonly nutrientRegistry: LoadedNutrientMappings;
+  readonly sourceCode: string;
+  readonly summary: BatchValidationSummary;
+}
+
+interface ReconciliationBaseline {
+  readonly evidence: CatalogueReconciliationReleaseEvidence;
+  readonly foods: readonly CatalogueReconciliationFoodSnapshot[];
+  readonly mappings: readonly CatalogueReconciliationMappingSnapshot[];
+}
+
+function assertReconciliationCandidateState(batch: BatchRow): void {
+  if (batch.status !== "ready") {
+    throw new Error(`Candidate batch ${batch.id} must be exactly ready, not ${batch.status}`);
+  }
+  if (
+    !batch.validated_at ||
+    batch.completed_at !== null ||
+    batch.release_id !== null ||
+    Number(batch.materialized_count) !== 0 ||
+    Number(batch.unresolved_error_count) !== 0
+  ) {
+    throw new Error("Candidate batch ready-state invariants are incomplete");
+  }
+  if (
+    canonicalJson(normalizePolicy(batch.validation_policy)) !==
+    canonicalJson(batch.validation_policy)
+  ) {
+    throw new Error("Candidate validation policy is not the exact frozen normalized policy");
+  }
+}
+
+async function loadAndVerifyParserEvidence(
+  database: DatabaseExecutor,
+  batch: BatchRow,
+  sourceCode: string,
+): Promise<PinnedParserEvidence> {
+  const pinned = PINNED_PARSER_VERSION_PATTERN.exec(batch.parser_version);
+  if (!pinned?.[1] || !pinned[2] || !pinned[3]) {
+    throw new Error(
+      "Parser version must pin exact parser-build and nutrient-mapping SHA-256 digests",
+    );
+  }
+  const report = await database
+    .selectFrom("food_import_parser_report")
+    .selectAll()
+    .where("batch_id", "=", batch.id)
+    .executeTakeFirst();
+  if (!report) throw new Error(`Batch ${batch.id} is missing immutable parser evidence`);
+  if (sha256CanonicalJson(report.report) !== report.report_sha256) {
+    throw new Error("Parser report digest does not match its canonical report bytes");
+  }
+  assertParserCountSums(parserCountsFromRow(report));
+  const payload = jsonObjectValue(report.report, "parser report");
+  const exactFields: ReadonlyArray<readonly [string, JsonValue]> = [
+    ["artifactSha256", batch.artifact_sha256],
+    ["nutrientMappingDigest", pinned[3]],
+    ["parserBuildSha256", pinned[2]],
+    ["parserVersion", pinned[1]],
+    ["releaseKey", batch.release_key],
+    ["schemaVersion", 1],
+    ["sourceCode", sourceCode],
+  ];
+  for (const [field, expected] of exactFields) {
+    if (canonicalJson(payload[field] ?? null) !== canonicalJson(expected)) {
+      throw new Error(`Parser report ${field} does not match immutable batch provenance`);
+    }
+  }
+  return {
+    nutrientMappingDigest: pinned[3],
+    parserBuildSha256: pinned[2],
+    parserPackageVersion: pinned[1],
+    report,
+  };
+}
+
+function loadAndVerifyCandidateRows(
+  batch: BatchRow,
+  summary: BatchValidationSummary,
+  entries: readonly ValidatedReconciliationRecord[],
+): {
+  readonly quarantined: readonly ValidatedReconciliationRecord[];
+  readonly rejectedBarcodes: readonly CatalogueReconciliationRejectedBarcode[];
+  readonly valid: readonly ValidatedReconciliationFood[];
+} {
+  const rows = entries.map((entry) => entry.record);
+  const summaryByKey = new Map(summary.records.map((record) => [record.sourceRecordKey, record]));
+  const valid: ValidatedReconciliationFood[] = [];
+  const quarantined: ValidatedReconciliationRecord[] = [];
+  const rejectedBarcodes: CatalogueReconciliationRejectedBarcode[] = [];
+  for (const entry of entries) {
+    const { record, result } = entry;
+    assertRecordPayloadEvidence(record);
+    const expected = summaryByKey.get(record.source_record_key);
+    if (
+      !expected ||
+      expected.status !== (result.recordIsValid ? "valid" : "quarantined") ||
+      expected.canonicalPayloadSha256 !== record.canonical_payload_sha256 ||
+      canonicalJson(expected.issues as JsonValue) !== canonicalJson(result.issues as JsonValue) ||
+      record.validation_status !== expected.status ||
+      canonicalJson(record.validation_issues) !== canonicalJson(result.issues as JsonValue) ||
+      !record.validated_at ||
+      record.validated_at.toISOString() !== batch.validated_at?.toISOString() ||
+      record.food_version_id !== null ||
+      record.materialized_at !== null
+    ) {
+      throw new Error(
+        `Candidate record ${record.source_record_key} no longer matches frozen validation`,
+      );
+    }
+    const barcode = readCatalogueBarcodeEvidence(record.canonical_payload);
+    const sourceFoodKey = barcode?.sourceFoodKey ?? record.source_record_key;
+    if (barcode && result.recordIsValid) {
+      for (const issue of result.issues.filter((item) => item.disposition === "exclude_barcode")) {
+        if (
+          issue.code !== "BARCODE_CROSS_SOURCE_CONFLICT" &&
+          issue.code !== "BARCODE_INVALID_GTIN"
+        ) {
+          throw new Error(`Unsupported rejected-barcode reason ${issue.code}`);
+        }
+        rejectedBarcodes.push({
+          marketCode: barcode.marketCode,
+          normalizedGtin: barcode.normalizedGtin,
+          rawValue: barcode.rawValue,
+          reasonCode: issue.code,
+          sourceFoodKey,
+        });
+      }
+    }
+    if (result.recordIsValid && result.food) valid.push({ ...entry, food: result.food });
+    else quarantined.push(entry);
+  }
+  if (summaryByKey.size !== rows.length) {
+    throw new Error("Candidate validation summary does not cover every staged record exactly once");
+  }
+  rejectedBarcodes.sort((left, right) =>
+    compareCodePoints(
+      `${left.sourceFoodKey}\u0000${left.reasonCode}\u0000${left.rawValue}`,
+      `${right.sourceFoodKey}\u0000${right.reasonCode}\u0000${right.rawValue}`,
+    ),
+  );
+  return { quarantined, rejectedBarcodes, valid };
+}
+
+function assertFrozenCandidateSummary(
+  batch: BatchRow,
+  summary: BatchValidationSummary,
+  parserReport: Selectable<FoodImportParserReportTable>,
+): void {
+  const comparisons: ReadonlyArray<readonly [string, string, string]> = [
+    ["stagedCount", String(batch.staged_count), String(summary.stagedCount)],
+    ["validCount", String(batch.valid_count), String(summary.validCount)],
+    ["quarantinedCount", String(batch.quarantined_count), String(summary.quarantinedCount)],
+    [
+      "unresolvedErrorCount",
+      String(batch.unresolved_error_count),
+      String(summary.unresolvedErrorCount),
+    ],
+    ["warningCount", String(batch.warning_count), String(summary.warningCount)],
+    ["nutrientInputCount", String(batch.nutrient_input_count), String(summary.nutrientInputCount)],
+    [
+      "nutrientMaterializableCount",
+      String(batch.nutrient_materializable_count),
+      String(summary.nutrientMaterializableCount),
+    ],
+    [
+      "excludedNutrientCount",
+      String(batch.nutrient_excluded_count),
+      String(summary.excludedNutrientCount),
+    ],
+    [
+      "parserEmittedRecords",
+      String(parserReport.emitted_record_count),
+      String(summary.stagedCount),
+    ],
+  ];
+  for (const [field, stored, recomputed] of comparisons) {
+    if (stored !== recomputed) throw new Error(`Frozen candidate ${field} changed`);
+  }
+  if (!summary.promotionEligible || summary.unresolvedErrorCount !== 0) {
+    throw new Error("Frozen candidate no longer satisfies its validation policy");
+  }
+}
+
+function reconciliationFoodFromValidated(
+  food: ValidatedCatalogueFood,
+  sourcePayloadSha256: string,
+): CatalogueReconciliationFoodSnapshot {
+  const descriptionFr = nullableJsonText(
+    food.attributes.descriptionFr,
+    "food.attributes.descriptionFr",
+  );
+  const nutrients: CatalogueReconciliationNutrientSnapshot[] = food.nutrients.map((value) => ({
+    amount: normalizeDatabaseDecimal(value.amount),
+    canonicalUnit: value.canonicalUnit,
+    mappingRevisionId: value.mappingRevisionId,
+    metadata: value.metadata,
+    nutrientCode: value.nutrientCode,
+    sourceAmount: value.sourceAmount === null ? null : normalizeDatabaseDecimal(value.sourceAmount),
+    sourceBasisQuantity:
+      value.sourceBasisQuantity === null
+        ? null
+        : normalizeDatabaseDecimal(value.sourceBasisQuantity),
+    sourceBasisUnit: value.sourceBasisUnit,
+    sourceName: value.sourceName,
+    sourceNutrientKey: value.sourceNutrientId,
+    sourceUnit: value.sourceUnit,
+    valueStatus: value.valueStatus,
+  }));
+  nutrients.sort((left, right) =>
+    compareCodePoints(
+      `${left.nutrientCode}\u0000${left.sourceNutrientKey}`,
+      `${right.nutrientCode}\u0000${right.sourceNutrientKey}`,
+    ),
+  );
+  const servings: CatalogueReconciliationServingSnapshot[] = food.servings.map((serving) => ({
+    displayOrder: serving.displayOrder,
+    gramWeight: normalizeDatabaseDecimal(serving.gramWeight),
+    isDefault: serving.isDefault,
+    label: serving.label,
+    metadata: serving.metadata,
+    milliliterVolume: null,
+    quantity: normalizeDatabaseDecimal(serving.quantity),
+    sourceServingKey: serving.sourceServingKey,
+    unit: serving.unit,
+    unitKind: serving.unitKind,
+  }));
+  servings.sort((left, right) => compareCodePoints(left.sourceServingKey, right.sourceServingKey));
+  return {
+    basisQuantity: normalizeDatabaseDecimal(food.basisQuantity),
+    basisUnit: "g",
+    brandName: food.brandName,
+    description: food.description,
+    descriptionFr,
+    gtin: food.gtin,
+    kind: food.kind,
+    languageTag: food.languageTag,
+    marketCode: food.marketCode,
+    name: food.name,
+    normalizedName: food.normalizedName,
+    nutrients,
+    servings,
+    sourceDataType: food.sourceDataType,
+    sourceFoodKey: food.sourceFoodKey,
+    sourceModifiedAt: food.sourceModifiedAt,
+    sourcePayloadSha256,
+  };
+}
+
+function referencedMappingRevisionIds(
+  foods: readonly CatalogueReconciliationFoodSnapshot[],
+): ReadonlySet<string> {
+  return new Set(foods.flatMap((food) => food.nutrients.map((value) => value.mappingRevisionId)));
+}
+
+function mappingSnapshotsFromRegistry(
+  mappings: ReadonlyMap<string, ReviewedCatalogueNutrientMapping>,
+  referencedRevisionIds: ReadonlySet<string>,
+): readonly CatalogueReconciliationMappingSnapshot[] {
+  const output = [...mappings.values()]
+    .filter((mapping) => referencedRevisionIds.has(mapping.mappingRevisionId))
+    .map((mapping) => ({
+      canonicalNutrientCode: mapping.nutrientCode,
+      canonicalUnit: mapping.canonicalUnit,
+      conversionMultiplier: normalizeDatabaseDecimal(mapping.conversionMultiplier),
+      revisionId: mapping.mappingRevisionId,
+      sourceNutrientKey: mapping.sourceNutrientId,
+      sourceUnit: mapping.sourceUnit,
+    }));
+  if (new Set(output.map((entry) => entry.revisionId)).size !== referencedRevisionIds.size) {
+    throw new Error("A candidate food references a nutrient mapping outside the active registry");
+  }
+  output.sort((left, right) =>
+    compareCodePoints(
+      `${left.canonicalNutrientCode}\u0000${left.sourceNutrientKey}`,
+      `${right.canonicalNutrientCode}\u0000${right.sourceNutrientKey}`,
+    ),
+  );
+  return output;
+}
+
+async function loadAndVerifyReconciliationBaseline(
+  database: DatabaseExecutor,
+  sourceId: string,
+  sourceCode: string,
+  releaseId: string,
+): Promise<ReconciliationBaseline> {
+  const release = await database
+    .selectFrom("food_source_release")
+    .selectAll()
+    .where("id", "=", releaseId)
+    .executeTakeFirst();
+  if (!release || release.food_source_id !== sourceId) {
+    throw new Error(
+      `Expected current release ${releaseId} does not belong to source ${sourceCode}`,
+    );
+  }
+  if (release.status !== "promoted" || !release.promoted_at) {
+    throw new Error(`Expected current release ${releaseId} is not a promoted release`);
+  }
+  const batches = await database
+    .selectFrom("food_import_batch")
+    .selectAll()
+    .where("food_source_id", "=", sourceId)
+    .where("release_id", "=", releaseId)
+    .execute();
+  if (batches.length !== 1 || !batches[0]) {
+    throw new Error("Current release must have exactly one provenance-linked import batch");
+  }
+  const batch = batches[0];
+  if (
+    batch.status !== "completed" ||
+    !batch.validated_at ||
+    !batch.completed_at ||
+    batch.release_id !== release.id ||
+    Number(batch.unresolved_error_count) !== 0 ||
+    Number(batch.materialized_count) !== Number(batch.valid_count)
+  ) {
+    throw new Error("Current release import batch is not one complete materialization");
+  }
+  const parser = await loadAndVerifyParserEvidence(database, batch, sourceCode);
+  const records = await database
+    .selectFrom("food_import_record")
+    .selectAll()
+    .where("batch_id", "=", batch.id)
+    .orderBy("sequence_number")
+    .execute();
+  for (const record of records) assertRecordPayloadEvidence(record);
+  const frozenMappingRevisionIds = await assertBaselineReleaseProvenance(
+    database,
+    release,
+    batch,
+    parser,
+    records,
+  );
+
+  const versionRows = await database
+    .selectFrom("food_import_record as record")
+    .innerJoin("food_version as version", "version.id", "record.food_version_id")
+    .innerJoin("food", "food.id", "version.food_id")
+    .select([
+      "record.source_record_key as record_source_record_key",
+      "record.source_record_type as record_source_record_type",
+      "record.source_payload_sha256 as record_source_payload_sha256",
+      "record.canonical_payload_sha256 as record_canonical_payload_sha256",
+      "record.canonical_payload as record_canonical_payload",
+      "version.id as version_id",
+      "version.source_release_id as version_source_release_id",
+      "version.name as version_name",
+      "version.normalized_name as version_normalized_name",
+      "version.brand_name as version_brand_name",
+      "version.description as version_description",
+      "version.ingredients_text as version_ingredients_text",
+      "version.language_tag as version_language_tag",
+      "version.market_code as version_market_code",
+      "version.data_quality as version_data_quality",
+      "version.basis_quantity as version_basis_quantity",
+      "version.basis_unit as version_basis_unit",
+      "version.source_modified_at as version_source_modified_at",
+      "version.attributes as version_attributes",
+      "version.created_by_user_id as version_created_by_user_id",
+      "food.kind as food_kind",
+      "food.food_source_id as food_source_id",
+      "food.source_food_key as food_source_food_key",
+      "food.owner_user_id as food_owner_user_id",
+      "food.visibility as food_visibility",
+      "food.current_version_id as food_current_version_id",
+      "food.archived_at as food_archived_at",
+    ])
+    .where("record.batch_id", "=", batch.id)
+    .where("record.validation_status", "=", "materialized")
+    .orderBy("record.source_record_key")
+    .execute();
+  if (versionRows.length !== Number(batch.materialized_count)) {
+    throw new Error("Current release materialized-record count does not match its completed batch");
+  }
+  const nutrientRows = await database
+    .selectFrom("food_import_record as record")
+    .innerJoin("food_nutrient_value as value", "value.food_version_id", "record.food_version_id")
+    .innerJoin("nutrient", "nutrient.id", "value.nutrient_id")
+    .select([
+      "record.source_record_key as record_source_record_key",
+      "value.amount",
+      "value.unit",
+      "value.basis_quantity",
+      "value.basis_unit",
+      "value.source_amount",
+      "value.source_unit",
+      "value.source_basis_quantity",
+      "value.source_basis_unit",
+      "value.value_status",
+      "value.derivation_code",
+      "value.confidence",
+      "value.metadata",
+      "nutrient.code as nutrient_code",
+      "nutrient.canonical_unit as nutrient_canonical_unit",
+    ])
+    .where("record.batch_id", "=", batch.id)
+    .where("record.validation_status", "=", "materialized")
+    .execute();
+  const servingRows = await database
+    .selectFrom("food_import_record as record")
+    .innerJoin("food_serving as serving", "serving.food_version_id", "record.food_version_id")
+    .select([
+      "record.source_record_key as record_source_record_key",
+      "serving.source_serving_key",
+      "serving.label",
+      "serving.quantity",
+      "serving.unit",
+      "serving.unit_kind",
+      "serving.gram_weight",
+      "serving.milliliter_volume",
+      "serving.is_default",
+      "serving.display_order",
+      "serving.metadata",
+    ])
+    .where("record.batch_id", "=", batch.id)
+    .where("record.validation_status", "=", "materialized")
+    .execute();
+  const barcodeRows = await database
+    .selectFrom("food_import_record as record")
+    .innerJoin("food_barcode as barcode", "barcode.food_version_id", "record.food_version_id")
+    .select([
+      "record.source_record_key as record_source_record_key",
+      "barcode.gtin",
+      "barcode.market_code",
+      "barcode.source_release_id",
+      "barcode.valid_to",
+    ])
+    .where("record.batch_id", "=", batch.id)
+    .where("record.validation_status", "=", "materialized")
+    .where("barcode.source_release_id", "=", release.id)
+    .where("barcode.valid_to", "is", null)
+    .execute();
+  const recordsBySourceRecordKey = new Map(
+    records.map((record) => [record.source_record_key, record] as const),
+  );
+  if (recordsBySourceRecordKey.size !== records.length) {
+    throw new Error("Completed baseline batch contains duplicate staged record identities");
+  }
+  const nutrientRowsBySourceRecordKey = groupMaterializedRowsByRecordKey(
+    nutrientRows,
+    (left, right) => {
+      const leftMetadata = jsonObjectValue(left.metadata, "materialized nutrient metadata");
+      const rightMetadata = jsonObjectValue(right.metadata, "materialized nutrient metadata");
+      return compareCodePoints(
+        `${left.nutrient_code}\u0000${jsonText(leftMetadata.sourceNutrientId, "materialized nutrient sourceNutrientId")}`,
+        `${right.nutrient_code}\u0000${jsonText(rightMetadata.sourceNutrientId, "materialized nutrient sourceNutrientId")}`,
+      );
+    },
+  );
+  const servingRowsBySourceRecordKey = groupMaterializedRowsByRecordKey(
+    servingRows,
+    (left, right) =>
+      compareCodePoints(
+        `${left.source_serving_key ?? ""}\u0000${String(left.display_order)}`,
+        `${right.source_serving_key ?? ""}\u0000${String(right.display_order)}`,
+      ),
+  );
+  const barcodeRowsBySourceRecordKey = groupMaterializedRowsByRecordKey(
+    barcodeRows,
+    (left, right) =>
+      compareCodePoints(
+        `${left.market_code}\u0000${left.gtin}`,
+        `${right.market_code}\u0000${right.gtin}`,
+      ),
+  );
+  const materializedMappingRevisionIds = new Set(
+    nutrientRows.map((row) =>
+      jsonText(
+        jsonObjectValue(row.metadata, "materialized nutrient metadata").mappingRevisionId,
+        "materialized nutrient mappingRevisionId",
+      ),
+    ),
+  );
+  const historicalMappings = await loadHistoricalMappingRegistry(
+    database,
+    sourceId,
+    new Set(frozenMappingRevisionIds),
+  );
+  if (historicalMappings.revisionDigest !== parser.nutrientMappingDigest) {
+    throw new Error("Frozen baseline nutrient registry does not match its pinned digest");
+  }
+  const foods: CatalogueReconciliationFoodSnapshot[] = [];
+  for (const row of versionRows) {
+    const attributes = jsonObjectValue(row.version_attributes, "materialized food attributes");
+    if (
+      row.version_source_release_id !== release.id ||
+      row.food_source_id !== sourceId ||
+      row.food_source_food_key === null ||
+      row.food_owner_user_id !== null ||
+      row.food_visibility !== "public" ||
+      row.food_current_version_id !== row.version_id ||
+      row.food_archived_at !== null ||
+      (row.food_kind !== "branded" && row.food_kind !== "generic") ||
+      row.version_basis_unit !== "g" ||
+      row.version_data_quality !== "provisional" ||
+      row.version_ingredients_text !== null ||
+      row.version_created_by_user_id !== null ||
+      attributes.canonicalPayloadSha256 !== row.record_canonical_payload_sha256 ||
+      attributes.importBatchId !== batch.id ||
+      attributes.idempotencyKey !== row.record_source_record_key ||
+      attributes.sourceDataType !== row.record_source_record_type ||
+      attributes.sourcePayloadSha256 !== row.record_source_payload_sha256 ||
+      attributes.unlistedNutrientPolicy !== "unknown_not_reported"
+    ) {
+      throw new Error(
+        `Materialized baseline food ${row.record_source_record_key} has provenance drift`,
+      );
+    }
+    const nutrients = (nutrientRowsBySourceRecordKey.get(row.record_source_record_key) ?? []).map(
+      (value): CatalogueReconciliationNutrientSnapshot => {
+        const metadata = jsonObjectValue(value.metadata, "materialized nutrient metadata");
+        const mappingRevisionId = jsonText(
+          metadata.mappingRevisionId,
+          "materialized nutrient mappingRevisionId",
+        );
+        const sourceName = jsonText(metadata.sourceName, "materialized nutrient sourceName");
+        const sourceNutrientKey = jsonText(
+          metadata.sourceNutrientId,
+          "materialized nutrient sourceNutrientId",
+        );
+        if (
+          value.unit !== value.nutrient_canonical_unit ||
+          value.basis_unit !== "g" ||
+          normalizeDatabaseDecimal(String(value.basis_quantity)) !==
+            normalizeDatabaseDecimal(String(row.version_basis_quantity)) ||
+          value.confidence !== null ||
+          (value.source_basis_unit !== null && value.source_basis_unit !== "g") ||
+          metadata.derivationCode !== value.derivation_code ||
+          !historicalMappings.revisionIds.has(mappingRevisionId)
+        ) {
+          throw new Error(`Materialized nutrient ${value.nutrient_code} has semantic drift`);
+        }
+        return {
+          amount: normalizeDatabaseDecimal(String(value.amount)),
+          canonicalUnit: value.unit,
+          mappingRevisionId,
+          metadata: metadata as JsonObject,
+          nutrientCode: value.nutrient_code,
+          sourceAmount:
+            value.source_amount === null
+              ? null
+              : normalizeDatabaseDecimal(String(value.source_amount)),
+          sourceBasisQuantity:
+            value.source_basis_quantity === null
+              ? null
+              : normalizeDatabaseDecimal(String(value.source_basis_quantity)),
+          sourceBasisUnit: value.source_basis_unit,
+          sourceName,
+          sourceNutrientKey,
+          sourceUnit: value.source_unit,
+          valueStatus: value.value_status,
+        };
+      },
+    );
+    nutrients.sort((left, right) =>
+      compareCodePoints(
+        `${left.nutrientCode}\u0000${left.sourceNutrientKey}`,
+        `${right.nutrientCode}\u0000${right.sourceNutrientKey}`,
+      ),
+    );
+    const servings = (servingRowsBySourceRecordKey.get(row.record_source_record_key) ?? []).map(
+      (value): CatalogueReconciliationServingSnapshot => {
+        if (!value.source_serving_key) {
+          throw new Error("Imported serving is missing its stable source identity");
+        }
+        return {
+          displayOrder: value.display_order,
+          gramWeight:
+            value.gram_weight === null ? null : normalizeDatabaseDecimal(String(value.gram_weight)),
+          isDefault: value.is_default,
+          label: value.label,
+          metadata: jsonObjectValue(value.metadata, "materialized serving metadata") as JsonObject,
+          milliliterVolume:
+            value.milliliter_volume === null
+              ? null
+              : normalizeDatabaseDecimal(String(value.milliliter_volume)),
+          quantity: normalizeDatabaseDecimal(String(value.quantity)),
+          sourceServingKey: value.source_serving_key,
+          unit: value.unit,
+          unitKind: value.unit_kind,
+        };
+      },
+    );
+    servings.sort((left, right) =>
+      compareCodePoints(left.sourceServingKey, right.sourceServingKey),
+    );
+    const barcodes = barcodeRowsBySourceRecordKey.get(row.record_source_record_key) ?? [];
+    if (
+      barcodes.length > 1 ||
+      barcodes.some((barcode) => barcode.market_code !== row.version_market_code)
+    ) {
+      throw new Error(
+        `Materialized baseline food ${row.record_source_record_key} has barcode drift`,
+      );
+    }
+    const snapshot: CatalogueReconciliationFoodSnapshot = {
+      basisQuantity: normalizeDatabaseDecimal(String(row.version_basis_quantity)),
+      basisUnit: "g",
+      brandName: row.version_brand_name,
+      description: row.version_description,
+      descriptionFr: nullableJsonText(attributes.descriptionFr, "food attributes.descriptionFr"),
+      gtin: barcodes[0]?.gtin ?? null,
+      kind: row.food_kind,
+      languageTag: row.version_language_tag,
+      marketCode: row.version_market_code,
+      name: row.version_name,
+      normalizedName: row.version_normalized_name,
+      nutrients,
+      servings,
+      sourceDataType: jsonText(attributes.sourceDataType, "food attributes.sourceDataType"),
+      sourceFoodKey: row.food_source_food_key,
+      sourceModifiedAt: row.version_source_modified_at?.toISOString() ?? null,
+      sourcePayloadSha256: row.record_source_payload_sha256,
+    };
+    const record = recordsBySourceRecordKey.get(row.record_source_record_key);
+    if (!record) throw new Error("Materialized baseline record lookup is inconsistent");
+    const revalidated = validateRecordRow(
+      record,
+      batch,
+      sourceCode,
+      historicalMappings.registry,
+      frozenBaselineForbiddenGtins(record),
+    );
+    if (
+      !revalidated.recordIsValid ||
+      !revalidated.food ||
+      canonicalJson(revalidated.issues as JsonValue) !== canonicalJson(record.validation_issues)
+    ) {
+      throw new Error(
+        `Materialized baseline food ${row.record_source_record_key} no longer validates`,
+      );
+    }
+    const expected = reconciliationFoodFromValidated(
+      revalidated.food,
+      row.record_source_payload_sha256,
+    );
+    if (canonicalJson(snapshot) !== canonicalJson(expected)) {
+      throw new Error(
+        `Materialized baseline food ${row.record_source_record_key} differs from staged meaning`,
+      );
+    }
+    foods.push(snapshot);
+  }
+  foods.sort((left, right) => compareCodePoints(left.sourceFoodKey, right.sourceFoodKey));
+  const validationSummary = jsonObjectValue(
+    release.validation_summary,
+    "release validation summary",
+  );
+  const validationDigest = jsonSha256(
+    validationSummary.validationDigest,
+    "release validationSummary.validationDigest",
+  );
+  return {
+    evidence: {
+      artifactBytes: String(release.artifact_bytes),
+      artifactSha256: release.artifact_sha256,
+      batchId: batch.id,
+      nutrientMappingDigest: parser.nutrientMappingDigest,
+      parserBuildSha256: parser.parserBuildSha256,
+      parserReportSha256: parser.report.report_sha256,
+      parserVersion: batch.parser_version,
+      releaseId: release.id,
+      releaseKey: release.release_key,
+      rightsManifestSha256: batch.rights_manifest_sha256,
+      validationDigest,
+    },
+    foods,
+    mappings: mappingSnapshotsFromRegistry(
+      historicalMappings.registry,
+      materializedMappingRevisionIds,
+    ),
+  };
+}
+
+async function loadHistoricalMappingRegistry(
+  database: DatabaseExecutor,
+  sourceId: string,
+  revisionIds: ReadonlySet<string>,
+): Promise<{
+  readonly registry: ReadonlyMap<string, ReviewedCatalogueNutrientMapping>;
+  readonly revisionDigest: string;
+  readonly revisionIds: ReadonlySet<string>;
+}> {
+  if (revisionIds.size === 0) {
+    return {
+      registry: new Map(),
+      revisionDigest: sha256CanonicalJson([]),
+      revisionIds: new Set(),
+    };
+  }
+  const rows = await database
+    .selectFrom("source_nutrient_map_revision as revision")
+    .innerJoin("nutrient", "nutrient.id", "revision.nutrient_id")
+    .select([
+      "revision.id",
+      "revision.food_source_id",
+      "revision.source_nutrient_key",
+      "revision.source_unit",
+      "revision.conversion_multiplier",
+      "nutrient.id as nutrient_id",
+      "nutrient.code as nutrient_code",
+      "nutrient.canonical_unit",
+      "nutrient.dimension",
+      "nutrient.name as nutrient_name",
+    ])
+    .where("revision.id", "in", [...revisionIds])
+    .execute();
+  if (rows.length !== revisionIds.size || rows.some((row) => row.food_source_id !== sourceId)) {
+    throw new Error("Materialized baseline references missing or cross-source mapping revisions");
+  }
+  const registry = new Map<string, ReviewedCatalogueNutrientMapping>();
+  for (const row of rows) {
+    if (registry.has(row.source_nutrient_key)) {
+      throw new Error(
+        "One baseline release references multiple mapping revisions for one source key",
+      );
+    }
+    registry.set(row.source_nutrient_key, {
+      canonicalUnit: row.canonical_unit,
+      conversionMultiplier: String(row.conversion_multiplier),
+      mappingRevisionId: row.id,
+      nutrientCode: row.nutrient_code,
+      nutrientId: row.nutrient_id,
+      sourceNutrientId: row.source_nutrient_key,
+      sourceUnit: row.source_unit,
+    });
+  }
+  const digestRows = rows.map((row) => ({
+    canonicalUnit: row.canonical_unit,
+    conversionMultiplier: String(row.conversion_multiplier),
+    nutrientCode: row.nutrient_code,
+    nutrientDimension: row.dimension,
+    nutrientId: String(row.nutrient_id),
+    nutrientName: row.nutrient_name,
+    revisionId: row.id,
+    sourceNutrientKey: row.source_nutrient_key,
+    sourceUnit: row.source_unit,
+  }));
+  return {
+    registry,
+    revisionDigest: nutrientMappingRevisionDigest(digestRows),
+    revisionIds: new Set(rows.map((row) => row.id)),
+  };
+}
+
+async function assertBaselineReleaseProvenance(
+  database: DatabaseExecutor,
+  release: Selectable<Database["food_source_release"]>,
+  batch: BatchRow,
+  parser: PinnedParserEvidence,
+  records: readonly RecordRow[],
+): Promise<readonly string[]> {
+  const mismatches = [
+    release.food_source_id === batch.food_source_id ? null : "foodSourceId",
+    release.release_key === batch.release_key ? null : "releaseKey",
+    dateOnly(release.published_on) === dateOnly(batch.published_on) ? null : "publishedOn",
+    release.acquired_at.toISOString() === batch.acquired_at.toISOString() ? null : "acquiredAt",
+    release.artifact_uri === batch.artifact_uri ? null : "artifactUri",
+    release.artifact_sha256 === batch.artifact_sha256 ? null : "artifactSha256",
+    String(release.artifact_bytes) === String(batch.artifact_bytes) ? null : "artifactBytes",
+    release.media_type === batch.media_type ? null : "mediaType",
+    release.upstream_schema_version === batch.upstream_schema_version
+      ? null
+      : "upstreamSchemaVersion",
+    release.parser_version === batch.parser_version ? null : "parserVersion",
+    release.rights_manifest_uri === batch.rights_manifest_uri ? null : "rightsManifestUri",
+    release.rights_manifest_sha256 === batch.rights_manifest_sha256 ? null : "rightsManifestSha256",
+  ].filter((field): field is string => field !== null);
+  if (mismatches.length > 0) {
+    throw new Error(
+      `Current release provenance differs from its one completed import batch: ${mismatches.join(", ")}`,
+    );
+  }
+  if (String(batch.staged_count) !== String(records.length)) {
+    throw new Error("Completed baseline batch staged count does not match immutable records");
+  }
+  const materialized = records.filter((record) => record.validation_status === "materialized");
+  const quarantined = records.filter((record) => record.validation_status === "quarantined");
+  if (
+    records.some(
+      (record) => record.validation_status === "pending" || record.validation_status === "valid",
+    )
+  ) {
+    throw new Error("Completed baseline batch contains unfinished record workflow state");
+  }
+  const parserExcludedRecords = Number(parser.report.excluded_record_count);
+  if (
+    materialized.length !== Number(batch.valid_count) ||
+    quarantined.length + parserExcludedRecords !== Number(batch.quarantined_count) ||
+    Number(parser.report.emitted_record_count) !== records.length
+  ) {
+    throw new Error("Completed baseline batch record counts do not reconcile");
+  }
+  const emittedNutrients = records.reduce(
+    (count, record) => count + jsonArrayLength(record.canonical_payload, "nutrients"),
+    0,
+  );
+  const emittedPortions = records.reduce(
+    (count, record) => count + jsonArrayLength(record.canonical_payload, "servings"),
+    0,
+  );
+  if (
+    emittedNutrients !== Number(parser.report.emitted_nutrient_count) ||
+    emittedPortions !== Number(parser.report.emitted_portion_count)
+  ) {
+    throw new Error("Completed baseline parser counts do not match staged canonical payloads");
+  }
+  const issueRows = records.flatMap((record) =>
+    Array.isArray(record.validation_issues) ? record.validation_issues : [],
+  );
+  const recordErrors = issueRows.filter(
+    (issue) => jsonObjectValue(issue, "validation issue").severity === "error",
+  ).length;
+  const warnings = issueRows.filter(
+    (issue) => jsonObjectValue(issue, "validation issue").severity === "warning",
+  ).length;
+  if (warnings !== Number(batch.warning_count)) {
+    throw new Error("Completed baseline warning count does not match frozen record issues");
+  }
+  const recordCounts: JsonObject = {
+    materializable: Number(batch.valid_count),
+    nutrientInput: Number(batch.nutrient_input_count),
+    nutrientMaterializable: Number(batch.nutrient_materializable_count),
+    nutrientExcluded: Number(batch.nutrient_excluded_count),
+    parserExcludedRecords,
+    quarantined: Number(batch.quarantined_count),
+    sourcePortions: Number(parser.report.source_portion_count),
+    sourceRecords: records.length + parserExcludedRecords,
+    staged: records.length,
+  };
+  if (canonicalJson(release.record_counts) !== canonicalJson(recordCounts)) {
+    throw new Error("Current release record counts differ from its completed import batch");
+  }
+  const validationSummary = jsonObjectValue(
+    release.validation_summary,
+    "release validation summary",
+  );
+  const validationDigest = jsonSha256(
+    validationSummary.validationDigest,
+    "release validationSummary.validationDigest",
+  );
+  const nutrientMappingRevisionIds = jsonUuidArray(
+    validationSummary.nutrientMappingRevisionIds,
+    "release validationSummary.nutrientMappingRevisionIds",
+  );
+  const nutrientInputCount = Number(batch.nutrient_input_count);
+  const validationEvidence: JsonObject = {
+    recordErrors,
+    excludedNutrientFraction:
+      nutrientInputCount === 0 ? 1 : Number(batch.nutrient_excluded_count) / nutrientInputCount,
+    nutrientMappingDigest: parser.nutrientMappingDigest,
+    nutrientMappingRevisionIds,
+    parserExcludedNutrients: Number(parser.report.excluded_nutrient_count),
+    parserExcludedPortions: Number(parser.report.excluded_portion_count),
+    parserReportSha256: parser.report.report_sha256,
+    unresolvedErrors: Number(batch.unresolved_error_count),
+    validationDigest,
+    warnings,
+  };
+  if (canonicalJson(release.validation_summary) !== canonicalJson(validationEvidence)) {
+    throw new Error("Current release validation evidence differs from its completed import batch");
+  }
+  const approvals = await database
+    .selectFrom("food_import_approval")
+    .selectAll()
+    .where("batch_id", "=", batch.id)
+    .execute();
+  const roles = new Set(approvals.map((approval) => approval.approval_role));
+  if (
+    approvals.length !== 3 ||
+    !roles.has("data") ||
+    !roles.has("quality") ||
+    !roles.has("rights") ||
+    approvals.some(
+      (approval) =>
+        approval.validation_digest !== validationDigest ||
+        approval.rights_manifest_sha256 !== batch.rights_manifest_sha256,
+    )
+  ) {
+    throw new Error(
+      "Current release does not have one matching immutable approval per required role",
+    );
+  }
+  const policy = normalizePolicy(batch.validation_policy);
+  if (
+    policy.requireDistinctApprovalPrincipals &&
+    new Set(approvals.map((approval) => approval.principal_id)).size !== approvals.length
+  ) {
+    throw new Error("Current release approvals do not have distinct principals");
+  }
+  return nutrientMappingRevisionIds;
+}
+
+function assertRecordPayloadEvidence(record: RecordRow): void {
+  if (sha256CanonicalJson(record.canonical_payload) !== record.canonical_payload_sha256) {
+    throw new Error(`Record ${record.source_record_key} canonical payload digest does not match`);
+  }
+  if (
+    record.canonical_payload !== null &&
+    typeof record.canonical_payload === "object" &&
+    !Array.isArray(record.canonical_payload)
+  ) {
+    const payload = record.canonical_payload as JsonObject;
+    const payloadHash = payload.sourcePayloadHash;
+    if (payloadHash !== undefined && payloadHash !== record.source_payload_sha256) {
+      throw new Error(`Record ${record.source_record_key} source payload digest does not match`);
+    }
+  }
+}
+
+function frozenBaselineForbiddenGtins(record: RecordRow): ReadonlySet<string> {
+  const hadCrossSourceConflict = record.validation_issues.some((value) => {
+    const issue = jsonObjectValue(value, "frozen baseline validation issue");
+    return (
+      issue.code === "BARCODE_CROSS_SOURCE_CONFLICT" && issue.disposition === "exclude_barcode"
+    );
+  });
+  if (!hadCrossSourceConflict) return new Set();
+  const barcode = readCatalogueBarcodeEvidence(record.canonical_payload);
+  if (!barcode?.normalizedGtin || !barcode.marketCode) {
+    throw new Error(`Record ${record.source_record_key} has incomplete frozen barcode evidence`);
+  }
+  return new Set([`${barcode.normalizedGtin}:${barcode.marketCode}`]);
+}
+
+function jsonObjectValue(value: JsonValue, field: string): JsonObject {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${field} must be an object`);
+  }
+  return value as JsonObject;
+}
+
+function jsonText(value: JsonValue | undefined, field: string): string {
+  if (typeof value !== "string" || value.trim().length === 0 || value.trim() !== value) {
+    throw new Error(`${field} must be non-blank text without surrounding whitespace`);
+  }
+  return value;
+}
+
+function nullableJsonText(value: JsonValue | undefined, field: string): string | null {
+  if (value === null) return null;
+  return jsonText(value, field);
+}
+
+function jsonSha256(value: JsonValue | undefined, field: string): string {
+  if (typeof value !== "string" || !SHA256_PATTERN.test(value)) {
+    throw new Error(`${field} must be a lowercase SHA-256 digest`);
+  }
+  return value;
+}
+
+function jsonUuidArray(value: JsonValue | undefined, field: string): readonly string[] {
+  if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
+  const revisionIds = value.map((entry, index) => {
+    if (typeof entry !== "string" || !UUID_PATTERN.test(entry)) {
+      throw new Error(`${field}[${index}] must be a canonical UUID`);
+    }
+    return entry;
+  });
+  const sorted = [...new Set(revisionIds)].sort(compareCodePoints);
+  if (canonicalJson(sorted) !== canonicalJson(revisionIds)) {
+    throw new Error(`${field} must be strictly code-point sorted without duplicates`);
+  }
+  return revisionIds;
+}
+
+function jsonArrayLength(payload: JsonValue, field: string): number {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return 0;
+  const object = payload as JsonObject;
+  const value = object[field];
+  return Array.isArray(value) ? value.length : 0;
+}
+
+function groupMaterializedRowsByRecordKey<
+  Row extends { readonly record_source_record_key: string },
+>(
+  rows: readonly Row[],
+  compareRows: (left: Row, right: Row) => number,
+): ReadonlyMap<string, readonly Row[]> {
+  const grouped = new Map<string, Row[]>();
+  for (const row of rows) {
+    const group = grouped.get(row.record_source_record_key);
+    if (group) group.push(row);
+    else grouped.set(row.record_source_record_key, [row]);
+  }
+  for (const group of grouped.values()) group.sort(compareRows);
+  return grouped;
+}
+
+function compareCodePoints(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
 async function buildValidationSummary(
   database: DatabaseExecutor,
   batch: BatchRow,
   policy: BatchValidationPolicy,
 ): Promise<BatchValidationSummary> {
+  return (await observeBatchValidation(database, batch, policy)).summary;
+}
+
+async function observeBatchValidation(
+  database: DatabaseExecutor,
+  batch: BatchRow,
+  policy: BatchValidationPolicy,
+): Promise<BatchValidationObservation> {
   const source = await database
     .selectFrom("food_source")
     .select("code")
@@ -1160,13 +2330,13 @@ async function buildValidationSummary(
       "Source nutrient mappings changed after this validation attempt was created; stage a new attempt",
     );
   }
-  const forbiddenGtins = await loadForbiddenGtins(database, batch.food_source_id);
   const rows = await database
     .selectFrom("food_import_record")
     .selectAll()
     .where("batch_id", "=", batch.id)
     .orderBy("sequence_number")
     .execute();
+  const forbiddenGtins = await loadForbiddenGtins(database, batch.food_source_id, rows);
   const initialResults = rows.map((record) =>
     validateRecordRow(record, batch, source.code, nutrientRegistry.mappings, forbiddenGtins),
   );
@@ -1239,19 +2409,10 @@ async function buildValidationSummary(
     policy,
     parserEvidence: { ...parserEvidence },
     parserReportSha256: parserReport.report_sha256,
-    records: records.map((record) => ({
-      canonicalPayloadSha256: record.canonicalPayloadSha256,
-      issues: record.issues,
-      excludedNutrientCount: record.excludedNutrientCount,
-      nutrientInputCount: record.nutrientInputCount,
-      nutrientMaterializableCount: record.nutrientMaterializableCount,
-      portionInputCount: record.portionInputCount,
-      sourceRecordKey: record.sourceRecordKey,
-      status: record.status,
-    })),
+    records: records as unknown as JsonArray,
     rightsManifestSha256: batch.rights_manifest_sha256,
   };
-  return {
+  const summary: BatchValidationSummary = {
     ...evaluation,
     nutrientMappingDigest: nutrientRegistry.revisionDigest,
     parserExcludedNutrientCount: parserEvidence.excludedNutrientCount,
@@ -1263,6 +2424,16 @@ async function buildValidationSummary(
     stagedCount: records.length,
     validationDigest: sha256CanonicalJson(digestEvidence),
     validationPolicy: policy,
+  };
+  return {
+    entries: rows.map((record, index) => {
+      const result = validationResults[index];
+      if (!result) throw new Error(`Missing validation result for ${record.source_record_key}`);
+      return { record, result };
+    }),
+    nutrientRegistry,
+    sourceCode: source.code,
+    summary,
   };
 }
 
@@ -1294,6 +2465,7 @@ async function createOrLoadRelease(
   transaction: Transaction<Database>,
   batch: BatchRow,
   summary: BatchValidationSummary,
+  nutrientMappingRevisionIds: readonly string[],
 ): Promise<Selectable<Database["food_source_release"]>> {
   const recordCounts: JsonObject = {
     materializable: summary.validCount,
@@ -1310,6 +2482,7 @@ async function createOrLoadRelease(
     recordErrors: summary.recordErrorCount,
     excludedNutrientFraction: summary.excludedNutrientFraction,
     nutrientMappingDigest: summary.nutrientMappingDigest,
+    nutrientMappingRevisionIds,
     parserExcludedNutrients: summary.parserExcludedNutrientCount,
     parserExcludedPortions: summary.parserExcludedPortionCount,
     parserReportSha256: summary.parserReportSha256,
@@ -1692,13 +2865,43 @@ async function writeActivationOutbox(
     .execute();
 }
 
+interface NutrientMappingDigestRow {
+  readonly canonicalUnit: string;
+  readonly conversionMultiplier: string;
+  readonly nutrientCode: string;
+  readonly nutrientDimension: string;
+  readonly nutrientId: string;
+  readonly nutrientName: string;
+  readonly revisionId: string;
+  readonly sourceNutrientKey: string;
+  readonly sourceUnit: string;
+}
+
+function nutrientMappingRevisionDigest(rows: readonly NutrientMappingDigestRow[]): string {
+  const sorted = [...rows].sort((left, right) =>
+    compareCodePoints(left.sourceNutrientKey, right.sourceNutrientKey),
+  );
+  if (new Set(sorted.map((row) => row.sourceNutrientKey)).size !== sorted.length) {
+    throw new Error("Nutrient mapping registry contains duplicate source keys");
+  }
+  const snapshot: JsonArray = sorted.map((row) => ({
+    canonicalUnit: row.canonicalUnit,
+    conversionMultiplier: normalizeDatabaseDecimal(row.conversionMultiplier),
+    nutrientCode: row.nutrientCode,
+    nutrientDimension: row.nutrientDimension,
+    nutrientId: row.nutrientId,
+    nutrientName: row.nutrientName,
+    revisionId: row.revisionId,
+    sourceNutrientKey: row.sourceNutrientKey,
+    sourceUnit: row.sourceUnit,
+  }));
+  return sha256CanonicalJson(snapshot);
+}
+
 async function loadNutrientMappings(
   database: DatabaseExecutor,
   sourceId: string,
-): Promise<{
-  readonly mappings: ReadonlyMap<string, ReviewedCatalogueNutrientMapping>;
-  readonly revisionDigest: string;
-}> {
+): Promise<LoadedNutrientMappings> {
   const mappings = await database
     .selectFrom("source_nutrient_map as mapping")
     .innerJoin(
@@ -1735,9 +2938,9 @@ async function loadNutrientMappings(
       },
     ]),
   );
-  const snapshot: JsonArray = mappings.map((mapping) => ({
+  const digestRows = mappings.map((mapping) => ({
     canonicalUnit: mapping.canonical_unit,
-    conversionMultiplier: normalizeDatabaseDecimal(String(mapping.conversion_multiplier)),
+    conversionMultiplier: String(mapping.conversion_multiplier),
     nutrientCode: mapping.nutrient_code,
     nutrientDimension: mapping.dimension,
     nutrientId: String(mapping.nutrient_id),
@@ -1746,7 +2949,12 @@ async function loadNutrientMappings(
     sourceNutrientKey: mapping.source_nutrient_key,
     sourceUnit: mapping.source_unit,
   }));
-  return { mappings: registry, revisionDigest: sha256CanonicalJson(snapshot) };
+  const revisionIds = digestRows.map((row) => row.revisionId).sort(compareCodePoints);
+  return {
+    mappings: registry,
+    revisionDigest: nutrientMappingRevisionDigest(digestRows),
+    revisionIds,
+  };
 }
 
 /** Digest of the exact active mapping revisions used to identify a validation attempt. */
@@ -1902,16 +3110,48 @@ function assertParserCountSums(counts: ParserCountEvidence): void {
 async function loadForbiddenGtins(
   database: DatabaseExecutor,
   sourceId: string,
+  records: readonly Pick<RecordRow, "canonical_payload">[],
 ): Promise<ReadonlySet<string>> {
-  const rows = await sql<{ gtin14: string; market_code: string }>`
-    select lpad(barcode.gtin, 14, '0') as gtin14, barcode.market_code
-    from food_barcode as barcode
-    join food on food.id = barcode.food_id
-    where barcode.valid_to is null
-      and food.food_source_id is not null
-      and food.food_source_id <> ${sourceId}
-  `.execute(database);
-  return new Set(rows.rows.map((row) => `${row.gtin14}:${row.market_code}`));
+  const identitiesByKey = new Map<
+    string,
+    { readonly gtin14: string; readonly marketCode: string }
+  >();
+  for (const record of records) {
+    const evidence = readCatalogueBarcodeEvidence(record.canonical_payload);
+    if (!evidence?.normalizedGtin || !evidence.marketCode) continue;
+    const key = `${evidence.normalizedGtin}:${evidence.marketCode}`;
+    identitiesByKey.set(key, {
+      gtin14: evidence.normalizedGtin,
+      marketCode: evidence.marketCode,
+    });
+  }
+  const identities = [...identitiesByKey.values()].sort((left, right) =>
+    compareCodePoints(
+      `${left.gtin14}\u0000${left.marketCode}`,
+      `${right.gtin14}\u0000${right.marketCode}`,
+    ),
+  );
+  const conflicts = new Set<string>();
+  const chunkSize = 4_096;
+  for (let offset = 0; offset < identities.length; offset += chunkSize) {
+    const chunk = identities.slice(offset, offset + chunkSize);
+    const gtins = chunk.map((identity) => identity.gtin14);
+    const markets = chunk.map((identity) => identity.marketCode);
+    const matches = await sql<{ gtin14: string; market_code: string }>`
+      select distinct candidate.gtin14, candidate.market_code
+      from unnest(${sql.val(gtins)}::text[], ${sql.val(markets)}::text[])
+        as candidate(gtin14, market_code)
+      join food_barcode as barcode
+        on lpad(barcode.gtin, 14, '0') = candidate.gtin14
+       and barcode.market_code = candidate.market_code
+       and barcode.valid_to is null
+      join food on food.id = barcode.food_id
+      where food.food_source_id is not null
+        and food.food_source_id <> ${sourceId}
+    `.execute(database);
+    for (const row of matches.rows) conflicts.add(`${row.gtin14}:${row.market_code}`);
+  }
+  return conflicts;
 }
 
 async function selectBatch(database: DatabaseExecutor, batchId: string): Promise<BatchRow> {
