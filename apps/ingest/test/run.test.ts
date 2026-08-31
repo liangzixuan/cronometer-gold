@@ -764,16 +764,11 @@ describe("catalogue reconciliation report writer", () => {
   it("removes its temporary file when serialization fails before publication", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "catalogue-report-failure-"));
     const reportOut = `${REPORT_DIRECTORY}/failed.json`;
-    const cyclic: { self?: unknown } = {};
-    cyclic.self = cyclic;
+    const invalidDocument = { invalid: Number.NaN };
     try {
       await expect(
-        writeCatalogueReconciliationReport(
-          reportOut,
-          cyclic as unknown as Parameters<typeof writeCatalogueReconciliationReport>[1],
-          workspace,
-        ),
-      ).rejects.toThrow();
+        writeCatalogueReconciliationReport(reportOut, invalidDocument, workspace),
+      ).rejects.toThrow("Canonical JSON rejects non-finite numbers");
       const reportParent = join(workspace, ...REPORT_DIRECTORY.split("/"));
       expect(await readdir(reportParent)).toEqual([]);
     } finally {
