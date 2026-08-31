@@ -226,10 +226,11 @@ source archive is checksum-pinned. Go 1.26.6 is pinned by image index digest,
 and the scratch runtime receives only the static Caddy binary, the exact Alpine
 `ca-certificates-bundle` 20260611-r0 payload, the exact `tzdata` 2026c-r0
 payload, and minimal user/directory files. The build explicitly advances the
-three vulnerable release dependencies to `golang.org/x/net` v0.56.0,
-`golang.org/x/text` v0.39.0, and `google.golang.org/grpc` v1.82.1; final image
-labels disclose that patched graph, and the build asserts all three binary
-module versions. Caddy runs as `1000:1000`. The OCI controlled-beta runtime must
+four vulnerable release dependencies to `golang.org/x/crypto` v0.55.0,
+`golang.org/x/net` v0.56.0, `golang.org/x/text` v0.39.0, and
+`google.golang.org/grpc` v1.82.1; final image labels disclose that patched
+graph, and the build asserts all four binary module versions. Caddy runs as
+`1000:1000`. The OCI controlled-beta runtime must
 drop all capabilities, add only `NET_BIND_SERVICE`, and present writable `/data`
 and `/config` mounts owned by `1000:1000`.
 

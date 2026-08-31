@@ -1443,7 +1443,7 @@ jobs:
                 .config.Labels["io.cronometer.upstream.source.revision"] == "e2eee6a7fce366321294c9c2a79f3146891dcbdf" and
                 .config.Labels["io.cronometer.upstream.source.tag-object"] == "8ec11a4b7e39a5fd00da2fc5cb9b543e31fd7926" and
                 .config.Labels["io.cronometer.upstream.version"] == "v2.11.4" and
-                .config.Labels["io.cronometer.upstream.vulnerability-patches"] == "golang.org/x/net=v0.56.0,golang.org/x/text=v0.39.0,google.golang.org/grpc=v1.82.1" and
+                .config.Labels["io.cronometer.upstream.vulnerability-patches"] == "golang.org/x/crypto=v0.55.0,golang.org/x/net=v0.56.0,golang.org/x/text=v0.39.0,google.golang.org/grpc=v1.82.1" and
                 (.config.Env | index("HOME=/home/caddy")) != null and
                 (.config.Env | index("PATH=/usr/bin")) != null and
                 (.config.Env | index("SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt")) != null and

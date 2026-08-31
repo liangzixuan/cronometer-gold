@@ -22,7 +22,7 @@ import {
   reconcileErasedAccountRows,
   runMigrations,
 } from "@nutrition-tracker/db";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createWorkerPollRuntime,
   type WorkerOperationalEvent,
@@ -640,6 +640,11 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         } else {
           expect(download.rawPayload.readUInt32LE(0)).toBe(0x0403_4b50);
         }
+        await vi.waitFor(async () => expect(await readdir(apiSpoolDirectory)).toEqual([]), {
+          interval: 10,
+          timeout: 2_000,
+        });
+        await new Promise<void>((resolvePromise) => setImmediate(resolvePromise));
       }
       expect(
         await database

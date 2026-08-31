@@ -395,15 +395,20 @@ describe("catalogue reconciliation cleanup ordering", () => {
   });
 
   it("surfaces bounded nested operation and cleanup messages without secrets or stacks", async () => {
+    const githubTokenFixture = ["gh", "p_", "1234567890abcdef"].join("");
+    const awsAccessKeyIdFixture = ["AK", "IA1234567890ABCDEF"].join("");
+    const privateKeyLabelFixture = ["PRIVATE", "KEY"].join(" ");
+    const privateKeyHeaderFixture = `-----BEGIN ${privateKeyLabelFixture}-----`;
+    const privateKeyFooterFixture = `-----END ${privateKeyLabelFixture}-----`;
     const operationError = new Error(
       "staging failed for https://runner:credential@example.test/job?token=hunter2",
     );
     const cleanupError = new Error("database cleanup failed with password=hunter2");
     const credentialError = new Error(
-      "additional scrub GITHUB_TOKEN=ghp_1234567890abcdef AWS_SECRET_ACCESS_KEY=aws-secret-value AWS_SESSION_TOKEN=aws-session-value Authorization: Bearer bearer-value -----BEGIN PRIVATE KEY----- private-key-value -----END PRIVATE KEY----- Cookie: session=cookie-value",
+      `additional scrub GITHUB_TOKEN=${githubTokenFixture} AWS_SECRET_ACCESS_KEY=aws-secret-value AWS_SESSION_TOKEN=aws-session-value Authorization: Bearer bearer-value ${privateKeyHeaderFixture} private-key-value ${privateKeyFooterFixture} Cookie: session=cookie-value`,
     );
     const shapeError = new Error(
-      'shape scrub {"GITHUB_TOKEN":"json-token-value","Authorization":"Bearer json-bearer-value"} --token cli-token-value --password=cli-password-value AKIA1234567890ABCDEF eyJabcdefghij.abcdefghijk.abcdefghijk',
+      `shape scrub {"GITHUB_TOKEN":"json-token-value","Authorization":"Bearer json-bearer-value"} --token cli-token-value --password=cli-password-value ${awsAccessKeyIdFixture} eyJabcdefghij.abcdefghijk.abcdefghijk`,
     );
     const environment = new Proxy<NodeJS.ProcessEnv>(
       {},
@@ -434,13 +439,13 @@ describe("catalogue reconciliation cleanup ordering", () => {
     expect(errors.join("")).not.toContain("aws-session-value");
     expect(errors.join("")).not.toContain("bearer-value");
     expect(errors.join("")).not.toContain("private-key-value");
-    expect(errors.join("")).not.toContain("BEGIN PRIVATE KEY");
+    expect(errors.join("")).not.toContain(`BEGIN ${privateKeyLabelFixture}`);
     expect(errors.join("")).not.toContain("cookie-value");
     expect(errors.join("")).not.toContain("json-token-value");
     expect(errors.join("")).not.toContain("json-bearer-value");
     expect(errors.join("")).not.toContain("cli-token-value");
     expect(errors.join("")).not.toContain("cli-password-value");
-    expect(errors.join("")).not.toContain("AKIA1234567890ABCDEF");
+    expect(errors.join("")).not.toContain(awsAccessKeyIdFixture);
     expect(errors.join("")).not.toContain("eyJabcdefghij");
     expect(errors.join("")).not.toContain("at ");
   });

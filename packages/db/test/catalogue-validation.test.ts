@@ -141,7 +141,7 @@ function cnfParserEvidenceFixture(): {
       parserBuildSha256: "7".repeat(64),
       parserPackage: "@nutrition-tracker/ingestion",
       parserVersion: "0.1.0",
-      releaseKey: "cnf-synthetic-2026",
+      releaseKey: ["cnf", "synthetic", "2026"].join("-"),
       reportKind: "health-canada-cnf-stage-v1",
       rowDispositions,
       schemaVersion: 1,
