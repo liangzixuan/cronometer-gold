@@ -36,6 +36,54 @@ Before ingestion:
 6. Validate against `food-source-manifest.schema.json` and retain the exact manifest
    beside the raw object. The database release row stores both URIs/checksums.
 
+## Health Canada CNF inventory and parser baseline
+
+For CNF, `validation.expectedFiles` is a unique, exact inventory of every regular
+file in the aggregate ZIP. It must include the five adapter-input CSVs
+(`Food_Name.csv`, `Nutrient_Amount.csv`, `Nutrient_Name.csv`,
+`Measure_Weight_Conversion.csv`, and `Measure_Name.csv`), the four
+reference-only CSVs (`Food_Source.csv`, `CNF_Food_Group.csv`,
+`Nutrient_Source.csv`, and `Measure_Type.csv`), and the exact path of every
+English/French non-CSV guide observed during controlled acquisition. Do not
+guess guide names, omit them because they are not parsed, or use a
+required-subset policy for an import-ready CNF release. Any other CSV is
+undeclared schema, not a guide.
+
+The checked-in CNF candidate lists the known nine-CSV contract, but it is not
+evidence of the aggregate ZIP's complete inventory. Keep it `templateOnly` until
+the real archive has been acquired under the release controls and every guide
+path has been recorded. The manifest schema rejects duplicate expected members.
+
+After pinning the independently agreed artifact SHA-256 and byte size, parser
+version, immutable parser-build SHA-256, and full inventory, run the database-free
+inspection command against the stored artifact:
+
+```sh
+INGEST_PARSER_BUILD_SHA256=<reviewed-lowercase-sha256> \
+pnpm --filter @nutrition-tracker/ingest cli -- cnf inspect \
+  data/manifests/<cnf-release>.json \
+  --artifact .local-data/acquired/<cnf-release>.zip \
+  --cache-dir .local-data/cache \
+  --extract-dir .local-data/extracted-cnf-inspect
+```
+
+The command verifies the artifact and parser-build pins, preflights the exact
+full inventory, parses all nine CSVs, and prints a `baseline` object. It does not
+mutate the manifest, access PostgreSQL, create an acquisition attestation, grant
+approval, or prove a live release. Review the evidence, then copy every emitted
+baseline key and exact value into
+`validation.releaseSpecificExpectations`. Those keys bind the full-inventory
+count/digest; every table's byte size, raw/header/ordered-row digests and row
+count; the ordered table-evidence digest; source/emitted/excluded/skipped counts;
+description-language partition; exclusion-reason digest; and accepted source
+payload digest.
+
+`catalogue stage-cnf` recomputes and compares every generated baseline value
+before it creates a database connection. A missing or changed key fails before
+staging. This parser baseline complements rather than replaces the two fresh
+acquisition observations, rights evidence, reviewed nutrient mappings, immutable
+artifact/manifest objects, and later role approvals.
+
 Import is blocked when rights are pending, the raw artifact/checksum is missing,
 the parser is not pinned, or executable validation expectations are absent. Later
 data, quality, and rights approvals are immutable database records bound to the

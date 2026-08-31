@@ -9,7 +9,14 @@ export interface DelimitedOptions {
   readonly delimiter?: "," | "\t";
   readonly maxColumns?: number;
   readonly maxFieldCharacters?: number;
+  /** Maximum logical rows, including the header and blank rows. */
+  readonly maxRows?: number;
   readonly maxRowCharacters?: number;
+}
+
+export interface DelimitedObjectOptions extends DelimitedOptions {
+  /** `exact` rejects surrounding header whitespace instead of normalizing it. */
+  readonly headerMode?: "exact" | "trimmed";
 }
 
 export type DelimitedChunkSource =
@@ -22,15 +29,20 @@ export async function* parseDelimitedRows(
   options: DelimitedOptions = {},
 ): AsyncGenerator<DelimitedRow> {
   const delimiter = options.delimiter ?? ",";
-  const maxColumns = options.maxColumns ?? 1_024;
-  const maxFieldCharacters = options.maxFieldCharacters ?? 1_000_000;
-  const maxRowCharacters = options.maxRowCharacters ?? 4_000_000;
+  const maxColumns = positiveLimit(options.maxColumns ?? 1_024, "maxColumns");
+  const maxFieldCharacters = positiveLimit(
+    options.maxFieldCharacters ?? 1_000_000,
+    "maxFieldCharacters",
+  );
+  const maxRows = positiveLimit(options.maxRows ?? 10_000_000, "maxRows");
+  const maxRowCharacters = positiveLimit(options.maxRowCharacters ?? 4_000_000, "maxRowCharacters");
   const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
   let values: string[] = [];
   let field = "";
   let line = 1;
   let rowLine = 1;
   let rowCharacters = 0;
+  let emittedRows = 0;
   let inQuotes = false;
   let afterQuote = false;
   let fieldStarted = false;
@@ -63,6 +75,21 @@ export async function* parseDelimitedRows(
     field = "";
     fieldStarted = false;
     afterQuote = false;
+  };
+
+  const finishRow = (): DelimitedRow => {
+    finishField();
+    emittedRows += 1;
+    invariant(
+      emittedRows <= maxRows,
+      "INVALID_RECORD",
+      `Delimited input exceeds ${maxRows} logical rows`,
+      { line: rowLine, maxRows },
+    );
+    const row = Object.freeze({ line: rowLine, values: Object.freeze(values) });
+    values = [];
+    rowCharacters = 0;
+    return row;
   };
 
   const consumeText = function* (text: string): Generator<DelimitedRow> {
@@ -115,10 +142,7 @@ export async function* parseDelimitedRows(
       if (character === delimiter) {
         finishField();
       } else if (character === "\n") {
-        finishField();
-        yield Object.freeze({ line: rowLine, values: Object.freeze(values) });
-        values = [];
-        rowCharacters = 0;
+        yield finishRow();
         line += 1;
         rowLine = line;
       } else if (character === '"') {
@@ -162,8 +186,7 @@ export async function* parseDelimitedRows(
 
   invariant(!inQuotes, "INVALID_RECORD", "Delimited input ended inside a quoted field", { line });
   if (fieldStarted || field.length > 0 || values.length > 0 || afterQuote) {
-    finishField();
-    yield Object.freeze({ line: rowLine, values: Object.freeze(values) });
+    yield finishRow();
   }
 }
 
@@ -172,20 +195,58 @@ export interface DelimitedObjectRow {
   readonly record: Readonly<Record<string, string>>;
 }
 
+export interface DelimitedObjectTable {
+  readonly headers: readonly string[];
+  readonly rows: readonly DelimitedObjectRow[];
+}
+
 export async function* parseDelimitedObjects(
   source: DelimitedChunkSource,
-  options: DelimitedOptions = {},
+  options: DelimitedObjectOptions = {},
+): AsyncGenerator<DelimitedObjectRow> {
+  yield* parseDelimitedObjectsInternal(source, options);
+}
+
+/** Parses a bounded stream while retaining its exact ordered header for evidence. */
+export async function parseDelimitedObjectTable(
+  source: DelimitedChunkSource,
+  options: DelimitedObjectOptions = {},
+): Promise<DelimitedObjectTable> {
+  let headers: readonly string[] | null = null;
+  const rows: DelimitedObjectRow[] = [];
+  for await (const row of parseDelimitedObjectsInternal(source, options, (value) => {
+    headers = value;
+  })) {
+    rows.push(row);
+  }
+  invariant(headers !== null, "INVALID_RECORD", "Delimited input has no header row");
+  return Object.freeze({ headers, rows: Object.freeze(rows) });
+}
+
+async function* parseDelimitedObjectsInternal(
+  source: DelimitedChunkSource,
+  options: DelimitedObjectOptions,
+  observeHeaders?: (headers: readonly string[]) => void,
 ): AsyncGenerator<DelimitedObjectRow> {
   let headers: readonly string[] | null = null;
   const seenHeaders = new Set<string>();
   for await (const row of parseDelimitedRows(source, options)) {
     if (headers === null) {
-      headers = row.values.map((header, index) => {
-        const normalized = (index === 0 ? header.replace(/^\uFEFF/, "") : header).trim();
+      const parsedHeaders = row.values.map((header, index) => {
+        const withoutBom = index === 0 ? header.replace(/^\uFEFF/, "") : header;
+        const normalized = options.headerMode === "exact" ? withoutBom : withoutBom.trim();
         invariant(normalized.length > 0, "INVALID_RECORD", "Delimited header is empty", {
           line: row.line,
           index,
         });
+        if (options.headerMode === "exact") {
+          invariant(
+            normalized === normalized.trim(),
+            "INVALID_RECORD",
+            "Delimited header has surrounding whitespace",
+            { line: row.line, index },
+          );
+        }
         if (seenHeaders.has(normalized)) {
           throw new IngestionError("DUPLICATE_KEY", `Duplicate delimited header: ${normalized}`, {
             header: normalized,
@@ -194,6 +255,8 @@ export async function* parseDelimitedObjects(
         seenHeaders.add(normalized);
         return normalized;
       });
+      headers = Object.freeze(parsedHeaders);
+      observeHeaders?.(headers);
       continue;
     }
     if (row.values.length === 1 && row.values[0] === "") {
@@ -214,4 +277,14 @@ export async function* parseDelimitedObjects(
     yield Object.freeze({ line: row.line, record: Object.freeze(record) });
   }
   invariant(headers !== null, "INVALID_RECORD", "Delimited input has no header row");
+}
+
+function positiveLimit(value: number, field: string): number {
+  invariant(
+    Number.isSafeInteger(value) && value > 0,
+    "INVALID_RECORD",
+    `Delimited ${field} must be a positive safe integer`,
+    { field },
+  );
+  return value;
 }

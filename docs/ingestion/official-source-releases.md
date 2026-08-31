@@ -62,14 +62,36 @@ slice. It exercises nested nutrient, portion, and provenance parsing without mak
 the initial run depend on a roughly 460 MB compressed branded catalogue. The full
 CSV candidate remains the representative scale test and eventual US catalogue seed.
 
-CNF 2026's aggregate ZIP contains nine relational CSV data files used by ingestion:
+CNF 2026's aggregate ZIP has a fixed nine-CSV ingestion contract. Five tables are
+adapter inputs and four are parsed, measured reference-only evidence:
 
-- `Food_Name.csv`, `Food_Source.csv`, and `CNF_Food_Group.csv`;
-- `Nutrient_Amount.csv`, `Nutrient_Name.csv`, and `Nutrient_Source.csv`;
-- `Measure_Weight_Conversion.csv`, `Measure_Type.csv`, and `Measure_Name.csv`.
+| Archive member | Disposition | Reference-only reason |
+| --- | --- | --- |
+| `Food_Name.csv` | adapter input | — |
+| `Food_Source.csv` | reference-only | `food_source_reference_not_materialized_v1` |
+| `CNF_Food_Group.csv` | reference-only | `upstream_food_group_taxonomy_not_materialized_v1` |
+| `Nutrient_Amount.csv` | adapter input | — |
+| `Nutrient_Name.csv` | adapter input | — |
+| `Nutrient_Source.csv` | reference-only | `nutrient_source_lookup_not_materialized_v1` |
+| `Measure_Weight_Conversion.csv` | adapter input | — |
+| `Measure_Type.csv` | reference-only | `measure_type_lookup_not_materialized_v1` |
+| `Measure_Name.csv` | adapter input | — |
 
-The archive also contains English and French guides. Documentation is retained as
-release evidence but is not parsed into catalogue records.
+The aggregate also contains English and French guides. The import-ready manifest
+must name their exact non-CSV archive paths along with the nine CSVs so
+`expectedFiles` describes the complete regular-file inventory. Guides are
+preflighted and retained as release evidence but are not extracted into the
+parser workspace. An additional CSV is schema drift, not documentation.
+
+The implemented `cnf inspect` command verifies a pinned local artifact and
+reviewed parser build, strictly parses all nine CSVs, and emits full-inventory,
+per-table, conservation, exclusion-reason, and language-partition baselines
+without accessing the database. `catalogue stage-cnf` requires an import-ready
+manifest and trusted runner, repeats those checks before opening PostgreSQL,
+checkpoints staging, and records immutable parser evidence that validation
+re-verifies. These paths are covered with synthetic fixtures only; they do not
+claim that the published 2026 aggregate has been acquired, baselined, or
+activated.
 
 ## Rights and attribution
 
@@ -98,7 +120,14 @@ approve the exact product use before either candidate becomes import-ready.
   version and accepted-field snapshot must supply our reproducibility boundary.
 - The complete April 2026 full-CSV archive member list and row-count baseline must
   be captured during controlled acquisition; it is intentionally not guessed here.
+- The complete CNF aggregate member list, including exact English/French guide
+  paths, and every real-artifact table/parser baseline must be captured and
+  independently reviewed during controlled acquisition; the checked-in
+  nine-CSV candidate is not that evidence.
 - CNF's individual portal hashes need publisher clarification before they can be
   treated as anything stronger than unlabeled metadata.
 - Rights review must confirm presentation of CNF attribution in product screens,
   exports, and any future public API.
+- Real-CNF staging, parser-scale/peak-memory evidence, immutable storage,
+  reviewed nutrient mappings, database reconciliation, high-impact outlier
+  review, and search/index evidence remain activation blockers.

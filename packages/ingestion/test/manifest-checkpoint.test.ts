@@ -133,6 +133,9 @@ describe("food source manifest v3 contract", () => {
         validation(value).expectedFiles = [];
       },
       (value: Record<string, unknown>) => {
+        validation(value).expectedFiles = ["release.json", "release.json"];
+      },
+      (value: Record<string, unknown>) => {
         validation(value).releaseSpecificExpectations = {};
       },
     ];

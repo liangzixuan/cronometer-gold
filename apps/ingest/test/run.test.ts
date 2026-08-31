@@ -11,13 +11,22 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-
+import {
+  CNF_ARCHIVE_CSV_PATHS,
+  type CnfArchiveParseResult,
+  type FoodSourceManifestV3,
+  sha256CanonicalJson,
+} from "@nutrition-tracker/ingestion";
 import { describe, expect, it } from "vitest";
 
 import {
+  assertCnfParserBaseline,
+  buildCnfStageEvidence,
   type CommandIo,
+  cnfParserBaselineEvidence,
   runAfterRequiredCleanup,
   runCommand,
+  validatedStageCheckpointOffset,
   writeCatalogueReconciliationReport,
 } from "../src/run.js";
 
@@ -28,6 +37,69 @@ const VALIDATION_DIGEST = "a".repeat(64);
 const REPORT_DIRECTORY = ".local-data/evidence/catalogue-reconciliation";
 const REPORT_OUT = `${REPORT_DIRECTORY}/catalogue-reconciliation.json`;
 const REPORT_DOCUMENT = { a: "fixture", z: 1 } as const;
+
+function cnfBaselineFixture(): {
+  readonly metrics: Parameters<typeof cnfParserBaselineEvidence>[1];
+  readonly parsed: CnfArchiveParseResult;
+} {
+  const expectedFiles = [...CNF_ARCHIVE_CSV_PATHS].sort();
+  const tables = CNF_ARCHIVE_CSV_PATHS.map((archivePath) => ({
+    archivePath,
+    byteSize: 10,
+    disposition: "adapter-input" as const,
+    headerSha256: "1".repeat(64),
+    headers: ["Code"],
+    rawSha256: "2".repeat(64),
+    referenceOnlyReason: null,
+    rowCount: 0,
+    rowsSha256: "3".repeat(64),
+  }));
+  const parsed: CnfArchiveParseResult = {
+    archive: {
+      expectedFiles,
+      inventoryCount: expectedFiles.length,
+      inventorySha256: sha256CanonicalJson(expectedFiles),
+    },
+    metrics: {
+      adapterInputDataRowCount: 0,
+      adapterInputTableCount: 5,
+      bilingualDescriptionCount: 0,
+      englishOnlyDescriptionCount: 0,
+      frenchOnlyDescriptionCount: 0,
+      missingBothDescriptionCount: 0,
+      parsedDataRowCount: 0,
+      referenceOnlyDataRowCount: 0,
+      referenceOnlyTableCount: 4,
+      tableCount: 9,
+    },
+    parsed: {
+      conservation: {
+        foodNames: { emittedCount: 0, quarantinedCount: 0, sourceCount: 0 },
+        measureWeightConversions: {
+          emittedCount: 0,
+          excludedCount: 0,
+          skippedCount: 0,
+          sourceCount: 0,
+        },
+        nutrientAmounts: { emittedCount: 0, excludedCount: 0, sourceCount: 0 },
+      },
+      excludedMeasures: [],
+      excludedNutrients: [],
+      quarantined: [],
+      records: [],
+      rowDispositions: {
+        foodNames: [],
+        measureWeightConversions: [],
+        nutrientAmounts: [],
+      },
+      skippedMeasures: [],
+    },
+    tableEvidenceSha256: sha256CanonicalJson(tables),
+    tables,
+  };
+  const metrics = buildCnfStageEvidence(parsed).metrics;
+  return { metrics, parsed };
+}
 
 function reconcileArguments(overrides: readonly string[] = []): string[] {
   return [
@@ -320,6 +392,281 @@ describe("catalogue reconciliation cleanup ordering", () => {
     expect(failure).toBeInstanceOf(AggregateError);
     expect((failure as AggregateError).errors).toEqual([reconciliationError, cleanupError]);
     expect(events).toEqual(["reconcile", "destroy"]);
+  });
+
+  it("surfaces bounded nested operation and cleanup messages without secrets or stacks", async () => {
+    const operationError = new Error(
+      "staging failed for https://runner:credential@example.test/job?token=hunter2",
+    );
+    const cleanupError = new Error("database cleanup failed with password=hunter2");
+    const credentialError = new Error(
+      "additional scrub GITHUB_TOKEN=ghp_1234567890abcdef AWS_SECRET_ACCESS_KEY=aws-secret-value AWS_SESSION_TOKEN=aws-session-value Authorization: Bearer bearer-value -----BEGIN PRIVATE KEY----- private-key-value -----END PRIVATE KEY----- Cookie: session=cookie-value",
+    );
+    const shapeError = new Error(
+      'shape scrub {"GITHUB_TOKEN":"json-token-value","Authorization":"Bearer json-bearer-value"} --token cli-token-value --password=cli-password-value AKIA1234567890ABCDEF eyJabcdefghij.abcdefghijk.abcdefghijk',
+    );
+    const environment = new Proxy<NodeJS.ProcessEnv>(
+      {},
+      {
+        get() {
+          throw new AggregateError(
+            [operationError, cleanupError, credentialError, shapeError],
+            "Operation and required cleanup both failed",
+          );
+        },
+      },
+    );
+    const { errors, io, output } = testIo(environment);
+
+    const exitCode = await runCommand(["catalogue", "approve"], io);
+
+    expect(exitCode).toBe(1);
+    expect(output).toEqual([]);
+    expect(errors.join("")).toContain("Operation and required cleanup both failed");
+    expect(errors.join("")).toContain(
+      "staging failed for https://[redacted]@example.test/job?[redacted]",
+    );
+    expect(errors.join("")).toContain("database cleanup failed with password=[redacted]");
+    expect(errors.join("")).not.toContain("credential");
+    expect(errors.join("")).not.toContain("hunter2");
+    expect(errors.join("")).not.toContain("1234567890abcdef");
+    expect(errors.join("")).not.toContain("aws-secret-value");
+    expect(errors.join("")).not.toContain("aws-session-value");
+    expect(errors.join("")).not.toContain("bearer-value");
+    expect(errors.join("")).not.toContain("private-key-value");
+    expect(errors.join("")).not.toContain("BEGIN PRIVATE KEY");
+    expect(errors.join("")).not.toContain("cookie-value");
+    expect(errors.join("")).not.toContain("json-token-value");
+    expect(errors.join("")).not.toContain("json-bearer-value");
+    expect(errors.join("")).not.toContain("cli-token-value");
+    expect(errors.join("")).not.toContain("cli-password-value");
+    expect(errors.join("")).not.toContain("AKIA1234567890ABCDEF");
+    expect(errors.join("")).not.toContain("eyJabcdefghij");
+    expect(errors.join("")).not.toContain("at ");
+  });
+
+  it("caps hostile aggregate detail count and output length", async () => {
+    const environment = new Proxy<NodeJS.ProcessEnv>(
+      {},
+      {
+        get() {
+          throw new AggregateError(
+            Array.from(
+              { length: 20 },
+              (_, index) => new Error(`detail-${index}-${"x".repeat(1_000)}`),
+            ),
+            "bounded aggregate",
+          );
+        },
+      },
+    );
+    const { errors, io } = testIo(environment);
+
+    expect(await runCommand(["catalogue", "approve"], io)).toBe(1);
+
+    const rendered = errors.join("");
+    expect(rendered.length).toBeLessThanOrEqual(4_000);
+    expect(rendered).toContain("detail-0-");
+    expect(rendered).not.toContain("detail-8-");
+  });
+});
+
+describe("catalogue staging checkpoint boundary", () => {
+  const checkpoint = (
+    processedCount: string,
+    nextOffset: number,
+    lastSequenceNumber: string | null,
+  ) => ({
+    cursor: { nextOffset },
+    lastSequenceNumber,
+    processedCount,
+    stage: "stage" as const,
+    updatedAt: new Date("2026-08-31T00:00:00Z"),
+  });
+
+  it("accepts only a complete mutually consistent checkpoint tuple", () => {
+    expect(validatedStageCheckpointOffset(undefined, 3)).toBe(0);
+    expect(validatedStageCheckpointOffset(checkpoint("0", 0, null), 3)).toBe(0);
+    expect(validatedStageCheckpointOffset(checkpoint("2", 2, "1"), 3)).toBe(2);
+    expect(validatedStageCheckpointOffset(checkpoint("3", 3, "2"), 3)).toBe(3);
+  });
+
+  it.each([
+    checkpoint("2", 1, "1"),
+    checkpoint("2", 2, "0"),
+    checkpoint("4", 4, "3"),
+    checkpoint("02", 2, "1"),
+    { ...checkpoint("2", 2, "1"), cursor: { nextOffset: 2, extra: true } },
+    { ...checkpoint("2", 2, "1"), stage: "parse" as const },
+  ])("rejects inconsistent or non-canonical checkpoint evidence", (value) => {
+    expect(() => validatedStageCheckpointOffset(value, 3)).toThrow(/checkpoint/i);
+  });
+});
+
+describe("CNF staging CLI boundary", () => {
+  const arguments_ = (extra: readonly string[] = []): string[] => [
+    "catalogue",
+    "stage-cnf",
+    "data/manifests/health-canada-cnf-2026.candidate.json",
+    "--artifact",
+    ".local-data/cnf.zip",
+    "--cache-dir",
+    ".local-data/cache",
+    "--extract-dir",
+    ".local-data/extracted-cnf",
+    "--manifest-object-uri",
+    `s3://evidence/sha256/${"a".repeat(64)}/manifest.json`,
+    ...extra,
+  ];
+
+  it.each([
+    {
+      args: arguments_(["--actor", "caller-authored"]),
+      expected: "Unknown catalogue stage-cnf option: --actor",
+    },
+    {
+      args: arguments_(["--__proto__=ignored"]),
+      expected: "Unknown catalogue stage-cnf option: --__proto__",
+    },
+    {
+      args: arguments_(["--artifact", ".local-data/second.zip"]),
+      expected: "Invalid or repeated option",
+    },
+    {
+      args: arguments_().filter((_value, index, values) => {
+        const optionIndex = values.indexOf("--manifest-object-uri");
+        return index !== optionIndex && index !== optionIndex + 1;
+      }),
+      expected: "--manifest-object-uri requires a non-blank value",
+    },
+  ])("rejects an invalid exact option shape before database access", async ({ args, expected }) => {
+    const { errors, io, output } = testIo();
+    const exitCode = await runCommand(args, io);
+    expect(exitCode).toBe(1);
+    expect(output).toEqual([]);
+    expect(errors.join("\n")).toContain(expected);
+    expect(errors.join("\n")).not.toContain("DATABASE_URL");
+  });
+
+  it("requires trusted workload identity before reading or staging an artifact", async () => {
+    const { errors, io, output } = testIo();
+    const exitCode = await runCommand(arguments_(), io);
+    expect(exitCode).toBe(1);
+    expect(output).toEqual([]);
+    expect(errors.join("\n")).toContain("externally authenticated");
+  });
+
+  it("rejects the checked-in candidate as a template before artifact or database access", async () => {
+    const { errors, io, output } = testIo({
+      INGEST_AUTHENTICATION_METHOD: "oidc",
+      INGEST_AUTHENTICATED_PRINCIPAL_ID: "service:cnf-release",
+      INGEST_AUTHENTICATION_RUN_REFERENCE: "https://runner.example/runs/123",
+      INGEST_PARSER_BUILD_SHA256: "b".repeat(64),
+    });
+    const exitCode = await runCommand(arguments_(), io);
+    expect(exitCode).toBe(1);
+    expect(output).toEqual([]);
+    expect(errors.join("\n")).toContain("Template manifest cannot be imported");
+    expect(errors.join("\n")).not.toContain("DATABASE_URL");
+  });
+});
+
+describe("CNF evidence-only inspection boundary", () => {
+  const arguments_ = (extra: readonly string[] = []): string[] => [
+    "cnf",
+    "inspect",
+    "data/manifests/health-canada-cnf-2026.candidate.json",
+    "--artifact",
+    ".local-data/cnf.zip",
+    "--cache-dir",
+    ".local-data/cache",
+    "--extract-dir",
+    ".local-data/extracted-cnf-inspect",
+    ...extra,
+  ];
+
+  it("rejects caller-authored identity before reading the manifest", async () => {
+    const { errors, io, output } = testIo();
+    const exitCode = await runCommand(arguments_(["--actor", "caller-authored"]), io);
+    expect(exitCode).toBe(1);
+    expect(output).toEqual([]);
+    expect(errors.join("\n")).toContain("Unknown cnf inspect option: --actor");
+  });
+
+  it("requires the executing parser identity before reading the artifact", async () => {
+    const { errors, io, output } = testIo();
+    const exitCode = await runCommand(arguments_(), io);
+    expect(exitCode).toBe(1);
+    expect(output).toEqual([]);
+    expect(errors.join("\n")).toContain(
+      "Manifest parser identity does not match the executing ingestion package",
+    );
+  });
+
+  it("rejects a stale parser version before reading the artifact", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "nutrition-cnf-inspect-version-"));
+    try {
+      const candidatePath = join(
+        import.meta.dirname,
+        "../../../data/manifests/health-canada-cnf-2026.candidate.json",
+      );
+      const manifest = JSON.parse(await readFile(candidatePath, "utf8")) as {
+        ingestion: { parserBuildSha256: string | null; parserVersion: string | null };
+      };
+      manifest.ingestion.parserBuildSha256 = "b".repeat(64);
+      manifest.ingestion.parserVersion = "0.0.0-stale";
+      const manifestPath = join(directory, "stale-parser.json");
+      await writeFile(manifestPath, JSON.stringify(manifest));
+      const args = arguments_();
+      args[2] = manifestPath;
+      const { errors, io, output } = testIo({ INGEST_PARSER_BUILD_SHA256: "b".repeat(64) });
+
+      const exitCode = await runCommand(args, io);
+      expect(exitCode).toBe(1);
+      expect(output).toEqual([]);
+      expect(errors.join("\n")).toContain(
+        "Manifest parser identity does not match the executing ingestion package",
+      );
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
+  });
+});
+
+describe("CNF parser baseline boundary", () => {
+  it("accepts a complete exact release-specific evidence set", () => {
+    const { metrics, parsed } = cnfBaselineFixture();
+    const releaseSpecificExpectations = { ...cnfParserBaselineEvidence(parsed, metrics) };
+    const manifest = {
+      validation: { releaseSpecificExpectations },
+    } as unknown as FoodSourceManifestV3;
+
+    expect(() => assertCnfParserBaseline(manifest, parsed, metrics)).not.toThrow();
+  });
+
+  it("rejects a missing release-specific table baseline", () => {
+    const { metrics, parsed } = cnfBaselineFixture();
+    const releaseSpecificExpectations = { ...cnfParserBaselineEvidence(parsed, metrics) };
+    const missingKey = `cnfTable.${CNF_ARCHIVE_CSV_PATHS[0]}.rawSha256`;
+    delete releaseSpecificExpectations[missingKey];
+    const manifest = {
+      validation: { releaseSpecificExpectations },
+    } as unknown as FoodSourceManifestV3;
+
+    expect(() => assertCnfParserBaseline(manifest, parsed, metrics)).toThrow(missingKey);
+  });
+
+  it("rejects a changed release-specific parser metric", () => {
+    const { metrics, parsed } = cnfBaselineFixture();
+    const releaseSpecificExpectations = { ...cnfParserBaselineEvidence(parsed, metrics) };
+    releaseSpecificExpectations["cnfParser.sourceRecordCount"] = 1;
+    const manifest = {
+      validation: { releaseSpecificExpectations },
+    } as unknown as FoodSourceManifestV3;
+
+    expect(() => assertCnfParserBaseline(manifest, parsed, metrics)).toThrow(
+      "cnfParser.sourceRecordCount",
+    );
   });
 });
 

@@ -14,8 +14,10 @@ import {
   type JsonObject,
   previewBatchValidation,
   promoteBatch,
+  type RecordBatchParserReportInput,
   reconcileCatalogueBatch,
   recordBatchParserReport,
+  recordBatchParserReportAndValidate,
   registerFoodSourceFromReviewedManifest,
   registerSourceNutrientMappings,
   rollbackSourceRelease,
@@ -31,8 +33,322 @@ import {
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const describeDatabase = databaseUrl ? describe : describe.skip;
+const CNF_SOURCE_CODE = "HEALTH_CANADA_CNF";
+const CNF_TABLE_CONTRACT = [
+  ["Food_Name.csv", "adapter-input", null],
+  ["Food_Source.csv", "reference-only", "food_source_reference_not_materialized_v1"],
+  ["CNF_Food_Group.csv", "reference-only", "upstream_food_group_taxonomy_not_materialized_v1"],
+  ["Nutrient_Amount.csv", "adapter-input", null],
+  ["Nutrient_Name.csv", "adapter-input", null],
+  ["Nutrient_Source.csv", "reference-only", "nutrient_source_lookup_not_materialized_v1"],
+  ["Measure_Weight_Conversion.csv", "adapter-input", null],
+  ["Measure_Type.csv", "reference-only", "measure_type_lookup_not_materialized_v1"],
+  ["Measure_Name.csv", "adapter-input", null],
+] as const;
 
 describeDatabase("catalogue ingestion PostgreSQL integration", () => {
+  it("atomically rolls back parser evidence so a new authenticated run can resume", async () => {
+    if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
+    const database = createDatabase({ connectionString: databaseUrl, maxConnections: 4 });
+    try {
+      await runMigrations(database);
+      const fixture = await createCnfParserValidationFixture(database, {
+        persistReport: false,
+      });
+      const firstReport = structuredClone(fixture.reportInput) as RecordBatchParserReportInput;
+      const firstPayload = firstReport.report as {
+        actor: { runReference: string };
+        parserPackage: string;
+      };
+      firstPayload.actor.runReference = "urn:cnf-integration:first-run";
+      firstPayload.parserPackage = "unreviewed-parser";
+
+      await expect(recordBatchParserReportAndValidate(database, firstReport)).rejects.toThrow(
+        "CNF parser report parserPackage must be @nutrition-tracker/ingestion",
+      );
+      expect(
+        await database
+          .selectFrom("food_import_parser_report")
+          .select(({ fn }) => fn.countAll<string>().as("count"))
+          .where("batch_id", "=", fixture.batchId)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ count: "0" });
+      expect(await cnfValidationFreezeSnapshot(database, fixture.batchId)).toMatchObject({
+        batch: { status: "staging", validated_at: null, validation_policy: {} },
+      });
+
+      const resumedReport = structuredClone(fixture.reportInput) as RecordBatchParserReportInput;
+      const resumedPayload = resumedReport.report as { actor: { runReference: string } };
+      resumedPayload.actor.runReference = "urn:cnf-integration:replacement-run";
+      const finalized = await recordBatchParserReportAndValidate(database, resumedReport);
+
+      expect(finalized.validation).toMatchObject({
+        promotionEligible: false,
+        stagedCount: 2,
+        validCount: 2,
+      });
+      expect(await cnfValidationFreezeSnapshot(database, fixture.batchId)).toMatchObject({
+        batch: { status: "quarantined", validated_at: expect.any(Date) },
+      });
+      const stored = await database
+        .selectFrom("food_import_parser_report")
+        .select("report")
+        .where("batch_id", "=", fixture.batchId)
+        .executeTakeFirstOrThrow();
+      expect((stored.report.actor as JsonObject).runReference).toBe(
+        "urn:cnf-integration:replacement-run",
+      );
+    } finally {
+      await database.destroy();
+    }
+  }, 30_000);
+
+  it("rejects malformed count-consistent CNF evidence before freezing validation", async () => {
+    if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
+    const database = createDatabase({ connectionString: databaseUrl, maxConnections: 4 });
+    try {
+      await runMigrations(database);
+      const fixture = await createCnfParserValidationFixture(database, {
+        parserPackage: "unreviewed-parser",
+      });
+      const before = await cnfValidationFreezeSnapshot(database, fixture.batchId);
+
+      await expect(validateBatch(database, fixture.batchId)).rejects.toThrow(
+        "CNF parser report parserPackage must be @nutrition-tracker/ingestion",
+      );
+      const after = await cnfValidationFreezeSnapshot(database, fixture.batchId);
+      expect(after).toEqual(before);
+      expect(after).toMatchObject({
+        batch: { status: "staging", validated_at: null, validation_policy: {} },
+        records: [
+          { validated_at: null, validation_issues: [], validation_status: "pending" },
+          { validated_at: null, validation_issues: [], validation_status: "pending" },
+        ],
+      });
+    } finally {
+      await database.destroy();
+    }
+  }, 30_000);
+
+  it("rejects CNF accepted-payload evidence that is not bound to ordered staged rows", async () => {
+    if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
+    const database = createDatabase({ connectionString: databaseUrl, maxConnections: 4 });
+    try {
+      await runMigrations(database);
+      const fixture = await createCnfParserValidationFixture(database, {
+        reverseAcceptedSourcePayloadOrder: true,
+      });
+      const before = await cnfValidationFreezeSnapshot(database, fixture.batchId);
+
+      await expect(validateBatch(database, fixture.batchId)).rejects.toThrow(
+        "CNF accepted source-payload digest does not match staged canonical records",
+      );
+      const after = await cnfValidationFreezeSnapshot(database, fixture.batchId);
+      expect(after).toEqual(before);
+      expect(after).toMatchObject({
+        batch: { status: "staging", validated_at: null, validation_policy: {} },
+        records: [
+          { validated_at: null, validation_issues: [], validation_status: "pending" },
+          { validated_at: null, validation_issues: [], validation_status: "pending" },
+        ],
+      });
+    } finally {
+      await database.destroy();
+    }
+  }, 30_000);
+
+  it("serializes monotonic checkpoints and rejects a queued write after validation freezes", async () => {
+    if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
+    const suffix = randomBytes(6).toString("hex");
+    const finalWriterName = `checkpoint-final-${suffix}`;
+    const staleWriterName = `checkpoint-stale-${suffix}`;
+    const validatorName = `checkpoint-validator-${suffix}`;
+    const database = createDatabase({ connectionString: databaseUrl, maxConnections: 4 });
+    const finalWriter = createDatabase({
+      applicationName: finalWriterName,
+      connectionString: databaseUrl,
+      maxConnections: 1,
+    });
+    const staleWriter = createDatabase({
+      applicationName: staleWriterName,
+      connectionString: databaseUrl,
+      maxConnections: 1,
+    });
+    const validator = createDatabase({
+      applicationName: validatorName,
+      connectionString: databaseUrl,
+      maxConnections: 1,
+    });
+    const releaseBatchLock = deferred<void>();
+    const batchLockReady = deferred<void>();
+    const releaseRecordLock = deferred<void>();
+    const recordLockReady = deferred<void>();
+    let batchLocker: Promise<void> | undefined;
+    let finalCheckpoint: Promise<void> | undefined;
+    let staleCheckpoint: Promise<void> | undefined;
+    let recordLocker: Promise<void> | undefined;
+    let validation: ReturnType<typeof recordBatchParserReportAndValidate> | undefined;
+    let lateCheckpoint: Promise<void> | undefined;
+    try {
+      await runMigrations(database);
+      const fixture = await createCnfParserValidationFixture(database, {
+        persistReport: false,
+      });
+      await saveBatchCheckpoint(database, {
+        batchId: fixture.batchId,
+        cursor: { page: 2 },
+        lastSequenceNumber: 1,
+        processedCount: 2,
+        stage: "parse",
+      });
+      await saveBatchCheckpoint(database, {
+        batchId: fixture.batchId,
+        cursor: { page: 2 },
+        lastSequenceNumber: 1,
+        processedCount: 2,
+        stage: "parse",
+      });
+      await expect(
+        saveBatchCheckpoint(database, {
+          batchId: fixture.batchId,
+          cursor: { page: 1 },
+          lastSequenceNumber: 1,
+          processedCount: 1,
+          stage: "parse",
+        }),
+      ).rejects.toThrow("processedCount cannot regress from 2 to 1");
+      await expect(
+        saveBatchCheckpoint(database, {
+          batchId: fixture.batchId,
+          cursor: { page: 3 },
+          lastSequenceNumber: 0,
+          processedCount: 3,
+          stage: "parse",
+        }),
+      ).rejects.toThrow("lastSequenceNumber cannot regress from 1 to 0");
+      await expect(
+        saveBatchCheckpoint(database, {
+          batchId: fixture.batchId,
+          cursor: { page: "different-evidence" },
+          lastSequenceNumber: 1,
+          processedCount: 2,
+          stage: "parse",
+        }),
+      ).rejects.toThrow("cannot replace equal-progress evidence");
+
+      await saveBatchCheckpoint(database, {
+        batchId: fixture.batchId,
+        cursor: { nextOffset: 1 },
+        lastSequenceNumber: 0,
+        processedCount: 1,
+        stage: "stage",
+      });
+      await expect(
+        saveBatchCheckpoint(database, {
+          batchId: fixture.batchId,
+          cursor: { nextOffset: 1 },
+          lastSequenceNumber: 1,
+          processedCount: 2,
+          stage: "stage",
+        }),
+      ).rejects.toThrow("Stage checkpoint requires nextOffset = processedCount");
+
+      batchLocker = database.transaction().execute(async (transaction) => {
+        await transaction
+          .selectFrom("food_import_batch")
+          .select("id")
+          .where("id", "=", fixture.batchId)
+          .forUpdate()
+          .executeTakeFirstOrThrow();
+        batchLockReady.resolve();
+        await releaseBatchLock.promise;
+      });
+      await batchLockReady.promise;
+      finalCheckpoint = saveBatchCheckpoint(finalWriter, {
+        batchId: fixture.batchId,
+        cursor: { nextOffset: 2 },
+        lastSequenceNumber: 1,
+        processedCount: 2,
+        stage: "stage",
+      });
+      await waitForApplicationLock(database, finalWriterName);
+      staleCheckpoint = expect(
+        saveBatchCheckpoint(staleWriter, {
+          batchId: fixture.batchId,
+          cursor: { nextOffset: 1 },
+          lastSequenceNumber: 0,
+          processedCount: 1,
+          stage: "stage",
+        }),
+      ).rejects.toThrow("processedCount cannot regress from 2 to 1");
+      await waitForApplicationLock(database, staleWriterName);
+      releaseBatchLock.resolve();
+      await batchLocker;
+      await finalCheckpoint;
+      await staleCheckpoint;
+      const frozenCheckpoint = await getBatchCheckpoint(database, fixture.batchId, "stage");
+      expect(frozenCheckpoint).toMatchObject({
+        cursor: { nextOffset: 2 },
+        lastSequenceNumber: "1",
+        processedCount: "2",
+      });
+
+      recordLocker = database.transaction().execute(async (transaction) => {
+        await transaction
+          .selectFrom("food_import_record")
+          .select("id")
+          .where("batch_id", "=", fixture.batchId)
+          .orderBy("sequence_number")
+          .forUpdate()
+          .executeTakeFirstOrThrow();
+        recordLockReady.resolve();
+        await releaseRecordLock.promise;
+      });
+      await recordLockReady.promise;
+      validation = recordBatchParserReportAndValidate(validator, fixture.reportInput, {
+        maximumExcludedNutrientFraction: 1,
+        requireMaterializedNutrientPerValidRecord: false,
+      });
+      await waitForApplicationLock(database, validatorName);
+      lateCheckpoint = expect(
+        saveBatchCheckpoint(staleWriter, {
+          batchId: fixture.batchId,
+          cursor: { nextOffset: 2 },
+          lastSequenceNumber: 1,
+          processedCount: 2,
+          stage: "stage",
+        }),
+      ).rejects.toThrow("cannot checkpoint while ready");
+      await waitForApplicationLock(database, staleWriterName);
+      releaseRecordLock.resolve();
+      await recordLocker;
+      expect((await validation).validation).toMatchObject({ promotionEligible: true });
+      await lateCheckpoint;
+      expect(await getBatchCheckpoint(database, fixture.batchId, "stage")).toEqual(
+        frozenCheckpoint,
+      );
+    } finally {
+      releaseBatchLock.resolve();
+      releaseRecordLock.resolve();
+      await Promise.allSettled(
+        [
+          batchLocker,
+          finalCheckpoint,
+          staleCheckpoint,
+          recordLocker,
+          validation,
+          lateCheckpoint,
+        ].map((operation) => operation ?? Promise.resolve()),
+      );
+      await Promise.all([
+        finalWriter.destroy(),
+        staleWriter.destroy(),
+        validator.destroy(),
+        database.destroy(),
+      ]);
+    }
+  }, 30_000);
+
   it("replays idempotently, promotes atomically, rolls back pointers, and preserves history", async () => {
     if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
     const database = createDatabase({ connectionString: databaseUrl, maxConnections: 4 });
@@ -133,13 +449,13 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
       });
       await saveBatchCheckpoint(database, {
         batchId: firstBatch.batchId,
-        cursor: { byteOffset: 42 },
+        cursor: { nextOffset: 3 },
         lastSequenceNumber: 2,
         processedCount: 3,
         stage: "stage",
       });
       expect(await getBatchCheckpoint(database, firstBatch.batchId, "stage")).toMatchObject({
-        cursor: { byteOffset: 42 },
+        cursor: { nextOffset: 3 },
         lastSequenceNumber: "2",
         processedCount: "3",
       });
@@ -1444,6 +1760,264 @@ describeDatabase("catalogue reconciliation PostgreSQL integration", () => {
     }
   }, 30_000);
 });
+
+function deferred<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolvePromise: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve: (value: T) => resolvePromise?.(value),
+  };
+}
+
+async function waitForApplicationLock(
+  database: ReturnType<typeof createDatabase>,
+  applicationName: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const activity = await sql<{ wait_event_type: string | null }>`
+      select wait_event_type
+      from pg_stat_activity
+      where application_name = ${applicationName}
+    `.execute(database);
+    if (activity.rows.some((row) => row.wait_event_type === "Lock")) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Writer ${applicationName} did not reach a PostgreSQL lock wait`);
+}
+
+async function createCnfParserValidationFixture(
+  database: Parameters<typeof recordBatchParserReport>[0],
+  options: {
+    readonly parserPackage?: string;
+    readonly persistReport?: boolean;
+    readonly reverseAcceptedSourcePayloadOrder?: boolean;
+  },
+): Promise<{
+  readonly batchId: string;
+  readonly reportInput: RecordBatchParserReportInput;
+}> {
+  await ensureCnfIntegrationSource(database);
+  const nutrientMappingDigest = await getSourceNutrientMappingDigest(database, CNF_SOURCE_CODE);
+  const parserBuildSha256 = sha256CanonicalJson({ fixture: "cnf-parser-validation" });
+  const parserVersion = pinnedParserVersion(parserBuildSha256, nutrientMappingDigest);
+  const releaseKey = `cnf-validation-${randomBytes(12).toString("hex")}`;
+  const artifactSha256 = sha256CanonicalJson({ releaseKey });
+  const rightsManifestSha256 = sha256CanonicalJson({ releaseKey, type: "rights-manifest" });
+  const batch = await stageBatch(database, {
+    ...batchInput(CNF_SOURCE_CODE, releaseKey, rightsManifestSha256, artifactSha256, parserVersion),
+    artifactUri: `s3://catalogue/${CNF_SOURCE_CODE}/${releaseKey}.zip`,
+    mediaType: "application/zip",
+    upstreamSchemaVersion: "cnf-2026",
+  });
+  const first = recordInput(cnfFoodPayload(releaseKey, "food-1", "First CNF food"), 0);
+  const second = recordInput(cnfFoodPayload(releaseKey, "food-2", "Second CNF food"), 1);
+
+  // Insert in reverse order so the report must bind the canonical sequence order,
+  // not insertion order or source-record-key ordering by accident.
+  await stageBatchRecords(database, batch.batchId, [second, first]);
+  const acceptedRows = [first, second].map((record) => ({
+    sourcePayloadHash: record.sourcePayloadSha256,
+    sourceRecordKey: record.sourceRecordKey,
+  }));
+  const reportedRows = options.reverseAcceptedSourcePayloadOrder
+    ? [...acceptedRows].reverse()
+    : acceptedRows;
+  const reportInput: RecordBatchParserReportInput = {
+    batchId: batch.batchId,
+    emittedNutrientCount: 2,
+    emittedPortionCount: 0,
+    emittedRecordCount: 2,
+    excludedNutrientCount: 0,
+    excludedPortionCount: 0,
+    excludedRecordCount: 0,
+    report: cnfIntegrationParserReport({
+      acceptedSourcePayloadSha256: sha256CanonicalJson(reportedRows),
+      artifactSha256,
+      nutrientMappingDigest,
+      parserBuildSha256,
+      parserPackage: options.parserPackage ?? "@nutrition-tracker/ingestion",
+      releaseKey,
+    }),
+    sourceNutrientCount: 2,
+    sourcePortionCount: 0,
+    sourceRecordCount: 2,
+  };
+  if (options.persistReport !== false) {
+    await recordBatchParserReport(database, reportInput);
+  }
+  return { batchId: batch.batchId, reportInput };
+}
+
+async function ensureCnfIntegrationSource(
+  database: Parameters<typeof registerFoodSourceFromReviewedManifest>[0],
+): Promise<void> {
+  const existing = await database
+    .selectFrom("food_source")
+    .select("id")
+    .where("code", "=", CNF_SOURCE_CODE)
+    .executeTakeFirst();
+  if (existing) return;
+  await registerFoodSourceFromReviewedManifest(database, {
+    attributionRequired: true,
+    attributionText: "Synthetic Health Canada CNF integration fixture",
+    code: CNF_SOURCE_CODE,
+    commercialUseAllowed: true,
+    databaseRightsNotes: "Test-only CNF parser-evidence fixture",
+    displayName: "Health Canada CNF integration fixture",
+    homepageUrl: "https://example.invalid/health-canada-cnf-integration",
+    kind: "government",
+    licenseExpression: "LicenseRef-Open-Government-Licence-Canada-2.0",
+    licenseUrl: "https://open.canada.ca/en/open-government-licence-canada",
+    redistributionAllowed: true,
+    rightsReviewStatus: "approved",
+    rightsReviewedAt: "2026-08-31T12:00:00Z",
+    rightsReviewedBy: "principal:legal-review",
+  });
+}
+
+function cnfFoodPayload(
+  releaseKey: string,
+  sourceRecordId: string,
+  description: string,
+): JsonObject {
+  const payload = foodPayload(
+    CNF_SOURCE_CODE,
+    releaseKey,
+    sourceRecordId,
+    description,
+    sourceRecordId === "food-1" ? "11" : "12",
+  );
+  return {
+    ...payload,
+    idempotencyKey: `${CNF_SOURCE_CODE}:${releaseKey}:Food_Name:${sourceRecordId}`,
+    source: {
+      ...(payload.source as JsonObject),
+      marketCode: "CA",
+      sourceDataType: "Food_Name",
+    },
+    sourcePayloadHash: sha256CanonicalJson({ releaseKey, sourceRecordId }),
+  };
+}
+
+function cnfIntegrationParserReport(input: {
+  readonly acceptedSourcePayloadSha256: string;
+  readonly artifactSha256: string;
+  readonly nutrientMappingDigest: string;
+  readonly parserBuildSha256: string;
+  readonly parserPackage: string;
+  readonly releaseKey: string;
+}): JsonObject {
+  const expectedFiles = CNF_TABLE_CONTRACT.map(([archivePath]) => archivePath).sort();
+  const tables = CNF_TABLE_CONTRACT.map(([archivePath, disposition, referenceOnlyReason]) => {
+    const rowCount =
+      archivePath === "Food_Name.csv" || archivePath === "Nutrient_Amount.csv"
+        ? 2
+        : archivePath === "Nutrient_Name.csv"
+          ? 1
+          : 0;
+    const headers = ["Code"];
+    return {
+      archivePath,
+      byteSize: 10 + rowCount,
+      disposition,
+      headerSha256: sha256CanonicalJson(headers),
+      headers,
+      rawSha256: sha256CanonicalJson({ archivePath, evidence: "raw" }),
+      referenceOnlyReason,
+      rowCount,
+      rowsSha256: sha256CanonicalJson({ archivePath, evidence: "rows", rowCount }),
+    };
+  });
+  const exclusionReasonCounts = {};
+  const rowDispositions = {
+    foodNames: [0, 1].map((sourceIndex) => ({ disposition: "emitted", sourceIndex })),
+    measureWeightConversions: [],
+    nutrientAmounts: [0, 1].map((sourceIndex) => ({ disposition: "emitted", sourceIndex })),
+  };
+  return {
+    actor: {
+      authenticationMethod: "oidc",
+      principalId: "service:cnf-integration",
+      runReference: `urn:cnf-integration:${input.releaseKey}`,
+    },
+    archive: {
+      expectedFiles,
+      inventoryCount: expectedFiles.length,
+      inventorySha256: sha256CanonicalJson(expectedFiles),
+    },
+    artifactSha256: input.artifactSha256,
+    exclusionReasonCounts,
+    exclusions: { measures: [], nutrients: [], records: [], skippedMeasures: [] },
+    metrics: {
+      acceptedSourcePayloadSha256: input.acceptedSourcePayloadSha256,
+      bilingualDescriptionCount: 0,
+      emittedNutrientCount: 2,
+      emittedPortionCount: 0,
+      emittedRecordCount: 2,
+      englishOnlyDescriptionCount: 2,
+      excludedMeasureCount: 0,
+      excludedNutrientCount: 0,
+      exclusionReasonCountsSha256: sha256CanonicalJson(exclusionReasonCounts),
+      frenchOnlyDescriptionCount: 0,
+      missingBothDescriptionCount: 0,
+      quarantinedRecordCount: 0,
+      rowDispositionsSha256: sha256CanonicalJson(rowDispositions),
+      skippedMeasureCount: 0,
+      sourceNutrientCount: 2,
+      sourcePortionCount: 0,
+      sourceRecordCount: 2,
+      tableEvidenceSha256: sha256CanonicalJson(tables),
+    },
+    nutrientMappingDigest: input.nutrientMappingDigest,
+    parserBuildSha256: input.parserBuildSha256,
+    parserPackage: input.parserPackage,
+    parserVersion: "integration-parser@1.0.0",
+    releaseKey: input.releaseKey,
+    reportKind: "health-canada-cnf-stage-v1",
+    rowDispositions,
+    schemaVersion: 1,
+    sourceCode: CNF_SOURCE_CODE,
+    tables,
+  };
+}
+
+async function cnfValidationFreezeSnapshot(
+  database: Parameters<typeof validateBatch>[0],
+  batchId: string,
+): Promise<unknown> {
+  const [batch, records] = await Promise.all([
+    database
+      .selectFrom("food_import_batch")
+      .select([
+        "materialized_count",
+        "nutrient_excluded_count",
+        "nutrient_input_count",
+        "nutrient_materializable_count",
+        "quarantined_count",
+        "status",
+        "unresolved_error_count",
+        "valid_count",
+        "validated_at",
+        "validation_policy",
+        "warning_count",
+      ])
+      .where("id", "=", batchId)
+      .executeTakeFirstOrThrow(),
+    database
+      .selectFrom("food_import_record")
+      .select(["validation_status", "validated_at", "validation_issues"])
+      .where("batch_id", "=", batchId)
+      .orderBy("sequence_number")
+      .execute(),
+  ]);
+  return { batch, records };
+}
 
 function pinnedParserVersion(parserBuildSha256: string, nutrientMappingDigest: string): string {
   return `integration-parser@1.0.0+build.${parserBuildSha256}+mapping.${nutrientMappingDigest}`;

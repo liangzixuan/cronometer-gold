@@ -354,10 +354,17 @@ export function parseFoodSourceManifest(input: unknown): FoodSourceManifestV3 {
     "releaseSpecificExpectations",
   ]);
   stringArray(validation.rules, "$.validation.rules", { min: 1 });
-  const expectedFiles = stringArray(validation.expectedFiles, "$.validation.expectedFiles", {
-    min: 0,
-  });
-  for (const expectedFile of expectedFiles) {
+  const expectedFiles = array(validation.expectedFiles, "$.validation.expectedFiles");
+  const seenExpectedFiles = new Set<string>();
+  for (const [index, expectedFile] of expectedFiles.entries()) {
+    requiredString(expectedFile, `$.validation.expectedFiles[${index}]`);
+    invariant(
+      !seenExpectedFiles.has(expectedFile),
+      "INVALID_MANIFEST",
+      "Manifest expected file paths must be unique",
+      { expectedFile },
+    );
+    seenExpectedFiles.add(expectedFile);
     try {
       safeArchivePath(expectedFile, false);
     } catch (error) {

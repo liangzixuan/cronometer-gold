@@ -5,6 +5,7 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import {
   approveBatch,
+  type BatchCheckpoint,
   canonicalJsonChunks,
   createDatabaseFromEnvironment,
   getBatchCheckpoint,
@@ -13,11 +14,12 @@ import {
   type JsonValue,
   promoteBatch,
   reconcileCatalogueBatch,
-  recordBatchParserReport,
+  recordBatchParserReportAndValidate,
   registerFoodSourceFromReviewedManifest,
   registerSourceNutrientMappings,
   rollbackSourceRelease,
   saveBatchCheckpoint,
+  sha256CanonicalJson,
   stageBatch,
   stageBatchRecords,
   validateBatch,
@@ -26,8 +28,12 @@ import {
   acquireArtifact,
   adaptFdcJsonRelease,
   assertImportReadyManifest,
+  assertManifestParserIdentity,
+  CNF_ARCHIVE_CSV_PATHS,
+  type CnfArchiveParseResult,
   extractZipArchive,
   type FoodSourceManifestV3,
+  parseCnfArchive,
   parseFoodSourceManifest,
 } from "@nutrition-tracker/ingestion";
 
@@ -74,6 +80,19 @@ const CATALOGUE_RECONCILE_OPTIONS = Object.freeze([
   "expected-validation-digest",
   "report-out",
 ]);
+const STAGE_CNF_OPTIONS = Object.freeze([
+  "artifact",
+  "cache-dir",
+  "extract-dir",
+  "manifest-object-uri",
+]);
+const INSPECT_CNF_OPTIONS = Object.freeze(["artifact", "cache-dir", "extract-dir"]);
+const CNF_ARCHIVE_LIMITS = Object.freeze({
+  maxCompressionRatio: 250,
+  maxEntries: 100,
+  maxFileBytes: 250_000_000,
+  maxTotalBytes: 500_000_000,
+});
 
 export async function runCommand(argv: readonly string[], io: CommandIo): Promise<number> {
   try {
@@ -89,8 +108,14 @@ export async function runCommand(argv: readonly string[], io: CommandIo): Promis
       case "fdc inspect":
         await inspectFdcCommand(arguments_.positionals, arguments_.options, io);
         return 0;
+      case "cnf inspect":
+        await inspectCnfCommand(argv, arguments_.positionals, arguments_.options, io);
+        return 0;
       case "catalogue stage-fdc":
         await stageFdcCommand(arguments_.positionals, arguments_.options, io);
+        return 0;
+      case "catalogue stage-cnf":
+        await stageCnfCommand(argv, arguments_.positionals, arguments_.options, io);
         return 0;
       case "catalogue mappings":
         await mappingsCommand(arguments_.positionals, io);
@@ -114,9 +139,86 @@ export async function runCommand(argv: readonly string[], io: CommandIo): Promis
         throw new Error(usage());
     }
   } catch (error) {
-    io.writeError(`${error instanceof Error ? error.message : "Unknown ingestion error"}\n`);
+    io.writeError(formatCommandError(error));
     return 1;
   }
+}
+
+const MAX_COMMAND_ERROR_DEPTH = 3;
+const MAX_COMMAND_ERROR_DETAILS = 8;
+const MAX_COMMAND_ERROR_MESSAGE_LENGTH = 500;
+const MAX_COMMAND_ERROR_OUTPUT_LENGTH = 4_000;
+
+export function formatCommandError(error: unknown): string {
+  const lines: string[] = [];
+  appendCommandError(lines, error, 0);
+  const output = `${lines.join("\n") || "Unknown ingestion error"}\n`;
+  return output.length <= MAX_COMMAND_ERROR_OUTPUT_LENGTH
+    ? output
+    : `${output.slice(0, MAX_COMMAND_ERROR_OUTPUT_LENGTH - 2)}…\n`;
+}
+
+function appendCommandError(lines: string[], error: unknown, depth: number): void {
+  if (lines.length >= MAX_COMMAND_ERROR_DETAILS) return;
+  lines.push(safeCommandErrorMessage(error));
+  if (!(error instanceof AggregateError) || depth >= MAX_COMMAND_ERROR_DEPTH) return;
+  for (const nested of error.errors) {
+    if (lines.length >= MAX_COMMAND_ERROR_DETAILS) break;
+    appendCommandError(lines, nested, depth + 1);
+  }
+}
+
+function safeCommandErrorMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : "Unknown ingestion error";
+  const boundedRaw = raw.slice(0, MAX_COMMAND_ERROR_MESSAGE_LENGTH * 4);
+  const singleLine = [...boundedRaw]
+    .map((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint <= 31 || codePoint === 127 ? " " : character;
+    })
+    .join("")
+    .trim();
+  const withoutUrlCredentials = singleLine.replace(
+    /([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/giu,
+    "$1[redacted]@",
+  );
+  const withoutUrlQueries = withoutUrlCredentials.replace(
+    /(https?:\/\/[^\s?#]+)\?[^\s#]*/giu,
+    "$1?[redacted]",
+  );
+  const withoutPrivateKeys = withoutUrlQueries.replace(
+    /-----BEGIN [^-]{0,80}PRIVATE KEY-----.*?(?:-----END [^-]{0,80}PRIVATE KEY-----|$)/giu,
+    "[private-key redacted]",
+  );
+  const withoutAuthorization = withoutPrivateKeys
+    .replace(
+      /\b(authorization|proxy-authorization)\s*:\s*(?:bearer|basic)\s+[^\s,;]+/giu,
+      "$1: [redacted]",
+    )
+    .replace(/\bbearer\s+[a-z0-9._~+/-]+=*/giu, "Bearer [redacted]");
+  const withoutSensitiveAssignments = withoutAuthorization
+    .replace(
+      /(--[a-z0-9_-]*(?:password|passwd|secret|token|private[_-]?key|api[_-]?key|access[_-]?key)[a-z0-9_-]*)(?:\s*=\s*|\s+)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;]+)/giu,
+      "$1=[redacted]",
+    )
+    .replace(
+      /((?:["'])?[a-z0-9_-]*(?:password|passwd|secret|token|private[_-]?key|api[_-]?key|access[_-]?key|authorization|cookie)[a-z0-9_-]*(?:["'])?\s*[=:]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;}]+)/giu,
+      "$1[redacted]",
+    )
+    .replace(/\b(?:gh[pousr]_[a-z0-9]{10,}|github_pat_[a-z0-9_]{10,})\b/giu, "[token redacted]")
+    .replace(
+      /\b(?:akia|asia|aida|aroa|aipa|anpa|anva|a3t)[a-z0-9]{12,}\b/giu,
+      "[access-key redacted]",
+    )
+    .replace(/\beyj[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}\b/giu, "[jwt redacted]");
+  const redacted = withoutSensitiveAssignments.replace(
+    /\b(set-cookie|cookie)\s*:\s*.*/giu,
+    "$1: [redacted]",
+  );
+  const message = redacted.length > 0 ? redacted : "Unknown ingestion error";
+  return message.length <= MAX_COMMAND_ERROR_MESSAGE_LENGTH
+    ? message
+    : `${message.slice(0, MAX_COMMAND_ERROR_MESSAGE_LENGTH - 1)}…`;
 }
 
 async function reconcileCommand(
@@ -191,7 +293,7 @@ export async function runAfterRequiredCleanup<T>(
     if (cleanupFailed) {
       throw new AggregateError(
         [operationResult.error, cleanupError],
-        "Catalogue reconciliation and required cleanup both failed",
+        "Operation and required cleanup both failed",
       );
     }
     throw operationResult.error;
@@ -375,6 +477,66 @@ async function inspectFdcCommand(
   });
 }
 
+async function inspectCnfCommand(
+  argv: readonly string[],
+  positionals: readonly string[],
+  options: Readonly<Record<string, string | true>>,
+  io: CommandIo,
+): Promise<void> {
+  assertExactCnfInspectArguments(argv, positionals, options);
+  const manifestPath = workspacePath(singlePositional(positionals, "manifest path"));
+  const manifestBytes = await readFile(manifestPath);
+  const manifest = parseFoodSourceManifest(JSON.parse(manifestBytes.toString("utf8")));
+  assertManifestParserIdentity(manifest);
+  const guideFiles = requireCnfManifest(manifest);
+  const parserBuildSha256 = trustedParserBuildSha256(manifest, io.environment);
+  const artifactSha256 = requiredManifestValue(manifest.artifact.sha256, "artifact.sha256");
+  const artifactByteSize = requiredPositiveSafeInteger(
+    manifest.artifact.byteSize,
+    "artifact.byteSize",
+  );
+  const artifact = await acquireArtifact({
+    cacheDirectory: workspacePath(requiredOption(options, "cache-dir")),
+    operatorPrincipalId: "local-cnf-inspection",
+    source: workspacePath(requiredOption(options, "artifact")),
+    sourceMode: "local-test",
+    tool: "nutrition-tracker-ingest/0.1.0",
+    verification: {
+      mode: "verified",
+      expected: {
+        byteSize: artifactByteSize,
+        provenance: `manifest:${hashBytes(manifestBytes)}`,
+        sha256: artifactSha256,
+      },
+    },
+  });
+  const parsed = await parseCnfArchive({
+    archivePath: artifact.path,
+    context: { releaseKey: manifest.release.releaseKey },
+    destinationDirectory: workspacePath(requiredOption(options, "extract-dir")),
+    expectedFiles: manifest.validation.expectedFiles,
+    guideFiles,
+    archiveLimits: CNF_ARCHIVE_LIMITS,
+  });
+  const evidence = buildCnfStageEvidence(parsed);
+  output(io, {
+    archive: parsed.archive,
+    artifact: artifact.observation,
+    baseline: evidence.baseline,
+    exclusionReasonCounts: evidence.exclusionReasonCounts,
+    metrics: evidence.metrics,
+    parserBuildSha256,
+    parserPackage: manifest.ingestion.parserPackage,
+    parserVersion: requiredManifestValue(
+      manifest.ingestion.parserVersion,
+      "ingestion.parserVersion",
+    ),
+    releaseKey: manifest.release.releaseKey,
+    rowDispositions: evidence.rowDispositions,
+    tables: parsed.tables,
+  });
+}
+
 async function stageFdcCommand(
   positionals: readonly string[],
   options: Readonly<Record<string, string | true>>,
@@ -403,125 +565,499 @@ async function stageFdcCommand(
     },
   });
   const database = createDatabaseFromEnvironment(io.environment);
-  try {
-    await registerManifestSource(database, manifest);
-    const nutrientMappingDigest = await getSourceNutrientMappingDigest(
-      database,
-      manifest.source.code,
-    );
-    const stagedBatch = await stageBatch(database, {
-      acquiredAt: requiredManifestValue(manifest.release.acquiredAt, "release.acquiredAt"),
-      artifactBytes: manifest.artifact.byteSize,
-      artifactSha256: manifest.artifact.sha256,
-      artifactUri: manifest.artifact.objectUri,
-      mediaType: manifest.artifact.mediaType,
-      parserVersion: `${manifest.ingestion.parserVersion}+build.${parserBuildSha256}+mapping.${nutrientMappingDigest}`,
-      publishedOn: manifest.release.publishedOn,
-      releaseKey: manifest.release.releaseKey,
-      rightsManifestSha256: hashBytes(manifestBytes),
-      rightsManifestUri: immutableManifestObjectUri(
-        requiredOption(options, "manifest-object-uri"),
-        hashBytes(manifestBytes),
-      ),
-      sourceCode: manifest.source.code,
-      upstreamSchemaVersion: manifest.release.upstreamSchemaVersion,
-    });
-    if (stagedBatch.status !== "staging") {
-      const validation = await validateBatch(database, stagedBatch.batchId);
-      output(io, {
+  await runAfterRequiredCleanup(
+    async () => {
+      await registerManifestSource(database, manifest);
+      const nutrientMappingDigest = await getSourceNutrientMappingDigest(
+        database,
+        manifest.source.code,
+      );
+      const stagedBatch = await stageBatch(database, {
+        acquiredAt: requiredManifestValue(manifest.release.acquiredAt, "release.acquiredAt"),
+        artifactBytes: manifest.artifact.byteSize,
+        artifactSha256: manifest.artifact.sha256,
+        artifactUri: manifest.artifact.objectUri,
+        mediaType: manifest.artifact.mediaType,
+        parserVersion: `${manifest.ingestion.parserVersion}+build.${parserBuildSha256}+mapping.${nutrientMappingDigest}`,
+        publishedOn: manifest.release.publishedOn,
+        releaseKey: manifest.release.releaseKey,
+        rightsManifestSha256: hashBytes(manifestBytes),
+        rightsManifestUri: immutableManifestObjectUri(
+          requiredOption(options, "manifest-object-uri"),
+          hashBytes(manifestBytes),
+        ),
+        sourceCode: manifest.source.code,
+        upstreamSchemaVersion: manifest.release.upstreamSchemaVersion,
+      });
+      if (stagedBatch.status !== "staging") {
+        assertFrozenReplayStatus(stagedBatch.status);
+        const validation = await validateBatch(database, stagedBatch.batchId);
+        return {
+          actor: actor.principalId,
+          batchId: stagedBatch.batchId,
+          excludedNutrients: validation.excludedNutrientCount,
+          inserted: 0,
+          promotionEligible: validation.promotionEligible,
+          parserBuildSha256,
+          nutrientMappingDigest,
+          quarantined: validation.quarantinedCount,
+          replayed: 0,
+          resumed: true,
+          staged: validation.stagedCount,
+          status: stagedBatch.status,
+          validationDigest: validation.validationDigest,
+          valid: validation.validCount,
+          warnings: validation.warningCount,
+        };
+      }
+      const parsed = await parseFdcArtifact(
+        manifest,
+        artifact.path,
+        workspacePath(requiredOption(options, "extract-dir")),
+      );
+      const metrics = fdcMetrics(parsed);
+      assertFdcParserBaseline(manifest, metrics);
+      const records = stagedInputs(parsed);
+      const checkpoint = await getBatchCheckpoint(database, stagedBatch.batchId, "stage");
+      const checkpointOffset = validatedStageCheckpointOffset(checkpoint, records.length);
+      let inserted = 0;
+      let replayed = 0;
+      for (let offset = checkpointOffset; offset < records.length; offset += 250) {
+        const endOffset = Math.min(offset + 250, records.length);
+        const result = await stageBatchRecords(
+          database,
+          stagedBatch.batchId,
+          records.slice(offset, endOffset),
+        );
+        inserted += result.inserted;
+        replayed += result.replayed;
+        await saveBatchCheckpoint(database, {
+          batchId: stagedBatch.batchId,
+          cursor: { nextOffset: endOffset },
+          lastSequenceNumber: endOffset - 1,
+          processedCount: endOffset,
+          stage: "stage",
+        });
+      }
+      const { parserReportSha256, validation } = await recordBatchParserReportAndValidate(
+        database,
+        {
+          batchId: stagedBatch.batchId,
+          emittedNutrientCount: metrics.stagedNutrients,
+          emittedPortionCount: metrics.stagedPortions,
+          emittedRecordCount: metrics.records,
+          excludedNutrientCount: metrics.excludedNutrients,
+          excludedPortionCount: metrics.excludedPortions,
+          excludedRecordCount: metrics.quarantined,
+          report: parserReport(manifest, parsed, metrics, parserBuildSha256, nutrientMappingDigest),
+          sourceNutrientCount: metrics.stagedNutrients + metrics.excludedNutrients,
+          sourcePortionCount: metrics.stagedPortions + metrics.excludedPortions,
+          sourceRecordCount: metrics.records + metrics.quarantined,
+        },
+        {
+          maximumExcludedNutrientFraction:
+            metrics.excludedNutrients / (metrics.stagedNutrients + metrics.excludedNutrients),
+          maximumQuarantineFraction: metrics.quarantined / (metrics.records + metrics.quarantined),
+          maximumQuarantinedRecords: metrics.quarantined,
+        },
+      );
+      return {
         actor: actor.principalId,
         batchId: stagedBatch.batchId,
         excludedNutrients: validation.excludedNutrientCount,
-        inserted: 0,
+        inserted,
         promotionEligible: validation.promotionEligible,
-        parserBuildSha256,
-        nutrientMappingDigest,
         quarantined: validation.quarantinedCount,
-        replayed: 0,
-        resumed: true,
+        replayed,
         staged: validation.stagedCount,
-        status: stagedBatch.status,
         validationDigest: validation.validationDigest,
         valid: validation.validCount,
         warnings: validation.warningCount,
-      });
-      return;
-    }
-    const parsed = await parseFdcArtifact(
-      manifest,
-      artifact.path,
-      workspacePath(requiredOption(options, "extract-dir")),
-    );
-    const metrics = fdcMetrics(parsed);
-    assertFdcParserBaseline(manifest, metrics);
-    const records = stagedInputs(parsed);
-    const checkpoint = await getBatchCheckpoint(database, stagedBatch.batchId, "stage");
-    const checkpointOffset = checkpoint ? Number(checkpoint.processedCount) : 0;
-    if (
-      !Number.isSafeInteger(checkpointOffset) ||
-      checkpointOffset < 0 ||
-      checkpointOffset > records.length
-    ) {
-      throw new Error(`Invalid staging checkpoint offset ${String(checkpoint?.processedCount)}`);
-    }
-    let inserted = 0;
-    let replayed = 0;
-    for (let offset = checkpointOffset; offset < records.length; offset += 250) {
-      const endOffset = Math.min(offset + 250, records.length);
-      const result = await stageBatchRecords(
+        parser: metrics,
+        parserBuildSha256,
+        nutrientMappingDigest,
+        parserReportSha256,
+      };
+    },
+    () => database.destroy(),
+    async (result) => output(io, result),
+  );
+}
+
+export interface CnfStageMetrics {
+  readonly acceptedSourcePayloadSha256: string;
+  readonly bilingualDescriptionCount: number;
+  readonly emittedNutrientCount: number;
+  readonly emittedPortionCount: number;
+  readonly emittedRecordCount: number;
+  readonly englishOnlyDescriptionCount: number;
+  readonly excludedMeasureCount: number;
+  readonly excludedNutrientCount: number;
+  readonly exclusionReasonCountsSha256: string;
+  readonly frenchOnlyDescriptionCount: number;
+  readonly missingBothDescriptionCount: number;
+  readonly quarantinedRecordCount: number;
+  readonly skippedMeasureCount: number;
+  readonly sourceNutrientCount: number;
+  readonly sourcePortionCount: number;
+  readonly sourceRecordCount: number;
+  readonly rowDispositionsSha256: string;
+  readonly tableEvidenceSha256: string;
+}
+
+export interface CnfStageEvidence {
+  readonly baseline: Readonly<Record<string, boolean | number | string>>;
+  readonly exclusionReasonCounts: JsonObject;
+  readonly exclusions: JsonObject;
+  readonly metrics: CnfStageMetrics;
+  readonly rowDispositions: JsonObject;
+}
+
+async function stageCnfCommand(
+  argv: readonly string[],
+  positionals: readonly string[],
+  options: Readonly<Record<string, string | true>>,
+  io: CommandIo,
+): Promise<void> {
+  assertExactStageCnfArguments(argv, positionals, options);
+  const actor = trustedRunnerActor(io.environment);
+  const manifestPath = workspacePath(singlePositional(positionals, "manifest path"));
+  const manifestBytes = await readFile(manifestPath);
+  const manifestSha256 = hashBytes(manifestBytes);
+  const manifest = parseFoodSourceManifest(JSON.parse(manifestBytes.toString("utf8")));
+  assertImportReadyManifest(manifest);
+  const guideFiles = requireCnfManifest(manifest);
+  const parserBuildSha256 = trustedParserBuildSha256(manifest, io.environment);
+  const manifestObjectUri = immutableManifestObjectUri(
+    requiredOption(options, "manifest-object-uri"),
+    manifestSha256,
+  );
+  const artifact = await acquireArtifact({
+    cacheDirectory: workspacePath(requiredOption(options, "cache-dir")),
+    operatorPrincipalId: actor.principalId,
+    source: workspacePath(requiredOption(options, "artifact")),
+    sourceMode: "local-test",
+    tool: "nutrition-tracker-ingest/0.1.0",
+    verification: {
+      mode: "verified",
+      expected: {
+        byteSize: manifest.artifact.byteSize,
+        provenance: `manifest:${manifestSha256}`,
+        sha256: manifest.artifact.sha256,
+      },
+    },
+  });
+  const parsed = await parseCnfArchive({
+    archivePath: artifact.path,
+    context: { releaseKey: manifest.release.releaseKey },
+    destinationDirectory: workspacePath(requiredOption(options, "extract-dir")),
+    expectedFiles: manifest.validation.expectedFiles,
+    guideFiles,
+    archiveLimits: CNF_ARCHIVE_LIMITS,
+  });
+  const evidence = buildCnfStageEvidence(parsed);
+  const { exclusionReasonCounts, exclusions, metrics, rowDispositions } = evidence;
+  assertCnfParserBaseline(manifest, parsed, metrics);
+  const records = stagedInputs(parsed.parsed);
+  const database = createDatabaseFromEnvironment(io.environment);
+  await runAfterRequiredCleanup(
+    async () => {
+      await registerManifestSource(database, manifest);
+      const nutrientMappingDigest = await getSourceNutrientMappingDigest(
         database,
-        stagedBatch.batchId,
-        records.slice(offset, endOffset),
+        manifest.source.code,
       );
-      inserted += result.inserted;
-      replayed += result.replayed;
-      await saveBatchCheckpoint(database, {
-        batchId: stagedBatch.batchId,
-        cursor: { nextOffset: endOffset },
-        lastSequenceNumber: endOffset - 1,
-        processedCount: endOffset,
-        stage: "stage",
+      const stagedBatch = await stageBatch(database, {
+        acquiredAt: requiredManifestValue(manifest.release.acquiredAt, "release.acquiredAt"),
+        artifactBytes: manifest.artifact.byteSize,
+        artifactSha256: manifest.artifact.sha256,
+        artifactUri: manifest.artifact.objectUri,
+        mediaType: manifest.artifact.mediaType,
+        parserVersion: `${manifest.ingestion.parserVersion}+build.${parserBuildSha256}+mapping.${nutrientMappingDigest}`,
+        publishedOn: manifest.release.publishedOn,
+        releaseKey: manifest.release.releaseKey,
+        rightsManifestSha256: manifestSha256,
+        rightsManifestUri: manifestObjectUri,
+        sourceCode: manifest.source.code,
+        upstreamSchemaVersion: manifest.release.upstreamSchemaVersion,
       });
-    }
-    const parserReportSha256 = await recordBatchParserReport(database, {
-      batchId: stagedBatch.batchId,
-      emittedNutrientCount: metrics.stagedNutrients,
-      emittedPortionCount: metrics.stagedPortions,
-      emittedRecordCount: metrics.records,
-      excludedNutrientCount: metrics.excludedNutrients,
-      excludedPortionCount: metrics.excludedPortions,
-      excludedRecordCount: metrics.quarantined,
-      report: parserReport(manifest, parsed, metrics, parserBuildSha256, nutrientMappingDigest),
-      sourceNutrientCount: metrics.stagedNutrients + metrics.excludedNutrients,
-      sourcePortionCount: metrics.stagedPortions + metrics.excludedPortions,
-      sourceRecordCount: metrics.records + metrics.quarantined,
-    });
-    const validation = await validateBatch(database, stagedBatch.batchId, {
-      maximumExcludedNutrientFraction:
-        metrics.excludedNutrients / (metrics.stagedNutrients + metrics.excludedNutrients),
-      maximumQuarantineFraction: metrics.quarantined / (metrics.records + metrics.quarantined),
-      maximumQuarantinedRecords: metrics.quarantined,
-    });
-    output(io, {
-      actor: actor.principalId,
-      batchId: stagedBatch.batchId,
-      excludedNutrients: validation.excludedNutrientCount,
-      inserted,
-      promotionEligible: validation.promotionEligible,
-      quarantined: validation.quarantinedCount,
-      replayed,
-      staged: validation.stagedCount,
-      validationDigest: validation.validationDigest,
-      valid: validation.validCount,
-      warnings: validation.warningCount,
-      parser: metrics,
-      parserBuildSha256,
-      nutrientMappingDigest,
-      parserReportSha256,
-    });
-  } finally {
-    await database.destroy();
+      if (stagedBatch.status !== "staging") {
+        assertFrozenReplayStatus(stagedBatch.status);
+        const validation = await validateBatch(database, stagedBatch.batchId);
+        return {
+          actor: actor.principalId,
+          batchId: stagedBatch.batchId,
+          excludedNutrients: validation.excludedNutrientCount,
+          inserted: 0,
+          nutrientMappingDigest,
+          parserBuildSha256,
+          parserReportSha256: validation.parserReportSha256,
+          promotionEligible: validation.promotionEligible,
+          quarantined: validation.quarantinedCount,
+          replayed: 0,
+          resumed: true,
+          staged: validation.stagedCount,
+          status: stagedBatch.status,
+          validationDigest: validation.validationDigest,
+          valid: validation.validCount,
+          warnings: validation.warningCount,
+        };
+      }
+
+      const checkpoint = await getBatchCheckpoint(database, stagedBatch.batchId, "stage");
+      const checkpointOffset = validatedStageCheckpointOffset(checkpoint, records.length);
+      let inserted = 0;
+      let replayed = 0;
+      for (let offset = checkpointOffset; offset < records.length; offset += 250) {
+        const endOffset = Math.min(offset + 250, records.length);
+        const result = await stageBatchRecords(
+          database,
+          stagedBatch.batchId,
+          records.slice(offset, endOffset),
+        );
+        inserted += result.inserted;
+        replayed += result.replayed;
+        await saveBatchCheckpoint(database, {
+          batchId: stagedBatch.batchId,
+          cursor: { nextOffset: endOffset },
+          lastSequenceNumber: endOffset - 1,
+          processedCount: endOffset,
+          stage: "stage",
+        });
+      }
+      const { parserReportSha256, validation } = await recordBatchParserReportAndValidate(
+        database,
+        {
+          batchId: stagedBatch.batchId,
+          emittedNutrientCount: metrics.emittedNutrientCount,
+          emittedPortionCount: metrics.emittedPortionCount,
+          emittedRecordCount: metrics.emittedRecordCount,
+          excludedNutrientCount: metrics.excludedNutrientCount,
+          excludedPortionCount: metrics.excludedMeasureCount + metrics.skippedMeasureCount,
+          excludedRecordCount: metrics.quarantinedRecordCount,
+          report: cnfParserReport(
+            manifest,
+            parsed,
+            metrics,
+            exclusions,
+            exclusionReasonCounts,
+            rowDispositions,
+            actor,
+            parserBuildSha256,
+            nutrientMappingDigest,
+          ),
+          sourceNutrientCount: metrics.sourceNutrientCount,
+          sourcePortionCount: metrics.sourcePortionCount,
+          sourceRecordCount: metrics.sourceRecordCount,
+        },
+        {
+          maximumExcludedNutrientFraction: safeObservedFraction(
+            metrics.excludedNutrientCount,
+            metrics.sourceNutrientCount,
+          ),
+          maximumQuarantineFraction: safeObservedFraction(
+            metrics.quarantinedRecordCount,
+            metrics.sourceRecordCount,
+          ),
+          maximumQuarantinedRecords: metrics.quarantinedRecordCount,
+        },
+      );
+      return {
+        actor: actor.principalId,
+        batchId: stagedBatch.batchId,
+        excludedNutrients: validation.excludedNutrientCount,
+        inserted,
+        nutrientMappingDigest,
+        parser: metrics,
+        parserBuildSha256,
+        parserReportSha256,
+        promotionEligible: validation.promotionEligible,
+        quarantined: validation.quarantinedCount,
+        replayed,
+        staged: validation.stagedCount,
+        status: validation.promotionEligible ? "ready" : "quarantined",
+        validationDigest: validation.validationDigest,
+        valid: validation.validCount,
+        warnings: validation.warningCount,
+      };
+    },
+    () => database.destroy(),
+    async (result) => output(io, result),
+  );
+}
+
+export function buildCnfStageEvidence(result: CnfArchiveParseResult): CnfStageEvidence {
+  const exclusions = cnfExclusions(result);
+  const exclusionReasonCounts = cnfExclusionReasonCounts(exclusions);
+  const rowDispositions = result.parsed.rowDispositions as unknown as JsonObject;
+  const metrics = cnfMetrics(result, exclusionReasonCounts);
+  return Object.freeze({
+    baseline: cnfParserBaselineEvidence(result, metrics),
+    exclusionReasonCounts,
+    exclusions,
+    metrics,
+    rowDispositions,
+  });
+}
+
+function cnfMetrics(
+  result: CnfArchiveParseResult,
+  exclusionReasonCounts: JsonObject,
+): CnfStageMetrics {
+  const conservation = result.parsed.conservation;
+  const emittedNutrientCount = result.parsed.records.reduce(
+    (total, record) => total + record.nutrients.length,
+    0,
+  );
+  const emittedPortionCount = result.parsed.records.reduce(
+    (total, record) => total + record.servings.length,
+    0,
+  );
+  if (
+    conservation.foodNames.emittedCount !== result.parsed.records.length ||
+    conservation.foodNames.quarantinedCount !== result.parsed.quarantined.length ||
+    conservation.nutrientAmounts.emittedCount !== emittedNutrientCount ||
+    conservation.nutrientAmounts.excludedCount !== result.parsed.excludedNutrients.length ||
+    conservation.measureWeightConversions.emittedCount !== emittedPortionCount ||
+    conservation.measureWeightConversions.excludedCount !== result.parsed.excludedMeasures.length ||
+    conservation.measureWeightConversions.skippedCount !== result.parsed.skippedMeasures.length
+  ) {
+    throw new Error("CNF adapter conservation evidence is internally inconsistent");
   }
+  return Object.freeze({
+    acceptedSourcePayloadSha256: sha256CanonicalJson(
+      result.parsed.records.map((record) => ({
+        sourcePayloadHash: record.sourcePayloadHash,
+        sourceRecordKey: record.idempotencyKey,
+      })),
+    ),
+    bilingualDescriptionCount: result.metrics.bilingualDescriptionCount,
+    emittedNutrientCount,
+    emittedPortionCount,
+    emittedRecordCount: result.parsed.records.length,
+    englishOnlyDescriptionCount: result.metrics.englishOnlyDescriptionCount,
+    excludedMeasureCount: result.parsed.excludedMeasures.length,
+    excludedNutrientCount: result.parsed.excludedNutrients.length,
+    exclusionReasonCountsSha256: sha256CanonicalJson(exclusionReasonCounts),
+    frenchOnlyDescriptionCount: result.metrics.frenchOnlyDescriptionCount,
+    missingBothDescriptionCount: result.metrics.missingBothDescriptionCount,
+    quarantinedRecordCount: result.parsed.quarantined.length,
+    skippedMeasureCount: result.parsed.skippedMeasures.length,
+    sourceNutrientCount: conservation.nutrientAmounts.sourceCount,
+    sourcePortionCount: conservation.measureWeightConversions.sourceCount,
+    sourceRecordCount: conservation.foodNames.sourceCount,
+    rowDispositionsSha256: sha256CanonicalJson(
+      result.parsed.rowDispositions as unknown as JsonValue,
+    ),
+    tableEvidenceSha256: result.tableEvidenceSha256,
+  });
+}
+
+function cnfExclusions(result: CnfArchiveParseResult): JsonObject {
+  return Object.freeze({
+    measures: result.parsed.excludedMeasures as unknown as JsonValue,
+    nutrients: result.parsed.excludedNutrients as unknown as JsonValue,
+    records: result.parsed.quarantined as unknown as JsonValue,
+    skippedMeasures: result.parsed.skippedMeasures as unknown as JsonValue,
+  });
+}
+
+function cnfExclusionReasonCounts(exclusions: JsonObject): JsonObject {
+  const counts: Record<string, number> = {};
+  const add = (prefix: string, values: JsonValue | undefined, field: "code" | "reason"): void => {
+    if (!Array.isArray(values)) throw new Error(`CNF ${prefix} exclusions must be an array`);
+    for (const [index, value] of values.entries()) {
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new Error(`CNF ${prefix} exclusion ${index} must be an object`);
+      }
+      const reason = value[field];
+      if (typeof reason !== "string" || reason.length === 0) {
+        throw new Error(`CNF ${prefix} exclusion ${index} has no ${field}`);
+      }
+      const key = `${prefix}:${reason}`;
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+  };
+  add("measure", exclusions.measures, "code");
+  add("nutrient", exclusions.nutrients, "code");
+  add("record", exclusions.records, "code");
+  add("skipped-measure", exclusions.skippedMeasures, "reason");
+  return Object.freeze(counts);
+}
+
+function cnfParserReport(
+  manifest: FoodSourceManifestV3,
+  parsed: CnfArchiveParseResult,
+  metrics: CnfStageMetrics,
+  exclusions: JsonObject,
+  exclusionReasonCounts: JsonObject,
+  rowDispositions: JsonObject,
+  actor: TrustedRunnerActor,
+  parserBuildSha256: string,
+  nutrientMappingDigest: string,
+): JsonObject {
+  return {
+    actor: actor as unknown as JsonObject,
+    archive: parsed.archive as unknown as JsonObject,
+    artifactSha256: requiredManifestValue(manifest.artifact.sha256, "artifact.sha256"),
+    exclusionReasonCounts,
+    exclusions,
+    metrics: metrics as unknown as JsonObject,
+    nutrientMappingDigest,
+    parserBuildSha256,
+    parserPackage: manifest.ingestion.parserPackage,
+    parserVersion: requiredManifestValue(
+      manifest.ingestion.parserVersion,
+      "ingestion.parserVersion",
+    ),
+    releaseKey: manifest.release.releaseKey,
+    reportKind: "health-canada-cnf-stage-v1",
+    rowDispositions,
+    schemaVersion: 1,
+    sourceCode: manifest.source.code,
+    tables: parsed.tables as unknown as JsonValue,
+  };
+}
+
+export function cnfParserBaselineEvidence(
+  parsed: CnfArchiveParseResult,
+  metrics: CnfStageMetrics,
+): Readonly<Record<string, boolean | number | string>> {
+  const evidence: Record<string, boolean | number | string> = {
+    "cnfArchive.inventoryCount": parsed.archive.inventoryCount,
+    "cnfArchive.inventorySha256": parsed.archive.inventorySha256,
+    "cnfTables.evidenceSha256": parsed.tableEvidenceSha256,
+  };
+  for (const table of parsed.tables) {
+    const prefix = `cnfTable.${table.archivePath}`;
+    evidence[`${prefix}.byteSize`] = table.byteSize;
+    evidence[`${prefix}.headerSha256`] = table.headerSha256;
+    evidence[`${prefix}.rawSha256`] = table.rawSha256;
+    evidence[`${prefix}.rowCount`] = table.rowCount;
+    evidence[`${prefix}.rowsSha256`] = table.rowsSha256;
+  }
+  for (const [key, value] of Object.entries(metrics)) {
+    evidence[`cnfParser.${key}`] = value;
+  }
+  return Object.freeze(evidence);
+}
+
+export function assertCnfParserBaseline(
+  manifest: FoodSourceManifestV3,
+  parsed: CnfArchiveParseResult,
+  metrics: CnfStageMetrics,
+): void {
+  const expected = manifest.validation.releaseSpecificExpectations;
+  for (const [key, actual] of Object.entries(cnfParserBaselineEvidence(parsed, metrics))) {
+    if (expected[key] !== actual) {
+      throw new Error(`CNF parser baseline mismatch for ${key}`);
+    }
+  }
+}
+
+function safeObservedFraction(numerator: number, denominator: number): number {
+  if (denominator === 0) return numerator === 0 ? 0 : 1;
+  return numerator / denominator;
 }
 
 async function approveCommand(
@@ -641,6 +1177,52 @@ function requireFdcFoundationManifest(manifest: FoodSourceManifestV3): void {
   }
 }
 
+function requireCnfManifest(manifest: FoodSourceManifestV3): readonly string[] {
+  if (
+    manifest.source.code !== "HEALTH_CANADA_CNF" ||
+    manifest.artifact.mediaType !== "application/zip" ||
+    manifest.ingestion.parserPackage !== "@nutrition-tracker/ingestion"
+  ) {
+    throw new Error("This command requires a Health Canada CNF ZIP manifest");
+  }
+  requireExactStringArray(manifest.ingestion.languages, ["en", "fr"], "CNF languages");
+  requireExactStringArray(manifest.ingestion.markets, ["CA"], "CNF markets");
+  requireExactStringArray(
+    manifest.ingestion.sourceIdentityFields,
+    ["food code"],
+    "CNF source identity fields",
+  );
+  requireExactStringArray(
+    manifest.ingestion.dataTypes,
+    ["foods", "nutrients", "nutrient amounts", "measure weights", "food groups"],
+    "CNF data types",
+  );
+  const officialCsv = new Set<string>(CNF_ARCHIVE_CSV_PATHS);
+  const expected = new Set(manifest.validation.expectedFiles);
+  for (const archivePath of officialCsv) {
+    if (!expected.has(archivePath)) throw new Error(`CNF manifest is missing ${archivePath}`);
+  }
+  const guides: string[] = [];
+  for (const archivePath of manifest.validation.expectedFiles) {
+    if (officialCsv.has(archivePath)) continue;
+    if (/\.csv$/iu.test(archivePath)) {
+      throw new Error(`CNF manifest contains an undeclared CSV member: ${archivePath}`);
+    }
+    guides.push(archivePath);
+  }
+  return Object.freeze(guides.sort());
+}
+
+function requireExactStringArray(
+  actual: readonly string[],
+  expected: readonly string[],
+  field: string,
+): void {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(`${field} must exactly match the reviewed contract`);
+  }
+}
+
 async function parseFdcArtifact(
   manifest: FoodSourceManifestV3,
   archivePath: string,
@@ -664,7 +1246,9 @@ async function parseFdcArtifact(
   });
 }
 
-function stagedInputs(parsed: ReturnType<typeof adaptFdcJsonRelease>): readonly {
+function stagedInputs(
+  parsed: ReturnType<typeof adaptFdcJsonRelease> | CnfArchiveParseResult["parsed"],
+): readonly {
   readonly canonicalPayload: JsonValue;
   readonly sequenceNumber: number;
   readonly sourcePayloadSha256: string;
@@ -952,6 +1536,13 @@ function requiredManifestValue(value: string | null, field: string): string {
   return value;
 }
 
+function requiredPositiveSafeInteger(value: unknown, field: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`Manifest ${field} must be a pinned positive safe integer`);
+  }
+  return value;
+}
+
 function workspacePath(path: string): string {
   return isAbsolute(path) ? path : resolve(WORKSPACE_ROOT, path);
 }
@@ -1119,6 +1710,106 @@ function assertExactCatalogueReconcileArguments(
   }
 }
 
+function assertExactCnfInspectArguments(
+  argv: readonly string[],
+  positionals: readonly string[],
+  options: Readonly<Record<string, string | true>>,
+): void {
+  if (positionals.length !== 1 || !positionals[0]) {
+    throw new Error("cnf inspect requires exactly one manifest path");
+  }
+  const allowed = new Set(INSPECT_CNF_OPTIONS);
+  for (const name of Object.keys(options)) {
+    if (!allowed.has(name)) throw new Error(`Unknown cnf inspect option: --${name}`);
+  }
+
+  const tokens = argv[0] === "--" ? argv.slice(1) : argv;
+  for (const token of tokens.slice(2)) {
+    if (token === "--") break;
+    if (!token.startsWith("--")) continue;
+    const name = token.slice(2).split("=", 1)[0];
+    if (!name || !allowed.has(name)) {
+      throw new Error(`Unknown cnf inspect option: --${name ?? ""}`);
+    }
+  }
+  for (const name of INSPECT_CNF_OPTIONS) requiredOption(options, name);
+}
+
+function assertExactStageCnfArguments(
+  argv: readonly string[],
+  positionals: readonly string[],
+  options: Readonly<Record<string, string | true>>,
+): void {
+  if (positionals.length !== 1 || !positionals[0]) {
+    throw new Error("catalogue stage-cnf requires exactly one manifest path");
+  }
+  const allowed = new Set(STAGE_CNF_OPTIONS);
+  for (const name of Object.keys(options)) {
+    if (!allowed.has(name)) throw new Error(`Unknown catalogue stage-cnf option: --${name}`);
+  }
+
+  // parseArguments intentionally uses a plain object. Inspect raw option names too
+  // so prototype-like names cannot disappear through object assignment semantics.
+  const tokens = argv[0] === "--" ? argv.slice(1) : argv;
+  for (const token of tokens.slice(2)) {
+    if (token === "--") break;
+    if (!token.startsWith("--")) continue;
+    const name = token.slice(2).split("=", 1)[0];
+    if (!name || !allowed.has(name)) {
+      throw new Error(`Unknown catalogue stage-cnf option: --${name ?? ""}`);
+    }
+  }
+  for (const name of STAGE_CNF_OPTIONS) requiredOption(options, name);
+}
+
+export function validatedStageCheckpointOffset(
+  checkpoint: BatchCheckpoint | null | undefined,
+  recordCount: number,
+): number {
+  if (!Number.isSafeInteger(recordCount) || recordCount < 0) {
+    throw new Error("Staging record count must be a non-negative safe integer");
+  }
+  if (!checkpoint) return 0;
+  if (checkpoint.stage !== "stage") {
+    throw new Error(`Invalid staging checkpoint stage ${checkpoint.stage}`);
+  }
+  const processedCount = checkpointInteger(checkpoint.processedCount, "processedCount");
+  const cursorKeys = Object.keys(checkpoint.cursor);
+  if (cursorKeys.length !== 1 || cursorKeys[0] !== "nextOffset") {
+    throw new Error("Invalid staging checkpoint cursor shape");
+  }
+  const nextOffset = checkpointInteger(checkpoint.cursor.nextOffset, "cursor.nextOffset");
+  const expectedLastSequenceNumber = processedCount === 0 ? null : processedCount - 1;
+  const lastSequenceNumber =
+    checkpoint.lastSequenceNumber === null
+      ? null
+      : checkpointInteger(checkpoint.lastSequenceNumber, "lastSequenceNumber");
+  if (
+    processedCount > recordCount ||
+    nextOffset !== processedCount ||
+    lastSequenceNumber !== expectedLastSequenceNumber
+  ) {
+    throw new Error("Invalid staging checkpoint tuple");
+  }
+  return processedCount;
+}
+
+function checkpointInteger(value: JsonValue | undefined, field: string): number {
+  if (typeof value === "number") {
+    if (Number.isSafeInteger(value) && value >= 0) return value;
+  } else if (typeof value === "string" && /^(?:0|[1-9][0-9]*)$/.test(value)) {
+    const parsed = Number(value);
+    if (Number.isSafeInteger(parsed)) return parsed;
+  }
+  throw new Error(`Invalid staging checkpoint ${field}`);
+}
+
+function assertFrozenReplayStatus(status: string): void {
+  if (status !== "ready" && status !== "quarantined" && status !== "completed") {
+    throw new Error(`Batch in ${status} state cannot be resumed as frozen staging evidence`);
+  }
+}
+
 function uuidInput(value: string, field: string): string {
   if (!UUID_PATTERN.test(value)) {
     throw new Error(`${field} must be a canonical lowercase UUID`);
@@ -1224,7 +1915,9 @@ function usage(): string {
     "  ingest manifest validate <manifest> [--import-ready]",
     "  ingest artifact observe <manifest> --cache-dir <path> --observation-out <path>",
     "  ingest fdc inspect <manifest> --artifact <zip> --cache-dir <path> --extract-dir <path>",
+    "  ingest cnf inspect <manifest> --artifact <zip> --cache-dir <path> --extract-dir <path>",
     "  ingest catalogue stage-fdc <manifest> --artifact <zip> --cache-dir <path> --extract-dir <path> --manifest-object-uri <s3-uri>",
+    "  ingest catalogue stage-cnf <manifest> --artifact <zip> --cache-dir <path> --extract-dir <path> --manifest-object-uri <s3-uri>",
     "  ingest catalogue mappings <reviewed-mapping.json>",
     "  ingest catalogue register-source <import-ready-manifest>",
     "  ingest catalogue reconcile --batch-id <uuid> --expected-current-release-id <uuid|none> --expected-validation-digest <lowercase-sha256> --report-out .local-data/evidence/catalogue-reconciliation/<file>",

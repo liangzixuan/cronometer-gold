@@ -13,8 +13,9 @@ releases. The package has no database dependency.
   attestations.
 - `extractZipArchive` preflights every central-directory entry, rejects links, encryption, path
   ambiguity and archive bombs, then lazily writes only selected members with atomic no-replace
-  promotion. Exact-member mode is the default; CNF documentation bundles must explicitly select
-  `required-subset`.
+  promotion. `expectedFiles` is the exact full regular-file inventory by default, while the
+  optional, unique `selectedFiles` subset controls which already-preflighted members are written.
+  `required-subset` remains only for callers that do not yet have a full inventory.
 - `parseDelimitedObjects`, `adaptFdcJsonRelease`, `stageFdcCsvRecordDetailed`,
   `adaptCnfTables`, and `stageCnfRecordDetailed` preserve source provenance and explicit
   known/trace/unknown semantics. Invalid child facts are returned as durable exclusion evidence
@@ -25,6 +26,70 @@ releases. The package has no database dependency.
 Canonical nutrient fields default to `null`. `proposeCanonicalNutrientMapping` is only a mapping
 proposal for review; production promotion must resolve mappings from the versioned authoritative
 source-nutrient map.
+
+## Health Canada CNF archive contract
+
+`parseCnfArchive` requires the exact full regular-file inventory. It must contain
+the nine declared CSVs below and may additionally contain only explicitly named
+non-CSV guides. The extractor performs a two-pass preflight over every archive
+entry, including guides, but selects only the nine CSVs for extraction and
+parsing. A duplicate, missing, or extra inventory member, an undeclared CSV, or
+a selected member outside the inventory fails closed.
+
+| Archive member | Disposition | Reference-only reason |
+| --- | --- | --- |
+| `Food_Name.csv` | adapter input | — |
+| `Food_Source.csv` | reference-only | `food_source_reference_not_materialized_v1` |
+| `CNF_Food_Group.csv` | reference-only | `upstream_food_group_taxonomy_not_materialized_v1` |
+| `Nutrient_Amount.csv` | adapter input | — |
+| `Nutrient_Name.csv` | adapter input | — |
+| `Nutrient_Source.csv` | reference-only | `nutrient_source_lookup_not_materialized_v1` |
+| `Measure_Weight_Conversion.csv` | adapter input | — |
+| `Measure_Type.csv` | reference-only | `measure_type_lookup_not_materialized_v1` |
+| `Measure_Name.csv` | adapter input | — |
+
+Reference-only tables are still parsed and included in evidence. Their versioned
+reason identifies why their rows are not currently materialized and prevents a
+successful run from masquerading as silent row loss. No lookup or nutrient
+mapping is inferred from those files.
+
+Each CSV is streamed through bounded fatal UTF-8 and RFC 4180 parsing with exact,
+unique headers. Evidence records the member path and byte size, raw-byte SHA-256,
+ordered headers and header SHA-256, data-row count, ordered canonical-row
+SHA-256, disposition, and reason. The result also binds the canonically sorted
+full inventory and the ordered nine-table evidence with aggregate SHA-256
+digests. Adapter conservation requires:
+
+- `Food_Name.csv`: source rows = emitted records + quarantined records;
+- `Nutrient_Amount.csv`: source rows = emitted nutrients + excluded nutrients;
+- `Measure_Weight_Conversion.csv`: source rows = emitted portions + excluded
+  measures + reason-counted skipped measures.
+
+The adapter also emits an immutable, globally source-indexed `rowDispositions`
+partition for those three tables. Its exact emitted, quarantined, excluded, and
+skipped entries are bound by `rowDispositionsSha256` rather than inferred from
+aggregate counts.
+
+Known zero, trace, and unknown nutrient states remain distinct throughout the
+adapter. A child row with a missing, invalid, or unknown `Food_Code` aborts at
+the known-parent boundary. Once a valid `Food_Code` resolves to a quarantined
+parent food, its child nutrient and measure rows become durable reason-counted
+exclusion evidence; they cannot disappear or become zero.
+
+Successful parsing deliberately retains the nine extracted CSVs for downstream
+staging and review, while guides are never extracted. Extraction requires a
+canonical current-user-owned `0700` root and creates `0700` parents plus `0600`
+files. This boundary is intentionally POSIX-only and must run on Linux (including
+the supported WSL2 environment); it relies on current-UID checks, POSIX open
+flags, and parent handles bound through `/proc/self/fd`. The extractor keeps its
+read/write handle open through hard-link publication, re-reads the bytes, and
+returns the final device, inode, owner, mode, timestamps, size, link count, and
+SHA-256 to the parser. Parsing uses `O_NOFOLLOW` and requires that extractor
+identity before and after each stream. On any extraction or parse failure,
+cleanup moves only an exact captured inode into a random private quarantine,
+revalidates its identity and content, and then removes it. It preserves
+replacements and unowned hard links and returns the operation error followed by
+every cleanup error when rollback is incomplete.
 
 ## Network boundary
 

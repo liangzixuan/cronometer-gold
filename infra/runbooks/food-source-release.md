@@ -54,6 +54,95 @@ republishing when no publisher digest exists. It is not a publisher signature.
 Approximate page sizes and HEAD `Content-Length` values are planning evidence only;
 the canonical byte size comes from the verified streamed object.
 
+### Health Canada CNF inventory and baseline
+
+The CNF nine-CSV parser contract is not the archive inventory. Before changing a
+CNF candidate from `templateOnly`, record a unique, exact
+`validation.expectedFiles` list containing all nine CSVs and every non-CSV
+English/French guide path observed in the acquired aggregate. The five adapter
+inputs are `Food_Name.csv`, `Nutrient_Amount.csv`, `Nutrient_Name.csv`,
+`Measure_Weight_Conversion.csv`, and `Measure_Name.csv`. The other four are
+parsed reference-only evidence with durable reasons:
+
+- `Food_Source.csv`: `food_source_reference_not_materialized_v1`;
+- `CNF_Food_Group.csv`:
+  `upstream_food_group_taxonomy_not_materialized_v1`;
+- `Nutrient_Source.csv`: `nutrient_source_lookup_not_materialized_v1`;
+- `Measure_Type.csv`: `measure_type_lookup_not_materialized_v1`.
+
+Do not guess the guide names, omit them because they are not adapter inputs, or
+classify an unknown CSV as a guide. The full inventory must exactly equal all
+regular files in the ZIP.
+
+After the two independent acquisitions agree and the artifact SHA-256/byte size,
+parser version/build digest, and full inventory have been pinned, run the
+evidence-only inspection against the retained object from a reviewed WSL parser
+build:
+
+```sh
+INGEST_PARSER_BUILD_SHA256=<reviewed-lowercase-sha256> \
+pnpm --filter @nutrition-tracker/ingest cli -- cnf inspect \
+  data/manifests/<cnf-release>.json \
+  --artifact .local-data/acquired/<cnf-release>.zip \
+  --cache-dir .local-data/cache \
+  --extract-dir .local-data/extracted-cnf-inspect
+```
+
+Use a new private extraction directory. This command accepts no actor, accesses
+no database, and creates no acquisition observation or approval. It verifies the
+manifest-pinned artifact and runtime parser-build digest, preflights the complete
+ZIP under the archive limits, parses the nine CSVs as bounded fatal UTF-8/RFC
+4180, and emits exact inventory, table, conservation, language, exclusion, and
+accepted-payload evidence. Review its `baseline` object, then copy every key and
+exact value to `validation.releaseSpecificExpectations`; the command never edits
+the manifest for the operator.
+
+On success, the nine CSVs remain in the extraction directory for review and the
+guide members have not been extracted. On failure, the parser removes only
+selected files whose captured device, inode, size, regular-file status, and
+single-link count still match. It preserves a replaced file and reports the
+cleanup failure; when both parsing and cleanup fail, retain and review both
+errors. Do not treat any extracted file or local cache hit as an independent
+publisher acquisition.
+
+After rights review and every other import-ready field is complete, validate the
+final manifest and run staging only through the approved release runner:
+
+```sh
+pnpm --filter @nutrition-tracker/ingest cli -- manifest validate \
+  data/manifests/<cnf-release>.json --import-ready
+
+pnpm --filter @nutrition-tracker/ingest cli -- catalogue stage-cnf \
+  data/manifests/<cnf-release>.json \
+  --artifact .local-data/acquired/<cnf-release>.zip \
+  --cache-dir .local-data/cache \
+  --extract-dir .local-data/extracted-cnf-stage \
+  --manifest-object-uri s3://<object-locked-bucket>/sha256/<manifest-sha256>/manifest.json
+```
+
+The runner must inject the externally authenticated method, stable principal,
+immutable run reference, reviewed `INGEST_PARSER_BUILD_SHA256`, and a
+least-privilege database credential; never substitute caller-authored identity.
+The manifest object URI must contain the exact manifest SHA-256. Before creating
+a database connection, staging checks the import-ready gate, verified artifact,
+exact archive inventory, all nine table contracts, and every generated parser
+baseline value.
+
+Database staging resumes in chunks of 250 from a validated checkpoint. It stores
+one canonical-digest-bound parser report containing the exact inventory/table
+evidence, dispositions and reference-only reasons, exclusions and reason counts,
+adapter conservation, artifact/parser/mapping identity, and trusted actor. A
+conflicting report is rejected, update/delete triggers make the row immutable,
+and validation independently verifies the report structure, digests,
+provenance, and count sums. A retry of a `ready`, `quarantined`, or `completed`
+batch returns its frozen validation evidence without reopening staged rows.
+
+The command emits final JSON only after the database connection closes. If both
+the operation and required cleanup fail, both errors are reported; if cleanup
+alone fails, no successful result is printed. A returned `ready` status or
+`promotionEligible: true` is validation evidence, not an approval, release
+promotion, or search-alias switch.
+
 ## Parse and quarantine
 
 - Run a pinned parser/container against the stored artifact, not the network.
@@ -126,8 +215,13 @@ retain and review the full nutrient-mapping registry diff, high-impact nutrient
 outlier review, and search/index evidence above, including relevance,
 zero-result, document-count, build-time, latency, and footprint results.
 Database reconciliation cannot authorize approval, promotion, or an alias
-switch. CNF likewise has a production parser adapter but no operator staging
-command yet; its first activation remains blocked.
+switch. CNF now has an evidence-only inspection command and an operator staging
+command, but its first activation remains blocked until the published artifact
+is acquired twice under distinct authenticated principals, its complete guide
+inventory and real baselines are reviewed, rights and attribution are approved,
+artifact and manifest objects are immutable, the nutrient map is reviewed, and
+representative parser scale, database reconciliation, outlier, and search/index
+evidence all pass. Synthetic fixture tests satisfy none of those release gates.
 
 Promotion stores the complete sorted active mapping-revision ID set in the
 immutable release validation summary. Historical baseline verification reloads

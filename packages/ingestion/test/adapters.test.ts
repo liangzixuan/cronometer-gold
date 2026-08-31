@@ -238,7 +238,11 @@ describe("Health Canada CNF 2026 adapter", () => {
       expect.objectContaining({ description: "1 cup (250 mL)", gramWeight: "258" }),
     ]);
     expect(result.skippedMeasures).toEqual([
-      expect.objectContaining({ reason: "non_user_facing_refuse", measureCode: "750" }),
+      expect.objectContaining({
+        sourceIndex: 1,
+        reason: "non_user_facing_refuse",
+        measureCode: "750",
+      }),
     ]);
     expect(result.records[0]?.nutrients[0]).toMatchObject({
       sourceName: "Energy",
@@ -249,6 +253,245 @@ describe("Health Canada CNF 2026 adapter", () => {
       state: "trace",
       detectionLimit: null,
     });
+    expect(result.conservation).toEqual({
+      foodNames: { sourceCount: 1, emittedCount: 1, quarantinedCount: 0 },
+      nutrientAmounts: { sourceCount: 2, emittedCount: 2, excludedCount: 0 },
+      measureWeightConversions: {
+        sourceCount: 2,
+        emittedCount: 1,
+        excludedCount: 0,
+        skippedCount: 1,
+      },
+    });
+    expect(result.rowDispositions).toEqual({
+      foodNames: [{ disposition: "emitted", sourceIndex: 0 }],
+      measureWeightConversions: [
+        { disposition: "emitted", sourceIndex: 0 },
+        { disposition: "skipped", sourceIndex: 1 },
+      ],
+      nutrientAmounts: [
+        { disposition: "emitted", sourceIndex: 0 },
+        { disposition: "emitted", sourceIndex: 1 },
+      ],
+    });
+  });
+
+  it("preserves known zero separately from trace without applying mapping proposals", () => {
+    const result = adaptCnfTables(
+      {
+        ...tables,
+        nutrientAmounts: [
+          { ...tables.nutrientAmounts[0], Nutrient_Amount: "0" },
+          tables.nutrientAmounts[1],
+        ],
+        measureWeightConversions: [],
+      },
+      { releaseKey: "cnf-2026" },
+    );
+    expect(result.records[0]?.nutrients).toEqual([
+      expect.objectContaining({
+        sourceNutrientId: "208",
+        canonicalNutrientId: null,
+        value: { state: "known", amount: "0", quality: "measured" },
+      }),
+      expect.objectContaining({
+        sourceNutrientId: "269",
+        canonicalNutrientId: null,
+        value: { state: "trace", detectionLimit: null },
+      }),
+    ]);
+  });
+
+  it("keeps malformed measure rows inside the child boundary with global source indexes", () => {
+    const result = adaptCnfTables(
+      {
+        ...tables,
+        nutrientAmounts: [],
+        measureWeightConversions: [
+          tables.measureWeightConversions[0],
+          {
+            Food_Code: "101",
+            Measure_Code: "100",
+            Measure_Weight_Conversion: "258",
+          },
+          {
+            Food_Code: "101",
+            Measure_Type_Code: "6",
+            Measure_Weight_Conversion: "258",
+          },
+          {
+            Food_Code: "101",
+            Measure_Type_Code: "9",
+            Measure_Code: "750",
+            Measure_Weight_Conversion: "0",
+          },
+        ],
+      },
+      { releaseKey: "cnf-2026" },
+    );
+    expect(result.records).toHaveLength(1);
+    expect(result.quarantined).toEqual([]);
+    expect(result.excludedMeasures).toEqual([
+      expect.objectContaining({
+        foodCode: "101",
+        sourceIndex: 1,
+        code: "INVALID_RECORD",
+        sourcePayloadHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      }),
+      expect.objectContaining({
+        foodCode: "101",
+        sourceIndex: 2,
+        code: "INVALID_RECORD",
+        sourcePayloadHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      }),
+    ]);
+    expect(result.skippedMeasures).toEqual([
+      expect.objectContaining({
+        foodCode: "101",
+        sourceIndex: 3,
+        reason: "non_user_facing_yield",
+        sourcePayloadHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      }),
+    ]);
+    expect(result.conservation.measureWeightConversions).toEqual({
+      sourceCount: 4,
+      emittedCount: 1,
+      excludedCount: 2,
+      skippedCount: 1,
+    });
+    expect(result.rowDispositions.measureWeightConversions).toEqual([
+      { disposition: "emitted", sourceIndex: 0 },
+      { disposition: "excluded", sourceIndex: 1 },
+      { disposition: "excluded", sourceIndex: 2 },
+      { disposition: "skipped", sourceIndex: 3 },
+    ]);
+  });
+
+  it("conserves children of a quarantined first parent exactly once across duplicates", () => {
+    const result = adaptCnfTables(
+      {
+        ...tables,
+        foodNames: [
+          { Food_Code: "bad" },
+          tables.foodNames[0],
+          { Food_Code: "bad", Food_Description_EN: "Duplicate parent" },
+        ],
+        nutrientAmounts: [
+          tables.nutrientAmounts[0],
+          { ...tables.nutrientAmounts[1], Food_Code: "bad" },
+          { ...tables.nutrientAmounts[0], Food_Code: "bad" },
+        ],
+        measureWeightConversions: [
+          tables.measureWeightConversions[0],
+          { ...tables.measureWeightConversions[1], Food_Code: "bad" },
+          tables.measureWeightConversions[1],
+        ],
+      },
+      { releaseKey: "cnf-2026" },
+    );
+    expect(result.records).toHaveLength(1);
+    expect(result.quarantined).toEqual([
+      expect.objectContaining({
+        sourceIndex: 0,
+        sourceRecordId: "bad",
+        code: "INVALID_RECORD",
+        sourcePayloadHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      }),
+      expect.objectContaining({
+        sourceIndex: 2,
+        sourceRecordId: "bad",
+        code: "DUPLICATE_KEY",
+        sourcePayloadHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      }),
+    ]);
+    expect(result.excludedNutrients).toEqual([
+      expect.objectContaining({
+        foodCode: "bad",
+        sourceIndex: 1,
+        code: "INVALID_RECORD",
+        message: expect.stringContaining("parent Food_Code bad was quarantined"),
+        sourcePayloadHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      }),
+      expect.objectContaining({
+        foodCode: "bad",
+        sourceIndex: 2,
+        code: "INVALID_RECORD",
+        message: expect.stringContaining("parent Food_Code bad was quarantined"),
+        sourcePayloadHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      }),
+    ]);
+    expect(result.excludedMeasures).toEqual([
+      expect.objectContaining({
+        foodCode: "bad",
+        sourceIndex: 1,
+        code: "INVALID_RECORD",
+        message: expect.stringContaining("parent Food_Code bad was quarantined"),
+        sourcePayloadHash: expect.stringMatching(/^[a-f0-9]{64}$/),
+      }),
+    ]);
+    expect(result.skippedMeasures).toEqual([
+      expect.objectContaining({
+        foodCode: "101",
+        sourceIndex: 2,
+        reason: "non_user_facing_refuse",
+      }),
+    ]);
+    expect(result.conservation).toEqual({
+      foodNames: { sourceCount: 3, emittedCount: 1, quarantinedCount: 2 },
+      nutrientAmounts: { sourceCount: 3, emittedCount: 1, excludedCount: 2 },
+      measureWeightConversions: {
+        sourceCount: 3,
+        emittedCount: 1,
+        excludedCount: 1,
+        skippedCount: 1,
+      },
+    });
+    expect(result.rowDispositions).toEqual({
+      foodNames: [
+        { disposition: "quarantined", sourceIndex: 0 },
+        { disposition: "emitted", sourceIndex: 1 },
+        { disposition: "quarantined", sourceIndex: 2 },
+      ],
+      measureWeightConversions: [
+        { disposition: "emitted", sourceIndex: 0 },
+        { disposition: "excluded", sourceIndex: 1 },
+        { disposition: "skipped", sourceIndex: 2 },
+      ],
+      nutrientAmounts: [
+        { disposition: "emitted", sourceIndex: 0 },
+        { disposition: "excluded", sourceIndex: 1 },
+        { disposition: "excluded", sourceIndex: 2 },
+      ],
+    });
+  });
+
+  it("fails closed when a child row has no known parent key", () => {
+    expect(() =>
+      adaptCnfTables(
+        {
+          ...tables,
+          nutrientAmounts: [{ ...tables.nutrientAmounts[0], Food_Code: "999" }],
+          measureWeightConversions: [],
+        },
+        { releaseKey: "cnf-2026" },
+      ),
+    ).toThrowError(/references unknown CNF Food_Code: 999/);
+    expect(() =>
+      adaptCnfTables(
+        {
+          ...tables,
+          nutrientAmounts: [],
+          measureWeightConversions: [
+            {
+              Measure_Type_Code: "6",
+              Measure_Code: "100",
+              Measure_Weight_Conversion: "258",
+            },
+          ],
+        },
+        { releaseKey: "cnf-2026" },
+      ),
+    ).toThrowError(expect.objectContaining({ code: "INVALID_RECORD" }));
   });
 
   it("offers symbol/tagname proposals without applying them by default", () => {

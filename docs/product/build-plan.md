@@ -57,9 +57,20 @@ candidate database reconciliation now atomically emits canonical, digest-bound,
 read-only evidence into a private, symlink-free repo-local `.local-data` evidence
 tree only after database cleanup, without granting approval or promotion
 eligibility. Separate retained full-registry mapping review, high-impact nutrient
-outlier review, search/index evidence, and the CNF operator staging command
-remain pre-activation work; their absence blocks a live release but not the
-completed ingestion-core milestone. Promoted releases freeze the complete active
+outlier review, and search/index evidence remain pre-activation work. The CNF
+path now includes database-free `cnf inspect` evidence and trusted-runner
+`catalogue stage-cnf`: it enforces the exact full archive inventory around the
+nine-CSV, five-adapter/four-reference-only contract, strict table and
+conservation baselines before database access, checkpointed idempotent staging,
+immutable parser-report verification, frozen replay, and database cleanup before
+final output. Successful parses retain only the nine selected CSVs for review;
+failure cleanup is bound to the captured identity of each extracted file. This
+implementation is proven with synthetic fixtures, not a live CNF acquisition.
+Dual fresh acquisitions, exact guide-member names and real-release baselines,
+rights/attribution review, immutable storage, reviewed mappings, representative
+parser-scale evidence, reconciliation/outlier review, and search/index evidence
+still block activation but not the completed ingestion-core milestone. Promoted
+releases freeze the complete active
 mapping-revision set for exact historical revalidation, and canonical report
 hashing/writing is incremental. The database observer and document builder still
 retain full validated snapshots and the result object, so representative

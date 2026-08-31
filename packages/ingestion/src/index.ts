@@ -2,6 +2,7 @@ export * from "./acquisition.js";
 export * from "./archive.js";
 export * from "./checkpoint.js";
 export * from "./cnf.js";
+export * from "./cnf-archive.js";
 export * from "./delimited.js";
 export * from "./deterministic.js";
 export * from "./errors.js";

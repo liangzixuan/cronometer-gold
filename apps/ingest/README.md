@@ -1,8 +1,9 @@
 # Food catalogue operator CLI
 
 This internal CLI is the controlled entry point for food-source manifests,
-independent artifact observations, FDC Foundation inspection, checkpointed and
-idempotent database staging, role approvals, promotion, and pointer-only rollback.
+independent artifact observations, FDC Foundation and Health Canada CNF
+inspection, checkpointed and idempotent database staging, role approvals,
+promotion, and pointer-only rollback.
 
 It deliberately does not mutate a manifest or manufacture a second acquisition
 identity. Checked-in candidates remain templates until two authenticated operators,
@@ -40,6 +41,95 @@ pnpm --filter @nutrition-tracker/ingest cli -- manifest validate \
 See [`infra/runbooks/food-source-release.md`](../../infra/runbooks/food-source-release.md)
 for the release procedure. Database promotion requires three distinct immutable
 approvals bound to the manifest and validation digests.
+
+## Health Canada CNF evidence and staging
+
+After a controlled acquisition has pinned the artifact SHA-256 and byte size,
+the parser version and immutable build digest, and the exact archive inventory,
+produce parser evidence without opening PostgreSQL:
+
+```sh
+INGEST_PARSER_BUILD_SHA256=<reviewed-lowercase-sha256> \
+pnpm --filter @nutrition-tracker/ingest cli -- cnf inspect \
+  data/manifests/<cnf-release>.json \
+  --artifact .local-data/acquired/<cnf-release>.zip \
+  --cache-dir .local-data/cache \
+  --extract-dir .local-data/extracted-cnf-inspect
+```
+
+`cnf inspect` accepts no caller-authored actor and performs no database write,
+approval, or promotion. It verifies the local artifact against the manifest and
+refuses a runtime `INGEST_PARSER_BUILD_SHA256` that differs from the reviewed
+manifest pin. Its JSON output contains the exact archive inventory evidence,
+per-table evidence, parser metrics, exclusion reason counts, and the complete
+`baseline` object to review before copying values into
+`validation.releaseSpecificExpectations`. It does not edit the manifest, count
+as an independent fresh-download observation, complete rights review, or make a
+template import-ready.
+
+The CNF manifest's `expectedFiles` is the exact full regular-file inventory, not
+just the parse selection. It must uniquely list these nine CSVs plus every
+observed non-CSV English/French guide path:
+
+- adapter input: `Food_Name.csv`, `Nutrient_Amount.csv`,
+  `Nutrient_Name.csv`, `Measure_Weight_Conversion.csv`, and
+  `Measure_Name.csv`;
+- reference-only: `Food_Source.csv`
+  (`food_source_reference_not_materialized_v1`), `CNF_Food_Group.csv`
+  (`upstream_food_group_taxonomy_not_materialized_v1`),
+  `Nutrient_Source.csv` (`nutrient_source_lookup_not_materialized_v1`), and
+  `Measure_Type.csv` (`measure_type_lookup_not_materialized_v1`).
+
+The reason strings are durable evidence that a table was parsed and measured
+but deliberately was not materialized; they are not permission to omit a file
+or silently infer its relationships. The extractor preflights the whole archive,
+rejects an extra or missing regular file and any undeclared CSV, and extracts
+only the nine CSVs. The parser uses bounded fatal UTF-8/RFC 4180 parsing and
+records raw-byte, header, ordered-row, and aggregate table digests. Adapter
+conservation proves that each source food row is emitted or quarantined, each
+nutrient-amount row is emitted or excluded, and each measure-conversion row is
+emitted, excluded, or reason-counted as skipped. Known zero, trace, and unknown
+remain distinct, and nutrient mappings are never inferred.
+
+Successful inspection or staging deliberately leaves the nine extracted CSVs
+for evidence review; guide files are never extracted. If parsing fails, cleanup
+removes only selected files whose captured device, inode, size, regular-file,
+and single-link identity still match. A replaced file is preserved and reported
+as a cleanup failure, and simultaneous operation and cleanup failures are both
+returned.
+
+Only after the manifest passes the import-ready gate may the approved release
+runner invoke database staging:
+
+```sh
+pnpm --filter @nutrition-tracker/ingest cli -- catalogue stage-cnf \
+  data/manifests/<cnf-release>.json \
+  --artifact .local-data/acquired/<cnf-release>.zip \
+  --cache-dir .local-data/cache \
+  --extract-dir .local-data/extracted-cnf-stage \
+  --manifest-object-uri s3://<object-locked-bucket>/sha256/<manifest-sha256>/manifest.json
+```
+
+The trusted runner must inject its authentication method, stable principal,
+immutable run reference, parser-build SHA-256, and least-privilege database
+credential. Before opening PostgreSQL, `catalogue stage-cnf` checks the
+import-ready manifest, content-addressed manifest URI, verified artifact, exact
+archive inventory, all nine tables, and every generated CNF baseline value. It
+then stages records in checkpointed chunks of 250 and stores one immutable,
+canonical-digest-bound parser report. Validation re-verifies its exact
+nine-table dispositions, reference-only reasons, provenance, exclusion evidence,
+and count conservation; database triggers reject update or deletion of the
+report.
+
+An interrupted staging batch resumes only from a validated checkpoint and
+replays byte-for-byte idempotently. Re-running a `ready`, `quarantined`, or
+`completed` batch returns its frozen validation result rather than reopening
+rows. The database connection must close successfully before final JSON is
+written to standard output; a cleanup failure suppresses the apparent success.
+Neither a `ready` status nor `promotionEligible: true` records an approval or
+promotes a release. The checked-in CNF candidate remains a template, and these
+commands are not evidence that the real 2026 archive has been acquired or
+activated.
 
 ## Database-only reconciliation evidence
 

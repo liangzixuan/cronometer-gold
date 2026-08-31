@@ -36,6 +36,7 @@ export {
   previewBatchValidation,
   promoteBatch,
   type ReconcileCatalogueBatchInput,
+  type RecordBatchParserReportAndValidateResult,
   type RecordBatchParserReportInput,
   type RegisterFoodSourceInput,
   type RegisterSourceNutrientMappingsInput,
@@ -43,6 +44,7 @@ export {
   type RollbackSourceReleaseResult,
   reconcileCatalogueBatch,
   recordBatchParserReport,
+  recordBatchParserReportAndValidate,
   registerFoodSourceFromReviewedManifest,
   registerSourceNutrientMappings,
   rollbackSourceRelease,
@@ -57,6 +59,7 @@ export {
   stageBatchRecords,
   supersedeSourceNutrientMapping,
   validateBatch,
+  verifyCnfParserReport,
 } from "./catalogue-ingestion.js";
 export {
   buildCatalogueReconciliationDocument,

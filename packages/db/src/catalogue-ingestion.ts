@@ -42,6 +42,22 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3
 const PINNED_PARSER_VERSION_PATTERN = /^(.+)\+build\.([0-9a-f]{64})\+mapping\.([0-9a-f]{64})$/;
 const SOURCE_LOCK_NAMESPACE = "nutrition-tracker:catalogue-source:v1";
 const NUTRIENT_REGISTRY_LOCK_NAMESPACE = "nutrition-tracker:active-nutrient-registry:v1";
+const CNF_PARSER_REPORT_KIND = "health-canada-cnf-stage-v1";
+const CNF_PARSER_EXCLUSION_CODES: ReadonlySet<string> = new Set([
+  "DUPLICATE_KEY",
+  "INVALID_RECORD",
+]);
+const CNF_TABLE_REPORT_CONTRACT = Object.freeze([
+  ["Food_Name.csv", "adapter-input", null],
+  ["Food_Source.csv", "reference-only", "food_source_reference_not_materialized_v1"],
+  ["CNF_Food_Group.csv", "reference-only", "upstream_food_group_taxonomy_not_materialized_v1"],
+  ["Nutrient_Amount.csv", "adapter-input", null],
+  ["Nutrient_Name.csv", "adapter-input", null],
+  ["Nutrient_Source.csv", "reference-only", "nutrient_source_lookup_not_materialized_v1"],
+  ["Measure_Weight_Conversion.csv", "adapter-input", null],
+  ["Measure_Type.csv", "reference-only", "measure_type_lookup_not_materialized_v1"],
+  ["Measure_Name.csv", "adapter-input", null],
+] as const);
 
 type DatabaseExecutor = Kysely<Database> | Transaction<Database>;
 type BatchRow = Selectable<FoodImportBatchTable>;
@@ -251,6 +267,11 @@ export interface RecordBatchParserReportInput {
   readonly sourceNutrientCount: bigint | number | string;
   readonly sourcePortionCount: bigint | number | string;
   readonly sourceRecordCount: bigint | number | string;
+}
+
+export interface RecordBatchParserReportAndValidateResult {
+  readonly parserReportSha256: string;
+  readonly validation: BatchValidationSummary;
 }
 
 export interface ReviewedNutrientMappingInput {
@@ -700,58 +721,82 @@ export async function recordBatchParserReport(
   database: Kysely<Database>,
   input: RecordBatchParserReportInput,
 ): Promise<string> {
+  return database
+    .transaction()
+    .execute((transaction) => recordBatchParserReportInTransaction(transaction, input));
+}
+
+async function recordBatchParserReportInTransaction(
+  transaction: Transaction<Database>,
+  input: RecordBatchParserReportInput,
+): Promise<string> {
   const reportSha256 = sha256CanonicalJson(input.report);
   if (input.reportSha256 && input.reportSha256 !== reportSha256) {
     throw new Error("Parser report checksum does not match its canonical JSON");
   }
   const counts = parserCountsFromInput(input);
   assertParserCountSums(counts);
+  const batch = await selectBatchForUpdate(transaction, input.batchId);
+  if (batch.status !== "staging") {
+    throw new Error(`Batch ${input.batchId} cannot record parser evidence while ${batch.status}`);
+  }
+  const inserted = await transaction
+    .insertInto("food_import_parser_report")
+    .values({
+      batch_id: input.batchId,
+      emitted_nutrient_count: counts.emittedNutrientCount,
+      emitted_portion_count: counts.emittedPortionCount,
+      emitted_record_count: counts.emittedRecordCount,
+      excluded_nutrient_count: counts.excludedNutrientCount,
+      excluded_portion_count: counts.excludedPortionCount,
+      excluded_record_count: counts.excludedRecordCount,
+      report: input.report,
+      report_sha256: reportSha256,
+      source_nutrient_count: counts.sourceNutrientCount,
+      source_portion_count: counts.sourcePortionCount,
+      source_record_count: counts.sourceRecordCount,
+    })
+    .onConflict((conflict) => conflict.column("batch_id").doNothing())
+    .returning("batch_id")
+    .executeTakeFirst();
+  if (!inserted) {
+    const existing = await transaction
+      .selectFrom("food_import_parser_report")
+      .selectAll()
+      .where("batch_id", "=", input.batchId)
+      .executeTakeFirstOrThrow();
+    if (
+      existing.report_sha256 !== reportSha256 ||
+      String(existing.source_record_count) !== String(counts.sourceRecordCount) ||
+      String(existing.emitted_record_count) !== String(counts.emittedRecordCount) ||
+      String(existing.excluded_record_count) !== String(counts.excludedRecordCount) ||
+      String(existing.source_nutrient_count) !== String(counts.sourceNutrientCount) ||
+      String(existing.emitted_nutrient_count) !== String(counts.emittedNutrientCount) ||
+      String(existing.excluded_nutrient_count) !== String(counts.excludedNutrientCount) ||
+      String(existing.source_portion_count) !== String(counts.sourcePortionCount) ||
+      String(existing.emitted_portion_count) !== String(counts.emittedPortionCount) ||
+      String(existing.excluded_portion_count) !== String(counts.excludedPortionCount)
+    ) {
+      throw new Error(`Batch ${input.batchId} already has different immutable parser evidence`);
+    }
+  }
+  return reportSha256;
+}
+
+/**
+ * Persist immutable parser evidence and freeze validation in one transaction.
+ * A process failure cannot leave a staging batch bound to a report from a run
+ * that did not also complete validation.
+ */
+export async function recordBatchParserReportAndValidate(
+  database: Kysely<Database>,
+  input: RecordBatchParserReportInput,
+  policy: Partial<BatchValidationPolicy> = {},
+): Promise<RecordBatchParserReportAndValidateResult> {
   return database.transaction().execute(async (transaction) => {
-    const batch = await selectBatchForUpdate(transaction, input.batchId);
-    if (batch.status !== "staging") {
-      throw new Error(`Batch ${input.batchId} cannot record parser evidence while ${batch.status}`);
-    }
-    const inserted = await transaction
-      .insertInto("food_import_parser_report")
-      .values({
-        batch_id: input.batchId,
-        emitted_nutrient_count: counts.emittedNutrientCount,
-        emitted_portion_count: counts.emittedPortionCount,
-        emitted_record_count: counts.emittedRecordCount,
-        excluded_nutrient_count: counts.excludedNutrientCount,
-        excluded_portion_count: counts.excludedPortionCount,
-        excluded_record_count: counts.excludedRecordCount,
-        report: input.report,
-        report_sha256: reportSha256,
-        source_nutrient_count: counts.sourceNutrientCount,
-        source_portion_count: counts.sourcePortionCount,
-        source_record_count: counts.sourceRecordCount,
-      })
-      .onConflict((conflict) => conflict.column("batch_id").doNothing())
-      .returning("batch_id")
-      .executeTakeFirst();
-    if (!inserted) {
-      const existing = await transaction
-        .selectFrom("food_import_parser_report")
-        .selectAll()
-        .where("batch_id", "=", input.batchId)
-        .executeTakeFirstOrThrow();
-      if (
-        existing.report_sha256 !== reportSha256 ||
-        String(existing.source_record_count) !== String(counts.sourceRecordCount) ||
-        String(existing.emitted_record_count) !== String(counts.emittedRecordCount) ||
-        String(existing.excluded_record_count) !== String(counts.excludedRecordCount) ||
-        String(existing.source_nutrient_count) !== String(counts.sourceNutrientCount) ||
-        String(existing.emitted_nutrient_count) !== String(counts.emittedNutrientCount) ||
-        String(existing.excluded_nutrient_count) !== String(counts.excludedNutrientCount) ||
-        String(existing.source_portion_count) !== String(counts.sourcePortionCount) ||
-        String(existing.emitted_portion_count) !== String(counts.emittedPortionCount) ||
-        String(existing.excluded_portion_count) !== String(counts.excludedPortionCount)
-      ) {
-        throw new Error(`Batch ${input.batchId} already has different immutable parser evidence`);
-      }
-    }
-    return reportSha256;
+    const parserReportSha256 = await recordBatchParserReportInTransaction(transaction, input);
+    const validation = await validateBatchInTransaction(transaction, input.batchId, policy);
+    return Object.freeze({ parserReportSha256, validation });
   });
 }
 
@@ -761,27 +806,90 @@ export async function saveBatchCheckpoint(
 ): Promise<void> {
   await database.transaction().execute(async (transaction) => {
     const batch = await selectBatchForUpdate(transaction, input.batchId);
-    if (batch.status !== "staging" && batch.status !== "ready") {
+    if (batch.status !== "staging") {
       throw new Error(`Batch ${input.batchId} cannot checkpoint while ${batch.status}`);
+    }
+    const processedCount = checkpointInteger(input.processedCount, "processedCount");
+    const lastSequenceNumber =
+      input.lastSequenceNumber === null || input.lastSequenceNumber === undefined
+        ? null
+        : checkpointInteger(input.lastSequenceNumber, "lastSequenceNumber");
+    if (input.stage === "stage") {
+      const cursorKeys = Object.keys(input.cursor);
+      if (cursorKeys.length !== 1 || cursorKeys[0] !== "nextOffset") {
+        throw new Error("Stage checkpoint cursor must contain only nextOffset");
+      }
+      const nextOffset = checkpointInteger(input.cursor.nextOffset, "cursor.nextOffset");
+      const expectedLastSequenceNumber = processedCount === 0n ? null : processedCount - 1n;
+      if (nextOffset !== processedCount || lastSequenceNumber !== expectedLastSequenceNumber) {
+        throw new Error(
+          "Stage checkpoint requires nextOffset = processedCount and lastSequenceNumber = processedCount - 1",
+        );
+      }
+    }
+    const existing = await transaction
+      .selectFrom("food_import_checkpoint")
+      .select(["cursor_data", "last_sequence_number", "processed_count"])
+      .where("batch_id", "=", input.batchId)
+      .where("stage", "=", input.stage)
+      .forUpdate()
+      .executeTakeFirst();
+    if (existing) {
+      const existingProcessedCount = BigInt(existing.processed_count);
+      if (processedCount < existingProcessedCount) {
+        throw new Error(
+          `Batch ${input.batchId} checkpoint ${input.stage} processedCount cannot regress from ${existingProcessedCount} to ${processedCount}`,
+        );
+      }
+      const existingLastSequenceNumber =
+        existing.last_sequence_number === null ? null : BigInt(existing.last_sequence_number);
+      if (
+        existingLastSequenceNumber !== null &&
+        (lastSequenceNumber === null || lastSequenceNumber < existingLastSequenceNumber)
+      ) {
+        throw new Error(
+          `Batch ${input.batchId} checkpoint ${input.stage} lastSequenceNumber cannot regress from ${existingLastSequenceNumber} to ${lastSequenceNumber ?? "null"}`,
+        );
+      }
+      if (
+        processedCount === existingProcessedCount &&
+        (lastSequenceNumber !== existingLastSequenceNumber ||
+          canonicalJson(input.cursor) !== canonicalJson(existing.cursor_data))
+      ) {
+        throw new Error(
+          `Batch ${input.batchId} checkpoint ${input.stage} cannot replace equal-progress evidence`,
+        );
+      }
     }
     await transaction
       .insertInto("food_import_checkpoint")
       .values({
         batch_id: input.batchId,
         cursor_data: input.cursor,
-        last_sequence_number: input.lastSequenceNumber ?? null,
-        processed_count: input.processedCount,
+        last_sequence_number: lastSequenceNumber,
+        processed_count: processedCount,
         stage: input.stage,
       })
       .onConflict((conflict) =>
         conflict.columns(["batch_id", "stage"]).doUpdateSet({
           cursor_data: input.cursor,
-          last_sequence_number: input.lastSequenceNumber ?? null,
-          processed_count: input.processedCount,
+          last_sequence_number: lastSequenceNumber,
+          processed_count: processedCount,
         }),
       )
       .execute();
   });
+}
+
+function checkpointInteger(value: unknown, field: string): bigint {
+  if (typeof value === "bigint") {
+    if (value >= 0n) return value;
+  } else if (typeof value === "number") {
+    if (Number.isSafeInteger(value) && value >= 0) return BigInt(value);
+  } else if (typeof value === "string" && /^(?:0|[1-9][0-9]*)$/.test(value)) {
+    return BigInt(value);
+  }
+  throw new Error(`${field} must be a canonical non-negative integer`);
 }
 
 export async function getBatchCheckpoint(
@@ -822,46 +930,54 @@ export async function validateBatch(
   batchId: string,
   policy: Partial<BatchValidationPolicy> = {},
 ): Promise<BatchValidationSummary> {
-  return database.transaction().execute(async (transaction) => {
-    const batch = await selectBatchForUpdate(transaction, batchId);
-    if (batch.status !== "staging") {
-      const savedPolicy = normalizePolicy(batch.validation_policy);
-      return buildValidationSummary(transaction, batch, savedPolicy);
-    }
-    const normalizedPolicy = normalizePolicy(policy);
-    const summary = await buildValidationSummary(transaction, batch, normalizedPolicy);
-    const validatedAt = new Date();
-    for (const record of summary.records) {
-      await transaction
-        .updateTable("food_import_record")
-        .set({
-          validated_at: validatedAt,
-          validation_issues: sql<JsonArray>`${canonicalJson(record.issues as JsonValue)}::jsonb`,
-          validation_status: record.status,
-        })
-        .where("batch_id", "=", batchId)
-        .where("source_record_key", "=", record.sourceRecordKey)
-        .where("validation_status", "=", "pending")
-        .execute();
-    }
+  return database
+    .transaction()
+    .execute((transaction) => validateBatchInTransaction(transaction, batchId, policy));
+}
+
+async function validateBatchInTransaction(
+  transaction: Transaction<Database>,
+  batchId: string,
+  policy: Partial<BatchValidationPolicy>,
+): Promise<BatchValidationSummary> {
+  const batch = await selectBatchForUpdate(transaction, batchId);
+  if (batch.status !== "staging") {
+    const savedPolicy = normalizePolicy(batch.validation_policy);
+    return buildValidationSummary(transaction, batch, savedPolicy);
+  }
+  const normalizedPolicy = normalizePolicy(policy);
+  const summary = await buildValidationSummary(transaction, batch, normalizedPolicy);
+  const validatedAt = new Date();
+  for (const record of summary.records) {
     await transaction
-      .updateTable("food_import_batch")
+      .updateTable("food_import_record")
       .set({
-        quarantined_count: summary.quarantinedCount,
-        nutrient_excluded_count: summary.excludedNutrientCount,
-        nutrient_input_count: summary.nutrientInputCount,
-        nutrient_materializable_count: summary.nutrientMaterializableCount,
-        status: summary.promotionEligible ? "ready" : "quarantined",
-        unresolved_error_count: summary.unresolvedErrorCount,
-        valid_count: summary.validCount,
         validated_at: validatedAt,
-        validation_policy: normalizedPolicy,
-        warning_count: summary.warningCount,
+        validation_issues: sql<JsonArray>`${canonicalJson(record.issues as JsonValue)}::jsonb`,
+        validation_status: record.status,
       })
-      .where("id", "=", batchId)
+      .where("batch_id", "=", batchId)
+      .where("source_record_key", "=", record.sourceRecordKey)
+      .where("validation_status", "=", "pending")
       .execute();
-    return summary;
-  });
+  }
+  await transaction
+    .updateTable("food_import_batch")
+    .set({
+      quarantined_count: summary.quarantinedCount,
+      nutrient_excluded_count: summary.excludedNutrientCount,
+      nutrient_input_count: summary.nutrientInputCount,
+      nutrient_materializable_count: summary.nutrientMaterializableCount,
+      status: summary.promotionEligible ? "ready" : "quarantined",
+      unresolved_error_count: summary.unresolvedErrorCount,
+      valid_count: summary.validCount,
+      validated_at: validatedAt,
+      validation_policy: normalizedPolicy,
+      warning_count: summary.warningCount,
+    })
+    .where("id", "=", batchId)
+    .execute();
+  return summary;
 }
 
 /**
@@ -1293,6 +1409,326 @@ interface PinnedParserEvidence {
   readonly report: Selectable<FoodImportParserReportTable>;
 }
 
+/**
+ * Validate the source-specific semantics of immutable CNF parser evidence.
+ * The generic report hash proves immutability; this proves that the frozen JSON
+ * actually contains the complete nine-table inventory and conserved raw counts.
+ */
+export function verifyCnfParserReport(report: JsonValue, counts: ParserCountEvidence): void {
+  assertParserCountSums(counts);
+  const payload = exactJsonObjectValue(report, "CNF parser report", [
+    "actor",
+    "archive",
+    "artifactSha256",
+    "exclusionReasonCounts",
+    "exclusions",
+    "metrics",
+    "nutrientMappingDigest",
+    "parserBuildSha256",
+    "parserPackage",
+    "parserVersion",
+    "releaseKey",
+    "reportKind",
+    "rowDispositions",
+    "schemaVersion",
+    "sourceCode",
+    "tables",
+  ]);
+  if (payload.reportKind !== CNF_PARSER_REPORT_KIND) {
+    throw new Error(`CNF parser reportKind must be ${CNF_PARSER_REPORT_KIND}`);
+  }
+  if (payload.schemaVersion !== 1 || payload.sourceCode !== "HEALTH_CANADA_CNF") {
+    throw new Error("CNF parser report identity is invalid");
+  }
+  jsonSha256(payload.artifactSha256, "CNF parser report artifactSha256");
+  jsonSha256(payload.parserBuildSha256, "CNF parser report parserBuildSha256");
+  jsonSha256(payload.nutrientMappingDigest, "CNF parser report nutrientMappingDigest");
+  if (payload.parserPackage !== "@nutrition-tracker/ingestion") {
+    throw new Error("CNF parser report parserPackage must be @nutrition-tracker/ingestion");
+  }
+  jsonText(payload.parserVersion, "CNF parser report parserVersion");
+  jsonText(payload.releaseKey, "CNF parser report releaseKey");
+
+  verifyCnfParserActor(payload.actor);
+  const archive = exactJsonObjectValue(payload.archive, "CNF parser report archive", [
+    "expectedFiles",
+    "inventoryCount",
+    "inventorySha256",
+  ]);
+  const expectedFiles = jsonUniqueTextArray(
+    archive.expectedFiles,
+    "CNF parser report archive.expectedFiles",
+  );
+  const sortedExpectedFiles = [...expectedFiles].sort(compareCodePoints);
+  if (canonicalJson(sortedExpectedFiles) !== canonicalJson(expectedFiles)) {
+    throw new Error("CNF parser report expectedFiles must be strictly sorted");
+  }
+  for (const expectedFile of expectedFiles) assertSafeCnfArchivePath(expectedFile);
+  const expectedCsv: ReadonlySet<string> = new Set(
+    CNF_TABLE_REPORT_CONTRACT.map(([archivePath]) => archivePath),
+  );
+  for (const archivePath of expectedCsv) {
+    if (!expectedFiles.includes(archivePath)) {
+      throw new Error(`CNF parser report archive is missing ${archivePath}`);
+    }
+  }
+  for (const expectedFile of expectedFiles) {
+    if (expectedFile.toLowerCase().endsWith(".csv") && !expectedCsv.has(expectedFile)) {
+      throw new Error(`CNF parser report contains undeclared CSV ${expectedFile}`);
+    }
+  }
+  const inventoryCount = jsonNonNegativeInteger(
+    archive.inventoryCount,
+    "CNF parser report archive.inventoryCount",
+  );
+  if (inventoryCount !== expectedFiles.length) {
+    throw new Error("CNF parser report archive inventory count is inconsistent");
+  }
+  if (
+    jsonSha256(archive.inventorySha256, "CNF parser report archive.inventorySha256") !==
+    sha256CanonicalJson(expectedFiles)
+  ) {
+    throw new Error("CNF parser report archive inventory digest is inconsistent");
+  }
+
+  const tables = jsonArrayValue(payload.tables, "CNF parser report tables");
+  if (tables.length !== CNF_TABLE_REPORT_CONTRACT.length) {
+    throw new Error("CNF parser report must contain exactly nine table entries");
+  }
+  const tableRowCounts = new Map<string, number>();
+  for (const [index, contract] of CNF_TABLE_REPORT_CONTRACT.entries()) {
+    const [expectedPath, expectedDisposition, expectedReason] = contract;
+    const table = exactJsonObjectValue(tables[index], `CNF parser report tables[${index}]`, [
+      "archivePath",
+      "byteSize",
+      "disposition",
+      "headerSha256",
+      "headers",
+      "rawSha256",
+      "referenceOnlyReason",
+      "rowCount",
+      "rowsSha256",
+    ]);
+    if (
+      table.archivePath !== expectedPath ||
+      table.disposition !== expectedDisposition ||
+      table.referenceOnlyReason !== expectedReason
+    ) {
+      throw new Error(`CNF parser report table contract mismatch for ${expectedPath}`);
+    }
+    const headers = jsonUniqueTextArray(table.headers, `CNF parser report ${expectedPath} headers`);
+    if (headers.length === 0) throw new Error(`CNF parser report ${expectedPath} has no headers`);
+    if (
+      jsonSha256(table.headerSha256, `CNF parser report ${expectedPath} headerSha256`) !==
+      sha256CanonicalJson(headers)
+    ) {
+      throw new Error(`CNF parser report ${expectedPath} header digest is inconsistent`);
+    }
+    jsonSha256(table.rawSha256, `CNF parser report ${expectedPath} rawSha256`);
+    jsonSha256(table.rowsSha256, `CNF parser report ${expectedPath} rowsSha256`);
+    const byteSize = jsonNonNegativeInteger(
+      table.byteSize,
+      `CNF parser report ${expectedPath} byteSize`,
+    );
+    if (byteSize === 0) throw new Error(`CNF parser report ${expectedPath} is empty`);
+    tableRowCounts.set(
+      expectedPath,
+      jsonNonNegativeInteger(table.rowCount, `CNF parser report ${expectedPath} rowCount`),
+    );
+  }
+
+  const metrics = exactJsonObjectValue(payload.metrics, "CNF parser report metrics", [
+    "acceptedSourcePayloadSha256",
+    "bilingualDescriptionCount",
+    "emittedNutrientCount",
+    "emittedPortionCount",
+    "emittedRecordCount",
+    "englishOnlyDescriptionCount",
+    "excludedMeasureCount",
+    "excludedNutrientCount",
+    "exclusionReasonCountsSha256",
+    "frenchOnlyDescriptionCount",
+    "missingBothDescriptionCount",
+    "quarantinedRecordCount",
+    "rowDispositionsSha256",
+    "skippedMeasureCount",
+    "sourceNutrientCount",
+    "sourcePortionCount",
+    "sourceRecordCount",
+    "tableEvidenceSha256",
+  ]);
+  const metricCounts = {
+    emittedNutrientCount: jsonNonNegativeInteger(
+      metrics.emittedNutrientCount,
+      "CNF emittedNutrientCount",
+    ),
+    emittedPortionCount: jsonNonNegativeInteger(
+      metrics.emittedPortionCount,
+      "CNF emittedPortionCount",
+    ),
+    emittedRecordCount: jsonNonNegativeInteger(
+      metrics.emittedRecordCount,
+      "CNF emittedRecordCount",
+    ),
+    excludedMeasureCount: jsonNonNegativeInteger(
+      metrics.excludedMeasureCount,
+      "CNF excludedMeasureCount",
+    ),
+    excludedNutrientCount: jsonNonNegativeInteger(
+      metrics.excludedNutrientCount,
+      "CNF excludedNutrientCount",
+    ),
+    quarantinedRecordCount: jsonNonNegativeInteger(
+      metrics.quarantinedRecordCount,
+      "CNF quarantinedRecordCount",
+    ),
+    skippedMeasureCount: jsonNonNegativeInteger(
+      metrics.skippedMeasureCount,
+      "CNF skippedMeasureCount",
+    ),
+    sourceNutrientCount: jsonNonNegativeInteger(
+      metrics.sourceNutrientCount,
+      "CNF sourceNutrientCount",
+    ),
+    sourcePortionCount: jsonNonNegativeInteger(
+      metrics.sourcePortionCount,
+      "CNF sourcePortionCount",
+    ),
+    sourceRecordCount: jsonNonNegativeInteger(metrics.sourceRecordCount, "CNF sourceRecordCount"),
+  };
+  if (
+    metricCounts.emittedNutrientCount !== counts.emittedNutrientCount ||
+    metricCounts.emittedPortionCount !== counts.emittedPortionCount ||
+    metricCounts.emittedRecordCount !== counts.emittedRecordCount ||
+    metricCounts.excludedNutrientCount !== counts.excludedNutrientCount ||
+    metricCounts.excludedMeasureCount + metricCounts.skippedMeasureCount !==
+      counts.excludedPortionCount ||
+    metricCounts.quarantinedRecordCount !== counts.excludedRecordCount ||
+    metricCounts.sourceNutrientCount !== counts.sourceNutrientCount ||
+    metricCounts.sourcePortionCount !== counts.sourcePortionCount ||
+    metricCounts.sourceRecordCount !== counts.sourceRecordCount
+  ) {
+    throw new Error("CNF parser report metrics do not match typed parser counts");
+  }
+  if (
+    tableRowCounts.get("Food_Name.csv") !== counts.sourceRecordCount ||
+    tableRowCounts.get("Nutrient_Amount.csv") !== counts.sourceNutrientCount ||
+    tableRowCounts.get("Measure_Weight_Conversion.csv") !== counts.sourcePortionCount
+  ) {
+    throw new Error("CNF parser report table rows do not match typed source counts");
+  }
+  const descriptionCount =
+    jsonNonNegativeInteger(metrics.bilingualDescriptionCount, "CNF bilingualDescriptionCount") +
+    jsonNonNegativeInteger(metrics.englishOnlyDescriptionCount, "CNF englishOnlyDescriptionCount") +
+    jsonNonNegativeInteger(metrics.frenchOnlyDescriptionCount, "CNF frenchOnlyDescriptionCount") +
+    jsonNonNegativeInteger(metrics.missingBothDescriptionCount, "CNF missingBothDescriptionCount");
+  if (descriptionCount !== counts.sourceRecordCount) {
+    throw new Error("CNF description pairing counts must partition Food_Name rows");
+  }
+  jsonSha256(metrics.acceptedSourcePayloadSha256, "CNF acceptedSourcePayloadSha256");
+  const rowDispositions = exactJsonObjectValue(
+    payload.rowDispositions,
+    "CNF parser report rowDispositions",
+    ["foodNames", "measureWeightConversions", "nutrientAmounts"],
+  );
+  if (
+    jsonSha256(metrics.rowDispositionsSha256, "CNF rowDispositionsSha256") !==
+    sha256CanonicalJson(rowDispositions)
+  ) {
+    throw new Error("CNF parser report row-disposition digest is inconsistent");
+  }
+  if (
+    jsonSha256(metrics.tableEvidenceSha256, "CNF tableEvidenceSha256") !==
+    sha256CanonicalJson(tables)
+  ) {
+    throw new Error("CNF parser report table-evidence digest is inconsistent");
+  }
+
+  const exclusions = exactJsonObjectValue(payload.exclusions, "CNF parser report exclusions", [
+    "measures",
+    "nutrients",
+    "records",
+    "skippedMeasures",
+  ]);
+  const excludedMeasures = jsonArrayValue(exclusions.measures, "CNF excluded measures");
+  const excludedNutrients = jsonArrayValue(exclusions.nutrients, "CNF excluded nutrients");
+  const excludedRecords = jsonArrayValue(exclusions.records, "CNF excluded records");
+  const skippedMeasures = jsonArrayValue(exclusions.skippedMeasures, "CNF skipped measures");
+  if (
+    excludedMeasures.length !== metricCounts.excludedMeasureCount ||
+    excludedNutrients.length !== metricCounts.excludedNutrientCount ||
+    excludedRecords.length !== metricCounts.quarantinedRecordCount ||
+    skippedMeasures.length !== metricCounts.skippedMeasureCount
+  ) {
+    throw new Error("CNF parser report exclusion arrays do not match metrics");
+  }
+  const excludedMeasureIndexes = verifyCnfChildExclusionEntries(
+    excludedMeasures,
+    "measure",
+    metricCounts.sourcePortionCount,
+  );
+  const excludedNutrientIndexes = verifyCnfChildExclusionEntries(
+    excludedNutrients,
+    "nutrient",
+    metricCounts.sourceNutrientCount,
+  );
+  const quarantinedRecordIndexes = verifyCnfRecordExclusionEntries(
+    excludedRecords,
+    metricCounts.sourceRecordCount,
+  );
+  const skippedMeasureIndexes = verifyCnfSkippedMeasureEntries(
+    skippedMeasures,
+    metricCounts.sourcePortionCount,
+    excludedMeasureIndexes,
+  );
+  verifyCnfRowDispositions(rowDispositions, metricCounts, {
+    excludedMeasureIndexes,
+    excludedNutrientIndexes,
+    quarantinedRecordIndexes,
+    skippedMeasureIndexes,
+  });
+  const reportedReasonCounts = jsonObjectValue(
+    payload.exclusionReasonCounts,
+    "CNF parser report exclusionReasonCounts",
+  );
+  const expectedReasonCounts = cnfExclusionReasonCounts({
+    measures: excludedMeasures,
+    nutrients: excludedNutrients,
+    records: excludedRecords,
+    skippedMeasures,
+  });
+  if (canonicalJson(reportedReasonCounts) !== canonicalJson(expectedReasonCounts)) {
+    throw new Error("CNF parser report exclusion reason counts are inconsistent");
+  }
+  if (
+    jsonSha256(metrics.exclusionReasonCountsSha256, "CNF exclusionReasonCountsSha256") !==
+    sha256CanonicalJson(reportedReasonCounts)
+  ) {
+    throw new Error("CNF parser report exclusion digest is inconsistent");
+  }
+}
+
+function verifyCnfAcceptedSourcePayloadDigest(
+  report: JsonValue,
+  records: readonly RecordRow[],
+): void {
+  const payload = jsonObjectValue(report, "CNF parser report");
+  const metrics = jsonObjectValue(payload.metrics, "CNF parser report metrics");
+  const expected = jsonSha256(
+    metrics.acceptedSourcePayloadSha256,
+    "CNF acceptedSourcePayloadSha256",
+  );
+  const actual = sha256CanonicalJson(
+    records.map((record) => ({
+      sourcePayloadHash: record.source_payload_sha256,
+      sourceRecordKey: record.source_record_key,
+    })),
+  );
+  if (actual !== expected) {
+    throw new Error("CNF accepted source-payload digest does not match staged canonical records");
+  }
+}
+
 interface ValidatedReconciliationRecord {
   readonly record: RecordRow;
   readonly result: CatalogueRecordValidationResult;
@@ -1347,22 +1783,31 @@ async function loadAndVerifyParserEvidence(
   batch: BatchRow,
   sourceCode: string,
 ): Promise<PinnedParserEvidence> {
-  const pinned = PINNED_PARSER_VERSION_PATTERN.exec(batch.parser_version);
-  if (!pinned?.[1] || !pinned[2] || !pinned[3]) {
-    throw new Error(
-      "Parser version must pin exact parser-build and nutrient-mapping SHA-256 digests",
-    );
-  }
   const report = await database
     .selectFrom("food_import_parser_report")
     .selectAll()
     .where("batch_id", "=", batch.id)
     .executeTakeFirst();
   if (!report) throw new Error(`Batch ${batch.id} is missing immutable parser evidence`);
+  return verifyPinnedParserEvidence(batch, sourceCode, report);
+}
+
+function verifyPinnedParserEvidence(
+  batch: BatchRow,
+  sourceCode: string,
+  report: Selectable<FoodImportParserReportTable>,
+): PinnedParserEvidence {
+  const pinned = PINNED_PARSER_VERSION_PATTERN.exec(batch.parser_version);
+  if (!pinned?.[1] || !pinned[2] || !pinned[3]) {
+    throw new Error(
+      "Parser version must pin exact parser-build and nutrient-mapping SHA-256 digests",
+    );
+  }
   if (sha256CanonicalJson(report.report) !== report.report_sha256) {
     throw new Error("Parser report digest does not match its canonical report bytes");
   }
-  assertParserCountSums(parserCountsFromRow(report));
+  const parserCounts = parserCountsFromRow(report);
+  assertParserCountSums(parserCounts);
   const payload = jsonObjectValue(report.report, "parser report");
   const exactFields: ReadonlyArray<readonly [string, JsonValue]> = [
     ["artifactSha256", batch.artifact_sha256],
@@ -1377,6 +1822,9 @@ async function loadAndVerifyParserEvidence(
     if (canonicalJson(payload[field] ?? null) !== canonicalJson(expected)) {
       throw new Error(`Parser report ${field} does not match immutable batch provenance`);
     }
+  }
+  if (sourceCode === "HEALTH_CANADA_CNF") {
+    verifyCnfParserReport(payload, parserCounts);
   }
   return {
     nutrientMappingDigest: pinned[3],
@@ -2237,11 +2685,342 @@ function frozenBaselineForbiddenGtins(record: RecordRow): ReadonlySet<string> {
   return new Set([`${barcode.normalizedGtin}:${barcode.marketCode}`]);
 }
 
-function jsonObjectValue(value: JsonValue, field: string): JsonObject {
+function jsonObjectValue(value: JsonValue | undefined, field: string): JsonObject {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`${field} must be an object`);
   }
   return value as JsonObject;
+}
+
+function exactJsonObjectValue(
+  value: JsonValue | undefined,
+  field: string,
+  expectedFields: readonly string[],
+): JsonObject {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${field} must be an object`);
+  }
+  const object = value as JsonObject;
+  const actual = Object.keys(object).sort(compareCodePoints);
+  const expected = [...expectedFields].sort(compareCodePoints);
+  if (canonicalJson(actual) !== canonicalJson(expected)) {
+    throw new Error(`${field} fields do not match the reviewed schema`);
+  }
+  return object;
+}
+
+function jsonArrayValue(value: JsonValue | undefined, field: string): readonly JsonValue[] {
+  if (!Array.isArray(value)) throw new Error(`${field} must be an array`);
+  return value;
+}
+
+function jsonUniqueTextArray(value: JsonValue | undefined, field: string): readonly string[] {
+  const values = jsonArrayValue(value, field).map((entry, index) =>
+    jsonText(entry, `${field}[${index}]`),
+  );
+  if (new Set(values).size !== values.length) throw new Error(`${field} contains duplicates`);
+  return values;
+}
+
+function jsonNonNegativeInteger(value: JsonValue | undefined, field: string): number {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${field} must be a non-negative safe integer`);
+  }
+  return value;
+}
+
+function assertSafeCnfArchivePath(value: string): void {
+  const segments = value.split("/");
+  const hasControlCharacters = [...value].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return codePoint <= 0x1f || codePoint === 0x7f;
+  });
+  if (
+    hasControlCharacters ||
+    value.includes("\\") ||
+    value.startsWith("/") ||
+    /^[A-Za-z]:/.test(value) ||
+    value.endsWith("/") ||
+    segments.some((segment) => segment === "" || segment === "." || segment === "..")
+  ) {
+    throw new Error(`CNF parser report has unsafe archive path ${value}`);
+  }
+}
+
+function verifyCnfParserActor(value: JsonValue | undefined): void {
+  const actor = exactJsonObjectValue(value, "CNF parser report actor", [
+    "authenticationMethod",
+    "principalId",
+    "runReference",
+  ]);
+  if (actor.authenticationMethod !== "oidc" && actor.authenticationMethod !== "workload-identity") {
+    throw new Error("CNF parser report actor authenticationMethod is invalid");
+  }
+  const principalId = jsonText(actor.principalId, "CNF parser report actor principalId");
+  if (!/^[a-z][-a-z0-9._:@/]{2,255}$/.test(principalId)) {
+    throw new Error("CNF parser report actor principalId is invalid");
+  }
+  const runReference = jsonText(actor.runReference, "CNF parser report actor runReference");
+  let url: URL;
+  try {
+    url = new URL(runReference);
+  } catch {
+    throw new Error("CNF parser report actor runReference is invalid");
+  }
+  if (
+    (url.protocol !== "https:" && url.protocol !== "urn:") ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.search !== "" ||
+    url.hash !== ""
+  ) {
+    throw new Error("CNF parser report actor runReference is not immutable and credential-free");
+  }
+}
+
+function verifyCnfChildExclusionEntries(
+  values: readonly JsonValue[],
+  label: string,
+  sourceCount: number,
+): Set<number> {
+  const sourceIndexes = new Set<number>();
+  for (const [index, value] of values.entries()) {
+    const entry = exactJsonObjectValue(value, `CNF ${label} exclusions[${index}]`, [
+      "code",
+      "foodCode",
+      "message",
+      "sourceIndex",
+      "sourcePayloadHash",
+    ]);
+    assertCnfParserExclusionCode(entry.code, `CNF ${label} exclusions[${index}].code`);
+    jsonText(entry.foodCode, `CNF ${label} exclusions[${index}].foodCode`);
+    jsonText(entry.message, `CNF ${label} exclusions[${index}].message`);
+    const sourceIndex = jsonNonNegativeInteger(
+      entry.sourceIndex,
+      `CNF ${label} exclusions[${index}].sourceIndex`,
+    );
+    if (sourceIndex >= sourceCount || sourceIndexes.has(sourceIndex)) {
+      throw new Error(`CNF ${label} exclusion source indexes must be unique and in range`);
+    }
+    sourceIndexes.add(sourceIndex);
+    jsonSha256(entry.sourcePayloadHash, `CNF ${label} exclusions[${index}].sourcePayloadHash`);
+  }
+  return sourceIndexes;
+}
+
+function verifyCnfRecordExclusionEntries(
+  values: readonly JsonValue[],
+  sourceCount: number,
+): Set<number> {
+  const sourceIndexes = new Set<number>();
+  for (const [index, value] of values.entries()) {
+    const entry = exactJsonObjectValue(value, `CNF record exclusions[${index}]`, [
+      "code",
+      "message",
+      "sourceIndex",
+      "sourcePayloadHash",
+      "sourceRecordId",
+    ]);
+    assertCnfParserExclusionCode(entry.code, `CNF record exclusions[${index}].code`);
+    jsonText(entry.message, `CNF record exclusions[${index}].message`);
+    const sourceIndex = jsonNonNegativeInteger(
+      entry.sourceIndex,
+      `CNF record exclusions[${index}].sourceIndex`,
+    );
+    if (sourceIndex >= sourceCount || sourceIndexes.has(sourceIndex)) {
+      throw new Error("CNF record exclusion source indexes must be unique and in range");
+    }
+    sourceIndexes.add(sourceIndex);
+    jsonSha256(entry.sourcePayloadHash, `CNF record exclusions[${index}].sourcePayloadHash`);
+    if (entry.sourceRecordId !== null) {
+      jsonText(entry.sourceRecordId, `CNF record exclusions[${index}].sourceRecordId`);
+    }
+  }
+  return sourceIndexes;
+}
+
+function assertCnfParserExclusionCode(value: JsonValue | undefined, field: string): void {
+  const code = jsonText(value, field);
+  if (!CNF_PARSER_EXCLUSION_CODES.has(code)) {
+    throw new Error(`${field} is outside the reviewed CNF parser v1 taxonomy`);
+  }
+}
+
+function verifyCnfSkippedMeasureEntries(
+  values: readonly JsonValue[],
+  sourceCount: number,
+  excludedSourceIndexes: ReadonlySet<number>,
+): Set<number> {
+  const sourceIndexes = new Set<number>();
+  for (const [index, value] of values.entries()) {
+    const entry = exactJsonObjectValue(value, `CNF skipped measures[${index}]`, [
+      "foodCode",
+      "measureCode",
+      "measureTypeCode",
+      "reason",
+      "sourceIndex",
+      "sourcePayloadHash",
+    ]);
+    jsonText(entry.foodCode, `CNF skipped measures[${index}].foodCode`);
+    jsonText(entry.measureCode, `CNF skipped measures[${index}].measureCode`);
+    const measureTypeCode = jsonText(
+      entry.measureTypeCode,
+      `CNF skipped measures[${index}].measureTypeCode`,
+    );
+    const expectedReason =
+      measureTypeCode === "3"
+        ? "non_user_facing_refuse"
+        : measureTypeCode === "9"
+          ? "non_user_facing_yield"
+          : measureTypeCode === "6"
+            ? null
+            : "unsupported_measure_type";
+    if (expectedReason === null || entry.reason !== expectedReason) {
+      throw new Error(`CNF skipped measures[${index}] type/reason mapping is invalid`);
+    }
+    const sourceIndex = jsonNonNegativeInteger(
+      entry.sourceIndex,
+      `CNF skipped measures[${index}].sourceIndex`,
+    );
+    if (
+      sourceIndex >= sourceCount ||
+      excludedSourceIndexes.has(sourceIndex) ||
+      sourceIndexes.has(sourceIndex)
+    ) {
+      throw new Error(
+        "CNF measure exclusion and skip source indexes must be disjoint, unique, and in range",
+      );
+    }
+    sourceIndexes.add(sourceIndex);
+    jsonSha256(entry.sourcePayloadHash, `CNF skipped measures[${index}].sourcePayloadHash`);
+  }
+  return sourceIndexes;
+}
+
+function verifyCnfRowDispositions(
+  dispositions: JsonObject,
+  counts: {
+    readonly emittedNutrientCount: number;
+    readonly emittedPortionCount: number;
+    readonly emittedRecordCount: number;
+    readonly excludedMeasureCount: number;
+    readonly excludedNutrientCount: number;
+    readonly quarantinedRecordCount: number;
+    readonly skippedMeasureCount: number;
+    readonly sourceNutrientCount: number;
+    readonly sourcePortionCount: number;
+    readonly sourceRecordCount: number;
+  },
+  expectedIndexes: {
+    readonly excludedMeasureIndexes: ReadonlySet<number>;
+    readonly excludedNutrientIndexes: ReadonlySet<number>;
+    readonly quarantinedRecordIndexes: ReadonlySet<number>;
+    readonly skippedMeasureIndexes: ReadonlySet<number>;
+  },
+): void {
+  verifyCnfDispositionPartition(
+    dispositions.foodNames,
+    "Food_Name",
+    counts.sourceRecordCount,
+    { emitted: counts.emittedRecordCount, quarantined: counts.quarantinedRecordCount },
+    { quarantined: expectedIndexes.quarantinedRecordIndexes },
+  );
+  verifyCnfDispositionPartition(
+    dispositions.nutrientAmounts,
+    "Nutrient_Amount",
+    counts.sourceNutrientCount,
+    { emitted: counts.emittedNutrientCount, excluded: counts.excludedNutrientCount },
+    { excluded: expectedIndexes.excludedNutrientIndexes },
+  );
+  verifyCnfDispositionPartition(
+    dispositions.measureWeightConversions,
+    "Measure_Weight_Conversion",
+    counts.sourcePortionCount,
+    {
+      emitted: counts.emittedPortionCount,
+      excluded: counts.excludedMeasureCount,
+      skipped: counts.skippedMeasureCount,
+    },
+    {
+      excluded: expectedIndexes.excludedMeasureIndexes,
+      skipped: expectedIndexes.skippedMeasureIndexes,
+    },
+  );
+}
+
+function verifyCnfDispositionPartition(
+  value: JsonValue | undefined,
+  label: string,
+  sourceCount: number,
+  expectedCounts: Readonly<Record<string, number>>,
+  expectedNonEmittedIndexes: Readonly<Record<string, ReadonlySet<number>>>,
+): void {
+  const entries = jsonArrayValue(value, `CNF ${label} row dispositions`);
+  if (entries.length !== sourceCount) {
+    throw new Error(`CNF ${label} row dispositions must cover every source index exactly once`);
+  }
+  const observedCounts: Record<string, number> = {};
+  const observedIndexes = new Map<string, Set<number>>();
+  for (const [index, value] of entries.entries()) {
+    const entry = exactJsonObjectValue(value, `CNF ${label} row dispositions[${index}]`, [
+      "disposition",
+      "sourceIndex",
+    ]);
+    const sourceIndex = jsonNonNegativeInteger(
+      entry.sourceIndex,
+      `CNF ${label} row dispositions[${index}].sourceIndex`,
+    );
+    if (sourceIndex !== index) {
+      throw new Error(`CNF ${label} row dispositions must be sorted with no gaps or duplicates`);
+    }
+    const disposition = jsonText(
+      entry.disposition,
+      `CNF ${label} row dispositions[${index}].disposition`,
+    );
+    if (!Object.hasOwn(expectedCounts, disposition)) {
+      throw new Error(`CNF ${label} row disposition ${disposition} is invalid`);
+    }
+    observedCounts[disposition] = (observedCounts[disposition] ?? 0) + 1;
+    const indexes = observedIndexes.get(disposition) ?? new Set<number>();
+    indexes.add(sourceIndex);
+    observedIndexes.set(disposition, indexes);
+  }
+  for (const [disposition, expectedCount] of Object.entries(expectedCounts)) {
+    if ((observedCounts[disposition] ?? 0) !== expectedCount) {
+      throw new Error(`CNF ${label} ${disposition} disposition count is inconsistent`);
+    }
+  }
+  for (const [disposition, expected] of Object.entries(expectedNonEmittedIndexes)) {
+    const observed = observedIndexes.get(disposition) ?? new Set<number>();
+    if (
+      observed.size !== expected.size ||
+      [...expected].some((sourceIndex) => !observed.has(sourceIndex))
+    ) {
+      throw new Error(`CNF ${label} ${disposition} dispositions do not match exclusion evidence`);
+    }
+  }
+}
+
+function cnfExclusionReasonCounts(input: {
+  readonly measures: readonly JsonValue[];
+  readonly nutrients: readonly JsonValue[];
+  readonly records: readonly JsonValue[];
+  readonly skippedMeasures: readonly JsonValue[];
+}): JsonObject {
+  const counts: Record<string, number> = {};
+  const add = (prefix: string, values: readonly JsonValue[], field: "code" | "reason"): void => {
+    for (const [index, value] of values.entries()) {
+      const entry = jsonObjectValue(value, `CNF ${prefix} exclusion[${index}]`);
+      const reason = jsonText(entry[field], `CNF ${prefix} exclusion[${index}].${field}`);
+      const key = `${prefix}:${reason}`;
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+  };
+  add("measure", input.measures, "code");
+  add("nutrient", input.nutrients, "code");
+  add("record", input.records, "code");
+  add("skipped-measure", input.skippedMeasures, "reason");
+  return Object.freeze(counts);
 }
 
 function jsonText(value: JsonValue | undefined, field: string): string {
@@ -2384,6 +3163,10 @@ async function observeBatchValidation(
     .executeTakeFirst();
   if (!parserReport) {
     throw new Error(`Batch ${batch.id} is missing immutable parser evidence`);
+  }
+  if (source.code === "HEALTH_CANADA_CNF") {
+    const verifiedParser = verifyPinnedParserEvidence(batch, source.code, parserReport);
+    verifyCnfAcceptedSourcePayloadDigest(verifiedParser.report.report, rows);
   }
   const parserEvidence = parserCountsFromRow(parserReport);
   const emittedNutrientCount = records.reduce(
