@@ -133,6 +133,17 @@ export interface UserSessionTable {
   created_at: CreatedTimestamp;
 }
 
+export interface AuthActionTokenTable {
+  id: UuidId;
+  user_id: string;
+  purpose: "email_verification";
+  token_hash: string;
+  email_hash: string;
+  expires_at: Timestamp;
+  consumed_at: NullableTimestamp;
+  created_at: Timestamp;
+}
+
 export interface FoodSourceTable {
   id: BigintId;
   code: string;
@@ -1371,6 +1382,7 @@ export interface Database {
   account_erasure_job: AccountErasureJobTable;
   account_erasure_receipt: AccountErasureReceiptTable;
   app_user: AppUserTable;
+  auth_action_token: AuthActionTokenTable;
   audit_log: AuditLogTable;
   biometric_definition: BiometricDefinitionTable;
   biometric_definition_operation: BiometricDefinitionOperationTable;

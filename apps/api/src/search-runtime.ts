@@ -7,6 +7,7 @@ import {
 
 import type { ApiDependencyConfig } from "./config.js";
 import { type AuthService, SecureAuthService } from "./modules/auth/auth-service.js";
+import { LocalMailpitEmailDelivery } from "./modules/auth/email-delivery.js";
 import type { DiaryService } from "./modules/diary/diary.routes.js";
 import { DatabaseBackedFoodSearchService } from "./modules/foods/search-service.js";
 import type { GoalService } from "./modules/goals/goal.routes.js";
@@ -72,6 +73,18 @@ export async function createApiSearchRuntime(
   try {
     const authService = new SecureAuthService({
       repository: new DatabaseAuthRepository(database),
+      ...(config.emailVerification
+        ? {
+            emailVerificationDelivery: new LocalMailpitEmailDelivery({
+              from: config.emailVerification.from,
+              host: config.emailVerification.host,
+              nodeEnv: config.emailVerification.nodeEnv,
+              port: config.emailVerification.port,
+              timeoutMs: config.emailVerification.timeoutMs,
+            }),
+            emailVerificationPublicOrigin: config.emailVerification.publicOrigin,
+          }
+        : {}),
       ...(options.clock ? { clock: options.clock } : {}),
     });
     const retentionService =

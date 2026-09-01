@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   coreFoodSearchService: vi.fn(),
   createApiRetentionArtifactRuntime: vi.fn(),
   createDatabaseFromEnvironment: vi.fn(),
+  localMailpitEmailDelivery: vi.fn(),
   databaseAuthRepository: vi.fn(),
   databaseBackedFoodSearchService: vi.fn(),
   databaseDiaryService: vi.fn(),
@@ -44,6 +45,14 @@ vi.mock("../src/modules/auth/auth-service.js", () => ({
   SecureAuthService: class {
     constructor(options: unknown) {
       mocks.secureAuthService(options);
+    }
+  },
+}));
+
+vi.mock("../src/modules/auth/email-delivery.js", () => ({
+  LocalMailpitEmailDelivery: class {
+    constructor(options: unknown) {
+      mocks.localMailpitEmailDelivery(options);
     }
   },
 }));
@@ -132,6 +141,7 @@ function dependencyConfig(retention = retentionConfig()): ApiDependencyConfig {
     cursorSecret: "clock-composition-cursor-secret-longer-than-thirty-two-bytes",
     databaseRestoreEpoch: null,
     databaseUrl: "postgresql://local.invalid/nutrition",
+    emailVerification: null,
     meiliSearchKey: "scoped-search-key",
     meiliUrl: "http://127.0.0.1:7700",
     requireDatabaseRestoreAttestation: false,
@@ -157,7 +167,17 @@ describe("API dependency runtime composition", () => {
     };
     mocks.createDatabaseFromEnvironment.mockReturnValue(database);
     mocks.createApiRetentionArtifactRuntime.mockResolvedValue(artifactRuntime);
-    const config = dependencyConfig();
+    const config = {
+      ...dependencyConfig(),
+      emailVerification: {
+        from: "Nutrition Tracker Local <no-reply@nutrition.local>",
+        host: "127.0.0.1",
+        nodeEnv: "test",
+        port: 1025,
+        publicOrigin: "http://127.0.0.1:3000",
+        timeoutMs: 5_000,
+      },
+    } as const;
     const environment = {
       DATABASE_URL: "postgresql://ambient.invalid/must-be-overridden",
       NODE_ENV: "test",
@@ -174,6 +194,19 @@ describe("API dependency runtime composition", () => {
       clock,
     });
     expect(mocks.secureAuthService).toHaveBeenCalledWith(expect.objectContaining({ clock }));
+    expect(mocks.localMailpitEmailDelivery).toHaveBeenCalledWith({
+      from: config.emailVerification.from,
+      host: "127.0.0.1",
+      nodeEnv: "test",
+      port: 1025,
+      timeoutMs: 5_000,
+    });
+    expect(mocks.secureAuthService).toHaveBeenCalledWith(
+      expect.objectContaining({
+        emailVerificationDelivery: expect.any(Object),
+        emailVerificationPublicOrigin: "http://127.0.0.1:3000",
+      }),
+    );
     expect(mocks.databaseDiaryService).toHaveBeenCalledWith(database, {
       cursorSecret: config.cursorSecret,
     });

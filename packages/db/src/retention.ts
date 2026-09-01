@@ -7176,6 +7176,7 @@ const EXPORT_TABLE_SCHEMA_SHA256: Readonly<Record<string, string>> = {
 const USER_LINKED_EXPORT_EXCLUSIONS = new Set([
   "account_erasure_job", // pseudonymous lifecycle/status capability; never in account export
   "account_erasure_receipt", // deliberately non-identifying post-erasure evidence
+  "auth_action_token", // single-use credential and current-email digests
   "food_import_record", // public-source ingestion evidence; custom foods cannot reference it
   "privacy_export_entity_snapshot", // transient DB spool manifest
   "privacy_export_record", // transient canonical DB spool rows
@@ -7240,6 +7241,7 @@ const ERASURE_TABLE_SPECS: readonly ErasureTableSpec[] = [
   eraseBy("reminder_consent", (userId) => sql`user_id=${userId}`),
   eraseBy("security_challenge", (userId) => sql`user_id=${userId}`),
   eraseBy("reauthentication_proof", (userId) => sql`user_id=${userId}`),
+  eraseBy("auth_action_token", (userId) => sql`user_id=${userId}`),
   eraseBy("device_registration", (userId) => sql`user_id=${userId}`),
   eraseBy("diary", (userId) => sql`user_id=${userId}`),
   eraseBy("recipe", (userId) => sql`owner_user_id=${userId}`),

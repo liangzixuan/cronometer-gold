@@ -5,6 +5,8 @@ import { loadConfig } from "../src/config.js";
 import {
   AuthRateLimitedError,
   type AuthService,
+  EmailVerificationTokenExpiredError,
+  EmailVerificationTokenInvalidError,
   InvalidCredentialsError,
 } from "../src/modules/auth/auth-service.js";
 import { account, bearerToken, profile, userId } from "./fixtures.js";
@@ -14,6 +16,7 @@ const testConfig = loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" });
 
 function authStub(overrides: Partial<AuthService> = {}): AuthService {
   return {
+    confirmEmailVerification: vi.fn(async () => ({ data: { verified: true as const } })),
     reauthenticate: vi.fn(async () => ({
       data: {
         expiresAt: "2026-08-15T00:10:00.000Z",
@@ -41,6 +44,7 @@ function authStub(overrides: Partial<AuthService> = {}): AuthService {
     ),
     authenticateErasureRecovery: vi.fn(async () => null),
     logout: vi.fn(async () => undefined),
+    requestEmailVerification: vi.fn(async () => ({ data: { status: "accepted" as const } })),
     ...overrides,
   };
 }
@@ -217,4 +221,96 @@ describe("account routes", () => {
     expect(whitespace.body).not.toContain("private display value");
     expect(oversized.statusCode).toBe(400);
   });
+
+  it("accepts an authenticated verification request without accepting request fields", async () => {
+    const service = authStub();
+    const app = createTestApp(service);
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/v1/auth/email-verification/request",
+      headers: { authorization: `Bearer ${bearerToken}` },
+    });
+    const unauthorized = await app.inject({
+      method: "POST",
+      url: "/v1/auth/email-verification/request",
+    });
+    const unexpectedBodies = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: "/v1/auth/email-verification/request",
+        headers: { authorization: `Bearer ${bearerToken}` },
+        payload: {},
+      }),
+      app.inject({
+        method: "POST",
+        url: "/v1/auth/email-verification/request",
+        headers: {
+          authorization: `Bearer ${bearerToken}`,
+          "content-type": "application/json",
+        },
+        payload: "null",
+      }),
+      app.inject({
+        method: "POST",
+        url: "/v1/auth/email-verification/request",
+        headers: {
+          authorization: `Bearer ${bearerToken}`,
+          "content-type": "application/json",
+        },
+        payload: "7",
+      }),
+      app.inject({
+        method: "POST",
+        url: "/v1/auth/email-verification/request",
+        headers: { authorization: `Bearer ${bearerToken}` },
+        payload: { email: "other@example.com" },
+      }),
+    ]);
+
+    expect(accepted.statusCode).toBe(202);
+    expect(accepted.headers["cache-control"]).toBe("no-store");
+    expect(accepted.json()).toEqual({ data: { status: "accepted" } });
+    expect(service.requestEmailVerification).toHaveBeenCalledWith(account);
+    expect(unauthorized.statusCode).toBe(401);
+    expect(unexpectedBodies.map((response) => response.statusCode)).toEqual([400, 400, 400, 400]);
+    expect(service.requestEmailVerification).toHaveBeenCalledTimes(1);
+  });
+
+  it("confirms a public fragment token without requiring a bearer session", async () => {
+    const service = authStub();
+    const response = await createTestApp(service).inject({
+      method: "POST",
+      url: "/v1/auth/email-verification/confirm",
+      payload: { token: `${"v".repeat(42)}A` },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.json()).toEqual({ data: { verified: true } });
+    expect(service.confirmEmailVerification).toHaveBeenCalledWith(
+      `${"v".repeat(42)}A`,
+      expect.any(String),
+    );
+  });
+
+  it.each([
+    [new EmailVerificationTokenInvalidError(), 400, "EMAIL_VERIFICATION_TOKEN_INVALID"],
+    [new EmailVerificationTokenExpiredError(), 410, "EMAIL_VERIFICATION_TOKEN_EXPIRED"],
+  ] as const)(
+    "maps verification failure without echoing the token",
+    async (error, status, code) => {
+      const token = `${"q".repeat(42)}A`;
+      const response = await createTestApp(
+        authStub({ confirmEmailVerification: vi.fn(async () => Promise.reject(error)) }),
+      ).inject({
+        method: "POST",
+        url: "/v1/auth/email-verification/confirm",
+        payload: { token },
+      });
+
+      expect(response.statusCode).toBe(status);
+      expect(response.json()).toMatchObject({ code });
+      expect(response.body).not.toContain(token);
+    },
+  );
 });

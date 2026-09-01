@@ -63,6 +63,7 @@ export const apiOnlyApplicationRuntimeEnvironmentFields = Object.freeze([
   "DATABASE_SSL_MODE",
   "DATABASE_STATEMENT_TIMEOUT_MS",
   "DATABASE_URL",
+  "EMAIL_VERIFICATION_PUBLIC_ORIGIN",
   "DEVICE_CHALLENGE_HMAC_KEY",
   "ERASURE_REPLAY_LEDGER_LOCATOR_CURRENT_KEY_ID",
   "ERASURE_REPLAY_LEDGER_LOCATOR_HMAC_KEYS",
@@ -99,6 +100,10 @@ export const apiOnlyApplicationRuntimeEnvironmentFields = Object.freeze([
   "SEARCH_REQUEST_TIMEOUT_MS",
   "SERVICE_VERSION",
   "SHUTDOWN_GRACE_MS",
+  "SMTP_FROM",
+  "SMTP_HOST",
+  "SMTP_PORT",
+  "SMTP_TIMEOUT_MS",
 ]);
 
 export const applicationRuntimeEnvironmentFields = Object.freeze([
@@ -112,6 +117,7 @@ export const applicationRuntimeEnvironmentFields = Object.freeze([
   "DATABASE_SSL_MODE",
   "DATABASE_STATEMENT_TIMEOUT_MS",
   "DATABASE_URL",
+  "EMAIL_VERIFICATION_PUBLIC_ORIGIN",
   "DEVICE_CHALLENGE_HMAC_KEY",
   "ERASURE_REPLAY_LEDGER_BUCKET",
   "ERASURE_REPLAY_LEDGER_CURRENT_KEY_ID",
@@ -178,6 +184,10 @@ export const applicationRuntimeEnvironmentFields = Object.freeze([
   "SEARCH_TASK_TIMEOUT_MS",
   "SERVICE_VERSION",
   "SHUTDOWN_GRACE_MS",
+  "SMTP_FROM",
+  "SMTP_HOST",
+  "SMTP_PORT",
+  "SMTP_TIMEOUT_MS",
   "WEB_PUBLIC_ORIGIN",
 ]);
 
@@ -392,6 +402,34 @@ function assertLocalObjectStorage(environment) {
   }
 }
 
+function assertLocalMailpit(environment) {
+  const configured = ["SMTP_HOST", "SMTP_PORT", "SMTP_FROM"].some(
+    (field) => environment[field] !== undefined,
+  );
+  if (!configured) return;
+  if (required(environment, "SMTP_HOST") !== "127.0.0.1") {
+    throw loopbackError("Mailpit SMTP");
+  }
+  const smtpPort = exactPort(environment, "SMTP_PORT");
+  const mailpitPort = exactPort(environment, "MAILPIT_SMTP_PORT");
+  if (smtpPort !== "1025" || mailpitPort !== smtpPort) {
+    throw loopbackError("Mailpit SMTP");
+  }
+  const from = required(environment, "SMTP_FROM");
+  if (
+    from.length > 200 ||
+    /[^\x20-\x7e]|[\r\n]/u.test(from) ||
+    !/(?:^|<)[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+>?$/u.test(from)
+  ) {
+    throw loopbackError("Mailpit SMTP");
+  }
+  exactOptionalLoopbackOrigin(
+    environment,
+    "EMAIL_VERIFICATION_PUBLIC_ORIGIN",
+    "email-verification web origin",
+  );
+}
+
 export function assertLocalDevelopmentEnvironment(environment) {
   if (
     environment.NODE_TLS_REJECT_UNAUTHORIZED ||
@@ -431,6 +469,7 @@ export function assertLocalDevelopmentEnvironment(environment) {
   }
 
   assertLocalObjectStorage(environment);
+  assertLocalMailpit(environment);
 }
 
 export function localDevelopmentChildEnvironment(

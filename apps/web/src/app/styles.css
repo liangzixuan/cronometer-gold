@@ -867,6 +867,29 @@ a {
   font-size: 0.72rem;
 }
 
+.verificationCard .authStatus {
+  margin-top: 24px;
+}
+
+.verificationResend {
+  width: 100%;
+}
+
+.verificationActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  margin-top: 24px;
+}
+
+.verificationLink {
+  margin-top: 10px;
+  color: #8a5705;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-underline-offset: 4px;
+}
+
 .accountIdentity {
   margin: auto 0 0;
   color: var(--ink-muted);

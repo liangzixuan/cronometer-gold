@@ -23,6 +23,13 @@ export function rejectUnexpectedBodyKeys(allowedKeys: readonly string[]): preVal
   };
 }
 
+/** Reject every parsed request body, including empty objects, null, arrays, and primitives. */
+export function rejectRequestBody(): preValidationHookHandler {
+  return async (request: FastifyRequest): Promise<void> => {
+    if (request.body !== undefined) throw unexpectedFields();
+  };
+}
+
 export function rejectUnexpectedQueryKeys(
   allowedKeys: readonly string[],
 ): preValidationHookHandler {

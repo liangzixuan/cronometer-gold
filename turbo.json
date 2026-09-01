@@ -24,6 +24,7 @@
         "DATABASE_SSL_MODE",
         "DATABASE_STATEMENT_TIMEOUT_MS",
         "DATABASE_URL",
+        "EMAIL_VERIFICATION_PUBLIC_ORIGIN",
         "DEVICE_CHALLENGE_HMAC_KEY",
         "EXPORT_ARTIFACT_BUCKET",
         "EXPORT_ARTIFACT_CURRENT_KEY_ID",
@@ -59,7 +60,11 @@
         "SEARCH_DB_MAX_QUEUE",
         "SEARCH_REQUEST_TIMEOUT_MS",
         "SERVICE_VERSION",
-        "SHUTDOWN_GRACE_MS"
+        "SHUTDOWN_GRACE_MS",
+        "SMTP_FROM",
+        "SMTP_HOST",
+        "SMTP_PORT",
+        "SMTP_TIMEOUT_MS"
       ],
       "persistent": true,
       "with": [

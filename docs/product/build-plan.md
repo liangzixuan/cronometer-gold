@@ -76,8 +76,8 @@ acceptance; progress in either lane never waives the gates in the other.
    changed upstream bytes and a bounded archive orchestrator.
 2. **M1 — excellent basic daily loop:** activity/exercise, water, private diary
    notes, configurable groups, camera barcode scan while preserving exact GTIN
-   lookup, durable offline retry/reorder, email verification and password
-   recovery, reviewed reference targets, and production-grade
+   lookup, durable offline retry/reorder, email-verification release acceptance
+   and password recovery, reviewed reference targets, and production-grade
    weight sync, with cross-client end-to-end and accessibility acceptance.
    Private notes attached to food and recipe entries are implemented locally.
    Repeat preserves a note. Clearing hides it from the current display, while
@@ -114,6 +114,30 @@ acceptance; progress in either lane never waives the gates in the other.
    persistence, background delivery, manual reorder, and cross-client
    convergence. A staggered deployment must be API-first as specified by ADR
    0013.
+
+   Additive email verification is implemented locally across PostgreSQL, an
+   authenticated request route, a public confirmation route, web, and mobile.
+   Registration never sends automatically and unverified accounts keep their
+   existing access. Each 24-hour capability has 256 bits of randomness and only
+   its SHA-256 digest is persisted. A token-hash transaction fence and bounded
+   account-first row lock preserve the prior action on pre-acceptance delivery
+   failure, serialize loopback Mailpit acceptance with digest promotion, and make
+   an immediate confirmation wait for issuance commit. Confirmation validates the action's
+   existing normalized-email binding before consuming it, setting
+   `email_verified_at`, and writing a redacted audit event. Browser links carry
+   the capability only in a fragment that an early bootstrap removes before
+   interactive navigation or submission; scrub failure aborts. Native clients
+   use resend/status plus external-browser completion, not application deep
+   links. Production provider/domain/TLS/authentication/outbox/retry/suppression
+   review, shared request and confirmation abuse limiting, verification
+   enforcement, signed-client and accessibility evidence, and password recovery
+   remain open. API-first rollout and the full boundary are specified by ADR
+   0014.
+
+   SMTP acceptance and database commit are not a distributed transaction. A
+   database failure after accepted local mail may leave that new message
+   unusable while preserving the previous action and returning unavailability;
+   this is one reason a production delivery/idempotency design remains blocked.
 
    No signed clients exist yet, so the entry-note source also proves only a
    coordinated deployment. Before a future staggered note rollout, M2 must add an
@@ -210,9 +234,9 @@ distinct through the clients.
 
 The checked-in food-release candidates are still deliberately non-promotable,
 so diary integration evidence uses a synthetic promoted catalogue fixture rather
-than claiming a live USDA or CNF release. Password recovery, email verification,
-general cross-restart offline mutation/reorder support, and signed-device preview
-testing remain controlled-beta gates rather than hidden claims of this
+than claiming a live USDA or CNF release. Password recovery, general cross-restart
+offline mutation/reorder support, and signed-device preview testing remain
+controlled-beta gates rather than hidden claims of this
 milestone. The bounded native public-food quick-add path is the sole durable
 exception: it stores a closed create-only envelope, never a bearer token, search
 query, private note, arbitrary request, or response body. It preserves exact

@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
+import Script from "next/script";
 import type { ReactNode } from "react";
 
+import { EMAIL_VERIFICATION_BOOTSTRAP_SCRIPT } from "../lib/email-verification";
 import "./styles.css";
 
 // Per-request CSP nonces require request-time rendering so every Next script receives the nonce.
@@ -11,10 +14,20 @@ export const metadata: Metadata = {
   description: "Provenance-first nutrition tracking",
 };
 
-export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+export default async function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        {children}
+        <Script
+          id="email-verification-fragment-bootstrap"
+          nonce={nonce}
+          strategy="beforeInteractive"
+        >
+          {EMAIL_VERIFICATION_BOOTSTRAP_SCRIPT}
+        </Script>
+      </body>
     </html>
   );
 }

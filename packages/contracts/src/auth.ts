@@ -35,6 +35,22 @@ export interface RegisterAccountRequest extends AuthCredentialsRequest {
   readonly displayName?: string;
 }
 
+export interface EmailVerificationConfirmRequest {
+  readonly token: string;
+}
+
+export interface EmailVerificationRequestResponse {
+  readonly data: {
+    readonly status: "accepted";
+  };
+}
+
+export interface EmailVerificationConfirmResponse {
+  readonly data: {
+    readonly verified: true;
+  };
+}
+
 const uuidSchema = {
   type: "string",
   pattern:
@@ -69,6 +85,55 @@ export const registerAccountRequestSchema = {
     password: { type: "string", minLength: 12, maxLength: 128 },
     timeZone: { type: "string", minLength: 1, maxLength: 63 },
     displayName: { type: "string", minLength: 1, maxLength: 100 },
+  },
+} as const;
+
+export const emailVerificationConfirmRequestSchema = {
+  $id: "EmailVerificationConfirmRequest",
+  type: "object",
+  additionalProperties: false,
+  required: ["token"],
+  properties: {
+    token: {
+      type: "string",
+      minLength: 43,
+      maxLength: 43,
+      pattern: "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$",
+    },
+  },
+} as const;
+
+export const emailVerificationRequestResponseSchema = {
+  $id: "EmailVerificationRequestResponse",
+  type: "object",
+  additionalProperties: false,
+  required: ["data"],
+  properties: {
+    data: {
+      type: "object",
+      additionalProperties: false,
+      required: ["status"],
+      properties: {
+        status: { type: "string", const: "accepted" },
+      },
+    },
+  },
+} as const;
+
+export const emailVerificationConfirmResponseSchema = {
+  $id: "EmailVerificationConfirmResponse",
+  type: "object",
+  additionalProperties: false,
+  required: ["data"],
+  properties: {
+    data: {
+      type: "object",
+      additionalProperties: false,
+      required: ["verified"],
+      properties: {
+        verified: { type: "boolean", const: true },
+      },
+    },
   },
 } as const;
 

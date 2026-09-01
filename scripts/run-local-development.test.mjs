@@ -949,3 +949,26 @@ test("derives an explicit leaf-service-supervisor shutdown hierarchy", () => {
 test("accepts the exact synthetic loopback fixture", () => {
   assert.doesNotThrow(() => assertLocalDevelopmentEnvironment(environment()));
 });
+
+test("permits only exact loopback Mailpit settings in the guarded runtime", () => {
+  const mailpit = {
+    EMAIL_VERIFICATION_PUBLIC_ORIGIN: "http://127.0.0.1:3000",
+    MAILPIT_SMTP_PORT: "1025",
+    SMTP_FROM: "Nutrition Tracker Local <no-reply@nutrition.local>",
+    SMTP_HOST: "127.0.0.1",
+    SMTP_PORT: "1025",
+  };
+  assert.doesNotThrow(() => assertLocalDevelopmentEnvironment(environment(mailpit)));
+  for (const override of [
+    { SMTP_HOST: "localhost" },
+    { SMTP_PORT: "2525" },
+    { MAILPIT_SMTP_PORT: "2525" },
+    { EMAIL_VERIFICATION_PUBLIC_ORIGIN: "https://example.invalid" },
+    { SMTP_FROM: "safe@nutrition.local\r\nBcc: private@example.com" },
+  ]) {
+    assert.throws(
+      () => assertLocalDevelopmentEnvironment(environment({ ...mailpit, ...override })),
+      /loopback Mailpit SMTP|loopback email-verification web origin fixture/u,
+    );
+  }
+});

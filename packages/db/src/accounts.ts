@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { type Kysely, sql } from "kysely";
 
@@ -14,6 +14,14 @@ export class AccountNotFoundError extends Error {
 
 export class ProfileRevisionConflictError extends Error {
   override readonly name = "ProfileRevisionConflictError";
+}
+
+export class EmailVerificationTokenInvalidError extends Error {
+  override readonly name = "EmailVerificationTokenInvalidError";
+}
+
+export class EmailVerificationTokenExpiredError extends Error {
+  override readonly name = "EmailVerificationTokenExpiredError";
 }
 
 export interface UserProfileRecord {
@@ -99,6 +107,24 @@ export interface UpdateUserProfileInput {
     readonly wellnessDisclaimerAcknowledgedAt?: Date | string | null;
   };
 }
+
+export interface IssueEmailVerificationTokenInput {
+  readonly userId: string;
+  readonly tokenHash: string;
+  readonly emailHash: string;
+  readonly issuedAt: Date | string;
+  readonly expiresAt: Date | string;
+  /** Bounded local delivery. It runs while the account row lock is held. */
+  readonly deliver: () => Promise<void>;
+}
+
+export interface ConfirmEmailVerificationTokenInput {
+  readonly tokenHash: string;
+  readonly confirmedAt: Date | string;
+  readonly requestId?: string | null;
+}
+
+export type IssueEmailVerificationTokenResult = "already_verified" | "issued";
 
 export async function registerPasswordAccount(
   database: Kysely<Database>,
@@ -312,6 +338,171 @@ export async function revokeSession(
   });
 }
 
+/**
+ * Hold the account lock across bounded local delivery, then replace the one
+ * current credential in the same transaction. Delivery failure rolls the
+ * transaction back, preserving the prior usable credential. Concurrent
+ * requests serialize their SMTP acceptance and promotion order on this lock.
+ */
+export async function issueEmailVerificationToken(
+  database: Kysely<Database>,
+  input: IssueEmailVerificationTokenInput,
+): Promise<IssueEmailVerificationTokenResult> {
+  assertSha256(input.tokenHash, "tokenHash");
+  assertSha256(input.emailHash, "emailHash");
+  const issuedAt = canonicalInstant(input.issuedAt, "issuedAt");
+  const expiresAt = canonicalInstant(input.expiresAt, "expiresAt");
+  if (expiresAt <= issuedAt) throw new Error("expiresAt must be after issuedAt");
+
+  return database.transaction().execute(async (transaction) => {
+    await acquireEmailVerificationTokenFence(transaction, input.tokenHash);
+    const account = await transaction
+      .selectFrom("app_user")
+      .select(["email", "email_verified_at"])
+      .where("id", "=", input.userId)
+      .where("status", "=", "active")
+      .where("deleted_at", "is", null)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!account) throw new AccountNotFoundError("Account not found");
+    if (account.email_verified_at !== null) return "already_verified";
+    if (sha256(account.email) !== input.emailHash) {
+      throw new AccountNotFoundError("Account email changed");
+    }
+
+    await input.deliver();
+    await transaction
+      .insertInto("auth_action_token")
+      .values({
+        consumed_at: null,
+        created_at: issuedAt,
+        email_hash: input.emailHash,
+        expires_at: expiresAt,
+        purpose: "email_verification",
+        token_hash: input.tokenHash,
+        user_id: input.userId,
+      })
+      .onConflict((conflict) =>
+        conflict.columns(["user_id", "purpose"]).doUpdateSet({
+          consumed_at: null,
+          created_at: issuedAt,
+          email_hash: input.emailHash,
+          expires_at: expiresAt,
+          token_hash: input.tokenHash,
+        }),
+      )
+      .execute();
+    return "issued";
+  });
+}
+
+/**
+ * Consume one verification credential and mark the same locked account as
+ * verified. Unknown, replayed, inactive, deleted, or email-stale credentials
+ * all share the invalid-token result.
+ */
+export async function confirmEmailVerificationToken(
+  database: Kysely<Database>,
+  input: ConfirmEmailVerificationTokenInput,
+): Promise<void> {
+  assertSha256(input.tokenHash, "tokenHash");
+  const confirmedAt = canonicalInstant(input.confirmedAt, "confirmedAt");
+  if (input.requestId !== undefined && input.requestId !== null) {
+    if (input.requestId.length < 1 || input.requestId.length > 200) {
+      throw new Error("requestId is invalid");
+    }
+  }
+
+  await database.transaction().execute(async (transaction) => {
+    // This transaction fence closes the post-SMTP/pre-commit lookup gap. It is
+    // not a row lock; after it, every path still takes the account row first.
+    await acquireEmailVerificationTokenFence(transaction, input.tokenHash);
+    // Discover the owner without taking a row lock, then lock account first.
+    // Account erasure and token replacement use the same account -> token row order.
+    const candidate = await transaction
+      .selectFrom("auth_action_token")
+      .select("user_id")
+      .where("purpose", "=", "email_verification")
+      .where("token_hash", "=", input.tokenHash)
+      .executeTakeFirst();
+    if (!candidate) throw new EmailVerificationTokenInvalidError("Verification token is invalid");
+
+    const account = await transaction
+      .selectFrom("app_user")
+      .select(["id", "email", "email_verified_at"])
+      .where("id", "=", candidate.user_id)
+      .where("status", "=", "active")
+      .where("deleted_at", "is", null)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!account) throw new EmailVerificationTokenInvalidError("Verification token is invalid");
+
+    const token = await transaction
+      .selectFrom("auth_action_token")
+      .select(["email_hash", "expires_at", "consumed_at"])
+      .where("user_id", "=", account.id)
+      .where("purpose", "=", "email_verification")
+      .where("token_hash", "=", input.tokenHash)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!token || token.consumed_at !== null || token.email_hash !== sha256(account.email)) {
+      throw new EmailVerificationTokenInvalidError("Verification token is invalid");
+    }
+    if (token.expires_at <= confirmedAt) {
+      throw new EmailVerificationTokenExpiredError("Verification token is expired");
+    }
+
+    const consumed = await transaction
+      .updateTable("auth_action_token")
+      .set({ consumed_at: confirmedAt })
+      .where("user_id", "=", account.id)
+      .where("purpose", "=", "email_verification")
+      .where("token_hash", "=", input.tokenHash)
+      .where("consumed_at", "is", null)
+      .executeTakeFirst();
+    if (consumed.numUpdatedRows !== 1n) {
+      throw new EmailVerificationTokenInvalidError("Verification token is invalid");
+    }
+
+    if (account.email_verified_at === null) {
+      await transaction
+        .updateTable("app_user")
+        .set({ email_verified_at: confirmedAt })
+        .where("id", "=", account.id)
+        .executeTakeFirstOrThrow();
+      await transaction
+        .insertInto("audit_log")
+        .values({
+          action: "auth.email_verification.confirmed",
+          actor_user_id: null,
+          after_state: { emailVerified: true },
+          before_state: { emailVerified: false },
+          context: { purpose: "email_verification" },
+          entity_id: account.id,
+          entity_type: "app_user",
+          occurred_at: confirmedAt,
+          reason: "user_confirmed_link",
+          request_id: input.requestId ?? null,
+          sensitivity: "security",
+          source_ip: null,
+          subject_user_id: account.id,
+          user_agent: null,
+        })
+        .execute();
+    }
+  });
+}
+
+async function acquireEmailVerificationTokenFence(
+  database: Kysely<Database>,
+  tokenHash: string,
+): Promise<void> {
+  // A 64-bit-prefix collision can only serialize unrelated attempts. Full
+  // token hashes and all account/email/state invariants are still rechecked.
+  const lockKey = BigInt.asIntN(64, BigInt(`0x${tokenHash.slice(0, 16)}`)).toString();
+  await sql`select pg_advisory_xact_lock(${lockKey}::bigint)`.execute(database);
+}
+
 export async function getUserProfile(
   database: Kysely<Database>,
   userId: string,
@@ -512,6 +703,16 @@ function normalizeDateOnly(value: unknown): string | null {
 
 function assertSha256(value: string, field: string): void {
   if (!/^[0-9a-f]{64}$/.test(value)) throw new Error(`${field} must be a lowercase SHA-256 hex`);
+}
+
+function sha256(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
+
+function canonicalInstant(value: Date | string, field: string): Date {
+  const instant = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+  if (!Number.isFinite(instant.getTime())) throw new Error(`${field} must be a finite instant`);
+  return instant;
 }
 
 function canonicalRevision(value: bigint | number | string): string {

@@ -17,6 +17,11 @@ projection with bounded PostgreSQL degradation.
 | `SEARCH_DB_MAX_CONCURRENCY` | `4` | 1 through 20 active degraded-search/barcode reads |
 | `SEARCH_DB_MAX_QUEUE` | `16` | 0 through 100 queued reads before failing fast |
 | `SHUTDOWN_GRACE_MS` | `10000` | 100 through 300000 milliseconds |
+| `SMTP_HOST` | not configured | With any local mail field, must be exact `127.0.0.1`; rejected in production |
+| `SMTP_PORT` | not configured | With local mail enabled, must be exact Mailpit port `1025` |
+| `SMTP_FROM` | not configured | Bounded printable ASCII local sender; CR/LF rejected |
+| `SMTP_TIMEOUT_MS` | `5000` | 100 through 10000 milliseconds; overall local SMTP deadline |
+| `EMAIL_VERIFICATION_PUBLIC_ORIGIN` | `http://127.0.0.1:3000` when local mail is enabled | Credential-free exact loopback HTTP origin; rejected in production |
 
 The production entrypoint additionally requires `DATABASE_URL`,
 `DATABASE_SSL_MODE=verify-full`, and a search cursor secret of at least 32 bytes.
@@ -65,6 +70,8 @@ production edge rate limits remain a separate deployment requirement.
 | --- | --- | --- |
 | `POST` | `/v1/auth/register` | Creates a password account and opaque bearer session; requires an IANA time zone |
 | `POST` | `/v1/auth/login` | Creates a fresh opaque bearer session with generic credential failures |
+| `POST` | `/v1/auth/email-verification/request` | Authenticated, bodyless request/resend; exact success is `202 {"data":{"status":"accepted"}}` without gating access |
+| `POST` | `/v1/auth/email-verification/confirm` | Public one-time confirmation; exact success is `200 {"data":{"verified":true}}`, semantic invalidity is `400 EMAIL_VERIFICATION_TOKEN_INVALID`, identifiable unused expiry is `410 EMAIL_VERIFICATION_TOKEN_EXPIRED`, and no session is returned |
 | `GET` | `/v1/auth/me` | Returns the authenticated account and profile |
 | `POST` | `/v1/auth/logout` | Revokes the current session |
 | `GET/PATCH` | `/v1/profile` | Reads or revision-guards changes to the authenticated profile |
@@ -76,6 +83,28 @@ Private responses use `Cache-Control: no-store`. Raw passwords and session token
 never reach PostgreSQL: fixed-parameter scrypt material and SHA-256 session-token
 digests are persisted. Scrypt concurrency, pending work, and process-local login
 attempt state are bounded; production still requires a shared edge rate limit.
+Email-verification capabilities use 32 random bytes and persist only SHA-256
+digests. One current action is bound to the account's normalized-email digest.
+A bounded transaction locks the account across exact-loopback SMTP acceptance,
+preserves the prior action on pre-acceptance failure, and then promotes the new
+digest before commit; concurrent requests serialize in delivery order. A
+configuration, delivery, or transaction failure returns `503`; a rare database
+failure after SMTP acceptance may leave an unusable new message while rollback
+preserves the previous action. A deterministic token-hash transaction fence makes
+confirmation wait across SMTP acceptance and issuance commit. Confirmation locks the
+account then exact action before atomically consuming it, setting
+`email_verified_at`, and writing a redacted security audit. A well-formed
+unknown, superseded, consumed, email-stale, deleted, or inactive token returns
+`400 EMAIL_VERIFICATION_TOKEN_INVALID`; a still-identifiable unused expired token
+returns `410 EMAIL_VERIFICATION_TOKEN_EXPIRED`. Registration never sends
+automatically, unverified accounts keep their existing access, and confirmation
+creates no session. The checked-in SMTP adapter is plaintext only on exact
+non-production loopback for Mailpit. Production mail remains unavailable until
+provider, authenticated TLS, sender/domain, shared abuse controls, transactional
+outbox/provider idempotency, retry, suppression, and legal-copy boundaries are
+approved. The request limiter is process-local at five attempts per fixed
+15-minute window; shared request and public-confirmation controls are blocked.
+Password recovery is not part of this slice.
 Entry mutation dates are derived from `occurredAt` and the persisted profile time
 zone. The caller cannot assign a local day, and unrelated writes on that day do
 not invalidate an entry-level precondition. Exact-decimal nutrient aggregates

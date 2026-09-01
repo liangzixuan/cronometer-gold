@@ -65,6 +65,34 @@ Create the legacy bucket named by `S3_BUCKET` in the MinIO console only when a
 food-import rehearsal needs it. Mailpit captures local email at
 <http://127.0.0.1:8025>.
 
+## Prove local email verification
+
+After `infra:up` and `db:migrate` succeed, run the opt-in real-service proof:
+
+```sh
+pnpm exec dotenv -e .env -- sh -c 'TEST_EMAIL_VERIFICATION_MAILPIT=true TEST_DATABASE_URL="$DATABASE_URL" TEST_MAILPIT_HTTP_URL=http://127.0.0.1:8025 pnpm --filter @nutrition-tracker/api exec vitest run test/email-verification-mailpit.integration.test.ts'
+```
+
+This is a synthetic loopback test, not a mail-provider or phone test. It creates
+an isolated PostgreSQL schema and random recipient, requests delivery through the
+real Fastify routes and PostgreSQL repository with an explicitly constructed
+exact `127.0.0.1:1025` Mailpit adapter, reads the captured fragment internally,
+confirms it through the API, verifies `/v1/auth/me`, the exact anonymous redacted
+audit, digest-only persistence, and privacy-export exclusion, then deletes only
+messages addressed to that synthetic recipient and drops the schema. It is not a
+production-entrypoint or configuration-composition proof. Its assertions never
+print the token, message body, digest, recipient, or `.env` values.
+
+This command proves the successful real-service path. Focused database, API, and
+SMTP suites separately prove failure preservation, concurrent delivery/promotion
+ordering, confirmation fencing between post-DATA acceptance and commit,
+post-DATA acceptance, and invalid-versus-expired mappings.
+
+The trusted `dotenv-cli` parent loads the complete local `.env`; this command is
+not an environment-isolation claim. The test itself rejects any Mailpit HTTP URL
+other than exact loopback. Do not substitute a relay, public host, phone endpoint,
+HTTP registry, or TLS bypass.
+
 ## Opt-in persistent LocalStack retention profile
 
 MinIO remains the default dependency and mandatory authenticated-secret test

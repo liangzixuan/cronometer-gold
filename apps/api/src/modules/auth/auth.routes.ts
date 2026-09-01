@@ -3,6 +3,12 @@ import {
   authCredentialsRequestSchema,
   type CurrentAccountResponse,
   currentAccountResponseSchema,
+  type EmailVerificationConfirmRequest,
+  type EmailVerificationConfirmResponse,
+  type EmailVerificationRequestResponse,
+  emailVerificationConfirmRequestSchema,
+  emailVerificationConfirmResponseSchema,
+  emailVerificationRequestResponseSchema,
   problemDetailsSchema,
   type ReauthenticationRequest,
   type ReauthenticationResponse,
@@ -18,6 +24,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { authenticatedPrincipal, requireAuthentication } from "../../http/authentication.js";
 import { HttpProblem } from "../../http/problem.js";
 import {
+  rejectRequestBody,
   rejectUnexpectedBodyKeys,
   rejectUnexpectedQueryKeys,
 } from "../../http/request-validation.js";
@@ -25,6 +32,9 @@ import {
   AccountAlreadyExistsError,
   AuthRateLimitedError,
   type AuthService,
+  EmailVerificationTokenExpiredError,
+  EmailVerificationTokenInvalidError,
+  EmailVerificationUnavailableError,
   InvalidCredentialsError,
 } from "./auth-service.js";
 
@@ -63,6 +73,25 @@ function mapAuthError(error: unknown): HttpProblem {
       expose: true,
     });
   }
+  if (error instanceof EmailVerificationTokenInvalidError) {
+    return new HttpProblem({
+      statusCode: 400,
+      code: "EMAIL_VERIFICATION_TOKEN_INVALID",
+      title: "Bad Request",
+      detail: "The email verification link is invalid or has already been used.",
+      expose: true,
+    });
+  }
+  if (error instanceof EmailVerificationTokenExpiredError) {
+    return new HttpProblem({
+      statusCode: 410,
+      code: "EMAIL_VERIFICATION_TOKEN_EXPIRED",
+      title: "Gone",
+      detail: "The email verification link has expired.",
+      expose: true,
+    });
+  }
+  if (error instanceof EmailVerificationUnavailableError) return unavailable(error);
   if (error instanceof RangeError) {
     return new HttpProblem({
       statusCode: 400,
@@ -176,6 +205,62 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (app, opt
           principal.account.user.email,
           request.body.password,
           request.body.purpose,
+        );
+        reply.header("cache-control", "no-store");
+        return result;
+      } catch (error) {
+        throw mapAuthError(error);
+      }
+    },
+  );
+
+  app.post(
+    "/email-verification/request",
+    {
+      preHandler: requireAuth,
+      preValidation: [rejectUnexpectedQueryKeys([]), rejectRequestBody()],
+      schema: {
+        response: {
+          202: emailVerificationRequestResponseSchema,
+          401: problemDetailsSchema,
+          429: problemDetailsSchema,
+          503: problemDetailsSchema,
+        },
+      },
+    },
+    async (request, reply): Promise<EmailVerificationRequestResponse> => {
+      const principal = authenticatedPrincipal(request);
+      if (!options.authService) throw unavailable();
+      try {
+        const result = await options.authService.requestEmailVerification(principal.account);
+        reply.header("cache-control", "no-store").status(202);
+        return result;
+      } catch (error) {
+        throw mapAuthError(error);
+      }
+    },
+  );
+
+  app.post<{ Body: EmailVerificationConfirmRequest }>(
+    "/email-verification/confirm",
+    {
+      preValidation: [rejectUnexpectedQueryKeys([]), rejectUnexpectedBodyKeys(["token"])],
+      schema: {
+        body: emailVerificationConfirmRequestSchema,
+        response: {
+          200: emailVerificationConfirmResponseSchema,
+          400: problemDetailsSchema,
+          410: problemDetailsSchema,
+          503: problemDetailsSchema,
+        },
+      },
+    },
+    async (request, reply): Promise<EmailVerificationConfirmResponse> => {
+      if (!options.authService) throw unavailable();
+      try {
+        const result = await options.authService.confirmEmailVerification(
+          request.body.token,
+          request.id,
         );
         reply.header("cache-control", "no-store");
         return result;

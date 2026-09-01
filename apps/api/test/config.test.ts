@@ -81,6 +81,70 @@ describe("loadApiDependencyConfig", () => {
     ).toThrow(ConfigValidationError);
   });
 
+  it("permits only the exact non-production loopback Mailpit fixture", () => {
+    expect(
+      loadApiDependencyConfig({
+        DATABASE_URL: "postgresql://local.invalid/nutrition",
+        EMAIL_VERIFICATION_PUBLIC_ORIGIN: "http://127.0.0.1:3000",
+        NODE_ENV: "development",
+        SMTP_FROM: "Nutrition Tracker Local <no-reply@nutrition.local>",
+        SMTP_HOST: "127.0.0.1",
+        SMTP_PORT: "1025",
+      }).emailVerification,
+    ).toEqual({
+      from: "Nutrition Tracker Local <no-reply@nutrition.local>",
+      host: "127.0.0.1",
+      nodeEnv: "development",
+      port: 1025,
+      publicOrigin: "http://127.0.0.1:3000",
+      timeoutMs: 5_000,
+    });
+
+    for (const overrides of [
+      { SMTP_HOST: "localhost" },
+      { SMTP_PORT: "2525" },
+      { EMAIL_VERIFICATION_PUBLIC_ORIGIN: "https://example.invalid" },
+      { SMTP_FROM: "safe@example.invalid\r\nBcc: private@example.invalid" },
+    ]) {
+      expect(() =>
+        loadApiDependencyConfig({
+          DATABASE_URL: "postgresql://local.invalid/nutrition",
+          NODE_ENV: "test",
+          SMTP_FROM: "no-reply@nutrition.local",
+          SMTP_HOST: "127.0.0.1",
+          SMTP_PORT: "1025",
+          ...overrides,
+        }),
+      ).toThrow(ConfigValidationError);
+    }
+  });
+
+  it("leaves mail disabled by default and rejects an unapproved production SMTP provider", () => {
+    expect(
+      loadApiDependencyConfig({
+        DATABASE_URL: "postgresql://local.invalid/nutrition",
+        NODE_ENV: "test",
+      }).emailVerification,
+    ).toBeNull();
+
+    try {
+      loadApiDependencyConfig({
+        DATABASE_URL: "postgresql://production.invalid/nutrition",
+        NODE_ENV: "production",
+        SMTP_FROM: "no-reply@nutrition.example",
+        SMTP_HOST: "smtp.production.example",
+        SMTP_PORT: "465",
+      });
+      throw new Error("expected production SMTP configuration to fail");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ConfigValidationError);
+      expect((error as ConfigValidationError).issues).toEqual(
+        expect.arrayContaining([expect.objectContaining({ field: "SMTP_HOST" })]),
+      );
+      expect((error as Error).message).not.toContain("smtp.production.example");
+    }
+  });
+
   it("requires a scoped key, cursor secret, and verified database/search TLS in production", () => {
     try {
       loadApiDependencyConfig({

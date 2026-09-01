@@ -20,6 +20,11 @@ import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { apiUrl, authenticatedHeaders, jsonBody } from "./src/api/private-api";
 import { type AuthResult, AuthScreen } from "./src/auth/AuthScreen";
 import { sessionBootstrapDecision } from "./src/auth/bootstrap";
+import { EmailVerificationScreen } from "./src/auth/EmailVerificationScreen";
+import {
+  acceptEmailVerificationSessionUpdate,
+  type EmailVerificationSessionUpdate,
+} from "./src/auth/email-verification";
 import { newOperationId } from "./src/auth/operation-id";
 import {
   clearSecureSession,
@@ -91,6 +96,7 @@ type RootStackParamList = {
   Recipes: undefined;
   Goals: undefined;
   Health: undefined;
+  VerifyEmail: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -99,8 +105,10 @@ interface AuthenticatedAppProps {
   readonly apiBase: URL;
   readonly accessToken: string;
   readonly session: SessionSummary;
+  readonly sessionEpoch: number;
   readonly onUnauthorized: () => Promise<void>;
   readonly onSignOut: () => Promise<void>;
+  readonly onSessionUpdated: (update: EmailVerificationSessionUpdate) => void;
   readonly onErasurePrepared: () => void;
   readonly quickAddOutboxController: QuickAddOutboxController;
   readonly quickAddOutboxState: QuickAddOutboxControllerState;
@@ -241,6 +249,19 @@ function SearchRoute(props: AuthenticatedAppProps) {
   );
 }
 
+function EmailVerificationRoute(props: AuthenticatedAppProps) {
+  return (
+    <EmailVerificationScreen
+      accessToken={props.accessToken}
+      apiBase={props.apiBase}
+      onSessionUpdated={props.onSessionUpdated}
+      onUnauthorized={props.onUnauthorized}
+      session={props.session}
+      sessionEpoch={props.sessionEpoch}
+    />
+  );
+}
+
 function AuthenticatedApp(
   props: AuthenticatedAppProps & {
     readonly onErasureAccepted: (input: {
@@ -302,16 +323,24 @@ function AuthenticatedApp(
       >
         <Stack.Screen
           name={authenticatedRoutes.today}
-          options={{
+          options={({ navigation }) => ({
             title: "nutrition/ledger",
             headerRight: () => (
               <View style={styles.headerActions}>
+                {!props.session.user.emailVerified ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => navigation.navigate(authenticatedRoutes.verifyEmail)}
+                  >
+                    <Text style={styles.verifyEmail}>Verify email</Text>
+                  </Pressable>
+                ) : null}
                 <Pressable accessibilityRole="button" onPress={() => void props.onSignOut()}>
                   <Text style={styles.signOut}>Sign out</Text>
                 </Pressable>
               </View>
             ),
-          }}
+          })}
         >
           {() => <TodayRoute {...props} />}
         </Stack.Screen>
@@ -326,6 +355,9 @@ function AuthenticatedApp(
         </Stack.Screen>
         <Stack.Screen name={authenticatedRoutes.health} options={{ title: "Health & privacy" }}>
           {() => <HealthRoute {...props} />}
+        </Stack.Screen>
+        <Stack.Screen name={authenticatedRoutes.verifyEmail} options={{ title: "Verify email" }}>
+          {() => <EmailVerificationRoute {...props} />}
         </Stack.Screen>
       </Stack.Navigator>
     </NavigationContainer>
@@ -373,6 +405,13 @@ export default function App() {
     useState<QuickAddOutboxController | null>(null);
   const [currentQuickAddOutboxState, setCurrentQuickAddOutboxState] =
     useState<QuickAddOutboxControllerState>({ status: "idle", pendingCount: 0 });
+
+  const updateEmailVerificationSession = useCallback((update: EmailVerificationSessionUpdate) => {
+    if (privateSessionEpochRef.current !== update.initiatingSessionEpoch) return;
+    setSession((current) =>
+      acceptEmailVerificationSessionUpdate(current, privateSessionEpochRef.current, update),
+    );
+  }, []);
 
   const closePrivateUi = useCallback(() => {
     privateSessionEpochRef.current += 1;
@@ -987,17 +1026,19 @@ export default function App() {
             <Text style={styles.clearText}>Sign out on this device</Text>
           </Pressable>
         </SafeAreaView>
-      ) : accessToken && session && quickAddOutboxController ? (
+      ) : accessToken && session && preparedQuickAddOutbox && quickAddOutboxController ? (
         <AuthenticatedApp
           accessToken={accessToken}
           apiBase={apiBase}
           onErasureAccepted={acceptErasure}
           onErasurePrepared={fenceQuickAddOutboxForErasure}
+          onSessionUpdated={updateEmailVerificationSession}
           onSignOut={signOut}
           onUnauthorized={handleUnauthorized}
           quickAddOutboxController={quickAddOutboxController}
           quickAddOutboxState={currentQuickAddOutboxState}
           session={session}
+          sessionEpoch={preparedQuickAddOutbox.sessionEpoch}
           subscribeQuickAddReceipts={subscribeQuickAddReceipts}
         />
       ) : accessToken && session ? (
@@ -1033,6 +1074,7 @@ const styles = StyleSheet.create({
   retryText: { color: palette.white, fontSize: 14, fontWeight: "800" },
   headerActions: { alignItems: "center", flexDirection: "row", gap: 12 },
   signOut: { color: palette.forest, fontSize: 13, fontWeight: "800" },
+  verifyEmail: { color: "#8a5705", fontSize: 13, fontWeight: "800" },
   status: {
     color: palette.muted,
     fontSize: 15,

@@ -20,6 +20,12 @@ every applicable gate and an owner who records the decision.
   readiness.
 - Logs and telemetry contain no food diary, biometric, token, or free-text note
   payload.
+- Authentication action capabilities have at least 256 bits of randomness; only
+  fixed-size digests are persisted, raw capabilities never enter logs, audit
+  state, server-visible request-target URLs, query strings, persistent browser
+  storage, or exports. A reviewed fragment-only client bootstrap is the sole
+  email-verification transport exception and must scrub before interaction or
+  submission. Account erasure reconciles capability deletion.
 
 The AST workspace-boundary check is a fast convention guard, not a security
 sandbox. It detects direct forbidden imports and direct environment/network
@@ -139,6 +145,19 @@ encrypted erasure-ledger tombstone as local recovery evidence.
 - General offline mutation retry/reorder acceptance still covers supported
   edits, deletes, repeats, recipes, custom foods, manual reorder, and cross-client
   convergence; the create-only outbox does not satisfy that broader gate.
+- Email verification proves digest-only token storage, current-email binding,
+  prior-link preservation on pre-acceptance delivery failure, concurrent resend
+  ordering, acceptance-to-commit confirmation fencing, expiry, atomic one-time
+  confirmation, redacted audit, erasure, safe browser-fragment removal, and
+  cross-client status behavior. It preserves exact
+  `400 EMAIL_VERIFICATION_TOKEN_INVALID` and
+  `410 EMAIL_VERIFICATION_TOKEN_EXPIRED` semantics. Exact-loopback Mailpit is
+  local evidence only, and SMTP-accepted/database-failed ambiguity is recorded
+  rather than hidden. Controlled beta additionally requires shared request and
+  public-confirmation capacity controls, an approved authenticated TLS mail
+  provider and sender/domain, transactional delivery/idempotency,
+  retry/suppression operations, accessibility review, and an explicit decision
+  about unverified-account access. Password recovery is a separate gate.
 - Recipe revisions preserve exact food/nested-recipe dependencies, reject cycles
   and depth overflow, and retain source attribution plus trace/unknown coverage
   through an exact diary log.

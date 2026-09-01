@@ -16,6 +16,7 @@ describe("production API runtime", () => {
         cursorSecret: "test-cursor-secret-that-is-longer-than-thirty-two-bytes",
         databaseRestoreEpoch: null,
         databaseUrl: "postgresql://local.invalid/nutrition",
+        emailVerification: null,
         meiliUrl: "http://127.0.0.1:7700",
         retention: null,
         requireDatabaseRestoreAttestation: false,

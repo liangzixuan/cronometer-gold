@@ -2,12 +2,14 @@ import { createHash, randomBytes } from "node:crypto";
 
 import type {
   AuthenticatedAccount,
+  EmailVerificationConfirmResponse,
+  EmailVerificationRequestResponse,
   ReauthenticationResponse,
   RegisterAccountRequest,
   SessionCreatedResponse,
 } from "@nutrition-tracker/contracts";
 import { canonicalIanaTimeZone } from "@nutrition-tracker/domain";
-
+import type { EmailVerificationDelivery } from "./email-delivery.js";
 import {
   hashPassword,
   PASSWORD_SCRYPT_PARAMETERS,
@@ -16,6 +18,8 @@ import {
   verifyPassword,
 } from "./password.js";
 import { BoundedAuthRateLimiter } from "./rate-limiter.js";
+
+export const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60_000;
 
 export interface PasswordCredential {
   readonly account: AuthenticatedAccount;
@@ -56,6 +60,19 @@ export interface AuthRepository {
     readonly tokenHash: string;
     readonly expiresAt: Date;
   }): Promise<void>;
+  issueEmailVerificationToken(input: {
+    readonly userId: string;
+    readonly tokenHash: string;
+    readonly emailHash: string;
+    readonly issuedAt: Date;
+    readonly expiresAt: Date;
+    readonly deliver: () => Promise<void>;
+  }): Promise<"already_verified" | "issued">;
+  confirmEmailVerificationToken(input: {
+    readonly tokenHash: string;
+    readonly confirmedAt: Date;
+    readonly requestId: string;
+  }): Promise<void>;
 }
 
 export interface AuthPrincipal {
@@ -85,6 +102,13 @@ export interface AuthService {
     password: string,
     purpose: "account_export" | "account_erasure",
   ): Promise<ReauthenticationResponse>;
+  requestEmailVerification(
+    account: AuthenticatedAccount,
+  ): Promise<EmailVerificationRequestResponse>;
+  confirmEmailVerification(
+    token: string,
+    requestId: string,
+  ): Promise<EmailVerificationConfirmResponse>;
 }
 
 export class InvalidCredentialsError extends Error {
@@ -105,6 +129,27 @@ export class AccountAlreadyExistsError extends Error {
   constructor() {
     super("Account already exists");
     this.name = "AccountAlreadyExistsError";
+  }
+}
+
+export class EmailVerificationUnavailableError extends Error {
+  constructor() {
+    super("Email verification is unavailable");
+    this.name = "EmailVerificationUnavailableError";
+  }
+}
+
+export class EmailVerificationTokenInvalidError extends Error {
+  constructor() {
+    super("Email verification token is invalid");
+    this.name = "EmailVerificationTokenInvalidError";
+  }
+}
+
+export class EmailVerificationTokenExpiredError extends Error {
+  constructor() {
+    super("Email verification token is expired");
+    this.name = "EmailVerificationTokenExpiredError";
   }
 }
 
@@ -144,6 +189,10 @@ export class SecureAuthService implements AuthService {
   readonly #sessionTtlMs: number;
   readonly #clock: () => Date;
   readonly #reauthenticationTtlMs: number;
+  readonly #emailVerificationDelivery: EmailVerificationDelivery | null;
+  readonly #emailVerificationPublicOrigin: string | null;
+  readonly #emailVerificationTtlMs: number;
+  readonly #emailVerificationLimiter: BoundedAuthRateLimiter;
   readonly #dummySalt = randomBytes(16).toString("base64url");
   readonly #dummyHash = randomBytes(PASSWORD_SCRYPT_PARAMETERS.keyLength).toString("base64url");
 
@@ -154,6 +203,10 @@ export class SecureAuthService implements AuthService {
     sessionTtlMs?: number;
     clock?: () => Date;
     reauthenticationTtlMs?: number;
+    emailVerificationDelivery?: EmailVerificationDelivery;
+    emailVerificationPublicOrigin?: string;
+    emailVerificationTtlMs?: number;
+    emailVerificationLimiter?: BoundedAuthRateLimiter;
   }) {
     this.#repository = options.repository;
     this.#queue = options.queue ?? new PasswordWorkQueue();
@@ -161,6 +214,12 @@ export class SecureAuthService implements AuthService {
     this.#sessionTtlMs = options.sessionTtlMs ?? 30 * 24 * 60 * 60_000;
     this.#clock = options.clock ?? (() => new Date());
     this.#reauthenticationTtlMs = options.reauthenticationTtlMs ?? 10 * 60_000;
+    this.#emailVerificationDelivery = options.emailVerificationDelivery ?? null;
+    this.#emailVerificationPublicOrigin = options.emailVerificationPublicOrigin ?? null;
+    this.#emailVerificationTtlMs = options.emailVerificationTtlMs ?? EMAIL_VERIFICATION_TTL_MS;
+    this.#emailVerificationLimiter =
+      options.emailVerificationLimiter ??
+      new BoundedAuthRateLimiter({ maximumAttempts: 5, windowMs: 15 * 60_000 });
   }
 
   async register(input: RegisterAccountRequest): Promise<SessionCreatedResponse> {
@@ -285,6 +344,59 @@ export class SecureAuthService implements AuthService {
     });
     this.#limiter.reset(key);
     return { data: { reauthenticationToken: token, expiresAt: expiresAt.toISOString() } };
+  }
+
+  async requestEmailVerification(
+    account: AuthenticatedAccount,
+  ): Promise<EmailVerificationRequestResponse> {
+    if (account.user.emailVerified) return { data: { status: "accepted" } };
+    if (!this.#emailVerificationDelivery || !this.#emailVerificationPublicOrigin) {
+      throw new EmailVerificationUnavailableError();
+    }
+    const limiterKey = `email-verification-request:${sha256(account.user.id)}`;
+    const issuedAt = this.#clock();
+    if (!this.#emailVerificationLimiter.consume(limiterKey, issuedAt.getTime())) {
+      throw new AuthRateLimitedError();
+    }
+
+    const token = randomBytes(32).toString("base64url");
+    const expiresAt = new Date(issuedAt.getTime() + this.#emailVerificationTtlMs);
+    const email = normalizeEmail(account.user.email);
+    const verificationUrl = new URL("/verify-email", this.#emailVerificationPublicOrigin);
+    verificationUrl.hash = `token=${token}`;
+    try {
+      await this.#repository.issueEmailVerificationToken({
+        deliver: () =>
+          this.#emailVerificationDelivery?.sendVerificationEmail({
+            expiresAt,
+            recipient: email,
+            verificationUrl: verificationUrl.toString(),
+          }) ?? Promise.reject(new EmailVerificationUnavailableError()),
+        emailHash: sha256(email),
+        expiresAt,
+        issuedAt,
+        tokenHash: sha256(token),
+        userId: account.user.id,
+      });
+    } catch {
+      throw new EmailVerificationUnavailableError();
+    }
+    return { data: { status: "accepted" } };
+  }
+
+  async confirmEmailVerification(
+    token: string,
+    requestId: string,
+  ): Promise<EmailVerificationConfirmResponse> {
+    if (!/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u.test(token)) {
+      throw new EmailVerificationTokenInvalidError();
+    }
+    await this.#repository.confirmEmailVerificationToken({
+      confirmedAt: this.#clock(),
+      requestId,
+      tokenHash: sha256(token),
+    });
+    return { data: { verified: true } };
   }
 
   async #createSession(account: AuthenticatedAccount): Promise<SessionCreatedResponse> {

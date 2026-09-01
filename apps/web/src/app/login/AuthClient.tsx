@@ -72,9 +72,14 @@ export function AuthClient() {
         setMessage(errorMessage(body));
         return;
       }
-      parseSession(body);
-      setMessage("Account ready. Opening your diary…");
-      router.replace("/dashboard");
+      const session = parseSession(body);
+      if (mode === "register" && !session.user.emailVerified) {
+        setMessage("Account ready. Opening email verification…");
+        router.replace("/verify-email");
+      } else {
+        setMessage("Account ready. Opening your diary…");
+        router.replace("/dashboard");
+      }
       router.refresh();
     } catch {
       setError(true);

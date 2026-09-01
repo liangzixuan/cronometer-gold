@@ -34,6 +34,7 @@ describe.skipIf(!enabled)("API restored-database readiness", () => {
           cursorSecret: "restore-readiness-test-cursor-secret-over-thirty-two-bytes",
           databaseRestoreEpoch: restoreEpoch,
           databaseUrl: scopedUrl.toString(),
+          emailVerification: null,
           meiliUrl: "http://127.0.0.1:7700",
           requireDatabaseRestoreAttestation: true,
           retention: null,

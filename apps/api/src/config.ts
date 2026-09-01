@@ -28,6 +28,7 @@ const dependencyEnvironmentSchema = z.object({
     .optional(),
   DATABASE_SSL_MODE: z.enum(["disable", "require", "verify-full"]).default("disable"),
   DATABASE_URL: z.string().trim().min(1),
+  EMAIL_VERIFICATION_PUBLIC_ORIGIN: z.url().optional(),
   DEVICE_CHALLENGE_HMAC_KEY: z.string().min(1).max(1_024).optional(),
   ERASURE_REPLAY_LEDGER_LOCATOR_CURRENT_KEY_ID: z.string().max(64).optional(),
   ERASURE_REPLAY_LEDGER_LOCATOR_HMAC_KEYS: z.string().min(1).max(32_768).optional(),
@@ -97,6 +98,10 @@ const dependencyEnvironmentSchema = z.object({
   SEARCH_DB_MAX_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(4),
   SEARCH_DB_MAX_QUEUE: z.coerce.number().int().min(0).max(100).default(16),
   SEARCH_REQUEST_TIMEOUT_MS: z.coerce.number().int().min(10).max(60_000).default(5_000),
+  SMTP_FROM: z.string().trim().min(3).max(200).optional(),
+  SMTP_HOST: z.string().trim().min(1).max(253).optional(),
+  SMTP_PORT: z.coerce.number().int().min(1).max(65_535).optional(),
+  SMTP_TIMEOUT_MS: z.coerce.number().int().min(100).max(10_000).default(5_000),
 });
 
 export interface ConfigIssue {
@@ -127,6 +132,7 @@ export interface ApiDependencyConfig {
   readonly cursorSecret: string;
   readonly databaseRestoreEpoch: string | null;
   readonly databaseUrl: string;
+  readonly emailVerification: ApiEmailVerificationDependencyConfig | null;
   readonly meiliSearchKey?: string;
   readonly meiliUrl: string;
   readonly searchDatabaseMaxConcurrency: number;
@@ -134,6 +140,15 @@ export interface ApiDependencyConfig {
   readonly searchRequestTimeoutMs: number;
   readonly requireDatabaseRestoreAttestation: boolean;
   readonly retention: ApiRetentionDependencyConfig | null;
+}
+
+export interface ApiEmailVerificationDependencyConfig {
+  readonly from: string;
+  readonly host: "127.0.0.1";
+  readonly nodeEnv: "development" | "test";
+  readonly port: 1025;
+  readonly publicOrigin: string;
+  readonly timeoutMs: number;
 }
 
 export interface ApiRetentionDependencyConfig {
@@ -216,6 +231,54 @@ export function loadApiDependencyConfig(
       ? undefined
       : "local-search-cursor-secret-change-before-shared-use-32-bytes");
   const issues: ConfigIssue[] = [];
+  const emailEnvironmentFields = [
+    "SMTP_HOST",
+    "SMTP_PORT",
+    "SMTP_FROM",
+    "EMAIL_VERIFICATION_PUBLIC_ORIGIN",
+  ] as const;
+  const emailEnvironmentConfigured = emailEnvironmentFields.some(
+    (field) => environment[field] !== undefined,
+  );
+  let emailVerification: ApiEmailVerificationDependencyConfig | null = null;
+  if (emailEnvironmentConfigured) {
+    if (result.data.NODE_ENV === "production") {
+      issues.push({ field: "SMTP_HOST", message: "Production email provider is not approved" });
+    } else {
+      if (result.data.SMTP_HOST !== "127.0.0.1") {
+        issues.push({ field: "SMTP_HOST", message: "Exact loopback Mailpit host is required" });
+      }
+      if (result.data.SMTP_PORT !== 1025) {
+        issues.push({ field: "SMTP_PORT", message: "Exact loopback Mailpit port is required" });
+      }
+      if (!result.data.SMTP_FROM || !safeMailFrom(result.data.SMTP_FROM)) {
+        issues.push({ field: "SMTP_FROM", message: "A safe local sender is required" });
+      }
+      const publicOrigin = result.data.EMAIL_VERIFICATION_PUBLIC_ORIGIN ?? "http://127.0.0.1:3000";
+      if (!isExactLoopbackOrigin(publicOrigin)) {
+        issues.push({
+          field: "EMAIL_VERIFICATION_PUBLIC_ORIGIN",
+          message: "Exact loopback HTTP origin is required for local verification",
+        });
+      }
+      if (
+        result.data.SMTP_HOST === "127.0.0.1" &&
+        result.data.SMTP_PORT === 1025 &&
+        result.data.SMTP_FROM &&
+        safeMailFrom(result.data.SMTP_FROM) &&
+        isExactLoopbackOrigin(publicOrigin)
+      ) {
+        emailVerification = {
+          from: result.data.SMTP_FROM,
+          host: result.data.SMTP_HOST,
+          nodeEnv: result.data.NODE_ENV,
+          port: result.data.SMTP_PORT,
+          publicOrigin,
+          timeoutMs: result.data.SMTP_TIMEOUT_MS,
+        };
+      }
+    }
+  }
   if (cursorSecret === undefined) {
     issues.push({ field: "SEARCH_CURSOR_SECRET", message: "Required in production" });
   }
@@ -392,6 +455,7 @@ export function loadApiDependencyConfig(
     cursorSecret,
     databaseRestoreEpoch: result.data.DATABASE_RESTORE_EPOCH ?? null,
     databaseUrl: result.data.DATABASE_URL,
+    emailVerification,
     ...(result.data.MEILI_SEARCH_KEY === undefined
       ? {}
       : { meiliSearchKey: result.data.MEILI_SEARCH_KEY }),
@@ -402,4 +466,33 @@ export function loadApiDependencyConfig(
     searchRequestTimeoutMs: result.data.SEARCH_REQUEST_TIMEOUT_MS,
     retention,
   };
+}
+
+function isExactLoopbackOrigin(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === "http:" &&
+      url.hostname === "127.0.0.1" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.pathname === "/" &&
+      url.search === "" &&
+      url.hash === "" &&
+      value === url.origin
+    );
+  } catch {
+    return false;
+  }
+}
+
+function safeMailFrom(value: string): boolean {
+  if (/[^\x20-\x7e]|[\r\n]/u.test(value)) return false;
+  const address = /<(?<address>[^<>]+)>$/u.exec(value)?.groups?.address ?? value;
+  return (
+    address.length <= 254 &&
+    /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/u.test(
+      address,
+    )
+  );
 }

@@ -675,6 +675,11 @@ export function DiaryClient() {
           <Link href="/health">Health & privacy</Link>
         </nav>
         {session ? <p className="accountIdentity">Signed in as {session.user.email}</p> : null}
+        {session && !session.user.emailVerified ? (
+          <Link className="verificationLink" href="/verify-email">
+            Verify email
+          </Link>
+        ) : null}
         <button
           className="signOutButton"
           disabled={mutationBusy !== null}

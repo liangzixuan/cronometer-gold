@@ -142,4 +142,19 @@ describe("forward migration discovery", () => {
       "case when entry.deleted_at is null then 'create' else 'delete' end",
     );
   });
+
+  it("adds bounded email-verification credentials without persisting raw tokens", async () => {
+    const migrationSql = await readFile(
+      resolve(import.meta.dirname, "../migrations/0008_email_verification.sql"),
+      "utf8",
+    );
+
+    expect(migrationSql).toContain("create table auth_action_token");
+    expect(migrationSql).toContain("token_hash ~ '^[0-9a-f]{64}$'");
+    expect(migrationSql).toContain("email_hash ~ '^[0-9a-f]{64}$'");
+    expect(migrationSql).toContain("unique (user_id, purpose)");
+    expect(migrationSql).toContain("purpose in ('email_verification')");
+    expect(migrationSql).toContain("consumed_at is null or consumed_at < expires_at");
+    expect(migrationSql).not.toMatch(/raw_token|token_value|token_plaintext/iu);
+  });
 });

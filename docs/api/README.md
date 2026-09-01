@@ -45,6 +45,46 @@
 - Authorization is object-level. A valid access token does not imply permission
   to another user's food, recipe, diary, report, export, or integration.
 
+## Email verification
+
+`POST /v1/auth/email-verification/request` is authenticated, accepts no body,
+and returns exact no-store `202 {"data":{"status":"accepted"}}` for a committed
+new request and an already verified account. It never sends automatically during
+registration. A five-attempt process-local fixed window bounds requests
+independently of password login. The account lock serializes concurrent resends;
+the previous capability is replaced only after SMTP DATA acceptance and database
+commit. Configuration, pre-acceptance delivery, or transaction failure returns
+`503` and preserves the previous active action. Shared limiting remains required.
+A token-hash transaction fence makes a confirmation arriving after SMTP
+acceptance wait until issuance commits or rolls back.
+
+`POST /v1/auth/email-verification/confirm` is public and accepts only
+`{"token":"<43-character-base64url>"}`. The token is a 256-bit bearer
+capability; only its SHA-256 digest is persisted. Confirmation returns no session
+and atomically consumes the action while setting the current active account's
+verification timestamp. Success is exact `200 {"data":{"verified":true}}`.
+A well-formed unknown, superseded, consumed, changed-email, deleted, or inactive
+token returns `400 EMAIL_VERIFICATION_TOKEN_INVALID`; a still-identifiable,
+unused expired token returns `410 EMAIL_VERIFICATION_TOKEN_EXPIRED`. Neither
+failure distinguishes an account identity, and responses are no-store.
+A structurally invalid or noncanonical body instead returns the ordinary closed-
+schema `400 VALIDATION_ERROR` contract.
+
+Browser links use `/verify-email#token=...`. The fragment is removed from browser
+history by an early bootstrap before interactive navigation and before the
+same-origin BFF submits it; scrub failure aborts submission. The token never
+appears in an HTTP request target, query string, server-rendered URL, persistent
+browser storage, ordinary request log, audit row, or privacy export. Native
+clients refresh verification status after external-browser completion; there is
+no native deep-link contract in this slice.
+
+The source delivery adapter permits only exact `127.0.0.1` Mailpit SMTP in
+non-production. Production delivery is unavailable until a provider, sender,
+domain, TLS/authentication, shared request/confirmation abuse controls,
+transactional delivery/idempotency, retry/suppression, and legal-copy review is
+accepted. Verification remains additive and non-enforcing; password recovery is
+not implemented in this slice.
+
 ## Recipes and goals
 
 The authenticated recipe surface is `GET|POST /v1/recipes`,

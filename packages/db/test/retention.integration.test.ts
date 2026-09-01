@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -41,6 +41,7 @@ import {
   getBiometricTrends,
   getNutrientTrend,
   getPrivacyExportJob,
+  issueEmailVerificationToken,
   listAccountPrivacyExportArtifactsForErasure,
   listBiometricEvents,
   listReminderSchedules,
@@ -807,6 +808,15 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
           .executeTakeFirst(),
       ).toMatchObject({ value: "9007199254740993.000001" });
 
+      const emailVerificationTokenHash = digest("7");
+      await issueEmailVerificationToken(fixture.database, {
+        deliver: async () => undefined,
+        emailHash: createHash("sha256").update(fixture.owner.email, "utf8").digest("hex"),
+        expiresAt: retentionInstant("08-17T13:00:00Z"),
+        issuedAt: retentionInstant("08-16T13:00:00Z"),
+        tokenHash: emailVerificationTokenHash,
+        userId: fixture.owner.userId,
+      });
       const exportSessionHash = digest("9");
       const exportProofHash = digest("a");
       await createSession(fixture.database, {
@@ -846,6 +856,9 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         },
         async (snapshot) => {
           securitySnapshotId = snapshot.snapshotId;
+          expect(snapshot.entities.map((entity) => entity.entity)).not.toContain(
+            "auth_action_token",
+          );
           for (const entity of [
             "device",
             "platform_import_batch",
@@ -1481,6 +1494,15 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
     if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
     const fixture = await createFixture(databaseUrl, "retention_privacy");
     try {
+      const erasureEmailVerificationTokenHash = digest("7");
+      await issueEmailVerificationToken(fixture.database, {
+        deliver: async () => undefined,
+        emailHash: createHash("sha256").update(fixture.owner.email, "utf8").digest("hex"),
+        expiresAt: retentionInstant("08-17T13:00:00Z"),
+        issuedAt: retentionInstant("08-16T13:00:00Z"),
+        tokenHash: erasureEmailVerificationTokenHash,
+        userId: fixture.owner.userId,
+      });
       const sessionHash = digest("9");
       await createSession(fixture.database, {
         expiresAt: retentionInstant("01-01T00:00:00Z", 1),
@@ -1968,9 +1990,17 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       const receipt = await executeAccountErasureJob(fixture.database, finalErasureInput);
       expect(receipt.deletedCounts).toMatchObject({
         app_user: "1",
+        auth_action_token: "1",
         retention_dead_letter_event: "1",
         retention_job_recovery_audit: "1",
       });
+      expect(
+        await fixture.database
+          .selectFrom("auth_action_token")
+          .select("id")
+          .where("token_hash", "=", erasureEmailVerificationTokenHash)
+          .executeTakeFirst(),
+      ).toBeUndefined();
       const retained = await fixture.database
         .selectFrom("account_erasure_job")
         .selectAll()

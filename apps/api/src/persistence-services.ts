@@ -26,6 +26,7 @@ import {
 import {
   AccountConflictError,
   AccountNotFoundError,
+  confirmEmailVerificationToken,
   type createDatabaseFromEnvironment,
   createFoodDiaryEntry,
   createNutritionGoal,
@@ -33,6 +34,8 @@ import {
   createRecipe,
   createRecipeDiaryEntry,
   createSession,
+  EmailVerificationTokenExpiredError as DatabaseEmailVerificationTokenExpiredError,
+  EmailVerificationTokenInvalidError as DatabaseEmailVerificationTokenInvalidError,
   type DiaryDayRecord,
   type DiaryEntryRecord,
   DiaryEntryRevisionConflictError,
@@ -58,6 +61,7 @@ import {
   getNutritionGoalProgress,
   getRecipe,
   getUserProfile,
+  issueEmailVerificationToken,
   type JsonObject,
   listRecipes,
   listTargetableNutrients,
@@ -105,6 +109,8 @@ import {
 import {
   AccountAlreadyExistsError,
   type AuthRepository,
+  EmailVerificationTokenExpiredError,
+  EmailVerificationTokenInvalidError,
   type PasswordCredential,
 } from "./modules/auth/auth-service.js";
 import {
@@ -272,6 +278,28 @@ export class DatabaseAuthRepository implements AuthRepository {
       tokenHash: input.tokenHash,
       userId: input.userId,
     });
+  }
+
+  async issueEmailVerificationToken(
+    input: Parameters<AuthRepository["issueEmailVerificationToken"]>[0],
+  ): Promise<"already_verified" | "issued"> {
+    return issueEmailVerificationToken(this.#database, input);
+  }
+
+  async confirmEmailVerificationToken(
+    input: Parameters<AuthRepository["confirmEmailVerificationToken"]>[0],
+  ): Promise<void> {
+    try {
+      await confirmEmailVerificationToken(this.#database, input);
+    } catch (error) {
+      if (error instanceof DatabaseEmailVerificationTokenExpiredError) {
+        throw new EmailVerificationTokenExpiredError();
+      }
+      if (error instanceof DatabaseEmailVerificationTokenInvalidError) {
+        throw new EmailVerificationTokenInvalidError();
+      }
+      throw error;
+    }
   }
 }
 
