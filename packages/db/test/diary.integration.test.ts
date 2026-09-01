@@ -31,6 +31,7 @@ import {
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const describeDatabase = databaseUrl ? describe : describe.skip;
+const STABLE_FUTURE_SESSION_EXPIRY = "2500-09-01T00:00:00Z";
 
 describeDatabase("account and append-only diary persistence", () => {
   it("enforces ownership, idempotency, immutable nutrition revisions, and exact day totals", async () => {
@@ -103,7 +104,7 @@ describeDatabase("account and append-only diary persistence", () => {
 
       const tokenHash = "d".repeat(64);
       const session = await createSession(database, {
-        expiresAt: "2026-09-01T00:00:00Z",
+        expiresAt: STABLE_FUTURE_SESSION_EXPIRY,
         tokenHash,
         userId: owner.userId,
       });
@@ -788,7 +789,7 @@ describeDatabase("account and append-only diary persistence", () => {
       expect(second.entry.currentRevision).toBe("1");
       const disabledTokenHash = "9".repeat(64);
       await createSession(database, {
-        expiresAt: "2026-09-01T00:00:00Z",
+        expiresAt: STABLE_FUTURE_SESSION_EXPIRY,
         tokenHash: disabledTokenHash,
         userId: owner.userId,
       });
@@ -1068,7 +1069,7 @@ describeDatabase("account and append-only diary persistence", () => {
       await disableReady.promise;
 
       sessionOutcome = createSession(writerDatabase, {
-        expiresAt: "2026-09-01T00:00:00Z",
+        expiresAt: STABLE_FUTURE_SESSION_EXPIRY,
         tokenHash: "8".repeat(64),
         userId: owner.userId,
       }).then(

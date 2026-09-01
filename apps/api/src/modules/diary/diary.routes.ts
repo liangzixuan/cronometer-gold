@@ -10,6 +10,7 @@ import {
   type DiaryNutrientAggregate,
   diaryDayResponseSchema,
   diaryMutationResponseSchema,
+  MAX_DIARY_NOTE_INPUT_CODE_POINTS,
   MAX_NUTRIENT_AGGREGATE_OUTPUT_LENGTH,
   problemDetailsSchema,
   type UpdateDiaryEntryRequest,
@@ -131,6 +132,44 @@ const entryParamsSchema = {
     },
   },
 } as const;
+
+function containsOnlyUnicodeScalarValues(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (index + 1 >= value.length || next < 0xdc00 || next > 0xdfff) return false;
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+async function rejectInvalidDiaryNote(request: FastifyRequest): Promise<void> {
+  const body = request.body;
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return;
+  const note = (body as Readonly<Record<string, unknown>>).note;
+  if (note === undefined || note === null) return;
+  if (
+    typeof note === "string" &&
+    note.length > 0 &&
+    !note.includes("\u0000") &&
+    containsOnlyUnicodeScalarValues(note) &&
+    [...note].length <= MAX_DIARY_NOTE_INPUT_CODE_POINTS
+  ) {
+    return;
+  }
+  throw new HttpProblem({
+    statusCode: 400,
+    code: "VALIDATION_ERROR",
+    title: "Bad Request",
+    detail: "One or more request fields are invalid.",
+    issues: [{ path: "/note", code: "invalid", message: "Invalid value." }],
+    expose: true,
+  });
+}
 
 function unavailable(cause?: unknown): HttpProblem {
   return new HttpProblem({
@@ -417,7 +456,8 @@ export const diaryRoutes: FastifyPluginAsync<DiaryRoutesOptions> = async (app, o
       preHandler: requireAuth,
       preValidation: [
         rejectUnexpectedQueryKeys([]),
-        rejectUnexpectedBodyKeys(["portion", "mealSlot", "occurredAt", "position"]),
+        rejectUnexpectedBodyKeys(["portion", "mealSlot", "occurredAt", "position", "note"]),
+        rejectInvalidDiaryNote,
       ],
       schema: {
         params: entryParamsSchema,

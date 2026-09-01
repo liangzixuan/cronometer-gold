@@ -63,6 +63,7 @@ interface DiaryEntryCommon {
   readonly revision: string;
   readonly mealSlot: MealSlot;
   readonly resolvedGrams: string;
+  readonly note: string | null;
   readonly occurredAt: string;
   readonly localDate: string;
   readonly timeZone: string;
@@ -177,6 +178,49 @@ function text(value: unknown, maximum = 1_000): value is string {
 
 function nullableText(value: unknown, maximum = 1_000): value is string | null {
   return value === null || text(value, maximum);
+}
+
+export function diaryEntryNoteCharacterCount(value: string): number {
+  return Array.from(value).length;
+}
+
+function legacyDiaryEntryNote(value: unknown): value is string | null | undefined {
+  return (
+    value === undefined ||
+    value === null ||
+    (typeof value === "string" &&
+      diaryEntryNoteCharacterCount(value) <= 10_000 &&
+      !value.includes("\u0000") &&
+      wellFormedUnicode(value))
+  );
+}
+
+function wellFormedUnicode(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const trailing = value.charCodeAt(index + 1);
+      if (!(trailing >= 0xdc00 && trailing <= 0xdfff)) return false;
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function exactEntryKeysWithLegacyNote(
+  value: Record<string, unknown>,
+  expected: readonly string[],
+): boolean {
+  if (exactEntryKeys(value, expected)) return true;
+  return (
+    !("note" in value) &&
+    exactEntryKeys(
+      value,
+      expected.filter((key) => key !== "note"),
+    )
+  );
 }
 
 function decimal(value: unknown): value is string {
@@ -472,6 +516,7 @@ function parseEntry(value: unknown): DiaryEntry {
     ) ||
     !isMealSlot(value.mealSlot) ||
     !positiveResolvedDecimal(value.resolvedGrams) ||
+    !legacyDiaryEntryNote(value.note) ||
     !text(value.occurredAt, 64) ||
     !isLocalDate(value.localDate) ||
     !text(value.timeZone, 63) ||
@@ -488,6 +533,7 @@ function parseEntry(value: unknown): DiaryEntry {
     revision: String(value.revision),
     mealSlot: value.mealSlot,
     resolvedGrams: value.resolvedGrams,
+    note: typeof value.note === "string" && value.note.length > 0 ? value.note : null,
     occurredAt: value.occurredAt,
     localDate: value.localDate,
     timeZone: value.timeZone,
@@ -497,7 +543,7 @@ function parseEntry(value: unknown): DiaryEntry {
   };
   if (
     value.entryKind === "food" &&
-    exactEntryKeys(value, [
+    exactEntryKeysWithLegacyNote(value, [
       "id",
       "revision",
       "entryKind",
@@ -510,6 +556,7 @@ function parseEntry(value: unknown): DiaryEntry {
       "foodProvenance",
       "mealSlot",
       "resolvedGrams",
+      "note",
       "occurredAt",
       "localDate",
       "localTime",
@@ -573,7 +620,7 @@ function parseEntry(value: unknown): DiaryEntry {
   }
   if (
     value.entryKind === "recipe" &&
-    exactEntryKeys(value, [
+    exactEntryKeysWithLegacyNote(value, [
       "id",
       "revision",
       "entryKind",
@@ -586,6 +633,7 @@ function parseEntry(value: unknown): DiaryEntry {
       "source",
       "mealSlot",
       "resolvedGrams",
+      "note",
       "occurredAt",
       "localDate",
       "localTime",
@@ -690,6 +738,27 @@ export function shiftLocalDate(localDate: string, days: number): string {
   const shifted = new Date(Date.UTC(year ?? 0, (month ?? 1) - 1, day));
   shifted.setUTCDate(shifted.getUTCDate() + days);
   return shifted.toISOString().slice(0, 10);
+}
+
+export function prepareDiaryEntryNote(value: string): string | null {
+  if (value.length === 0) return null;
+  if (value.includes("\u0000")) {
+    throw new RangeError("A private note cannot contain a null character.");
+  }
+  if (!wellFormedUnicode(value)) {
+    throw new RangeError("A private note must contain well-formed Unicode text.");
+  }
+  if (diaryEntryNoteCharacterCount(value) > 2_000) {
+    throw new RangeError("A private note must contain 1 to 2,000 characters or be cleared.");
+  }
+  return value;
+}
+
+export function prepareDiaryEntryNotePatch(
+  draft: string,
+  current: string | null,
+): { readonly note?: string | null } {
+  return draft === (current ?? "") ? {} : { note: prepareDiaryEntryNote(draft) };
 }
 
 function zonedParts(instant: Date, timeZone: string): readonly number[] {

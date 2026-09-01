@@ -163,6 +163,7 @@ async function buildFixture(root: string) {
           customFoodVersionNumber: 2,
           kind: "private_custom",
         },
+        note: "private historical diary note",
         operation: "delete",
       },
       { deleted: true },
@@ -217,6 +218,16 @@ describe("privacy export formatting", () => {
     const jsonBytes = await readFile(firstJson.path);
     const parsed = JSON.parse(jsonBytes.toString("utf8")) as Record<string, unknown>;
     expect(jsonBytes.toString("utf8")).toBe(`${canonicalJson(parsed)}\n`);
+    const exportedDiaryRevisions = (
+      parsed.entities as {
+        diary_entry_revision: readonly {
+          readonly payload: Readonly<Record<string, unknown>>;
+        }[];
+      }
+    ).diary_entry_revision;
+    expect(exportedDiaryRevisions).toMatchObject([
+      { payload: { note: "private historical diary note" } },
+    ]);
     expect(jsonBytes).toEqual(await readFile(secondJson.path));
     expect(await readFile(firstZip.path)).toEqual(await readFile(secondZip.path));
     expect(firstJson.sha256).toBe(secondJson.sha256);
@@ -263,6 +274,7 @@ describe("privacy export formatting", () => {
       entries.get("entities/diary_entry_revision/part-000001.csv")?.toString("utf8") ?? "";
     expect(tombstoneCsv).toContain(",true,");
     expect(tombstoneCsv).toContain('""kind"":""private_custom""');
+    expect(tombstoneCsv).toContain('""note"":""private historical diary note""');
     expect(
       first.spool.manifestBase.entities.every((item) => item.sourceCount === item.exportedCount),
     ).toBe(true);

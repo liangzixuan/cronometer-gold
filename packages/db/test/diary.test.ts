@@ -29,6 +29,24 @@ describe("diary persistence boundary validation", () => {
     ).rejects.toMatchObject({ code: "DIARY_VALIDATION" });
   });
 
+  it.each(["", "x".repeat(2_001), "bad\u0000note", "\uD800", "\uDC00"])(
+    "rejects an invalid mutable note before opening a transaction",
+    async (note) => {
+      await expect(
+        createFoodDiaryEntry(unreachableDatabase, {
+          clientOperationId: "10000000-0000-4000-8000-000000000001",
+          foodVersionId: "1",
+          mealSlot: "breakfast",
+          note,
+          occurredAt: "2026-08-15T00:00:00Z",
+          portion: { grams: "10", kind: "grams" },
+          requestDigest: "a".repeat(64),
+          userId: "user",
+        }),
+      ).rejects.toBeInstanceOf(DiaryValidationError);
+    },
+  );
+
   it("rejects impossible calendar dates before querying", async () => {
     await expect(
       getDiaryDay(unreachableDatabase, { localDate: "2026-02-30", userId: "user" }),

@@ -13,7 +13,10 @@ import {
   type AccountErasureMutationResponse,
   type AccountErasureResponse,
   type AccountExportResponse,
+  type CustomFoodMutationResponse,
   canonicalJson,
+  type DiaryDayResponse,
+  type DiaryMutationResponse,
 } from "@nutrition-tracker/contracts";
 import {
   createDatabase,
@@ -136,6 +139,35 @@ function exactNumber(value: string, field: string): number {
 
 function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function storedZipEntries(bytes: Buffer): ReadonlyMap<string, Buffer> {
+  const entries = new Map<string, Buffer>();
+  let offset = 0;
+  while (offset + 30 <= bytes.byteLength && bytes.readUInt32LE(offset) === 0x0403_4b50) {
+    expect(bytes.readUInt16LE(offset + 8)).toBe(0);
+    expect(bytes.readUInt16LE(offset + 10)).toBe(0);
+    expect(bytes.readUInt16LE(offset + 12)).toBe(0x21);
+    const size = bytes.readUInt32LE(offset + 18);
+    const nameLength = bytes.readUInt16LE(offset + 26);
+    const extraLength = bytes.readUInt16LE(offset + 28);
+    const nameStart = offset + 30;
+    const dataStart = nameStart + nameLength + extraLength;
+    const name = bytes.subarray(nameStart, nameStart + nameLength).toString("utf8");
+    entries.set(name, Buffer.from(bytes.subarray(dataStart, dataStart + size)));
+    offset = dataStart + size;
+  }
+  return entries;
+}
+
+function requiredZipEntry(entries: ReadonlyMap<string, Buffer>, path: string): Buffer {
+  const entry = entries.get(path);
+  if (!entry) throw new Error(`Missing ZIP entry: ${path}`);
+  return entry;
+}
+
+function occurrenceCount(value: string, needle: string): number {
+  return value.split(needle).length - 1;
 }
 
 async function createPrivateTmpfsDirectory(prefix: string): Promise<string> {
@@ -498,6 +530,98 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
       const userId = registered.data.user.id;
       const authorization = `Bearer ${registered.data.accessToken}`;
 
+      const nutrient = await database
+        .insertInto("nutrient")
+        .values({
+          canonical_unit: "kcal",
+          code: "retention_e2e_energy",
+          dimension: "energy",
+          is_targetable: true,
+          name: "Retention E2E energy",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow();
+      const customFoodResponse = await app.inject({
+        method: "POST",
+        url: "/v1/custom-foods",
+        headers: { authorization, "idempotency-key": randomUUID() },
+        payload: {
+          brandName: null,
+          name: "Private export fixture food",
+          notes: null,
+          nutrients: [
+            {
+              amountPer100Grams: "123.45",
+              nutrientId: nutrient.id,
+              state: "quantified",
+            },
+          ],
+          serving: { grams: "100", label: "serving" },
+        },
+      });
+      expect(customFoodResponse.statusCode, customFoodResponse.body).toBe(201);
+      const customFood = customFoodResponse.json<CustomFoodMutationResponse>().data.customFood;
+      const logResponse = await app.inject({
+        method: "POST",
+        url: `/v1/custom-foods/${customFood.id}/log`,
+        headers: { authorization, "idempotency-key": randomUUID() },
+        payload: {
+          customFoodVersionId: customFood.currentVersion.id,
+          mealSlot: "lunch",
+          occurredAt: new Date(clock.getTime() - 2_000).toISOString(),
+          portion: { grams: "100", kind: "grams" },
+        },
+      });
+      expect(logResponse.statusCode, logResponse.body).toBe(201);
+      expect(logResponse.headers.etag).toBe('"1"');
+      const loggedEntry = logResponse.json<DiaryMutationResponse>().data.entry;
+      if (!loggedEntry) throw new Error("Expected a logged private food diary entry");
+      expect(loggedEntry.note).toBeNull();
+      const diaryEntryId = loggedEntry.id;
+      const diaryLocalDate = loggedEntry.localDate;
+      const privateDiaryNote = `private-diary-history-${randomUUID()}`;
+
+      const setNoteResponse = await app.inject({
+        method: "PATCH",
+        url: `/v1/diary/entries/${diaryEntryId}`,
+        headers: {
+          authorization,
+          "idempotency-key": randomUUID(),
+          "if-match": '"1"',
+        },
+        payload: { note: privateDiaryNote },
+      });
+      expect(setNoteResponse.statusCode, setNoteResponse.body).toBe(200);
+      expect(setNoteResponse.headers.etag).toBe('"2"');
+      expect(setNoteResponse.json<DiaryMutationResponse>().data.entry?.note).toBe(privateDiaryNote);
+
+      const clearNoteResponse = await app.inject({
+        method: "PATCH",
+        url: `/v1/diary/entries/${diaryEntryId}`,
+        headers: {
+          authorization,
+          "idempotency-key": randomUUID(),
+          "if-match": '"2"',
+        },
+        payload: { note: null },
+      });
+      expect(clearNoteResponse.statusCode, clearNoteResponse.body).toBe(200);
+      expect(clearNoteResponse.headers.etag).toBe('"3"');
+      expect(clearNoteResponse.json<DiaryMutationResponse>().data.entry?.note).toBeNull();
+
+      const currentDiaryResponse = await app.inject({
+        method: "GET",
+        url: `/v1/diary?date=${diaryLocalDate}`,
+        headers: { authorization },
+      });
+      expect(currentDiaryResponse.statusCode, currentDiaryResponse.body).toBe(200);
+      const currentDiary = currentDiaryResponse.json<DiaryDayResponse>().data;
+      expect(currentDiary.entries.find((entry) => entry.id === diaryEntryId)).toMatchObject({
+        note: null,
+        revision: "3",
+      });
+      expect(currentDiaryResponse.body).not.toContain(privateDiaryNote);
+
       const biometricDefinitionResponse = await app.inject({
         method: "POST",
         url: "/v1/biometrics/definitions",
@@ -622,6 +746,11 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
               biometric_definition_version: unknown[];
               biometric_event: unknown[];
               biometric_event_revision: unknown[];
+              diary_entry_revision: readonly {
+                readonly entityId: string;
+                readonly payload: Readonly<Record<string, unknown>>;
+                readonly revision: string | null;
+              }[];
               profile: unknown[];
             };
             manifest: Parameters<typeof canonicalJson>[0];
@@ -632,6 +761,20 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
           expect(parsed.entities.biometric_event).toHaveLength(1);
           expect(parsed.entities.biometric_event_revision).toHaveLength(1);
           expect(parsed.entities.profile).toHaveLength(1);
+          const exportedDiaryRevisions = parsed.entities.diary_entry_revision
+            .filter((row) => row.payload.diary_entry_id === diaryEntryId)
+            .sort((left, right) => Number(left.revision) - Number(right.revision));
+          expect(
+            exportedDiaryRevisions.map((row) => ({
+              note: row.payload.note,
+              operation: row.payload.operation,
+              revision: row.revision,
+            })),
+          ).toEqual([
+            { note: null, operation: "create", revision: "1" },
+            { note: privateDiaryNote, operation: "update", revision: "2" },
+            { note: null, operation: "update", revision: "3" },
+          ]);
           expect(parsed.manifest).toMatchObject({
             formatVersion: "nutrition-account-export-v1",
             reconciled: true,
@@ -639,6 +782,14 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
           expect(sha256(canonicalJson(parsed.manifest))).toBe(completedExport.manifestSha256);
         } else {
           expect(download.rawPayload.readUInt32LE(0)).toBe(0x0403_4b50);
+          const diaryRevisionCsv = requiredZipEntry(
+            storedZipEntries(download.rawPayload),
+            "entities/diary_entry_revision/part-000001.csv",
+          ).toString("utf8");
+          expect(occurrenceCount(diaryRevisionCsv, diaryEntryId)).toBe(3);
+          expect(occurrenceCount(diaryRevisionCsv, privateDiaryNote)).toBe(1);
+          expect(occurrenceCount(diaryRevisionCsv, '""note"":null')).toBe(2);
+          expect(diaryRevisionCsv).toContain(`""note"":""${privateDiaryNote}""`);
         }
         await vi.waitFor(async () => expect(await readdir(apiSpoolDirectory)).toEqual([]), {
           interval: 10,
@@ -756,10 +907,20 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         biometric_definition_version: "0",
         biometric_event: "0",
         biometric_event_revision: "0",
+        diary_entry: "0",
+        diary_entry_revision: "0",
+        diary_operation: "0",
       });
       expect(Object.values(reconciliation.remainingRows).every((count) => count === "0")).toBe(
         true,
       );
+      expect(
+        await database
+          .selectFrom("diary_entry_revision")
+          .select(["id", "note"])
+          .where("diary_entry_id", "=", diaryEntryId)
+          .execute(),
+      ).toEqual([]);
       expect(
         await database.selectFrom("app_user").select("id").where("id", "=", userId).execute(),
       ).toEqual([]);

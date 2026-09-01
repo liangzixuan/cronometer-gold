@@ -10,26 +10,102 @@ accurately understand calories, macronutrients, and micronutrients. Accuracy
 means preserving source provenance and missingness—not presenting absent values
 as measured zeros.
 
-## Delivery sequence
+## Delivery status
 
-1. **Foundation (complete):** modular monorepo, exact nutrition math, immutable
+Here, **implemented** means the source and its local/CI evidence are complete. It
+does not mean a feature has passed controlled-beta, signed-device, independent-
+reviewer, or production-release acceptance.
+
+1. **Foundation (implemented):** modular monorepo, exact nutrition math, immutable
    diary snapshots, PostgreSQL schema, API/client shells, CI, and local services.
-2. **Canonical food ingestion core (complete):** release-candidate manifests and
+2. **Canonical food ingestion core (implemented):** release-candidate manifests and
    real-data adapters for USDA FoodData Central and Health Canada CNF, plus
    resumable staging, validation, atomic activation, rollback, and provenance.
-3. **Food search (complete):** disposable Meilisearch projection,
+3. **Food search (implemented against controlled fixtures):** disposable Meilisearch projection,
    generic/branded intent, autocomplete, typo tolerance, reviewed synonyms,
    bounded recent/favorite reranking, and authoritative exact barcode lookup.
-4. **Diary vertical slice (complete):** account/profile, local-day diary, serving
+4. **Diary vertical slice (implemented):** account/profile, local-day diary, serving
    selection, add/edit/delete, meal groups, exact daily totals, and retry-safe
    idempotency.
-5. **Recipes and goals (complete):** yield-aware versioned recipes, immutable
+5. **Recipes and goals (implemented):** yield-aware versioned recipes, immutable
    recipe diary snapshots, versioned targets, bounded energy estimates, and
    lower-bound nutrient progress.
-6. **Retention features (next):** trends, exports, repeat logging, reminders, custom
-   foods/biometrics, and platform health integrations.
-7. **Subscription features:** advanced reports, long-range analytics, premium
-   automation, and coaching only after the free tracking loop is excellent.
+6. **Retention and privacy (implemented; release-gated):** timezone-correct
+   nutrient and biometric trends, exact-version repeat logging, private versioned
+   custom foods and biometrics, consented local reminders, coherent JSON/CSV
+   export, erasure/recovery, and read-only HealthKit/Health Connect weight adapters
+   are wired across database, API/worker, web, and mobile with package and
+   integration evidence. The real API/worker privacy drill proves account,
+   profile, biometric, and custom-food composition; real custom-food creation
+   and diary logging; diary-revision JSON and CSV export including a historical
+   private note; and diary/custom-food erasure reconciliation. Full API/worker
+   export-erasure population across every retained entity family is an explicit
+   M2 controlled-beta exit gate; safe local implementation may proceed earlier.
+   Signed physical-device, independent-reviewer, and controlled-beta evidence
+   still block release.
+
+## Forward milestones
+
+M0's authenticated acquisition, review, and activation trust lane and M1's
+safe local source-work lane proceed in parallel. M2 requires both M0 and M1
+acceptance; progress in either lane never waives the gates in the other.
+
+1. **M0 — live catalogue evidence and controlled activation (current blocker):**
+   revalidate upstream release identity; build verified, database-free parser
+   evidence; obtain two genuinely independent authenticated acquisitions,
+   immutable artifacts, rights/attribution approval, and reviewed nutrient
+   mappings; stage into a non-current catalogue; and complete reconciliation,
+   outlier, real-scale memory, search/index, relevance, barcode, completeness,
+   and rollback review. Activation is a separately approved final action and is
+   never implied by successful staging or synthetic fixtures.
+   The FDC Foundation database-free inspection boundary is implemented locally:
+   it now requires pinned artifact and parser identities, exact inventory, and
+   deterministic baseline evidence. The dated Foundation parser smoke accepted
+   363 foods, so it is an evidence-pipeline pilot rather than consumer-viable
+   catalogue acceptance. Before M0 closes, independent reviewers must define
+   and approve numeric thresholds for food, branded-food, and GTIN counts;
+   nutrient-mapping and completeness coverage; benchmark search recall and
+   zero-result rate; and parser/index memory, build time, latency, and footprint.
+   The staged candidate must meet those evidence-bound thresholds; this plan
+   does not infer them from the 363-food pilot.
+
+   Controlled acquisitions, rights/mapping review, trusted staging, and every
+   activation review above remain open. Full FDC CSV also remains blocked on
+   changed upstream bytes and a bounded archive orchestrator.
+2. **M1 — excellent basic daily loop:** activity/exercise, water, private diary
+   notes, configurable groups, camera barcode scan while preserving exact GTIN
+   lookup, diary pagination, durable offline retry/reorder, email verification
+   and password recovery, reviewed reference targets, and production-grade
+   weight sync, with cross-client end-to-end and accessibility acceptance.
+   Private notes attached to food and recipe entries are implemented locally.
+   Repeat preserves a note. Clearing hides it from the current display, while
+   immutable prior revisions remain in private account exports until whole-
+   account erasure deletes them. Structured logs redact note fields. This is the
+   first entry-note sub-slice, not standalone diary notes.
+   Standalone day/note-only entries remain open and require a separately reviewed
+   immutable-entry model. Safe local work may extend the real API/worker privacy
+   drill across every retained entity family ahead of M2; diary pagination remains
+   the next diary feature slice. No signed clients exist yet, so this source proves
+   only a coordinated deployment. Before a future staggered rollout, M2 must add
+   an explicit compatibility phase and capability signal: the server first accepts note
+   writes while `note` output remains optional; editors stay hidden until they
+   observe that capability; tolerant clients are staged; only then may server
+   output become required.
+3. **M2 — controlled beta:** reviewed hosting and digest-pinned seven-image
+   deployment; HTTPS, access-control, and off-host restore evidence; full API/worker
+   export-erasure population across every retained entity family; a reviewed
+   Windows-host/WSL private-phone boundary; a signed iOS/Android device matrix; and
+   independent security, browser/device, accessibility, scientific, and legal
+   review. Cloud, DNS, Terraform, Tailscale, firewall, and EAS actions keep their
+   separate approval gates.
+4. **M3 — premium analysis and planning:** arbitrary-range reports and custom
+   charts, printable/PDF output, scheduled repeats, macro scheduling, fasting,
+   and nutrition scores/balance meters.
+5. **M4 — premium capture and discovery:** recipe URL/text import, food and
+   nutrient suggestions, photo/voice input, private sharing, and coaching, only
+   after their privacy and claims boundaries are reviewed.
+6. **M5 — commercial launch:** first-party entitlements, plans/trials, web and
+   app-store billing, support, monitoring, and SLOs only after M1 and M2 pass.
 
 ## Non-negotiable engineering rules
 
@@ -105,11 +181,13 @@ distinct through the clients.
 The checked-in food-release candidates are still deliberately non-promotable,
 so diary integration evidence uses a synthetic promoted catalogue fixture rather
 than claiming a live USDA or CNF release. Password recovery, email verification,
-durable cross-restart offline queues, account export/deletion, and signed-device
-preview testing remain controlled-beta gates rather than hidden claims of this
-milestone. Until diary entries are paginated, a local day is capped at 50 food
-entries so the full immutable nutrient vectors remain within a reviewed response
-and mobile-memory budget.
+durable cross-restart offline queues, and signed-device preview testing remain
+controlled-beta gates rather than hidden claims of this milestone. Account
+export and deletion are implemented and locally drilled under the retention and
+privacy milestone; they are not production evidence. Until diary entries are
+paginated, a local day is capped at 50 food and recipe entries so the full
+immutable nutrient vectors remain within a reviewed response and mobile-memory
+budget.
 
 ## Recipes-and-goals boundary
 
@@ -135,18 +213,29 @@ idempotent retry bodies and exact recipe versions.
 Migration `0005` deliberately refuses experimental legacy recipe or goal roots
 that lack the immutable evidence required by these contracts. They require a
 reviewed export/remediation and API-based recreation; the migration does not
-fabricate nutrition, yield, source, or equation history. Whole-account erasure,
-automatic reference targets, retention-factor datasets, therapeutic goals, and
-signed-device validation remain controlled-beta work and are not claimed here.
+fabricate nutrition, yield, source, or equation history. Whole-account erasure
+is implemented and locally drilled under the retention milestone. Automatic
+reference targets, retention-factor datasets, therapeutic goals, and signed-device
+validation remain controlled-beta work and are not claimed here.
 
-## Next acceptance target
+## Current acceptance target — live catalogue evidence
 
-Retention features are complete when an authenticated person can inspect
-timezone-correct nutrient trends, export a complete and machine-readable copy of
-their account and immutable nutrition history, repeat a prior log without
-silently selecting newer food or recipe versions, and configure reminders that
-remain consented, revocable, and free of health details on lock screens. Custom
-foods, biometrics, and platform-health imports must preserve provenance,
-deduplicate retries, expose conflicts, and remain deletable. Account erasure,
-backup restore, export reconciliation, notification delivery, and signed-device
-flows must pass end-to-end drills before this milestone is called complete.
+M0 is complete only when an exact publisher artifact is independently acquired
+by two authenticated principals, content-addressed and immutably retained,
+rights/attribution-reviewed, parsed by a reviewed digest-pinned build, mapped
+through reviewed nutrient revisions, and staged without changing the current
+catalogue. Reconciliation, high-impact outliers, representative scale and peak
+memory, complete mapping transitions, search relevance and zero-result rate,
+barcode integrity, index count/build/latency/footprint, and forward rollback must
+all produce digest-bound review evidence. Three distinct role approvals and an
+explicit activation decision are still required before promotion and alias
+switching. See [release gates](../quality/release-gates.md) and the
+[food-source runbook](../../infra/runbooks/food-source-release.md).
+
+The scoped retention source/package evidence and real API/worker drill now covers
+account/profile/biometric/custom-food composition, real custom-food diary logging,
+diary-revision JSON and CSV export including a historical private note, and
+diary/custom-food erasure reconciliation. It does not complete the M2
+all-retained-entity vertical gate or satisfy notification, signed-device,
+independent-reviewer, physical-phone, hosted-beta, or public release acceptance.
+Those boundaries remain fail-closed under M2.

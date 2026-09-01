@@ -258,6 +258,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         expectedCustomFoodId: created.food.id,
         foodVersionId: created.food.currentVersion.id,
         mealSlot: "breakfast",
+        note: "  exact source note\nkeep spacing  ",
         occurredAt: "2026-01-01T02:00:00Z",
         portion: { grams: "100", kind: "grams" },
         requestDigest: digest("3"),
@@ -289,6 +290,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       expect(repeated.entry.kind).toBe("food");
       if (repeated.entry.kind !== "food") throw new Error("Expected a repeated food entry");
       expect(repeated.entry.food.foodVersionId).toBe(created.food.currentVersion.id);
+      expect(repeated.entry.note).toBe(firstLog.entry.note);
       expect(repeated.entry.repeatedFromRevisionId).not.toBeNull();
 
       await archiveCustomFood(fixture.database, {

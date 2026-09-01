@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, type Stats } from "node:fs";
 import { link, lstat, mkdir, open, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
@@ -31,8 +31,11 @@ import {
   assertManifestParserIdentity,
   CNF_ARCHIVE_CSV_PATHS,
   type CnfArchiveParseResult,
+  type ExtractedZipFile,
   extractZipArchive,
   type FoodSourceManifestV3,
+  IngestionError,
+  invariant,
   parseCnfArchive,
   parseFoodSourceManifest,
 } from "@nutrition-tracker/ingestion";
@@ -80,12 +83,19 @@ const CATALOGUE_RECONCILE_OPTIONS = Object.freeze([
   "expected-validation-digest",
   "report-out",
 ]);
+const STAGE_FDC_OPTIONS = Object.freeze([
+  "artifact",
+  "cache-dir",
+  "extract-dir",
+  "manifest-object-uri",
+]);
 const STAGE_CNF_OPTIONS = Object.freeze([
   "artifact",
   "cache-dir",
   "extract-dir",
   "manifest-object-uri",
 ]);
+const INSPECT_FDC_OPTIONS = Object.freeze(["artifact", "cache-dir", "extract-dir"]);
 const INSPECT_CNF_OPTIONS = Object.freeze(["artifact", "cache-dir", "extract-dir"]);
 const CNF_ARCHIVE_LIMITS = Object.freeze({
   maxCompressionRatio: 250,
@@ -106,13 +116,13 @@ export async function runCommand(argv: readonly string[], io: CommandIo): Promis
         await observeArtifactCommand(arguments_.positionals, arguments_.options, io);
         return 0;
       case "fdc inspect":
-        await inspectFdcCommand(arguments_.positionals, arguments_.options, io);
+        await inspectFdcCommand(argv, arguments_.positionals, arguments_.options, io);
         return 0;
       case "cnf inspect":
         await inspectCnfCommand(argv, arguments_.positionals, arguments_.options, io);
         return 0;
       case "catalogue stage-fdc":
-        await stageFdcCommand(arguments_.positionals, arguments_.options, io);
+        await stageFdcCommand(argv, arguments_.positionals, arguments_.options, io);
         return 0;
       case "catalogue stage-cnf":
         await stageCnfCommand(argv, arguments_.positionals, arguments_.options, io);
@@ -448,33 +458,86 @@ async function observeArtifactCommand(
 }
 
 async function inspectFdcCommand(
+  argv: readonly string[],
   positionals: readonly string[],
   options: Readonly<Record<string, string | true>>,
   io: CommandIo,
 ): Promise<void> {
-  const manifest = await readManifest(singlePositional(positionals, "manifest path"));
+  assertExactFdcInspectArguments(argv, positionals, options);
+  const manifestPath = workspacePath(singlePositional(positionals, "manifest path"));
+  const manifestBytes = await readFile(manifestPath);
+  const manifest = parseFoodSourceManifest(JSON.parse(manifestBytes.toString("utf8")));
+  const manifestSha256 = hashBytes(manifestBytes);
+  assertManifestParserIdentity(manifest);
   requireFdcFoundationManifest(manifest);
-  const artifact = workspacePath(requiredOption(options, "artifact"));
-  const cacheDirectory = workspacePath(requiredOption(options, "cache-dir"));
-  const observation = await acquireArtifact({
-    cacheDirectory,
-    operatorPrincipalId: "local-inspection",
-    source: artifact,
+  const parserBuildSha256 = trustedParserBuildSha256(manifest, io.environment);
+  const artifactSha256 = requiredManifestValue(manifest.artifact.sha256, "artifact.sha256");
+  const artifactByteSize = requiredPositiveSafeInteger(
+    manifest.artifact.byteSize,
+    "artifact.byteSize",
+  );
+  const artifact = await acquireArtifact({
+    cacheDirectory: workspacePath(requiredOption(options, "cache-dir")),
+    operatorPrincipalId: "local-fdc-inspection",
+    source: workspacePath(requiredOption(options, "artifact")),
+    sourceReadMode: "require-source-read",
     sourceMode: "local-test",
     tool: "nutrition-tracker-ingest/0.1.0",
-    verification: { mode: "observe-only" },
+    verification: {
+      mode: "verified",
+      expected: {
+        byteSize: artifactByteSize,
+        provenance: `manifest:${manifestSha256}`,
+        sha256: artifactSha256,
+      },
+    },
   });
-  const parsed = await parseFdcArtifact(
+  const inspected = await parseFdcArtifact(
     manifest,
-    observation.path,
+    artifact.path,
     workspacePath(requiredOption(options, "extract-dir")),
   );
-  const metrics = fdcMetrics(parsed);
-  assertFdcParserBaseline(manifest, metrics);
-  output(io, {
-    artifact: observation.observation,
-    ...metrics,
-  });
+  const metrics = fdcMetrics(inspected.parsed);
+  const semanticEvidence = fdcSemanticEvidence(inspected.parsed);
+  const baseline = fdcParserBaselineEvidence(metrics, semanticEvidence);
+  const baselineMismatches = fdcParserBaselineMismatches(manifest, baseline);
+  const inspection = {
+    archive: fdcArchiveEvidence(manifest, inspected.member),
+    baseline,
+    baselineReview: {
+      kind: "non-qualifying-local-baseline-comparison-v1",
+      manifestExpectationsMatched: baselineMismatches.length === 0,
+      mismatches: baselineMismatches,
+      qualifiesAsAcquisitionOrApprovalEvidence: false,
+      status: baselineMismatches.length === 0 ? "matched-manifest-expectations" : "review-required",
+    },
+    localVerification: {
+      artifactByteSize,
+      artifactSha256,
+      kind: "non-qualifying-local-artifact-verification-v1",
+      qualifiesAsAcquisitionObservation: false,
+      status: "verified-against-manifest-pins",
+    },
+    manifestSha256,
+    metrics,
+    parserBuildSha256,
+    parserPackage: manifest.ingestion.parserPackage,
+    parserVersion: requiredManifestValue(
+      manifest.ingestion.parserVersion,
+      "ingestion.parserVersion",
+    ),
+    releaseKey: manifest.release.releaseKey,
+    semanticEvidence,
+  };
+  if (baselineMismatches.length > 0) {
+    output(io, inspection);
+    throw new Error(
+      `FDC inspection produced a non-qualifying baseline proposal for: ${baselineMismatches
+        .map((mismatch) => mismatch.key)
+        .join(", ")}`,
+    );
+  }
+  output(io, inspection);
 }
 
 async function inspectCnfCommand(
@@ -538,32 +601,49 @@ async function inspectCnfCommand(
 }
 
 async function stageFdcCommand(
+  argv: readonly string[],
   positionals: readonly string[],
   options: Readonly<Record<string, string | true>>,
   io: CommandIo,
 ): Promise<void> {
+  assertExactStageFdcArguments(argv, positionals, options);
   const actor = trustedRunnerActor(io.environment);
   const manifestPath = workspacePath(singlePositional(positionals, "manifest path"));
   const manifestBytes = await readFile(manifestPath);
+  const manifestSha256 = hashBytes(manifestBytes);
   const manifest = parseFoodSourceManifest(JSON.parse(manifestBytes.toString("utf8")));
   assertImportReadyManifest(manifest);
   const parserBuildSha256 = trustedParserBuildSha256(manifest, io.environment);
   requireFdcFoundationManifest(manifest);
+  const manifestObjectUri = immutableManifestObjectUri(
+    requiredOption(options, "manifest-object-uri"),
+    manifestSha256,
+  );
   const artifact = await acquireArtifact({
     cacheDirectory: workspacePath(requiredOption(options, "cache-dir")),
-    operatorPrincipalId: "local-import-verifier",
+    operatorPrincipalId: actor.principalId,
     source: workspacePath(requiredOption(options, "artifact")),
+    sourceReadMode: "require-source-read",
     sourceMode: "local-test",
     tool: "nutrition-tracker-ingest/0.1.0",
     verification: {
       mode: "verified",
       expected: {
         byteSize: manifest.artifact.byteSize,
-        provenance: `manifest:${hashBytes(manifestBytes)}`,
+        provenance: `manifest:${manifestSha256}`,
         sha256: manifest.artifact.sha256,
       },
     },
   });
+  const { parsed } = await parseFdcArtifact(
+    manifest,
+    artifact.path,
+    workspacePath(requiredOption(options, "extract-dir")),
+  );
+  const metrics = fdcMetrics(parsed);
+  const semanticEvidence = fdcSemanticEvidence(parsed);
+  assertFdcParserBaseline(manifest, metrics, semanticEvidence);
+  const records = stagedInputs(parsed);
   const database = createDatabaseFromEnvironment(io.environment);
   await runAfterRequiredCleanup(
     async () => {
@@ -581,11 +661,8 @@ async function stageFdcCommand(
         parserVersion: `${manifest.ingestion.parserVersion}+build.${parserBuildSha256}+mapping.${nutrientMappingDigest}`,
         publishedOn: manifest.release.publishedOn,
         releaseKey: manifest.release.releaseKey,
-        rightsManifestSha256: hashBytes(manifestBytes),
-        rightsManifestUri: immutableManifestObjectUri(
-          requiredOption(options, "manifest-object-uri"),
-          hashBytes(manifestBytes),
-        ),
+        rightsManifestSha256: manifestSha256,
+        rightsManifestUri: manifestObjectUri,
         sourceCode: manifest.source.code,
         upstreamSchemaVersion: manifest.release.upstreamSchemaVersion,
       });
@@ -610,14 +687,6 @@ async function stageFdcCommand(
           warnings: validation.warningCount,
         };
       }
-      const parsed = await parseFdcArtifact(
-        manifest,
-        artifact.path,
-        workspacePath(requiredOption(options, "extract-dir")),
-      );
-      const metrics = fdcMetrics(parsed);
-      assertFdcParserBaseline(manifest, metrics);
-      const records = stagedInputs(parsed);
       const checkpoint = await getBatchCheckpoint(database, stagedBatch.batchId, "stage");
       const checkpointOffset = validatedStageCheckpointOffset(checkpoint, records.length);
       let inserted = 0;
@@ -1168,9 +1237,21 @@ async function readManifest(path: string): Promise<FoodSourceManifestV3> {
 }
 
 function requireFdcFoundationManifest(manifest: FoodSourceManifestV3): void {
-  if (manifest.source.code !== "USDA_FDC" || manifest.validation.expectedFiles.length !== 1) {
+  if (
+    manifest.source.code !== "USDA_FDC" ||
+    manifest.artifact.mediaType !== "application/zip" ||
+    manifest.validation.expectedFiles.length !== 1
+  ) {
     throw new Error("This command requires a USDA FDC single-member JSON manifest");
   }
+  requireExactStringArray(manifest.ingestion.dataTypes, ["Foundation"], "FDC data types");
+  requireExactStringArray(manifest.ingestion.languages, ["en"], "FDC languages");
+  requireExactStringArray(manifest.ingestion.markets, ["US"], "FDC markets");
+  requireExactStringArray(
+    manifest.ingestion.sourceIdentityFields,
+    ["fdcId", "dataType"],
+    "FDC source identity fields",
+  );
   const member = manifest.validation.expectedFiles[0];
   if (!member?.toLowerCase().endsWith(".json")) {
     throw new Error("FDC manifest must select exactly one JSON archive member");
@@ -1223,12 +1304,28 @@ function requireExactStringArray(
   }
 }
 
+interface FdcMemberEvidence {
+  readonly archivePath: string;
+  readonly byteSize: number;
+  readonly sha256: string;
+}
+
+interface ParsedFdcArtifact {
+  readonly extracted: readonly ExtractedZipFile[];
+  readonly member: FdcMemberEvidence;
+  readonly parsed: ReturnType<typeof adaptFdcJsonRelease>;
+}
+
 async function parseFdcArtifact(
   manifest: FoodSourceManifestV3,
   archivePath: string,
   extractionDirectory: string,
-): Promise<ReturnType<typeof adaptFdcJsonRelease>> {
+): Promise<ParsedFdcArtifact> {
   const extracted = await extractZipArchive({
+    archiveExpectation: {
+      byteSize: requiredPositiveSafeInteger(manifest.artifact.byteSize, "artifact.byteSize"),
+      sha256: requiredManifestValue(manifest.artifact.sha256, "artifact.sha256"),
+    },
     archivePath,
     destinationDirectory: extractionDirectory,
     expectedFiles: manifest.validation.expectedFiles,
@@ -1241,9 +1338,179 @@ async function parseFdcArtifact(
   });
   const selected = extracted[0];
   if (!selected) throw new Error("FDC archive produced no selected JSON member");
-  return adaptFdcJsonRelease(JSON.parse(await readFile(selected.path, "utf8")), {
-    releaseKey: manifest.release.releaseKey,
+  const exact = await readExactFdcJsonMember(selected);
+  return Object.freeze({
+    extracted,
+    member: exact.evidence,
+    parsed: adaptFdcJsonRelease(JSON.parse(exact.bytes.toString("utf8")), {
+      releaseKey: manifest.release.releaseKey,
+    }),
   });
+}
+
+export interface ReadExactFdcMemberResult {
+  readonly bytes: Buffer;
+  readonly evidence: FdcMemberEvidence;
+}
+
+export async function readExactFdcJsonMember(
+  file: ExtractedZipFile,
+): Promise<ReadExactFdcMemberResult> {
+  let handle: Awaited<ReturnType<typeof open>>;
+  try {
+    handle = await open(file.path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  } catch (error) {
+    throw new IngestionError(
+      "INVALID_ARCHIVE_ENTRY",
+      "Unable to open the exact extracted FDC member for parsing",
+      { path: file.archivePath },
+      { cause: error },
+    );
+  }
+  let identityEstablished = false;
+  let operationFailed = false;
+  let operationError: unknown;
+  let result: ReadExactFdcMemberResult | undefined;
+  try {
+    invariant(
+      Number.isSafeInteger(file.byteSize) &&
+        file.byteSize >= 0 &&
+        file.byteSize === file.identity.size,
+      "INVALID_ARCHIVE_ENTRY",
+      "FDC member size differs from extractor identity",
+      { path: file.archivePath },
+    );
+    const before = await handle.stat();
+    invariant(
+      matchesFdcExtractedIdentity(before, file.identity),
+      "INVALID_ARCHIVE_ENTRY",
+      "Extracted FDC member changed before parsing",
+      { path: file.archivePath },
+    );
+    const pathBefore = await lstat(file.path);
+    invariant(
+      matchesFdcExtractedIdentity(pathBefore, file.identity),
+      "INVALID_ARCHIVE_ENTRY",
+      "Extracted FDC member path changed before parsing",
+      { path: file.archivePath },
+    );
+    identityEstablished = true;
+    const bytes = Buffer.allocUnsafe(file.identity.size);
+    const hash = createHash("sha256");
+    let position = 0;
+    while (position < bytes.byteLength) {
+      const { bytesRead } = await handle.read(
+        bytes,
+        position,
+        bytes.byteLength - position,
+        position,
+      );
+      invariant(bytesRead > 0, "INVALID_ARCHIVE_ENTRY", "FDC exact-member read made no progress", {
+        path: file.archivePath,
+      });
+      hash.update(bytes.subarray(position, position + bytesRead));
+      position += bytesRead;
+    }
+    const trailing = Buffer.allocUnsafe(1);
+    const trailingRead = await handle.read(trailing, 0, 1, position);
+    invariant(
+      trailingRead.bytesRead === 0,
+      "INVALID_ARCHIVE_ENTRY",
+      "FDC exact member grew while parsing",
+      { path: file.archivePath },
+    );
+    const sha256 = hash.digest("hex");
+    invariant(
+      sha256 === file.identity.sha256,
+      "INVALID_ARCHIVE_ENTRY",
+      "Parsed FDC member content differs from extractor evidence",
+      { path: file.archivePath },
+    );
+    result = Object.freeze({
+      bytes,
+      evidence: Object.freeze({
+        archivePath: file.archivePath,
+        byteSize: bytes.byteLength,
+        sha256,
+      }),
+    });
+  } catch (error) {
+    operationFailed = true;
+    operationError = error;
+  }
+  const finalizationErrors: unknown[] = [];
+  if (identityEstablished) {
+    try {
+      const after = await handle.stat();
+      invariant(
+        matchesFdcExtractedIdentity(after, file.identity),
+        "INVALID_ARCHIVE_ENTRY",
+        "Extracted FDC member changed while parsing",
+        { path: file.archivePath },
+      );
+      const pathAfter = await lstat(file.path);
+      invariant(
+        matchesFdcExtractedIdentity(pathAfter, file.identity),
+        "INVALID_ARCHIVE_ENTRY",
+        "Extracted FDC member path changed while parsing",
+        { path: file.archivePath },
+      );
+    } catch (error) {
+      finalizationErrors.push(error);
+    }
+  }
+  try {
+    await handle.close();
+  } catch (error) {
+    finalizationErrors.push(
+      new IngestionError(
+        "INVALID_ARCHIVE_ENTRY",
+        "Unable to close the exact extracted FDC member after parsing",
+        { path: file.archivePath },
+        { cause: error },
+      ),
+    );
+  }
+  if (operationFailed) {
+    if (finalizationErrors.length > 0) {
+      throw new AggregateError(
+        [operationError, ...finalizationErrors],
+        "FDC exact-member parsing failed and finalization was incomplete",
+        { cause: operationError },
+      );
+    }
+    throw operationError;
+  }
+  if (finalizationErrors.length === 1) throw finalizationErrors[0];
+  if (finalizationErrors.length > 1) {
+    throw new AggregateError(finalizationErrors, "FDC exact-member finalization failed", {
+      cause: finalizationErrors[0],
+    });
+  }
+  invariant(result, "INVALID_ARCHIVE_ENTRY", "FDC exact-member result is unavailable");
+  return result;
+}
+
+function matchesFdcExtractedIdentity(
+  metadata: Stats,
+  identity: ExtractedZipFile["identity"],
+): boolean {
+  const currentUid = typeof process.getuid === "function" ? process.getuid() : null;
+  return (
+    currentUid !== null &&
+    metadata.isFile() &&
+    !metadata.isSymbolicLink() &&
+    metadata.birthtimeMs === identity.birthtimeMs &&
+    metadata.ctimeMs === identity.ctimeMs &&
+    metadata.dev === identity.device &&
+    metadata.ino === identity.inode &&
+    metadata.uid === currentUid &&
+    metadata.uid === identity.uid &&
+    (metadata.mode & 0o777) === identity.mode &&
+    metadata.mtimeMs === identity.mtimeMs &&
+    metadata.nlink === identity.nlink &&
+    metadata.size === identity.size
+  );
 }
 
 function stagedInputs(
@@ -1484,6 +1751,35 @@ function hashRecordDigests(digests: readonly string[]): string {
     .digest("hex");
 }
 
+interface FdcArchiveEvidence {
+  readonly expectedFiles: readonly string[];
+  readonly inventoryCount: number;
+  readonly inventorySha256: string;
+  readonly memberEvidenceSha256: string;
+  readonly members: readonly {
+    readonly archivePath: string;
+    readonly byteSize: number;
+    readonly sha256: string;
+  }[];
+}
+
+interface FdcEvidenceDigest {
+  readonly count: number;
+  readonly sha256: string;
+}
+
+interface FdcSemanticEvidence {
+  readonly canonicalAcceptedRecords: FdcEvidenceDigest;
+  readonly orderedDispositions: {
+    readonly excludedAttributes: FdcEvidenceDigest;
+    readonly excludedNutrients: FdcEvidenceDigest;
+    readonly excludedPortions: FdcEvidenceDigest;
+    readonly quarantined: FdcEvidenceDigest;
+  };
+  readonly schemaVersion: 1;
+  readonly sha256: string;
+}
+
 interface FdcMetrics {
   readonly excludedAttributes: number;
   readonly excludedNutrients: number;
@@ -1510,24 +1806,110 @@ function fdcMetrics(parsed: ReturnType<typeof adaptFdcJsonRelease>): FdcMetrics 
   });
 }
 
-function assertFdcParserBaseline(manifest: FoodSourceManifestV3, metrics: FdcMetrics): void {
+function fdcArchiveEvidence(
+  manifest: FoodSourceManifestV3,
+  member: FdcMemberEvidence,
+): FdcArchiveEvidence {
+  const expectedFiles = Object.freeze([...manifest.validation.expectedFiles].sort());
+  const members = Object.freeze([member]);
+  return Object.freeze({
+    expectedFiles,
+    inventoryCount: expectedFiles.length,
+    inventorySha256: sha256CanonicalJson(expectedFiles as unknown as JsonValue),
+    memberEvidenceSha256: sha256CanonicalJson(members as unknown as JsonValue),
+    members,
+  });
+}
+
+function fdcSemanticEvidence(parsed: ReturnType<typeof adaptFdcJsonRelease>): FdcSemanticEvidence {
+  const evidence = Object.freeze({
+    canonicalAcceptedRecords: fdcEvidenceDigest(parsed.records),
+    orderedDispositions: Object.freeze({
+      excludedAttributes: fdcEvidenceDigest(parsed.excludedAttributes),
+      excludedNutrients: fdcEvidenceDigest(parsed.excludedNutrients),
+      excludedPortions: fdcEvidenceDigest(parsed.excludedPortions),
+      quarantined: fdcEvidenceDigest(parsed.quarantined),
+    }),
+    schemaVersion: 1 as const,
+  });
+  return Object.freeze({
+    ...evidence,
+    sha256: sha256CanonicalJson(evidence as unknown as JsonValue),
+  });
+}
+
+function fdcEvidenceDigest(values: readonly unknown[]): FdcEvidenceDigest {
+  return Object.freeze({
+    count: values.length,
+    sha256: sha256CanonicalJson(values as unknown as JsonValue),
+  });
+}
+
+function fdcParserBaselineEvidence(
+  metrics: FdcMetrics,
+  semanticEvidence: FdcSemanticEvidence,
+): Readonly<Record<string, number | string>> {
+  return Object.freeze({
+    parserBaselineAcceptedFoodCount: metrics.records,
+    parserBaselineCanonicalAcceptedRecordsDigest: semanticEvidence.canonicalAcceptedRecords.sha256,
+    parserBaselineQuarantinedFoodCount: metrics.quarantined,
+    parserBaselineStagedNutrientCount: metrics.stagedNutrients,
+    parserBaselineExcludedNutrientCount: metrics.excludedNutrients,
+    parserBaselineStagedPortionCount: metrics.stagedPortions,
+    parserBaselineExcludedPortionCount: metrics.excludedPortions,
+    parserBaselineExcludedAttributeCount: metrics.excludedAttributes,
+    parserBaselineAcceptedPayloadDigest: metrics.sourcePayloadDigest,
+    parserBaselineOrderedQuarantinedDispositionsDigest:
+      semanticEvidence.orderedDispositions.quarantined.sha256,
+    parserBaselineOrderedExcludedNutrientDispositionsDigest:
+      semanticEvidence.orderedDispositions.excludedNutrients.sha256,
+    parserBaselineOrderedExcludedPortionDispositionsDigest:
+      semanticEvidence.orderedDispositions.excludedPortions.sha256,
+    parserBaselineOrderedExcludedAttributeDispositionsDigest:
+      semanticEvidence.orderedDispositions.excludedAttributes.sha256,
+    parserBaselineSemanticEvidenceDigest: semanticEvidence.sha256,
+  });
+}
+
+interface FdcParserBaselineMismatch {
+  readonly actual: number | string;
+  readonly expected: boolean | number | string | null;
+  readonly issue: "mismatch" | "missing";
+  readonly key: string;
+}
+
+function fdcParserBaselineMismatches(
+  manifest: FoodSourceManifestV3,
+  actual: Readonly<Record<string, number | string>>,
+): readonly FdcParserBaselineMismatch[] {
   const expected = manifest.validation.releaseSpecificExpectations;
-  const checks: readonly [keyof FdcMetrics, string][] = [
-    ["records", "parserBaselineAcceptedFoodCount"],
-    ["quarantined", "parserBaselineQuarantinedFoodCount"],
-    ["stagedNutrients", "parserBaselineStagedNutrientCount"],
-    ["excludedNutrients", "parserBaselineExcludedNutrientCount"],
-    ["stagedPortions", "parserBaselineStagedPortionCount"],
-    ["excludedPortions", "parserBaselineExcludedPortionCount"],
-    ["excludedAttributes", "parserBaselineExcludedAttributeCount"],
-    ["sourcePayloadDigest", "parserBaselineAcceptedPayloadDigest"],
-  ];
-  for (const [metric, expectation] of checks) {
-    if (expected[expectation] !== metrics[metric]) {
-      throw new Error(
-        `FDC parser baseline mismatch for ${expectation}: expected ${String(expected[expectation])}, received ${String(metrics[metric])}`,
-      );
-    }
+  const mismatches: FdcParserBaselineMismatch[] = [];
+  for (const [key, value] of Object.entries(actual)) {
+    if (expected[key] === value) continue;
+    const present = Object.hasOwn(expected, key);
+    mismatches.push(
+      Object.freeze({
+        actual: value,
+        expected: present ? (expected[key] ?? null) : null,
+        issue: present ? "mismatch" : "missing",
+        key,
+      }),
+    );
+  }
+  return Object.freeze(mismatches);
+}
+
+function assertFdcParserBaseline(
+  manifest: FoodSourceManifestV3,
+  metrics: FdcMetrics,
+  semanticEvidence: FdcSemanticEvidence,
+): void {
+  const actual = fdcParserBaselineEvidence(metrics, semanticEvidence);
+  const mismatch = fdcParserBaselineMismatches(manifest, actual)[0];
+  if (mismatch) {
+    throw new Error(
+      `FDC parser baseline mismatch for ${mismatch.key}: expected ${String(mismatch.expected)}, received ${String(mismatch.actual)}`,
+    );
   }
 }
 
@@ -1708,6 +2090,58 @@ function assertExactCatalogueReconcileArguments(
       throw new Error(`Unknown catalogue reconcile option: --${name ?? ""}`);
     }
   }
+}
+
+function assertExactFdcInspectArguments(
+  argv: readonly string[],
+  positionals: readonly string[],
+  options: Readonly<Record<string, string | true>>,
+): void {
+  if (positionals.length !== 1 || !positionals[0]) {
+    throw new Error("fdc inspect requires exactly one manifest path");
+  }
+  const allowed = new Set(INSPECT_FDC_OPTIONS);
+  for (const name of Object.keys(options)) {
+    if (!allowed.has(name)) throw new Error(`Unknown fdc inspect option: --${name}`);
+  }
+
+  const tokens = argv[0] === "--" ? argv.slice(1) : argv;
+  for (const token of tokens.slice(2)) {
+    if (token === "--") break;
+    if (!token.startsWith("--")) continue;
+    const name = token.slice(2).split("=", 1)[0];
+    if (!name || !allowed.has(name)) {
+      throw new Error(`Unknown fdc inspect option: --${name ?? ""}`);
+    }
+  }
+  for (const name of INSPECT_FDC_OPTIONS) requiredOption(options, name);
+}
+
+function assertExactStageFdcArguments(
+  argv: readonly string[],
+  positionals: readonly string[],
+  options: Readonly<Record<string, string | true>>,
+): void {
+  if (positionals.length !== 1 || !positionals[0]) {
+    throw new Error("catalogue stage-fdc requires exactly one manifest path");
+  }
+  const allowed = new Set(STAGE_FDC_OPTIONS);
+  for (const name of Object.keys(options)) {
+    if (!allowed.has(name)) throw new Error(`Unknown catalogue stage-fdc option: --${name}`);
+  }
+
+  // parseArguments intentionally uses a plain object. Inspect raw option names too
+  // so prototype-like names cannot disappear through object assignment semantics.
+  const tokens = argv[0] === "--" ? argv.slice(1) : argv;
+  for (const token of tokens.slice(2)) {
+    if (token === "--") break;
+    if (!token.startsWith("--")) continue;
+    const name = token.slice(2).split("=", 1)[0];
+    if (!name || !allowed.has(name)) {
+      throw new Error(`Unknown catalogue stage-fdc option: --${name ?? ""}`);
+    }
+  }
+  for (const name of STAGE_FDC_OPTIONS) requiredOption(options, name);
 }
 
 function assertExactCnfInspectArguments(

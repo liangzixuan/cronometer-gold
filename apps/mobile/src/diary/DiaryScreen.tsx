@@ -17,11 +17,13 @@ import { palette } from "../theme";
 import {
   type DiaryDay,
   type DiaryEntry,
+  diaryNoteFromDraft,
   entryEnergyDisplay,
   isLocalDate,
   isPositiveDecimal,
   localDateInTimeZone,
   localDateTimeToInstant,
+  MAX_DIARY_NOTE_LENGTH,
   type MealSlot,
   mealLabel,
   mealSlots,
@@ -42,6 +44,7 @@ interface Editor {
   readonly localTime: string;
   readonly originalLocalTime: string;
   readonly timeZone: string;
+  readonly note: string;
 }
 
 interface DiaryScreenProps {
@@ -67,6 +70,7 @@ function editorFor(entry: DiaryEntry, currentProfileTimeZone: string): Editor {
     localTime,
     originalLocalTime: localTime,
     timeZone: currentProfileTimeZone,
+    note: entry.note ?? "",
   };
 }
 
@@ -171,6 +175,15 @@ export function DiaryScreen({
     }
     const entry = diary.entries.find((candidate) => candidate.id === editor.entryId);
     if (!entry) return;
+    let note: string | null | undefined;
+    if (editor.note !== (entry.note ?? "")) {
+      try {
+        note = diaryNoteFromDraft(editor.note);
+      } catch (caught) {
+        setMessage(caught instanceof Error ? caught.message : "The private note is invalid.");
+        return;
+      }
+    }
     const timestampChanged =
       editor.localDate !== entry.localDate || editor.localTime !== editor.originalLocalTime;
     let occurredAt: string | undefined;
@@ -191,6 +204,7 @@ export function DiaryScreen({
           : { kind: "grams", grams: editor.quantity },
       mealSlot: editor.mealSlot,
       ...(occurredAt ? { occurredAt } : {}),
+      ...(note !== undefined ? { note } : {}),
     };
     const key = `edit:${entry.id}:${entry.revision}:${JSON.stringify(body)}`;
     setBusyEntry(entry.id);
@@ -494,6 +508,17 @@ export function DiaryScreen({
                         {entry.timeZone !== diary.timeZone ? (
                           <Text style={styles.entrySource}>Logged in {entry.timeZone}</Text>
                         ) : null}
+                        {entry.note !== null ? (
+                          <View style={styles.entryNoteBlock}>
+                            <Text style={styles.entryNoteLabel}>Private note</Text>
+                            <Text
+                              accessibilityLabel={`Private note for ${entryName(entry)}: ${entry.note}`}
+                              style={styles.entryNote}
+                            >
+                              {entry.note}
+                            </Text>
+                          </View>
+                        ) : null}
                         {editor?.entryId === entry.id ? (
                           <View style={styles.editor}>
                             <Text style={styles.label}>Quantity</Text>
@@ -549,6 +574,37 @@ export function DiaryScreen({
                             <Text style={styles.entrySource}>
                               Changed date and time are interpreted in {editor.timeZone}.
                             </Text>
+                            <Text style={styles.label}>Private note</Text>
+                            <TextInput
+                              accessibilityHint="Saving an empty value removes the note from the current display only. Immutable prior revisions remain in your private account export until whole-account erasure."
+                              accessibilityLabel={`Private note for ${entryName(entry)}`}
+                              multiline
+                              numberOfLines={4}
+                              onChangeText={(note) => setEditor({ ...editor, note })}
+                              style={[styles.input, styles.noteInput]}
+                              textAlignVertical="top"
+                              value={editor.note}
+                            />
+                            <Text style={styles.noteCount}>
+                              {[...editor.note].length.toLocaleString()} /{" "}
+                              {MAX_DIARY_NOTE_LENGTH.toLocaleString()} characters
+                            </Text>
+                            <Text style={styles.noteRetention}>
+                              Saving an empty note removes it from the current diary display only.
+                              Immutable prior revisions remain in your private account export until
+                              whole-account erasure.
+                            </Text>
+                            {editor.note.length > 0 ? (
+                              <Pressable
+                                accessibilityHint="Save to remove the note from the current display only. Immutable prior revisions remain in your private account export until whole-account erasure."
+                                accessibilityLabel={`Clear private note for ${entryName(entry)}`}
+                                accessibilityRole="button"
+                                onPress={() => setEditor({ ...editor, note: "" })}
+                                style={styles.clearNoteButton}
+                              >
+                                <Text style={styles.secondaryText}>Clear note</Text>
+                              </Pressable>
+                            ) : null}
                             <View style={styles.actionRow}>
                               <Pressable
                                 accessibilityRole="button"
@@ -581,6 +637,7 @@ export function DiaryScreen({
                               <Text style={styles.secondaryText}>Repeat today</Text>
                             </Pressable>
                             <Pressable
+                              accessibilityLabel={`Edit ${entryName(entry)} entry and private note`}
                               accessibilityRole="button"
                               disabled={busyEntry === entry.id || diary.status === "locked"}
                               onPress={() => setEditor(editorFor(entry, diary.timeZone))}
@@ -647,6 +704,7 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     textDecorationLine: "underline",
   },
+  clearNoteButton: { alignSelf: "flex-start", marginTop: 9, paddingVertical: 4 },
   chip: {
     borderColor: palette.line,
     borderRadius: 999,
@@ -687,6 +745,26 @@ const styles = StyleSheet.create({
   emptyTitle: { color: palette.white, fontSize: 25, fontWeight: "700", letterSpacing: -0.6 },
   entryBrand: { color: palette.muted, fontSize: 14, marginTop: 2 },
   entryCard: { borderTopColor: palette.line, borderTopWidth: 1, paddingVertical: 18 },
+  entryNote: {
+    color: palette.ink,
+    fontSize: 14,
+    lineHeight: 21,
+    marginTop: 4,
+  },
+  entryNoteBlock: {
+    backgroundColor: palette.white,
+    borderColor: palette.line,
+    borderRadius: 9,
+    borderWidth: 1,
+    marginTop: 12,
+    padding: 12,
+  },
+  entryNoteLabel: {
+    color: palette.muted,
+    fontSize: 11,
+    fontWeight: "800",
+    textTransform: "uppercase",
+  },
   entryMeta: { color: palette.muted, fontSize: 13, marginTop: 7 },
   entrySource: { color: palette.muted, fontSize: 11, lineHeight: 16, marginTop: 5 },
   entryTitle: { color: palette.ink, fontSize: 18, fontWeight: "700" },
@@ -721,6 +799,9 @@ const styles = StyleSheet.create({
   mealSection: { marginTop: 32 },
   mealTitle: { color: palette.ink, fontSize: 26, fontWeight: "700", letterSpacing: -0.8 },
   note: { color: palette.muted, fontSize: 12, lineHeight: 18, marginTop: 18 },
+  noteCount: { color: palette.muted, fontSize: 11, marginTop: 5, textAlign: "right" },
+  noteRetention: { color: palette.muted, fontSize: 11, lineHeight: 16, marginTop: 7 },
+  noteInput: { minHeight: 112, paddingBottom: 11, paddingTop: 11 },
   primaryButton: {
     alignSelf: "flex-start",
     backgroundColor: palette.lime,

@@ -284,7 +284,7 @@ describe("PostgreSQL API adapters", () => {
       timeZone: "America/Chicago",
       mealSlot: "breakfast",
       position: 0,
-      note: null,
+      note: "😀".repeat(2_500),
       repeatedFromRevisionId: null,
       recipe: {
         recipeId: "20000000-0000-4000-8000-000000000001",
@@ -315,6 +315,7 @@ describe("PostgreSQL API adapters", () => {
     };
     expect(mapDiaryEntryRecord(record)).toMatchObject({
       entryKind: "recipe",
+      note: record.note,
       food: null,
       foodVersionId: null,
       recipeVersionId: record.recipe.recipeVersionId,
@@ -350,7 +351,7 @@ describe("PostgreSQL API adapters", () => {
       localDate: "2026-08-16",
       localTime: "07:00:00",
       mealSlot: "breakfast",
-      note: null,
+      note: "",
       nutrients: [persistedAggregate()],
       occurredAt: "2026-08-16T12:00:00.000Z",
       operation: "create",
@@ -370,6 +371,7 @@ describe("PostgreSQL API adapters", () => {
     };
     expect(mapDiaryEntryRecord(record)).toMatchObject({
       entryKind: "food",
+      note: record.note,
       foodVersionId: "901",
       source: null,
       foodProvenance: {

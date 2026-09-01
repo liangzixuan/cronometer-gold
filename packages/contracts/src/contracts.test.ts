@@ -65,6 +65,17 @@ describe("public contracts", () => {
     expect(userProfileSchema.required).toContain("revision");
     expect(createDiaryEntryRequestSchema.required).not.toContain("localDate");
     expect(updateDiaryEntryRequestSchema.properties).not.toHaveProperty("localDate");
+    expect(updateDiaryEntryRequestSchema.properties.note.anyOf[0]).toEqual({
+      type: "string",
+      minLength: 1,
+      maxLength: 2_000,
+      pattern: expect.any(String),
+    });
+    expect(diaryFoodEntrySchema.properties.note.anyOf[0]).toEqual({
+      type: "string",
+      maxLength: 10_000,
+      pattern: expect.any(String),
+    });
     expect(diaryNutrientAggregateSchema.additionalProperties).toBe(false);
     expect(diaryNutrientAggregateSchema.properties).toHaveProperty("knownAmount");
     expect(diaryNutrientAggregateSchema.properties.knownAmount.maxLength).toBe(200);
@@ -82,6 +93,8 @@ describe("public contracts", () => {
     expect(diaryFoodEntrySchema.properties.nutrients.maxItems).toBe(256);
     expect(diaryFoodEntrySchema.required).toContain("source");
     expect(diaryFoodEntrySchema.required).toContain("foodProvenance");
+    expect(diaryFoodEntrySchema.required).toContain("note");
+    expect(diaryRecipeEntrySchema.required).toContain("note");
     expect(diaryFoodEntrySchema.required).toContain("timeZone");
     const servingEntryPortion = diaryFoodEntrySchema.properties.portion.oneOf[0];
     expect(servingEntryPortion.required).toContain("servingLabel");

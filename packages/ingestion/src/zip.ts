@@ -1,6 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { EventEmitter } from "node:events";
-import { constants, type Stats } from "node:fs";
+import {
+  close as closeDescriptor,
+  constants,
+  fstat as fstatDescriptor,
+  open as openDescriptor,
+  read as readDescriptor,
+  type Stats,
+} from "node:fs";
 import { link, lstat, mkdir, open, realpath, rename, unlink } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import type { Readable } from "node:stream";
@@ -12,8 +19,14 @@ import {
 } from "./archive.js";
 import { abortError, IngestionError, invariant } from "./errors.js";
 
+export interface ExactArchiveExpectation {
+  readonly byteSize: number;
+  readonly sha256: string;
+}
+
 export interface ExtractZipOptions {
   readonly archivePath: string;
+  readonly archiveExpectation?: ExactArchiveExpectation;
   readonly destinationDirectory: string;
   /** Full regular-file inventory for exact mode; required members for required-subset mode. */
   readonly expectedFiles: readonly string[];
@@ -88,6 +101,18 @@ interface ExtractionAttempt {
   readonly directories: Map<string, BoundDirectory>;
 }
 
+interface BoundArchiveDescriptor {
+  readonly expectation: ExactArchiveExpectation;
+  readonly fd: number;
+  readonly identity: FileIdentity;
+  readonly path: string;
+}
+
+interface OpenedZipArchive {
+  readonly binding?: BoundArchiveDescriptor;
+  readonly zip: ZipFile;
+}
+
 /**
  * Two-pass, lazy ZIP extraction: all central-directory entries are preflighted
  * before selected members are streamed to atomic, no-replace destination files.
@@ -129,8 +154,11 @@ export async function extractZipArchive(
     directories: new Map([[".", destination]]),
   };
   let zip: ZipFile | undefined;
+  let archiveBinding: BoundArchiveDescriptor | undefined;
   try {
-    zip = await openZip(options.archivePath);
+    const opened = await openZip(options.archivePath, options.archiveExpectation);
+    zip = opened.zip;
+    archiveBinding = opened.binding;
     const maxEntries = options.limits?.maxEntries ?? 20_000;
     invariant(
       zip.entryCount <= maxEntries,
@@ -200,6 +228,9 @@ export async function extractZipArchive(
     );
     await assertPublishedOutputs(extracted, attempt.createdPaths);
     await assertBoundDirectory(destination);
+    if (archiveBinding) {
+      await assertBoundArchiveDescriptor(archiveBinding);
+    }
     extracted.sort((left, right) =>
       left.archivePath < right.archivePath ? -1 : left.archivePath > right.archivePath ? 1 : 0,
     );
@@ -284,7 +315,236 @@ async function enumerateOpenZip(
   return Object.freeze(entries);
 }
 
-function openZip(path: string): Promise<ZipFile> {
+async function openZip(
+  path: string,
+  expectation?: ExactArchiveExpectation,
+): Promise<OpenedZipArchive> {
+  if (!expectation) {
+    return Object.freeze({ zip: await openZipPath(path) });
+  }
+  invariant(
+    /^[0-9a-f]{64}$/.test(expectation.sha256),
+    "INVALID_ARCHIVE_ENTRY",
+    "Exact ZIP expectation SHA-256 must be lowercase hexadecimal",
+  );
+  invariant(
+    Number.isSafeInteger(expectation.byteSize) && expectation.byteSize > 0,
+    "INVALID_ARCHIVE_ENTRY",
+    "Exact ZIP expectation byte size must be a positive safe integer",
+  );
+  const fd = await openArchiveDescriptor(path);
+  let descriptorOwned = true;
+  let operationError: unknown;
+  let result: OpenedZipArchive | undefined;
+  try {
+    const before = await statArchiveDescriptor(fd);
+    invariant(
+      before.isFile() && !before.isSymbolicLink() && before.size === expectation.byteSize,
+      "INVALID_ARCHIVE_ENTRY",
+      "Verified ZIP archive is not the expected regular file",
+      { path, expectedByteSize: expectation.byteSize, actualByteSize: before.size },
+    );
+    const initialIdentity = fileIdentity(before, null);
+    const pathBefore = await lstat(path);
+    invariant(
+      isSameOwnedFile(pathBefore, initialIdentity),
+      "INVALID_ARCHIVE_ENTRY",
+      "Verified ZIP archive path changed before descriptor binding",
+      { path },
+    );
+    const sha256 = await hashArchiveDescriptor(fd, expectation.byteSize);
+    const after = await statArchiveDescriptor(fd);
+    invariant(
+      isSameOwnedFile(after, initialIdentity),
+      "INVALID_ARCHIVE_ENTRY",
+      "Verified ZIP archive changed while binding its descriptor",
+      { path },
+    );
+    const pathAfter = await lstat(path);
+    invariant(
+      isSameOwnedFile(pathAfter, initialIdentity),
+      "INVALID_ARCHIVE_ENTRY",
+      "Verified ZIP archive path changed while binding its descriptor",
+      { path },
+    );
+    invariant(
+      sha256 === expectation.sha256,
+      "INVALID_ARCHIVE_ENTRY",
+      "Verified ZIP archive content differs from its exact expectation",
+      { path, expectedSha256: expectation.sha256, actualSha256: sha256 },
+    );
+    const zip = await openZipDescriptor(fd, path);
+    // yauzl now owns this raw descriptor. closeOpenZip explicitly calls
+    // ZipFile.close(), whose FdSlicer unref closes the fd and reports its
+    // one-shot close/error event before extraction settles.
+    result = Object.freeze({
+      binding: Object.freeze({
+        expectation,
+        fd,
+        identity: fileIdentity(after, sha256),
+        path,
+      }),
+      zip,
+    });
+    descriptorOwned = false;
+  } catch (error) {
+    operationError = error;
+  }
+
+  let descriptorCloseError: Error | undefined;
+  if (descriptorOwned) {
+    try {
+      await closeArchiveDescriptor(fd);
+    } catch (closeError) {
+      descriptorCloseError = cleanupFailure(
+        "Unable to close the exact ZIP archive descriptor after initialization failed",
+        { path },
+        closeError,
+      );
+    }
+  }
+
+  if (operationError !== undefined) {
+    if (descriptorCloseError !== undefined) {
+      throw new AggregateError(
+        [operationError, descriptorCloseError],
+        "Exact ZIP archive initialization failed and descriptor close was incomplete",
+        { cause: operationError },
+      );
+    }
+    throw operationError;
+  }
+  if (descriptorCloseError !== undefined) {
+    throw descriptorCloseError;
+  }
+  invariant(
+    result !== undefined,
+    "INVALID_ARCHIVE_ENTRY",
+    "Exact ZIP archive initialization produced no bound result",
+    { path },
+  );
+  return result;
+}
+
+async function assertBoundArchiveDescriptor(binding: BoundArchiveDescriptor): Promise<void> {
+  const metadata = await statArchiveDescriptor(binding.fd);
+  invariant(
+    isSameOwnedFile(metadata, binding.identity),
+    "INVALID_ARCHIVE_ENTRY",
+    "Verified ZIP archive changed during extraction",
+    { path: binding.path },
+  );
+  const pathMetadata = await lstat(binding.path);
+  invariant(
+    isSameOwnedFile(pathMetadata, binding.identity),
+    "INVALID_ARCHIVE_ENTRY",
+    "Verified ZIP archive path changed during extraction",
+    { path: binding.path },
+  );
+  const sha256 = await hashArchiveDescriptor(binding.fd, binding.expectation.byteSize);
+  invariant(
+    sha256 === binding.expectation.sha256,
+    "INVALID_ARCHIVE_ENTRY",
+    "Verified ZIP archive content changed during extraction",
+    { path: binding.path },
+  );
+}
+
+function openArchiveDescriptor(path: string): Promise<number> {
+  return new Promise((resolveOpen, reject) => {
+    openDescriptor(path, constants.O_RDONLY | constants.O_NOFOLLOW, (error, fd) => {
+      if (error) {
+        reject(
+          new IngestionError(
+            "INVALID_ARCHIVE_ENTRY",
+            "Unable to open the exact ZIP archive descriptor",
+            { path },
+            { cause: error },
+          ),
+        );
+        return;
+      }
+      resolveOpen(fd);
+    });
+  });
+}
+
+function statArchiveDescriptor(fd: number): Promise<Stats> {
+  return new Promise((resolveStat, reject) => {
+    fstatDescriptor(fd, (error, metadata) => {
+      if (error) reject(error);
+      else resolveStat(metadata);
+    });
+  });
+}
+
+function readArchiveDescriptor(fd: number, buffer: Buffer, position: number): Promise<number> {
+  return new Promise((resolveRead, reject) => {
+    readDescriptor(fd, buffer, 0, buffer.byteLength, position, (error, bytesRead) => {
+      if (error) reject(error);
+      else resolveRead(bytesRead);
+    });
+  });
+}
+
+function closeArchiveDescriptor(fd: number): Promise<void> {
+  return new Promise((resolveClose, reject) => {
+    closeDescriptor(fd, (error) => {
+      if (error) reject(error);
+      else resolveClose();
+    });
+  });
+}
+
+async function hashArchiveDescriptor(fd: number, expectedSize: number): Promise<string> {
+  const hash = createHash("sha256");
+  let position = 0;
+  while (position < expectedSize) {
+    const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, expectedSize - position));
+    const bytesRead = await readArchiveDescriptor(fd, buffer, position);
+    invariant(bytesRead > 0, "INVALID_ARCHIVE_ENTRY", "ZIP archive read made no progress");
+    hash.update(buffer.subarray(0, bytesRead));
+    position += bytesRead;
+  }
+  const trailing = Buffer.allocUnsafe(1);
+  invariant(
+    (await readArchiveDescriptor(fd, trailing, position)) === 0,
+    "INVALID_ARCHIVE_ENTRY",
+    "ZIP archive exceeds its exact expected size",
+  );
+  return hash.digest("hex");
+}
+
+function openZipDescriptor(fd: number, path: string): Promise<ZipFile> {
+  return new Promise((resolveOpen, reject) => {
+    yauzl.fromFd(
+      fd,
+      {
+        autoClose: false,
+        decodeStrings: true,
+        lazyEntries: true,
+        strictFileNames: true,
+        validateEntrySizes: true,
+      },
+      (error, zipfile) => {
+        if (error || !zipfile) {
+          reject(
+            new IngestionError(
+              "INVALID_ARCHIVE_ENTRY",
+              "Unable to open the descriptor-bound ZIP archive",
+              { path },
+              { cause: error },
+            ),
+          );
+          return;
+        }
+        resolveOpen(zipfile);
+      },
+    );
+  });
+}
+
+function openZipPath(path: string): Promise<ZipFile> {
   return new Promise((resolveOpen, reject) => {
     yauzl.open(
       path,

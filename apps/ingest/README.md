@@ -42,6 +42,77 @@ See [`infra/runbooks/food-source-release.md`](../../infra/runbooks/food-source-r
 for the release procedure. Database promotion requires three distinct immutable
 approvals bound to the manifest and validation digests.
 
+## USDA FDC evidence-only inspection
+
+After controlled acquisition has pinned the artifact SHA-256 and byte size, the
+executing parser version and immutable build digest, and the exact single-member
+JSON inventory, inspect the retained local artifact without opening PostgreSQL:
+
+```sh
+INGEST_PARSER_BUILD_SHA256=<pinned-lowercase-sha256> \
+pnpm --filter @nutrition-tracker/ingest cli -- fdc inspect \
+  data/manifests/<fdc-foundation-release>.json \
+  --artifact .local-data/acquired/<fdc-foundation-release>.zip \
+  --cache-dir .local-data/cache \
+  --extract-dir .local-data/extracted-fdc-inspect
+```
+
+`fdc inspect` accepts only the manifest path and the three local path options;
+caller-authored actors or other authority claims are rejected. It never performs
+a network acquisition or database write. Before parsing, it requires the
+manifest-pinned artifact SHA-256 and byte size, verifies both against the local
+ZIP, and then reopens the verified cache object with `O_NOFOLLOW`. It always
+opens, streams, and verifies the supplied `--artifact` path first, even when the
+pinned digest is already present in the cache; a cached object cannot stand in
+for a missing or mismatched source path. The extractor reads that same bound
+descriptor and rechecks its path, file identity, exact
+length, and SHA-256 before returning; pathname replacement or same-inode mutation
+fails closed and rolls back extracted output. The command also binds the manifest
+parser package/version and build digest to the executing parser. The manifest
+must retain the exact reviewed Foundation contract: `application/zip`,
+`dataTypes: ["Foundation"]`, `languages: ["en"]`, `markets: ["US"]`, and
+`sourceIdentityFields: ["fdcId", "dataType"]`.
+The extractor preflights that the ZIP's complete regular-file inventory is
+exactly the one manifested JSON member. The parser opens that captured member
+with `O_NOFOLLOW`, verifies its regular-file identity before and after reading,
+and hashes the exact bytes it parses; content drift or a path replacement fails
+closed.
+
+The JSON result explicitly includes `manifestSha256`, deterministic archive
+inventory and exact parsed-member evidence, parser/release identity and metrics,
+and `semanticEvidence`. Semantic evidence digests the canonical accepted records
+and the complete ordered quarantine, excluded-nutrient, excluded-portion, and
+excluded-attribute arrays, including their dispositions and reasons. The
+`baseline` object carries those semantic digests as well as the count and accepted
+payload values, and every key must already match
+`validation.releaseSpecificExpectations`; a missing or changed value fails
+closed. On a mismatch the command still writes the full computed local evidence,
+including `baseline`, and sets `baselineReview.status` to `review-required` with
+deterministic missing/mismatch details; it then exits nonzero. When every key
+matches, `baselineReview.status` is `matched-manifest-expectations`. In both
+cases `baselineReview.kind` is
+`non-qualifying-local-baseline-comparison-v1` and
+`qualifiesAsAcquisitionOrApprovalEvidence` is false. Operators can therefore
+review and deliberately copy a first proposed baseline without the command
+claiming that it is approved or import-ready. `localVerification.kind` is
+`non-qualifying-local-artifact-verification-v1` and
+`qualifiesAsAcquisitionObservation` is false. The result deliberately contains
+no acquisition-shaped identity, actor, approval, or promotion claim.
+
+If exact extraction succeeds but JSON parsing or baseline comparison fails, the
+captured expected member is intentionally retained for diagnosis in the private
+operator-owned extraction directory (`0700` directory, `0600` single-link file).
+Automatic deletion could target a path replaced after capture, so review the
+failure and remove the retained local evidence only after confirming its
+identity. It is not acquisition or release evidence.
+
+The command does not mutate the manifest, count as either of the two independent
+fresh-download observations, complete rights review, approve or promote a batch,
+or make a template import-ready. The checked-in candidate intentionally retains
+null artifact/parser pins and the new semantic expectations are not guessed, so
+it fails this command until controlled acquisition and build review have produced
+real values in a reviewed working copy.
+
 ## Health Canada CNF evidence and staging
 
 After a controlled acquisition has pinned the artifact SHA-256 and byte size,
@@ -185,6 +256,12 @@ independent approval or promotion decision.
 
 `catalogue stage-fdc` requires content-addressed, object-locked artifact and
 manifest URIs; the manifest URI must contain the exact manifest SHA-256.
+It accepts exactly one manifest plus `--artifact`, `--cache-dir`,
+`--extract-dir`, and `--manifest-object-uri`; caller-authored identity or unknown
+options are rejected before manifest or database access. It completes the exact
+descriptor-bound artifact/inventory/member parse and strict reviewed-baseline
+preflight before opening PostgreSQL or registering a source or batch, and applies
+the same mandatory supplied-`--artifact` source-read rule as `fdc inspect`.
 It checkpoints every committed record chunk. Replaying a
 partially staged chunk is byte-for-byte idempotent; replaying a validated or
 completed batch returns its validation result instead of reopening it. A mapping

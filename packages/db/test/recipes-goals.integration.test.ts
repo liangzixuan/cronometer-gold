@@ -18,6 +18,7 @@ import {
   createRecipe,
   createRecipeDiaryEntry,
   type Database,
+  DiaryIdempotencyConflictError,
   deleteDiaryEntry,
   getCurrentNutritionGoal,
   getDiaryDay,
@@ -37,6 +38,7 @@ import {
   RecipeRevisionConflictError,
   RecipeValidationError,
   registerPasswordAccount,
+  repeatDiaryEntry,
   reviseNutritionGoal,
   reviseRecipe,
   runMigrations,
@@ -48,6 +50,152 @@ const databaseUrl = process.env.TEST_DATABASE_URL;
 const describeDatabase = databaseUrl ? describe : describe.skip;
 
 describeDatabase("versioned recipes, recipe diary entries, and nutrition goals", () => {
+  it("persists exact food and recipe notes across revisions, replay, clear, and repeat", async () => {
+    if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
+    const fixture = await createFixture(databaseUrl, "diary_notes");
+    try {
+      const recipe = await createRecipe(fixture.database, {
+        clientOperationId: randomUUID(),
+        recipe: foodRecipeDraft(fixture.catalogue.foodVersionId, fixture.catalogue.servingId, {
+          servingCount: "1",
+          servingLabel: "bowl",
+          yieldGrams: "50",
+        }),
+        requestDigest: randomBytes(32).toString("hex"),
+        userId: fixture.owner.userId,
+      });
+      const food = await createFoodDiaryEntry(fixture.database, {
+        clientOperationId: randomUUID(),
+        foodVersionId: fixture.catalogue.foodVersionId,
+        mealSlot: "lunch",
+        occurredAt: "2026-08-20T17:00:00Z",
+        portion: {
+          amount: "1",
+          kind: "serving",
+          servingId: fixture.catalogue.servingId,
+        },
+        requestDigest: randomBytes(32).toString("hex"),
+        userId: fixture.owner.userId,
+      });
+      const recipeLog = await createRecipeDiaryEntry(fixture.database, {
+        clientOperationId: randomUUID(),
+        mealSlot: "dinner",
+        occurredAt: "2026-08-20T23:00:00Z",
+        portion: { amount: "1", kind: "serving" },
+        recipeId: recipe.recipe.id,
+        recipeVersionId: recipe.recipe.currentVersion.id,
+        requestDigest: randomBytes(32).toString("hex"),
+        userId: fixture.owner.userId,
+      });
+
+      expect(food.entry.note).toBeNull();
+      expect(recipeLog.entry.note).toBeNull();
+      const cases = [
+        {
+          entryId: food.entry.id,
+          note: "  food 😀 note\r\nkeep exact spacing  ",
+          repeatClearedAt: "2026-08-22T17:00:00Z",
+          repeatSetAt: "2026-08-21T17:00:00Z",
+        },
+        {
+          entryId: recipeLog.entry.id,
+          note: "\tRecipe 🍲 note\nsecond line\t",
+          repeatClearedAt: "2026-08-24T17:00:00Z",
+          repeatSetAt: "2026-08-23T17:00:00Z",
+        },
+      ] as const;
+
+      for (const testCase of cases) {
+        const setInput = {
+          clientOperationId: randomUUID(),
+          entryId: testCase.entryId,
+          expectedEntryRevision: "1",
+          note: testCase.note,
+          requestDigest: randomBytes(32).toString("hex"),
+          userId: fixture.owner.userId,
+        };
+        const set = await updateDiaryEntry(fixture.database, setInput);
+        expect(set).toMatchObject({
+          entry: { currentRevision: "2", note: testCase.note },
+          replayed: false,
+        });
+        expect(
+          (
+            await getDiaryDay(fixture.database, {
+              localDate: set.entry.localDate,
+              userId: fixture.owner.userId,
+            })
+          ).entries.find((entry) => entry.id === testCase.entryId),
+        ).toMatchObject({ note: testCase.note });
+
+        expect(await updateDiaryEntry(fixture.database, setInput)).toMatchObject({
+          entry: { currentRevision: "2", note: testCase.note },
+          replayed: true,
+        });
+        await expect(
+          updateDiaryEntry(fixture.database, {
+            ...setInput,
+            requestDigest: randomBytes(32).toString("hex"),
+          }),
+        ).rejects.toBeInstanceOf(DiaryIdempotencyConflictError);
+
+        const cleared = await updateDiaryEntry(fixture.database, {
+          clientOperationId: randomUUID(),
+          entryId: testCase.entryId,
+          expectedEntryRevision: "2",
+          note: null,
+          requestDigest: randomBytes(32).toString("hex"),
+          userId: fixture.owner.userId,
+        });
+        expect(cleared).toMatchObject({
+          entry: { currentRevision: "3", note: null },
+          replayed: false,
+        });
+        expect(
+          (
+            await getDiaryDay(fixture.database, {
+              localDate: cleared.entry.localDate,
+              userId: fixture.owner.userId,
+            })
+          ).entries.find((entry) => entry.id === testCase.entryId),
+        ).toMatchObject({ note: null });
+        expect(
+          await fixture.database
+            .selectFrom("diary_entry_revision")
+            .select(["revision_number", "note"])
+            .where("diary_entry_id", "=", testCase.entryId)
+            .orderBy("revision_number", "asc")
+            .execute(),
+        ).toEqual([
+          { note: null, revision_number: "1" },
+          { note: testCase.note, revision_number: "2" },
+          { note: null, revision_number: "3" },
+        ]);
+
+        for (const source of [
+          { expectedNote: testCase.note, occurredAt: testCase.repeatSetAt, revision: "2" },
+          { expectedNote: null, occurredAt: testCase.repeatClearedAt, revision: "3" },
+        ] as const) {
+          const repeated = await repeatDiaryEntry(fixture.database, {
+            clientOperationId: randomUUID(),
+            occurredAt: source.occurredAt,
+            requestDigest: randomBytes(32).toString("hex"),
+            sourceEntryId: testCase.entryId,
+            sourceRevision: source.revision,
+            userId: fixture.owner.userId,
+          });
+          expect(repeated.entry).toMatchObject({
+            currentRevision: "1",
+            note: source.expectedNote,
+            repeatedFromRevisionId: expect.any(String),
+          });
+        }
+      }
+    } finally {
+      await fixture.close();
+    }
+  }, 30_000);
+
   it("persists explainable recipe history and logs a pinned recipe version", async () => {
     if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
     const fixture = await createFixture(databaseUrl, "recipes");

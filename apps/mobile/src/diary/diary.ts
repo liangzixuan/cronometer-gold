@@ -57,6 +57,8 @@ interface DiaryEntryCommon {
   readonly localTime: string;
   readonly position: number;
   readonly nutrients: readonly DiaryNutrient[];
+  /** Private owner-authored text, returned exactly as entered. */
+  readonly note: string | null;
 }
 
 interface DiaryFoodEntryCommon extends DiaryEntryCommon {
@@ -148,6 +150,8 @@ const API_POSITIVE_DECIMAL = /^(?=.*[1-9])(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,6})
 const API_RESOLVED_DECIMAL = /^(?=.*[1-9])(?:0|[1-9][0-9]{0,17})(?:\.[0-9]+)?$/u;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const TIME = /^(?:[01][0-9]|2[0-3]):[0-5][0-9](?::[0-5][0-9](?:\.\d{1,9})?)?$/u;
+export const MAX_DIARY_NOTE_LENGTH = 2_000;
+const MAX_LEGACY_DIARY_NOTE_LENGTH = 10_000;
 
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -171,6 +175,32 @@ function positiveResolvedDecimal(value: unknown): value is string {
 
 function isMeal(value: unknown): value is MealSlot {
   return mealSlots.some((meal) => meal === value);
+}
+
+function isWellFormedUnicode(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) return false;
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/** Preserve note bytes exactly; an empty draft is the explicit clear operation. */
+export function diaryNoteFromDraft(value: string): string | null {
+  if (value.length === 0) return null;
+  if (value.includes("\u0000") || !isWellFormedUnicode(value)) {
+    throw new TypeError("A private diary note must be valid Unicode text without U+0000.");
+  }
+  if ([...value].length > MAX_DIARY_NOTE_LENGTH) {
+    throw new RangeError("A private diary note cannot exceed 2,000 characters.");
+  }
+  return value;
 }
 
 export function isLocalDate(value: unknown): value is string {
@@ -444,6 +474,34 @@ function exactEntryKeys(value: Record<string, unknown>, expected: readonly strin
   return Object.keys(value).length === expected.length && expected.every((key) => key in value);
 }
 
+function hasOwnNote(value: Record<string, unknown>): boolean {
+  return Object.hasOwn(value, "note");
+}
+
+function exactEntryKeysWithOptionalNote(
+  value: Record<string, unknown>,
+  expectedWithoutNote: readonly string[],
+): boolean {
+  return exactEntryKeys(
+    value,
+    hasOwnNote(value) ? [...expectedWithoutNote, "note"] : expectedWithoutNote,
+  );
+}
+
+/** Tolerate legacy or optional responses without a populated note; new writes remain capped. */
+function parseDiaryResponseNote(value: Record<string, unknown>): string | null {
+  if (!hasOwnNote(value) || value.note === null) return null;
+  if (
+    typeof value.note !== "string" ||
+    [...value.note].length > MAX_LEGACY_DIARY_NOTE_LENGTH ||
+    value.note.includes("\u0000") ||
+    !isWellFormedUnicode(value.note)
+  ) {
+    throw new TypeError("A diary entry note was invalid.");
+  }
+  return value.note.length === 0 ? null : value.note;
+}
+
 function parseSource(value: unknown): DiarySource {
   if (
     !record(value) ||
@@ -588,6 +646,7 @@ function parseEntry(value: unknown): DiaryEntry {
     value.nutrients.length > 256
   )
     throw new TypeError("A diary entry was invalid.");
+  const note = parseDiaryResponseNote(value);
   const common = {
     id: value.id,
     revision: String(value.revision),
@@ -599,10 +658,11 @@ function parseEntry(value: unknown): DiaryEntry {
     localTime: value.localTime,
     position: Number(value.position),
     nutrients: value.nutrients.map(parseDiaryNutrient),
+    note,
   };
   if (
     value.entryKind === "food" &&
-    exactEntryKeys(value, [
+    exactEntryKeysWithOptionalNote(value, [
       "id",
       "revision",
       "entryKind",
@@ -679,7 +739,7 @@ function parseEntry(value: unknown): DiaryEntry {
   }
   if (
     value.entryKind === "recipe" &&
-    exactEntryKeys(value, [
+    exactEntryKeysWithOptionalNote(value, [
       "id",
       "revision",
       "entryKind",

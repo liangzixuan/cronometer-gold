@@ -11,6 +11,7 @@ import {
   nutritionGoalSchema,
   recipeDraftRequestSchema,
   recipeSchema,
+  updateDiaryEntryRequestSchema,
 } from "./index.js";
 
 const addFormats = addFormatsModule.default as unknown as (ajv: Ajv) => Ajv;
@@ -372,6 +373,7 @@ describe("food and recipe diary entry union", () => {
     timeZone: "America/Chicago",
     position: 0,
     nutrients: [aggregate],
+    note: null,
   } as const;
 
   it("accepts both exact variants and the pinned recipe log request", () => {
@@ -411,6 +413,25 @@ describe("food and recipe diary entry union", () => {
       source: null,
     };
     expect(validateEntry(recipeEntry), JSON.stringify(validateEntry.errors)).toBe(true);
+    expect(validateEntry({ ...food, note: "" })).toBe(true);
+    expect(validateEntry({ ...food, note: "x".repeat(10_000) })).toBe(true);
+    expect(validateEntry({ ...food, note: "😀".repeat(2_500) })).toBe(true);
+    expect(validateEntry({ ...food, note: "x".repeat(10_001) })).toBe(false);
+    expect(validateEntry({ ...food, note: "contains\u0000null" })).toBe(false);
+    expect(validateEntry({ ...food, note: "\uD800" })).toBe(false);
+    expect(validateEntry({ ...food, note: "\uDC00" })).toBe(false);
+    const { note: _note, ...foodWithoutNote } = food;
+    expect(validateEntry(foodWithoutNote)).toBe(false);
+
+    const validatePatch = validator(updateDiaryEntryRequestSchema);
+    expect(validatePatch({ note: "  exactly 😀 as entered\n" })).toBe(true);
+    expect(validatePatch({ note: null })).toBe(true);
+    expect(validatePatch({ note: "" })).toBe(false);
+    expect(validatePatch({ note: "x".repeat(2_001) })).toBe(false);
+    expect(validatePatch({ note: "contains\u0000null" })).toBe(false);
+    expect(validatePatch({ note: "\uD800" })).toBe(false);
+    expect(validatePatch({ note: "\uDC00" })).toBe(false);
+
     expect(
       validateEntry({ ...recipeEntry, resolvedGrams: `33.${"3".repeat(150)}` }),
       JSON.stringify(validateEntry.errors),

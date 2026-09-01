@@ -24,6 +24,7 @@ export interface AcquireArtifactOptions {
   readonly operatorPrincipalId: string;
   readonly tool: string;
   readonly freshness?: "allow-cache" | "require-fresh-network";
+  readonly sourceReadMode?: "allow-cache-replay" | "require-source-read";
   readonly sourceMode?: "local-test" | "release";
   readonly signal?: AbortSignal;
   readonly maxBytes?: number;
@@ -96,7 +97,11 @@ export async function acquireArtifact(options: AcquireArtifactOptions): Promise<
   const temporaryDirectory = join(cacheDirectory, ".tmp");
   await mkdir(temporaryDirectory, { recursive: true, mode: 0o700 });
 
-  if (options.verification.mode === "verified" && options.freshness !== "require-fresh-network") {
+  if (
+    options.verification.mode === "verified" &&
+    options.freshness !== "require-fresh-network" &&
+    options.sourceReadMode !== "require-source-read"
+  ) {
     const existingPath = cachePath(cacheDirectory, options.verification.expected.sha256);
     const existing = await verifyExistingCache(
       existingPath,

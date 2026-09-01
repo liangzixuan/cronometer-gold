@@ -67,6 +67,7 @@ export const diaryEntry: DiaryPublicFoodEntry = {
   localDate: "2026-08-15",
   localTime: "08:30:00.000",
   position: 0,
+  note: null,
   source: {
     attributionRequired: true,
     attributionText: "Data source: USDA FoodData Central",

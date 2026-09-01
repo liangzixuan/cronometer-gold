@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest";
 
 import {
   diaryEditErrorMessage,
+  diaryEntryNoteCharacterCount,
   entryEnergyDisplay,
   isLocalDate,
   localDateTimeToInstant,
   nutrientDisplay,
   parseDiaryDay,
   parseDiaryMutation,
+  prepareDiaryEntryNote,
+  prepareDiaryEntryNotePatch,
   prepareQuickAddOperation,
   quickAddOccurredAt,
   shiftLocalDate,
@@ -63,6 +66,7 @@ const entry = {
   },
   mealSlot: "breakfast",
   resolvedGrams: "182.000000",
+  note: null,
   occurredAt: "2026-08-15T13:30:00.000Z",
   localDate: "2026-08-15",
   timeZone: "America/Chicago",
@@ -156,6 +160,39 @@ describe("web diary contract", () => {
     expect(diary.entries[1]?.entryKind === "recipe" && diary.entries[1].recipe.name).toBe(
       "Bean stew",
     );
+  });
+
+  it("normalizes a missing legacy note and preserves exact multiline notes", () => {
+    const note = "  Ate after a long run.\nSecond line stays exact.  ";
+    const diary = parseDiaryDay({
+      data: {
+        id: "41b5f2ea-2274-4b98-8b13-96504d176917",
+        localDate: "2026-08-15",
+        timeZone: "America/Chicago",
+        status: "open",
+        revision: "5",
+        entries: [{ ...entry, note }],
+        totals: [nutrient],
+        updatedAt: "2026-08-15T13:31:00.000Z",
+      },
+    });
+    expect(diary.entries[0]?.note).toBe(note);
+
+    const { note: _omitted, ...entryWithoutNote } = entry;
+    expect(
+      parseDiaryDay({
+        data: {
+          id: "41b5f2ea-2274-4b98-8b13-96504d176917",
+          localDate: "2026-08-15",
+          timeZone: "America/Chicago",
+          status: "open",
+          revision: "5",
+          entries: [entryWithoutNote],
+          totals: [nutrient],
+          updatedAt: "2026-08-15T13:31:00.000Z",
+        },
+      }).entries[0]?.note,
+    ).toBeNull();
   });
 
   it("accepts owner-entered private food without fabricating a public source", () => {
@@ -336,6 +373,58 @@ describe("web diary contract", () => {
         },
       }).entry?.revision,
     ).toBe("3");
+  });
+});
+
+describe("private diary entry notes", () => {
+  it("normalizes only an explicit clear and preserves all other input bytes", () => {
+    const exact = "  before meal\nafter meal  ";
+    expect(prepareDiaryEntryNote("")).toBeNull();
+    expect(prepareDiaryEntryNote(exact)).toBe(exact);
+
+    const atLimit = "🥑".repeat(2_000);
+    const overLimit = `${atLimit}🥑`;
+    expect(atLimit.length).toBe(4_000);
+    expect(diaryEntryNoteCharacterCount(atLimit)).toBe(2_000);
+    expect(prepareDiaryEntryNote(atLimit)).toBe(atLimit);
+    expect(() => prepareDiaryEntryNote(overLimit)).toThrow(RangeError);
+    expect(() => prepareDiaryEntryNote("x".repeat(2_001))).toThrow(RangeError);
+    expect(() => prepareDiaryEntryNote("before\u0000after")).toThrow("null character");
+    expect(() => prepareDiaryEntryNote("unpaired \ud800")).toThrow("well-formed Unicode");
+    expect(() => prepareDiaryEntryNote("unpaired \udc00")).toThrow("well-formed Unicode");
+  });
+
+  it("omits untouched legacy notes while keeping explicit clear and edit patches", () => {
+    const legacyOverDraftLimit = "🥑".repeat(2_001);
+    expect(prepareDiaryEntryNotePatch(legacyOverDraftLimit, legacyOverDraftLimit)).toEqual({});
+    expect(prepareDiaryEntryNotePatch("", "")).toEqual({});
+    expect(prepareDiaryEntryNotePatch("", null)).toEqual({});
+    expect(prepareDiaryEntryNotePatch("", "clear me")).toEqual({ note: null });
+    expect(prepareDiaryEntryNotePatch("  exact edit  ", "old")).toEqual({
+      note: "  exact edit  ",
+    });
+    expect(() => prepareDiaryEntryNotePatch(legacyOverDraftLimit, "old")).toThrow(RangeError);
+  });
+
+  it("normalizes legacy empty notes and accepts valid response strings through 10,000 code points", () => {
+    const mutation = (note: string | undefined) => ({
+      data: {
+        replayed: false,
+        entry:
+          note === undefined ? (({ note: _note, ...legacy }) => legacy)(entry) : { ...entry, note },
+        affectedDays: [{ localDate: "2026-08-15", revision: "4" }],
+      },
+    });
+    const atLimit = "🥑".repeat(10_000);
+    expect(parseDiaryMutation(mutation(undefined)).entry?.note).toBeNull();
+    expect(parseDiaryMutation(mutation("")).entry?.note).toBeNull();
+    expect(parseDiaryMutation(mutation("valid 😀 text")).entry?.note).toBe("valid 😀 text");
+    const accepted = parseDiaryMutation(mutation(atLimit));
+    expect(accepted.entry?.note).toBe(atLimit);
+    expect(() => parseDiaryMutation(mutation("contains\u0000null"))).toThrow(TypeError);
+    expect(() => parseDiaryMutation(mutation("\uD800"))).toThrow(TypeError);
+    expect(() => parseDiaryMutation(mutation("\uDC00"))).toThrow(TypeError);
+    expect(() => parseDiaryMutation(mutation(`${atLimit}🥑`))).toThrow(TypeError);
   });
 });
 

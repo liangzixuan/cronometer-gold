@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   existsSync,
+  fstatSync,
   mkdirSync,
   readdirSync,
   readlinkSync,
@@ -13,7 +14,7 @@ import { mkdir, mkdtemp, open, readdir, readFile, rm, writeFile } from "node:fs/
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import yauzl, { type ZipFile } from "yauzl";
+import yauzl, { type Options as YauzlOptions, type ZipFile } from "yauzl";
 import { acquireArtifact, extractZipArchive, planArchiveExtraction } from "../src/index.js";
 
 const temporaryDirectories: string[] = [];
@@ -62,6 +63,38 @@ describe("artifact acquisition", () => {
       observation: { transport: "cache", freshDownload: false, sha256, byteSize: bytes.length },
     });
     expect(second.observation.acquisitionId).not.toBe(first.observation.acquisitionId);
+  });
+
+  it("requires reading the source before reusing a pinned cache object", async () => {
+    const root = await temporaryDirectory();
+    const source = join(root, "source.bin");
+    const cacheDirectory = join(root, "cache");
+    const bytes = Buffer.from("canonical source-read fixture");
+    await writeFile(source, bytes);
+    const sha256 = createHash("sha256").update(bytes).digest("hex");
+    const common = {
+      cacheDirectory,
+      operatorPrincipalId: "operator.source-read@example.test",
+      source,
+      sourceMode: "local-test" as const,
+      tool: "ingestion-test/1",
+      verification: {
+        mode: "verified" as const,
+        expected: { byteSize: bytes.length, provenance: "pinned fixture", sha256 },
+      },
+    };
+    const seeded = await acquireArtifact(common);
+
+    await rm(source);
+    await expect(
+      acquireArtifact({ ...common, sourceReadMode: "require-source-read" }),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+
+    await writeFile(source, Buffer.alloc(bytes.length, 0x78));
+    await expect(
+      acquireArtifact({ ...common, sourceReadMode: "require-source-read" }),
+    ).rejects.toMatchObject({ code: "CHECKSUM_MISMATCH" });
+    expect(await readFile(seeded.path)).toEqual(bytes);
   });
 
   it("rejects a checksum mismatch without promoting partial bytes", async () => {
@@ -266,6 +299,185 @@ describe("archive safety and ZIP extraction", () => {
         { maxCompressionRatio: 20 },
       ),
     ).toThrowError(expect.objectContaining({ code: "ARCHIVE_LIMIT_EXCEEDED" }));
+  });
+
+  it("extracts from the exact verified descriptor and closes it on success", async () => {
+    const root = await temporaryDirectory();
+    const archive = join(root, "descriptor-bound-success.zip");
+    const archiveBytes = makeStoredZip([{ name: "only.csv", data: Buffer.from("trusted") }]);
+    await writeFile(archive, archiveBytes);
+    const destinationDirectory = join(root, "success-out");
+    const originalFromFd = yauzl.fromFd.bind(yauzl) as (
+      fd: number,
+      options: YauzlOptions,
+      callback: (error: Error | null, zipfile: ZipFile) => void,
+    ) => void;
+    let descriptor: number | undefined;
+    const fromFdSpy = vi.spyOn(yauzl, "fromFd").mockImplementation(((
+      fd: number,
+      options: YauzlOptions,
+      callback: (error: Error | null, zipfile: ZipFile) => void,
+    ) => {
+      descriptor = fd;
+      originalFromFd(fd, options, callback);
+    }) as typeof yauzl.fromFd);
+    try {
+      const extracted = await extractZipArchive({
+        archiveExpectation: {
+          byteSize: archiveBytes.byteLength,
+          sha256: createHash("sha256").update(archiveBytes).digest("hex"),
+        },
+        archivePath: archive,
+        destinationDirectory,
+        expectedFiles: ["only.csv"],
+      });
+      expect(extracted).toHaveLength(1);
+      expect(descriptor).toBeTypeOf("number");
+      expect(() => fstatSync(descriptor ?? -1)).toThrowError(
+        expect.objectContaining({ code: "EBADF" }),
+      );
+      expect(await readFile(join(destinationDirectory, "only.csv"), "utf8")).toBe("trusted");
+    } finally {
+      fromFdSpy.mockRestore();
+    }
+  });
+
+  it("closes the exact descriptor when yauzl initialization fails", async () => {
+    const root = await temporaryDirectory();
+    const archive = join(root, "descriptor-initialization-failure.zip");
+    const archiveBytes = makeStoredZip([{ name: "only.csv", data: Buffer.from("trusted") }]);
+    await writeFile(archive, archiveBytes);
+    const destinationDirectory = join(root, "initialization-failure-out");
+    let descriptor: number | undefined;
+    const fromFdSpy = vi.spyOn(yauzl, "fromFd").mockImplementation(((
+      fd: number,
+      _options: YauzlOptions,
+      callback: (error: Error | null, zipfile: ZipFile) => void,
+    ) => {
+      descriptor = fd;
+      callback(
+        new Error("injected descriptor initialization failure"),
+        undefined as unknown as ZipFile,
+      );
+    }) as typeof yauzl.fromFd);
+    try {
+      await expect(
+        extractZipArchive({
+          archiveExpectation: {
+            byteSize: archiveBytes.byteLength,
+            sha256: createHash("sha256").update(archiveBytes).digest("hex"),
+          },
+          archivePath: archive,
+          destinationDirectory,
+          expectedFiles: ["only.csv"],
+        }),
+      ).rejects.toMatchObject({
+        cause: expect.objectContaining({
+          message: "injected descriptor initialization failure",
+        }),
+        message: "Unable to open the descriptor-bound ZIP archive",
+      });
+      expect(descriptor).toBeTypeOf("number");
+      expect(() => fstatSync(descriptor ?? -1)).toThrowError(
+        expect.objectContaining({ code: "EBADF" }),
+      );
+      expect(await readdir(destinationDirectory)).toEqual([]);
+    } finally {
+      fromFdSpy.mockRestore();
+    }
+  });
+
+  it("fails closed if the verified archive pathname is replaced after descriptor binding", async () => {
+    const root = await temporaryDirectory();
+    const archive = join(root, "descriptor-bound-replacement.zip");
+    const displaced = join(root, "displaced.zip");
+    const originalBytes = makeStoredZip([{ name: "only.csv", data: Buffer.from("trusted") }]);
+    const replacementBytes = makeStoredZip([{ name: "only.csv", data: Buffer.from("altered") }]);
+    await writeFile(archive, originalBytes);
+    const destinationDirectory = join(root, "replacement-out");
+    const originalFromFd = yauzl.fromFd.bind(yauzl) as (
+      fd: number,
+      options: YauzlOptions,
+      callback: (error: Error | null, zipfile: ZipFile) => void,
+    ) => void;
+    let replaced = false;
+    const fromFdSpy = vi.spyOn(yauzl, "fromFd").mockImplementation(((
+      fd: number,
+      options: YauzlOptions,
+      callback: (error: Error | null, zipfile: ZipFile) => void,
+    ) => {
+      if (!replaced) {
+        replaced = true;
+        renameSync(archive, displaced);
+        writeFileSync(archive, replacementBytes);
+      }
+      originalFromFd(fd, options, callback);
+    }) as typeof yauzl.fromFd);
+    try {
+      await expect(
+        extractZipArchive({
+          archiveExpectation: {
+            byteSize: originalBytes.byteLength,
+            sha256: createHash("sha256").update(originalBytes).digest("hex"),
+          },
+          archivePath: archive,
+          destinationDirectory,
+          expectedFiles: ["only.csv"],
+        }),
+      ).rejects.toThrow(/Verified ZIP archive (?:path )?changed during extraction/);
+      expect(await readdir(destinationDirectory)).toEqual([]);
+    } finally {
+      fromFdSpy.mockRestore();
+    }
+  });
+
+  it("rejects in-place mutation after verification and closes the descriptor on failure", async () => {
+    const root = await temporaryDirectory();
+    const archive = join(root, "descriptor-bound-mutation.zip");
+    const originalBytes = makeStoredZip([{ name: "only.csv", data: Buffer.from("trusted") }]);
+    const replacementBytes = makeStoredZip([{ name: "only.csv", data: Buffer.from("altered") }]);
+    expect(replacementBytes.byteLength).toBe(originalBytes.byteLength);
+    await writeFile(archive, originalBytes);
+    const destinationDirectory = join(root, "mutation-out");
+    const originalFromFd = yauzl.fromFd.bind(yauzl) as (
+      fd: number,
+      options: YauzlOptions,
+      callback: (error: Error | null, zipfile: ZipFile) => void,
+    ) => void;
+    let descriptor: number | undefined;
+    let mutated = false;
+    const fromFdSpy = vi.spyOn(yauzl, "fromFd").mockImplementation(((
+      fd: number,
+      options: YauzlOptions,
+      callback: (error: Error | null, zipfile: ZipFile) => void,
+    ) => {
+      descriptor = fd;
+      if (!mutated) {
+        mutated = true;
+        writeFileSync(archive, replacementBytes);
+      }
+      originalFromFd(fd, options, callback);
+    }) as typeof yauzl.fromFd);
+    try {
+      await expect(
+        extractZipArchive({
+          archiveExpectation: {
+            byteSize: originalBytes.byteLength,
+            sha256: createHash("sha256").update(originalBytes).digest("hex"),
+          },
+          archivePath: archive,
+          destinationDirectory,
+          expectedFiles: ["only.csv"],
+        }),
+      ).rejects.toThrow(/Verified ZIP archive (?:changed|content changed) during extraction/);
+      expect(descriptor).toBeTypeOf("number");
+      expect(() => fstatSync(descriptor ?? -1)).toThrowError(
+        expect.objectContaining({ code: "EBADF" }),
+      );
+      expect(await readdir(destinationDirectory)).toEqual([]);
+    } finally {
+      fromFdSpy.mockRestore();
+    }
   });
 
   it("awaits an asynchronous successful ZIP reader close and removes iteration listeners", async () => {

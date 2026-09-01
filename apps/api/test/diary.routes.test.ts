@@ -190,6 +190,89 @@ describe("diary routes", () => {
     expect(calls[0]?.[0].requestDigest).not.toBe(calls[1]?.[0].requestDigest);
   });
 
+  it("preserves exact private note text, clears with null, and rejects invalid lengths", async () => {
+    const service = diaryStub();
+    const app = createTestApp(service);
+    const exactNote = "  Felt 😀 energized after lunch.\nKeep this spacing.  ";
+    const setResponse = await app.inject({
+      method: "PATCH",
+      url: `/v1/diary/entries/${entryId}`,
+      headers: {
+        ...authHeaders,
+        "idempotency-key": operationId,
+        "if-match": '"3"',
+      },
+      payload: { note: exactNote },
+    });
+    const clearResponse = await app.inject({
+      method: "PATCH",
+      url: `/v1/diary/entries/${entryId}`,
+      headers: {
+        ...authHeaders,
+        "idempotency-key": randomUUID(),
+        "if-match": '"4"',
+      },
+      payload: { note: null },
+    });
+    for (const invalidNote of ["", "x".repeat(2_001), 42, "bad\u0000note", "\uD800", "\uDC00"]) {
+      const response = await app.inject({
+        method: "PATCH",
+        url: `/v1/diary/entries/${entryId}`,
+        headers: {
+          ...authHeaders,
+          "idempotency-key": randomUUID(),
+          "if-match": '"4"',
+        },
+        payload: { note: invalidNote },
+      });
+      expect(response.statusCode).toBe(400);
+      if (String(invalidNote).length > 0) {
+        expect(response.body).not.toContain(String(invalidNote));
+      }
+    }
+    const createWithNote = await app.inject({
+      method: "POST",
+      url: "/v1/diary/entries",
+      headers: { ...authHeaders, "idempotency-key": randomUUID() },
+      payload: { ...createBody, note: exactNote },
+    });
+
+    expect(setResponse.statusCode, setResponse.body).toBe(200);
+    expect(clearResponse.statusCode, clearResponse.body).toBe(200);
+    expect(createWithNote.statusCode).toBe(400);
+    expect(service.updateEntry).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ patch: { note: exactNote } }),
+    );
+    expect(service.updateEntry).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ patch: { note: null } }),
+    );
+    expect(service.updateEntry).toHaveBeenCalledTimes(2);
+    expect(service.createEntry).not.toHaveBeenCalled();
+  });
+  it.each(["", "x".repeat(10_000), "😀".repeat(2_500)])(
+    "serializes a migration-0004-compatible stored note without applying PATCH bounds",
+    async (legacyNote) => {
+      const app = createTestApp(
+        diaryStub({
+          getDay: vi.fn(async () => ({
+            ...diaryDay,
+            entries: [{ ...diaryEntry, note: legacyNote }],
+          })),
+        }),
+      );
+      const response = await app.inject({
+        method: "GET",
+        url: "/v1/diary?date=2026-08-15",
+        headers: authHeaders,
+      });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().data.entries[0].note).toBe(legacyNote);
+    },
+  );
+
   it("edits and serializes a pinned recipe entry through the ordinary diary route", async () => {
     const recipeVersionId = "d696b6c8-782a-4783-b459-af4698470cf0";
     const { foodProvenance: _foodProvenance, ...diaryEntryWithoutFoodProvenance } = diaryEntry;

@@ -33,6 +33,7 @@ const entry = {
   },
   mealSlot: "breakfast",
   resolvedGrams: "364",
+  note: "  before meal\nafter meal  ",
   occurredAt: "2026-08-15T13:30:00.000Z",
   localDate: "2026-08-15",
   timeZone: "America/Chicago",
@@ -63,6 +64,7 @@ describe("web diary mutation proxy", () => {
       portion: { kind: "serving", servingId: "303", amount: "2" },
       mealSlot: "breakfast",
       occurredAt: "2026-08-15T13:30:00.000Z",
+      note: "  before meal\nafter meal  ",
     };
     const response = await proxyDiaryChange(
       new Request(

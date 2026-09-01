@@ -309,6 +309,7 @@ export interface DeleteDiaryEntryInput {
 const SNAPSHOT_ENGINE_VERSION = NUTRITION_ENGINE_VERSION;
 const MAX_DAY_ENTRIES = 50;
 const MAX_NUTRIENT_VECTOR_SIZE = 256;
+const MAX_MUTABLE_DIARY_NOTE_CODE_POINTS = 2_000;
 
 export async function createFoodDiaryEntry(
   database: Kysely<Database>,
@@ -316,6 +317,7 @@ export async function createFoodDiaryEntry(
 ): Promise<DiaryFoodMutationResult> {
   validateOperationIdentity(input.clientOperationId, input.requestDigest);
   validateMealSlot(input.mealSlot);
+  validateMutableDiaryNote(input.note);
   return database
     .transaction()
     .setIsolationLevel("read committed")
@@ -411,6 +413,7 @@ export async function createRecipeDiaryEntry(
 ): Promise<DiaryRecipeMutationResult> {
   validateOperationIdentity(input.clientOperationId, input.requestDigest);
   validateMealSlot(input.mealSlot);
+  validateMutableDiaryNote(input.note);
   return database
     .transaction()
     .setIsolationLevel("read committed")
@@ -509,6 +512,7 @@ export async function repeatDiaryEntry(
   validateOperationIdentity(input.clientOperationId, input.requestDigest);
   const sourceRevision = canonicalRevision(input.sourceRevision);
   if (input.mealSlot !== undefined) validateMealSlot(input.mealSlot);
+  if (input.note !== undefined) validateMutableDiaryNote(input.note);
   return database
     .transaction()
     .setIsolationLevel("read committed")
@@ -718,6 +722,7 @@ async function runDiaryEntryUpdate(
 ): Promise<DiaryMutationResult> {
   validateOperationIdentity(input.clientOperationId, input.requestDigest);
   if (input.mealSlot !== undefined) validateMealSlot(input.mealSlot);
+  if (input.note !== undefined) validateMutableDiaryNote(input.note);
   return database
     .transaction()
     .setIsolationLevel("read committed")
@@ -2533,6 +2538,32 @@ function validateOperationIdentity(clientOperationId: string, requestDigest: str
 function validateMealSlot(value: string): asserts value is DiaryMealSlot {
   if (!(["breakfast", "lunch", "dinner", "snacks"] as const).includes(value as DiaryMealSlot)) {
     throw new DiaryValidationError("mealSlot is invalid");
+  }
+}
+
+function containsOnlyUnicodeScalarValues(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index);
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (index + 1 >= value.length || next < 0xdc00 || next > 0xdfff) return false;
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function validateMutableDiaryNote(value: string | null | undefined): void {
+  if (value === undefined || value === null) return;
+  if (
+    value.length === 0 ||
+    value.includes("\u0000") ||
+    !containsOnlyUnicodeScalarValues(value) ||
+    [...value].length > MAX_MUTABLE_DIARY_NOTE_CODE_POINTS
+  ) {
+    throw new DiaryValidationError("note is invalid");
   }
 }
 

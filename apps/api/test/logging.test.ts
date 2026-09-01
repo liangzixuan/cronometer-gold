@@ -32,7 +32,7 @@ describe("structured logging", () => {
       body: { glucose: "health-value-do-not-log-this" },
       context: {
         credentials: { apiKey: "nested-api-key-do-not-log-this" },
-        diary: { notes: "nested-diary-note-do-not-log-this" },
+        diary: { note: "nested-diary-note-do-not-log-this", notes: "legacy-notes-do-not-log" },
       },
     };
     app.log.info(secrets, "Redaction probe");
@@ -47,6 +47,7 @@ describe("structured logging", () => {
     expect(output).not.toContain(secrets.password);
     expect(output).not.toContain(secrets.body.glucose);
     expect(output).not.toContain(secrets.context.credentials.apiKey);
+    expect(output).not.toContain(secrets.context.diary.note);
     expect(output).not.toContain(secrets.context.diary.notes);
     expect(output).not.toContain("query-value-must-not-be-logged");
   });

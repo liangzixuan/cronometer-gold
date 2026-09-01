@@ -14,6 +14,7 @@ const REDACTED_LOG_KEYS = [
   "refreshToken",
   "apiKey",
   "session",
+  "note",
   "notes",
   "biometrics",
 ] as const;

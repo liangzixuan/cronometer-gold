@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   createOperationId,
+  diaryNoteFromDraft,
   entryEnergyDisplay,
   isLocalDate,
   localDateTimeToInstant,
@@ -63,6 +64,7 @@ const entry = {
   localTime: "08:30:00.000",
   position: 0,
   nutrients: [nutrient],
+  note: null,
 } as const;
 
 const { foodProvenance: _publicFoodProvenance, ...entryWithoutFoodProvenance } = entry;
@@ -98,6 +100,7 @@ const recipeEntry = {
   },
   source: null,
   sources: [entry.source],
+  note: "Batch cooked\nKeep half for tomorrow.",
 } as const;
 
 const privateCustomEntry = {
@@ -143,6 +146,8 @@ describe("mobile diary contract", () => {
   });
 
   it("strictly parses a mixed food and immutable recipe day", () => {
+    const exactNote = "  Batch cooked\nKeep half for tomorrow.  ";
+    const recipeWithExactNote = { ...recipeEntry, note: exactNote };
     const day = parseDiaryDay({
       data: {
         id: "7f2a4824-872e-4616-9cd1-d63cf1beae51",
@@ -150,13 +155,58 @@ describe("mobile diary contract", () => {
         timeZone: "America/Chicago",
         status: "open",
         revision: "5",
-        entries: [entry, recipeEntry],
+        entries: [entry, recipeWithExactNote],
         totals: [nutrient],
         updatedAt: "2026-08-15T13:30:01.000Z",
       },
     });
     expect(day.entries.map((candidate) => candidate.entryKind)).toEqual(["food", "recipe"]);
     expect(day.entries[1]?.entryKind === "recipe" && day.entries[1].recipe.name).toBe("Bean stew");
+    expect(day.entries[1]?.note).toBe(exactNote);
+  });
+
+  it("normalizes missing or empty notes and accepts valid legacy text through 10,000 characters", () => {
+    const day = (candidate: unknown) => ({
+      data: {
+        id: "7f2a4824-872e-4616-9cd1-d63cf1beae51",
+        localDate: "2026-08-15",
+        timeZone: "America/Chicago",
+        status: "open",
+        revision: "4",
+        entries: [candidate],
+        totals: [nutrient],
+        updatedAt: "2026-08-15T13:30:01.000Z",
+      },
+    });
+    const { note: _omitted, ...withoutNote } = entry;
+    expect(parseDiaryDay(day(withoutNote)).entries[0]?.note).toBeNull();
+    expect(parseDiaryDay(day({ ...entry, note: null })).entries[0]?.note).toBeNull();
+    expect(parseDiaryDay(day({ ...entry, note: "" })).entries[0]?.note).toBeNull();
+    expect(parseDiaryDay(day({ ...entry, note: "valid 🙂 text" })).entries[0]?.note).toBe(
+      "valid 🙂 text",
+    );
+    const maximumLegacyNote = "🙂".repeat(10_000);
+    expect(parseDiaryDay(day({ ...entry, note: maximumLegacyNote })).entries[0]?.note).toBe(
+      maximumLegacyNote,
+    );
+    expect(() => parseDiaryDay(day({ ...entry, note: "🙂".repeat(10_001) }))).toThrow(TypeError);
+    expect(() => parseDiaryDay(day({ ...entry, note: "contains\u0000null" }))).toThrow(TypeError);
+    expect(() => parseDiaryDay(day({ ...entry, note: "\uD800" }))).toThrow(TypeError);
+    expect(() => parseDiaryDay(day({ ...entry, note: "\uDC00" }))).toThrow(TypeError);
+    expect(() => parseDiaryDay(day({ ...entry, note: 42 }))).toThrow(TypeError);
+  });
+
+  it("validates new note drafts while preserving exact well-formed text", () => {
+    const note = "  pre-run\nfelt strong 🙂  ";
+    expect(diaryNoteFromDraft(note)).toBe(note);
+    expect(diaryNoteFromDraft("")).toBeNull();
+    expect(diaryNoteFromDraft("🙂".repeat(2_000))).toBe("🙂".repeat(2_000));
+    expect(() => diaryNoteFromDraft("a".repeat(2_001))).toThrow(RangeError);
+    expect(() => diaryNoteFromDraft("contains\u0000null")).toThrow(TypeError);
+    expect(() => diaryNoteFromDraft("\ud800")).toThrow(TypeError);
+    expect(() => diaryNoteFromDraft("\udc00")).toThrow(TypeError);
+    expect(() => diaryNoteFromDraft("\ud800not-a-pair")).toThrow(TypeError);
+    expect(diaryNoteFromDraft("\ud83d\ude42")).toBe("🙂");
   });
 
   it("accepts owner-entered private food without fabricating a public source", () => {

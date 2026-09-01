@@ -12,7 +12,14 @@ export const nutrientUnknownReasons = [
 
 /** Derived recipe views may add scale digits beyond the 160-character persisted snapshot bound. */
 export const MAX_NUTRIENT_AGGREGATE_OUTPUT_LENGTH = 200;
-
+/** New note writes are bounded by Unicode code points before persistence. */
+export const MAX_DIARY_NOTE_INPUT_CODE_POINTS = 2_000;
+/** Legacy migration 0004 allows stored notes up to this exact UTF-8 byte bound. */
+export const MAX_STORED_DIARY_NOTE_UTF8_BYTES = 10_000;
+const validDiaryNoteInputPattern =
+  "^(?![\\s\\S]*\\u0000)(?:[^\\uD800-\\uDFFF]|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF])+$";
+const validStoredDiaryNotePattern =
+  "^(?![\\s\\S]*\\u0000)(?:[^\\uD800-\\uDFFF]|[\\uD800-\\uDBFF][\\uDC00-\\uDFFF])*$";
 export type DiaryMealSlot = (typeof diaryMealSlots)[number];
 export type NutrientCompleteness = (typeof nutrientCompletenessValues)[number];
 export type NutrientUnknownReason = (typeof nutrientUnknownReasons)[number];
@@ -75,6 +82,8 @@ interface DiaryEntryCommon {
   readonly timeZone: string;
   readonly position: number;
   readonly nutrients: readonly DiaryNutrientAggregate[];
+  /** Private owner-authored text, returned exactly as entered. */
+  readonly note: string | null;
 }
 
 interface DiaryFoodEntryCommon extends DiaryEntryCommon {
@@ -175,6 +184,8 @@ export interface UpdateDiaryEntryRequest {
   readonly mealSlot?: DiaryMealSlot;
   readonly occurredAt?: string;
   readonly position?: number;
+  /** Omit to preserve, use null to clear, or provide exact non-empty text. */
+  readonly note?: string | null;
 }
 
 export interface CreateRecipeDiaryEntryRequest {
@@ -360,7 +371,37 @@ const diaryEntryCommonRequired = [
   "timeZone",
   "position",
   "nutrients",
+  "note",
 ] as const;
+
+/**
+ * Response compatibility for migration 0004 rows. The database's UTF-8 byte
+ * constraint is stricter than this safe JSON Schema code-point ceiling.
+ */
+export const diaryStoredNoteSchema = {
+  anyOf: [
+    {
+      type: "string",
+      maxLength: MAX_STORED_DIARY_NOTE_UTF8_BYTES,
+      pattern: validStoredDiaryNotePattern,
+    },
+    {
+      type: "null",
+    },
+  ],
+} as const;
+
+export const diaryNotePatchSchema = {
+  anyOf: [
+    {
+      type: "string",
+      minLength: 1,
+      maxLength: MAX_DIARY_NOTE_INPUT_CODE_POINTS,
+      pattern: validDiaryNoteInputPattern,
+    },
+    { type: "null" },
+  ],
+} as const;
 
 const diaryEntryCommonProperties = {
   id: uuidSchema,
@@ -376,6 +417,7 @@ const diaryEntryCommonProperties = {
   timeZone: { type: "string", minLength: 1, maxLength: 63 },
   position: { type: "integer", minimum: 0, maximum: 1000000 },
   nutrients: { type: "array", maxItems: 256, items: diaryNutrientAggregateSchema },
+  note: diaryStoredNoteSchema,
 } as const;
 
 const foodSourceSnapshotSchema = {
@@ -608,7 +650,10 @@ export const updateDiaryEntryRequestSchema = {
   type: "object",
   additionalProperties: false,
   minProperties: 1,
-  properties: mutableEntryProperties,
+  properties: {
+    ...mutableEntryProperties,
+    note: diaryNotePatchSchema,
+  },
 } as const;
 
 export const diaryMutationResponseSchema = {

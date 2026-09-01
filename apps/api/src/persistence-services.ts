@@ -384,6 +384,7 @@ function foodEntry(record: DiaryFoodEntryRecord): DiaryEntry {
     resolvedGrams: record.portion.resolvedGrams,
     revision: record.currentRevision,
     recipe: null,
+    note: record.note,
     recipeVersionId: null,
     timeZone: record.timeZone,
   } as const;
@@ -510,6 +511,7 @@ function recipeDiaryEntry(record: DiaryRecipeEntryRecord): DiaryEntry {
     resolvedGrams: record.portion.resolvedGrams,
     revision: record.currentRevision,
     source: null,
+    note: record.note,
     sources,
     timeZone: record.timeZone,
   };
@@ -608,6 +610,7 @@ export class DatabaseDiaryService implements DiaryService {
         ...(input.patch.occurredAt === undefined ? {} : { occurredAt: input.patch.occurredAt }),
         ...(input.patch.portion === undefined ? {} : { portion: input.patch.portion }),
         ...(input.patch.position === undefined ? {} : { position: input.patch.position }),
+        ...(input.patch.note === undefined ? {} : { note: input.patch.note }),
         requestDigest: input.requestDigest,
         userId: input.userId,
       });

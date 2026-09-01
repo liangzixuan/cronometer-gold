@@ -10,6 +10,7 @@ import {
   type DiaryDay,
   type DiaryEntry,
   diaryEditErrorMessage,
+  diaryEntryNoteCharacterCount,
   entryEnergyDisplay,
   isLocalDate,
   isPositiveDecimal,
@@ -23,6 +24,7 @@ import {
   parseDiaryDay,
   parseDiaryMutation,
   parseSession,
+  prepareDiaryEntryNotePatch,
   quoteRevision,
   type SessionSummary,
   shiftLocalDate,
@@ -35,6 +37,7 @@ interface EntryEditor {
   readonly entryId: string;
   readonly originalDate: string;
   readonly quantity: string;
+  readonly note: string;
   readonly mealSlot: MealSlot;
   readonly localDate: string;
   readonly localTime: string;
@@ -62,6 +65,7 @@ function editState(entry: DiaryEntry, currentProfileTimeZone: string): EntryEdit
     entryId: entry.id,
     originalDate: entry.localDate,
     quantity: entry.portion.kind === "serving" ? entry.portion.amount : entry.portion.grams,
+    note: entry.note ?? "",
     mealSlot: entry.mealSlot,
     localDate: entry.localDate,
     localTime,
@@ -182,14 +186,24 @@ export function DiaryClient() {
   }
 
   async function saveEntry() {
-    if (!editor || !diary || !isPositiveDecimal(editor.quantity)) {
-      setMessage("Quantity must be a positive decimal number.");
-      return;
-    }
+    if (!editor || !diary) return;
     const entry = diary.entries.find((candidate) => candidate.id === editor.entryId);
     if (!entry) {
       setEditor(null);
       setMessage("That entry is no longer present. Fresh diary data is required.");
+      return;
+    }
+    if (!isPositiveDecimal(editor.quantity)) {
+      setMessage("Quantity must be a positive decimal number.");
+      return;
+    }
+    let notePatch: { readonly note?: string | null };
+    try {
+      notePatch = prepareDiaryEntryNotePatch(editor.note, entry.note);
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "The private note could not be validated.",
+      );
       return;
     }
     setMutationBusy(editor.entryId);
@@ -205,6 +219,7 @@ export function DiaryClient() {
               : { kind: "serving", amount: editor.quantity }
             : { kind: "grams", grams: editor.quantity },
         mealSlot: editor.mealSlot,
+        ...notePatch,
         ...(timestampChanged
           ? {
               occurredAt: localDateTimeToInstant(
@@ -547,10 +562,40 @@ export function DiaryClient() {
                                     value={editor.localTime}
                                   />
                                 </label>
-                                <small>
+                                <label
+                                  className="entryNoteField"
+                                  htmlFor={`entry-note-${entry.id}`}
+                                >
+                                  Private note
+                                  <textarea
+                                    aria-describedby={`entry-note-help-${entry.id}`}
+                                    id={`entry-note-${entry.id}`}
+                                    maxLength={4_000}
+                                    onChange={(event) =>
+                                      setEditor({ ...editor, note: event.target.value })
+                                    }
+                                    rows={4}
+                                    value={editor.note}
+                                  />
+                                </label>
+                                <small className="entryNoteHint" id={`entry-note-help-${entry.id}`}>
+                                  Clear the field and save to remove this note from the current
+                                  display only. Immutable prior revisions remain in your private
+                                  account export until whole-account erasure. Character count:{" "}
+                                  {diaryEntryNoteCharacterCount(editor.note)}
+                                  of 2,000.
+                                </small>
+                                <small className="entryTimeHint">
                                   Changed date and time are interpreted in {editor.timeZone}.
                                 </small>
                                 <div className="entryActions">
+                                  <button
+                                    disabled={mutationBusy === entry.id || editor.note.length === 0}
+                                    onClick={() => setEditor({ ...editor, note: "" })}
+                                    type="button"
+                                  >
+                                    Clear field
+                                  </button>
                                   <button
                                     disabled={
                                       mutationBusy === entry.id || diary.status === "locked"
@@ -578,6 +623,12 @@ export function DiaryClient() {
                                   ) : null}
                                   {entry.entryKind === "recipe" ? (
                                     <p>Recipe version {entry.recipe.versionNumber}</p>
+                                  ) : null}
+                                  {entry.note !== null ? (
+                                    <div className="entryNote">
+                                      <small>Private note</small>
+                                      <p>{entry.note}</p>
+                                    </div>
                                   ) : null}
                                   <small>
                                     {entry.portion.kind === "serving"
