@@ -1,6 +1,7 @@
 import {
   type AuthenticatedAccount,
   type DiaryDay,
+  type DiaryDayResponse,
   type DiaryEntry,
   type DiaryEntryPortion,
   type DiaryMutationResponse,
@@ -41,6 +42,8 @@ import {
   type DiaryMutationResult,
   DiaryNotFoundError,
   type DiaryNutrientAggregateRecord,
+  type DiaryPageContinuationRecord,
+  DiaryPageStaleError,
   type DiaryRecipeEntryRecord,
   DiaryValidationError,
   deleteDiaryEntry,
@@ -50,6 +53,7 @@ import {
   type GoalNutrientDefinitionRecord,
   getCurrentNutritionGoal,
   getDiaryDay,
+  getDiaryDayPage,
   getNutritionGoalProgress,
   getRecipe,
   getUserProfile,
@@ -106,10 +110,16 @@ import {
   DiaryIdempotencyConflictServiceError,
   DiaryLockedServiceError,
   DiaryNotFoundServiceError,
+  DiaryPageCursorServiceError,
+  DiaryPageStaleServiceError,
   DiaryRevisionConflictServiceError,
   type DiaryService,
   DiaryValidationServiceError,
 } from "./modules/diary/diary.routes.js";
+import {
+  DiaryPageCursorCodec,
+  InvalidDiaryPageCursorError,
+} from "./modules/diary/diary-page-cursor.js";
 import {
   GoalIdempotencyConflictServiceError,
   GoalNotFoundServiceError,
@@ -553,15 +563,18 @@ function mapDiaryPersistenceError(error: unknown): never {
     throw new DiaryIdempotencyConflictServiceError();
   }
   if (error instanceof DiaryLockedError) throw new DiaryLockedServiceError();
+  if (error instanceof DiaryPageStaleError) throw new DiaryPageStaleServiceError();
   if (error instanceof DiaryValidationError) throw new DiaryValidationServiceError();
   throw error;
 }
 
 export class DatabaseDiaryService implements DiaryService {
   readonly #database: AppDatabase;
+  readonly #pageCursorCodec: DiaryPageCursorCodec;
 
-  constructor(database: AppDatabase) {
+  constructor(database: AppDatabase, options: { readonly cursorSecret: string | Uint8Array }) {
     this.#database = database;
+    this.#pageCursorCodec = new DiaryPageCursorCodec(options.cursorSecret);
   }
 
   async getDay(input: Parameters<DiaryService["getDay"]>[0]): Promise<DiaryDay> {
@@ -570,6 +583,49 @@ export class DatabaseDiaryService implements DiaryService {
       const result = await getDiaryDay(this.#database, input);
       input.signal?.throwIfAborted();
       return day(result);
+    } catch (error) {
+      mapDiaryPersistenceError(error);
+    }
+  }
+
+  async getDayPage(
+    input: Parameters<NonNullable<DiaryService["getDayPage"]>>[0],
+  ): Promise<DiaryDayResponse> {
+    input.signal?.throwIfAborted();
+    const binding = {
+      userId: input.userId,
+      localDate: input.localDate,
+      limit: input.limit,
+    };
+    let continuation: DiaryPageContinuationRecord | undefined;
+    if (input.cursor !== undefined) {
+      try {
+        continuation = this.#pageCursorCodec.decode(input.cursor, binding);
+      } catch (error) {
+        if (error instanceof InvalidDiaryPageCursorError) {
+          throw new DiaryPageCursorServiceError();
+        }
+        throw error;
+      }
+    }
+    try {
+      const result = await getDiaryDayPage(this.#database, {
+        userId: input.userId,
+        localDate: input.localDate,
+        limit: input.limit,
+        ...(continuation === undefined ? {} : { continuation }),
+      });
+      input.signal?.throwIfAborted();
+      return {
+        data: day(result.day),
+        page: {
+          nextCursor:
+            result.page.next === null
+              ? null
+              : this.#pageCursorCodec.encode(result.page.next, binding),
+          totalEntries: result.page.totalEntries,
+        },
+      };
     } catch (error) {
       mapDiaryPersistenceError(error);
     }

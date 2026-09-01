@@ -1,4 +1,4 @@
-import { isLocalDate, isUuid } from "./diary";
+import { DIARY_CURSOR_MAX_LENGTH, DIARY_PAGE_SIZE, isLocalDate, isUuid } from "./diary";
 
 export const SESSION_COOKIE = "__Host-nutrition_session";
 export const PRIVATE_RESPONSE_HEADERS = {
@@ -165,6 +165,50 @@ export function validatedDiaryDate(request: Request): string | null {
   if ([...url.searchParams.keys()].some((key) => key !== "date")) return null;
   const values = url.searchParams.getAll("date");
   return values.length === 1 && isLocalDate(values[0]) ? (values[0] ?? null) : null;
+}
+
+export interface DiaryReadQuery {
+  readonly date: string;
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+/** Validate the paged read surface without changing the stricter mutation query contract. */
+export function validatedDiaryReadQuery(request: Request): DiaryReadQuery | null {
+  const url = new URL(request.url);
+  const allowed = new Set(["date", "limit", "cursor"]);
+  if ([...url.searchParams.keys()].some((key) => !allowed.has(key))) return null;
+  const dates = url.searchParams.getAll("date");
+  const limits = url.searchParams.getAll("limit");
+  const cursors = url.searchParams.getAll("cursor");
+  if (dates.length !== 1 || limits.length > 1 || cursors.length > 1) return null;
+  const date = dates[0];
+  const rawLimit = limits[0];
+  const rawCursor = cursors[0];
+  if (!isLocalDate(date) || (rawLimit !== undefined && !/^(?:[1-9]|1[0-9]|20)$/u.test(rawLimit))) {
+    return null;
+  }
+  if (rawCursor !== undefined && rawLimit === undefined) return null;
+  if (
+    rawCursor !== undefined &&
+    (rawCursor.length === 0 ||
+      rawCursor.length > DIARY_CURSOR_MAX_LENGTH ||
+      !/^d1\.[A-Za-z0-9_-]+$/u.test(rawCursor))
+  ) {
+    return null;
+  }
+  const limit = rawLimit === undefined ? undefined : Number(rawLimit);
+  if (
+    limit !== undefined &&
+    (!Number.isSafeInteger(limit) || limit < 1 || limit > DIARY_PAGE_SIZE)
+  ) {
+    return null;
+  }
+  return {
+    date,
+    ...(limit === undefined ? {} : { limit }),
+    ...(rawCursor === undefined ? {} : { cursor: rawCursor }),
+  };
 }
 
 export function validatedEntryId(value: string): string | null {

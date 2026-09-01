@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { proxyDiaryChange, proxyDiaryRepeat } from "../app/api/diary/proxy";
-import { SESSION_COOKIE } from "./private-api";
+import { proxyDiaryChange, proxyDiaryGet, proxyDiaryRepeat } from "../app/api/diary/proxy";
+import { SESSION_COOKIE, validatedDiaryDate, validatedDiaryReadQuery } from "./private-api";
 
 const entry = {
   id: "75d7fa63-4e26-42de-a1f8-0683ce268f62",
@@ -43,6 +43,137 @@ const entry = {
 } as const;
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe("web diary read query and proxy", () => {
+  it("keeps legacy date-only reads while validating opt-in pagination separately", () => {
+    const request = (query: string) => new Request(`https://app.example.test/api/diary?${query}`);
+    expect(validatedDiaryReadQuery(request("date=2026-08-15"))).toEqual({
+      date: "2026-08-15",
+    });
+    expect(
+      validatedDiaryReadQuery(request("date=2026-08-15&limit=20&cursor=d1.page_2-next")),
+    ).toEqual({ date: "2026-08-15", limit: 20, cursor: "d1.page_2-next" });
+    expect(validatedDiaryReadQuery(request("date=2026-08-15&cursor=page_2"))).toBeNull();
+    expect(
+      validatedDiaryReadQuery(request("date=2026-08-15&limit=20&cursor=page_2.next")),
+    ).toBeNull();
+    expect(validatedDiaryReadQuery(request("date=2026-08-15&limit=21"))).toBeNull();
+    expect(
+      validatedDiaryReadQuery(request(`date=2026-08-15&limit=20&cursor=${"x".repeat(513)}`)),
+    ).toBeNull();
+    expect(validatedDiaryReadQuery(request("date=2026-08-15&limit=20&limit=20"))).toBeNull();
+    expect(validatedDiaryReadQuery(request("date=2026-08-15&limit=20&extra=true"))).toBeNull();
+    expect(validatedDiaryDate(request("date=2026-08-15&limit=20"))).toBeNull();
+  });
+
+  it("forwards only the reviewed paged keys and preserves page metadata, ETag, and no-store", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL) => {
+        calls.push(url.href);
+        return Response.json(
+          {
+            data: {
+              id: "7f2a4824-872e-4616-9cd1-d63cf1beae51",
+              localDate: "2026-08-15",
+              timeZone: "America/Chicago",
+              status: "open",
+              revision: "8",
+              entries: [entry],
+              totals: [],
+              updatedAt: "2026-08-15T13:30:01.000Z",
+            },
+            page: { nextCursor: null, totalEntries: 1 },
+          },
+          { headers: { etag: '"8"' } },
+        );
+      }),
+    );
+    const response = await proxyDiaryGet(
+      new Request(
+        "https://app.example.test/api/diary?date=2026-08-15&limit=20&cursor=d1.page_2-next",
+        { headers: { cookie: `${SESSION_COOKIE}=${"t".repeat(43)}` } },
+      ),
+    );
+    expect(calls).toEqual([
+      "http://127.0.0.1:4000/v1/diary?date=2026-08-15&limit=20&cursor=d1.page_2-next",
+    ]);
+    expect(await response.json()).toMatchObject({ page: { nextCursor: null, totalEntries: 1 } });
+    expect(response.headers.get("etag")).toBe('"8"');
+    expect(response.headers.get("cache-control")).toContain("no-store");
+  });
+
+  it("fails closed when paged upstream metadata contains a malformed cursor", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          data: {
+            id: "7f2a4824-872e-4616-9cd1-d63cf1beae51",
+            localDate: "2026-08-15",
+            timeZone: "America/Chicago",
+            status: "open",
+            revision: "8",
+            entries: [entry],
+            totals: [],
+            updatedAt: "2026-08-15T13:30:01.000Z",
+          },
+          page: { nextCursor: "page_2.next", totalEntries: 2 },
+        }),
+      ),
+    );
+    const response = await proxyDiaryGet(
+      new Request("https://app.example.test/api/diary?date=2026-08-15&limit=20", {
+        headers: { cookie: `${SESSION_COOKIE}=${"t".repeat(43)}` },
+      }),
+    );
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      error: "The diary service returned an invalid response.",
+    });
+  });
+
+  it("forwards a legacy date-only read unchanged and does not invent wire page metadata", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL) => {
+        calls.push(url.href);
+        return Response.json({
+          data: {
+            id: null,
+            localDate: "2026-08-15",
+            timeZone: "America/Chicago",
+            status: "open",
+            revision: "0",
+            entries: [],
+            totals: [],
+            updatedAt: null,
+          },
+        });
+      }),
+    );
+    const response = await proxyDiaryGet(
+      new Request("https://app.example.test/api/diary?date=2026-08-15", {
+        headers: { cookie: `${SESSION_COOKIE}=${"t".repeat(43)}` },
+      }),
+    );
+    expect(calls).toEqual(["http://127.0.0.1:4000/v1/diary?date=2026-08-15"]);
+    expect(await response.json()).toEqual({
+      data: {
+        id: null,
+        localDate: "2026-08-15",
+        timeZone: "America/Chicago",
+        status: "open",
+        revision: "0",
+        entries: [],
+        totals: [],
+        updatedAt: null,
+      },
+    });
+  });
+});
 
 describe("web diary mutation proxy", () => {
   it("preserves a serving portion patch and forwards only reviewed concurrency headers", async () => {

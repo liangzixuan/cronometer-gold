@@ -33,6 +33,13 @@ export interface DiaryService {
     readonly localDate: string;
     readonly signal?: AbortSignal;
   }): Promise<DiaryDay>;
+  getDayPage?(input: {
+    readonly userId: string;
+    readonly localDate: string;
+    readonly limit: number;
+    readonly cursor?: string;
+    readonly signal?: AbortSignal;
+  }): Promise<DiaryDayResponse>;
   createEntry(input: {
     readonly userId: string;
     readonly clientOperationId: string;
@@ -99,8 +106,24 @@ export class DiaryLockedServiceError extends Error {
   }
 }
 
+export class DiaryPageCursorServiceError extends Error {
+  constructor() {
+    super("Diary page cursor is invalid");
+    this.name = "DiaryPageCursorServiceError";
+  }
+}
+
+export class DiaryPageStaleServiceError extends Error {
+  constructor() {
+    super("Diary page is stale");
+    this.name = "DiaryPageStaleServiceError";
+  }
+}
+
 interface DiaryQuerystring {
   date: string;
+  cursor?: string;
+  limit?: number;
 }
 
 interface EntryParams {
@@ -117,7 +140,15 @@ const dateQuerySchema = {
       format: "date",
       pattern: "^(?!0000)[0-9]{4}-[0-9]{2}-[0-9]{2}$",
     },
+    cursor: {
+      type: "string",
+      minLength: 1,
+      maxLength: 512,
+      pattern: "^d1\\.[A-Za-z0-9_-]+$",
+    },
+    limit: { type: "integer", minimum: 1, maximum: 20 },
   },
+  dependencies: { cursor: ["limit"] },
 } as const;
 
 const entryParamsSchema = {
@@ -220,6 +251,25 @@ function mapDiaryError(error: unknown): HttpProblem {
       expose: true,
     });
   }
+  if (error instanceof DiaryPageCursorServiceError) {
+    return new HttpProblem({
+      statusCode: 400,
+      code: "VALIDATION_ERROR",
+      title: "Bad Request",
+      detail: "One or more request fields are invalid.",
+      issues: [{ path: "/cursor", code: "invalid", message: "Invalid value." }],
+      expose: true,
+    });
+  }
+  if (error instanceof DiaryPageStaleServiceError) {
+    return new HttpProblem({
+      statusCode: 409,
+      code: "DIARY_PAGE_STALE",
+      title: "Conflict",
+      detail: "The diary day changed while loading more entries. Refresh the day and try again.",
+      expose: true,
+    });
+  }
   if (error instanceof DiaryValidationServiceError) {
     return new HttpProblem({
       statusCode: 400,
@@ -244,6 +294,11 @@ function canonicalJson(value: unknown): string {
 
 function requestDigest(operation: string, value: unknown): string {
   return createHash("sha256").update(canonicalJson({ operation, value }), "utf8").digest("hex");
+}
+
+function diaryPageEtag(response: DiaryDayResponse): string {
+  const digest = createHash("sha256").update(canonicalJson(response), "utf8").digest("base64url");
+  return `"p-${digest}"`;
 }
 
 export function assertNutrientAggregate(aggregate: DiaryNutrientAggregate): void {
@@ -337,6 +392,39 @@ function assertDiaryDay(day: DiaryDay): void {
   for (const entry of day.entries) assertDiaryEntry(entry);
 }
 
+function invalidDiaryPageResponse(): HttpProblem {
+  return new HttpProblem({
+    statusCode: 500,
+    code: "INTERNAL_ERROR",
+    title: "Invalid diary page",
+    detail: "Diary pagination invariants failed.",
+  });
+}
+
+function assertDiaryDayResponse(
+  response: DiaryDayResponse,
+  request: Readonly<{ limit: number | undefined; hasCursor: boolean }>,
+): void {
+  assertDiaryDay(response.data);
+  if (request.limit === undefined) {
+    if (response.page !== undefined) throw invalidDiaryPageResponse();
+    return;
+  }
+
+  const page = response.page;
+  if (page === undefined) throw invalidDiaryPageResponse();
+  const entryCount = response.data.entries.length;
+  if (
+    entryCount > request.limit ||
+    entryCount > page.totalEntries ||
+    (page.totalEntries > 0 && entryCount === 0) ||
+    (page.nextCursor !== null && entryCount >= page.totalEntries) ||
+    (!request.hasCursor && page.nextCursor === null && entryCount < page.totalEntries)
+  ) {
+    throw invalidDiaryPageResponse();
+  }
+}
+
 function assertMutation(result: DiaryMutationResponse): void {
   if (!result.data.entry) return;
   assertDiaryEntry(result.data.entry);
@@ -364,13 +452,14 @@ export const diaryRoutes: FastifyPluginAsync<DiaryRoutesOptions> = async (app, o
     "/",
     {
       preHandler: requireAuth,
-      preValidation: rejectUnexpectedQueryKeys(["date"]),
+      preValidation: rejectUnexpectedQueryKeys(["date", "cursor", "limit"]),
       schema: {
         querystring: dateQuerySchema,
         response: {
           200: diaryDayResponseSchema,
           400: problemDetailsSchema,
           401: problemDetailsSchema,
+          409: problemDetailsSchema,
           503: problemDetailsSchema,
         },
       },
@@ -379,18 +468,39 @@ export const diaryRoutes: FastifyPluginAsync<DiaryRoutesOptions> = async (app, o
       if (!options.diaryService) throw unavailable();
       const principal = authenticatedPrincipal(request);
       try {
-        const day = await withRequestSignal(
-          request,
-          (signal) =>
-            options.diaryService?.getDay({
+        const response = await withRequestSignal(request, async (signal) => {
+          if (request.query.limit === undefined) {
+            const day = await options.diaryService?.getDay({
               userId: principal.userId,
               localDate: request.query.date,
               signal,
-            }) ?? Promise.reject(unavailable()),
-        );
-        assertDiaryDay(day);
-        reply.header("cache-control", "no-store").header("etag", revisionEtag(day.revision));
-        return { data: day };
+            });
+            if (!day) throw unavailable();
+            return { data: day };
+          }
+          const diaryService = options.diaryService;
+          if (!diaryService?.getDayPage) throw unavailable();
+          return diaryService.getDayPage({
+            userId: principal.userId,
+            localDate: request.query.date,
+            limit: request.query.limit,
+            ...(request.query.cursor === undefined ? {} : { cursor: request.query.cursor }),
+            signal,
+          });
+        });
+        assertDiaryDayResponse(response, {
+          limit: request.query.limit,
+          hasCursor: request.query.cursor !== undefined,
+        });
+        reply
+          .header("cache-control", "no-store")
+          .header(
+            "etag",
+            response.page === undefined
+              ? revisionEtag(response.data.revision)
+              : diaryPageEtag(response),
+          );
+        return response;
       } catch (error) {
         throw mapDiaryError(error);
       }

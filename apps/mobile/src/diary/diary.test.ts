@@ -1,14 +1,23 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  createDiaryUnauthorizedSingleFlight,
   createOperationId,
+  diaryEditorOperationKey,
+  diaryEditorOrigin,
+  diaryEditorOriginMatches,
   diaryNoteFromDraft,
+  diaryPagePath,
+  diaryRouteTransitionGeneration,
   entryEnergyDisplay,
+  isDiaryPageStaleProblem,
   isLocalDate,
   localDateTimeToInstant,
+  mergeDiaryPages,
   nutrientDisplay,
   parseDiaryDay,
   parseDiaryMutation,
+  parseDiaryPage,
   prepareQuickAddOperation,
   quickAddOccurredAt,
 } from "./diary";
@@ -115,6 +124,39 @@ const privateCustomEntry = {
     customFoodVersionNumber: 3,
   },
 } as const;
+
+function numberedEntries(from: number, count: number) {
+  return Array.from({ length: count }, (_, offset) => {
+    const number = from + offset;
+    return {
+      ...entry,
+      id: `00000000-0000-4000-8000-${String(number).padStart(12, "0")}`,
+      position: number,
+    };
+  });
+}
+
+function diaryPageFixture(
+  entries: readonly unknown[],
+  nextCursor: string | null,
+  totalEntries: number,
+  overrides: Readonly<Record<string, unknown>> = {},
+) {
+  return {
+    data: {
+      id: "7f2a4824-872e-4616-9cd1-d63cf1beae51",
+      localDate: "2026-08-15",
+      timeZone: "America/Chicago",
+      status: "open",
+      revision: "8",
+      entries,
+      totals: [nutrient],
+      updatedAt: "2026-08-15T13:30:01.000Z",
+      ...overrides,
+    },
+    page: { nextCursor, totalEntries },
+  };
+}
 
 describe("mobile diary contract", () => {
   it("preserves portions, revisions, and exact nutrient decimal strings", () => {
@@ -413,5 +455,120 @@ describe("mobile diary contract", () => {
         throw new Error("secure source unavailable");
       }),
     ).toThrow("secure source unavailable");
+  });
+});
+
+describe("mobile diary screen guards", () => {
+  it("binds edits to the original entry and day snapshot", () => {
+    const day = parseDiaryPage(diaryPageFixture([entry], null, 1)).data;
+    const parsedEntry = day.entries[0];
+    if (!parsedEntry) throw new Error("Expected a diary entry fixture.");
+    const origin = diaryEditorOrigin(day, parsedEntry);
+
+    expect(diaryEditorOriginMatches(origin, day, parsedEntry)).toBe(true);
+    expect(diaryEditorOriginMatches(origin, { ...day, revision: "9" }, parsedEntry)).toBe(false);
+    expect(diaryEditorOriginMatches(origin, { ...day, localDate: "2026-08-16" }, parsedEntry)).toBe(
+      false,
+    );
+    expect(diaryEditorOriginMatches(origin, { ...day, timeZone: "UTC" }, parsedEntry)).toBe(false);
+    expect(diaryEditorOriginMatches(origin, day, { ...parsedEntry, revision: "4" })).toBe(false);
+    expect(diaryEditorOperationKey(origin, { mealSlot: "lunch" })).toBe(
+      `edit:${entry.id}:3:8:{"mealSlot":"lunch"}`,
+    );
+  });
+
+  it("treats requested date plus refresh key as one route transition generation", () => {
+    const first = diaryRouteTransitionGeneration("2026-08-15", "route-1");
+    expect(first).toBe(diaryRouteTransitionGeneration("2026-08-15", "route-1"));
+    expect(diaryRouteTransitionGeneration("2026-08-15", "route-2")).not.toBe(first);
+    expect(diaryRouteTransitionGeneration("2026-08-16", "route-1")).not.toBe(first);
+    expect(diaryRouteTransitionGeneration("partial", "route-2")).toBeNull();
+    expect(diaryRouteTransitionGeneration(undefined, "route-2")).toBeNull();
+  });
+
+  it("single-flights concurrent unauthorized cleanup callbacks", async () => {
+    const flight = createDiaryUnauthorizedSingleFlight();
+    let calls = 0;
+    let release: () => void = () => undefined;
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const action = async () => {
+      calls += 1;
+      await blocked;
+    };
+
+    const first = flight.run(action);
+    const second = flight.run(action);
+    expect(second).toBe(first);
+    await Promise.resolve();
+    expect(calls).toBe(1);
+    release();
+    await first;
+    expect(flight.run(action)).toBe(first);
+    expect(calls).toBe(1);
+  });
+});
+
+describe("mobile diary pagination", () => {
+  it("builds a limit-20 page path and treats legacy data as a final page", () => {
+    expect(diaryPagePath("2026-08-15")).toBe("/v1/diary?date=2026-08-15&limit=20");
+    expect(diaryPagePath("2026-08-15", "d1.page_2-next")).toBe(
+      "/v1/diary?date=2026-08-15&limit=20&cursor=d1.page_2-next",
+    );
+    expect(() => diaryPagePath("2026-08-15", "page_2.next")).toThrow(TypeError);
+    expect(() => diaryPagePath("2026-08-15", "x".repeat(513))).toThrow(TypeError);
+    const { page: _page, ...legacyWire } = diaryPageFixture([entry], null, 1);
+    expect(parseDiaryPage(legacyWire)).toMatchObject({
+      legacy: true,
+      page: { nextCursor: null, totalEntries: 1 },
+    });
+    expect(() => parseDiaryPage({ ...legacyWire, unexpected: true })).toThrow(TypeError);
+    expect(() => parseDiaryPage(diaryPageFixture([], "d1.page_2", 1))).toThrow(TypeError);
+    expect(() => parseDiaryPage(diaryPageFixture([entry], "page_2.next", 2))).toThrow(TypeError);
+    expect(isDiaryPageStaleProblem(409, { code: "DIARY_PAGE_STALE" })).toBe(true);
+    expect(isDiaryPageStaleProblem(409, { code: "CONFLICT" })).toBe(false);
+    expect(isDiaryPageStaleProblem(400, { code: "DIARY_PAGE_STALE" })).toBe(false);
+  });
+
+  it("merges 20, 20, and 5 entries without changing whole-day totals", () => {
+    const first = mergeDiaryPages(
+      null,
+      parseDiaryPage(diaryPageFixture(numberedEntries(1, 20), "d1.page_2", 45)),
+    );
+    const second = mergeDiaryPages(
+      first,
+      parseDiaryPage(diaryPageFixture(numberedEntries(21, 20), "d1.page_3", 45)),
+    );
+    const complete = mergeDiaryPages(
+      second,
+      parseDiaryPage(diaryPageFixture(numberedEntries(41, 5), null, 45)),
+    );
+    expect(complete.data.entries).toHaveLength(45);
+    expect(complete.data.totals).toEqual(first.data.totals);
+    expect(complete.page.nextCursor).toBeNull();
+  });
+
+  it("rejects duplicate IDs, mismatched snapshots, and page overflow", () => {
+    const first = mergeDiaryPages(
+      null,
+      parseDiaryPage(diaryPageFixture(numberedEntries(1, 20), "d1.page_2", 40)),
+    );
+    expect(() =>
+      mergeDiaryPages(first, parseDiaryPage(diaryPageFixture(numberedEntries(20, 20), null, 40))),
+    ).toThrow(TypeError);
+    expect(() =>
+      mergeDiaryPages(
+        first,
+        parseDiaryPage(
+          diaryPageFixture(numberedEntries(21, 20), null, 40, {
+            updatedAt: "2026-08-15T13:30:02.000Z",
+          }),
+        ),
+      ),
+    ).toThrow(TypeError);
+    expect(() => parseDiaryPage(diaryPageFixture(numberedEntries(1, 21), null, 21))).toThrow(
+      TypeError,
+    );
   });
 });

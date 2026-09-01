@@ -63,8 +63,8 @@ vi.mock("../src/persistence-services.js", () => ({
     }
   },
   DatabaseDiaryService: class {
-    constructor(database: unknown) {
-      mocks.databaseDiaryService(database);
+    constructor(database: unknown, options: unknown) {
+      mocks.databaseDiaryService(database, options);
     }
   },
   DatabaseGoalService: class {
@@ -174,6 +174,9 @@ describe("API dependency runtime composition", () => {
       clock,
     });
     expect(mocks.secureAuthService).toHaveBeenCalledWith(expect.objectContaining({ clock }));
+    expect(mocks.databaseDiaryService).toHaveBeenCalledWith(database, {
+      cursorSecret: config.cursorSecret,
+    });
     expect(mocks.databaseRetentionService).toHaveBeenCalledWith(
       expect.objectContaining({
         artifacts: artifactRuntime,

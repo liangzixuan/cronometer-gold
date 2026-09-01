@@ -14,11 +14,13 @@ import {
   DiaryIdempotencyConflictError,
   DiaryLockedError,
   DiaryNotFoundError,
+  DiaryPageStaleError,
   DiaryValidationError,
   deleteDiaryEntry,
   findActiveSessionByTokenHash,
   findPasswordCredentialByEmail,
   getDiaryDay,
+  getDiaryDayPage,
   getUserProfile,
   ProfileRevisionConflictError,
   registerPasswordAccount,
@@ -830,6 +832,323 @@ describeDatabase("account and append-only diary persistence", () => {
     }
   }, 30_000);
 
+  it("pages one coherent 45-entry day in canonical order and rejects stale day or profile state", async () => {
+    if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
+    const bootstrap = createDatabase({ connectionString: databaseUrl, maxConnections: 1 });
+    const schemaName = `diary_page_${randomBytes(6).toString("hex")}`;
+    await sql`create schema ${sql.id(schemaName)}`.execute(bootstrap);
+    const scopedUrl = new URL(databaseUrl);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName},public`);
+    const database = createDatabase({ connectionString: scopedUrl.toString(), maxConnections: 6 });
+    try {
+      await runMigrations(database);
+      const catalogue = await seedCatalogue(database);
+      const owner = await registerPasswordAccount(database, {
+        email: `page-owner-${randomUUID()}@example.invalid`,
+        passwordHash: "$argon2id$page-owner-fixture-hash",
+        passwordParameters: { algorithm: "argon2id" },
+        passwordSalt: "page-owner-fixture-salt",
+        timeZone: "America/Chicago",
+      });
+      const targetDay = await database
+        .insertInto("diary")
+        .values({ local_date: "2026-08-28", time_zone: "America/Chicago", user_id: owner.userId })
+        .returning("id")
+        .executeTakeFirstOrThrow();
+      await seedDiaryDayAtCapacity(
+        database,
+        owner.userId,
+        targetDay.id,
+        catalogue.currentVersionId,
+        45,
+        true,
+        true,
+      );
+      await database
+        .updateTable("diary")
+        .set({ revision: "45" })
+        .where("id", "=", targetDay.id)
+        .where("user_id", "=", owner.userId)
+        .executeTakeFirstOrThrow();
+      const legacy = await getDiaryDay(database, {
+        localDate: "2026-08-28",
+        userId: owner.userId,
+      });
+      const first = await getDiaryDayPage(database, {
+        localDate: "2026-08-28",
+        userId: owner.userId,
+        limit: 20,
+      });
+      if (!first.page.next) throw new Error("First diary page requires a continuation");
+      const second = await getDiaryDayPage(database, {
+        localDate: "2026-08-28",
+        userId: owner.userId,
+        limit: 20,
+        continuation: first.page.next,
+      });
+      if (!second.page.next) throw new Error("Second diary page requires a continuation");
+      const third = await getDiaryDayPage(database, {
+        localDate: "2026-08-28",
+        userId: owner.userId,
+        limit: 20,
+        continuation: second.page.next,
+      });
+      const pagedEntries = [...first.day.entries, ...second.day.entries, ...third.day.entries];
+      const mealRank = new Map([
+        ["breakfast", 0],
+        ["lunch", 1],
+        ["dinner", 2],
+        ["snacks", 3],
+      ]);
+      const compareText = (left: string, right: string): number =>
+        left < right ? -1 : left > right ? 1 : 0;
+      const independentlySortedIds = [...legacy.entries]
+        .sort(
+          (left, right) =>
+            (mealRank.get(left.mealSlot) ?? 99) - (mealRank.get(right.mealSlot) ?? 99) ||
+            left.position - right.position ||
+            compareText(left.occurredAt, right.occurredAt) ||
+            compareText(left.id, right.id),
+        )
+        .map((entry) => entry.id);
+
+      expect([
+        first.day.entries.length,
+        second.day.entries.length,
+        third.day.entries.length,
+      ]).toEqual([20, 20, 5]);
+      expect(first.page.totalEntries).toBe(45);
+      expect(second.page.totalEntries).toBe(45);
+      expect(third.page).toEqual({ next: null, totalEntries: 45 });
+      expect(new Set(pagedEntries.map((entry) => entry.id)).size).toBe(45);
+      expect(pagedEntries.map((entry) => entry.id)).toEqual(
+        legacy.entries.map((entry) => entry.id),
+      );
+      expect(pagedEntries.map((entry) => entry.id)).toEqual(independentlySortedIds);
+      expect(first.day.totals).toEqual(legacy.totals);
+      expect(second.day.totals).toEqual(legacy.totals);
+      expect(third.day.totals).toEqual(legacy.totals);
+      expect(legacy.totals.every((total) => total.contributorCount === 45)).toBe(true);
+
+      const beforeLock = first.page.next;
+      await database
+        .updateTable("diary")
+        .set({ status: "locked" })
+        .where("id", "=", targetDay.id)
+        .where("user_id", "=", owner.userId)
+        .executeTakeFirstOrThrow();
+      expect(
+        await database
+          .selectFrom("diary")
+          .select(["revision", "status"])
+          .where("id", "=", targetDay.id)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ revision: "45", status: "locked" });
+      await expect(
+        getDiaryDayPage(database, {
+          localDate: "2026-08-28",
+          userId: owner.userId,
+          limit: 20,
+          continuation: beforeLock,
+        }),
+      ).rejects.toBeInstanceOf(DiaryPageStaleError);
+
+      await sql`
+        create function diary_page_force_updated_at_for_test()
+        returns trigger
+        language plpgsql
+        as $$
+        declare
+          forced_updated_at text;
+        begin
+          forced_updated_at := current_setting(
+            'nutrition_tracker.test_diary_updated_at',
+            true
+          );
+          if forced_updated_at is not null and forced_updated_at <> '' then
+            new.updated_at := forced_updated_at::timestamptz;
+          end if;
+          return new;
+        end;
+        $$
+      `.execute(database);
+      await sql`
+        create trigger zz_diary_page_force_updated_at_for_test
+        before update on diary
+        for each row execute function diary_page_force_updated_at_for_test()
+      `.execute(database);
+      const updateDiaryMetadataAt = async (updatedAt: string): Promise<void> => {
+        await database.transaction().execute(async (transaction) => {
+          await sql`
+            select set_config(
+              'nutrition_tracker.test_diary_updated_at',
+              ${updatedAt},
+              true
+            )
+          `.execute(transaction);
+          await transaction
+            .updateTable("diary")
+            .set({ note: null })
+            .where("id", "=", targetDay.id)
+            .where("user_id", "=", owner.userId)
+            .executeTakeFirstOrThrow();
+        });
+      };
+      await updateDiaryMetadataAt("2035-01-02T03:04:05.123456Z");
+      const whileLocked = await getDiaryDayPage(database, {
+        localDate: "2026-08-28",
+        userId: owner.userId,
+        limit: 20,
+      });
+      if (!whileLocked.page.next) throw new Error("Locked diary page requires a continuation");
+      const lockedUpdatedAt = whileLocked.day.updatedAt;
+      await updateDiaryMetadataAt("2035-01-02T03:04:05.123789Z");
+      const metadataChangedDay = await database
+        .selectFrom("diary")
+        .select(["revision", "status", "updated_at"])
+        .where("id", "=", targetDay.id)
+        .executeTakeFirstOrThrow();
+      expect(metadataChangedDay).toMatchObject({ revision: "45", status: "locked" });
+      expect(metadataChangedDay.updated_at.toISOString()).toBe(lockedUpdatedAt);
+      await expect(
+        getDiaryDayPage(database, {
+          localDate: "2026-08-28",
+          userId: owner.userId,
+          limit: 20,
+          continuation: whileLocked.page.next,
+        }),
+      ).rejects.toBeInstanceOf(DiaryPageStaleError);
+
+      const beforeUnlock = await getDiaryDayPage(database, {
+        localDate: "2026-08-28",
+        userId: owner.userId,
+        limit: 20,
+      });
+      if (!beforeUnlock.page.next) throw new Error("Diary page requires a continuation");
+      await database
+        .updateTable("diary")
+        .set({ status: "open" })
+        .where("id", "=", targetDay.id)
+        .where("user_id", "=", owner.userId)
+        .executeTakeFirstOrThrow();
+      expect(
+        await database
+          .selectFrom("diary")
+          .select(["revision", "status"])
+          .where("id", "=", targetDay.id)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ revision: "45", status: "open" });
+      await expect(
+        getDiaryDayPage(database, {
+          localDate: "2026-08-28",
+          userId: owner.userId,
+          limit: 20,
+          continuation: beforeUnlock.page.next,
+        }),
+      ).rejects.toBeInstanceOf(DiaryPageStaleError);
+
+      const beforeHeadDrift = await getDiaryDayPage(database, {
+        localDate: "2026-08-28",
+        userId: owner.userId,
+        limit: 20,
+      });
+      const beforeHeadDriftContinuation = beforeHeadDrift.page.next;
+      if (!beforeHeadDriftContinuation) throw new Error("Diary page requires a continuation");
+      await updateFoodDiaryEntry(database, {
+        clientOperationId: randomUUID(),
+        entryId: pagedEntries[40]?.id ?? "missing",
+        expectedEntryRevision: "1",
+        note: "snapshot digest drift",
+        requestDigest: "a".repeat(64),
+        userId: owner.userId,
+      });
+      await database.transaction().execute(async (transaction) => {
+        await sql`
+          select set_config(
+            'nutrition_tracker.test_diary_updated_at',
+            ${beforeHeadDriftContinuation.updatedAtMicroseconds},
+            true
+          )
+        `.execute(transaction);
+        await transaction
+          .updateTable("diary")
+          .set({ note: null, revision: beforeHeadDrift.day.revision })
+          .where("id", "=", targetDay.id)
+          .where("user_id", "=", owner.userId)
+          .executeTakeFirstOrThrow();
+      });
+      const afterHeadDrift = await getDiaryDayPage(database, {
+        localDate: "2026-08-28",
+        userId: owner.userId,
+        limit: 20,
+      });
+      const afterHeadDriftContinuation = afterHeadDrift.page.next;
+      if (!afterHeadDriftContinuation)
+        throw new Error("Mutated diary page requires a continuation");
+      expect(afterHeadDrift.day).toMatchObject({
+        revision: beforeHeadDrift.day.revision,
+        status: beforeHeadDrift.day.status,
+        timeZone: beforeHeadDrift.day.timeZone,
+        updatedAt: beforeHeadDrift.day.updatedAt,
+      });
+      expect(afterHeadDrift.day.entries.map((entry) => entry.id)).toEqual(
+        beforeHeadDrift.day.entries.map((entry) => entry.id),
+      );
+      expect(afterHeadDriftContinuation.updatedAtMicroseconds).toBe(
+        beforeHeadDriftContinuation.updatedAtMicroseconds,
+      );
+      expect(afterHeadDriftContinuation.snapshotDigest).not.toBe(
+        beforeHeadDriftContinuation.snapshotDigest,
+      );
+      await expect(
+        getDiaryDayPage(database, {
+          localDate: "2026-08-28",
+          userId: owner.userId,
+          limit: 20,
+          continuation: beforeHeadDriftContinuation,
+        }),
+      ).rejects.toBeInstanceOf(DiaryPageStaleError);
+
+      await updateUserProfile(database, {
+        expectedRevision: "0",
+        patch: { timeZone: "Asia/Tokyo" },
+        userId: owner.userId,
+      });
+      await expect(
+        getDiaryDayPage(database, {
+          localDate: "2026-08-28",
+          userId: owner.userId,
+          limit: 20,
+          continuation: afterHeadDriftContinuation,
+        }),
+      ).rejects.toBeInstanceOf(DiaryPageStaleError);
+
+      const beforeDayDeletion = await getDiaryDayPage(database, {
+        localDate: "2026-08-28",
+        userId: owner.userId,
+        limit: 20,
+      });
+      if (!beforeDayDeletion.page.next) throw new Error("Diary page requires a continuation");
+      await database
+        .deleteFrom("diary")
+        .where("id", "=", targetDay.id)
+        .where("user_id", "=", owner.userId)
+        .executeTakeFirstOrThrow();
+      await expect(
+        getDiaryDayPage(database, {
+          localDate: "2026-08-28",
+          userId: owner.userId,
+          limit: 20,
+          continuation: beforeDayDeletion.page.next,
+        }),
+      ).rejects.toBeInstanceOf(DiaryPageStaleError);
+    } finally {
+      await database.destroy();
+      await sql`drop schema ${sql.id(schemaName)} cascade`.execute(bootstrap);
+      await bootstrap.destroy();
+    }
+  }, 30_000);
+
   it("bounds the non-paginated maximum day payload to the beta memory budget", async () => {
     if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
     const bootstrap = createDatabase({ connectionString: databaseUrl, maxConnections: 1 });
@@ -877,12 +1196,28 @@ describeDatabase("account and append-only diary persistence", () => {
         localDate: "2026-08-12",
         userId: owner.userId,
       });
+      const maximumPage = await getDiaryDayPage(database, {
+        localDate: "2026-08-12",
+        userId: owner.userId,
+        limit: 20,
+      });
       const payloadBytes = Buffer.byteLength(JSON.stringify(maximumDay), "utf8");
+      const pageBytes = Buffer.byteLength(JSON.stringify(maximumPage), "utf8");
       expect(maximumDay.entries).toHaveLength(50);
+      expect(maximumPage.day.entries).toHaveLength(20);
       expect(maximumDay.totals).toHaveLength(256);
       expect(maximumDay.entries.every((entry) => entry.nutrients.length === 256)).toBe(true);
+      expect(maximumPage.day.entries.every((entry) => entry.nutrients.length === 256)).toBe(true);
       expect(payloadBytes).toBeGreaterThan(1_000_000);
       expect(payloadBytes).toBeLessThanOrEqual(5 * 1024 * 1024);
+      expect(
+        pageBytes,
+        `20-entry diary page measured ${pageBytes} bytes against ${payloadBytes} full-day bytes`,
+      ).toBeLessThanOrEqual(5 * 1024 * 1024);
+      expect(
+        pageBytes * 2,
+        `20-entry diary page measured ${pageBytes} bytes against ${payloadBytes} full-day bytes`,
+      ).toBeLessThan(payloadBytes);
     } finally {
       await database.destroy();
       await sql`drop schema ${sql.id(schemaName)} cascade`.execute(bootstrap);
@@ -1743,6 +2078,7 @@ async function seedDiaryDayAtCapacity(
   foodVersionId: string,
   entryCount = 50,
   withFullNutrientVector = false,
+  withCanonicalTies = false,
 ): Promise<void> {
   await database.transaction().execute(async (transaction) => {
     await sql`set constraints all deferred`.execute(transaction);
@@ -1754,7 +2090,21 @@ async function seedDiaryDayAtCapacity(
         from promoted_food_search_catalogue_v1
         where food_version_id = ${foodVersionId}
       ), generated as materialized (
-        select gen_random_uuid() as entry_id, gen_random_uuid() as revision_id, ordinal::integer
+        select
+          gen_random_uuid() as entry_id,
+          gen_random_uuid() as revision_id,
+          ordinal::integer,
+          case
+            when ${withCanonicalTies} then
+              case (ordinal - 1) % 4
+                when 0 then 'snacks'
+                when 1 then 'dinner'
+                when 2 then 'lunch'
+                else 'breakfast'
+              end
+            else 'lunch'
+          end as meal_slot,
+          case when ${withCanonicalTies} then ((ordinal - 1) % 3)::integer else ordinal::integer end as position
         from generate_series(1, ${entryCount}) ordinal
       ), inserted as (
         insert into diary_entry (
@@ -1770,11 +2120,11 @@ async function seedDiaryDayAtCapacity(
           catalogue.food_version_id, null, null,
           1, 'g', 1,
           (diary_day.local_date + time '12:00:00') at time zone diary_day.time_zone,
-          '12:00:00', 'lunch', generated.ordinal, null,
+          '12:00:00', generated.meal_slot, generated.position, null,
           'partial', ${NUTRITION_ENGINE_VERSION},
           generated.revision_id, 1
         from generated cross join catalogue cross join diary_day
-        returning id, current_revision_id, position
+        returning id, current_revision_id, meal_slot, position
       )
       insert into diary_entry_revision (
         id, diary_entry_id, diary_id, user_id, revision_number, operation, entry_kind,
@@ -1787,7 +2137,7 @@ async function seedDiaryDayAtCapacity(
       )
       select
         inserted.current_revision_id, inserted.id, ${diaryId}, ${userId}, 1, 'create', 'food',
-        catalogue.food_version_id, null, null, 'lunch',
+        catalogue.food_version_id, null, null, inserted.meal_slot,
         1, 'g', 1, 'g',
         (diary_day.local_date + time '12:00:00') at time zone diary_day.time_zone,
         diary_day.local_date, '12:00:00', diary_day.time_zone,
@@ -1796,7 +2146,11 @@ async function seedDiaryDayAtCapacity(
         catalogue.source_release_id, catalogue.source_display_name,
         catalogue.license_expression, catalogue.attribution_required,
         catalogue.attribution_text, null,
-        'partial', ${NUTRITION_ENGINE_VERSION}, ${withFullNutrientVector ? 256 : 0}
+        'partial', ${NUTRITION_ENGINE_VERSION},
+        case
+          when ${withFullNutrientVector} then (select count(*)::integer from nutrient where active)
+          else 0
+        end
       from inserted cross join catalogue cross join diary_day
     `.execute(transaction);
     if (withFullNutrientVector) {

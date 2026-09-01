@@ -25,8 +25,10 @@ reviewer, or production-release acceptance.
    generic/branded intent, autocomplete, typo tolerance, reviewed synonyms,
    bounded recent/favorite reranking, and authoritative exact barcode lookup.
 4. **Diary vertical slice (implemented):** account/profile, local-day diary, serving
-   selection, add/edit/delete, meal groups, exact daily totals, and retry-safe
-   idempotency.
+   selection, add/edit/delete, meal groups, exact daily totals, retry-safe
+   idempotency, and opt-in 20-entry response pages with coherent whole-day
+   totals, encrypted revision-bound continuations, and legacy full-day
+   compatibility. The reviewed 50-active-entry day cap remains.
 5. **Recipes and goals (implemented):** yield-aware versioned recipes, immutable
    recipe diary snapshots, versioned targets, bounded energy estimates, and
    lower-bound nutrient progress.
@@ -74,8 +76,8 @@ acceptance; progress in either lane never waives the gates in the other.
    changed upstream bytes and a bounded archive orchestrator.
 2. **M1 — excellent basic daily loop:** activity/exercise, water, private diary
    notes, configurable groups, camera barcode scan while preserving exact GTIN
-   lookup, diary pagination, durable offline retry/reorder, email verification
-   and password recovery, reviewed reference targets, and production-grade
+   lookup, durable offline retry/reorder, email verification and password
+   recovery, reviewed reference targets, and production-grade
    weight sync, with cross-client end-to-end and accessibility acceptance.
    Private notes attached to food and recipe entries are implemented locally.
    Repeat preserves a note. Clearing hides it from the current display, while
@@ -84,13 +86,25 @@ acceptance; progress in either lane never waives the gates in the other.
    first entry-note sub-slice, not standalone diary notes.
    Standalone day/note-only entries remain open and require a separately reviewed
    immutable-entry model. Safe local work may extend the real API/worker privacy
-   drill across every retained entity family ahead of M2; diary pagination remains
-   the next diary feature slice. No signed clients exist yet, so this source proves
-   only a coordinated deployment. Before a future staggered rollout, M2 must add
-   an explicit compatibility phase and capability signal: the server first accepts note
-   writes while `note` output remains optional; editors stay hidden until they
-   observe that capability; tolerant clients are staged; only then may server
-   output become required.
+   drill across every retained entity family ahead of M2.
+
+   Bounded diary pagination is implemented locally across PostgreSQL, the private
+   API, web, and mobile. New diary screens request at most 20 entries per page;
+   every page repeats whole-day totals and count, encrypted continuations bind the
+   owner/date/limit/day revision/effective time-zone state, and a stale day forces
+   a page-one restart. Legacy date-only readers still receive the complete bounded
+   day. The 50-entry write/aggregation cap remains until separate scale and client-
+   virtualization evidence supports a change. This closes one M1 source slice,
+   not M1, signed-device, cross-client, accessibility, controlled-beta, or release
+   acceptance. A future staggered pagination deployment must remain API-first as
+   specified by ADR 0012.
+
+   No signed clients exist yet, so the entry-note source also proves only a
+   coordinated deployment. Before a future staggered note rollout, M2 must add an
+   explicit compatibility phase and capability signal: the server first accepts
+   note writes while `note` output remains optional; editors stay hidden until
+   they observe that capability; tolerant clients are staged; only then may
+   server output become required.
 3. **M2 — controlled beta:** reviewed hosting and digest-pinned seven-image
    deployment; HTTPS, access-control, and off-host restore evidence; full API/worker
    export-erasure population across every retained entity family; a reviewed
@@ -184,10 +198,15 @@ than claiming a live USDA or CNF release. Password recovery, email verification,
 durable cross-restart offline queues, and signed-device preview testing remain
 controlled-beta gates rather than hidden claims of this milestone. Account
 export and deletion are implemented and locally drilled under the retention and
-privacy milestone; they are not production evidence. Until diary entries are
-paginated, a local day is capped at 50 food and recipe entries so the full
-immutable nutrient vectors remain within a reviewed response and mobile-memory
-budget.
+privacy milestone; they are not production evidence. Diary screens now opt into
+20-entry pages while legacy date-only readers retain a complete-day response.
+Every page is derived with the authoritative whole-day totals inside one
+repeatable-read snapshot; encrypted continuations reject a changed day or
+effective profile time zone instead of merging revisions. Pagination bounds each
+transfer but does not make writes, aggregation, export, erasure, or accumulated
+client memory unbounded. A local day therefore remains capped at 50 food and
+recipe entries and 256 nutrients until separately reviewed scale and
+virtualization evidence justifies a change.
 
 ## Recipes-and-goals boundary
 

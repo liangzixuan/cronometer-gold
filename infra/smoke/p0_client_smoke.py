@@ -22,10 +22,10 @@ from typing import Any, NoReturn, Sequence
 from urllib.parse import urlsplit
 
 
-REPORT_SCHEMA = "nutrition-tracker-p0-client-smoke-report-v1"
-REVIEW_PACKAGE_SCHEMA = "nutrition-tracker-p0-client-smoke-review-package-v1"
-CAPTURE_SCHEMA = "nutrition-tracker-p0-client-smoke-capture-v1"
-SOURCE_BUNDLE_SCHEMA = "nutrition-tracker-p0-client-smoke-source-capture-bundle-v1"
+REPORT_SCHEMA = "nutrition-tracker-p0-client-smoke-report-v2"
+REVIEW_PACKAGE_SCHEMA = "nutrition-tracker-p0-client-smoke-review-package-v2"
+CAPTURE_SCHEMA = "nutrition-tracker-p0-client-smoke-capture-v2"
+SOURCE_BUNDLE_SCHEMA = "nutrition-tracker-p0-client-smoke-source-capture-bundle-v2"
 UNSIGNED_TRUST_BOUNDARY = (
     "unsigned-structural-candidate-requires-independent-ed25519-health-manifest-review"
 )
@@ -40,6 +40,7 @@ FLOW_IDS = (
     "food-search",
     "diary-add-edit-delete",
     "diary-repeat",
+    "diary-pagination",
     "recipe-create-revise-log",
     "goal-create-revise-progress",
     "retention-trends",

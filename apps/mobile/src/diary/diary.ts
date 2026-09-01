@@ -1,4 +1,7 @@
 export const mealSlots = ["breakfast", "lunch", "dinner", "snacks"] as const;
+export const DIARY_PAGE_SIZE = 20;
+export const DIARY_DAY_MAX_ENTRIES = 50;
+export const DIARY_CURSOR_MAX_LENGTH = 512;
 export type MealSlot = (typeof mealSlots)[number];
 export type NutrientCompleteness = "complete" | "partial" | "unknown";
 
@@ -136,6 +139,29 @@ export interface DiaryDay {
   readonly entries: readonly DiaryEntry[];
   readonly totals: readonly DiaryNutrient[];
   readonly updatedAt: string | null;
+}
+
+export interface DiaryPageMetadata {
+  readonly nextCursor: string | null;
+  readonly totalEntries: number;
+}
+
+export interface DiaryPage {
+  readonly data: DiaryDay;
+  readonly page: DiaryPageMetadata;
+  readonly legacy: boolean;
+}
+
+export interface DiaryEditorOrigin {
+  readonly entryId: string;
+  readonly originEntryRevision: string;
+  readonly originLocalDate: string;
+  readonly originTimeZone: string;
+  readonly originDayRevision: string;
+}
+
+export interface DiaryUnauthorizedSingleFlight {
+  readonly run: (action: () => Promise<void>) => Promise<void>;
 }
 
 export interface DiaryMutationResult {
@@ -853,7 +879,7 @@ export function parseDiaryDay(value: unknown): DiaryDay {
     !["open", "locked"].includes(String(value.data.status)) ||
     !/^\d+$/u.test(String(value.data.revision)) ||
     !Array.isArray(value.data.entries) ||
-    value.data.entries.length > 50 ||
+    value.data.entries.length > DIARY_DAY_MAX_ENTRIES ||
     !Array.isArray(value.data.totals) ||
     value.data.totals.length > 256 ||
     !(value.data.updatedAt === null || text(value.data.updatedAt, 64))
@@ -868,6 +894,168 @@ export function parseDiaryDay(value: unknown): DiaryDay {
     entries: value.data.entries.map(parseEntry),
     totals: value.data.totals.map(parseDiaryNutrient),
     updatedAt: value.data.updatedAt,
+  };
+}
+
+function cursor(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= DIARY_CURSOR_MAX_LENGTH &&
+    /^d1\.[A-Za-z0-9_-]+$/u.test(value)
+  );
+}
+
+function uniqueEntryIds(entries: readonly DiaryEntry[]): boolean {
+  return new Set(entries.map((entry) => entry.id)).size === entries.length;
+}
+
+function completePageShape(page: DiaryPage): boolean {
+  const loaded = page.data.entries.length;
+  return (
+    uniqueEntryIds(page.data.entries) &&
+    loaded <= page.page.totalEntries &&
+    page.page.totalEntries <= DIARY_DAY_MAX_ENTRIES &&
+    (page.page.nextCursor === null
+      ? loaded === page.page.totalEntries
+      : loaded > 0 && loaded < page.page.totalEntries)
+  );
+}
+
+export function parseDiaryPage(value: unknown): DiaryPage {
+  const data = parseDiaryDay(value);
+  if (!record(value) || !("page" in value)) {
+    if (!record(value) || Object.keys(value).length !== 1 || !("data" in value)) {
+      throw new TypeError("The legacy diary response was invalid.");
+    }
+    const legacy = {
+      data,
+      page: { nextCursor: null, totalEntries: data.entries.length },
+      legacy: true,
+    } satisfies DiaryPage;
+    if (!completePageShape(legacy)) throw new TypeError("The diary response was invalid.");
+    return legacy;
+  }
+  if (
+    Object.keys(value).some((key) => key !== "data" && key !== "page") ||
+    !record(value.page) ||
+    Object.keys(value.page).some((key) => key !== "nextCursor" && key !== "totalEntries") ||
+    !(value.page.nextCursor === null || cursor(value.page.nextCursor)) ||
+    !Number.isSafeInteger(value.page.totalEntries) ||
+    Number(value.page.totalEntries) < 0 ||
+    Number(value.page.totalEntries) > DIARY_DAY_MAX_ENTRIES ||
+    data.entries.length > DIARY_PAGE_SIZE ||
+    data.entries.length > Number(value.page.totalEntries) ||
+    (value.page.nextCursor !== null && data.entries.length === 0) ||
+    !uniqueEntryIds(data.entries)
+  ) {
+    throw new TypeError("The diary page response was invalid.");
+  }
+  return {
+    data,
+    page: {
+      nextCursor: value.page.nextCursor,
+      totalEntries: Number(value.page.totalEntries),
+    },
+    legacy: false,
+  };
+}
+
+function sameTotals(left: readonly DiaryNutrient[], right: readonly DiaryNutrient[]): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+export function mergeDiaryPages(current: DiaryPage | null, incoming: DiaryPage): DiaryPage {
+  if (current === null) {
+    if (!completePageShape(incoming)) {
+      throw new TypeError("The first diary page was incomplete or inconsistent.");
+    }
+    return incoming;
+  }
+  if (
+    current.page.nextCursor === null ||
+    current.data.id !== incoming.data.id ||
+    current.data.localDate !== incoming.data.localDate ||
+    current.data.timeZone !== incoming.data.timeZone ||
+    current.data.status !== incoming.data.status ||
+    current.data.revision !== incoming.data.revision ||
+    current.data.updatedAt !== incoming.data.updatedAt ||
+    current.page.totalEntries !== incoming.page.totalEntries ||
+    !sameTotals(current.data.totals, incoming.data.totals) ||
+    incoming.legacy ||
+    (incoming.data.entries.length === 0 && incoming.page.nextCursor !== null)
+  ) {
+    throw new TypeError("The diary pages did not describe the same day snapshot.");
+  }
+  const entries = [...current.data.entries, ...incoming.data.entries];
+  const merged: DiaryPage = {
+    data: { ...current.data, entries },
+    page: incoming.page,
+    legacy: false,
+  };
+  if (!completePageShape(merged)) {
+    throw new TypeError("The diary pages overlapped or exceeded the day total.");
+  }
+  return merged;
+}
+
+export function diaryPagePath(localDate: string, nextCursor?: string | null): string {
+  if (!isLocalDate(localDate) || (nextCursor != null && !cursor(nextCursor))) {
+    throw new TypeError("The diary page request was invalid.");
+  }
+  const query = new URLSearchParams({ date: localDate, limit: String(DIARY_PAGE_SIZE) });
+  if (nextCursor != null) query.set("cursor", nextCursor);
+  return `/v1/diary?${query.toString()}`;
+}
+
+export function isDiaryPageStaleProblem(status: number, value: unknown): boolean {
+  return status === 409 && record(value) && value.code === "DIARY_PAGE_STALE";
+}
+
+export function diaryEditorOrigin(day: DiaryDay, entry: DiaryEntry): DiaryEditorOrigin {
+  return {
+    entryId: entry.id,
+    originEntryRevision: entry.revision,
+    originLocalDate: day.localDate,
+    originTimeZone: day.timeZone,
+    originDayRevision: day.revision,
+  };
+}
+
+export function diaryEditorOriginMatches(
+  origin: DiaryEditorOrigin,
+  day: DiaryDay,
+  entry: DiaryEntry,
+): boolean {
+  return (
+    origin.entryId === entry.id &&
+    origin.originEntryRevision === entry.revision &&
+    origin.originLocalDate === day.localDate &&
+    origin.originTimeZone === day.timeZone &&
+    origin.originDayRevision === day.revision
+  );
+}
+
+export function diaryEditorOperationKey(origin: DiaryEditorOrigin, body: object): string {
+  return `edit:${origin.entryId}:${origin.originEntryRevision}:${origin.originDayRevision}:${JSON.stringify(body)}`;
+}
+
+export function diaryRouteTransitionGeneration(
+  requestedDate: string | undefined,
+  refreshKey: string | undefined,
+): string | null {
+  return requestedDate && isLocalDate(requestedDate)
+    ? JSON.stringify([requestedDate, refreshKey ?? null])
+    : null;
+}
+
+export function createDiaryUnauthorizedSingleFlight(): DiaryUnauthorizedSingleFlight {
+  let pending: Promise<void> | null = null;
+  return {
+    run(action) {
+      pending ??= Promise.resolve().then(action);
+      return pending;
+    },
   };
 }
 

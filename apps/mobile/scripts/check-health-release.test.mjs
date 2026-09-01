@@ -346,24 +346,24 @@ function p0ClientSmokeReport() {
     browser: {
       captureSha256: "7".repeat(64),
       testedEasBuildId: null,
-      capturedAt: "2026-08-16T07:18:00.000Z",
+      capturedAt: "2026-08-16T07:19:00.000Z",
       results: p0ClientResults(),
     },
     ios: {
       captureSha256: "8".repeat(64),
       testedEasBuildId: buildIds.physicalDevice.ios,
-      capturedAt: "2026-08-16T07:18:00.000Z",
+      capturedAt: "2026-08-16T07:19:00.000Z",
       results: p0ClientResults(),
     },
     android: {
       captureSha256: "9".repeat(64),
       testedEasBuildId: buildIds.physicalDevice.android,
-      capturedAt: "2026-08-16T07:18:00.000Z",
+      capturedAt: "2026-08-16T07:19:00.000Z",
       results: p0ClientResults(),
     },
   };
   const sourceCaptureBundleDigest = createHash("sha256").update(
-    "nutrition-tracker-p0-client-smoke-source-capture-bundle-v1\n",
+    "nutrition-tracker-p0-client-smoke-source-capture-bundle-v2\n",
   );
   for (const role of ["browser", "ios", "android"]) {
     sourceCaptureBundleDigest.update(`${role}\n${clients[role].captureSha256}\n`);
@@ -940,6 +940,11 @@ describe("native health release evidence", () => {
   it("binds an unsigned synthetic P0 smoke candidate through the signed v5 manifest", async () => {
     const mutations = [
       [
+        "legacy v1 report schema",
+        (report) => (report.schemaVersion = "nutrition-tracker-p0-client-smoke-report-v1"),
+        /p0-client-smoke-report-v2/u,
+      ],
+      [
         "wrong trust marker",
         (report) => (report.trustBoundary = "trusted"),
         /unsigned structural candidate/u,
@@ -988,7 +993,7 @@ describe("native health release evidence", () => {
       ],
       [
         "wrong final capture time",
-        (report) => (report.clients.ios.capturedAt = "2026-08-16T07:17:00.000Z"),
+        (report) => (report.clients.ios.capturedAt = "2026-08-16T07:18:00.000Z"),
         /final ordered observation/u,
       ],
       [

@@ -36,14 +36,14 @@ const PHYSICAL_DEVICE_RELAY_ADAPTER_PLATFORM = "windows-host";
 const PHYSICAL_DEVICE_RELAY_TEST_ADAPTER_PREFIX = "test-";
 const PHYSICAL_DEVICE_API_ORIGIN_COMMITMENT_DOMAIN =
   "nutrition-tracker-physical-device-api-origin-v1";
-export const P0_CLIENT_SMOKE_REPORT_SCHEMA = "nutrition-tracker-p0-client-smoke-report-v1";
+export const P0_CLIENT_SMOKE_REPORT_SCHEMA = "nutrition-tracker-p0-client-smoke-report-v2";
 const PHYSICAL_DEVICE_RELAY_TRUST_BOUNDARY =
   "unsigned-structural-candidate-requires-independent-ed25519-manifest-review";
 const P0_CLIENT_SMOKE_TRUST_BOUNDARY =
   "unsigned-structural-candidate-requires-independent-ed25519-health-manifest-review";
 const P0_CLIENT_SMOKE_DATA_CLASSIFICATION = "synthetic-only";
 const P0_CLIENT_SMOKE_SOURCE_CAPTURE_BUNDLE_SCHEMA =
-  "nutrition-tracker-p0-client-smoke-source-capture-bundle-v1";
+  "nutrition-tracker-p0-client-smoke-source-capture-bundle-v2";
 export const P0_CLIENT_SMOKE_FLOW_IDS = Object.freeze([
   "unauthenticated-entry",
   "register",
@@ -53,6 +53,7 @@ export const P0_CLIENT_SMOKE_FLOW_IDS = Object.freeze([
   "food-search",
   "diary-add-edit-delete",
   "diary-repeat",
+  "diary-pagination",
   "recipe-create-revise-log",
   "goal-create-revise-progress",
   "retention-trends",

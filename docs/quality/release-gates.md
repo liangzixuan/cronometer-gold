@@ -142,6 +142,15 @@ encrypted erasure-ledger tombstone as local recovery evidence.
   every input and source, and never add ordinary exercise twice.
 - Goal progress proves lower-bound semantics with incomplete nutrient panels and
   never labels an unknown contribution as measured zero or exact completion.
+- Diary client acceptance exercises a synthetic multi-page day spanning
+  breakfast, lunch, dinner, and snacks on browser, physical iOS, and physical
+  Android. Every immutable entry appears exactly once; repeated `totalEntries`
+  and whole-day totals remain authoritative across pages; a mutation between
+  pages produces a typed stale restart; and a pending date switch cannot render
+  or mutate the previous day. Partially loaded groups never claim a false empty
+  state. Reviewer-preserved evidence covers keyboard plus a browser screen
+  reader, VoiceOver, and TalkBack load-more, progress, error/retry, group, and
+  date-switch behavior.
 - Export, account deletion, backup restore, and search reindex drills pass.
 - Signed internal Android APK and iOS IPA binaries compile from one clean commit
   and pass the physical-device matrix. A reviewer-signed manifest separately
@@ -171,7 +180,8 @@ encrypted erasure-ledger tombstone as local recovery evidence.
   report hash does not clear this gate.
 - Browser and installed-device smoke tests render, navigate, and exercise the
   authenticated and unauthenticated states of every P0 client flow with
-  synthetic data. The canonical unsigned candidate must bind the exact commit,
+  synthetic data, including the v2 `diary-pagination` flow. The canonical
+  unsigned candidate must bind the exact commit,
   private API origin, physical iOS/Android EAS build IDs, timing, ordered flow
   results, and protected source-capture hashes. It clears the gate only when an
   independent reviewer reconciles the raw captures, reruns the normalizer, and

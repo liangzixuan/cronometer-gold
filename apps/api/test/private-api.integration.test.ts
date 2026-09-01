@@ -29,10 +29,13 @@ describeDatabase("live private API adapters", () => {
     const authService = new SecureAuthService({
       repository: new DatabaseAuthRepository(database),
     });
+    const config = loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" });
     const app = buildApp({
       authService,
-      config: loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" }),
-      diaryService: new DatabaseDiaryService(database),
+      config,
+      diaryService: new DatabaseDiaryService(database, {
+        cursorSecret: "x".repeat(32),
+      }),
       logger: false,
       profileService: new DatabaseProfileService(database),
     });
@@ -99,6 +102,17 @@ describeDatabase("live private API adapters", () => {
       expect(diary.headers.etag).toBe('"0"');
       expect(diary.json()).toMatchObject({
         data: { entries: [], id: null, localDate: "2026-08-15", revision: "0", totals: [] },
+      });
+      const diaryPage = await app.inject({
+        method: "GET",
+        url: "/v1/diary?date=2026-08-15&limit=20",
+        headers: { authorization },
+      });
+      expect(diaryPage.statusCode, diaryPage.body).toBe(200);
+      expect(diaryPage.headers.etag).toMatch(/^"p-[A-Za-z0-9_-]{43}"$/u);
+      expect(diaryPage.json()).toMatchObject({
+        data: { entries: [], id: null, localDate: "2026-08-15", revision: "0", totals: [] },
+        page: { nextCursor: null, totalEntries: 0 },
       });
 
       const logout = await app.inject({

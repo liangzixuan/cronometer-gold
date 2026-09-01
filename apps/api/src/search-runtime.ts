@@ -88,7 +88,7 @@ export async function createApiSearchRuntime(
 
     return {
       authService,
-      diaryService: new DatabaseDiaryService(database),
+      diaryService: new DatabaseDiaryService(database, { cursorSecret: config.cursorSecret }),
       foodSearchService: new DatabaseBackedFoodSearchService({
         core,
         database,

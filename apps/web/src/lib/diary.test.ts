@@ -2,17 +2,25 @@ import { describe, expect, it } from "vitest";
 
 import {
   diaryEditErrorMessage,
+  diaryEditorOperationKey,
+  diaryEditorOrigin,
+  diaryEditorOriginMatches,
   diaryEntryNoteCharacterCount,
+  diaryPagePath,
   entryEnergyDisplay,
+  isDiaryPageStaleProblem,
   isLocalDate,
   localDateTimeToInstant,
+  mergeDiaryPages,
   nutrientDisplay,
   parseDiaryDay,
   parseDiaryMutation,
+  parseDiaryPage,
   prepareDiaryEntryNote,
   prepareDiaryEntryNotePatch,
   prepareQuickAddOperation,
   quickAddOccurredAt,
+  resolveDiaryRouteDate,
   shiftLocalDate,
 } from "./diary";
 
@@ -122,6 +130,39 @@ const privateCustomEntry = {
     customFoodVersionNumber: 3,
   },
 } as const;
+
+function numberedEntries(from: number, count: number) {
+  return Array.from({ length: count }, (_, offset) => {
+    const number = from + offset;
+    return {
+      ...entry,
+      id: `00000000-0000-4000-8000-${String(number).padStart(12, "0")}`,
+      position: number,
+    };
+  });
+}
+
+function diaryPageFixture(
+  entries: readonly unknown[],
+  nextCursor: string | null,
+  totalEntries: number,
+  overrides: Readonly<Record<string, unknown>> = {},
+) {
+  return {
+    data: {
+      id: "41b5f2ea-2274-4b98-8b13-96504d176917",
+      localDate: "2026-08-15",
+      timeZone: "America/Chicago",
+      status: "open",
+      revision: "8",
+      entries,
+      totals: [nutrient],
+      updatedAt: "2026-08-15T13:31:00.000Z",
+      ...overrides,
+    },
+    page: { nextCursor, totalEntries },
+  };
+}
 
 describe("web diary contract", () => {
   it("preserves exact decimal strings and labels partial totals as lower bounds", () => {
@@ -376,6 +417,89 @@ describe("web diary contract", () => {
   });
 });
 
+describe("web diary editor snapshot binding", () => {
+  it("binds edits to the original entry and day revisions, date, and zone", () => {
+    const day = parseDiaryPage(diaryPageFixture([entry], null, 1)).data;
+    const parsedEntry = day.entries[0];
+    if (!parsedEntry) throw new Error("Expected a diary entry fixture.");
+    const origin = diaryEditorOrigin(day, parsedEntry);
+
+    expect(origin).toEqual({
+      entryId: entry.id,
+      originEntryRevision: "3",
+      originLocalDate: "2026-08-15",
+      originTimeZone: "America/Chicago",
+      originDayRevision: "8",
+    });
+    expect(diaryEditorOriginMatches(origin, day, parsedEntry)).toBe(true);
+    expect(diaryEditorOriginMatches(origin, { ...day, revision: "9" }, parsedEntry)).toBe(false);
+    expect(diaryEditorOriginMatches(origin, { ...day, localDate: "2026-08-16" }, parsedEntry)).toBe(
+      false,
+    );
+    expect(diaryEditorOriginMatches(origin, { ...day, timeZone: "UTC" }, parsedEntry)).toBe(false);
+    expect(diaryEditorOriginMatches(origin, day, { ...parsedEntry, revision: "4" })).toBe(false);
+    expect(diaryEditorOperationKey(origin, { mealSlot: "lunch" })).toBe(
+      `edit:${entry.id}:3:8:{"mealSlot":"lunch"}`,
+    );
+  });
+});
+
+describe("web diary pagination", () => {
+  it("builds an opt-in bounded page path and normalizes a legacy final page", () => {
+    expect(diaryPagePath("2026-08-15")).toBe("/api/diary?date=2026-08-15&limit=20");
+    expect(diaryPagePath("2026-08-15", "d1.next_page-2")).toBe(
+      "/api/diary?date=2026-08-15&limit=20&cursor=d1.next_page-2",
+    );
+    expect(() => diaryPagePath("2026-08-15", "page_2.next")).toThrow(TypeError);
+    expect(() => diaryPagePath("2026-08-15", "x".repeat(513))).toThrow(TypeError);
+    const { page: _page, ...legacyWire } = diaryPageFixture([entry], null, 1);
+    const legacy = parseDiaryPage(legacyWire);
+    expect(legacy).toMatchObject({ legacy: true, page: { nextCursor: null, totalEntries: 1 } });
+    expect(() => parseDiaryPage({ ...legacyWire, unexpected: true })).toThrow(TypeError);
+    expect(() => parseDiaryPage(diaryPageFixture([], "d1.page_2", 1))).toThrow(TypeError);
+    expect(() => parseDiaryPage(diaryPageFixture([entry], "page_2.next", 2))).toThrow(TypeError);
+    expect(isDiaryPageStaleProblem(409, { code: "DIARY_PAGE_STALE" })).toBe(true);
+    expect(isDiaryPageStaleProblem(409, { code: "CONFLICT" })).toBe(false);
+    expect(isDiaryPageStaleProblem(400, { code: "DIARY_PAGE_STALE" })).toBe(false);
+  });
+
+  it("merges 20, 20, and 5 entries into one exact 45-entry snapshot", () => {
+    const first = mergeDiaryPages(
+      null,
+      parseDiaryPage(diaryPageFixture(numberedEntries(1, 20), "d1.page_2", 45)),
+    );
+    const second = mergeDiaryPages(
+      first,
+      parseDiaryPage(diaryPageFixture(numberedEntries(21, 20), "d1.page_3", 45)),
+    );
+    const complete = mergeDiaryPages(
+      second,
+      parseDiaryPage(diaryPageFixture(numberedEntries(41, 5), null, 45)),
+    );
+    expect(complete.data.entries).toHaveLength(45);
+    expect(complete.page).toEqual({ nextCursor: null, totalEntries: 45 });
+  });
+
+  it("rejects duplicate IDs, page overflow, and mixed snapshot metadata", () => {
+    const first = mergeDiaryPages(
+      null,
+      parseDiaryPage(diaryPageFixture(numberedEntries(1, 20), "d1.page_2", 40)),
+    );
+    expect(() =>
+      mergeDiaryPages(first, parseDiaryPage(diaryPageFixture(numberedEntries(20, 20), null, 40))),
+    ).toThrow(TypeError);
+    expect(() => parseDiaryPage(diaryPageFixture(numberedEntries(1, 21), null, 21))).toThrow(
+      TypeError,
+    );
+    expect(() =>
+      mergeDiaryPages(
+        first,
+        parseDiaryPage(diaryPageFixture(numberedEntries(21, 20), null, 40, { revision: "9" })),
+      ),
+    ).toThrow(TypeError);
+  });
+});
+
 describe("private diary entry notes", () => {
   it("normalizes only an explicit clear and preserves all other input bytes", () => {
     const exact = "  before meal\nafter meal  ";
@@ -429,6 +553,14 @@ describe("private diary entry notes", () => {
 });
 
 describe("local diary dates", () => {
+  it("waits for the profile zone unless the route supplies a valid explicit date", () => {
+    const now = new Date("2026-08-16T02:30:00.000Z");
+    expect(resolveDiaryRouteDate(null, null, now)).toBeNull();
+    expect(resolveDiaryRouteDate("2026-08-14", null, now)).toBe("2026-08-14");
+    expect(resolveDiaryRouteDate(null, "America/Chicago", now)).toBe("2026-08-15");
+    expect(resolveDiaryRouteDate("not-a-date", "America/Chicago", now)).toBe("2026-08-15");
+  });
+
   it("shifts calendar dates without relying on browser UTC conversion", () => {
     expect(isLocalDate("2024-02-29")).toBe(true);
     expect(isLocalDate("2026-02-29")).toBe(false);

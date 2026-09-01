@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 
-import type { DiaryNutrientAggregate, DiaryRecipeEntry } from "@nutrition-tracker/contracts";
+import type {
+  DiaryDayResponse,
+  DiaryNutrientAggregate,
+  DiaryRecipeEntry,
+} from "@nutrition-tracker/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
@@ -9,6 +13,8 @@ import type { AuthService } from "../src/modules/auth/auth-service.js";
 import {
   assertDiaryEntry,
   DiaryNotFoundServiceError,
+  DiaryPageCursorServiceError,
+  DiaryPageStaleServiceError,
   type DiaryService,
 } from "../src/modules/diary/diary.routes.js";
 import {
@@ -98,6 +104,157 @@ describe("diary routes", () => {
     expect(response.headers.etag).toBe('"4"');
     expect(response.headers["cache-control"]).toBe("no-store");
     expect(response.json()).toEqual({ data: diaryDay });
+  });
+
+  it("opts into bounded pages explicitly and emits a validator for the exact page body", async () => {
+    let call = 0;
+    const getDayPage = vi.fn(async () => {
+      call += 1;
+      return {
+        data: diaryDay,
+        page: { nextCursor: `d1.opaque${call}`, totalEntries: 45 },
+      };
+    });
+    const service = diaryStub({ getDayPage });
+    const app = createTestApp(service);
+    const first = await app.inject({
+      method: "GET",
+      url: "/v1/diary?date=2026-08-15&limit=20",
+      headers: authHeaders,
+    });
+    const second = await app.inject({
+      method: "GET",
+      url: "/v1/diary?date=2026-08-15&limit=20",
+      headers: authHeaders,
+    });
+
+    expect(first.statusCode, first.body).toBe(200);
+    expect(second.statusCode, second.body).toBe(200);
+    expect(service.getDay).not.toHaveBeenCalled();
+    expect(getDayPage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ userId, localDate: "2026-08-15", limit: 20 }),
+    );
+    expect(first.json()).toEqual({
+      data: diaryDay,
+      page: { nextCursor: "d1.opaque1", totalEntries: 45 },
+    });
+    expect(first.headers["cache-control"]).toBe("no-store");
+    expect(first.headers.etag).toMatch(/^"p-[A-Za-z0-9_-]{43}"$/u);
+    expect(second.headers.etag).not.toBe(first.headers.etag);
+    expect(first.headers.etag).not.toBe('"4"');
+  });
+
+  it("forwards an opaque cursor only with its required page limit", async () => {
+    const getDayPage = vi.fn(async () => ({
+      data: diaryDay,
+      page: { nextCursor: null, totalEntries: 1 },
+    }));
+    const service = diaryStub({ getDayPage });
+    const app = createTestApp(service);
+    const valid = await app.inject({
+      method: "GET",
+      url: "/v1/diary?date=2026-08-15&limit=20&cursor=d1.opaque_token",
+      headers: authHeaders,
+    });
+    const missingLimit = await app.inject({
+      method: "GET",
+      url: "/v1/diary?date=2026-08-15&cursor=d1.opaque_token",
+      headers: authHeaders,
+    });
+
+    expect(valid.statusCode, valid.body).toBe(200);
+    expect(getDayPage).toHaveBeenCalledWith(
+      expect.objectContaining({ cursor: "d1.opaque_token", limit: 20 }),
+    );
+    expect(missingLimit.statusCode).toBe(400);
+    expect(getDayPage).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [
+      "an entry count greater than the snapshot total",
+      { data: diaryDay, page: { nextCursor: null, totalEntries: 0 } },
+      "/v1/diary?date=2026-08-15&limit=20",
+    ],
+    [
+      "an empty continuation page for a non-empty snapshot",
+      {
+        data: { ...diaryDay, entries: [] },
+        page: { nextCursor: null, totalEntries: 1 },
+      },
+      "/v1/diary?date=2026-08-15&limit=20&cursor=d1.previous",
+    ],
+    [
+      "a continuation cursor after the whole snapshot is present",
+      { data: diaryDay, page: { nextCursor: "d1.more", totalEntries: 1 } },
+      "/v1/diary?date=2026-08-15&limit=20&cursor=d1.previous",
+    ],
+    [
+      "a terminal initial page before the whole snapshot is present",
+      { data: diaryDay, page: { nextCursor: null, totalEntries: 2 } },
+      "/v1/diary?date=2026-08-15&limit=20",
+    ],
+    [
+      "more entries than the requested limit",
+      {
+        data: { ...diaryDay, entries: [diaryEntry, diaryEntry] },
+        page: { nextCursor: null, totalEntries: 2 },
+      },
+      "/v1/diary?date=2026-08-15&limit=1",
+    ],
+  ] satisfies readonly (readonly [string, DiaryDayResponse, string])[])(
+    "rejects an incoherent page response with %s",
+    async (_name, pageResponse, url) => {
+      const service = diaryStub({ getDayPage: vi.fn(async () => pageResponse) });
+      const response = await createTestApp(service).inject({
+        method: "GET",
+        url,
+        headers: authHeaders,
+      });
+
+      expect(response.statusCode).toBe(500);
+      expect(response.json()).toMatchObject({ code: "INTERNAL_ERROR" });
+      expect(response.body).not.toContain("Diary pagination invariants failed");
+    },
+  );
+
+  it.each(["0", "21", "1.5"])("rejects an out-of-bounds page limit: %s", async (limit) => {
+    const service = diaryStub({ getDayPage: vi.fn() });
+    const response = await createTestApp(service).inject({
+      method: "GET",
+      url: `/v1/diary?date=2026-08-15&limit=${limit}`,
+      headers: authHeaders,
+    });
+    expect(response.statusCode).toBe(400);
+    expect(service.getDayPage).not.toHaveBeenCalled();
+    expect(service.getDay).not.toHaveBeenCalled();
+  });
+
+  it("maps invalid and stale continuation failures without exposing cursor state", async () => {
+    const invalid = diaryStub({
+      getDayPage: vi.fn(async () => Promise.reject(new DiaryPageCursorServiceError())),
+    });
+    const stale = diaryStub({
+      getDayPage: vi.fn(async () => Promise.reject(new DiaryPageStaleServiceError())),
+    });
+    const invalidResponse = await createTestApp(invalid).inject({
+      method: "GET",
+      url: "/v1/diary?date=2026-08-15&limit=20&cursor=d1.tampered",
+      headers: authHeaders,
+    });
+    const staleResponse = await createTestApp(stale).inject({
+      method: "GET",
+      url: "/v1/diary?date=2026-08-15&limit=20&cursor=d1.authentic_but_stale",
+      headers: authHeaders,
+    });
+
+    expect(invalidResponse.statusCode).toBe(400);
+    expect(invalidResponse.json()).toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(invalidResponse.body).not.toContain("tampered");
+    expect(staleResponse.statusCode).toBe(409);
+    expect(staleResponse.json()).toMatchObject({ code: "DIARY_PAGE_STALE" });
+    expect(staleResponse.body).not.toContain("authentic_but_stale");
   });
 
   it("creates a serving-resolved entry with a UUID operation key and no caller date", async () => {
@@ -226,8 +383,14 @@ describe("diary routes", () => {
         payload: { note: invalidNote },
       });
       expect(response.statusCode).toBe(400);
+      const publicValidation = response.json<{
+        detail?: string;
+        issues?: readonly { code?: string; message?: string; path?: string }[];
+      }>();
       if (String(invalidNote).length > 0) {
-        expect(response.body).not.toContain(String(invalidNote));
+        expect(
+          JSON.stringify({ detail: publicValidation.detail, issues: publicValidation.issues }),
+        ).not.toContain(String(invalidNote));
       }
     }
     const createWithNote = await app.inject({

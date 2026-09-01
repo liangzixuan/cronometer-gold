@@ -169,6 +169,12 @@ export interface DiaryDay {
 
 export interface DiaryDayResponse {
   readonly data: DiaryDay;
+  /** Present only when the caller explicitly opts into bounded diary pagination. */
+  readonly page?: {
+    readonly nextCursor: string | null;
+    /** Authoritative count for the whole coherent day snapshot, not just this page. */
+    readonly totalEntries: number;
+  };
 }
 
 export interface CreateDiaryEntryRequest {
@@ -609,7 +615,61 @@ export const diaryDayResponseSchema = {
   type: "object",
   additionalProperties: false,
   required: ["data"],
-  properties: { data: diaryDaySchema },
+  properties: {
+    data: diaryDaySchema,
+    page: {
+      type: "object",
+      additionalProperties: false,
+      required: ["nextCursor", "totalEntries"],
+      properties: {
+        nextCursor: {
+          anyOf: [
+            {
+              type: "string",
+              minLength: 1,
+              maxLength: 512,
+              pattern: "^d1\\.[A-Za-z0-9_-]+$",
+            },
+            { type: "null" },
+          ],
+        },
+        totalEntries: { type: "integer", minimum: 0, maximum: 50 },
+      },
+    },
+  },
+  dependencies: {
+    page: {
+      oneOf: [
+        {
+          properties: {
+            data: {
+              type: "object",
+              properties: { entries: { type: "array", maxItems: 0 } },
+            },
+            page: {
+              type: "object",
+              properties: {
+                nextCursor: { type: "null" },
+                totalEntries: { const: 0 },
+              },
+            },
+          },
+        },
+        {
+          properties: {
+            data: {
+              type: "object",
+              properties: { entries: { type: "array", minItems: 1, maxItems: 20 } },
+            },
+            page: {
+              type: "object",
+              properties: { totalEntries: { type: "integer", minimum: 1, maximum: 50 } },
+            },
+          },
+        },
+      ],
+    },
+  },
 } as const;
 
 const mutableEntryProperties = {

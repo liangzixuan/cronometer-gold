@@ -16,8 +16,19 @@
   preconditions are independent of unrelated day changes.
 - Timestamps are RFC 3339 UTC instants; diary grouping also stores the user's
   effective IANA time zone and local date.
-- The beta diary-day representation is non-paginated and therefore capped at 50
-  entries and 256 distinct nutrients to bound database work and client memory.
+- Legacy `GET /v1/diary?date=` reads remain complete and are capped at 50
+  entries and 256 distinct nutrients. Diary clients opt into bounded pages with
+  `limit=1..20` and an optional opaque `cursor`; a cursor without its bound
+  limit is invalid. A labeled page contains at most 20 entries plus
+  `page.totalEntries` and `page.nextCursor`, while `data.totals` remains the
+  authoritative whole-day aggregate on every page. Pagination does not raise
+  the 50-entry write or aggregation cap.
+- Diary continuations use authenticated encryption and bind the owner, date,
+  limit, day revision, effective profile time zone, and exact continuation
+  position. Malformed, tampered, or cross-binding tokens are generic validation
+  failures. A valid continuation after the day or effective time zone changes
+  returns `409 DIARY_PAGE_STALE`; clients discard accumulated pages and restart
+  from page one.
 - Cursor pagination uses stable ordering and opaque cursors. Page-number APIs are
   reserved for bounded administrative datasets.
 - ETags may cache public/versioned food records. Private diary or biometric
@@ -44,4 +55,6 @@ lower bound. Derived energy snapshots retain the reviewed equation, profile
 inputs, explicit PAL category/factor, source URLs, and general-wellness notice.
 
 All recipe, goal, targetable-nutrient, and diary responses are private and send
-`Cache-Control: no-store`.
+`Cache-Control: no-store`. Legacy diary ETags retain the day revision; paged
+diary ETags hash the exact response representation because authenticated cursor
+nonces make separately generated page bodies byte-distinct.

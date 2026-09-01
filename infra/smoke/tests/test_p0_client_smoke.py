@@ -69,8 +69,8 @@ class CaptureBundle:
             "gitCommit": COMMIT,
             "apiOrigin": ORIGIN,
             "startedAt": "2026-08-26T00:00:00.000Z",
-            "executedAt": "2026-08-26T00:57:00.000Z",
-            "completedAt": "2026-08-26T00:58:00.000Z",
+            "executedAt": "2026-08-26T00:58:00.000Z",
+            "completedAt": "2026-08-26T00:59:00.000Z",
             "buildIds": {"ios": IOS_BUILD, "android": ANDROID_BUILD},
             "captures": self.paths,
         }
@@ -103,7 +103,9 @@ class P0ClientSmokeTests(unittest.TestCase):
         self.assertEqual(report["dataClassification"], "synthetic-only")
         self.assertEqual(report["gitCommit"], COMMIT)
         self.assertEqual(report["apiOrigin"], ORIGIN)
-        self.assertEqual(report["executedAt"], "2026-08-26T00:57:00.000Z")
+        self.assertEqual(report["executedAt"], "2026-08-26T00:58:00.000Z")
+        self.assertEqual(len(SMOKE.FLOW_IDS), 19)
+        self.assertEqual(SMOKE.FLOW_IDS[8], "diary-pagination")
         # Canonical JSON sorts object keys; role order is bound independently by
         # source_capture_bundle_sha256 and flow order remains array-significant.
         self.assertEqual(set(report["clients"]), set(SMOKE.CLIENT_ROLES))
@@ -164,6 +166,25 @@ class P0ClientSmokeTests(unittest.TestCase):
                 self.rewrite(role, mutate)
                 with self.assertRaises(SMOKE.P0SmokeError):
                     SMOKE.normalize_candidate(str(self.index))
+
+    def test_v2_cutover_rejects_v1_review_package_and_capture_schemas(self) -> None:
+        index = json.loads(self.index.read_text())
+        index["schemaVersion"] = "nutrition-tracker-p0-client-smoke-review-package-v1"
+        self.index.write_bytes(compact(index))
+        self.index.chmod(0o600)
+        with self.assertRaisesRegex(SMOKE.P0SmokeError, "Review-package schema"):
+            SMOKE.normalize_candidate(str(self.index))
+
+        self.bundle = CaptureBundle(Path(self.temporary.name))
+        self.index = self.bundle.write()
+        self.rewrite(
+            "browser",
+            lambda value: value.update(
+                schemaVersion="nutrition-tracker-p0-client-smoke-capture-v1"
+            ),
+        )
+        with self.assertRaisesRegex(SMOKE.P0SmokeError, "capture schema"):
+            SMOKE.normalize_candidate(str(self.index))
 
     def test_rejects_unsafe_paths_modes_duplicate_inodes_and_ambiguous_json(self) -> None:
         Path(self.bundle.paths["ios"]).chmod(0o644)

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   createRecipeDiaryEntryRequestSchema,
+  diaryDayResponseSchema,
   diaryEntrySchema,
   goalProgressRowSchema,
   nutritionGoalDraftRequestSchema,
@@ -375,6 +376,78 @@ describe("food and recipe diary entry union", () => {
     nutrients: [aggregate],
     note: null,
   } as const;
+
+  it("caps explicitly paged diary responses and keeps empty-page metadata coherent", () => {
+    const validate = validator(diaryDayResponseSchema);
+    const food = {
+      ...common,
+      entryKind: "food",
+      foodVersionId: "1",
+      recipeVersionId: null,
+      portion: { kind: "grams", grams: "100" },
+      food: { name: "Oats", brandName: null },
+      recipe: null,
+      source,
+      foodProvenance: { kind: "public", source },
+    };
+    const data = {
+      id: "50000000-0000-4000-8000-000000000001",
+      localDate: "2026-08-16",
+      timeZone: "America/Chicago",
+      status: "open",
+      revision: "21",
+      entries: Array.from({ length: 21 }, () => food),
+      totals: [aggregate],
+      updatedAt: "2026-08-16T12:00:00.000Z",
+    };
+
+    expect(validate({ data }), JSON.stringify(validate.errors)).toBe(true);
+    expect(
+      validate({
+        data: { ...data, entries: data.entries.slice(0, 20) },
+        page: { nextCursor: "d1.opaque", totalEntries: 21 },
+      }),
+      JSON.stringify(validate.errors),
+    ).toBe(true);
+    expect(validate({ data, page: { nextCursor: "d1.opaque", totalEntries: 21 } })).toBe(false);
+    expect(
+      validate({
+        data: { ...data, entries: data.entries.slice(0, 20) },
+        page: { nextCursor: "not-a-diary-cursor", totalEntries: 21 },
+      }),
+    ).toBe(false);
+    expect(
+      validate({
+        data: { ...data, entries: data.entries.slice(0, 20) },
+        page: { nextCursor: null, totalEntries: 21, extra: true },
+      }),
+    ).toBe(false);
+    expect(
+      validate({
+        data: { ...data, entries: [] },
+        page: { nextCursor: null, totalEntries: 0 },
+      }),
+      JSON.stringify(validate.errors),
+    ).toBe(true);
+    expect(
+      validate({
+        data: { ...data, entries: [] },
+        page: { nextCursor: null, totalEntries: 1 },
+      }),
+    ).toBe(false);
+    expect(
+      validate({
+        data: { ...data, entries: [] },
+        page: { nextCursor: "d1.opaque", totalEntries: 0 },
+      }),
+    ).toBe(false);
+    expect(
+      validate({
+        data: { ...data, entries: data.entries.slice(0, 1) },
+        page: { nextCursor: null, totalEntries: 0 },
+      }),
+    ).toBe(false);
+  });
 
   it("accepts both exact variants and the pinned recipe log request", () => {
     const validateEntry = validator(diaryEntrySchema);

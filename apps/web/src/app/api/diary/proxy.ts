@@ -1,4 +1,4 @@
-import { parseDiaryDay, parseDiaryMutation } from "../../../lib/diary";
+import { parseDiaryMutation, parseDiaryPage } from "../../../lib/diary";
 import {
   authenticatedFetch,
   isTrustedMutationRequest,
@@ -7,18 +7,22 @@ import {
   readBoundedJson,
   safeUpstreamProblem,
   validatedDiaryDate,
+  validatedDiaryReadQuery,
   validatedIdempotencyKey,
   validatedIfMatch,
 } from "../../../lib/private-api";
 
-async function diaryResponse(upstream: Response): Promise<Response> {
+async function diaryResponse(upstream: Response, expectedDate: string): Promise<Response> {
   if (!upstream.ok)
     return safeUpstreamProblem(upstream, "The diary request could not be completed.");
   try {
-    const diary = parseDiaryDay(await upstream.json());
-    const etag = upstream.headers.get("etag") ?? `"${diary.revision}"`;
+    const diary = parseDiaryPage(await upstream.json());
+    if (diary.data.localDate !== expectedDate) {
+      throw new TypeError("The diary service returned a different day.");
+    }
+    const etag = upstream.headers.get("etag") ?? `"${diary.data.revision}"`;
     return Response.json(
-      { data: diary },
+      diary.legacy ? { data: diary.data } : { data: diary.data, page: diary.page },
       { status: upstream.status, headers: { ...PRIVATE_RESPONSE_HEADERS, etag } },
     );
   } catch {
@@ -27,10 +31,13 @@ async function diaryResponse(upstream: Response): Promise<Response> {
 }
 
 export async function proxyDiaryGet(request: Request): Promise<Response> {
-  const date = validatedDiaryDate(request);
-  if (!date) return privateJsonError(400, "Choose a valid diary date.");
-  const upstream = await authenticatedFetch(request, `/v1/diary?date=${encodeURIComponent(date)}`);
-  return diaryResponse(upstream);
+  const query = validatedDiaryReadQuery(request);
+  if (!query) return privateJsonError(400, "Choose a valid paged diary request.");
+  const params = new URLSearchParams({ date: query.date });
+  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  if (query.cursor !== undefined) params.set("cursor", query.cursor);
+  const upstream = await authenticatedFetch(request, `/v1/diary?${params.toString()}`);
+  return diaryResponse(upstream, query.date);
 }
 
 async function mutationResponse(upstream: Response): Promise<Response> {

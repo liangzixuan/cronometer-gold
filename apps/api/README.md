@@ -68,7 +68,7 @@ production edge rate limits remain a separate deployment requirement.
 | `GET` | `/v1/auth/me` | Returns the authenticated account and profile |
 | `POST` | `/v1/auth/logout` | Revokes the current session |
 | `GET/PATCH` | `/v1/profile` | Reads or revision-guards changes to the authenticated profile |
-| `GET` | `/v1/diary?date=YYYY-MM-DD` | Returns the authenticated profile-local day, immutable entry snapshots, and missingness-aware totals |
+| `GET` | `/v1/diary?date=YYYY-MM-DD[&limit=1..20][&cursor=...]` | Returns the authenticated profile-local day; pagination is opt-in and a cursor requires the same explicit limit |
 | `POST` | `/v1/diary/entries` | Logs a serving or gram portion with UUID idempotency |
 | `PATCH/DELETE` | `/v1/diary/entries/:entryId` | Mutates the owned entry using UUID idempotency and a strong `If-Match` entry revision |
 
@@ -80,6 +80,12 @@ Entry mutation dates are derived from `occurredAt` and the persisted profile tim
 zone. The caller cannot assign a local day, and unrelated writes on that day do
 not invalidate an entry-level precondition. Exact-decimal nutrient aggregates
 carry quantified, trace, and reason-counted unknown contributions; missing data
-is never serialized as a measured zero. The non-paginated beta day response is
-limited to 50 entries and 256 distinct nutrients; pagination is required before
-either response budget can be raised.
+is never serialized as a measured zero. A request containing only `date` keeps
+the legacy full-day response (within the existing 50-entry write cap). An
+explicit `limit` opts into pages of at most 20 immutable entries and adds
+`page.nextCursor` plus the authoritative whole-day `page.totalEntries`; totals
+always cover the coherent whole-day snapshot, not just the returned entries.
+Continuation tokens are confidential, owner/date/limit-bound, and invalidated
+by a day revision or profile-time-zone change (`DIARY_PAGE_STALE`). Pagination
+reduces response/UI payloads, but the 50-entry day and 256-nutrient bounds remain
+until separate scale evidence justifies raising them.

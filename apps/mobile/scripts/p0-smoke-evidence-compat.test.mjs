@@ -46,6 +46,8 @@ describe("P0 client-smoke review-package normalizer trust boundary", () => {
       const report = JSON.parse(reportBytes);
       expect(reportBytes).toBe(`${canonicalJson(report)}\n`);
       expect(report.schemaVersion).toBe(P0_CLIENT_SMOKE_REPORT_SCHEMA);
+      expect(P0_CLIENT_SMOKE_FLOW_IDS).toHaveLength(19);
+      expect(P0_CLIENT_SMOKE_FLOW_IDS[8]).toBe("diary-pagination");
       expect(report.trustBoundary).toBe(
         "unsigned-structural-candidate-requires-independent-ed25519-health-manifest-review",
       );
@@ -67,10 +69,29 @@ describe("P0 client-smoke review-package normalizer trust boundary", () => {
               android: { easBuildId: androidBuildId },
             },
           },
-          Date.parse("2026-08-26T00:57:00.000Z"),
+          Date.parse("2026-08-26T00:58:00.000Z"),
           Date.parse("2026-08-26T01:00:00.000Z"),
         ),
       ).toEqual(report);
+
+      expect(() =>
+        validateUnsignedP0ClientSmokeCandidateStructureForReview(
+          {
+            ...report,
+            schemaVersion: "nutrition-tracker-p0-client-smoke-report-v1",
+          },
+          { apiOrigin: report.apiOrigin },
+          report.gitCommit,
+          {
+            physicalDevice: {
+              ios: { easBuildId: iosBuildId },
+              android: { easBuildId: androidBuildId },
+            },
+          },
+          Date.parse("2026-08-26T00:58:00.000Z"),
+          Date.parse("2026-08-26T01:00:00.000Z"),
+        ),
+      ).toThrow(/p0-client-smoke-report-v2/u);
 
       await expect(
         validateHealthReleaseEvidence({

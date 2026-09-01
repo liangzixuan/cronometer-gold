@@ -69,6 +69,15 @@ than 256 active nutrients, a legacy entry or active-day nutrient union above
 Timestamp year checks are evaluated in UTC, independent of the operator session
 zone. Numeric `NaN` or infinite catalogue/diary facts fail before DDL.
 
+The migration's greater-than-50 rejection is an immutable historical upgrade
+and representation boundary. Response pagination does not change, supersede,
+or retroactively reinterpret that preflight, and `0004` must never be edited to
+admit a larger legacy day. Runtime writes and coherent whole-day aggregation
+also retain the independent 50-active-entry cap after paginated reads are
+introduced. Raising either boundary requires new scale and client evidence plus
+a forward-only migration or explicitly compatible runtime decision; pagination
+alone is not that evidence.
+
 Pre-0004 diary entries already own their `client_operation_id`, but the old
 schema has no request digest or result payload. Those keys are therefore treated
 as reservations after upgrade: reuse deterministically returns

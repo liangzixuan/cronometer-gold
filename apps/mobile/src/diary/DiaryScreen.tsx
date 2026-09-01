@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Alert,
   Pressable,
@@ -15,10 +16,21 @@ import { apiUrl, authenticatedHeaders, jsonBody, responseError } from "../api/pr
 import { newOperationId } from "../auth/operation-id";
 import { palette } from "../theme";
 import {
-  type DiaryDay,
+  createDiaryUnauthorizedSingleFlight,
+  DIARY_PAGE_SIZE,
+  type DiaryEditorOrigin,
   type DiaryEntry,
+  type DiaryMutationResult,
+  type DiaryPage,
+  type DiaryUnauthorizedSingleFlight,
+  diaryEditorOperationKey,
+  diaryEditorOrigin,
+  diaryEditorOriginMatches,
   diaryNoteFromDraft,
+  diaryPagePath,
+  diaryRouteTransitionGeneration,
   entryEnergyDisplay,
+  isDiaryPageStaleProblem,
   isLocalDate,
   isPositiveDecimal,
   localDateInTimeZone,
@@ -27,24 +39,31 @@ import {
   type MealSlot,
   mealLabel,
   mealSlots,
+  mergeDiaryPages,
   nutrientDisplay,
-  parseDiaryDay,
   parseDiaryMutation,
+  parseDiaryPage,
   quickAddOccurredAt,
   shiftLocalDate,
 } from "./diary";
 
 type LoadState = "loading" | "ready" | "error";
+type PageLoadState = "idle" | "loading" | "error";
 
-interface Editor {
-  readonly entryId: string;
+interface Editor extends DiaryEditorOrigin {
+  readonly originalEntryLocalDate: string;
   readonly quantity: string;
   readonly mealSlot: MealSlot;
   readonly localDate: string;
   readonly localTime: string;
   readonly originalLocalTime: string;
-  readonly timeZone: string;
   readonly note: string;
+}
+
+interface MutationOwner {
+  readonly sourceDate: string;
+  readonly token: number;
+  readonly viewEpoch: number;
 }
 
 interface DiaryScreenProps {
@@ -60,22 +79,29 @@ interface DiaryScreenProps {
   readonly onUnauthorized: () => Promise<void>;
 }
 
-function editorFor(entry: DiaryEntry, currentProfileTimeZone: string): Editor {
+function editorFor(entry: DiaryEntry, day: DiaryPage["data"]): Editor {
   const localTime = entry.localTime.slice(0, 5);
   return {
-    entryId: entry.id,
+    ...diaryEditorOrigin(day, entry),
+    originalEntryLocalDate: entry.localDate,
     quantity: entry.portion.kind === "serving" ? entry.portion.amount : entry.portion.grams,
     mealSlot: entry.mealSlot,
     localDate: entry.localDate,
     localTime,
     originalLocalTime: localTime,
-    timeZone: currentProfileTimeZone,
     note: entry.note ?? "",
   };
 }
 
 function entryName(entry: DiaryEntry): string {
   return entry.entryKind === "food" ? entry.food.name : entry.recipe.name;
+}
+
+function loadedMessage(page: DiaryPage): string {
+  const loaded = page.data.entries.length;
+  const total = page.page.totalEntries;
+  if (total === 0) return "No foods logged for this local day.";
+  return `${loaded} of ${total} ${total === 1 ? "entry" : "entries"} loaded. Nutrition totals include all ${total}.`;
 }
 
 export function DiaryScreen({
@@ -90,66 +116,163 @@ export function DiaryScreen({
   onHealth,
   onUnauthorized,
 }: DiaryScreenProps) {
-  const [date, setDate] = useState(() =>
+  const initialDate =
     requestedDate && isLocalDate(requestedDate)
       ? requestedDate
-      : localDateInTimeZone(new Date(), profileTimeZone),
-  );
-  const [diary, setDiary] = useState<DiaryDay | null>(null);
+      : localDateInTimeZone(new Date(), profileTimeZone);
+  const [date, setDate] = useState(initialDate);
+  const [dateDraft, setDateDraft] = useState(initialDate);
+  const [diaryPage, setDiaryPage] = useState<DiaryPage | null>(null);
   const [state, setState] = useState<LoadState>("loading");
+  const [pageState, setPageState] = useState<PageLoadState>("idle");
   const [message, setMessage] = useState("Opening your private diary…");
   const [editor, setEditor] = useState<Editor | null>(null);
   const [busyEntry, setBusyEntry] = useState<string | null>(null);
+  const [routeReloadGeneration, setRouteReloadGeneration] = useState(0);
   const operationIds = useRef(new Map<string, string>());
   const loadController = useRef<AbortController | null>(null);
+  const pageRequestBusy = useRef(false);
+  const requestGeneration = useRef(0);
+  const viewEpoch = useRef(0);
+  const mutationSequence = useRef(0);
+  const activeMutation = useRef<number | null>(null);
+  const privateUiClosed = useRef(false);
+  const unauthorizedFlight = useRef<DiaryUnauthorizedSingleFlight | null>(null);
+  const appliedRouteGeneration = useRef(diaryRouteTransitionGeneration(requestedDate, refreshKey));
+  const dateRef = useRef(date);
+  dateRef.current = date;
+  const diary = diaryPage?.data.localDate === date ? diaryPage.data : null;
+
+  const closeForUnauthorized = useCallback(() => {
+    unauthorizedFlight.current ??= createDiaryUnauthorizedSingleFlight();
+    if (!privateUiClosed.current) {
+      privateUiClosed.current = true;
+      viewEpoch.current += 1;
+      mutationSequence.current += 1;
+      activeMutation.current = null;
+      requestGeneration.current += 1;
+      loadController.current?.abort();
+      pageRequestBusy.current = false;
+      operationIds.current.clear();
+      dateRef.current = "";
+      setDiaryPage(null);
+      setEditor(null);
+      setBusyEntry(null);
+      setPageState("idle");
+      setState("loading");
+      setMessage("Closing your private diary…");
+      setDateDraft("");
+      setDate("");
+    }
+    return unauthorizedFlight.current.run(onUnauthorized);
+  }, [onUnauthorized]);
 
   const load = useCallback(
-    async (requested: string) => {
+    async (requested: string, refreshedAfterStalePage = false) => {
+      if (privateUiClosed.current || dateRef.current !== requested) return false;
+      const generation = requestGeneration.current + 1;
+      requestGeneration.current = generation;
       loadController.current?.abort();
+      pageRequestBusy.current = false;
       const controller = new AbortController();
       loadController.current = controller;
+      const isCurrent = () =>
+        requestGeneration.current === generation &&
+        loadController.current === controller &&
+        !controller.signal.aborted &&
+        !privateUiClosed.current &&
+        dateRef.current === requested;
+      setEditor(null);
+      setDiaryPage(null);
+      setPageState("idle");
       setState("loading");
       setMessage(`Loading ${requested}…`);
       try {
-        const url = apiUrl(apiBase, "/v1/diary");
-        url.searchParams.set("date", requested);
+        const url = apiUrl(apiBase, diaryPagePath(requested));
         const response = await fetch(url.toString(), {
           headers: authenticatedHeaders(accessToken),
           signal: controller.signal,
         });
-        if (response.status === 401) return onUnauthorized();
+        if (!isCurrent()) return false;
+        if (response.status === 401) {
+          await closeForUnauthorized();
+          return false;
+        }
         const body = await jsonBody(response);
+        if (!isCurrent()) return false;
         if (!response.ok) throw new Error(responseError(body, "The diary could not be loaded."));
-        const next = parseDiaryDay(body);
-        if (!controller.signal.aborted) {
-          setDiary(next);
-          setState("ready");
-          setMessage(
-            next.entries.length === 0
-              ? "No foods logged for this local day."
-              : `${next.entries.length} ${next.entries.length === 1 ? "entry" : "entries"} loaded.`,
-          );
-        }
+        const next = mergeDiaryPages(null, parseDiaryPage(body));
+        if (!isCurrent()) return false;
+        setDiaryPage(next);
+        setState("ready");
+        const nextMessage = refreshedAfterStalePage
+          ? "The diary changed while more entries were loading. Page one was refreshed safely."
+          : loadedMessage(next);
+        setMessage(nextMessage);
+        if (refreshedAfterStalePage) AccessibilityInfo.announceForAccessibility(nextMessage);
+        return true;
       } catch (caught) {
-        if (!controller.signal.aborted) {
-          setDiary(null);
-          setState("error");
-          setMessage(caught instanceof Error ? caught.message : "The diary could not be loaded.");
-        }
+        if (!isCurrent()) return false;
+        setDiaryPage(null);
+        setState("error");
+        setMessage(caught instanceof Error ? caught.message : "The diary could not be loaded.");
+        return false;
       }
     },
-    [accessToken, apiBase, onUnauthorized],
+    [accessToken, apiBase, closeForUnauthorized],
   );
 
-  useEffect(() => {
-    if (requestedDate && isLocalDate(requestedDate)) setDate(requestedDate);
-  }, [requestedDate]);
+  const transitionCommittedDate = useCallback((next: string, forceReload = false) => {
+    if (privateUiClosed.current || !isLocalDate(next)) return;
+    setDateDraft(next);
+    const dateChanged = next !== dateRef.current;
+    if (!dateChanged && !forceReload) return;
+    viewEpoch.current += 1;
+    activeMutation.current = null;
+    requestGeneration.current += 1;
+    loadController.current?.abort();
+    pageRequestBusy.current = false;
+    setBusyEntry(null);
+    setEditor(null);
+    setDiaryPage(null);
+    setPageState("idle");
+    setState("loading");
+    setMessage(`Loading ${next}…`);
+    if (dateChanged) setDate(next);
+    else setRouteReloadGeneration((generation) => generation + 1);
+  }, []);
 
   useEffect(() => {
-    void refreshKey;
-    void load(date);
-    return () => loadController.current?.abort();
-  }, [date, load, refreshKey]);
+    const generation = diaryRouteTransitionGeneration(requestedDate, refreshKey);
+    if (generation === null) {
+      appliedRouteGeneration.current = null;
+      return;
+    }
+    if (generation === appliedRouteGeneration.current || !requestedDate) return;
+    appliedRouteGeneration.current = generation;
+    transitionCommittedDate(requestedDate, true);
+  }, [refreshKey, requestedDate, transitionCommittedDate]);
+
+  useEffect(() => {
+    void routeReloadGeneration;
+    if (isLocalDate(date)) void load(date);
+    return () => {
+      requestGeneration.current += 1;
+      loadController.current?.abort();
+      pageRequestBusy.current = false;
+    };
+  }, [date, load, routeReloadGeneration]);
+
+  useEffect(
+    () => () => {
+      privateUiClosed.current = true;
+      viewEpoch.current += 1;
+      activeMutation.current = null;
+      requestGeneration.current += 1;
+      loadController.current?.abort();
+    },
+    [],
+  );
 
   function operationId(key: string): string {
     const existing = operationIds.current.get(key);
@@ -159,22 +282,141 @@ export function DiaryScreen({
     return created;
   }
 
+  function beginMutation(sourceDate: string, busyKey: string): MutationOwner {
+    const token = mutationSequence.current + 1;
+    mutationSequence.current = token;
+    activeMutation.current = token;
+    setBusyEntry(busyKey);
+    return { sourceDate, token, viewEpoch: viewEpoch.current };
+  }
+
+  function mutationIsCurrent(owner: MutationOwner): boolean {
+    return (
+      activeMutation.current === owner.token &&
+      viewEpoch.current === owner.viewEpoch &&
+      dateRef.current === owner.sourceDate
+    );
+  }
+
+  function finishMutation(owner: MutationOwner): void {
+    if (activeMutation.current !== owner.token) return;
+    activeMutation.current = null;
+    setBusyEntry(null);
+  }
+
+  async function reportMutationReceipt(
+    owner: MutationOwner,
+    mutation: DiaryMutationResult,
+    successMessage: string,
+    reloadFailureMessage: string,
+  ): Promise<void> {
+    if (!mutationIsCurrent(owner)) return;
+    if (!mutation.affectedDays.some((day) => day.localDate === owner.sourceDate)) {
+      setMessage(successMessage);
+      return;
+    }
+    const reloaded = await load(owner.sourceDate);
+    if (!mutationIsCurrent(owner)) return;
+    setMessage(reloaded ? successMessage : reloadFailureMessage);
+  }
+
   function selectDate(next: string) {
+    if (privateUiClosed.current) return;
     if (!isLocalDate(next)) {
+      setDateDraft(dateRef.current);
       setMessage("Date must use YYYY-MM-DD and be a real calendar day.");
       return;
     }
-    setEditor(null);
-    setDate(next);
+    transitionCommittedDate(next);
+  }
+
+  async function loadMore() {
+    const current = diaryPage;
+    const nextCursor = current?.page.nextCursor;
+    if (
+      privateUiClosed.current ||
+      !current ||
+      current.data.localDate !== date ||
+      nextCursor === null ||
+      nextCursor === undefined ||
+      pageRequestBusy.current
+    ) {
+      return;
+    }
+    const requested = date;
+    const generation = requestGeneration.current + 1;
+    requestGeneration.current = generation;
+    pageRequestBusy.current = true;
+    const controller = new AbortController();
+    loadController.current = controller;
+    const isCurrent = () =>
+      requestGeneration.current === generation &&
+      loadController.current === controller &&
+      !controller.signal.aborted &&
+      dateRef.current === requested;
+    setPageState("loading");
+    setMessage(`Loading more entries for ${requested}…`);
+    try {
+      const response = await fetch(
+        apiUrl(apiBase, diaryPagePath(requested, nextCursor)).toString(),
+        {
+          headers: authenticatedHeaders(accessToken),
+          signal: controller.signal,
+        },
+      );
+      if (!isCurrent()) return;
+      if (response.status === 401) {
+        await closeForUnauthorized();
+        return;
+      }
+      const body = await jsonBody(response);
+      if (!isCurrent()) return;
+      if (isDiaryPageStaleProblem(response.status, body)) {
+        setDiaryPage(null);
+        setPageState("idle");
+        await load(requested, true);
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(responseError(body, "More diary entries could not be loaded."));
+      }
+      const merged = mergeDiaryPages(current, parseDiaryPage(body));
+      if (!isCurrent()) return;
+      setDiaryPage(merged);
+      setPageState("idle");
+      setMessage(loadedMessage(merged));
+    } catch (caught) {
+      if (!isCurrent()) return;
+      setPageState("error");
+      setMessage(
+        `${caught instanceof Error ? caught.message : "More diary entries could not be loaded."} Loaded entries remain available; press Load more to retry.`,
+      );
+    } finally {
+      if (requestGeneration.current === generation && loadController.current === controller) {
+        pageRequestBusy.current = false;
+      }
+    }
   }
 
   async function save() {
-    if (!editor || !diary || !isPositiveDecimal(editor.quantity)) {
+    if (privateUiClosed.current || !editor || !diary) return;
+    if (!isPositiveDecimal(editor.quantity)) {
       setMessage("Quantity must be a positive decimal number.");
       return;
     }
     const entry = diary.entries.find((candidate) => candidate.id === editor.entryId);
-    if (!entry) return;
+    if (!entry) {
+      setEditor(null);
+      setMessage("That entry is no longer present. Fresh diary data is required.");
+      return;
+    }
+    if (!diaryEditorOriginMatches(editor, diary, entry)) {
+      setEditor(null);
+      setMessage(
+        "The diary changed after editing began. Review the fresh entry before editing again.",
+      );
+      return;
+    }
     let note: string | null | undefined;
     if (editor.note !== (entry.note ?? "")) {
       try {
@@ -185,11 +427,16 @@ export function DiaryScreen({
       }
     }
     const timestampChanged =
-      editor.localDate !== entry.localDate || editor.localTime !== editor.originalLocalTime;
+      editor.localDate !== editor.originalEntryLocalDate ||
+      editor.localTime !== editor.originalLocalTime;
     let occurredAt: string | undefined;
     if (timestampChanged) {
       try {
-        occurredAt = localDateTimeToInstant(editor.localDate, editor.localTime, editor.timeZone);
+        occurredAt = localDateTimeToInstant(
+          editor.localDate,
+          editor.localTime,
+          editor.originTimeZone,
+        );
       } catch (caught) {
         setMessage(caught instanceof Error ? caught.message : "The local time is invalid.");
         return;
@@ -206,8 +453,8 @@ export function DiaryScreen({
       ...(occurredAt ? { occurredAt } : {}),
       ...(note !== undefined ? { note } : {}),
     };
-    const key = `edit:${entry.id}:${entry.revision}:${JSON.stringify(body)}`;
-    setBusyEntry(entry.id);
+    const key = diaryEditorOperationKey(editor, body);
+    const owner = beginMutation(editor.originLocalDate, editor.entryId);
     setMessage("Saving the diary entry…");
     try {
       const response = await fetch(apiUrl(apiBase, `/v1/diary/entries/${entry.id}`).toString(), {
@@ -215,42 +462,56 @@ export function DiaryScreen({
         headers: authenticatedHeaders(accessToken, {
           "content-type": "application/json",
           "idempotency-key": operationId(key),
-          "if-match": `"${entry.revision}"`,
+          "if-match": `"${editor.originEntryRevision}"`,
         }),
         body: JSON.stringify(body),
       });
-      if (response.status === 401) return onUnauthorized();
+      if (response.status === 401) {
+        await closeForUnauthorized();
+        return;
+      }
       const responseBody = await jsonBody(response);
       if (response.status === 412) {
         operationIds.current.delete(key);
+        if (!mutationIsCurrent(owner)) return;
         setEditor(null);
-        await load(date);
-        setMessage("The diary changed elsewhere. Fresh values were loaded; review the edit again.");
+        const reloaded = await load(owner.sourceDate);
+        if (mutationIsCurrent(owner)) {
+          setMessage(
+            reloaded
+              ? "The diary changed elsewhere. Fresh values were loaded; review the edit again."
+              : "The diary changed elsewhere, but fresh data could not be confirmed. Press Retry.",
+          );
+        }
         return;
       }
       if (!response.ok)
         throw new Error(responseError(responseBody, "The entry could not be saved."));
       const mutation = parseDiaryMutation(responseBody);
       operationIds.current.delete(key);
+      if (!mutationIsCurrent(owner)) return;
       setEditor(null);
-      const savedDate = mutation.entry?.localDate ?? editor.localDate;
-      if (savedDate !== date) setDate(savedDate);
-      else {
-        await load(date);
-        setMessage("Diary entry saved with fresh totals.");
-      }
-    } catch (caught) {
-      setMessage(
-        `${caught instanceof Error ? caught.message : "The entry could not be saved."} Press Save again to retry safely.`,
+      await reportMutationReceipt(
+        owner,
+        mutation,
+        "Diary entry saved with fresh totals.",
+        "The entry was saved, but fresh diary data could not be confirmed. Press Retry.",
       );
+    } catch (caught) {
+      if (mutationIsCurrent(owner)) {
+        setMessage(
+          `${caught instanceof Error ? caught.message : "The entry could not be saved."} Press Save again to retry safely.`,
+        );
+      }
     } finally {
-      setBusyEntry(null);
+      finishMutation(owner);
     }
   }
 
   async function remove(entry: DiaryEntry) {
+    if (privateUiClosed.current || !diary) return;
     const key = `delete:${entry.id}:${entry.revision}`;
-    setBusyEntry(entry.id);
+    const owner = beginMutation(diary.localDate, entry.id);
     setMessage("Deleting the diary entry…");
     try {
       const response = await fetch(apiUrl(apiBase, `/v1/diary/entries/${entry.id}`).toString(), {
@@ -260,31 +521,46 @@ export function DiaryScreen({
           "if-match": `"${entry.revision}"`,
         }),
       });
-      if (response.status === 401) return onUnauthorized();
+      if (response.status === 401) {
+        await closeForUnauthorized();
+        return;
+      }
       const body = await jsonBody(response);
       if (response.status === 412) {
         operationIds.current.delete(key);
-        await load(date);
-        setMessage(
-          "The diary changed elsewhere. Fresh values were loaded; delete again if needed.",
-        );
+        if (!mutationIsCurrent(owner)) return;
+        const reloaded = await load(owner.sourceDate);
+        if (mutationIsCurrent(owner)) {
+          setMessage(
+            reloaded
+              ? "The diary changed elsewhere. Fresh values were loaded; delete again if needed."
+              : "The diary changed elsewhere, but fresh data could not be confirmed. Press Retry.",
+          );
+        }
         return;
       }
       if (!response.ok) throw new Error(responseError(body, "The entry could not be deleted."));
-      parseDiaryMutation(body);
+      const mutation = parseDiaryMutation(body);
       operationIds.current.delete(key);
-      await load(date);
-      setMessage("Diary entry deleted and totals refreshed.");
-    } catch (caught) {
-      setMessage(
-        `${caught instanceof Error ? caught.message : "The entry could not be deleted."} Choose Delete again to retry safely.`,
+      await reportMutationReceipt(
+        owner,
+        mutation,
+        "Diary entry deleted and totals refreshed.",
+        "The entry was deleted, but fresh diary data could not be confirmed. Press Retry.",
       );
+    } catch (caught) {
+      if (mutationIsCurrent(owner)) {
+        setMessage(
+          `${caught instanceof Error ? caught.message : "The entry could not be deleted."} Choose Delete again to retry safely.`,
+        );
+      }
     } finally {
-      setBusyEntry(null);
+      finishMutation(owner);
     }
   }
 
   async function repeat(entry: DiaryEntry) {
+    if (privateUiClosed.current || !diary) return;
     const now = new Date();
     const targetDate = localDateInTimeZone(now, profileTimeZone);
     const body = {
@@ -292,7 +568,7 @@ export function DiaryScreen({
       mealSlot: entry.mealSlot,
     };
     const key = `repeat:${entry.id}:${entry.revision}:${JSON.stringify(body)}`;
-    setBusyEntry(entry.id);
+    const owner = beginMutation(diary.localDate, entry.id);
     setMessage(`Repeating the pinned ${entryName(entry)} version…`);
     try {
       const response = await fetch(
@@ -307,12 +583,22 @@ export function DiaryScreen({
           body: JSON.stringify(body),
         },
       );
-      if (response.status === 401) return onUnauthorized();
+      if (response.status === 401) {
+        await closeForUnauthorized();
+        return;
+      }
       const responseBody = await jsonBody(response);
       if (response.status === 412) {
         operationIds.current.delete(key);
-        await load(date);
-        setMessage("The source entry changed. Fresh details were loaded; review before repeating.");
+        if (!mutationIsCurrent(owner)) return;
+        const reloaded = await load(owner.sourceDate);
+        if (mutationIsCurrent(owner)) {
+          setMessage(
+            reloaded
+              ? "The source entry changed. Fresh details were loaded; review before repeating."
+              : "The source entry changed, but fresh data could not be confirmed. Press Retry.",
+          );
+        }
         return;
       }
       if (!response.ok)
@@ -320,15 +606,22 @@ export function DiaryScreen({
       const mutation = parseDiaryMutation(responseBody);
       operationIds.current.delete(key);
       const repeatedDate = mutation.entry?.localDate ?? targetDate;
-      if (repeatedDate === date) await load(date);
-      else setDate(repeatedDate);
-      setMessage("Pinned entry version repeated with fresh authoritative totals.");
-    } catch (caught) {
-      setMessage(
-        `${caught instanceof Error ? caught.message : "The entry could not be repeated."} Choose Repeat again to retry the same operation safely.`,
+      await reportMutationReceipt(
+        owner,
+        mutation,
+        repeatedDate === owner.sourceDate
+          ? "Pinned entry version repeated with fresh authoritative totals."
+          : `Pinned entry version repeated for ${repeatedDate}.`,
+        "The entry was repeated, but fresh diary data could not be confirmed. Press Retry.",
       );
+    } catch (caught) {
+      if (mutationIsCurrent(owner)) {
+        setMessage(
+          `${caught instanceof Error ? caught.message : "The entry could not be repeated."} Choose Repeat again to retry the same operation safely.`,
+        );
+      }
     } finally {
-      setBusyEntry(null);
+      finishMutation(owner);
     }
   }
 
@@ -372,6 +665,8 @@ export function DiaryScreen({
           <Pressable
             accessibilityLabel="Previous day"
             accessibilityRole="button"
+            accessibilityState={{ disabled: busyEntry !== null }}
+            disabled={busyEntry !== null}
             onPress={() => selectDate(shiftLocalDate(date, -1))}
             style={styles.squareButton}
           >
@@ -380,15 +675,20 @@ export function DiaryScreen({
           <TextInput
             accessibilityLabel="Diary date YYYY-MM-DD"
             autoCapitalize="none"
+            editable={busyEntry === null}
             maxLength={10}
             onEndEditing={(event) => selectDate(event.nativeEvent.text)}
-            onChangeText={setDate}
+            onChangeText={setDateDraft}
+            onSubmitEditing={(event) => selectDate(event.nativeEvent.text)}
+            returnKeyType="done"
             style={styles.dateInput}
-            value={date}
+            value={dateDraft}
           />
           <Pressable
             accessibilityLabel="Next day"
             accessibilityRole="button"
+            accessibilityState={{ disabled: busyEntry !== null }}
+            disabled={busyEntry !== null}
             onPress={() => selectDate(shiftLocalDate(date, 1))}
             style={styles.squareButton}
           >
@@ -397,6 +697,8 @@ export function DiaryScreen({
         </View>
         <Pressable
           accessibilityRole="button"
+          accessibilityState={{ disabled: busyEntry !== null }}
+          disabled={busyEntry !== null}
           onPress={() => selectDate(localDateInTimeZone(new Date(), activeTimeZone))}
           style={styles.todayButton}
         >
@@ -405,7 +707,7 @@ export function DiaryScreen({
 
         <Text
           accessibilityLiveRegion="polite"
-          style={[styles.status, state === "error" && styles.error]}
+          style={[styles.status, (state === "error" || pageState === "error") && styles.error]}
         >
           {message}
         </Text>
@@ -413,6 +715,8 @@ export function DiaryScreen({
         {state === "error" ? (
           <Pressable
             accessibilityRole="button"
+            accessibilityState={{ disabled: busyEntry !== null }}
+            disabled={busyEntry !== null}
             onPress={() => void load(date)}
             style={styles.secondaryButton}
           >
@@ -420,7 +724,14 @@ export function DiaryScreen({
           </Pressable>
         ) : null}
 
-        {diary && diary.entries.length === 0 && state === "ready" ? (
+        {diary && diaryPage && state === "ready" ? (
+          <Text accessibilityLiveRegion="polite" style={styles.pageCount}>
+            {diary.entries.length} of {diaryPage.page.totalEntries} entries loaded. Nutrition totals
+            include all {diaryPage.page.totalEntries}.
+          </Text>
+        ) : null}
+
+        {diary && diaryPage?.page.totalEntries === 0 && state === "ready" ? (
           <View style={styles.emptyCard}>
             <Text accessibilityRole="header" style={styles.emptyTitle}>
               Start with a food you actually ate.
@@ -455,7 +766,11 @@ export function DiaryScreen({
                     </Pressable>
                   </View>
                   {entries.length === 0 ? (
-                    <Text style={styles.emptyMeal}>No entries</Text>
+                    <Text style={styles.emptyMeal}>
+                      {diaryPage?.page.nextCursor
+                        ? "No entries loaded for this meal yet"
+                        : "No entries"}
+                    </Text>
                   ) : (
                     entries.map((entry) => (
                       <View key={entry.id} style={styles.entryCard}>
@@ -564,7 +879,7 @@ export function DiaryScreen({
                             />
                             <Text style={styles.label}>Local time</Text>
                             <TextInput
-                              accessibilityLabel={`Entry local time in ${editor.timeZone}`}
+                              accessibilityLabel={`Entry local time in ${editor.originTimeZone}`}
                               keyboardType="numbers-and-punctuation"
                               maxLength={5}
                               onChangeText={(localTime) => setEditor({ ...editor, localTime })}
@@ -572,7 +887,7 @@ export function DiaryScreen({
                               value={editor.localTime}
                             />
                             <Text style={styles.entrySource}>
-                              Changed date and time are interpreted in {editor.timeZone}.
+                              Changed date and time are interpreted in {editor.originTimeZone}.
                             </Text>
                             <Text style={styles.label}>Private note</Text>
                             <TextInput
@@ -599,6 +914,8 @@ export function DiaryScreen({
                                 accessibilityHint="Save to remove the note from the current display only. Immutable prior revisions remain in your private account export until whole-account erasure."
                                 accessibilityLabel={`Clear private note for ${entryName(entry)}`}
                                 accessibilityRole="button"
+                                accessibilityState={{ disabled: busyEntry !== null }}
+                                disabled={busyEntry !== null}
                                 onPress={() => setEditor({ ...editor, note: "" })}
                                 style={styles.clearNoteButton}
                               >
@@ -607,8 +924,9 @@ export function DiaryScreen({
                             ) : null}
                             <View style={styles.actionRow}>
                               <Pressable
+                                accessibilityLabel={`Save changes to ${entryName(entry)}`}
                                 accessibilityRole="button"
-                                disabled={busyEntry === entry.id || diary.status === "locked"}
+                                disabled={busyEntry !== null || diary.status === "locked"}
                                 onPress={() => void save()}
                                 style={styles.primarySmall}
                               >
@@ -617,7 +935,10 @@ export function DiaryScreen({
                                 </Text>
                               </Pressable>
                               <Pressable
+                                accessibilityLabel={`Cancel editing ${entryName(entry)}`}
                                 accessibilityRole="button"
+                                accessibilityState={{ disabled: busyEntry !== null }}
+                                disabled={busyEntry !== null}
                                 onPress={() => setEditor(null)}
                                 style={styles.secondarySmall}
                               >
@@ -630,7 +951,7 @@ export function DiaryScreen({
                             <Pressable
                               accessibilityLabel={`Repeat the pinned ${entryName(entry)} version today`}
                               accessibilityRole="button"
-                              disabled={busyEntry === entry.id}
+                              disabled={busyEntry !== null}
                               onPress={() => void repeat(entry)}
                               style={styles.secondarySmall}
                             >
@@ -639,15 +960,16 @@ export function DiaryScreen({
                             <Pressable
                               accessibilityLabel={`Edit ${entryName(entry)} entry and private note`}
                               accessibilityRole="button"
-                              disabled={busyEntry === entry.id || diary.status === "locked"}
-                              onPress={() => setEditor(editorFor(entry, diary.timeZone))}
+                              disabled={busyEntry !== null || diary.status === "locked"}
+                              onPress={() => setEditor(editorFor(entry, diary))}
                               style={styles.secondarySmall}
                             >
                               <Text style={styles.secondaryText}>Edit</Text>
                             </Pressable>
                             <Pressable
+                              accessibilityLabel={`Delete ${entryName(entry)}`}
                               accessibilityRole="button"
-                              disabled={busyEntry === entry.id || diary.status === "locked"}
+                              disabled={busyEntry !== null || diary.status === "locked"}
                               onPress={() => confirmRemove(entry)}
                               style={styles.deleteSmall}
                             >
@@ -664,6 +986,42 @@ export function DiaryScreen({
               );
             })
           : null}
+
+        {diary && diaryPage && diaryPage.page.totalEntries > DIARY_PAGE_SIZE ? (
+          <Pressable
+            accessibilityHint={`${diary.entries.length} of ${diaryPage.page.totalEntries} entries are currently loaded.`}
+            accessibilityLabel={
+              pageState === "error"
+                ? "Retry loading more diary entries"
+                : diaryPage.page.nextCursor === null
+                  ? "All diary entries loaded"
+                  : "Load more diary entries"
+            }
+            accessibilityRole="button"
+            accessibilityState={{
+              busy: pageState === "loading",
+              disabled:
+                diaryPage.page.nextCursor === null || pageState === "loading" || busyEntry !== null,
+            }}
+            disabled={
+              diaryPage.page.nextCursor === null || pageState === "loading" || busyEntry !== null
+            }
+            onPress={() => void loadMore()}
+            style={styles.loadMoreButton}
+          >
+            {pageState === "loading" ? (
+              <ActivityIndicator color={palette.forest} />
+            ) : (
+              <Text style={styles.secondaryText}>
+                {pageState === "error"
+                  ? "Retry load more"
+                  : diaryPage.page.nextCursor === null
+                    ? "All entries loaded"
+                    : "Load more"}
+              </Text>
+            )}
+          </Pressable>
+        ) : null}
 
         {diary && diary.totals.length > 0 ? (
           <View style={styles.summary}>
@@ -684,7 +1042,9 @@ export function DiaryScreen({
               );
             })}
             <Text style={styles.note}>
-              Partial totals are lower bounds. Unknown values are never counted as zero.
+              These totals cover all {diaryPage?.page.totalEntries ?? diary.entries.length} diary
+              entries, including entries not loaded yet. Partial nutrient totals are lower bounds.
+              Unknown values are never counted as zero.
             </Text>
           </View>
         ) : null}
@@ -795,6 +1155,17 @@ const styles = StyleSheet.create({
     marginTop: 20,
     padding: 14,
   },
+  loadMoreButton: {
+    alignItems: "center",
+    alignSelf: "flex-start",
+    borderColor: palette.forest,
+    borderRadius: 999,
+    borderWidth: 1,
+    marginTop: 24,
+    minWidth: 128,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+  },
   mealHeading: { alignItems: "center", flexDirection: "row", justifyContent: "space-between" },
   mealSection: { marginTop: 32 },
   mealTitle: { color: palette.ink, fontSize: 26, fontWeight: "700", letterSpacing: -0.8 },
@@ -802,6 +1173,7 @@ const styles = StyleSheet.create({
   noteCount: { color: palette.muted, fontSize: 11, marginTop: 5, textAlign: "right" },
   noteRetention: { color: palette.muted, fontSize: 11, lineHeight: 16, marginTop: 7 },
   noteInput: { minHeight: 112, paddingBottom: 11, paddingTop: 11 },
+  pageCount: { color: palette.muted, fontSize: 12, lineHeight: 18, marginBottom: 4 },
   primaryButton: {
     alignSelf: "flex-start",
     backgroundColor: palette.lime,

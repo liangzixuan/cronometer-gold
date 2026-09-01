@@ -7,8 +7,10 @@ import {
   DiaryEntryRevisionConflictError,
   DiaryIdempotencyConflictError,
   DiaryNotFoundError,
+  DiaryPageStaleError,
   DiaryValidationError,
   getDiaryDay,
+  getDiaryDayPage,
   registerPasswordAccount,
 } from "../src/index.js";
 
@@ -59,6 +61,39 @@ describe("diary persistence boundary validation", () => {
     ).rejects.toBeInstanceOf(DiaryValidationError);
   });
 
+  it.each([0, 21, 1.5])(
+    "rejects an invalid diary page limit before querying: %s",
+    async (limit) => {
+      await expect(
+        getDiaryDayPage(unreachableDatabase, {
+          localDate: "2026-08-15",
+          userId: "user",
+          limit,
+        }),
+      ).rejects.toBeInstanceOf(DiaryValidationError);
+    },
+  );
+
+  it("rejects structurally invalid server-only continuation state before querying", async () => {
+    await expect(
+      getDiaryDayPage(unreachableDatabase, {
+        localDate: "2026-08-15",
+        userId: "user",
+        limit: 20,
+        continuation: {
+          dayId: "not-a-uuid",
+          dayRevision: "0",
+          offset: 0,
+          snapshotDigest: "not-a-digest",
+          status: "open",
+          tailEntryId: "not-a-uuid",
+          timeZone: "",
+          updatedAtMicroseconds: "not-an-instant",
+        },
+      }),
+    ).rejects.toBeInstanceOf(DiaryValidationError);
+  });
+
   it("normalizes no malformed email into account persistence", async () => {
     await expect(
       registerPasswordAccount(unreachableDatabase, {
@@ -75,5 +110,6 @@ describe("diary persistence boundary validation", () => {
     expect(new DiaryNotFoundError().code).toBe("DIARY_NOT_FOUND");
     expect(new DiaryEntryRevisionConflictError().code).toBe("DIARY_ENTRY_REVISION_CONFLICT");
     expect(new DiaryIdempotencyConflictError().code).toBe("DIARY_IDEMPOTENCY_CONFLICT");
+    expect(new DiaryPageStaleError().code).toBe("DIARY_PAGE_STALE");
   });
 });

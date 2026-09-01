@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import {
   calculatePortionNutrition,
@@ -35,6 +35,7 @@ export type DiaryPersistenceErrorCode =
   | "DIARY_IDEMPOTENCY_CONFLICT"
   | "DIARY_LOCKED"
   | "DIARY_NOT_FOUND"
+  | "DIARY_PAGE_STALE"
   | "DIARY_VALIDATION";
 
 export class DiaryPersistenceError extends Error {
@@ -74,6 +75,12 @@ export class DiaryValidationError extends DiaryPersistenceError {
 export class DiaryLockedError extends DiaryPersistenceError {
   constructor() {
     super("DIARY_LOCKED", "Diary day is locked");
+  }
+}
+
+export class DiaryPageStaleError extends DiaryPersistenceError {
+  constructor() {
+    super("DIARY_PAGE_STALE", "Diary day changed while reading pages");
   }
 }
 
@@ -216,6 +223,26 @@ export interface DiaryDayRecord {
   readonly totals: readonly DiaryNutrientAggregateRecord[];
   readonly totalEntries: number;
   readonly updatedAt: string | null;
+}
+
+/** Server-only continuation state. The API seals this before it crosses the trust boundary. */
+export interface DiaryPageContinuationRecord {
+  readonly dayId: string;
+  readonly dayRevision: string;
+  readonly offset: number;
+  readonly snapshotDigest: string;
+  readonly status: "locked" | "open";
+  readonly tailEntryId: string;
+  readonly timeZone: string;
+  readonly updatedAtMicroseconds: string;
+}
+
+export interface DiaryDayPageRecord {
+  readonly day: DiaryDayRecord;
+  readonly page: {
+    readonly next: DiaryPageContinuationRecord | null;
+    readonly totalEntries: number;
+  };
 }
 
 export interface CreateFoodDiaryEntryInput {
@@ -935,38 +962,131 @@ export async function getDiaryDay(
     .execute(async (transaction) => readDiaryDaySnapshot(transaction, input));
 }
 
+export async function getDiaryDayPage(
+  database: Kysely<Database>,
+  input: {
+    readonly userId: string;
+    readonly localDate: string;
+    readonly limit: number;
+    readonly continuation?: DiaryPageContinuationRecord;
+  },
+): Promise<DiaryDayPageRecord> {
+  validateLocalDate(input.localDate);
+  if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 20) {
+    throw new DiaryValidationError("Diary page limit must be between 1 and 20");
+  }
+  validateDiaryContinuation(input.continuation);
+  return database
+    .transaction()
+    .setIsolationLevel("repeatable read")
+    .setAccessMode("read only")
+    .execute(async (transaction) => {
+      const snapshot = await loadDiaryDaySnapshot(transaction, input);
+      const offset = input.continuation?.offset ?? 0;
+      if (input.continuation) {
+        const continuation = input.continuation;
+        if (
+          snapshot.day.id === null ||
+          snapshot.day.id !== continuation.dayId ||
+          snapshot.day.revision !== continuation.dayRevision ||
+          snapshot.day.status !== continuation.status ||
+          snapshot.day.timeZone !== continuation.timeZone ||
+          snapshot.snapshotDigest !== continuation.snapshotDigest ||
+          snapshot.updatedAtMicroseconds !== continuation.updatedAtMicroseconds ||
+          snapshot.entryIds[offset - 1] !== continuation.tailEntryId
+        ) {
+          throw new DiaryPageStaleError();
+        }
+      }
+      const end = Math.min(offset + input.limit, snapshot.day.totalEntries);
+      const entries = snapshot.day.entries.slice(offset, end);
+      const nextTail = snapshot.entryIds[end - 1];
+      const next =
+        end < snapshot.day.totalEntries &&
+        snapshot.day.id !== null &&
+        snapshot.snapshotDigest !== null &&
+        snapshot.updatedAtMicroseconds !== null &&
+        nextTail
+          ? {
+              dayId: snapshot.day.id,
+              dayRevision: snapshot.day.revision,
+              offset: end,
+              snapshotDigest: snapshot.snapshotDigest,
+              status: snapshot.day.status,
+              tailEntryId: nextTail,
+              timeZone: snapshot.day.timeZone,
+              updatedAtMicroseconds: snapshot.updatedAtMicroseconds,
+            }
+          : null;
+      return {
+        day: { ...snapshot.day, entries },
+        page: { next, totalEntries: snapshot.day.totalEntries },
+      };
+    });
+}
+
 export async function readDiaryDaySnapshot(
   database: Transaction<Database>,
   input: { readonly userId: string; readonly localDate: string },
 ): Promise<DiaryDayRecord> {
+  return (await loadDiaryDaySnapshot(database, input)).day;
+}
+
+interface DiaryDaySnapshot {
+  readonly day: DiaryDayRecord;
+  readonly entryIds: readonly string[];
+  readonly snapshotDigest: string | null;
+  readonly updatedAtMicroseconds: string | null;
+}
+
+async function loadDiaryDaySnapshot(
+  database: Transaction<Database>,
+  input: { readonly userId: string; readonly localDate: string },
+): Promise<DiaryDaySnapshot> {
   const profile = await requireProfile(database, input.userId);
   const day = await database
     .selectFrom("diary")
-    .select(["id", "revision", "status", "time_zone", "updated_at"])
+    .select([
+      "id",
+      "revision",
+      "status",
+      "time_zone",
+      "updated_at",
+      sql<string>`to_char(updated_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`.as(
+        "updated_at_microseconds",
+      ),
+    ])
     .where("user_id", "=", input.userId)
     .where("local_date", "=", input.localDate)
     .executeTakeFirst();
   if (!day) {
     return {
-      entries: [],
-      id: null,
-      localDate: input.localDate,
-      revision: "0",
-      status: "open",
-      timeZone: profile.timeZone,
-      totalEntries: 0,
-      totals: [],
-      updatedAt: null,
+      day: {
+        entries: [],
+        id: null,
+        localDate: input.localDate,
+        revision: "0",
+        status: "open",
+        timeZone: profile.timeZone,
+        totalEntries: 0,
+        totals: [],
+        updatedAt: null,
+      },
+      entryIds: [],
+      snapshotDigest: null,
+      updatedAtMicroseconds: null,
     };
   }
   const heads = await database
     .selectFrom("diary_entry as entry")
     .innerJoin("diary_entry_revision as revision", "revision.id", "entry.current_revision_id")
-    .select("revision.id")
+    .select(["revision.id as revisionId", "entry.id as entryId"])
     .where("entry.user_id", "=", input.userId)
     .where("entry.diary_id", "=", day.id)
     .where("revision.operation", "!=", "delete")
-    .orderBy("revision.meal_slot")
+    .orderBy(
+      sql<number>`case revision.meal_slot when 'breakfast' then 0 when 'lunch' then 1 when 'dinner' then 2 when 'snacks' then 3 end`,
+    )
     .orderBy("revision.position")
     .orderBy("revision.occurred_at")
     .orderBy("entry.id")
@@ -976,19 +1096,71 @@ export async function readDiaryDaySnapshot(
     throw new DiaryValidationError("Diary day exceeds the supported entry limit");
   }
   const entries = await Promise.all(
-    heads.map((head) => loadEntryByRevision(database, input.userId, head.id)),
+    heads.map((head) => loadEntryByRevision(database, input.userId, head.revisionId)),
   );
+  const snapshotDigest = createHash("sha256")
+    .update(
+      JSON.stringify([
+        "diary-page-snapshot-v1",
+        day.id,
+        input.localDate,
+        day.revision,
+        day.status,
+        profile.timeZone,
+        day.updated_at_microseconds,
+        heads.map((head) => [head.entryId, head.revisionId]),
+      ]),
+    )
+    .digest("hex");
   return {
-    entries,
-    id: day.id,
-    localDate: input.localDate,
-    revision: day.revision,
-    status: day.status,
-    timeZone: profile.timeZone,
-    totalEntries: entries.length,
-    totals: aggregateDayTotals(entries),
-    updatedAt: day.updated_at.toISOString(),
+    day: {
+      entries,
+      id: day.id,
+      localDate: input.localDate,
+      revision: day.revision,
+      status: day.status,
+      timeZone: profile.timeZone,
+      totalEntries: entries.length,
+      totals: aggregateDayTotals(entries),
+      updatedAt: day.updated_at.toISOString(),
+    },
+    entryIds: heads.map((head) => head.entryId),
+    snapshotDigest,
+    updatedAtMicroseconds: day.updated_at_microseconds,
   };
+}
+
+function validateDiaryContinuation(continuation: DiaryPageContinuationRecord | undefined): void {
+  if (!continuation) return;
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+      continuation.dayId,
+    ) ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+      continuation.tailEntryId,
+    ) ||
+    !/^[1-9][0-9]*$/u.test(continuation.dayRevision) ||
+    !Number.isSafeInteger(continuation.offset) ||
+    continuation.offset < 1 ||
+    continuation.offset > MAX_DAY_ENTRIES ||
+    !/^[0-9a-f]{64}$/u.test(continuation.snapshotDigest) ||
+    !["locked", "open"].includes(continuation.status) ||
+    continuation.timeZone.length < 1 ||
+    continuation.timeZone.length > 100 ||
+    !isCanonicalPostgresMicrosecondInstant(continuation.updatedAtMicroseconds)
+  ) {
+    throw new DiaryValidationError("Diary page continuation is invalid");
+  }
+}
+
+function isCanonicalPostgresMicrosecondInstant(value: string): boolean {
+  if (!/^(?!0000)[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{6}Z$/u.test(value))
+    return false;
+  const millisecondInstant = `${value.slice(0, 23)}Z`;
+  const milliseconds = Date.parse(millisecondInstant);
+  return (
+    Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === millisecondInstant
+  );
 }
 
 interface Coordinates {
