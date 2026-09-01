@@ -168,9 +168,34 @@ describe("protected public-food quick-add outbox journal", () => {
   it("retains old entries without TTL, preserves FIFO, caps at 50, and never evicts", async () => {
     const storage = new MemoryProtectedStore();
     const store = createQuickAddOutboxStore({ storage, lockKey: "capacity" });
-    for (let index = 1; index <= 50; index += 1) {
-      await store.append(owner, await draft(index));
+
+    // Prefill a valid committed journal instead of building it through 50 appends. Each append
+    // deliberately validates every existing slot, so using it as setup makes this bounded-capacity
+    // test quadratic and needlessly sensitive to hosted-runner contention.
+    const seededItems = await Promise.all(
+      Array.from({ length: 50 }, async (_, offset) =>
+        parseQuickAddOutboxItem({
+          ...(await draft(offset + 1)),
+          sequence: offset,
+          blocked: null,
+        }),
+      ),
+    );
+    storage.values.set(
+      QUICK_ADD_OUTBOX_MANIFEST_KEY,
+      JSON.stringify({
+        version: 1,
+        state: "ready",
+        ownerUserId: owner,
+        headSequence: 0,
+        nextSequence: 50,
+        count: 50,
+      }),
+    );
+    for (const item of seededItems) {
+      storage.values.set(quickAddOutboxSlotKey(item.sequence), JSON.stringify(item));
     }
+
     const full = await store.snapshot(owner);
     expect(full.items).toHaveLength(50);
     expect(full.items[0]?.enqueuedAt).toBe("2001-01-01T00:00:00.000Z");
