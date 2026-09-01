@@ -8,6 +8,7 @@ import {
   DiaryIdempotencyConflictError,
   DiaryNotFoundError,
   DiaryPageStaleError,
+  DiaryTimeZoneChangedError,
   DiaryValidationError,
   getDiaryDay,
   getDiaryDayPage,
@@ -29,6 +30,21 @@ describe("diary persistence boundary validation", () => {
         userId: "user",
       }),
     ).rejects.toMatchObject({ code: "DIARY_VALIDATION" });
+  });
+
+  it("rejects an unsupported expected profile time zone before opening a transaction", async () => {
+    await expect(
+      createFoodDiaryEntry(unreachableDatabase, {
+        clientOperationId: "10000000-0000-4000-8000-000000000001",
+        expectedProfileTimeZone: "Not/A_Zone",
+        foodVersionId: "1",
+        mealSlot: "breakfast",
+        occurredAt: "2026-08-15T00:00:00Z",
+        portion: { grams: "10", kind: "grams" },
+        requestDigest: "a".repeat(64),
+        userId: "user",
+      }),
+    ).rejects.toBeInstanceOf(DiaryValidationError);
   });
 
   it.each(["", "x".repeat(2_001), "bad\u0000note", "\uD800", "\uDC00"])(
@@ -111,5 +127,6 @@ describe("diary persistence boundary validation", () => {
     expect(new DiaryEntryRevisionConflictError().code).toBe("DIARY_ENTRY_REVISION_CONFLICT");
     expect(new DiaryIdempotencyConflictError().code).toBe("DIARY_IDEMPOTENCY_CONFLICT");
     expect(new DiaryPageStaleError().code).toBe("DIARY_PAGE_STALE");
+    expect(new DiaryTimeZoneChangedError().code).toBe("DIARY_TIME_ZONE_CHANGED");
   });
 });

@@ -15,6 +15,7 @@ import {
   DiaryLockedError,
   DiaryNotFoundError,
   DiaryPageStaleError,
+  DiaryTimeZoneChangedError,
   DiaryValidationError,
   deleteDiaryEntry,
   findActiveSessionByTokenHash,
@@ -156,6 +157,7 @@ describeDatabase("account and append-only diary persistence", () => {
       const createOperationId = randomUUID();
       const createInput = {
         clientOperationId: createOperationId,
+        expectedProfileTimeZone: "America/Chicago",
         foodVersionId: catalogue.currentVersionId,
         mealSlot: "breakfast" as const,
         occurredAt: "2026-08-15T05:30:00Z",
@@ -163,6 +165,31 @@ describeDatabase("account and append-only diary persistence", () => {
         requestDigest: "a".repeat(64),
         userId: owner.userId,
       };
+      const mismatchedOperationId = randomUUID();
+      await expect(
+        createFoodDiaryEntry(database, {
+          ...createInput,
+          clientOperationId: mismatchedOperationId,
+          expectedProfileTimeZone: "Asia/Tokyo",
+          requestDigest: "9".repeat(64),
+        }),
+      ).rejects.toBeInstanceOf(DiaryTimeZoneChangedError);
+      expect(
+        await database
+          .selectFrom("diary_entry")
+          .select(({ fn }) => fn.countAll<string>().as("count"))
+          .where("user_id", "=", owner.userId)
+          .where("client_operation_id", "=", mismatchedOperationId)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ count: "0" });
+      expect(
+        await database
+          .selectFrom("diary_operation")
+          .select(({ fn }) => fn.countAll<string>().as("count"))
+          .where("user_id", "=", owner.userId)
+          .where("client_operation_id", "=", mismatchedOperationId)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ count: "0" });
       const created = await createFoodDiaryEntry(database, createInput);
       expect(created).toMatchObject({
         days: [{ localDate: "2026-08-15", revision: "1" }],
@@ -204,7 +231,11 @@ describeDatabase("account and append-only diary persistence", () => {
       });
       expect(await createFoodDiaryEntry(database, createInput)).toMatchObject({ replayed: true });
       await expect(
-        createFoodDiaryEntry(database, { ...createInput, requestDigest: "b".repeat(64) }),
+        createFoodDiaryEntry(database, {
+          ...createInput,
+          expectedProfileTimeZone: "Asia/Tokyo",
+          requestDigest: "b".repeat(64),
+        }),
       ).rejects.toBeInstanceOf(DiaryIdempotencyConflictError);
 
       const concurrentOperationId = randomUUID();
@@ -305,13 +336,34 @@ describeDatabase("account and append-only diary persistence", () => {
           requestDigest: "d".repeat(64),
         }),
       ).rejects.toBeInstanceOf(DiaryValidationError);
+      const dateBoundaryInput = {
+        clientOperationId: randomUUID(),
+        foodVersionId: catalogue.currentVersionId,
+        mealSlot: "breakfast" as const,
+        occurredAt: "9999-12-31T23:59:59Z",
+        portion: { grams: "10", kind: "grams" as const },
+        requestDigest: "b".repeat(64),
+        userId: dateBoundaryOwner.userId,
+      };
       await expect(
         createFoodDiaryEntry(database, {
-          ...createInput,
+          ...dateBoundaryInput,
+          expectedProfileTimeZone: "America/Chicago",
+        }),
+      ).rejects.toBeInstanceOf(DiaryTimeZoneChangedError);
+      await expect(
+        createFoodDiaryEntry(database, {
+          ...dateBoundaryInput,
           clientOperationId: randomUUID(),
-          occurredAt: "9999-12-31T23:59:59Z",
-          requestDigest: "b".repeat(64),
-          userId: dateBoundaryOwner.userId,
+          expectedProfileTimeZone: "Pacific/Kiritimati",
+          requestDigest: "2".repeat(64),
+        }),
+      ).rejects.toBeInstanceOf(DiaryValidationError);
+      await expect(
+        createFoodDiaryEntry(database, {
+          ...dateBoundaryInput,
+          clientOperationId: randomUUID(),
+          requestDigest: "3".repeat(64),
         }),
       ).rejects.toBeInstanceOf(DiaryValidationError);
       await expect(
@@ -409,7 +461,7 @@ describeDatabase("account and append-only diary persistence", () => {
           .executeTakeFirstOrThrow(),
       ).toEqual({ count: "50" });
 
-      const second = await createFoodDiaryEntry(database, {
+      const legacyCreateInput = {
         clientOperationId: randomUUID(),
         foodVersionId: catalogue.currentVersionId,
         mealSlot: "lunch",
@@ -417,7 +469,8 @@ describeDatabase("account and append-only diary persistence", () => {
         portion: { grams: "50", kind: "grams" },
         requestDigest: "f".repeat(64),
         userId: owner.userId,
-      });
+      } as const;
+      const second = await createFoodDiaryEntry(database, legacyCreateInput);
       const day = await getDiaryDay(database, { localDate: "2026-08-15", userId: owner.userId });
       expect(day).toMatchObject({ id: expect.any(String), revision: "2", totalEntries: 2 });
       expect(day.totals.find((value) => value.code === "energy")).toMatchObject({
@@ -442,6 +495,16 @@ describeDatabase("account and append-only diary persistence", () => {
         expectedRevision: "1",
         patch: { timeZone: "Asia/Tokyo" },
         userId: owner.userId,
+      });
+      const guardedReplayAfterZoneChange = await createFoodDiaryEntry(database, createInput);
+      expect(guardedReplayAfterZoneChange).toMatchObject({
+        entry: { id: created.entry.id, localDate: "2026-08-15", timeZone: "America/Chicago" },
+        replayed: true,
+      });
+      const legacyReplayAfterZoneChange = await createFoodDiaryEntry(database, legacyCreateInput);
+      expect(legacyReplayAfterZoneChange).toMatchObject({
+        entry: { id: second.entry.id },
+        replayed: true,
       });
       const quantityEdit = await updateFoodDiaryEntry(database, {
         clientOperationId: randomUUID(),
@@ -826,6 +889,110 @@ describeDatabase("account and append-only diary persistence", () => {
           .executeTakeFirstOrThrow(),
       ).toEqual(profileBeforeDisable);
     } finally {
+      await database.destroy();
+      await sql`drop schema ${sql.id(schemaName)} cascade`.execute(bootstrap);
+      await bootstrap.destroy();
+    }
+  }, 30_000);
+
+  it("reads the guarded create zone after a waiting active-account lock", async () => {
+    if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
+    const bootstrap = createDatabase({ connectionString: databaseUrl, maxConnections: 1 });
+    const schemaName = `diary_zone_race_${randomBytes(6).toString("hex")}`;
+    await sql`create schema ${sql.id(schemaName)}`.execute(bootstrap);
+    const scopedUrl = new URL(databaseUrl);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName},public`);
+    const database = createDatabase({ connectionString: scopedUrl.toString(), maxConnections: 4 });
+    const writerApplicationName = `diary-zone-writer-${randomBytes(6).toString("hex")}`;
+    const writerUrl = new URL(scopedUrl);
+    writerUrl.searchParams.set("application_name", writerApplicationName);
+    const writerDatabase = createDatabase({
+      connectionString: writerUrl.toString(),
+      maxConnections: 1,
+    });
+    const commitProfileUpdate = deferred<void>();
+    const profileUpdateReady = deferred<void>();
+    let profileUpdate: Promise<void> | undefined;
+    let writerOutcome:
+      | Promise<
+          | { readonly status: "fulfilled" }
+          | { readonly error: unknown; readonly status: "rejected" }
+        >
+      | undefined;
+    try {
+      await runMigrations(database);
+      const catalogue = await seedCatalogue(database);
+      const owner = await registerPasswordAccount(database, {
+        email: `zone-race-${randomUUID()}@example.invalid`,
+        passwordHash: "$argon2id$zone-race-fixture-hash",
+        passwordParameters: { algorithm: "argon2id" },
+        passwordSalt: "zone-race-fixture-salt",
+        timeZone: "America/Chicago",
+      });
+
+      profileUpdate = database.transaction().execute(async (transaction) => {
+        await transaction
+          .selectFrom("app_user")
+          .select("id")
+          .where("id", "=", owner.userId)
+          .forUpdate()
+          .executeTakeFirstOrThrow();
+        await transaction
+          .updateTable("user_profile")
+          .set({ revision: "1", time_zone: "Asia/Tokyo" })
+          .where("user_id", "=", owner.userId)
+          .executeTakeFirstOrThrow();
+        profileUpdateReady.resolve();
+        await commitProfileUpdate.promise;
+      });
+      await profileUpdateReady.promise;
+
+      const clientOperationId = randomUUID();
+      writerOutcome = createFoodDiaryEntry(writerDatabase, {
+        clientOperationId,
+        expectedProfileTimeZone: "America/Chicago",
+        foodVersionId: catalogue.currentVersionId,
+        mealSlot: "breakfast",
+        occurredAt: "2026-08-15T05:30:00Z",
+        portion: { grams: "10", kind: "grams" },
+        requestDigest: "a".repeat(64),
+        userId: owner.userId,
+      }).then(
+        () => ({ status: "fulfilled" as const }),
+        (error: unknown) => ({ error, status: "rejected" as const }),
+      );
+      await waitForApplicationLock(database, writerApplicationName);
+
+      commitProfileUpdate.resolve();
+      await profileUpdate;
+      const outcome = await settleWithin(writerOutcome, 2_000);
+      expect(outcome.status).toBe("rejected");
+      if (outcome.status === "rejected") {
+        expect(outcome.error).toBeInstanceOf(DiaryTimeZoneChangedError);
+      }
+      expect(
+        await database
+          .selectFrom("diary_entry")
+          .select(({ fn }) => fn.countAll<string>().as("count"))
+          .where("user_id", "=", owner.userId)
+          .where("client_operation_id", "=", clientOperationId)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ count: "0" });
+      expect(
+        await database
+          .selectFrom("diary_operation")
+          .select(({ fn }) => fn.countAll<string>().as("count"))
+          .where("user_id", "=", owner.userId)
+          .where("client_operation_id", "=", clientOperationId)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ count: "0" });
+    } finally {
+      commitProfileUpdate.resolve();
+      const pending: Promise<unknown>[] = [];
+      if (profileUpdate) pending.push(profileUpdate);
+      if (writerOutcome) pending.push(writerOutcome);
+      await Promise.allSettled(pending);
+      await writerDatabase.destroy();
       await database.destroy();
       await sql`drop schema ${sql.id(schemaName)} cascade`.execute(bootstrap);
       await bootstrap.destroy();

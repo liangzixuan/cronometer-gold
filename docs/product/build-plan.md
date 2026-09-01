@@ -99,6 +99,22 @@ acceptance; progress in either lane never waives the gates in the other.
    acceptance. A future staggered pagination deployment must remain API-first as
    specified by ADR 0012.
 
+   A bounded native public-food quick-add outbox is implemented locally. It
+   persists at most 50 owner-bound, create-only operations in device-only
+   SecureStore before sending, replays one exact idempotent request at a time in
+   the foreground, and blocks at a terminal FIFO head until exact retry or
+   confirmed head-only discard. A paired API query marker and expected-profile-
+   time-zone header fail closed on an older server and prevent a delayed first
+   delivery from silently moving to a different local day. Sign-out,
+   unauthorized-session, accepted-erasure, owner-mismatch, and corruption paths
+   participate in the retryable private-device cleanup ledger. This closes only
+   the public-food, default-serving, amount-one native create source slice.
+   Signed iOS/Android crash-boundary and lifecycle evidence remains open, as do
+   offline edits, deletes, repeats, recipes, custom foods, quantities, web
+   persistence, background delivery, manual reorder, and cross-client
+   convergence. A staggered deployment must be API-first as specified by ADR
+   0013.
+
    No signed clients exist yet, so the entry-note source also proves only a
    coordinated deployment. Before a future staggered note rollout, M2 must add an
    explicit compatibility phase and capability signal: the server first accepts
@@ -195,8 +211,13 @@ distinct through the clients.
 The checked-in food-release candidates are still deliberately non-promotable,
 so diary integration evidence uses a synthetic promoted catalogue fixture rather
 than claiming a live USDA or CNF release. Password recovery, email verification,
-durable cross-restart offline queues, and signed-device preview testing remain
-controlled-beta gates rather than hidden claims of this milestone. Account
+general cross-restart offline mutation/reorder support, and signed-device preview
+testing remain controlled-beta gates rather than hidden claims of this
+milestone. The bounded native public-food quick-add path is the sole durable
+exception: it stores a closed create-only envelope, never a bearer token, search
+query, private note, arbitrary request, or response body. It preserves exact
+FIFO replay across restarts but does not claim general offline synchronization.
+Account
 export and deletion are implemented and locally drilled under the retention and
 privacy milestone; they are not production evidence. Diary screens now opt into
 20-entry pages while legacy date-only readers retain a complete-day response.

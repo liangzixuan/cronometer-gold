@@ -5,6 +5,7 @@ import {
   type PendingPrivateCleanup,
   type PrivateCleanupDependencies,
   type PrivateCleanupStore,
+  parsePendingPrivateCleanup,
   resumePrivateDeviceCleanup,
 } from "./device-cleanup";
 
@@ -32,6 +33,9 @@ function dependencies(events: string[]): PrivateCleanupDependencies {
     closePrivateUi: () => events.push("close-ui"),
     cleanupServerState: async () => {
       events.push("server");
+    },
+    clearQuickAddOutbox: async () => {
+      events.push("outbox");
     },
     clearLocalReminders: async () => {
       events.push("reminders");
@@ -68,6 +72,7 @@ describe("terminal private-device cleanup", () => {
     expect(events).toEqual([
       "close-ui",
       "server-offline",
+      "outbox",
       "reminders",
       "cursors",
       "device-state",
@@ -125,6 +130,7 @@ describe("terminal private-device cleanup", () => {
     expect(events).toEqual([
       "close-ui",
       "server",
+      "outbox",
       "reminders",
       "cursors",
       "device-state",
@@ -133,5 +139,77 @@ describe("terminal private-device cleanup", () => {
     ]);
     expect(result.complete).toBe(false);
     expect(result.statePersistenceFailed).toBe(true);
+  });
+
+  it("does not report completion until the cleanup marker itself is removed", async () => {
+    const events: string[] = [];
+    let marker: PendingPrivateCleanup | null = null;
+    const currentMarker = () => marker;
+    let clearAttempts = 0;
+    const store: PrivateCleanupStore = {
+      load: async () => marker,
+      save: async (next) => {
+        marker = next;
+      },
+      clear: async () => {
+        clearAttempts += 1;
+        if (clearAttempts === 1) throw new Error("secure-store-unavailable");
+        marker = null;
+      },
+    };
+    const deps = dependencies(events);
+
+    const first = await beginPrivateDeviceCleanup("sign_out", deps, store);
+    expect(first.complete).toBe(false);
+    expect(first.statePersistenceFailed).toBe(true);
+    expect(first.pendingSteps).toEqual(["session_credential"]);
+    expect(currentMarker()?.pendingSteps).toEqual(["session_credential"]);
+
+    const resumed = await resumePrivateDeviceCleanup(deps, store);
+    expect(resumed?.complete).toBe(true);
+    expect(events.filter((event) => event === "session")).toHaveLength(2);
+    expect(marker).toBeNull();
+  });
+
+  it("migrates a version-one marker and makes outbox deletion the first pending step", () => {
+    expect(
+      parsePendingPrivateCleanup(
+        JSON.stringify({
+          version: 1,
+          reason: "sign_out",
+          createdAt: "2026-08-16T08:00:00.000Z",
+          pendingSteps: ["health_cursors", "session_credential"],
+        }),
+      ),
+    ).toEqual({
+      version: 2,
+      reason: "sign_out",
+      createdAt: "2026-08-16T08:00:00.000Z",
+      pendingSteps: ["quick_add_outbox", "health_cursors", "session_credential"],
+    });
+  });
+
+  it("retries an outbox deletion failure without repeating completed deletion steps", async () => {
+    const events: string[] = [];
+    const state = memoryStore();
+    let outboxAttempts = 0;
+    const deps = {
+      ...dependencies(events),
+      clearQuickAddOutbox: async () => {
+        outboxAttempts += 1;
+        events.push(`outbox-${outboxAttempts}`);
+        if (outboxAttempts === 1) throw new Error("secure-store-unavailable");
+      },
+    };
+
+    const first = await beginPrivateDeviceCleanup("account_erasure", deps, state.store);
+    expect(first.complete).toBe(false);
+    expect(first.pendingSteps).toEqual(["quick_add_outbox"]);
+    expect(state.marker()?.pendingSteps).toEqual(["quick_add_outbox"]);
+
+    const resumed = await resumePrivateDeviceCleanup(deps, state.store);
+    expect(resumed?.complete).toBe(true);
+    expect(events.filter((event) => event.startsWith("outbox-"))).toEqual(["outbox-1", "outbox-2"]);
+    expect(events.filter((event) => event === "session")).toHaveLength(1);
   });
 });

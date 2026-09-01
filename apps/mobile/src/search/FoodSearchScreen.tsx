@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -11,22 +12,20 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import {
-  apiUrl,
-  authenticatedHeaders,
-  jsonBody as privateJsonBody,
-  responseError,
-} from "../api/private-api";
-import { newOperationId } from "../auth/operation-id";
-import {
   isLocalDate,
   localDateInTimeZone,
   type MealSlot,
   mealLabel,
   mealSlots,
-  parseDiaryMutation,
-  prepareQuickAddOperation,
-  type QuickAddOperation,
+  quickAddOccurredAt,
 } from "../diary/diary";
+import {
+  MAX_QUICK_ADD_OUTBOX_ITEMS,
+  QuickAddEnqueueAmbiguousError,
+  type QuickAddOutboxController,
+  type QuickAddOutboxControllerState,
+  type QuickAddReceipt,
+} from "../diary/quick-add-outbox";
 import { palette } from "../theme";
 import {
   buildAutocompleteUrl,
@@ -83,12 +82,13 @@ function foodAccessibilityLabel(food: FoodSearchHit): string {
 
 interface FoodSearchScreenProps {
   readonly apiBase: URL;
-  readonly accessToken: string;
   readonly profileTimeZone: string;
   readonly diaryDate: string;
   readonly mealSlot: MealSlot;
+  readonly quickAddOutboxController: QuickAddOutboxController;
+  readonly quickAddOutboxState: QuickAddOutboxControllerState;
+  readonly subscribeQuickAddReceipts: (listener: (receipt: QuickAddReceipt) => void) => () => void;
   readonly onAdded: (date: string) => void;
-  readonly onUnauthorized: () => Promise<void>;
 }
 
 function hasGramServing(food: FoodSearchHit): boolean {
@@ -99,14 +99,63 @@ function hasGramServing(food: FoodSearchHit): boolean {
   );
 }
 
+function quickAddEnqueueDisabled(state: QuickAddOutboxControllerState): boolean {
+  return (
+    state.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS ||
+    state.status === "closed" ||
+    state.status === "owner_mismatch" ||
+    (state.status === "unavailable" &&
+      (state.reason === "storage" || state.reason === "credential"))
+  );
+}
+
+function quickAddQueueMessage(state: QuickAddOutboxControllerState): string {
+  const count = state.pendingCount;
+  const noun = count === 1 ? "add" : "adds";
+  switch (state.status) {
+    case "idle":
+      return "No food adds are waiting on this device.";
+    case "pending":
+      return `${count} queued food ${noun} ${count === 1 ? "is" : "are"} stored on this device and not yet included in diary totals.`;
+    case "draining":
+      return `Sending the oldest of ${count} queued food ${noun}. Nothing is included in diary totals until the server confirms it.`;
+    case "blocked": {
+      const destination = `${mealLabel(state.mealSlot)} on ${state.localDate}`;
+      const waiting =
+        count > 1
+          ? ` ${count - 1} more queued ${count === 2 ? "add waits" : "adds wait"} behind it.`
+          : "";
+      return state.blockedReason === "time_zone_changed"
+        ? `The oldest queued add, ${state.foodName} (${state.servingLabel}) for ${destination}, is blocked because your diary time zone changed. It has not been added.${waiting}`
+        : `The server rejected the oldest queued add, ${state.foodName} (${state.servingLabel}) for ${destination} (HTTP ${state.httpStatus}). It has not been added.${waiting}`;
+    }
+    case "unavailable":
+      if (state.reason === "storage") {
+        return "Secure storage could not confirm the quick-add queue. Adding is disabled until storage recovers.";
+      }
+      if (state.reason === "credential") {
+        return `${count} queued food ${noun} ${count === 1 ? "is" : "are"} retained, but sending is disabled until authentication recovers.`;
+      }
+      if (state.reason === "response") {
+        return `${count} queued food ${noun} ${count === 1 ? "is" : "are"} retained because the server response could not be verified. Nothing unverified is included in diary totals.`;
+      }
+      return `${count} queued food ${noun} ${count === 1 ? "is" : "are"} retained because the network is unavailable. Nothing unconfirmed is included in diary totals.`;
+    case "owner_mismatch":
+      return "This device queue does not belong to the active account. Quick add is fenced and private-device cleanup is required.";
+    case "closed":
+      return `Quick add is closed for this private session. ${count} queued food ${noun} ${count === 1 ? "is" : "are"} not included in diary totals.`;
+  }
+}
+
 export function FoodSearchScreen({
   apiBase,
-  accessToken,
   profileTimeZone,
   diaryDate: initialDate,
   mealSlot: initialMeal,
+  quickAddOutboxController,
+  quickAddOutboxState,
+  subscribeQuickAddReceipts,
   onAdded,
-  onUnauthorized,
 }: FoodSearchScreenProps) {
   const [diaryDate, setDiaryDate] = useState(() =>
     isLocalDate(initialDate) ? initialDate : localDateInTimeZone(new Date(), profileTimeZone),
@@ -117,8 +166,11 @@ export function FoodSearchScreen({
   const [addMessage, setAddMessage] = useState(
     "Choose a local day and meal, then add one reviewed gram-resolved serving.",
   );
-  const pendingAdds = useRef(new Map<string, QuickAddOperation>());
-  const activeAddOperation = useRef<string | null>(null);
+  const enqueueInFlight = useRef(false);
+  const ownedOperations = useRef(new Set<string>());
+  const receivedOwnedReceiptCount = useRef(0);
+  const outboxActionInFlight = useRef(false);
+  const [outboxAction, setOutboxAction] = useState<"retry" | "discard" | null>(null);
   const [query, setQuery] = useState("");
   const [intent, setIntent] = useState<FoodSearchIntent>("all");
   const [suggestions, setSuggestions] = useState<readonly FoodSuggestion[]>([]);
@@ -140,6 +192,31 @@ export function FoodSearchScreen({
   const searchController = useRef<AbortController | null>(null);
   const barcodeController = useRef<AbortController | null>(null);
   const suppressedAutocompleteValue = useRef<string | null>(null);
+  const onAddedRef = useRef(onAdded);
+  onAddedRef.current = onAdded;
+
+  useEffect(
+    () =>
+      subscribeQuickAddReceipts((receipt) => {
+        if (!ownedOperations.current.delete(receipt.operationId)) return;
+        receivedOwnedReceiptCount.current += 1;
+        const entry = receipt.mutation.entry;
+        const loggedDate = entry?.localDate ?? receipt.mutation.affectedDays[0]?.localDate;
+        if (!loggedDate) {
+          setAddState("error");
+          setAddMessage(
+            "The queued request was accepted, but its diary day could not be read. Refresh the diary before adding it again.",
+          );
+          return;
+        }
+        setAddState("ready");
+        setAddMessage(
+          `A queued food was confirmed in ${entry ? mealLabel(entry.mealSlot) : "the selected meal"} on ${loggedDate}.`,
+        );
+        onAddedRef.current(loggedDate);
+      }),
+    [subscribeQuickAddReceipts],
+  );
 
   useEffect(() => {
     autocompleteController.current?.abort();
@@ -341,73 +418,200 @@ export function FoodSearchScreen({
   }
 
   async function addFood(food: FoodSearchHit) {
-    if (activeAddOperation.current !== null) {
+    if (outboxActionInFlight.current) {
       setAddState("error");
-      setAddMessage("Wait for the current diary addition to finish before adding another food.");
+      setAddMessage("Wait for the current queued-request action to finish.");
       return;
     }
-    if (!food.defaultServing || !hasGramServing(food)) {
+    if (enqueueInFlight.current) {
+      setAddState("error");
+      setAddMessage("Wait for the current food to be secured on this device.");
+      return;
+    }
+    const serving = food.defaultServing;
+    if (!serving || !hasGramServing(food)) {
       setAddState("error");
       setAddMessage("This food needs a gram-resolved serving before it can be added.");
       return;
     }
-    let operation: QuickAddOperation;
-    try {
-      operation = prepareQuickAddOperation(
-        pendingAdds.current,
-        {
-          foodVersionId: food.foodVersionId,
-          servingId: food.defaultServing.servingId,
-          localDate: diaryDate,
-          mealSlot,
-          timeZone: profileTimeZone,
-        },
-        new Date(),
-        newOperationId,
+    const currentState = quickAddOutboxController.getState();
+    if (currentState.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS) {
+      setAddState("error");
+      setAddMessage(
+        `The secure quick-add queue is full at ${MAX_QUICK_ADD_OUTBOX_ITEMS} items. Confirm or review queued adds before adding another.`,
       );
+      return;
+    }
+    if (quickAddEnqueueDisabled(currentState)) {
+      setAddState("error");
+      setAddMessage(
+        currentState.status === "owner_mismatch"
+          ? "Quick add is disabled because this device queue belongs to another account."
+          : currentState.status === "closed"
+            ? "Quick add is closed for this private session."
+            : "Quick add is disabled until secure storage and authentication recover.",
+      );
+      return;
+    }
+    let occurredAt: string;
+    try {
+      occurredAt = quickAddOccurredAt(diaryDate, profileTimeZone, new Date());
     } catch {
       setAddState("error");
       setAddMessage("That local date is not valid in your diary time zone.");
       return;
     }
-    pendingAdds.current.set(operation.intentKey, operation);
-    activeAddOperation.current = operation.operationId;
+    enqueueInFlight.current = true;
     setAddingVersion(food.foodVersionId);
     setAddState("loading");
-    setAddMessage(`Adding ${food.name}…`);
+    setAddMessage(`Securing ${food.name} on this device before sending…`);
     try {
-      const response = await fetch(apiUrl(apiBase, "/v1/diary/entries").toString(), {
-        method: "POST",
-        headers: authenticatedHeaders(accessToken, {
-          "content-type": "application/json",
-          "idempotency-key": operation.operationId,
-        }),
-        body: JSON.stringify(operation.body),
+      const item = await quickAddOutboxController.enqueue({
+        foodKind: food.kind,
+        foodName: food.name,
+        foodVersionId: food.foodVersionId,
+        servingId: serving.servingId,
+        servingLabel: serving.label,
+        localDate: diaryDate,
+        mealSlot,
+        occurredAt,
       });
-      if (response.status === 401) return onUnauthorized();
-      const responseBody = await privateJsonBody(response);
-      if (!response.ok)
-        throw new Error(responseError(responseBody, "The food could not be added."));
-      const mutation = parseDiaryMutation(responseBody);
-      const loggedDate = mutation.affectedDays[0]?.localDate ?? diaryDate;
-      if (pendingAdds.current.get(operation.intentKey) === operation) {
-        pendingAdds.current.delete(operation.intentKey);
-      }
+      ownedOperations.current.add(item.operationId);
       setAddState("ready");
-      setAddMessage(`${food.name} was added to ${mealLabel(mealSlot)} on ${loggedDate}.`);
-      onAdded(loggedDate);
-    } catch (caught) {
+      setAddMessage(
+        `${food.name} is queued securely for ${mealLabel(mealSlot)} on ${diaryDate}. It is not included in diary totals until the server confirms it.`,
+      );
+      void quickAddOutboxController.requestDrain(item.operationId);
+    } catch (error) {
+      if (error instanceof QuickAddEnqueueAmbiguousError) {
+        ownedOperations.current.add(error.operationId);
+        void quickAddOutboxController.requestDrain(error.operationId);
+      }
       setAddState("error");
       setAddMessage(
-        `${caught instanceof Error ? caught.message : "The food could not be added."} Choose Add again to retry safely.`,
+        "Secure storage could not confirm whether the food was queued. Do not tap Add again until the queue status recovers.",
       );
     } finally {
-      if (activeAddOperation.current === operation.operationId) {
-        activeAddOperation.current = null;
-      }
+      enqueueInFlight.current = false;
       setAddingVersion(null);
     }
   }
+
+  async function retryQueuedAdds() {
+    if (outboxActionInFlight.current || enqueueInFlight.current) return;
+    outboxActionInFlight.current = true;
+    const receiptCount = receivedOwnedReceiptCount.current;
+    setOutboxAction("retry");
+    setAddState("loading");
+    setAddMessage("Retrying the exact queued requests without changing their contents…");
+    try {
+      await quickAddOutboxController.requestDrain();
+      const current = quickAddOutboxController.getState();
+      if (receivedOwnedReceiptCount.current === receiptCount) {
+        setAddState(
+          current.status === "blocked" || current.status === "unavailable" ? "error" : "ready",
+        );
+        setAddMessage(
+          current.status === "idle"
+            ? "The queue no longer retains those requests. Refresh the diary before adding them again."
+            : "The retry finished. The queue status below shows what is still retained.",
+        );
+      }
+    } catch {
+      setAddState("error");
+      setAddMessage("The queued requests remain retained because retry could not start.");
+    } finally {
+      outboxActionInFlight.current = false;
+      setOutboxAction(null);
+    }
+  }
+
+  async function retryBlockedAdd(operationId: string) {
+    if (outboxActionInFlight.current || enqueueInFlight.current) return;
+    outboxActionInFlight.current = true;
+    const receiptCount = receivedOwnedReceiptCount.current;
+    setOutboxAction("retry");
+    setAddState("loading");
+    setAddMessage("Retrying the exact blocked request without changing its contents…");
+    try {
+      await quickAddOutboxController.retryBlockedHead(operationId);
+      const current = quickAddOutboxController.getState();
+      if (receivedOwnedReceiptCount.current === receiptCount) {
+        setAddState(
+          current.status === "blocked" || current.status === "unavailable" ? "error" : "ready",
+        );
+        setAddMessage(
+          current.status === "idle"
+            ? "The queue no longer retains that request. Refresh the diary before adding it again."
+            : "The exact retry finished. The queue status below shows what is still retained.",
+        );
+      }
+    } catch {
+      setAddState("error");
+      setAddMessage(
+        "The exact retry could not be confirmed. Review the queue status before acting again.",
+      );
+    } finally {
+      outboxActionInFlight.current = false;
+      setOutboxAction(null);
+    }
+  }
+
+  async function discardBlockedAdd(operationId: string, foodName: string) {
+    if (outboxActionInFlight.current || enqueueInFlight.current) return;
+    outboxActionInFlight.current = true;
+    const receiptCount = receivedOwnedReceiptCount.current;
+    setOutboxAction("discard");
+    setAddState("loading");
+    setAddMessage(`Discarding only the blocked ${foodName} request…`);
+    try {
+      await quickAddOutboxController.discardBlockedHead(operationId);
+      ownedOperations.current.delete(operationId);
+      if (receivedOwnedReceiptCount.current === receiptCount) {
+        setAddState("ready");
+        setAddMessage(`The blocked ${foodName} request was discarded. It was not added.`);
+      }
+    } catch {
+      setAddState("error");
+      setAddMessage(
+        "The discard could not be confirmed. Review the queue status before taking another action.",
+      );
+    } finally {
+      outboxActionInFlight.current = false;
+      setOutboxAction(null);
+    }
+  }
+
+  function confirmDiscardBlockedAdd(
+    state: Extract<QuickAddOutboxControllerState, { status: "blocked" }>,
+  ) {
+    Alert.alert(
+      "Discard blocked food add?",
+      `This permanently removes only ${state.foodName} (${state.servingLabel}) for ${mealLabel(state.mealSlot)} on ${state.localDate}. It has not been added. Remaining queued adds stay in order.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Discard queued add",
+          style: "destructive",
+          onPress: () => void discardBlockedAdd(state.operationId, state.foodName),
+        },
+      ],
+    );
+  }
+
+  const quickAddUnavailable = quickAddEnqueueDisabled(quickAddOutboxState) || outboxAction !== null;
+  const quickAddQueueError =
+    quickAddOutboxState.status === "blocked" ||
+    quickAddOutboxState.status === "unavailable" ||
+    quickAddOutboxState.status === "owner_mismatch" ||
+    quickAddOutboxState.status === "closed";
+  const canRetryQueue =
+    quickAddOutboxState.status === "pending" ||
+    (quickAddOutboxState.status === "unavailable" && quickAddOutboxState.reason !== "credential");
+  const showRetryQueue =
+    canRetryQueue &&
+    (quickAddOutboxState.pendingCount > 0 ||
+      (quickAddOutboxState.status === "unavailable" && quickAddOutboxState.reason === "storage"));
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
@@ -457,6 +661,71 @@ export function FoodSearchScreen({
           >
             {addMessage}
           </Text>
+          <Text
+            accessibilityLiveRegion="polite"
+            style={[styles.queueStatus, quickAddQueueError && styles.errorCopy]}
+          >
+            {quickAddQueueMessage(quickAddOutboxState)}
+          </Text>
+          {quickAddOutboxState.status === "blocked" ? (
+            <View style={styles.queueActions}>
+              <Pressable
+                accessibilityHint="Retries the unchanged oldest queued request"
+                accessibilityRole="button"
+                accessibilityState={{
+                  disabled: outboxAction !== null || addingVersion !== null,
+                }}
+                disabled={outboxAction !== null || addingVersion !== null}
+                onPress={() => void retryBlockedAdd(quickAddOutboxState.operationId)}
+                style={({ pressed }) => [
+                  styles.queueButton,
+                  (outboxAction !== null || addingVersion !== null) && styles.disabled,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={styles.queueButtonText}>
+                  {outboxAction === "retry" ? "Retrying…" : "Retry exact request"}
+                </Text>
+              </Pressable>
+              <Pressable
+                accessibilityHint="Opens a confirmation before discarding only the blocked oldest request"
+                accessibilityRole="button"
+                accessibilityState={{
+                  disabled: outboxAction !== null || addingVersion !== null,
+                }}
+                disabled={outboxAction !== null || addingVersion !== null}
+                onPress={() => confirmDiscardBlockedAdd(quickAddOutboxState)}
+                style={({ pressed }) => [
+                  styles.queueButton,
+                  styles.queueDangerButton,
+                  (outboxAction !== null || addingVersion !== null) && styles.disabled,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Text style={[styles.queueButtonText, styles.queueDangerButtonText]}>
+                  {outboxAction === "discard" ? "Discarding…" : "Discard blocked add"}
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
+          {showRetryQueue ? (
+            <Pressable
+              accessibilityHint="Retries retained requests in their original order without changing them"
+              accessibilityRole="button"
+              accessibilityState={{ disabled: outboxAction !== null || addingVersion !== null }}
+              disabled={outboxAction !== null || addingVersion !== null}
+              onPress={() => void retryQueuedAdds()}
+              style={({ pressed }) => [
+                styles.queueButton,
+                (outboxAction !== null || addingVersion !== null) && styles.disabled,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text style={styles.queueButtonText}>
+                {outboxAction === "retry" ? "Retrying…" : "Retry queued adds"}
+              </Text>
+            </Pressable>
+          ) : null}
         </View>
 
         <Text style={styles.fieldLabel}>Food type</Text>
@@ -583,22 +852,26 @@ export function FoodSearchScreen({
               }
               accessibilityRole="button"
               accessibilityState={{
-                disabled: !hasGramServing(food) || addingVersion !== null,
+                disabled: !hasGramServing(food) || addingVersion !== null || quickAddUnavailable,
               }}
-              disabled={!hasGramServing(food) || addingVersion !== null}
+              disabled={!hasGramServing(food) || addingVersion !== null || quickAddUnavailable}
               onPress={() => void addFood(food)}
               style={({ pressed }) => [
                 styles.addButton,
-                !hasGramServing(food) && styles.disabled,
+                (!hasGramServing(food) || quickAddUnavailable) && styles.disabled,
                 pressed && styles.pressed,
               ]}
             >
               <Text style={styles.addButtonText}>
                 {addingVersion === food.foodVersionId
-                  ? "Adding…"
-                  : hasGramServing(food)
-                    ? "Add default serving"
-                    : "Needs a gram-resolved serving"}
+                  ? "Securing…"
+                  : !hasGramServing(food)
+                    ? "Needs a gram-resolved serving"
+                    : quickAddOutboxState.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS
+                      ? `Queue full (${MAX_QUICK_ADD_OUTBOX_ITEMS})`
+                      : quickAddUnavailable
+                        ? "Quick add unavailable"
+                        : "Add default serving"}
               </Text>
             </Pressable>
           </View>
@@ -669,18 +942,28 @@ export function FoodSearchScreen({
             <Pressable
               accessibilityRole="button"
               accessibilityState={{
-                disabled: !hasGramServing(barcodeResult) || addingVersion !== null,
+                disabled:
+                  !hasGramServing(barcodeResult) || addingVersion !== null || quickAddUnavailable,
               }}
-              disabled={!hasGramServing(barcodeResult) || addingVersion !== null}
+              disabled={
+                !hasGramServing(barcodeResult) || addingVersion !== null || quickAddUnavailable
+              }
               onPress={() => void addFood(barcodeResult)}
-              style={[styles.addButton, !hasGramServing(barcodeResult) && styles.disabled]}
+              style={[
+                styles.addButton,
+                (!hasGramServing(barcodeResult) || quickAddUnavailable) && styles.disabled,
+              ]}
             >
               <Text style={styles.addButtonText}>
                 {addingVersion === barcodeResult.foodVersionId
-                  ? "Adding…"
-                  : hasGramServing(barcodeResult)
-                    ? "Add default serving"
-                    : "Needs a gram-resolved serving"}
+                  ? "Securing…"
+                  : !hasGramServing(barcodeResult)
+                    ? "Needs a gram-resolved serving"
+                    : quickAddOutboxState.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS
+                      ? `Queue full (${MAX_QUICK_ADD_OUTBOX_ITEMS})`
+                      : quickAddUnavailable
+                        ? "Quick add unavailable"
+                        : "Add default serving"}
               </Text>
             </Pressable>
           </View>
@@ -790,6 +1073,29 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
   },
   primaryButtonLabel: { color: palette.white, fontSize: 14, fontWeight: "800" },
+  queueActions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  queueButton: {
+    alignItems: "center",
+    borderColor: palette.forest,
+    borderRadius: 9,
+    borderWidth: 1,
+    justifyContent: "center",
+    marginTop: 12,
+    minHeight: 44,
+    paddingHorizontal: 14,
+  },
+  queueButtonText: { color: palette.forest, fontSize: 13, fontWeight: "800" },
+  queueDangerButton: { borderColor: "#8a332b" },
+  queueDangerButtonText: { color: "#8a332b" },
+  queueStatus: {
+    borderTopColor: palette.line,
+    borderTopWidth: 1,
+    color: palette.muted,
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 14,
+    paddingTop: 14,
+  },
   resultBrand: { color: palette.muted, fontSize: 14, marginTop: 3 },
   resultCard: {
     backgroundColor: palette.white,

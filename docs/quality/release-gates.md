@@ -130,7 +130,15 @@ encrypted erasure-ledger tombstone as local recovery evidence.
   match is at least 85%, with the Wilson lower bound at least 82%.
 - Core generic foods meet the agreed nutrient-completeness definition at least
   90% of the time.
-- Offline mutation retry/reorder simulations create no duplicate diary entry.
+- The bounded native public-food create outbox proves a 50-item encrypted,
+  owner-bound FIFO; persist-before-send and exact idempotent replay across every
+  slot/manifest crash boundary; one foreground request; selected-day
+  time-zone preconditions; terminal-head review; corruption/overflow failure;
+  and retryable sign-out, unauthorized, and erasure cleanup with no duplicate
+  diary entry.
+- General offline mutation retry/reorder acceptance still covers supported
+  edits, deletes, repeats, recipes, custom foods, manual reorder, and cross-client
+  convergence; the create-only outbox does not satisfy that broader gate.
 - Recipe revisions preserve exact food/nested-recipe dependencies, reject cycles
   and depth overflow, and retain source attribution plus trace/unknown coverage
   through an exact diary log.

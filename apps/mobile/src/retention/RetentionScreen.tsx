@@ -88,6 +88,8 @@ interface Props {
   readonly accessToken: string;
   readonly profileTimeZone: string;
   readonly onUnauthorized: () => Promise<void>;
+  /** Fence queued diary delivery after the erasure request is durable and before it is sent. */
+  readonly onErasurePrepared: () => void;
   readonly onErasureAccepted: (input: {
     readonly job: AccountErasureJob;
     readonly token: string;
@@ -275,6 +277,7 @@ export function RetentionScreen({
   accessToken,
   profileTimeZone,
   onUnauthorized,
+  onErasurePrepared,
   onErasureAccepted,
 }: Props) {
   const today = useMemo(
@@ -1279,6 +1282,7 @@ export function RetentionScreen({
         };
         await pendingStore.save(pending);
       }
+      onErasurePrepared();
       let response: Response;
       try {
         response = await fetch(apiUrl(apiBase, "/v1/account/erasure").toString(), {

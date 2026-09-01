@@ -46,6 +46,7 @@ import {
   quickAddOccurredAt,
   shiftLocalDate,
 } from "./diary";
+import type { QuickAddOutboxControllerState, QuickAddReceipt } from "./quick-add-outbox";
 
 type LoadState = "loading" | "ready" | "error";
 type PageLoadState = "idle" | "loading" | "error";
@@ -77,6 +78,8 @@ interface DiaryScreenProps {
   readonly onGoals: () => void;
   readonly onHealth: () => void;
   readonly onUnauthorized: () => Promise<void>;
+  readonly quickAddOutboxState: QuickAddOutboxControllerState;
+  readonly subscribeQuickAddReceipts: (listener: (receipt: QuickAddReceipt) => void) => () => void;
 }
 
 function editorFor(entry: DiaryEntry, day: DiaryPage["data"]): Editor {
@@ -104,6 +107,37 @@ function loadedMessage(page: DiaryPage): string {
   return `${loaded} of ${total} ${total === 1 ? "entry" : "entries"} loaded. Nutrition totals include all ${total}.`;
 }
 
+function queuedQuickAddMessage(state: QuickAddOutboxControllerState): string | null {
+  const queued =
+    state.pendingCount === 1 ? "1 queued food add" : `${state.pendingCount} queued food adds`;
+  switch (state.status) {
+    case "idle":
+      return null;
+    case "pending":
+      return `${queued} ${state.pendingCount === 1 ? "is" : "are"} not yet included in diary totals.`;
+    case "draining":
+      return `Sending ${queued}. ${state.pendingCount === 1 ? "It is" : "They are"} not included in diary totals until the server confirms each add.`;
+    case "blocked":
+      return state.blockedReason === "time_zone_changed"
+        ? `${queued} stopped because your diary time zone changed. ${state.foodName} (${state.servingLabel}) for ${state.localDate} is still queued and is not included in diary totals.`
+        : `${queued} stopped at ${state.foodName} (${state.servingLabel}) for ${state.localDate} after the server returned HTTP ${state.httpStatus}. The exact request is retained and is not included in diary totals.`;
+    case "unavailable":
+      if (state.reason === "storage") {
+        return "Queued food delivery is unavailable because secure storage could not be read. Do not assume a queued add is included in diary totals.";
+      }
+      if (state.reason === "credential") {
+        return `${queued} ${state.pendingCount === 1 ? "is" : "are"} paused until authentication is restored and ${state.pendingCount === 1 ? "is" : "are"} not included in diary totals.`;
+      }
+      return `${queued} ${state.pendingCount === 1 ? "is" : "are"} retained after a ${state.reason === "network" ? "network" : "server response"} interruption and ${state.pendingCount === 1 ? "is" : "are"} not included in diary totals.`;
+    case "owner_mismatch":
+      return "Queued food delivery was fenced because its private owner could not be verified. Private-device cleanup is required, and no queued add is included in diary totals.";
+    case "closed":
+      return state.pendingCount > 0
+        ? `Food delivery is closed with ${queued}; ${state.pendingCount === 1 ? "it is" : "they are"} not included in diary totals.`
+        : null;
+  }
+}
+
 export function DiaryScreen({
   apiBase,
   accessToken,
@@ -115,6 +149,8 @@ export function DiaryScreen({
   onGoals,
   onHealth,
   onUnauthorized,
+  quickAddOutboxState,
+  subscribeQuickAddReceipts,
 }: DiaryScreenProps) {
   const initialDate =
     requestedDate && isLocalDate(requestedDate)
@@ -142,6 +178,7 @@ export function DiaryScreen({
   const dateRef = useRef(date);
   dateRef.current = date;
   const diary = diaryPage?.data.localDate === date ? diaryPage.data : null;
+  const queuedMessage = queuedQuickAddMessage(quickAddOutboxState);
 
   const closeForUnauthorized = useCallback(() => {
     unauthorizedFlight.current ??= createDiaryUnauthorizedSingleFlight();
@@ -252,6 +289,22 @@ export function DiaryScreen({
     appliedRouteGeneration.current = generation;
     transitionCommittedDate(requestedDate, true);
   }, [refreshKey, requestedDate, transitionCommittedDate]);
+
+  useEffect(
+    () =>
+      subscribeQuickAddReceipts((receipt) => {
+        const current = dateRef.current;
+        if (
+          privateUiClosed.current ||
+          !isLocalDate(current) ||
+          !receipt.mutation.affectedDays.some((day) => day.localDate === current)
+        ) {
+          return;
+        }
+        transitionCommittedDate(current, true);
+      }),
+    [subscribeQuickAddReceipts, transitionCommittedDate],
+  );
 
   useEffect(() => {
     void routeReloadGeneration;
@@ -711,6 +764,29 @@ export function DiaryScreen({
         >
           {message}
         </Text>
+        {queuedMessage ? (
+          <View style={styles.queueCard}>
+            <Text accessibilityLiveRegion="polite" style={styles.queueStatus}>
+              {queuedMessage}
+            </Text>
+            {quickAddOutboxState.status === "blocked" ? (
+              <Pressable
+                accessibilityLabel={`Review queued ${quickAddOutboxState.foodName} add`}
+                accessibilityRole="button"
+                onPress={() =>
+                  onSearch(
+                    quickAddOutboxState.localDate,
+                    quickAddOutboxState.mealSlot,
+                    profileTimeZone,
+                  )
+                }
+                style={styles.queueAction}
+              >
+                <Text style={styles.secondaryText}>Review queued add</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : null}
         {state === "loading" ? <ActivityIndicator color={palette.forest} /> : null}
         {state === "error" ? (
           <Pressable
@@ -1189,6 +1265,24 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   primaryText: { color: palette.white, fontSize: 13, fontWeight: "800" },
+  queueAction: {
+    alignSelf: "flex-start",
+    borderColor: palette.forest,
+    borderRadius: 999,
+    borderWidth: 1,
+    marginTop: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  queueCard: {
+    backgroundColor: palette.white,
+    borderColor: palette.line,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 18,
+    padding: 14,
+  },
+  queueStatus: { color: palette.ink, fontSize: 13, lineHeight: 19 },
   screen: { backgroundColor: palette.paper, flex: 1 },
   secondaryButton: {
     alignSelf: "flex-start",

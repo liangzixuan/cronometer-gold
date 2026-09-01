@@ -185,6 +185,15 @@ export interface CreateDiaryEntryRequest {
   readonly position?: number;
 }
 
+/** Optional guarded-create precondition; unrelated standard headers remain allowed. */
+export interface CreateDiaryEntryHeaders {
+  readonly "x-expected-profile-time-zone"?: string;
+}
+
+export interface CreateDiaryEntryQuery {
+  readonly profileTimeZonePrecondition?: "v1";
+}
+
 export interface UpdateDiaryEntryRequest {
   readonly portion?: DiaryMutablePortion;
   readonly mealSlot?: DiaryMealSlot;
@@ -688,6 +697,24 @@ export const createDiaryEntryRequestSchema = {
     foodVersionId: positiveIdentifierSchema,
     ...mutableEntryProperties,
     portion: diaryPortionSchema,
+  },
+} as const;
+
+export const createDiaryEntryHeadersSchema = {
+  $id: "CreateDiaryEntryHeaders",
+  type: "object",
+  additionalProperties: true,
+  properties: {
+    "x-expected-profile-time-zone": { type: "string", minLength: 1, maxLength: 63 },
+  },
+} as const;
+
+export const createDiaryEntryQuerySchema = {
+  $id: "CreateDiaryEntryQuery",
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    profileTimeZonePrecondition: { type: "string", const: "v1" },
   },
 } as const;
 

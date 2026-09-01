@@ -124,6 +124,7 @@ export {
   type DiaryPortionInput,
   type DiaryRecipeEntryRecord,
   type DiaryRecipeMutationResult,
+  DiaryTimeZoneChangedError,
   DiaryValidationError,
   deleteDiaryEntry,
   getDiaryDay,

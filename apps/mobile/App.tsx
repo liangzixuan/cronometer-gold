@@ -5,7 +5,7 @@ import type {
 } from "@react-navigation/native-stack";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { StatusBar } from "expo-status-bar";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   AppState,
@@ -28,6 +28,20 @@ import {
 } from "./src/auth/secure-session";
 import { DiaryScreen } from "./src/diary/DiaryScreen";
 import { type MealSlot, parseSession, type SessionSummary } from "./src/diary/diary";
+import {
+  createQuickAddOutboxController,
+  type FatalQuickAddOutboxStoreReason,
+  type QuickAddOutboxController,
+  type QuickAddOutboxControllerState,
+  type QuickAddOutboxSnapshot,
+  type QuickAddReceipt,
+} from "./src/diary/quick-add-outbox";
+import {
+  createSecureQuickAddOutboxStore,
+  QuickAddOutboxCorruptError,
+  QuickAddOutboxHeadConflictError,
+  QuickAddOutboxOwnerMismatchError,
+} from "./src/diary/quick-add-outbox-store";
 import { authenticatedRoutes } from "./src/navigation/routes";
 import { GoalsScreen } from "./src/recipes/GoalsScreen";
 import { RecipesScreen } from "./src/recipes/RecipesScreen";
@@ -87,6 +101,40 @@ interface AuthenticatedAppProps {
   readonly session: SessionSummary;
   readonly onUnauthorized: () => Promise<void>;
   readonly onSignOut: () => Promise<void>;
+  readonly onErasurePrepared: () => void;
+  readonly quickAddOutboxController: QuickAddOutboxController;
+  readonly quickAddOutboxState: QuickAddOutboxControllerState;
+  readonly subscribeQuickAddReceipts: (listener: (receipt: QuickAddReceipt) => void) => () => void;
+}
+
+interface PreparedQuickAddOutbox {
+  readonly ownerUserId: string;
+  readonly sessionEpoch: number;
+  readonly initialState: QuickAddOutboxControllerState;
+}
+
+class QuickAddOutboxPreparationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "QuickAddOutboxPreparationError";
+  }
+}
+
+function quickAddOutboxState(snapshot: QuickAddOutboxSnapshot): QuickAddOutboxControllerState {
+  const head = snapshot.items[0];
+  if (!head) return { status: "idle", pendingCount: 0 };
+  if (!head.blocked) return { status: "pending", pendingCount: snapshot.items.length };
+  return {
+    status: "blocked",
+    pendingCount: snapshot.items.length,
+    operationId: head.operationId,
+    httpStatus: head.blocked.status,
+    blockedReason: head.blocked.reason,
+    foodName: head.display.foodName,
+    servingLabel: head.display.servingLabel,
+    localDate: head.localDate,
+    mealSlot: head.body.mealSlot,
+  };
 }
 
 function TodayRoute(props: AuthenticatedAppProps) {
@@ -104,6 +152,8 @@ function TodayRoute(props: AuthenticatedAppProps) {
       onHealth={() => navigation.navigate(authenticatedRoutes.health)}
       onUnauthorized={props.onUnauthorized}
       profileTimeZone={props.session.profile.timeZone}
+      quickAddOutboxState={props.quickAddOutboxState}
+      subscribeQuickAddReceipts={props.subscribeQuickAddReceipts}
       {...(route.params?.refreshKey ? { refreshKey: route.params.refreshKey } : {})}
       {...(route.params?.date ? { requestedDate: route.params.date } : {})}
     />
@@ -124,6 +174,7 @@ function HealthRoute(
       accessToken={props.accessToken}
       apiBase={props.apiBase}
       onErasureAccepted={props.onErasureAccepted}
+      onErasurePrepared={props.onErasurePrepared}
       onUnauthorized={props.onUnauthorized}
       profileTimeZone={props.session.profile.timeZone}
     />
@@ -173,7 +224,6 @@ function SearchRoute(props: AuthenticatedAppProps) {
   const route = useRoute<NativeStackScreenProps<RootStackParamList, "Search">["route"]>();
   return (
     <FoodSearchScreen
-      accessToken={props.accessToken}
       apiBase={props.apiBase}
       diaryDate={route.params.date}
       mealSlot={route.params.meal}
@@ -183,8 +233,10 @@ function SearchRoute(props: AuthenticatedAppProps) {
           refreshKey: String(Date.now()),
         })
       }
-      onUnauthorized={props.onUnauthorized}
       profileTimeZone={route.params.timeZone}
+      quickAddOutboxController={props.quickAddOutboxController}
+      quickAddOutboxState={props.quickAddOutboxState}
+      subscribeQuickAddReceipts={props.subscribeQuickAddReceipts}
     />
   );
 }
@@ -222,6 +274,20 @@ function AuthenticatedApp(
       reconciler.dispose();
     };
   }, [props.accessToken, props.apiBase, props.onUnauthorized]);
+
+  useEffect(() => {
+    const controller = props.quickAddOutboxController;
+    if (AppState.currentState === "active") void controller.resume();
+    else controller.suspend();
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") void controller.resume();
+      else controller.suspend();
+    });
+    return () => {
+      subscription.remove();
+      controller.suspend();
+    };
+  }, [props.quickAddOutboxController]);
 
   return (
     <NavigationContainer>
@@ -276,23 +342,90 @@ export default function App() {
       return null;
     }
   }, []);
+  const quickAddOutboxStore = useMemo(() => createSecureQuickAddOutboxStore(), []);
+  const quickAddOutboxControllerRef = useRef<QuickAddOutboxController | null>(null);
+  const quickAddReceiptListenersRef = useRef(new Set<(receipt: QuickAddReceipt) => void>());
+  const privateSessionEpochRef = useRef(0);
+  const unauthorizedCleanupFlightRef = useRef<{
+    readonly sessionEpoch: number;
+    readonly promise: Promise<void>;
+  } | null>(null);
+  const fatalOutboxCleanupFlightRef = useRef<{
+    readonly sessionEpoch: number;
+    readonly promise: Promise<void>;
+  } | null>(null);
   const [booting, setBooting] = useState(true);
   const [bootError, setBootError] = useState(false);
+  const [cleanupRunning, setCleanupRunning] = useState(false);
   const [cleanupError, setCleanupError] = useState(false);
   const [cleanupRetryReason, setCleanupRetryReason] = useState<PrivateCleanupReason>("sign_out");
   const [remoteCleanupWarning, setRemoteCleanupWarning] = useState(false);
+  const [outboxResetWarning, setOutboxResetWarning] = useState(false);
+  const [outboxPreparationError, setOutboxPreparationError] = useState(false);
   const [erasureCapability, setErasureCapability] = useState<ErasureStatusCapability | null>(null);
   const [erasureRecoveryPending, setErasureRecoveryPending] = useState(false);
   const [bootAttempt, setBootAttempt] = useState(0);
   const [accessToken, setAccessToken] = useState<string | null>(null);
   const [session, setSession] = useState<SessionSummary | null>(null);
+  const [preparedQuickAddOutbox, setPreparedQuickAddOutbox] =
+    useState<PreparedQuickAddOutbox | null>(null);
+  const [quickAddOutboxController, setQuickAddOutboxController] =
+    useState<QuickAddOutboxController | null>(null);
+  const [currentQuickAddOutboxState, setCurrentQuickAddOutboxState] =
+    useState<QuickAddOutboxControllerState>({ status: "idle", pendingCount: 0 });
+
+  const closePrivateUi = useCallback(() => {
+    privateSessionEpochRef.current += 1;
+    const controller = quickAddOutboxControllerRef.current;
+    quickAddOutboxControllerRef.current = null;
+    controller?.close();
+    quickAddReceiptListenersRef.current.clear();
+    setQuickAddOutboxController(null);
+    setPreparedQuickAddOutbox(null);
+    setCurrentQuickAddOutboxState({ status: "idle", pendingCount: 0 });
+    setAccessToken(null);
+    setSession(null);
+  }, []);
+
+  const prepareQuickAddOutbox = useCallback(
+    async (ownerUserId: string) => {
+      let reset = false;
+      let snapshot: QuickAddOutboxSnapshot;
+      try {
+        snapshot = await quickAddOutboxStore.snapshot(ownerUserId);
+      } catch (error) {
+        if (
+          !(error instanceof QuickAddOutboxOwnerMismatchError) &&
+          !(error instanceof QuickAddOutboxHeadConflictError) &&
+          !(error instanceof QuickAddOutboxCorruptError)
+        ) {
+          throw new QuickAddOutboxPreparationError(
+            "Protected queued diary adds could not be prepared on this device.",
+          );
+        }
+        reset = true;
+        try {
+          await quickAddOutboxStore.clear();
+          snapshot = await quickAddOutboxStore.snapshot(ownerUserId);
+        } catch {
+          throw new QuickAddOutboxPreparationError(
+            "Protected queued diary adds could not be prepared on this device.",
+          );
+        }
+      }
+      return { initialState: quickAddOutboxState(snapshot), reset };
+    },
+    [quickAddOutboxStore],
+  );
+
+  const subscribeQuickAddReceipts = useCallback((listener: (receipt: QuickAddReceipt) => void) => {
+    quickAddReceiptListenersRef.current.add(listener);
+    return () => quickAddReceiptListenersRef.current.delete(listener);
+  }, []);
 
   const buildCleanupDependencies = useCallback(
     (token: string | null, reason: PrivateCleanupReason): PrivateCleanupDependencies => ({
-      closePrivateUi() {
-        setAccessToken(null);
-        setSession(null);
-      },
+      closePrivateUi,
       async cleanupServerState() {
         if (!apiBase || !token) return;
         let incomplete = false;
@@ -361,6 +494,7 @@ export default function App() {
           createExpoNotificationAdapter(),
           createSecureReminderScheduleStore(),
         ),
+      clearQuickAddOutbox: () => quickAddOutboxStore.clear(),
       async clearHealthCursors() {
         const results = await Promise.allSettled([
           clearHealthCursor("apple_healthkit"),
@@ -375,44 +509,169 @@ export default function App() {
       clearSessionCredential: clearSecureSession,
       now: () => new Date(),
     }),
-    [apiBase],
+    [apiBase, closePrivateUi, quickAddOutboxStore],
   );
 
   const performCleanup = useCallback(
     async (reason: PrivateCleanupReason, token = accessToken) => {
       setCleanupRetryReason(reason);
-      const result = await beginPrivateDeviceCleanup(
-        reason,
-        buildCleanupDependencies(token, reason),
-        createSecurePrivateCleanupStore(),
-      );
-      setCleanupError(!result.complete);
-      setRemoteCleanupWarning(result.remoteCleanupIncomplete);
-      if (result.complete) setBootError(false);
-      return result;
+      setCleanupRunning(true);
+      try {
+        const result = await beginPrivateDeviceCleanup(
+          reason,
+          buildCleanupDependencies(token, reason),
+          createSecurePrivateCleanupStore(),
+        );
+        setCleanupError(!result.complete);
+        setRemoteCleanupWarning(result.remoteCleanupIncomplete);
+        if (result.complete) setBootError(false);
+        return result;
+      } finally {
+        setCleanupRunning(false);
+      }
     },
     [accessToken, buildCleanupDependencies],
   );
 
+  const handleTerminalUnauthorized = useCallback(
+    (token: string, sessionEpoch: number): Promise<void> => {
+      const existing = unauthorizedCleanupFlightRef.current;
+      if (privateSessionEpochRef.current !== sessionEpoch) {
+        return existing?.sessionEpoch === sessionEpoch ? existing.promise : Promise.resolve();
+      }
+      closePrivateUi();
+      if (existing?.sessionEpoch === sessionEpoch) return existing.promise;
+      const promise = performCleanup("terminal_unauthorized", token).then(() => undefined);
+      unauthorizedCleanupFlightRef.current = { sessionEpoch, promise };
+      return promise;
+    },
+    [closePrivateUi, performCleanup],
+  );
+
+  const handleUnauthorized = useCallback((): Promise<void> => {
+    if (!accessToken || !preparedQuickAddOutbox) {
+      closePrivateUi();
+      return Promise.resolve();
+    }
+    return handleTerminalUnauthorized(accessToken, preparedQuickAddOutbox.sessionEpoch);
+  }, [accessToken, closePrivateUi, handleTerminalUnauthorized, preparedQuickAddOutbox]);
+
+  const handleFatalQuickAddOutbox = useCallback(
+    (reason: FatalQuickAddOutboxStoreReason): Promise<void> => {
+      const token = accessToken;
+      const prepared = preparedQuickAddOutbox;
+      const existing = fatalOutboxCleanupFlightRef.current;
+      if (!token || !prepared) {
+        closePrivateUi();
+        return Promise.resolve();
+      }
+      if (privateSessionEpochRef.current !== prepared.sessionEpoch) {
+        return existing?.sessionEpoch === prepared.sessionEpoch
+          ? existing.promise
+          : Promise.resolve();
+      }
+      setOutboxResetWarning(reason === "owner_mismatch" || reason === "corrupt");
+      closePrivateUi();
+      if (existing?.sessionEpoch === prepared.sessionEpoch) return existing.promise;
+      const promise = performCleanup("sign_out", token).then(() => undefined);
+      fatalOutboxCleanupFlightRef.current = {
+        sessionEpoch: prepared.sessionEpoch,
+        promise,
+      };
+      return promise;
+    },
+    [accessToken, closePrivateUi, performCleanup, preparedQuickAddOutbox],
+  );
+
+  const fenceQuickAddOutboxForErasure = useCallback(() => {
+    quickAddOutboxControllerRef.current?.close();
+  }, []);
+
   const retryCleanup = useCallback(async () => {
-    const dependencies = buildCleanupDependencies(null, cleanupRetryReason);
-    const store = createSecurePrivateCleanupStore();
-    const resumed = await resumePrivateDeviceCleanup(dependencies, store);
-    const result =
-      resumed ?? (await beginPrivateDeviceCleanup(cleanupRetryReason, dependencies, store));
-    setCleanupError(!result.complete);
-    if (result.complete) setBootError(false);
-  }, [buildCleanupDependencies, cleanupRetryReason]);
+    setCleanupRunning(true);
+    try {
+      const dependencies = buildCleanupDependencies(null, cleanupRetryReason);
+      const store = createSecurePrivateCleanupStore();
+      const resumed = await resumePrivateDeviceCleanup(dependencies, store);
+      const result =
+        resumed ?? (await beginPrivateDeviceCleanup(cleanupRetryReason, dependencies, store));
+      let complete = result.complete;
+      if (complete && erasureCapability) {
+        try {
+          await createPendingErasureStore().clear();
+        } catch {
+          complete = false;
+        }
+      }
+      setCleanupError(!complete);
+      if (complete) {
+        setBootError(false);
+        setBootAttempt((value) => value + 1);
+      }
+    } finally {
+      setCleanupRunning(false);
+    }
+  }, [buildCleanupDependencies, cleanupRetryReason, erasureCapability]);
+
+  useEffect(() => {
+    if (
+      !apiBase ||
+      !accessToken ||
+      !session ||
+      !preparedQuickAddOutbox ||
+      preparedQuickAddOutbox.ownerUserId !== session.user.id
+    ) {
+      return;
+    }
+    const controller = createQuickAddOutboxController({
+      apiBase,
+      ownerUserId: session.user.id,
+      expectedTimeZone: session.profile.timeZone,
+      store: quickAddOutboxStore,
+      fetcher: (input, init) => fetch(input, init),
+      accessToken: () => accessToken,
+      isForeground: () => AppState.currentState === "active",
+      operationId: newOperationId,
+      onUnauthorized: handleUnauthorized,
+      onFatalStoreError: handleFatalQuickAddOutbox,
+      onReceipt(receipt) {
+        for (const listener of [...quickAddReceiptListenersRef.current]) {
+          try {
+            listener(receipt);
+          } catch {
+            // A screen observer cannot interrupt an already accepted durable receipt.
+          }
+        }
+      },
+    });
+    controller.suspend();
+    quickAddOutboxControllerRef.current = controller;
+    setCurrentQuickAddOutboxState(preparedQuickAddOutbox.initialState);
+    const unsubscribe = controller.subscribe(setCurrentQuickAddOutboxState);
+    setQuickAddOutboxController(controller);
+    return () => {
+      unsubscribe();
+      if (quickAddOutboxControllerRef.current === controller) {
+        quickAddOutboxControllerRef.current = null;
+      }
+      controller.close();
+    };
+  }, [
+    accessToken,
+    apiBase,
+    handleFatalQuickAddOutbox,
+    handleUnauthorized,
+    preparedQuickAddOutbox,
+    quickAddOutboxStore,
+    session,
+  ]);
 
   useEffect(() => {
     void bootAttempt;
-    if (!apiBase) {
-      setBooting(false);
-      return;
-    }
     let cancelled = false;
     setBooting(true);
     setBootError(false);
+    setOutboxPreparationError(false);
     void (async () => {
       let recoveringErasure = false;
       try {
@@ -421,16 +680,6 @@ export default function App() {
           buildCleanupDependencies(null, "sign_out"),
           cleanupStore,
         );
-        if (resumed && !resumed.complete) {
-          if (!cancelled) setCleanupError(true);
-          return;
-        }
-        const capability = await createErasureCapabilityStore().load();
-        if (capability) {
-          await createPendingErasureStore().clear();
-          if (!cancelled) setErasureCapability(capability);
-          return;
-        }
         let pendingErasure: PendingErasureEnvelope | null;
         try {
           pendingErasure = await createPendingErasureStore().load();
@@ -439,8 +688,56 @@ export default function App() {
           throw error;
         }
         recoveringErasure = pendingErasure !== null;
+        let capability: ErasureStatusCapability | null;
+        try {
+          capability = await createErasureCapabilityStore().load();
+        } catch (error) {
+          recoveringErasure = true;
+          throw error;
+        }
+        if (capability) recoveringErasure = true;
+        if (resumed && !resumed.complete) {
+          if (!cancelled) {
+            if (capability) {
+              setCleanupRetryReason("account_erasure");
+              setErasureCapability(capability);
+            }
+            setCleanupError(true);
+            setRemoteCleanupWarning(resumed.remoteCleanupIncomplete);
+          }
+          return;
+        }
         const stored = await loadSecureSession();
+        if (!stored) {
+          try {
+            await quickAddOutboxStore.clear();
+          } catch {
+            throw new QuickAddOutboxPreparationError(
+              "Protected queued diary adds could not be cleared on this device.",
+            );
+          }
+        }
+        if (capability) {
+          const result =
+            resumed ??
+            (await beginPrivateDeviceCleanup(
+              "account_erasure",
+              buildCleanupDependencies(stored?.accessToken ?? null, "account_erasure"),
+              cleanupStore,
+            ));
+          if (result.complete) await createPendingErasureStore().clear();
+          if (!cancelled) {
+            setCleanupRetryReason("account_erasure");
+            setErasureCapability(capability);
+            setCleanupError(!result.complete);
+            setRemoteCleanupWarning(result.remoteCleanupIncomplete);
+          }
+          return;
+        }
         if (pendingErasure) {
+          if (!apiBase) {
+            throw new Error("A safe API origin is required to replay the protected erasure.");
+          }
           if (!stored) {
             throw new Error(
               "The protected erasure replay exists but its session proof is missing.",
@@ -461,13 +758,14 @@ export default function App() {
             expiresAt: recovered.statusCapability.expiresAt,
           };
           await createErasureCapabilityStore().save(recoveredCapability);
-          await createPendingErasureStore().clear();
           const result = await beginPrivateDeviceCleanup(
             "account_erasure",
             buildCleanupDependencies(stored.accessToken, "account_erasure"),
             cleanupStore,
           );
+          if (result.complete) await createPendingErasureStore().clear();
           if (!cancelled) {
+            setCleanupRetryReason("account_erasure");
             setErasureCapability(recoveredCapability);
             setCleanupError(!result.complete);
             setRemoteCleanupWarning(result.remoteCleanupIncomplete);
@@ -475,7 +773,7 @@ export default function App() {
           }
           return;
         }
-        if (!stored || cancelled) return;
+        if (!stored || cancelled || !apiBase) return;
         const response = await fetch(apiUrl(apiBase, "/v1/auth/me").toString(), {
           headers: authenticatedHeaders(stored.accessToken),
         });
@@ -491,13 +789,25 @@ export default function App() {
         }
         if (decision === "retry") throw new Error("session-verification-unavailable");
         const account = parseSession(await jsonBody(response));
+        const prepared = await prepareQuickAddOutbox(account.user.id);
         if (!cancelled) {
+          const sessionEpoch = privateSessionEpochRef.current + 1;
+          privateSessionEpochRef.current = sessionEpoch;
+          unauthorizedCleanupFlightRef.current = null;
+          fatalOutboxCleanupFlightRef.current = null;
+          setPreparedQuickAddOutbox({
+            ownerUserId: account.user.id,
+            sessionEpoch,
+            initialState: prepared.initialState,
+          });
+          setOutboxResetWarning(prepared.reset);
           setAccessToken(stored.accessToken);
           setSession(account);
         }
-      } catch {
+      } catch (error) {
         if (!cancelled) {
           setErasureRecoveryPending(recoveringErasure);
+          setOutboxPreparationError(error instanceof QuickAddOutboxPreparationError);
           setBootError(true);
         }
       } finally {
@@ -507,12 +817,23 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [apiBase, bootAttempt, buildCleanupDependencies]);
+  }, [apiBase, bootAttempt, buildCleanupDependencies, prepareQuickAddOutbox, quickAddOutboxStore]);
 
   async function authenticated(result: AuthResult) {
+    const prepared = await prepareQuickAddOutbox(result.session.user.id);
     await saveSecureSession({ accessToken: result.accessToken, expiresAt: result.expiresAt });
+    const sessionEpoch = privateSessionEpochRef.current + 1;
+    privateSessionEpochRef.current = sessionEpoch;
+    unauthorizedCleanupFlightRef.current = null;
+    fatalOutboxCleanupFlightRef.current = null;
     setCleanupError(false);
     setRemoteCleanupWarning(false);
+    setPreparedQuickAddOutbox({
+      ownerUserId: result.session.user.id,
+      sessionEpoch,
+      initialState: prepared.initialState,
+    });
+    setOutboxResetWarning(prepared.reset);
     setAccessToken(result.accessToken);
     setSession(result.session);
   }
@@ -535,7 +856,12 @@ export default function App() {
     // Persist status authority before any session, reminder, cursor, device, or key deletion.
     await createErasureCapabilityStore().save(capability);
     setErasureCapability(capability);
-    await performCleanup("account_erasure");
+    const result = await performCleanup("account_erasure");
+    if (!result.complete) {
+      throw new Error(
+        "The erasure request was accepted, but private device cleanup must finish before its protected replay proof is removed.",
+      );
+    }
   }
 
   async function clearErasureCapability() {
@@ -545,10 +871,12 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      {booting ? (
+      {booting || cleanupRunning ? (
         <SafeAreaView style={styles.center}>
           <ActivityIndicator color={palette.forest} size="large" />
-          <Text style={styles.status}>Opening secure session…</Text>
+          <Text style={styles.status}>
+            {cleanupRunning ? "Removing private device data…" : "Opening secure session…"}
+          </Text>
         </SafeAreaView>
       ) : cleanupError ? (
         <SafeAreaView style={styles.center}>
@@ -556,9 +884,9 @@ export default function App() {
             Private-device cleanup needs attention
           </Text>
           <Text style={styles.status}>
-            Private screens are closed, but one or more local reminders, health cursors, device
-            records, signing keys, or credentials could not be removed. Retry before handing this
-            device to someone else.
+            Private screens are closed, but one or more queued diary adds, local reminders, health
+            cursors, device records, signing keys, or credentials could not be removed. Retry before
+            handing this device to someone else.
           </Text>
           <Pressable
             accessibilityRole="button"
@@ -592,17 +920,38 @@ export default function App() {
             <Text style={styles.retryText}>Continue</Text>
           </Pressable>
         </SafeAreaView>
+      ) : outboxResetWarning ? (
+        <SafeAreaView style={styles.center}>
+          <Text accessibilityRole="header" style={styles.errorTitle}>
+            Queued diary adds were reset
+          </Text>
+          <Text style={styles.status}>
+            Protected queued adds on this device could not be safely read or attributed to this
+            account and were removed before private screens opened.
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setOutboxResetWarning(false)}
+            style={styles.retryButton}
+          >
+            <Text style={styles.retryText}>Continue</Text>
+          </Pressable>
+        </SafeAreaView>
       ) : bootError ? (
         <SafeAreaView style={styles.center}>
           <Text accessibilityRole="header" style={styles.errorTitle}>
             {erasureRecoveryPending
               ? "Protected erasure replay needs attention"
-              : "Session check unavailable"}
+              : outboxPreparationError
+                ? "Protected queue needs attention"
+                : "Session check unavailable"}
           </Text>
           <Text style={styles.status}>
             {erasureRecoveryPending
               ? "The exact erasure request and session proof were preserved. Reconnect and retry; do not clear this device until the one-purpose status capability is recovered."
-              : "Your saved credential was preserved. Reconnect and try again, or sign out on this device."}
+              : outboxPreparationError
+                ? "The app could not safely read or clear protected queued diary adds, so private screens remain closed. Retry first. Signing out on this device will retry removing the queue."
+                : "Your saved credential was preserved. Reconnect and try again, or sign out on this device."}
           </Text>
           <Pressable
             accessibilityRole="button"
@@ -627,20 +976,35 @@ export default function App() {
             Secure API configuration required
           </Text>
           <Text style={styles.status}>
-            Set a safe HTTPS API origin before using the mobile app.
+            Set a safe HTTPS API origin before using the mobile app. Local cleanup recovery has
+            still run; signing out below removes protected data held on this device.
           </Text>
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => void performCleanup("sign_out", null)}
+            style={styles.clearButton}
+          >
+            <Text style={styles.clearText}>Sign out on this device</Text>
+          </Pressable>
         </SafeAreaView>
-      ) : accessToken && session ? (
+      ) : accessToken && session && quickAddOutboxController ? (
         <AuthenticatedApp
           accessToken={accessToken}
           apiBase={apiBase}
           onErasureAccepted={acceptErasure}
+          onErasurePrepared={fenceQuickAddOutboxForErasure}
           onSignOut={signOut}
-          onUnauthorized={async () => {
-            await performCleanup("terminal_unauthorized");
-          }}
+          onUnauthorized={handleUnauthorized}
+          quickAddOutboxController={quickAddOutboxController}
+          quickAddOutboxState={currentQuickAddOutboxState}
           session={session}
+          subscribeQuickAddReceipts={subscribeQuickAddReceipts}
         />
+      ) : accessToken && session ? (
+        <SafeAreaView style={styles.center}>
+          <ActivityIndicator color={palette.forest} size="large" />
+          <Text style={styles.status}>Preparing protected queued diary adds…</Text>
+        </SafeAreaView>
       ) : (
         <AuthScreen apiBase={apiBase} onAuthenticated={authenticated} />
       )}

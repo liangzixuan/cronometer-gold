@@ -8,6 +8,15 @@
   `requestId`, and optional structured `issues`.
 - Diary create/update/delete endpoints require a UUID `Idempotency-Key`; an exact
   replay returns the original result and key reuse with changed input conflicts.
+- A native public-food create may opt into the atomic profile-time-zone
+  precondition only by sending both
+  `profileTimeZonePrecondition=v1` and
+  `X-Expected-Profile-Time-Zone`. Either signal alone is invalid. A first
+  delivery whose canonical profile zone changed returns
+  `409 DIARY_TIME_ZONE_CHANGED` without a diary write; an exact stored replay is
+  returned before that comparison. Requests with neither signal preserve the
+  legacy digest and behavior. The query marker makes rollout fail closed because
+  pre-feature servers reject it; backend convergence precedes guarded clients.
 - Recipe create/revise/log and goal create/revise endpoints use the same
   digest-bound idempotency rule. Recipe and goal revisions also require a quoted,
   strong `If-Match` root revision; a diary recipe log additionally pins the exact

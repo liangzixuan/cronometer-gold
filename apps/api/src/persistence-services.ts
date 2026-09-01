@@ -45,6 +45,7 @@ import {
   type DiaryPageContinuationRecord,
   DiaryPageStaleError,
   type DiaryRecipeEntryRecord,
+  DiaryTimeZoneChangedError,
   DiaryValidationError,
   deleteDiaryEntry,
   findActiveSessionByTokenHash,
@@ -114,6 +115,7 @@ import {
   DiaryPageStaleServiceError,
   DiaryRevisionConflictServiceError,
   type DiaryService,
+  DiaryTimeZoneChangedServiceError,
   DiaryValidationServiceError,
 } from "./modules/diary/diary.routes.js";
 import {
@@ -564,6 +566,9 @@ function mapDiaryPersistenceError(error: unknown): never {
   }
   if (error instanceof DiaryLockedError) throw new DiaryLockedServiceError();
   if (error instanceof DiaryPageStaleError) throw new DiaryPageStaleServiceError();
+  if (error instanceof DiaryTimeZoneChangedError) {
+    throw new DiaryTimeZoneChangedServiceError();
+  }
   if (error instanceof DiaryValidationError) throw new DiaryValidationServiceError();
   throw error;
 }
@@ -641,6 +646,9 @@ export class DatabaseDiaryService implements DiaryService {
         foodVersionId: input.entry.foodVersionId,
         mealSlot: input.entry.mealSlot,
         occurredAt: input.entry.occurredAt,
+        ...(input.expectedProfileTimeZone === undefined
+          ? {}
+          : { expectedProfileTimeZone: input.expectedProfileTimeZone }),
         portion: input.entry.portion,
         ...(input.entry.position === undefined ? {} : { position: input.entry.position }),
         requestDigest: input.requestDigest,

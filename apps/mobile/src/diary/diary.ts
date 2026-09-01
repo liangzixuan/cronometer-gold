@@ -313,54 +313,6 @@ export function quickAddOccurredAt(localDate: string, timeZone: string, now = ne
     : localDateTimeToInstant(localDate, "12:00", timeZone);
 }
 
-export interface QuickAddOperation {
-  readonly intentKey: string;
-  readonly operationId: string;
-  readonly body: {
-    readonly foodVersionId: string;
-    readonly portion: {
-      readonly kind: "serving";
-      readonly servingId: string;
-      readonly amount: "1";
-    };
-    readonly mealSlot: MealSlot;
-    readonly occurredAt: string;
-  };
-}
-
-/** Retain both identity and bytes after an ambiguous response so retry cannot duplicate the entry. */
-export function prepareQuickAddOperation(
-  pendingByIntent: ReadonlyMap<string, QuickAddOperation>,
-  input: {
-    readonly foodVersionId: string;
-    readonly servingId: string;
-    readonly localDate: string;
-    readonly mealSlot: MealSlot;
-    readonly timeZone: string;
-  },
-  now: Date,
-  operationIdFactory: () => string,
-): QuickAddOperation {
-  const intentKey = JSON.stringify([
-    input.foodVersionId,
-    input.servingId,
-    input.localDate,
-    input.mealSlot,
-  ]);
-  const pending = pendingByIntent.get(intentKey);
-  if (pending) return pending;
-  return {
-    intentKey,
-    operationId: operationIdFactory(),
-    body: {
-      foodVersionId: input.foodVersionId,
-      portion: { kind: "serving", servingId: input.servingId, amount: "1" },
-      mealSlot: input.mealSlot,
-      occurredAt: quickAddOccurredAt(input.localDate, input.timeZone, now),
-    },
-  };
-}
-
 export function localDateTimeToInstant(
   localDate: string,
   localTime: string,

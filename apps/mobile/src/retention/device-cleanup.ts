@@ -1,7 +1,9 @@
-const CLEANUP_KEY = "nutrition-tracker.private-cleanup.v1";
+const LEGACY_CLEANUP_KEY = "nutrition-tracker.private-cleanup.v1";
+const CLEANUP_KEY = "nutrition-tracker.private-cleanup.v2";
 
 export type PrivateCleanupReason = "terminal_unauthorized" | "sign_out" | "account_erasure";
 export type PrivateCleanupStep =
+  | "quick_add_outbox"
   | "local_reminders"
   | "health_cursors"
   | "device_state"
@@ -9,6 +11,7 @@ export type PrivateCleanupStep =
   | "session_credential";
 
 const allSteps: readonly PrivateCleanupStep[] = [
+  "quick_add_outbox",
   "local_reminders",
   "health_cursors",
   "device_state",
@@ -17,7 +20,7 @@ const allSteps: readonly PrivateCleanupStep[] = [
 ];
 
 export interface PendingPrivateCleanup {
-  readonly version: 1;
+  readonly version: 2;
   readonly reason: PrivateCleanupReason;
   readonly createdAt: string;
   readonly pendingSteps: readonly PrivateCleanupStep[];
@@ -34,6 +37,7 @@ export interface PrivateCleanupDependencies {
   closePrivateUi(): void;
   /** Best effort while the current credential is still available; never blocks local deletion. */
   cleanupServerState?(): Promise<void>;
+  clearQuickAddOutbox(): Promise<void>;
   clearLocalReminders(): Promise<void>;
   clearHealthCursors(): Promise<void>;
   clearDeviceState(): Promise<void>;
@@ -49,7 +53,9 @@ export interface PrivateCleanupResult {
   readonly statePersistenceFailed: boolean;
 }
 
-function parsePendingCleanup(value: string): PendingPrivateCleanup {
+const legacySteps = allSteps.filter((step) => step !== "quick_add_outbox");
+
+export function parsePendingPrivateCleanup(value: string): PendingPrivateCleanup {
   const parsed: unknown = JSON.parse(value);
   if (
     typeof parsed !== "object" ||
@@ -62,18 +68,29 @@ function parsePendingCleanup(value: string): PendingPrivateCleanup {
   const candidate = parsed as Record<string, unknown>;
   const pending = candidate.pendingSteps;
   if (
-    candidate.version !== 1 ||
+    (candidate.version !== 1 && candidate.version !== 2) ||
     !["terminal_unauthorized", "sign_out", "account_erasure"].includes(String(candidate.reason)) ||
     typeof candidate.createdAt !== "string" ||
     !Number.isFinite(Date.parse(candidate.createdAt)) ||
     !Array.isArray(pending) ||
-    pending.length > allSteps.length ||
     new Set(pending).size !== pending.length ||
-    pending.some((step) => !allSteps.includes(step as PrivateCleanupStep))
+    pending.some(
+      (step) =>
+        !(candidate.version === 1 ? legacySteps : allSteps).includes(step as PrivateCleanupStep),
+    ) ||
+    pending.length > (candidate.version === 1 ? legacySteps.length : allSteps.length)
   ) {
     throw new TypeError("The pending private-cleanup state was invalid.");
   }
-  return candidate as unknown as PendingPrivateCleanup;
+  return {
+    version: 2,
+    reason: candidate.reason as PrivateCleanupReason,
+    createdAt: candidate.createdAt,
+    pendingSteps:
+      candidate.version === 1
+        ? ["quick_add_outbox", ...(pending as PrivateCleanupStep[])]
+        : (pending as PrivateCleanupStep[]),
+  };
 }
 
 export function createSecurePrivateCleanupStore(): PrivateCleanupStore {
@@ -81,19 +98,32 @@ export function createSecurePrivateCleanupStore(): PrivateCleanupStore {
     async load() {
       const SecureStore = await import("expo-secure-store");
       const options = { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY };
-      const raw = await SecureStore.getItemAsync(CLEANUP_KEY, options);
-      return raw === null ? null : parsePendingCleanup(raw);
+      const current = await SecureStore.getItemAsync(CLEANUP_KEY, options);
+      if (current !== null) return parsePendingPrivateCleanup(current);
+      const legacy = await SecureStore.getItemAsync(LEGACY_CLEANUP_KEY, options);
+      if (legacy === null) return null;
+      const migrated = parsePendingPrivateCleanup(legacy);
+      await SecureStore.setItemAsync(CLEANUP_KEY, JSON.stringify(migrated), options);
+      await SecureStore.deleteItemAsync(LEGACY_CLEANUP_KEY, options);
+      return migrated;
     },
     async save(value) {
       const SecureStore = await import("expo-secure-store");
       const options = { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY };
-      const parsed = parsePendingCleanup(JSON.stringify(value));
+      const parsed = parsePendingPrivateCleanup(JSON.stringify(value));
       await SecureStore.setItemAsync(CLEANUP_KEY, JSON.stringify(parsed), options);
+      await SecureStore.deleteItemAsync(LEGACY_CLEANUP_KEY, options);
     },
     async clear() {
       const SecureStore = await import("expo-secure-store");
       const options = { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY };
-      await SecureStore.deleteItemAsync(CLEANUP_KEY, options);
+      const results = await Promise.allSettled([
+        SecureStore.deleteItemAsync(CLEANUP_KEY, options),
+        SecureStore.deleteItemAsync(LEGACY_CLEANUP_KEY, options),
+      ]);
+      if (results.some((result) => result.status === "rejected")) {
+        throw new Error("The private-cleanup marker could not be fully removed.");
+      }
     },
   };
 }
@@ -103,6 +133,8 @@ function actionFor(
   dependencies: PrivateCleanupDependencies,
 ): () => Promise<void> {
   switch (step) {
+    case "quick_add_outbox":
+      return dependencies.clearQuickAddOutbox;
     case "local_reminders":
       return dependencies.clearLocalReminders;
     case "health_cursors":
@@ -136,10 +168,6 @@ async function executePendingCleanup(
   for (const step of marker.pendingSteps) {
     try {
       await actionFor(step, dependencies)();
-      pending = pending.filter((candidate) => candidate !== step);
-      const next = { ...marker, pendingSteps: pending };
-      if (pending.length === 0) await store.clear();
-      else await store.save(next);
     } catch {
       // Continue through independent local deletion steps. The marker retains every failed step.
       try {
@@ -147,6 +175,16 @@ async function executePendingCleanup(
       } catch {
         statePersistenceFailed = true;
       }
+      continue;
+    }
+    const remaining = pending.filter((candidate) => candidate !== step);
+    try {
+      if (remaining.length === 0) await store.clear();
+      else await store.save({ ...marker, pendingSteps: remaining });
+      pending = remaining;
+    } catch {
+      // Repeat the idempotent deletion when marker progress could not be made durable.
+      statePersistenceFailed = true;
     }
   }
   return {
@@ -164,7 +202,7 @@ export async function beginPrivateDeviceCleanup(
 ): Promise<PrivateCleanupResult> {
   dependencies.closePrivateUi();
   const marker: PendingPrivateCleanup = {
-    version: 1,
+    version: 2,
     reason,
     createdAt: dependencies.now().toISOString(),
     pendingSteps: allSteps,

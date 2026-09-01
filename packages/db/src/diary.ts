@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import {
   calculatePortionNutrition,
+  canonicalIanaTimeZone,
   canonicalNonNegativeDecimal,
   canonicalPositiveDecimal,
   combineNutrientAggregates,
@@ -36,6 +37,7 @@ export type DiaryPersistenceErrorCode =
   | "DIARY_LOCKED"
   | "DIARY_NOT_FOUND"
   | "DIARY_PAGE_STALE"
+  | "DIARY_TIME_ZONE_CHANGED"
   | "DIARY_VALIDATION";
 
 export class DiaryPersistenceError extends Error {
@@ -63,6 +65,12 @@ export class DiaryEntryRevisionConflictError extends DiaryPersistenceError {
 export class DiaryIdempotencyConflictError extends DiaryPersistenceError {
   constructor() {
     super("DIARY_IDEMPOTENCY_CONFLICT", "Idempotency key was already used for another request");
+  }
+}
+
+export class DiaryTimeZoneChangedError extends DiaryPersistenceError {
+  constructor() {
+    super("DIARY_TIME_ZONE_CHANGED", "Profile time zone changed before diary entry creation");
   }
 }
 
@@ -249,6 +257,7 @@ export interface CreateFoodDiaryEntryInput {
   readonly userId: string;
   readonly clientOperationId: string;
   readonly requestDigest: string;
+  readonly expectedProfileTimeZone?: string;
   readonly occurredAt: string;
   readonly foodVersionId: string;
   /** Binds a private custom-food route to the exact owner-scoped custom root. */
@@ -343,6 +352,7 @@ export async function createFoodDiaryEntry(
   input: CreateFoodDiaryEntryInput,
 ): Promise<DiaryFoodMutationResult> {
   validateOperationIdentity(input.clientOperationId, input.requestDigest);
+  const expectedProfileTimeZone = optionalExpectedProfileTimeZone(input.expectedProfileTimeZone);
   validateMealSlot(input.mealSlot);
   validateMutableDiaryNote(input.note);
   return database
@@ -350,7 +360,7 @@ export async function createFoodDiaryEntry(
     .setIsolationLevel("read committed")
     .execute(async (transaction) => {
       await lockUserDiary(transaction, input.userId);
-      const profile = await requireWritableProfile(transaction, input.userId);
+      await lockActiveDiaryUser(transaction, input.userId);
       const replay = await readOperationReplay(
         transaction,
         input.userId,
@@ -361,6 +371,10 @@ export async function createFoodDiaryEntry(
       if (replay) {
         if (replay.entry.kind !== "food") throw new DiaryIdempotencyConflictError();
         return { ...replay, entry: replay.entry };
+      }
+      const profile = await requireLockedProfile(transaction, input.userId);
+      if (expectedProfileTimeZone !== undefined && profile.timeZone !== expectedProfileTimeZone) {
+        throw new DiaryTimeZoneChangedError();
       }
       const coordinates = deriveLocalCoordinates(input.occurredAt, profile.timeZone);
       const facts = await loadFoodFacts(
@@ -2468,14 +2482,33 @@ async function requireWritableProfile(
   transaction: Transaction<Database>,
   userId: string,
 ): Promise<{ timeZone: string }> {
+  await lockActiveDiaryUser(transaction, userId);
+  return requireLockedProfile(transaction, userId);
+}
+
+async function lockActiveDiaryUser(
+  transaction: Transaction<Database>,
+  userId: string,
+): Promise<void> {
   const row = await transaction
-    .selectFrom("user_profile as profile")
-    .innerJoin("app_user as user", "user.id", "profile.user_id")
-    .select("profile.time_zone")
-    .where("profile.user_id", "=", userId)
-    .where("user.status", "=", "active")
-    .where("user.deleted_at", "is", null)
-    .forUpdate("user")
+    .selectFrom("app_user")
+    .select("id")
+    .where("id", "=", userId)
+    .where("status", "=", "active")
+    .where("deleted_at", "is", null)
+    .forUpdate()
+    .executeTakeFirst();
+  if (!row) throw new DiaryNotFoundError();
+}
+
+async function requireLockedProfile(
+  transaction: Transaction<Database>,
+  userId: string,
+): Promise<{ timeZone: string }> {
+  const row = await transaction
+    .selectFrom("user_profile")
+    .select("time_zone")
+    .where("user_id", "=", userId)
     .executeTakeFirst();
   if (!row) throw new DiaryNotFoundError();
   return { timeZone: row.time_zone };
@@ -2704,6 +2737,17 @@ function validateOperationIdentity(clientOperationId: string, requestDigest: str
   }
   if (!/^[0-9a-f]{64}$/.test(requestDigest)) {
     throw new DiaryValidationError("requestDigest must be a lowercase SHA-256 hex");
+  }
+}
+
+function optionalExpectedProfileTimeZone(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  try {
+    return canonicalIanaTimeZone(value);
+  } catch {
+    throw new DiaryValidationError(
+      "expectedProfileTimeZone must be a supported IANA time-zone identifier",
+    );
   }
 }
 

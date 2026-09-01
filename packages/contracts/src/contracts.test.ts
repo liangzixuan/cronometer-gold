@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  createDiaryEntryHeadersSchema,
+  createDiaryEntryQuerySchema,
   createDiaryEntryRequestSchema,
   diaryDayResponseSchema,
   diaryEntrySchema,
@@ -64,6 +66,21 @@ describe("public contracts", () => {
     expect(registerAccountRequestSchema.required).toContain("timeZone");
     expect(userProfileSchema.required).toContain("revision");
     expect(createDiaryEntryRequestSchema.required).not.toContain("localDate");
+    expect(createDiaryEntryHeadersSchema).toMatchObject({
+      additionalProperties: true,
+      properties: {
+        "x-expected-profile-time-zone": { type: "string", minLength: 1, maxLength: 63 },
+      },
+    });
+    expect(createDiaryEntryQuerySchema).toEqual({
+      $id: "CreateDiaryEntryQuery",
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        profileTimeZonePrecondition: { type: "string", const: "v1" },
+      },
+    });
+    expect(problemCodes).toContain("DIARY_TIME_ZONE_CHANGED");
     expect(updateDiaryEntryRequestSchema.properties).not.toHaveProperty("localDate");
     expect(updateDiaryEntryRequestSchema.properties.note.anyOf[0]).toEqual({
       type: "string",

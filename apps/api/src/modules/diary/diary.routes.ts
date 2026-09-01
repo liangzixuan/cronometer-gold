@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 
 import {
+  type CreateDiaryEntryHeaders,
+  type CreateDiaryEntryQuery,
   type CreateDiaryEntryRequest,
+  createDiaryEntryHeadersSchema,
+  createDiaryEntryQuerySchema,
   createDiaryEntryRequestSchema,
   type DiaryDay,
   type DiaryDayResponse,
@@ -16,6 +20,7 @@ import {
   type UpdateDiaryEntryRequest,
   updateDiaryEntryRequestSchema,
 } from "@nutrition-tracker/contracts";
+import { canonicalIanaTimeZone } from "@nutrition-tracker/domain";
 import type { FastifyPluginAsync, FastifyRequest } from "fastify";
 
 import { authenticatedPrincipal, requireAuthentication } from "../../http/authentication.js";
@@ -44,6 +49,7 @@ export interface DiaryService {
     readonly userId: string;
     readonly clientOperationId: string;
     readonly requestDigest: string;
+    readonly expectedProfileTimeZone?: string;
     readonly entry: CreateDiaryEntryRequest;
     readonly signal?: AbortSignal;
   }): Promise<DiaryMutationResponse>;
@@ -89,6 +95,13 @@ export class DiaryIdempotencyConflictServiceError extends Error {
   constructor() {
     super("Diary idempotency conflict");
     this.name = "DiaryIdempotencyConflictServiceError";
+  }
+}
+
+export class DiaryTimeZoneChangedServiceError extends Error {
+  constructor() {
+    super("Diary profile time zone changed");
+    this.name = "DiaryTimeZoneChangedServiceError";
   }
 }
 
@@ -202,6 +215,48 @@ async function rejectInvalidDiaryNote(request: FastifyRequest): Promise<void> {
   });
 }
 
+function expectedProfileTimeZone(value: string | string[] | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  try {
+    if (typeof value !== "string") throw new RangeError("Expected one header value");
+    return canonicalIanaTimeZone(value);
+  } catch {
+    throw new HttpProblem({
+      statusCode: 400,
+      code: "VALIDATION_ERROR",
+      title: "Bad Request",
+      detail: "One or more request fields are invalid.",
+      issues: [
+        {
+          path: "/headers/x-expected-profile-time-zone",
+          code: "invalid",
+          message: "Invalid value.",
+        },
+      ],
+      expose: true,
+    });
+  }
+}
+
+async function rejectUnpairedProfileTimeZonePrecondition(request: FastifyRequest): Promise<void> {
+  const query =
+    typeof request.query === "object" && request.query !== null && !Array.isArray(request.query)
+      ? (request.query as Readonly<Record<string, unknown>>)
+      : {};
+  const marker = query.profileTimeZonePrecondition;
+  const header = request.headers["x-expected-profile-time-zone"];
+  const isLegacy = marker === undefined && header === undefined;
+  const isGuardedV1 = marker === "v1" && typeof header === "string";
+  if (isLegacy || isGuardedV1) return;
+  throw new HttpProblem({
+    statusCode: 400,
+    code: "VALIDATION_ERROR",
+    title: "Bad Request",
+    detail: "One or more request fields are invalid.",
+    expose: true,
+  });
+}
+
 function unavailable(cause?: unknown): HttpProblem {
   return new HttpProblem({
     statusCode: 503,
@@ -239,6 +294,16 @@ function mapDiaryError(error: unknown): HttpProblem {
       code: "CONFLICT",
       title: "Conflict",
       detail: "The Idempotency-Key was already used for a different operation.",
+      expose: true,
+    });
+  }
+  if (error instanceof DiaryTimeZoneChangedServiceError) {
+    return new HttpProblem({
+      statusCode: 409,
+      code: "DIARY_TIME_ZONE_CHANGED",
+      title: "Conflict",
+      detail:
+        "The profile time zone changed before the diary entry was saved. Review the date and try again.",
       expose: true,
     });
   }
@@ -507,12 +572,16 @@ export const diaryRoutes: FastifyPluginAsync<DiaryRoutesOptions> = async (app, o
     },
   );
 
-  app.post<{ Body: CreateDiaryEntryRequest }>(
+  app.post<{
+    Body: CreateDiaryEntryRequest;
+    Headers: CreateDiaryEntryHeaders;
+    Querystring: CreateDiaryEntryQuery;
+  }>(
     "/entries",
     {
       preHandler: requireAuth,
       preValidation: [
-        rejectUnexpectedQueryKeys([]),
+        rejectUnexpectedQueryKeys(["profileTimeZonePrecondition"]),
         rejectUnexpectedBodyKeys([
           "foodVersionId",
           "portion",
@@ -520,8 +589,11 @@ export const diaryRoutes: FastifyPluginAsync<DiaryRoutesOptions> = async (app, o
           "occurredAt",
           "position",
         ]),
+        rejectUnpairedProfileTimeZonePrecondition,
       ],
       schema: {
+        headers: createDiaryEntryHeadersSchema,
+        querystring: createDiaryEntryQuerySchema,
         body: createDiaryEntryRequestSchema,
         response: {
           200: diaryMutationResponseSchema,
@@ -538,7 +610,16 @@ export const diaryRoutes: FastifyPluginAsync<DiaryRoutesOptions> = async (app, o
       const principal = authenticatedPrincipal(request);
       const clientOperationId = requireIdempotencyKey(request.headers["idempotency-key"]);
       try {
-        const digest = requestDigest("create-diary-entry", request.body);
+        const expectedTimeZone = expectedProfileTimeZone(
+          request.headers["x-expected-profile-time-zone"],
+        );
+        const digest =
+          expectedTimeZone === undefined
+            ? requestDigest("create-diary-entry", request.body)
+            : requestDigest("create-diary-entry-with-expected-profile-time-zone-v1", {
+                entry: request.body,
+                expectedProfileTimeZone: expectedTimeZone,
+              });
         const result = await withRequestSignal(
           request,
           (signal) =>
@@ -546,6 +627,9 @@ export const diaryRoutes: FastifyPluginAsync<DiaryRoutesOptions> = async (app, o
               userId: principal.userId,
               clientOperationId,
               requestDigest: digest,
+              ...(expectedTimeZone === undefined
+                ? {}
+                : { expectedProfileTimeZone: expectedTimeZone }),
               entry: request.body,
               signal,
             }) ?? Promise.reject(unavailable()),

@@ -16,6 +16,7 @@ import {
   DiaryPageCursorServiceError,
   DiaryPageStaleServiceError,
   type DiaryService,
+  DiaryTimeZoneChangedServiceError,
 } from "../src/modules/diary/diary.routes.js";
 import {
   account,
@@ -273,9 +274,111 @@ describe("diary routes", () => {
         userId,
         clientOperationId: operationId,
         entry: createBody,
-        requestDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+        requestDigest: "6b8d613578bbba37b7b5740cfbd24194aad3dcf402b7be3e2464967e7e365be6",
       }),
     );
+  });
+
+  it("binds a canonical expected profile time zone into a separate guarded digest domain", async () => {
+    const service = diaryStub();
+    const response = await createTestApp(service).inject({
+      method: "POST",
+      url: "/v1/diary/entries?profileTimeZonePrecondition=v1",
+      headers: {
+        ...authHeaders,
+        "idempotency-key": operationId,
+        "x-expected-profile-time-zone": "America/Chicago",
+      },
+      payload: createBody,
+    });
+
+    expect(response.statusCode, response.body).toBe(201);
+    expect(service.createEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedProfileTimeZone: "America/Chicago",
+        requestDigest: "f8e797dc98a27fa8d91cba56a83bacf15e2226d5bf54fa27dbfe3ca7924e0bc0",
+      }),
+    );
+  });
+
+  it("requires the guarded header and literal query capability marker as one pair", async () => {
+    const service = diaryStub();
+    const app = createTestApp(service);
+    const guardedHeaders = {
+      ...authHeaders,
+      "idempotency-key": operationId,
+      "x-expected-profile-time-zone": "America/Chicago",
+    };
+    const requests = [
+      { url: "/v1/diary/entries", headers: guardedHeaders },
+      {
+        url: "/v1/diary/entries?profileTimeZonePrecondition=v1",
+        headers: { ...authHeaders, "idempotency-key": operationId },
+      },
+      {
+        url: "/v1/diary/entries?profileTimeZonePrecondition=v2",
+        headers: guardedHeaders,
+      },
+      {
+        url: "/v1/diary/entries?profileTimeZonePrecondition=v1&profileTimeZonePrecondition=v1",
+        headers: guardedHeaders,
+      },
+      {
+        url: "/v1/diary/entries?profileTimeZonePrecondition=v1&unknownCapability=v1",
+        headers: guardedHeaders,
+      },
+    ];
+
+    for (const request of requests) {
+      const response = await app.inject({
+        method: "POST",
+        url: request.url,
+        headers: request.headers,
+        payload: createBody,
+      });
+      expect(response.statusCode, response.body).toBe(400);
+      expect(response.json()).toMatchObject({ code: "VALIDATION_ERROR" });
+    }
+    expect(service.createEntry).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unsupported expected profile time zone before persistence", async () => {
+    const service = diaryStub();
+    const response = await createTestApp(service).inject({
+      method: "POST",
+      url: "/v1/diary/entries?profileTimeZonePrecondition=v1",
+      headers: {
+        ...authHeaders,
+        "idempotency-key": operationId,
+        "x-expected-profile-time-zone": "Not/A_Private_Zone",
+      },
+      payload: createBody,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(response.body).not.toContain("Not/A_Private_Zone");
+    expect(service.createEntry).not.toHaveBeenCalled();
+  });
+
+  it("maps a guarded first-delivery time-zone mismatch to a typed private conflict", async () => {
+    const service = diaryStub({
+      createEntry: vi.fn(async () => Promise.reject(new DiaryTimeZoneChangedServiceError())),
+    });
+    const response = await createTestApp(service).inject({
+      method: "POST",
+      url: "/v1/diary/entries?profileTimeZonePrecondition=v1",
+      headers: {
+        ...authHeaders,
+        "idempotency-key": operationId,
+        "x-expected-profile-time-zone": "America/Chicago",
+      },
+      payload: createBody,
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: "DIARY_TIME_ZONE_CHANGED" });
+    expect(response.body).not.toContain("America/Chicago");
   });
 
   it("rejects a caller-assigned local date instead of trusting it", async () => {

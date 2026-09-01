@@ -18,7 +18,6 @@ import {
   parseDiaryDay,
   parseDiaryMutation,
   parseDiaryPage,
-  prepareQuickAddOperation,
   quickAddOccurredAt,
 } from "./diary";
 
@@ -398,51 +397,6 @@ describe("mobile diary contract", () => {
     expect(quickAddOccurredAt("2026-11-01", "America/Chicago", secondFold)).toBe(
       "2026-11-01T07:30:45.123Z",
     );
-  });
-
-  it("reuses the exact quick-add body and id after a lost response", () => {
-    const pending = new Map<string, ReturnType<typeof prepareQuickAddOperation>>();
-    const input = {
-      foodVersionId: "202",
-      servingId: "303",
-      localDate: "2026-11-01",
-      mealSlot: "breakfast" as const,
-      timeZone: "America/Chicago",
-    };
-    const first = prepareQuickAddOperation(
-      pending,
-      input,
-      new Date("2026-11-01T07:30:45.123Z"),
-      () => "a7183708-7725-4b7c-a180-58e03ca01234",
-    );
-    pending.set(first.intentKey, first);
-    const retry = prepareQuickAddOperation(
-      pending,
-      input,
-      new Date("2026-11-01T07:31:59.999Z"),
-      () => "f2a47c26-8e02-4057-8b48-cda619302452",
-    );
-    expect(retry).toBe(first);
-    expect(retry.body).toEqual(first.body);
-    expect(retry.operationId).toBe("a7183708-7725-4b7c-a180-58e03ca01234");
-
-    const secondIntent = prepareQuickAddOperation(
-      pending,
-      { ...input, localDate: "2026-11-02" },
-      new Date("2026-11-01T07:32:00.000Z"),
-      () => "f2a47c26-8e02-4057-8b48-cda619302452",
-    );
-    pending.set(secondIntent.intentKey, secondIntent);
-    expect(secondIntent.operationId).toBe("f2a47c26-8e02-4057-8b48-cda619302452");
-
-    pending.delete(secondIntent.intentKey);
-    const firstAfterSecond = prepareQuickAddOperation(
-      pending,
-      input,
-      new Date("2026-11-01T07:33:00.000Z"),
-      () => "93f88742-d39c-4f6c-95a1-8b292b12a93d",
-    );
-    expect(firstAfterSecond).toBe(first);
   });
 
   it("fails closed when the secure UUID source fails or returns malformed data", () => {

@@ -49,6 +49,7 @@ describe("private-route telemetry boundary", () => {
     apps.push(app);
     const password = "private password value";
     const occurredAt = "2026-08-15T13:30:00.000Z";
+    const expectedProfileTimeZone = "America/Chicago";
 
     await app.inject({
       method: "POST",
@@ -57,10 +58,11 @@ describe("private-route telemetry boundary", () => {
     });
     await app.inject({
       method: "POST",
-      url: "/v1/diary/entries",
+      url: "/v1/diary/entries?profileTimeZonePrecondition=v1",
       headers: {
         authorization: `Bearer ${bearerToken}`,
         "idempotency-key": operationId,
+        "x-expected-profile-time-zone": expectedProfileTimeZone,
       },
       payload: {
         foodVersionId: "202",
@@ -76,6 +78,7 @@ describe("private-route telemetry boundary", () => {
       bearerToken,
       password,
       occurredAt,
+      expectedProfileTimeZone,
       operationId,
       "private@example.com",
       privateFailure,

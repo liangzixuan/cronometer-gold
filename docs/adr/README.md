@@ -18,6 +18,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0010](./0010-persistent-localstack-development-profile.md) | Attended persistent LocalStack development profile | Accepted for local implementation |
 | [0011](./0011-windows-host-wsl2-private-phone-relay.md) | Windows-host/WSL2 private physical-phone relay boundary | Proposed; implementation and phone exposure blocked |
 | [0012](./0012-coherent-private-diary-pagination.md) | Coherent private diary pagination | Accepted for local implementation; release evidence blocked |
+| [0013](./0013-durable-native-public-food-quick-add-outbox.md) | Durable native public-food quick-add outbox | Accepted for local implementation; signed-device evidence blocked |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.
