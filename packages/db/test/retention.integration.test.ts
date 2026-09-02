@@ -825,6 +825,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         userId: fixture.owner.userId,
       });
       await createReauthenticationProof(fixture.database, {
+        expectedPasswordHash: fixture.ownerPasswordHash,
         expiresAt: retentionInstant("08-17T00:00:00Z"),
         purpose: "account_export",
         sessionTokenHash: exportSessionHash,
@@ -1087,6 +1088,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       ] as const;
       for (const input of inputs)
         await createReauthenticationProof(fixture.database, {
+          expectedPasswordHash: fixture.ownerPasswordHash,
           expiresAt: retentionInstant("08-18T00:00:00Z"),
           purpose: "account_export",
           sessionTokenHash,
@@ -1201,6 +1203,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         userId: fixture.owner.userId,
       });
       await createReauthenticationProof(fixture.database, {
+        expectedPasswordHash: fixture.ownerPasswordHash,
         expiresAt: retentionInstant("08-18T00:00:00Z"),
         purpose: "account_export",
         sessionTokenHash,
@@ -1379,6 +1382,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       });
 
       await createReauthenticationProof(fixture.database, {
+        expectedPasswordHash: fixture.ownerPasswordHash,
         expiresAt: retentionInstant("08-18T00:00:00Z"),
         purpose: "account_erasure",
         sessionTokenHash,
@@ -1546,6 +1550,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         .execute();
       const exportProof = digest("a");
       await createReauthenticationProof(fixture.database, {
+        expectedPasswordHash: fixture.ownerPasswordHash,
         expiresAt: retentionInstant("08-17T00:00:00Z"),
         purpose: "account_export",
         sessionTokenHash: sessionHash,
@@ -1732,6 +1737,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
 
       const crashedExportProof = digest("6");
       await createReauthenticationProof(fixture.database, {
+        expectedPasswordHash: fixture.ownerPasswordHash,
         expiresAt: retentionInstant("08-17T00:00:00Z"),
         purpose: "account_export",
         sessionTokenHash: sessionHash,
@@ -1792,6 +1798,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
 
       const erasureProof = digest("e");
       await createReauthenticationProof(fixture.database, {
+        expectedPasswordHash: fixture.ownerPasswordHash,
         expiresAt: retentionInstant("08-20T00:00:00Z"),
         purpose: "account_erasure",
         sessionTokenHash: sessionHash,
@@ -2039,6 +2046,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         userId: fixture.other.userId,
       });
       await createReauthenticationProof(fixture.database, {
+        expectedPasswordHash: fixture.otherPasswordHash,
         expiresAt: retentionInstant("08-21T00:00:00Z"),
         purpose: "account_erasure",
         sessionTokenHash: restoreSessionHash,
@@ -2157,8 +2165,10 @@ async function createFixture(databaseUrl: string, label: string) {
   const database = createDatabase({ connectionString: scopedUrl.toString(), maxConnections: 12 });
   await runMigrations(database);
   const nutrients = await seedNutrients(database);
-  const owner = await registerPasswordAccount(database, accountInput(`${label}-owner`));
-  const other = await registerPasswordAccount(database, accountInput(`${label}-other`));
+  const ownerInput = accountInput(`${label}-owner`);
+  const otherInput = accountInput(`${label}-other`);
+  const owner = await registerPasswordAccount(database, ownerInput);
+  const other = await registerPasswordAccount(database, otherInput);
   return {
     close: async () => {
       await database.destroy();
@@ -2168,7 +2178,9 @@ async function createFixture(databaseUrl: string, label: string) {
     database,
     nutrients,
     other,
+    otherPasswordHash: otherInput.passwordHash,
     owner,
+    ownerPasswordHash: ownerInput.passwordHash,
   };
 }
 

@@ -39,6 +39,15 @@ export interface EmailVerificationConfirmRequest {
   readonly token: string;
 }
 
+export interface PasswordRecoveryRequest {
+  readonly email: string;
+}
+
+export interface PasswordRecoveryConfirmRequest {
+  readonly token: string;
+  readonly newPassword: string;
+}
+
 export interface EmailVerificationRequestResponse {
   readonly data: {
     readonly status: "accepted";
@@ -48,6 +57,18 @@ export interface EmailVerificationRequestResponse {
 export interface EmailVerificationConfirmResponse {
   readonly data: {
     readonly verified: true;
+  };
+}
+
+export interface PasswordRecoveryRequestResponse {
+  readonly data: {
+    readonly status: "accepted";
+  };
+}
+
+export interface PasswordRecoveryConfirmResponse {
+  readonly data: {
+    readonly passwordReset: true;
   };
 }
 
@@ -64,6 +85,15 @@ const emailSchema = {
   format: "email",
 } as const;
 
+const passwordSchema = { type: "string", minLength: 12, maxLength: 128 } as const;
+
+const authActionTokenSchema = {
+  type: "string",
+  minLength: 43,
+  maxLength: 43,
+  pattern: "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$",
+} as const;
+
 export const authCredentialsRequestSchema = {
   $id: "AuthCredentialsRequest",
   type: "object",
@@ -71,7 +101,7 @@ export const authCredentialsRequestSchema = {
   required: ["email", "password"],
   properties: {
     email: emailSchema,
-    password: { type: "string", minLength: 12, maxLength: 128 },
+    password: passwordSchema,
   },
 } as const;
 
@@ -82,7 +112,7 @@ export const registerAccountRequestSchema = {
   required: ["email", "password", "timeZone"],
   properties: {
     email: emailSchema,
-    password: { type: "string", minLength: 12, maxLength: 128 },
+    password: passwordSchema,
     timeZone: { type: "string", minLength: 1, maxLength: 63 },
     displayName: { type: "string", minLength: 1, maxLength: 100 },
   },
@@ -94,12 +124,28 @@ export const emailVerificationConfirmRequestSchema = {
   additionalProperties: false,
   required: ["token"],
   properties: {
-    token: {
-      type: "string",
-      minLength: 43,
-      maxLength: 43,
-      pattern: "^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$",
-    },
+    token: authActionTokenSchema,
+  },
+} as const;
+
+export const passwordRecoveryRequestSchema = {
+  $id: "PasswordRecoveryRequest",
+  type: "object",
+  additionalProperties: false,
+  required: ["email"],
+  properties: {
+    email: emailSchema,
+  },
+} as const;
+
+export const passwordRecoveryConfirmRequestSchema = {
+  $id: "PasswordRecoveryConfirmRequest",
+  type: "object",
+  additionalProperties: false,
+  required: ["token", "newPassword"],
+  properties: {
+    token: authActionTokenSchema,
+    newPassword: passwordSchema,
   },
 } as const;
 
@@ -132,6 +178,40 @@ export const emailVerificationConfirmResponseSchema = {
       required: ["verified"],
       properties: {
         verified: { type: "boolean", const: true },
+      },
+    },
+  },
+} as const;
+
+export const passwordRecoveryRequestResponseSchema = {
+  $id: "PasswordRecoveryRequestResponse",
+  type: "object",
+  additionalProperties: false,
+  required: ["data"],
+  properties: {
+    data: {
+      type: "object",
+      additionalProperties: false,
+      required: ["status"],
+      properties: {
+        status: { type: "string", const: "accepted" },
+      },
+    },
+  },
+} as const;
+
+export const passwordRecoveryConfirmResponseSchema = {
+  $id: "PasswordRecoveryConfirmResponse",
+  type: "object",
+  additionalProperties: false,
+  required: ["data"],
+  properties: {
+    data: {
+      type: "object",
+      additionalProperties: false,
+      required: ["passwordReset"],
+      properties: {
+        passwordReset: { type: "boolean", const: true },
       },
     },
   },

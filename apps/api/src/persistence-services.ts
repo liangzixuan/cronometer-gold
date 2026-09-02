@@ -27,6 +27,7 @@ import {
   AccountConflictError,
   AccountNotFoundError,
   confirmEmailVerificationToken,
+  confirmPasswordRecoveryToken,
   type createDatabaseFromEnvironment,
   createFoodDiaryEntry,
   createNutritionGoal,
@@ -36,6 +37,9 @@ import {
   createSession,
   EmailVerificationTokenExpiredError as DatabaseEmailVerificationTokenExpiredError,
   EmailVerificationTokenInvalidError as DatabaseEmailVerificationTokenInvalidError,
+  PasswordCredentialStaleError as DatabasePasswordCredentialStaleError,
+  PasswordRecoveryTokenExpiredError as DatabasePasswordRecoveryTokenExpiredError,
+  PasswordRecoveryTokenInvalidError as DatabasePasswordRecoveryTokenInvalidError,
   type DiaryDayRecord,
   type DiaryEntryRecord,
   DiaryEntryRevisionConflictError,
@@ -62,6 +66,7 @@ import {
   getRecipe,
   getUserProfile,
   issueEmailVerificationToken,
+  issuePasswordRecoveryToken,
   type JsonObject,
   listRecipes,
   listTargetableNutrients,
@@ -111,7 +116,10 @@ import {
   type AuthRepository,
   EmailVerificationTokenExpiredError,
   EmailVerificationTokenInvalidError,
+  InvalidCredentialsError,
   type PasswordCredential,
+  PasswordRecoveryTokenExpiredError,
+  PasswordRecoveryTokenInvalidError,
 } from "./modules/auth/auth-service.js";
 import {
   DiaryIdempotencyConflictServiceError,
@@ -239,7 +247,14 @@ export class DatabaseAuthRepository implements AuthRepository {
   }
 
   async createSession(input: Parameters<AuthRepository["createSession"]>[0]): Promise<void> {
-    await createSession(this.#database, input);
+    try {
+      await createSession(this.#database, input);
+    } catch (error) {
+      if (error instanceof DatabasePasswordCredentialStaleError) {
+        throw new InvalidCredentialsError();
+      }
+      throw error;
+    }
   }
 
   async findActiveSession(tokenHash: string, now: Date): Promise<AuthenticatedAccount | null> {
@@ -271,13 +286,21 @@ export class DatabaseAuthRepository implements AuthRepository {
   async createReauthenticationProof(
     input: Parameters<AuthRepository["createReauthenticationProof"]>[0],
   ): Promise<void> {
-    await createReauthenticationProof(this.#database, {
-      expiresAt: input.expiresAt.toISOString(),
-      purpose: input.purpose,
-      sessionTokenHash: input.sessionTokenHash,
-      tokenHash: input.tokenHash,
-      userId: input.userId,
-    });
+    try {
+      await createReauthenticationProof(this.#database, {
+        expectedPasswordHash: input.expectedPasswordHash,
+        expiresAt: input.expiresAt.toISOString(),
+        purpose: input.purpose,
+        sessionTokenHash: input.sessionTokenHash,
+        tokenHash: input.tokenHash,
+        userId: input.userId,
+      });
+    } catch (error) {
+      if (error instanceof DatabasePasswordCredentialStaleError) {
+        throw new InvalidCredentialsError();
+      }
+      throw error;
+    }
   }
 
   async issueEmailVerificationToken(
@@ -297,6 +320,31 @@ export class DatabaseAuthRepository implements AuthRepository {
       }
       if (error instanceof DatabaseEmailVerificationTokenInvalidError) {
         throw new EmailVerificationTokenInvalidError();
+      }
+      throw error;
+    }
+  }
+
+  async issuePasswordRecoveryToken(
+    input: Parameters<AuthRepository["issuePasswordRecoveryToken"]>[0],
+  ): Promise<"ineligible" | "issued"> {
+    return issuePasswordRecoveryToken(this.#database, input);
+  }
+
+  async confirmPasswordRecoveryToken(
+    input: Parameters<AuthRepository["confirmPasswordRecoveryToken"]>[0],
+  ): Promise<void> {
+    try {
+      await confirmPasswordRecoveryToken(this.#database, {
+        ...input,
+        passwordParameters: jsonObject(input.passwordParameters),
+      });
+    } catch (error) {
+      if (error instanceof DatabasePasswordRecoveryTokenExpiredError) {
+        throw new PasswordRecoveryTokenExpiredError();
+      }
+      if (error instanceof DatabasePasswordRecoveryTokenInvalidError) {
+        throw new PasswordRecoveryTokenInvalidError();
       }
       throw error;
     }

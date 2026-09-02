@@ -129,6 +129,7 @@ describe("web email verification", () => {
     };
     const fetcher = vi.fn<typeof fetch>(async (_input, init) => {
       events.push("fetch");
+      expect(init?.redirect).toBe("error");
       expect(String(init?.body)).toBe(JSON.stringify({ token: verificationToken }));
       return Response.json({ data: { verified: true } });
     });
@@ -180,8 +181,9 @@ describe("web email verification", () => {
     expect(bare.events).toEqual(["replace:/verify-email"]);
 
     const navigation = navigationSource(`#token=${verificationToken}`);
-    const fetcher = vi.fn<EmailVerificationStatusFetch>(async () => {
+    const fetcher = vi.fn<EmailVerificationStatusFetch>(async (_input, init) => {
       navigation.events.push("fetch");
+      expect(init?.redirect).toBe("error");
       return Response.json({ data: { verified: true } });
     });
     const confirmation = takeEmailVerificationBootstrap(navigation.source, fetcher);
@@ -436,6 +438,7 @@ describe("web email verification", () => {
       "/api/auth/email-verification/request",
       "/api/auth/me",
     ]);
+    expect(fetcher.mock.calls.every(([, init]) => init?.redirect === "error")).toBe(true);
   });
 
   it("keeps an accepted request truthful when the status refresh fails transiently", async () => {
@@ -508,6 +511,7 @@ describe("web email verification", () => {
     expect(await response.json()).toEqual({ data: { verified: true } });
     expect(calls).toHaveLength(1);
     expect(calls[0]?.url).toBe("http://127.0.0.1:4000/v1/auth/email-verification/confirm");
+    expect(calls[0]?.init?.redirect).toBe("error");
     expect(calls[0]?.url).not.toContain(verificationToken);
     expect(JSON.stringify(calls[0]?.init?.headers)).not.toContain(verificationToken);
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual({ token: verificationToken });

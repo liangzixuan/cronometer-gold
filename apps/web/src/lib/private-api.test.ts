@@ -111,6 +111,27 @@ describe("private web API boundary", () => {
     expect(PRIVATE_RESPONSE_HEADERS["cache-control"]).toContain("no-store");
   });
 
+  it("refuses redirects on authenticated upstream requests", async () => {
+    vi.stubEnv("API_INTERNAL_URL", "http://127.0.0.1:4000");
+    const fetcher = vi.fn(async (url: URL, init?: RequestInit) => {
+      expect(url.href).toBe("http://127.0.0.1:4000/v1/auth/me");
+      expect(init?.redirect).toBe("error");
+      expect(new Headers(init?.headers).get("authorization")).toBe(`Bearer ${token}`);
+      return Response.json({ data: { status: "ok" } });
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    const response = await authenticatedFetch(
+      new Request("https://app.example.test/api/auth/me", {
+        headers: { cookie: `${SESSION_COOKIE}=${token}` },
+      }),
+      "/v1/auth/me",
+    );
+
+    expect(response.status).toBe(200);
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
   it("expires malformed or rejected session cookies instead of trapping login navigation", async () => {
     const missing = await authenticatedFetch(
       new Request("https://app.example.test/api/auth/me", {

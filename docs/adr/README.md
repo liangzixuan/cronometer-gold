@@ -19,7 +19,8 @@ ADR with a new ADR instead of rewriting its decision.
 | [0011](./0011-windows-host-wsl2-private-phone-relay.md) | Windows-host/WSL2 private physical-phone relay boundary | Proposed; implementation and phone exposure blocked |
 | [0012](./0012-coherent-private-diary-pagination.md) | Coherent private diary pagination | Accepted for local implementation; release evidence blocked |
 | [0013](./0013-durable-native-public-food-quick-add-outbox.md) | Durable native public-food quick-add outbox | Accepted for local implementation; signed-device evidence blocked |
-| [0014](./0014-email-verification-boundary.md) | Additive email-verification boundary | Accepted for local implementation; production delivery, enforcement, and recovery blocked |
+| [0014](./0014-email-verification-boundary.md) | Additive email-verification boundary | Accepted for local implementation; production delivery and enforcement blocked; password recovery continued by ADR 0015 |
+| [0015](./0015-password-recovery-boundary.md) | Password-recovery boundary | Accepted for local implementation; production delivery and abuse controls blocked |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

@@ -4,6 +4,7 @@ import Script from "next/script";
 import type { ReactNode } from "react";
 
 import { EMAIL_VERIFICATION_BOOTSTRAP_SCRIPT } from "../lib/email-verification";
+import { PASSWORD_RECOVERY_BOOTSTRAP_SCRIPT } from "../lib/password-recovery";
 import "./styles.css";
 
 // Per-request CSP nonces require request-time rendering so every Next script receives the nonce.
@@ -26,6 +27,13 @@ export default async function RootLayout({ children }: Readonly<{ children: Reac
           strategy="beforeInteractive"
         >
           {EMAIL_VERIFICATION_BOOTSTRAP_SCRIPT}
+        </Script>
+        <Script
+          id="password-recovery-fragment-bootstrap"
+          nonce={nonce}
+          strategy="beforeInteractive"
+        >
+          {PASSWORD_RECOVERY_BOOTSTRAP_SCRIPT}
         </Script>
       </body>
     </html>

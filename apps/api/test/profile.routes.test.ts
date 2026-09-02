@@ -15,6 +15,7 @@ const testConfig = loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" });
 function authStub(): AuthService {
   return {
     confirmEmailVerification: vi.fn(),
+    confirmPasswordRecovery: vi.fn(),
     reauthenticate: vi.fn(),
     register: vi.fn(),
     login: vi.fn(),
@@ -26,6 +27,7 @@ function authStub(): AuthService {
     authenticateErasureRecovery: vi.fn(async () => null),
     logout: vi.fn(),
     requestEmailVerification: vi.fn(),
+    requestPasswordRecovery: vi.fn(),
   };
 }
 

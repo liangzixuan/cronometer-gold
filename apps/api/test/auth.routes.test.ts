@@ -8,6 +8,8 @@ import {
   EmailVerificationTokenExpiredError,
   EmailVerificationTokenInvalidError,
   InvalidCredentialsError,
+  PasswordRecoveryTokenExpiredError,
+  PasswordRecoveryTokenInvalidError,
 } from "../src/modules/auth/auth-service.js";
 import { account, bearerToken, profile, userId } from "./fixtures.js";
 
@@ -17,6 +19,7 @@ const testConfig = loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" });
 function authStub(overrides: Partial<AuthService> = {}): AuthService {
   return {
     confirmEmailVerification: vi.fn(async () => ({ data: { verified: true as const } })),
+    confirmPasswordRecovery: vi.fn(async () => ({ data: { passwordReset: true as const } })),
     reauthenticate: vi.fn(async () => ({
       data: {
         expiresAt: "2026-08-15T00:10:00.000Z",
@@ -45,6 +48,7 @@ function authStub(overrides: Partial<AuthService> = {}): AuthService {
     authenticateErasureRecovery: vi.fn(async () => null),
     logout: vi.fn(async () => undefined),
     requestEmailVerification: vi.fn(async () => ({ data: { status: "accepted" as const } })),
+    requestPasswordRecovery: vi.fn(async () => ({ data: { status: "accepted" as const } })),
     ...overrides,
   };
 }
@@ -81,6 +85,29 @@ describe("account routes", () => {
     expect(response.headers["cache-control"]).toBe("no-store");
     expect(response.json()).toMatchObject({ data: { accessToken: bearerToken, profile } });
     expect(service.register).toHaveBeenCalledOnce();
+  });
+
+  it("declares the safe 401 returned when registration loses the credential race", async () => {
+    const service = authStub({
+      register: vi.fn(async () => Promise.reject(new InvalidCredentialsError())),
+    });
+    const response = await createTestApp(service).inject({
+      method: "POST",
+      url: "/v1/auth/register",
+      payload: {
+        email: "ada@example.com",
+        password: "correct horse battery staple",
+        timeZone: "America/Chicago",
+      },
+    });
+
+    expect(response.statusCode).toBe(401);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.json()).toMatchObject({
+      code: "UNAUTHORIZED",
+      detail: "Email or password is incorrect.",
+    });
+    expect(response.body).not.toContain(bearerToken);
   });
 
   it("uses the same safe 401 for unknown accounts and wrong passwords", async () => {
@@ -313,4 +340,100 @@ describe("account routes", () => {
       expect(response.body).not.toContain(token);
     },
   );
+
+  it("returns the same public recovery acknowledgement without authentication", async () => {
+    const privateEmail = "private.person@example.com";
+    const service = authStub();
+    const app = createTestApp(service);
+    const response = await app.inject({
+      method: "POST",
+      url: "/v1/auth/password-recovery/request",
+      payload: { email: privateEmail },
+    });
+
+    expect(response.statusCode).toBe(202);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.json()).toEqual({ data: { status: "accepted" } });
+    expect(response.body).not.toContain(privateEmail);
+    expect(service.requestPasswordRecovery).toHaveBeenCalledWith(privateEmail);
+
+    const unexpected = await app.inject({
+      method: "POST",
+      url: "/v1/auth/password-recovery/request?source=private",
+      payload: { email: privateEmail, accountId: userId },
+    });
+    expect(unexpected.statusCode).toBe(400);
+    expect(service.requestPasswordRecovery).toHaveBeenCalledTimes(1);
+  });
+
+  it("confirms recovery without creating or returning a session", async () => {
+    const service = authStub();
+    const token = `${"r".repeat(42)}A`;
+    const response = await createTestApp(service).inject({
+      method: "POST",
+      url: "/v1/auth/password-recovery/confirm",
+      payload: { token, newPassword: "a new correct horse battery staple" },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.json()).toEqual({ data: { passwordReset: true } });
+    expect(response.body).not.toContain(token);
+    expect(response.body).not.toContain("accessToken");
+    expect(service.confirmPasswordRecovery).toHaveBeenCalledWith(
+      token,
+      "a new correct horse battery staple",
+      expect.any(String),
+    );
+  });
+
+  it.each([
+    [new PasswordRecoveryTokenInvalidError(), 400, "PASSWORD_RECOVERY_TOKEN_INVALID"],
+    [new PasswordRecoveryTokenExpiredError(), 410, "PASSWORD_RECOVERY_TOKEN_EXPIRED"],
+  ] as const)(
+    "maps recovery failure without echoing the capability",
+    async (error, status, code) => {
+      const token = `${"s".repeat(42)}A`;
+      const response = await createTestApp(
+        authStub({ confirmPasswordRecovery: vi.fn(async () => Promise.reject(error)) }),
+      ).inject({
+        method: "POST",
+        url: "/v1/auth/password-recovery/confirm",
+        payload: { token, newPassword: "a new correct horse battery staple" },
+      });
+
+      expect(response.statusCode).toBe(status);
+      expect(response.json()).toMatchObject({ code });
+      expect(response.body).not.toContain(token);
+    },
+  );
+
+  it("rejects malformed recovery bodies before service invocation", async () => {
+    const service = authStub();
+    const app = createTestApp(service);
+    const responses = await Promise.all([
+      app.inject({
+        method: "POST",
+        url: "/v1/auth/password-recovery/request",
+        payload: { email: "not-an-email" },
+      }),
+      app.inject({
+        method: "POST",
+        url: "/v1/auth/password-recovery/confirm",
+        payload: { token: "too-short", newPassword: "a new correct horse battery staple" },
+      }),
+      app.inject({
+        method: "POST",
+        url: "/v1/auth/password-recovery/confirm",
+        payload: {
+          token: `${"t".repeat(42)}A`,
+          newPassword: "a new correct horse battery staple",
+          email: "private@example.com",
+        },
+      }),
+    ]);
+    expect(responses.map((response) => response.statusCode)).toEqual([400, 400, 400]);
+    expect(service.requestPasswordRecovery).not.toHaveBeenCalled();
+    expect(service.confirmPasswordRecovery).not.toHaveBeenCalled();
+  });
 });

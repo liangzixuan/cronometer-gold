@@ -157,4 +157,16 @@ describe("forward migration discovery", () => {
     expect(migrationSql).toContain("consumed_at is null or consumed_at < expires_at");
     expect(migrationSql).not.toMatch(/raw_token|token_value|token_plaintext/iu);
   });
+
+  it("extends the digest-only action credential for password recovery", async () => {
+    const migrationSql = await readFile(
+      resolve(import.meta.dirname, "../migrations/0009_password_recovery.sql"),
+      "utf8",
+    );
+
+    expect(migrationSql).toContain("drop constraint auth_action_token_purpose_check");
+    expect(migrationSql).toContain("purpose in ('email_verification', 'password_recovery')");
+    expect(migrationSql).not.toMatch(/raw_token|token_value|token_plaintext/iu);
+    expect(migrationSql).not.toMatch(/create table|drop table|drop column/iu);
+  });
 });

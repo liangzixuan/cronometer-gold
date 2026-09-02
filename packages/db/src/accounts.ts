@@ -24,6 +24,18 @@ export class EmailVerificationTokenExpiredError extends Error {
   override readonly name = "EmailVerificationTokenExpiredError";
 }
 
+export class PasswordRecoveryTokenInvalidError extends Error {
+  override readonly name = "PasswordRecoveryTokenInvalidError";
+}
+
+export class PasswordRecoveryTokenExpiredError extends Error {
+  override readonly name = "PasswordRecoveryTokenExpiredError";
+}
+
+export class PasswordCredentialStaleError extends Error {
+  override readonly name = "PasswordCredentialStaleError";
+}
+
 export interface UserProfileRecord {
   readonly userId: string;
   readonly email: string;
@@ -85,6 +97,7 @@ export interface CreateSessionInput {
   readonly userId: string;
   readonly tokenHash: string;
   readonly expiresAt: Date | string;
+  readonly expectedPasswordHash?: string;
   readonly userAgent?: string | null;
   readonly ipAddress?: string | null;
 }
@@ -124,7 +137,27 @@ export interface ConfirmEmailVerificationTokenInput {
   readonly requestId?: string | null;
 }
 
+export interface IssuePasswordRecoveryTokenInput {
+  readonly normalizedEmail: string;
+  readonly tokenHash: string;
+  readonly emailHash: string;
+  readonly issuedAt: Date | string;
+  readonly expiresAt: Date | string;
+  /** Bounded local delivery. It runs while the active account row lock is held. */
+  readonly deliver: () => Promise<void>;
+}
+
+export interface ConfirmPasswordRecoveryTokenInput {
+  readonly tokenHash: string;
+  readonly passwordHash: string;
+  readonly passwordSalt: string;
+  readonly passwordParameters: JsonObject;
+  readonly confirmedAt: Date | string;
+  readonly requestId?: string | null;
+}
+
 export type IssueEmailVerificationTokenResult = "already_verified" | "issued";
+export type IssuePasswordRecoveryTokenResult = "ineligible" | "issued";
 
 export async function registerPasswordAccount(
   database: Kysely<Database>,
@@ -204,6 +237,8 @@ export async function createSession(
   input: CreateSessionInput,
 ): Promise<SessionRecord> {
   assertSha256(input.tokenHash, "tokenHash");
+  const expectedPasswordHash = input.expectedPasswordHash ?? null;
+  if (expectedPasswordHash !== null) assertPasswordHash(expectedPasswordHash);
   return database.transaction().execute(async (transaction) => {
     // Serialize session issuance with account disable/delete transitions. A
     // disable that commits first makes this read fail; a session that locks
@@ -217,6 +252,21 @@ export async function createSession(
       .forShare()
       .executeTakeFirst();
     if (!user) throw new AccountNotFoundError("Account not found");
+    if (expectedPasswordHash !== null) {
+      // Registration and password-authenticated session issuance carry the
+      // exact verifier they established or checked. Locking account first and
+      // then requiring that verifier prevents an old-password request from
+      // minting a session after recovery.
+      const credential = await transaction
+        .selectFrom("user_password_credential")
+        .select("password_hash")
+        .where("user_id", "=", input.userId)
+        .forShare()
+        .executeTakeFirst();
+      if (!credential || credential.password_hash !== expectedPasswordHash) {
+        throw new PasswordCredentialStaleError("Password credential changed");
+      }
+    }
     const row = await transaction
       .insertInto("user_session")
       .values({
@@ -355,7 +405,7 @@ export async function issueEmailVerificationToken(
   if (expiresAt <= issuedAt) throw new Error("expiresAt must be after issuedAt");
 
   return database.transaction().execute(async (transaction) => {
-    await acquireEmailVerificationTokenFence(transaction, input.tokenHash);
+    await acquireAuthActionTokenFence(transaction, input.tokenHash);
     const account = await transaction
       .selectFrom("app_user")
       .select(["email", "email_verified_at"])
@@ -397,6 +447,68 @@ export async function issueEmailVerificationToken(
 }
 
 /**
+ * Issue one password-recovery credential for an eligible current email. Public
+ * callers deliberately collapse the ineligible result and every target-specific
+ * failure into the same accepted response.
+ *
+ * Delivery stays inside the active account lock and the replacement transaction:
+ * a failed delivery preserves the prior usable credential, while concurrent
+ * requests promote digests in the same order that SMTP accepts their messages.
+ */
+export async function issuePasswordRecoveryToken(
+  database: Kysely<Database>,
+  input: IssuePasswordRecoveryTokenInput,
+): Promise<IssuePasswordRecoveryTokenResult> {
+  assertSha256(input.tokenHash, "tokenHash");
+  assertSha256(input.emailHash, "emailHash");
+  const normalizedEmail = normalizeEmail(input.normalizedEmail);
+  if (normalizedEmail !== input.normalizedEmail) {
+    throw new Error("normalizedEmail must already be canonical");
+  }
+  const issuedAt = canonicalInstant(input.issuedAt, "issuedAt");
+  const expiresAt = canonicalInstant(input.expiresAt, "expiresAt");
+  if (expiresAt <= issuedAt) throw new Error("expiresAt must be after issuedAt");
+
+  return database.transaction().execute(async (transaction) => {
+    await acquireAuthActionTokenFence(transaction, input.tokenHash);
+    const account = await transaction
+      .selectFrom("app_user as account")
+      .innerJoin("user_password_credential as credential", "credential.user_id", "account.id")
+      .select(["account.id", "account.email"])
+      .where("account.email", "=", normalizedEmail)
+      .where("account.status", "=", "active")
+      .where("account.deleted_at", "is", null)
+      .forUpdate("account")
+      .executeTakeFirst();
+    if (!account || sha256(account.email) !== input.emailHash) return "ineligible";
+
+    await input.deliver();
+    await transaction
+      .insertInto("auth_action_token")
+      .values({
+        consumed_at: null,
+        created_at: issuedAt,
+        email_hash: input.emailHash,
+        expires_at: expiresAt,
+        purpose: "password_recovery",
+        token_hash: input.tokenHash,
+        user_id: account.id,
+      })
+      .onConflict((conflict) =>
+        conflict.columns(["user_id", "purpose"]).doUpdateSet({
+          consumed_at: null,
+          created_at: issuedAt,
+          email_hash: input.emailHash,
+          expires_at: expiresAt,
+          token_hash: input.tokenHash,
+        }),
+      )
+      .execute();
+    return "issued";
+  });
+}
+
+/**
  * Consume one verification credential and mark the same locked account as
  * verified. Unknown, replayed, inactive, deleted, or email-stale credentials
  * all share the invalid-token result.
@@ -416,7 +528,7 @@ export async function confirmEmailVerificationToken(
   await database.transaction().execute(async (transaction) => {
     // This transaction fence closes the post-SMTP/pre-commit lookup gap. It is
     // not a row lock; after it, every path still takes the account row first.
-    await acquireEmailVerificationTokenFence(transaction, input.tokenHash);
+    await acquireAuthActionTokenFence(transaction, input.tokenHash);
     // Discover the owner without taking a row lock, then lock account first.
     // Account erasure and token replacement use the same account -> token row order.
     const candidate = await transaction
@@ -493,7 +605,167 @@ export async function confirmEmailVerificationToken(
   });
 }
 
-async function acquireEmailVerificationTokenFence(
+/**
+ * Atomically replace the password credential authorized by one current-email-
+ * bound recovery action. Successful recovery proves control of the account's
+ * current mailbox, creates no session, and invalidates every older session and
+ * reauthentication capability.
+ */
+export async function confirmPasswordRecoveryToken(
+  database: Kysely<Database>,
+  input: ConfirmPasswordRecoveryTokenInput,
+): Promise<void> {
+  assertSha256(input.tokenHash, "tokenHash");
+  assertPasswordCredentialMaterial(input);
+  const confirmedAt = exactInstant(input.confirmedAt, "confirmedAt");
+  if (input.requestId !== undefined && input.requestId !== null) {
+    if (input.requestId.length < 1 || input.requestId.length > 200) {
+      throw new Error("requestId is invalid");
+    }
+  }
+
+  await database.transaction().execute(async (transaction) => {
+    await acquireAuthActionTokenFence(transaction, input.tokenHash);
+    const candidate = await transaction
+      .selectFrom("auth_action_token")
+      .select("user_id")
+      .where("purpose", "=", "password_recovery")
+      .where("token_hash", "=", input.tokenHash)
+      .executeTakeFirst();
+    if (!candidate) throw new PasswordRecoveryTokenInvalidError("Recovery token is invalid");
+
+    // Every credential, session, status, email, erasure, and action transition
+    // serializes on the account before locking the exact action row.
+    const account = await transaction
+      .selectFrom("app_user")
+      .select(["id", "email", "email_verified_at"])
+      .where("id", "=", candidate.user_id)
+      .where("status", "=", "active")
+      .where("deleted_at", "is", null)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!account) throw new PasswordRecoveryTokenInvalidError("Recovery token is invalid");
+
+    const token = await transaction
+      .selectFrom("auth_action_token")
+      .select(["email_hash", "consumed_at"])
+      .where("user_id", "=", account.id)
+      .where("purpose", "=", "password_recovery")
+      .where("token_hash", "=", input.tokenHash)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!token || token.consumed_at !== null || token.email_hash !== sha256(account.email)) {
+      throw new PasswordRecoveryTokenInvalidError("Recovery token is invalid");
+    }
+    const currentCredential = await transaction
+      .selectFrom("user_password_credential")
+      .select("user_id")
+      .where("user_id", "=", account.id)
+      .forUpdate()
+      .executeTakeFirst();
+    if (!currentCredential) {
+      throw new PasswordRecoveryTokenInvalidError("Recovery token is invalid");
+    }
+    // Capture one completion instant only after every account/token/credential
+    // lock is held. The database clock closes the session-created-after-input
+    // race; greatest() preserves deterministic future-clock fixtures and never
+    // lets a backwards application clock predate a row created before this lock.
+    const completion = await sql<{ completed_at: string }>`
+      select to_char(
+        greatest(clock_timestamp(), ${confirmedAt}::timestamptz) at time zone 'UTC',
+        'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'
+      ) as completed_at
+    `.execute(transaction);
+    const completedAt = completion.rows[0]?.completed_at;
+    if (!completedAt) throw new Error("Password recovery completion time is unavailable");
+    const timing = await transaction
+      .selectFrom("auth_action_token")
+      .select([
+        sql<boolean>`created_at > ${completedAt}::timestamptz`.as("created_after_completion"),
+        sql<boolean>`expires_at <= ${completedAt}::timestamptz`.as("expired"),
+      ])
+      .where("user_id", "=", account.id)
+      .where("purpose", "=", "password_recovery")
+      .where("token_hash", "=", input.tokenHash)
+      .executeTakeFirst();
+    if (!timing || timing.created_after_completion) {
+      throw new PasswordRecoveryTokenInvalidError("Recovery token is invalid");
+    }
+    if (timing.expired) {
+      throw new PasswordRecoveryTokenExpiredError("Recovery token is expired");
+    }
+
+    const credentialUpdate = await transaction
+      .updateTable("user_password_credential")
+      .set({
+        password_hash: input.passwordHash,
+        password_parameters: input.passwordParameters,
+        password_salt: input.passwordSalt,
+      })
+      .where("user_id", "=", account.id)
+      .executeTakeFirst();
+    if (credentialUpdate.numUpdatedRows !== 1n) {
+      throw new PasswordRecoveryTokenInvalidError("Recovery token is invalid");
+    }
+
+    const consumed = await transaction
+      .updateTable("auth_action_token")
+      .set({ consumed_at: completedAt })
+      .where("user_id", "=", account.id)
+      .where("purpose", "=", "password_recovery")
+      .where("token_hash", "=", input.tokenHash)
+      .where("consumed_at", "is", null)
+      .executeTakeFirst();
+    if (consumed.numUpdatedRows !== 1n) {
+      throw new PasswordRecoveryTokenInvalidError("Recovery token is invalid");
+    }
+
+    await transaction
+      .updateTable("app_user")
+      .set({ email_verified_at: account.email_verified_at ?? completedAt })
+      .where("id", "=", account.id)
+      .executeTakeFirstOrThrow();
+    await transaction
+      .deleteFrom("auth_action_token")
+      .where("user_id", "=", account.id)
+      .where("purpose", "=", "email_verification")
+      .execute();
+    await transaction
+      .updateTable("user_session")
+      .set({ revoked_at: completedAt })
+      .where("user_id", "=", account.id)
+      .where("revoked_at", "is", null)
+      .execute();
+    await transaction
+      .updateTable("reauthentication_proof")
+      .set({ revoked_at: completedAt })
+      .where("user_id", "=", account.id)
+      .where("consumed_at", "is", null)
+      .where("revoked_at", "is", null)
+      .execute();
+    await transaction
+      .insertInto("audit_log")
+      .values({
+        action: "auth.password_recovery.completed",
+        actor_user_id: null,
+        after_state: { emailVerified: true, passwordChanged: true },
+        before_state: { emailVerified: account.email_verified_at !== null },
+        context: { purpose: "password_recovery" },
+        entity_id: account.id,
+        entity_type: "user_password_credential",
+        occurred_at: completedAt,
+        reason: "user_confirmed_recovery_link",
+        request_id: input.requestId ?? null,
+        sensitivity: "security",
+        source_ip: null,
+        subject_user_id: account.id,
+        user_agent: null,
+      })
+      .execute();
+  });
+}
+
+async function acquireAuthActionTokenFence(
   database: Kysely<Database>,
   tokenHash: string,
 ): Promise<void> {
@@ -705,6 +977,28 @@ function assertSha256(value: string, field: string): void {
   if (!/^[0-9a-f]{64}$/.test(value)) throw new Error(`${field} must be a lowercase SHA-256 hex`);
 }
 
+function assertPasswordCredentialMaterial(input: {
+  readonly passwordHash: string;
+  readonly passwordSalt: string;
+  readonly passwordParameters: JsonObject;
+}): void {
+  assertPasswordHash(input.passwordHash);
+  const saltBytes = Buffer.byteLength(input.passwordSalt, "utf8");
+  if (saltBytes < 16 || saltBytes > 512) throw new Error("passwordSalt is invalid");
+  if (
+    typeof input.passwordParameters !== "object" ||
+    input.passwordParameters === null ||
+    Array.isArray(input.passwordParameters)
+  ) {
+    throw new Error("passwordParameters is invalid");
+  }
+}
+
+function assertPasswordHash(value: string): void {
+  const bytes = Buffer.byteLength(value, "utf8");
+  if (bytes < 16 || bytes > 1_024) throw new Error("passwordHash is invalid");
+}
+
 function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
@@ -713,6 +1007,22 @@ function canonicalInstant(value: Date | string, field: string): Date {
   const instant = value instanceof Date ? new Date(value.getTime()) : new Date(value);
   if (!Number.isFinite(instant.getTime())) throw new Error(`${field} must be a finite instant`);
   return instant;
+}
+
+function exactInstant(value: Date | string, field: string): string {
+  if (value instanceof Date) {
+    if (!Number.isFinite(value.getTime())) throw new Error(`${field} must be a finite instant`);
+    return value.toISOString();
+  }
+  if (
+    value.length < 20 ||
+    value.length > 64 ||
+    value.trim() !== value ||
+    !Number.isFinite(new Date(value).getTime())
+  ) {
+    throw new Error(`${field} must be a finite instant`);
+  }
+  return value;
 }
 
 function canonicalRevision(value: bigint | number | string): string {

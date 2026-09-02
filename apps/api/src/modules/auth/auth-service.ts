@@ -4,12 +4,14 @@ import type {
   AuthenticatedAccount,
   EmailVerificationConfirmResponse,
   EmailVerificationRequestResponse,
+  PasswordRecoveryConfirmResponse,
+  PasswordRecoveryRequestResponse,
   ReauthenticationResponse,
   RegisterAccountRequest,
   SessionCreatedResponse,
 } from "@nutrition-tracker/contracts";
 import { canonicalIanaTimeZone } from "@nutrition-tracker/domain";
-import type { EmailVerificationDelivery } from "./email-delivery.js";
+import type { EmailVerificationDelivery, PasswordRecoveryDelivery } from "./email-delivery.js";
 import {
   hashPassword,
   PASSWORD_SCRYPT_PARAMETERS,
@@ -20,6 +22,7 @@ import {
 import { BoundedAuthRateLimiter } from "./rate-limiter.js";
 
 export const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60_000;
+export const PASSWORD_RECOVERY_TTL_MS = 60 * 60_000;
 
 export interface PasswordCredential {
   readonly account: AuthenticatedAccount;
@@ -42,6 +45,7 @@ export interface AuthRepository {
     readonly userId: string;
     readonly tokenHash: string;
     readonly expiresAt: Date;
+    readonly expectedPasswordHash?: string;
   }): Promise<void>;
   findActiveSession(tokenHash: string, now: Date): Promise<AuthenticatedAccount | null>;
   findPendingErasureRecoverySession(
@@ -59,6 +63,7 @@ export interface AuthRepository {
     readonly purpose: "account_export" | "account_erasure";
     readonly tokenHash: string;
     readonly expiresAt: Date;
+    readonly expectedPasswordHash: string;
   }): Promise<void>;
   issueEmailVerificationToken(input: {
     readonly userId: string;
@@ -70,6 +75,22 @@ export interface AuthRepository {
   }): Promise<"already_verified" | "issued">;
   confirmEmailVerificationToken(input: {
     readonly tokenHash: string;
+    readonly confirmedAt: Date;
+    readonly requestId: string;
+  }): Promise<void>;
+  issuePasswordRecoveryToken(input: {
+    readonly normalizedEmail: string;
+    readonly tokenHash: string;
+    readonly emailHash: string;
+    readonly issuedAt: Date;
+    readonly expiresAt: Date;
+    readonly deliver: () => Promise<void>;
+  }): Promise<"ineligible" | "issued">;
+  confirmPasswordRecoveryToken(input: {
+    readonly tokenHash: string;
+    readonly passwordHash: string;
+    readonly passwordSalt: string;
+    readonly passwordParameters: Readonly<Record<string, unknown>>;
     readonly confirmedAt: Date;
     readonly requestId: string;
   }): Promise<void>;
@@ -109,6 +130,12 @@ export interface AuthService {
     token: string,
     requestId: string,
   ): Promise<EmailVerificationConfirmResponse>;
+  requestPasswordRecovery(email: string): Promise<PasswordRecoveryRequestResponse>;
+  confirmPasswordRecovery(
+    token: string,
+    newPassword: string,
+    requestId: string,
+  ): Promise<PasswordRecoveryConfirmResponse>;
 }
 
 export class InvalidCredentialsError extends Error {
@@ -153,6 +180,20 @@ export class EmailVerificationTokenExpiredError extends Error {
   }
 }
 
+export class PasswordRecoveryTokenInvalidError extends Error {
+  constructor() {
+    super("Password recovery token is invalid");
+    this.name = "PasswordRecoveryTokenInvalidError";
+  }
+}
+
+export class PasswordRecoveryTokenExpiredError extends Error {
+  constructor() {
+    super("Password recovery token is expired");
+    this.name = "PasswordRecoveryTokenExpiredError";
+  }
+}
+
 function sha256(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
 }
@@ -176,6 +217,20 @@ function validatePassword(password: string): void {
   }
 }
 
+function validatedEmail(emailInput: string): string {
+  const email = normalizeEmail(emailInput);
+  if (
+    email.length < 3 ||
+    email.length > 254 ||
+    !/^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/u.test(
+      email,
+    )
+  ) {
+    throw new RangeError("Invalid email");
+  }
+  return email;
+}
+
 function bearerToken(header: string | undefined): string | null {
   if (!header) return null;
   const match = /^Bearer ([A-Za-z0-9_-]{43,128})$/.exec(header);
@@ -193,6 +248,11 @@ export class SecureAuthService implements AuthService {
   readonly #emailVerificationPublicOrigin: string | null;
   readonly #emailVerificationTtlMs: number;
   readonly #emailVerificationLimiter: BoundedAuthRateLimiter;
+  readonly #passwordRecoveryDelivery: PasswordRecoveryDelivery | null;
+  readonly #passwordRecoveryPublicOrigin: string | null;
+  readonly #passwordRecoveryTtlMs: number;
+  readonly #passwordRecoveryRequestLimiter: BoundedAuthRateLimiter;
+  readonly #passwordRecoveryConfirmLimiter: BoundedAuthRateLimiter;
   readonly #dummySalt = randomBytes(16).toString("base64url");
   readonly #dummyHash = randomBytes(PASSWORD_SCRYPT_PARAMETERS.keyLength).toString("base64url");
 
@@ -207,6 +267,11 @@ export class SecureAuthService implements AuthService {
     emailVerificationPublicOrigin?: string;
     emailVerificationTtlMs?: number;
     emailVerificationLimiter?: BoundedAuthRateLimiter;
+    passwordRecoveryDelivery?: PasswordRecoveryDelivery;
+    passwordRecoveryPublicOrigin?: string;
+    passwordRecoveryTtlMs?: number;
+    passwordRecoveryRequestLimiter?: BoundedAuthRateLimiter;
+    passwordRecoveryConfirmLimiter?: BoundedAuthRateLimiter;
   }) {
     this.#repository = options.repository;
     this.#queue = options.queue ?? new PasswordWorkQueue();
@@ -220,6 +285,15 @@ export class SecureAuthService implements AuthService {
     this.#emailVerificationLimiter =
       options.emailVerificationLimiter ??
       new BoundedAuthRateLimiter({ maximumAttempts: 5, windowMs: 15 * 60_000 });
+    this.#passwordRecoveryDelivery = options.passwordRecoveryDelivery ?? null;
+    this.#passwordRecoveryPublicOrigin = options.passwordRecoveryPublicOrigin ?? null;
+    this.#passwordRecoveryTtlMs = options.passwordRecoveryTtlMs ?? PASSWORD_RECOVERY_TTL_MS;
+    this.#passwordRecoveryRequestLimiter =
+      options.passwordRecoveryRequestLimiter ??
+      new BoundedAuthRateLimiter({ maximumAttempts: 5, windowMs: 15 * 60_000 });
+    this.#passwordRecoveryConfirmLimiter =
+      options.passwordRecoveryConfirmLimiter ??
+      new BoundedAuthRateLimiter({ maximumAttempts: 10, windowMs: 15 * 60_000 });
   }
 
   async register(input: RegisterAccountRequest): Promise<SessionCreatedResponse> {
@@ -248,8 +322,9 @@ export class SecureAuthService implements AuthService {
       timeZone,
       ...(displayName === undefined ? {} : { displayName }),
     });
+    const session = await this.#createSession(account, passwordHash);
     this.#limiter.reset(key);
-    return this.#createSession(account);
+    return session;
   }
 
   async login(emailInput: string, password: string): Promise<SessionCreatedResponse> {
@@ -270,8 +345,9 @@ export class SecureAuthService implements AuthService {
     );
     if (!credential || !valid) throw new InvalidCredentialsError();
 
+    const session = await this.#createSession(credential.account, credential.passwordHash);
     this.#limiter.reset(key);
-    return this.#createSession(credential.account);
+    return session;
   }
 
   async authenticate(authorizationHeader: string | undefined): Promise<AuthPrincipal | null> {
@@ -341,6 +417,7 @@ export class SecureAuthService implements AuthService {
       purpose,
       tokenHash: sha256(token),
       expiresAt,
+      expectedPasswordHash: credential.passwordHash,
     });
     this.#limiter.reset(key);
     return { data: { reauthenticationToken: token, expiresAt: expiresAt.toISOString() } };
@@ -399,13 +476,82 @@ export class SecureAuthService implements AuthService {
     return { data: { verified: true } };
   }
 
-  async #createSession(account: AuthenticatedAccount): Promise<SessionCreatedResponse> {
+  async requestPasswordRecovery(emailInput: string): Promise<PasswordRecoveryRequestResponse> {
+    const email = validatedEmail(emailInput);
+    const issuedAt = this.#clock();
+    const limiterKey = `password-recovery-request:${sha256(email)}`;
+    if (!this.#passwordRecoveryRequestLimiter.consume(limiterKey, issuedAt.getTime())) {
+      return { data: { status: "accepted" } };
+    }
+    if (!this.#passwordRecoveryDelivery || !this.#passwordRecoveryPublicOrigin) {
+      return { data: { status: "accepted" } };
+    }
+
+    const token = randomBytes(32).toString("base64url");
+    const expiresAt = new Date(issuedAt.getTime() + this.#passwordRecoveryTtlMs);
+    const recoveryUrl = new URL("/reset-password", this.#passwordRecoveryPublicOrigin);
+    recoveryUrl.hash = `token=${token}`;
+    try {
+      await this.#repository.issuePasswordRecoveryToken({
+        deliver: () =>
+          this.#passwordRecoveryDelivery?.sendPasswordRecoveryEmail({
+            expiresAt,
+            recipient: email,
+            recoveryUrl: recoveryUrl.toString(),
+          }) ?? Promise.reject(new Error("Password recovery delivery is unavailable")),
+        emailHash: sha256(email),
+        expiresAt,
+        issuedAt,
+        normalizedEmail: email,
+        tokenHash: sha256(token),
+      });
+    } catch {
+      // Every target-dependent outcome retains the same public acknowledgement.
+    }
+    return { data: { status: "accepted" } };
+  }
+
+  async confirmPasswordRecovery(
+    token: string,
+    newPassword: string,
+    requestId: string,
+  ): Promise<PasswordRecoveryConfirmResponse> {
+    if (!/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u.test(token)) {
+      throw new RangeError("Invalid password recovery token");
+    }
+    validatePassword(newPassword);
+    const tokenHash = sha256(token);
+    const limiterKey = `password-recovery-confirm:${tokenHash}`;
+    if (!this.#passwordRecoveryConfirmLimiter.consume(limiterKey, this.#clock().getTime())) {
+      throw new AuthRateLimitedError();
+    }
+    const salt = randomBytes(16);
+    const passwordHash = await this.#runPasswordWork(() =>
+      hashPassword(newPassword, salt, this.#queue),
+    );
+    await this.#repository.confirmPasswordRecoveryToken({
+      confirmedAt: this.#clock(),
+      passwordHash,
+      passwordParameters: PASSWORD_SCRYPT_PARAMETERS,
+      passwordSalt: salt.toString("base64url"),
+      requestId,
+      tokenHash,
+    });
+    this.#passwordRecoveryConfirmLimiter.reset(limiterKey);
+    return { data: { passwordReset: true } };
+  }
+
+  async #createSession(
+    account: AuthenticatedAccount,
+    expectedPasswordHash?: string,
+  ): Promise<SessionCreatedResponse> {
     const accessToken = randomBytes(32).toString("base64url");
     const expiresAt = new Date(this.#clock().getTime() + this.#sessionTtlMs);
     await this.#repository.createSession({
       userId: account.user.id,
       tokenHash: sha256(accessToken),
       expiresAt,
+      ...(expectedPasswordHash ? { expectedPasswordHash } : {}),
     });
     return { data: { accessToken, expiresAt: expiresAt.toISOString(), ...account } };
   }

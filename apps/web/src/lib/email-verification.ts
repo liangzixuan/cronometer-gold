@@ -109,6 +109,7 @@ export const EMAIL_VERIFICATION_BOOTSTRAP_SCRIPT = `(() => {
       cache: "no-store",
       headers: { accept: "application/json", "content-type": "application/json" },
       method: "POST",
+      redirect: "error",
       referrerPolicy: "no-referrer",
     });
   } catch {
@@ -186,6 +187,7 @@ async function confirmEmailVerificationRequestBody(
       cache: "no-store",
       headers: { accept: "application/json", "content-type": "application/json" },
       method: "POST",
+      redirect: "error",
       referrerPolicy: "no-referrer",
     });
     requestBody = "";
@@ -324,6 +326,7 @@ export async function reconcileAcceptedEmailVerificationRequest(
       cache: "no-store",
       credentials: "same-origin",
       headers: { accept: "application/json" },
+      redirect: "error",
     });
     if (response.status !== 200) return "unknown";
     const session = parseSession(await response.json());
@@ -341,6 +344,7 @@ export async function requestAndReconcileEmailVerification(
     credentials: "same-origin",
     headers: { accept: "application/json" },
     method: "POST",
+    redirect: "error",
   });
   let body: unknown = null;
   try {

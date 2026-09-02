@@ -29,6 +29,7 @@ const dependencyEnvironmentSchema = z.object({
   DATABASE_SSL_MODE: z.enum(["disable", "require", "verify-full"]).default("disable"),
   DATABASE_URL: z.string().trim().min(1),
   EMAIL_VERIFICATION_PUBLIC_ORIGIN: z.url().optional(),
+  PASSWORD_RECOVERY_PUBLIC_ORIGIN: z.url().optional(),
   DEVICE_CHALLENGE_HMAC_KEY: z.string().min(1).max(1_024).optional(),
   ERASURE_REPLAY_LEDGER_LOCATOR_CURRENT_KEY_ID: z.string().max(64).optional(),
   ERASURE_REPLAY_LEDGER_LOCATOR_HMAC_KEYS: z.string().min(1).max(32_768).optional(),
@@ -148,6 +149,7 @@ export interface ApiEmailVerificationDependencyConfig {
   readonly nodeEnv: "development" | "test";
   readonly port: 1025;
   readonly publicOrigin: string;
+  readonly passwordRecoveryPublicOrigin: string;
   readonly timeoutMs: number;
 }
 
@@ -236,6 +238,7 @@ export function loadApiDependencyConfig(
     "SMTP_PORT",
     "SMTP_FROM",
     "EMAIL_VERIFICATION_PUBLIC_ORIGIN",
+    "PASSWORD_RECOVERY_PUBLIC_ORIGIN",
   ] as const;
   const emailEnvironmentConfigured = emailEnvironmentFields.some(
     (field) => environment[field] !== undefined,
@@ -255,10 +258,18 @@ export function loadApiDependencyConfig(
         issues.push({ field: "SMTP_FROM", message: "A safe local sender is required" });
       }
       const publicOrigin = result.data.EMAIL_VERIFICATION_PUBLIC_ORIGIN ?? "http://127.0.0.1:3000";
+      const passwordRecoveryPublicOrigin =
+        result.data.PASSWORD_RECOVERY_PUBLIC_ORIGIN ?? "http://127.0.0.1:3000";
       if (!isExactLoopbackOrigin(publicOrigin)) {
         issues.push({
           field: "EMAIL_VERIFICATION_PUBLIC_ORIGIN",
           message: "Exact loopback HTTP origin is required for local verification",
+        });
+      }
+      if (!isExactLoopbackOrigin(passwordRecoveryPublicOrigin)) {
+        issues.push({
+          field: "PASSWORD_RECOVERY_PUBLIC_ORIGIN",
+          message: "Exact loopback HTTP origin is required for local recovery",
         });
       }
       if (
@@ -266,7 +277,8 @@ export function loadApiDependencyConfig(
         result.data.SMTP_PORT === 1025 &&
         result.data.SMTP_FROM &&
         safeMailFrom(result.data.SMTP_FROM) &&
-        isExactLoopbackOrigin(publicOrigin)
+        isExactLoopbackOrigin(publicOrigin) &&
+        isExactLoopbackOrigin(passwordRecoveryPublicOrigin)
       ) {
         emailVerification = {
           from: result.data.SMTP_FROM,
@@ -274,6 +286,7 @@ export function loadApiDependencyConfig(
           nodeEnv: result.data.NODE_ENV,
           port: result.data.SMTP_PORT,
           publicOrigin,
+          passwordRecoveryPublicOrigin,
           timeoutMs: result.data.SMTP_TIMEOUT_MS,
         };
       }

@@ -209,6 +209,7 @@ export async function proxyEmailVerificationConfirm(request: Request): Promise<R
       headers: { accept: "application/json", "content-type": "application/json" },
       body: JSON.stringify({ token }),
       cache: "no-store",
+      redirect: "error",
       signal: request.signal,
     });
   } catch {

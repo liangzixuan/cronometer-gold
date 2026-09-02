@@ -13,6 +13,7 @@ import {
 } from "@nutrition-tracker/domain";
 import { type Kysely, type QueryResult, type Selectable, sql, type Transaction } from "kysely";
 
+import { PasswordCredentialStaleError } from "./accounts.js";
 import type { Database, JsonObject, JsonValue } from "./types.js";
 
 export type RetentionPersistenceErrorCode =
@@ -541,6 +542,7 @@ export interface CreateReauthenticationProofInput {
   readonly purpose: ReauthenticationPurpose;
   readonly tokenHash: string;
   readonly expiresAt: string;
+  readonly expectedPasswordHash: string;
 }
 export interface ConsumeReauthenticationProofInput {
   readonly userId: string;
@@ -2154,9 +2156,22 @@ export async function createReauthenticationProof(
   requireDigest(input.sessionTokenHash, "sessionTokenHash");
   requireDigest(input.tokenHash, "tokenHash");
   const expiresAt = canonicalInstant(input.expiresAt);
+  const expectedPasswordHashBytes = Buffer.byteLength(input.expectedPasswordHash, "utf8");
+  if (expectedPasswordHashBytes < 16 || expectedPasswordHashBytes > 1_024) {
+    throw new RetentionValidationError("Password verifier is invalid");
+  }
   return database.transaction().execute(async (transaction) => {
     await lockRetentionUser(transaction, input.userId);
     await requireActiveProfile(transaction, input.userId, true);
+    const credential = await transaction
+      .selectFrom("user_password_credential")
+      .select("password_hash")
+      .where("user_id", "=", input.userId)
+      .forShare()
+      .executeTakeFirst();
+    if (!credential || credential.password_hash !== input.expectedPasswordHash) {
+      throw new PasswordCredentialStaleError("Password credential changed");
+    }
     const session = await transaction
       .selectFrom("user_session")
       .select("expires_at")

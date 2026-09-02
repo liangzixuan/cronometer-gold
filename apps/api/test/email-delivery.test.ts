@@ -141,6 +141,39 @@ describe("local Mailpit SMTP delivery", () => {
     expect(messages).toHaveLength(1);
   });
 
+  it("delivers recovery mail to a 254-character contract-valid recipient", async () => {
+    const messages: string[] = [];
+    const port = await listen(successfulFixture(messages));
+    const recipient = `${"a".repeat(64)}@${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(61)}`;
+    expect(recipient).toHaveLength(254);
+
+    await expect(
+      sendSmtpMail({
+        body: "Open the one-time password-recovery link.",
+        from: "no-reply@nutrition.local",
+        host: "127.0.0.1",
+        port,
+        recipient,
+        subject: "Reset your Nutrition Tracker password",
+        timeoutMs: 1_000,
+      }),
+    ).resolves.toBeUndefined();
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain(`To: ${recipient}`);
+
+    await expect(
+      sendSmtpMail({
+        body: "safe",
+        from: "no-reply@nutrition.local",
+        host: "127.0.0.1",
+        port,
+        recipient: `b${recipient}`,
+        subject: "Reset your Nutrition Tracker password",
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toBeInstanceOf(EmailDeliveryConfigurationError);
+  });
+
   it("fails closed on connection errors, timeout, and oversized replies", async () => {
     const refusedPort = await closedLoopbackPort();
     await expect(
@@ -269,6 +302,34 @@ describe("local Mailpit SMTP delivery", () => {
           expiresAt: new Date("2030-01-01T00:00:00.000Z"),
           recipient: "ada@example.com",
           verificationUrl,
+        }),
+      ).rejects.toBeInstanceOf(EmailDeliveryConfigurationError);
+    }
+  });
+
+  it("rejects noncanonical password-recovery URLs before connecting", async () => {
+    const delivery = new LocalMailpitEmailDelivery({
+      from: "no-reply@nutrition.local",
+      host: "127.0.0.1",
+      nodeEnv: "test",
+      port: 1025,
+    });
+    const token = `${"a".repeat(42)}A`;
+    const invalidUrls = [
+      `https://127.0.0.1:3000/reset-password#token=${token}`,
+      `http://localhost:3000/reset-password#token=${token}`,
+      `http://127.0.0.1:3000/wrong#token=${token}`,
+      `http://127.0.0.1:3000/reset-password?next=login#token=${token}`,
+      `http://127.0.0.1:3000/reset-password#token=${"a".repeat(42)}`,
+      `http://127.0.0.1:3000/reset-password#token=${token}&next=login`,
+    ];
+
+    for (const recoveryUrl of invalidUrls) {
+      await expect(
+        delivery.sendPasswordRecoveryEmail({
+          expiresAt: new Date("2030-01-01T00:00:00.000Z"),
+          recipient: "ada@example.com",
+          recoveryUrl,
         }),
       ).rejects.toBeInstanceOf(EmailDeliveryConfigurationError);
     }

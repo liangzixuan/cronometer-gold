@@ -9,6 +9,14 @@ import {
   emailVerificationConfirmRequestSchema,
   emailVerificationConfirmResponseSchema,
   emailVerificationRequestResponseSchema,
+  type PasswordRecoveryConfirmRequest,
+  type PasswordRecoveryConfirmResponse,
+  type PasswordRecoveryRequest,
+  type PasswordRecoveryRequestResponse,
+  passwordRecoveryConfirmRequestSchema,
+  passwordRecoveryConfirmResponseSchema,
+  passwordRecoveryRequestResponseSchema,
+  passwordRecoveryRequestSchema,
   problemDetailsSchema,
   type ReauthenticationRequest,
   type ReauthenticationResponse,
@@ -36,6 +44,8 @@ import {
   EmailVerificationTokenInvalidError,
   EmailVerificationUnavailableError,
   InvalidCredentialsError,
+  PasswordRecoveryTokenExpiredError,
+  PasswordRecoveryTokenInvalidError,
 } from "./auth-service.js";
 
 export interface AuthRoutesOptions {
@@ -91,6 +101,24 @@ function mapAuthError(error: unknown): HttpProblem {
       expose: true,
     });
   }
+  if (error instanceof PasswordRecoveryTokenInvalidError) {
+    return new HttpProblem({
+      statusCode: 400,
+      code: "PASSWORD_RECOVERY_TOKEN_INVALID",
+      title: "Bad Request",
+      detail: "The password recovery link is invalid or has already been used.",
+      expose: true,
+    });
+  }
+  if (error instanceof PasswordRecoveryTokenExpiredError) {
+    return new HttpProblem({
+      statusCode: 410,
+      code: "PASSWORD_RECOVERY_TOKEN_EXPIRED",
+      title: "Gone",
+      detail: "The password recovery link has expired.",
+      expose: true,
+    });
+  }
   if (error instanceof EmailVerificationUnavailableError) return unavailable(error);
   if (error instanceof RangeError) {
     return new HttpProblem({
@@ -128,6 +156,7 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (app, opt
         response: {
           201: sessionCreatedResponseSchema,
           400: problemDetailsSchema,
+          401: problemDetailsSchema,
           409: problemDetailsSchema,
           429: problemDetailsSchema,
           503: problemDetailsSchema,
@@ -260,6 +289,65 @@ export const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (app, opt
       try {
         const result = await options.authService.confirmEmailVerification(
           request.body.token,
+          request.id,
+        );
+        reply.header("cache-control", "no-store");
+        return result;
+      } catch (error) {
+        throw mapAuthError(error);
+      }
+    },
+  );
+
+  app.post<{ Body: PasswordRecoveryRequest }>(
+    "/password-recovery/request",
+    {
+      preValidation: [rejectUnexpectedQueryKeys([]), rejectUnexpectedBodyKeys(["email"])],
+      schema: {
+        body: passwordRecoveryRequestSchema,
+        response: {
+          202: passwordRecoveryRequestResponseSchema,
+          400: problemDetailsSchema,
+          503: problemDetailsSchema,
+        },
+      },
+    },
+    async (request, reply): Promise<PasswordRecoveryRequestResponse> => {
+      if (!options.authService) throw unavailable();
+      try {
+        const result = await options.authService.requestPasswordRecovery(request.body.email);
+        reply.header("cache-control", "no-store").status(202);
+        return result;
+      } catch (error) {
+        throw mapAuthError(error);
+      }
+    },
+  );
+
+  app.post<{ Body: PasswordRecoveryConfirmRequest }>(
+    "/password-recovery/confirm",
+    {
+      preValidation: [
+        rejectUnexpectedQueryKeys([]),
+        rejectUnexpectedBodyKeys(["token", "newPassword"]),
+      ],
+      schema: {
+        body: passwordRecoveryConfirmRequestSchema,
+        response: {
+          200: passwordRecoveryConfirmResponseSchema,
+          400: problemDetailsSchema,
+          410: problemDetailsSchema,
+          429: problemDetailsSchema,
+          503: problemDetailsSchema,
+        },
+      },
+    },
+    async (request, reply): Promise<PasswordRecoveryConfirmResponse> => {
+      if (!options.authService) throw unavailable();
+      try {
+        const result = await options.authService.confirmPasswordRecovery(
+          request.body.token,
+          request.body.newPassword,
           request.id,
         );
         reply.header("cache-control", "no-store");

@@ -29,6 +29,7 @@ describe("private-route telemetry boundary", () => {
     const privateFailure = "private-diary-database-value";
     const authService: AuthService = {
       confirmEmailVerification: vi.fn(),
+      confirmPasswordRecovery: vi.fn(async () => Promise.reject(new Error(privateFailure))),
       reauthenticate: vi.fn(),
       register: vi.fn(),
       login: vi.fn(async () => Promise.reject(new Error(privateFailure))),
@@ -40,6 +41,7 @@ describe("private-route telemetry boundary", () => {
       authenticateErasureRecovery: vi.fn(async () => null),
       logout: vi.fn(),
       requestEmailVerification: vi.fn(),
+      requestPasswordRecovery: vi.fn(async () => ({ data: { status: "accepted" as const } })),
     };
     const diaryService: DiaryService = {
       getDay: vi.fn(),
@@ -50,6 +52,9 @@ describe("private-route telemetry boundary", () => {
     const app = buildApp({ config, logger, authService, diaryService });
     apps.push(app);
     const password = "private password value";
+    const recoveryEmail = "recovery-private@example.com";
+    const recoveryPassword = "private recovery password value";
+    const recoveryToken = `${"z".repeat(42)}A`;
     const occurredAt = "2026-08-15T13:30:00.000Z";
     const expectedProfileTimeZone = "America/Chicago";
 
@@ -57,6 +62,16 @@ describe("private-route telemetry boundary", () => {
       method: "POST",
       url: "/v1/auth/login",
       payload: { email: "private@example.com", password },
+    });
+    await app.inject({
+      method: "POST",
+      url: "/v1/auth/password-recovery/request",
+      payload: { email: recoveryEmail },
+    });
+    await app.inject({
+      method: "POST",
+      url: "/v1/auth/password-recovery/confirm",
+      payload: { token: recoveryToken, newPassword: recoveryPassword },
     });
     await app.inject({
       method: "POST",
@@ -75,10 +90,15 @@ describe("private-route telemetry boundary", () => {
     });
 
     expect(output).toContain("/v1/auth/login");
+    expect(output).toContain("/v1/auth/password-recovery/request");
+    expect(output).toContain("/v1/auth/password-recovery/confirm");
     expect(output).toContain("/v1/diary/entries");
     for (const privateValue of [
       bearerToken,
       password,
+      recoveryEmail,
+      recoveryPassword,
+      recoveryToken,
       occurredAt,
       expectedProfileTimeZone,
       operationId,

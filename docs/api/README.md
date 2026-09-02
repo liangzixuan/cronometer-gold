@@ -83,7 +83,54 @@ non-production. Production delivery is unavailable until a provider, sender,
 domain, TLS/authentication, shared request/confirmation abuse controls,
 transactional delivery/idempotency, retry/suppression, and legal-copy review is
 accepted. Verification remains additive and non-enforcing; password recovery is
-not implemented in this slice.
+independent until a recovery action succeeds.
+
+## Password recovery
+
+`POST /v1/auth/password-recovery/request` is public and accepts only
+`{"email":"..."}`. Every schema-valid target-dependent result returns exact
+no-store `202 {"data":{"status":"accepted"}}`, including an unknown, inactive,
+deleted, ineligible, rate-suppressed, delivery-unconfigured, or
+delivery/commit-failed target. The response does not echo the address or claim
+mail was sent. The process-local five-attempt
+fixed window counts known and unknown normalized addresses alike; public
+production use still requires shared source and target controls.
+
+An eligible request creates a one-hour, 256-bit capability bound to the active
+password account's current normalized-email digest. Only token and email
+SHA-256 digests are stored. The account lock spans bounded Mailpit delivery and
+promotes a replacement only after SMTP acceptance, preserving the prior action
+on pre-acceptance failure and serializing concurrent resends. The existing
+post-acceptance/database-commit ambiguity remains explicit.
+
+`POST /v1/auth/password-recovery/confirm` accepts only
+`{"token":"<43-character-base64url>","newPassword":"..."}`. Exact success is
+`200 {"data":{"passwordReset":true}}` and creates no session. One atomic
+transaction rotates the password with a fresh salt/current bounded scrypt
+parameters, consumes the action, verifies the bound current email, invalidates
+its outstanding verification action, revokes every unrevoked session and every
+unconsumed reauthentication proof, and appends a redacted audit. The database
+selects one exact post-lock microsecond completion instant for expiry and every
+successful transition. Registration session writes carry the freshly created
+verifier; login session and reauthentication-proof writes carry the verifier
+they checked. All lock the account then require that exact value, so work begun
+with the old password cannot mint authority after the reset. Invalid/replayed/
+superseded/stale/inactive actions return
+`400 PASSWORD_RECOVERY_TOKEN_INVALID`; an identifiable unused expiry returns
+`410 PASSWORD_RECOVERY_TOKEN_EXPIRED`.
+
+Browser links use `/reset-password#token=...`; a nonce-authorized early
+bootstrap scrubs the fragment before exposing controls and keeps the capability
+only in an ephemeral submission closure. The same-origin BFF streams at most 1
+KiB of request and 4 KiB of upstream response; the browser independently
+streams at most 4 KiB from the BFF, and overflow is cancelled. `pagehide`
+destroys the capability and back/forward-cache restoration stays fail closed
+without a new fragment. Successful confirmation clears the local session
+cookie. Mobile independently caps the request response at 4 KiB, requests mail
+only, and finishes in the external browser; it has no recovery deep link or
+token storage. Exact-loopback Mailpit proves the local path, not production
+timing resistance or delivery readiness. The full boundary and production
+blockers are in ADR 0015.
 
 ## Recipes and goals
 

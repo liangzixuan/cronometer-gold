@@ -157,7 +157,38 @@ encrypted erasure-ledger tombstone as local recovery evidence.
   public-confirmation capacity controls, an approved authenticated TLS mail
   provider and sender/domain, transactional delivery/idempotency,
   retry/suppression operations, accessibility review, and an explicit decision
-  about unverified-account access. Password recovery is a separate gate.
+  about unverified-account access.
+- Password recovery proves exact status/body/header response equivalence for
+  eligible and unknown targets at the real API/Mailpit boundary. Separate tests
+  cover fail-closed suppression, missing-delivery configuration, and delivery
+  failure; it does not claim timing indistinguishability or unproven
+  inactive/deleted/post-delivery commit-failure equivalence. Separate tests also
+  prove digest-only/current-email-bound storage; previous-link preservation; resend
+  ordering; confirmation fencing; one-hour expiry; supersession; replay
+  rejection; and exactly one concurrent winner. Success proves a fresh-salt
+  password rotation using the reviewed bounded parameters, current-email
+  verification, outstanding-verification invalidation, atomic revocation of all
+  unrevoked sessions and unconsumed reauthentication proofs, no new session,
+  old-password rejection, new-password login, and a redacted
+  audit/export/erasure boundary. Registration/login session issuance and
+  reauthentication-proof issuance prove exact-verifier fencing under account-
+  then-credential locks. Confirmation proves one exact post-lock database
+  completion instant across expiry, consumption, verification, revocation, and
+  audit, including same-millisecond concurrency.
+  It preserves exact `400 PASSWORD_RECOVERY_TOKEN_INVALID` and
+  `410 PASSWORD_RECOVERY_TOKEN_EXPIRED`, early browser-fragment scrubbing, hard
+  streamed BFF/browser/mobile byte caps with overflow cancellation,
+  redirect refusal for every web recovery browser request and BFF upstream hop,
+  `pagehide` disposal, fail-closed back/forward-cache restoration, and the
+  web-request/mobile-check-mail cross-client boundary. Exact-loopback
+  Mailpit is local evidence only. Controlled beta additionally requires shared
+  source and target abuse controls, timing-enumeration review, asynchronous
+  durable delivery or provider idempotency without plaintext token persistence,
+  authenticated TLS provider/sender/domain, retry/suppression/bounce operations,
+  monitoring, legal and support procedures, accessibility evidence, and an
+  explicit verification-enforcement rollout. Native redirect behavior remains
+  a signed-device transport-review blocker; raw recovery capabilities and new
+  passwords never enter the mobile path.
 - Recipe revisions preserve exact food/nested-recipe dependencies, reject cycles
   and depth overflow, and retain source attribution plus trace/unknown coverage
   through an exact diary log.

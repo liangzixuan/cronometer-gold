@@ -11,8 +11,14 @@ strictPeerDependencies: true
 overrides:
   '@expo/plist>@xmldom/xmldom': 0.8.15
   'plist>@xmldom/xmldom': 0.9.12
+  'fast-uri@3': 3.1.7
+  'fast-uri@4': 4.1.4
   react: 19.2.3
   react-dom: 19.2.3
+
+minimumReleaseAgeExclude:
+  - fast-uri@3.1.7
+  - fast-uri@4.1.4
 
 supportedArchitectures:
   os: [current, darwin, linux]

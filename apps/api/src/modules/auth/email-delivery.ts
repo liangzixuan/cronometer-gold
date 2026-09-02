@@ -15,6 +15,14 @@ export interface EmailVerificationDelivery {
   }): Promise<void>;
 }
 
+export interface PasswordRecoveryDelivery {
+  sendPasswordRecoveryEmail(input: {
+    readonly recipient: string;
+    readonly recoveryUrl: string;
+    readonly expiresAt: Date;
+  }): Promise<void>;
+}
+
 export class EmailDeliveryConfigurationError extends Error {
   override readonly name = "EmailDeliveryConfigurationError";
 }
@@ -35,7 +43,9 @@ export interface LocalMailpitEmailDeliveryOptions {
 }
 
 /** Plaintext SMTP is accepted only for the exact loopback Mailpit fixture. */
-export class LocalMailpitEmailDelivery implements EmailVerificationDelivery {
+export class LocalMailpitEmailDelivery
+  implements EmailVerificationDelivery, PasswordRecoveryDelivery
+{
   readonly #from: string;
   readonly #host: "127.0.0.1";
   readonly #port: 1025;
@@ -93,6 +103,47 @@ export class LocalMailpitEmailDelivery implements EmailVerificationDelivery {
       port: this.#port,
       recipient: input.recipient,
       subject: "Verify your Nutrition Tracker email",
+      timeoutMs: this.#timeoutMs,
+    });
+  }
+
+  async sendPasswordRecoveryEmail(input: {
+    readonly recipient: string;
+    readonly recoveryUrl: string;
+    readonly expiresAt: Date;
+  }): Promise<void> {
+    assertEmail(input.recipient, "recipient");
+    if (!Number.isFinite(input.expiresAt.getTime())) {
+      throw new EmailDeliveryConfigurationError("Recovery expiry is invalid");
+    }
+    const url = new URL(input.recoveryUrl);
+    if (
+      url.protocol !== "http:" ||
+      url.hostname !== "127.0.0.1" ||
+      url.username !== "" ||
+      url.password !== "" ||
+      url.pathname !== "/reset-password" ||
+      url.search !== "" ||
+      !/^#token=[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u.test(url.hash)
+    ) {
+      throw new EmailDeliveryConfigurationError("Local recovery URL is invalid");
+    }
+    const body = [
+      "Reset your Nutrition Tracker password by opening this one-time link:",
+      "",
+      url.toString(),
+      "",
+      `This link expires at ${input.expiresAt.toISOString()}.`,
+      "If you did not request this message, you can ignore it.",
+    ].join("\r\n");
+
+    await sendSmtpMail({
+      body,
+      from: this.#from,
+      host: this.#host,
+      port: this.#port,
+      recipient: input.recipient,
+      subject: "Reset your Nutrition Tracker password",
       timeoutMs: this.#timeoutMs,
     });
   }
@@ -236,10 +287,10 @@ async function writeCommand(
   });
 }
 
-function assertHeaderValue(value: string, field: string): void {
+function assertHeaderValue(value: string, field: string, maximumLength = 200): void {
   if (
     value.length < 1 ||
-    value.length > 200 ||
+    value.length > maximumLength ||
     /[\r\n]/u.test(value) ||
     !/^[\x20-\x7e]+$/u.test(value)
   ) {
@@ -248,7 +299,7 @@ function assertHeaderValue(value: string, field: string): void {
 }
 
 function assertEmail(value: string, field: string): void {
-  assertHeaderValue(value, field);
+  assertHeaderValue(value, field, 254);
   if (value.length > 254 || !EMAIL_PATTERN.test(value)) {
     throw new EmailDeliveryConfigurationError(`${field} address is invalid`);
   }

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { FormEvent } from "react";
 import { useState } from "react";
@@ -146,6 +147,11 @@ export function AuthClient() {
           type="password"
           value={password}
         />
+        {mode === "login" ? (
+          <Link className="recoveryLink" href="/forgot-password">
+            Forgot password?
+          </Link>
+        ) : null}
         {mode === "register" ? (
           <>
             <label htmlFor="account-display-name">Display name (optional)</label>

@@ -22,6 +22,7 @@ projection with bounded PostgreSQL degradation.
 | `SMTP_FROM` | not configured | Bounded printable ASCII local sender; CR/LF rejected |
 | `SMTP_TIMEOUT_MS` | `5000` | 100 through 10000 milliseconds; overall local SMTP deadline |
 | `EMAIL_VERIFICATION_PUBLIC_ORIGIN` | `http://127.0.0.1:3000` when local mail is enabled | Credential-free exact loopback HTTP origin; rejected in production |
+| `PASSWORD_RECOVERY_PUBLIC_ORIGIN` | `http://127.0.0.1:3000` when local mail is enabled | Exact loopback recovery-page origin; rejected in production |
 
 The production entrypoint additionally requires `DATABASE_URL`,
 `DATABASE_SSL_MODE=verify-full`, and a search cursor secret of at least 32 bytes.
@@ -72,6 +73,8 @@ production edge rate limits remain a separate deployment requirement.
 | `POST` | `/v1/auth/login` | Creates a fresh opaque bearer session with generic credential failures |
 | `POST` | `/v1/auth/email-verification/request` | Authenticated, bodyless request/resend; exact success is `202 {"data":{"status":"accepted"}}` without gating access |
 | `POST` | `/v1/auth/email-verification/confirm` | Public one-time confirmation; exact success is `200 {"data":{"verified":true}}`, semantic invalidity is `400 EMAIL_VERIFICATION_TOKEN_INVALID`, identifiable unused expiry is `410 EMAIL_VERIFICATION_TOKEN_EXPIRED`, and no session is returned |
+| `POST` | `/v1/auth/password-recovery/request` | Public email-only request; every schema-valid target-dependent outcome is exact `202 {"data":{"status":"accepted"}}` |
+| `POST` | `/v1/auth/password-recovery/confirm` | Public one-time reset; exact success is `200 {"data":{"passwordReset":true}}`, all sessions are revoked, and no session is returned |
 | `GET` | `/v1/auth/me` | Returns the authenticated account and profile |
 | `POST` | `/v1/auth/logout` | Revokes the current session |
 | `GET/PATCH` | `/v1/profile` | Reads or revision-guards changes to the authenticated profile |
@@ -104,7 +107,28 @@ provider, authenticated TLS, sender/domain, shared abuse controls, transactional
 outbox/provider idempotency, retry, suppression, and legal-copy boundaries are
 approved. The request limiter is process-local at five attempts per fixed
 15-minute window; shared request and public-confirmation controls are blocked.
-Password recovery is not part of this slice.
+Password recovery uses a separate one-hour, digest-only current-email-bound
+action. Its request response is identical for eligible, unknown, inactive,
+deleted, suppressed, missing-delivery-configuration, and per-message
+delivery/commit-failed targets. Confirmation hashes the new password with a
+fresh salt before an account-first transaction atomically rotates the
+credential, verifies the current email, invalidates outstanding verification,
+revokes every unrevoked session and every unconsumed reauthentication proof, and
+writes a redacted security audit at one exact post-lock database completion
+instant. Registration session writes carry the freshly created verifier; login
+session and reauthentication-proof writes carry the verifier they checked. All
+require that exact value under the account and credential locks, preventing
+old-password work from minting authority after a reset.
+Invalid/replayed/superseded/stale actions are
+`400 PASSWORD_RECOVERY_TOKEN_INVALID`; identifiable unused expiry is
+`410 PASSWORD_RECOVERY_TOKEN_EXPIRED`. It creates no session. The BFF/browser
+stream the bounded request/response bodies, and `pagehide` plus fail-closed
+back/forward-cache restoration prevents capability reuse. Mobile independently
+caps its response and requests mail but has no recovery deep link. Synchronous
+loopback SMTP does not
+prove timing-resistant anti-enumeration, so production remains blocked on
+shared controls, durable/provider-idempotent delivery, authenticated TLS,
+operations, legal/support copy, and accessibility review. See ADR 0015.
 Entry mutation dates are derived from `occurredAt` and the persisted profile time
 zone. The caller cannot assign a local day, and unrelated writes on that day do
 not invalidate an entry-level precondition. Exact-decimal nutrient aggregates

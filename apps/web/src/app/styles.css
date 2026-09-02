@@ -882,6 +882,32 @@ a {
   margin-top: 24px;
 }
 
+.recoveryActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  margin-top: 24px;
+}
+
+.recoveryCard > .authStatus {
+  margin-top: 24px;
+}
+
+.recoveryFieldError {
+  margin: 7px 0 0;
+  color: #8a332b;
+  font-size: 0.78rem;
+}
+
+.recoveryLink {
+  width: fit-content;
+  margin-top: 6px;
+  color: #8a5705;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-underline-offset: 4px;
+}
+
 .verificationLink {
   margin-top: 10px;
   color: #8a5705;

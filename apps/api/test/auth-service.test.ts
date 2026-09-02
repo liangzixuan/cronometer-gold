@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 import { describe, expect, it, vi } from "vitest";
 
@@ -9,13 +9,22 @@ import {
   EmailVerificationUnavailableError,
   SecureAuthService,
 } from "../src/modules/auth/auth-service.js";
-import type { EmailVerificationDelivery } from "../src/modules/auth/email-delivery.js";
-import { PasswordWorkQueue } from "../src/modules/auth/password.js";
+import type {
+  EmailVerificationDelivery,
+  PasswordRecoveryDelivery,
+} from "../src/modules/auth/email-delivery.js";
+import {
+  hashPassword,
+  PASSWORD_SCRYPT_PARAMETERS,
+  PasswordWorkQueue,
+} from "../src/modules/auth/password.js";
+import { BoundedAuthRateLimiter } from "../src/modules/auth/rate-limiter.js";
 import { account } from "./fixtures.js";
 
 function repositoryStub(overrides: Partial<AuthRepository> = {}): AuthRepository {
   return {
     confirmEmailVerificationToken: vi.fn(async () => undefined),
+    confirmPasswordRecoveryToken: vi.fn(async () => undefined),
     createReauthenticationProof: vi.fn(async () => undefined),
     register: vi.fn(async () => account),
     findPasswordCredential: vi.fn(async () => null),
@@ -23,6 +32,10 @@ function repositoryStub(overrides: Partial<AuthRepository> = {}): AuthRepository
     findActiveSession: vi.fn(async () => account),
     findPendingErasureRecoverySession: vi.fn(async () => null),
     issueEmailVerificationToken: vi.fn(async (input) => {
+      await input.deliver();
+      return "issued" as const;
+    }),
+    issuePasswordRecoveryToken: vi.fn(async (input) => {
       await input.deliver();
       return "issued" as const;
     }),
@@ -70,6 +83,30 @@ describe("secure auth service", () => {
       createHash("sha256").update(result.data.accessToken).digest("hex"),
     );
     expect(session?.tokenHash).not.toBe(result.data.accessToken);
+    expect(session?.expectedPasswordHash).toBe(registration?.passwordHash);
+  });
+
+  it("does not clear registration capacity when credential-fenced session issuance fails", {
+    timeout: 15_000,
+  }, async () => {
+    const repository = repositoryStub({
+      createSession: vi.fn(async () => Promise.reject(new Error("stale credential"))),
+    });
+    const service = new SecureAuthService({
+      limiter: new BoundedAuthRateLimiter({ maximumAttempts: 1, windowMs: 60_000 }),
+      queue: new PasswordWorkQueue({ maxConcurrent: 1, maxPending: 1 }),
+      repository,
+    });
+    const input = {
+      email: "capacity@example.com",
+      password: "correct horse battery staple",
+      timeZone: "America/Chicago",
+    } as const;
+
+    await expect(service.register(input)).rejects.toThrow("stale credential");
+    await expect(service.register(input)).rejects.toBeInstanceOf(AuthRateLimitedError);
+    expect(repository.register).toHaveBeenCalledTimes(1);
+    expect(repository.createSession).toHaveBeenCalledTimes(1);
   });
 
   it("hashes bearer tokens before every persistence lookup", async () => {
@@ -84,6 +121,70 @@ describe("secure auth service", () => {
       expect.any(Date),
     );
     expect(repository.findActiveSession).not.toHaveBeenCalledWith(token, expect.anything());
+  });
+
+  it("binds a password-login session to the verified credential version", {
+    timeout: 15_000,
+  }, async () => {
+    const password = "correct horse battery staple";
+    const salt = randomBytes(16);
+    const queue = new PasswordWorkQueue({ maxConcurrent: 1, maxPending: 1 });
+    const passwordHash = await hashPassword(password, salt, queue);
+    const repository = repositoryStub({
+      findPasswordCredential: vi.fn(async () => ({
+        account,
+        passwordHash,
+        passwordParameters: PASSWORD_SCRYPT_PARAMETERS,
+        passwordSalt: salt.toString("base64url"),
+      })),
+    });
+    const service = new SecureAuthService({ queue, repository });
+
+    await expect(service.login(account.user.email, password)).resolves.toMatchObject({
+      data: { user: account.user },
+    });
+    expect(repository.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedPasswordHash: passwordHash,
+        userId: account.user.id,
+      }),
+    );
+  });
+
+  it("binds a reauthentication proof to the verified credential version", {
+    timeout: 15_000,
+  }, async () => {
+    const password = "correct horse battery staple";
+    const salt = randomBytes(16);
+    const queue = new PasswordWorkQueue({ maxConcurrent: 1, maxPending: 1 });
+    const passwordHash = await hashPassword(password, salt, queue);
+    const repository = repositoryStub({
+      findPasswordCredential: vi.fn(async () => ({
+        account,
+        passwordHash,
+        passwordParameters: PASSWORD_SCRYPT_PARAMETERS,
+        passwordSalt: salt.toString("base64url"),
+      })),
+    });
+    const service = new SecureAuthService({ queue, repository });
+    const sessionTokenHash = "e".repeat(64);
+
+    await expect(
+      service.reauthenticate(
+        account.user.id,
+        sessionTokenHash,
+        account.user.email,
+        password,
+        "account_export",
+      ),
+    ).resolves.toMatchObject({ data: { reauthenticationToken: expect.any(String) } });
+    expect(repository.createReauthenticationProof).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedPasswordHash: passwordHash,
+        sessionTokenHash,
+        userId: account.user.id,
+      }),
+    );
   });
 
   it("rejects malformed bearer values without touching persistence", async () => {
@@ -286,6 +387,118 @@ describe("secure auth service", () => {
       EmailVerificationTokenInvalidError,
     );
     expect(repository.confirmEmailVerificationToken).toHaveBeenCalledTimes(1);
+  });
+
+  it("issues a one-hour digest-only recovery credential and a fragment-only link", async () => {
+    const repository = repositoryStub();
+    const delivery: PasswordRecoveryDelivery = {
+      sendPasswordRecoveryEmail: vi.fn(async () => undefined),
+    };
+    const issuedAt = new Date("2026-08-15T00:00:00.000Z");
+    const service = new SecureAuthService({
+      clock: () => issuedAt,
+      passwordRecoveryDelivery: delivery,
+      passwordRecoveryPublicOrigin: "http://127.0.0.1:3000",
+      repository,
+    });
+
+    await expect(service.requestPasswordRecovery(" ADA@EXAMPLE.COM ")).resolves.toEqual({
+      data: { status: "accepted" },
+    });
+    const message = vi.mocked(delivery.sendPasswordRecoveryEmail).mock.calls[0]?.[0];
+    const recoveryUrl = new URL(message?.recoveryUrl ?? "invalid:");
+    const token = recoveryUrl.hash.replace(/^#token=/u, "");
+    expect(message).toMatchObject({
+      expiresAt: new Date("2026-08-15T01:00:00.000Z"),
+      recipient: "ada@example.com",
+    });
+    expect(recoveryUrl.pathname).toBe("/reset-password");
+    expect(recoveryUrl.search).toBe("");
+    expect(token).toMatch(/^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/u);
+    expect(repository.issuePasswordRecoveryToken).toHaveBeenCalledWith({
+      deliver: expect.any(Function),
+      emailHash: createHash("sha256").update("ada@example.com").digest("hex"),
+      expiresAt: new Date("2026-08-15T01:00:00.000Z"),
+      issuedAt,
+      normalizedEmail: "ada@example.com",
+      tokenHash: createHash("sha256").update(token).digest("hex"),
+    });
+    expect(
+      JSON.stringify(vi.mocked(repository.issuePasswordRecoveryToken).mock.calls),
+    ).not.toContain(token);
+  });
+
+  it("keeps every target-dependent recovery request outcome indistinguishable", async () => {
+    const delivery: PasswordRecoveryDelivery = {
+      sendPasswordRecoveryEmail: vi.fn(async () => Promise.reject(new Error("private SMTP"))),
+    };
+    const failingRepository = repositoryStub({
+      issuePasswordRecoveryToken: vi.fn(async (input) => {
+        await input.deliver();
+        return "issued" as const;
+      }),
+    });
+    const service = new SecureAuthService({
+      clock: () => new Date("2026-08-15T00:00:00.000Z"),
+      passwordRecoveryDelivery: delivery,
+      passwordRecoveryPublicOrigin: "http://127.0.0.1:3000",
+      repository: failingRepository,
+    });
+
+    for (let attempt = 0; attempt < 7; attempt += 1) {
+      await expect(service.requestPasswordRecovery("nobody@example.com")).resolves.toEqual({
+        data: { status: "accepted" },
+      });
+    }
+    expect(failingRepository.issuePasswordRecoveryToken).toHaveBeenCalledTimes(5);
+
+    const unconfigured = new SecureAuthService({ repository: repositoryStub() });
+    await expect(unconfigured.requestPasswordRecovery("nobody@example.com")).resolves.toEqual({
+      data: { status: "accepted" },
+    });
+  });
+
+  it("hashes a new recovery password with fresh parameters and creates no session", {
+    timeout: 15_000,
+  }, async () => {
+    const repository = repositoryStub();
+    const confirmedAt = new Date("2026-08-15T00:00:00.000Z");
+    const service = new SecureAuthService({
+      clock: () => confirmedAt,
+      queue: new PasswordWorkQueue({ maxConcurrent: 1, maxPending: 1 }),
+      repository,
+    });
+    const token = `${"r".repeat(42)}A`;
+    const newPassword = "a different horse battery staple";
+
+    await expect(
+      service.confirmPasswordRecovery(token, newPassword, "request-reset"),
+    ).resolves.toEqual({ data: { passwordReset: true } });
+    const confirmation = vi.mocked(repository.confirmPasswordRecoveryToken).mock.calls[0]?.[0];
+    expect(confirmation).toMatchObject({
+      confirmedAt,
+      passwordParameters: {
+        algorithm: "scrypt",
+        N: 32768,
+        r: 8,
+        p: 3,
+        keyLength: 64,
+      },
+      requestId: "request-reset",
+      tokenHash: createHash("sha256").update(token).digest("hex"),
+    });
+    expect(confirmation?.passwordHash).not.toBe(newPassword);
+    expect(confirmation?.passwordSalt).not.toBe(newPassword);
+    expect(JSON.stringify(confirmation)).not.toContain(newPassword);
+    expect(repository.createSession).not.toHaveBeenCalled();
+
+    await expect(
+      service.confirmPasswordRecovery("too-short", newPassword, "request-invalid"),
+    ).rejects.toBeInstanceOf(RangeError);
+    await expect(
+      service.confirmPasswordRecovery(token, "🫐".repeat(129), "request-password"),
+    ).rejects.toBeInstanceOf(RangeError);
+    expect(repository.confirmPasswordRecoveryToken).toHaveBeenCalledTimes(1);
   });
 });
 

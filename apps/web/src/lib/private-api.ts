@@ -256,6 +256,7 @@ export async function authenticatedFetch(
         ...(init.headers ?? {}),
       },
       cache: "no-store",
+      redirect: "error",
       signal: request.signal,
     });
   } catch {

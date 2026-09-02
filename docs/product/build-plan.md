@@ -130,14 +130,37 @@ acceptance; progress in either lane never waives the gates in the other.
    use resend/status plus external-browser completion, not application deep
    links. Production provider/domain/TLS/authentication/outbox/retry/suppression
    review, shared request and confirmation abuse limiting, verification
-   enforcement, signed-client and accessibility evidence, and password recovery
-   remain open. API-first rollout and the full boundary are specified by ADR
-   0014.
+   enforcement, signed-client, and accessibility evidence remain open.
+   API-first rollout and the full boundary are specified by ADR 0014.
 
    SMTP acceptance and database commit are not a distributed transaction. A
    database failure after accepted local mail may leave that new message
    unusable while preserving the previous action and returning unavailability;
    this is one reason a production delivery/idempotency design remains blocked.
+
+   Password recovery is implemented locally across the shared action table,
+   public API, exact-loopback Mailpit, web, and mobile request flow. A public
+   request returns one exact acknowledgement for every schema-valid
+   target-dependent outcome, including missing delivery configuration and
+   delivery/commit failure. Each one-hour capability is digest-only and bound
+   to the active password account's current email. Account-first locking
+   preserves the prior accepted action on pre-acceptance failure and serializes
+   resends. Confirmation uses a fresh salt and the current bounded scrypt
+   parameters, then atomically rotates the credential, verifies the bound email,
+   invalidates outstanding verification, revokes every unrevoked session and
+   every unconsumed reauthentication proof, and writes a redacted audit without
+   creating a new session. Exact-verifier fencing prevents registration, login,
+   or reauthentication work begun with the old password from minting authority
+   after reset, and one exact post-lock database instant governs completion.
+   The web scrubs the fragment before showing password controls, keeps it only
+   in an ephemeral closure, streams hard request/response limits, and destroys
+   it across page hide or back/forward-cache restoration. Mobile independently
+   bounds the request response and has no native recovery link or token storage.
+   Shared source/target abuse controls,
+   timing-enumeration evidence, durable or provider-idempotent delivery,
+   authenticated TLS/provider/sender/domain, retry/suppression/bounce operations,
+   support/legal copy, signed clients, and accessibility acceptance remain open.
+   ADR 0015 specifies the full boundary.
 
    No signed clients exist yet, so the entry-note source also proves only a
    coordinated deployment. Before a future staggered note rollout, M2 must add an
@@ -234,10 +257,11 @@ distinct through the clients.
 
 The checked-in food-release candidates are still deliberately non-promotable,
 so diary integration evidence uses a synthetic promoted catalogue fixture rather
-than claiming a live USDA or CNF release. Password recovery, general cross-restart
-offline mutation/reorder support, and signed-device preview testing remain
-controlled-beta gates rather than hidden claims of this
-milestone. The bounded native public-food quick-add path is the sole durable
+than claiming a live USDA or CNF release. Production password-recovery
+acceptance, general cross-restart offline mutation/reorder support, and signed-
+device preview testing remain controlled-beta gates rather than hidden claims
+of this milestone. The bounded native public-food quick-add path is the sole
+durable
 exception: it stores a closed create-only envelope, never a bearer token, search
 query, private note, arbitrary request, or response body. It preserves exact
 FIFO replay across restarts but does not claim general offline synchronization.

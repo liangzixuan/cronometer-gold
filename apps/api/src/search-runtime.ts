@@ -71,18 +71,23 @@ export async function createApiSearchRuntime(
   };
 
   try {
+    const localEmailDelivery = config.emailVerification
+      ? new LocalMailpitEmailDelivery({
+          from: config.emailVerification.from,
+          host: config.emailVerification.host,
+          nodeEnv: config.emailVerification.nodeEnv,
+          port: config.emailVerification.port,
+          timeoutMs: config.emailVerification.timeoutMs,
+        })
+      : null;
     const authService = new SecureAuthService({
       repository: new DatabaseAuthRepository(database),
-      ...(config.emailVerification
+      ...(config.emailVerification && localEmailDelivery
         ? {
-            emailVerificationDelivery: new LocalMailpitEmailDelivery({
-              from: config.emailVerification.from,
-              host: config.emailVerification.host,
-              nodeEnv: config.emailVerification.nodeEnv,
-              port: config.emailVerification.port,
-              timeoutMs: config.emailVerification.timeoutMs,
-            }),
+            emailVerificationDelivery: localEmailDelivery,
             emailVerificationPublicOrigin: config.emailVerification.publicOrigin,
+            passwordRecoveryDelivery: localEmailDelivery,
+            passwordRecoveryPublicOrigin: config.emailVerification.passwordRecoveryPublicOrigin,
           }
         : {}),
       ...(options.clock ? { clock: options.clock } : {}),

@@ -174,6 +174,7 @@ describe("API dependency runtime composition", () => {
         host: "127.0.0.1",
         nodeEnv: "test",
         port: 1025,
+        passwordRecoveryPublicOrigin: "http://127.0.0.1:3000",
         publicOrigin: "http://127.0.0.1:3000",
         timeoutMs: 5_000,
       },
@@ -205,6 +206,8 @@ describe("API dependency runtime composition", () => {
       expect.objectContaining({
         emailVerificationDelivery: expect.any(Object),
         emailVerificationPublicOrigin: "http://127.0.0.1:3000",
+        passwordRecoveryDelivery: expect.any(Object),
+        passwordRecoveryPublicOrigin: "http://127.0.0.1:3000",
       }),
     );
     expect(mocks.databaseDiaryService).toHaveBeenCalledWith(database, {

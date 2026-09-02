@@ -93,6 +93,37 @@ not an environment-isolation claim. The test itself rejects any Mailpit HTTP URL
 other than exact loopback. Do not substitute a relay, public host, phone endpoint,
 HTTP registry, or TLS bypass.
 
+## Prove local password recovery
+
+After `infra:up` and `db:migrate` succeed, run the separate opt-in proof:
+
+```sh
+pnpm exec dotenv -e .env -- sh -c 'TEST_PASSWORD_RECOVERY_MAILPIT=true TEST_DATABASE_URL="$DATABASE_URL" TEST_MAILPIT_HTTP_URL=http://127.0.0.1:8025 pnpm --filter @nutrition-tracker/api exec vitest run test/password-recovery-mailpit.integration.test.ts'
+```
+
+This is also a synthetic exact-loopback proof, never a provider, public-host,
+phone, or production test. It uses an isolated schema and random recipient,
+compares the exact generic request contract for known and unknown addresses,
+captures only the synthetic recipient's `/reset-password#token=...` message,
+and confirms through the real API and PostgreSQL repository. It proves the old
+password and all pre-reset sessions/reauthentication proofs stop working, the
+new password signs in, the bound current email becomes verified, outstanding
+verification is invalidated, replay fails, and token/email digests stay out of
+logs, audits, and exports. Cleanup deletes only the synthetic messages and
+drops the scratch schema; assertions never print the capability, digest,
+message, recipient, password, or `.env` value.
+
+The command proves local status/body anti-enumeration and a successful bounded
+Mailpit path. Synchronous SMTP still has a target-dependent timing channel and
+SMTP acceptance is not atomic with database commit. Do not treat this proof as
+production delivery, timing resistance, shared abuse control, durable retry, or
+provider readiness.
+
+Focused database, API, web, and mobile suites separately prove exact-verifier
+fencing for password-authenticated writes, the exact post-lock database
+completion instant, hard streamed byte caps, and `pagehide`/back-forward-cache
+capability disposal. The Mailpit test alone does not establish those properties.
+
 ## Opt-in persistent LocalStack retention profile
 
 MinIO remains the default dependency and mandatory authenticated-secret test

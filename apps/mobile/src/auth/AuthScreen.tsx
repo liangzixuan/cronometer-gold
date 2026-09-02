@@ -15,8 +15,9 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { apiUrl, jsonBody, responseError } from "../api/private-api";
 import { isSupportedTimeZone, parseAuthResponse, type SessionSummary } from "../diary/diary";
 import { palette } from "../theme";
+import { PASSWORD_RECOVERY_ACCEPTED_MESSAGE, requestPasswordRecovery } from "./password-recovery";
 
-type Mode = "login" | "register";
+type Mode = "login" | "recovery" | "register";
 
 export interface AuthResult {
   readonly accessToken: string;
@@ -48,6 +49,27 @@ export function AuthScreen({ apiBase, onAuthenticated }: AuthScreenProps) {
   const [message, setMessage] = useState("Sign in to open your private diary.");
 
   async function submit() {
+    if (mode === "recovery") {
+      setBusy(true);
+      setError(false);
+      setMessage("Requesting recovery instructions…");
+      try {
+        await requestPasswordRecovery(apiBase, email);
+        setEmail("");
+        setPassword("");
+        setMessage(PASSWORD_RECOVERY_ACCEPTED_MESSAGE);
+      } catch (caught) {
+        setError(true);
+        setMessage(
+          caught instanceof Error
+            ? caught.message
+            : "Password recovery could not be requested. Please try again.",
+        );
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     if (mode === "register" && !isSupportedTimeZone(timeZone.trim())) {
       setError(true);
       setMessage("Enter a valid IANA time zone, such as America/Chicago.");
@@ -97,10 +119,13 @@ export function AuthScreen({ apiBase, onAuthenticated }: AuthScreenProps) {
     if (busy) return;
     setMode(next);
     setError(false);
+    if (next === "recovery") setPassword("");
     setMessage(
       next === "login"
         ? "Sign in to open your private diary."
-        : "Your time zone determines which local day receives each entry.",
+        : next === "register"
+          ? "Your time zone determines which local day receives each entry."
+          : "Enter your email to request recovery instructions. Account status is never disclosed.",
     );
   }
 
@@ -117,23 +142,43 @@ export function AuthScreen({ apiBase, onAuthenticated }: AuthScreenProps) {
         >
           <Text style={styles.kicker}>PRIVATE NUTRITION LEDGER</Text>
           <Text accessibilityRole="header" style={styles.title}>
-            {mode === "login" ? "Welcome back." : "Start your diary."}
+            {mode === "login"
+              ? "Welcome back."
+              : mode === "register"
+                ? "Start your diary."
+                : "Recover access."}
           </Text>
-          <View accessibilityRole="tablist" style={styles.tabs}>
-            {(["login", "register"] as const).map((option) => (
-              <Pressable
-                accessibilityRole="tab"
-                accessibilityState={{ selected: mode === option }}
-                key={option}
-                onPress={() => selectMode(option)}
-                style={[styles.tab, mode === option && styles.tabActive]}
-              >
-                <Text style={[styles.tabText, mode === option && styles.tabTextActive]}>
-                  {option === "login" ? "Sign in" : "Create account"}
-                </Text>
-              </Pressable>
-            ))}
-          </View>
+          {mode === "recovery" ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: busy }}
+              disabled={busy}
+              onPress={() => selectMode("login")}
+              style={({ pressed }) => [
+                styles.secondaryAction,
+                busy && styles.disabledAction,
+                pressed && !busy && styles.pressed,
+              ]}
+            >
+              <Text style={styles.secondaryActionText}>Back to sign in</Text>
+            </Pressable>
+          ) : (
+            <View accessibilityRole="tablist" style={styles.tabs}>
+              {(["login", "register"] as const).map((option) => (
+                <Pressable
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected: mode === option }}
+                  key={option}
+                  onPress={() => selectMode(option)}
+                  style={[styles.tab, mode === option && styles.tabActive]}
+                >
+                  <Text style={[styles.tabText, mode === option && styles.tabTextActive]}>
+                    {option === "login" ? "Sign in" : "Create account"}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          )}
 
           <Text style={styles.label}>Email</Text>
           <TextInput
@@ -146,17 +191,31 @@ export function AuthScreen({ apiBase, onAuthenticated }: AuthScreenProps) {
             style={styles.input}
             value={email}
           />
-          <Text style={styles.label}>Password</Text>
-          <TextInput
-            accessibilityLabel="Password"
-            autoCapitalize="none"
-            autoComplete={mode === "login" ? "current-password" : "new-password"}
-            maxLength={128}
-            onChangeText={setPassword}
-            secureTextEntry
-            style={styles.input}
-            value={password}
-          />
+          {mode !== "recovery" ? (
+            <>
+              <Text style={styles.label}>Password</Text>
+              <TextInput
+                accessibilityLabel="Password"
+                autoCapitalize="none"
+                autoComplete={mode === "login" ? "current-password" : "new-password"}
+                maxLength={128}
+                onChangeText={setPassword}
+                secureTextEntry
+                style={styles.input}
+                value={password}
+              />
+            </>
+          ) : null}
+          {mode === "login" ? (
+            <Pressable
+              accessibilityHint="Requests email instructions without revealing whether an account exists"
+              accessibilityRole="button"
+              onPress={() => selectMode("recovery")}
+              style={({ pressed }) => [styles.secondaryAction, pressed && styles.pressed]}
+            >
+              <Text style={styles.secondaryActionText}>Forgot password?</Text>
+            </Pressable>
+          ) : null}
           {mode === "register" ? (
             <>
               <Text style={styles.label}>Display name (optional)</Text>
@@ -190,15 +249,22 @@ export function AuthScreen({ apiBase, onAuthenticated }: AuthScreenProps) {
           >
             {busy ? <ActivityIndicator color={palette.white} /> : null}
             <Text style={styles.submitText}>
-              {busy ? "Please wait…" : mode === "login" ? "Sign in" : "Create account"}
+              {busy
+                ? "Please wait…"
+                : mode === "login"
+                  ? "Sign in"
+                  : mode === "register"
+                    ? "Create account"
+                    : "Request recovery email"}
             </Text>
           </Pressable>
           <Text accessibilityLiveRegion="polite" style={[styles.status, error && styles.error]}>
             {message}
           </Text>
           <Text style={styles.privacy}>
-            Your bearer session is kept in secure device credential storage and is never written to
-            logs.
+            {mode === "recovery"
+              ? "This screen sends only the email request. It does not receive or store a recovery token."
+              : "Your bearer session is kept in secure device credential storage and is never written to logs."}
           </Text>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -208,6 +274,7 @@ export function AuthScreen({ apiBase, onAuthenticated }: AuthScreenProps) {
 
 const styles = StyleSheet.create({
   content: { padding: 28, paddingBottom: 64 },
+  disabledAction: { opacity: 0.5 },
   error: { color: "#8a3128" },
   flex: { flex: 1 },
   input: {
@@ -232,6 +299,8 @@ const styles = StyleSheet.create({
   pressed: { opacity: 0.78 },
   privacy: { color: palette.muted, fontSize: 12, lineHeight: 18, marginTop: 28 },
   screen: { backgroundColor: palette.paper, flex: 1 },
+  secondaryAction: { alignSelf: "flex-start", marginTop: 18, paddingVertical: 6 },
+  secondaryActionText: { color: palette.forest, fontSize: 14, fontWeight: "800" },
   status: { color: palette.muted, fontSize: 14, lineHeight: 20, marginTop: 18 },
   submit: {
     alignItems: "center",

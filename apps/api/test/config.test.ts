@@ -86,6 +86,7 @@ describe("loadApiDependencyConfig", () => {
       loadApiDependencyConfig({
         DATABASE_URL: "postgresql://local.invalid/nutrition",
         EMAIL_VERIFICATION_PUBLIC_ORIGIN: "http://127.0.0.1:3000",
+        PASSWORD_RECOVERY_PUBLIC_ORIGIN: "http://127.0.0.1:3000",
         NODE_ENV: "development",
         SMTP_FROM: "Nutrition Tracker Local <no-reply@nutrition.local>",
         SMTP_HOST: "127.0.0.1",
@@ -95,6 +96,7 @@ describe("loadApiDependencyConfig", () => {
       from: "Nutrition Tracker Local <no-reply@nutrition.local>",
       host: "127.0.0.1",
       nodeEnv: "development",
+      passwordRecoveryPublicOrigin: "http://127.0.0.1:3000",
       port: 1025,
       publicOrigin: "http://127.0.0.1:3000",
       timeoutMs: 5_000,
@@ -104,6 +106,7 @@ describe("loadApiDependencyConfig", () => {
       { SMTP_HOST: "localhost" },
       { SMTP_PORT: "2525" },
       { EMAIL_VERIFICATION_PUBLIC_ORIGIN: "https://example.invalid" },
+      { PASSWORD_RECOVERY_PUBLIC_ORIGIN: "http://localhost:3000" },
       { SMTP_FROM: "safe@example.invalid\r\nBcc: private@example.invalid" },
     ]) {
       expect(() =>

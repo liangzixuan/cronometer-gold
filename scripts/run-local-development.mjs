@@ -64,6 +64,7 @@ export const apiOnlyApplicationRuntimeEnvironmentFields = Object.freeze([
   "DATABASE_STATEMENT_TIMEOUT_MS",
   "DATABASE_URL",
   "EMAIL_VERIFICATION_PUBLIC_ORIGIN",
+  "PASSWORD_RECOVERY_PUBLIC_ORIGIN",
   "DEVICE_CHALLENGE_HMAC_KEY",
   "ERASURE_REPLAY_LEDGER_LOCATOR_CURRENT_KEY_ID",
   "ERASURE_REPLAY_LEDGER_LOCATOR_HMAC_KEYS",
@@ -118,6 +119,7 @@ export const applicationRuntimeEnvironmentFields = Object.freeze([
   "DATABASE_STATEMENT_TIMEOUT_MS",
   "DATABASE_URL",
   "EMAIL_VERIFICATION_PUBLIC_ORIGIN",
+  "PASSWORD_RECOVERY_PUBLIC_ORIGIN",
   "DEVICE_CHALLENGE_HMAC_KEY",
   "ERASURE_REPLAY_LEDGER_BUCKET",
   "ERASURE_REPLAY_LEDGER_CURRENT_KEY_ID",
@@ -427,6 +429,11 @@ function assertLocalMailpit(environment) {
     environment,
     "EMAIL_VERIFICATION_PUBLIC_ORIGIN",
     "email-verification web origin",
+  );
+  exactOptionalLoopbackOrigin(
+    environment,
+    "PASSWORD_RECOVERY_PUBLIC_ORIGIN",
+    "password-recovery web origin",
   );
 }
 

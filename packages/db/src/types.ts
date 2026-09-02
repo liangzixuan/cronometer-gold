@@ -136,7 +136,7 @@ export interface UserSessionTable {
 export interface AuthActionTokenTable {
   id: UuidId;
   user_id: string;
-  purpose: "email_verification";
+  purpose: "email_verification" | "password_recovery";
   token_hash: string;
   email_hash: string;
   expires_at: Timestamp;

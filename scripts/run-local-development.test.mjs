@@ -953,6 +953,7 @@ test("accepts the exact synthetic loopback fixture", () => {
 test("permits only exact loopback Mailpit settings in the guarded runtime", () => {
   const mailpit = {
     EMAIL_VERIFICATION_PUBLIC_ORIGIN: "http://127.0.0.1:3000",
+    PASSWORD_RECOVERY_PUBLIC_ORIGIN: "http://127.0.0.1:3000",
     MAILPIT_SMTP_PORT: "1025",
     SMTP_FROM: "Nutrition Tracker Local <no-reply@nutrition.local>",
     SMTP_HOST: "127.0.0.1",
@@ -964,11 +965,12 @@ test("permits only exact loopback Mailpit settings in the guarded runtime", () =
     { SMTP_PORT: "2525" },
     { MAILPIT_SMTP_PORT: "2525" },
     { EMAIL_VERIFICATION_PUBLIC_ORIGIN: "https://example.invalid" },
+    { PASSWORD_RECOVERY_PUBLIC_ORIGIN: "http://localhost:3000" },
     { SMTP_FROM: "safe@nutrition.local\r\nBcc: private@example.com" },
   ]) {
     assert.throws(
       () => assertLocalDevelopmentEnvironment(environment({ ...mailpit, ...override })),
-      /loopback Mailpit SMTP|loopback email-verification web origin fixture/u,
+      /loopback Mailpit SMTP|loopback (?:email-verification|password-recovery) web origin fixture/u,
     );
   }
 });
