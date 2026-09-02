@@ -27,15 +27,22 @@ const containerSupplyChainDocs = readFileSync(
 );
 
 const CADDY_GRPC_PATCH_VERSION = "v1.83.2";
-const CADDY_VULNERABILITY_PATCH_GRAPH = `golang.org/x/crypto=v0.55.0,golang.org/x/net=v0.57.0,golang.org/x/text=v0.41.0,google.golang.org/grpc=${CADDY_GRPC_PATCH_VERSION}`;
+const CADDY_X_NET_PATCH_VERSION = "v0.58.0";
+const CADDY_VULNERABILITY_PATCH_GRAPH = `golang.org/x/crypto=v0.55.0,golang.org/x/net=${CADDY_X_NET_PATCH_VERSION},golang.org/x/text=v0.41.0,google.golang.org/grpc=${CADDY_GRPC_PATCH_VERSION}`;
 const CADDY_GRPC_REQUIRE_LINE = `      -require=google.golang.org/grpc@${CADDY_GRPC_PATCH_VERSION}; \\`;
 const CADDY_GRPC_BINARY_ASSERTION_LINE = `    go version -m /out/caddy | grep -E 'google.golang.org/grpc[[:space:]]+${CADDY_GRPC_PATCH_VERSION}'; \\`;
+const CADDY_X_NET_REQUIRE_LINE = `      -require=golang.org/x/net@${CADDY_X_NET_PATCH_VERSION} \\`;
+const CADDY_X_NET_BINARY_ASSERTION_LINE = `    go version -m /out/caddy | grep -E 'golang.org/x/net[[:space:]]+${CADDY_X_NET_PATCH_VERSION}'; \\`;
 const CADDY_RUNTIME_LABEL_LINE = `      io.cronometer.upstream.vulnerability-patches="${CADDY_VULNERABILITY_PATCH_GRAPH}"`;
 const CADDY_WORKFLOW_LABEL_LINE = `                .config.Labels["io.cronometer.upstream.vulnerability-patches"] == "${CADDY_VULNERABILITY_PATCH_GRAPH}" and`;
 const CADDY_ADMISSION_LABEL_LINE = `            "io.cronometer.upstream.vulnerability-patches": "${CADDY_VULNERABILITY_PATCH_GRAPH}",`;
+const CADDY_X_NET_DOCUMENTATION_LINE = `\`golang.org/x/net\` ${CADDY_X_NET_PATCH_VERSION}, \`golang.org/x/text\` v0.41.0, and`;
 const CADDY_DOCUMENTATION_LINE = `\`google.golang.org/grpc\` ${CADDY_GRPC_PATCH_VERSION}; final image labels disclose that patched`;
 
 const CADDY_GRPC_REFERENCE = /google\.golang\.org\/grpc[^\r\n]*?\b(v\d+\.\d+\.\d+)\b/gu;
+const CADDY_X_NET_REFERENCE = /golang\.org\/x\/net[^\r\n]*?\b(v\d+\.\d+\.\d+)\b/gu;
+const CADDY_GRPC_MODULE_REFERENCE = /google\.golang\.org\/grpc/gu;
+const CADDY_X_NET_MODULE_REFERENCE = /golang\.org\/x\/net/gu;
 
 const BUILD_ACTION = "docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a";
 const BUILDX_ACTION = "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c";
@@ -189,21 +196,64 @@ function assertOneExactLine(source, expected, boundary) {
   );
 }
 
-function assertReviewedGrpcReferences(source, expectedCount, boundary) {
-  const references = [...source.matchAll(CADDY_GRPC_REFERENCE)];
+function assertReviewedModuleReferences(
+  source,
+  moduleReference,
+  versionedReference,
+  expectedVersion,
+  expectedCount,
+  boundary,
+  moduleName,
+) {
+  const moduleReferences = [...source.matchAll(moduleReference)];
+  const versionedReferences = [...source.matchAll(versionedReference)];
 
-  for (const reference of references) {
+  assert.equal(
+    versionedReferences.length,
+    moduleReferences.length,
+    `${boundary} must bind every Caddy ${moduleName} reference to a same-line version`,
+  );
+
+  for (const reference of versionedReferences) {
     assert.equal(
       reference[1],
-      CADDY_GRPC_PATCH_VERSION,
-      `${boundary} contains an alternate Caddy grpc version`,
+      expectedVersion,
+      `${boundary} contains an alternate Caddy ${moduleName} version`,
     );
   }
 
-  assert.equal(references.length, expectedCount, `${boundary} Caddy grpc reference count changed`);
+  assert.equal(
+    moduleReferences.length,
+    expectedCount,
+    `${boundary} Caddy ${moduleName} reference count changed`,
+  );
 }
 
-function assertCaddyGrpcPatchGraph(overrides = {}) {
+function assertReviewedGrpcReferences(source, expectedCount, boundary) {
+  assertReviewedModuleReferences(
+    source,
+    CADDY_GRPC_MODULE_REFERENCE,
+    CADDY_GRPC_REFERENCE,
+    CADDY_GRPC_PATCH_VERSION,
+    expectedCount,
+    boundary,
+    "grpc",
+  );
+}
+
+function assertReviewedXNetReferences(source, expectedCount, boundary) {
+  assertReviewedModuleReferences(
+    source,
+    CADDY_X_NET_MODULE_REFERENCE,
+    CADDY_X_NET_REFERENCE,
+    CADDY_X_NET_PATCH_VERSION,
+    expectedCount,
+    boundary,
+    "x/net",
+  );
+}
+
+function assertCaddyVulnerabilityPatchGraph(overrides = {}) {
   const sources = {
     admission: overrides.admission ?? caddyAdmission,
     dockerfile: overrides.dockerfile ?? caddyDockerfile,
@@ -215,6 +265,10 @@ function assertCaddyGrpcPatchGraph(overrides = {}) {
   assertReviewedGrpcReferences(sources.workflow, 1, "container workflow");
   assertReviewedGrpcReferences(sources.admission, 1, "Caddy admission policy");
   assertReviewedGrpcReferences(sources.documentation, 1, "container documentation");
+  assertReviewedXNetReferences(sources.dockerfile, 3, "Caddy Dockerfile");
+  assertReviewedXNetReferences(sources.workflow, 1, "container workflow");
+  assertReviewedXNetReferences(sources.admission, 1, "Caddy admission policy");
+  assertReviewedXNetReferences(sources.documentation, 1, "container documentation");
 
   const buildStage = boundedSection(
     sources.dockerfile,
@@ -239,9 +293,16 @@ function assertCaddyGrpcPatchGraph(overrides = {}) {
 
   assertOneExactLine(buildStage, CADDY_GRPC_REQUIRE_LINE, "Caddy grpc requirement");
   assertOneExactLine(buildStage, CADDY_GRPC_BINARY_ASSERTION_LINE, "Caddy grpc binary assertion");
+  assertOneExactLine(buildStage, CADDY_X_NET_REQUIRE_LINE, "Caddy x/net requirement");
+  assertOneExactLine(buildStage, CADDY_X_NET_BINARY_ASSERTION_LINE, "Caddy x/net binary assertion");
   assertOneExactLine(runtimeMetadata, CADDY_RUNTIME_LABEL_LINE, "Caddy runtime label");
   assertOneExactLine(identityStep, CADDY_WORKFLOW_LABEL_LINE, "Caddy workflow identity");
   assertOneExactLine(admissionBranch, CADDY_ADMISSION_LABEL_LINE, "Caddy admission label");
+  assertOneExactLine(
+    sources.documentation,
+    CADDY_X_NET_DOCUMENTATION_LINE,
+    "Caddy x/net documentation",
+  );
   assertOneExactLine(sources.documentation, CADDY_DOCUMENTATION_LINE, "Caddy grpc documentation");
 }
 
@@ -670,16 +731,16 @@ test("exact-binds every repository publisher toolchain, scan, and provenance gat
 });
 
 test("exact-binds the reviewed Caddy vulnerability patch graph across every boundary", () => {
-  assertCaddyGrpcPatchGraph();
+  assertCaddyVulnerabilityPatchGraph();
 });
 
-test("rejects stale, commented, duplicated, and comment-only Caddy grpc controls", () => {
+test("rejects stale, commented, duplicated, and comment-only Caddy patch controls", () => {
   const staleRequirement = caddyDockerfile.replace(
     CADDY_GRPC_REQUIRE_LINE,
     CADDY_GRPC_REQUIRE_LINE.replace(CADDY_GRPC_PATCH_VERSION, "v1.83.1"),
   );
   assert.throws(
-    () => assertCaddyGrpcPatchGraph({ dockerfile: staleRequirement }),
+    () => assertCaddyVulnerabilityPatchGraph({ dockerfile: staleRequirement }),
     /alternate Caddy grpc version/u,
   );
 
@@ -688,7 +749,7 @@ test("rejects stale, commented, duplicated, and comment-only Caddy grpc controls
     `      # ${CADDY_GRPC_REQUIRE_LINE.trim()}`,
   );
   assert.throws(
-    () => assertCaddyGrpcPatchGraph({ dockerfile: commentedRequirement }),
+    () => assertCaddyVulnerabilityPatchGraph({ dockerfile: commentedRequirement }),
     /one exact active line/u,
   );
 
@@ -697,14 +758,47 @@ test("rejects stale, commented, duplicated, and comment-only Caddy grpc controls
     `${CADDY_WORKFLOW_LABEL_LINE}\n${CADDY_WORKFLOW_LABEL_LINE}`,
   );
   assert.throws(
-    () => assertCaddyGrpcPatchGraph({ workflow: duplicatedWorkflowLabel }),
+    () => assertCaddyVulnerabilityPatchGraph({ workflow: duplicatedWorkflowLabel }),
     /reference count changed|one exact active line/u,
   );
 
   const staleDocumentationComment = `${containerSupplyChainDocs}\n<!-- google.golang.org/grpc v1.83.1 -->\n`;
   assert.throws(
-    () => assertCaddyGrpcPatchGraph({ documentation: staleDocumentationComment }),
+    () => assertCaddyVulnerabilityPatchGraph({ documentation: staleDocumentationComment }),
     /alternate Caddy grpc version/u,
+  );
+
+  const staleXNetAssertion = caddyDockerfile.replace(
+    CADDY_X_NET_BINARY_ASSERTION_LINE,
+    CADDY_X_NET_BINARY_ASSERTION_LINE.replace(CADDY_X_NET_PATCH_VERSION, "v0.57.0"),
+  );
+  assert.throws(
+    () => assertCaddyVulnerabilityPatchGraph({ dockerfile: staleXNetAssertion }),
+    /alternate Caddy x\/net version/u,
+  );
+
+  const commentedXNetRequirement = caddyDockerfile.replace(
+    CADDY_X_NET_REQUIRE_LINE,
+    `      # ${CADDY_X_NET_REQUIRE_LINE.trim()}`,
+  );
+  assert.throws(
+    () => assertCaddyVulnerabilityPatchGraph({ dockerfile: commentedXNetRequirement }),
+    /one exact active line/u,
+  );
+
+  const duplicatedXNetDocumentation = `${containerSupplyChainDocs}\n<!-- golang.org/x/net ${CADDY_X_NET_PATCH_VERSION} -->\n`;
+  assert.throws(
+    () => assertCaddyVulnerabilityPatchGraph({ documentation: duplicatedXNetDocumentation }),
+    /reference count changed/u,
+  );
+
+  const splitXNetRequirement = caddyDockerfile.replace(
+    CADDY_X_NET_REQUIRE_LINE,
+    ["      -require=golang.org/x/net@\\", "        v0.57.0 \\"].join("\n"),
+  );
+  assert.throws(
+    () => assertCaddyVulnerabilityPatchGraph({ dockerfile: splitXNetRequirement }),
+    /same-line version/u,
   );
 });
 
