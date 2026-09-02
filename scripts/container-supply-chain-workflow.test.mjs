@@ -13,6 +13,21 @@ const workflow = readFileSync(
   new URL("../.github/workflows/container-supply-chain.yml", import.meta.url),
   "utf8",
 );
+const caddyDockerfile = readFileSync(
+  new URL("../infra/docker/caddy.Dockerfile", import.meta.url),
+  "utf8",
+);
+const caddyAdmission = readFileSync(
+  new URL("../infra/oci/files/image-admission.py", import.meta.url),
+  "utf8",
+);
+const containerSupplyChainDocs = readFileSync(
+  new URL("../docs/quality/container-supply-chain.md", import.meta.url),
+  "utf8",
+);
+
+const CADDY_GRPC_PATCH_VERSION = "v1.83.1";
+const CADDY_VULNERABILITY_PATCH_GRAPH = `golang.org/x/crypto=v0.55.0,golang.org/x/net=v0.57.0,golang.org/x/text=v0.41.0,google.golang.org/grpc=${CADDY_GRPC_PATCH_VERSION}`;
 
 const BUILD_ACTION = "docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a";
 const BUILDX_ACTION = "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c";
@@ -564,6 +579,26 @@ test("exact-binds every repository publisher toolchain, scan, and provenance gat
   assertOnlyReviewedPublicationCommands(workflow);
   assertOnlyReviewedIgnorePolicyReferences(workflow);
   for (const family of publisherFamilies) assertPublisherFamily(family);
+});
+
+test("exact-binds the reviewed Caddy vulnerability patch graph across every boundary", () => {
+  assert.equal(
+    caddyDockerfile.split(`-require=google.golang.org/grpc@${CADDY_GRPC_PATCH_VERSION}`).length - 1,
+    1,
+  );
+  assert.equal(
+    caddyDockerfile.split(`google.golang.org/grpc[[:space:]]+${CADDY_GRPC_PATCH_VERSION}`).length -
+      1,
+    1,
+  );
+  assert.equal(caddyDockerfile.split(CADDY_VULNERABILITY_PATCH_GRAPH).length - 1, 1);
+  assert.equal(workflow.split(CADDY_VULNERABILITY_PATCH_GRAPH).length - 1, 1);
+  assert.equal(caddyAdmission.split(CADDY_VULNERABILITY_PATCH_GRAPH).length - 1, 1);
+  assert.equal(
+    containerSupplyChainDocs.split(`\`google.golang.org/grpc\` ${CADDY_GRPC_PATCH_VERSION}`)
+      .length - 1,
+    1,
+  );
 });
 
 test("confines the sole pinned ARM64 emulator to application images", () => {
