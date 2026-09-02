@@ -228,7 +228,7 @@ and the scratch runtime receives only the static Caddy binary, the exact Alpine
 payload, and minimal user/directory files. The build explicitly advances the
 four vulnerable release dependencies to `golang.org/x/crypto` v0.55.0,
 `golang.org/x/net` v0.57.0, `golang.org/x/text` v0.41.0, and
-`google.golang.org/grpc` v1.83.1; final image labels disclose that patched
+`google.golang.org/grpc` v1.83.2; final image labels disclose that patched
 graph, and the build asserts all four binary module versions. Caddy runs as
 `1000:1000`. The OCI controlled-beta runtime must
 drop all capabilities, add only `NET_BIND_SERVICE`, and present writable `/data`

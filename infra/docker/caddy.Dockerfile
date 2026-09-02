@@ -42,7 +42,7 @@ RUN --mount=type=cache,id=nutrition-caddy-go-mod-v1,target=/go/pkg/mod,sharing=l
       -require=golang.org/x/crypto@v0.55.0 \
       -require=golang.org/x/net@v0.57.0 \
       -require=golang.org/x/text@v0.41.0 \
-      -require=google.golang.org/grpc@v1.83.1; \
+      -require=google.golang.org/grpc@v1.83.2; \
     go mod download; \
     go mod tidy; \
     go mod verify; \
@@ -56,7 +56,7 @@ RUN --mount=type=cache,id=nutrition-caddy-go-mod-v1,target=/go/pkg/mod,sharing=l
     go version -m /out/caddy | grep -E 'golang.org/x/crypto[[:space:]]+v0.55.0'; \
     go version -m /out/caddy | grep -E 'golang.org/x/net[[:space:]]+v0.57.0'; \
     go version -m /out/caddy | grep -E 'golang.org/x/text[[:space:]]+v0.41.0'; \
-    go version -m /out/caddy | grep -E 'google.golang.org/grpc[[:space:]]+v1.83.1'; \
+    go version -m /out/caddy | grep -E 'google.golang.org/grpc[[:space:]]+v1.83.2'; \
     /out/caddy list-modules --packages | grep -Fx 'tls.issuance.acme'; \
     /out/caddy list-modules --packages | grep -Fx 'tls.issuance.internal'
 
@@ -87,7 +87,7 @@ LABEL io.cronometer.runtime.component="caddy" \
       io.cronometer.upstream.source.revision="e2eee6a7fce366321294c9c2a79f3146891dcbdf" \
       io.cronometer.upstream.source.tag-object="8ec11a4b7e39a5fd00da2fc5cb9b543e31fd7926" \
       io.cronometer.upstream.version="v2.11.4" \
-      io.cronometer.upstream.vulnerability-patches="golang.org/x/crypto=v0.55.0,golang.org/x/net=v0.57.0,golang.org/x/text=v0.41.0,google.golang.org/grpc=v1.83.1"
+      io.cronometer.upstream.vulnerability-patches="golang.org/x/crypto=v0.55.0,golang.org/x/net=v0.57.0,golang.org/x/text=v0.41.0,google.golang.org/grpc=v1.83.2"
 
 ENV HOME=/home/caddy \
     PATH=/usr/bin \

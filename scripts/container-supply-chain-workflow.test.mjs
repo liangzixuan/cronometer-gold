@@ -26,8 +26,16 @@ const containerSupplyChainDocs = readFileSync(
   "utf8",
 );
 
-const CADDY_GRPC_PATCH_VERSION = "v1.83.1";
+const CADDY_GRPC_PATCH_VERSION = "v1.83.2";
 const CADDY_VULNERABILITY_PATCH_GRAPH = `golang.org/x/crypto=v0.55.0,golang.org/x/net=v0.57.0,golang.org/x/text=v0.41.0,google.golang.org/grpc=${CADDY_GRPC_PATCH_VERSION}`;
+const CADDY_GRPC_REQUIRE_LINE = `      -require=google.golang.org/grpc@${CADDY_GRPC_PATCH_VERSION}; \\`;
+const CADDY_GRPC_BINARY_ASSERTION_LINE = `    go version -m /out/caddy | grep -E 'google.golang.org/grpc[[:space:]]+${CADDY_GRPC_PATCH_VERSION}'; \\`;
+const CADDY_RUNTIME_LABEL_LINE = `      io.cronometer.upstream.vulnerability-patches="${CADDY_VULNERABILITY_PATCH_GRAPH}"`;
+const CADDY_WORKFLOW_LABEL_LINE = `                .config.Labels["io.cronometer.upstream.vulnerability-patches"] == "${CADDY_VULNERABILITY_PATCH_GRAPH}" and`;
+const CADDY_ADMISSION_LABEL_LINE = `            "io.cronometer.upstream.vulnerability-patches": "${CADDY_VULNERABILITY_PATCH_GRAPH}",`;
+const CADDY_DOCUMENTATION_LINE = `\`google.golang.org/grpc\` ${CADDY_GRPC_PATCH_VERSION}; final image labels disclose that patched`;
+
+const CADDY_GRPC_REFERENCE = /google\.golang\.org\/grpc[^\r\n]*?\b(v\d+\.\d+\.\d+)\b/gu;
 
 const BUILD_ACTION = "docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a";
 const BUILDX_ACTION = "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c";
@@ -155,6 +163,86 @@ const publisherTrivySettings = [
 
 function leadingSpaces(line) {
   return /^ */u.exec(line)?.[0].length ?? 0;
+}
+
+function exactLineIndexes(source, expected) {
+  return source.split(/\r?\n/gu).flatMap((line, index) => (line === expected ? [index] : []));
+}
+
+function boundedSection(source, startLine, endLine, boundary) {
+  const lines = source.split(/\r?\n/gu);
+  const starts = exactLineIndexes(source, startLine);
+  const ends = exactLineIndexes(source, endLine);
+
+  assert.equal(starts.length, 1, `${boundary} start changed`);
+  assert.equal(ends.length, 1, `${boundary} end changed`);
+  assert.ok(ends[0] > starts[0], `${boundary} ordering changed`);
+
+  return lines.slice(starts[0] + 1, ends[0]).join("\n");
+}
+
+function assertOneExactLine(source, expected, boundary) {
+  assert.equal(
+    exactLineIndexes(source, expected).length,
+    1,
+    `${boundary} must retain one exact active line`,
+  );
+}
+
+function assertReviewedGrpcReferences(source, expectedCount, boundary) {
+  const references = [...source.matchAll(CADDY_GRPC_REFERENCE)];
+
+  for (const reference of references) {
+    assert.equal(
+      reference[1],
+      CADDY_GRPC_PATCH_VERSION,
+      `${boundary} contains an alternate Caddy grpc version`,
+    );
+  }
+
+  assert.equal(references.length, expectedCount, `${boundary} Caddy grpc reference count changed`);
+}
+
+function assertCaddyGrpcPatchGraph(overrides = {}) {
+  const sources = {
+    admission: overrides.admission ?? caddyAdmission,
+    dockerfile: overrides.dockerfile ?? caddyDockerfile,
+    documentation: overrides.documentation ?? containerSupplyChainDocs,
+    workflow: overrides.workflow ?? workflow,
+  };
+
+  assertReviewedGrpcReferences(sources.dockerfile, 3, "Caddy Dockerfile");
+  assertReviewedGrpcReferences(sources.workflow, 1, "container workflow");
+  assertReviewedGrpcReferences(sources.admission, 1, "Caddy admission policy");
+  assertReviewedGrpcReferences(sources.documentation, 1, "container documentation");
+
+  const buildStage = boundedSection(
+    sources.dockerfile,
+    `FROM \${GO_IMAGE} AS build`,
+    `FROM \${GO_IMAGE} AS rootfs`,
+    "Caddy build stage",
+  );
+  const runtimeMetadata = boundedSection(
+    sources.dockerfile,
+    "FROM scratch AS runtime",
+    "ENV HOME=/home/caddy \\",
+    "Caddy runtime metadata",
+  );
+  const admissionBranch = boundedSection(
+    sources.admission,
+    '    elif variable == "CADDY_IMAGE":',
+    '    elif variable == "POSTGRES_IMAGE":',
+    "Caddy admission branch",
+  );
+  const serviceJob = workflowJob(sources.workflow, "build-scan-publish-services");
+  const identityStep = workflowStep(serviceJob, "Verify ARM64 service identity");
+
+  assertOneExactLine(buildStage, CADDY_GRPC_REQUIRE_LINE, "Caddy grpc requirement");
+  assertOneExactLine(buildStage, CADDY_GRPC_BINARY_ASSERTION_LINE, "Caddy grpc binary assertion");
+  assertOneExactLine(runtimeMetadata, CADDY_RUNTIME_LABEL_LINE, "Caddy runtime label");
+  assertOneExactLine(identityStep, CADDY_WORKFLOW_LABEL_LINE, "Caddy workflow identity");
+  assertOneExactLine(admissionBranch, CADDY_ADMISSION_LABEL_LINE, "Caddy admission label");
+  assertOneExactLine(sources.documentation, CADDY_DOCUMENTATION_LINE, "Caddy grpc documentation");
 }
 
 function yamlSyntaxLines(source) {
@@ -582,22 +670,41 @@ test("exact-binds every repository publisher toolchain, scan, and provenance gat
 });
 
 test("exact-binds the reviewed Caddy vulnerability patch graph across every boundary", () => {
-  assert.equal(
-    caddyDockerfile.split(`-require=google.golang.org/grpc@${CADDY_GRPC_PATCH_VERSION}`).length - 1,
-    1,
+  assertCaddyGrpcPatchGraph();
+});
+
+test("rejects stale, commented, duplicated, and comment-only Caddy grpc controls", () => {
+  const staleRequirement = caddyDockerfile.replace(
+    CADDY_GRPC_REQUIRE_LINE,
+    CADDY_GRPC_REQUIRE_LINE.replace(CADDY_GRPC_PATCH_VERSION, "v1.83.1"),
   );
-  assert.equal(
-    caddyDockerfile.split(`google.golang.org/grpc[[:space:]]+${CADDY_GRPC_PATCH_VERSION}`).length -
-      1,
-    1,
+  assert.throws(
+    () => assertCaddyGrpcPatchGraph({ dockerfile: staleRequirement }),
+    /alternate Caddy grpc version/u,
   );
-  assert.equal(caddyDockerfile.split(CADDY_VULNERABILITY_PATCH_GRAPH).length - 1, 1);
-  assert.equal(workflow.split(CADDY_VULNERABILITY_PATCH_GRAPH).length - 1, 1);
-  assert.equal(caddyAdmission.split(CADDY_VULNERABILITY_PATCH_GRAPH).length - 1, 1);
-  assert.equal(
-    containerSupplyChainDocs.split(`\`google.golang.org/grpc\` ${CADDY_GRPC_PATCH_VERSION}`)
-      .length - 1,
-    1,
+
+  const commentedRequirement = caddyDockerfile.replace(
+    CADDY_GRPC_REQUIRE_LINE,
+    `      # ${CADDY_GRPC_REQUIRE_LINE.trim()}`,
+  );
+  assert.throws(
+    () => assertCaddyGrpcPatchGraph({ dockerfile: commentedRequirement }),
+    /one exact active line/u,
+  );
+
+  const duplicatedWorkflowLabel = workflow.replace(
+    CADDY_WORKFLOW_LABEL_LINE,
+    `${CADDY_WORKFLOW_LABEL_LINE}\n${CADDY_WORKFLOW_LABEL_LINE}`,
+  );
+  assert.throws(
+    () => assertCaddyGrpcPatchGraph({ workflow: duplicatedWorkflowLabel }),
+    /reference count changed|one exact active line/u,
+  );
+
+  const staleDocumentationComment = `${containerSupplyChainDocs}\n<!-- google.golang.org/grpc v1.83.1 -->\n`;
+  assert.throws(
+    () => assertCaddyGrpcPatchGraph({ documentation: staleDocumentationComment }),
+    /alternate Caddy grpc version/u,
   );
 });
 
