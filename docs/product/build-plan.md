@@ -71,11 +71,13 @@ acceptance; progress in either lane never waives the gates in the other.
    The staged candidate must meet those evidence-bound thresholds; this plan
    does not infer them from the 363-food pilot.
 
-   A bounded database-free full-FDC CSV inspector is now implemented and covered
-   by synthetic archives. It requires exact manifest-driven inventory,
-   dispositions, raw data-type/market mappings, strict table contracts,
-   disk-partitioned joins, conservation, and deterministic evidence without
-   opening PostgreSQL. Controlled acquisitions, real inventory/header and mapping
+   A bounded database-free full-FDC CSV inspector source slice is covered locally
+   by synthetic archives. It meets this plan's implemented definition only when
+   exact-change CI also passes. It requires exact manifest-driven inventory,
+   dispositions, explicit manifest-supplied data-type/market mappings,
+   required-header contracts and ordered-header evidence, disk-partitioned joins,
+   row/disposition accounting, and deterministic evidence without opening
+   PostgreSQL. Controlled acquisitions, real inventory/header and mapping
    review, rights review, representative-scale resource evidence, a streaming
    staging path, reconciliation, search/index evidence, and every activation
    review above remain open. Changed upstream bytes remain unpinned.
@@ -217,9 +219,10 @@ tree only after database cleanup, without granting approval or promotion
 eligibility. Separate retained full-registry mapping review, high-impact nutrient
 outlier review, and search/index evidence remain pre-activation work. The FDC
 full-CSV path now has a database-free, bounded, manifest-driven inspector with
-seven relational adapter roles, explicit reference/guide dispositions, reviewed
-raw-value mappings, disk-partitioned joins, conservation, and deterministic
-baseline evidence. It is synthetic-fixture proof only: real dual acquisition,
+seven relational adapter roles, explicit reference/guide dispositions,
+explicit manifest-supplied raw-value mappings, disk-partitioned joins,
+row/disposition accounting, and deterministic baseline evidence. It is
+synthetic-fixture proof only: real dual acquisition,
 archive inventory/headers/mappings, scale evidence, and database staging remain
 open. The CNF
 path now includes database-free `cnf inspect` evidence and trusted-runner
