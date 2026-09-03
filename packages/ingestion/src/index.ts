@@ -7,6 +7,7 @@ export * from "./delimited.js";
 export * from "./deterministic.js";
 export * from "./errors.js";
 export * from "./fdc.js";
+export * from "./fdc-csv-archive.js";
 export * from "./manifest.js";
 export * from "./model.js";
 export * from "./zip.js";

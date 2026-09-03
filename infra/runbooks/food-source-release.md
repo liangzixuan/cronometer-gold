@@ -130,6 +130,81 @@ exact inventory and member parsing, and strict baseline comparison before it ope
 PostgreSQL or can register a source or create a batch. A preflight failure must
 therefore leave the database unopened and unchanged.
 
+### USDA FDC full-CSV inventory and bounded inspection
+
+The full CSV has a separate evidence-only command; it is not an input to the
+Foundation JSON staging command. Use it only after two authenticated fresh
+downloads agree and a controlled working manifest pins the exact artifact,
+parser package/version/build, and complete observed regular-file inventory:
+
+From the repository root, create or normalize the untracked private local root
+before the first inspection:
+
+```sh
+install -d -m 0700 .local-data
+test "$(stat -c '%a' .local-data)" = 700
+```
+
+Replace every angle-bracket placeholder in the example below before running it;
+the example is not directly pasteable with placeholders intact. Dependencies
+must already be installed and the workspace packages built.
+
+```sh
+INGEST_PARSER_BUILD_SHA256=<reviewed-lowercase-sha256> \
+pnpm --filter @nutrition-tracker/ingest cli -- fdc inspect-csv \
+  data/manifests/<fdc-full-csv-release>.json \
+  --artifact .local-data/acquired/<fdc-full-csv-release>.zip \
+  --cache-dir .local-data/cache-fdc-csv \
+  --extract-dir .local-data/extracted-fdc-csv-proposal-<run-id>
+```
+
+Do not guess archive paths from historical filenames. Classify every observed
+member in `releaseSpecificExpectations` with
+`fdcCsvDisposition:<archive-path>`. Exactly one member must fill each adapter
+role: `food`, `branded-food`, `food-nutrient`, `nutrient`,
+`food-nutrient-derivation`, `food-portion`, and `measure-unit`. Classify every
+other CSV as `reference-only:unmaterialized-supporting-table-v1` and each
+non-CSV publisher document as `guide:publisher-documentation-v1`. Any unlisted,
+missing, duplicate, case-colliding, or differently classified member stops the
+inspection.
+
+Review the exact publisher values before adding
+`fdcCsvDataTypeMapping:<raw-value>` and
+`fdcCsvMarketMapping:<raw-value>` entries. Mapping targets must remain inside the
+manifest's reviewed data types and markets; `fdcCsvDefaultMarketCode` applies
+only to non-branded foods. An unknown raw value quarantines the food and its
+children instead of being inferred.
+
+The command is Linux/WSL-only and accepts repository-relative paths under
+`data/manifests` and `.local-data`; it rejects Windows, `/mnt/<drive>`, absolute,
+traversing, and symlink-escaping paths. The two authority roots must be real
+current-user-owned directories and `.local-data` must be mode `0700`. Use a new
+empty extraction directory for every proposal or reviewed rerun; successful
+inspection retains selected CSV inputs and no-replace extraction deliberately
+rejects a reused directory. It verifies the exact supplied artifact, preflights
+the full ZIP, parses bounded lookup tables, disk-partitions the four large
+relations, joins one partition at a time, and emits deterministic table,
+conservation, disposition, semantic, resource, source-mix, context, canonical
+per-market GTIN-collision, and baseline evidence. It opens no database and
+accepts no identity or authority option.
+
+A first baseline proposal deliberately exits nonzero. Independently review all
+counts, ordered-header and row digests, mappings, exclusions, quarantines,
+partition limits, spool footprint, source-type/market histograms, canonical
+GTIN-14 collision groups, and conservation equations before copying the entire
+baseline into the controlled working manifest and rerunning with another new
+empty extraction directory. A match is still non-qualifying local verification:
+it creates no acquisition record, rights decision, approval, batch, promotion
+eligibility, or current pointer.
+
+Only synthetic archives currently prove this implementation. Before any live
+staging work, complete dual acquisition, full inventory/header review,
+rights/attribution and nutrient-mapping review, representative 460 MB/3.1 GB
+scale and scratch-capacity evidence, and a separately reviewed streaming
+database-staging design. Do not use this inspector's retained CSV files or output
+as an acquisition attestation, and do not retrofit the Foundation JSON staging
+command to consume them during an operator run.
+
 ### Health Canada CNF inventory and baseline
 
 The CNF nine-CSV parser contract is not the archive inventory. Before changing a

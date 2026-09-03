@@ -1,6 +1,6 @@
 # Official source release catalogue
 
-Initial research date: 2026-08-15. Latest strict-HTTPS revalidation: 2026-09-01
+Initial research date: 2026-08-15. Latest strict-HTTPS revalidation: 2026-09-03
 UTC. This catalogue uses publisher-operated sources only. It records what can
 be pinned before an operator acquisition; it does not approve the candidates
 for ingestion or replace a rights review.
@@ -53,14 +53,15 @@ These values help capacity planning and detect obvious later changes, but they a
 not canonical manifest byte sizes until a verified acquisition streams the entire
 object. FDC ETags and Azure blob ETags are likewise not accepted as content hashes.
 
-### Revalidation on 2026-09-01 UTC
+### Revalidation on 2026-09-03 UTC
 
-Strict HTTPS `HEAD` observations at `2026-09-01T01:05Z` found the Foundation
-JSON and CNF aggregate lengths unchanged at 469,303 and 26,656,195 bytes. The
-full FDC CSV response instead reported 481,517,495 bytes and a
-`Last-Modified` value of 2026-08-19, differing from the 481,510,693-byte
-2026-08-15 observation above. These headers are drift detection only, not an
-acquisition or checksum.
+Strict HTTPS `HEAD` observations on 2026-09-03 found the Foundation JSON and CNF
+aggregate lengths unchanged at 469,303 and 26,656,195 bytes, with respective
+`Last-Modified` dates of 2026-04-29 and 2026-06-03. The full FDC CSV response
+reported 481,517,495 bytes and a `Last-Modified` date of 2026-08-19, still
+differing from the 481,510,693-byte 2026-08-15 observation above. These headers
+are drift detection only, not an acquisition or checksum. Temporary signed CNF
+redirect parameters are neither recorded nor treated as artifact identity.
 
 USDA still labels the full download 04/2026, while its update log lists branded
 data version 15.4 on 2026-08-20. It is not publisher-confirmed that the changed
@@ -82,11 +83,13 @@ Foundation JSON candidate contains one JSON member and is the first executable
 slice. It exercises nested nutrient, portion, and provenance parsing without making
 the initial run depend on a roughly 460 MB compressed branded catalogue. The full
 CSV candidate remains the representative scale target and eventual US catalogue
-seed, but it is not yet executable as an archive pipeline. The current full-CSV
-code is a per-record adapter primitive; no bounded archive inventory, table join,
-conservation, or deterministic inspection orchestrator invokes it. Build and
-review that database-free path before downloading the large artifact for a scale
-run.
+seed. A database-free `fdc inspect-csv` boundary now enforces a manifest-declared
+exact inventory, explicit per-member dispositions and raw-value mappings,
+bounded lookup tables, disk-partitioned joins, conservation, and deterministic
+baseline evidence. That implementation is proven only with synthetic archives;
+the live archive has not been acquired, inventoried, mapped, parsed at scale, or
+staged. The checked-in candidate therefore remains intentionally unpinned and
+non-executable.
 
 CNF 2026's aggregate ZIP has a fixed nine-CSV ingestion contract. Five tables are
 adapter inputs and four are parsed, measured reference-only evidence:
@@ -146,6 +149,9 @@ approve the exact product use before either candidate becomes import-ready.
   version and accepted-field snapshot must supply our reproducibility boundary.
 - The complete April 2026 full-CSV archive member list and row-count baseline must
   be captured during controlled acquisition; it is intentionally not guessed here.
+- Full-CSV ordered headers, observed raw `data_type` and `market_country` values,
+  explicit mappings, partition/spool footprint, and peak-memory evidence must be
+  captured and reviewed against the real artifact before staging design begins.
 - The complete CNF aggregate member list, including exact English/French guide
   paths, and every real-artifact table/parser baseline must be captured and
   independently reviewed during controlled acquisition; the checked-in

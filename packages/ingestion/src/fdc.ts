@@ -23,6 +23,11 @@ export interface FdcAdapterContext {
   readonly mappingResolver?: NutrientMappingResolver;
 }
 
+export interface FdcCsvAdapterContext extends FdcAdapterContext {
+  /** Reviewed ISO 3166-1 alpha-2 market retained from the joined CSV source row. */
+  readonly marketCode: string;
+}
+
 export interface QuarantinedSourceRecord {
   readonly sourceIndex: number;
   readonly sourceRecordId: string | null;
@@ -124,6 +129,7 @@ export function adaptFdcJsonRelease(
       excludedPortions.push(...staged.excludedPortions);
       excludedAttributes.push(...staged.excludedAttributes);
     } catch (error) {
+      if (!isFdcRowDispositionError(error)) throw error;
       const record =
         candidate.value && typeof candidate.value === "object" ? candidate.value : null;
       const sourceRecordId = record
@@ -189,6 +195,7 @@ export function stageFdcJsonRecordDetailed(
       seenNutrients.add(nutrient.sourceNutrientId);
       nutrients.push(nutrient);
     } catch (error) {
+      if (!isFdcRowDispositionError(error)) throw error;
       excludedNutrients.push(excludedChild(foodSourceRecordId, index, raw, error));
     }
   }
@@ -211,24 +218,18 @@ export function stageFdcJsonRecordDetailed(
       seenPortions.add(serving.sourceServingId);
       servings.push(serving);
     } catch (error) {
+      if (!isFdcRowDispositionError(error)) throw error;
       excludedPortions.push(excludedChild(foodSourceRecordId, index, raw, error));
     }
   }
-  const labelServing = fdcLabelServing(food);
-  if (labelServing) {
-    if (seenPortions.has(labelServing.sourceServingId)) {
-      excludedPortions.push(
-        excludedChild(
-          foodSourceRecordId,
-          rawPortions.length,
-          { labelServing },
-          new IngestionError("DUPLICATE_KEY", "Duplicate FDC label serving key"),
-        ),
-      );
-    } else {
-      servings.push(labelServing);
-    }
-  }
+  appendFdcLabelServing(
+    food,
+    foodSourceRecordId,
+    rawPortions.length,
+    servings,
+    seenPortions,
+    excludedPortions,
+  );
   const gtin = fdcGtin(firstDefined(food, "gtinUpc", "gtin_upc"), foodSourceRecordId);
 
   const record = createStagedFood({
@@ -260,7 +261,7 @@ export function stageFdcCsvRecord(
   foodRow: Readonly<Record<string, unknown>>,
   nutrientRows: readonly Readonly<Record<string, unknown>>[],
   portionRows: readonly Readonly<Record<string, unknown>>[],
-  context: FdcAdapterContext,
+  context: FdcCsvAdapterContext,
 ): StagedFoodRecord {
   return stageFdcCsvRecordDetailed(foodRow, nutrientRows, portionRows, context).record;
 }
@@ -269,7 +270,7 @@ export function stageFdcCsvRecordDetailed(
   foodRow: Readonly<Record<string, unknown>>,
   nutrientRows: readonly Readonly<Record<string, unknown>>[],
   portionRows: readonly Readonly<Record<string, unknown>>[],
-  context: FdcAdapterContext,
+  context: FdcCsvAdapterContext,
 ): FdcStagedRecordResult {
   const fdcId = firstDefined(foodRow, "fdc_id", "fdcId");
   for (const [index, row] of nutrientRows.entries()) {
@@ -288,9 +289,8 @@ export function stageFdcCsvRecordDetailed(
       { index },
     );
   }
-  const quality: StagedKnownQuality = String(firstDefined(foodRow, "data_type", "dataType"))
-    .toLowerCase()
-    .includes("branded")
+  const sourceDataType = firstDefined(foodRow, "data_type", "dataType");
+  const quality: StagedKnownQuality = String(sourceDataType).toLowerCase().includes("branded")
     ? "label"
     : "measured";
   const foodSourceRecordId = identifier(fdcId, "FDC food ID");
@@ -310,6 +310,7 @@ export function stageFdcCsvRecordDetailed(
       seenNutrients.add(nutrient.sourceNutrientId);
       nutrients.push(nutrient);
     } catch (error) {
+      if (!isFdcRowDispositionError(error)) throw error;
       excludedNutrients.push(excludedChild(foodSourceRecordId, index, row, error));
     }
   }
@@ -318,7 +319,7 @@ export function stageFdcCsvRecordDetailed(
   const seenPortions = new Set<string>();
   for (const [index, row] of portionRows.entries()) {
     try {
-      const serving = stageFdcCsvPortion(row, index);
+      const serving = stageFdcCsvPortion(row, index, sourceDataType === "FNDDS");
       if (seenPortions.has(serving.sourceServingId)) {
         throw new IngestionError(
           "DUPLICATE_KEY",
@@ -328,16 +329,25 @@ export function stageFdcCsvRecordDetailed(
       seenPortions.add(serving.sourceServingId);
       servings.push(serving);
     } catch (error) {
+      if (!isFdcRowDispositionError(error)) throw error;
       excludedPortions.push(excludedChild(foodSourceRecordId, index, row, error));
     }
   }
+  appendFdcLabelServing(
+    foodRow,
+    foodSourceRecordId,
+    portionRows.length,
+    servings,
+    seenPortions,
+    excludedPortions,
+  );
   const record = createStagedFood({
     sourceCode: "USDA_FDC",
     releaseKey: context.releaseKey,
     sourceRecordId: fdcId,
-    sourceDataType: firstDefined(foodRow, "data_type", "dataType"),
+    sourceDataType,
     languageTag: "en",
-    marketCode: "US",
+    marketCode: context.marketCode,
     sourceModifiedAt: normalizeFdcDate(
       firstDefined(foodRow, "publication_date", "publicationDate"),
     ),
@@ -429,11 +439,29 @@ function stageFdcCsvNutrient(
       firstDefined(row, "nutrient_name", "nutrientName", "name") ??
       `FDC nutrient ${String(firstDefined(row, "nutrient_id", "nutrientId"))}`,
     unitName: firstDefined(row, "unit_name", "unitName", "unit"),
-    amount: firstDefined(row, "amount", "value"),
-    derivation_id: firstDefined(row, "derivation_id", "derivationCode", "derivation_code"),
+    amount: fdcCsvNutrientAmount(row),
+    derivation_code: firstDefined(row, "derivation_code", "derivationCode"),
     data_points: firstDefined(row, "data_points", "dataPoints"),
   };
   return stageFdcNutrient(nested, quality, context, index);
+}
+
+function fdcCsvNutrientAmount(row: Readonly<Record<string, unknown>>): unknown {
+  const amount = firstDefined(row, "amount", "value");
+  const loq = firstDefined(row, "loq", "limit_of_quantitation");
+  const amountIsMissingOrZero =
+    amount === null ||
+    amount === undefined ||
+    amount === "" ||
+    (typeof amount === "string" && /^\+?0+(?:\.0+)?$/u.test(amount.trim())) ||
+    amount === 0;
+  const loqText = typeof loq === "string" ? loq.trim() : typeof loq === "number" ? String(loq) : "";
+  if (amountIsMissingOrZero && loqText.length > 0) {
+    const numericLoq = Number(loqText);
+    if (numericLoq === 0) return amount;
+    return `<${loqText}`;
+  }
+  return amount;
 }
 
 function stageFdcPortion(input: unknown, index: number): StagedServingRecord {
@@ -460,14 +488,59 @@ function stageFdcPortion(input: unknown, index: number): StagedServingRecord {
 function stageFdcCsvPortion(
   row: Readonly<Record<string, unknown>>,
   index: number,
+  allowBlankAmount: boolean,
 ): StagedServingRecord {
+  const rawAmount = firstDefined(row, "amount");
+  const amount =
+    allowBlankAmount && (rawAmount === "" || rawAmount === null || rawAmount === undefined)
+      ? 1
+      : rawAmount;
   return createStagedServing({
     sourceServingId: firstDefined(row, "id", "food_portion_id") ?? index,
-    description: firstDefined(row, "portion_description", "modifier", "measure_unit_name", "unit"),
-    amount: firstDefined(row, "amount") ?? 1,
+    description: firstNonblankText(
+      row,
+      "portion_description",
+      "modifier",
+      "measure_unit_name",
+      "unit",
+    ),
+    amount,
     unit: firstDefined(row, "measure_unit_name", "measure_unit", "unit"),
     gramWeight: firstDefined(row, "gram_weight", "gramWeight"),
   });
+}
+
+function firstNonblankText(
+  record: Readonly<Record<string, unknown>>,
+  ...keys: readonly string[]
+): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim().length > 0) return value;
+  }
+  return undefined;
+}
+
+function appendFdcLabelServing(
+  food: Readonly<Record<string, unknown>>,
+  foodSourceRecordId: string,
+  sourceIndex: number,
+  servings: StagedServingRecord[],
+  seenPortions: Set<string>,
+  exclusions: ExcludedFdcChildRecord[],
+): void {
+  try {
+    const labelServing = fdcLabelServing(food);
+    if (!labelServing) return;
+    if (seenPortions.has(labelServing.sourceServingId)) {
+      throw new IngestionError("DUPLICATE_KEY", "Duplicate FDC label serving key");
+    }
+    seenPortions.add(labelServing.sourceServingId);
+    servings.push(labelServing);
+  } catch (error) {
+    if (!isFdcRowDispositionError(error)) throw error;
+    exclusions.push(excludedChild(foodSourceRecordId, sourceIndex, food, error));
+  }
 }
 
 function fdcLabelServing(food: Readonly<Record<string, unknown>>): StagedServingRecord | null {
@@ -484,11 +557,19 @@ function fdcLabelServing(food: Readonly<Record<string, unknown>>): StagedServing
     return null;
   }
   const normalizedUnit = String(unit).trim();
+  const descriptionCandidate = firstDefined(
+    food,
+    "householdServingFullText",
+    "household_serving_full_text",
+    "household_serving_fulltext",
+  );
+  const description =
+    typeof descriptionCandidate === "string" && descriptionCandidate.trim().length > 0
+      ? descriptionCandidate
+      : `${String(size)} ${normalizedUnit}`;
   return createStagedServing({
     sourceServingId: "label-serving",
-    description:
-      firstDefined(food, "householdServingFullText", "household_serving_full_text") ??
-      `${String(size)} ${normalizedUnit}`,
+    description,
     amount: 1,
     unit: "serving",
     gramWeight: /^g(?:ram)?s?$/i.test(normalizedUnit) ? size : null,
@@ -554,7 +635,7 @@ function fdcGtin(
   }
   const value = typeof raw === "string" ? raw.trim() : "";
   if (/^(?:\d{8}|\d{12}|\d{13}|\d{14})$/.test(value) && hasValidGs1CheckDigit(value)) {
-    return Object.freeze({ value, exclusion: null });
+    return Object.freeze({ value: value.padStart(14, "0"), exclusion: null });
   }
   return Object.freeze({
     value: null,
@@ -566,6 +647,13 @@ function fdcGtin(
       sourcePayloadHash: safeSourceHash(raw),
     }),
   });
+}
+
+function isFdcRowDispositionError(error: unknown): error is IngestionError {
+  return (
+    error instanceof IngestionError &&
+    (error.code === "DUPLICATE_KEY" || error.code === "INVALID_RECORD")
+  );
 }
 
 export function normalizeFdcDate(value: unknown): string | null {

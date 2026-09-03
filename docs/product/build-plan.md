@@ -71,9 +71,14 @@ acceptance; progress in either lane never waives the gates in the other.
    The staged candidate must meet those evidence-bound thresholds; this plan
    does not infer them from the 363-food pilot.
 
-   Controlled acquisitions, rights/mapping review, trusted staging, and every
-   activation review above remain open. Full FDC CSV also remains blocked on
-   changed upstream bytes and a bounded archive orchestrator.
+   A bounded database-free full-FDC CSV inspector is now implemented and covered
+   by synthetic archives. It requires exact manifest-driven inventory,
+   dispositions, raw data-type/market mappings, strict table contracts,
+   disk-partitioned joins, conservation, and deterministic evidence without
+   opening PostgreSQL. Controlled acquisitions, real inventory/header and mapping
+   review, rights review, representative-scale resource evidence, a streaming
+   staging path, reconciliation, search/index evidence, and every activation
+   review above remain open. Changed upstream bytes remain unpinned.
 2. **M1 — excellent basic daily loop:** activity/exercise, water, private diary
    notes, configurable groups, camera barcode scan while preserving exact GTIN
    lookup, durable offline retry/reorder, email-verification release acceptance
@@ -210,7 +215,13 @@ candidate database reconciliation now atomically emits canonical, digest-bound,
 read-only evidence into a private, symlink-free repo-local `.local-data` evidence
 tree only after database cleanup, without granting approval or promotion
 eligibility. Separate retained full-registry mapping review, high-impact nutrient
-outlier review, and search/index evidence remain pre-activation work. The CNF
+outlier review, and search/index evidence remain pre-activation work. The FDC
+full-CSV path now has a database-free, bounded, manifest-driven inspector with
+seven relational adapter roles, explicit reference/guide dispositions, reviewed
+raw-value mappings, disk-partitioned joins, conservation, and deterministic
+baseline evidence. It is synthetic-fixture proof only: real dual acquisition,
+archive inventory/headers/mappings, scale evidence, and database staging remain
+open. The CNF
 path now includes database-free `cnf inspect` evidence and trusted-runner
 `catalogue stage-cnf`: it enforces the exact full archive inventory around the
 nine-CSV, five-adapter/four-reference-only contract, strict table and
@@ -319,6 +330,13 @@ all produce digest-bound review evidence. Three distinct role approvals and an
 explicit activation decision are still required before promotion and alias
 switching. See [release gates](../quality/release-gates.md) and the
 [food-source runbook](../../infra/runbooks/food-source-release.md).
+
+The initial full-CSV inspector implements a database-free candidate contract and
+synthetic-fixture evidence for bounded parsing and joins. It has not inspected
+the current USDA archive and therefore does not close the live source gate.
+Exact inventory, headers, raw values, type/market semantics, real-scale
+footprint/runtime, thresholds, staging, reconciliation, search, rights,
+approvals, and activation all remain open.
 
 The scoped retention source/package evidence and real API/worker drill now covers
 account/profile/biometric/custom-food composition, real custom-food diary logging,

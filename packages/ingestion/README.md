@@ -27,6 +27,49 @@ Canonical nutrient fields default to `null`. `proposeCanonicalNutrientMapping` i
 proposal for review; production promotion must resolve mappings from the versioned authoritative
 source-nutrient map.
 
+## USDA FDC full-CSV archive contract
+
+`parseFdcCsvArchive` is the database-free, bounded inspection boundary for a
+reviewed full-download CSV ZIP. The caller must provide the exact complete
+regular-file inventory and one explicit disposition for every member. Exactly
+seven CSV roles are adapter inputs: food, branded food, food nutrient, nutrient,
+food-nutrient derivation, food portion, and measure unit. Every other CSV must be
+declared reference-only with
+`unmaterialized-supporting-table-v1`; non-CSV publisher documentation must be a
+guide with `publisher-documentation-v1`. Paths are learned from the reviewed
+inventory rather than assumed from an archive naming convention.
+
+The parser loads only bounded nutrient, derivation, and measure-unit lookup
+tables. It writes the four potentially large relations to private, fixed-count
+SHA-256 partitions, joins one partition and one food at a time, updates
+deterministic count/digest evidence, and discards each staged record. All row,
+field, lookup, individual and combined partition, fan-out, spool,
+archive-member, and expanded-byte limits fail closed. The result contains
+table, conservation, disposition, semantic, processing, source-mix, and
+canonical per-market GTIN-collision evidence; it never contains the full
+catalogue and the package has no database dependency. Semantic and GTIN evidence
+declare their SHA-256-partition/key ordering, and the partition algorithm,
+count, and limits are baseline-bound rather than implicit.
+
+Raw `food.data_type` and branded `market_country` values are accepted only
+through explicit reviewed mappings supplied by the manifest. Unknown values
+quarantine their parent food; no substring, default-country, or display-label
+guess is used. Nutrient derivation foreign keys are joined to their published
+codes, a strictly positive limit of quantitation converts a missing/zero amount
+to trace while LOQ zero preserves a known zero, and
+`household_serving_fulltext` can produce a label serving. A blank portion
+amount defaults to one only for FNDDS; SR Legacy descriptions may fall back to
+their nonblank modifier, while other blank amounts remain invalid child facts.
+Valid GTIN-8/12/13/14 values are normalized to GTIN-14 before identity and
+collision analysis.
+
+Successful parsing retains only the declared CSV inputs for review and removes
+its private spool after identity-bound cleanup; guides are preflighted but not
+extracted. This boundary is currently proven with synthetic fixtures. It does
+not establish the real archive inventory, headers, raw-value mappings, scale
+budget, acquisition identity, rights decision, database staging, or promotion
+eligibility.
+
 ## Health Canada CNF archive contract
 
 `parseCnfArchive` requires the exact full regular-file inventory. It must contain

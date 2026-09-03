@@ -17,6 +17,8 @@ export interface DelimitedOptions {
 export interface DelimitedObjectOptions extends DelimitedOptions {
   /** `exact` rejects surrounding header whitespace instead of normalizing it. */
   readonly headerMode?: "exact" | "trimmed";
+  /** Observes the immutable ordered header without retaining data rows. */
+  readonly onHeaders?: (headers: readonly string[]) => void;
 }
 
 export type DelimitedChunkSource =
@@ -256,6 +258,7 @@ async function* parseDelimitedObjectsInternal(
         return normalized;
       });
       headers = Object.freeze(parsedHeaders);
+      options.onHeaders?.(headers);
       observeHeaders?.(headers);
       continue;
     }
@@ -272,7 +275,12 @@ async function* parseDelimitedObjectsInternal(
     for (let index = 0; index < headers.length; index += 1) {
       const header = headers[index];
       invariant(header !== undefined, "INVALID_RECORD", "Missing delimited header", { index });
-      record[header] = row.values[index] ?? "";
+      Object.defineProperty(record, header, {
+        configurable: true,
+        enumerable: true,
+        value: row.values[index] ?? "",
+        writable: true,
+      });
     }
     yield Object.freeze({ line: row.line, record: Object.freeze(record) });
   }

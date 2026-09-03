@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { constants, type Stats } from "node:fs";
-import { link, lstat, mkdir, open, readFile, unlink, writeFile } from "node:fs/promises";
+import { link, lstat, mkdir, open, readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import {
@@ -27,16 +27,22 @@ import {
 import {
   acquireArtifact,
   adaptFdcJsonRelease,
+  assertFdcCsvArchiveContext,
+  assertFdcCsvArchiveContract,
   assertImportReadyManifest,
   assertManifestParserIdentity,
   CNF_ARCHIVE_CSV_PATHS,
   type CnfArchiveParseResult,
   type ExtractedZipFile,
   extractZipArchive,
+  type FdcCsvArchiveContext,
+  type FdcCsvArchiveParseResult,
+  type FdcCsvFileContract,
   type FoodSourceManifestV3,
   IngestionError,
   invariant,
   parseCnfArchive,
+  parseFdcCsvArchive,
   parseFoodSourceManifest,
 } from "@nutrition-tracker/ingestion";
 
@@ -96,6 +102,7 @@ const STAGE_CNF_OPTIONS = Object.freeze([
   "manifest-object-uri",
 ]);
 const INSPECT_FDC_OPTIONS = Object.freeze(["artifact", "cache-dir", "extract-dir"]);
+const INSPECT_FDC_CSV_OPTIONS = Object.freeze(["artifact", "cache-dir", "extract-dir"]);
 const INSPECT_CNF_OPTIONS = Object.freeze(["artifact", "cache-dir", "extract-dir"]);
 const CNF_ARCHIVE_LIMITS = Object.freeze({
   maxCompressionRatio: 250,
@@ -103,6 +110,17 @@ const CNF_ARCHIVE_LIMITS = Object.freeze({
   maxFileBytes: 250_000_000,
   maxTotalBytes: 500_000_000,
 });
+const FDC_CSV_ARCHIVE_LIMITS = Object.freeze({
+  maxCompressionRatio: 250,
+  maxEntries: 256,
+  maxFileBytes: 4_000_000_000,
+  maxTotalBytes: 5_000_000_000,
+});
+const FDC_CSV_MAX_ARTIFACT_BYTES = 1_000_000_000;
+const FDC_CSV_DISPOSITION_PREFIX = "fdcCsvDisposition:";
+const FDC_CSV_DATA_TYPE_PREFIX = "fdcCsvDataTypeMapping:";
+const FDC_CSV_MARKET_PREFIX = "fdcCsvMarketMapping:";
+const FDC_CSV_DEFAULT_MARKET_KEY = "fdcCsvDefaultMarketCode";
 
 export async function runCommand(argv: readonly string[], io: CommandIo): Promise<number> {
   try {
@@ -117,6 +135,9 @@ export async function runCommand(argv: readonly string[], io: CommandIo): Promis
         return 0;
       case "fdc inspect":
         await inspectFdcCommand(argv, arguments_.positionals, arguments_.options, io);
+        return 0;
+      case "fdc inspect-csv":
+        await inspectFdcCsvCommand(argv, arguments_.positionals, arguments_.options, io);
         return 0;
       case "cnf inspect":
         await inspectCnfCommand(argv, arguments_.positionals, arguments_.options, io);
@@ -538,6 +559,102 @@ async function inspectFdcCommand(
     );
   }
   output(io, inspection);
+}
+
+async function inspectFdcCsvCommand(
+  argv: readonly string[],
+  positionals: readonly string[],
+  options: Readonly<Record<string, string | true>>,
+  io: CommandIo,
+): Promise<void> {
+  assertExactFdcCsvInspectArguments(argv, positionals, options);
+  const paths = await resolveFdcCsvInspectionPaths(positionals, options);
+  const manifestBytes = await readFile(paths.manifest);
+  const manifest = parseFoodSourceManifest(JSON.parse(manifestBytes.toString("utf8")));
+  const manifestSha256 = hashBytes(manifestBytes);
+  assertManifestParserIdentity(manifest);
+  const contract = requireFdcCsvManifest(manifest);
+  assertFdcCsvArchiveContract(manifest.validation.expectedFiles, contract.fileContracts);
+  assertFdcCsvArchiveContext(contract.context);
+  const parserBuildSha256 = trustedParserBuildSha256(manifest, io.environment);
+  const artifactSha256 = requiredManifestValue(manifest.artifact.sha256, "artifact.sha256");
+  const artifactByteSize = requiredPositiveSafeInteger(
+    manifest.artifact.byteSize,
+    "artifact.byteSize",
+  );
+  const artifact = await acquireArtifact({
+    cacheDirectory: paths.cacheDirectory,
+    maxBytes: FDC_CSV_MAX_ARTIFACT_BYTES,
+    operatorPrincipalId: "local-fdc-csv-inspection",
+    source: paths.artifact,
+    sourceReadMode: "require-source-read",
+    sourceMode: "local-test",
+    tool: "nutrition-tracker-ingest/0.1.0",
+    verification: {
+      mode: "verified",
+      expected: {
+        byteSize: artifactByteSize,
+        provenance: `manifest:${manifestSha256}`,
+        sha256: artifactSha256,
+      },
+    },
+  });
+  const parsed = await parseFdcCsvArchive({
+    archiveExpectation: { byteSize: artifactByteSize, sha256: artifactSha256 },
+    archiveLimits: FDC_CSV_ARCHIVE_LIMITS,
+    archivePath: artifact.path,
+    context: contract.context,
+    destinationDirectory: paths.extractionDirectory,
+    expectedFiles: manifest.validation.expectedFiles,
+    fileContracts: contract.fileContracts,
+  });
+  const baseline = fdcCsvParserBaselineEvidence(parsed);
+  const baselineMismatches = fdcCsvParserBaselineMismatches(manifest, baseline);
+  const inspection = {
+    archive: parsed.archive,
+    baseline,
+    baselineReview: {
+      kind: "non-qualifying-local-baseline-comparison-v1",
+      manifestExpectationsMatched: baselineMismatches.length === 0,
+      mismatches: baselineMismatches,
+      qualifiesAsAcquisitionOrApprovalEvidence: false,
+      status: baselineMismatches.length === 0 ? "matched-manifest-expectations" : "review-required",
+    },
+    conservation: parsed.conservation,
+    exclusionReasonCounts: parsed.exclusionReasonCounts,
+    gtinEvidence: parsed.gtinEvidence,
+    localVerification: {
+      artifactByteSize,
+      artifactSha256,
+      kind: "non-qualifying-local-artifact-verification-v1",
+      qualifiesAsAcquisitionObservation: false,
+      status: "verified-against-manifest-pins",
+    },
+    manifestSha256,
+    metrics: parsed.metrics,
+    parserBuildSha256,
+    parserPackage: manifest.ingestion.parserPackage,
+    parserVersion: requiredManifestValue(
+      manifest.ingestion.parserVersion,
+      "ingestion.parserVersion",
+    ),
+    processing: parsed.processing,
+    releaseKey: manifest.release.releaseKey,
+    reportKind: "usda-fdc-full-csv-inspection-v1",
+    schemaVersion: 1,
+    semanticEvidence: parsed.semanticEvidence,
+    sourceMixEvidence: parsed.sourceMixEvidence,
+    tableEvidenceSha256: parsed.tableEvidenceSha256,
+    tables: parsed.tables,
+  };
+  output(io, inspection);
+  if (baselineMismatches.length > 0) {
+    throw new Error(
+      `FDC CSV inspection produced a non-qualifying baseline proposal for: ${baselineMismatches
+        .map((mismatch) => mismatch.key)
+        .join(", ")}`,
+    );
+  }
 }
 
 async function inspectCnfCommand(
@@ -1258,6 +1375,141 @@ function requireFdcFoundationManifest(manifest: FoodSourceManifestV3): void {
   }
 }
 
+interface FdcCsvManifestContract {
+  readonly context: FdcCsvArchiveContext;
+  readonly fileContracts: readonly FdcCsvFileContract[];
+}
+
+const FDC_CSV_DISPOSITIONS: Readonly<
+  Record<string, Pick<FdcCsvFileContract, "referenceOnlyReason" | "role">>
+> = Object.freeze({
+  "adapter-input:food-v1": Object.freeze({ role: "food", referenceOnlyReason: null }),
+  "adapter-input:branded-food-v1": Object.freeze({
+    role: "branded-food",
+    referenceOnlyReason: null,
+  }),
+  "adapter-input:food-nutrient-v1": Object.freeze({
+    role: "food-nutrient",
+    referenceOnlyReason: null,
+  }),
+  "adapter-input:nutrient-v1": Object.freeze({ role: "nutrient", referenceOnlyReason: null }),
+  "adapter-input:food-nutrient-derivation-v1": Object.freeze({
+    role: "food-nutrient-derivation",
+    referenceOnlyReason: null,
+  }),
+  "adapter-input:food-portion-v1": Object.freeze({
+    role: "food-portion",
+    referenceOnlyReason: null,
+  }),
+  "adapter-input:measure-unit-v1": Object.freeze({
+    role: "measure-unit",
+    referenceOnlyReason: null,
+  }),
+  "reference-only:unmaterialized-supporting-table-v1": Object.freeze({
+    role: "reference-only",
+    referenceOnlyReason: "unmaterialized-supporting-table-v1",
+  }),
+  "guide:publisher-documentation-v1": Object.freeze({
+    role: "guide",
+    referenceOnlyReason: "publisher-documentation-v1",
+  }),
+});
+
+function requireFdcCsvManifest(manifest: FoodSourceManifestV3): FdcCsvManifestContract {
+  if (
+    manifest.source.code !== "USDA_FDC" ||
+    manifest.artifact.mediaType !== "application/zip" ||
+    manifest.ingestion.parserPackage !== "@nutrition-tracker/ingestion" ||
+    manifest.validation.expectedFiles.length === 0
+  ) {
+    throw new Error("This command requires a pinned USDA FDC full-CSV ZIP manifest");
+  }
+  requireExactStringArray(
+    manifest.ingestion.dataTypes,
+    ["Foundation", "Experimental", "FNDDS", "SR Legacy", "Branded"],
+    "FDC CSV data types",
+  );
+  requireExactStringArray(manifest.ingestion.languages, ["en"], "FDC CSV languages");
+  requireExactStringArray(manifest.ingestion.markets, ["US", "NZ"], "FDC CSV markets");
+  requireExactStringArray(
+    manifest.ingestion.sourceIdentityFields,
+    ["fdcId", "dataType"],
+    "FDC CSV source identity fields",
+  );
+  const expected = new Set(manifest.validation.expectedFiles);
+  const expectations = manifest.validation.releaseSpecificExpectations;
+  const fileContracts = manifest.validation.expectedFiles.map((archivePath) => {
+    const key = `${FDC_CSV_DISPOSITION_PREFIX}${archivePath}`;
+    const dispositionValue = expectations[key];
+    if (typeof dispositionValue !== "string") {
+      throw new Error(`FDC CSV manifest is missing explicit disposition ${key}`);
+    }
+    if (!Object.hasOwn(FDC_CSV_DISPOSITIONS, dispositionValue)) {
+      throw new Error(`FDC CSV manifest disposition is unsupported for ${archivePath}`);
+    }
+    const disposition = FDC_CSV_DISPOSITIONS[dispositionValue];
+    if (!disposition) throw new Error(`FDC CSV manifest disposition is invalid for ${archivePath}`);
+    return Object.freeze({ archivePath, ...disposition });
+  });
+  for (const key of Object.keys(expectations)) {
+    if (!key.startsWith(FDC_CSV_DISPOSITION_PREFIX)) continue;
+    const archivePath = key.slice(FDC_CSV_DISPOSITION_PREFIX.length);
+    if (!expected.has(archivePath)) {
+      throw new Error(`FDC CSV disposition names a file outside expectedFiles: ${archivePath}`);
+    }
+  }
+
+  const defaultMarketCode = expectations[FDC_CSV_DEFAULT_MARKET_KEY];
+  if (typeof defaultMarketCode !== "string") {
+    throw new Error(`FDC CSV manifest requires ${FDC_CSV_DEFAULT_MARKET_KEY}`);
+  }
+  const dataTypeMappings = Object.create(null) as Record<string, string>;
+  for (const [key, value] of Object.entries(expectations)) {
+    if (!key.startsWith(FDC_CSV_DATA_TYPE_PREFIX)) continue;
+    const source = key.slice(FDC_CSV_DATA_TYPE_PREFIX.length);
+    if (
+      source.length === 0 ||
+      source.trim() !== source ||
+      source.normalize("NFKC") !== source ||
+      typeof value !== "string"
+    ) {
+      throw new Error("FDC CSV data-type mappings require normalized text keys and string values");
+    }
+    dataTypeMappings[source] = value;
+  }
+  if (Object.keys(dataTypeMappings).length === 0) {
+    throw new Error("FDC CSV manifest requires at least one reviewed data-type mapping");
+  }
+  const marketMappings = Object.create(null) as Record<string, string>;
+  for (const [key, value] of Object.entries(expectations)) {
+    if (!key.startsWith(FDC_CSV_MARKET_PREFIX)) continue;
+    const source = key.slice(FDC_CSV_MARKET_PREFIX.length);
+    if (
+      source.length === 0 ||
+      source.trim() !== source ||
+      source.normalize("NFKC") !== source ||
+      typeof value !== "string"
+    ) {
+      throw new Error("FDC CSV market mappings require normalized text keys and string values");
+    }
+    marketMappings[source] = value;
+  }
+  if (Object.keys(marketMappings).length === 0) {
+    throw new Error("FDC CSV manifest requires at least one reviewed branded market mapping");
+  }
+  return Object.freeze({
+    context: Object.freeze({
+      releaseKey: manifest.release.releaseKey,
+      allowedDataTypes: manifest.ingestion.dataTypes,
+      allowedMarketCodes: manifest.ingestion.markets,
+      dataTypeMappings: Object.freeze(dataTypeMappings),
+      defaultMarketCode,
+      marketMappings: Object.freeze(marketMappings),
+    }),
+    fileContracts: Object.freeze(fileContracts),
+  });
+}
+
 function requireCnfManifest(manifest: FoodSourceManifestV3): readonly string[] {
   if (
     manifest.source.code !== "HEALTH_CANADA_CNF" ||
@@ -1871,10 +2123,78 @@ function fdcParserBaselineEvidence(
   });
 }
 
+export function fdcCsvParserBaselineEvidence(
+  parsed: FdcCsvArchiveParseResult,
+): Readonly<Record<string, number | string>> {
+  const baseline: Record<string, number | string> = {
+    parserBaselineCsvAcceptedFoodCount: parsed.metrics.acceptedFoodCount,
+    parserBaselineCsvAdapterInputDataRowCount: parsed.metrics.adapterInputDataRowCount,
+    parserBaselineCsvArchiveContractDigest: parsed.archive.contractSha256,
+    parserBaselineCsvArchiveInventoryDigest: parsed.archive.inventorySha256,
+    parserBaselineCsvCanonicalAcceptedRecordsDigest:
+      parsed.semanticEvidence.canonicalAcceptedRecords.sha256,
+    parserBaselineCsvConservationDigest: sha256CanonicalJson(
+      parsed.conservation as unknown as JsonValue,
+    ),
+    parserBaselineCsvContextDigest: parsed.contextSha256,
+    parserBaselineCsvDerivedLabelServingCount: parsed.metrics.derivedLabelServingCount,
+    parserBaselineCsvExcludedAttributeCount: parsed.metrics.excludedAttributeCount,
+    parserBaselineCsvExcludedNutrientCount: parsed.metrics.excludedNutrientCount,
+    parserBaselineCsvExcludedPortionCount: parsed.metrics.excludedPortionCount,
+    parserBaselineCsvExclusionReasonCountsDigest: sha256CanonicalJson(
+      parsed.exclusionReasonCounts as unknown as JsonValue,
+    ),
+    parserBaselineCsvGuideCount: parsed.metrics.guideCount,
+    parserBaselineCsvGtinAssignmentCount: parsed.gtinEvidence.assignmentCount,
+    parserBaselineCsvGtinAssignmentsDigest: parsed.gtinEvidence.assignmentsSha256,
+    parserBaselineCsvGtinCollisionAssignmentCount: parsed.gtinEvidence.collisionAssignmentCount,
+    parserBaselineCsvGtinCollisionCount: parsed.gtinEvidence.collisionCount,
+    parserBaselineCsvGtinCollisionsDigest: parsed.gtinEvidence.collisionsSha256,
+    parserBaselineCsvGtinOrdering: parsed.gtinEvidence.ordering,
+    parserBaselineCsvGtinUniqueCount: parsed.gtinEvidence.uniqueCount,
+    parserBaselineCsvMaximumCombinedPartitionBytes:
+      parsed.processing.maximumObservedCombinedPartitionBytes,
+    parserBaselineCsvMaximumCombinedPartitionRows:
+      parsed.processing.maximumObservedCombinedPartitionRows,
+    parserBaselineCsvMaximumPartitionBytes: parsed.processing.maximumObservedPartitionBytes,
+    parserBaselineCsvMaximumPartitionRows: parsed.processing.maximumObservedPartitionRows,
+    parserBaselineCsvOrderedExcludedAttributeDispositionsDigest:
+      parsed.semanticEvidence.orderedDispositions.excludedAttributes.sha256,
+    parserBaselineCsvOrderedExcludedNutrientDispositionsDigest:
+      parsed.semanticEvidence.orderedDispositions.excludedNutrients.sha256,
+    parserBaselineCsvOrderedExcludedPortionDispositionsDigest:
+      parsed.semanticEvidence.orderedDispositions.excludedPortions.sha256,
+    parserBaselineCsvOrderedQuarantinedFoodDispositionsDigest:
+      parsed.semanticEvidence.orderedDispositions.quarantinedFoods.sha256,
+    parserBaselineCsvParsedRowCount: parsed.metrics.parsedCsvRowCount,
+    parserBaselineCsvPartitionAlgorithm: parsed.processing.algorithm,
+    parserBaselineCsvPartitionCount: parsed.processing.partitionCount,
+    parserBaselineCsvProcessingLimitsDigest: parsed.processing.limitsSha256,
+    parserBaselineCsvQuarantinedFoodCount: parsed.metrics.quarantinedFoodCount,
+    parserBaselineCsvReferenceOnlyDataRowCount: parsed.metrics.referenceOnlyDataRowCount,
+    parserBaselineCsvSemanticOrdering: parsed.semanticEvidence.ordering,
+    parserBaselineCsvSemanticEvidenceDigest: parsed.semanticEvidence.sha256,
+    parserBaselineCsvSourceMixEvidenceDigest: parsed.sourceMixEvidence.sha256,
+    parserBaselineCsvSpoolByteSize: parsed.processing.spoolByteSize,
+    parserBaselineCsvStagedNutrientCount: parsed.metrics.stagedNutrientCount,
+    parserBaselineCsvStagedPortionCount: parsed.metrics.stagedPortionCount,
+    parserBaselineCsvTableEvidenceDigest: parsed.tableEvidenceSha256,
+  };
+  for (const table of parsed.tables) {
+    const prefix = `parserBaselineCsvTable:${table.archivePath}:`;
+    baseline[`${prefix}byteSize`] = table.byteSize;
+    baseline[`${prefix}headerSha256`] = table.headerSha256;
+    baseline[`${prefix}rawSha256`] = table.rawSha256;
+    baseline[`${prefix}rowCount`] = table.rowCount;
+    baseline[`${prefix}rowsSha256`] = table.rowsSha256;
+  }
+  return Object.freeze(baseline);
+}
+
 interface FdcParserBaselineMismatch {
-  readonly actual: number | string;
+  readonly actual: number | string | null;
   readonly expected: boolean | number | string | null;
-  readonly issue: "mismatch" | "missing";
+  readonly issue: "mismatch" | "missing" | "unexpected";
   readonly key: string;
 }
 
@@ -1897,6 +2217,22 @@ function fdcParserBaselineMismatches(
     );
   }
   return Object.freeze(mismatches);
+}
+
+function fdcCsvParserBaselineMismatches(
+  manifest: FoodSourceManifestV3,
+  actual: Readonly<Record<string, number | string>>,
+): readonly FdcParserBaselineMismatch[] {
+  const mismatches = [...fdcParserBaselineMismatches(manifest, actual)];
+  for (const [key, value] of Object.entries(manifest.validation.releaseSpecificExpectations)) {
+    if (!key.startsWith("parserBaselineCsv") || Object.hasOwn(actual, key)) continue;
+    mismatches.push(
+      Object.freeze({ actual: null, expected: value, issue: "unexpected" as const, key }),
+    );
+  }
+  return Object.freeze(
+    mismatches.sort((left, right) => (left.key < right.key ? -1 : left.key > right.key ? 1 : 0)),
+  );
 }
 
 function assertFdcParserBaseline(
@@ -1927,6 +2263,244 @@ function requiredPositiveSafeInteger(value: unknown, field: string): number {
 
 function workspacePath(path: string): string {
   return isAbsolute(path) ? path : resolve(WORKSPACE_ROOT, path);
+}
+
+export interface FdcCsvInspectionPaths {
+  readonly artifact: string;
+  readonly cacheDirectory: string;
+  readonly extractionDirectory: string;
+  readonly manifest: string;
+}
+
+export async function resolveFdcCsvInspectionPaths(
+  positionals: readonly string[],
+  options: Readonly<Record<string, string | true>>,
+  sourceRoot = WORKSPACE_ROOT,
+): Promise<FdcCsvInspectionPaths> {
+  const workspaceRoot = await realpath(sourceRoot);
+  assertLinuxFilesystemPath(workspaceRoot, "FDC CSV workspace");
+  const manifestCandidate = repositoryRelativePath(
+    singlePositional(positionals, "manifest path"),
+    "data/manifests",
+    "FDC CSV manifest",
+    workspaceRoot,
+  );
+  const artifactCandidate = repositoryRelativePath(
+    requiredOption(options, "artifact"),
+    ".local-data",
+    "FDC CSV artifact",
+    workspaceRoot,
+  );
+  const cacheCandidate = repositoryRelativePath(
+    requiredOption(options, "cache-dir"),
+    ".local-data",
+    "FDC CSV cache directory",
+    workspaceRoot,
+  );
+  const extractionCandidate = repositoryRelativePath(
+    requiredOption(options, "extract-dir"),
+    ".local-data",
+    "FDC CSV extraction directory",
+    workspaceRoot,
+  );
+  const manifestRoot = await trustedRepositoryDirectory(
+    resolve(workspaceRoot, "data/manifests"),
+    workspaceRoot,
+    "FDC CSV manifest root",
+    false,
+  );
+  const localDataRoot = await trustedRepositoryDirectory(
+    resolve(workspaceRoot, ".local-data"),
+    workspaceRoot,
+    "FDC CSV local-data root",
+    true,
+  );
+  const manifest = await canonicalExistingLinuxPath(
+    manifestCandidate,
+    manifestRoot,
+    "FDC CSV manifest",
+  );
+  const artifact = await canonicalExistingLinuxPath(
+    artifactCandidate,
+    localDataRoot,
+    "FDC CSV artifact",
+  );
+  const cacheDirectory = await canonicalFutureLinuxPath(
+    cacheCandidate,
+    localDataRoot,
+    "FDC CSV cache directory",
+  );
+  const extractionDirectory = await canonicalFutureLinuxPath(
+    extractionCandidate,
+    localDataRoot,
+    "FDC CSV extraction directory",
+  );
+  if (pathsOverlap(cacheDirectory, extractionDirectory)) {
+    throw new Error("FDC CSV cache and extraction directories must be disjoint");
+  }
+  if (pathsOverlap(artifact, cacheDirectory) || pathsOverlap(artifact, extractionDirectory)) {
+    throw new Error("FDC CSV artifact, cache, and extraction paths must be disjoint");
+  }
+  return Object.freeze({ artifact, cacheDirectory, extractionDirectory, manifest });
+}
+
+function repositoryRelativePath(
+  rawPath: string,
+  allowedRoot: string,
+  field: string,
+  workspaceRoot = WORKSPACE_ROOT,
+): string {
+  if (
+    isAbsolute(rawPath) ||
+    /^[A-Za-z]:[\\/]/u.test(rawPath) ||
+    rawPath.startsWith("\\\\") ||
+    rawPath.includes("\\") ||
+    rawPath.includes("\0")
+  ) {
+    throw new Error(`${field} must be a relative Linux path inside ${allowedRoot}`);
+  }
+  const root = resolve(workspaceRoot, allowedRoot);
+  const candidate = resolve(workspaceRoot, rawPath);
+  const within = relative(root, candidate);
+  if (
+    within.length === 0 ||
+    within === ".." ||
+    within.startsWith(`..${sep}`) ||
+    isAbsolute(within)
+  ) {
+    throw new Error(`${field} must be beneath ${allowedRoot}`);
+  }
+  assertLinuxFilesystemPath(candidate, field);
+  return candidate;
+}
+
+async function trustedRepositoryDirectory(
+  path: string,
+  workspaceRoot: string,
+  field: string,
+  requirePrivateMode: boolean,
+): Promise<string> {
+  let handle: Awaited<ReturnType<typeof open>>;
+  try {
+    handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  } catch (error) {
+    throw new Error(`${field} must be a real directory`, { cause: error });
+  }
+  try {
+    const descriptor = await handle.stat();
+    const pathname = await lstat(path);
+    const resolved = await realpath(path);
+    const currentUid = process.getuid?.();
+    if (
+      currentUid === undefined ||
+      !descriptor.isDirectory() ||
+      descriptor.isSymbolicLink() ||
+      !pathname.isDirectory() ||
+      pathname.isSymbolicLink() ||
+      descriptor.dev !== pathname.dev ||
+      descriptor.ino !== pathname.ino ||
+      descriptor.uid !== currentUid ||
+      pathname.uid !== currentUid ||
+      resolved !== resolve(path) ||
+      (requirePrivateMode && (descriptor.mode & 0o777) !== 0o700)
+    ) {
+      throw new Error(
+        `${field} must be a real current-user-owned${requirePrivateMode ? " mode-0700" : ""} directory`,
+      );
+    }
+    assertPathWithinWorkspace(resolved, workspaceRoot, field);
+    return resolved;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function canonicalExistingLinuxPath(
+  path: string,
+  allowedRoot: string,
+  field: string,
+): Promise<string> {
+  const resolved = await realpath(path);
+  assertPathBeneathRoot(resolved, allowedRoot, field);
+  return resolved;
+}
+
+async function canonicalFutureLinuxPath(
+  path: string,
+  allowedRoot: string,
+  field: string,
+): Promise<string> {
+  let candidate = path;
+  const missingSuffix: string[] = [];
+  while (true) {
+    try {
+      const resolved = await realpath(candidate);
+      assertPathBeneathRoot(resolved, allowedRoot, field);
+      if (missingSuffix.length > 0) {
+        const metadata = await lstat(resolved);
+        if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+          throw new Error(`${field} has a non-directory existing ancestor`);
+        }
+      }
+      const rebuilt = resolve(resolved, ...missingSuffix);
+      assertPathBeneathRoot(rebuilt, allowedRoot, field);
+      return rebuilt;
+    } catch (error) {
+      if (!isMissingPathError(error)) throw error;
+      const parent = dirname(candidate);
+      if (parent === candidate) throw error;
+      missingSuffix.unshift(candidate.slice(parent.length + (parent.endsWith(sep) ? 0 : 1)));
+      candidate = parent;
+    }
+  }
+}
+
+function assertPathBeneathRoot(path: string, allowedRoot: string, field: string): void {
+  assertLinuxFilesystemPath(path, field);
+  const within = relative(allowedRoot, path);
+  if (
+    within.length === 0 ||
+    within === ".." ||
+    within.startsWith(`..${sep}`) ||
+    isAbsolute(within)
+  ) {
+    throw new Error(`${field} resolves outside its required repository subtree`);
+  }
+}
+
+function assertPathWithinWorkspace(path: string, workspaceRoot: string, field: string): void {
+  assertLinuxFilesystemPath(path, field);
+  const within = relative(workspaceRoot, path);
+  if (within === ".." || within.startsWith(`..${sep}`) || isAbsolute(within)) {
+    throw new Error(`${field} resolves outside the WSL source checkout`);
+  }
+}
+
+function assertLinuxFilesystemPath(path: string, field: string): void {
+  if (
+    process.platform !== "linux" ||
+    !path.startsWith("/") ||
+    /^\/mnt\/[A-Za-z](?:\/|$)/u.test(path) ||
+    /^[A-Za-z]:[\\/]/u.test(path) ||
+    path.includes("\\") ||
+    path.includes("\0")
+  ) {
+    throw new Error(`${field} must reside in the WSL Linux filesystem`);
+  }
+}
+
+function pathsOverlap(left: string, right: string): boolean {
+  const leftToRight = relative(left, right);
+  const rightToLeft = relative(right, left);
+  return (
+    leftToRight.length === 0 ||
+    (leftToRight !== ".." && !leftToRight.startsWith(`..${sep}`) && !isAbsolute(leftToRight)) ||
+    (rightToLeft !== ".." && !rightToLeft.startsWith(`..${sep}`) && !isAbsolute(rightToLeft))
+  );
+}
+
+function isMissingPathError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }
 
 function resolveCatalogueReconciliationReportPath(
@@ -2115,6 +2689,31 @@ function assertExactFdcInspectArguments(
     }
   }
   for (const name of INSPECT_FDC_OPTIONS) requiredOption(options, name);
+}
+
+function assertExactFdcCsvInspectArguments(
+  argv: readonly string[],
+  positionals: readonly string[],
+  options: Readonly<Record<string, string | true>>,
+): void {
+  if (positionals.length !== 1 || !positionals[0]) {
+    throw new Error("fdc inspect-csv requires exactly one manifest path");
+  }
+  const allowed = new Set(INSPECT_FDC_CSV_OPTIONS);
+  for (const name of Object.keys(options)) {
+    if (!allowed.has(name)) throw new Error(`Unknown fdc inspect-csv option: --${name}`);
+  }
+
+  const tokens = argv[0] === "--" ? argv.slice(1) : argv;
+  for (const token of tokens.slice(2)) {
+    if (token === "--") break;
+    if (!token.startsWith("--")) continue;
+    const name = token.slice(2).split("=", 1)[0];
+    if (!name || !allowed.has(name)) {
+      throw new Error(`Unknown fdc inspect-csv option: --${name ?? ""}`);
+    }
+  }
+  for (const name of INSPECT_FDC_CSV_OPTIONS) requiredOption(options, name);
 }
 
 function assertExactStageFdcArguments(
@@ -2349,6 +2948,7 @@ function usage(): string {
     "  ingest manifest validate <manifest> [--import-ready]",
     "  ingest artifact observe <manifest> --cache-dir <path> --observation-out <path>",
     "  ingest fdc inspect <manifest> --artifact <zip> --cache-dir <path> --extract-dir <path>",
+    "  ingest fdc inspect-csv <manifest> --artifact <zip> --cache-dir <path> --extract-dir <path>",
     "  ingest cnf inspect <manifest> --artifact <zip> --cache-dir <path> --extract-dir <path>",
     "  ingest catalogue stage-fdc <manifest> --artifact <zip> --cache-dir <path> --extract-dir <path> --manifest-object-uri <s3-uri>",
     "  ingest catalogue stage-cnf <manifest> --artifact <zip> --cache-dir <path> --extract-dir <path> --manifest-object-uri <s3-uri>",
@@ -2359,6 +2959,6 @@ function usage(): string {
     "  ingest catalogue promote --batch-id <id> [--reason <text>]",
     "  ingest catalogue rollback --source-code <code> --reason <text> (--target-release-id <id>|--deactivate)",
     "",
-    "Authority-changing release commands derive actor identity from the trusted runner environment; command-line principal overrides are not accepted. Catalogue reconciliation is read-only and has no actor.",
+    "Authority-changing release commands derive actor identity from the trusted runner environment; command-line principal overrides are not accepted. FDC inspection is database-free and non-authority-changing but writes only the caller-selected local cache/extraction paths. Catalogue reconciliation reads PostgreSQL and writes one local evidence report; neither command grants authority or accepts an actor.",
   ].join("\n");
 }

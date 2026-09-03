@@ -3,10 +3,12 @@ import {
   adaptCnfTables,
   adaptFdcJsonRelease,
   canonicalJson,
+  IngestionError,
   parseDelimitedObjects,
   proposeCanonicalNutrientMapping,
   stageCnfRecordDetailed,
   stageFdcCsvRecord,
+  stageFdcCsvRecordDetailed,
   stageFdcJsonRecord,
   stageFdcJsonRecordDetailed,
 } from "../src/index.js";
@@ -38,6 +40,23 @@ describe("streaming delimited parser", () => {
         // consume
       }
     }).rejects.toMatchObject({ code: "INVALID_RECORD" });
+  });
+
+  it("preserves prototype-like headers as ordinary own data properties", async () => {
+    const rows = [];
+    for await (const row of parseDelimitedObjects([
+      "__proto__,constructor,toString\nsafe,constructor-value,string-value\n",
+    ])) {
+      rows.push(row.record);
+    }
+
+    expect(rows).toHaveLength(1);
+    expect(Object.hasOwn(rows[0] ?? {}, "__proto__")).toBe(true);
+    expect(Object.hasOwn(rows[0] ?? {}, "constructor")).toBe(true);
+    expect(Object.hasOwn(rows[0] ?? {}, "toString")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(rows[0] ?? {}, "__proto__")?.value).toBe("safe");
+    expect(rows[0]?.constructor).toBe("constructor-value");
+    expect(rows[0]?.toString).toBe("string-value");
   });
 });
 
@@ -151,18 +170,226 @@ describe("USDA FoodData Central adapters", () => {
           unit_name: "KCAL",
           amount: "57.0",
           derivation_id: "49",
+          derivation_code: "A",
           data_points: "3",
         },
       ],
       [],
-      { releaseKey: "r1" },
+      { releaseKey: "r1", marketCode: "US" },
     );
     expect(record.nutrients[0]).toMatchObject({
       sourceNutrientId: "1008",
       originalUnit: "KCAL",
       value: { state: "known", amount: "57", quality: "measured" },
-      provenance: { derivationCode: "49", dataPoints: 3 },
+      provenance: { derivationCode: "A", dataPoints: 3 },
     });
+  });
+
+  it("preserves CSV LOQ as trace and emits an explicitly mapped branded serving", () => {
+    const record = stageFdcCsvRecord(
+      {
+        fdc_id: "88",
+        data_type: "Branded",
+        description: "Synthetic oats",
+        publication_date: "2026-04-30",
+        brand_owner: "Example Foods",
+        serving_size: "30",
+        serving_size_unit: "g",
+        household_serving_fulltext: "1 packet (30 g)",
+        gtin_upc: "036000291452",
+      },
+      [
+        {
+          fdc_id: "88",
+          nutrient_id: "1003",
+          nutrient_name: "Protein",
+          unit_name: "G",
+          amount: "0",
+          loq: "0.05",
+          derivation_code: "LCCS",
+        },
+        {
+          fdc_id: "88",
+          nutrient_id: "1004",
+          nutrient_name: "Total lipid (fat)",
+          unit_name: "G",
+          amount: "0",
+          loq: "0",
+          derivation_code: "LCCS",
+        },
+      ],
+      [],
+      { releaseKey: "r1", marketCode: "NZ" },
+    );
+
+    expect(record.source.marketCode).toBe("NZ");
+    expect(record.identity.gtin).toBe("00036000291452");
+    expect(record.nutrients[0]?.value).toEqual({
+      state: "trace",
+      detectionLimit: "0.05",
+    });
+    expect(record.nutrients[1]?.value).toEqual({
+      state: "known",
+      amount: "0",
+      quality: "label",
+    });
+    expect(record.servings).toEqual([
+      expect.objectContaining({
+        sourceServingId: "label-serving",
+        description: "1 packet (30 g)",
+        gramWeight: "30",
+      }),
+    ]);
+  });
+
+  it("normalizes a blank FNDDS portion amount as one described portion", () => {
+    const record = stageFdcCsvRecord(
+      {
+        fdc_id: "99",
+        data_type: "FNDDS",
+        description: "Synthetic survey food",
+        publication_date: "2024-10-31",
+      },
+      [],
+      [
+        {
+          id: "900",
+          fdc_id: "99",
+          amount: "",
+          portion_description: "1 cup, synthetic",
+          measure_unit_name: "portion",
+          gram_weight: "240",
+        },
+      ],
+      { releaseKey: "r1", marketCode: "US" },
+    );
+
+    expect(record.servings).toEqual([
+      expect.objectContaining({
+        amount: "1",
+        description: "1 cup, synthetic",
+        gramWeight: "240",
+        unit: "portion",
+      }),
+    ]);
+  });
+
+  it("uses SR modifier fallback but excludes blank amounts outside FNDDS", () => {
+    const staged = stageFdcCsvRecordDetailed(
+      {
+        fdc_id: "102",
+        data_type: "SR Legacy",
+        description: "Synthetic legacy food",
+        publication_date: "2018-04-30",
+      },
+      [],
+      [
+        {
+          id: "901",
+          fdc_id: "102",
+          amount: "1",
+          portion_description: "",
+          modifier: "1 legacy measure",
+          measure_unit_name: "undetermined",
+          gram_weight: "85",
+        },
+        {
+          id: "902",
+          fdc_id: "102",
+          amount: "",
+          portion_description: "blank amount must not be invented",
+          modifier: "",
+          measure_unit_name: "undetermined",
+          gram_weight: "85",
+        },
+      ],
+      { releaseKey: "r1", marketCode: "US" },
+    );
+
+    expect(staged.record.servings).toEqual([
+      expect.objectContaining({ amount: "1", description: "1 legacy measure" }),
+    ]);
+    expect(staged.excludedPortions).toEqual([
+      expect.objectContaining({ sourceIndex: 1, code: "INVALID_RECORD" }),
+    ]);
+  });
+
+  it("isolates an invalid optional label serving and rethrows operational resolver failures", () => {
+    const staged = stageFdcCsvRecordDetailed(
+      {
+        fdc_id: "100",
+        data_type: "Branded",
+        description: "Synthetic label food",
+        publication_date: "2026-04-30",
+        serving_size: "not-a-number",
+        serving_size_unit: "g",
+        household_serving_fulltext: "",
+      },
+      [],
+      [],
+      { releaseKey: "r1", marketCode: "US" },
+    );
+    expect(staged.record.identity.description).toBe("Synthetic label food");
+    expect(staged.record.servings).toEqual([]);
+    expect(staged.excludedPortions).toEqual([
+      expect.objectContaining({ sourceIndex: 0, code: "INVALID_RECORD" }),
+    ]);
+
+    expect(() =>
+      stageFdcCsvRecordDetailed(
+        {
+          fdc_id: "101",
+          data_type: "Foundation",
+          description: "Synthetic resolver failure",
+          publication_date: "2026-04-30",
+        },
+        [
+          {
+            fdc_id: "101",
+            nutrient_id: "1003",
+            nutrient_name: "Protein",
+            unit_name: "G",
+            amount: "1",
+          },
+        ],
+        [],
+        {
+          releaseKey: "r1",
+          marketCode: "US",
+          mappingResolver: () => {
+            throw new Error("synthetic resolver outage");
+          },
+        },
+      ),
+    ).toThrowError("synthetic resolver outage");
+
+    expect(() =>
+      stageFdcCsvRecordDetailed(
+        {
+          fdc_id: "103",
+          data_type: "Foundation",
+          description: "Synthetic bounded resolver failure",
+          publication_date: "2026-04-30",
+        },
+        [
+          {
+            fdc_id: "103",
+            nutrient_id: "1003",
+            nutrient_name: "Protein",
+            unit_name: "G",
+            amount: "1",
+          },
+        ],
+        [],
+        {
+          releaseKey: "r1",
+          marketCode: "US",
+          mappingResolver: () => {
+            throw new IngestionError("ARCHIVE_LIMIT_EXCEEDED", "synthetic resource limit");
+          },
+        },
+      ),
+    ).toThrowError("synthetic resource limit");
   });
 });
 

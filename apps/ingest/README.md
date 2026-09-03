@@ -113,6 +113,82 @@ null artifact/parser pins and the new semantic expectations are not guessed, so
 it fails this command until controlled acquisition and build review have produced
 real values in a reviewed working copy.
 
+## USDA FDC full-CSV evidence-only inspection
+
+After two controlled acquisitions agree and a reviewed working manifest contains
+the exact artifact, parser, and complete archive-inventory pins, inspect the full
+CSV artifact without opening PostgreSQL:
+
+From the repository root, create or normalize the untracked private local root
+before the first inspection:
+
+```sh
+install -d -m 0700 .local-data
+test "$(stat -c '%a' .local-data)" = 700
+```
+
+Replace every angle-bracket placeholder in the example below before running it;
+the example is not directly pasteable with placeholders intact.
+
+```sh
+INGEST_PARSER_BUILD_SHA256=<reviewed-lowercase-sha256> \
+pnpm --filter @nutrition-tracker/ingest cli -- fdc inspect-csv \
+  data/manifests/<fdc-full-csv-release>.json \
+  --artifact .local-data/acquired/<fdc-full-csv-release>.zip \
+  --cache-dir .local-data/cache-fdc-csv \
+  --extract-dir .local-data/extracted-fdc-csv-proposal-<run-id>
+```
+
+The manifest must retain the exact full-release dimensions (`Foundation`,
+`Experimental`, `FNDDS`, `SR Legacy`, and `Branded`; English; US and NZ; source
+identity `fdcId` plus `dataType`). `validation.expectedFiles` must list every
+regular member actually observed in the ZIP. For every member,
+`releaseSpecificExpectations` must contain
+`fdcCsvDisposition:<archive-path>` with exactly one supported value:
+
+- `adapter-input:<role>-v1` for each of the seven required roles `food`,
+  `branded-food`, `food-nutrient`, `nutrient`,
+  `food-nutrient-derivation`, `food-portion`, and `measure-unit`;
+- `reference-only:unmaterialized-supporting-table-v1` for each other CSV; or
+- `guide:publisher-documentation-v1` for each non-CSV publisher guide.
+
+The same expectations must explicitly map each observed raw food type through
+`fdcCsvDataTypeMapping:<publisher-value>` to a reviewed manifest data type, each
+observed branded country through
+`fdcCsvMarketMapping:<publisher-value>` to `US` or `NZ`, and set
+`fdcCsvDefaultMarketCode` for non-branded foods. Unknown types or markets are
+quarantined; the command never guesses them.
+
+All arguments are repository-relative Linux paths. The manifest must resolve
+beneath `data/manifests`; the artifact, cache, and extraction paths must resolve
+beneath `.local-data`; cache and extraction roots must be distinct. Absolute,
+Windows, UNC, backslash, traversal, symlink-escape, and `/mnt/<drive>` paths are
+rejected before artifact parsing. Both authority roots must be real directories
+owned by the current WSL user, and `.local-data` must have mode `0700`. Each
+invocation needs a new empty extraction directory because successful inspection
+retains its selected CSVs; use a different reviewed run ID for the baseline
+rerun instead of reusing the proposal directory.
+
+`fdc inspect-csv` verifies the caller-supplied source path even when the digest is
+already cached, verifies exact archive inventory, streams strict UTF-8/RFC 4180
+tables, and performs bounded disk-partitioned joins. Its count, table, row,
+conservation, semantic, processing, source-mix, context, and canonical
+per-market GTIN-collision digests become a non-authoritative baseline proposal;
+missing or changed baseline keys are emitted for review and the command exits
+nonzero. LOQ zero remains known zero, only FNDDS receives the documented blank
+portion-amount fallback, and GTIN aliases are grouped as GTIN-14. The output
+cannot count as acquisition, approval, or promotion evidence and contains no
+actor or acquisition identity. The command performs no network or database
+operation and cannot stage or activate a release.
+
+This path is covered only by synthetic archives today. Do not populate the
+checked-in candidate's null pins, empty inventory, mappings, dispositions, or
+baselines from guesses or HTTP headers. Real dual acquisition, inventory/header
+review, raw-value mapping review, rights review, representative-scale evidence,
+database staging, reconciliation, search/index evidence, and approvals remain
+separate gates. `catalogue stage-fdc` remains the Foundation JSON staging path;
+it must not be pointed at this full-CSV output.
+
 ## Health Canada CNF evidence and staging
 
 After a controlled acquisition has pinned the artifact SHA-256 and byte size,
