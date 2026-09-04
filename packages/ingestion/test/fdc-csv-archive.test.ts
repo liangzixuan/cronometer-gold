@@ -4,14 +4,15 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  readlinkSync,
   renameSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, open, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertFdcCsvSpoolIdentityContinuity,
   type FdcCsvFileContract,
@@ -625,6 +626,163 @@ describe("full FDC CSV archive inspection", () => {
     expect(movedNames.some((name) => name.startsWith("food-portion-"))).toBe(true);
   });
 
+  it("pins the spool parent and preserves a same-name replacement directory", async () => {
+    const root = await temporaryDirectory();
+    const archive = join(root, "spool-parent-replacement.zip");
+    await writeFixtureZip(archive);
+    const destination = join(root, "out");
+    const signal = new AbortController().signal;
+    let movedDestination: string | null = null;
+    let replacementDestination: string | null = null;
+    Object.defineProperty(signal, "aborted", {
+      configurable: true,
+      get: () => {
+        if (replacementDestination !== null || !existsSync(destination)) return false;
+        const spoolName = readdirSync(destination).find((name) =>
+          name.startsWith(".fdc-csv-spool-"),
+        );
+        if (!spoolName || readdirSync(join(destination, spoolName)).length === 0) return false;
+        movedDestination = `${destination}.moved`;
+        renameSync(destination, movedDestination);
+        mkdirSync(destination, { mode: 0o700 });
+        writeFileSync(join(destination, "sentinel.txt"), "preserve me", { mode: 0o600 });
+        replacementDestination = destination;
+        return false;
+      },
+    });
+
+    let failure: unknown;
+    try {
+      await parseFdcCsvArchive({
+        archiveExpectation: expectation(await readFile(archive)),
+        archivePath: archive,
+        context: context(),
+        destinationDirectory: destination,
+        expectedFiles: Object.keys(CSV),
+        fileContracts: CONTRACTS,
+        processingLimits: { partitionCount: 2 },
+        signal,
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(replacementDestination).toBe(destination);
+    expect(failure).toBeInstanceOf(AggregateError);
+    const aggregate = failure as AggregateError;
+    expect(aggregate.errors[1]).toMatchObject({
+      code: "INVALID_ARCHIVE_ENTRY",
+      message: "Refusing to clean a replaced FDC spool workspace",
+    });
+    expect(readFileSync(join(destination, "sentinel.txt"), "utf8")).toBe("preserve me");
+    expect(movedDestination).not.toBeNull();
+    const movedNames = readdirSync(movedDestination as unknown as string);
+    expect(movedNames.some((name) => name.startsWith(".fdc-csv-spool-"))).toBe(true);
+    expect(existsSync(join(movedDestination as unknown as string, PATHS.food))).toBe(true);
+  });
+
+  it("restores a spool file after a deterministic post-quarantine fault", async () => {
+    const root = await temporaryDirectory();
+    const archive = join(root, "spool-post-quarantine-fault.zip");
+    await writeFixtureZip(archive);
+    const destination = join(root, "out");
+    const probe = await open(join(root, "spool-quarantine-probe"), "w+");
+    const prototype = methodPrototype(probe, "stat") as { stat: typeof probe.stat };
+    const originalStat = prototype.stat;
+    await probe.close();
+    const injectedFailure = new Error("injected FDC spool post-quarantine stat failure");
+    let faultInjected = false;
+    let quarantinedSpoolName: string | null = null;
+    const statSpy = vi.spyOn(prototype, "stat").mockImplementation(function (this: typeof probe) {
+      const target = descriptorTarget(this.fd);
+      const quarantineMatch = /\/\.([^/]+\.jsonl)\.[0-9a-f-]{36}\.quarantine$/u.exec(target);
+      if (!faultInjected && target.includes("/.fdc-csv-spool-") && quarantineMatch?.[1]) {
+        faultInjected = true;
+        quarantinedSpoolName = quarantineMatch[1];
+        return Promise.reject(injectedFailure);
+      }
+      return originalStat.call(this);
+    });
+    let failure: unknown;
+    try {
+      await parseFdcCsvArchive({
+        archiveExpectation: expectation(await readFile(archive)),
+        archivePath: archive,
+        context: context(),
+        destinationDirectory: destination,
+        expectedFiles: Object.keys(CSV),
+        fileContracts: CONTRACTS,
+        processingLimits: { partitionCount: 2 },
+      });
+    } catch (error) {
+      failure = error;
+    } finally {
+      statSpy.mockRestore();
+    }
+
+    expect(faultInjected).toBe(true);
+    expect(failure).toBeInstanceOf(AggregateError);
+    const aggregate = failure as AggregateError;
+    expect(aggregate.errors).toHaveLength(2);
+    expect(aggregate.errors[0]).toBe(injectedFailure);
+    expect(aggregate.errors[1]).toBe(injectedFailure);
+    const spoolNames = readdirSync(destination).filter((name) =>
+      name.startsWith(".fdc-csv-spool-"),
+    );
+    expect(spoolNames).toHaveLength(1);
+    const spoolFiles = readdirSync(join(destination, spoolNames[0] as string));
+    expect(quarantinedSpoolName).not.toBeNull();
+    expect(spoolFiles).toContain(quarantinedSpoolName as unknown as string);
+    expect(spoolFiles.every((name) => !name.endsWith(".quarantine"))).toBe(true);
+  });
+
+  it("keeps successful spool cleanup idempotent when failure handling invokes it twice", async () => {
+    const root = await temporaryDirectory();
+    const archive = join(root, "spool-double-cleanup.zip");
+    await writeFixtureZip(archive);
+    const destination = join(root, "out");
+    const probe = await open(join(root, "spool-double-cleanup-probe"), "w+");
+    const prototype = methodPrototype(probe, "stat") as { stat: typeof probe.stat };
+    const originalStat = prototype.stat;
+    await probe.close();
+    const removedExtractedFile = join(destination, PATHS.food);
+    let faultArmed = false;
+    const statSpy = vi.spyOn(prototype, "stat").mockImplementation(function (this: typeof probe) {
+      const target = descriptorTarget(this.fd);
+      if (
+        !faultArmed &&
+        /\/\.\.fdc-csv-spool-[0-9a-f-]{36}\.[0-9a-f-]{36}\.quarantine$/u.test(target)
+      ) {
+        faultArmed = true;
+        unlinkSync(removedExtractedFile);
+      }
+      return originalStat.call(this);
+    });
+    let failure: unknown;
+    try {
+      await parseFdcCsvArchive({
+        archiveExpectation: expectation(await readFile(archive)),
+        archivePath: archive,
+        context: context(),
+        destinationDirectory: destination,
+        expectedFiles: Object.keys(CSV),
+        fileContracts: CONTRACTS,
+        processingLimits: { partitionCount: 2 },
+      });
+    } catch (error) {
+      failure = error;
+    } finally {
+      statSpy.mockRestore();
+    }
+
+    expect(faultArmed).toBe(true);
+    expect(failure).not.toBeInstanceOf(AggregateError);
+    expect(failure).toMatchObject({ code: "ENOENT", path: removedExtractedFile });
+    expect(readdirSync(destination).filter((name) => name.startsWith(".fdc-csv-spool-"))).toEqual(
+      [],
+    );
+    expect(existsSync(removedExtractedFile)).toBe(false);
+  });
+
   const boundedFailureCases = [
     {
       label: "duplicate-definition",
@@ -911,6 +1069,23 @@ async function temporaryDirectory(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "nutrition-fdc-csv-test-"));
   temporaryDirectories.push(directory);
   return directory;
+}
+
+function descriptorTarget(fd: number): string {
+  try {
+    return readlinkSync(`/proc/self/fd/${fd}`);
+  } catch {
+    return "";
+  }
+}
+
+function methodPrototype(value: object, method: string): object {
+  let prototype = Object.getPrototypeOf(value);
+  while (prototype !== null) {
+    if (Object.hasOwn(prototype, method)) return prototype;
+    prototype = Object.getPrototypeOf(prototype);
+  }
+  throw new Error(`Unable to locate prototype method ${method}`);
 }
 
 async function writeFixtureZip(
