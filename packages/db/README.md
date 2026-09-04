@@ -150,6 +150,41 @@ name/OID. The DB library never reads an ambient restore epoch. The external
 encrypted ledger and ciphertext object lifecycle are operational dependencies
 outside PostgreSQL.
 
+### 0010 private hydration ledger
+
+Migration `0010_hydration_ledger.sql` creates four owner-scoped tables:
+`hydration_day`, `hydration_entry`, `hydration_entry_revision`, and
+`hydration_operation`. An entry head points to one immutable contiguous revision
+chain; deletion appends a tombstone revision instead of erasing history. The
+operation ledger stores a canonical request digest and exact result for
+owner-scoped UUID replay. Direct revision, operation, entry, and day deletion is
+guarded; whole-account erasure uses reviewed non-null cascades from `app_user`.
+All four tables participate in the closed privacy-export schema and exact
+JSON/CSV and zero-row erasure reconciliation.
+
+Hydration amounts are exact integers from 1 through 20,000 mL. Database checks
+and serialized repository writes cap each profile-local day at 64 active entries
+and 100,000 total mL. Those limits are operational bounds, not health guidance.
+The server derives finite local dates and millisecond local times from each
+finite `occurred_at` instant and the active profile's canonical IANA zone.
+Immutable revisions retain that effective zone and their original local
+coordinates; a day read separately exposes the profile's current zone.
+
+Hydration writers take a hydration-specific per-owner advisory lock, lock the
+active account, read the current profile zone, lock an active entry head when
+needed, and lock affected day IDs in deterministic order. Create/update/delete
+recheck caps in that transaction. Amount-only corrections preserve the stored
+instant, local coordinates, and effective zone; updates that change `occurred_at`
+derive new coordinates from the current profile zone and may move days, advancing
+both day revisions. Reads use one read-only `REPEATABLE READ` snapshot. Repository
+writes therefore preserve owner isolation, exact idempotent replay, strong
+revision preconditions, consistent day revisions, immutable history, and bounded
+totals under concurrency. Schema guards independently enforce owner references,
+contiguous immutable revision history, head consistency, and entry/day bounds.
+Direct SQL is not a supported hydration mutation protocol and is not promised to
+advance application day synchronization tokens. Migration 0010 is forward-only
+and has no down migration.
+
 ## Client
 
 ```ts
@@ -173,6 +208,9 @@ not the canonical ID-generation policy.
 All writers must preserve this global order:
 
 1. Diary mutations take the per-user advisory lock, then lock the active account.
+   Hydration mutations use their dedicated per-owner advisory namespace, then
+   lock the active account, read the current profile, lock the entry head, and
+   lock sorted affected days.
 2. New food logs lock source, food, food version, and source release in that order;
    they then pin the nutrient registry and finally lock affected diary-day IDs in
    sorted order. Cross-day moves use the same sorted day set.

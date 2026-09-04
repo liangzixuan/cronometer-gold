@@ -1705,6 +1705,96 @@ button:disabled {
   color: #8b1f1f;
 }
 
+.hydrationDashboard {
+  width: min(1120px, 100%);
+}
+
+.hydrationStatus {
+  min-height: 22px;
+  margin: 20px 0;
+  color: var(--ink-muted);
+  font-size: 0.84rem;
+}
+
+.hydrationStatus--error {
+  color: #8a332b;
+}
+
+.hydrationRetry {
+  margin: -8px 0 20px;
+}
+
+.hydrationGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.75fr) minmax(320px, 1.25fr);
+  gap: 24px;
+}
+
+.hydrationTotal {
+  margin: 12px 0 0;
+  color: var(--forest);
+  font-size: clamp(3rem, 7vw, 5rem);
+  letter-spacing: -0.06em;
+  line-height: 1;
+}
+
+.hydrationForm {
+  margin-top: 20px;
+}
+
+.hydrationForm .buttonPrimary {
+  justify-self: start;
+}
+
+.hydrationEntries {
+  margin-top: 24px;
+}
+
+.hydrationEntries .recordList {
+  margin-top: 20px;
+}
+
+.hydrationEntries .recordList li > div:first-child strong,
+.hydrationEntries .recordList li > div:first-child small {
+  display: block;
+}
+
+.hydrationEntries .recordList li > div:first-child strong {
+  font-size: 1.1rem;
+}
+
+.hydrationEditor {
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  align-items: end;
+  gap: 16px;
+}
+
+.hydrationEditor input {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 11px;
+  color: var(--ink);
+  background: var(--white);
+  border: 1px solid rgba(23, 33, 29, 0.3);
+  border-radius: 9px;
+  font: inherit;
+}
+
+.hydrationEmpty {
+  margin: 20px 0 0;
+  color: var(--ink-muted);
+}
+
+.hydrationForm input:focus-visible,
+.hydrationForm button:focus-visible,
+.hydrationEntries input:focus-visible,
+.hydrationEntries button:focus-visible {
+  outline: 3px solid #4c8c65;
+  outline-offset: 3px;
+}
+
 .jobStatus a {
   color: #285f3d;
   font-weight: 700;
@@ -1768,6 +1858,7 @@ button:disabled {
 
   .recipeWorkspace,
   .goalWorkspace,
+  .hydrationGrid,
   .retentionColumns,
   .trendTables,
   .privacyGrid {
@@ -1857,6 +1948,15 @@ button:disabled {
 
   .ingredientRow {
     grid-template-columns: 1fr;
+  }
+
+  .hydrationEditor {
+    grid-template-columns: 1fr;
+  }
+
+  .hydrationEntries .recordList li {
+    align-items: stretch;
+    flex-direction: column;
   }
 }
 

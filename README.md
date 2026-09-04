@@ -18,7 +18,7 @@ Cronometer source code, content, branding, assets, or proprietary food data.
 - `apps/mobile`: Expo/React Native client
 - `apps/worker`: background-process shell
 - `apps/ingest`: controlled food-source acquisition and catalogue release CLI
-- `packages/domain`: pure nutrition, serving, recipe, and snapshot rules
+- `packages/domain`: pure nutrition, serving, recipe, hydration, and snapshot rules
 - `packages/contracts`: transport-neutral API contracts
 - `packages/db`: PostgreSQL schema, Kysely types, and migrations
 - `packages/search`: search contracts, ranking, cursors, and Meilisearch adapter
@@ -113,8 +113,10 @@ exports, health records, OAuth tokens, or secrets in Git.
    or environment modules.
 2. PostgreSQL is the source of truth. Search indexes and caches are disposable
    projections.
-3. Food, recipe, goal, equation, and diary history is versioned. A logged entry
-   stores a nutrition snapshot and does not change when a source record changes.
+3. Food, recipe, goal, equation, diary, and hydration histories are versioned. A
+   logged food or recipe diary entry stores a nutrition snapshot and does not
+   change when a source record changes; hydration revisions retain their exact
+   milliliters, instant, and effective time zone.
 4. Missing nutrient data is not zero. Every published nutrient value retains its
    source, release, basis, and quality status.
 5. External providers sit behind adapters. Entitlements, consent, provenance,

@@ -1,5 +1,6 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 
+import { canonicalJson, type HydrationDayResponse } from "@nutrition-tracker/contracts";
 import { createDatabase, runMigrations } from "@nutrition-tracker/db";
 import { describe, expect, it } from "vitest";
 
@@ -9,15 +10,21 @@ import { SecureAuthService } from "../src/modules/auth/auth-service.js";
 import {
   DatabaseAuthRepository,
   DatabaseDiaryService,
+  DatabaseHydrationService,
   DatabaseProfileService,
 } from "../src/persistence-services.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const describeDatabase = databaseUrl ? describe : describe.skip;
 
+function hydrationDayEtag(response: HydrationDayResponse): string {
+  const digest = createHash("sha256").update(canonicalJson(response), "utf8").digest("base64url");
+  return `"h-${digest}"`;
+}
+
 describeDatabase("live private API adapters", () => {
-  it("registers, authenticates, edits revision zero, reads an owned day, and revokes the session", {
-    timeout: 30_000,
+  it("proves authenticated profile, diary, and hydration ownership through real adapters", {
+    timeout: 60_000,
   }, async () => {
     if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
     const bootstrap = createDatabase({ connectionString: databaseUrl, maxConnections: 1 });
@@ -36,6 +43,7 @@ describeDatabase("live private API adapters", () => {
       diaryService: new DatabaseDiaryService(database, {
         cursorSecret: "x".repeat(32),
       }),
+      hydrationService: new DatabaseHydrationService(database),
       logger: false,
       profileService: new DatabaseProfileService(database),
     });
@@ -113,6 +121,197 @@ describeDatabase("live private API adapters", () => {
       expect(diaryPage.json()).toMatchObject({
         data: { entries: [], id: null, localDate: "2026-08-15", revision: "0", totals: [] },
         page: { nextCursor: null, totalEntries: 0 },
+      });
+
+      const createOperationId = randomUUID();
+      const createBody = {
+        amountMilliliters: 250,
+        // This UTC instant is still the prior profile-local day in America/Chicago.
+        occurredAt: "2026-08-15T04:30:00.000Z",
+      };
+      const createdHydration = await app.inject({
+        method: "POST",
+        url: "/v1/hydration/entries?profileTimeZonePrecondition=v1",
+        headers: {
+          authorization,
+          "idempotency-key": createOperationId,
+          "x-expected-profile-time-zone": "America/Chicago",
+        },
+        payload: createBody,
+      });
+      expect(createdHydration.statusCode, createdHydration.body).toBe(201);
+      expect(createdHydration.headers["cache-control"]).toBe("no-store");
+      expect(createdHydration.headers.etag).toBe('"1"');
+      const createdHydrationBody = createdHydration.json<{
+        data: {
+          replayed: boolean;
+          entry: {
+            id: string;
+            revision: string;
+            amountMilliliters: number;
+            localDate: string;
+            localTime: string;
+            timeZone: string;
+          };
+        };
+      }>();
+      expect(createdHydrationBody.data).toMatchObject({
+        replayed: false,
+        entry: {
+          revision: "1",
+          amountMilliliters: 250,
+          localDate: "2026-08-14",
+          localTime: "23:30:00",
+          timeZone: "America/Chicago",
+        },
+      });
+
+      const replayedCreate = await app.inject({
+        method: "POST",
+        url: "/v1/hydration/entries?profileTimeZonePrecondition=v1",
+        headers: {
+          authorization,
+          "idempotency-key": createOperationId,
+          "x-expected-profile-time-zone": "America/Chicago",
+        },
+        payload: createBody,
+      });
+      expect(replayedCreate.statusCode, replayedCreate.body).toBe(200);
+      expect(replayedCreate.json()).toMatchObject({
+        data: { replayed: true, entry: { id: createdHydrationBody.data.entry.id } },
+      });
+
+      const hydrationBeforeMove = await app.inject({
+        method: "GET",
+        url: "/v1/hydration?date=2026-08-14",
+        headers: { authorization },
+      });
+      expect(hydrationBeforeMove.statusCode, hydrationBeforeMove.body).toBe(200);
+      expect(hydrationBeforeMove.json()).toMatchObject({
+        data: {
+          entries: [{ id: createdHydrationBody.data.entry.id, amountMilliliters: 250 }],
+          localDate: "2026-08-14",
+          totalMilliliters: 250,
+        },
+      });
+
+      const otherRegistration = await app.inject({
+        method: "POST",
+        url: "/v1/auth/register",
+        payload: {
+          displayName: "Other Hydration Owner",
+          email: "other-hydration-owner@example.invalid",
+          password,
+          timeZone: "UTC",
+        },
+      });
+      expect(otherRegistration.statusCode, otherRegistration.body).toBe(201);
+      const otherAuthorization = `Bearer ${
+        otherRegistration.json<{ data: { accessToken: string } }>().data.accessToken
+      }`;
+      const otherDay = await app.inject({
+        method: "GET",
+        url: "/v1/hydration?date=2026-08-14",
+        headers: { authorization: otherAuthorization },
+      });
+      expect(otherDay.statusCode, otherDay.body).toBe(200);
+      expect(otherDay.json()).toMatchObject({
+        data: { entries: [], revision: "0", timeZone: "UTC", totalMilliliters: 0 },
+      });
+      const crossOwnerUpdate = await app.inject({
+        method: "PATCH",
+        url: `/v1/hydration/entries/${createdHydrationBody.data.entry.id}`,
+        headers: {
+          authorization: otherAuthorization,
+          "idempotency-key": randomUUID(),
+          "if-match": '"1"',
+        },
+        payload: { amountMilliliters: 400 },
+      });
+      expect(crossOwnerUpdate.statusCode).toBe(404);
+
+      const movedHydration = await app.inject({
+        method: "PATCH",
+        url: `/v1/hydration/entries/${createdHydrationBody.data.entry.id}`,
+        headers: {
+          authorization,
+          "idempotency-key": randomUUID(),
+          "if-match": '"1"',
+        },
+        payload: {
+          amountMilliliters: 500,
+          occurredAt: "2026-08-15T05:30:00.000Z",
+        },
+      });
+      expect(movedHydration.statusCode, movedHydration.body).toBe(200);
+      expect(movedHydration.headers.etag).toBe('"2"');
+      expect(movedHydration.json()).toMatchObject({
+        data: {
+          replayed: false,
+          entry: { revision: "2", localDate: "2026-08-15", amountMilliliters: 500 },
+          affectedDays: expect.arrayContaining([
+            { localDate: "2026-08-14", revision: "2" },
+            { localDate: "2026-08-15", revision: "1" },
+          ]),
+        },
+      });
+
+      const oldDay = await app.inject({
+        method: "GET",
+        url: "/v1/hydration?date=2026-08-14",
+        headers: { authorization },
+      });
+      expect(oldDay.statusCode, oldDay.body).toBe(200);
+      const oldDayBody = oldDay.json<HydrationDayResponse>();
+      expect(oldDay.headers.etag).toBe(hydrationDayEtag(oldDayBody));
+      expect(oldDayBody).toMatchObject({
+        data: { entries: [], revision: "2", totalMilliliters: 0 },
+      });
+      const newDay = await app.inject({
+        method: "GET",
+        url: "/v1/hydration?date=2026-08-15",
+        headers: { authorization },
+      });
+      expect(newDay.statusCode, newDay.body).toBe(200);
+      expect(newDay.json()).toMatchObject({
+        data: { entries: [{ amountMilliliters: 500 }], totalMilliliters: 500 },
+      });
+
+      const deleteOperationId = randomUUID();
+      const deletedHydration = await app.inject({
+        method: "DELETE",
+        url: `/v1/hydration/entries/${createdHydrationBody.data.entry.id}`,
+        headers: {
+          authorization,
+          "idempotency-key": deleteOperationId,
+          "if-match": '"2"',
+        },
+      });
+      expect(deletedHydration.statusCode, deletedHydration.body).toBe(200);
+      expect(deletedHydration.json()).toMatchObject({
+        data: { replayed: false, entry: null },
+      });
+      const replayedDelete = await app.inject({
+        method: "DELETE",
+        url: `/v1/hydration/entries/${createdHydrationBody.data.entry.id}`,
+        headers: {
+          authorization,
+          "idempotency-key": deleteOperationId,
+          "if-match": '"2"',
+        },
+      });
+      expect(replayedDelete.statusCode, replayedDelete.body).toBe(200);
+      expect(replayedDelete.json()).toMatchObject({ data: { replayed: true, entry: null } });
+      const emptyPersistedDay = await app.inject({
+        method: "GET",
+        url: "/v1/hydration?date=2026-08-15",
+        headers: { authorization },
+      });
+      expect(emptyPersistedDay.statusCode, emptyPersistedDay.body).toBe(200);
+      const emptyPersistedDayBody = emptyPersistedDay.json<HydrationDayResponse>();
+      expect(emptyPersistedDay.headers.etag).toBe(hydrationDayEtag(emptyPersistedDayBody));
+      expect(emptyPersistedDayBody).toMatchObject({
+        data: { entries: [], revision: "2", totalMilliliters: 0 },
       });
 
       const logout = await app.inject({

@@ -15,6 +15,7 @@ import type { AuthService } from "./modules/auth/auth-service.js";
 import type { DiaryService } from "./modules/diary/diary.routes.js";
 import type { FoodSearchService } from "./modules/foods/food.routes.js";
 import type { GoalService } from "./modules/goals/goal.routes.js";
+import type { HydrationService } from "./modules/hydration/hydration.routes.js";
 import type { ProfileService } from "./modules/profile/profile.routes.js";
 import type { RecipeService } from "./modules/recipes/recipe.routes.js";
 import type { RetentionService } from "./modules/retention/retention.routes.js";
@@ -29,6 +30,7 @@ export interface BuildAppOptions {
   authService?: AuthService;
   profileService?: ProfileService;
   diaryService?: DiaryService;
+  hydrationService?: HydrationService;
   recipeService?: RecipeService;
   goalService?: GoalService;
   retentionService?: RetentionService;
@@ -93,6 +95,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     ...(options.authService ? { authService: options.authService } : {}),
     ...(options.profileService ? { profileService: options.profileService } : {}),
     ...(options.diaryService ? { diaryService: options.diaryService } : {}),
+    ...(options.hydrationService ? { hydrationService: options.hydrationService } : {}),
     ...(options.recipeService ? { recipeService: options.recipeService } : {}),
     ...(options.goalService ? { goalService: options.goalService } : {}),
     ...(options.retentionService ? { retentionService: options.retentionService } : {}),

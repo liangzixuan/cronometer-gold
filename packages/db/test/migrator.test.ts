@@ -169,4 +169,43 @@ describe("forward migration discovery", () => {
     expect(migrationSql).not.toMatch(/raw_token|token_value|token_plaintext/iu);
     expect(migrationSql).not.toMatch(/create table|drop table|drop column/iu);
   });
+
+  it("adds an owner-scoped bounded hydration ledger with immutable history", async () => {
+    const migrationSql = await readFile(
+      resolve(import.meta.dirname, "../migrations/0010_hydration_ledger.sql"),
+      "utf8",
+    );
+
+    expect(migrationSql).not.toMatch(/\bdrop\s+(table|column)\b/iu);
+    for (const table of [
+      "hydration_day",
+      "hydration_entry",
+      "hydration_entry_revision",
+      "hydration_operation",
+    ]) {
+      expect(migrationSql).toContain(`create table ${table}`);
+    }
+    for (const constraint of [
+      "hydration_day_user_fk",
+      "hydration_entry_user_fk",
+      "hydration_entry_day_owner_fk",
+      "hydration_entry_revision_user_fk",
+      "hydration_entry_revision_entry_owner_fk",
+      "hydration_entry_revision_day_owner_fk",
+      "hydration_entry_current_revision_fk",
+      "hydration_operation_user_fk",
+      "hydration_operation_entry_owner_fk",
+    ]) {
+      expect(migrationSql).toContain(`constraint ${constraint}`);
+    }
+    expect(migrationSql).toContain("amount_milliliters between 1 and 20000");
+    expect(migrationSql).toContain("active_count > 64");
+    expect(migrationSql).toContain("active_total > 100000");
+    expect(migrationSql).toContain("hydration revisions must form a contiguous append-only chain");
+    expect(migrationSql).toContain("latest hydration revision must become the logical entry head");
+    expect(migrationSql).toContain("hydration revision local date does not match its day bucket");
+    expect(migrationSql).toContain("execute function validate_iana_time_zone()");
+    expect(migrationSql).toContain("deleted_at is null or isfinite(deleted_at)");
+    expect(migrationSql).toContain("on delete cascade");
+  });
 });

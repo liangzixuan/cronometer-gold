@@ -132,6 +132,59 @@ token storage. Exact-loopback Mailpit proves the local path, not production
 timing resistance or delivery readiness. The full boundary and production
 blockers are in ADR 0015.
 
+## Hydration
+
+The hydration surface is authenticated and owner-scoped. Every response is
+private and sends `Cache-Control: no-store`.
+
+`GET /v1/hydration?date=YYYY-MM-DD` returns `200 {"data": HydrationDay}` with
+ordered active entries, their exact integer milliliters, an exact
+`totalMilliliters`, and a strong
+`"h-<43-character-SHA-256-base64url>"` ETag over the exact canonical
+`HydrationDayResponse`. The day `revision` remains a synchronization token; it is
+not reconstructed as the HTTP ETag. A date with no persisted hydration returns
+an empty revision-zero day rather than an invented entry or target. The day-level
+`timeZone` is the profile's current canonical IANA zone; every immutable entry
+separately retains the zone used to derive that
+revision's `localDate` and `localTime` from its finite RFC 3339 `occurredAt`.
+Clients never submit local coordinates.
+
+`POST /v1/hydration/entries` requires a UUID `Idempotency-Key` and exactly
+`{"amountMilliliters": integer, "occurredAt": RFC3339}`. A first application
+returns 201 and an exact replay returns 200 with `data.replayed: true`; both carry
+the recorded response entry revision's strong ETag. A create may use the profile-time-zone
+race guard only by pairing `profileTimeZonePrecondition=v1` with
+`X-Expected-Profile-Time-Zone`. Either signal alone is invalid. An exact replay
+wins before the current-zone comparison; a new request after the zone changed
+returns `409 HYDRATION_TIME_ZONE_CHANGED` without a write.
+
+`PATCH /v1/hydration/entries/:entryId` requires a UUID `Idempotency-Key`, the
+current strong entry revision in `If-Match`, and a nonempty closed-schema subset
+of `amountMilliliters` and `occurredAt`. An amount-only correction preserves the
+stored instant, local coordinates, and effective time zone. A change to
+`occurredAt` derives new coordinates with the current profile zone and may
+atomically move the entry between profile-local days. The response is 200 with
+the new entry ETag. Current web and mobile clients expose only amount correction;
+time editing remains open client work even though the private API supports it.
+
+`DELETE /v1/hydration/entries/:entryId` requires the same headers, accepts no
+body, creates an immutable logical-delete revision, and returns 200 with
+`data.entry: null` and no ETag. Every mutation returns one or two
+`data.affectedDays` revision tokens and records a digest-bound result so reuse of
+an operation UUID with different method, target, precondition, or body conflicts.
+
+Amounts are exact integers from 1 through 20,000 mL. A profile-local day permits
+at most 64 active entries and 100,000 total mL. These are query, overflow, and
+abuse bounds—not intake targets, recommendations, or warnings. Hydration never
+changes food, nutrient, energy, recipe, diary, or goal calculations, and this
+contract has no reminder, offline/background queue, or device-ingestion path.
+
+A missing or malformed idempotency key, malformed `If-Match`, malformed body, or
+unpaired time-zone guard is 400. A missing `If-Match` is 428, an owned-entry miss
+is 404, idempotency or guarded-time-zone conflict is 409, a stale revision is
+412, and an entry/day operational-bound violation is 422. Authentication and
+service-readiness errors retain the shared 401 and 503 contracts.
+
 ## Recipes and goals
 
 The authenticated recipe surface is `GET|POST /v1/recipes`,

@@ -11,6 +11,7 @@ import { LocalMailpitEmailDelivery } from "./modules/auth/email-delivery.js";
 import type { DiaryService } from "./modules/diary/diary.routes.js";
 import { DatabaseBackedFoodSearchService } from "./modules/foods/search-service.js";
 import type { GoalService } from "./modules/goals/goal.routes.js";
+import type { HydrationService } from "./modules/hydration/hydration.routes.js";
 import type { ProfileService } from "./modules/profile/profile.routes.js";
 import type { RecipeService } from "./modules/recipes/recipe.routes.js";
 import type { RetentionService } from "./modules/retention/retention.routes.js";
@@ -18,6 +19,7 @@ import {
   DatabaseAuthRepository,
   DatabaseDiaryService,
   DatabaseGoalService,
+  DatabaseHydrationService,
   DatabaseProfileService,
   DatabaseRecipeService,
 } from "./persistence-services.js";
@@ -29,6 +31,7 @@ export interface ApiSearchRuntime {
   readonly diaryService: DiaryService;
   readonly foodSearchService: DatabaseBackedFoodSearchService;
   readonly goalService: GoalService;
+  readonly hydrationService: HydrationService;
   readonly profileService: ProfileService;
   readonly recipeService: RecipeService;
   readonly retentionService?: RetentionService;
@@ -114,6 +117,7 @@ export async function createApiSearchRuntime(
         maxQueuedDatabaseOperations: config.searchDatabaseMaxQueue,
       }),
       goalService: new DatabaseGoalService(database),
+      hydrationService: new DatabaseHydrationService(database),
       profileService: new DatabaseProfileService(database),
       recipeService: new DatabaseRecipeService(database),
       ...(retentionService ? { retentionService } : {}),

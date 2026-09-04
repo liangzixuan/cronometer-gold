@@ -23,6 +23,8 @@ import {
   type HealthDeviceResponse,
   type HealthImportBatchRequest,
   type HealthImportBatchResponse,
+  type HydrationDayResponse,
+  type HydrationMutationResponse,
   healthImportSignaturePayload,
   type NutritionGoalMutationResponse,
   type NutritionGoalProgressResponse,
@@ -80,6 +82,10 @@ const EXPECTED_PRIVACY_EXPORT_ENTITY_SET: Readonly<Record<PrivacyExportEntity, t
   diary_entry_revision: true,
   diary_entry_source: true,
   diary_operation: true,
+  hydration_day: true,
+  hydration_entry: true,
+  hydration_entry_revision: true,
+  hydration_operation: true,
   nutrition_goal: true,
   nutrition_goal_operation: true,
   nutrition_goal_target: true,
@@ -225,6 +231,11 @@ function exactNumber(value: string, field: string): number {
 
 function sha256(value: string | Uint8Array): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function hydrationDayEtag(response: HydrationDayResponse): string {
+  const digest = createHash("sha256").update(canonicalJson(response), "utf8").digest("base64url");
+  return `"h-${digest}"`;
 }
 
 function storedZipEntries(bytes: Buffer): ReadonlyMap<string, Buffer> {
@@ -1270,6 +1281,169 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
       expect(profileTimeZoneResponse.headers.etag).toBe('"1"');
       await expectDiaryPageStale(beforeTimeZoneCursor);
 
+      const hydrationLocalDate = "2026-01-02";
+      const emptyHydrationResponse = await app.inject({
+        method: "GET",
+        url: `/v1/hydration?date=${hydrationLocalDate}`,
+        headers: { authorization },
+      });
+      expect(emptyHydrationResponse.statusCode, emptyHydrationResponse.body).toBe(200);
+      expect(emptyHydrationResponse.headers["cache-control"]).toBe("no-store");
+      const emptyHydrationBody = emptyHydrationResponse.json<HydrationDayResponse>();
+      expect(emptyHydrationResponse.headers.etag).toBe(hydrationDayEtag(emptyHydrationBody));
+      expect(emptyHydrationBody.data).toEqual({
+        entries: [],
+        localDate: hydrationLocalDate,
+        revision: "0",
+        timeZone: "Asia/Tokyo",
+        totalMilliliters: 0,
+        updatedAt: null,
+      });
+
+      const firstHydrationPayload = {
+        amountMilliliters: 500,
+        occurredAt: "2026-01-02T03:04:05.123Z",
+      };
+      const firstHydrationOperationId = randomUUID();
+      const firstHydrationResponse = await app.inject({
+        method: "POST",
+        url: "/v1/hydration/entries?profileTimeZonePrecondition=v1",
+        headers: {
+          authorization,
+          "idempotency-key": firstHydrationOperationId,
+          "x-expected-profile-time-zone": "Asia/Tokyo",
+        },
+        payload: firstHydrationPayload,
+      });
+      expect(firstHydrationResponse.statusCode, firstHydrationResponse.body).toBe(201);
+      expect(firstHydrationResponse.headers["cache-control"]).toBe("no-store");
+      expect(firstHydrationResponse.headers.etag).toBe('"1"');
+      const firstHydrationEntry =
+        firstHydrationResponse.json<HydrationMutationResponse>().data.entry;
+      if (!firstHydrationEntry) throw new Error("Expected the first hydration entry");
+      expect(firstHydrationEntry).toMatchObject({
+        amountMilliliters: 500,
+        localDate: hydrationLocalDate,
+        revision: "1",
+        timeZone: "Asia/Tokyo",
+      });
+
+      const replayedHydrationResponse = await app.inject({
+        method: "POST",
+        url: "/v1/hydration/entries?profileTimeZonePrecondition=v1",
+        headers: {
+          authorization,
+          "idempotency-key": firstHydrationOperationId,
+          "x-expected-profile-time-zone": "Asia/Tokyo",
+        },
+        payload: firstHydrationPayload,
+      });
+      expect(replayedHydrationResponse.statusCode, replayedHydrationResponse.body).toBe(200);
+      expect(replayedHydrationResponse.headers.etag).toBe('"1"');
+      expect(replayedHydrationResponse.json<HydrationMutationResponse>().data).toMatchObject({
+        entry: { id: firstHydrationEntry.id },
+        replayed: true,
+      });
+
+      const secondHydrationResponse = await app.inject({
+        method: "POST",
+        url: "/v1/hydration/entries?profileTimeZonePrecondition=v1",
+        headers: {
+          authorization,
+          "idempotency-key": randomUUID(),
+          "x-expected-profile-time-zone": "Asia/Tokyo",
+        },
+        payload: {
+          amountMilliliters: 250,
+          occurredAt: "2026-01-02T04:05:06.000Z",
+        },
+      });
+      expect(secondHydrationResponse.statusCode, secondHydrationResponse.body).toBe(201);
+      const secondHydrationEntry =
+        secondHydrationResponse.json<HydrationMutationResponse>().data.entry;
+      if (!secondHydrationEntry) throw new Error("Expected the second hydration entry");
+
+      const updatedHydrationResponse = await app.inject({
+        method: "PATCH",
+        url: `/v1/hydration/entries/${firstHydrationEntry.id}`,
+        headers: {
+          authorization,
+          "idempotency-key": randomUUID(),
+          "if-match": '"1"',
+        },
+        payload: { amountMilliliters: 650 },
+      });
+      expect(updatedHydrationResponse.statusCode, updatedHydrationResponse.body).toBe(200);
+      expect(updatedHydrationResponse.headers.etag).toBe('"2"');
+      const updatedHydrationEntry =
+        updatedHydrationResponse.json<HydrationMutationResponse>().data.entry;
+      expect(updatedHydrationEntry).toMatchObject({
+        amountMilliliters: 650,
+        id: firstHydrationEntry.id,
+        revision: "2",
+      });
+
+      const deletedHydrationResponse = await app.inject({
+        method: "DELETE",
+        url: `/v1/hydration/entries/${secondHydrationEntry.id}`,
+        headers: {
+          authorization,
+          "idempotency-key": randomUUID(),
+          "if-match": '"1"',
+        },
+      });
+      expect(deletedHydrationResponse.statusCode, deletedHydrationResponse.body).toBe(200);
+      expect(deletedHydrationResponse.headers["cache-control"]).toBe("no-store");
+      expect(deletedHydrationResponse.headers.etag).toBeUndefined();
+      expect(deletedHydrationResponse.json<HydrationMutationResponse>().data.entry).toBeNull();
+
+      const currentHydrationResponse = await app.inject({
+        method: "GET",
+        url: `/v1/hydration?date=${hydrationLocalDate}`,
+        headers: { authorization },
+      });
+      expect(currentHydrationResponse.statusCode, currentHydrationResponse.body).toBe(200);
+      expect(currentHydrationResponse.headers["cache-control"]).toBe("no-store");
+      const currentHydrationBody = currentHydrationResponse.json<HydrationDayResponse>();
+      expect(currentHydrationResponse.headers.etag).toBe(hydrationDayEtag(currentHydrationBody));
+      expect(currentHydrationBody.data).toMatchObject({
+        entries: [
+          {
+            amountMilliliters: 650,
+            id: firstHydrationEntry.id,
+            revision: "2",
+            timeZone: "Asia/Tokyo",
+          },
+        ],
+        localDate: hydrationLocalDate,
+        revision: "4",
+        timeZone: "Asia/Tokyo",
+        totalMilliliters: 650,
+      });
+
+      const crossOwnerHydrationResponse = await app.inject({
+        method: "POST",
+        url: "/v1/hydration/entries?profileTimeZonePrecondition=v1",
+        headers: {
+          authorization: crossOwnerAuthorization,
+          "idempotency-key": randomUUID(),
+          "x-expected-profile-time-zone": "America/Chicago",
+        },
+        payload: {
+          amountMilliliters: 375,
+          occurredAt: "2026-01-02T18:05:00.000Z",
+        },
+      });
+      expect(crossOwnerHydrationResponse.statusCode, crossOwnerHydrationResponse.body).toBe(201);
+      const crossOwnerHydrationEntry =
+        crossOwnerHydrationResponse.json<HydrationMutationResponse>().data.entry;
+      if (!crossOwnerHydrationEntry) throw new Error("Expected cross-owner hydration entry");
+      expect(crossOwnerHydrationEntry).toMatchObject({
+        amountMilliliters: 375,
+        localDate: hydrationLocalDate,
+        timeZone: "America/Chicago",
+      });
+
       const goalResponse = await app.inject({
         method: "POST",
         url: "/v1/goals",
@@ -1846,6 +2020,10 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         ["diary_entry_revision", 49],
         ["diary_entry_source", 1],
         ["diary_operation", 49],
+        ["hydration_day", 1],
+        ["hydration_entry", 2],
+        ["hydration_entry_revision", 4],
+        ["hydration_operation", 4],
       ] as const) {
         expect(
           completedExport.reconciliation?.entities.find((candidate) => candidate.entity === entity),
@@ -2257,6 +2435,28 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         diary_entry_revision: expectedDiaryExportIds.revisions.map((id) => ({ id })),
         diary_entry_source: expectedDiaryExportIds.sources.map((id) => ({ id })),
         diary_operation: expectedDiaryExportIds.operations.map((id) => ({ id })),
+        hydration_day: await database
+          .selectFrom("hydration_day")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        hydration_entry: await database
+          .selectFrom("hydration_entry")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        hydration_entry_revision: await database
+          .selectFrom("hydration_entry_revision")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        hydration_operation: (
+          await database
+            .selectFrom("hydration_operation")
+            .select(["client_operation_id", "operation"])
+            .where("user_id", "=", userId)
+            .execute()
+        ).map((row) => ({ id: `${row.client_operation_id}:${row.operation}` })),
         nutrition_goal_target: (
           await database
             .selectFrom("nutrition_goal_target as target")
@@ -2481,6 +2681,7 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
             `${canonicalJson(measuredJson as unknown as Parameters<typeof canonicalJson>[0])}\n`,
           );
           expect(rawJson).not.toContain(crossOwnerUserId);
+          expect(rawJson).not.toContain(crossOwnerHydrationEntry.id);
           expect(sha256(canonicalJson(measuredJson.manifest))).toBe(measuredExport.manifestSha256);
         } else {
           measuredZipEntries = storedZipEntries(download.rawPayload);
@@ -2497,6 +2698,7 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         .map((bytes) => bytes.toString("utf8"))
         .join("\n");
       expect(measuredCsvText).not.toContain(crossOwnerUserId);
+      expect(measuredCsvText).not.toContain(crossOwnerHydrationEntry.id);
       expect(Object.keys(measuredJson.entities).sort()).toEqual(
         [...EXPECTED_PRIVACY_EXPORT_ENTITIES].sort(),
       );
@@ -2659,6 +2861,28 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
           .where("id", "=", crossOwnerUserId)
           .execute(),
       ).toEqual([{ id: crossOwnerUserId }]);
+      const crossOwnerHydrationAfterErasure = await app.inject({
+        method: "GET",
+        url: `/v1/hydration?date=${hydrationLocalDate}`,
+        headers: { authorization: crossOwnerAuthorization },
+      });
+      expect(crossOwnerHydrationAfterErasure.statusCode, crossOwnerHydrationAfterErasure.body).toBe(
+        200,
+      );
+      expect(crossOwnerHydrationAfterErasure.headers["cache-control"]).toBe("no-store");
+      expect(crossOwnerHydrationAfterErasure.json<HydrationDayResponse>().data).toMatchObject({
+        entries: [
+          {
+            amountMilliliters: 375,
+            id: crossOwnerHydrationEntry.id,
+            timeZone: "America/Chicago",
+          },
+        ],
+        localDate: hydrationLocalDate,
+        revision: "1",
+        timeZone: "America/Chicago",
+        totalMilliliters: 375,
+      });
 
       expect(
         (
@@ -2722,6 +2946,10 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         diary_entry_revision: "0",
         diary_entry_source: "0",
         diary_operation: "0",
+        hydration_day: "0",
+        hydration_entry: "0",
+        hydration_entry_revision: "0",
+        hydration_operation: "0",
       });
       expect(Object.values(reconciliation.remainingRows).every((count) => count === "0")).toBe(
         true,

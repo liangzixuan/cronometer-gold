@@ -104,7 +104,7 @@ runs exactly four named bounded polls. They use the
 same combined search/retention worker runtime used by the worker entrypoint:
 seed export, one-artifact expiry, measured export, and erasure. A static
 contract rejects a hidden additional poll. The drill populates and independently
-enumerates the compile-pinned set of all 57 retained export entity families,
+enumerates the compile-pinned set of all 61 retained export entity families,
 requires nonzero source counts and exact ID/count reconciliation across the
 source snapshot, JSON, and decompressed CSV, and proves cross-owner account/
 session survival. Forbidden field-name assertions
@@ -114,6 +114,12 @@ encryption identifiers, and ciphertext-byte metadata. Supported user workflows
 are route-first, with narrow direct compatibility/evidence fixtures only for
 route-unreachable catalogue/source/import, audit, legacy nutrient/barcode, and
 legacy operation rows.
+
+Hydration setup is route-first: the authenticated fixture creates, revises, and
+logically deletes entries through the private HTTP surface. The day, entry,
+immutable-revision, and operation families reconcile through both artifacts and
+erased-owner zero-row evidence, while an independently queried cross-owner
+hydration entry and its owner session survive.
 
 This is never a cloud, public-hosting, physical-phone, or production-data
 command. The drill deletes its export artifacts and scratch database schema, but
@@ -141,9 +147,20 @@ acceptance.
   unchanged across approved-readiness and blocked-unapproved-source probes. The
   redacted report stores neither source address; the verifier validates the exact
   assertion and signature but cannot derive routability from the redacted data.
-- Every profile, diary, biometric, report, and integration route enforces a
-  server-side session/ownership check; unauthenticated and cross-user access
-  tests fail closed.
+- Every profile, diary, hydration, biometric, report, and integration route
+  enforces a server-side session/ownership check; unauthenticated and cross-user
+  access tests fail closed.
+- Hydration acceptance proves exact-integer milliliter creation, amount correction,
+  and deletion,
+  immutable revisions and logical tombstones, digest-bound replay, strong entry
+  and day revisions, profile-time-zone race handling, explicit-`occurredAt`
+  cross-day moves, and owner-isolated export/erasure. Browser and signed
+  iOS/Android acceptance covers the shipped amount-correction UI; client time
+  editing remains open and cannot be claimed from API coverage. The 1–20,000 mL
+  per-entry, 64-active-entry, and 100,000 mL daily ceilings are operational
+  abuse/overflow bounds, never targets or intake advice. Targets, reminders,
+  non-water fluids, offline/background mutation, device/platform ingestion, and
+  medical interpretation remain out of scope until separately reviewed.
 - Authenticated web routes use a nonce- or hash-based Content Security Policy;
   the foundation shell's temporary `script-src 'unsafe-inline'` policy is not a
   sufficient XSS boundary for personal data.
@@ -215,6 +232,9 @@ acceptance.
 - Derived energy targets reproduce the reviewed Mifflin–St Jeor and PAL golden
   cases, fail closed outside the supported adult/profile boundary, identify
   every input and source, and never add ordinary exercise twice.
+  Activity/exercise ingestion remains deferred until a reviewed PAL and
+  ordinary-exercise double-counting policy defines whether and how it may affect
+  energy accounting.
 - Goal progress proves lower-bound semantics with incomplete nutrient panels and
   never labels an unknown contribution as measured zero or exact completion.
 - Diary client acceptance exercises a synthetic multi-page day spanning

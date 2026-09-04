@@ -21,6 +21,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0013](./0013-durable-native-public-food-quick-add-outbox.md) | Durable native public-food quick-add outbox | Accepted for local implementation; signed-device evidence blocked |
 | [0014](./0014-email-verification-boundary.md) | Additive email-verification boundary | Accepted for local implementation; production delivery and enforcement blocked; password recovery continued by ADR 0015 |
 | [0015](./0015-password-recovery-boundary.md) | Password-recovery boundary | Accepted for local implementation; production delivery and abuse controls blocked |
+| [0016](./0016-hydration-ledger-boundary.md) | Private hydration-ledger boundary | Accepted for local implementation; targets, offline mutation, and device evidence blocked |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

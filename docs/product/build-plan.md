@@ -34,11 +34,12 @@ reviewer, or production-release acceptance.
    lower-bound nutrient progress.
 6. **Retention and privacy (implemented; release-gated):** timezone-correct
    nutrient and biometric trends, exact-version repeat logging, private versioned
-   custom foods and biometrics, consented local reminders, coherent JSON/CSV
-   export, erasure/recovery, and read-only HealthKit/Health Connect weight adapters
-   are wired across database, API/worker, web, and mobile with package and
-   integration evidence. The real API/worker privacy drill now populates and
-   independently enumerates all 57 retained export entity families. It requires
+   custom foods, biometrics, and hydration entries, consented local reminders,
+   coherent JSON/CSV export, erasure/recovery, and read-only HealthKit/Health
+   Connect weight adapters are wired across database, API/worker, web, and mobile
+   with package and integration evidence. The real API/worker privacy drill now
+   populates and independently enumerates all 61 retained export entity families.
+   It requires
    exact source-ID/count reconciliation in JSON and decompressed CSV; proves
    cross-owner survival; verifies audit and artifact-lifecycle redaction; expires
    one artifact; cancels queued reminder delivery after pause/revoke; and
@@ -85,11 +86,29 @@ acceptance; progress in either lane never waives the gates in the other.
    review, rights review, representative-scale resource evidence, a streaming
    staging path, reconciliation, search/index evidence, and every activation
    review above remain open. Changed upstream bytes remain unpinned.
-2. **M1 — excellent basic daily loop:** activity/exercise, water, private diary
+2. **M1 — excellent basic daily loop:** activity/exercise, private diary
    notes, configurable groups, camera barcode scan while preserving exact GTIN
    lookup, durable offline retry/reorder, email-verification release acceptance
    and password recovery, reviewed reference targets, and production-grade
    weight sync, with cross-client end-to-end and accessibility acceptance.
+   Plain-water hydration is implemented locally across PostgreSQL, the private
+   API, web, and mobile as an owner-scoped exact-integer milliliter ledger.
+   Server-derived profile-local coordinates, strong entry/day revisions,
+   digest-bound idempotency, logical deletion, and immutable revision history
+   keep create, amount correction, and delete replay-safe and timezone-explainable.
+   Its 1–20,000 mL per-entry, 64-active-entry, and 100,000 mL daily limits are
+   operational abuse and overflow bounds, not intake guidance. Its four private
+   entity families are route-first in the 61-family export/erasure drill. This
+   closes only the online hydration CRUD source slice. Client time editing,
+   targets, reminders, non-water fluids, offline/background mutation,
+   device/platform ingestion, and signed-device, cross-client, and accessibility
+   evidence remain open. The private API already supports explicit `occurredAt`
+   changes without claiming a client time editor.
+
+   Activity/exercise remains deferred until the product and scientific review
+   settles PAL and ordinary-exercise double-counting policy. Hydration work does
+   not imply an exercise-energy adjustment.
+
    Private notes attached to food and recipe entries are implemented locally.
    Repeat preserves a note. Clearing hides it from the current display, while
    immutable prior revisions remain in private account exports until whole-
@@ -181,7 +200,7 @@ acceptance; progress in either lane never waives the gates in the other.
    server output become required.
 3. **M2 — controlled beta:** reviewed hosting and digest-pinned seven-image
    deployment; HTTPS, access-control, and off-host restore evidence; controlled-
-   beta review of the locally complete 57-family API/worker export-erasure flow;
+   beta review of the locally complete 61-family API/worker export-erasure flow;
    a reviewed Windows-host/WSL private-phone boundary; a signed iOS/Android device
    matrix; and independent security, browser/device, accessibility, scientific,
    and legal review. Cloud, DNS, Terraform, Tailscale, firewall, and EAS actions
@@ -346,12 +365,16 @@ footprint/runtime, thresholds, staging, reconciliation, search, rights,
 approvals, and activation all remain open.
 
 The real API/worker privacy drill now populates and independently enumerates all
-57 retained export entity families. Exact IDs and counts reconcile across the
+61 retained export entity families. Exact IDs and counts reconcile across the
 source snapshot, JSON, and decompressed CSV; forbidden field-name checks and
 independent sentinels prove audit-field redaction; artifact lifecycle rows omit
 object locators, encryption identifiers, and ciphertext-byte metadata; the
 erased owner's rows and projections reconcile while a cross-owner account and
-session survive. Narrow direct fixtures cover route-unreachable compatibility/
+session survive. Hydration create, update, and logical delete are seeded through
+authenticated routes; its day, entry, immutable-revision, and operation families
+participate in exact export and erased-owner zero-row reconciliation while an
+independently queried cross-owner hydration entry survives. Narrow direct
+fixtures cover route-unreachable compatibility/
 evidence tables,
 including catalogue/source/import, audit, legacy nutrient/barcode, and legacy
 operation rows. This completes the local all-retained-entity source gate, but not

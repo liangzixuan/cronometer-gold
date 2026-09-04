@@ -672,6 +672,7 @@ export function DiaryClient() {
           <Link href={`/foods${dateQuery}`}>Foods</Link>
           <Link href={`/recipes${dateQuery}`}>Recipes</Link>
           <Link href={`/goals${dateQuery}`}>Goals</Link>
+          <Link href={`/hydration${dateQuery}`}>Hydration</Link>
           <Link href="/health">Health & privacy</Link>
         </nav>
         {session ? <p className="accountIdentity">Signed in as {session.user.email}</p> : null}

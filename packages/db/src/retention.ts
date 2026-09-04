@@ -767,6 +767,10 @@ export type PrivacyExportEntity =
   | "diary_entry_revision"
   | "diary_entry_source"
   | "diary_operation"
+  | "hydration_day"
+  | "hydration_entry"
+  | "hydration_entry_revision"
+  | "hydration_operation"
   | "nutrition_goal"
   | "nutrition_goal_operation"
   | "nutrition_goal_target"
@@ -4690,7 +4694,7 @@ async function lockAllUserWriters(
   transaction: Transaction<Database>,
   userId: string,
 ): Promise<void> {
-  for (const scope of ["diary", "goal", "recipe", "retention"]) {
+  for (const scope of ["diary", "goal", "hydration", "recipe", "retention"]) {
     await sql`select pg_advisory_xact_lock(hashtextextended(${`nutrition-tracker:${scope}:${userId}`},0))`.execute(
       transaction,
     );
@@ -6684,6 +6688,42 @@ const EXPORT_ENTITY_SPECS: readonly PrivacyExportEntitySpec[] = [
     "false",
   ),
   exportSpec(
+    "hydration_day",
+    "hydration_day",
+    "hydration_day t",
+    "t.user_id",
+    "t.id::text",
+    "t.revision::text",
+    "false",
+  ),
+  exportSpec(
+    "hydration_entry",
+    "hydration_entry",
+    "hydration_entry t",
+    "t.user_id",
+    "t.id::text",
+    "t.current_revision_number::text",
+    "t.deleted_at is not null",
+  ),
+  exportSpec(
+    "hydration_entry_revision",
+    "hydration_entry_revision",
+    "hydration_entry_revision t",
+    "t.user_id",
+    "t.id::text",
+    "t.revision_number::text",
+    "t.operation = 'delete'",
+  ),
+  exportSpec(
+    "hydration_operation",
+    "hydration_operation",
+    "hydration_operation t",
+    "t.user_id",
+    "concat_ws(':',t.client_operation_id::text,t.operation)",
+    "null",
+    "false",
+  ),
+  exportSpec(
     "recipe",
     "recipe",
     "recipe t",
@@ -7147,6 +7187,10 @@ const EXPORT_TABLE_SCHEMA_SHA256: Readonly<Record<string, string>> = {
   food_nutrient_value: "205612a35d2db5dfee5f2a06a3a5431880e8334c6fcf0b22e71ae4509ace2b52",
   food_serving: "ea541ebd2e446c05867a4126f4399685d1d92302691e5c33525b8506f2799e63",
   food_version: "db0fc9994d348d810118b945b7e783af43cd783368e78a4e339dc72283809dc2",
+  hydration_day: "6af1c24b8bb451a65a6c51b3aeaf41d28d2c5c75f0b5fa49465b252f595958e2",
+  hydration_entry: "ba751420c30d14f063af5f0a7b24e3b029528b45065c87a476c2954b26451f54",
+  hydration_entry_revision: "4938c41052b7441a72bb3fae666578731f3984f0c478b0e8892954e3a477e4d6",
+  hydration_operation: "03d89ed753d04f1c3bb44b6e044583eb41123523d584ad4357de0f46bf886dad",
   nutrition_goal: "d985a98a3aae2060aa928f9605c516cd7261b6a68da0a3275448260f71819646",
   nutrition_goal_operation: "60572bb70b101b42ffde1213c5993b1bfd5ec5fd19a35c0b5989db2d9ea20ad9",
   nutrition_goal_target: "418e30c9b41e388febcf8d369e31910c7600ede3b947ad76ef71bbf0b560ce67",
@@ -7338,6 +7382,14 @@ const ERASURE_TABLE_SPECS: readonly ErasureTableSpec[] = [
     "diary_entry_revision_source_diary_entry_revision_id_fkey",
   ),
   eraseByCascade("diary_operation", "diary_entry", "diary_operation_diary_entry_id_fkey"),
+  eraseByCascade("hydration_day", "app_user", "hydration_day_user_fk"),
+  eraseByCascade("hydration_entry", "hydration_day", "hydration_entry_day_owner_fk"),
+  eraseByCascade(
+    "hydration_entry_revision",
+    "hydration_entry",
+    "hydration_entry_revision_entry_owner_fk",
+  ),
+  eraseByCascade("hydration_operation", "hydration_entry", "hydration_operation_entry_owner_fk"),
   eraseByCascade("food_barcode", "food", "food_barcode_food_id_fkey"),
   eraseByCascade("food_nutrient_value", "food_version", "food_nutrient_value_food_version_id_fkey"),
   eraseByCascade("food_serving", "food_version", "food_serving_food_version_id_fkey"),

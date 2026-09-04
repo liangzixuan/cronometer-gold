@@ -8,6 +8,9 @@ import {
   type DiaryNutrientAggregate,
   GENERAL_WELLNESS_NOTICE,
   type GoalProgressRow,
+  type HydrationDay,
+  type HydrationEntry,
+  type HydrationMutationResponse,
   type NutrientCategory,
   type NutrientUnknownReason,
   type NutritionGoal,
@@ -30,6 +33,7 @@ import {
   confirmPasswordRecoveryToken,
   type createDatabaseFromEnvironment,
   createFoodDiaryEntry,
+  createHydrationEntry,
   createNutritionGoal,
   createReauthenticationProof,
   createRecipe,
@@ -55,6 +59,7 @@ import {
   DiaryTimeZoneChangedError,
   DiaryValidationError,
   deleteDiaryEntry,
+  deleteHydrationEntry,
   findActiveSessionByTokenHash,
   findPasswordCredentialByEmail,
   findPendingErasureRecoverySessionByTokenHash,
@@ -62,9 +67,18 @@ import {
   getCurrentNutritionGoal,
   getDiaryDay,
   getDiaryDayPage,
+  getHydrationDay,
   getNutritionGoalProgress,
   getRecipe,
   getUserProfile,
+  type HydrationDayRecord,
+  type HydrationEntryRecord,
+  HydrationEntryRevisionConflictError,
+  HydrationIdempotencyConflictError,
+  type HydrationMutationResult,
+  HydrationNotFoundError,
+  HydrationTimeZoneChangedError,
+  HydrationValidationError,
   issueEmailVerificationToken,
   issuePasswordRecoveryToken,
   type JsonObject,
@@ -99,6 +113,7 @@ import {
   revokeSession,
   type UserProfileRecord,
   updateDiaryEntry,
+  updateHydrationEntry,
   updateUserProfile,
 } from "@nutrition-tracker/db";
 import {
@@ -145,6 +160,14 @@ import {
   GoalUnsupportedProfileServiceError,
   GoalValidationServiceError,
 } from "./modules/goals/goal.routes.js";
+import {
+  HydrationIdempotencyConflictServiceError,
+  HydrationNotFoundServiceError,
+  HydrationRevisionConflictServiceError,
+  type HydrationService,
+  HydrationTimeZoneChangedServiceError,
+  HydrationValidationServiceError,
+} from "./modules/hydration/hydration.routes.js";
 import {
   ProfileRevisionConflictServiceError,
   type ProfileService,
@@ -777,6 +800,143 @@ export class DatabaseDiaryService implements DiaryService {
       return mutation(result, true);
     } catch (error) {
       mapDiaryPersistenceError(error);
+    }
+  }
+}
+
+export function mapHydrationEntryRecord(record: HydrationEntryRecord): HydrationEntry {
+  return {
+    id: record.id,
+    revision: record.revision,
+    amountMilliliters: record.amountMilliliters,
+    occurredAt: record.occurredAt,
+    localDate: record.localDate,
+    localTime: record.localTime,
+    timeZone: record.timeZone,
+    createdAt: record.createdAt,
+  };
+}
+
+export function mapHydrationDayRecord(record: HydrationDayRecord): HydrationDay {
+  return {
+    localDate: record.localDate,
+    timeZone: record.timeZone,
+    revision: record.revision,
+    entries: record.entries.map(mapHydrationEntryRecord),
+    totalMilliliters: record.totalMilliliters,
+    updatedAt: record.updatedAt,
+  };
+}
+
+function hydrationMutation(result: HydrationMutationResult): HydrationMutationResponse {
+  return {
+    data: {
+      replayed: result.replayed,
+      entry: result.entry === null ? null : mapHydrationEntryRecord(result.entry),
+      affectedDays: result.days,
+    },
+  };
+}
+
+export function mapHydrationPersistenceError(error: unknown): never {
+  if (error instanceof HydrationNotFoundError) throw new HydrationNotFoundServiceError();
+  if (error instanceof HydrationEntryRevisionConflictError) {
+    throw new HydrationRevisionConflictServiceError();
+  }
+  if (error instanceof HydrationIdempotencyConflictError) {
+    throw new HydrationIdempotencyConflictServiceError();
+  }
+  if (error instanceof HydrationTimeZoneChangedError) {
+    throw new HydrationTimeZoneChangedServiceError();
+  }
+  if (error instanceof HydrationValidationError || error instanceof RangeError) {
+    throw new HydrationValidationServiceError();
+  }
+  throw error;
+}
+
+export class DatabaseHydrationService implements HydrationService {
+  readonly #database: AppDatabase;
+
+  constructor(database: AppDatabase) {
+    this.#database = database;
+  }
+
+  async getDay(input: Parameters<HydrationService["getDay"]>[0]): Promise<HydrationDay> {
+    input.signal?.throwIfAborted();
+    try {
+      const result = await getHydrationDay(this.#database, {
+        userId: input.userId,
+        localDate: input.localDate,
+      });
+      input.signal?.throwIfAborted();
+      return mapHydrationDayRecord(result);
+    } catch (error) {
+      mapHydrationPersistenceError(error);
+    }
+  }
+
+  async createEntry(
+    input: Parameters<HydrationService["createEntry"]>[0],
+  ): Promise<HydrationMutationResponse> {
+    input.signal?.throwIfAborted();
+    try {
+      const result = await createHydrationEntry(this.#database, {
+        userId: input.userId,
+        clientOperationId: input.clientOperationId,
+        requestDigest: input.requestDigest,
+        ...(input.expectedProfileTimeZone === undefined
+          ? {}
+          : { expectedProfileTimeZone: input.expectedProfileTimeZone }),
+        amountMilliliters: input.entry.amountMilliliters,
+        occurredAt: input.entry.occurredAt,
+      });
+      input.signal?.throwIfAborted();
+      return hydrationMutation(result);
+    } catch (error) {
+      mapHydrationPersistenceError(error);
+    }
+  }
+
+  async updateEntry(
+    input: Parameters<HydrationService["updateEntry"]>[0],
+  ): Promise<HydrationMutationResponse> {
+    input.signal?.throwIfAborted();
+    try {
+      const result = await updateHydrationEntry(this.#database, {
+        userId: input.userId,
+        entryId: input.entryId,
+        expectedEntryRevision: input.expectedRevision,
+        clientOperationId: input.clientOperationId,
+        requestDigest: input.requestDigest,
+        ...(input.patch.amountMilliliters === undefined
+          ? {}
+          : { amountMilliliters: input.patch.amountMilliliters }),
+        ...(input.patch.occurredAt === undefined ? {} : { occurredAt: input.patch.occurredAt }),
+      });
+      input.signal?.throwIfAborted();
+      return hydrationMutation(result);
+    } catch (error) {
+      mapHydrationPersistenceError(error);
+    }
+  }
+
+  async deleteEntry(
+    input: Parameters<HydrationService["deleteEntry"]>[0],
+  ): Promise<HydrationMutationResponse> {
+    input.signal?.throwIfAborted();
+    try {
+      const result = await deleteHydrationEntry(this.#database, {
+        userId: input.userId,
+        entryId: input.entryId,
+        expectedEntryRevision: input.expectedRevision,
+        clientOperationId: input.clientOperationId,
+        requestDigest: input.requestDigest,
+      });
+      input.signal?.throwIfAborted();
+      return hydrationMutation(result);
+    } catch (error) {
+      mapHydrationPersistenceError(error);
     }
   }
 }

@@ -3,6 +3,7 @@ export const authenticatedRoutes = {
   search: "Search",
   recipes: "Recipes",
   goals: "Goals",
+  hydration: "Hydration",
   health: "Health",
   verifyEmail: "VerifyEmail",
 } as const;
@@ -12,6 +13,7 @@ export const authenticatedRouteNames = [
   authenticatedRoutes.search,
   authenticatedRoutes.recipes,
   authenticatedRoutes.goals,
+  authenticatedRoutes.hydration,
   authenticatedRoutes.health,
   authenticatedRoutes.verifyEmail,
 ] as const;

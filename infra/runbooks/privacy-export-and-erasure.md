@@ -1,8 +1,8 @@
 # Privacy export and account erasure
 
 This runbook covers the production execution and evidence boundary for complete
-account exports and erasure. Nutrition and biometric values never belong in a
-ticket, log, metric, email, or operator screenshot.
+account exports and erasure. Nutrition, hydration, and biometric values never
+belong in a ticket, log, metric, email, or operator screenshot.
 
 ## Local all-entity drill
 
@@ -13,7 +13,7 @@ named bounded polls: seed export, one-artifact expiry, measured export, and
 erasure. Its static contract rejects an additional hidden poll.
 
 The fixture populates and independently enumerates the compile-pinned set of all
-57 retained export entity families. Every family must have a nonzero source
+61 retained export entity families. Every family must have a nonzero source
 count and exact IDs/counts must reconcile across the source snapshot, JSON, and
 decompressed CSV. Forbidden field-name assertions and independent sentinels
 verify redaction in every exported audit row; artifact lifecycle rows must omit
@@ -24,6 +24,12 @@ cross-owner account and session must survive. Supported user workflows are
 route-first. Narrow direct compatibility/evidence fixtures cover only route-
 unreachable catalogue/source/import, audit, legacy nutrient/barcode, and legacy
 operation rows.
+
+Hydration is route-first in this drill: create, update, and logical delete use
+the authenticated HTTP contract. `hydration_day`, `hydration_entry`,
+`hydration_entry_revision`, and `hydration_operation` must reconcile exactly in
+both artifacts, then reconcile to zero for the erased owner; an independently
+queried cross-owner hydration entry and its owner session must survive.
 
 This is local synthetic evidence, not permission to inspect a person's artifact,
 expose a listener, use production data, or operate a cloud deployment. It does
@@ -70,9 +76,10 @@ ciphertext does not satisfy expiry or erasure.
    revokes sessions, device keys, integration consent, reminder schedules,
    download access, and queued delivery/import work.
 3. Delete user-owned data in the repository's reviewed dependency order. This
-   includes diary history, biometrics, custom foods, recipes, goals, imports,
-   devices, reminders, exports/artifacts, sessions, credentials, profile, and
-   account identifiers. Do not bypass immutable guards from an application role;
+   includes diary and hydration history, biometrics, custom foods, recipes, goals,
+   imports, devices, reminders, exports/artifacts, sessions, credentials,
+   profile, and account identifiers. Do not bypass immutable guards from an
+   application role;
    use the narrowly scoped erasure transaction.
 4. Reconcile every scoped table and projection to zero rows for the erased owner.
    Rebuild or invalidate any derived index/cache that could retain a private

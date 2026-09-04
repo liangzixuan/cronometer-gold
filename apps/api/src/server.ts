@@ -78,6 +78,7 @@ export async function createApiApplicationRuntime(
       diaryService: dependencies.diaryService,
       foodSearchService: dependencies.foodSearchService,
       goalService: dependencies.goalService,
+      hydrationService: dependencies.hydrationService,
       profileService: dependencies.profileService,
       recipeService: dependencies.recipeService,
       ...(options.logger === undefined ? {} : { logger: options.logger }),

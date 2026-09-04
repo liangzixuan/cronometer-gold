@@ -231,6 +231,27 @@ export {
   reviseNutritionGoal,
 } from "./goals.js";
 export {
+  type CreateHydrationEntryInput,
+  createHydrationEntry,
+  type DeleteHydrationEntryInput,
+  deleteHydrationEntry,
+  type GetHydrationDayInput,
+  getHydrationDay,
+  type HydrationDayRecord,
+  type HydrationDayRevisionRecord,
+  type HydrationEntryRecord,
+  HydrationEntryRevisionConflictError,
+  HydrationIdempotencyConflictError,
+  type HydrationMutationResult,
+  HydrationNotFoundError,
+  HydrationPersistenceError,
+  type HydrationPersistenceErrorCode,
+  HydrationTimeZoneChangedError,
+  HydrationValidationError,
+  type UpdateHydrationEntryInput,
+  updateHydrationEntry,
+} from "./hydration.js";
+export {
   type AppliedMigration,
   discoverMigrations,
   type MigrationResult,

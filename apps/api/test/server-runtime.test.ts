@@ -29,6 +29,7 @@ function dependencies(close = vi.fn().mockResolvedValue(undefined)) {
     diaryService: {},
     foodSearchService: {},
     goalService: {},
+    hydrationService: {},
     profileService: {},
     readinessCheck: vi.fn().mockResolvedValue(true),
     recipeService: {},
@@ -96,6 +97,7 @@ describe("API application runtime factory", () => {
     expect(mocks.buildApp).toHaveBeenCalledWith(
       expect.objectContaining({
         authService: runtimeDependencies.authService,
+        hydrationService: runtimeDependencies.hydrationService,
         logger: false,
         readinessCheck: runtimeDependencies.readinessCheck,
         retentionClock: clock,

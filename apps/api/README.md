@@ -1,9 +1,9 @@
 # API
 
 Fastify adapter for the nutrition tracker modular monolith. Domain functionality
-is registered through `src/modules/v1.routes.ts`. Account, profile, and diary
-state is authoritative in PostgreSQL; food search uses a rebuildable Meilisearch
-projection with bounded PostgreSQL degradation.
+is registered through `src/modules/v1.routes.ts`. Account, profile, diary, and
+hydration state is authoritative in PostgreSQL; food search uses a rebuildable
+Meilisearch projection with bounded PostgreSQL degradation.
 
 ## Runtime configuration
 
@@ -65,7 +65,7 @@ mappings are read from PostgreSQL rather than trusted to an eventually consisten
 Degraded keyword reads and barcode reads share a bounded process-local bulkhead;
 production edge rate limits remain a separate deployment requirement.
 
-## Account and diary routes
+## Account, diary, and hydration routes
 
 | Method | Route | Behavior |
 | --- | --- | --- |
@@ -81,6 +81,16 @@ production edge rate limits remain a separate deployment requirement.
 | `GET` | `/v1/diary?date=YYYY-MM-DD[&limit=1..20][&cursor=...]` | Returns the authenticated profile-local day; pagination is opt-in and a cursor requires the same explicit limit |
 | `POST` | `/v1/diary/entries` | Logs a serving or gram portion with UUID idempotency |
 | `PATCH/DELETE` | `/v1/diary/entries/:entryId` | Mutates the owned entry using UUID idempotency and a strong `If-Match` entry revision |
+| `GET` | `/v1/hydration?date=YYYY-MM-DD` | Returns the owned bounded day, exact milliliter total, day synchronization revision, and strong exact-response ETag |
+| `POST` | `/v1/hydration/entries` | Creates an exact-milliliter entry with UUID idempotency and the optional paired profile-time-zone guard |
+| `PATCH/DELETE` | `/v1/hydration/entries/:entryId` | Revises or logically deletes the owned entry using UUID idempotency and a strong `If-Match` entry revision |
+
+Hydration remains the separate private, exact-milliliter ledger specified by
+[ADR 0016](../../docs/adr/0016-hydration-ledger-boundary.md): it never changes
+food, nutrient, energy, diary, recipe, or goal calculations, and its entry/day
+ceilings are operational bounds rather than intake guidance. An amount-only
+PATCH preserves stored temporal coordinates; only an explicit `occurredAt`
+change rederives them using the current profile time zone.
 
 Private responses use `Cache-Control: no-store`. Raw passwords and session tokens
 never reach PostgreSQL: fixed-parameter scrypt material and SHA-256 session-token

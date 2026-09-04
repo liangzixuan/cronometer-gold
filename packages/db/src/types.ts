@@ -77,6 +77,7 @@ export type DiaryStatus = "locked" | "open";
 export type DiaryEntryKind = "food" | "note" | "quick_add" | "recipe";
 export type SnapshotStatus = "complete" | "partial" | "pending";
 export type DiaryRevisionOperation = "create" | "delete" | "move" | "update";
+export type HydrationRevisionOperation = "create" | "delete" | "update";
 export type GoalStatus = "active" | "archived" | "draft";
 export type GoalEnergyMode = "derived" | "fixed";
 export type AuditSensitivity = "health" | "operational" | "personal" | "security";
@@ -709,6 +710,56 @@ export interface DiaryEntryNutrientSnapshotTable {
   unit: string;
   calculation_version: string;
   provenance: ImmutableJson;
+  created_at: CreatedTimestamp;
+}
+
+export interface HydrationDayTable {
+  id: UuidId;
+  user_id: string;
+  local_date: DateOnly;
+  time_zone: string;
+  revision: DefaultInt8;
+  created_at: CreatedTimestamp;
+  updated_at: UpdatedTimestamp;
+}
+
+export interface HydrationEntryTable {
+  id: UuidId;
+  hydration_day_id: string;
+  user_id: string;
+  current_revision_id: string;
+  current_revision_number: Int8;
+  amount_milliliters: number;
+  occurred_at: Timestamp;
+  local_time: string;
+  created_at: CreatedTimestamp;
+  updated_at: UpdatedTimestamp;
+  deleted_at: NullableTimestamp;
+}
+
+export interface HydrationEntryRevisionTable {
+  id: UuidId;
+  hydration_entry_id: string;
+  hydration_day_id: string;
+  user_id: string;
+  revision_number: Int8;
+  supersedes_revision_id: string | null;
+  operation: HydrationRevisionOperation;
+  amount_milliliters: number;
+  occurred_at: Timestamp;
+  local_date: DateOnly;
+  local_time: string;
+  time_zone: string;
+  created_at: CreatedTimestamp;
+}
+
+export interface HydrationOperationTable {
+  user_id: string;
+  client_operation_id: string;
+  request_digest: string;
+  operation: HydrationRevisionOperation;
+  hydration_entry_id: string;
+  result_payload: ImmutableJson;
   created_at: CreatedTimestamp;
 }
 
@@ -1416,6 +1467,10 @@ export interface Database {
   food_source_release: FoodSourceReleaseTable;
   food_source_release_activation: FoodSourceReleaseActivationTable;
   food_version: FoodVersionTable;
+  hydration_day: HydrationDayTable;
+  hydration_entry: HydrationEntryTable;
+  hydration_entry_revision: HydrationEntryRevisionTable;
+  hydration_operation: HydrationOperationTable;
   nutrient: NutrientTable;
   nutrient_alias: NutrientAliasTable;
   nutrition_goal: NutritionGoalTable;

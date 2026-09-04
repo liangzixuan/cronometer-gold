@@ -47,6 +47,7 @@ import {
   QuickAddOutboxHeadConflictError,
   QuickAddOutboxOwnerMismatchError,
 } from "./src/diary/quick-add-outbox-store";
+import { HydrationScreen } from "./src/hydration/HydrationScreen";
 import { authenticatedRoutes } from "./src/navigation/routes";
 import { GoalsScreen } from "./src/recipes/GoalsScreen";
 import { RecipesScreen } from "./src/recipes/RecipesScreen";
@@ -95,6 +96,7 @@ type RootStackParamList = {
   Search: { readonly date: string; readonly meal: MealSlot; readonly timeZone: string };
   Recipes: undefined;
   Goals: undefined;
+  Hydration: undefined;
   Health: undefined;
   VerifyEmail: undefined;
 };
@@ -157,6 +159,7 @@ function TodayRoute(props: AuthenticatedAppProps) {
       }
       onRecipes={() => navigation.navigate(authenticatedRoutes.recipes)}
       onGoals={() => navigation.navigate(authenticatedRoutes.goals)}
+      onHydration={() => navigation.navigate(authenticatedRoutes.hydration)}
       onHealth={() => navigation.navigate(authenticatedRoutes.health)}
       onUnauthorized={props.onUnauthorized}
       profileTimeZone={props.session.profile.timeZone}
@@ -164,6 +167,17 @@ function TodayRoute(props: AuthenticatedAppProps) {
       subscribeQuickAddReceipts={props.subscribeQuickAddReceipts}
       {...(route.params?.refreshKey ? { refreshKey: route.params.refreshKey } : {})}
       {...(route.params?.date ? { requestedDate: route.params.date } : {})}
+    />
+  );
+}
+
+function HydrationRoute(props: AuthenticatedAppProps) {
+  return (
+    <HydrationScreen
+      accessToken={props.accessToken}
+      apiBase={props.apiBase}
+      onUnauthorized={props.onUnauthorized}
+      profileTimeZone={props.session.profile.timeZone}
     />
   );
 }
@@ -352,6 +366,9 @@ function AuthenticatedApp(
         </Stack.Screen>
         <Stack.Screen name={authenticatedRoutes.goals} options={{ title: "Goals" }}>
           {() => <GoalsRoute {...props} />}
+        </Stack.Screen>
+        <Stack.Screen name={authenticatedRoutes.hydration} options={{ title: "Hydration" }}>
+          {() => <HydrationRoute {...props} />}
         </Stack.Screen>
         <Stack.Screen name={authenticatedRoutes.health} options={{ title: "Health & privacy" }}>
           {() => <HealthRoute {...props} />}
