@@ -625,149 +625,147 @@ describe("full FDC CSV archive inspection", () => {
     expect(movedNames.some((name) => name.startsWith("food-portion-"))).toBe(true);
   });
 
-  it("rejects duplicate lookups, malformed CSV, and bounded-resource overruns", async () => {
-    const cases = [
-      {
-        label: "duplicate-definition",
-        overrides: {
-          [PATHS.nutrient]: "id,name,unit_name\n1003,Protein,G\n1003,Protein duplicate,G\n",
-        },
-        options: {},
-        code: "DUPLICATE_KEY",
+  const boundedFailureCases = [
+    {
+      label: "duplicate-definition",
+      overrides: {
+        [PATHS.nutrient]: "id,name,unit_name\n1003,Protein,G\n1003,Protein duplicate,G\n",
       },
-      {
-        label: "header-whitespace",
-        overrides: {
-          [PATHS.measureUnit]: "id, name,abbreviation\n1,gram,g\n",
-        },
-        options: {},
-        code: "INVALID_RECORD",
+      options: {},
+      code: "DUPLICATE_KEY",
+    },
+    {
+      label: "header-whitespace",
+      overrides: {
+        [PATHS.measureUnit]: "id, name,abbreviation\n1,gram,g\n",
       },
-      {
-        label: "row-limit",
-        overrides: {},
-        options: { delimitedLimits: { maxRows: 2 } },
-        code: "INVALID_RECORD",
+      options: {},
+      code: "INVALID_RECORD",
+    },
+    {
+      label: "row-limit",
+      overrides: {},
+      options: { delimitedLimits: { maxRows: 2 } },
+      code: "INVALID_RECORD",
+    },
+    {
+      label: "spool-limit",
+      overrides: {},
+      options: { processingLimits: { maxSpoolBytes: 32 } },
+      code: "ARCHIVE_LIMIT_EXCEEDED",
+    },
+    {
+      label: "combined-partition-limit",
+      overrides: {},
+      options: { processingLimits: { maxCombinedPartitionBytes: 32 } },
+      code: "ARCHIVE_LIMIT_EXCEEDED",
+    },
+    {
+      label: "definition-row-limit",
+      overrides: {},
+      options: { processingLimits: { maxDefinitionRows: 1 } },
+      code: "ARCHIVE_LIMIT_EXCEEDED",
+    },
+    {
+      label: "definition-byte-limit",
+      overrides: {},
+      options: { processingLimits: { maxDefinitionBytes: 1 } },
+      code: "ARCHIVE_LIMIT_EXCEEDED",
+    },
+    {
+      label: "partition-row-limit",
+      overrides: {},
+      options: { processingLimits: { maxPartitionRows: 1 } },
+      code: "ARCHIVE_LIMIT_EXCEEDED",
+    },
+    {
+      label: "partition-byte-limit",
+      overrides: {},
+      options: { processingLimits: { maxPartitionBytes: 32 } },
+      code: "ARCHIVE_LIMIT_EXCEEDED",
+    },
+    {
+      label: "combined-partition-row-limit",
+      overrides: {},
+      options: { processingLimits: { maxCombinedPartitionRows: 1 } },
+      code: "ARCHIVE_LIMIT_EXCEEDED",
+    },
+    {
+      label: "nutrient-fanout-limit",
+      overrides: {
+        [PATHS.foodNutrient]: [
+          "id,fdc_id,nutrient_id,amount,data_points,derivation_id,loq",
+          "3,300,1003,2,1,49,",
+          "1,100,1008,0,3,49,0",
+          "4,100,1003,1,1,49,",
+          "2,200,1003,0,1,49,0.05",
+          "",
+        ].join("\n"),
       },
-      {
-        label: "spool-limit",
-        overrides: {},
-        options: { processingLimits: { maxSpoolBytes: 32 } },
-        code: "ARCHIVE_LIMIT_EXCEEDED",
+      options: { processingLimits: { maxNutrientsPerFood: 1 } },
+      code: "ARCHIVE_LIMIT_EXCEEDED",
+    },
+    {
+      label: "portion-fanout-limit",
+      overrides: {
+        [PATHS.portion]: [
+          "id,fdc_id,amount,measure_unit_id,portion_description,modifier,gram_weight",
+          "30,300,1,1,serving,,45",
+          "10,100,1,1,100 g,,100",
+          "11,100,1,1,second serving,,50",
+          "20,200,1,1,invalid source portion,,0",
+          "",
+        ].join("\n"),
       },
-      {
-        label: "combined-partition-limit",
-        overrides: {},
-        options: { processingLimits: { maxCombinedPartitionBytes: 32 } },
-        code: "ARCHIVE_LIMIT_EXCEEDED",
+      options: { processingLimits: { maxPortionsPerFood: 1 } },
+      code: "ARCHIVE_LIMIT_EXCEEDED",
+    },
+    {
+      label: "gtin-assignment-fanout-limit",
+      overrides: {
+        [PATHS.food]: [
+          "fdc_id,data_type,description,publication_date",
+          "300,source_branded,Rejected market cereal,2026-04-30",
+          "100,source_foundation,Synthetic pear,2026-04-30",
+          "200,source_branded,Synthetic oats,2026-04-30",
+          "201,source_branded,Synthetic alias oats,2026-04-30",
+          "",
+        ].join("\n"),
+        [PATHS.branded]: [
+          "fdc_id,brand_owner,gtin_upc,serving_size,serving_size_unit,household_serving_fulltext,market_country",
+          "300,Example Foods,,45,g,1 bowl (45 g),Atlantis",
+          "200,Example Foods,036000291452,30,g,1 packet (30 g),New Zealand",
+          "201,Example Foods,00036000291452,30,g,1 packet (30 g),New Zealand",
+          "",
+        ].join("\n"),
       },
-      {
-        label: "definition-row-limit",
-        overrides: {},
-        options: { processingLimits: { maxDefinitionRows: 1 } },
-        code: "ARCHIVE_LIMIT_EXCEEDED",
-      },
-      {
-        label: "definition-byte-limit",
-        overrides: {},
-        options: { processingLimits: { maxDefinitionBytes: 1 } },
-        code: "ARCHIVE_LIMIT_EXCEEDED",
-      },
-      {
-        label: "partition-row-limit",
-        overrides: {},
-        options: { processingLimits: { maxPartitionRows: 1 } },
-        code: "ARCHIVE_LIMIT_EXCEEDED",
-      },
-      {
-        label: "partition-byte-limit",
-        overrides: {},
-        options: { processingLimits: { maxPartitionBytes: 32 } },
-        code: "ARCHIVE_LIMIT_EXCEEDED",
-      },
-      {
-        label: "combined-partition-row-limit",
-        overrides: {},
-        options: { processingLimits: { maxCombinedPartitionRows: 1 } },
-        code: "ARCHIVE_LIMIT_EXCEEDED",
-      },
-      {
-        label: "nutrient-fanout-limit",
-        overrides: {
-          [PATHS.foodNutrient]: [
-            "id,fdc_id,nutrient_id,amount,data_points,derivation_id,loq",
-            "3,300,1003,2,1,49,",
-            "1,100,1008,0,3,49,0",
-            "4,100,1003,1,1,49,",
-            "2,200,1003,0,1,49,0.05",
-            "",
-          ].join("\n"),
-        },
-        options: { processingLimits: { maxNutrientsPerFood: 1 } },
-        code: "ARCHIVE_LIMIT_EXCEEDED",
-      },
-      {
-        label: "portion-fanout-limit",
-        overrides: {
-          [PATHS.portion]: [
-            "id,fdc_id,amount,measure_unit_id,portion_description,modifier,gram_weight",
-            "30,300,1,1,serving,,45",
-            "10,100,1,1,100 g,,100",
-            "11,100,1,1,second serving,,50",
-            "20,200,1,1,invalid source portion,,0",
-            "",
-          ].join("\n"),
-        },
-        options: { processingLimits: { maxPortionsPerFood: 1 } },
-        code: "ARCHIVE_LIMIT_EXCEEDED",
-      },
-      {
-        label: "gtin-assignment-fanout-limit",
-        overrides: {
-          [PATHS.food]: [
-            "fdc_id,data_type,description,publication_date",
-            "300,source_branded,Rejected market cereal,2026-04-30",
-            "100,source_foundation,Synthetic pear,2026-04-30",
-            "200,source_branded,Synthetic oats,2026-04-30",
-            "201,source_branded,Synthetic alias oats,2026-04-30",
-            "",
-          ].join("\n"),
-          [PATHS.branded]: [
-            "fdc_id,brand_owner,gtin_upc,serving_size,serving_size_unit,household_serving_fulltext,market_country",
-            "300,Example Foods,,45,g,1 bowl (45 g),Atlantis",
-            "200,Example Foods,036000291452,30,g,1 packet (30 g),New Zealand",
-            "201,Example Foods,00036000291452,30,g,1 packet (30 g),New Zealand",
-            "",
-          ].join("\n"),
-        },
-        options: { processingLimits: { maxGtinAssignmentsPerKey: 1 } },
-        code: "ARCHIVE_LIMIT_EXCEEDED",
-      },
-    ] as const;
+      options: { processingLimits: { maxGtinAssignmentsPerKey: 1 } },
+      code: "ARCHIVE_LIMIT_EXCEEDED",
+    },
+  ] as const;
 
-    for (const fixture of cases) {
-      const root = await temporaryDirectory();
-      const archive = join(root, `${fixture.label}.zip`);
-      await writeFixtureZip(archive, fixture.overrides);
-      const bytes = await readFile(archive);
-      await expect(
-        parseFdcCsvArchive({
-          archiveExpectation: expectation(bytes),
-          archivePath: archive,
-          context: context(),
-          destinationDirectory: join(root, "out"),
-          expectedFiles: Object.keys(CSV),
-          fileContracts: CONTRACTS,
-          ...("delimitedLimits" in fixture.options
-            ? { delimitedLimits: fixture.options.delimitedLimits }
-            : {}),
-          processingLimits: {
-            partitionCount: 2,
-            ...("processingLimits" in fixture.options ? fixture.options.processingLimits : {}),
-          },
-        }),
-      ).rejects.toMatchObject({ code: fixture.code });
-    }
+  it.each(boundedFailureCases)("rejects the $label fixture", async (fixture) => {
+    const root = await temporaryDirectory();
+    const archive = join(root, `${fixture.label}.zip`);
+    await writeFixtureZip(archive, fixture.overrides);
+    const bytes = await readFile(archive);
+    await expect(
+      parseFdcCsvArchive({
+        archiveExpectation: expectation(bytes),
+        archivePath: archive,
+        context: context(),
+        destinationDirectory: join(root, "out"),
+        expectedFiles: Object.keys(CSV),
+        fileContracts: CONTRACTS,
+        ...("delimitedLimits" in fixture.options
+          ? { delimitedLimits: fixture.options.delimitedLimits }
+          : {}),
+        processingLimits: {
+          partitionCount: 2,
+          ...("processingLimits" in fixture.options ? fixture.options.processingLimits : {}),
+        },
+      }),
+    ).rejects.toMatchObject({ code: fixture.code });
   });
 
   it("streams repeated partition spool flushes successfully", async () => {
