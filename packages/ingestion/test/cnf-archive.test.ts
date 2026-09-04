@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import {
   existsSync,
+  mkdirSync,
   readdirSync,
   readlinkSync,
+  renameSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -14,6 +16,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CNF_ARCHIVE_CSV_PATHS,
   type CnfArchiveCsvPath,
+  type IngestionError,
   parseCnfArchive,
   sha256CanonicalJson,
 } from "../src/index.js";
@@ -198,6 +201,48 @@ describe("Health Canada CNF archive parser", () => {
     expect(await readdir(output)).toEqual([]);
   });
 
+  it("rolls back exact members through the bound root after a same-name root replacement", async () => {
+    const root = await temporaryDirectory();
+    const archive = join(root, "post-extraction-root-replacement.zip");
+    await writeFixtureZip(archive);
+    const output = join(root, "out");
+    const displacedOutput = join(root, "out.displaced");
+    const signal = new AbortController().signal;
+    let replaced = false;
+    Object.defineProperty(signal, "aborted", {
+      configurable: true,
+      get: () => {
+        if (
+          !replaced &&
+          CNF_ARCHIVE_CSV_PATHS.every((path) => existsSync(join(output, path))) &&
+          !readdirSync(output).some((path) => path.endsWith(".partial"))
+        ) {
+          renameSync(output, displacedOutput);
+          mkdirSync(output, { mode: 0o700 });
+          writeFileSync(join(output, "sentinel.txt"), "replacement", { mode: 0o600 });
+          replaced = true;
+        }
+        return false;
+      },
+    });
+
+    await expect(
+      parseCnfArchive({
+        archivePath: archive,
+        destinationDirectory: output,
+        expectedFiles: [...CNF_ARCHIVE_CSV_PATHS, GUIDE_PATH],
+        guideFiles: [GUIDE_PATH],
+        context: { releaseKey: "cnf-synthetic" },
+        signal,
+      }),
+    ).rejects.toMatchObject({ message: "Multiple extracted CNF members changed before parsing" });
+
+    expect(replaced).toBe(true);
+    expect(await readdir(displacedOutput)).toEqual([]);
+    expect(await readdir(output)).toEqual(["sentinel.txt"]);
+    expect(await readFile(join(output, "sentinel.txt"), "utf8")).toBe("replacement");
+  });
+
   it("removes every exact member when aborted during final-table finalization", async () => {
     const root = await temporaryDirectory();
     const archive = join(root, "final-table-finalization-abort.zip");
@@ -327,10 +372,12 @@ describe("Health Canada CNF archive parser", () => {
     expect(closeInjected).toBe(true);
     expect(failure).toBeInstanceOf(AggregateError);
     const outer = failure as AggregateError;
+    expect(outer.message).toBe("ZIP extraction failed and rollback was incomplete");
+    expect(outer.cause).toBe(outer.errors[0]);
     expect(outer.errors[0]).toMatchObject({ code: "DUPLICATE_KEY" });
     expect(outer.errors[1]).toMatchObject({
       code: "INVALID_ARCHIVE_ENTRY",
-      message: "Unable to remove an exact extracted CNF member after parsing failed",
+      message: "Unable to remove an exact ZIP extraction output during rollback",
     });
     const verification = (outer.errors[1] as Error & { cause?: unknown }).cause;
     expect(verification).toBeInstanceOf(AggregateError);
@@ -341,9 +388,9 @@ describe("Health Canada CNF archive parser", () => {
     });
     expect(verificationAggregate.errors[1]).toMatchObject({
       code: "INVALID_ARCHIVE_ENTRY",
-      message: "Unable to close an extracted CNF member after content verification",
+      message: "Unable to close a ZIP output after content verification",
     });
-    expect((await readdir(output)).sort()).toEqual(["CNF_Food_Group.csv", "caller-owned.txt"]);
+    expect((await readdir(output)).sort()).toEqual(["Measure_Name.csv", "caller-owned.txt"]);
     expect(await readFile(callerOwned, "utf8")).toBe("preserve me");
   });
 
@@ -397,9 +444,13 @@ describe("Health Canada CNF archive parser", () => {
     expect(aggregate.errors.slice(1)).toEqual([
       expect.objectContaining({
         code: "INVALID_ARCHIVE_ENTRY",
-        message: "Unable to remove an exact extracted CNF member after parsing failed",
+        message: "Unable to remove an exact ZIP extraction output during rollback",
       }),
     ]);
+    expect((aggregate.errors[1] as Error & { cause?: unknown }).cause).toMatchObject({
+      code: "INVALID_ARCHIVE_ENTRY",
+      message: "Refusing to remove a replaced ZIP extraction output",
+    });
     expect(await readdir(output)).toEqual(["Food_Name.csv"]);
     expect(await readFile(replacedPath, "utf8")).toBe(CSV_FIXTURES["Food_Name.csv"]);
   });
@@ -454,9 +505,13 @@ describe("Health Canada CNF archive parser", () => {
     expect(aggregate.errors.slice(1)).toEqual([
       expect.objectContaining({
         code: "INVALID_ARCHIVE_ENTRY",
-        message: "Unable to remove an exact extracted CNF member after parsing failed",
+        message: "Unable to remove an exact ZIP extraction output during rollback",
       }),
     ]);
+    expect((aggregate.errors[1] as Error & { cause?: unknown }).cause).toMatchObject({
+      code: "INVALID_ARCHIVE_ENTRY",
+      message: "Refusing to remove a replaced ZIP extraction output",
+    });
     expect(await readFile(targetPath, "utf8")).toBe(CSV_FIXTURES["Food_Name.csv"]);
     expect(await readdir(output)).toEqual(["Food_Name.csv"]);
   });
@@ -505,8 +560,28 @@ describe("Health Canada CNF archive parser", () => {
     expect(failure).toBeInstanceOf(AggregateError);
     const outer = failure as AggregateError;
     expect(outer.errors).toHaveLength(3);
+    expect(outer.message).toBe("ZIP extraction failed and rollback was incomplete");
+    expect(outer.cause).toBe(outer.errors[0]);
     expect(outer.errors[0]).toBeInstanceOf(AggregateError);
     expect((outer.errors[0] as AggregateError).errors).toHaveLength(2);
+    expect(
+      outer.errors.slice(1).map((error) => ({
+        archivePath: (error as IngestionError).details.archivePath,
+        cause: (error as Error & { cause?: Error }).cause?.message,
+        message: (error as Error).message,
+      })),
+    ).toEqual([
+      {
+        archivePath: "Nutrient_Name.csv",
+        cause: "Refusing to remove a replaced ZIP extraction output",
+        message: "Unable to remove an exact ZIP extraction output during rollback",
+      },
+      {
+        archivePath: "Food_Name.csv",
+        cause: "Refusing to remove a replaced ZIP extraction output",
+        message: "Unable to remove an exact ZIP extraction output during rollback",
+      },
+    ]);
     expect(await readdir(output)).toEqual([...replacedPaths].sort());
     for (const path of replacedPaths) {
       expect(await readFile(join(output, path), "utf8")).toBe(CSV_FIXTURES[path]);

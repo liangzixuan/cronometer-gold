@@ -120,6 +120,28 @@ interface OpenedZipArchive {
 export async function extractZipArchive(
   options: ExtractZipOptions,
 ): Promise<readonly ExtractedZipFile[]> {
+  return runExtractZipArchive(options, (files) => files, false);
+}
+
+/**
+ * Keeps extractor-bound destination handles alive while a bounded consumer
+ * processes the selected members. Consumer failure rolls back the exact
+ * extractor-owned paths before those handles are released. Consumers must
+ * treat files as read-only and defer external commits until this promise
+ * resolves because final verification or handle cleanup can still reject.
+ */
+export async function withExtractedZipArchive<Result>(
+  options: ExtractZipOptions,
+  consume: (files: readonly ExtractedZipFile[]) => Result | Promise<Result>,
+): Promise<Result> {
+  return runExtractZipArchive(options, consume, true);
+}
+
+async function runExtractZipArchive<Result>(
+  options: ExtractZipOptions,
+  consume: (files: readonly ExtractedZipFile[]) => Result | Promise<Result>,
+  revalidateAfterConsume: boolean,
+): Promise<Result> {
   invariant(
     options.expectedFiles.length > 0,
     "INVALID_ARCHIVE_ENTRY",
@@ -234,12 +256,20 @@ export async function extractZipArchive(
     extracted.sort((left, right) =>
       left.archivePath < right.archivePath ? -1 : left.archivePath > right.archivePath ? 1 : 0,
     );
+    const completedFiles = Object.freeze(extracted);
     const completedZip = zip;
     zip = undefined;
     try {
       await closeOpenZip(completedZip);
     } catch (error) {
       throw cleanupFailure("Unable to close the ZIP archive after extraction completed", {}, error);
+    }
+    const result = await consume(completedFiles);
+    if (revalidateAfterConsume) {
+      await assertPublishedOutputs(completedFiles, attempt.createdPaths);
+      for (const directory of [...attempt.directories.values()].reverse()) {
+        await assertBoundDirectory(directory);
+      }
     }
     const directoryCloseErrors = await closeAttemptDirectories(attempt);
     if (directoryCloseErrors.length > 0) {
@@ -262,7 +292,7 @@ export async function extractZipArchive(
         { cause: directoryCloseErrors[0] },
       );
     }
-    return Object.freeze(extracted);
+    return result;
   } catch (operationError) {
     const cleanupErrors = [
       ...attempt.cleanupErrors,
@@ -1121,7 +1151,7 @@ async function assertPublishedOutputs(
     invariant(
       (await hashOwnedPath(published)) === published.identity.sha256,
       "INVALID_ARCHIVE_ENTRY",
-      "Published ZIP output content changed before extraction completed",
+      "Published ZIP output content changed before ownership was released",
       { path: file.archivePath },
     );
   }

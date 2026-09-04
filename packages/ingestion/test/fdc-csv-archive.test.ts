@@ -626,7 +626,7 @@ describe("full FDC CSV archive inspection", () => {
     expect(movedNames.some((name) => name.startsWith("food-portion-"))).toBe(true);
   });
 
-  it("pins the spool parent and preserves a same-name replacement directory", async () => {
+  it("rolls back extracted files through pinned ZIP parents when the spool parent is replaced", async () => {
     const root = await temporaryDirectory();
     const archive = join(root, "spool-parent-replacement.zip");
     await writeFixtureZip(archive);
@@ -677,7 +677,79 @@ describe("full FDC CSV archive inspection", () => {
     expect(movedDestination).not.toBeNull();
     const movedNames = readdirSync(movedDestination as unknown as string);
     expect(movedNames.some((name) => name.startsWith(".fdc-csv-spool-"))).toBe(true);
-    expect(existsSync(join(movedDestination as unknown as string, PATHS.food))).toBe(true);
+    for (const contract of CONTRACTS) {
+      if (contract.role !== "guide") {
+        expect(existsSync(join(movedDestination as unknown as string, contract.archivePath))).toBe(
+          false,
+        );
+      }
+    }
+  });
+
+  it("keeps parse, spool-cleanup, and ZIP-rollback failures in flat operation-first order", async () => {
+    const root = await temporaryDirectory();
+    const archive = join(root, "flat-cross-layer-cleanup-errors.zip");
+    await writeFixtureZip(archive);
+    const destination = join(root, "out");
+    const movedDestination = `${destination}.moved`;
+    const signal = new AbortController().signal;
+    let injected = false;
+    Object.defineProperty(signal, "aborted", {
+      configurable: true,
+      get: () => {
+        if (injected || !existsSync(destination)) return false;
+        const spoolName = readdirSync(destination).find((name) =>
+          name.startsWith(".fdc-csv-spool-"),
+        );
+        if (!spoolName || readdirSync(join(destination, spoolName)).length === 0) return false;
+        renameSync(destination, movedDestination);
+        mkdirSync(destination, { mode: 0o700 });
+        writeFileSync(join(destination, "sentinel.txt"), "preserve me", { mode: 0o600 });
+        const replacedOutput = join(movedDestination, PATHS.food);
+        unlinkSync(replacedOutput);
+        writeFileSync(replacedOutput, "caller-owned", { mode: 0o600 });
+        injected = true;
+        return false;
+      },
+    });
+
+    let failure: unknown;
+    try {
+      await parseFdcCsvArchive({
+        archiveExpectation: expectation(await readFile(archive)),
+        archivePath: archive,
+        context: context(),
+        destinationDirectory: destination,
+        expectedFiles: Object.keys(CSV),
+        fileContracts: CONTRACTS,
+        processingLimits: { partitionCount: 2 },
+        signal,
+      });
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(injected).toBe(true);
+    expect(failure).toBeInstanceOf(AggregateError);
+    const aggregate = failure as AggregateError;
+    expect(aggregate.message).toBe("FDC CSV archive parsing failed and cleanup was incomplete");
+    expect(aggregate.errors).toHaveLength(3);
+    expect(aggregate.cause).toBe(aggregate.errors[0]);
+    expect(aggregate.errors[0]).not.toBeInstanceOf(AggregateError);
+    expect(aggregate.errors[1]).toMatchObject({
+      code: "INVALID_ARCHIVE_ENTRY",
+      message: "Refusing to clean a replaced FDC spool workspace",
+    });
+    expect(aggregate.errors[2]).toMatchObject({
+      code: "INVALID_ARCHIVE_ENTRY",
+      message: "Unable to remove an exact ZIP extraction output during rollback",
+    });
+    expect((aggregate.errors[2] as Error & { cause?: unknown }).cause).toMatchObject({
+      code: "INVALID_ARCHIVE_ENTRY",
+      message: "Refusing to remove a replaced ZIP extraction output",
+    });
+    expect(readFileSync(join(destination, "sentinel.txt"), "utf8")).toBe("preserve me");
+    expect(readFileSync(join(movedDestination, PATHS.food), "utf8")).toBe("caller-owned");
   });
 
   it("restores a spool file after a deterministic post-quarantine fault", async () => {

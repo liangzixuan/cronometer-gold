@@ -1,7 +1,6 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import { constants, type Stats } from "node:fs";
-import { link, lstat, open, rename, unlink } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { lstat, open } from "node:fs/promises";
 import type { ArchiveSafetyLimits } from "./archive.js";
 import { safeArchivePath } from "./archive.js";
 import {
@@ -13,7 +12,11 @@ import {
 import { parseDelimitedObjectTable } from "./delimited.js";
 import { canonicalJson, compareCodePoints, sha256CanonicalJson } from "./deterministic.js";
 import { abortError, IngestionError, invariant } from "./errors.js";
-import { type ExtractedZipFile, type ExtractedZipFileIdentity, extractZipArchive } from "./zip.js";
+import {
+  type ExtractedZipFile,
+  type ExtractedZipFileIdentity,
+  withExtractedZipArchive,
+} from "./zip.js";
 
 export const CNF_ARCHIVE_CSV_PATHS = Object.freeze([
   "Food_Name.csv",
@@ -139,32 +142,24 @@ const MAX_CNF_DELIMITED_LIMITS = Object.freeze({
  */
 export async function parseCnfArchive(input: CnfArchiveParseInput): Promise<CnfArchiveParseResult> {
   const expectedFiles = validateInventory(input.expectedFiles, input.guideFiles ?? []);
-  const extracted = await extractZipArchive({
-    archivePath: input.archivePath,
-    destinationDirectory: input.destinationDirectory,
-    expectedFiles,
-    selectedFiles: CNF_ARCHIVE_CSV_PATHS,
-    ...(input.archiveLimits === undefined ? {} : { limits: input.archiveLimits }),
-    ...(input.signal === undefined ? {} : { signal: input.signal }),
-  });
-  const identities = new Map<string, ExtractedCnfFileIdentity>(
-    extracted.map((file) => [file.path, file.identity]),
-  );
-  try {
-    throwIfAborted(input.signal);
-    await captureExtractedFileIdentities(extracted, identities);
-    return await parseExtractedCnfArchive(input, expectedFiles, extracted, identities);
-  } catch (operationError) {
-    const cleanupErrors = await cleanupExtractedCnfFiles(extracted, identities);
-    if (cleanupErrors.length > 0) {
-      throw new AggregateError(
-        [operationError, ...cleanupErrors],
-        "CNF archive parsing failed and extracted-member cleanup was incomplete",
-        { cause: operationError },
+  return withExtractedZipArchive(
+    {
+      archivePath: input.archivePath,
+      destinationDirectory: input.destinationDirectory,
+      expectedFiles,
+      selectedFiles: CNF_ARCHIVE_CSV_PATHS,
+      ...(input.archiveLimits === undefined ? {} : { limits: input.archiveLimits }),
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    },
+    async (extracted) => {
+      const identities = new Map<string, ExtractedCnfFileIdentity>(
+        extracted.map((file) => [file.path, file.identity]),
       );
-    }
-    throw operationError;
-  }
+      throwIfAborted(input.signal);
+      await captureExtractedFileIdentities(extracted, identities);
+      return parseExtractedCnfArchive(input, expectedFiles, extracted, identities);
+    },
+  );
 }
 
 async function parseExtractedCnfArchive(
@@ -263,42 +258,6 @@ async function captureExtractedFileIdentities(
       cause: errors[0],
     });
   }
-}
-
-async function cleanupExtractedCnfFiles(
-  files: readonly ExtractedZipFile[],
-  identities: ReadonlyMap<string, ExtractedCnfFileIdentity>,
-): Promise<readonly Error[]> {
-  const errors: Error[] = [];
-  for (const file of files) {
-    const identity = identities.get(file.path);
-    if (!identity) {
-      errors.push(
-        new IngestionError(
-          "INVALID_ARCHIVE_ENTRY",
-          "Cannot safely remove an extracted CNF member without its identity",
-          { path: file.archivePath },
-        ),
-      );
-      continue;
-    }
-    try {
-      await removeExactExtractedCnfFile(file, identity);
-    } catch (error) {
-      if (isNotFound(error)) {
-        continue;
-      }
-      errors.push(
-        new IngestionError(
-          "INVALID_ARCHIVE_ENTRY",
-          "Unable to remove an exact extracted CNF member after parsing failed",
-          { path: file.archivePath },
-          { cause: error },
-        ),
-      );
-    }
-  }
-  return Object.freeze(errors);
 }
 
 async function parseTable(
@@ -605,229 +564,6 @@ function referenceOnly(
   return Object.freeze({ archivePath, disposition: "reference-only", referenceOnlyReason });
 }
 
-async function removeExactExtractedCnfFile(
-  file: ExtractedZipFile,
-  identity: ExtractedCnfFileIdentity,
-): Promise<void> {
-  const parentPath = dirname(file.path);
-  const parent = await open(
-    parentPath,
-    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-  );
-  let operationFailed = false;
-  let operationError: unknown;
-  try {
-    const parentMetadata = await parent.stat();
-    const publicParentMetadata = await lstat(parentPath);
-    invariant(
-      parentMetadata.isDirectory() &&
-        !parentMetadata.isSymbolicLink() &&
-        parentMetadata.uid === currentUserId() &&
-        (parentMetadata.mode & 0o777) === 0o700 &&
-        publicParentMetadata.isDirectory() &&
-        !publicParentMetadata.isSymbolicLink() &&
-        publicParentMetadata.dev === parentMetadata.dev &&
-        publicParentMetadata.ino === parentMetadata.ino,
-      "INVALID_ARCHIVE_ENTRY",
-      "Cannot safely clean CNF output outside its private bound directory",
-      { path: file.archivePath },
-    );
-    const boundPath = join(`/proc/self/fd/${parent.fd}`, basename(file.path));
-    const before = await lstat(boundPath);
-    invariant(
-      matchesExtractedIdentity(before, identity),
-      "INVALID_ARCHIVE_ENTRY",
-      "Refusing to remove a replaced extracted CNF member",
-      { path: file.archivePath },
-    );
-    invariant(
-      (await hashExactCnfPath(boundPath, identity)) === identity.sha256,
-      "INVALID_ARCHIVE_ENTRY",
-      "Refusing to remove an extracted CNF member whose content changed",
-      { path: file.archivePath },
-    );
-    const quarantinePath = join(
-      `/proc/self/fd/${parent.fd}`,
-      `.${basename(file.path)}.${randomUUID()}.quarantine`,
-    );
-    await rename(boundPath, quarantinePath);
-    try {
-      const quarantinedMetadata = await lstat(quarantinePath);
-      if (!matchesExtractedIdentityAfterRename(quarantinedMetadata, identity)) {
-        throw new IngestionError(
-          "INVALID_ARCHIVE_ENTRY",
-          "Extracted CNF member identity changed while entering cleanup quarantine",
-          { path: file.archivePath },
-        );
-      }
-      const quarantinedIdentity = identityFromMetadata(quarantinedMetadata, identity.sha256);
-      if ((await hashExactCnfPath(quarantinePath, quarantinedIdentity)) !== identity.sha256) {
-        throw new IngestionError(
-          "INVALID_ARCHIVE_ENTRY",
-          "Extracted CNF member content changed while entering cleanup quarantine",
-          { path: file.archivePath },
-        );
-      }
-      const immediatelyBeforeUnlink = await lstat(quarantinePath);
-      invariant(
-        matchesExtractedIdentity(immediatelyBeforeUnlink, quarantinedIdentity),
-        "INVALID_ARCHIVE_ENTRY",
-        "Extracted CNF cleanup quarantine changed before removal",
-        { path: file.archivePath },
-      );
-      await unlink(quarantinePath);
-    } catch (error) {
-      try {
-        await restoreCnfQuarantine(quarantinePath, boundPath);
-      } catch (restoreError) {
-        throw new AggregateError(
-          [error, restoreError],
-          "CNF cleanup quarantine verification failed and the original path could not be restored",
-          { cause: error },
-        );
-      }
-      throw error;
-    }
-  } catch (error) {
-    operationFailed = true;
-    operationError = error;
-  }
-  try {
-    await parent.close();
-  } catch (error) {
-    const closeError = new IngestionError(
-      "INVALID_ARCHIVE_ENTRY",
-      "Unable to close the bound CNF cleanup directory",
-      { path: file.archivePath },
-      { cause: error },
-    );
-    if (operationFailed) {
-      throw new AggregateError(
-        [operationError, closeError],
-        "CNF cleanup and bound-directory handle cleanup both failed",
-        { cause: operationError },
-      );
-    }
-    throw closeError;
-  }
-  if (operationFailed) {
-    throw operationError;
-  }
-}
-
-async function restoreCnfQuarantine(quarantinePath: string, originalPath: string): Promise<void> {
-  try {
-    await link(quarantinePath, originalPath);
-    await unlink(quarantinePath);
-  } catch (error) {
-    throw new IngestionError(
-      "INVALID_ARCHIVE_ENTRY",
-      "Unable to restore a replaced CNF member from cleanup quarantine",
-      { quarantinePath },
-      { cause: error },
-    );
-  }
-}
-
-async function hashExactCnfPath(path: string, identity: ExtractedCnfFileIdentity): Promise<string> {
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  let digest: string | undefined;
-  let operationFailed = false;
-  let operationError: unknown;
-  try {
-    const before = await handle.stat();
-    invariant(
-      matchesExtractedIdentity(before, identity),
-      "INVALID_ARCHIVE_ENTRY",
-      "Extracted CNF member changed before cleanup content verification",
-      { path },
-    );
-    const hash = createHash("sha256");
-    let position = 0;
-    while (position < identity.size) {
-      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, identity.size - position));
-      const { bytesRead } = await handle.read(buffer, 0, buffer.byteLength, position);
-      invariant(
-        bytesRead > 0,
-        "INVALID_ARCHIVE_ENTRY",
-        "CNF cleanup content verification made no progress",
-      );
-      hash.update(buffer.subarray(0, bytesRead));
-      position += bytesRead;
-    }
-    const trailing = Buffer.allocUnsafe(1);
-    const { bytesRead } = await handle.read(trailing, 0, 1, position);
-    invariant(bytesRead === 0, "INVALID_ARCHIVE_ENTRY", "CNF cleanup member grew");
-    const after = await handle.stat();
-    invariant(
-      matchesExtractedIdentity(after, identity),
-      "INVALID_ARCHIVE_ENTRY",
-      "Extracted CNF member changed during cleanup content verification",
-      { path },
-    );
-    digest = hash.digest("hex");
-  } catch (error) {
-    operationFailed = true;
-    operationError = error;
-  }
-  try {
-    await handle.close();
-  } catch (error) {
-    const closeError = new IngestionError(
-      "INVALID_ARCHIVE_ENTRY",
-      "Unable to close an extracted CNF member after content verification",
-      { path },
-      { cause: error },
-    );
-    if (operationFailed) {
-      throw new AggregateError(
-        [operationError, closeError],
-        "CNF member content verification and handle cleanup both failed",
-        { cause: operationError },
-      );
-    }
-    throw closeError;
-  }
-  if (operationFailed) {
-    throw operationError;
-  }
-  invariant(digest !== undefined, "INVALID_ARCHIVE_ENTRY", "CNF content hash is unavailable");
-  return digest;
-}
-
-function matchesExtractedIdentityAfterRename(
-  metadata: Stats,
-  identity: ExtractedCnfFileIdentity,
-): boolean {
-  return (
-    metadata.isFile() &&
-    !metadata.isSymbolicLink() &&
-    metadata.birthtimeMs === identity.birthtimeMs &&
-    metadata.dev === identity.device &&
-    metadata.ino === identity.inode &&
-    metadata.uid === identity.uid &&
-    (metadata.mode & 0o777) === identity.mode &&
-    metadata.mtimeMs === identity.mtimeMs &&
-    metadata.nlink === identity.nlink &&
-    metadata.size === identity.size
-  );
-}
-
-function identityFromMetadata(metadata: Stats, sha256: string): ExtractedCnfFileIdentity {
-  return Object.freeze({
-    birthtimeMs: metadata.birthtimeMs,
-    ctimeMs: metadata.ctimeMs,
-    device: metadata.dev,
-    inode: metadata.ino,
-    mode: metadata.mode & 0o777,
-    mtimeMs: metadata.mtimeMs,
-    nlink: metadata.nlink,
-    sha256,
-    size: metadata.size,
-    uid: metadata.uid,
-  });
-}
-
 async function* readExactHandle(
   handle: Awaited<ReturnType<typeof open>>,
   signal?: AbortSignal,
@@ -876,8 +612,4 @@ function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
     throw abortError(signal);
   }
-}
-
-function isNotFound(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }

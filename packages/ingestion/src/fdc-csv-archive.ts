@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants, type Stats } from "node:fs";
 import { link, lstat, mkdir, open, readdir, rename, rmdir, unlink } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, join } from "node:path";
 import type { ArchiveSafetyLimits } from "./archive.js";
 import { safeArchivePath } from "./archive.js";
 import { parseDelimitedObjects } from "./delimited.js";
@@ -17,7 +17,7 @@ import {
   type ExactArchiveExpectation,
   type ExtractedZipFile,
   type ExtractedZipFileIdentity,
-  extractZipArchive,
+  withExtractedZipArchive,
 } from "./zip.js";
 
 export const FDC_CSV_ADAPTER_ROLES = Object.freeze([
@@ -414,53 +414,74 @@ export async function parseFdcCsvArchive(
   const selectedFiles = validated.contracts
     .filter((contract) => contract.role !== "guide")
     .map((contract) => contract.archivePath);
-  const extracted = await extractZipArchive({
-    archiveExpectation: input.archiveExpectation,
-    archivePath: input.archivePath,
-    destinationDirectory: input.destinationDirectory,
-    expectedFiles: validated.expectedFiles,
-    limits: archiveLimits,
-    selectedFiles,
-    ...(input.signal === undefined ? {} : { signal: input.signal }),
-  });
-  const identities = new Map(extracted.map((file) => [file.path, file.identity]));
-  let spool: SpoolWorkspace | undefined;
+  let parserCleanupFailure: AggregateError | undefined;
   try {
-    throwIfAborted(input.signal);
-    await assertExtractedFileIdentities(extracted, identities, "before parsing");
-    spool = await SpoolWorkspace.create(input.destinationDirectory, processingLimits);
-    const result = await parseExtractedArchive({
-      ...input,
-      context,
-      delimitedLimits,
-      processingLimits,
-      validated,
-      extracted,
-      identities,
-      spool,
-    });
-    await assertExtractedFileIdentities(extracted, identities, "after parsing");
-    await spool.cleanup();
-    await assertExtractedFileIdentities(extracted, identities, "after spool cleanup");
-    return result;
-  } catch (operationError) {
-    const cleanupErrors: unknown[] = [];
-    if (spool) {
-      try {
-        await spool.cleanup();
-      } catch (error) {
-        cleanupErrors.push(error);
-      }
-    }
-    cleanupErrors.push(...(await cleanupExtractedFiles(extracted, identities)));
-    if (cleanupErrors.length > 0) {
+    return await withExtractedZipArchive(
+      {
+        archiveExpectation: input.archiveExpectation,
+        archivePath: input.archivePath,
+        destinationDirectory: input.destinationDirectory,
+        expectedFiles: validated.expectedFiles,
+        limits: archiveLimits,
+        selectedFiles,
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+      },
+      async (extracted) => {
+        const identities = new Map(extracted.map((file) => [file.path, file.identity]));
+        let spool: SpoolWorkspace | undefined;
+        try {
+          throwIfAborted(input.signal);
+          await assertExtractedFileIdentities(extracted, identities, "before parsing");
+          spool = await SpoolWorkspace.create(input.destinationDirectory, processingLimits);
+          const result = await parseExtractedArchive({
+            ...input,
+            context,
+            delimitedLimits,
+            processingLimits,
+            validated,
+            extracted,
+            identities,
+            spool,
+          });
+          await assertExtractedFileIdentities(extracted, identities, "after parsing");
+          await spool.cleanup();
+          await assertExtractedFileIdentities(extracted, identities, "after spool cleanup");
+          return result;
+        } catch (operationError) {
+          const cleanupErrors: unknown[] = [];
+          if (spool) {
+            try {
+              await spool.cleanup();
+            } catch (error) {
+              cleanupErrors.push(error);
+            }
+          }
+          if (cleanupErrors.length > 0) {
+            parserCleanupFailure = new AggregateError(
+              [operationError, ...cleanupErrors],
+              "FDC CSV archive parsing failed and cleanup was incomplete",
+              { cause: operationError },
+            );
+            throw parserCleanupFailure;
+          }
+          throw operationError;
+        }
+      },
+    );
+  } catch (error) {
+    if (
+      parserCleanupFailure &&
+      error instanceof AggregateError &&
+      error.cause === parserCleanupFailure &&
+      error.errors[0] === parserCleanupFailure
+    ) {
       throw new AggregateError(
-        [operationError, ...cleanupErrors],
-        "FDC CSV archive parsing failed and cleanup was incomplete",
-        { cause: operationError },
+        [...parserCleanupFailure.errors, ...error.errors.slice(1)],
+        parserCleanupFailure.message,
+        { cause: parserCleanupFailure.cause },
       );
     }
-    throw operationError;
+    throw error;
   }
 }
 
@@ -2718,130 +2739,6 @@ async function assertExactOpenFile(
   );
 }
 
-async function cleanupExtractedFiles(
-  files: readonly ExtractedZipFile[],
-  identities: ReadonlyMap<string, ExtractedZipFileIdentity>,
-): Promise<readonly Error[]> {
-  const errors: Error[] = [];
-  for (const file of files) {
-    const identity = identities.get(file.path);
-    if (!identity) {
-      errors.push(
-        new IngestionError(
-          "INVALID_ARCHIVE_ENTRY",
-          "Cannot safely remove an FDC CSV member without its identity",
-          { path: file.archivePath },
-        ),
-      );
-      continue;
-    }
-    try {
-      await removeExactExtractedFile(file, identity);
-    } catch (error) {
-      if (isNotFound(error)) continue;
-      errors.push(
-        new IngestionError(
-          "INVALID_ARCHIVE_ENTRY",
-          "Unable to remove an exact extracted FDC CSV member",
-          { path: file.archivePath },
-          { cause: error },
-        ),
-      );
-    }
-  }
-  return Object.freeze(errors);
-}
-
-async function removeExactExtractedFile(
-  file: ExtractedZipFile,
-  identity: ExtractedZipFileIdentity,
-): Promise<void> {
-  const parent = await open(
-    dirname(file.path),
-    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-  );
-  let operationError: unknown;
-  try {
-    const parentMetadata = await parent.stat();
-    invariant(
-      parentMetadata.isDirectory() &&
-        parentMetadata.uid === currentUserId() &&
-        (parentMetadata.mode & 0o777) === 0o700,
-      "INVALID_ARCHIVE_ENTRY",
-      "Cannot clean FDC CSV output outside its private directory",
-      { path: file.archivePath },
-    );
-    const boundPath = join(`/proc/self/fd/${parent.fd}`, basename(file.path));
-    const before = await lstat(boundPath);
-    invariant(
-      matchesExtractedIdentity(before, identity),
-      "INVALID_ARCHIVE_ENTRY",
-      "Refusing to remove a replaced FDC CSV member",
-      { path: file.archivePath },
-    );
-    invariant(
-      (await hashExactPath(boundPath, identity)) === identity.sha256,
-      "INVALID_ARCHIVE_ENTRY",
-      "Refusing to remove a changed FDC CSV member",
-      { path: file.archivePath },
-    );
-    const quarantine = join(
-      `/proc/self/fd/${parent.fd}`,
-      `.${basename(file.path)}.${randomUUID()}.quarantine`,
-    );
-    await rename(boundPath, quarantine);
-    try {
-      const quarantined = await lstat(quarantine);
-      invariant(
-        matchesIdentityAfterRename(quarantined, identity),
-        "INVALID_ARCHIVE_ENTRY",
-        "FDC CSV cleanup quarantine identity changed",
-        { path: file.archivePath },
-      );
-      const renamedIdentity = identityFromMetadata(quarantined, identity.sha256);
-      invariant(
-        (await hashExactPath(quarantine, renamedIdentity)) === identity.sha256,
-        "INVALID_ARCHIVE_ENTRY",
-        "FDC CSV cleanup quarantine content changed",
-        { path: file.archivePath },
-      );
-      const immediatelyBeforeUnlink = await lstat(quarantine);
-      invariant(
-        matchesExtractedIdentity(immediatelyBeforeUnlink, renamedIdentity),
-        "INVALID_ARCHIVE_ENTRY",
-        "Refusing to remove a replaced FDC CSV cleanup quarantine",
-        { path: file.archivePath },
-      );
-      await unlink(quarantine);
-    } catch (error) {
-      try {
-        await restoreQuarantine(quarantine, boundPath);
-      } catch (restoreError) {
-        throw new AggregateError(
-          [error, restoreError],
-          "FDC CSV cleanup quarantine failed and could not be restored",
-          { cause: error },
-        );
-      }
-      throw error;
-    }
-  } catch (error) {
-    operationError = error;
-  }
-  try {
-    await parent.close();
-  } catch (error) {
-    if (operationError !== undefined)
-      throw new AggregateError(
-        [operationError, error],
-        "FDC CSV cleanup and directory close both failed",
-        { cause: operationError },
-      );
-    throw error;
-  }
-  if (operationError !== undefined) throw operationError;
-}
-
 async function restoreQuarantine(quarantine: string, original: string): Promise<void> {
   try {
     const source = await open(quarantine, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -2970,8 +2867,4 @@ function currentUserId(): number {
 
 function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw abortError(signal);
-}
-
-function isNotFound(error: unknown): boolean {
-  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }

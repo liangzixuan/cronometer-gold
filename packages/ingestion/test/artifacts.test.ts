@@ -15,7 +15,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import yauzl, { type Options as YauzlOptions, type ZipFile } from "yauzl";
-import { acquireArtifact, extractZipArchive, planArchiveExtraction } from "../src/index.js";
+import {
+  acquireArtifact,
+  extractZipArchive,
+  planArchiveExtraction,
+  withExtractedZipArchive,
+} from "../src/index.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -531,6 +536,47 @@ describe("archive safety and ZIP extraction", () => {
     }
   });
 
+  it("never invokes a scoped consumer when the ZIP reader cannot close", async () => {
+    const root = await temporaryDirectory();
+    const archive = join(root, "scoped-close-failure.zip");
+    await writeFile(archive, makeStoredZip([{ name: "only.csv", data: Buffer.from("fault") }]));
+    const destinationDirectory = join(root, "scoped-close-failure-out");
+    const prototype = yauzl.ZipFile.prototype;
+    const originalClose = prototype.close;
+    let closeInjected = false;
+    let consumerCalls = 0;
+    const closeSpy = vi.spyOn(prototype, "close").mockImplementation(function (this: ZipFile) {
+      injectYauzlReaderCloseFailure(this, "injected scoped ZIP reader close failure", () => {
+        closeInjected = true;
+      });
+      originalClose.call(this);
+    });
+    try {
+      await expect(
+        withExtractedZipArchive(
+          {
+            archivePath: archive,
+            destinationDirectory,
+            expectedFiles: ["only.csv"],
+          },
+          () => {
+            consumerCalls += 1;
+            return "unreachable";
+          },
+        ),
+      ).rejects.toMatchObject({
+        code: "INVALID_ARCHIVE_ENTRY",
+        message: "Unable to close the ZIP archive after extraction completed",
+      });
+    } finally {
+      closeSpy.mockRestore();
+    }
+
+    expect(closeInjected).toBe(true);
+    expect(consumerCalls).toBe(0);
+    expect(await readdir(destinationDirectory)).toEqual([]);
+  });
+
   it("preserves an iteration error before an asynchronous ZIP reader close fault", async () => {
     const root = await temporaryDirectory();
     const archive = join(root, "iteration-and-close-failure.zip");
@@ -975,6 +1021,143 @@ describe("archive safety and ZIP extraction", () => {
     });
     expect(await readdir(destinationDirectory)).toEqual(["second.csv"]);
     expect(await readFile(callerOwned, "utf8")).toBe("caller-owned");
+  });
+
+  it("runs a scoped consumer before releasing bound directories and returns its result", async () => {
+    const root = await temporaryDirectory();
+    const archive = join(root, "scoped-success.zip");
+    await writeFile(
+      archive,
+      makeStoredZip([
+        { name: "z.csv", data: Buffer.from("last") },
+        { name: "nested/a.csv", data: Buffer.from("first") },
+      ]),
+    );
+    const destinationDirectory = join(root, "scoped-success-out");
+    const result = Object.freeze({ status: "parsed" as const });
+
+    const consumed = await withExtractedZipArchive(
+      {
+        archivePath: archive,
+        destinationDirectory,
+        expectedFiles: ["z.csv", "nested/a.csv"],
+      },
+      async (files) => {
+        expect(Object.isFrozen(files)).toBe(true);
+        expect(files.map((file) => file.archivePath)).toEqual(["nested/a.csv", "z.csv"]);
+        expect(Object.isFrozen(files[0])).toBe(true);
+        expect(await readFile(files[0]?.path ?? "", "utf8")).toBe("first");
+        expect(await readFile(files[1]?.path ?? "", "utf8")).toBe("last");
+        return result;
+      },
+    );
+
+    expect(consumed).toBe(result);
+    expect(await readFile(join(destinationDirectory, "nested/a.csv"), "utf8")).toBe("first");
+    expect(await readFile(join(destinationDirectory, "z.csv"), "utf8")).toBe("last");
+  });
+
+  it("rolls back through the bound parent when a scoped consumer swaps the public root", async () => {
+    const root = await temporaryDirectory();
+    const archive = join(root, "scoped-root-swap.zip");
+    await writeFile(archive, makeStoredZip([{ name: "only.csv", data: Buffer.from("owned") }]));
+    const destinationDirectory = join(root, "scoped-root-swap-out");
+    const displacedDirectory = join(root, "scoped-root-swap-displaced");
+    const consumerError = new Error("scoped consumer failure");
+
+    await expect(
+      withExtractedZipArchive(
+        {
+          archivePath: archive,
+          destinationDirectory,
+          expectedFiles: ["only.csv"],
+        },
+        () => {
+          renameSync(destinationDirectory, displacedDirectory);
+          mkdirSync(destinationDirectory, { mode: 0o700 });
+          writeFileSync(join(destinationDirectory, "sentinel.txt"), "replacement", {
+            mode: 0o600,
+          });
+          throw consumerError;
+        },
+      ),
+    ).rejects.toBe(consumerError);
+
+    expect(await readdir(displacedDirectory)).toEqual([]);
+    expect(await readdir(destinationDirectory)).toEqual(["sentinel.txt"]);
+    expect(await readFile(join(destinationDirectory, "sentinel.txt"), "utf8")).toBe("replacement");
+  });
+
+  it("rejects a successful scoped consumer after a nested parent becomes a symlink alias", async () => {
+    const root = await temporaryDirectory();
+    const archive = join(root, "scoped-nested-swap.zip");
+    await writeFile(
+      archive,
+      makeStoredZip([{ name: "nested/only.csv", data: Buffer.from("owned") }]),
+    );
+    const destinationDirectory = join(root, "scoped-nested-swap-out");
+    const publicParent = join(destinationDirectory, "nested");
+    const displacedParent = join(destinationDirectory, "nested.displaced");
+
+    await expect(
+      withExtractedZipArchive(
+        {
+          archivePath: archive,
+          destinationDirectory,
+          expectedFiles: ["nested/only.csv"],
+        },
+        () => {
+          renameSync(publicParent, displacedParent);
+          symlinkSync(displacedParent, publicParent, "dir");
+          return "parsed";
+        },
+      ),
+    ).rejects.toMatchObject({ code: "INVALID_ARCHIVE_ENTRY" });
+
+    expect(await readdir(displacedParent)).toEqual([]);
+    expect(readlinkSync(publicParent)).toBe(displacedParent);
+  });
+
+  it("preserves a scoped consumer failure before exact rollback evidence", async () => {
+    const root = await temporaryDirectory();
+    const archive = join(root, "scoped-replacement.zip");
+    await writeFile(archive, makeStoredZip([{ name: "only.csv", data: Buffer.from("owned") }]));
+    const destinationDirectory = join(root, "scoped-replacement-out");
+    const consumerError = new Error("scoped replacement failure");
+    let failure: unknown;
+
+    try {
+      await withExtractedZipArchive(
+        {
+          archivePath: archive,
+          destinationDirectory,
+          expectedFiles: ["only.csv"],
+        },
+        (files) => {
+          const output = files[0]?.path ?? "";
+          unlinkSync(output);
+          writeFileSync(output, "caller-owned", { mode: 0o600 });
+          throw consumerError;
+        },
+      );
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    const aggregate = failure as AggregateError;
+    expect(aggregate.message).toBe("ZIP extraction failed and rollback was incomplete");
+    expect(aggregate.cause).toBe(consumerError);
+    expect(aggregate.errors[0]).toBe(consumerError);
+    expect(aggregate.errors[1]).toMatchObject({
+      code: "INVALID_ARCHIVE_ENTRY",
+      message: "Unable to remove an exact ZIP extraction output during rollback",
+    });
+    expect((aggregate.errors[1] as Error & { cause?: unknown }).cause).toMatchObject({
+      code: "INVALID_ARCHIVE_ENTRY",
+      message: "Refusing to remove a replaced ZIP extraction output",
+    });
+    expect(await readFile(join(destinationDirectory, "only.csv"), "utf8")).toBe("caller-owned");
   });
 
   it("rolls back a linked final when temporary-link cleanup fails", async () => {

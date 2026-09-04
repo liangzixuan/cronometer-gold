@@ -16,6 +16,12 @@ releases. The package has no database dependency.
   promotion. `expectedFiles` is the exact full regular-file inventory by default, while the
   optional, unique `selectedFiles` subset controls which already-preflighted members are written.
   `required-subset` remains only for callers that do not yet have a full inventory.
+- `withExtractedZipArchive` closes the ZIP and, when an exact archive expectation is supplied,
+  re-verifies its bound descriptor before invoking a bounded consumer. It retains every exact
+  destination-parent handle until that consumer finishes. A consumer failure rolls back only
+  extractor-owned identities through those retained handles; success revalidates every output and
+  bound directory before releasing ownership. Consumers must treat extracted files as read-only
+  and defer external commits until the scoped promise resolves.
 - `parseDelimitedObjects`, `adaptFdcJsonRelease`, `stageFdcCsvRecordDetailed`,
   `adaptCnfTables`, and `stageCnfRecordDetailed` preserve source provenance and explicit
   known/trace/unknown semantics. Invalid child facts are returned as durable exclusion evidence
@@ -65,10 +71,12 @@ collision analysis.
 
 Successful parsing retains only the declared CSV inputs for review and removes
 its private spool after identity-bound cleanup; guides are preflighted but not
-extracted. This boundary is currently proven with synthetic fixtures. It does
-not establish the real archive inventory, headers, raw-value mappings, scale
-budget, acquisition identity, rights decision, database staging, or promotion
-eligibility.
+extracted. FDC parsing runs inside the extractor-owned scope, so a parse failure
+rolls back exact CSV identities through their original bound parents even if a
+public parent path was renamed and replaced. This boundary is currently proven
+with synthetic fixtures. It does not establish the real archive inventory,
+headers, raw-value mappings, scale budget, acquisition identity, rights
+decision, database staging, or promotion eligibility.
 
 ## Health Canada CNF archive contract
 
@@ -127,12 +135,13 @@ the supported WSL2 environment); it relies on current-UID checks, POSIX open
 flags, and parent handles bound through `/proc/self/fd`. The extractor keeps its
 read/write handle open through hard-link publication, re-reads the bytes, and
 returns the final device, inode, owner, mode, timestamps, size, link count, and
-SHA-256 to the parser. Parsing uses `O_NOFOLLOW` and requires that extractor
-identity before and after each stream. On any extraction or parse failure,
-cleanup moves only an exact captured inode into a random private quarantine,
-revalidates its identity and content, and then removes it. It preserves
-replacements and unowned hard links and returns the operation error followed by
-every cleanup error when rollback is incomplete.
+SHA-256 to the parser. Parsing runs inside the extractor-owned scope, uses
+`O_NOFOLLOW`, and requires that extractor identity before and after each
+stream. On any extraction or parse failure, cleanup uses the still-bound
+original parent, moves only an exact captured inode into a random private
+quarantine, revalidates its identity and content, and then removes it. It
+preserves replacements and unowned hard links and returns the operation error
+followed by every cleanup error when rollback is incomplete.
 
 ## Network boundary
 
