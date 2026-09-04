@@ -31,6 +31,19 @@ describe("operator CLI argument parsing", () => {
     ]);
   });
 
+  it("preserves every character after the first inline option separator", () => {
+    const parsed = parseArguments([
+      "artifact",
+      "observe",
+      "manifest.json",
+      "--observation-out=.local-data/acquisition/evidence=a.json",
+    ]);
+
+    expect(requiredOption(parsed.options, "observation-out")).toBe(
+      ".local-data/acquisition/evidence=a.json",
+    );
+  });
+
   it("rejects surrounding whitespace in security-relevant values", () => {
     const parsed = parseArguments(["x", "y", "--principal", " operator "]);
     expect(() => requiredOption(parsed.options, "principal")).toThrow("non-blank value");

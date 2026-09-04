@@ -33,6 +33,31 @@ Canonical nutrient fields default to `null`. `proposeCanonicalNutrientMapping` i
 proposal for review; production promotion must resolve mappings from the versioned authoritative
 source-nutrient map.
 
+## Acquisition evidence sidecars
+
+The versioned acquisition-evidence parsers are pure, provider-neutral contract checks; they perform
+no network, storage, token, or signature verification. An accepted sidecar therefore means that
+externally verified identity claims are structurally complete and internally coherent, not that
+this package authenticated the claimant. A review candidate requires exactly two matching fresh
+HTTPS acquisitions and one matching retained-object receipt. Their authenticated identities must
+have pairwise-distinct canonical issuer-and-subject tuples as well as distinct canonical operator
+and storage-workload principals. The receipt binds provider/object identity, conditional
+no-overwrite creation, service-verified SHA-256, and retention recorded as
+`active-at-recording`.
+
+Each public parser snapshots its input once before validation, rejects an input that cannot be
+safely cloned with a bounded error, and constructs a frozen, fixed-shape canonical result solely
+from that snapshot. Candidate assembly canonicalizes equivalent URL spellings, object URI
+spellings, nested property order, and the order of its two acquisition sidecars, so semantically
+equivalent inputs produce the same JSON bytes.
+
+Assembly returns only frozen `pending-review` / `not-granted` evidence and never mutates a manifest
+or grants import readiness. Governance-mode retention may be recorded for review, but it is not
+irreversible storage or compliance approval; that decision remains outside this package. The
+`active-at-recording` status is historical evidence, not a promise of current retention. Any future
+authority must revalidate the storage service's current retention state before relying on it or
+granting approval.
+
 ## USDA FDC full-CSV archive contract
 
 `parseFdcCsvArchive` is the database-free, bounded inspection boundary for a

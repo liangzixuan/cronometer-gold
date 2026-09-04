@@ -357,6 +357,26 @@ explicit activation decision are still required before promotion and alias
 switching. See [release gates](../quality/release-gates.md) and the
 [food-source runbook](../../infra/runbooks/food-source-release.md).
 
+The source now has a provider-neutral version-1 acquisition identity and
+retention-evidence contract. It structurally binds each fresh observation to an
+externally verified runner/source identity, requires a separate authenticated
+storage workload with conditional-create, service-checksum, and retention
+evidence active at receipt recording, and deterministically assembles two matches
+only as frozen
+`pending-review`/`not-granted` evidence. `artifact observe` also rejects unknown
+or caller-authored identity/tool options and derives its tool identity from the
+co-located package metadata. This is synthetic source readiness, not live
+evidence: no approved runner or immutable food-release store exists, and no
+current USDA artifact has been acquired.
+
+Manifest version 3 cannot yet bind the authenticated sidecars, retained-object
+receipt, assembled candidate, current-retention check, or named review decision by
+digest. The next source milestone is a reviewed manifest/batch evidence-bundle
+binding and fail-closed runtime gate. Until then, every live non-template manifest,
+staging attempt, approval, and activation remains blocked.
+That block is procedural release policy today; the existing staging runtime does
+not distinguish live inputs from synthetic/local fixtures.
+
 The initial full-CSV inspector implements a database-free candidate contract and
 synthetic-fixture evidence for bounded parsing and joins. It has not inspected
 the current USDA archive and therefore does not close the live source gate.

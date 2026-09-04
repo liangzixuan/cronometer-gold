@@ -14,28 +14,41 @@ without mutating the currently served catalogue.
    checksum and its official evidence URL. Do not label MD5, an ETag, or an
    undocumented portal `hash` as SHA-256.
 4. Operator A streams the pinned official HTTPS URL through an allow-listed
-   acquisition job, computes SHA-256 and byte size during the stream, and writes an
-   immutable raw object plus an acquisition observation. The job rejects local
-   files, non-HTTPS transport, private/link-local destinations, host changes, and
-   redirects outside the source allow-list. Do not retain query strings, user info,
-   or temporary signed redirect credentials in the manifest or logs.
-5. Operator B, using a distinct authenticated principal and acquisition ID and a
-   fresh publisher download rather than Operator A's object or cache, independently
-   computes a second observation. A cache hit is never an independent attestation.
-   The URL, SHA-256, and byte size must match. If a publisher SHA-256 exists, both
-   observations must also match it.
-6. On any mismatch, stop. Preserve both observations, check whether the upstream
-   file was republished, reacquire twice, and create a new candidate release when
-   upstream bytes changed. Never choose one digest by hand.
-7. After a match, copy the digest and size into `artifact.sha256` and
-   `artifact.byteSize`, set a content-addressed, object-locked `objectUri`, and retain official metadata,
-   terms, response headers, and observations beside the raw object.
-8. Replace the remaining template/null fields. The validator requires at least two
-   distinct matching observations before `templateOnly` can become false.
-9. Record an immutable-provenance `food_import_batch` in `staging`; do not create
-   or mark a catalogue release current. The `food_source_release` row is created
-   only inside the later atomic promotion transaction, after validation and all
-   role approvals, so a merely downloaded artifact cannot appear publishable.
+   acquisition job and computes a raw SHA-256/byte-size observation. After external
+   OIDC or workload-identity verification, the approved runner wraps that exact
+   observation in an authenticated-acquisition sidecar. This operator does not
+   create the retained raw object.
+5. Operator B repeats the publisher transfer in a dedicated context with no shared
+   cache, a distinct authenticated issuer-subject identity and normalized principal,
+   and distinct acquisition/run/context identifiers. A cache hit is never an
+   independent observation.
+6. A third, separately authenticated storage workload conditionally creates the
+   absent content-addressed raw object without overwrite, verifies the service
+   SHA-256, enables the reviewed retention policy, and emits the retained-artifact
+   receipt. The receipt records externally verified retention evidence only at its
+   recording time; structural parsing does not itself prove provider state.
+7. Assemble the two normalized sidecars with that receipt only when the sidecars'
+   tool, canonical source URLs, reviewed runner source, SHA-256, and byte size agree;
+   the receipt must match their artifact identity, and all authenticated-identity
+   and chronology checks must pass. The structural result is `pending-review` /
+   `not-granted`; it is not an attestation or release decision.
+8. On any acquisition, identity, storage, checksum, URL, or chronology mismatch,
+   stop. Preserve the evidence, check whether the publisher republished the file,
+   and reacquire twice under a new candidate. Never choose one digest by hand.
+9. Named source, rights, storage, and operator reviewers inspect the exact sidecars,
+   receipt, and assembled candidate. The authority step must independently
+   revalidate current provider retention and bind the accepted evidence and decision
+   by cryptographic digest.
+10. **Current hard stop:** manifest version 3 and the staging commands do not yet
+    bind that authenticated evidence bundle or review decision. Keep every live
+    candidate `templateOnly: true`; do not populate an import-ready manifest or
+    stage it until a reviewed schema/runtime gate implements the binding.
+    This is a procedural release-policy stop today; the existing staging runtime
+    does not distinguish live inputs from synthetic/local fixtures.
+11. Only after that future gate exists may the accepted digest, size, object URI,
+    parser pins, inventory, rights fields, and evidence-bundle identity enter an
+    immutable manifest and staging batch. Promotion still requires all later
+    validation and role approvals.
 
 The CLI does not authenticate a human by itself. Run release commands only inside
 the approved release runner, which validates an OIDC or workload-identity
@@ -43,6 +56,29 @@ assertion and injects the authenticated principal and immutable run reference.
 The runner owns the short-lived, least-privilege database credential; direct
 developer-shell promotion and shared database credentials are prohibited. Raw
 principal flags are deliberately not supported.
+
+For acquisition, the runner must wrap each raw observation in the versioned
+authenticated-acquisition sidecar defined by
+[`ADR 0017`](../../docs/adr/0017-authenticated-food-artifact-acquisition-retention.md).
+The sidecar binds externally verified identity claims, immutable run/source
+identity, and one dedicated no-shared-cache context to the observation.
+`artifact observe` accepts exactly one manifest plus `--cache-dir` and
+`--observation-out`; it derives the tool identity from co-located package metadata
+and rejects caller-authored identity or tool options.
+
+A separately authenticated storage workload must conditionally create the
+content-addressed raw object and produce a matching retained-artifact receipt.
+That receipt records service checksum verification and retention active when the
+receipt was recorded, in addition to versioning and deletion protection. The
+later authority decision must revalidate current provider retention. Governance
+retention remains review evidence, not irreversible approval. The pure ingestion
+parsers verify structure and coherence, not tokens, signatures, storage, or provider
+policy;
+their deterministic two-sidecar assembler returns only frozen
+`pending-review`/`not-granted` evidence. No raw observation value, sidecar, receipt,
+or assembled candidate may be used to make a manifest import-ready until the
+digest-binding gate exists and named source, rights, storage, and operator reviews
+accept the exact evidence.
 
 The runner injects the reviewed parser image/build SHA-256 and stores the exact
 manifest bytes at a separate content-addressed, object-locked URI. The CLI binds
@@ -56,9 +92,11 @@ the canonical byte size comes from the verified streamed object.
 
 ### USDA FDC Foundation inventory and baseline
 
-Only after the two independent acquisitions agree may an operator copy their
-exact SHA-256 and byte size into a controlled FDC working manifest. Pin the
-executing ingestion package version and reviewed immutable parser-build digest,
+Only after the future evidence-bundle binding exists and named reviewers accept the
+two independent acquisitions, retained-object receipt, and current-retention proof
+may an operator copy the exact SHA-256 and byte size into a controlled FDC working
+manifest. Pin the executing ingestion package version and reviewed immutable
+parser-build digest,
 and retain the exact single JSON member under `validation.expectedFiles`. Then
 run the local, database-free evidence check from the retained artifact:
 

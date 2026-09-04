@@ -1,4 +1,5 @@
 export * from "./acquisition.js";
+export * from "./acquisition-evidence.js";
 export * from "./archive.js";
 export * from "./checkpoint.js";
 export * from "./cnf.js";

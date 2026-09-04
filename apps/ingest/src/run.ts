@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { constants, type Stats } from "node:fs";
+import { constants, readFileSync, type Stats } from "node:fs";
 import { link, lstat, mkdir, open, readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
@@ -80,6 +80,9 @@ const SOURCE_POLICIES: Readonly<
 });
 const WORKSPACE_ROOT = resolve(import.meta.dirname, "../../..");
 const CATALOGUE_RECONCILIATION_REPORT_ROOT = ".local-data/evidence/catalogue-reconciliation";
+const ARTIFACT_OBSERVE_OPTIONS = Object.freeze(["cache-dir", "observation-out"]);
+const CANONICAL_NUMERIC_PACKAGE_VERSION_PATTERN =
+  /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/u;
 const PRINCIPAL_ID_PATTERN = /^[a-z][-a-z0-9._:@/]{2,255}$/;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -131,7 +134,7 @@ export async function runCommand(argv: readonly string[], io: CommandIo): Promis
         await validateManifestCommand(arguments_.positionals, arguments_.options, io);
         return 0;
       case "artifact observe":
-        await observeArtifactCommand(arguments_.positionals, arguments_.options, io);
+        await observeArtifactCommand(argv, arguments_.positionals, arguments_.options, io);
         return 0;
       case "fdc inspect":
         await inspectFdcCommand(argv, arguments_.positionals, arguments_.options, io);
@@ -443,10 +446,12 @@ async function validateManifestCommand(
 }
 
 async function observeArtifactCommand(
+  argv: readonly string[],
   positionals: readonly string[],
   options: Readonly<Record<string, string | true>>,
   io: CommandIo,
 ): Promise<void> {
+  assertExactArtifactObserveArguments(argv, positionals, options);
   const manifest = await readManifest(singlePositional(positionals, "manifest path"));
   const actor = trustedRunnerActor(io.environment);
   if (!manifest.artifact.downloadUrl) throw new Error("Manifest has no artifact download URL");
@@ -459,7 +464,7 @@ async function observeArtifactCommand(
     remotePolicy: { allowedSources },
     source: manifest.artifact.downloadUrl,
     sourceMode: "release",
-    tool: optionalOption(options, "tool") ?? "nutrition-tracker-ingest/0.1.0",
+    tool: readIngestToolIdentity(),
     verification: { mode: "observe-only" },
   });
   const observationPath = workspacePath(requiredOption(options, "observation-out"));
@@ -2261,6 +2266,31 @@ function requiredPositiveSafeInteger(value: unknown, field: string): number {
   return value;
 }
 
+function readIngestToolIdentity(): string {
+  let packageMetadata: unknown;
+  try {
+    packageMetadata = JSON.parse(
+      readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+    ) as unknown;
+  } catch {
+    throw new Error("Unable to read co-located ingest package metadata");
+  }
+  if (typeof packageMetadata !== "object" || packageMetadata === null) {
+    throw new Error("Ingest package metadata must be an object");
+  }
+  const { name, version } = packageMetadata as Record<string, unknown>;
+  if (
+    name !== "@nutrition-tracker/ingest" ||
+    typeof version !== "string" ||
+    !CANONICAL_NUMERIC_PACKAGE_VERSION_PATTERN.test(version)
+  ) {
+    throw new Error(
+      "Ingest package metadata must have the expected name and a canonical numeric version",
+    );
+  }
+  return `${name.slice(1).replace("/", "-")}/${version}`;
+}
+
 function workspacePath(path: string): string {
   return isAbsolute(path) ? path : resolve(WORKSPACE_ROOT, path);
 }
@@ -2664,6 +2694,33 @@ function assertExactCatalogueReconcileArguments(
       throw new Error(`Unknown catalogue reconcile option: --${name ?? ""}`);
     }
   }
+}
+
+function assertExactArtifactObserveArguments(
+  argv: readonly string[],
+  positionals: readonly string[],
+  options: Readonly<Record<string, string | true>>,
+): void {
+  if (positionals.length !== 1 || !positionals[0]) {
+    throw new Error("artifact observe requires exactly one manifest path");
+  }
+  const allowed = new Set(ARTIFACT_OBSERVE_OPTIONS);
+  for (const name of Object.keys(options)) {
+    if (!allowed.has(name)) throw new Error(`Unknown artifact observe option: --${name}`);
+  }
+
+  // parseArguments intentionally uses a plain object. Inspect raw option names too
+  // so prototype-like names cannot disappear through object assignment semantics.
+  const tokens = argv[0] === "--" ? argv.slice(1) : argv;
+  for (const token of tokens.slice(2)) {
+    if (token === "--") break;
+    if (!token.startsWith("--")) continue;
+    const name = token.slice(2).split("=", 1)[0];
+    if (!name || !allowed.has(name)) {
+      throw new Error(`Unknown artifact observe option: --${name ?? ""}`);
+    }
+  }
+  for (const name of ARTIFACT_OBSERVE_OPTIONS) requiredOption(options, name);
 }
 
 function assertExactFdcInspectArguments(

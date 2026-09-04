@@ -20,7 +20,10 @@ export function parseArguments(argv: readonly string[]): ParsedArguments {
     }
     if (token.startsWith("--")) {
       readingCommand = false;
-      const [rawName, inlineValue] = token.slice(2).split("=", 2);
+      const option = token.slice(2);
+      const separator = option.indexOf("=");
+      const rawName = separator === -1 ? option : option.slice(0, separator);
+      const inlineValue = separator === -1 ? undefined : option.slice(separator + 1);
       if (!rawName || Object.hasOwn(options, rawName)) {
         throw new Error(`Invalid or repeated option: ${token}`);
       }

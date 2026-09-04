@@ -10,9 +10,23 @@ identity. Checked-in candidates remain templates until two authenticated operato
 a rights reviewer, a pinned parser, immutable object storage, and executable release
 expectations are present.
 
+**Current hard stop:** manifest version 3 cannot bind the authenticated-acquisition
+sidecars, retained-artifact receipt, assembled candidate, current-retention check, or
+named review decision by digest, and the current staging commands do not enforce that
+bundle. Keep every live candidate `templateOnly: true`; for a live source, do not use
+`catalogue stage-fdc` or `catalogue stage-cnf` until a reviewed schema/runtime gate
+implements the binding. Passing the current import-ready checks is necessary but not
+sufficient for live staging. The commands remain available for synthetic/local fixture
+validation only while this hard stop is active.
+This is a procedural release-policy stop, not a runtime-enforced
+live-versus-synthetic distinction.
+
 `artifact observe` always performs a fresh allow-listed HTTPS transfer and writes
-the attestation with exclusive-create semantics. It refuses to overwrite an
+the raw observation with exclusive-create semantics. It refuses to overwrite an
 existing observation file; a cache hit never counts as an independent observation.
+It accepts exactly one manifest plus `--cache-dir` and `--observation-out`; caller-
+authored identity and tool options are rejected. The recorded tool identity is
+derived from the co-located `@nutrition-tracker/ingest` package metadata.
 
 Authority-changing commands do not accept a principal on the command line. In a
 production release, an access-controlled runner must first validate OIDC or
@@ -245,8 +259,11 @@ and single-link identity still match. A replaced file is preserved and reported
 as a cleanup failure, and simultaneous operation and cleanup failures are both
 returned.
 
-Only after the manifest passes the import-ready gate may the approved release
-runner invoke database staging:
+While the hard stop above is active, this staging command is limited to
+synthetic/local fixture validation. For a live source, the approved release runner
+may invoke database staging only after the reviewed evidence-binding schema/runtime
+gate exists, binds the exact authenticated evidence and decision by digest, and the
+manifest passes every remaining import-ready gate:
 
 ```sh
 pnpm --filter @nutrition-tracker/ingest cli -- catalogue stage-cnf \
@@ -261,8 +278,10 @@ The trusted runner must inject its authentication method, stable principal,
 immutable run reference, parser-build SHA-256, and least-privilege database
 credential. Before opening PostgreSQL, `catalogue stage-cnf` checks the
 import-ready manifest, content-addressed manifest URI, verified artifact, exact
-archive inventory, all nine tables, and every generated CNF baseline value. It
-then stages records in checkpointed chunks of 250 and stores one immutable,
+archive inventory, all nine tables, and every generated CNF baseline value. Those
+checks do not implement the authenticated-evidence binding and cannot authorize
+live staging while the hard stop remains. For synthetic/local validation, the
+command then stages records in checkpointed chunks of 250 and stores one immutable,
 canonical-digest-bound parser report. Validation re-verifies its exact
 nine-table dispositions, reference-only reasons, provenance, exclusion evidence,
 and count conservation; database triggers reject update or deletion of the
@@ -330,8 +349,12 @@ relevance, zero-result rate, index document count, build time, p95 latency, or
 memory/disk footprint. Retain all of that separate evidence before any
 independent approval or promotion decision.
 
-`catalogue stage-fdc` requires content-addressed, object-locked artifact and
-manifest URIs; the manifest URI must contain the exact manifest SHA-256.
+While the hard stop above is active, `catalogue stage-fdc` is limited to
+synthetic/local fixture validation. For a live source, it may run only after the
+reviewed evidence-binding schema/runtime gate exists and binds the exact
+authenticated evidence and decision by digest. The command requires content-addressed,
+object-locked artifact and manifest URIs; the manifest URI must contain the exact
+manifest SHA-256.
 It accepts exactly one manifest plus `--artifact`, `--cache-dir`,
 `--extract-dir`, and `--manifest-object-uri`; caller-authored identity or unknown
 options are rejected before manifest or database access. It completes the exact

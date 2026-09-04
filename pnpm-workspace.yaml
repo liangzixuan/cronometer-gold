@@ -17,6 +17,12 @@ overrides:
   react-dom: 19.2.3
 
 minimumReleaseAgeExclude:
+  - '@expo/cli@57.0.22'
+  - expo@57.0.20
+  - expo-build-properties@57.0.17
+  - expo-modules-core@57.0.16
+  - expo-modules-jsi@57.0.8
+  - expo-notifications@57.0.17
   - fast-uri@3.1.7
   - fast-uri@4.1.4
 

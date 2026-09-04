@@ -36,6 +36,19 @@ package boundaries.
 
 - Source manifest has URL, release identifier, retrieval timestamp, checksum,
   rights classification, attribution, and reviewer.
+- Two distinct authenticated-acquisition sidecars agree on the fresh HTTPS
+  artifact and reviewed runner source, and one receipt from a separate storage
+  workload records externally verified evidence of conditional no-overwrite
+  creation, service SHA-256, and retention active when its receipt was recorded at
+  the content-addressed object URI. The later review/authority decision independently
+  revalidates current provider retention. Structural parsing produces only
+  pending-review evidence; it does not authenticate claims or grant import readiness.
+- The import-ready manifest and batch bind the exact authenticated sidecars,
+  retained-object receipt, assembled candidate, and named review decision by
+  cryptographic digest. Manifest version 3 does not yet implement this binding, so
+  live non-template manifests and staging remain blocked.
+  This is a procedural release-policy stop today; the existing staging runtime does
+  not distinguish live inputs from synthetic/local fixtures.
 - Import from the pinned raw artifact is deterministic and reports accepted,
   rejected, quarantined, and missing-nutrient counts.
 - A source cannot publish directly into the active catalogue. Staging, validation,
