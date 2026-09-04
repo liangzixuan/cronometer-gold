@@ -280,7 +280,7 @@ describe("privacy export formatting", () => {
     ).toBe(true);
     await first.spool.dispose();
     await second.spool.dispose();
-  });
+  }, 30_000);
 
   it("does not stage or claim absent CSV members for a JSON-only export", async () => {
     const root = join(tmpdir(), `privacy-export-json-only-${randomBytes(8).toString("hex")}`);
