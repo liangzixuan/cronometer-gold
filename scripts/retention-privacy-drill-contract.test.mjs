@@ -50,6 +50,12 @@ const meiliBootstrapStepName = "Bootstrap scoped Meilisearch keys";
 const meiliCleanupStepName = "Remove scoped Meilisearch key file";
 const workerSearchStepName = "Exercise PostgreSQL-to-Meilisearch worker boundary";
 const searchIntegrationStepName = "Exercise real search index rebuild and queries";
+const expectedIntegrationWorkerPollPhases = [
+  "seed_export",
+  "seed_artifact_expiry",
+  "measured_export",
+  "account_erasure",
+];
 const expectedArtifactStep = [
   `      - name: ${artifactStepName}`,
   "        env:",
@@ -365,13 +371,41 @@ function assertSharedRuntimeComposition(sources) {
   );
   assert.equal(
     occurrences(sources.integration, "await workerRuntime.pollOnce();"),
-    2,
-    "the drill must run exactly the export poll and the erasure poll through the shared runtime",
+    1,
+    "the drill poll helper must delegate exactly once to the shared runtime",
   );
   assert.equal(
     occurrences(sources.integration, "workerRuntime.pollOnce("),
-    2,
-    "the drill must not bypass or add worker polls outside the two production-runtime calls",
+    1,
+    "the drill must not bypass the single named-phase poll helper",
+  );
+  assert.equal(
+    occurrences(sources.integration, "const pollRetentionWorkerOnce = async ("),
+    1,
+    "the drill must define one named-phase worker poll helper",
+  );
+  assert.equal(
+    occurrences(sources.integration, "workerPollSequence.push(phase);"),
+    1,
+    "the drill must record each phase before delegating to the worker",
+  );
+  let previousPollOffset = -1;
+  for (const phase of expectedIntegrationWorkerPollPhases) {
+    const call = `await pollRetentionWorkerOnce("${phase}");`;
+    assert.equal(occurrences(sources.integration, call), 1, `${phase} must run exactly once`);
+    const offset = sources.integration.indexOf(call);
+    assert.ok(offset > previousPollOffset, `${phase} must retain the reviewed poll order`);
+    previousPollOffset = offset;
+  }
+  assert.equal(
+    occurrences(sources.integration, "await pollRetentionWorkerOnce("),
+    expectedIntegrationWorkerPollPhases.length,
+    "the drill must invoke exactly the four reviewed named-phase worker polls",
+  );
+  assert.match(
+    sources.integration,
+    /expect\(workerPollSequence\)\.toEqual\(\[\s*"seed_export",\s*"seed_artifact_expiry",\s*"measured_export",\s*"account_erasure",\s*\]\);/u,
+    "the runtime drill must assert the complete named worker poll sequence",
   );
   assert.doesNotMatch(sources.integration, /\.listen\s*\(/u);
   for (const manualComposition of [
@@ -703,6 +737,13 @@ test("rejects bypassing either shared runtime composition factory", () => {
       integration: sources.integration.replace(
         "await workerRuntime.pollOnce();",
         "await workerRuntimeHandle?.pollOnce();",
+      ),
+    },
+    {
+      ...sources,
+      integration: sources.integration.replace(
+        'await pollRetentionWorkerOnce("account_erasure");',
+        'await pollRetentionWorkerOnce(workerPollSequence[0]);\n      await pollRetentionWorkerOnce("account_erasure");',
       ),
     },
     {

@@ -100,11 +100,28 @@ targets.
 
 The flow creates the same closeable API application runtime used by the server
 entrypoint without opening a listener, proves the exact readiness response, and
-runs two bounded polls through the same combined search/retention worker runtime
-used by the worker entrypoint. It is never a cloud, public-hosting,
-physical-phone, or production-data command. The drill deletes its export
-artifacts and scratch database schema, but intentionally retains the immutable
-encrypted erasure-ledger tombstone as local recovery evidence.
+runs exactly four named bounded polls. They use the
+same combined search/retention worker runtime used by the worker entrypoint:
+seed export, one-artifact expiry, measured export, and erasure. A static
+contract rejects a hidden additional poll. The drill populates and independently
+enumerates the compile-pinned set of all 57 retained export entity families,
+requires nonzero source counts and exact ID/count reconciliation across the
+source snapshot, JSON, and decompressed CSV, and proves cross-owner account/
+session survival. Forbidden field-name assertions
+and independent sentinels verify every audit row omits all redacted fields in
+JSON and decompressed CSV; artifact lifecycle rows omit object locators,
+encryption identifiers, and ciphertext-byte metadata. Supported user workflows
+are route-first, with narrow direct compatibility/evidence fixtures only for
+route-unreachable catalogue/source/import, audit, legacy nutrient/barcode, and
+legacy operation rows.
+
+This is never a cloud, public-hosting, physical-phone, or production-data
+command. The drill deletes its export artifacts and scratch database schema, but
+intentionally retains the immutable encrypted erasure-ledger tombstone as local
+recovery evidence. Passing it closes the local all-retained-entity source gate;
+it does not prove production notification delivery, hosted access controls,
+off-host restoration, signed devices, independent review, or controlled-beta
+acceptance.
 
 ## Controlled beta
 

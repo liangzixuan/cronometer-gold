@@ -7064,7 +7064,7 @@ const EXPORT_ENTITY_SPECS: readonly PrivacyExportEntitySpec[] = [
     "t.id::text",
     "null",
     "false",
-    ["object_key", "encryption_key_id"],
+    ["object_key", "encryption_key_id", "ciphertext_bytes"],
   ),
   exportSpec(
     "privacy_export_artifact_deletion",

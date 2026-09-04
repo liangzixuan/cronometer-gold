@@ -4,6 +4,32 @@ This runbook covers the production execution and evidence boundary for complete
 account exports and erasure. Nutrition and biometric values never belong in a
 ticket, log, metric, email, or operator screenshot.
 
+## Local all-entity drill
+
+With the guarded loopback dependencies healthy and migrations current, run
+`pnpm retention:privacy-drill`. The drill uses the closeable production API
+application without a listener and the combined worker runtime for exactly four
+named bounded polls: seed export, one-artifact expiry, measured export, and
+erasure. Its static contract rejects an additional hidden poll.
+
+The fixture populates and independently enumerates the compile-pinned set of all
+57 retained export entity families. Every family must have a nonzero source
+count and exact IDs/counts must reconcile across the source snapshot, JSON, and
+decompressed CSV. Forbidden field-name assertions and independent sentinels
+verify redaction in every exported audit row; artifact lifecycle rows must omit
+object locators, encryption identifiers, and ciphertext-byte metadata.
+Pause/revoke cancels a queued reminder delivery before export. The erased
+owner's scoped rows and projections reconcile to zero, and an authenticated
+cross-owner account and session must survive. Supported user workflows are
+route-first. Narrow direct compatibility/evidence fixtures cover only route-
+unreachable catalogue/source/import, audit, legacy nutrient/barcode, and legacy
+operation rows.
+
+This is local synthetic evidence, not permission to inspect a person's artifact,
+expose a listener, use production data, or operate a cloud deployment. It does
+not replace notification-delivery, hosted access-control, off-host restore,
+signed-device, independent-reviewer, or controlled-beta evidence.
+
 ## Export release checklist
 
 1. Confirm the request was made by an active owner session with an unexpired,

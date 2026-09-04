@@ -338,6 +338,26 @@ describe("privacy export formatting", () => {
     await spool.dispose();
   });
 
+  it("rejects privacy export artifact ciphertext when upstream redaction is missing", async () => {
+    const root = join(tmpdir(), `privacy-export-credential-${randomBytes(8).toString("hex")}`);
+    roots.push(root);
+    await import("node:fs/promises").then(({ mkdir }) => mkdir(root, { mode: 0o700 }));
+    const rows = [row("privacy_export_artifact", 1, { ciphertext_bytes: "1" })];
+    await expect(
+      spoolPrivacyExportSnapshot({
+        maximumBytes: MAX_PRIVACY_EXPORT_ROW_BYTES,
+        snapshot: {
+          capturedAt: "2026-08-16T12:00:00.000Z",
+          entities: evidence(rows),
+          records: records(rows),
+          semanticEvidence: semanticEvidence(),
+          snapshotWatermark: "artifact-credential-guard",
+        },
+        temporaryDirectory: root,
+      }),
+    ).rejects.toThrow("Credential material is not exportable account data");
+  });
+
   it("fails reconciliation for wrong counts, watermarks, payload digests, ordering, and fractional JSON numerics", async () => {
     const root = join(tmpdir(), `privacy-export-test-${randomBytes(8).toString("hex")}`);
     roots.push(root);

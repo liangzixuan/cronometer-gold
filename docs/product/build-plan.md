@@ -37,14 +37,18 @@ reviewer, or production-release acceptance.
    custom foods and biometrics, consented local reminders, coherent JSON/CSV
    export, erasure/recovery, and read-only HealthKit/Health Connect weight adapters
    are wired across database, API/worker, web, and mobile with package and
-   integration evidence. The real API/worker privacy drill proves account,
-   profile, biometric, and custom-food composition; real custom-food creation
-   and diary logging; diary-revision JSON and CSV export including a historical
-   private note; and diary/custom-food erasure reconciliation. Full API/worker
-   export-erasure population across every retained entity family is an explicit
-   M2 controlled-beta exit gate; safe local implementation may proceed earlier.
-   Signed physical-device, independent-reviewer, and controlled-beta evidence
-   still block release.
+   integration evidence. The real API/worker privacy drill now populates and
+   independently enumerates all 57 retained export entity families. It requires
+   exact source-ID/count reconciliation in JSON and decompressed CSV; proves
+   cross-owner survival; verifies audit and artifact-lifecycle redaction; expires
+   one artifact; cancels queued reminder delivery after pause/revoke; and
+   reconciles the erased owner's rows and projections. Public routes create the
+   supported user workflows; narrow direct fixtures cover only route-unreachable
+   compatibility/evidence tables, including catalogue/source/import, audit,
+   legacy nutrient/barcode, and legacy operation rows. This closes the local
+   all-retained-entity source gate, not M2. Signed physical-device, independent-
+   reviewer, hosted access/restore, notification-delivery, and controlled-beta
+   evidence still block release.
 
 ## Forward milestones
 
@@ -92,8 +96,8 @@ acceptance; progress in either lane never waives the gates in the other.
    account erasure deletes them. Structured logs redact note fields. This is the
    first entry-note sub-slice, not standalone diary notes.
    Standalone day/note-only entries remain open and require a separately reviewed
-   immutable-entry model. Safe local work may extend the real API/worker privacy
-   drill across every retained entity family ahead of M2.
+   immutable-entry model. The real API/worker privacy drill now covers every
+   retained entity family, but that local evidence does not close M1 or M2.
 
    Bounded diary pagination is implemented locally across PostgreSQL, the private
    API, web, and mobile. New diary screens request at most 20 entries per page;
@@ -176,12 +180,12 @@ acceptance; progress in either lane never waives the gates in the other.
    they observe that capability; tolerant clients are staged; only then may
    server output become required.
 3. **M2 — controlled beta:** reviewed hosting and digest-pinned seven-image
-   deployment; HTTPS, access-control, and off-host restore evidence; full API/worker
-   export-erasure population across every retained entity family; a reviewed
-   Windows-host/WSL private-phone boundary; a signed iOS/Android device matrix; and
-   independent security, browser/device, accessibility, scientific, and legal
-   review. Cloud, DNS, Terraform, Tailscale, firewall, and EAS actions keep their
-   separate approval gates.
+   deployment; HTTPS, access-control, and off-host restore evidence; controlled-
+   beta review of the locally complete 57-family API/worker export-erasure flow;
+   a reviewed Windows-host/WSL private-phone boundary; a signed iOS/Android device
+   matrix; and independent security, browser/device, accessibility, scientific,
+   and legal review. Cloud, DNS, Terraform, Tailscale, firewall, and EAS actions
+   keep their separate approval gates.
 4. **M3 — premium analysis and planning:** arbitrary-range reports and custom
    charts, printable/PDF output, scheduled repeats, macro scheduling, fasting,
    and nutrition scores/balance meters.
@@ -341,10 +345,15 @@ Exact inventory, headers, raw values, type/market semantics, real-scale
 footprint/runtime, thresholds, staging, reconciliation, search, rights,
 approvals, and activation all remain open.
 
-The scoped retention source/package evidence and real API/worker drill now covers
-account/profile/biometric/custom-food composition, real custom-food diary logging,
-diary-revision JSON and CSV export including a historical private note, and
-diary/custom-food erasure reconciliation. It does not complete the M2
-all-retained-entity vertical gate or satisfy notification, signed-device,
-independent-reviewer, physical-phone, hosted-beta, or public release acceptance.
-Those boundaries remain fail-closed under M2.
+The real API/worker privacy drill now populates and independently enumerates all
+57 retained export entity families. Exact IDs and counts reconcile across the
+source snapshot, JSON, and decompressed CSV; forbidden field-name checks and
+independent sentinels prove audit-field redaction; artifact lifecycle rows omit
+object locators, encryption identifiers, and ciphertext-byte metadata; the
+erased owner's rows and projections reconcile while a cross-owner account and
+session survive. Narrow direct fixtures cover route-unreachable compatibility/
+evidence tables,
+including catalogue/source/import, audit, legacy nutrient/barcode, and legacy
+operation rows. This completes the local all-retained-entity source gate, but not
+M2: production notification, signed-device, independent-reviewer, physical-phone,
+hosted access/restore, and public-release acceptance remain fail-closed.

@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign } from "node:crypto";
 import { chmod, lstat, mkdtemp, readdir, rm, statfs } from "node:fs/promises";
 
 import {
@@ -13,18 +13,32 @@ import {
   type AccountErasureMutationResponse,
   type AccountErasureResponse,
   type AccountExportResponse,
+  type CurrentAccountResponse,
   type CustomFoodMutationResponse,
   canonicalJson,
+  type DeviceChallengeResponse,
   type DiaryDayResponse,
   type DiaryMutationResponse,
+  deviceRegistrationSignaturePayload,
+  type HealthDeviceResponse,
+  type HealthImportBatchRequest,
+  type HealthImportBatchResponse,
+  healthImportSignaturePayload,
   type NutritionGoalMutationResponse,
   type NutritionGoalProgressResponse,
+  type PlatformIntegrationResponse,
+  type RecipeMutationResponse,
+  type ReminderMutationResponse,
 } from "@nutrition-tracker/contracts";
 import {
   createDatabase,
+  enqueueDueReminderDeliveries,
   getDiaryDay,
   getPrivacyExportJob,
+  issueEmailVerificationToken,
+  issuePasswordRecoveryToken,
   MAX_PRIVACY_EXPORT_SNAPSHOT_BYTES,
+  type PrivacyExportEntity,
   reconcileErasedAccountRows,
   runMigrations,
 } from "@nutrition-tracker/db";
@@ -39,6 +53,75 @@ import { type ApiApplicationRuntime, createApiApplicationRuntime } from "../src/
 const enabled = process.env.RUN_RETENTION_WORKER_INTEGRATION === "1";
 const WORKSPACE_BYTES = 100 * 1_024 * 1_024;
 const TMPFS_MAGIC = 0x0102_1994;
+
+const EXPECTED_PRIVACY_EXPORT_ENTITY_SET: Readonly<Record<PrivacyExportEntity, true>> = {
+  account: true,
+  audit_event: true,
+  biometric_definition: true,
+  biometric_definition_operation: true,
+  biometric_definition_version: true,
+  biometric_event: true,
+  biometric_event_operation: true,
+  biometric_event_revision: true,
+  custom_food: true,
+  custom_food_catalogue_barcode: true,
+  custom_food_catalogue_food: true,
+  custom_food_catalogue_nutrient: true,
+  custom_food_catalogue_serving: true,
+  custom_food_catalogue_version: true,
+  custom_food_nutrient: true,
+  custom_food_operation: true,
+  custom_food_version: true,
+  device: true,
+  diary_day: true,
+  diary_entry: true,
+  diary_entry_legacy_nutrient: true,
+  diary_entry_nutrient: true,
+  diary_entry_revision: true,
+  diary_entry_source: true,
+  diary_operation: true,
+  nutrition_goal: true,
+  nutrition_goal_operation: true,
+  nutrition_goal_target: true,
+  nutrition_goal_version: true,
+  platform_health_import: true,
+  platform_health_import_conflict: true,
+  platform_health_import_revision: true,
+  platform_import_batch: true,
+  platform_integration: true,
+  platform_integration_version: true,
+  privacy_export_artifact: true,
+  privacy_export_artifact_deletion: true,
+  privacy_export_artifact_tombstone: true,
+  privacy_export_download_audit: true,
+  privacy_export_job: true,
+  profile: true,
+  reauthentication_proof: true,
+  recipe: true,
+  recipe_ingredient: true,
+  recipe_nutrient: true,
+  recipe_operation: true,
+  recipe_source: true,
+  recipe_version: true,
+  reminder_consent: true,
+  reminder_consent_version: true,
+  reminder_delivery: true,
+  reminder_schedule: true,
+  reminder_schedule_version: true,
+  retention_operation: true,
+  security_challenge: true,
+  session: true,
+  user_watermark: true,
+};
+const EXPECTED_PRIVACY_EXPORT_ENTITIES = Object.keys(
+  EXPECTED_PRIVACY_EXPORT_ENTITY_SET,
+) as PrivacyExportEntity[];
+
+type ExportEntityRow = {
+  readonly entityId: string;
+  readonly payload: Readonly<Record<string, unknown>>;
+  readonly revision: string | null;
+};
 
 function required(value: string | undefined, field: string): string {
   if (!value) throw new Error(`${field} is required`);
@@ -188,10 +271,193 @@ function csvEntityIds(bytes: Buffer): string[] {
   });
 }
 
-function expectExactEntityIds(actual: readonly string[], expected: readonly string[]): void {
-  expect(actual).toHaveLength(expected.length);
-  expect(new Set(actual).size).toBe(actual.length);
-  expect([...actual].sort()).toEqual([...expected].sort());
+function expectExactEntityIds(
+  actual: readonly string[],
+  expected: readonly string[],
+  label?: string,
+): void {
+  expect(actual, label).toHaveLength(expected.length);
+  expect(new Set(actual).size, label).toBe(actual.length);
+  expect([...actual].sort(), label).toEqual([...expected].sort());
+}
+
+async function seedPromotedPublicFood(
+  database: ReturnType<typeof createDatabase>,
+  input: {
+    readonly energyNutrientId: string;
+    readonly now: Date;
+    readonly proteinNutrientId: string;
+  },
+): Promise<{
+  readonly foodVersionId: string;
+  readonly releaseId: string;
+  readonly sourceId: string;
+}> {
+  return database.transaction().execute(async (transaction) => {
+    const suffix = randomBytes(4).toString("hex").toUpperCase();
+    const instant = input.now.toISOString();
+    const artifactSha256 = sha256(`retention-public-food-${suffix}`);
+    const rightsManifestSha256 = sha256(`retention-public-rights-${suffix}`);
+    const source = await transaction
+      .insertInto("food_source")
+      .values({
+        access_url: null,
+        active: true,
+        attribution_required: true,
+        attribution_text: "Synthetic retention privacy drill fixture",
+        code: `RP${suffix}`,
+        commercial_use_allowed: true,
+        database_rights_notes: "Test-only synthetic fixture",
+        display_name: `Retention public source ${suffix}`,
+        homepage_url: "https://example.invalid/retention-public-food",
+        kind: "government",
+        license_expression: "CC0-1.0",
+        license_url: "https://creativecommons.org/publicdomain/zero/1.0/",
+        redistribution_allowed: true,
+        rights_review_status: "approved",
+        rights_reviewed_at: input.now,
+        rights_reviewed_by: "principal:retention-privacy-drill",
+        terms_url: null,
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const release = await transaction
+      .insertInto("food_source_release")
+      .values({
+        acquired_at: input.now,
+        artifact_bytes: 1,
+        artifact_sha256: artifactSha256,
+        artifact_uri: `s3://retention-fixture.invalid/sha256/${artifactSha256}.json`,
+        food_source_id: source.id,
+        media_type: "application/json",
+        parser_version: "retention-privacy-drill@1",
+        promoted_at: null,
+        published_on: instant.slice(0, 10),
+        record_counts: { records: 1 },
+        release_key: `retention-public-${suffix}`,
+        rights_manifest_sha256: rightsManifestSha256,
+        rights_manifest_uri: "repo://retention-privacy-drill/synthetic-rights.json",
+        status: "imported",
+        upstream_schema_version: "synthetic-v1",
+        validation_summary: { synthetic: true, valid: true },
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const batch = await transaction
+      .insertInto("food_import_batch")
+      .values({
+        acquired_at: input.now,
+        artifact_bytes: 1,
+        artifact_sha256: artifactSha256,
+        artifact_uri: `s3://retention-fixture.invalid/sha256/${artifactSha256}.json`,
+        completed_at: input.now,
+        food_source_id: source.id,
+        materialized_count: 1,
+        media_type: "application/json",
+        parser_version: "retention-privacy-drill@1",
+        published_on: instant.slice(0, 10),
+        release_id: release.id,
+        release_key: `retention-public-${suffix}`,
+        rights_manifest_sha256: rightsManifestSha256,
+        rights_manifest_uri: "repo://retention-privacy-drill/synthetic-rights.json",
+        staged_count: 1,
+        status: "completed",
+        upstream_schema_version: "synthetic-v1",
+        valid_count: 1,
+        validated_at: input.now,
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const food = await transaction
+      .insertInto("food")
+      .values({
+        archived_at: null,
+        food_source_id: source.id,
+        kind: "generic",
+        owner_user_id: null,
+        source_food_key: `retention-public-${suffix}`,
+        visibility: "public",
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    const version = await transaction
+      .insertInto("food_version")
+      .values({
+        attributes: { synthetic: true },
+        basis_quantity: "100",
+        basis_unit: "g",
+        brand_name: null,
+        created_by_user_id: null,
+        data_quality: "verified",
+        description: "Synthetic source-backed public food",
+        food_id: food.id,
+        ingredients_text: null,
+        language_tag: "en-US",
+        market_code: "US",
+        name: "Retention public food",
+        normalized_name: "retention public food",
+        source_modified_at: input.now,
+        source_release_id: release.id,
+        version_number: 1,
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    await transaction
+      .insertInto("food_import_record")
+      .values({
+        batch_id: batch.id,
+        canonical_payload: { name: "Retention public food", synthetic: true },
+        canonical_payload_sha256: sha256("retention-public-canonical-payload"),
+        food_version_id: version.id,
+        materialized_at: input.now,
+        sequence_number: 0,
+        source_payload_sha256: sha256("retention-public-source-payload"),
+        source_record_key: `retention-public-${suffix}`,
+        source_record_type: "fixture",
+        validated_at: input.now,
+        validation_status: "materialized",
+      })
+      .execute();
+    await transaction
+      .updateTable("food")
+      .set({ current_version_id: version.id })
+      .where("id", "=", food.id)
+      .execute();
+    await transaction
+      .insertInto("food_nutrient_value")
+      .values([
+        {
+          amount: "321",
+          basis_quantity: "100",
+          basis_unit: "g",
+          food_version_id: version.id,
+          nutrient_id: input.energyNutrientId,
+          unit: "kcal",
+          value_status: "measured",
+        },
+        {
+          amount: "17.5",
+          basis_quantity: "100",
+          basis_unit: "g",
+          food_version_id: version.id,
+          nutrient_id: input.proteinNutrientId,
+          unit: "g",
+          value_status: "measured",
+        },
+      ])
+      .execute();
+    await transaction
+      .updateTable("food_source_release")
+      .set({ promoted_at: input.now, status: "promoted" })
+      .where("id", "=", release.id)
+      .execute();
+    await transaction
+      .updateTable("food_source")
+      .set({ active_release_id: release.id })
+      .where("id", "=", source.id)
+      .execute();
+    return { foodVersionId: version.id, releaseId: release.id, sourceId: source.id };
+  });
 }
 
 async function createPrivateTmpfsDirectory(prefix: string): Promise<string> {
@@ -536,6 +802,13 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         onOperationalEvent: (event) => events.push(event),
       });
       workerRuntimeHandle = workerRuntime;
+      const workerPollSequence: string[] = [];
+      const pollRetentionWorkerOnce = async (
+        phase: "seed_export" | "seed_artifact_expiry" | "measured_export" | "account_erasure",
+      ): Promise<void> => {
+        workerPollSequence.push(phase);
+        await workerRuntime.pollOnce();
+      };
 
       const readiness = await app.inject({ method: "GET", url: "/ready" });
       expect(readiness.statusCode).toBe(200);
@@ -553,6 +826,44 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
       }>();
       const userId = registered.data.user.id;
       const authorization = `Bearer ${registered.data.accessToken}`;
+
+      const secondLogin = await app.inject({
+        method: "POST",
+        url: "/v1/auth/login",
+        payload: { email, password },
+      });
+      expect(secondLogin.statusCode, secondLogin.body).toBe(200);
+      const secondAuthorization = `Bearer ${
+        secondLogin.json<{ data: { accessToken: string } }>().data.accessToken
+      }`;
+      const secondLogout = await app.inject({
+        method: "POST",
+        url: "/v1/auth/logout",
+        headers: { authorization: secondAuthorization },
+      });
+      expect(secondLogout.statusCode, secondLogout.body).toBe(204);
+
+      const emailHash = sha256(email);
+      expect(
+        await issueEmailVerificationToken(database, {
+          deliver: async () => undefined,
+          emailHash,
+          expiresAt: new Date(clock.getTime() + 86_400_000).toISOString(),
+          issuedAt: clock.toISOString(),
+          tokenHash: sha256(`retention-email-verification-${userId}`),
+          userId,
+        }),
+      ).toBe("issued");
+      expect(
+        await issuePasswordRecoveryToken(database, {
+          deliver: async () => undefined,
+          emailHash,
+          expiresAt: new Date(clock.getTime() + 86_400_000).toISOString(),
+          issuedAt: clock.toISOString(),
+          normalizedEmail: email,
+          tokenHash: sha256(`retention-password-recovery-${userId}`),
+        }),
+      ).toBe("issued");
 
       const nutrients = await database
         .insertInto("nutrient")
@@ -619,6 +930,18 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
       });
       expect(proteinFoodResponse.statusCode, proteinFoodResponse.body).toBe(201);
       const proteinFood = proteinFoodResponse.json<CustomFoodMutationResponse>().data.customFood;
+      const customFoodOperationId = randomUUID();
+      await database
+        .insertInto("custom_food_operation")
+        .values({
+          client_operation_id: customFoodOperationId,
+          custom_food_id: customFood.id,
+          operation: "create",
+          request_digest: sha256("retention-custom-food-operation"),
+          result_payload: { customFoodId: customFood.id },
+          user_id: userId,
+        })
+        .execute();
       const logResponse = await app.inject({
         method: "POST",
         url: `/v1/custom-foods/${customFood.id}/log`,
@@ -723,9 +1046,11 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         },
       });
       expect(crossOwnerRegistration.statusCode, crossOwnerRegistration.body).toBe(201);
-      const crossOwnerAuthorization = `Bearer ${
-        crossOwnerRegistration.json<{ data: { accessToken: string } }>().data.accessToken
-      }`;
+      const crossOwner = crossOwnerRegistration.json<{
+        data: { accessToken: string; user: { id: string } };
+      }>().data;
+      const crossOwnerAuthorization = `Bearer ${crossOwner.accessToken}`;
+      const crossOwnerUserId = crossOwner.user.id;
       const crossOwnerPage = await app.inject({
         method: "GET",
         url: `/v1/diary?date=${diaryLocalDate}&limit=20&cursor=${encodeURIComponent(nextDiaryCursor)}`,
@@ -956,13 +1281,21 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
             rationale: "Pagination compatibility fixture.",
             targetKcal: "2000",
           },
-          nutrientTargets: [],
+          nutrientTargets: [
+            {
+              maximumAmount: "150",
+              minimumAmount: "50",
+              nutrientId: proteinNutrient.id,
+              rationale: "Synthetic privacy-drill coverage target.",
+              source: { label: "Synthetic integration fixture", version: null },
+              targetAmount: "75",
+            },
+          ],
         },
       });
       expect(goalResponse.statusCode, goalResponse.body).toBe(201);
-      expect(
-        goalResponse.json<NutritionGoalMutationResponse>().data.goal.currentVersion.energy,
-      ).toMatchObject({ mode: "fixed", targetKcal: "2000" });
+      const goal = goalResponse.json<NutritionGoalMutationResponse>().data.goal;
+      expect(goal.currentVersion.energy).toMatchObject({ mode: "fixed", targetKcal: "2000" });
       const goalProgressResponse = await app.inject({
         method: "GET",
         url: `/v1/goals/progress?date=${diaryLocalDate}`,
@@ -1001,6 +1334,351 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         revision: "3",
       });
       expect(currentDiaryResponse.body).not.toContain(privateDiaryNote);
+
+      const publicRecipeFood = await seedPromotedPublicFood(database, {
+        energyNutrientId: energyNutrient.id,
+        now: clock,
+        proteinNutrientId: proteinNutrient.id,
+      });
+      const recipeResponse = await app.inject({
+        method: "POST",
+        url: "/v1/recipes",
+        headers: { authorization, "idempotency-key": randomUUID() },
+        payload: {
+          description: "Synthetic route-first privacy coverage.",
+          finalYield: { grams: "100", source: "measured" },
+          ingredients: [
+            {
+              foodVersionId: publicRecipeFood.foodVersionId,
+              kind: "food",
+              portion: { grams: "100", kind: "grams" },
+            },
+          ],
+          instructions: null,
+          name: "Private retention recipe",
+          servingCount: "1",
+          servingLabel: "bowl",
+        },
+      });
+      expect(recipeResponse.statusCode, recipeResponse.body).toBe(201);
+      const recipe = recipeResponse.json<RecipeMutationResponse>().data.recipe;
+      expect(recipe.currentVersion.ingredients).toHaveLength(1);
+      expect(
+        recipe.currentVersion.nutrition.totals.map((nutrient) => nutrient.code).sort(),
+      ).toEqual(["energy", "retention_e2e_protein"]);
+      expect(
+        await database
+          .selectFrom("recipe_version_source")
+          .select(["food_source_id", "source_release_id"])
+          .where("recipe_version_id", "=", recipe.currentVersion.id)
+          .execute(),
+      ).toEqual([
+        {
+          food_source_id: publicRecipeFood.sourceId,
+          source_release_id: publicRecipeFood.releaseId,
+        },
+      ]);
+
+      const reminderDraft = {
+        channel: "local" as const,
+        consentGranted: true as const,
+        daysOfWeek: [1, 2, 3, 4, 5, 6, 7],
+        label: "Private retention reminder",
+        localTime: "12:34",
+        timeZone: "UTC",
+      };
+      const reminderResponse = await app.inject({
+        method: "POST",
+        url: "/v1/reminders",
+        headers: { authorization, "idempotency-key": randomUUID() },
+        payload: reminderDraft,
+      });
+      expect(reminderResponse.statusCode, reminderResponse.body).toBe(201);
+      const reminder = reminderResponse.json<ReminderMutationResponse>().data.reminder;
+      expect(
+        await enqueueDueReminderDeliveries(database, {
+          limit: 1,
+          through: new Date(clock.getTime() + 2 * 86_400_000).toISOString(),
+        }),
+      ).toBe(1);
+      const pausedReminderResponse = await app.inject({
+        method: "PATCH",
+        url: `/v1/reminders/${reminder.id}`,
+        headers: {
+          authorization,
+          "idempotency-key": randomUUID(),
+          "if-match": `"${reminder.revision}"`,
+        },
+        payload: {
+          daysOfWeek: reminderDraft.daysOfWeek,
+          label: reminderDraft.label,
+          localTime: reminderDraft.localTime,
+          status: "paused",
+          timeZone: reminderDraft.timeZone,
+        },
+      });
+      expect(pausedReminderResponse.statusCode, pausedReminderResponse.body).toBe(200);
+      const pausedReminder = pausedReminderResponse.json<ReminderMutationResponse>().data.reminder;
+      expect(pausedReminder.status).toBe("paused");
+      const revokedReminderResponse = await app.inject({
+        method: "DELETE",
+        url: `/v1/reminders/${reminder.id}`,
+        headers: {
+          authorization,
+          "idempotency-key": randomUUID(),
+          "if-match": `"${pausedReminder.revision}"`,
+        },
+      });
+      expect(revokedReminderResponse.statusCode, revokedReminderResponse.body).toBe(200);
+      expect(revokedReminderResponse.json<ReminderMutationResponse>().data.reminder.status).toBe(
+        "revoked",
+      );
+      expect(
+        await database
+          .selectFrom("reminder_delivery_outbox")
+          .select(["schedule_id", "status"])
+          .where("user_id", "=", userId)
+          .where("schedule_id", "=", reminder.id)
+          .execute(),
+      ).toEqual([{ schedule_id: reminder.id, status: "cancelled" }]);
+
+      const challengeResponse = await app.inject({
+        method: "POST",
+        url: "/v1/devices/challenges",
+        headers: { authorization, "idempotency-key": randomUUID() },
+        payload: { platform: "apple_healthkit" },
+      });
+      expect(challengeResponse.statusCode, challengeResponse.body).toBe(201);
+      const challenge = challengeResponse.json<DeviceChallengeResponse>().data;
+      const { privateKey, publicKey } = generateKeyPairSync("ec", { namedCurve: "P-256" });
+      const publicKeyRequest = {
+        algorithm: "ES256" as const,
+        derBase64: publicKey.export({ format: "der", type: "spki" }).toString("base64"),
+        format: "spki" as const,
+      };
+      const canonicalPublicKeySha256 = sha256(canonicalJson(publicKeyRequest));
+      const challengeSignature = sign(
+        "sha256",
+        Buffer.from(
+          deviceRegistrationSignaturePayload({
+            canonicalPublicKeySha256,
+            challenge: challenge.challenge,
+            challengeId: challenge.id,
+            platform: challenge.platform,
+          }),
+          "utf8",
+        ),
+        privateKey,
+      ).toString("base64url");
+      const deviceResponse = await app.inject({
+        method: "POST",
+        url: "/v1/devices",
+        headers: { authorization, "idempotency-key": randomUUID() },
+        payload: {
+          attestation: null,
+          challenge: challenge.challenge,
+          challengeId: challenge.id,
+          challengeSignature,
+          displayName: "Synthetic retention phone",
+          platform: challenge.platform,
+          publicKey: publicKeyRequest,
+        },
+      });
+      expect(deviceResponse.statusCode, deviceResponse.body).toBe(201);
+      const device = deviceResponse.json<HealthDeviceResponse>().data.device;
+      const consentResponse = await app.inject({
+        method: "POST",
+        url: "/v1/integrations/health/consents",
+        headers: { authorization, "idempotency-key": randomUUID() },
+        payload: {
+          consentGranted: true,
+          dataTypeCodes: ["body_weight"],
+          platform: "apple_healthkit",
+        },
+      });
+      expect(consentResponse.statusCode, consentResponse.body).toBe(201);
+      const integration = consentResponse.json<PlatformIntegrationResponse>().data.integration;
+      expect(integration).toMatchObject({ deviceId: device.id, cursorEpoch: "1" });
+
+      const injectSignedHealthBatch = async (request: HealthImportBatchRequest) => {
+        const signedAt = clock.toISOString();
+        const nonce = randomBytes(16).toString("base64url");
+        const signaturePayload = healthImportSignaturePayload({
+          batchId: request.batchId,
+          bodySha256: sha256(canonicalJson(request)),
+          deviceId: request.deviceId,
+          nonce,
+          platform: request.platform,
+          signedAt,
+        });
+        const signature = sign(
+          "sha256",
+          Buffer.from(signaturePayload, "utf8"),
+          privateKey,
+        ).toString("base64url");
+        return app.inject({
+          method: "POST",
+          url: "/v1/integrations/health/imports",
+          headers: {
+            authorization,
+            "x-device-nonce": nonce,
+            "x-device-signature": signature,
+            "x-device-timestamp": signedAt,
+          },
+          payload: request,
+        });
+      };
+      const platformExternalId = `retention-weight-${randomUUID()}`;
+      const firstHealthRecord = {
+        definitionCode: "body_weight",
+        externalId: platformExternalId,
+        externalRevision: "1",
+        measuredAt: new Date(clock.getTime() - 500).toISOString(),
+        operation: "upsert" as const,
+        recordedTimeZone: "America/Chicago",
+        unit: "kg",
+        value: "72.125",
+      };
+      const firstHealthBatch: HealthImportBatchRequest = {
+        batchId: randomUUID(),
+        cursorEpoch: integration.cursorEpoch,
+        deviceId: device.id,
+        nextSourceCursor: "retention-anchor-0001",
+        platform: "apple_healthkit",
+        records: [firstHealthRecord],
+        sourceCursor: null,
+      };
+      const firstHealthResponse = await injectSignedHealthBatch(firstHealthBatch);
+      expect(firstHealthResponse.statusCode, firstHealthResponse.body).toBe(201);
+      expect(firstHealthResponse.json<HealthImportBatchResponse>().data).toMatchObject({
+        accepted: 1,
+        conflicts: [],
+      });
+      const conflictingHealthBatch: HealthImportBatchRequest = {
+        ...firstHealthBatch,
+        batchId: randomUUID(),
+        nextSourceCursor: "retention-anchor-0002",
+        records: [{ ...firstHealthRecord, value: "72.250" }],
+        sourceCursor: firstHealthBatch.nextSourceCursor,
+      };
+      const conflictHealthResponse = await injectSignedHealthBatch(conflictingHealthBatch);
+      expect(conflictHealthResponse.statusCode, conflictHealthResponse.body).toBe(201);
+      expect(conflictHealthResponse.json<HealthImportBatchResponse>().data).toMatchObject({
+        accepted: 0,
+        conflicts: [
+          {
+            code: "SOURCE_ID_REUSED",
+            currentRevision: "1",
+            externalId: platformExternalId,
+            submittedRevision: "1",
+          },
+        ],
+      });
+
+      // These narrowly scoped database fixtures cover compatibility-only owner barcode, legacy
+      // nutrient, and redacted audit export tables that have no current mutation route. Their data
+      // is synthetic and remains confined to this per-test scratch schema.
+      const customFoodCatalogue = await database
+        .selectFrom("custom_food")
+        .select(["food_id", "current_food_version_id"])
+        .where("id", "=", customFood.id)
+        .where("user_id", "=", userId)
+        .executeTakeFirstOrThrow();
+      const customFoodServing = await database
+        .selectFrom("food_serving")
+        .select("id")
+        .where("food_version_id", "=", customFoodCatalogue.current_food_version_id)
+        .executeTakeFirstOrThrow();
+      const scratchBarcode = await database
+        .insertInto("food_barcode")
+        .values({
+          food_id: customFoodCatalogue.food_id,
+          food_serving_id: customFoodServing.id,
+          food_version_id: customFoodCatalogue.current_food_version_id,
+          gtin: "012345678905",
+          market_code: "US",
+          metadata: { fixture: "retention-privacy-drill-only" },
+          source_release_id: null,
+          valid_from: clock,
+          valid_to: null,
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow();
+      await database
+        .insertInto("diary_entry_nutrient_snapshot")
+        .values({
+          amount: "123.45",
+          calculation_version: "retention-privacy-drill-legacy-v1",
+          diary_entry_id: diaryEntryId,
+          nutrient_id: energyNutrient.id,
+          provenance: { fixture: "retention-privacy-drill-only" },
+          unit: "kcal",
+        })
+        .execute();
+      const recipeLogResponse = await app.inject({
+        method: "POST",
+        url: `/v1/recipes/${recipe.id}/log`,
+        headers: { authorization, "idempotency-key": randomUUID() },
+        payload: {
+          mealSlot: "dinner",
+          occurredAt: `${diaryLocalDate}T12:00:00.000Z`,
+          portion: { amount: "1", kind: "serving" },
+          position: 1_000,
+          recipeVersionId: recipe.currentVersion.id,
+        },
+      });
+      expect(recipeLogResponse.statusCode, recipeLogResponse.body).toBe(201);
+      const recipeDiaryEntry = recipeLogResponse.json<DiaryMutationResponse>().data.entry;
+      if (recipeDiaryEntry?.entryKind !== "recipe") {
+        throw new Error("Expected a logged recipe diary entry");
+      }
+      expect(recipeDiaryEntry.sources).toHaveLength(1);
+      diaryEntryIds.push(recipeDiaryEntry.id);
+      expect(
+        await database
+          .selectFrom("diary_entry_revision_source as source")
+          .innerJoin(
+            "diary_entry_revision as revision",
+            "revision.id",
+            "source.diary_entry_revision_id",
+          )
+          .select(["source.food_source_id", "source.source_release_id"])
+          .where("revision.diary_entry_id", "=", recipeDiaryEntry.id)
+          .execute(),
+      ).toEqual([
+        {
+          food_source_id: publicRecipeFood.sourceId,
+          source_release_id: publicRecipeFood.releaseId,
+        },
+      ]);
+      const auditPrivateStateSentinel = `audit-private-state-${randomUUID()}`;
+      const auditPrivateRequestId = `audit-private-request-${randomUUID()}`;
+      const auditPrivateSourceIp = "192.0.2.10";
+      const auditPrivateUserAgent = `audit-private-agent-${randomUUID()}`;
+      const auditRedactionSentinels = [
+        auditPrivateStateSentinel,
+        auditPrivateRequestId,
+        auditPrivateSourceIp,
+        auditPrivateUserAgent,
+      ] as const;
+      await database
+        .insertInto("audit_log")
+        .values({
+          action: "retention-privacy-drill",
+          actor_user_id: userId,
+          after_state: { privateFixture: auditPrivateStateSentinel },
+          before_state: null,
+          context: { internalRequest: auditPrivateStateSentinel },
+          entity_id: userId,
+          entity_type: "user",
+          reason: "synthetic",
+          request_id: auditPrivateRequestId,
+          sensitivity: "health",
+          source_ip: auditPrivateSourceIp,
+          subject_user_id: userId,
+          user_agent: auditPrivateUserAgent,
+        })
+        .execute();
 
       const expectedDiaryEntries = await database
         .selectFrom("diary_entry")
@@ -1045,10 +1723,10 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         expectedDiaryEntries.map((row) => row.id),
         diaryEntryIds,
       );
-      expect(expectedDiaryRevisions).toHaveLength(48);
-      expect(expectedDiaryNutrients).toHaveLength(96);
-      expect(expectedDiarySources).toHaveLength(0);
-      expect(expectedDiaryOperations).toHaveLength(48);
+      expect(expectedDiaryRevisions).toHaveLength(49);
+      expect(expectedDiaryNutrients).toHaveLength(98);
+      expect(expectedDiarySources).toHaveLength(1);
+      expect(expectedDiaryOperations).toHaveLength(49);
 
       const biometricDefinitionResponse = await app.inject({
         method: "POST",
@@ -1076,6 +1754,33 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         },
       });
       expect(biometricEventResponse.statusCode).toBe(201);
+      const biometricEventId = biometricEventResponse.json<{
+        data: { event: { id: string } };
+      }>().data.event.id;
+      const biometricDefinitionOperationId = randomUUID();
+      const biometricEventOperationId = randomUUID();
+      await database
+        .insertInto("biometric_definition_operation")
+        .values({
+          client_operation_id: biometricDefinitionOperationId,
+          definition_id: biometricDefinitionId,
+          operation: "create",
+          request_digest: sha256("retention-biometric-definition-operation"),
+          result_payload: { definitionId: biometricDefinitionId },
+          user_id: userId,
+        })
+        .execute();
+      await database
+        .insertInto("biometric_event_operation")
+        .values({
+          client_operation_id: biometricEventOperationId,
+          event_id: biometricEventId,
+          operation: "create",
+          request_digest: sha256("retention-biometric-event-operation"),
+          result_payload: { eventId: biometricEventId },
+          user_id: userId,
+        })
+        .execute();
 
       const exportProof = await app.inject({
         method: "POST",
@@ -1105,7 +1810,7 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
       expect(requestedExport.status).toBe("queued");
 
       clock = new Date(Date.now() + 120_000);
-      await workerRuntime.pollOnce();
+      await pollRetentionWorkerOnce("seed_export");
       expect(events).toContainEqual({
         event: "retention.export.completed",
         jobId: requestedExport.id,
@@ -1135,12 +1840,12 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
       ).toBe(true);
       for (const [entity, count] of [
         ["diary_day", 1],
-        ["diary_entry", 45],
-        ["diary_entry_legacy_nutrient", 0],
-        ["diary_entry_nutrient", 96],
-        ["diary_entry_revision", 48],
-        ["diary_entry_source", 0],
-        ["diary_operation", 48],
+        ["diary_entry", 46],
+        ["diary_entry_legacy_nutrient", 1],
+        ["diary_entry_nutrient", 98],
+        ["diary_entry_revision", 49],
+        ["diary_entry_source", 1],
+        ["diary_operation", 49],
       ] as const) {
         expect(
           completedExport.reconciliation?.entities.find((candidate) => candidate.entity === entity),
@@ -1238,10 +1943,10 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
             `${canonicalJson(parsed as unknown as Parameters<typeof canonicalJson>[0])}\n`,
           );
           expect(parsed.entities.account).toHaveLength(1);
-          expect(parsed.entities.biometric_definition).toHaveLength(1);
-          expect(parsed.entities.biometric_definition_version).toHaveLength(1);
-          expect(parsed.entities.biometric_event).toHaveLength(1);
-          expect(parsed.entities.biometric_event_revision).toHaveLength(1);
+          expect(parsed.entities.biometric_definition).toHaveLength(2);
+          expect(parsed.entities.biometric_definition_version).toHaveLength(2);
+          expect(parsed.entities.biometric_event).toHaveLength(2);
+          expect(parsed.entities.biometric_event_revision).toHaveLength(2);
           expect(parsed.entities.profile).toHaveLength(1);
           expectExactEntityIds(
             parsed.entities.diary_entry.map((row) => row.entityId),
@@ -1328,7 +2033,7 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
           ).toString("utf8");
           expect(occurrenceCount(diaryRevisionCsv, diaryEntryId)).toBe(3);
           expect(occurrenceCount(diaryRevisionCsv, privateDiaryNote)).toBe(1);
-          expect(occurrenceCount(diaryRevisionCsv, '""note"":null')).toBe(47);
+          expect(occurrenceCount(diaryRevisionCsv, '""note"":null')).toBe(48);
           expect(diaryRevisionCsv).toContain(`""note"":""${privateDiaryNote}""`);
         }
         await vi.waitFor(async () => expect(await readdir(apiSpoolDirectory)).toEqual([]), {
@@ -1348,6 +2053,545 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         { format: "csv_zip", outcome: "opened" },
         { format: "json", outcome: "opened" },
       ]);
+
+      const seedExportExpiresAt = completedExport.expiresAt;
+      if (!seedExportExpiresAt) throw new Error("Expected the seed export to have an expiry");
+      clock = new Date(Date.parse(seedExportExpiresAt) + 1_000);
+      await pollRetentionWorkerOnce("seed_artifact_expiry");
+      expect(events).toContainEqual({
+        event: "retention.export_artifact.expired",
+        jobId: requestedExport.id,
+        level: "info",
+      });
+      const seedLifecycleCounts = {
+        privacy_export_artifact: (
+          await database
+            .selectFrom("privacy_export_artifact as artifact")
+            .innerJoin("privacy_export_job as job", "job.id", "artifact.job_id")
+            .select(({ fn }) => fn.countAll<string>().as("count"))
+            .where("job.user_id", "=", userId)
+            .executeTakeFirstOrThrow()
+        ).count,
+        privacy_export_artifact_deletion: (
+          await database
+            .selectFrom("privacy_export_artifact_deletion as deletion")
+            .innerJoin("privacy_export_artifact as artifact", "artifact.id", "deletion.artifact_id")
+            .innerJoin("privacy_export_job as job", "job.id", "artifact.job_id")
+            .select(({ fn }) => fn.countAll<string>().as("count"))
+            .where("job.user_id", "=", userId)
+            .executeTakeFirstOrThrow()
+        ).count,
+        privacy_export_artifact_tombstone: (
+          await database
+            .selectFrom("privacy_export_artifact_tombstone as tombstone")
+            .innerJoin("privacy_export_job as job", "job.id", "tombstone.job_id")
+            .select(({ fn }) => fn.countAll<string>().as("count"))
+            .where("job.user_id", "=", userId)
+            .executeTakeFirstOrThrow()
+        ).count,
+        privacy_export_download_audit: (
+          await database
+            .selectFrom("privacy_export_download_audit")
+            .select(({ fn }) => fn.countAll<string>().as("count"))
+            .where("user_id", "=", userId)
+            .executeTakeFirstOrThrow()
+        ).count,
+        privacy_export_job: (
+          await database
+            .selectFrom("privacy_export_job")
+            .select(({ fn }) => fn.countAll<string>().as("count"))
+            .where("user_id", "=", userId)
+            .executeTakeFirstOrThrow()
+        ).count,
+      };
+      expect(seedLifecycleCounts).toEqual({
+        privacy_export_artifact: "1",
+        privacy_export_artifact_deletion: "1",
+        privacy_export_artifact_tombstone: "1",
+        privacy_export_download_audit: "2",
+        privacy_export_job: "1",
+      });
+
+      const measuredExportProof = await app.inject({
+        method: "POST",
+        url: "/v1/auth/reauthenticate",
+        headers: { authorization },
+        payload: { password, purpose: "account_export" },
+      });
+      expect(measuredExportProof.statusCode, measuredExportProof.body).toBe(200);
+      const measuredExportProofToken = measuredExportProof.json<{
+        data: { reauthenticationToken: string };
+      }>().data.reauthenticationToken;
+      const measuredExportRequest = await app.inject({
+        method: "POST",
+        url: "/v1/exports",
+        headers: {
+          authorization,
+          "idempotency-key": randomUUID(),
+          "x-reauthentication-token": measuredExportProofToken,
+        },
+        payload: { formats: ["json", "csv"] },
+      });
+      expect(measuredExportRequest.statusCode, measuredExportRequest.body).toBe(202);
+      const requestedMeasuredExport =
+        measuredExportRequest.json<AccountExportResponse>().data.export;
+      expect(requestedMeasuredExport.status).toBe("queued");
+
+      const expectedMeasuredBoundaryIds: Partial<Record<PrivacyExportEntity, readonly string[]>> = {
+        account: [userId],
+        custom_food: [customFood.id, proteinFood.id],
+        custom_food_catalogue_barcode: [scratchBarcode.id],
+        device: [device.id],
+        diary_entry: expectedDiaryEntries.map((row) => row.id),
+        nutrition_goal: [goal.id],
+        nutrition_goal_version: [goal.currentVersion.id],
+        platform_import_batch: [firstHealthBatch.batchId, conflictingHealthBatch.batchId],
+        privacy_export_job: [requestedExport.id],
+        profile: [userId],
+        recipe: [recipe.id],
+        recipe_version: [recipe.currentVersion.id],
+        reminder_schedule: [reminder.id],
+        security_challenge: [challenge.id],
+        user_watermark: [userId],
+      };
+      const directBoundaryQueries = {
+        biometric_definition: await database
+          .selectFrom("biometric_definition")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        biometric_definition_version: await database
+          .selectFrom("biometric_definition_version")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        biometric_definition_operation: (
+          await database
+            .selectFrom("biometric_definition_operation")
+            .select(["client_operation_id", "operation"])
+            .where("user_id", "=", userId)
+            .execute()
+        ).map((row) => ({ id: `${row.client_operation_id}:${row.operation}` })),
+        biometric_event: await database
+          .selectFrom("biometric_event")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        biometric_event_revision: await database
+          .selectFrom("biometric_event_revision")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        biometric_event_operation: (
+          await database
+            .selectFrom("biometric_event_operation")
+            .select(["client_operation_id", "operation"])
+            .where("user_id", "=", userId)
+            .execute()
+        ).map((row) => ({ id: `${row.client_operation_id}:${row.operation}` })),
+        audit_event: await database
+          .selectFrom("audit_log")
+          .select("id")
+          .where((builder) =>
+            builder.or([
+              builder("subject_user_id", "=", userId),
+              builder("actor_user_id", "=", userId),
+            ]),
+          )
+          .execute(),
+        custom_food_catalogue_food: await database
+          .selectFrom("food")
+          .select("id")
+          .where("owner_user_id", "=", userId)
+          .execute(),
+        custom_food_catalogue_version: await database
+          .selectFrom("food_version as version")
+          .innerJoin("food as owner", "owner.id", "version.food_id")
+          .select("version.id as id")
+          .where("owner.owner_user_id", "=", userId)
+          .execute(),
+        custom_food_catalogue_serving: await database
+          .selectFrom("food_serving as serving")
+          .innerJoin("food_version as version", "version.id", "serving.food_version_id")
+          .innerJoin("food as owner", "owner.id", "version.food_id")
+          .select("serving.id as id")
+          .where("owner.owner_user_id", "=", userId)
+          .execute(),
+        custom_food_catalogue_nutrient: (
+          await database
+            .selectFrom("food_nutrient_value as nutrient")
+            .innerJoin("food_version as version", "version.id", "nutrient.food_version_id")
+            .innerJoin("food as owner", "owner.id", "version.food_id")
+            .select(["nutrient.food_version_id", "nutrient.nutrient_id"])
+            .where("owner.owner_user_id", "=", userId)
+            .execute()
+        ).map((row) => ({ id: `${row.food_version_id}:${row.nutrient_id}` })),
+        custom_food_version: (
+          await database
+            .selectFrom("custom_food_version as version")
+            .innerJoin("custom_food as owner", "owner.id", "version.custom_food_id")
+            .select(["version.custom_food_id", "version.food_version_id"])
+            .where("owner.user_id", "=", userId)
+            .execute()
+        ).map((row) => ({ id: `${row.custom_food_id}:${row.food_version_id}` })),
+        custom_food_nutrient: (
+          await database
+            .selectFrom("custom_food_version_nutrient as nutrient")
+            .innerJoin("custom_food as owner", "owner.id", "nutrient.custom_food_id")
+            .select(["nutrient.custom_food_id", "nutrient.food_version_id", "nutrient.nutrient_id"])
+            .where("owner.user_id", "=", userId)
+            .execute()
+        ).map((row) => ({
+          id: `${row.custom_food_id}:${row.food_version_id}:${row.nutrient_id}`,
+        })),
+        custom_food_operation: (
+          await database
+            .selectFrom("custom_food_operation")
+            .select(["client_operation_id", "operation"])
+            .where("user_id", "=", userId)
+            .execute()
+        ).map((row) => ({ id: `${row.client_operation_id}:${row.operation}` })),
+        diary_day: [{ id: diaryId }],
+        diary_entry_legacy_nutrient: [{ id: `${diaryEntryId}:${energyNutrient.id}` }],
+        diary_entry_nutrient: expectedDiaryExportIds.nutrients.map((id) => ({ id })),
+        diary_entry_revision: expectedDiaryExportIds.revisions.map((id) => ({ id })),
+        diary_entry_source: expectedDiaryExportIds.sources.map((id) => ({ id })),
+        diary_operation: expectedDiaryExportIds.operations.map((id) => ({ id })),
+        nutrition_goal_target: (
+          await database
+            .selectFrom("nutrition_goal_target as target")
+            .innerJoin(
+              "nutrition_goal_version as version",
+              "version.id",
+              "target.nutrition_goal_version_id",
+            )
+            .select(["target.nutrition_goal_version_id", "target.nutrient_id"])
+            .where("version.user_id", "=", userId)
+            .execute()
+        ).map((row) => ({ id: `${row.nutrition_goal_version_id}:${row.nutrient_id}` })),
+        nutrition_goal_operation: (
+          await database
+            .selectFrom("nutrition_goal_operation")
+            .select(["client_operation_id", "operation"])
+            .where("user_id", "=", userId)
+            .execute()
+        ).map((row) => ({ id: `${row.client_operation_id}:${row.operation}` })),
+        platform_health_import: await database
+          .selectFrom("platform_health_import")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        platform_health_import_conflict: await database
+          .selectFrom("platform_health_import_conflict")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        platform_health_import_revision: await database
+          .selectFrom("platform_health_import_revision")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        platform_import_batch: await database
+          .selectFrom("platform_import_batch")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        platform_integration: await database
+          .selectFrom("platform_integration")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        platform_integration_version: await database
+          .selectFrom("platform_integration_version")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        privacy_export_artifact: await database
+          .selectFrom("privacy_export_artifact as artifact")
+          .innerJoin("privacy_export_job as job", "job.id", "artifact.job_id")
+          .select("artifact.id")
+          .where("job.user_id", "=", userId)
+          .where("job.id", "=", requestedExport.id)
+          .execute(),
+        privacy_export_artifact_deletion: await database
+          .selectFrom("privacy_export_artifact_deletion as deletion")
+          .innerJoin("privacy_export_artifact as artifact", "artifact.id", "deletion.artifact_id")
+          .innerJoin("privacy_export_job as job", "job.id", "artifact.job_id")
+          .select("deletion.artifact_id as id")
+          .where("job.user_id", "=", userId)
+          .where("job.id", "=", requestedExport.id)
+          .execute(),
+        privacy_export_artifact_tombstone: await database
+          .selectFrom("privacy_export_artifact_tombstone")
+          .select("artifact_id as id")
+          .where("job_id", "=", requestedExport.id)
+          .execute(),
+        privacy_export_download_audit: await database
+          .selectFrom("privacy_export_download_audit")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        reauthentication_proof: await database
+          .selectFrom("reauthentication_proof")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        recipe_ingredient: await database
+          .selectFrom("recipe_ingredient as ingredient")
+          .innerJoin("recipe_version as version", "version.id", "ingredient.recipe_version_id")
+          .select("ingredient.id")
+          .where("version.owner_user_id", "=", userId)
+          .execute(),
+        recipe_nutrient: (
+          await database
+            .selectFrom("recipe_version_nutrient as nutrient")
+            .innerJoin("recipe_version as version", "version.id", "nutrient.recipe_version_id")
+            .select(["nutrient.recipe_version_id", "nutrient.nutrient_id"])
+            .where("version.owner_user_id", "=", userId)
+            .execute()
+        ).map((row) => ({ id: `${row.recipe_version_id}:${row.nutrient_id}` })),
+        recipe_source: (
+          await database
+            .selectFrom("recipe_version_source as source")
+            .innerJoin("recipe_version as version", "version.id", "source.recipe_version_id")
+            .select([
+              "source.recipe_version_id",
+              "source.food_source_id",
+              "source.source_release_id",
+            ])
+            .where("version.owner_user_id", "=", userId)
+            .execute()
+        ).map((row) => ({
+          id: `${row.recipe_version_id}:${row.food_source_id}:${row.source_release_id}`,
+        })),
+        recipe_operation: (
+          await database
+            .selectFrom("recipe_operation")
+            .select(["client_operation_id", "operation"])
+            .where("user_id", "=", userId)
+            .execute()
+        ).map((row) => ({ id: `${row.client_operation_id}:${row.operation}` })),
+        reminder_consent: await database
+          .selectFrom("reminder_consent")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        reminder_consent_version: await database
+          .selectFrom("reminder_consent_version")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        reminder_delivery: await database
+          .selectFrom("reminder_delivery_outbox")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        reminder_schedule_version: await database
+          .selectFrom("reminder_schedule_version")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        retention_operation: (
+          await database
+            .selectFrom("retention_operation")
+            .select(["client_operation_id", "feature", "operation"])
+            .where("user_id", "=", userId)
+            .execute()
+        ).map((row) => ({ id: `${row.client_operation_id}:${row.feature}:${row.operation}` })),
+        session: await database
+          .selectFrom("user_session")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+      };
+      for (const [entity, rows] of Object.entries(directBoundaryQueries) as [
+        PrivacyExportEntity,
+        readonly { readonly id: string }[],
+      ][]) {
+        expectedMeasuredBoundaryIds[entity] = rows.map((row) => row.id);
+      }
+      expect(Object.keys(expectedMeasuredBoundaryIds).sort()).toEqual(
+        [...EXPECTED_PRIVACY_EXPORT_ENTITIES].sort(),
+      );
+
+      await pollRetentionWorkerOnce("measured_export");
+      const measuredStatusResponse = await app.inject({
+        method: "GET",
+        url: `/v1/exports/${requestedMeasuredExport.id}`,
+        headers: { authorization },
+      });
+      expect(measuredStatusResponse.statusCode, measuredStatusResponse.body).toBe(200);
+      const measuredExport = measuredStatusResponse.json<AccountExportResponse>().data.export;
+      expect(measuredExport).toMatchObject({
+        status: "completed",
+        reconciliation: { reconciled: true },
+      });
+      const measuredReconciliation = measuredExport.reconciliation;
+      if (!measuredReconciliation) throw new Error("Expected measured export reconciliation");
+      expect(measuredReconciliation.entities.map((entity) => entity.entity).sort()).toEqual(
+        [...EXPECTED_PRIVACY_EXPORT_ENTITIES].sort(),
+      );
+      for (const entity of measuredReconciliation.entities) {
+        expect(entity.sourceCount, entity.entity).toBeGreaterThan(0);
+        expect(entity.exportedCount, entity.entity).toBe(entity.sourceCount);
+      }
+
+      const persistedMeasuredExport = await getPrivacyExportJob(database, {
+        jobId: requestedMeasuredExport.id,
+        userId,
+      });
+      const measuredMetadata: EncryptedArtifactMetadata[] = persistedMeasuredExport.artifacts.map(
+        (artifact) => {
+          trackedExportObjects.add(artifact.objectKey);
+          return {
+            ciphertextBytes: exactNumber(artifact.ciphertextBytes, "ciphertextBytes"),
+            encryptionKeyId: artifact.encryptionKeyId,
+            envelopeVersion: 1,
+            mediaType: artifact.mediaType,
+            objectKey: artifact.objectKey,
+            plaintextBytes: exactNumber(artifact.plaintextBytes, "plaintextBytes"),
+            plaintextSha256: artifact.plaintextSha256,
+          };
+        },
+      );
+      let measuredJson:
+        | {
+            readonly entities: Record<PrivacyExportEntity, readonly ExportEntityRow[]>;
+            readonly manifest: Parameters<typeof canonicalJson>[0];
+          }
+        | undefined;
+      let measuredZipEntries: ReadonlyMap<string, Buffer> | undefined;
+      for (const artifact of measuredExport.artifacts) {
+        const download = await app.inject({
+          method: "GET",
+          url: artifact.downloadPath,
+          headers: { authorization },
+        });
+        expect(download.statusCode, download.body).toBe(200);
+        expect(download.headers["cache-control"]).toBe("no-store");
+        expect(download.rawPayload.byteLength).toBe(
+          exactNumber(artifact.byteLength, "measured download byteLength"),
+        );
+        expect(sha256(download.rawPayload)).toBe(artifact.sha256);
+        if (artifact.format === "json") {
+          const rawJson = download.rawPayload.toString("utf8");
+          measuredJson = JSON.parse(rawJson) as typeof measuredJson;
+          if (!measuredJson) throw new Error("Expected measured JSON export");
+          expect(rawJson).toBe(
+            `${canonicalJson(measuredJson as unknown as Parameters<typeof canonicalJson>[0])}\n`,
+          );
+          expect(rawJson).not.toContain(crossOwnerUserId);
+          expect(sha256(canonicalJson(measuredJson.manifest))).toBe(measuredExport.manifestSha256);
+        } else {
+          measuredZipEntries = storedZipEntries(download.rawPayload);
+        }
+        await vi.waitFor(async () => expect(await readdir(apiSpoolDirectory)).toEqual([]), {
+          interval: 10,
+          timeout: 2_000,
+        });
+      }
+      if (!measuredJson || !measuredZipEntries) {
+        throw new Error("Expected measured JSON and CSV export artifacts");
+      }
+      const measuredCsvText = [...measuredZipEntries.values()]
+        .map((bytes) => bytes.toString("utf8"))
+        .join("\n");
+      expect(measuredCsvText).not.toContain(crossOwnerUserId);
+      expect(Object.keys(measuredJson.entities).sort()).toEqual(
+        [...EXPECTED_PRIVACY_EXPORT_ENTITIES].sort(),
+      );
+      for (const entity of EXPECTED_PRIVACY_EXPORT_ENTITIES) {
+        const reconciliation = measuredReconciliation.entities.find(
+          (candidate) => candidate.entity === entity,
+        );
+        if (!reconciliation) throw new Error(`Missing reconciliation for ${entity}`);
+        const jsonIds = measuredJson.entities[entity].map((row) => row.entityId);
+        expect(jsonIds, entity).toHaveLength(reconciliation.sourceCount);
+        expect(new Set(jsonIds).size, entity).toBe(jsonIds.length);
+        expectExactEntityIds(
+          csvEntityIds(requiredZipEntry(measuredZipEntries, `entities/${entity}/part-000001.csv`)),
+          jsonIds,
+          `${entity} CSV IDs`,
+        );
+        const expectedIds = expectedMeasuredBoundaryIds[entity];
+        if (!expectedIds) throw new Error(`Missing independent expected IDs for ${entity}`);
+        expectExactEntityIds(jsonIds, expectedIds, `${entity} independent IDs`);
+      }
+      const redactedAuditFields = [
+        "actor_user_id",
+        "subject_user_id",
+        "source_ip",
+        "request_id",
+        "user_agent",
+        "before_state",
+        "after_state",
+        "context",
+      ] as const;
+      for (const row of measuredJson.entities.audit_event) {
+        for (const field of redactedAuditFields) {
+          expect(row.payload, `audit ${row.entityId} must redact ${field}`).not.toHaveProperty(
+            field,
+          );
+        }
+      }
+      const measuredAuditJson = JSON.stringify(measuredJson.entities.audit_event);
+      const measuredAuditCsv = [...measuredZipEntries.entries()]
+        .filter(([name]) => name.startsWith("entities/audit_event/") && name.endsWith(".csv"))
+        .map(([, bytes]) => bytes.toString("utf8"))
+        .join("\n");
+      expect(measuredAuditCsv.length).toBeGreaterThan(0);
+      for (const field of redactedAuditFields) {
+        expect(measuredAuditCsv, `audit CSV must redact ${field}`).not.toContain(`""${field}""`);
+      }
+      for (const sentinel of auditRedactionSentinels) {
+        expect(measuredAuditJson).not.toContain(sentinel);
+        expect(measuredAuditCsv).not.toContain(sentinel);
+      }
+      expect(measuredJson.entities.account[0]?.payload).not.toHaveProperty("auth_subject");
+      expect(measuredJson.entities.device[0]?.payload).not.toHaveProperty("public_key_spki_base64");
+      expect(measuredJson.entities.platform_import_batch[0]?.payload).not.toHaveProperty(
+        "nonce_hash",
+      );
+      expect(measuredJson.entities.privacy_export_artifact[0]?.payload).not.toHaveProperty(
+        "object_key",
+      );
+      expect(measuredJson.entities.privacy_export_artifact[0]?.payload).not.toHaveProperty(
+        "encryption_key_id",
+      );
+      expect(measuredJson.entities.privacy_export_artifact[0]?.payload).not.toHaveProperty(
+        "ciphertext_bytes",
+      );
+      expect(measuredJson.entities.privacy_export_artifact_deletion[0]?.payload).not.toHaveProperty(
+        "deletion_evidence_digest",
+      );
+      expect(
+        measuredJson.entities.privacy_export_artifact_tombstone[0]?.payload,
+      ).not.toHaveProperty("deletion_evidence_digest");
+      expect(measuredJson.entities.reauthentication_proof[0]?.payload).not.toHaveProperty(
+        "token_hash",
+      );
+      expect(measuredJson.entities.session[0]?.payload).not.toHaveProperty("token_hash");
+
+      const excludedOwnerRowsBeforeErasure = {
+        auth_action_token: (
+          await database
+            .selectFrom("auth_action_token")
+            .select(({ fn }) => fn.countAll<string>().as("count"))
+            .where("user_id", "=", userId)
+            .executeTakeFirstOrThrow()
+        ).count,
+        user_password_credential: (
+          await database
+            .selectFrom("user_password_credential")
+            .select(({ fn }) => fn.countAll<string>().as("count"))
+            .where("user_id", "=", userId)
+            .executeTakeFirstOrThrow()
+        ).count,
+      };
+      expect(excludedOwnerRowsBeforeErasure).toEqual({
+        auth_action_token: "2",
+        user_password_credential: "1",
+      });
 
       const erasureProof = await app.inject({
         method: "POST",
@@ -1383,7 +2627,13 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
       ).toBe(401);
 
       clock = new Date(Date.parse(queuedErasure.erasure.executeAfter) + 60_000);
-      await workerRuntime.pollOnce();
+      await pollRetentionWorkerOnce("account_erasure");
+      expect(workerPollSequence).toEqual([
+        "seed_export",
+        "seed_artifact_expiry",
+        "measured_export",
+        "account_erasure",
+      ]);
       expect(events).toContainEqual({
         event: "retention.erasure.completed",
         jobId: queuedErasure.erasure.id,
@@ -1391,6 +2641,24 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
       });
       expect(events.filter((event) => event.level === "warn")).toEqual([]);
       expect(events.filter((event) => event.event === "worker.poll.slice_failed")).toEqual([]);
+
+      const crossOwnerMeAfterErasure = await app.inject({
+        method: "GET",
+        url: "/v1/auth/me",
+        headers: { authorization: crossOwnerAuthorization },
+      });
+      expect(crossOwnerMeAfterErasure.statusCode, crossOwnerMeAfterErasure.body).toBe(200);
+      expect(crossOwnerMeAfterErasure.headers["cache-control"]).toBe("no-store");
+      expect(crossOwnerMeAfterErasure.json<CurrentAccountResponse>().data.user.id).toBe(
+        crossOwnerUserId,
+      );
+      expect(
+        await database
+          .selectFrom("app_user")
+          .select("id")
+          .where("id", "=", crossOwnerUserId)
+          .execute(),
+      ).toEqual([{ id: crossOwnerUserId }]);
 
       expect(
         (
@@ -1430,7 +2698,7 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         ).statusCode,
       ).toBe(401);
 
-      for (const metadata of persistedMetadata) {
+      for (const metadata of [...persistedMetadata, ...measuredMetadata]) {
         const opened = await exportVerifier.openAuthenticated(metadata);
         await opened?.dispose();
         expect(opened).toBeNull();
@@ -1458,6 +2726,20 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
       expect(Object.values(reconciliation.remainingRows).every((count) => count === "0")).toBe(
         true,
       );
+      expect(
+        await database
+          .selectFrom("auth_action_token")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+      ).toEqual([]);
+      expect(
+        await database
+          .selectFrom("user_password_credential")
+          .select("user_id")
+          .where("user_id", "=", userId)
+          .execute(),
+      ).toEqual([]);
       const erasedDiaryCounts = {
         diary: (
           await database
@@ -1563,7 +2845,10 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         },
       ]);
       expect(await readdir(apiSpoolDirectory)).toEqual([]);
-      expect(await readdir(workerSpoolDirectory)).toEqual([]);
+      expect(await readdir(workerSpoolDirectory)).toEqual(["search-rebuild"]);
+      const searchRebuildSpoolDirectory = `${workerSpoolDirectory}/search-rebuild`;
+      expect((await lstat(searchRebuildSpoolDirectory)).mode & 0o777).toBe(0o700);
+      expect(await readdir(searchRebuildSpoolDirectory)).toEqual([]);
       expect(await readdir(restoreSpoolDirectory)).toEqual([]);
     } catch (error) {
       operationFailed = true;
@@ -1585,12 +2870,14 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
 
       const database = databaseHandle;
       if (database && retentionTablesReady) {
-        await attemptCleanup(cleanupErrors, "discover staged export objects", async () => {
-          const staged = await database
-            .selectFrom("privacy_export_upload_artifact")
-            .select("object_key")
-            .execute();
-          for (const artifact of staged) trackedExportObjects.add(artifact.object_key);
+        await attemptCleanup(cleanupErrors, "discover export objects", async () => {
+          const [staged, finalized] = await Promise.all([
+            database.selectFrom("privacy_export_upload_artifact").select("object_key").execute(),
+            database.selectFrom("privacy_export_artifact").select("object_key").execute(),
+          ]);
+          for (const artifact of [...staged, ...finalized]) {
+            if (artifact.object_key) trackedExportObjects.add(artifact.object_key);
+          }
         });
       }
 
