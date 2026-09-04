@@ -689,6 +689,22 @@ test("keeps guarded development projections and listeners exact", () => {
   );
 });
 
+test("bounds package-level test fan-out before Vitest file workers", () => {
+  const rootPackage = readJson("package.json");
+  assert.equal(
+    rootPackage.scripts?.test,
+    "turbo run test --concurrency=2",
+    "root tests must bound Turbo fan-out before package test runners parallelize files",
+  );
+
+  const checkStages = (rootPackage.scripts?.check ?? "").split(" && ");
+  assert.equal(
+    checkStages.filter((stage) => stage === "pnpm test").length,
+    1,
+    "the root check gate must inherit the bounded test command exactly once",
+  );
+});
+
 test("keeps root development concurrency one slot above persistent workspace tasks", () => {
   const rootPackage = readJson("package.json");
   const turbo = readJson("turbo.json");

@@ -34,7 +34,7 @@
     "infra:up": "node scripts/local-infra-up.mjs",
     "mobile:check": "pnpm --filter @nutrition-tracker/mobile dependencies:check && pnpm --filter @nutrition-tracker/mobile config:check",
     "retention:privacy-drill": "node scripts/run-retention-privacy-drill.mjs",
-    "test": "turbo run test",
+    "test": "turbo run test --concurrency=2",
     "test:localstack:dev": "python3 -B infra/localstack/dev-profile.py verify",
     "typecheck": "turbo run typecheck",
     "verify": "pnpm check && pnpm build && pnpm audit:prod && pnpm licenses:check"
