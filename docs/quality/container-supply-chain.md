@@ -288,15 +288,17 @@ for the tagged Meilisearch release workflow and GitHub Actions OIDC issuer. The
 Meilisearch publisher repeats the exact lock, Dockerfile `FROM`, child identity,
 and signature checks before receiving GHCR credentials or building.
 
-Hosted container supply-chain run `33029133377` for source commit
-`e46b91afe7d875c74e0ce27f5e129edfb8efc70d` produced the repository derivatives
-and evidence required for this follow-up change to close the one-time upstream
-CI fixture exception. Its native ARM64 service jobs passed the runner guard,
-runtime identity and behavior checks, explicit empty-ignore HIGH/CRITICAL scans,
-BuildKit provenance, GitHub attestation, and immutable-tag verification. This
-follow-up therefore binds database CI to the resulting repository-owned indexes:
+Hosted container supply-chain run `33987760700` for source commit
+`924822c3f100ebf68f5fa65aa81d982dea74d82d` produced the PostgreSQL derivative
+that installs the current Alpine `libuuid=2.42.3-r1` security revision. Its
+native ARM64 PostgreSQL job passed the runner guard, exact APK inventory,
+runtime identity, initialization, TLS, health and existing-cluster behavior,
+explicit empty-ignore HIGH/CRITICAL scan, BuildKit provenance, GitHub
+attestation, and immutable-tag verification. Database CI is therefore bound to
+that new repository-owned PostgreSQL index; the unchanged Meilisearch fixture
+retains its previously reviewed index:
 
-- PostgreSQL: `ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:8619f613a586a1bbeee096cc229cbdcf18e9bf12f8d1b1e5c2f517b5be210e74`
+- PostgreSQL: `ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:62f034da2b5123a68d289e53c92aae37ccfd515b10dfda7ddba028803fcb9cc3`
 - Meilisearch: `ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:d05ad0c8303b284c587b9b2167adad4fdd9705d7b011ea983ddba5f22cc548fa`
 
 The signed upstream Meilisearch digest remains build-input evidence only; it is

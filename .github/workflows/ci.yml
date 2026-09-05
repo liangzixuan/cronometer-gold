@@ -120,7 +120,7 @@ jobs:
     timeout-minutes: 30
     services:
       postgres:
-        image: ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:8619f613a586a1bbeee096cc229cbdcf18e9bf12f8d1b1e5c2f517b5be210e74
+        image: ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:62f034da2b5123a68d289e53c92aae37ccfd515b10dfda7ddba028803fcb9cc3
         env:
           POSTGRES_DB: nutrition_tracker
           POSTGRES_PASSWORD: nutrition_local_only

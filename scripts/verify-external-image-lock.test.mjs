@@ -19,7 +19,7 @@ const meiliDockerfile = readFileSync(
 );
 
 const REPOSITORY_POSTGRES_CI_REF =
-  "ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:8619f613a586a1bbeee096cc229cbdcf18e9bf12f8d1b1e5c2f517b5be210e74";
+  "ghcr.io/liangzixuan/cronometer-gold-postgres@sha256:62f034da2b5123a68d289e53c92aae37ccfd515b10dfda7ddba028803fcb9cc3";
 const REPOSITORY_MEILI_CI_REF =
   "ghcr.io/liangzixuan/cronometer-gold-meilisearch@sha256:d05ad0c8303b284c587b9b2167adad4fdd9705d7b011ea983ddba5f22cc548fa";
 const UPSTREAM_POSTGRES_CI_REF =
