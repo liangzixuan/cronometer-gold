@@ -103,7 +103,9 @@ inventory gates, rejected prior composition, and scan boundary.
 The Caddy image is a UID/GID-1000 scratch runtime. Deployment drops all
 capabilities, adds only `NET_BIND_SERVICE`, mounts the reviewed Caddyfile, and
 presents writable `/data` and `/config` directories owned by 1000. The
-PostgreSQL image is fixed to UID/GID 70 and has no gosu binary. Deployment must
+PostgreSQL image is fixed to UID/GID 70, has no gosu binary, and upgrades its
+ARM64 Alpine `libuuid` runtime package to exact 2.42.3-r0 before the strict
+zero-HIGH/zero-CRITICAL scan. Deployment must
 pre-own PGDATA and the `/run/postgresql` and `/tmp` tmpfs mounts as 70. See
 `docs/quality/container-supply-chain.md` for the exact source, dependency, and
 scan evidence. The Meilisearch derivative is fixed to UID/GID 1000 and upgrades

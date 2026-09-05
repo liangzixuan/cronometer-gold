@@ -193,7 +193,13 @@ An earlier review found Go standard-library records attached to
 unreachable. The 2026-08-26 hosted ARM64 scan then reported two HIGH findings,
 one each for Alpine `libcrypto3` and `libssl3` 3.5.7-r0. The derivative now
 installs exactly 3.5.8-r0 for both packages and asserts their full APK inventory
-records before the final strict scan. It retains PostgreSQL initialization,
+records before the final strict scan. On 2026-09-05, exact-head supply run
+`33959101567` found seven additional HIGH findings in Alpine `libuuid`
+2.42.1-r0: CVE-2026-53612, CVE-2026-53613, CVE-2026-53614,
+CVE-2026-76642, CVE-2026-78408, CVE-2026-78409, and CVE-2026-78410.
+The derivative therefore also installs exact `libuuid=2.42.3-r0`, records the
+complete trigger set in image labels, and asserts its ARM64 APK inventory.
+No ignore or severity waiver is used. It retains PostgreSQL initialization,
 init-script, existing-cluster, TLS, stop-signal, and health semantics. The
 controlled-beta runtime must present PGDATA and the `/var/run/postgresql` and
 `/tmp` tmpfs mounts pre-owned by `70:70`.

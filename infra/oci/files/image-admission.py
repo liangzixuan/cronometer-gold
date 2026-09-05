@@ -280,13 +280,15 @@ def require_repository_runtime_contract(variable, config):
         }
         expected_labels = {
             "io.cronometer.runtime.component": "postgres",
-            "io.cronometer.runtime.contract": "openssl-3.5.8-r0-uid-gid-70-preowned-pgdata-and-tmpfs",
+            "io.cronometer.runtime.contract": "openssl-3.5.8-r0-libuuid-2.42.3-r0-uid-gid-70-preowned-pgdata-and-tmpfs",
             "io.cronometer.upstream.image": "docker.io/library/postgres:17.11-alpine3.24",
             "io.cronometer.upstream.image.digest": "sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73",
             "io.cronometer.upstream.image.arm64.digest": "sha256:dfc2780980fe6ca2d158bfe4342660db5e4c6431fb969088e543430d09f8d0f2",
             "io.cronometer.upstream.version": "17.11",
             "io.cronometer.runtime.openssl-packages": "libcrypto3=3.5.8-r0,libssl3=3.5.8-r0",
             "io.cronometer.runtime.openssl-upgrade-trigger": "CVE-2026-14456",
+            "io.cronometer.runtime.util-linux-packages": "libuuid=2.42.3-r0",
+            "io.cronometer.runtime.util-linux-upgrade-trigger": "CVE-2026-53612,CVE-2026-53613,CVE-2026-53614,CVE-2026-76642,CVE-2026-78408,CVE-2026-78409,CVE-2026-78410",
         }
         expected_environment = {
             "GOSU_VERSION=",

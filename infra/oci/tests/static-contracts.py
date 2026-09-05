@@ -1308,7 +1308,7 @@ assert '"org.opencontainers.image.version": f"sha-{revision}"' in image_admissio
 assert '"io.cronometer.runtime.contract": "uid-gid-1000-net-bind-service"' in image_admission
 assert (
     '"io.cronometer.runtime.contract": '
-    '"openssl-3.5.8-r0-uid-gid-70-preowned-pgdata-and-tmpfs"'
+    '"openssl-3.5.8-r0-libuuid-2.42.3-r0-uid-gid-70-preowned-pgdata-and-tmpfs"'
     in image_admission
 )
 assert (
@@ -1555,7 +1555,7 @@ postgres_config = {
     "Labels": {
         "io.cronometer.runtime.component": "postgres",
         "io.cronometer.runtime.contract": (
-            "openssl-3.5.8-r0-uid-gid-70-preowned-pgdata-and-tmpfs"
+            "openssl-3.5.8-r0-libuuid-2.42.3-r0-uid-gid-70-preowned-pgdata-and-tmpfs"
         ),
         "io.cronometer.upstream.image": "docker.io/library/postgres:17.11-alpine3.24",
         "io.cronometer.upstream.image.digest": (
@@ -1569,6 +1569,11 @@ postgres_config = {
             "libcrypto3=3.5.8-r0,libssl3=3.5.8-r0"
         ),
         "io.cronometer.runtime.openssl-upgrade-trigger": "CVE-2026-14456",
+        "io.cronometer.runtime.util-linux-packages": "libuuid=2.42.3-r0",
+        "io.cronometer.runtime.util-linux-upgrade-trigger": (
+            "CVE-2026-53612,CVE-2026-53613,CVE-2026-53614,CVE-2026-76642,"
+            "CVE-2026-78408,CVE-2026-78409,CVE-2026-78410"
+        ),
     },
 }
 meili_config = {
@@ -1635,6 +1640,24 @@ wrong_postgres_packages["Labels"]["io.cronometer.runtime.openssl-packages"] = (
 )
 assert_service_contract_blocked(
     "POSTGRES_IMAGE", wrong_postgres_packages, "vulnerable PostgreSQL OpenSSL packages"
+)
+
+wrong_postgres_libuuid = copy.deepcopy(postgres_config)
+wrong_postgres_libuuid["Labels"]["io.cronometer.runtime.util-linux-packages"] = (
+    "libuuid=2.42.1-r0"
+)
+assert_service_contract_blocked(
+    "POSTGRES_IMAGE", wrong_postgres_libuuid, "vulnerable PostgreSQL libuuid package"
+)
+
+wrong_postgres_libuuid_trigger = copy.deepcopy(postgres_config)
+wrong_postgres_libuuid_trigger["Labels"][
+    "io.cronometer.runtime.util-linux-upgrade-trigger"
+] = "CVE-2026-53612,CVE-2026-53613,CVE-2026-53614,CVE-2026-76642,CVE-2026-78408,CVE-2026-78409"
+assert_service_contract_blocked(
+    "POSTGRES_IMAGE",
+    wrong_postgres_libuuid_trigger,
+    "incomplete PostgreSQL libuuid vulnerability provenance",
 )
 
 wrong_meili_user = copy.deepcopy(meili_config)
