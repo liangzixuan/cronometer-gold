@@ -574,8 +574,11 @@ test("CLI writes output only after a successful bootstrap and leaves none on fai
   t.after(async () => rm(directory, { force: true, recursive: true }));
   const outputPath = resolve(directory, "keys.env");
   const environment = {
+    MEILI_ADMIN_KEY: "bootstrap-replaced-scoped-admin-key-not-for-production",
     MEILI_MASTER_KEY: masterKey,
     MEILI_PORT: "7700",
+    MEILI_SEARCH_KEY: "bootstrap-replaced-scoped-search-key-not-for-production",
+    MEILI_TASK_OBSERVER_KEY: "bootstrap-replaced-scoped-task-observer-key-not-for-production",
     MEILI_URL: endpoint,
   };
   const fixture = createFetch();
@@ -587,6 +590,12 @@ test("CLI writes output only after a successful bootstrap and leaves none on fai
     timeoutMs: 1_000,
   });
   assert.equal((await stat(outputPath)).mode & 0o777, 0o600);
+  assert.equal(
+    await readFile(outputPath, "utf8"),
+    `MEILI_SEARCH_KEY=${searchKey}\n` +
+      `MEILI_ADMIN_KEY=${workerKey}\n` +
+      `MEILI_TASK_OBSERVER_KEY=${taskObserverKey}\n`,
+  );
 
   const failedPath = resolve(directory, "failed.env");
   await genericFailure(
@@ -600,4 +609,58 @@ test("CLI writes output only after a successful bootstrap and leaves none on fai
     }),
   );
   await assert.rejects(stat(failedPath), { code: "ENOENT" });
+});
+
+test("CLI no-argument mode validates ambient scoped keys as exact expectations", async () => {
+  const exactEnvironment = {
+    MEILI_ADMIN_KEY: workerKey,
+    MEILI_MASTER_KEY: masterKey,
+    MEILI_PORT: "7700",
+    MEILI_SEARCH_KEY: searchKey,
+    MEILI_TASK_OBSERVER_KEY: taskObserverKey,
+    MEILI_URL: endpoint,
+  };
+  const fixture = createFetch();
+
+  assert.deepEqual(
+    await runScopedMeiliKeysCli({
+      argv: [],
+      environment: exactEnvironment,
+      fetchImpl: fixture.fetchImpl,
+      timeoutMs: 1_000,
+    }),
+    {
+      MEILI_ADMIN_KEY: workerKey,
+      MEILI_SEARCH_KEY: searchKey,
+      MEILI_TASK_OBSERVER_KEY: taskObserverKey,
+    },
+  );
+
+  let requested = false;
+  await genericFailure(
+    runScopedMeiliKeysCli({
+      argv: [],
+      environment: {
+        ...exactEnvironment,
+        MEILI_SEARCH_KEY: "bootstrap-replaced-scoped-search-key-not-for-production",
+      },
+      fetchImpl: async () => {
+        requested = true;
+        return response(500);
+      },
+      timeoutMs: 1_000,
+    }),
+  );
+  assert.equal(requested, false);
+
+  const mismatchFixture = createFetch();
+  await genericFailure(
+    runScopedMeiliKeysCli({
+      argv: [],
+      environment: { ...exactEnvironment, MEILI_SEARCH_KEY: "d".repeat(64) },
+      fetchImpl: mismatchFixture.fetchImpl,
+      timeoutMs: 1_000,
+    }),
+  );
+  assert.equal(mismatchFixture.calls.length, 1);
 });

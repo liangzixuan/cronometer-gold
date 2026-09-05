@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 import {
   CNF_ARCHIVE_CSV_PATHS,
   type CnfArchiveParseResult,
-  type FoodSourceManifestV3,
+  type FoodSourceManifestV4,
   sha256CanonicalJson,
 } from "@nutrition-tracker/ingestion";
 import { describe, expect, it } from "vitest";
@@ -519,6 +519,8 @@ describe("CNF staging CLI boundary", () => {
     ".local-data/cache",
     "--extract-dir",
     ".local-data/extracted-cnf",
+    "--evidence-bundle",
+    ".local-data/cnf-release-evidence.json",
     "--manifest-object-uri",
     `s3://evidence/sha256/${"a".repeat(64)}/manifest.json`,
     ...extra,
@@ -644,7 +646,7 @@ describe("CNF parser baseline boundary", () => {
     const releaseSpecificExpectations = { ...cnfParserBaselineEvidence(parsed, metrics) };
     const manifest = {
       validation: { releaseSpecificExpectations },
-    } as unknown as FoodSourceManifestV3;
+    } as unknown as FoodSourceManifestV4;
 
     expect(() => assertCnfParserBaseline(manifest, parsed, metrics)).not.toThrow();
   });
@@ -656,7 +658,7 @@ describe("CNF parser baseline boundary", () => {
     delete releaseSpecificExpectations[missingKey];
     const manifest = {
       validation: { releaseSpecificExpectations },
-    } as unknown as FoodSourceManifestV3;
+    } as unknown as FoodSourceManifestV4;
 
     expect(() => assertCnfParserBaseline(manifest, parsed, metrics)).toThrow(missingKey);
   });
@@ -667,7 +669,7 @@ describe("CNF parser baseline boundary", () => {
     releaseSpecificExpectations["cnfParser.sourceRecordCount"] = 1;
     const manifest = {
       validation: { releaseSpecificExpectations },
-    } as unknown as FoodSourceManifestV3;
+    } as unknown as FoodSourceManifestV4;
 
     expect(() => assertCnfParserBaseline(manifest, parsed, metrics)).toThrow(
       "cnfParser.sourceRecordCount",

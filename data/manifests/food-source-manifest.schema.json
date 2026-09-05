@@ -7,6 +7,8 @@
   "required": [
     "manifestVersion",
     "templateOnly",
+    "releaseClass",
+    "evidenceBundle",
     "source",
     "release",
     "artifact",
@@ -16,8 +18,29 @@
   ],
   "properties": {
     "$schema": { "type": "string" },
-    "manifestVersion": { "const": 3 },
+    "manifestVersion": { "const": 4 },
     "templateOnly": { "type": "boolean" },
+    "releaseClass": { "enum": ["live-reviewed", "fixture-nonrelease"] },
+    "evidenceBundle": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["contractVersion", "sha256", "objectUri"],
+          "properties": {
+            "contractVersion": { "const": 1 },
+            "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "objectUri": {
+              "type": "string",
+              "format": "uri",
+              "maxLength": 2048,
+              "pattern": "^s3://(?![0-9]+(?:\\.[0-9]+){3}/)(?![a-z0-9.-]*\\.\\.)[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/(?:[A-Za-z0-9_-][A-Za-z0-9._~-]*/)*sha256/[0-9a-f]{64}(?:/[A-Za-z0-9_-][A-Za-z0-9._~-]*)*$"
+            }
+          }
+        }
+      ]
+    },
     "source": {
       "type": "object",
       "additionalProperties": false,
@@ -51,8 +74,7 @@
         "mediaType",
         "sha256",
         "byteSize",
-        "publisherIntegrity",
-        "acquisitionObservations"
+        "publisherIntegrity"
       ],
       "properties": {
         "downloadUrl": { "type": ["string", "null"], "format": "uri" },
@@ -106,49 +128,6 @@
               }
             }
           ]
-        },
-        "acquisitionObservations": {
-          "type": "array",
-          "uniqueItems": true,
-          "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": [
-              "acquisitionId",
-              "observedAt",
-              "operatorPrincipalId",
-              "tool",
-              "transport",
-              "freshDownload",
-              "downloadUrl",
-              "resolvedUrl",
-              "etag",
-              "lastModified",
-              "sha256",
-              "byteSize"
-            ],
-            "properties": {
-              "acquisitionId": {
-                "type": "string",
-                "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-              },
-              "observedAt": { "type": "string", "format": "date-time" },
-              "operatorPrincipalId": {
-                "type": "string",
-                "minLength": 3,
-                "pattern": "^(?!\\s)(?:.*\\S)?$"
-              },
-              "tool": { "type": "string", "minLength": 1, "pattern": "^(?!\\s)(?:.*\\S)?$" },
-              "transport": { "const": "https" },
-              "freshDownload": { "const": true },
-              "downloadUrl": { "type": "string", "format": "uri", "pattern": "^https://" },
-              "resolvedUrl": { "type": "string", "format": "uri", "pattern": "^https://" },
-              "etag": { "type": ["string", "null"] },
-              "lastModified": { "type": ["string", "null"] },
-              "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-              "byteSize": { "type": "integer", "minimum": 1 }
-            }
-          }
         }
       }
     },
@@ -276,6 +255,7 @@
       "then": {
         "type": "object",
         "properties": {
+          "evidenceBundle": { "type": "object" },
           "release": {
             "type": "object",
             "properties": {
@@ -289,8 +269,7 @@
               "downloadUrl": { "type": "string", "pattern": "^https://" },
               "objectUri": { "type": "string" },
               "sha256": { "type": "string" },
-              "byteSize": { "type": "integer" },
-              "acquisitionObservations": { "type": "array", "minItems": 2 }
+              "byteSize": { "type": "integer" }
             }
           },
           "ingestion": {
@@ -325,6 +304,12 @@
               }
             }
           }
+        }
+      },
+      "else": {
+        "type": "object",
+        "properties": {
+          "evidenceBundle": { "type": "null" }
         }
       }
     }

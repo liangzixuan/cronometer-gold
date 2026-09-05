@@ -1,17 +1,36 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  link,
+  lstat,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
   adaptFdcJsonRelease,
+  canonicalJson,
   type ExtractedZipFile,
-  type FoodSourceManifestV3,
+  type FoodSourceManifestV4,
   sha256CanonicalJson,
 } from "@nutrition-tracker/ingestion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { type CommandIo, readExactFdcJsonMember, runCommand } from "../src/run.js";
+import {
+  bindSyntheticReleaseEvidence,
+  SYNTHETIC_EVIDENCE_EVALUATED_AT,
+  SYNTHETIC_EVIDENCE_EXPIRED_AT,
+  type SyntheticEvidenceRunner,
+  type SyntheticReleaseEvidenceFixture,
+  writeCanonicalReleaseEvidence,
+} from "./synthetic-release-evidence.js";
 
 const databaseOpenAttempt = vi.hoisted(() =>
   vi.fn(() => {
@@ -34,6 +53,12 @@ const FOUNDATION_MANIFEST_PATH = join(
 const FDC_MEMBER = "synthetic-foundation.json";
 const FDC_RELEASE_KEY = "fdc-inspect-synthetic";
 const PARSER_BUILD_SHA256 = "b".repeat(64);
+const FDC_EVIDENCE_RUNNER: SyntheticEvidenceRunner = Object.freeze({
+  authenticationMethod: "oidc",
+  principalId: "service:fdc-release",
+  runId: "fdc-cli-evidence-test",
+  runReference: "urn:nutrition-tracker:test:fdc-cli-evidence-test",
+});
 const FDC_JSON_DOCUMENT = Object.freeze({
   FoundationFoods: [
     Object.freeze({
@@ -114,7 +139,7 @@ interface FdcInspectionFixture {
   readonly artifactByteSize: number;
   readonly artifactPath: string;
   readonly artifactSha256: string;
-  readonly manifest: FoodSourceManifestV3;
+  readonly manifest: FoodSourceManifestV4;
   readonly manifestPath: string;
   readonly root: string;
 }
@@ -535,7 +560,7 @@ describe("FDC evidence-only inspection boundary", () => {
     try {
       const cases: readonly {
         readonly expected: string;
-        readonly manifest: FoodSourceManifestV3;
+        readonly manifest: FoodSourceManifestV4;
         readonly name: string;
       }[] = [
         {
@@ -786,12 +811,14 @@ describe("FDC evidence-only inspection boundary", () => {
         mode: 0o600,
       });
       const ready = importReadyFdcManifest(fixture.manifest);
-      const readyPath = await writeManifest(fixture.root, "source-read-ready.json", ready);
+      const readyPath = await writeManifest(fixture.root, "source-read-ready.json", ready.manifest);
+      const evidencePath = join(fixture.root, "source-read-evidence.json");
+      await writeCanonicalReleaseEvidence(evidencePath, ready.bundle);
       const staged = commandIo({
         ...parserEnvironment,
-        INGEST_AUTHENTICATED_PRINCIPAL_ID: "service:fdc-release",
-        INGEST_AUTHENTICATION_METHOD: "oidc",
-        INGEST_AUTHENTICATION_RUN_REFERENCE: "urn:nutrition-tracker:test:fdc-source-read",
+        INGEST_AUTHENTICATED_PRINCIPAL_ID: FDC_EVIDENCE_RUNNER.principalId,
+        INGEST_AUTHENTICATION_METHOD: FDC_EVIDENCE_RUNNER.authenticationMethod,
+        INGEST_AUTHENTICATION_RUN_REFERENCE: FDC_EVIDENCE_RUNNER.runReference,
       });
       expect(
         await runCommand(
@@ -801,6 +828,7 @@ describe("FDC evidence-only inspection boundary", () => {
             cacheDirectory,
             join(fixture.root, "extract-source-read-wrong"),
             sha256Bytes(await readFile(readyPath)),
+            evidencePath,
           ),
           staged.io,
         ),
@@ -825,6 +853,8 @@ describe("FDC evidence-only inspection boundary", () => {
       "/cache-must-not-be-created",
       "--extract-dir",
       "/extract-must-not-be-created",
+      "--evidence-bundle",
+      "/evidence-must-not-be-read.json",
       "--manifest-object-uri",
       "s3://locked-evidence/sha256/placeholder/manifest.json",
     ];
@@ -843,15 +873,231 @@ describe("FDC evidence-only inspection boundary", () => {
     }
   });
 
+  it.each([
+    [
+      "an uppercase bucket",
+      (digest: string) => `s3://Release-Evidence/sha256/${digest}/bundle.json`,
+    ],
+    [
+      "an invalid bucket",
+      (digest: string) => `s3://release..evidence/sha256/${digest}/bundle.json`,
+    ],
+    [
+      "a noncanonical path",
+      (digest: string) => `s3://release-evidence/sha256/${digest}/nested/../bundle.json`,
+    ],
+  ])(
+    "rejects %s during manifest validate --import-ready before reading evidence",
+    async (_name, objectUriForDigest) => {
+      const fixture = await createFixture();
+      try {
+        const ready = importReadyFdcManifest(fixture.manifest);
+        if (ready.manifest.evidenceBundle === null) {
+          throw new Error("Synthetic import-ready fixture did not bind release evidence");
+        }
+        const objectUri = objectUriForDigest(ready.manifest.evidenceBundle.sha256);
+        const manifestPath = await writeManifest(fixture.root, "invalid-evidence-uri.json", {
+          ...ready.manifest,
+          evidenceBundle: { ...ready.manifest.evidenceBundle, objectUri },
+        });
+        const result = commandIo();
+
+        expect(
+          await runCommand(
+            [
+              "manifest",
+              "validate",
+              manifestPath,
+              "--import-ready",
+              "--evidence-bundle",
+              join(fixture.root, "evidence-must-not-be-read.json"),
+            ],
+            result.io,
+          ),
+        ).toBe(1);
+        expect(result.output).toEqual([]);
+        expect(result.errors.join("\n")).toContain(
+          "Evidence bundle objectUri must be a credential-free content-addressed S3 URI",
+        );
+        expect(result.errors.join("\n")).not.toContain("ENOENT");
+        expect(databaseOpenAttempt).not.toHaveBeenCalled();
+      } finally {
+        await rm(fixture.root, { force: true, recursive: true });
+      }
+    },
+  );
+
+  it("rejects absent, tampered, noncanonical, and expired release evidence before artifact or database I/O", async () => {
+    const fixture = await createFixture();
+    try {
+      const ready = importReadyFdcManifest(fixture.manifest);
+      const readyPath = await writeManifest(
+        fixture.root,
+        "evidence-gate-ready.json",
+        ready.manifest,
+      );
+      const manifestSha256 = sha256Bytes(await readFile(readyPath));
+      const trustedEnvironment = {
+        INGEST_AUTHENTICATED_PRINCIPAL_ID: FDC_EVIDENCE_RUNNER.principalId,
+        INGEST_AUTHENTICATION_METHOD: FDC_EVIDENCE_RUNNER.authenticationMethod,
+        INGEST_AUTHENTICATION_RUN_REFERENCE: FDC_EVIDENCE_RUNNER.runReference,
+        INGEST_PARSER_BUILD_SHA256: PARSER_BUILD_SHA256,
+      };
+      const argumentsFor = (evidencePath: string): string[] =>
+        stageArguments(
+          readyPath,
+          join(fixture.root, "artifact-must-not-be-read.zip"),
+          join(fixture.root, "cache-must-not-be-created"),
+          join(fixture.root, "extract-must-not-be-created"),
+          manifestSha256,
+          evidencePath,
+        );
+      const assertPreIoFailure = async (
+        arguments_: readonly string[],
+        expected: string,
+        evaluatedAt = SYNTHETIC_EVIDENCE_EVALUATED_AT,
+      ): Promise<void> => {
+        const result = commandIo(trustedEnvironment, evaluatedAt);
+        expect(await runCommand(arguments_, result.io)).toBe(1);
+        expect(result.output).toEqual([]);
+        expect(result.errors.join("\n")).toContain(expected);
+        expect(result.errors.join("\n")).not.toContain("Artifact does not match");
+        expect(result.errors.join("\n")).not.toContain("artifact-must-not-be-read");
+        expect(databaseOpenAttempt).not.toHaveBeenCalled();
+      };
+
+      const absentArguments = argumentsFor(join(fixture.root, "unused-evidence.json"));
+      const evidenceOptionIndex = absentArguments.indexOf("--evidence-bundle");
+      absentArguments.splice(evidenceOptionIndex, 2);
+      await assertPreIoFailure(absentArguments, "--evidence-bundle requires a non-blank value");
+
+      await assertPreIoFailure(argumentsFor(join(fixture.root, "missing-evidence.json")), "ENOENT");
+
+      const tampered = structuredClone(ready.bundle) as unknown as {
+        authorityDecision: { scope: { releaseKey: string } };
+      };
+      tampered.authorityDecision.scope.releaseKey = "tampered-release";
+      const tamperedPath = join(fixture.root, "tampered-evidence.json");
+      await writeFile(tamperedPath, `${canonicalJson(tampered)}\n`, {
+        flag: "wx",
+        mode: 0o600,
+      });
+      await assertPreIoFailure(
+        argumentsFor(tamperedPath),
+        "Manifest evidence-bundle digest does not match",
+      );
+
+      const noncanonicalPath = join(fixture.root, "noncanonical-evidence.json");
+      await writeFile(noncanonicalPath, `${JSON.stringify(ready.bundle, null, 2)}\n`, {
+        flag: "wx",
+        mode: 0o600,
+      });
+      await assertPreIoFailure(
+        argumentsFor(noncanonicalPath),
+        "exact canonical UTF-8 JSON serialization",
+      );
+
+      const malformedPath = join(fixture.root, "malformed-utf8-evidence.json");
+      await writeFile(malformedPath, Buffer.from([0x7b, 0xff, 0x7d]), {
+        flag: "wx",
+        mode: 0o600,
+      });
+      await assertPreIoFailure(
+        argumentsFor(malformedPath),
+        "Release evidence bundle must be valid UTF-8",
+      );
+
+      const publicModePath = join(fixture.root, "public-mode-evidence.json");
+      await writeCanonicalReleaseEvidence(publicModePath, ready.bundle);
+      await chmod(publicModePath, 0o644);
+      await assertPreIoFailure(
+        argumentsFor(publicModePath),
+        "Release evidence bundle must be an owner-only, single-link regular file",
+      );
+
+      const symlinkTargetPath = join(fixture.root, "symlink-target-evidence.json");
+      const symlinkPath = join(fixture.root, "symlink-evidence.json");
+      await writeCanonicalReleaseEvidence(symlinkTargetPath, ready.bundle);
+      await symlink(symlinkTargetPath, symlinkPath);
+      await assertPreIoFailure(argumentsFor(symlinkPath), "ELOOP");
+
+      const hardlinkTargetPath = join(fixture.root, "hardlink-target-evidence.json");
+      const hardlinkPath = join(fixture.root, "hardlink-evidence.json");
+      await writeCanonicalReleaseEvidence(hardlinkTargetPath, ready.bundle);
+      await link(hardlinkTargetPath, hardlinkPath);
+      await assertPreIoFailure(
+        argumentsFor(hardlinkPath),
+        "Release evidence bundle must be an owner-only, single-link regular file",
+      );
+
+      const canonicalPath = join(fixture.root, "canonical-evidence.json");
+      await writeCanonicalReleaseEvidence(canonicalPath, ready.bundle);
+      const boundary = commandIo(trustedEnvironment, ready.bundle.currentRetention.validUntil);
+      expect(await runCommand(argumentsFor(canonicalPath), boundary.io)).toBe(1);
+      expect(boundary.output).toEqual([]);
+      expect(boundary.errors.join("\n")).toContain("Authority evidence is not current");
+      expect(boundary.errors.join("\n")).not.toContain("ENOENT");
+      expect(databaseOpenAttempt).not.toHaveBeenCalled();
+
+      await assertPreIoFailure(
+        argumentsFor(canonicalPath),
+        "Authority evidence is not current",
+        SYNTHETIC_EVIDENCE_EXPIRED_AT,
+      );
+
+      for (const runnerMismatch of [
+        {
+          environment: {
+            ...trustedEnvironment,
+            INGEST_AUTHENTICATED_PRINCIPAL_ID: "service:fdc-release-other",
+          },
+          name: "reviewer principal",
+        },
+        {
+          environment: {
+            ...trustedEnvironment,
+            INGEST_AUTHENTICATION_METHOD: "workload-identity",
+          },
+          name: "authentication method",
+        },
+        {
+          environment: {
+            ...trustedEnvironment,
+            INGEST_AUTHENTICATION_RUN_REFERENCE:
+              "urn:nutrition-tracker:test:fdc-cli-evidence-other",
+          },
+          name: "run reference",
+        },
+      ] as const) {
+        const result = commandIo(runnerMismatch.environment);
+        expect(await runCommand(argumentsFor(canonicalPath), result.io), runnerMismatch.name).toBe(
+          1,
+        );
+        expect(result.output, runnerMismatch.name).toEqual([]);
+        expect(result.errors.join("\n"), runnerMismatch.name).toContain(
+          "Authority decision reviewer identity must match the authenticated staging runner",
+        );
+        expect(result.errors.join("\n"), runnerMismatch.name).not.toContain(
+          "artifact-must-not-be-read",
+        );
+        expect(databaseOpenAttempt, runnerMismatch.name).not.toHaveBeenCalled();
+      }
+    } finally {
+      await rm(fixture.root, { force: true, recursive: true });
+    }
+  });
+
   it("finishes exact FDC preflight before opening a database and blocks drift without an open", async () => {
     const fixture = await createFixture();
     try {
       const ready = importReadyFdcManifest(fixture.manifest);
-      const readyPath = await writeManifest(fixture.root, "import-ready.json", ready);
+      const readyPath = await writeManifest(fixture.root, "import-ready.json", ready.manifest);
+      const evidencePath = join(fixture.root, "import-ready-evidence.json");
+      await writeCanonicalReleaseEvidence(evidencePath, ready.bundle);
       const trustedEnvironment = {
-        INGEST_AUTHENTICATED_PRINCIPAL_ID: "service:fdc-release",
-        INGEST_AUTHENTICATION_METHOD: "oidc",
-        INGEST_AUTHENTICATION_RUN_REFERENCE: "urn:nutrition-tracker:test:fdc-stage-preflight",
+        INGEST_AUTHENTICATED_PRINCIPAL_ID: FDC_EVIDENCE_RUNNER.principalId,
+        INGEST_AUTHENTICATION_METHOD: FDC_EVIDENCE_RUNNER.authenticationMethod,
+        INGEST_AUTHENTICATION_RUN_REFERENCE: FDC_EVIDENCE_RUNNER.runReference,
         INGEST_PARSER_BUILD_SHA256: PARSER_BUILD_SHA256,
       };
       const valid = commandIo(trustedEnvironment);
@@ -863,6 +1109,7 @@ describe("FDC evidence-only inspection boundary", () => {
             join(fixture.root, "cache-stage-valid"),
             join(fixture.root, "extract-stage-valid"),
             sha256Bytes(await readFile(readyPath)),
+            evidencePath,
           ),
           valid.io,
         ),
@@ -872,17 +1119,28 @@ describe("FDC evidence-only inspection boundary", () => {
       expect(databaseOpenAttempt).toHaveBeenCalledTimes(1);
 
       databaseOpenAttempt.mockClear();
-      const driftedPath = await writeManifest(fixture.root, "import-ready-drifted.json", {
-        ...ready,
-        validation: {
-          ...ready.validation,
-          releaseSpecificExpectations: {
-            ...ready.validation.releaseSpecificExpectations,
-            parserBaselineSemanticEvidenceDigest: "f".repeat(64),
+      const drifted = bindSyntheticReleaseEvidence(
+        {
+          ...ready.manifest,
+          evidenceBundle: null,
+          validation: {
+            ...ready.manifest.validation,
+            releaseSpecificExpectations: {
+              ...ready.manifest.validation.releaseSpecificExpectations,
+              parserBaselineSemanticEvidenceDigest: "f".repeat(64),
+            },
           },
         },
-      });
-      const drifted = commandIo(trustedEnvironment);
+        FDC_EVIDENCE_RUNNER,
+      );
+      const driftedPath = await writeManifest(
+        fixture.root,
+        "import-ready-drifted.json",
+        drifted.manifest,
+      );
+      const driftedEvidencePath = join(fixture.root, "import-ready-drifted-evidence.json");
+      await writeCanonicalReleaseEvidence(driftedEvidencePath, drifted.bundle);
+      const driftedResult = commandIo(trustedEnvironment);
       expect(
         await runCommand(
           stageArguments(
@@ -891,13 +1149,14 @@ describe("FDC evidence-only inspection boundary", () => {
             join(fixture.root, "cache-stage-drifted"),
             join(fixture.root, "extract-stage-drifted"),
             sha256Bytes(await readFile(driftedPath)),
+            driftedEvidencePath,
           ),
-          drifted.io,
+          driftedResult.io,
         ),
       ).toBe(1);
-      expect(drifted.output).toEqual([]);
-      expect(drifted.errors.join("\n")).toContain("parserBaselineSemanticEvidenceDigest");
-      expect(drifted.errors.join("\n")).not.toContain("DATABASE_OPEN_CALLED");
+      expect(driftedResult.output).toEqual([]);
+      expect(driftedResult.errors.join("\n")).toContain("parserBaselineSemanticEvidenceDigest");
+      expect(driftedResult.errors.join("\n")).not.toContain("DATABASE_OPEN_CALLED");
       expect(databaseOpenAttempt).not.toHaveBeenCalled();
     } finally {
       await rm(fixture.root, { force: true, recursive: true });
@@ -908,9 +1167,9 @@ describe("FDC evidence-only inspection boundary", () => {
     const fixture = await createFixture();
     try {
       const result = commandIo({
-        INGEST_AUTHENTICATED_PRINCIPAL_ID: "service:fdc-release",
-        INGEST_AUTHENTICATION_METHOD: "oidc",
-        INGEST_AUTHENTICATION_RUN_REFERENCE: "urn:nutrition-tracker:test:fdc-stage-boundary",
+        INGEST_AUTHENTICATED_PRINCIPAL_ID: FDC_EVIDENCE_RUNNER.principalId,
+        INGEST_AUTHENTICATION_METHOD: FDC_EVIDENCE_RUNNER.authenticationMethod,
+        INGEST_AUTHENTICATION_RUN_REFERENCE: FDC_EVIDENCE_RUNNER.runReference,
         INGEST_PARSER_BUILD_SHA256: PARSER_BUILD_SHA256,
       });
       expect(
@@ -925,6 +1184,8 @@ describe("FDC evidence-only inspection boundary", () => {
             join(fixture.root, "cache-stage-regression"),
             "--extract-dir",
             join(fixture.root, "extract-stage-regression"),
+            "--evidence-bundle",
+            join(fixture.root, "evidence-must-not-be-read.json"),
             "--manifest-object-uri",
             `s3://locked-evidence/sha256/${sha256Bytes(await readFile(fixture.manifestPath))}/manifest.json`,
           ],
@@ -953,8 +1214,8 @@ async function createFixture(
   const artifactSha256 = sha256Bytes(archiveBytes);
   const foundation = JSON.parse(
     await readFile(FOUNDATION_MANIFEST_PATH, "utf8"),
-  ) as FoodSourceManifestV3;
-  const manifest: FoodSourceManifestV3 = {
+  ) as FoodSourceManifestV4;
+  const manifest: FoodSourceManifestV4 = {
     ...foundation,
     artifact: {
       ...foundation.artifact,
@@ -989,7 +1250,7 @@ async function createFixture(
   };
 }
 
-function importReadyFdcManifest(template: FoodSourceManifestV3): FoodSourceManifestV3 {
+function importReadyFdcManifest(template: FoodSourceManifestV4): SyntheticReleaseEvidenceFixture {
   const sha256 = template.artifact.sha256;
   const byteSize = template.artifact.byteSize;
   const downloadUrl = template.artifact.downloadUrl;
@@ -997,61 +1258,39 @@ function importReadyFdcManifest(template: FoodSourceManifestV3): FoodSourceManif
   if (!sha256 || !byteSize || !downloadUrl || !resolvedUrl) {
     throw new Error("Pinned FDC test fixture is incomplete");
   }
-  const observation = (acquisitionId: string, observedAt: string, operatorPrincipalId: string) => ({
-    acquisitionId,
-    byteSize,
-    downloadUrl,
-    etag: null,
-    freshDownload: true as const,
-    lastModified: null,
-    observedAt,
-    operatorPrincipalId,
-    resolvedUrl,
-    sha256,
-    tool: "synthetic-fdc-cli-test/1",
-    transport: "https" as const,
-  });
-  return {
-    ...template,
-    artifact: {
-      ...template.artifact,
-      acquisitionObservations: [
-        observation(
-          "11111111-1111-4111-8111-111111111111",
-          "2026-08-29T10:00:00Z",
-          "principal:fdc-observer-a",
-        ),
-        observation(
-          "22222222-2222-4222-8222-222222222222",
-          "2026-08-29T11:00:00Z",
-          "principal:fdc-observer-b",
-        ),
-      ],
-      objectUri: `s3://synthetic-fdc-artifacts/sha256/${sha256}/foundation.zip`,
-    },
-    release: {
-      ...template.release,
-      acquiredAt: "2026-08-30T12:00:00Z",
-      upstreamSchemaVersion: "fdc-cli-preflight-v1",
-    },
-    rights: {
-      ...template.rights,
-      review: {
-        ...template.rights.review,
-        notes: "Synthetic test fixture only; not release evidence.",
-        reviewedAt: "2026-08-29T12:00:00Z",
-        reviewedBy: "principal:fdc-rights-reviewer",
-        status: "approved",
+  return bindSyntheticReleaseEvidence(
+    {
+      ...template,
+      artifact: {
+        ...template.artifact,
+        objectUri: `s3://synthetic-fdc-artifacts/sha256/${sha256}/foundation.zip`,
       },
+      evidenceBundle: null,
+      release: {
+        ...template.release,
+        upstreamSchemaVersion: "fdc-cli-preflight-v1",
+      },
+      releaseClass: "fixture-nonrelease",
+      rights: {
+        ...template.rights,
+        review: {
+          ...template.rights.review,
+          notes: "Synthetic test fixture only; not release evidence.",
+          reviewedAt: "2026-08-29T12:00:00Z",
+          reviewedBy: "principal:fdc-rights-reviewer",
+          status: "approved",
+        },
+      },
+      templateOnly: false,
     },
-    templateOnly: false,
-  };
+    FDC_EVIDENCE_RUNNER,
+  );
 }
 
 async function writeManifest(
   root: string,
   name: string,
-  manifest: FoodSourceManifestV3,
+  manifest: FoodSourceManifestV4,
 ): Promise<string> {
   const path = join(root, name);
   await writeFile(path, `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx", mode: 0o600 });
@@ -1083,6 +1322,7 @@ function stageArguments(
   cacheDirectory: string,
   extractDirectory: string,
   manifestSha256: string,
+  evidenceBundlePath: string,
 ): string[] {
   return [
     "catalogue",
@@ -1094,12 +1334,17 @@ function stageArguments(
     cacheDirectory,
     "--extract-dir",
     extractDirectory,
+    "--evidence-bundle",
+    evidenceBundlePath,
     "--manifest-object-uri",
     `s3://locked-evidence/sha256/${manifestSha256}/manifest.json`,
   ];
 }
 
-function commandIo(environment: NodeJS.ProcessEnv = {}): {
+function commandIo(
+  environment: NodeJS.ProcessEnv = {},
+  evaluatedAt = SYNTHETIC_EVIDENCE_EVALUATED_AT,
+): {
   readonly errors: string[];
   readonly io: CommandIo;
   readonly output: string[];
@@ -1110,6 +1355,7 @@ function commandIo(environment: NodeJS.ProcessEnv = {}): {
     errors,
     io: {
       environment,
+      now: () => new Date(evaluatedAt),
       writeError: (value) => errors.push(value),
       writeOutput: (value) => output.push(value),
     },

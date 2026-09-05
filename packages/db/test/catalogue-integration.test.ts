@@ -34,6 +34,7 @@ import {
 const databaseUrl = process.env.TEST_DATABASE_URL;
 const describeDatabase = databaseUrl ? describe : describe.skip;
 const CNF_SOURCE_CODE = "HEALTH_CANADA_CNF";
+const FIXTURE_EVIDENCE_VALID_UNTIL = new Date(Date.now() + 12 * 60 * 60 * 1_000).toISOString();
 const CNF_TABLE_CONTRACT = [
   ["Food_Name.csv", "adapter-input", null],
   ["Food_Source.csv", "reference-only", "food_source_reference_not_materialized_v1"],
@@ -47,6 +48,463 @@ const CNF_TABLE_CONTRACT = [
 ] as const;
 
 describeDatabase("catalogue ingestion PostgreSQL integration", () => {
+  it("separates renewed evidence attempts and rejects non-live or expired authority", async () => {
+    if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
+    const database = createDatabase({ connectionString: databaseUrl, maxConnections: 4 });
+    try {
+      await runMigrations(database);
+      const suffix = randomBytes(4).toString("hex").toUpperCase();
+      const sourceCode = `EV${suffix}`;
+      const rightsSha = "c".repeat(64);
+      const sourceId = await registerFoodSourceFromReviewedManifest(database, {
+        attributionRequired: true,
+        attributionText: "Evidence binding integration fixture",
+        code: sourceCode,
+        commercialUseAllowed: true,
+        databaseRightsNotes: "Test-only fixture",
+        displayName: `Evidence source ${suffix}`,
+        homepageUrl: "https://example.invalid/catalogue",
+        kind: "government",
+        licenseExpression: "CC0-1.0",
+        licenseUrl: "https://creativecommons.org/publicdomain/zero/1.0/",
+        redistributionAllowed: true,
+        rightsReviewStatus: "approved",
+        rightsReviewedAt: "2026-08-15T12:00:00Z",
+        rightsReviewedBy: "principal:legal-review",
+      });
+
+      const originalInput = batchInput(sourceCode, "evidence-release", rightsSha);
+      const first = await stageBatch(database, originalInput);
+      const replay = await stageBatch(database, originalInput);
+      expect(replay).toMatchObject({ batchId: first.batchId, resumed: true });
+      for (const evidenceBundleUri of [
+        `${originalInput.evidenceBundleUri}?credential=forbidden`,
+        `s3://user:password@catalogue-evidence/sha256/${originalInput.evidenceBundleSha256}/bundle.json`,
+        `s3://catalogue-evidence/sha256/${"f".repeat(64)}/bundle.json`,
+        `s3://catalogue-evidence//sha256/${originalInput.evidenceBundleSha256}/bundle.json`,
+        `s3://catalogue-evidence/sha256/${originalInput.evidenceBundleSha256}//bundle.json`,
+        `s3://catalogue-evidence/%zz/sha256/${originalInput.evidenceBundleSha256}/bundle.json`,
+      ]) {
+        await expect(
+          stageBatch(database, {
+            ...originalInput,
+            evidenceBundleUri,
+            releaseKey: `invalid-uri-${randomBytes(3).toString("hex")}`,
+          }),
+        ).rejects.toThrow("credential-free content-addressed S3 URI");
+      }
+      for (const evidenceObjectVersionId of [" leading-space", "x".repeat(513), "invalid%escape"]) {
+        await expect(
+          stageBatch(database, {
+            ...originalInput,
+            evidenceObjectVersionId,
+            releaseKey: `invalid-object-version-${randomBytes(3).toString("hex")}`,
+          }),
+        ).rejects.toThrow("bounded provider-neutral opaque identifier");
+      }
+
+      const renewedBundleSha256 = sha256CanonicalJson({
+        previous: originalInput.evidenceBundleSha256,
+        renewal: 2,
+      });
+      const renewed = await stageBatch(database, {
+        ...originalInput,
+        evidenceBundleSha256: renewedBundleSha256,
+        evidenceBundleUri: `s3://catalogue-evidence/sha256/${renewedBundleSha256}/bundle.json`,
+      });
+      expect(renewed).toMatchObject({ resumed: false });
+      expect(renewed.batchId).not.toBe(first.batchId);
+      expect(
+        await database
+          .selectFrom("food_import_batch")
+          .select(({ fn }) => fn.countAll<string>().as("count"))
+          .where("food_source_id", "=", sourceId)
+          .where("release_key", "=", originalInput.releaseKey)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ count: "2" });
+
+      await expect(
+        database
+          .updateTable("food_import_batch")
+          .set({ evidence_bundle_uri: "s3://catalogue-evidence/rewritten.json" })
+          .where("id", "=", first.batchId)
+          .execute(),
+      ).rejects.toThrow("provenance cannot be rewritten");
+
+      const fixture = await stageBatch(database, {
+        ...batchInput(sourceCode, "fixture-release", rightsSha),
+        releaseClass: "fixture-nonrelease",
+      });
+      const fixtureReleaseBundleSha256 = fixture.batchId.replaceAll("-", "").padEnd(64, "0");
+      await expect(
+        approveBatch(database, {
+          approvalReference: "review://fixture",
+          approvalRole: "data",
+          batchId: fixture.batchId,
+          principalId: "principal:data-review",
+          rightsManifestSha256: rightsSha,
+          validationDigest: "a".repeat(64),
+        }),
+      ).rejects.toThrow("without live-reviewed evidence");
+      await expect(
+        promoteBatch(database, {
+          batchId: fixture.batchId,
+          performedBy: "service:catalogue-promoter",
+        }),
+      ).rejects.toThrow("without live-reviewed evidence");
+      await expect(
+        database
+          .insertInto("food_import_approval")
+          .values({
+            approval_reference: "review://fixture/direct-sql",
+            approval_role: "data",
+            batch_id: fixture.batchId,
+            principal_id: "principal:direct-sql-review",
+            rights_manifest_sha256: rightsSha,
+            validation_digest: "a".repeat(64),
+          })
+          .execute(),
+      ).rejects.toThrow("approval requires current live-reviewed evidence");
+      await database
+        .updateTable("food_import_batch")
+        .set({ status: "ready", validated_at: new Date() })
+        .where("id", "=", fixture.batchId)
+        .execute();
+      await expect(
+        database
+          .updateTable("food_import_batch")
+          .set({ status: "promoting" })
+          .where("id", "=", fixture.batchId)
+          .execute(),
+      ).rejects.toThrow("only current live-reviewed evidence may enter batch status promoting");
+      const directFixtureRelease = {
+        acquired_at: "2026-08-15T12:00:00.000Z",
+        artifact_bytes: 1,
+        artifact_sha256: "d".repeat(64),
+        artifact_uri: "s3://catalogue/fixture-direct-release.json",
+        evidence_bundle_sha256: fixtureReleaseBundleSha256,
+        evidence_bundle_uri: `s3://catalogue-evidence/sha256/${fixtureReleaseBundleSha256}/bundle.json`,
+        evidence_decision_sha256: "e".repeat(64),
+        evidence_object_version_id: "fixture-direct-release-v1",
+        evidence_valid_until: FIXTURE_EVIDENCE_VALID_UNTIL,
+        food_source_id: sourceId,
+        media_type: "application/json",
+        parser_version: "fixture-direct@1",
+        record_counts: { fixture: true },
+        release_class: "fixture-nonrelease" as const,
+        release_key: "fixture-direct-release",
+        rights_manifest_sha256: rightsSha,
+        rights_manifest_uri: "repo://fixture-direct-rights.json",
+        status: "imported" as const,
+        validation_summary: { fixture: true },
+      };
+      await expect(
+        database
+          .insertInto("food_source_release")
+          .values({ ...directFixtureRelease, promoted_at: new Date(), status: "promoted" })
+          .execute(),
+      ).rejects.toThrow("new food source release must begin imported");
+      const storedFixtureRelease = await database
+        .insertInto("food_source_release")
+        .values(directFixtureRelease)
+        .returning("id")
+        .executeTakeFirstOrThrow();
+      const deferredBypassReleaseId = randomUUID();
+      await expect(
+        database.transaction().execute(async (transaction) => {
+          const bypassSource = await transaction
+            .insertInto("food_source")
+            .values({
+              access_url: null,
+              active: true,
+              active_release_id: deferredBypassReleaseId,
+              attribution_required: true,
+              attribution_text: "Deferred fixture activation bypass regression",
+              code: `BX${randomBytes(4).toString("hex").toUpperCase()}`,
+              commercial_use_allowed: true,
+              database_rights_notes: "Test-only fixture",
+              display_name: "Deferred fixture activation bypass regression",
+              homepage_url: "https://example.invalid/deferred-fixture-bypass",
+              kind: "government",
+              license_expression: "CC0-1.0",
+              license_url: "https://creativecommons.org/publicdomain/zero/1.0/",
+              redistribution_allowed: true,
+              rights_review_status: "approved",
+              rights_reviewed_at: "2026-08-15T12:00:00.000Z",
+              rights_reviewed_by: "principal:deferred-bypass-test",
+              terms_url: null,
+            })
+            .returning("id")
+            .executeTakeFirstOrThrow();
+          await transaction
+            .insertInto("food_source_release")
+            .values({
+              ...directFixtureRelease,
+              food_source_id: bypassSource.id,
+              id: deferredBypassReleaseId,
+              release_key: "deferred-fixture-activation-bypass",
+            })
+            .execute();
+        }),
+      ).rejects.toThrow("new food source must start without an active catalogue release");
+      await expect(
+        database
+          .updateTable("food_source")
+          .set({ active_release_id: storedFixtureRelease.id })
+          .where("id", "=", sourceId)
+          .execute(),
+      ).rejects.toThrow("only a promoted live-reviewed catalogue release may become active");
+      await expect(
+        database
+          .updateTable("food_source")
+          .set({ active_release_id: randomUUID() })
+          .where("id", "=", sourceId)
+          .execute(),
+      ).rejects.toThrow("active catalogue release does not belong to the food source");
+      await expect(
+        database
+          .insertInto("food_import_approval")
+          .values({
+            approval_reference: "review://unknown/direct-sql",
+            approval_role: "data",
+            batch_id: randomUUID(),
+            principal_id: "principal:unknown-direct-sql",
+            rights_manifest_sha256: rightsSha,
+            validation_digest: "a".repeat(64),
+          })
+          .execute(),
+      ).rejects.toThrow("food import approval references an unknown batch");
+
+      await expect(
+        stageBatch(database, {
+          ...batchInput(sourceCode, "already-expired-release", rightsSha),
+          evidenceValidUntil: "2026-08-15T12:01:00.000Z",
+        }),
+      ).rejects.toThrow("evidenceValidUntil must be current and no more than 24 hours ahead");
+      await expect(
+        stageBatch(database, {
+          ...batchInput(sourceCode, "too-long-release", rightsSha),
+          evidenceValidUntil: new Date(Date.now() + 25 * 60 * 60 * 1_000),
+        }),
+      ).rejects.toThrow("evidenceValidUntil must be current and no more than 24 hours ahead");
+
+      const directBundleSha256 = "f".repeat(64);
+      const directBatch = {
+        acquired_at: "2026-08-15T12:00:00.000Z",
+        artifact_bytes: 1,
+        artifact_sha256: "1".repeat(64),
+        artifact_uri: "s3://catalogue/direct-evidence-test.json",
+        evidence_bundle_sha256: directBundleSha256,
+        evidence_bundle_uri: `s3://catalogue-evidence/sha256/${directBundleSha256}/bundle.json`,
+        evidence_decision_sha256: "2".repeat(64),
+        evidence_object_version_id: "direct-evidence-test-v1",
+        evidence_valid_until: FIXTURE_EVIDENCE_VALID_UNTIL,
+        food_source_id: sourceId,
+        media_type: "application/json",
+        parser_version: "direct-evidence-test@1",
+        release_class: "fixture-nonrelease" as const,
+        release_key: "direct-evidence-test",
+        rights_manifest_sha256: rightsSha,
+        rights_manifest_uri: "repo://direct-evidence-test-rights.json",
+      };
+      await expect(
+        database
+          .insertInto("food_import_batch")
+          .values({
+            ...directBatch,
+            completed_at: new Date(),
+            status: "completed",
+            validated_at: new Date(),
+          })
+          .execute(),
+      ).rejects.toThrow("new food import batch must begin in staging");
+      await expect(
+        database
+          .insertInto("food_import_batch")
+          .values({
+            ...directBatch,
+            evidence_bundle_uri: `s3://catalogue-evidence/sha256/${"0".repeat(64)}/bundle.json`,
+          })
+          .execute(),
+      ).rejects.toThrow("food_import_batch_evidence_binding_check");
+      await expect(
+        database
+          .insertInto("food_import_batch")
+          .values({
+            ...directBatch,
+            evidence_decision_sha256: null,
+            release_key: "direct-evidence-incomplete",
+          })
+          .execute(),
+      ).rejects.toThrow("food_import_batch_evidence_binding_check");
+      await expect(
+        database
+          .insertInto("food_import_batch")
+          .values({
+            ...directBatch,
+            evidence_valid_until: "2026-08-15T12:01:00.000Z",
+          })
+          .execute(),
+      ).rejects.toThrow(
+        "new catalogue evidence must be current and no more than 24 hours ahead at insertion",
+      );
+      const tooLongReleaseBundleSha256 = "3".repeat(64);
+      await expect(
+        database
+          .insertInto("food_source_release")
+          .values({
+            ...directFixtureRelease,
+            artifact_sha256: "4".repeat(64),
+            artifact_uri: "s3://catalogue/direct-release-too-long.json",
+            evidence_bundle_sha256: tooLongReleaseBundleSha256,
+            evidence_bundle_uri: `s3://catalogue-evidence/sha256/${tooLongReleaseBundleSha256}/bundle.json`,
+            evidence_valid_until: new Date(Date.now() + 25 * 60 * 60 * 1_000),
+            release_class: "live-reviewed",
+            release_key: "direct-release-too-long",
+          })
+          .execute(),
+      ).rejects.toThrow(
+        "new catalogue evidence must be current and no more than 24 hours ahead at insertion",
+      );
+      await expect(
+        database
+          .insertInto("food_import_batch")
+          .values({
+            ...directBatch,
+            evidence_valid_until: new Date(Date.now() + 25 * 60 * 60 * 1_000),
+            release_key: "direct-evidence-too-long",
+          })
+          .execute(),
+      ).rejects.toThrow(
+        "new catalogue evidence must be current and no more than 24 hours ahead at insertion",
+      );
+      await expect(
+        database
+          .insertInto("food_import_batch")
+          .values({
+            ...directBatch,
+            evidence_object_version_id: "x".repeat(513),
+            release_key: "direct-evidence-long-version",
+          })
+          .execute(),
+      ).rejects.toThrow("food_import_batch_evidence_object_version_id_check");
+      await expect(
+        database
+          .insertInto("food_import_batch")
+          .values({
+            ...directBatch,
+            evidence_object_version_id: " leading-space",
+            release_key: "direct-evidence-invalid-version",
+          })
+          .execute(),
+      ).rejects.toThrow("food_import_batch_evidence_object_version_id_check");
+
+      const evidenceValidUntil = new Date(Date.now() + 8_000);
+      const expiringCompletedBatch = await stageBatch(database, {
+        ...batchInput(sourceCode, "expiring-live-release", rightsSha, "6".repeat(64)),
+        evidenceValidUntil,
+      });
+      await recordBatchParserReport(database, {
+        batchId: expiringCompletedBatch.batchId,
+        emittedNutrientCount: 0,
+        emittedPortionCount: 0,
+        emittedRecordCount: 0,
+        excludedNutrientCount: 0,
+        excludedPortionCount: 0,
+        excludedRecordCount: 0,
+        report: { adapter: "integration", release: "expiring-live-release" },
+        sourceNutrientCount: 0,
+        sourcePortionCount: 0,
+        sourceRecordCount: 0,
+      });
+      const expiringSummary = await validateBatch(database, expiringCompletedBatch.batchId, {
+        maximumExcludedNutrientFraction: 1,
+        maximumQuarantineFraction: 1,
+        maximumQuarantinedRecords: 0,
+        requireAtLeastOneValidRecord: false,
+        requireDistinctApprovalPrincipals: true,
+        requireMaterializedNutrientPerValidRecord: true,
+      });
+      await approveAll(
+        database,
+        expiringCompletedBatch.batchId,
+        expiringSummary.validationDigest,
+        rightsSha,
+      );
+      const expiringPromotion = await promoteBatch(database, {
+        batchId: expiringCompletedBatch.batchId,
+        performedBy: "service:catalogue-promoter",
+      });
+      const expiringLiveRelease = expiringPromotion.activatedReleaseId;
+      await rollbackSourceRelease(database, {
+        performedBy: "principal:rollback-review",
+        reason: "Prepare expired promoted release rollback regression",
+        sourceCode,
+        targetReleaseId: null,
+      });
+      const expired = await stageBatch(database, {
+        ...batchInput(sourceCode, "expired-release", rightsSha),
+        evidenceValidUntil,
+      });
+      await new Promise((resolve) =>
+        setTimeout(resolve, Math.max(0, evidenceValidUntil.getTime() - Date.now() + 100)),
+      );
+      await expect(
+        approveBatch(database, {
+          approvalReference: "review://expired",
+          approvalRole: "data",
+          batchId: expired.batchId,
+          principalId: "principal:data-review",
+          rightsManifestSha256: rightsSha,
+          validationDigest: "a".repeat(64),
+        }),
+      ).rejects.toThrow("with expired evidence");
+      await expect(
+        promoteBatch(database, {
+          batchId: expired.batchId,
+          performedBy: "service:catalogue-promoter",
+        }),
+      ).rejects.toThrow("with expired evidence");
+      await expect(
+        database
+          .insertInto("food_import_approval")
+          .values({
+            approval_reference: "review://expired/direct-sql",
+            approval_role: "data",
+            batch_id: expired.batchId,
+            principal_id: "principal:expired-direct-sql",
+            rights_manifest_sha256: rightsSha,
+            validation_digest: "a".repeat(64),
+          })
+          .execute(),
+      ).rejects.toThrow("approval requires current live-reviewed evidence");
+      await expect(
+        promoteBatch(database, {
+          batchId: expiringCompletedBatch.batchId,
+          performedBy: "service:catalogue-promoter",
+        }),
+      ).resolves.toMatchObject({
+        activatedReleaseId: expiringLiveRelease,
+        previousReleaseId: null,
+        wasAlreadyCompleted: true,
+      });
+      await expect(
+        rollbackSourceRelease(database, {
+          performedBy: "principal:rollback-review",
+          reason: "Verify expired promoted evidence remains rollback-eligible",
+          sourceCode,
+          targetReleaseId: expiringLiveRelease,
+        }),
+      ).resolves.toMatchObject({
+        activeReleaseId: expiringLiveRelease,
+        changed: true,
+        previousReleaseId: null,
+      });
+    } finally {
+      await database.destroy();
+    }
+  }, 30_000);
+
   it("atomically rolls back parser evidence so a new authenticated run can resume", async () => {
     if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
     const database = createDatabase({ connectionString: databaseUrl, maxConnections: 4 });
@@ -2139,14 +2597,28 @@ function batchInput(
   artifactSha256 = "b".repeat(64),
   parserVersion = "integration-parser@1.0.0",
 ) {
+  const evidenceBundleSha256 = sha256CanonicalJson({
+    releaseKey,
+    sourceCode,
+    type: "acquisition-evidence-bundle",
+  });
   return {
     acquiredAt: `2026-08-${releaseKey.endsWith("1") ? "15" : "16"}T12:00:00Z`,
     artifactBytes: 1_024,
     artifactSha256,
     artifactUri: `s3://catalogue/${sourceCode}/${releaseKey}.json`,
+    evidenceBundleSha256,
+    evidenceBundleUri: `s3://catalogue-evidence/sha256/${evidenceBundleSha256}/bundle.json`,
+    evidenceDecisionSha256: sha256CanonicalJson({
+      evidenceBundleSha256,
+      type: "acquisition-evidence-decision",
+    }),
+    evidenceObjectVersionId: `fixture-${evidenceBundleSha256}`,
+    evidenceValidUntil: FIXTURE_EVIDENCE_VALID_UNTIL,
     mediaType: "application/json",
     parserVersion,
     publishedOn: "2026-08-15",
+    releaseClass: "live-reviewed",
     releaseKey,
     rightsManifestSha256,
     rightsManifestUri: `repo://manifests/${sourceCode}.json`,

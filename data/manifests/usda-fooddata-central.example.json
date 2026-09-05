@@ -1,7 +1,9 @@
 {
   "$schema": "./food-source-manifest.schema.json",
-  "manifestVersion": 3,
+  "manifestVersion": 4,
   "templateOnly": true,
+  "releaseClass": "live-reviewed",
+  "evidenceBundle": null,
   "source": {
     "code": "USDA_FDC",
     "displayName": "USDA FoodData Central",
@@ -29,9 +31,8 @@
       "exactByteSize": null,
       "reportedSize": null,
       "metadataUrl": "https://fdc.nal.usda.gov/download-datasets/",
-      "notes": "FoodData Central does not currently publish a SHA-256 beside its downloads. Record two independent acquisition observations before this template can become import-ready."
-    },
-    "acquisitionObservations": []
+      "notes": "FoodData Central does not currently publish a SHA-256 beside its downloads. Two independently authenticated matching acquisitions are one prerequisite; import readiness also requires the retained-object receipt, a current provider retention check, and the named authority decision in the bound evidence bundle."
+    }
   },
   "rights": {
     "licenseExpression": "CC0-1.0",

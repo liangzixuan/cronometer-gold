@@ -1,5 +1,5 @@
 import { canonicalJson, sha256CanonicalJson } from "./catalogue-validation.js";
-import type { JsonObject, JsonValue } from "./types.js";
+import type { FoodImportReleaseClass, JsonObject, JsonValue } from "./types.js";
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const UNSIGNED_DECIMAL_PATTERN = /^(?:0|[1-9]\d*)$/;
@@ -26,6 +26,11 @@ const VALIDATION_SEVERITIES = Object.freeze(["error", "warning"] as const);
 const REJECTED_BARCODE_REASONS = Object.freeze([
   "BARCODE_CROSS_SOURCE_CONFLICT",
   "BARCODE_INVALID_GTIN",
+] as const);
+const RELEASE_CLASSES = Object.freeze([
+  "fixture-nonrelease",
+  "legacy-unbound",
+  "live-reviewed",
 ] as const);
 const FOOD_FIELD_ORDER = Object.freeze([
   "kind",
@@ -114,10 +119,16 @@ export interface CatalogueReconciliationReleaseEvidence extends JsonObject {
   readonly artifactBytes: string;
   readonly artifactSha256: string;
   readonly batchId: string;
+  readonly evidenceBundleSha256: string | null;
+  readonly evidenceBundleUri: string | null;
+  readonly evidenceDecisionSha256: string | null;
+  readonly evidenceObjectVersionId: string | null;
+  readonly evidenceValidUntil: string | null;
   readonly nutrientMappingDigest: string;
   readonly parserBuildSha256: string;
   readonly parserReportSha256: string;
   readonly parserVersion: string;
+  readonly releaseClass: FoodImportReleaseClass;
   readonly releaseId: string;
   readonly releaseKey: string;
   readonly rightsManifestSha256: string;
@@ -128,10 +139,16 @@ export interface CatalogueReconciliationCandidateEvidence extends JsonObject {
   readonly artifactBytes: string;
   readonly artifactSha256: string;
   readonly batchId: string;
+  readonly evidenceBundleSha256: string | null;
+  readonly evidenceBundleUri: string | null;
+  readonly evidenceDecisionSha256: string | null;
+  readonly evidenceObjectVersionId: string | null;
+  readonly evidenceValidUntil: string | null;
   readonly nutrientMappingDigest: string;
   readonly parserBuildSha256: string;
   readonly parserReportSha256: string;
   readonly parserVersion: string;
+  readonly releaseClass: FoodImportReleaseClass;
   readonly releaseKey: string;
   readonly rightsManifestSha256: string;
   readonly validationDigest: string;
@@ -182,7 +199,7 @@ export interface CatalogueReconciliationDocument extends JsonObject {
   readonly evidence: JsonObject;
   readonly reconciliationSha256: string;
   readonly reportType: typeof REPORT_TYPE;
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
 }
 
 export function buildCatalogueReconciliationDocument(
@@ -269,7 +286,7 @@ export function buildCatalogueReconciliationDocument(
   const digestInput: JsonObject = {
     evidence,
     reportType: REPORT_TYPE,
-    schemaVersion: 1,
+    schemaVersion: 2,
   };
   const document: CatalogueReconciliationDocument = {
     ...digestInput,
@@ -288,7 +305,7 @@ export function verifyCatalogueReconciliationDocument(
     "reportType",
     "schemaVersion",
   ]);
-  if (document.reportType !== REPORT_TYPE || document.schemaVersion !== 1) {
+  if (document.reportType !== REPORT_TYPE || document.schemaVersion !== 2) {
     throw new Error("Reconciliation report identity is invalid");
   }
   const reconciliationSha256 = sha256(document.reconciliationSha256, "reconciliationSha256");
@@ -296,7 +313,7 @@ export function verifyCatalogueReconciliationDocument(
   const digestInput: JsonObject = {
     evidence,
     reportType: REPORT_TYPE,
-    schemaVersion: 1,
+    schemaVersion: 2,
   };
   if (sha256CanonicalJson(digestInput) !== reconciliationSha256) {
     throw new Error("Reconciliation document digest does not match its canonical evidence");
@@ -964,20 +981,28 @@ function normalizeReleaseEvidence<
     "artifactBytes",
     "artifactSha256",
     "batchId",
+    "evidenceBundleSha256",
+    "evidenceBundleUri",
+    "evidenceDecisionSha256",
+    "evidenceObjectVersionId",
+    "evidenceValidUntil",
     "nutrientMappingDigest",
     "parserBuildSha256",
     "parserReportSha256",
     "parserVersion",
+    "releaseClass",
     "releaseKey",
     "rightsManifestSha256",
     "validationDigest",
     ...(hasReleaseId ? ["releaseId"] : []),
   ];
   const object = exactObject(value, field, keys);
+  const evidenceBinding = normalizeEvidenceBinding(object, field, hasReleaseId);
   const normalized = {
     artifactBytes: unsignedDecimal(object.artifactBytes, `${field}.artifactBytes`),
     artifactSha256: sha256(object.artifactSha256, `${field}.artifactSha256`),
     batchId: uuid(object.batchId, `${field}.batchId`),
+    ...evidenceBinding,
     nutrientMappingDigest: sha256(object.nutrientMappingDigest, `${field}.nutrientMappingDigest`),
     parserBuildSha256: sha256(object.parserBuildSha256, `${field}.parserBuildSha256`),
     parserReportSha256: sha256(object.parserReportSha256, `${field}.parserReportSha256`),
@@ -1209,11 +1234,17 @@ function validateReportReleaseEvidence(
     "artifactBytes",
     "artifactSha256",
     "batchId",
+    "evidenceBundleSha256",
+    "evidenceBundleUri",
+    "evidenceDecisionSha256",
+    "evidenceObjectVersionId",
+    "evidenceValidUntil",
     "nutrientMappingDigest",
     "parserBuildSha256",
     "parserReportSha256",
     "parserVersion",
     "recordSetSha256",
+    "releaseClass",
     "releaseKey",
     "rightsManifestSha256",
     "validationDigest",
@@ -1222,6 +1253,7 @@ function validateReportReleaseEvidence(
   unsignedDecimal(object.artifactBytes, `${field}.artifactBytes`);
   sha256(object.artifactSha256, `${field}.artifactSha256`);
   uuid(object.batchId, `${field}.batchId`);
+  normalizeEvidenceBinding(object, field, hasReleaseId);
   sha256(object.nutrientMappingDigest, `${field}.nutrientMappingDigest`);
   sha256(object.parserBuildSha256, `${field}.parserBuildSha256`);
   sha256(object.parserReportSha256, `${field}.parserReportSha256`);
@@ -1232,6 +1264,74 @@ function validateReportReleaseEvidence(
   sha256(object.validationDigest, `${field}.validationDigest`);
   if (hasReleaseId) uuid(object.releaseId, `${field}.releaseId`);
   return object;
+}
+
+function normalizeEvidenceBinding(
+  object: Readonly<Record<string, unknown>>,
+  field: string,
+  hasReleaseId: boolean,
+): {
+  readonly evidenceBundleSha256: string | null;
+  readonly evidenceBundleUri: string | null;
+  readonly evidenceDecisionSha256: string | null;
+  readonly evidenceObjectVersionId: string | null;
+  readonly evidenceValidUntil: string | null;
+  readonly releaseClass: FoodImportReleaseClass;
+} {
+  const releaseClass = enumValue(object.releaseClass, `${field}.releaseClass`, RELEASE_CLASSES);
+  const evidenceBundleSha256 = nullableSha256(
+    object.evidenceBundleSha256,
+    `${field}.evidenceBundleSha256`,
+  );
+  const evidenceBundleUri = nullableBoundedText(
+    object.evidenceBundleUri,
+    `${field}.evidenceBundleUri`,
+    2_048,
+  );
+  const evidenceDecisionSha256 = nullableSha256(
+    object.evidenceDecisionSha256,
+    `${field}.evidenceDecisionSha256`,
+  );
+  const evidenceObjectVersionId = nullableOpaqueProviderIdentifier(
+    object.evidenceObjectVersionId,
+    `${field}.evidenceObjectVersionId`,
+  );
+  const evidenceValidUntil = nullableIsoTimestamp(
+    object.evidenceValidUntil,
+    `${field}.evidenceValidUntil`,
+  );
+  const evidenceValues = [
+    evidenceBundleSha256,
+    evidenceBundleUri,
+    evidenceDecisionSha256,
+    evidenceObjectVersionId,
+    evidenceValidUntil,
+  ];
+  if (releaseClass === "legacy-unbound") {
+    if (!hasReleaseId || evidenceValues.some((entry) => entry !== null)) {
+      throw new Error(`${field} legacy-unbound evidence is only valid for a null-bound baseline`);
+    }
+  } else if (evidenceValues.some((entry) => entry === null)) {
+    throw new Error(`${field} ${releaseClass} evidence must include every binding field`);
+  }
+  if (evidenceBundleSha256 !== null && evidenceBundleUri !== null) {
+    contentAddressedEvidenceBundleUri(
+      evidenceBundleUri,
+      evidenceBundleSha256,
+      `${field}.evidenceBundleUri`,
+    );
+  }
+  if (hasReleaseId && releaseClass === "fixture-nonrelease") {
+    throw new Error(`${field} fixture-nonrelease evidence cannot be an active baseline`);
+  }
+  return {
+    evidenceBundleSha256,
+    evidenceBundleUri,
+    evidenceDecisionSha256,
+    evidenceObjectVersionId,
+    evidenceValidUntil,
+    releaseClass,
+  };
 }
 
 function validateRecordsEvidence(value: unknown, baselineAbsent: boolean): void {
@@ -2129,6 +2229,14 @@ function nullableText(value: unknown, field: string): string | null {
   return value === null ? null : requiredText(value, field);
 }
 
+function nullableBoundedText(value: unknown, field: string, maximumBytes: number): string | null {
+  const text = nullableText(value, field);
+  if (text !== null && Buffer.byteLength(text, "utf8") > maximumBytes) {
+    throw new Error(`${field} must contain at most ${maximumBytes} UTF-8 bytes`);
+  }
+  return text;
+}
+
 function nullableIsoTimestamp(value: unknown, field: string): string | null {
   if (value === null) return null;
   const text = requiredText(value, field);
@@ -2137,6 +2245,43 @@ function nullableIsoTimestamp(value: unknown, field: string): string | null {
     throw new Error(`${field} must be a canonical UTC ISO timestamp`);
   }
   return text;
+}
+
+function contentAddressedEvidenceBundleUri(value: string, digest: string, field: string): void {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${field} must be a valid S3 URI`);
+  }
+  const pathSegments = url.pathname.split("/");
+  const pathIsCanonical =
+    pathSegments[0] === "" &&
+    pathSegments.length > 1 &&
+    pathSegments.slice(1).every((segment) => /^[A-Za-z0-9_-][A-Za-z0-9._~-]*$/u.test(segment));
+  const digestIsBound = pathSegments.some(
+    (segment, index) => segment === "sha256" && pathSegments[index + 1] === digest,
+  );
+  const canonicalHostname = url.hostname.toLowerCase();
+  const bucketIsValid =
+    /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(canonicalHostname) &&
+    !canonicalHostname.includes("..") &&
+    !/^\d+\.\d+\.\d+\.\d+$/.test(canonicalHostname);
+  if (
+    url.protocol !== "s3:" ||
+    !bucketIsValid ||
+    url.href !== value ||
+    url.hostname !== canonicalHostname ||
+    url.port !== "" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.search !== "" ||
+    url.hash !== "" ||
+    !pathIsCanonical ||
+    !digestIsBound
+  ) {
+    throw new Error(`${field} must be a credential-free content-addressed S3 URI`);
+  }
 }
 
 function nullableGtin14(value: unknown, field: string): string | null {
@@ -2216,6 +2361,18 @@ function barcodeSortKey(value: BarcodeAssignment): string {
 function sha256(value: unknown, field: string): string {
   if (typeof value !== "string" || !SHA256_PATTERN.test(value)) {
     throw new Error(`${field} must be a lowercase SHA-256 digest`);
+  }
+  return value;
+}
+
+function nullableSha256(value: unknown, field: string): string | null {
+  return value === null ? null : sha256(value, field);
+}
+
+function nullableOpaqueProviderIdentifier(value: unknown, field: string): string | null {
+  if (value === null) return null;
+  if (typeof value !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._~+/:@=-]{0,511}$/u.test(value)) {
+    throw new Error(`${field} must be a bounded provider-neutral opaque identifier`);
   }
   return value;
 }

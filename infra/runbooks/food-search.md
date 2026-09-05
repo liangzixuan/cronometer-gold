@@ -89,7 +89,14 @@ pnpm verify
 The live Meilisearch integrations require `TEST_MEILI_URL` plus the generated
 `MEILI_SEARCH_KEY`, `MEILI_ADMIN_KEY`, and `MEILI_TASK_OBSERVER_KEY`. Load
 those three scoped values from the owner-only bootstrap output; never substitute
-the master key.
+the master key. For a fresh absent absolute output path, the standalone
+`scoped-meili-keys.mjs --output-file <path>` bootstrap consumes only
+`MEILI_MASTER_KEY`, `MEILI_URL`, and `MEILI_PORT` from the environment. It does
+not trust the intentionally non-authoritative scoped placeholders in a newly
+copied `.env`; after policy and permission canaries pass, it writes the generated
+keys through an exclusive owner-only mode-`0600` file descriptor. Load that file
+over `.env`, then run `scoped-meili-keys.mjs` with no arguments: replay mode
+treats all ambient scoped values as exact expectations and fails on any mismatch.
 
 ## Legacy mutation-key revocation
 

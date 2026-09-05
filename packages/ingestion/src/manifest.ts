@@ -1,14 +1,24 @@
 import { safeArchivePath } from "./archive.js";
-import { canonicalJson } from "./deterministic.js";
+import { sha256CanonicalJson } from "./deterministic.js";
 import { IngestionError, invariant } from "./errors.js";
 
 export const INGESTION_PARSER_PACKAGE = "@nutrition-tracker/ingestion" as const;
 export const INGESTION_PARSER_VERSION = "0.1.0" as const;
 
-export interface FoodSourceManifestV3 {
+export type FoodSourceReleaseClass = "fixture-nonrelease" | "live-reviewed";
+
+export interface FoodSourceEvidenceBundleReferenceV1 {
+  readonly contractVersion: 1;
+  readonly sha256: string;
+  readonly objectUri: string;
+}
+
+export interface FoodSourceManifestV4 {
   readonly $schema?: string;
-  readonly manifestVersion: 3;
+  readonly manifestVersion: 4;
   readonly templateOnly: boolean;
+  readonly releaseClass: FoodSourceReleaseClass;
+  readonly evidenceBundle: FoodSourceEvidenceBundleReferenceV1 | null;
   readonly source: {
     readonly code: string;
     readonly displayName: string;
@@ -38,20 +48,6 @@ export interface FoodSourceManifestV3 {
       readonly metadataUrl: string;
       readonly notes: string;
     };
-    readonly acquisitionObservations: readonly {
-      readonly acquisitionId: string;
-      readonly observedAt: string;
-      readonly operatorPrincipalId: string;
-      readonly tool: string;
-      readonly transport: "https";
-      readonly freshDownload: true;
-      readonly downloadUrl: string;
-      readonly resolvedUrl: string;
-      readonly etag: string | null;
-      readonly lastModified: string | null;
-      readonly sha256: string;
-      readonly byteSize: number;
-    }[];
   };
   readonly rights: {
     readonly licenseExpression: string;
@@ -89,19 +85,20 @@ export interface FoodSourceManifestV3 {
   };
 }
 
-export type ImportReadyFoodSourceManifest = FoodSourceManifestV3 & {
+export type ImportReadyFoodSourceManifest = FoodSourceManifestV4 & {
   readonly templateOnly: false;
-  readonly release: FoodSourceManifestV3["release"] & {
+  readonly evidenceBundle: FoodSourceEvidenceBundleReferenceV1;
+  readonly release: FoodSourceManifestV4["release"] & {
     readonly acquiredAt: string;
     readonly upstreamSchemaVersion: string;
   };
-  readonly artifact: FoodSourceManifestV3["artifact"] & {
+  readonly artifact: FoodSourceManifestV4["artifact"] & {
     readonly downloadUrl: string;
     readonly objectUri: string;
     readonly sha256: string;
     readonly byteSize: number;
   };
-  readonly ingestion: FoodSourceManifestV3["ingestion"] & {
+  readonly ingestion: FoodSourceManifestV4["ingestion"] & {
     readonly parserVersion: string;
     readonly parserBuildSha256: string;
   };
@@ -111,6 +108,8 @@ const ROOT_KEYS = [
   "$schema",
   "manifestVersion",
   "templateOnly",
+  "releaseClass",
+  "evidenceBundle",
   "source",
   "release",
   "artifact",
@@ -119,15 +118,30 @@ const ROOT_KEYS = [
   "validation",
 ] as const;
 
-export function parseFoodSourceManifest(input: unknown): FoodSourceManifestV3 {
+export function parseFoodSourceManifest(input: unknown): FoodSourceManifestV4 {
   const root = exactObject(
     input,
     "$",
     ROOT_KEYS,
     ROOT_KEYS.filter((key) => key !== "$schema"),
   );
-  equal(root.manifestVersion, 3, "$.manifestVersion");
+  equal(root.manifestVersion, 4, "$.manifestVersion");
   boolean(root.templateOnly, "$.templateOnly");
+  enumeration(root.releaseClass, "$.releaseClass", ["live-reviewed", "fixture-nonrelease"]);
+  if (root.evidenceBundle !== null) {
+    const evidenceBundle = exactObject(root.evidenceBundle, "$.evidenceBundle", [
+      "contractVersion",
+      "sha256",
+      "objectUri",
+    ]);
+    equal(evidenceBundle.contractVersion, 1, "$.evidenceBundle.contractVersion");
+    sha256(evidenceBundle.sha256, "$.evidenceBundle.sha256");
+    requiredString(evidenceBundle.objectUri, "$.evidenceBundle.objectUri");
+    assertContentAddressedEvidenceBundleUri(
+      evidenceBundle.objectUri as string,
+      evidenceBundle.sha256 as string,
+    );
+  }
 
   const source = exactObject(root.source, "$.source", [
     "code",
@@ -161,7 +175,6 @@ export function parseFoodSourceManifest(input: unknown): FoodSourceManifestV3 {
     "sha256",
     "byteSize",
     "publisherIntegrity",
-    "acquisitionObservations",
   ]);
   nullableUri(artifact.downloadUrl, "$.artifact.downloadUrl");
   const permittedResolvedUrls = stringArray(
@@ -218,64 +231,6 @@ export function parseFoodSourceManifest(input: unknown): FoodSourceManifestV3 {
       "INVALID_MANIFEST",
       "Publisher SHA-256 fields must be null when the publisher does not provide one",
     );
-  }
-
-  const observations = array(
-    artifact.acquisitionObservations,
-    "$.artifact.acquisitionObservations",
-  );
-  const observationKeys = new Set<string>();
-  for (const [index, candidate] of observations.entries()) {
-    const path = `$.artifact.acquisitionObservations[${index}]`;
-    const item = exactObject(candidate, path, [
-      "acquisitionId",
-      "observedAt",
-      "operatorPrincipalId",
-      "tool",
-      "transport",
-      "freshDownload",
-      "downloadUrl",
-      "resolvedUrl",
-      "etag",
-      "lastModified",
-      "sha256",
-      "byteSize",
-    ]);
-    stableIdentifier(item.acquisitionId, `${path}.acquisitionId`);
-    patternString(
-      item.acquisitionId,
-      `${path}.acquisitionId`,
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-    );
-    dateTime(item.observedAt, `${path}.observedAt`);
-    stableIdentifier(item.operatorPrincipalId, `${path}.operatorPrincipalId`, 3);
-    requiredString(item.tool, `${path}.tool`);
-    equal(item.transport, "https", `${path}.transport`);
-    equal(item.freshDownload, true, `${path}.freshDownload`);
-    networkArtifactUrl(item.downloadUrl, `${path}.downloadUrl`);
-    networkArtifactUrl(item.resolvedUrl, `${path}.resolvedUrl`);
-    nullableString(item.etag, `${path}.etag`);
-    nullableDateTime(item.lastModified, `${path}.lastModified`);
-    if (item.lastModified !== null) {
-      invariant(
-        Date.parse(item.lastModified) <= Date.parse(item.observedAt as string),
-        "INVALID_MANIFEST",
-        "Artifact Last-Modified cannot be later than its observation",
-        { path },
-      );
-    }
-    sha256(item.sha256, `${path}.sha256`);
-    positiveInteger(item.byteSize, `${path}.byteSize`);
-    const key = canonicalJson(item);
-    invariant(
-      !observationKeys.has(key),
-      "INVALID_MANIFEST",
-      "Acquisition observations must be unique",
-      {
-        path,
-      },
-    );
-    observationKeys.add(key);
   }
 
   const rights = exactObject(root.rights, "$.rights", [
@@ -401,9 +356,16 @@ export function parseFoodSourceManifest(input: unknown): FoodSourceManifestV3 {
     stableIdentifier(review.reviewedBy, "$.rights.review.reviewedBy");
   }
 
-  if (root.templateOnly === false) {
+  if (root.templateOnly === true) {
     invariant(
-      release.acquiredAt !== null &&
+      root.evidenceBundle === null,
+      "INVALID_MANIFEST",
+      "Template manifest must not bind an authority evidence bundle",
+    );
+  } else {
+    invariant(
+      root.evidenceBundle !== null &&
+        release.acquiredAt !== null &&
         typeof release.upstreamSchemaVersion === "string" &&
         release.upstreamSchemaVersion.length > 0 &&
         typeof artifact.downloadUrl === "string" &&
@@ -416,16 +378,7 @@ export function parseFoodSourceManifest(input: unknown): FoodSourceManifestV3 {
       "INVALID_MANIFEST",
       "Non-template manifest is missing pinned release or artifact fields",
     );
-    validateObservationConsensus(artifact, observations);
     const acquiredTime = Date.parse(release.acquiredAt as string);
-    for (const candidate of observations) {
-      const observedTime = Date.parse((candidate as Record<string, unknown>).observedAt as string);
-      invariant(
-        observedTime <= acquiredTime,
-        "INVALID_MANIFEST",
-        "Acquisition observation occurs after the final release acquisition time",
-      );
-    }
     if (release.publishedOn !== null) {
       invariant(
         Date.parse(`${release.publishedOn}T00:00:00.000Z`) <= acquiredTime,
@@ -448,13 +401,18 @@ export function parseFoodSourceManifest(input: unknown): FoodSourceManifestV3 {
       );
     }
   }
-  return deepFreeze(structuredClone(input)) as FoodSourceManifestV3;
+  return deepFreeze(structuredClone(input)) as FoodSourceManifestV4;
 }
 
 export function assertImportReadyManifest(
-  manifest: FoodSourceManifestV3,
+  manifest: FoodSourceManifestV4,
 ): asserts manifest is ImportReadyFoodSourceManifest {
   invariant(!manifest.templateOnly, "INVALID_MANIFEST", "Template manifest cannot be imported");
+  invariant(
+    manifest.evidenceBundle !== null,
+    "INVALID_MANIFEST",
+    "Import-ready manifest must bind an authority evidence bundle",
+  );
   invariant(
     manifest.rights.review.status === "approved" || manifest.rights.review.status === "restricted",
     "INVALID_MANIFEST",
@@ -477,6 +435,10 @@ export function assertImportReadyManifest(
     "Manifest artifact or parser is not pinned",
   );
   assertContentAddressedObjectUri(manifest.artifact.objectUri, manifest.artifact.sha256);
+  assertContentAddressedEvidenceBundleUri(
+    manifest.evidenceBundle.objectUri,
+    manifest.evidenceBundle.sha256,
+  );
   invariant(
     manifest.validation.expectedFiles.length > 0 &&
       Object.keys(manifest.validation.releaseSpecificExpectations).length > 0,
@@ -485,26 +447,83 @@ export function assertImportReadyManifest(
   );
 }
 
-function assertContentAddressedObjectUri(objectUri: string, sha256: string): void {
+function assertContentAddressedObjectUri(
+  objectUri: string,
+  sha256: string,
+  field = "Artifact objectUri",
+): void {
   const url = new URL(objectUri);
-  const pathSegments = url.pathname.split("/").filter(Boolean);
+  const pathSegments = url.pathname.split("/");
+  const pathIsCanonical =
+    pathSegments[0] === "" &&
+    pathSegments.length > 1 &&
+    pathSegments.slice(1).every((segment) => /^[A-Za-z0-9_-][A-Za-z0-9._~-]*$/u.test(segment));
   const digestIsBound = pathSegments.some(
     (segment, index) => segment === "sha256" && pathSegments[index + 1] === sha256,
   );
+  const canonicalHostname = url.hostname.toLowerCase();
+  const bucketIsValid =
+    /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(canonicalHostname) &&
+    !canonicalHostname.includes("..") &&
+    !/^\d+\.\d+\.\d+\.\d+$/.test(canonicalHostname);
   invariant(
-    url.protocol === "s3:" &&
-      url.hostname.length > 0 &&
+    Buffer.byteLength(objectUri, "utf8") <= 2_048 &&
+      url.protocol === "s3:" &&
+      bucketIsValid &&
+      url.href === objectUri &&
+      url.hostname === canonicalHostname &&
+      url.port === "" &&
       url.username === "" &&
       url.password === "" &&
       url.search === "" &&
       url.hash === "" &&
+      pathIsCanonical &&
       digestIsBound,
     "INVALID_MANIFEST",
-    "Artifact objectUri must be a credential-free content-addressed S3 URI",
+    `${field} must be a credential-free content-addressed S3 URI`,
   );
 }
 
-export function assertManifestParserIdentity(manifest: FoodSourceManifestV3): void {
+function assertContentAddressedEvidenceBundleUri(objectUri: string, sha256: string): void {
+  const message = "Evidence bundle objectUri must be a credential-free content-addressed S3 URI";
+  let url: URL | undefined;
+  try {
+    url = new URL(objectUri);
+  } catch {
+    invariant(false, "INVALID_MANIFEST", message);
+  }
+  const pathSegments = url.pathname.split("/");
+  const pathIsCanonical =
+    pathSegments[0] === "" &&
+    pathSegments.length > 1 &&
+    pathSegments.slice(1).every((segment) => /^[A-Za-z0-9_-][A-Za-z0-9._~-]*$/u.test(segment));
+  const digestIsBound = pathSegments.some(
+    (segment, index) => segment === "sha256" && pathSegments[index + 1] === sha256,
+  );
+  const canonicalHostname = url.hostname.toLowerCase();
+  const bucketIsValid =
+    /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(canonicalHostname) &&
+    !canonicalHostname.includes("..") &&
+    !/^\d+\.\d+\.\d+\.\d+$/.test(canonicalHostname);
+  invariant(
+    Buffer.byteLength(objectUri, "utf8") <= 2_048 &&
+      url.protocol === "s3:" &&
+      bucketIsValid &&
+      url.href === objectUri &&
+      url.hostname === canonicalHostname &&
+      url.port === "" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.search === "" &&
+      url.hash === "" &&
+      pathIsCanonical &&
+      digestIsBound,
+    "INVALID_MANIFEST",
+    message,
+  );
+}
+
+export function assertManifestParserIdentity(manifest: FoodSourceManifestV4): void {
   invariant(
     manifest.ingestion.parserPackage === INGESTION_PARSER_PACKAGE &&
       manifest.ingestion.parserVersion === INGESTION_PARSER_VERSION,
@@ -525,54 +544,9 @@ export function importReadyManifest(input: unknown): ImportReadyFoodSourceManife
   return manifest;
 }
 
-function validateObservationConsensus(
-  artifact: Readonly<Record<string, unknown>>,
-  observations: readonly unknown[],
-): void {
-  invariant(
-    observations.length >= 2,
-    "INVALID_MANIFEST",
-    "Pinned artifact requires two observations",
-  );
-  const observers = new Set<string>();
-  const acquisitionIds = new Set<string>();
-  const canonicalDownload = canonicalNetworkUrl(artifact.downloadUrl as string);
-  const permittedResolvedUrls = new Set(
-    (artifact.permittedResolvedUrls as readonly string[]).map(canonicalNetworkUrl),
-  );
-  for (const candidate of observations) {
-    const item = candidate as Record<string, unknown>;
-    const principal = (item.operatorPrincipalId as string).normalize("NFKC").trim().toLowerCase();
-    const acquisitionId = item.acquisitionId as string;
-    invariant(
-      !observers.has(principal),
-      "INVALID_MANIFEST",
-      "Observation operators must be distinct",
-      {
-        principal,
-      },
-    );
-    invariant(
-      !acquisitionIds.has(acquisitionId),
-      "INVALID_MANIFEST",
-      "Observation acquisition IDs must be distinct",
-      { acquisitionId },
-    );
-    observers.add(principal);
-    acquisitionIds.add(acquisitionId);
-    const resolved = canonicalNetworkUrl(item.resolvedUrl as string);
-    invariant(
-      item.sha256 === artifact.sha256 &&
-        item.byteSize === artifact.byteSize &&
-        canonicalNetworkUrl(item.downloadUrl as string) === canonicalDownload &&
-        item.transport === "https" &&
-        item.freshDownload === true &&
-        permittedResolvedUrls.has(resolved),
-      "INVALID_MANIFEST",
-      "Acquisition observation does not match the canonical artifact",
-      { principal },
-    );
-  }
+export function manifestAuthoritySubjectSha256(manifest: FoodSourceManifestV4): string {
+  const parsed = parseFoodSourceManifest(manifest);
+  return sha256CanonicalJson({ ...parsed, evidenceBundle: null });
 }
 
 function networkArtifactUrl(value: unknown, path: string): string {

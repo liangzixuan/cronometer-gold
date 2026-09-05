@@ -532,17 +532,23 @@ export async function runScopedMeiliKeysCli(options = {}) {
   const environment = options.environment ?? process.env;
   const argv = options.argv ?? process.argv.slice(2);
   const outputPath = cliOutputPath(argv);
+  const expectedKeys =
+    outputPath === undefined
+      ? {
+          expectedSearchKey: Object.hasOwn(environment, "MEILI_SEARCH_KEY")
+            ? environment.MEILI_SEARCH_KEY
+            : undefined,
+          expectedTaskObserverKey: Object.hasOwn(environment, "MEILI_TASK_OBSERVER_KEY")
+            ? environment.MEILI_TASK_OBSERVER_KEY
+            : undefined,
+          expectedWorkerKey: Object.hasOwn(environment, "MEILI_ADMIN_KEY")
+            ? environment.MEILI_ADMIN_KEY
+            : undefined,
+        }
+      : {};
   const keys = await bootstrapScopedMeiliKeys({
     endpoint: environment.MEILI_URL,
-    expectedSearchKey: Object.hasOwn(environment, "MEILI_SEARCH_KEY")
-      ? environment.MEILI_SEARCH_KEY
-      : undefined,
-    expectedWorkerKey: Object.hasOwn(environment, "MEILI_ADMIN_KEY")
-      ? environment.MEILI_ADMIN_KEY
-      : undefined,
-    expectedTaskObserverKey: Object.hasOwn(environment, "MEILI_TASK_OBSERVER_KEY")
-      ? environment.MEILI_TASK_OBSERVER_KEY
-      : undefined,
+    ...expectedKeys,
     fetchImpl: options.fetchImpl,
     masterKey: environment.MEILI_MASTER_KEY,
     port: environment.MEILI_PORT,

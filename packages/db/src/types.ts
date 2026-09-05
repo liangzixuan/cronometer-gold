@@ -55,6 +55,7 @@ export type UnitSystem = "metric" | "us_customary";
 export type FoodSourceKind = "commercial" | "government" | "open" | "partner";
 export type RightsReviewStatus = "approved" | "blocked" | "pending" | "restricted";
 export type SourceReleaseStatus = "failed" | "imported" | "promoted" | "quarantined";
+export type FoodImportReleaseClass = "fixture-nonrelease" | "legacy-unbound" | "live-reviewed";
 export type FoodImportBatchStatus =
   | "completed"
   | "failed"
@@ -183,6 +184,12 @@ export interface FoodImportBatchTable {
   parser_version: string;
   rights_manifest_uri: string;
   rights_manifest_sha256: string;
+  release_class: FoodImportReleaseClass;
+  evidence_bundle_sha256: string | null;
+  evidence_bundle_uri: string | null;
+  evidence_decision_sha256: string | null;
+  evidence_object_version_id: string | null;
+  evidence_valid_until: NullableTimestamp;
   status: DefaultValue<FoodImportBatchStatus>;
   staged_count: DefaultInt8;
   valid_count: DefaultInt8;
@@ -284,6 +291,13 @@ export interface FoodSourceReleaseTable {
   validation_summary: ImmutableJson;
   rights_manifest_uri: string;
   rights_manifest_sha256: string | null;
+  release_class: FoodImportReleaseClass;
+  evidence_bundle_sha256: string | null;
+  evidence_bundle_uri: string | null;
+  evidence_decision_sha256: string | null;
+  evidence_object_version_id: string | null;
+  evidence_valid_until: NullableTimestamp;
+  legacy_promotion_grandfathered_at: ReadonlyColumn<Date | null>;
   promoted_at: NullableTimestamp;
   created_at: CreatedTimestamp;
 }

@@ -1,9 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
   ACQUISITION_EVIDENCE_CONTRACT_VERSION,
+  type AuthenticatedReleaseEvidenceBundleV1,
   assembleAcquisitionReviewCandidate,
+  assertAuthenticatedReleaseEvidenceBundle,
+  authenticatedReleaseEvidenceBundleSha256,
+  type CurrentRetentionVerificationV1,
+  type FoodReleaseAuthorityDecisionV1,
+  type FoodSourceManifestV4,
+  manifestAuthoritySubjectSha256,
   parseAuthenticatedAcquisitionSidecar,
+  parseAuthenticatedReleaseEvidenceBundle,
+  parseFoodSourceManifest,
   parseRetainedArtifactReceipt,
+  sha256CanonicalJson,
 } from "../src/index.js";
 
 const sha256 = "a".repeat(64);
@@ -197,6 +207,15 @@ describe("retained artifact receipt v1", () => {
         value.objectUri = `${String(value.objectUri)}?credential=secret`;
       },
       (value: Record<string, unknown>) => {
+        value.objectUri = `s3://food-source-artifacts/fdc/junk/../sha256/${sha256}/release.zip`;
+      },
+      (value: Record<string, unknown>) => {
+        value.objectUri = `s3://food-source-artifacts/fdc//sha256/${sha256}/release.zip`;
+      },
+      (value: Record<string, unknown>) => {
+        value.objectUri = `s3://food-source-artifacts/fdc/%2e%2e/sha256/${sha256}/release.zip`;
+      },
+      (value: Record<string, unknown>) => {
         value.bucket = "different-artifact-bucket";
       },
       (value: Record<string, unknown>) => {
@@ -253,7 +272,7 @@ describe("retained artifact receipt v1", () => {
     defineFlippingGetter(input, "objectUri", () => {
       uriReads += 1;
       return uriReads === 1
-        ? `S3://FOOD-SOURCE-ARTIFACTS/fdc/sha256/${sha256}/release.zip`
+        ? `s3://food-source-artifacts/fdc/sha256/${sha256}/release.zip`
         : `s3://evil-bucket/fdc/sha256/${sha256}/replacement.zip`;
     });
     defineFlippingGetter(input, "mediaType", () => {
@@ -307,7 +326,7 @@ describe("acquisition review candidate v1", () => {
     expect(Object.isFrozen(storageReceipt)).toBe(false);
   });
 
-  it("canonicalizes sidecar order, property order, and equivalent URL spellings", () => {
+  it("canonicalizes sidecar order, property order, and equivalent identity URL spellings", () => {
     const first = acquisition("operator.one", "run-1", "11111111-1111-4111-8111-111111111111");
     const second = acquisition("operator.two", "run-2", "22222222-2222-4222-8222-222222222222");
 
@@ -325,7 +344,6 @@ describe("acquisition review candidate v1", () => {
     runner(second).issuer = "https://IDENTITY.example.test:443/";
     runner(second).runReference = "URN:ci:run:run-2";
     const equivalentReceipt = receipt();
-    equivalentReceipt.objectUri = `S3://FOOD-SOURCE-ARTIFACTS/fdc/sha256/${sha256}/release.zip`;
     storageWorkload(equivalentReceipt).issuer = "HTTPS://IDENTITY.EXAMPLE.TEST:443/";
     storageWorkload(equivalentReceipt).runReference = "URN:ci:storage:storage-run-1";
 
@@ -490,6 +508,425 @@ describe("acquisition review candidate v1", () => {
   });
 });
 
+describe("authenticated release evidence bundle v1", () => {
+  it("binds deterministic acquisition, current retention, named authority, and manifest scope", () => {
+    const fixture = releaseEvidenceFixture("live-reviewed");
+    const parsed = parseAuthenticatedReleaseEvidenceBundle(fixture.bundle);
+
+    expect(parsed).toMatchObject({
+      contractVersion: 1,
+      kind: "authenticated-release-evidence-bundle",
+      candidate: {
+        reviewStatus: "pending-review",
+        importReadiness: "not-granted",
+      },
+      currentRetention: {
+        kind: "current-retention-verification",
+        retention: { status: "active", enforced: true },
+      },
+      authorityDecision: {
+        decision: "approved-for-live-staging",
+        releaseClass: "live-reviewed",
+        reviewerClaims: { reviewerPrincipalId: "release.reviewer" },
+      },
+    });
+    expect(authenticatedReleaseEvidenceBundleSha256(parsed)).toBe(
+      fixture.manifest.evidenceBundle?.sha256,
+    );
+    expect(() =>
+      assertAuthenticatedReleaseEvidenceBundle(
+        fixture.manifest,
+        parsed,
+        "2026-09-04T09:06:00.000Z",
+      ),
+    ).not.toThrow();
+    expect(Object.isFrozen(parsed)).toBe(true);
+    expect(Object.isFrozen(parsed.currentRetention)).toBe(true);
+    expect(Object.isFrozen(parsed.authorityDecision.reviewerClaims)).toBe(true);
+  });
+
+  it("keeps fixture authorization explicit and structural candidates non-authorizing", () => {
+    const fixture = releaseEvidenceFixture("fixture-nonrelease");
+    expect(fixture.bundle.authorityDecision.decision).toBe("approved-for-fixture-staging");
+    expect(() =>
+      assertAuthenticatedReleaseEvidenceBundle(
+        fixture.manifest,
+        fixture.bundle,
+        "2026-09-04T09:06:00.000Z",
+      ),
+    ).not.toThrow();
+    expect(() => parseAuthenticatedReleaseEvidenceBundle(fixture.bundle.candidate)).toThrowError(
+      expect.objectContaining({ code: "INVALID_ARTIFACT" }),
+    );
+    expect(fixture.bundle.candidate.importReadiness).toBe("not-granted");
+  });
+
+  it("requires the current-retention verifier to be independent from acquisition and storage identities", () => {
+    const identityCollisions: readonly ((value: Record<string, unknown>) => void)[] = [
+      (value) => {
+        currentRetentionClaims(value).principalId = "operator.one";
+      },
+      (value) => {
+        currentRetentionClaims(value).principalId = "operator.two";
+      },
+      (value) => {
+        currentRetentionClaims(value).principalId = "storage.retainer";
+      },
+      (value) => {
+        currentRetentionClaims(value).subject = "operator:operator.one";
+      },
+      (value) => {
+        currentRetentionClaims(value).subject = "operator:operator.two";
+      },
+      (value) => {
+        currentRetentionClaims(value).subject = "workload:artifact-retainer";
+      },
+    ];
+
+    for (const collideIdentity of identityCollisions) {
+      const value = structuredClone(
+        releaseEvidenceFixture("live-reviewed").bundle,
+      ) as unknown as Record<string, unknown>;
+      collideIdentity(value);
+      rebindRetentionDigest(value);
+      expect(() => parseAuthenticatedReleaseEvidenceBundle(value)).toThrowError(
+        expect.objectContaining({ code: "INVALID_ARTIFACT" }),
+      );
+    }
+
+    const reviewerReuse = structuredClone(
+      releaseEvidenceFixture("live-reviewed").bundle,
+    ) as unknown as Record<string, unknown>;
+    currentRetentionClaims(reviewerReuse).principalId = "release.reviewer";
+    currentRetentionClaims(reviewerReuse).subject = "reviewer:release.reviewer";
+    rebindRetentionDigest(reviewerReuse);
+    expect(() => parseAuthenticatedReleaseEvidenceBundle(reviewerReuse)).not.toThrow();
+  });
+
+  it("canonicalizes property order but rejects a non-deterministic candidate ordering", () => {
+    const fixture = releaseEvidenceFixture("live-reviewed");
+    const reversedProperties = parseAuthenticatedReleaseEvidenceBundle(
+      reversePropertyOrder(fixture.bundle),
+    );
+    expect(authenticatedReleaseEvidenceBundleSha256(reversedProperties)).toBe(
+      authenticatedReleaseEvidenceBundleSha256(fixture.bundle),
+    );
+
+    const reversedCandidate = structuredClone(fixture.bundle) as unknown as Record<string, unknown>;
+    const candidate = bundleCandidate(reversedCandidate);
+    candidate.acquisitions = [...(candidate.acquisitions as unknown[])].reverse();
+    expect(() => parseAuthenticatedReleaseEvidenceBundle(reversedCandidate)).toThrowError(
+      expect.objectContaining({ code: "INVALID_ARTIFACT" }),
+    );
+  });
+
+  it("rejects component, chronology, retention, authority, and identity drift", () => {
+    const cases: readonly ((value: Record<string, unknown>) => void)[] = [
+      (value) => {
+        value.candidateSha256 = "f".repeat(64);
+      },
+      (value) => {
+        currentRetention(value).objectVersionId = "version=other";
+        rebindRetentionDigest(value);
+      },
+      (value) => {
+        currentRetention(value).validUntil = "2026-09-05T09:04:00.001Z";
+        currentRetentionRecord(value).retainUntil = "2033-09-04T09:03:00.000Z";
+        rebindRetentionDigest(value);
+      },
+      (value) => {
+        currentRetention(value).checkedAt = "2026-09-04T09:06:00.000Z";
+        currentRetentionClaims(value).verifiedAt = "2026-09-04T09:05:00.000Z";
+        rebindRetentionDigest(value);
+      },
+      (value) => {
+        authorityDecision(value).decision = "pending-review";
+      },
+      (value) => {
+        authorityDecision(value).candidateSha256 = "e".repeat(64);
+      },
+      (value) => {
+        authorityScope(value).objectVersionId = "version=other";
+      },
+      (value) => {
+        reviewerClaims(value).reviewerPrincipalId = "operator.one";
+        reviewerClaims(value).subject = "operator:operator.one";
+      },
+      (value) => {
+        reviewerClaims(value).issuer = "https://identity.example.test/";
+        reviewerClaims(value).subject = "workload:artifact-retainer";
+      },
+      (value) => {
+        authorityDecision(value).unexpected = true;
+      },
+    ];
+
+    for (const mutate of cases) {
+      const value = structuredClone(
+        releaseEvidenceFixture("live-reviewed").bundle,
+      ) as unknown as Record<string, unknown>;
+      mutate(value);
+      expect(() => parseAuthenticatedReleaseEvidenceBundle(value)).toThrowError(
+        expect.objectContaining({ code: "INVALID_ARTIFACT" }),
+      );
+    }
+  });
+
+  it("treats current-retention validUntil as an exclusive decision and evaluation boundary", () => {
+    const fixture = releaseEvidenceFixture("live-reviewed");
+    const decisionAtExpiry = structuredClone(fixture.bundle) as unknown as Record<string, unknown>;
+    authorityDecision(decisionAtExpiry).decidedAt = currentRetention(decisionAtExpiry).validUntil;
+    expect(() => parseAuthenticatedReleaseEvidenceBundle(decisionAtExpiry)).toThrowError(
+      expect.objectContaining({ code: "INVALID_ARTIFACT" }),
+    );
+
+    expect(() =>
+      assertAuthenticatedReleaseEvidenceBundle(
+        fixture.manifest,
+        fixture.bundle,
+        "2026-09-05T09:03:59.999Z",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertAuthenticatedReleaseEvidenceBundle(
+        fixture.manifest,
+        fixture.bundle,
+        "2026-09-05T09:04:00.000Z",
+      ),
+    ).toThrowError(expect.objectContaining({ code: "INVALID_ARTIFACT" }));
+  });
+
+  it("rejects stale evaluation and every manifest authority-scope mismatch", () => {
+    const fixture = releaseEvidenceFixture("live-reviewed");
+    expect(() =>
+      assertAuthenticatedReleaseEvidenceBundle(
+        fixture.manifest,
+        fixture.bundle,
+        "2026-09-05T09:04:00.001Z",
+      ),
+    ).toThrowError(expect.objectContaining({ code: "INVALID_ARTIFACT" }));
+
+    const wrongDigest = {
+      ...fixture.manifest,
+      evidenceBundle: {
+        contractVersion: 1 as const,
+        sha256: "f".repeat(64),
+        objectUri: `s3://release-evidence/sha256/${"f".repeat(64)}/bundle.json`,
+      },
+    };
+    expect(() =>
+      assertAuthenticatedReleaseEvidenceBundle(
+        wrongDigest,
+        fixture.bundle,
+        "2026-09-04T09:06:00.000Z",
+      ),
+    ).toThrowError(expect.objectContaining({ code: "INVALID_ARTIFACT" }));
+
+    for (const mutate of [
+      (value: Record<string, unknown>) => {
+        source(value).displayName = "Changed source name";
+      },
+      (value: Record<string, unknown>) => {
+        release(value).releaseKey = "different-release";
+      },
+      (value: Record<string, unknown>) => {
+        manifestArtifact(value).mediaType = "application/octet-stream";
+      },
+      (value: Record<string, unknown>) => {
+        value.releaseClass = "fixture-nonrelease";
+      },
+    ]) {
+      const manifest = structuredClone(fixture.manifest) as unknown as Record<string, unknown>;
+      mutate(manifest);
+      expect(() =>
+        assertAuthenticatedReleaseEvidenceBundle(
+          manifest as unknown as FoodSourceManifestV4,
+          fixture.bundle,
+          "2026-09-04T09:06:00.000Z",
+        ),
+      ).toThrowError(expect.objectContaining({ code: "INVALID_ARTIFACT" }));
+    }
+  });
+});
+
+function releaseEvidenceFixture(releaseClass: FoodSourceManifestV4["releaseClass"]): {
+  readonly bundle: AuthenticatedReleaseEvidenceBundleV1;
+  readonly manifest: FoodSourceManifestV4;
+} {
+  const candidate = assembleAcquisitionReviewCandidate({
+    acquisitions: [
+      acquisition("operator.one", "run-1", "11111111-1111-4111-8111-111111111111"),
+      acquisition("operator.two", "run-2", "22222222-2222-4222-8222-222222222222"),
+    ],
+    receipt: receipt(),
+  });
+  const candidateSha256 = sha256CanonicalJson(candidate);
+  const currentRetention: CurrentRetentionVerificationV1 = {
+    contractVersion: 1,
+    kind: "current-retention-verification",
+    checkedAt: "2026-09-04T09:04:00.000Z",
+    validUntil: "2026-09-05T09:04:00.000Z",
+    provider: candidate.receipt.provider,
+    providerNamespace: candidate.receipt.providerNamespace,
+    bucket: candidate.receipt.bucket,
+    objectUri: candidate.receipt.objectUri,
+    objectKey: candidate.receipt.objectKey,
+    objectVersionId: candidate.receipt.objectVersionId,
+    mediaType: candidate.receipt.mediaType,
+    sha256: candidate.receipt.sha256,
+    byteSize: candidate.receipt.byteSize,
+    verifierClaims: {
+      verification: "externally-verified",
+      authenticationMethod: "workload-identity",
+      principalId: "retention.verifier",
+      runId: "retention-run-1",
+      runReference: "urn:ci:retention:retention-run-1",
+      issuer: "https://identity.example.test/",
+      subject: "workload:retention-verifier",
+      audience: "artifact-retention-verification",
+      verifiedAt: "2026-09-04T09:03:30.000Z",
+    },
+    retention: {
+      status: "active",
+      mode: candidate.receipt.retention.mode,
+      enforced: true,
+      retainUntil: candidate.receipt.retention.retainUntil,
+    },
+  };
+  const currentRetentionSha256 = sha256CanonicalJson(currentRetention);
+  const placeholderDigest = "0".repeat(64);
+  let manifest = parseFoodSourceManifest({
+    manifestVersion: 4,
+    templateOnly: false,
+    releaseClass,
+    evidenceBundle: {
+      contractVersion: 1,
+      sha256: placeholderDigest,
+      objectUri: `s3://release-evidence/sha256/${placeholderDigest}/bundle.json`,
+    },
+    source: {
+      code: "USDA_FDC",
+      displayName: "USDA FoodData Central",
+      kind: "government",
+      homepageUrl: "https://fdc.nal.usda.gov/",
+      accessUrl: "https://fdc.nal.usda.gov/download-datasets/",
+    },
+    release: {
+      releaseKey: "fdc-2026-04",
+      publishedOn: "2026-04-30",
+      acquiredAt: "2026-09-04T09:00:30.000Z",
+      upstreamSchemaVersion: "fdc-v1",
+    },
+    artifact: {
+      downloadUrl: candidate.artifact.downloadUrl,
+      permittedResolvedUrls: [candidate.artifact.downloadUrl, candidate.artifact.resolvedUrl],
+      objectUri: candidate.artifact.objectUri,
+      mediaType: candidate.artifact.mediaType,
+      sha256: candidate.artifact.sha256,
+      byteSize: candidate.artifact.byteSize,
+      publisherIntegrity: {
+        publisherProvidesSha256: false,
+        sha256: null,
+        sha256EvidenceUrl: null,
+        exactByteSize: null,
+        reportedSize: "publisher display value only",
+        metadataUrl: "https://fdc.nal.usda.gov/download-datasets/",
+        notes: "Publisher did not provide SHA-256.",
+      },
+    },
+    rights: {
+      licenseExpression: "CC0-1.0",
+      licenseName: "CC0",
+      licenseUrl: "https://creativecommons.org/publicdomain/zero/1.0/",
+      termsUrl: "https://fdc.nal.usda.gov/api-guide/",
+      commercialUseAllowed: true,
+      redistributionAllowed: true,
+      licenseAttributionRequired: false,
+      productAttributionRequired: true,
+      attributionFixture: "USDA FoodData Central {{releaseKey}}",
+      databaseRightsNotes: "Synthetic contract fixture.",
+      review: {
+        status: "approved",
+        reviewedAt: "2026-09-04T08:55:00.000Z",
+        reviewedBy: "rights.reviewer",
+        evidenceUrls: ["https://fdc.nal.usda.gov/api-guide/"],
+        notes: "Synthetic contract fixture only.",
+      },
+    },
+    ingestion: {
+      parserPackage: "@nutrition-tracker/ingestion",
+      parserVersion: "0.1.0",
+      parserBuildSha256: "b".repeat(64),
+      dataTypes: ["Foundation"],
+      languages: ["en"],
+      markets: ["US"],
+      sourceIdentityFields: ["fdcId", "dataType"],
+      missingValuePolicy: "absent-is-unknown-never-zero",
+    },
+    validation: {
+      rules: ["archive member set is exact"],
+      expectedFiles: ["release.json"],
+      releaseSpecificExpectations: { expectedFoodCount: 1 },
+    },
+  });
+  const authorityDecision: FoodReleaseAuthorityDecisionV1 = {
+    contractVersion: 1,
+    kind: "food-release-authority-decision",
+    decision:
+      releaseClass === "live-reviewed"
+        ? "approved-for-live-staging"
+        : "approved-for-fixture-staging",
+    decidedAt: "2026-09-04T09:05:00.000Z",
+    releaseClass,
+    candidateSha256,
+    currentRetentionSha256,
+    manifestAuthoritySubjectSha256: manifestAuthoritySubjectSha256(manifest),
+    scope: {
+      sourceCode: manifest.source.code,
+      releaseKey: manifest.release.releaseKey,
+      artifact: {
+        downloadUrl: candidate.artifact.downloadUrl,
+        resolvedUrl: candidate.artifact.resolvedUrl,
+        objectUri: candidate.artifact.objectUri,
+        objectVersionId: candidate.artifact.objectVersionId,
+        mediaType: candidate.artifact.mediaType,
+        sha256: candidate.artifact.sha256,
+        byteSize: candidate.artifact.byteSize,
+      },
+    },
+    reviewerClaims: {
+      verification: "externally-verified",
+      authenticationMethod: "oidc",
+      reviewerPrincipalId: "release.reviewer",
+      runId: "review-run-1",
+      runReference: "urn:ci:review:review-run-1",
+      issuer: "https://identity.example.test/",
+      subject: "reviewer:release.reviewer",
+      audience: "food-release-authority",
+      verifiedAt: "2026-09-04T09:04:30.000Z",
+    },
+  };
+  const bundle = parseAuthenticatedReleaseEvidenceBundle({
+    contractVersion: 1,
+    kind: "authenticated-release-evidence-bundle",
+    candidate,
+    candidateSha256,
+    currentRetention,
+    currentRetentionSha256,
+    authorityDecision,
+  });
+  const bundleSha256 = authenticatedReleaseEvidenceBundleSha256(bundle);
+  manifest = parseFoodSourceManifest({
+    ...manifest,
+    evidenceBundle: {
+      contractVersion: 1,
+      sha256: bundleSha256,
+      objectUri: `s3://release-evidence/sha256/${bundleSha256}/bundle.json`,
+    },
+  });
+  return { bundle, manifest };
+}
+
 function acquisition(
   principal: string,
   runId: string,
@@ -619,6 +1056,53 @@ function checksum(value: Record<string, unknown>): Record<string, unknown> {
 
 function retention(value: Record<string, unknown>): Record<string, unknown> {
   return value.retention as Record<string, unknown>;
+}
+
+function bundleCandidate(value: Record<string, unknown>): Record<string, unknown> {
+  return value.candidate as Record<string, unknown>;
+}
+
+function currentRetention(value: Record<string, unknown>): Record<string, unknown> {
+  return value.currentRetention as Record<string, unknown>;
+}
+
+function currentRetentionClaims(value: Record<string, unknown>): Record<string, unknown> {
+  return currentRetention(value).verifierClaims as Record<string, unknown>;
+}
+
+function currentRetentionRecord(value: Record<string, unknown>): Record<string, unknown> {
+  return currentRetention(value).retention as Record<string, unknown>;
+}
+
+function authorityDecision(value: Record<string, unknown>): Record<string, unknown> {
+  return value.authorityDecision as Record<string, unknown>;
+}
+
+function authorityScope(value: Record<string, unknown>): Record<string, unknown> {
+  const scope = authorityDecision(value).scope as Record<string, unknown>;
+  return scope.artifact as Record<string, unknown>;
+}
+
+function reviewerClaims(value: Record<string, unknown>): Record<string, unknown> {
+  return authorityDecision(value).reviewerClaims as Record<string, unknown>;
+}
+
+function rebindRetentionDigest(value: Record<string, unknown>): void {
+  const digest = sha256CanonicalJson(currentRetention(value));
+  value.currentRetentionSha256 = digest;
+  authorityDecision(value).currentRetentionSha256 = digest;
+}
+
+function source(value: Record<string, unknown>): Record<string, unknown> {
+  return value.source as Record<string, unknown>;
+}
+
+function release(value: Record<string, unknown>): Record<string, unknown> {
+  return value.release as Record<string, unknown>;
+}
+
+function manifestArtifact(value: Record<string, unknown>): Record<string, unknown> {
+  return value.artifact as Record<string, unknown>;
 }
 
 function defineFlippingGetter(

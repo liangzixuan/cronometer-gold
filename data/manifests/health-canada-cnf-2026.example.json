@@ -1,7 +1,9 @@
 {
   "$schema": "./food-source-manifest.schema.json",
-  "manifestVersion": 3,
+  "manifestVersion": 4,
   "templateOnly": true,
+  "releaseClass": "live-reviewed",
+  "evidenceBundle": null,
   "source": {
     "code": "HEALTH_CANADA_CNF",
     "displayName": "Health Canada Canadian Nutrient File",
@@ -29,9 +31,8 @@
       "exactByteSize": null,
       "reportedSize": null,
       "metadataUrl": "https://open.canada.ca/data/api/action/package_show?id=1b6139bd-ed7e-4043-bc28-ff00e10f3109",
-      "notes": "The aggregate CNF ZIP resource has an empty hash and null size in the publisher metadata. Record two independent acquisition observations before this template can become import-ready."
-    },
-    "acquisitionObservations": []
+      "notes": "The aggregate CNF ZIP resource has an empty hash and null size in the publisher metadata. Two independently authenticated matching acquisitions are one prerequisite; import readiness also requires the retained-object receipt, a current provider retention check, and the named authority decision in the bound evidence bundle."
+    }
   },
   "rights": {
     "licenseExpression": "LicenseRef-Open-Government-Licence-Canada-2.0",

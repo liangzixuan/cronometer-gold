@@ -116,11 +116,15 @@ The implemented `cnf inspect` command verifies a pinned local artifact and
 reviewed parser build, strictly parses all nine CSVs, and emits full-inventory,
 per-table, conservation, exclusion-reason, and language-partition baselines
 without accessing the database. `catalogue stage-cnf` requires an import-ready
-manifest and trusted runner, repeats those checks before opening PostgreSQL,
-checkpoints staging, and records immutable parser evidence that validation
-re-verifies. These paths are covered with synthetic fixtures only; they do not
-claim that the published 2026 aggregate has been acquired, baselined, or
-activated.
+manifest plus its canonical manifest-v4 evidence bundle, repeats those checks
+before opening PostgreSQL, checkpoints staging, and records immutable parser and
+bundle provenance that validation re-verifies. The source gate checks structure,
+canonical digests, bound identities, and chronology; it does not authenticate the
+bundle's OIDC/workload claims, query provider state, or prove object existence or
+retention. These paths are covered with `fixture-nonrelease` evidence only, which
+cannot be approved, promoted, activated, or selected for rollback. They do not
+claim that the published 2026 aggregate has been acquired, baselined, retained, or
+activated; live M0B remains blocked.
 
 ## Rights and attribution
 

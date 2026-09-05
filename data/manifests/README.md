@@ -5,10 +5,18 @@ canonical food database. The checked-in `.example.json` files are rights and
 mapping fixtures, not import-ready releases: `templateOnly` is true and artifact
 checksums are intentionally null rather than fabricated.
 
-Manifest version 3 adds explicit publisher-integrity metadata, independently
-auditable fresh-download observations, and separates the immutable acquisition and
-rights manifest from post-validation promotion approvals. Earlier manifests are
-intentionally rejected rather than silently bypassing the current verification gate.
+Manifest version 4 is the only accepted runtime contract; earlier versions are
+rejected rather than silently reinterpreted. It adds an exact `releaseClass` of
+`live-reviewed` or `fixture-nonrelease` and a content-addressed `evidenceBundle`
+reference. Every non-template manifest, including a fixture, must bind a complete
+canonical authenticated-release evidence bundle. Checked-in examples and
+candidates are version-4 templates with `evidenceBundle: null`; do not invent
+artifact or evidence digests for them.
+
+The implemented parser checks the bundle's exact shape, canonical digests,
+cross-object identity, and chronology. It does not authenticate OIDC or workload
+identity, verify a signature, query a storage provider, or prove that an object or
+retention rule exists. Those are external runner and reviewer responsibilities.
 
 Release-specific `.candidate.json` files pin official release identities and
 download URLs, but they are also non-importable templates. A candidate may record
@@ -32,22 +40,35 @@ Before ingestion:
 5. Have a third, separately authenticated storage workload conditionally create the
    absent content-addressed object, verify the service SHA-256, and emit the
    retained-artifact receipt. Assemble matching sidecars and the receipt only as
-   `pending-review` / `not-granted` evidence. Named reviewers must verify the exact
-   bundle, revalidate current provider retention, and bind their decision by digest.
-6. **Current hard stop:** manifest version 3 cannot carry that authenticated
-   evidence-bundle identity or review decision, and current staging commands cannot
-   enforce it. Keep live candidates `templateOnly: true`; do not copy observation
-   values into an import-ready manifest or stage them until a reviewed schema and
-   runtime gate add the binding.
-   This is a procedural release-policy stop today; the staging runtime does not yet
-   distinguish live inputs from synthetic/local fixtures.
-7. After that future gate exists, pin the accepted artifact values, object URI,
-   parser version and immutable build/image SHA-256, validation expectations, rights
-   evidence, evidence-bundle identity, and named decision. Only then may
-   `templateOnly` become false.
-8. Validate against `food-source-manifest.schema.json` and retain the exact manifest
-   beside the raw object. The database release row stores the reviewed manifest and
-   artifact identities.
+   `pending-review` / `not-granted` evidence.
+6. Have a separately authenticated retention verifier query the provider, then have
+   the named authority reviewer accept the exact candidate and current-retention
+   verification. The verification window must be no longer than 24 hours and must
+   still be current when the authority decision and staging gate evaluate it. The
+   decision binds the manifest authority subject, release class, source/release and
+   artifact scope, candidate digest, and current-retention digest; the manifest
+   reference binds the digest of the complete canonical bundle.
+7. In a controlled working manifest, set the reviewed release class and pin the
+   artifact values, retained-object URI, parser version and immutable build/image
+   SHA-256, validation expectations, rights evidence, and content-addressed bundle
+   reference. Only then may `templateOnly` become false. Use the import-ready form
+   of `manifest validate` with the required `--evidence-bundle <bundle.json>` option
+   so the manifest and supplied canonical bundle are validated together.
+8. `catalogue register-source`, `catalogue stage-fdc`, and `catalogue stage-cnf`
+   require the same supplied bundle. Staging persists the release class, bundle and
+   decision digests, retained-object version, and evidence expiry in immutable batch
+   provenance and validation evidence. A `fixture-nonrelease` batch may stage,
+   validate, and replay, but database and runtime guards prevent approval,
+   promotion, activation, and rollback-to. No test mode, environment value, or CLI
+   option bypasses either gate.
+9. **Live M0B hard stop:** the source gate does not provide a protected runner,
+   authenticate the claims it parses, perform two real acquisitions, create or
+   inspect immutable provider storage, or perform named review. Keep the checked-in
+   live candidates as templates until those external controls produce trustworthy
+   evidence and explicit live acquisition is approved.
+10. Validate against `food-source-manifest.schema.json` and retain the exact
+    manifest beside the raw object. The database release row stores the reviewed
+    manifest, artifact, and bound evidence identities after promotion.
 
 ## Health Canada CNF inventory and parser baseline
 
@@ -67,10 +88,9 @@ evidence of the aggregate ZIP's complete inventory. Keep it `templateOnly` until
 the real archive has been acquired under the release controls and every guide
 path has been recorded. The manifest schema rejects duplicate expected members.
 
-After the future evidence-bundle gate is implemented and reviewers accept the
-independently agreed artifact SHA-256 and byte size, parser version, immutable
-parser-build SHA-256, and full inventory, run the database-free inspection command
-against the stored artifact:
+After reviewers accept the independently agreed artifact SHA-256 and byte size,
+parser version, immutable parser-build SHA-256, and full inventory, run the
+database-free inspection command against the stored artifact:
 
 ```sh
 INGEST_PARSER_BUILD_SHA256=<reviewed-lowercase-sha256> \
@@ -105,14 +125,16 @@ approvals are immutable database records bound to the
 manifest and validation-report digests; they are deliberately not mutable fields in
 this manifest. Never edit an imported manifest; create a new source release.
 
-The schema requires at least two observations for any non-template manifest. The
-ingestion validator additionally requires distinct normalized operator principals
-and acquisition IDs, fresh HTTPS downloads, and every observation to match the
-manifest URL, SHA-256, and byte size. Those version-3 checks are necessary but not
-sufficient: until the authenticated evidence-bundle binding is implemented, no live
-non-template manifest or staging attempt is authorized. An ETag, `Last-Modified`,
-`Content-Length`, approximate website size, or unlabeled
-32-character portal hash does not substitute for SHA-256.
+The version-4 bundle requires exactly two fresh HTTPS observations with distinct
+normalized operator principals, authenticated issuer-subject identities,
+acquisition IDs, runs, and dedicated no-shared-cache contexts. Both observations,
+the retained-object receipt, the current-retention verification, the named
+decision, and the manifest must agree on their bound identities and digests. These
+are structural, digest, and chronology checks over externally supplied claims; they
+do not authenticate those claims, verify provider state or object existence, or
+authorize a live release. An ETag, `Last-Modified`, `Content-Length`, approximate
+website size, or unlabeled 32-character portal hash does not substitute for
+SHA-256.
 
 These fixtures do not replace legal review. See
 [`ADR 0001`](../../docs/adr/0001-food-source-rights-and-provenance.md) and the

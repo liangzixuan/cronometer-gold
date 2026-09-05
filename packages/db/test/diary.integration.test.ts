@@ -33,6 +33,7 @@ import {
 } from "../src/index.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
+const FIXTURE_EVIDENCE_VALID_UNTIL = new Date(Date.now() + 12 * 60 * 60 * 1_000).toISOString();
 const describeDatabase = databaseUrl ? describe : describe.skip;
 const STABLE_FUTURE_SESSION_EXPIRY = "2500-09-01T00:00:00Z";
 
@@ -1925,10 +1926,16 @@ describeDatabase("account and append-only diary persistence", () => {
           artifact_bytes: 1,
           artifact_sha256: "e".repeat(64),
           artifact_uri: `s3://child-race/${suffix}.json`,
+          evidence_bundle_sha256: "a".repeat(64),
+          evidence_bundle_uri: `s3://child-race/sha256/${"a".repeat(64)}/bundle.json`,
+          evidence_decision_sha256: "b".repeat(64),
+          evidence_object_version_id: `child-race-${suffix}-v1`,
+          evidence_valid_until: FIXTURE_EVIDENCE_VALID_UNTIL,
           food_source_id: catalogue.sourceId,
           media_type: "application/json",
           parser_version: "child-race@1",
           record_counts: { records: 1 },
+          release_class: "live-reviewed",
           release_key: `child-race-${suffix}`,
           rights_manifest_sha256: "f".repeat(64),
           rights_manifest_uri: "repo://child-race-rights.json",
@@ -2626,10 +2633,16 @@ async function insertRelease(
         artifact_bytes: 100,
         artifact_sha256: "7".repeat(64),
         artifact_uri: "s3://diary-test/catalogue.json",
+        evidence_bundle_sha256: "9".repeat(64),
+        evidence_bundle_uri: `s3://diary-test/sha256/${"9".repeat(64)}/bundle.json`,
+        evidence_decision_sha256: "a".repeat(64),
+        evidence_object_version_id: "diary-test-evidence-v1",
+        evidence_valid_until: FIXTURE_EVIDENCE_VALID_UNTIL,
         food_source_id: sourceId,
         media_type: "application/json",
         parser_version: "diary-test@1",
         record_counts: { records: 2 },
+        release_class: "live-reviewed",
         release_key: "diary-release-1",
         rights_manifest_sha256: "8".repeat(64),
         rights_manifest_uri: "repo://diary-rights.json",
@@ -2646,31 +2659,50 @@ async function insertBatch(
   sourceId: string,
   releaseId: string,
 ): Promise<string> {
-  return (
-    await transaction
-      .insertInto("food_import_batch")
-      .values({
-        acquired_at: "2026-08-15T00:00:00Z",
-        artifact_bytes: 100,
-        artifact_sha256: "7".repeat(64),
-        artifact_uri: "s3://diary-test/catalogue.json",
-        completed_at: "2026-08-15T01:00:00Z",
-        food_source_id: sourceId,
-        materialized_count: 2,
-        media_type: "application/json",
-        parser_version: "diary-test@1",
-        release_id: releaseId,
-        release_key: "diary-release-1",
-        rights_manifest_sha256: "8".repeat(64),
-        rights_manifest_uri: "repo://diary-rights.json",
-        staged_count: 2,
-        status: "completed",
-        valid_count: 2,
-        validated_at: "2026-08-15T00:30:00Z",
-      })
-      .returning("id")
-      .executeTakeFirstOrThrow()
-  ).id;
+  const batch = await transaction
+    .insertInto("food_import_batch")
+    .values({
+      acquired_at: "2026-08-15T00:00:00Z",
+      artifact_bytes: 100,
+      artifact_sha256: "7".repeat(64),
+      artifact_uri: "s3://diary-test/catalogue.json",
+      evidence_bundle_sha256: "9".repeat(64),
+      evidence_bundle_uri: `s3://diary-test/sha256/${"9".repeat(64)}/bundle.json`,
+      evidence_decision_sha256: "a".repeat(64),
+      evidence_object_version_id: "diary-test-evidence-v1",
+      evidence_valid_until: FIXTURE_EVIDENCE_VALID_UNTIL,
+      food_source_id: sourceId,
+      media_type: "application/json",
+      parser_version: "diary-test@1",
+      release_class: "live-reviewed",
+      release_key: "diary-release-1",
+      rights_manifest_sha256: "8".repeat(64),
+      rights_manifest_uri: "repo://diary-rights.json",
+      staged_count: 2,
+      valid_count: 2,
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow();
+  await transaction
+    .updateTable("food_import_batch")
+    .set({ status: "ready", validated_at: "2026-08-15T00:30:00Z" })
+    .where("id", "=", batch.id)
+    .execute();
+  await transaction
+    .updateTable("food_import_batch")
+    .set({ release_id: releaseId, status: "promoting" })
+    .where("id", "=", batch.id)
+    .execute();
+  await transaction
+    .updateTable("food_import_batch")
+    .set({
+      completed_at: "2026-08-15T01:00:00Z",
+      materialized_count: 2,
+      status: "completed",
+    })
+    .where("id", "=", batch.id)
+    .execute();
+  return batch.id;
 }
 
 async function insertVersion(

@@ -1,7 +1,7 @@
 # ADR 0017: Authenticated food-artifact acquisition and retention evidence
 
-- Status: Accepted for source-contract implementation; live runner, immutable
-  storage, and acquisition remain blocked
+- Status: Accepted and implemented for source/local enforcement; live runner,
+  immutable storage, and acquisition remain blocked
 - Date: 2026-09-04
 
 ## Context
@@ -61,23 +61,57 @@ chronology mismatch stops the lane. Preserve the evidence, investigate
 republishing, and repeat two fresh acquisitions under a new reviewed candidate
 when needed; never select one digest by hand.
 
-This ADR authorizes source contracts and synthetic tests only. It does not choose
-or provision a provider, approve cost, configure federation, create or lock a
-bucket, dispatch a workflow, download a live artifact, or authorize staging or
-promotion. Manifest version 3 does not yet bind the authenticated sidecars,
-retained-object receipt, assembled candidate, or review decision by digest; live
-non-template manifests and staging remain blocked until a reviewed schema and
-runtime gate do so. Future run-ID-specific output/cache confinement remains part
-of the reviewed runner design; existing CLI paths are not silently broken here.
-The current block is procedural release policy, not a runtime-enforced
-live-versus-synthetic distinction.
+This ADR authorizes source contracts, local enforcement, and synthetic tests only.
+It does not choose or provision a provider, approve cost, configure federation,
+create or lock a bucket, dispatch a workflow, download a live artifact, or grant
+live staging or promotion authority. Run-ID-specific output/cache confinement
+remains part of the reviewed live-runner design.
+
+## Implemented manifest-v4 source gate
+
+The source now accepts manifest version 4 and rejects version 3 rather than
+silently changing the accepted meaning of an existing version. Version 4 declares
+exactly one `releaseClass`: `live-reviewed` or `fixture-nonrelease`.
+
+Every non-template manifest, including a synthetic fixture, supplies a complete
+canonical authenticated-release evidence bundle. There is no test-only,
+environment-variable, or command-line bypass. The bundle contains the
+deterministically assembled candidate (and therefore the exact two sidecars and
+retained-artifact receipt), a current provider-retention recheck, and a named
+staging decision. A retention recheck must bind the retained provider/object
+identity, be current when the decision is made, and have a validity interval of no
+more than 24 hours. The decision binds the canonical manifest-authority subject,
+release class, source/release and artifact scope, candidate digest, and
+retention-check digest; the canonical complete bundle digest is then bound by the
+manifest without circular hashing.
+
+The staging batch persists the release class, bundle digest, decision digest,
+retained-object version, and retention-evidence expiry as immutable provenance.
+Those values enter the validation digest so data, quality, and rights approvals
+bind them transitively. A `fixture-nonrelease` batch is durable local test evidence
+and may prove parsing, staging, validation, and replay, but it can never enter an
+approval, promotion, activation, or rollback-to transition. This restriction is a
+database and runtime invariant, not a convention based on `NODE_ENV` or a caller
+assertion. Pre-existing rows migrate to `legacy-unbound` with null evidence; the
+migration deliberately fabricates no historical provenance.
+
+This source work still performs no identity-provider authentication, signature
+verification, live acquisition, immutable-provider write, current-provider query,
+object-existence check, or human review. In particular, parsing
+`verification: externally-verified`, a content-addressed S3 URI, or a retention
+claim does not prove any of them. Live M0B staging remains blocked until a protected
+authenticated runner, two real isolated acquisitions, a separate immutable-storage
+workload, a current provider-retention check, and named reviews supply externally
+trustworthy evidence to the gate.
 
 ## Consequences
 
 - Human acquisition, storage workload, artifact, and review evidence remain
   distinct and auditable.
 - The provider-neutral contract can be tested without cloud or publisher bytes.
-- A structural candidate cannot satisfy manifest-v3 import readiness by itself.
+- A structural candidate cannot satisfy manifest-v4 import readiness by itself;
+  only the complete, current, named-decision-bound bundle may pass the source gate,
+  and passing it does not authenticate the external claims.
 - Live M0 still needs named source/rights decisions, a reviewed runner, two
   isolated operators, immutable storage, and explicit acquisition approval.
 

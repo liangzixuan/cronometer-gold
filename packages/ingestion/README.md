@@ -5,8 +5,9 @@ releases. The package has no database dependency.
 
 ## Public boundaries
 
-- `parseFoodSourceManifest` validates the exact manifest v3 runtime contract;
-  `assertImportReadyManifest` applies the stricter legal, attestation, and release-expectation gate.
+- `parseFoodSourceManifest` validates the exact manifest-v4 runtime contract and rejects earlier
+  versions; `assertImportReadyManifest` applies the stricter legal, pinned-artifact,
+  evidence-reference, and release-expectation gate.
 - `acquireArtifact` streams local/test or allow-listed HTTPS bytes into a content-addressed cache,
   verifies an independently pinned SHA-256 and byte count, and returns an immutable acquisition
   observation. Cache hits and local files are explicitly ineligible as independent release
@@ -57,6 +58,32 @@ irreversible storage or compliance approval; that decision remains outside this 
 `active-at-recording` status is historical evidence, not a promise of current retention. Any future
 authority must revalidate the storage service's current retention state before relying on it or
 granting approval.
+
+### Manifest-v4 evidence-bundle contract
+
+Manifest version 4 declares `releaseClass: live-reviewed | fixture-nonrelease`; version 3 is
+rejected. Templates require `evidenceBundle: null`. Every non-template manifest instead binds a
+content-addressed complete canonical bundle, with no test, environment-variable, or CLI bypass.
+The bundle contains the deterministic candidate, a current-retention verification whose validity
+interval is at most 24 hours, and a named staging decision. That decision binds the canonical
+manifest-authority subject, release class, source/release and artifact scope, candidate digest, and
+current-retention digest. The manifest binds the final canonical bundle digest without a hash
+cycle.
+
+`parseAuthenticatedReleaseEvidenceBundle` validates and freezes the exact bundle shape, while
+`assertAuthenticatedReleaseEvidenceBundle` compares its canonical digest, observations, artifact,
+retained URI and object version, decision scope, and strict chronology with the import-ready
+manifest. Evidence is invalid at the exact `validUntil` boundary. The CLI and database persist the
+release class, bundle and decision digests, retained-object version, and retention-evidence expiry;
+those values enter validation and therefore later approvals transitively. `fixture-nonrelease`
+exercises the same parsing, staging, validation, and replay path but cannot be approved, promoted,
+activated, or selected as a rollback target.
+
+These are structural, canonical-digest, cross-object, and chronology checks. The package does not
+authenticate OIDC or workload-identity tokens, verify signatures, query a provider, confirm object
+existence or retention, or grant live authority merely because a field says `externally-verified`.
+Those controls remain the responsibility of the protected runner, provider workload, and named
+reviewers; live M0B is still blocked.
 
 ## USDA FDC full-CSV archive contract
 

@@ -10,16 +10,32 @@ identity. Checked-in candidates remain templates until two authenticated operato
 a rights reviewer, a pinned parser, immutable object storage, and executable release
 expectations are present.
 
-**Current hard stop:** manifest version 3 cannot bind the authenticated-acquisition
-sidecars, retained-artifact receipt, assembled candidate, current-retention check, or
-named review decision by digest, and the current staging commands do not enforce that
-bundle. Keep every live candidate `templateOnly: true`; for a live source, do not use
-`catalogue stage-fdc` or `catalogue stage-cnf` until a reviewed schema/runtime gate
-implements the binding. Passing the current import-ready checks is necessary but not
-sufficient for live staging. The commands remain available for synthetic/local fixture
-validation only while this hard stop is active.
-This is a procedural release-policy stop, not a runtime-enforced
-live-versus-synthetic distinction.
+The CLI accepts manifest version 4 only. Every non-template manifest declares
+`releaseClass: live-reviewed | fixture-nonrelease` and binds a complete canonical
+evidence bundle by content-addressed SHA-256 and S3 URI. The import-ready form of
+`manifest validate`, plus `catalogue register-source`, `catalogue stage-fdc`, and
+`catalogue stage-cnf`, all require the same bundle through `--evidence-bundle`;
+no test mode, environment value, or alternate CLI option bypasses that gate.
+Staging persists its class, bundle and decision digests, retained-object version,
+and expiry. A `fixture-nonrelease` batch may stage, validate, and replay but cannot
+be approved, promoted, activated, or selected as a rollback target.
+
+The supplied bundle must be exact canonical UTF-8 JSON, optionally followed by one
+LF, in a current-user-owned, single-link regular mode-`0600` file on the WSL Linux
+filesystem. The CLI opens it without following the final symlink and rejects an
+empty or over-2-MiB file, malformed UTF-8/JSON, non-canonical bytes, a digest,
+scope, or chronology mismatch, and evidence at or after `validUntil`. For source
+registration and staging, the authority decision's reviewer principal,
+authentication method, and immutable run reference must match the trusted runner
+environment.
+
+**Live M0B hard stop:** these checks validate structure, canonical digests,
+cross-object identity, and chronology. They do not authenticate OIDC/workload
+tokens, verify signatures, query provider state, or prove that an S3 object or
+retention rule exists. Keep every checked-in live candidate `templateOnly: true`;
+do not live-stage it until a protected authenticated runner, real dual acquisition,
+distinct immutable-storage workload, current provider query, and named reviews
+supply trustworthy evidence and explicit authorization.
 
 `artifact observe` always performs a fresh allow-listed HTTPS transfer and writes
 the raw observation with exclusive-create semantics. It refuses to overwrite an
@@ -50,6 +66,15 @@ Run from the repository root after building workspace dependencies:
 ```sh
 pnpm --filter @nutrition-tracker/ingest cli -- manifest validate \
   data/manifests/usda-fdc-foundation-json-2026-04-30.candidate.json
+```
+
+For a controlled non-template working manifest, validate the bound bundle too:
+
+```sh
+pnpm --filter @nutrition-tracker/ingest cli -- manifest validate \
+  data/manifests/<release>.json \
+  --import-ready \
+  --evidence-bundle .local-data/evidence/<release>-bundle.json
 ```
 
 See [`infra/runbooks/food-source-release.md`](../../infra/runbooks/food-source-release.md)
@@ -259,17 +284,18 @@ and single-link identity still match. A replaced file is preserved and reported
 as a cleanup failure, and simultaneous operation and cleanup failures are both
 returned.
 
-While the hard stop above is active, this staging command is limited to
-synthetic/local fixture validation. For a live source, the approved release runner
-may invoke database staging only after the reviewed evidence-binding schema/runtime
-gate exists, binds the exact authenticated evidence and decision by digest, and the
-manifest passes every remaining import-ready gate:
+The implemented source gate permits this staging command only when the manifest and
+supplied bundle pass every import-ready, digest, scope, and chronology check. The
+currently authorized executions use `fixture-nonrelease`; live M0B remains blocked
+by the external runner, acquisition, storage, provider-query, and review requirements
+described above:
 
 ```sh
 pnpm --filter @nutrition-tracker/ingest cli -- catalogue stage-cnf \
   data/manifests/<cnf-release>.json \
   --artifact .local-data/acquired/<cnf-release>.zip \
   --cache-dir .local-data/cache \
+  --evidence-bundle .local-data/evidence/<cnf-release>-bundle.json \
   --extract-dir .local-data/extracted-cnf-stage \
   --manifest-object-uri s3://<object-locked-bucket>/sha256/<manifest-sha256>/manifest.json
 ```
@@ -277,21 +303,23 @@ pnpm --filter @nutrition-tracker/ingest cli -- catalogue stage-cnf \
 The trusted runner must inject its authentication method, stable principal,
 immutable run reference, parser-build SHA-256, and least-privilege database
 credential. Before opening PostgreSQL, `catalogue stage-cnf` checks the
-import-ready manifest, content-addressed manifest URI, verified artifact, exact
-archive inventory, all nine tables, and every generated CNF baseline value. Those
-checks do not implement the authenticated-evidence binding and cannot authorize
-live staging while the hard stop remains. For synthetic/local validation, the
-command then stages records in checkpointed chunks of 250 and stores one immutable,
-canonical-digest-bound parser report. Validation re-verifies its exact
-nine-table dispositions, reference-only reasons, provenance, exclusion evidence,
-and count conservation; database triggers reject update or deletion of the
-report.
+import-ready manifest, canonical supplied bundle, content-addressed manifest URI,
+verified artifact, exact archive inventory, all nine tables, and every generated
+CNF baseline value. The command then stages records in checkpointed chunks of 250
+and stores one immutable, canonical-digest-bound parser report. Validation
+re-verifies its bound bundle provenance, exact nine-table dispositions,
+reference-only reasons, provenance, exclusion evidence, and count conservation;
+database triggers reject update or deletion of the report. These checks consume
+externally asserted identity and provider evidence; they do not authenticate it or
+contact the provider.
 
 An interrupted staging batch resumes only from a validated checkpoint and
-replays byte-for-byte idempotently. Re-running a `ready`, `quarantined`, or
-`completed` batch returns its frozen validation result rather than reopening
-rows. The database connection must close successfully before final JSON is
-written to standard output; a cleanup failure suppresses the apparent success.
+replays byte-for-byte idempotently. While the supplied authority evidence is
+still current, re-running a `ready`, `quarantined`, or `completed` batch
+returns its frozen validation result rather than reopening rows; an expired
+bundle is rejected before replay. The database connection must close
+successfully before final JSON is written to standard output; a cleanup failure
+suppresses the apparent success.
 Neither a `ready` status nor `promotionEligible: true` records an approval or
 promotes a release. The checked-in CNF candidate remains a template, and these
 commands are not evidence that the real 2026 archive has been acquired or
@@ -349,23 +377,33 @@ relevance, zero-result rate, index document count, build time, p95 latency, or
 memory/disk footprint. Retain all of that separate evidence before any
 independent approval or promotion decision.
 
-While the hard stop above is active, `catalogue stage-fdc` is limited to
-synthetic/local fixture validation. For a live source, it may run only after the
-reviewed evidence-binding schema/runtime gate exists and binds the exact
-authenticated evidence and decision by digest. The command requires content-addressed,
-object-locked artifact and manifest URIs; the manifest URI must contain the exact
-manifest SHA-256.
+`catalogue stage-fdc` applies the same implemented manifest-v4 bundle gate as CNF.
+The currently authorized executions use `fixture-nonrelease`; a live invocation
+remains blocked by the external M0B controls above. The command requires
+content-addressed artifact, manifest, and evidence-bundle URIs; the manifest URI
+must contain the exact manifest SHA-256.
 It accepts exactly one manifest plus `--artifact`, `--cache-dir`,
-`--extract-dir`, and `--manifest-object-uri`; caller-authored identity or unknown
-options are rejected before manifest or database access. It completes the exact
-descriptor-bound artifact/inventory/member parse and strict reviewed-baseline
-preflight before opening PostgreSQL or registering a source or batch, and applies
-the same mandatory supplied-`--artifact` source-read rule as `fdc inspect`.
+`--evidence-bundle`, `--extract-dir`, and `--manifest-object-uri`;
+caller-authored identity or unknown options are rejected before manifest or
+database access. It completes the exact descriptor-bound artifact/inventory/member
+parse and strict reviewed-baseline preflight before opening PostgreSQL or
+registering a source or batch, and applies the same mandatory supplied-`--artifact`
+source-read rule as `fdc inspect`.
 It checkpoints every committed record chunk. Replaying a
 partially staged chunk is byte-for-byte idempotent; replaying a validated or
 completed batch returns its validation result instead of reopening it. A mapping
 revision change invalidates the old attempt and creates a new mapping-digest-bound
 batch on replay.
+
+```sh
+pnpm --filter @nutrition-tracker/ingest cli -- catalogue stage-fdc \
+  data/manifests/<fdc-foundation-release>.json \
+  --artifact .local-data/acquired/<fdc-foundation-release>.zip \
+  --cache-dir .local-data/cache \
+  --evidence-bundle .local-data/evidence/<fdc-release>-bundle.json \
+  --extract-dir .local-data/extracted-fdc-stage \
+  --manifest-object-uri s3://<object-locked-bucket>/sha256/<manifest-sha256>/manifest.json
+```
 
 Nutrient mappings are never inferred from staged rows. A reviewer supplies a
 mapping file to `catalogue mappings`; the database resolves source nutrient keys

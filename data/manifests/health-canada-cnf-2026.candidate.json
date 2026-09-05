@@ -1,7 +1,9 @@
 {
   "$schema": "./food-source-manifest.schema.json",
-  "manifestVersion": 3,
+  "manifestVersion": 4,
   "templateOnly": true,
+  "releaseClass": "live-reviewed",
+  "evidenceBundle": null,
   "source": {
     "code": "HEALTH_CANADA_CNF",
     "displayName": "Health Canada Canadian Nutrient File",
@@ -33,8 +35,7 @@
       "reportedSize": null,
       "metadataUrl": "https://open.canada.ca/data/api/action/package_show?id=1b6139bd-ed7e-4043-bc28-ff00e10f3109",
       "notes": "The publisher metadata leaves the aggregate ZIP hash empty and size null. A 2026-08-15 HEAD observation returned 26656195 bytes; that transport observation is not an acquired-artifact size or publisher checksum."
-    },
-    "acquisitionObservations": []
+    }
   },
   "rights": {
     "licenseExpression": "LicenseRef-Open-Government-Licence-Canada-2.0",

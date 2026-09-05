@@ -1,7 +1,9 @@
 {
   "$schema": "./food-source-manifest.schema.json",
-  "manifestVersion": 3,
+  "manifestVersion": 4,
   "templateOnly": true,
+  "releaseClass": "live-reviewed",
+  "evidenceBundle": null,
   "source": {
     "code": "USDA_FDC",
     "displayName": "USDA FoodData Central",
@@ -32,8 +34,7 @@
       "reportedSize": "459K zipped; 6.5M unzipped",
       "metadataUrl": "https://fdc.nal.usda.gov/download-datasets/",
       "notes": "The release table publishes approximate display sizes but no cryptographic checksum. A 2026-08-15 HEAD observation returned 469303 bytes; that transport observation is not an acquired-artifact size or publisher checksum."
-    },
-    "acquisitionObservations": []
+    }
   },
   "rights": {
     "licenseExpression": "CC0-1.0",

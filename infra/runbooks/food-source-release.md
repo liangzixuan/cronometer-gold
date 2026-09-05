@@ -38,17 +38,38 @@ without mutating the currently served catalogue.
 9. Named source, rights, storage, and operator reviewers inspect the exact sidecars,
    receipt, and assembled candidate. The authority step must independently
    revalidate current provider retention and bind the accepted evidence and decision
-   by cryptographic digest.
-10. **Current hard stop:** manifest version 3 and the staging commands do not yet
-    bind that authenticated evidence bundle or review decision. Keep every live
-    candidate `templateOnly: true`; do not populate an import-ready manifest or
-    stage it until a reviewed schema/runtime gate implements the binding.
-    This is a procedural release-policy stop today; the existing staging runtime
-    does not distinguish live inputs from synthetic/local fixtures.
-11. Only after that future gate exists may the accepted digest, size, object URI,
-    parser pins, inventory, rights fields, and evidence-bundle identity enter an
-    immutable manifest and staging batch. Promotion still requires all later
-    validation and role approvals.
+   by cryptographic digest. The selected version-4 contract limits the retention
+   recheck validity interval to 24 hours; it must still be current when the decision
+   and staging gate evaluate it.
+10. The implemented source gate accepts manifest version 4 only and declares exactly
+    one release class: `live-reviewed` or `fixture-nonrelease`. Every non-template
+    manifest, including a fixture, traverses the same complete canonical bundle
+    gate; no test environment, process variable, or CLI option bypasses it. The
+    named decision binds the manifest-authority subject, release class,
+    source/release and artifact scope, deterministic-candidate digest, and
+    current-retention digest; the manifest binds the final bundle digest.
+11. Store the exact bundle as canonical UTF-8 JSON in the WSL Linux filesystem and
+    supply it with `--evidence-bundle` to every import-ready validation,
+    registration, or staging command. The CLI rejects a final-path symlink,
+    non-regular file, multiple hard links, a file not owned by the current user, any
+    mode other than `0600`, an empty or over-2-MiB file, malformed UTF-8/JSON,
+    non-canonical bytes, a digest or scope mismatch, and evidence that is expired at
+    the evaluation instant. One trailing LF after the canonical JSON is allowed.
+12. The immutable batch persists release class, bundle and decision digests,
+    retained-object version, and retention-evidence expiry. Validation and later
+    role approvals transitively bind those values. A `fixture-nonrelease` batch may
+    persist staging/validation/replay evidence but can never be approved, promoted,
+    activated, or selected as a rollback target. Pre-gate rows remain
+    `legacy-unbound`; the migration invents no evidence for them.
+13. **Live M0B hard stop:** source parsing checks structure, canonical digests,
+    cross-object identity, and chronology, but does not authenticate OIDC/workload
+    claims, verify signatures, query provider state, or prove object existence or
+    retention. Keep the checked-in live candidates `templateOnly: true`. Live
+    staging remains blocked until a protected authenticated runner performs two
+    real isolated acquisitions, a distinct immutable-storage workload writes the
+    object, a current provider query succeeds, named reviewers accept the exact
+    evidence, and explicit live acquisition is approved. Promotion still requires
+    all later validation and role approvals.
 
 The CLI does not authenticate a human by itself. Run release commands only inside
 the approved release runner, which validates an OIDC or workload-identity
@@ -72,13 +93,14 @@ That receipt records service checksum verification and retention active when the
 receipt was recorded, in addition to versioning and deletion protection. The
 later authority decision must revalidate current provider retention. Governance
 retention remains review evidence, not irreversible approval. The pure ingestion
-parsers verify structure and coherence, not tokens, signatures, storage, or provider
-policy;
-their deterministic two-sidecar assembler returns only frozen
-`pending-review`/`not-granted` evidence. No raw observation value, sidecar, receipt,
-or assembled candidate may be used to make a manifest import-ready until the
-digest-binding gate exists and named source, rights, storage, and operator reviews
-accept the exact evidence.
+parsers verify structure, canonical digests, and coherence, not tokens, signatures,
+storage, object existence, or provider policy; their deterministic two-sidecar
+assembler returns only frozen `pending-review`/`not-granted` evidence. No raw
+observation value, sidecar, receipt, or assembled candidate alone makes a manifest
+import-ready; the complete current bundle and named source, rights, storage, and
+operator reviews must bind the exact evidence. Even a bundle that passes the source
+parser is not proof that its external claims were authenticated or its S3 object
+exists.
 
 The runner injects the reviewed parser image/build SHA-256 and stores the exact
 manifest bytes at a separate content-addressed, object-locked URI. The CLI binds
@@ -92,11 +114,10 @@ the canonical byte size comes from the verified streamed object.
 
 ### USDA FDC Foundation inventory and baseline
 
-Only after the future evidence-bundle binding exists and named reviewers accept the
-two independent acquisitions, retained-object receipt, and current-retention proof
-may an operator copy the exact SHA-256 and byte size into a controlled FDC working
-manifest. Pin the executing ingestion package version and reviewed immutable
-parser-build digest,
+Only after named reviewers accept the two independent acquisitions,
+retained-object receipt, and current-retention proof may an operator copy the exact
+SHA-256 and byte size into a controlled FDC working manifest. Pin the executing
+ingestion package version and reviewed immutable parser-build digest,
 and retain the exact single JSON member under `validation.expectedFiles`. Then
 run the local, database-free evidence check from the retained artifact:
 
@@ -161,12 +182,22 @@ evidence. Never fill those fields from a HEAD response, approximate publisher
 size, local guess, or a single download.
 
 Once the working manifest independently passes every import-ready gate,
-`catalogue stage-fdc` accepts only its one manifest and the four documented path/
-object options. Unknown or authority-shaped options are rejected before manifest
-or database access. The command performs descriptor-bound artifact verification,
-exact inventory and member parsing, and strict baseline comparison before it opens
-PostgreSQL or can register a source or create a batch. A preflight failure must
-therefore leave the database unopened and unchanged.
+`catalogue stage-fdc` accepts only its one manifest and the five documented path/
+object/evidence options. Unknown or authority-shaped options are rejected before
+manifest or database access. The command performs descriptor-bound artifact
+verification, exact inventory and member parsing, and strict baseline comparison
+before it opens PostgreSQL or can register a source or create a batch. A preflight
+failure must therefore leave the database unopened and unchanged.
+
+```sh
+pnpm --filter @nutrition-tracker/ingest cli -- catalogue stage-fdc \
+  data/manifests/<fdc-foundation-release>.json \
+  --artifact .local-data/acquired/<fdc-foundation-release>.zip \
+  --cache-dir .local-data/cache \
+  --evidence-bundle .local-data/evidence/<fdc-release>-bundle.json \
+  --extract-dir .local-data/extracted-fdc-stage \
+  --manifest-object-uri s3://<object-locked-bucket>/sha256/<manifest-sha256>/manifest.json
+```
 
 ### USDA FDC full-CSV inventory and bounded inspection
 
@@ -299,12 +330,15 @@ final manifest and run staging only through the approved release runner:
 
 ```sh
 pnpm --filter @nutrition-tracker/ingest cli -- manifest validate \
-  data/manifests/<cnf-release>.json --import-ready
+  data/manifests/<cnf-release>.json \
+  --import-ready \
+  --evidence-bundle .local-data/evidence/<cnf-release>-bundle.json
 
 pnpm --filter @nutrition-tracker/ingest cli -- catalogue stage-cnf \
   data/manifests/<cnf-release>.json \
   --artifact .local-data/acquired/<cnf-release>.zip \
   --cache-dir .local-data/cache \
+  --evidence-bundle .local-data/evidence/<cnf-release>-bundle.json \
   --extract-dir .local-data/extracted-cnf-stage \
   --manifest-object-uri s3://<object-locked-bucket>/sha256/<manifest-sha256>/manifest.json
 ```
@@ -312,10 +346,13 @@ pnpm --filter @nutrition-tracker/ingest cli -- catalogue stage-cnf \
 The runner must inject the externally authenticated method, stable principal,
 immutable run reference, reviewed `INGEST_PARSER_BUILD_SHA256`, and a
 least-privilege database credential; never substitute caller-authored identity.
-The manifest object URI must contain the exact manifest SHA-256. Before creating
-a database connection, staging checks the import-ready gate, verified artifact,
-exact archive inventory, all nine table contracts, and every generated parser
-baseline value.
+The authority decision's reviewer principal, authentication method, and immutable
+run reference must match that runner identity. The manifest object URI must contain
+the exact manifest SHA-256. Before creating a database connection, staging checks
+the import-ready manifest and canonical bundle, verified artifact, exact archive
+inventory, all nine table contracts, and every generated parser baseline value.
+These local checks still do not validate an identity token, signature, provider
+query, object existence, or retention policy.
 
 Database staging resumes in chunks of 250 from a validated checkpoint. It stores
 one canonical-digest-bound parser report containing the exact inventory/table
@@ -323,8 +360,10 @@ evidence, dispositions and reference-only reasons, exclusions and reason counts,
 adapter conservation, artifact/parser/mapping identity, and trusted actor. A
 conflicting report is rejected, update/delete triggers make the row immutable,
 and validation independently verifies the report structure, digests,
-provenance, and count sums. A retry of a `ready`, `quarantined`, or `completed`
-batch returns its frozen validation evidence without reopening staged rows.
+provenance, and count sums. While the supplied authority evidence is still
+current, a retry of a `ready`, `quarantined`, or `completed` batch returns
+its frozen validation evidence without reopening staged rows; expired evidence
+is rejected before replay.
 
 The command emits final JSON only after the database connection closes. If both
 the operation and required cleanup fail, both errors are reported; if cleanup
@@ -337,7 +376,8 @@ promotion, or search-alias switch.
 - Run a pinned parser/container against the stored artifact, not the network.
 - Resume record staging from the durable `stage` checkpoint. A crash between a
   chunk commit and checkpoint update safely replays the identical chunk; a retry
-  after validation returns the frozen validation result and cannot reopen rows.
+  after validation returns the frozen validation result and cannot reopen rows
+  only while its supplied authority evidence remains current.
 - Load source-scoped staging tables. Retain original identifiers, language, market,
   bases, units, derivation/missingness flags, and rejected-row reason.
 - Map source nutrients only through reviewed `source_nutrient_map` rows.
@@ -426,6 +466,10 @@ Unexplained schema, rights, count, or quality changes block promotion.
 
 ## Promote
 
+Only a `live-reviewed` batch with current bound evidence and all three distinct
+role approvals may enter a new promotion. `fixture-nonrelease` and
+`legacy-unbound` batches are rejected before they can become live authority.
+
 In one database transaction, create the imported source release and immutable food
 versions, advance only validated food current-version pointers, mark the source
 release promoted, and enqueue an
@@ -441,3 +485,7 @@ Do not mutate the bad release. Mark affected current food roots archived or adva
 them to corrected versions from a new release, switch the search alias back to the
 last healthy build, and publish compensating idempotent outbox events. Preserve the
 raw artifact, failed validation, and audit trail for investigation and retention.
+Any rollback target must already be a promoted `live-reviewed` release for the same
+source. A fixture or `legacy-unbound` row cannot be newly selected or reactivated;
+the migration may preserve an existing historical pointer until a reviewed live
+release replaces it.

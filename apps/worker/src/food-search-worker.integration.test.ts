@@ -174,6 +174,9 @@ describeIntegration("food-search worker integration", () => {
 async function seedCatalogue(database: Parameters<typeof runMigrations>[0]): Promise<string> {
   return database.transaction().execute(async (transaction) => {
     const suffix = randomBytes(4).toString("hex").toUpperCase();
+    const evidenceBundleSha256 = "f".repeat(64);
+    const evidenceDecisionSha256 = "c".repeat(64);
+    const evidenceValidUntil = new Date(Date.now() + 12 * 60 * 60 * 1_000);
     const source = await transaction
       .insertInto("food_source")
       .values({
@@ -204,12 +207,18 @@ async function seedCatalogue(database: Parameters<typeof runMigrations>[0]): Pro
         artifact_bytes: 1024,
         artifact_sha256: "d".repeat(64),
         artifact_uri: `s3://worker-fixture/sha256/${"d".repeat(64)}.json`,
+        evidence_bundle_sha256: evidenceBundleSha256,
+        evidence_bundle_uri: `s3://worker-evidence/sha256/${evidenceBundleSha256}/bundle.json`,
+        evidence_decision_sha256: evidenceDecisionSha256,
+        evidence_object_version_id: "worker-search-fixture-evidence-v1",
+        evidence_valid_until: evidenceValidUntil,
         food_source_id: source.id,
         media_type: "application/json",
         parser_version: "worker-search-fixture@1",
         promoted_at: null,
         published_on: "2026-08-15",
         record_counts: { fixture: true },
+        release_class: "live-reviewed",
         release_key: "worker-release-1",
         rights_manifest_sha256: "e".repeat(64),
         rights_manifest_uri: "repo://worker-search-rights.json",
@@ -226,24 +235,44 @@ async function seedCatalogue(database: Parameters<typeof runMigrations>[0]): Pro
         artifact_bytes: 1024,
         artifact_sha256: "d".repeat(64),
         artifact_uri: `s3://worker-fixture/sha256/${"d".repeat(64)}.json`,
-        completed_at: "2026-08-15T13:00:00Z",
+        evidence_bundle_sha256: evidenceBundleSha256,
+        evidence_bundle_uri: `s3://worker-evidence/sha256/${evidenceBundleSha256}/bundle.json`,
+        evidence_decision_sha256: evidenceDecisionSha256,
+        evidence_object_version_id: "worker-search-fixture-evidence-v1",
+        evidence_valid_until: evidenceValidUntil,
         food_source_id: source.id,
-        materialized_count: 2,
         media_type: "application/json",
         parser_version: "worker-search-fixture@1",
         published_on: "2026-08-15",
-        release_id: release.id,
+        release_class: "live-reviewed",
         release_key: "worker-release-1",
         rights_manifest_sha256: "e".repeat(64),
         rights_manifest_uri: "repo://worker-search-rights.json",
         staged_count: 2,
-        status: "completed",
         upstream_schema_version: "fixture-v1",
         valid_count: 2,
-        validated_at: "2026-08-15T12:30:00Z",
       })
       .returning("id")
       .executeTakeFirstOrThrow();
+    await transaction
+      .updateTable("food_import_batch")
+      .set({ status: "ready", validated_at: "2026-08-15T12:30:00Z" })
+      .where("id", "=", batch.id)
+      .execute();
+    await transaction
+      .updateTable("food_import_batch")
+      .set({ release_id: release.id, status: "promoting" })
+      .where("id", "=", batch.id)
+      .execute();
+    await transaction
+      .updateTable("food_import_batch")
+      .set({
+        completed_at: "2026-08-15T13:00:00Z",
+        materialized_count: 2,
+        status: "completed",
+      })
+      .where("id", "=", batch.id)
+      .execute();
 
     await insertFood(transaction, {
       batchId: batch.id,

@@ -308,6 +308,9 @@ async function seedPromotedPublicFood(
     const suffix = randomBytes(4).toString("hex").toUpperCase();
     const instant = input.now.toISOString();
     const artifactSha256 = sha256(`retention-public-food-${suffix}`);
+    const evidenceBundleSha256 = sha256(`retention-public-evidence-bundle-${suffix}`);
+    const evidenceDecisionSha256 = sha256(`retention-public-evidence-decision-${suffix}`);
+    const evidenceValidUntil = new Date(Date.now() + 12 * 60 * 60 * 1_000);
     const rightsManifestSha256 = sha256(`retention-public-rights-${suffix}`);
     const source = await transaction
       .insertInto("food_source")
@@ -339,12 +342,18 @@ async function seedPromotedPublicFood(
         artifact_bytes: 1,
         artifact_sha256: artifactSha256,
         artifact_uri: `s3://retention-fixture.invalid/sha256/${artifactSha256}.json`,
+        evidence_bundle_sha256: evidenceBundleSha256,
+        evidence_bundle_uri: `s3://retention-evidence/sha256/${evidenceBundleSha256}/bundle.json`,
+        evidence_decision_sha256: evidenceDecisionSha256,
+        evidence_object_version_id: `retention-public-${suffix}-evidence-v1`,
+        evidence_valid_until: evidenceValidUntil,
         food_source_id: source.id,
         media_type: "application/json",
         parser_version: "retention-privacy-drill@1",
         promoted_at: null,
         published_on: instant.slice(0, 10),
         record_counts: { records: 1 },
+        release_class: "live-reviewed",
         release_key: `retention-public-${suffix}`,
         rights_manifest_sha256: rightsManifestSha256,
         rights_manifest_uri: "repo://retention-privacy-drill/synthetic-rights.json",
@@ -361,24 +370,40 @@ async function seedPromotedPublicFood(
         artifact_bytes: 1,
         artifact_sha256: artifactSha256,
         artifact_uri: `s3://retention-fixture.invalid/sha256/${artifactSha256}.json`,
-        completed_at: input.now,
+        evidence_bundle_sha256: evidenceBundleSha256,
+        evidence_bundle_uri: `s3://retention-evidence/sha256/${evidenceBundleSha256}/bundle.json`,
+        evidence_decision_sha256: evidenceDecisionSha256,
+        evidence_object_version_id: `retention-public-${suffix}-evidence-v1`,
+        evidence_valid_until: evidenceValidUntil,
         food_source_id: source.id,
-        materialized_count: 1,
         media_type: "application/json",
         parser_version: "retention-privacy-drill@1",
         published_on: instant.slice(0, 10),
-        release_id: release.id,
+        release_class: "live-reviewed",
         release_key: `retention-public-${suffix}`,
         rights_manifest_sha256: rightsManifestSha256,
         rights_manifest_uri: "repo://retention-privacy-drill/synthetic-rights.json",
         staged_count: 1,
-        status: "completed",
         upstream_schema_version: "synthetic-v1",
         valid_count: 1,
-        validated_at: input.now,
       })
       .returning("id")
       .executeTakeFirstOrThrow();
+    await transaction
+      .updateTable("food_import_batch")
+      .set({ status: "ready", validated_at: input.now })
+      .where("id", "=", batch.id)
+      .execute();
+    await transaction
+      .updateTable("food_import_batch")
+      .set({ release_id: release.id, status: "promoting" })
+      .where("id", "=", batch.id)
+      .execute();
+    await transaction
+      .updateTable("food_import_batch")
+      .set({ completed_at: input.now, materialized_count: 1, status: "completed" })
+      .where("id", "=", batch.id)
+      .execute();
     const food = await transaction
       .insertInto("food")
       .values({

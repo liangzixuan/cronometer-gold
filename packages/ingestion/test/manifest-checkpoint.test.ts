@@ -12,11 +12,12 @@ import {
   INGESTION_PARSER_PACKAGE,
   INGESTION_PARSER_VERSION,
   importReadyManifest,
+  manifestAuthoritySubjectSha256,
   parseFoodSourceManifest,
   runResumableBatch,
 } from "../src/index.js";
 
-describe("food source manifest v3 contract", () => {
+describe("food source manifest v4 contract", () => {
   it("keeps the exported parser identity aligned with package metadata", async () => {
     const packageJson = JSON.parse(
       await readFile(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
@@ -36,64 +37,113 @@ describe("food source manifest v3 contract", () => {
     for (const name of names) {
       const input: unknown = JSON.parse(await readFile(join(directory, name), "utf8"));
       const manifest = parseFoodSourceManifest(input);
-      expect(manifest.manifestVersion).toBe(3);
+      expect(manifest.manifestVersion).toBe(4);
       expect(manifest.templateOnly).toBe(true);
+      expect(manifest.releaseClass).toBe("live-reviewed");
+      expect(manifest.evidenceBundle).toBeNull();
+      expect(manifest.artifact).not.toHaveProperty("acquisitionObservations");
       expect(() => assertImportReadyManifest(manifest)).toThrowError(
         expect.objectContaining({ code: "INVALID_MANIFEST" }),
       );
     }
   });
 
-  it("accepts a pinned two-operator fresh HTTPS consensus", () => {
+  it("accepts a non-template manifest only with an immutable authority-bundle reference", () => {
     const ready = readyManifest();
     const parsed = importReadyManifest(ready);
     expect(parsed.artifact.sha256).toBe("a".repeat(64));
     expect(INGESTION_PARSER_PACKAGE).toBe("@nutrition-tracker/ingestion");
     expect(INGESTION_PARSER_VERSION).toBe("0.1.0");
     expect(() => assertManifestParserIdentity(parsed)).not.toThrow();
-    expect(Object.isFrozen(parsed.artifact.acquisitionObservations)).toBe(true);
+    expect(Object.isFrozen(parsed.evidenceBundle)).toBe(true);
   });
 
-  it("accepts an exact reviewed cross-host resolution and rejects an unlisted resource", () => {
-    const ready = readyManifest();
-    const downloadUrl = String(artifact(ready).downloadUrl);
-    const resolvedUrl = "https://storage.example.test/resources/release-id/release.zip";
-    artifact(ready).permittedResolvedUrls = [downloadUrl, resolvedUrl];
-    for (const item of observations(ready)) item.resolvedUrl = resolvedUrl;
-    expect(() => importReadyManifest(ready)).not.toThrow();
+  it("rejects v3 and the removed caller-authored acquisition-observation field", () => {
+    const v3 = readyManifest();
+    v3.manifestVersion = 3;
+    expect(() => parseFoodSourceManifest(v3)).toThrowError(
+      expect.objectContaining({ code: "INVALID_MANIFEST" }),
+    );
 
-    observationAt(ready, 1).resolvedUrl =
-      "https://storage.example.test/resources/other-release/release.zip";
-    expect(() => importReadyManifest(ready)).toThrowError(
+    const legacy = readyManifest();
+    artifact(legacy).acquisitionObservations = [];
+    expect(() => parseFoodSourceManifest(legacy)).toThrowError(
       expect.objectContaining({ code: "INVALID_MANIFEST" }),
     );
   });
 
-  it("rejects same-principal, duplicate-acquisition, stale/cache, and mismatched observations", () => {
-    const cases = [
-      (value: Record<string, unknown>) => {
-        observationAt(value, 1).operatorPrincipalId = "OPERATOR.ONE";
-      },
-      (value: Record<string, unknown>) => {
-        observationAt(value, 1).acquisitionId = observationAt(value, 0).acquisitionId;
-      },
-      (value: Record<string, unknown>) => {
-        observationAt(value, 1).freshDownload = false;
-      },
-      (value: Record<string, unknown>) => {
-        observationAt(value, 1).sha256 = "b".repeat(64);
-      },
-      (value: Record<string, unknown>) => {
-        observationAt(value, 1).resolvedUrl = "https://evil.example/release.zip";
-      },
-    ];
-    for (const mutate of cases) {
-      const input = readyManifest();
-      mutate(input);
-      expect(() => importReadyManifest(input)).toThrowError(
-        expect.objectContaining({ code: "INVALID_MANIFEST" }),
-      );
-    }
+  it("enforces the template/bundle invariant and exact release classification", () => {
+    const missing = readyManifest();
+    missing.evidenceBundle = null;
+    expect(() => importReadyManifest(missing)).toThrowError(
+      expect.objectContaining({ code: "INVALID_MANIFEST" }),
+    );
+
+    const template = readyManifest();
+    template.templateOnly = true;
+    expect(() => parseFoodSourceManifest(template)).toThrowError(
+      expect.objectContaining({ code: "INVALID_MANIFEST" }),
+    );
+
+    const wrongUri = readyManifest();
+    evidenceBundle(wrongUri).objectUri = "s3://release-evidence/sha256/wrong/bundle.json";
+    expect(() => importReadyManifest(wrongUri)).toThrowError(
+      expect.objectContaining({ code: "INVALID_MANIFEST" }),
+    );
+
+    const unknownClass = readyManifest();
+    unknownClass.releaseClass = "caller-authored";
+    expect(() => parseFoodSourceManifest(unknownClass)).toThrowError(
+      expect.objectContaining({ code: "INVALID_MANIFEST" }),
+    );
+  });
+
+  it.each([
+    ["an uppercase bucket", `s3://Release-Evidence/sha256/${"c".repeat(64)}/bundle.json`],
+    [
+      "a bucket with consecutive dots",
+      `s3://release..evidence/sha256/${"c".repeat(64)}/bundle.json`,
+    ],
+    ["an IPv4-shaped bucket", `s3://192.168.0.1/sha256/${"c".repeat(64)}/bundle.json`],
+    ["a bucket shorter than three characters", `s3://ab/sha256/${"c".repeat(64)}/bundle.json`],
+    ["a bucket with a port", `s3://release-evidence:443/sha256/${"c".repeat(64)}/bundle.json`],
+    [
+      "a path that URL parsing would normalize",
+      `s3://release-evidence/sha256/${"c".repeat(64)}/nested/../bundle.json`,
+    ],
+    [
+      "an empty path segment before the digest",
+      `s3://release-evidence//sha256/${"c".repeat(64)}/bundle.json`,
+    ],
+    [
+      "an empty path segment after the digest",
+      `s3://release-evidence/sha256/${"c".repeat(64)}//bundle.json`,
+    ],
+    [
+      "a malformed percent escape",
+      `s3://release-evidence/%zz/sha256/${"c".repeat(64)}/bundle.json`,
+    ],
+  ])("rejects an evidence-bundle URI with %s", (_name, objectUri) => {
+    const input = readyManifest();
+    evidenceBundle(input).objectUri = objectUri;
+    expect(() => importReadyManifest(input)).toThrowError(
+      expect.objectContaining({
+        code: "INVALID_MANIFEST",
+        message: "Evidence bundle objectUri must be a credential-free content-addressed S3 URI",
+      }),
+    );
+  });
+
+  it("hashes the complete manifest authority subject without the bundle reference", () => {
+    const first = importReadyManifest(readyManifest());
+    const secondInput = readyManifest();
+    secondInput.evidenceBundle = {
+      contractVersion: 1,
+      sha256: "d".repeat(64),
+      objectUri: `s3://release-evidence/sha256/${"d".repeat(64)}/bundle.json`,
+    };
+    const second = importReadyManifest(secondInput);
+    expect(manifestAuthoritySubjectSha256(first)).toBe(manifestAuthoritySubjectSha256(second));
   });
 
   it("rejects whitespace identities, incomplete rights review, bad dates, and weak expectations", () => {
@@ -118,16 +168,18 @@ describe("food source manifest v3 contract", () => {
           `s3://food-source-artifacts/fdc/sha256/${"a".repeat(64)}suffix/release.zip`;
       },
       (value: Record<string, unknown>) => {
+        artifact(value).objectUri =
+          `s3://food-source-artifacts/fdc/junk/../sha256/${"a".repeat(64)}/release.zip`;
+      },
+      (value: Record<string, unknown>) => {
+        artifact(value).objectUri =
+          `s3://food-source-artifacts/fdc//sha256/${"a".repeat(64)}/release.zip`;
+      },
+      (value: Record<string, unknown>) => {
         rightsReview(value).reviewedBy = "reviewer.one ";
       },
       (value: Record<string, unknown>) => {
         rightsReview(value).reviewedAt = null;
-      },
-      (value: Record<string, unknown>) => {
-        observationAt(value, 0).observedAt = "2026-02-30T12:00:00Z";
-      },
-      (value: Record<string, unknown>) => {
-        observationAt(value, 1).observedAt = "2026-08-16T12:00:00Z";
       },
       (value: Record<string, unknown>) => {
         validation(value).expectedFiles = [];
@@ -235,8 +287,14 @@ function readyManifest(): Record<string, unknown> {
   const downloadUrl = "https://fdc.nal.usda.gov/fdc-datasets/release.zip";
   const sha256 = "a".repeat(64);
   return {
-    manifestVersion: 3,
+    manifestVersion: 4,
     templateOnly: false,
+    releaseClass: "fixture-nonrelease",
+    evidenceBundle: {
+      contractVersion: 1,
+      sha256: "c".repeat(64),
+      objectUri: `s3://release-evidence/sha256/${"c".repeat(64)}/bundle.json`,
+    },
     source: {
       code: "USDA_FDC",
       displayName: "USDA FoodData Central",
@@ -266,18 +324,6 @@ function readyManifest(): Record<string, unknown> {
         metadataUrl: "https://fdc.nal.usda.gov/download-datasets/",
         notes: "Publisher does not provide SHA-256.",
       },
-      acquisitionObservations: [
-        observation(
-          "11111111-1111-4111-8111-111111111111",
-          "operator.one",
-          "2026-08-15T10:00:00.000Z",
-        ),
-        observation(
-          "22222222-2222-4222-8222-222222222222",
-          "operator.two",
-          "2026-08-15T11:00:00.000Z",
-        ),
-      ],
     },
     rights: {
       licenseExpression: "CC0-1.0",
@@ -314,39 +360,14 @@ function readyManifest(): Record<string, unknown> {
       releaseSpecificExpectations: { expectedFoodCount: 395 },
     },
   };
-
-  function observation(acquisitionId: string, operatorPrincipalId: string, observedAt: string) {
-    return {
-      acquisitionId,
-      observedAt,
-      operatorPrincipalId,
-      tool: "nutrition-ingestion/0.1.0",
-      transport: "https",
-      freshDownload: true,
-      downloadUrl,
-      resolvedUrl: downloadUrl,
-      etag: null,
-      lastModified: "2026-04-30T00:00:00.000Z",
-      sha256,
-      byteSize: 123,
-    };
-  }
 }
 
 function artifact(value: Record<string, unknown>): Record<string, unknown> {
   return value.artifact as Record<string, unknown>;
 }
 
-function observations(value: Record<string, unknown>): Record<string, unknown>[] {
-  return artifact(value).acquisitionObservations as Record<string, unknown>[];
-}
-
-function observationAt(value: Record<string, unknown>, index: number): Record<string, unknown> {
-  const observation = observations(value)[index];
-  if (!observation) {
-    throw new Error(`Missing fixture observation ${index}`);
-  }
-  return observation;
+function evidenceBundle(value: Record<string, unknown>): Record<string, unknown> {
+  return value.evidenceBundle as Record<string, unknown>;
 }
 
 function ingestion(value: Record<string, unknown>): Record<string, unknown> {

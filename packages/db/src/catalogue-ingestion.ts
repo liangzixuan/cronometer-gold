@@ -32,12 +32,14 @@ import type {
   FoodImportCheckpointStage,
   FoodImportParserReportTable,
   FoodImportRecordTable,
+  FoodImportReleaseClass,
   JsonArray,
   JsonObject,
   JsonValue,
 } from "./types.js";
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const MAX_EVIDENCE_VALIDITY_MS = 24 * 60 * 60 * 1_000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PINNED_PARSER_VERSION_PATTERN = /^(.+)\+build\.([0-9a-f]{64})\+mapping\.([0-9a-f]{64})$/;
 const SOURCE_LOCK_NAMESPACE = "nutrition-tracker:catalogue-source:v1";
@@ -68,9 +70,15 @@ export interface StageBatchInput {
   readonly artifactBytes: bigint | number | string;
   readonly artifactSha256: string;
   readonly artifactUri: string;
+  readonly evidenceBundleSha256: string;
+  readonly evidenceBundleUri: string;
+  readonly evidenceDecisionSha256: string;
+  readonly evidenceObjectVersionId: string;
+  readonly evidenceValidUntil: Date | string;
   readonly mediaType: string;
   readonly parserVersion: string;
   readonly publishedOn?: string | null;
+  readonly releaseClass: Exclude<FoodImportReleaseClass, "legacy-unbound">;
   readonly releaseKey: string;
   readonly rightsManifestSha256: string;
   readonly rightsManifestUri: string;
@@ -432,6 +440,21 @@ export async function stageBatch(
   requireText(input.parserVersion, "parserVersion");
   requireText(input.artifactUri, "artifactUri");
   requireText(input.rightsManifestUri, "rightsManifestUri");
+  assertSha256(input.evidenceBundleSha256, "evidenceBundleSha256");
+  assertSha256(input.evidenceDecisionSha256, "evidenceDecisionSha256");
+  assertContentAddressedEvidenceBundleUri(input.evidenceBundleUri, input.evidenceBundleSha256);
+  assertEvidenceObjectVersionId(input.evidenceObjectVersionId);
+  if (input.releaseClass !== "live-reviewed" && input.releaseClass !== "fixture-nonrelease") {
+    throw new Error("releaseClass must be live-reviewed or fixture-nonrelease");
+  }
+  const evidenceValidUntil = finiteTimestamp(input.evidenceValidUntil, "evidenceValidUntil");
+  const evidenceValidatedAt = Date.now();
+  if (
+    evidenceValidUntil.getTime() <= evidenceValidatedAt ||
+    evidenceValidUntil.getTime() > evidenceValidatedAt + MAX_EVIDENCE_VALIDITY_MS
+  ) {
+    throw new Error("evidenceValidUntil must be current and no more than 24 hours ahead");
+  }
 
   const source = await database
     .selectFrom("food_source")
@@ -447,10 +470,16 @@ export async function stageBatch(
       artifact_bytes: input.artifactBytes,
       artifact_sha256: input.artifactSha256,
       artifact_uri: input.artifactUri,
+      evidence_bundle_sha256: input.evidenceBundleSha256,
+      evidence_bundle_uri: input.evidenceBundleUri,
+      evidence_decision_sha256: input.evidenceDecisionSha256,
+      evidence_object_version_id: input.evidenceObjectVersionId,
+      evidence_valid_until: evidenceValidUntil,
       food_source_id: source.id,
       media_type: input.mediaType,
       parser_version: input.parserVersion,
       published_on: input.publishedOn ?? null,
+      release_class: input.releaseClass,
       release_key: input.releaseKey,
       rights_manifest_sha256: input.rightsManifestSha256,
       rights_manifest_uri: input.rightsManifestUri,
@@ -458,7 +487,13 @@ export async function stageBatch(
     })
     .onConflict((conflict) =>
       conflict
-        .columns(["food_source_id", "release_key", "artifact_sha256", "parser_version"])
+        .columns([
+          "food_source_id",
+          "release_key",
+          "artifact_sha256",
+          "parser_version",
+          "evidence_bundle_sha256",
+        ])
         .doNothing(),
     )
     .returningAll()
@@ -473,6 +508,7 @@ export async function stageBatch(
       .where("release_key", "=", input.releaseKey)
       .where("artifact_sha256", "=", input.artifactSha256)
       .where("parser_version", "=", input.parserVersion)
+      .where("evidence_bundle_sha256", "=", input.evidenceBundleSha256)
       .executeTakeFirstOrThrow());
   assertBatchProvenance(batch, input);
   return { batchId: batch.id, resumed: !inserted, status: batch.status };
@@ -1074,10 +1110,16 @@ export async function reconcileCatalogueBatch(
           artifactBytes: String(batch.artifact_bytes),
           artifactSha256: batch.artifact_sha256,
           batchId: batch.id,
+          evidenceBundleSha256: batch.evidence_bundle_sha256,
+          evidenceBundleUri: batch.evidence_bundle_uri,
+          evidenceDecisionSha256: batch.evidence_decision_sha256,
+          evidenceObjectVersionId: batch.evidence_object_version_id,
+          evidenceValidUntil: batch.evidence_valid_until?.toISOString() ?? null,
           nutrientMappingDigest: candidateParser.nutrientMappingDigest,
           parserBuildSha256: candidateParser.parserBuildSha256,
           parserReportSha256: candidateParser.report.report_sha256,
           parserVersion: batch.parser_version,
+          releaseClass: batch.release_class,
           releaseKey: batch.release_key,
           rightsManifestSha256: batch.rights_manifest_sha256,
           validationDigest: summary.validationDigest,
@@ -1104,6 +1146,7 @@ export async function approveBatch(
   requireText(input.approvalReference, "approvalReference");
   await database.transaction().execute(async (transaction) => {
     const batch = await selectBatchForUpdate(transaction, input.batchId);
+    assertLiveReviewedEvidenceCurrent(batch, "approve");
     if (batch.status !== "ready") {
       throw new Error(`Batch ${input.batchId} cannot be approved while ${batch.status}`);
     }
@@ -1161,6 +1204,7 @@ export async function promoteBatch(
   const performedBy = stablePrincipalId(options.performedBy, "performedBy");
   return database.transaction().execute(async (transaction) => {
     const initialBatch = await selectBatchForUpdate(transaction, options.batchId);
+    assertLiveReviewedEvidenceBound(initialBatch, "promote");
     const source = await selectAndLockSource(transaction, initialBatch.food_source_id);
     await lockSource(transaction, source.id);
 
@@ -1178,6 +1222,7 @@ export async function promoteBatch(
         wasAlreadyCompleted: true,
       };
     }
+    assertLiveReviewedEvidenceCurrent(initialBatch, "promote");
     assertSourceMayActivate(source);
     if (initialBatch.status !== "ready" || Number(initialBatch.unresolved_error_count) !== 0) {
       throw new Error(`Batch ${options.batchId} is not promotion-ready`);
@@ -1268,8 +1313,7 @@ export async function promoteBatch(
     }
 
     const previousReleaseId = source.active_release_id;
-    await activateCataloguePointers(transaction, source.id, release.id);
-    await replaceActiveBarcodes(transaction, source.id, release.id, materialized);
+    assertLiveReviewedEvidenceCurrent(initialBatch, "promote");
     if (release.status === "imported") {
       await transaction
         .updateTable("food_source_release")
@@ -1278,6 +1322,8 @@ export async function promoteBatch(
         .where("status", "=", "imported")
         .execute();
     }
+    await activateCataloguePointers(transaction, source.id, release.id);
+    await replaceActiveBarcodes(transaction, source.id, release.id, materialized);
     await transaction
       .updateTable("food_source")
       .set({ active_release_id: release.id })
@@ -1345,7 +1391,7 @@ export async function rollbackSourceRelease(
       assertSourceMayActivate(source);
       const target = await transaction
         .selectFrom("food_source_release")
-        .select(["id", "status"])
+        .select(["id", "release_class", "status"])
         .where("id", "=", input.targetReleaseId)
         .where("food_source_id", "=", source.id)
         .executeTakeFirst();
@@ -1354,6 +1400,9 @@ export async function rollbackSourceRelease(
       }
       if (target.status !== "promoted") {
         throw new Error(`Release ${input.targetReleaseId} has never been promoted`);
+      }
+      if (target.release_class !== "live-reviewed") {
+        throw new Error(`Release ${input.targetReleaseId} is not live-reviewed`);
       }
     }
 
@@ -2417,10 +2466,16 @@ async function loadAndVerifyReconciliationBaseline(
       artifactBytes: String(release.artifact_bytes),
       artifactSha256: release.artifact_sha256,
       batchId: batch.id,
+      evidenceBundleSha256: release.evidence_bundle_sha256,
+      evidenceBundleUri: release.evidence_bundle_uri,
+      evidenceDecisionSha256: release.evidence_decision_sha256,
+      evidenceObjectVersionId: release.evidence_object_version_id,
+      evidenceValidUntil: release.evidence_valid_until?.toISOString() ?? null,
       nutrientMappingDigest: parser.nutrientMappingDigest,
       parserBuildSha256: parser.parserBuildSha256,
       parserReportSha256: parser.report.report_sha256,
       parserVersion: batch.parser_version,
+      releaseClass: release.release_class,
       releaseId: release.id,
       releaseKey: release.release_key,
       rightsManifestSha256: batch.rights_manifest_sha256,
@@ -2527,6 +2582,18 @@ async function assertBaselineReleaseProvenance(
     release.parser_version === batch.parser_version ? null : "parserVersion",
     release.rights_manifest_uri === batch.rights_manifest_uri ? null : "rightsManifestUri",
     release.rights_manifest_sha256 === batch.rights_manifest_sha256 ? null : "rightsManifestSha256",
+    release.release_class === batch.release_class ? null : "releaseClass",
+    release.evidence_bundle_sha256 === batch.evidence_bundle_sha256 ? null : "evidenceBundleSha256",
+    release.evidence_bundle_uri === batch.evidence_bundle_uri ? null : "evidenceBundleUri",
+    release.evidence_decision_sha256 === batch.evidence_decision_sha256
+      ? null
+      : "evidenceDecisionSha256",
+    release.evidence_object_version_id === batch.evidence_object_version_id
+      ? null
+      : "evidenceObjectVersionId",
+    timestampIso(release.evidence_valid_until) === timestampIso(batch.evidence_valid_until)
+      ? null
+      : "evidenceValidUntil",
   ].filter((field): field is string => field !== null);
   if (mismatches.length > 0) {
     throw new Error(
@@ -3188,11 +3255,17 @@ async function observeBatchValidation(
   const digestEvidence: JsonObject = {
     artifactSha256: batch.artifact_sha256,
     batchId: batch.id,
+    evidenceBundleSha256: batch.evidence_bundle_sha256,
+    evidenceBundleUri: batch.evidence_bundle_uri,
+    evidenceDecisionSha256: batch.evidence_decision_sha256,
+    evidenceObjectVersionId: batch.evidence_object_version_id,
+    evidenceValidUntil: batch.evidence_valid_until?.toISOString() ?? null,
     nutrientMappingDigest: nutrientRegistry.revisionDigest,
     policy,
     parserEvidence: { ...parserEvidence },
     parserReportSha256: parserReport.report_sha256,
     records: records as unknown as JsonArray,
+    releaseClass: batch.release_class,
     rightsManifestSha256: batch.rights_manifest_sha256,
   };
   const summary: BatchValidationSummary = {
@@ -3280,11 +3353,17 @@ async function createOrLoadRelease(
       artifact_bytes: batch.artifact_bytes,
       artifact_sha256: batch.artifact_sha256,
       artifact_uri: batch.artifact_uri,
+      evidence_bundle_sha256: batch.evidence_bundle_sha256,
+      evidence_bundle_uri: batch.evidence_bundle_uri,
+      evidence_decision_sha256: batch.evidence_decision_sha256,
+      evidence_object_version_id: batch.evidence_object_version_id,
+      evidence_valid_until: batch.evidence_valid_until,
       food_source_id: batch.food_source_id,
       media_type: batch.media_type,
       parser_version: batch.parser_version,
       published_on: batch.published_on,
       record_counts: recordCounts,
+      release_class: batch.release_class,
       release_key: batch.release_key,
       rights_manifest_uri: batch.rights_manifest_uri,
       rights_manifest_sha256: batch.rights_manifest_sha256,
@@ -3310,6 +3389,12 @@ async function createOrLoadRelease(
     release.parser_version !== batch.parser_version ||
     release.rights_manifest_uri !== batch.rights_manifest_uri ||
     release.rights_manifest_sha256 !== batch.rights_manifest_sha256 ||
+    release.release_class !== batch.release_class ||
+    release.evidence_bundle_sha256 !== batch.evidence_bundle_sha256 ||
+    release.evidence_bundle_uri !== batch.evidence_bundle_uri ||
+    release.evidence_decision_sha256 !== batch.evidence_decision_sha256 ||
+    release.evidence_object_version_id !== batch.evidence_object_version_id ||
+    timestampIso(release.evidence_valid_until) !== timestampIso(batch.evidence_valid_until) ||
     canonicalJson(release.record_counts) !== canonicalJson(recordCounts) ||
     canonicalJson(release.validation_summary) !== canonicalJson(validationSummary)
   ) {
@@ -4045,6 +4130,13 @@ function assertBatchProvenance(batch: BatchRow, input: StageBatchInput): void {
     batch.upstream_schema_version === (input.upstreamSchemaVersion ?? null) &&
     batch.rights_manifest_uri === input.rightsManifestUri &&
     batch.rights_manifest_sha256 === input.rightsManifestSha256 &&
+    batch.release_class === input.releaseClass &&
+    batch.evidence_bundle_sha256 === input.evidenceBundleSha256 &&
+    batch.evidence_bundle_uri === input.evidenceBundleUri &&
+    batch.evidence_decision_sha256 === input.evidenceDecisionSha256 &&
+    batch.evidence_object_version_id === input.evidenceObjectVersionId &&
+    timestampIso(batch.evidence_valid_until) ===
+      finiteTimestamp(input.evidenceValidUntil, "evidenceValidUntil").toISOString() &&
     dateOnly(batch.published_on) === (input.publishedOn ?? null) &&
     batch.acquired_at.toISOString() === new Date(input.acquiredAt).toISOString();
   if (!same) throw new Error("Existing import batch provenance differs from the requested batch");
@@ -4062,6 +4154,87 @@ function requireBoundedText(value: string, field: string, maximumLength: number)
   requireText(value, field);
   if (Buffer.byteLength(value, "utf8") > maximumLength) {
     throw new Error(`${field} must contain at most ${maximumLength} UTF-8 bytes`);
+  }
+}
+
+function assertEvidenceObjectVersionId(value: string): void {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._~+/:@=-]{0,511}$/u.test(value)) {
+    throw new Error("evidenceObjectVersionId must be a bounded provider-neutral opaque identifier");
+  }
+}
+
+function finiteTimestamp(value: Date | string, field: string): Date {
+  const timestamp = new Date(value);
+  if (!Number.isFinite(timestamp.getTime())) {
+    throw new Error(`${field} must be a finite timestamp`);
+  }
+  return timestamp;
+}
+
+function assertContentAddressedEvidenceBundleUri(value: string, digest: string): void {
+  requireBoundedText(value, "evidenceBundleUri", 2_048);
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("evidenceBundleUri must be a valid S3 URI");
+  }
+  const pathSegments = url.pathname.split("/");
+  const pathIsCanonical =
+    pathSegments[0] === "" &&
+    pathSegments.length > 1 &&
+    pathSegments.slice(1).every((segment) => /^[A-Za-z0-9_-][A-Za-z0-9._~-]*$/u.test(segment));
+  const digestIsBound = pathSegments.some(
+    (segment, index) => segment === "sha256" && pathSegments[index + 1] === digest,
+  );
+  const canonicalHostname = url.hostname.toLowerCase();
+  const bucketIsValid =
+    /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(canonicalHostname) &&
+    !canonicalHostname.includes("..") &&
+    !/^\d+\.\d+\.\d+\.\d+$/.test(canonicalHostname);
+  if (
+    url.protocol !== "s3:" ||
+    !bucketIsValid ||
+    url.href !== value ||
+    url.hostname !== canonicalHostname ||
+    url.port !== "" ||
+    url.username !== "" ||
+    url.password !== "" ||
+    url.search !== "" ||
+    url.hash !== "" ||
+    !pathIsCanonical ||
+    !digestIsBound
+  ) {
+    throw new Error(
+      "evidenceBundleUri must be a credential-free content-addressed S3 URI containing evidenceBundleSha256",
+    );
+  }
+}
+
+function timestampIso(value: Date | null): string | null {
+  return value?.toISOString() ?? null;
+}
+
+function assertLiveReviewedEvidenceBound(batch: BatchRow, operation: string): void {
+  if (
+    batch.release_class !== "live-reviewed" ||
+    batch.evidence_bundle_sha256 === null ||
+    batch.evidence_bundle_uri === null ||
+    batch.evidence_decision_sha256 === null ||
+    batch.evidence_object_version_id === null ||
+    batch.evidence_valid_until === null
+  ) {
+    throw new Error(`Batch ${batch.id} cannot ${operation} without live-reviewed evidence`);
+  }
+}
+
+function assertLiveReviewedEvidenceCurrent(batch: BatchRow, operation: string): void {
+  assertLiveReviewedEvidenceBound(batch, operation);
+  if (batch.evidence_valid_until === null) {
+    throw new Error(`Batch ${batch.id} cannot ${operation} without live-reviewed evidence`);
+  }
+  if (batch.evidence_valid_until.getTime() <= Date.now()) {
+    throw new Error(`Batch ${batch.id} cannot ${operation} with expired evidence`);
   }
 }
 

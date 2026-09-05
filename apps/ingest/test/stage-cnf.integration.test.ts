@@ -14,11 +14,17 @@ import {
 import {
   CNF_ARCHIVE_CSV_PATHS,
   type CnfArchiveCsvPath,
-  type FoodSourceManifestV3,
+  type FoodSourceManifestV4,
 } from "@nutrition-tracker/ingestion";
 import { describe, expect, it, vi } from "vitest";
 
 import { type CommandIo, runCommand } from "../src/run.js";
+import {
+  bindSyntheticReleaseEvidence,
+  SYNTHETIC_EVIDENCE_EVALUATED_AT,
+  type SyntheticEvidenceRunner,
+  writeCanonicalReleaseEvidence,
+} from "./synthetic-release-evidence.js";
 
 const adminDatabaseUrl = process.env.CNF_CLI_TEST_DATABASE_ADMIN_URL;
 const describeDatabase = adminDatabaseUrl ? describe : describe.skip;
@@ -33,6 +39,12 @@ const RELEASE_KEY = "cnf-cli-synthetic-251";
 const PARSER_BUILD_SHA256 = "b".repeat(64);
 const ACTOR_PRINCIPAL_ID = "service:cnf-cli-integration";
 const ACTOR_RUN_REFERENCE = "urn:nutrition-tracker:test:cnf-cli-integration";
+const CNF_EVIDENCE_RUNNER: SyntheticEvidenceRunner = Object.freeze({
+  authenticationMethod: "workload-identity",
+  principalId: ACTOR_PRINCIPAL_ID,
+  runId: "cnf-cli-integration",
+  runReference: ACTOR_RUN_REFERENCE,
+});
 
 const CSV_FIXTURES: Readonly<Record<CnfArchiveCsvPath, string>> = Object.freeze({
   "Food_Name.csv": csv([
@@ -98,7 +110,7 @@ describeDatabase("synthetic CNF CLI PostgreSQL integration", () => {
       const artifactSha256 = sha256Bytes(artifactBytes);
       const foundation = JSON.parse(
         await readFile(FOUNDATION_MANIFEST_PATH, "utf8"),
-      ) as FoodSourceManifestV3;
+      ) as FoodSourceManifestV4;
       const expectedFiles = [...CNF_ARCHIVE_CSV_PATHS, GUIDE_PATH];
       const pinnedTemplate = pinnedTemplateManifest(
         foundation,
@@ -142,26 +154,39 @@ describeDatabase("synthetic CNF CLI PostgreSQL integration", () => {
         emittedRecordCount: RECORD_COUNT,
       });
 
-      const importReady = importReadyManifest(
-        pinnedTemplate,
-        inspection.baseline,
-        artifactBytes.byteLength,
-        artifactSha256,
+      const importReadyEvidence = bindSyntheticReleaseEvidence(
+        importReadyManifest(
+          pinnedTemplate,
+          inspection.baseline,
+          artifactBytes.byteLength,
+          artifactSha256,
+        ),
+        CNF_EVIDENCE_RUNNER,
       );
+      const importReady = importReadyEvidence.manifest;
       const manifestPath = join(root, "cnf-import-ready.json");
       const manifestSha256 = await writePrivateJson(manifestPath, importReady);
-      const wrongBaselineManifest = {
-        ...importReady,
-        validation: {
-          ...importReady.validation,
-          releaseSpecificExpectations: {
-            ...inspection.baseline,
-            "cnfParser.emittedRecordCount": RECORD_COUNT - 1,
+      const evidencePath = join(root, "cnf-import-ready-evidence.json");
+      await writeCanonicalReleaseEvidence(evidencePath, importReadyEvidence.bundle);
+      const wrongBaselineEvidence = bindSyntheticReleaseEvidence(
+        {
+          ...importReady,
+          evidenceBundle: null,
+          validation: {
+            ...importReady.validation,
+            releaseSpecificExpectations: {
+              ...inspection.baseline,
+              "cnfParser.emittedRecordCount": RECORD_COUNT - 1,
+            },
           },
         },
-      } satisfies FoodSourceManifestV3;
+        CNF_EVIDENCE_RUNNER,
+      );
+      const wrongBaselineManifest = wrongBaselineEvidence.manifest;
       const wrongManifestPath = join(root, "cnf-wrong-baseline.json");
       const wrongManifestSha256 = await writePrivateJson(wrongManifestPath, wrongBaselineManifest);
+      const wrongEvidencePath = join(root, "cnf-wrong-baseline-evidence.json");
+      await writeCanonicalReleaseEvidence(wrongEvidencePath, wrongBaselineEvidence.bundle);
       const runnerEnvironment = trustedRunnerEnvironment(targetDatabaseUrl, applicationName);
 
       expect(await databaseExists(testAdmin, databaseName)).toBe(false);
@@ -174,6 +199,7 @@ describeDatabase("synthetic CNF CLI PostgreSQL integration", () => {
             cacheDirectory,
             join(root, "invalid-manifest-uri-extract"),
             "s3://synthetic-cnf-manifests/not-content-addressed/manifest.json",
+            evidencePath,
           ),
           invalidManifestUri.io,
         ),
@@ -193,6 +219,7 @@ describeDatabase("synthetic CNF CLI PostgreSQL integration", () => {
             cacheDirectory,
             join(root, "wrong-baseline-extract"),
             manifestObjectUri(wrongManifestSha256),
+            wrongEvidencePath,
           ),
           wrongStage.io,
         ),
@@ -232,9 +259,15 @@ describeDatabase("synthetic CNF CLI PostgreSQL integration", () => {
 
       const registerSource = commandIo(runnerEnvironment);
       expect(
-        await runCommand(["catalogue", "register-source", manifestPath], registerSource.io),
+        await runCommand(
+          ["catalogue", "register-source", manifestPath, "--evidence-bundle", evidencePath],
+          registerSource.io,
+        ),
       ).toBe(0);
-      singleOutput(registerSource);
+      expect(singleOutput(registerSource)).toMatchObject({
+        evidenceBundleSha256: importReady.evidenceBundle?.sha256,
+        releaseClass: "fixture-nonrelease",
+      });
 
       const mappingPath = join(root, "cnf-mapping.json");
       await writePrivateJson(mappingPath, {
@@ -273,6 +306,7 @@ describeDatabase("synthetic CNF CLI PostgreSQL integration", () => {
             cacheDirectory,
             firstExtractDirectory,
             manifestObjectUri(manifestSha256),
+            evidencePath,
           ),
           firstStage.io,
         ),
@@ -408,6 +442,7 @@ describeDatabase("synthetic CNF CLI PostgreSQL integration", () => {
             cacheDirectory,
             replayExtractDirectory,
             manifestObjectUri(manifestSha256),
+            evidencePath,
           ),
           replayStage.io,
         ),
@@ -522,16 +557,15 @@ function cnfArchiveFiles(): readonly { readonly data: Buffer; readonly name: str
 }
 
 function pinnedTemplateManifest(
-  foundation: FoodSourceManifestV3,
+  foundation: FoodSourceManifestV4,
   expectedFiles: readonly string[],
   artifactByteSize: number,
   artifactSha256: string,
-): FoodSourceManifestV3 {
+): FoodSourceManifestV4 {
   return {
     ...foundation,
     artifact: {
       ...foundation.artifact,
-      acquisitionObservations: [],
       byteSize: artifactByteSize,
       objectUri: `s3://synthetic-cnf-artifacts/sha256/${artifactSha256}/cnf-synthetic.zip`,
       sha256: artifactSha256,
@@ -556,56 +590,21 @@ function pinnedTemplateManifest(
 }
 
 function importReadyManifest(
-  template: FoodSourceManifestV3,
+  template: FoodSourceManifestV4,
   baseline: Readonly<Record<string, boolean | number | string>>,
   artifactByteSize: number,
   artifactSha256: string,
-): FoodSourceManifestV3 {
-  const downloadUrl = requiredString(template.artifact.downloadUrl, "template download URL");
-  const permittedResolvedUrls = template.artifact.permittedResolvedUrls;
-  const firstResolvedUrl = requiredString(permittedResolvedUrls[0], "first resolved URL");
-  const secondResolvedUrl = requiredString(permittedResolvedUrls[1], "second resolved URL");
+): FoodSourceManifestV4 {
   return {
     ...template,
     artifact: {
       ...template.artifact,
-      acquisitionObservations: [
-        {
-          acquisitionId: "11111111-1111-4111-8111-111111111111",
-          byteSize: artifactByteSize,
-          downloadUrl,
-          etag: null,
-          freshDownload: true,
-          lastModified: null,
-          observedAt: "2026-08-29T10:00:00Z",
-          operatorPrincipalId: "principal:cnf-fixture-observer-a",
-          resolvedUrl: firstResolvedUrl,
-          sha256: artifactSha256,
-          tool: "synthetic-cnf-cli-test/1",
-          transport: "https",
-        },
-        {
-          acquisitionId: "22222222-2222-4222-8222-222222222222",
-          byteSize: artifactByteSize,
-          downloadUrl,
-          etag: null,
-          freshDownload: true,
-          lastModified: null,
-          observedAt: "2026-08-29T11:00:00Z",
-          operatorPrincipalId: "principal:cnf-fixture-observer-b",
-          resolvedUrl: secondResolvedUrl,
-          sha256: artifactSha256,
-          tool: "synthetic-cnf-cli-test/1",
-          transport: "https",
-        },
-      ],
       byteSize: artifactByteSize,
       objectUri: `s3://synthetic-cnf-artifacts/sha256/${artifactSha256}/cnf-synthetic.zip`,
       sha256: artifactSha256,
     },
     release: {
       ...template.release,
-      acquiredAt: "2026-08-30T12:00:00Z",
       publishedOn: "2026-08-29",
       upstreamSchemaVersion: "cnf-cli-integration-v1",
     },
@@ -621,6 +620,8 @@ function importReadyManifest(
         status: "approved",
       },
     },
+    evidenceBundle: null,
+    releaseClass: "fixture-nonrelease",
     templateOnly: false,
     validation: {
       ...template.validation,
@@ -651,6 +652,7 @@ function stageArguments(
   cacheDirectory: string,
   extractDirectory: string,
   manifestUri: string,
+  evidenceBundlePath: string,
 ): string[] {
   return [
     "catalogue",
@@ -662,6 +664,8 @@ function stageArguments(
     cacheDirectory,
     "--extract-dir",
     extractDirectory,
+    "--evidence-bundle",
+    evidenceBundlePath,
     "--manifest-object-uri",
     manifestUri,
   ];
@@ -687,6 +691,7 @@ function commandIo(
     errors,
     io: {
       environment,
+      now: () => new Date(SYNTHETIC_EVIDENCE_EVALUATED_AT),
       writeError: (value) => errors.push(value),
       writeOutput: (value) => {
         if (onOutput) outputChecks.push(onOutput());

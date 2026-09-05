@@ -208,4 +208,94 @@ describe("forward migration discovery", () => {
     expect(migrationSql).toContain("deleted_at is null or isfinite(deleted_at)");
     expect(migrationSql).toContain("on delete cascade");
   });
+
+  it("binds new catalogue attempts and releases to immutable acquisition evidence", async () => {
+    const migrationSql = await readFile(
+      resolve(import.meta.dirname, "../migrations/0011_food_import_evidence_binding.sql"),
+      "utf8",
+    );
+
+    for (const field of [
+      "release_class",
+      "evidence_bundle_sha256",
+      "evidence_bundle_uri",
+      "evidence_decision_sha256",
+      "evidence_object_version_id",
+      "evidence_valid_until",
+    ]) {
+      expect(migrationSql).toContain(field);
+    }
+    expect(migrationSql.match(/default 'legacy-unbound'/gu)).toHaveLength(2);
+    expect(migrationSql.match(/alter column release_class drop default/gu)).toHaveLength(2);
+    expect(migrationSql).toContain("restore the pre-migration database backup to roll");
+    expect(migrationSql).toContain("never fabricate or upgrade");
+    expect(migrationSql).toContain(
+      "release_class in ('live-reviewed', 'fixture-nonrelease', 'legacy-unbound')",
+    );
+    expect(migrationSql).toMatch(
+      /unique \(\s*food_source_id,\s*release_key,\s*artifact_sha256,\s*parser_version,\s*evidence_bundle_sha256\s*\)/u,
+    );
+    expect(migrationSql).toContain("new catalogue provenance cannot be legacy-unbound");
+    expect(migrationSql).toContain("food_import_batch_reject_new_legacy_unbound");
+    expect(migrationSql).toContain("food_source_release_reject_new_legacy_unbound");
+    expect(migrationSql).toContain(
+      "only a promoted live-reviewed catalogue release may become active",
+    );
+    expect(migrationSql.match(/new\.evidence_bundle_sha256/gu)).toHaveLength(2);
+    expect(migrationSql.match(/new\.evidence_valid_until/gu)?.length).toBeGreaterThanOrEqual(2);
+    expect(migrationSql).toContain("food_import_approval_guard_authority");
+    expect(migrationSql).toContain("food_import_batch_fixture_authority_check");
+    expect(migrationSql).toContain("food_source_release_promoted_authority_check");
+    expect(migrationSql).toContain("new.evidence_valid_until <= clock_timestamp()");
+    expect(migrationSql).toContain("catalogue_evidence_bundle_uri_is_valid");
+    expect(migrationSql).toContain("([^/?#]+/)*sha256/");
+    expect(migrationSql.match(/evidence_bundle_sha256 is not null/gu)).toHaveLength(2);
+    expect(migrationSql).toContain("octet_length(evidence_object_version_id) <= 1024");
+    expect(migrationSql).toContain("clock_timestamp() + interval '24 hours'");
+    expect(migrationSql).toContain(
+      "new catalogue evidence must be current and no more than 24 hours ahead at insertion",
+    );
+    expect(migrationSql).toContain("food import approval references an unknown batch");
+    expect(migrationSql).toContain("active catalogue release does not belong to the food source");
+    expect(migrationSql).not.toMatch(/set\s+evidence_(?:bundle|decision|object|valid)/iu);
+  });
+
+  it("fully validates only migration-grandfathered legacy promotions", async () => {
+    const migrationSql = await readFile(
+      resolve(import.meta.dirname, "../migrations/0012_food_source_release_legacy_grandfather.sql"),
+      "utf8",
+    );
+
+    expect(migrationSql).toContain(
+      "where release_class = 'legacy-unbound'\n  and status = 'promoted'",
+    );
+    expect(migrationSql).toContain("disable trigger food_source_release_guard_update");
+    expect(migrationSql).toContain("enable trigger food_source_release_guard_update");
+    expect(migrationSql).toContain("legacy_promotion_grandfathered_at is not null");
+    expect(migrationSql).toContain("release_class = 'live-reviewed'");
+    expect(migrationSql).toContain("grandfather marker is migration-owned and immutable");
+    expect(migrationSql).not.toMatch(/\bnot\s+valid\b/iu);
+  });
+
+  it("hardens evidence fields and direct-insert authority state", async () => {
+    const migrationSql = await readFile(
+      resolve(import.meta.dirname, "../migrations/0013_food_release_authority_hardening.sql"),
+      "utf8",
+    );
+
+    expect(migrationSql).toContain(
+      "create or replace function catalogue_evidence_bundle_uri_is_valid",
+    );
+    expect(migrationSql).toContain("[A-Za-z0-9_-][A-Za-z0-9._~-]*");
+    expect(migrationSql).toContain(
+      "existing food import batch has a non-canonical evidence bundle URI",
+    );
+    expect(migrationSql).toContain("new food import batch must begin in staging");
+    expect(migrationSql).toContain("new food source release must begin imported");
+    expect(migrationSql).toContain(
+      "new food source must start without an active catalogue release",
+    );
+    expect(migrationSql).toContain("before insert on food_source");
+    expect(migrationSql).not.toMatch(/\bnot\s+valid\b/iu);
+  });
 });

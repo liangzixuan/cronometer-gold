@@ -453,6 +453,68 @@ describe("catalogue reconciliation document", () => {
     );
   });
 
+  it("keeps fixture candidates non-release and legacy evidence baseline-only", () => {
+    const fixtureCandidate = buildCatalogueReconciliationDocument(
+      input({
+        candidate: {
+          ...input().candidate,
+          releaseClass: "fixture-nonrelease",
+        },
+      }),
+    );
+    expect(fixtureCandidate.evidence.candidate).toMatchObject({
+      releaseClass: "fixture-nonrelease",
+    });
+
+    expect(() =>
+      buildCatalogueReconciliationDocument(
+        input({
+          candidate: {
+            ...input().candidate,
+            evidenceBundleSha256: null,
+            evidenceBundleUri: null,
+            evidenceDecisionSha256: null,
+            evidenceObjectVersionId: null,
+            evidenceValidUntil: null,
+            releaseClass: "legacy-unbound",
+          },
+        }),
+      ),
+    ).toThrow("only valid for a null-bound baseline");
+
+    const baseline = input().baseline;
+    if (!baseline) throw new Error("Expected the default reconciliation baseline");
+    expect(() =>
+      buildCatalogueReconciliationDocument(
+        input({ baseline: { ...baseline, releaseClass: "fixture-nonrelease" } }),
+      ),
+    ).toThrow("cannot be an active baseline");
+
+    expect(() =>
+      buildCatalogueReconciliationDocument(
+        input({
+          candidate: {
+            ...input().candidate,
+            evidenceBundleUri: `${input().candidate.evidenceBundleUri}?credential=forbidden`,
+          },
+        }),
+      ),
+    ).toThrow("credential-free content-addressed S3 URI");
+
+    for (const evidenceObjectVersionId of [" leading-space", "x".repeat(513), "invalid%escape"]) {
+      expect(() =>
+        buildCatalogueReconciliationDocument(
+          input({
+            candidate: {
+              ...input().candidate,
+              evidenceObjectVersionId,
+            },
+          }),
+        ),
+      ).toThrow("bounded provider-neutral opaque identifier");
+    }
+  });
+
   it("rejects unknown runtime fields throughout builder inputs", () => {
     const paths: readonly (readonly (string | number)[])[] = [
       [],
@@ -632,10 +694,16 @@ function input(
       artifactBytes: "1000",
       artifactSha256: digest("1"),
       batchId: BASELINE_BATCH_ID,
+      evidenceBundleSha256: digest("7"),
+      evidenceBundleUri: `s3://evidence/sha256/${digest("7")}/baseline.json`,
+      evidenceDecisionSha256: digest("8"),
+      evidenceObjectVersionId: "baseline-version-1",
+      evidenceValidUntil: "2099-01-01T00:00:00.000Z",
       nutrientMappingDigest: digest("2"),
       parserBuildSha256: digest("3"),
       parserReportSha256: digest("4"),
       parserVersion: "fixture-parser@1",
+      releaseClass: "live-reviewed",
       releaseId: BASELINE_RELEASE_ID,
       releaseKey: "baseline-release",
       rightsManifestSha256: digest("5"),
@@ -647,10 +715,16 @@ function input(
       artifactBytes: "1001",
       artifactSha256: digest("7"),
       batchId: CANDIDATE_BATCH_ID,
+      evidenceBundleSha256: digest("c"),
+      evidenceBundleUri: `s3://evidence/sha256/${digest("c")}/candidate.json`,
+      evidenceDecisionSha256: digest("d"),
+      evidenceObjectVersionId: "candidate-version-1",
+      evidenceValidUntil: "2099-01-01T00:00:00.000Z",
       nutrientMappingDigest: digest("2"),
       parserBuildSha256: digest("8"),
       parserReportSha256: digest("9"),
       parserVersion: "fixture-parser@2",
+      releaseClass: "live-reviewed",
       releaseKey: "candidate-release",
       rightsManifestSha256: digest("a"),
       validationDigest: digest("b"),

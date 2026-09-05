@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { FoodSourceManifestV3 } from "@nutrition-tracker/ingestion";
+import type { FoodSourceManifestV4 } from "@nutrition-tracker/ingestion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveFdcCsvInspectionPaths, runCommand } from "../src/run.js";
 
@@ -281,12 +281,12 @@ describe("fdc inspect-csv", () => {
 });
 
 interface MutableManifest
-  extends Omit<FoodSourceManifestV3, "artifact" | "ingestion" | "validation"> {
-  artifact: Omit<FoodSourceManifestV3["artifact"], "byteSize" | "sha256"> & {
+  extends Omit<FoodSourceManifestV4, "artifact" | "ingestion" | "validation"> {
+  artifact: Omit<FoodSourceManifestV4["artifact"], "byteSize" | "sha256"> & {
     byteSize: number | null;
     sha256: string | null;
   };
-  ingestion: Omit<FoodSourceManifestV3["ingestion"], "parserBuildSha256" | "parserVersion"> & {
+  ingestion: Omit<FoodSourceManifestV4["ingestion"], "parserBuildSha256" | "parserVersion"> & {
     parserBuildSha256: string | null;
     parserVersion: string | null;
   };

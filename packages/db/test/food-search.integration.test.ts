@@ -22,6 +22,7 @@ import {
 } from "../src/index.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
+const FIXTURE_EVIDENCE_VALID_UNTIL = new Date(Date.now() + 12 * 60 * 60 * 1_000).toISOString();
 const describeDatabase = databaseUrl ? describe : describe.skip;
 
 describeDatabase("promoted food-search projection", () => {
@@ -830,11 +831,17 @@ async function insertRelease(
         artifact_bytes: 1_024,
         artifact_sha256: artifactSha256,
         artifact_uri: `s3://search-fixture/sha256/${artifactSha256}.json`,
+        evidence_bundle_sha256: "b".repeat(64),
+        evidence_bundle_uri: `s3://search-fixture/sha256/${"b".repeat(64)}/${releaseKey}.json`,
+        evidence_decision_sha256: "c".repeat(64),
+        evidence_object_version_id: `search-fixture-${releaseKey}-v1`,
+        evidence_valid_until: FIXTURE_EVIDENCE_VALID_UNTIL,
         food_source_id: sourceId,
         media_type: "application/json",
         parser_version: `search-fixture@${releaseKey}`,
         published_on: "2026-08-15",
         record_counts: { fixture: true },
+        release_class: "live-reviewed",
         release_key: releaseKey,
         rights_manifest_sha256: "a".repeat(64),
         rights_manifest_uri: "repo://search-fixture-rights.json",
@@ -856,33 +863,52 @@ async function insertCompletedBatch(
   recordCount: number,
 ): Promise<string> {
   const artifactSha256 = hashCharacter.repeat(64);
-  return (
-    await transaction
-      .insertInto("food_import_batch")
-      .values({
-        acquired_at: "2026-08-15T12:00:00Z",
-        artifact_bytes: 1_024,
-        artifact_sha256: artifactSha256,
-        artifact_uri: `s3://search-fixture/sha256/${artifactSha256}.json`,
-        completed_at: "2026-08-15T13:00:00Z",
-        food_source_id: sourceId,
-        materialized_count: recordCount,
-        media_type: "application/json",
-        parser_version: `search-fixture@${releaseKey}`,
-        published_on: "2026-08-15",
-        release_id: releaseId,
-        release_key: releaseKey,
-        rights_manifest_sha256: "a".repeat(64),
-        rights_manifest_uri: "repo://search-fixture-rights.json",
-        staged_count: recordCount,
-        status: "completed",
-        upstream_schema_version: "fixture-v1",
-        valid_count: recordCount,
-        validated_at: "2026-08-15T12:30:00Z",
-      })
-      .returning("id")
-      .executeTakeFirstOrThrow()
-  ).id;
+  const batch = await transaction
+    .insertInto("food_import_batch")
+    .values({
+      acquired_at: "2026-08-15T12:00:00Z",
+      artifact_bytes: 1_024,
+      artifact_sha256: artifactSha256,
+      artifact_uri: `s3://search-fixture/sha256/${artifactSha256}.json`,
+      evidence_bundle_sha256: "b".repeat(64),
+      evidence_bundle_uri: `s3://search-fixture/sha256/${"b".repeat(64)}/${releaseKey}.json`,
+      evidence_decision_sha256: "c".repeat(64),
+      evidence_object_version_id: `search-fixture-${releaseKey}-v1`,
+      evidence_valid_until: FIXTURE_EVIDENCE_VALID_UNTIL,
+      food_source_id: sourceId,
+      media_type: "application/json",
+      parser_version: `search-fixture@${releaseKey}`,
+      published_on: "2026-08-15",
+      release_class: "live-reviewed",
+      release_key: releaseKey,
+      rights_manifest_sha256: "a".repeat(64),
+      rights_manifest_uri: "repo://search-fixture-rights.json",
+      staged_count: recordCount,
+      upstream_schema_version: "fixture-v1",
+      valid_count: recordCount,
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow();
+  await transaction
+    .updateTable("food_import_batch")
+    .set({ status: "ready", validated_at: "2026-08-15T12:30:00Z" })
+    .where("id", "=", batch.id)
+    .execute();
+  await transaction
+    .updateTable("food_import_batch")
+    .set({ release_id: releaseId, status: "promoting" })
+    .where("id", "=", batch.id)
+    .execute();
+  await transaction
+    .updateTable("food_import_batch")
+    .set({
+      completed_at: "2026-08-15T13:00:00Z",
+      materialized_count: recordCount,
+      status: "completed",
+    })
+    .where("id", "=", batch.id)
+    .execute();
+  return batch.id;
 }
 
 async function insertFood(

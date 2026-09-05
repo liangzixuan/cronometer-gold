@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { constants, readFileSync, type Stats } from "node:fs";
 import { link, lstat, mkdir, open, readFile, realpath, unlink, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { TextDecoder } from "node:util";
 
 import {
   approveBatch,
@@ -25,22 +26,27 @@ import {
   validateBatch,
 } from "@nutrition-tracker/db";
 import {
+  type AuthenticatedReleaseEvidenceBundleV1,
   acquireArtifact,
   adaptFdcJsonRelease,
+  assertAuthenticatedReleaseEvidenceBundle,
   assertFdcCsvArchiveContext,
   assertFdcCsvArchiveContract,
   assertImportReadyManifest,
   assertManifestParserIdentity,
+  authenticatedReleaseEvidenceBundleSha256,
   CNF_ARCHIVE_CSV_PATHS,
   type CnfArchiveParseResult,
+  canonicalJson,
   type ExtractedZipFile,
   extractZipArchive,
   type FdcCsvArchiveContext,
   type FdcCsvArchiveParseResult,
   type FdcCsvFileContract,
-  type FoodSourceManifestV3,
+  type FoodSourceManifestV4,
   IngestionError,
   invariant,
+  parseAuthenticatedReleaseEvidenceBundle,
   parseCnfArchive,
   parseFdcCsvArchive,
   parseFoodSourceManifest,
@@ -50,6 +56,7 @@ import { flagOption, optionalOption, parseArguments, requiredOption } from "./ar
 
 export interface CommandIo {
   readonly environment: NodeJS.ProcessEnv;
+  readonly now?: () => Date;
   readonly writeError: (value: string) => void;
   readonly writeOutput: (value: string) => void;
 }
@@ -95,15 +102,22 @@ const CATALOGUE_RECONCILE_OPTIONS = Object.freeze([
 const STAGE_FDC_OPTIONS = Object.freeze([
   "artifact",
   "cache-dir",
+  "evidence-bundle",
   "extract-dir",
   "manifest-object-uri",
 ]);
+const STAGE_FDC_REQUIRED_OPTIONS = STAGE_FDC_OPTIONS;
 const STAGE_CNF_OPTIONS = Object.freeze([
   "artifact",
   "cache-dir",
+  "evidence-bundle",
   "extract-dir",
   "manifest-object-uri",
 ]);
+const STAGE_CNF_REQUIRED_OPTIONS = STAGE_FDC_REQUIRED_OPTIONS;
+const MANIFEST_VALIDATE_OPTIONS = Object.freeze(["evidence-bundle", "import-ready"]);
+const REGISTER_SOURCE_OPTIONS = Object.freeze(["evidence-bundle"]);
+const MAX_RELEASE_EVIDENCE_BYTES = 2 * 1024 * 1024;
 const INSPECT_FDC_OPTIONS = Object.freeze(["artifact", "cache-dir", "extract-dir"]);
 const INSPECT_FDC_CSV_OPTIONS = Object.freeze(["artifact", "cache-dir", "extract-dir"]);
 const INSPECT_CNF_OPTIONS = Object.freeze(["artifact", "cache-dir", "extract-dir"]);
@@ -131,7 +145,7 @@ export async function runCommand(argv: readonly string[], io: CommandIo): Promis
     const command = arguments_.command.join(" ");
     switch (command) {
       case "manifest validate":
-        await validateManifestCommand(arguments_.positionals, arguments_.options, io);
+        await validateManifestCommand(argv, arguments_.positionals, arguments_.options, io);
         return 0;
       case "artifact observe":
         await observeArtifactCommand(argv, arguments_.positionals, arguments_.options, io);
@@ -155,7 +169,7 @@ export async function runCommand(argv: readonly string[], io: CommandIo): Promis
         await mappingsCommand(arguments_.positionals, io);
         return 0;
       case "catalogue register-source":
-        await registerSourceCommand(arguments_.positionals, io);
+        await registerSourceCommand(argv, arguments_.positionals, arguments_.options, io);
         return 0;
       case "catalogue reconcile":
         await reconcileCommand(argv, arguments_.positionals, arguments_.options, io);
@@ -429,15 +443,32 @@ async function writeCatalogueReconciliationReportAtPath(
 }
 
 async function validateManifestCommand(
+  argv: readonly string[],
   positionals: readonly string[],
   options: Readonly<Record<string, string | true>>,
   io: CommandIo,
 ): Promise<void> {
+  assertExactManifestValidateArguments(argv, positionals, options);
   const manifest = await readManifest(singlePositional(positionals, "manifest path"));
-  if (flagOption(options, "import-ready")) assertImportReadyManifest(manifest);
+  const importReadyRequested = flagOption(options, "import-ready");
+  let evidenceBundleSha256: string | null = null;
+  if (importReadyRequested) {
+    assertImportReadyManifest(manifest);
+    evidenceBundleSha256 = (
+      await readBoundReleaseEvidence(
+        manifest,
+        requiredOption(options, "evidence-bundle"),
+        currentTimeIso(io),
+      )
+    ).bundleSha256;
+  } else if (options["evidence-bundle"] !== undefined) {
+    throw new Error("--evidence-bundle requires --import-ready");
+  }
   output(io, {
-    importReadyRequested: flagOption(options, "import-ready"),
+    evidenceBundleSha256,
+    importReadyRequested,
     manifestVersion: manifest.manifestVersion,
+    releaseClass: manifest.releaseClass,
     releaseKey: manifest.release.releaseKey,
     sourceCode: manifest.source.code,
     templateOnly: manifest.templateOnly,
@@ -684,6 +715,7 @@ async function inspectCnfCommand(
     cacheDirectory: workspacePath(requiredOption(options, "cache-dir")),
     operatorPrincipalId: "local-cnf-inspection",
     source: workspacePath(requiredOption(options, "artifact")),
+    sourceReadMode: "require-source-read",
     sourceMode: "local-test",
     tool: "nutrition-tracker-ingest/0.1.0",
     verification: {
@@ -735,6 +767,12 @@ async function stageFdcCommand(
   const manifestSha256 = hashBytes(manifestBytes);
   const manifest = parseFoodSourceManifest(JSON.parse(manifestBytes.toString("utf8")));
   assertImportReadyManifest(manifest);
+  const releaseEvidence = await readBoundReleaseEvidence(
+    manifest,
+    requiredOption(options, "evidence-bundle"),
+    currentTimeIso(io),
+  );
+  assertEvidenceDecisionRunner(actor, releaseEvidence.bundle);
   const parserBuildSha256 = trustedParserBuildSha256(manifest, io.environment);
   requireFdcFoundationManifest(manifest);
   const manifestObjectUri = immutableManifestObjectUri(
@@ -779,10 +817,16 @@ async function stageFdcCommand(
         artifactBytes: manifest.artifact.byteSize,
         artifactSha256: manifest.artifact.sha256,
         artifactUri: manifest.artifact.objectUri,
+        evidenceBundleSha256: releaseEvidence.bundleSha256,
+        evidenceBundleUri: manifest.evidenceBundle.objectUri,
+        evidenceDecisionSha256: releaseEvidence.decisionSha256,
+        evidenceObjectVersionId: releaseEvidence.bundle.candidate.artifact.objectVersionId,
+        evidenceValidUntil: releaseEvidence.bundle.currentRetention.validUntil,
         mediaType: manifest.artifact.mediaType,
         parserVersion: `${manifest.ingestion.parserVersion}+build.${parserBuildSha256}+mapping.${nutrientMappingDigest}`,
         publishedOn: manifest.release.publishedOn,
         releaseKey: manifest.release.releaseKey,
+        releaseClass: manifest.releaseClass,
         rightsManifestSha256: manifestSha256,
         rightsManifestUri: manifestObjectUri,
         sourceCode: manifest.source.code,
@@ -917,6 +961,12 @@ async function stageCnfCommand(
   const manifestSha256 = hashBytes(manifestBytes);
   const manifest = parseFoodSourceManifest(JSON.parse(manifestBytes.toString("utf8")));
   assertImportReadyManifest(manifest);
+  const releaseEvidence = await readBoundReleaseEvidence(
+    manifest,
+    requiredOption(options, "evidence-bundle"),
+    currentTimeIso(io),
+  );
+  assertEvidenceDecisionRunner(actor, releaseEvidence.bundle);
   const guideFiles = requireCnfManifest(manifest);
   const parserBuildSha256 = trustedParserBuildSha256(manifest, io.environment);
   const manifestObjectUri = immutableManifestObjectUri(
@@ -927,6 +977,7 @@ async function stageCnfCommand(
     cacheDirectory: workspacePath(requiredOption(options, "cache-dir")),
     operatorPrincipalId: actor.principalId,
     source: workspacePath(requiredOption(options, "artifact")),
+    sourceReadMode: "require-source-read",
     sourceMode: "local-test",
     tool: "nutrition-tracker-ingest/0.1.0",
     verification: {
@@ -963,10 +1014,16 @@ async function stageCnfCommand(
         artifactBytes: manifest.artifact.byteSize,
         artifactSha256: manifest.artifact.sha256,
         artifactUri: manifest.artifact.objectUri,
+        evidenceBundleSha256: releaseEvidence.bundleSha256,
+        evidenceBundleUri: manifest.evidenceBundle.objectUri,
+        evidenceDecisionSha256: releaseEvidence.decisionSha256,
+        evidenceObjectVersionId: releaseEvidence.bundle.candidate.artifact.objectVersionId,
+        evidenceValidUntil: releaseEvidence.bundle.currentRetention.validUntil,
         mediaType: manifest.artifact.mediaType,
         parserVersion: `${manifest.ingestion.parserVersion}+build.${parserBuildSha256}+mapping.${nutrientMappingDigest}`,
         publishedOn: manifest.release.publishedOn,
         releaseKey: manifest.release.releaseKey,
+        releaseClass: manifest.releaseClass,
         rightsManifestSha256: manifestSha256,
         rightsManifestUri: manifestObjectUri,
         sourceCode: manifest.source.code,
@@ -1177,7 +1234,7 @@ function cnfExclusionReasonCounts(exclusions: JsonObject): JsonObject {
 }
 
 function cnfParserReport(
-  manifest: FoodSourceManifestV3,
+  manifest: FoodSourceManifestV4,
   parsed: CnfArchiveParseResult,
   metrics: CnfStageMetrics,
   exclusions: JsonObject,
@@ -1234,7 +1291,7 @@ export function cnfParserBaselineEvidence(
 }
 
 export function assertCnfParserBaseline(
-  manifest: FoodSourceManifestV3,
+  manifest: FoodSourceManifestV4,
   parsed: CnfArchiveParseResult,
   metrics: CnfStageMetrics,
 ): void {
@@ -1295,13 +1352,29 @@ async function mappingsCommand(positionals: readonly string[], io: CommandIo): P
   }
 }
 
-async function registerSourceCommand(positionals: readonly string[], io: CommandIo): Promise<void> {
-  trustedRunnerActor(io.environment);
+async function registerSourceCommand(
+  argv: readonly string[],
+  positionals: readonly string[],
+  options: Readonly<Record<string, string | true>>,
+  io: CommandIo,
+): Promise<void> {
+  assertExactRegisterSourceArguments(argv, positionals, options);
+  const actor = trustedRunnerActor(io.environment);
   const manifest = await readManifest(singlePositional(positionals, "manifest path"));
   assertImportReadyManifest(manifest);
+  const releaseEvidence = await readBoundReleaseEvidence(
+    manifest,
+    requiredOption(options, "evidence-bundle"),
+    currentTimeIso(io),
+  );
+  assertEvidenceDecisionRunner(actor, releaseEvidence.bundle);
   const database = createDatabaseFromEnvironment(io.environment);
   try {
-    output(io, { sourceId: await registerManifestSource(database, manifest) });
+    output(io, {
+      evidenceBundleSha256: releaseEvidence.bundleSha256,
+      releaseClass: manifest.releaseClass,
+      sourceId: await registerManifestSource(database, manifest),
+    });
   } finally {
     await database.destroy();
   }
@@ -1354,11 +1427,11 @@ async function rollbackCommand(
   }
 }
 
-async function readManifest(path: string): Promise<FoodSourceManifestV3> {
+async function readManifest(path: string): Promise<FoodSourceManifestV4> {
   return parseFoodSourceManifest(JSON.parse(await readFile(workspacePath(path), "utf8")));
 }
 
-function requireFdcFoundationManifest(manifest: FoodSourceManifestV3): void {
+function requireFdcFoundationManifest(manifest: FoodSourceManifestV4): void {
   if (
     manifest.source.code !== "USDA_FDC" ||
     manifest.artifact.mediaType !== "application/zip" ||
@@ -1420,7 +1493,7 @@ const FDC_CSV_DISPOSITIONS: Readonly<
   }),
 });
 
-function requireFdcCsvManifest(manifest: FoodSourceManifestV3): FdcCsvManifestContract {
+function requireFdcCsvManifest(manifest: FoodSourceManifestV4): FdcCsvManifestContract {
   if (
     manifest.source.code !== "USDA_FDC" ||
     manifest.artifact.mediaType !== "application/zip" ||
@@ -1515,7 +1588,7 @@ function requireFdcCsvManifest(manifest: FoodSourceManifestV3): FdcCsvManifestCo
   });
 }
 
-function requireCnfManifest(manifest: FoodSourceManifestV3): readonly string[] {
+function requireCnfManifest(manifest: FoodSourceManifestV4): readonly string[] {
   if (
     manifest.source.code !== "HEALTH_CANADA_CNF" ||
     manifest.artifact.mediaType !== "application/zip" ||
@@ -1574,7 +1647,7 @@ interface ParsedFdcArtifact {
 }
 
 async function parseFdcArtifact(
-  manifest: FoodSourceManifestV3,
+  manifest: FoodSourceManifestV4,
   archivePath: string,
   extractionDirectory: string,
 ): Promise<ParsedFdcArtifact> {
@@ -1791,7 +1864,7 @@ function stagedInputs(
 }
 
 function parserReport(
-  manifest: FoodSourceManifestV3,
+  manifest: FoodSourceManifestV4,
   parsed: ReturnType<typeof adaptFdcJsonRelease>,
   metrics: FdcMetrics,
   parserBuildSha256: string,
@@ -1819,7 +1892,7 @@ function parserReport(
 
 async function registerManifestSource(
   database: Parameters<typeof registerFoodSourceFromReviewedManifest>[0],
-  manifest: FoodSourceManifestV3,
+  manifest: FoodSourceManifestV4,
 ): Promise<string> {
   assertImportReadyManifest(manifest);
   const status = manifest.rights.review.status;
@@ -1856,6 +1929,105 @@ async function registerManifestSource(
 
 function hashBytes(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+interface ValidatedReleaseEvidence {
+  readonly bundle: AuthenticatedReleaseEvidenceBundleV1;
+  readonly bundleSha256: string;
+  readonly decisionSha256: string;
+}
+
+async function readBoundReleaseEvidence(
+  manifest: FoodSourceManifestV4,
+  pathInput: string,
+  evaluatedAt: string,
+): Promise<ValidatedReleaseEvidence> {
+  const path = workspacePath(pathInput);
+  assertLinuxFilesystemPath(path, "release evidence bundle");
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  let bytes: Buffer;
+  try {
+    handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    const descriptorPath = await realpath(`/proc/self/fd/${handle.fd}`);
+    assertLinuxFilesystemPath(descriptorPath, "bound release evidence bundle");
+    const metadata = await handle.stat();
+    const expectedUid = process.getuid?.();
+    if (
+      !metadata.isFile() ||
+      metadata.nlink !== 1 ||
+      (metadata.mode & 0o777) !== 0o600 ||
+      (expectedUid !== undefined && metadata.uid !== expectedUid)
+    ) {
+      throw new Error("Release evidence bundle must be an owner-only, single-link regular file");
+    }
+    if (metadata.size <= 0 || metadata.size > MAX_RELEASE_EVIDENCE_BYTES) {
+      throw new Error(
+        `Release evidence bundle must contain 1..${MAX_RELEASE_EVIDENCE_BYTES} bytes`,
+      );
+    }
+    bytes = await handle.readFile();
+    if (bytes.byteLength !== metadata.size) {
+      throw new Error("Release evidence bundle changed while it was read");
+    }
+  } finally {
+    await handle?.close();
+  }
+
+  let input: unknown;
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error("Release evidence bundle must be valid UTF-8");
+  }
+  try {
+    input = JSON.parse(text) as unknown;
+  } catch {
+    throw new Error("Release evidence bundle must be valid JSON");
+  }
+  const canonicalInput = canonicalJson(input);
+  const canonicalBytes = Buffer.from(canonicalInput, "utf8");
+  const canonicalBytesWithNewline = Buffer.concat([canonicalBytes, Buffer.from("\n")]);
+  if (!bytes.equals(canonicalBytes) && !bytes.equals(canonicalBytesWithNewline)) {
+    throw new Error(
+      "Release evidence bundle must use its exact canonical UTF-8 JSON serialization",
+    );
+  }
+  const bundle = parseAuthenticatedReleaseEvidenceBundle(input);
+  if (canonicalJson(bundle) !== canonicalInput) {
+    throw new Error("Release evidence bundle contains non-canonical contract values");
+  }
+  assertAuthenticatedReleaseEvidenceBundle(manifest, bundle, evaluatedAt);
+  const bundleSha256 = authenticatedReleaseEvidenceBundleSha256(bundle);
+  return {
+    bundle,
+    bundleSha256,
+    decisionSha256: hashBytes(Buffer.from(canonicalJson(bundle.authorityDecision), "utf8")),
+  };
+}
+
+function assertEvidenceDecisionRunner(
+  actor: TrustedRunnerActor,
+  bundle: AuthenticatedReleaseEvidenceBundleV1,
+): void {
+  const reviewer = bundle.authorityDecision.reviewerClaims;
+  if (
+    reviewer.reviewerPrincipalId.normalize("NFKC").toLowerCase() !== actor.principalId ||
+    reviewer.authenticationMethod !== actor.authenticationMethod ||
+    reviewer.runReference !== actor.runReference
+  ) {
+    throw new Error(
+      "Authority decision reviewer identity must match the authenticated staging runner",
+    );
+  }
+}
+
+function currentTimeIso(io: CommandIo): string {
+  const current = io.now?.() ?? new Date();
+  if (!(current instanceof Date) || Number.isNaN(current.valueOf())) {
+    throw new Error("Command clock returned an invalid instant");
+  }
+  return current.toISOString();
 }
 
 function immutableManifestObjectUri(value: string, sha256: string): string {
@@ -2064,7 +2236,7 @@ function fdcMetrics(parsed: ReturnType<typeof adaptFdcJsonRelease>): FdcMetrics 
 }
 
 function fdcArchiveEvidence(
-  manifest: FoodSourceManifestV3,
+  manifest: FoodSourceManifestV4,
   member: FdcMemberEvidence,
 ): FdcArchiveEvidence {
   const expectedFiles = Object.freeze([...manifest.validation.expectedFiles].sort());
@@ -2204,7 +2376,7 @@ interface FdcParserBaselineMismatch {
 }
 
 function fdcParserBaselineMismatches(
-  manifest: FoodSourceManifestV3,
+  manifest: FoodSourceManifestV4,
   actual: Readonly<Record<string, number | string>>,
 ): readonly FdcParserBaselineMismatch[] {
   const expected = manifest.validation.releaseSpecificExpectations;
@@ -2225,7 +2397,7 @@ function fdcParserBaselineMismatches(
 }
 
 function fdcCsvParserBaselineMismatches(
-  manifest: FoodSourceManifestV3,
+  manifest: FoodSourceManifestV4,
   actual: Readonly<Record<string, number | string>>,
 ): readonly FdcParserBaselineMismatch[] {
   const mismatches = [...fdcParserBaselineMismatches(manifest, actual)];
@@ -2241,7 +2413,7 @@ function fdcCsvParserBaselineMismatches(
 }
 
 function assertFdcParserBaseline(
-  manifest: FoodSourceManifestV3,
+  manifest: FoodSourceManifestV4,
   metrics: FdcMetrics,
   semanticEvidence: FdcSemanticEvidence,
 ): void {
@@ -2797,7 +2969,27 @@ function assertExactStageFdcArguments(
       throw new Error(`Unknown catalogue stage-fdc option: --${name ?? ""}`);
     }
   }
-  for (const name of STAGE_FDC_OPTIONS) requiredOption(options, name);
+  for (const name of STAGE_FDC_REQUIRED_OPTIONS) requiredOption(options, name);
+}
+
+function assertExactManifestValidateArguments(
+  argv: readonly string[],
+  positionals: readonly string[],
+  options: Readonly<Record<string, string | true>>,
+): void {
+  assertExactSingleManifestCommandArguments(
+    argv,
+    positionals,
+    options,
+    MANIFEST_VALIDATE_OPTIONS,
+    "manifest validate",
+  );
+  if (options["import-ready"] !== undefined) {
+    flagOption(options, "import-ready");
+    requiredOption(options, "evidence-bundle");
+  } else if (options["evidence-bundle"] !== undefined) {
+    throw new Error("--evidence-bundle requires --import-ready");
+  }
 }
 
 function assertExactCnfInspectArguments(
@@ -2849,7 +3041,47 @@ function assertExactStageCnfArguments(
       throw new Error(`Unknown catalogue stage-cnf option: --${name ?? ""}`);
     }
   }
-  for (const name of STAGE_CNF_OPTIONS) requiredOption(options, name);
+  for (const name of STAGE_CNF_REQUIRED_OPTIONS) requiredOption(options, name);
+}
+
+function assertExactRegisterSourceArguments(
+  argv: readonly string[],
+  positionals: readonly string[],
+  options: Readonly<Record<string, string | true>>,
+): void {
+  assertExactSingleManifestCommandArguments(
+    argv,
+    positionals,
+    options,
+    REGISTER_SOURCE_OPTIONS,
+    "catalogue register-source",
+  );
+  requiredOption(options, "evidence-bundle");
+}
+
+function assertExactSingleManifestCommandArguments(
+  argv: readonly string[],
+  positionals: readonly string[],
+  options: Readonly<Record<string, string | true>>,
+  allowedOptions: readonly string[],
+  command: string,
+): void {
+  if (positionals.length !== 1 || !positionals[0]) {
+    throw new Error(`${command} requires exactly one manifest path`);
+  }
+  const allowed = new Set(allowedOptions);
+  for (const name of Object.keys(options)) {
+    if (!allowed.has(name)) throw new Error(`Unknown ${command} option: --${name}`);
+  }
+  const tokens = argv[0] === "--" ? argv.slice(1) : argv;
+  for (const token of tokens.slice(2)) {
+    if (token === "--") break;
+    if (!token.startsWith("--")) continue;
+    const name = token.slice(2).split("=", 1)[0];
+    if (!name || !allowed.has(name)) {
+      throw new Error(`Unknown ${command} option: --${name ?? ""}`);
+    }
+  }
 }
 
 export function validatedStageCheckpointOffset(
@@ -2963,7 +3195,7 @@ function auditReason(actor: TrustedRunnerActor, reason: string): string {
 }
 
 function trustedParserBuildSha256(
-  manifest: FoodSourceManifestV3,
+  manifest: FoodSourceManifestV4,
   environment: NodeJS.ProcessEnv,
 ): string {
   const runtimeDigest = textInput(
@@ -3002,15 +3234,15 @@ function trustedRunReference(value: unknown, field: string): string {
 function usage(): string {
   return [
     "Usage:",
-    "  ingest manifest validate <manifest> [--import-ready]",
+    "  ingest manifest validate <manifest> [--import-ready --evidence-bundle <bundle.json>]",
     "  ingest artifact observe <manifest> --cache-dir <path> --observation-out <path>",
     "  ingest fdc inspect <manifest> --artifact <zip> --cache-dir <path> --extract-dir <path>",
     "  ingest fdc inspect-csv <manifest> --artifact <zip> --cache-dir <path> --extract-dir <path>",
     "  ingest cnf inspect <manifest> --artifact <zip> --cache-dir <path> --extract-dir <path>",
-    "  ingest catalogue stage-fdc <manifest> --artifact <zip> --cache-dir <path> --extract-dir <path> --manifest-object-uri <s3-uri>",
-    "  ingest catalogue stage-cnf <manifest> --artifact <zip> --cache-dir <path> --extract-dir <path> --manifest-object-uri <s3-uri>",
+    "  ingest catalogue stage-fdc <manifest> --artifact <zip> --cache-dir <path> --evidence-bundle <bundle.json> --extract-dir <path> --manifest-object-uri <s3-uri>",
+    "  ingest catalogue stage-cnf <manifest> --artifact <zip> --cache-dir <path> --evidence-bundle <bundle.json> --extract-dir <path> --manifest-object-uri <s3-uri>",
     "  ingest catalogue mappings <reviewed-mapping.json>",
-    "  ingest catalogue register-source <import-ready-manifest>",
+    "  ingest catalogue register-source <import-ready-manifest> --evidence-bundle <bundle.json>",
     "  ingest catalogue reconcile --batch-id <uuid> --expected-current-release-id <uuid|none> --expected-validation-digest <lowercase-sha256> --report-out .local-data/evidence/catalogue-reconciliation/<file>",
     "  ingest catalogue approve --batch-id <id> --role <role> --manifest-sha256 <sha> --validation-digest <sha>",
     "  ingest catalogue promote --batch-id <id> [--reason <text>]",

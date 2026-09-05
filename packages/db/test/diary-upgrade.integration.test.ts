@@ -87,21 +87,25 @@ describeDatabase("0004 existing-schema diary upgrade", () => {
         .executeTakeFirstOrThrow();
       const release = await database
         .insertInto("food_source_release")
-        .values({
-          acquired_at: "2026-08-01T00:00:00Z",
-          artifact_bytes: 1,
-          artifact_sha256: "a".repeat(64),
-          artifact_uri: "s3://legacy-upgrade/catalogue.json",
-          food_source_id: source.id,
-          media_type: "application/json",
-          parser_version: "legacy-upgrade@1",
-          record_counts: { records: 1 },
-          release_key: "legacy-release",
-          rights_manifest_sha256: "b".repeat(64),
-          rights_manifest_uri: "repo://legacy-rights.json",
-          status: "imported",
-          validation_summary: { valid: true },
-        })
+        .values(
+          {
+            acquired_at: "2026-08-01T00:00:00Z",
+            artifact_bytes: 1,
+            artifact_sha256: "a".repeat(64),
+            artifact_uri: "s3://legacy-upgrade/catalogue.json",
+            food_source_id: source.id,
+            media_type: "application/json",
+            parser_version: "legacy-upgrade@1",
+            record_counts: { records: 1 },
+            release_key: "legacy-release",
+            rights_manifest_sha256: "b".repeat(64),
+            rights_manifest_uri: "repo://legacy-rights.json",
+            status: "imported",
+            validation_summary: { valid: true },
+          } as never,
+          // This fixture intentionally targets migrations 0001-0003, before
+          // acquisition-evidence columns exist.
+        )
         .returning("id")
         .executeTakeFirstOrThrow();
       const food = await database

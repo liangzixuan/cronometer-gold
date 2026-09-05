@@ -1,5 +1,13 @@
 import type { ArtifactAcquisitionObservation } from "./acquisition.js";
+import { canonicalJson, sha256CanonicalJson } from "./deterministic.js";
 import { IngestionError, invariant } from "./errors.js";
+import {
+  assertImportReadyManifest,
+  type FoodSourceManifestV4,
+  type FoodSourceReleaseClass,
+  manifestAuthoritySubjectSha256,
+  parseFoodSourceManifest,
+} from "./manifest.js";
 
 export const ACQUISITION_EVIDENCE_CONTRACT_VERSION = 1 as const;
 
@@ -123,6 +131,84 @@ export interface AcquisitionReviewCandidateV1 {
     AuthenticatedAcquisitionSidecarV1,
   ];
   readonly receipt: RetainedArtifactReceiptV1;
+}
+
+export interface CurrentRetentionVerificationV1 {
+  readonly contractVersion: typeof ACQUISITION_EVIDENCE_CONTRACT_VERSION;
+  readonly kind: "current-retention-verification";
+  readonly checkedAt: string;
+  readonly validUntil: string;
+  readonly provider: string;
+  readonly providerNamespace: string;
+  readonly bucket: string;
+  readonly objectUri: string;
+  readonly objectKey: string;
+  readonly objectVersionId: string;
+  readonly mediaType: string;
+  readonly sha256: string;
+  readonly byteSize: number;
+  readonly verifierClaims: {
+    readonly verification: "externally-verified";
+    readonly authenticationMethod: "oidc" | "workload-identity";
+    readonly principalId: string;
+    readonly runId: string;
+    readonly runReference: string;
+    readonly issuer: string;
+    readonly subject: string;
+    readonly audience: string;
+    readonly verifiedAt: string;
+  };
+  readonly retention: {
+    readonly status: "active";
+    readonly mode: "governance" | "compliance";
+    readonly enforced: true;
+    readonly retainUntil: string;
+  };
+}
+
+export interface FoodReleaseAuthorityDecisionV1 {
+  readonly contractVersion: typeof ACQUISITION_EVIDENCE_CONTRACT_VERSION;
+  readonly kind: "food-release-authority-decision";
+  readonly decision: "approved-for-fixture-staging" | "approved-for-live-staging";
+  readonly decidedAt: string;
+  readonly releaseClass: FoodSourceReleaseClass;
+  readonly candidateSha256: string;
+  readonly currentRetentionSha256: string;
+  readonly manifestAuthoritySubjectSha256: string;
+  readonly scope: {
+    readonly sourceCode: string;
+    readonly releaseKey: string;
+    readonly artifact: {
+      readonly downloadUrl: string;
+      readonly resolvedUrl: string;
+      readonly objectUri: string;
+      readonly objectVersionId: string;
+      readonly mediaType: string;
+      readonly sha256: string;
+      readonly byteSize: number;
+    };
+  };
+  readonly reviewerClaims: {
+    readonly verification: "externally-verified";
+    readonly authenticationMethod: "oidc" | "workload-identity";
+    readonly reviewerPrincipalId: string;
+    readonly runId: string;
+    readonly runReference: string;
+    readonly issuer: string;
+    readonly subject: string;
+    readonly audience: string;
+    readonly verifiedAt: string;
+  };
+}
+
+export interface AuthenticatedReleaseEvidenceBundleV1 {
+  readonly contractVersion: typeof ACQUISITION_EVIDENCE_CONTRACT_VERSION;
+  readonly kind: "authenticated-release-evidence-bundle";
+  readonly candidate: AcquisitionReviewCandidateV1;
+  readonly candidateSha256: string;
+  readonly currentRetention: CurrentRetentionVerificationV1;
+  readonly currentRetentionSha256: string;
+  readonly authorityDecision: FoodReleaseAuthorityDecisionV1;
 }
 
 export interface AssembleAcquisitionReviewCandidateOptions {
@@ -564,6 +650,572 @@ export function assembleAcquisitionReviewCandidate(
   });
 }
 
+const MAXIMUM_RETENTION_VERIFICATION_VALIDITY_MS = 24 * 60 * 60 * 1_000;
+
+export function parseAuthenticatedReleaseEvidenceBundle(
+  input: unknown,
+): AuthenticatedReleaseEvidenceBundleV1 {
+  return parseAuthenticatedReleaseEvidenceBundleSnapshot(
+    snapshotEvidence(input, "authenticated release evidence bundle"),
+  );
+}
+
+export function authenticatedReleaseEvidenceBundleSha256(
+  bundle: AuthenticatedReleaseEvidenceBundleV1,
+): string {
+  return sha256CanonicalJson(parseAuthenticatedReleaseEvidenceBundle(bundle));
+}
+
+export function assertAuthenticatedReleaseEvidenceBundle(
+  manifest: FoodSourceManifestV4,
+  bundle: AuthenticatedReleaseEvidenceBundleV1,
+  evaluatedAt = new Date().toISOString(),
+): void {
+  const parsedManifest = parseFoodSourceManifest(manifest);
+  assertImportReadyManifest(parsedManifest);
+  const parsedBundle = parseAuthenticatedReleaseEvidenceBundle(bundle);
+  instant(evaluatedAt, "$evaluatedAt");
+
+  const bundleSha256 = sha256CanonicalJson(parsedBundle);
+  invariant(
+    parsedManifest.evidenceBundle.sha256 === bundleSha256,
+    "INVALID_ARTIFACT",
+    "Manifest evidence-bundle digest does not match the supplied canonical bundle",
+  );
+  invariant(
+    parsedBundle.authorityDecision.manifestAuthoritySubjectSha256 ===
+      manifestAuthoritySubjectSha256(parsedManifest),
+    "INVALID_ARTIFACT",
+    "Authority decision does not bind the exact manifest authority subject",
+  );
+  invariant(
+    parsedBundle.authorityDecision.releaseClass === parsedManifest.releaseClass,
+    "INVALID_ARTIFACT",
+    "Authority decision release class does not match the manifest",
+  );
+  const expectedDecision =
+    parsedManifest.releaseClass === "live-reviewed"
+      ? "approved-for-live-staging"
+      : "approved-for-fixture-staging";
+  invariant(
+    parsedBundle.authorityDecision.decision === expectedDecision,
+    "INVALID_ARTIFACT",
+    "Authority decision does not approve the manifest release class",
+  );
+
+  const scope = parsedBundle.authorityDecision.scope;
+  const candidateArtifact = parsedBundle.candidate.artifact;
+  const manifestArtifact = parsedManifest.artifact;
+  invariant(
+    scope.sourceCode === parsedManifest.source.code &&
+      scope.releaseKey === parsedManifest.release.releaseKey,
+    "INVALID_ARTIFACT",
+    "Authority decision source or release scope does not match the manifest",
+  );
+  invariant(
+    manifestArtifact.downloadUrl !== null &&
+      manifestArtifact.objectUri !== null &&
+      manifestArtifact.sha256 !== null &&
+      manifestArtifact.byteSize !== null &&
+      canonicalUrl(candidateArtifact.downloadUrl) === canonicalUrl(manifestArtifact.downloadUrl) &&
+      parsedManifest.artifact.permittedResolvedUrls
+        .map(canonicalUrl)
+        .includes(canonicalUrl(candidateArtifact.resolvedUrl)) &&
+      candidateArtifact.objectUri === manifestArtifact.objectUri &&
+      candidateArtifact.mediaType === manifestArtifact.mediaType &&
+      candidateArtifact.sha256 === manifestArtifact.sha256 &&
+      candidateArtifact.byteSize === manifestArtifact.byteSize,
+    "INVALID_ARTIFACT",
+    "Authenticated evidence artifact does not match the manifest",
+  );
+
+  const acquiredAt = Date.parse(parsedManifest.release.acquiredAt);
+  const latestObservation = Math.max(
+    ...parsedBundle.candidate.acquisitions.map((entry) => Date.parse(entry.observation.observedAt)),
+  );
+  invariant(
+    latestObservation <= acquiredAt &&
+      acquiredAt <= Date.parse(parsedBundle.candidate.receipt.retainedAt),
+    "INVALID_ARTIFACT",
+    "Manifest acquisition time must follow both acquisitions and not follow retention",
+  );
+
+  const evaluationTime = Date.parse(evaluatedAt);
+  invariant(
+    Date.parse(parsedBundle.authorityDecision.decidedAt) <= evaluationTime &&
+      evaluationTime < Date.parse(parsedBundle.currentRetention.validUntil),
+    "INVALID_ARTIFACT",
+    "Authority evidence is not current at the requested evaluation time",
+  );
+}
+
+function parseAuthenticatedReleaseEvidenceBundleSnapshot(
+  input: unknown,
+): AuthenticatedReleaseEvidenceBundleV1 {
+  const root = exactObject(input, "$", [
+    "contractVersion",
+    "kind",
+    "candidate",
+    "candidateSha256",
+    "currentRetention",
+    "currentRetentionSha256",
+    "authorityDecision",
+  ]);
+  equal(root.contractVersion, ACQUISITION_EVIDENCE_CONTRACT_VERSION, "$.contractVersion");
+  equal(root.kind, "authenticated-release-evidence-bundle", "$.kind");
+  const candidate = parseAcquisitionReviewCandidateSnapshot(root.candidate);
+  sha256(root.candidateSha256, "$.candidateSha256");
+  invariant(
+    root.candidateSha256 === sha256CanonicalJson(candidate),
+    "INVALID_ARTIFACT",
+    "Evidence bundle candidate digest does not match its canonical candidate",
+  );
+  const currentRetention = parseCurrentRetentionVerificationSnapshot(root.currentRetention);
+  sha256(root.currentRetentionSha256, "$.currentRetentionSha256");
+  invariant(
+    root.currentRetentionSha256 === sha256CanonicalJson(currentRetention),
+    "INVALID_ARTIFACT",
+    "Evidence bundle retention digest does not match its canonical verification",
+  );
+  const authorityDecision = parseFoodReleaseAuthorityDecisionSnapshot(root.authorityDecision);
+  invariant(
+    authorityDecision.candidateSha256 === root.candidateSha256 &&
+      authorityDecision.currentRetentionSha256 === root.currentRetentionSha256,
+    "INVALID_ARTIFACT",
+    "Authority decision does not bind the exact candidate and retention digests",
+  );
+
+  const artifact = candidate.artifact;
+  const receipt = candidate.receipt;
+  invariant(
+    currentRetention.provider === receipt.provider &&
+      currentRetention.providerNamespace === receipt.providerNamespace &&
+      currentRetention.bucket === receipt.bucket &&
+      currentRetention.objectUri === receipt.objectUri &&
+      currentRetention.objectKey === receipt.objectKey &&
+      currentRetention.objectVersionId === receipt.objectVersionId &&
+      currentRetention.mediaType === receipt.mediaType &&
+      currentRetention.sha256 === receipt.sha256 &&
+      currentRetention.byteSize === receipt.byteSize,
+    "INVALID_ARTIFACT",
+    "Current-retention verification does not match the retained artifact receipt",
+  );
+
+  const acquisitionOne = candidate.acquisitions[0];
+  const acquisitionTwo = candidate.acquisitions[1];
+  const acquisitionAndStoragePrincipals = new Set([
+    normalizedPrincipal(acquisitionOne.runnerClaims.actorPrincipalId),
+    normalizedPrincipal(acquisitionTwo.runnerClaims.actorPrincipalId),
+    normalizedPrincipal(receipt.storageWorkload.principalId),
+  ]);
+  const retentionVerifierPrincipal = normalizedPrincipal(
+    currentRetention.verifierClaims.principalId,
+  );
+  invariant(
+    !acquisitionAndStoragePrincipals.has(retentionVerifierPrincipal),
+    "INVALID_ARTIFACT",
+    "Current-retention verifier principal must differ from acquisition and storage principals",
+  );
+  const acquisitionAndStorageSubjects = new Set([
+    authenticatedSubjectKey(
+      acquisitionOne.runnerClaims.issuer,
+      acquisitionOne.runnerClaims.subject,
+    ),
+    authenticatedSubjectKey(
+      acquisitionTwo.runnerClaims.issuer,
+      acquisitionTwo.runnerClaims.subject,
+    ),
+    authenticatedSubjectKey(receipt.storageWorkload.issuer, receipt.storageWorkload.subject),
+  ]);
+  const retentionVerifierSubject = authenticatedSubjectKey(
+    currentRetention.verifierClaims.issuer,
+    currentRetention.verifierClaims.subject,
+  );
+  invariant(
+    !acquisitionAndStorageSubjects.has(retentionVerifierSubject),
+    "INVALID_ARTIFACT",
+    "Current-retention verifier identity must differ from acquisition and storage identities",
+  );
+
+  invariant(
+    authorityDecision.scope.artifact.downloadUrl === artifact.downloadUrl &&
+      authorityDecision.scope.artifact.resolvedUrl === artifact.resolvedUrl &&
+      authorityDecision.scope.artifact.objectUri === artifact.objectUri &&
+      authorityDecision.scope.artifact.objectVersionId === artifact.objectVersionId &&
+      authorityDecision.scope.artifact.mediaType === artifact.mediaType &&
+      authorityDecision.scope.artifact.sha256 === artifact.sha256 &&
+      authorityDecision.scope.artifact.byteSize === artifact.byteSize,
+    "INVALID_ARTIFACT",
+    "Authority decision artifact scope does not match the acquisition candidate",
+  );
+
+  const receiptRecordedAt = Date.parse(receipt.recordedAt);
+  const checkedAt = Date.parse(currentRetention.checkedAt);
+  const validUntil = Date.parse(currentRetention.validUntil);
+  const decidedAt = Date.parse(authorityDecision.decidedAt);
+  invariant(
+    receiptRecordedAt <= checkedAt &&
+      checkedAt <= decidedAt &&
+      decidedAt < validUntil &&
+      validUntil - checkedAt <= MAXIMUM_RETENTION_VERIFICATION_VALIDITY_MS,
+    "INVALID_ARTIFACT",
+    "Release evidence chronology or retention-verification validity is invalid",
+  );
+  invariant(
+    validUntil <= Date.parse(receipt.retention.retainUntil) &&
+      currentRetention.retention.retainUntil === receipt.retention.retainUntil &&
+      currentRetention.retention.mode === receipt.retention.mode,
+    "INVALID_ARTIFACT",
+    "Retained-object policy does not cover the authority evidence validity window",
+  );
+
+  const reviewerPrincipal = normalizedPrincipal(
+    authorityDecision.reviewerClaims.reviewerPrincipalId,
+  );
+  invariant(
+    !acquisitionAndStoragePrincipals.has(reviewerPrincipal),
+    "INVALID_ARTIFACT",
+    "Authority reviewer principal must differ from acquisition and storage principals",
+  );
+  const reviewerSubject = authenticatedSubjectKey(
+    authorityDecision.reviewerClaims.issuer,
+    authorityDecision.reviewerClaims.subject,
+  );
+  invariant(
+    !acquisitionAndStorageSubjects.has(reviewerSubject),
+    "INVALID_ARTIFACT",
+    "Authority reviewer identity must differ from acquisition and storage identities",
+  );
+
+  return deepFreeze({
+    contractVersion: ACQUISITION_EVIDENCE_CONTRACT_VERSION,
+    kind: "authenticated-release-evidence-bundle",
+    candidate,
+    candidateSha256: root.candidateSha256 as string,
+    currentRetention,
+    currentRetentionSha256: root.currentRetentionSha256 as string,
+    authorityDecision,
+  });
+}
+
+function parseAcquisitionReviewCandidateSnapshot(input: unknown): AcquisitionReviewCandidateV1 {
+  const root = exactObject(input, "$.candidate", [
+    "contractVersion",
+    "kind",
+    "reviewStatus",
+    "importReadiness",
+    "artifact",
+    "acquisitions",
+    "receipt",
+  ]);
+  equal(root.contractVersion, ACQUISITION_EVIDENCE_CONTRACT_VERSION, "$.candidate.contractVersion");
+  equal(root.kind, "acquisition-review-candidate", "$.candidate.kind");
+  equal(root.reviewStatus, "pending-review", "$.candidate.reviewStatus");
+  equal(root.importReadiness, "not-granted", "$.candidate.importReadiness");
+  invariant(
+    Array.isArray(root.acquisitions) && root.acquisitions.length === 2,
+    "INVALID_ARTIFACT",
+    "Evidence bundle candidate requires exactly two acquisitions",
+  );
+  const acquisitions = [
+    parseAuthenticatedAcquisitionSnapshot(root.acquisitions[0]),
+    parseAuthenticatedAcquisitionSnapshot(root.acquisitions[1]),
+  ] as const;
+  const receipt = parseRetainedArtifactReceiptSnapshot(root.receipt);
+  const suppliedArtifact = parseCandidateArtifact(root.artifact);
+  const supplied: AcquisitionReviewCandidateV1 = {
+    contractVersion: ACQUISITION_EVIDENCE_CONTRACT_VERSION,
+    kind: "acquisition-review-candidate",
+    reviewStatus: "pending-review",
+    importReadiness: "not-granted",
+    artifact: suppliedArtifact,
+    acquisitions,
+    receipt,
+  };
+  const assembled = assembleAcquisitionReviewCandidate({ acquisitions, receipt });
+  invariant(
+    canonicalJson(supplied) === canonicalJson(assembled),
+    "INVALID_ARTIFACT",
+    "Supplied acquisition candidate is not the deterministic assembled candidate",
+  );
+  return assembled;
+}
+
+function parseCandidateArtifact(input: unknown): AcquisitionReviewCandidateV1["artifact"] {
+  const artifact = exactObject(input, "$.candidate.artifact", [
+    "downloadUrl",
+    "resolvedUrl",
+    "mediaType",
+    "sha256",
+    "byteSize",
+    "provider",
+    "providerNamespace",
+    "bucket",
+    "objectUri",
+    "objectKey",
+    "objectVersionId",
+  ]);
+  credentialFreeHttpsUrl(artifact.downloadUrl, "$.candidate.artifact.downloadUrl");
+  credentialFreeHttpsUrl(artifact.resolvedUrl, "$.candidate.artifact.resolvedUrl");
+  mediaType(artifact.mediaType, "$.candidate.artifact.mediaType");
+  sha256(artifact.sha256, "$.candidate.artifact.sha256");
+  positiveInteger(artifact.byteSize, "$.candidate.artifact.byteSize");
+  stableIdentifier(artifact.provider, "$.candidate.artifact.provider");
+  stableIdentifier(artifact.providerNamespace, "$.candidate.artifact.providerNamespace");
+  bucket(artifact.bucket, "$.candidate.artifact.bucket");
+  objectKey(artifact.objectKey, "$.candidate.artifact.objectKey");
+  opaqueProviderIdentifier(artifact.objectVersionId, "$.candidate.artifact.objectVersionId");
+  contentAddressedS3Uri(artifact.objectUri, artifact.bucket, artifact.objectKey, artifact.sha256);
+  return {
+    downloadUrl: canonicalUrl(artifact.downloadUrl as string),
+    resolvedUrl: canonicalUrl(artifact.resolvedUrl as string),
+    mediaType: artifact.mediaType as string,
+    sha256: artifact.sha256 as string,
+    byteSize: artifact.byteSize as number,
+    provider: artifact.provider as string,
+    providerNamespace: artifact.providerNamespace as string,
+    bucket: artifact.bucket as string,
+    objectUri: canonicalS3Uri(artifact.objectUri as string, artifact.objectKey as string),
+    objectKey: artifact.objectKey as string,
+    objectVersionId: artifact.objectVersionId as string,
+  };
+}
+
+function parseCurrentRetentionVerificationSnapshot(input: unknown): CurrentRetentionVerificationV1 {
+  const root = exactObject(input, "$.currentRetention", [
+    "contractVersion",
+    "kind",
+    "checkedAt",
+    "validUntil",
+    "provider",
+    "providerNamespace",
+    "bucket",
+    "objectUri",
+    "objectKey",
+    "objectVersionId",
+    "mediaType",
+    "sha256",
+    "byteSize",
+    "verifierClaims",
+    "retention",
+  ]);
+  equal(
+    root.contractVersion,
+    ACQUISITION_EVIDENCE_CONTRACT_VERSION,
+    "$.currentRetention.contractVersion",
+  );
+  equal(root.kind, "current-retention-verification", "$.currentRetention.kind");
+  instant(root.checkedAt, "$.currentRetention.checkedAt");
+  instant(root.validUntil, "$.currentRetention.validUntil");
+  stableIdentifier(root.provider, "$.currentRetention.provider");
+  stableIdentifier(root.providerNamespace, "$.currentRetention.providerNamespace");
+  bucket(root.bucket, "$.currentRetention.bucket");
+  objectKey(root.objectKey, "$.currentRetention.objectKey");
+  opaqueProviderIdentifier(root.objectVersionId, "$.currentRetention.objectVersionId");
+  mediaType(root.mediaType, "$.currentRetention.mediaType");
+  sha256(root.sha256, "$.currentRetention.sha256");
+  positiveInteger(root.byteSize, "$.currentRetention.byteSize");
+  contentAddressedS3Uri(root.objectUri, root.bucket, root.objectKey, root.sha256);
+
+  const verifierClaims = exactObject(root.verifierClaims, "$.currentRetention.verifierClaims", [
+    "verification",
+    "authenticationMethod",
+    "principalId",
+    "runId",
+    "runReference",
+    "issuer",
+    "subject",
+    "audience",
+    "verifiedAt",
+  ]);
+  validateExternallyVerifiedIdentity(
+    verifierClaims,
+    "principalId",
+    "$.currentRetention.verifierClaims",
+    root.checkedAt,
+  );
+  const retention = exactObject(root.retention, "$.currentRetention.retention", [
+    "status",
+    "mode",
+    "enforced",
+    "retainUntil",
+  ]);
+  equal(retention.status, "active", "$.currentRetention.retention.status");
+  enumeration(retention.mode, "$.currentRetention.retention.mode", ["governance", "compliance"]);
+  equal(retention.enforced, true, "$.currentRetention.retention.enforced");
+  instant(retention.retainUntil, "$.currentRetention.retention.retainUntil");
+  const checkedAt = Date.parse(root.checkedAt as string);
+  const validUntil = Date.parse(root.validUntil as string);
+  invariant(
+    checkedAt < validUntil &&
+      validUntil - checkedAt <= MAXIMUM_RETENTION_VERIFICATION_VALIDITY_MS &&
+      validUntil <= Date.parse(retention.retainUntil as string),
+    "INVALID_ARTIFACT",
+    "Current-retention verification must be valid for at most 24 hours within retention",
+  );
+
+  return deepFreeze({
+    contractVersion: ACQUISITION_EVIDENCE_CONTRACT_VERSION,
+    kind: "current-retention-verification",
+    checkedAt: root.checkedAt as string,
+    validUntil: root.validUntil as string,
+    provider: root.provider as string,
+    providerNamespace: root.providerNamespace as string,
+    bucket: root.bucket as string,
+    objectUri: canonicalS3Uri(root.objectUri as string, root.objectKey as string),
+    objectKey: root.objectKey as string,
+    objectVersionId: root.objectVersionId as string,
+    mediaType: root.mediaType as string,
+    sha256: root.sha256 as string,
+    byteSize: root.byteSize as number,
+    verifierClaims: {
+      verification: "externally-verified",
+      authenticationMethod: verifierClaims.authenticationMethod as "oidc" | "workload-identity",
+      principalId: verifierClaims.principalId as string,
+      runId: verifierClaims.runId as string,
+      runReference: canonicalUrl(verifierClaims.runReference as string),
+      issuer: canonicalUrl(verifierClaims.issuer as string),
+      subject: verifierClaims.subject as string,
+      audience: verifierClaims.audience as string,
+      verifiedAt: verifierClaims.verifiedAt as string,
+    },
+    retention: {
+      status: "active",
+      mode: retention.mode as "governance" | "compliance",
+      enforced: true,
+      retainUntil: retention.retainUntil as string,
+    },
+  });
+}
+
+function parseFoodReleaseAuthorityDecisionSnapshot(input: unknown): FoodReleaseAuthorityDecisionV1 {
+  const root = exactObject(input, "$.authorityDecision", [
+    "contractVersion",
+    "kind",
+    "decision",
+    "decidedAt",
+    "releaseClass",
+    "candidateSha256",
+    "currentRetentionSha256",
+    "manifestAuthoritySubjectSha256",
+    "scope",
+    "reviewerClaims",
+  ]);
+  equal(
+    root.contractVersion,
+    ACQUISITION_EVIDENCE_CONTRACT_VERSION,
+    "$.authorityDecision.contractVersion",
+  );
+  equal(root.kind, "food-release-authority-decision", "$.authorityDecision.kind");
+  enumeration(root.decision, "$.authorityDecision.decision", [
+    "approved-for-fixture-staging",
+    "approved-for-live-staging",
+  ]);
+  instant(root.decidedAt, "$.authorityDecision.decidedAt");
+  enumeration(root.releaseClass, "$.authorityDecision.releaseClass", [
+    "live-reviewed",
+    "fixture-nonrelease",
+  ]);
+  const expectedDecision =
+    root.releaseClass === "live-reviewed"
+      ? "approved-for-live-staging"
+      : "approved-for-fixture-staging";
+  invariant(
+    root.decision === expectedDecision,
+    "INVALID_ARTIFACT",
+    "Authority decision does not match its release class",
+  );
+  sha256(root.candidateSha256, "$.authorityDecision.candidateSha256");
+  sha256(root.currentRetentionSha256, "$.authorityDecision.currentRetentionSha256");
+  sha256(root.manifestAuthoritySubjectSha256, "$.authorityDecision.manifestAuthoritySubjectSha256");
+
+  const scope = exactObject(root.scope, "$.authorityDecision.scope", [
+    "sourceCode",
+    "releaseKey",
+    "artifact",
+  ]);
+  stableIdentifier(scope.sourceCode, "$.authorityDecision.scope.sourceCode");
+  stableLabel(scope.releaseKey, "$.authorityDecision.scope.releaseKey");
+  const artifact = parseAuthorityDecisionArtifact(scope.artifact);
+  const reviewerClaims = exactObject(root.reviewerClaims, "$.authorityDecision.reviewerClaims", [
+    "verification",
+    "authenticationMethod",
+    "reviewerPrincipalId",
+    "runId",
+    "runReference",
+    "issuer",
+    "subject",
+    "audience",
+    "verifiedAt",
+  ]);
+  validateExternallyVerifiedIdentity(
+    reviewerClaims,
+    "reviewerPrincipalId",
+    "$.authorityDecision.reviewerClaims",
+    root.decidedAt,
+  );
+
+  return deepFreeze({
+    contractVersion: ACQUISITION_EVIDENCE_CONTRACT_VERSION,
+    kind: "food-release-authority-decision",
+    decision: root.decision as FoodReleaseAuthorityDecisionV1["decision"],
+    decidedAt: root.decidedAt as string,
+    releaseClass: root.releaseClass as FoodSourceReleaseClass,
+    candidateSha256: root.candidateSha256 as string,
+    currentRetentionSha256: root.currentRetentionSha256 as string,
+    manifestAuthoritySubjectSha256: root.manifestAuthoritySubjectSha256 as string,
+    scope: {
+      sourceCode: scope.sourceCode as string,
+      releaseKey: scope.releaseKey as string,
+      artifact,
+    },
+    reviewerClaims: {
+      verification: "externally-verified",
+      authenticationMethod: reviewerClaims.authenticationMethod as "oidc" | "workload-identity",
+      reviewerPrincipalId: reviewerClaims.reviewerPrincipalId as string,
+      runId: reviewerClaims.runId as string,
+      runReference: canonicalUrl(reviewerClaims.runReference as string),
+      issuer: canonicalUrl(reviewerClaims.issuer as string),
+      subject: reviewerClaims.subject as string,
+      audience: reviewerClaims.audience as string,
+      verifiedAt: reviewerClaims.verifiedAt as string,
+    },
+  });
+}
+
+function parseAuthorityDecisionArtifact(
+  input: unknown,
+): FoodReleaseAuthorityDecisionV1["scope"]["artifact"] {
+  const artifact = exactObject(input, "$.authorityDecision.scope.artifact", [
+    "downloadUrl",
+    "resolvedUrl",
+    "objectUri",
+    "objectVersionId",
+    "mediaType",
+    "sha256",
+    "byteSize",
+  ]);
+  credentialFreeHttpsUrl(artifact.downloadUrl, "$.authorityDecision.scope.artifact.downloadUrl");
+  credentialFreeHttpsUrl(artifact.resolvedUrl, "$.authorityDecision.scope.artifact.resolvedUrl");
+  opaqueProviderIdentifier(
+    artifact.objectVersionId,
+    "$.authorityDecision.scope.artifact.objectVersionId",
+  );
+  mediaType(artifact.mediaType, "$.authorityDecision.scope.artifact.mediaType");
+  sha256(artifact.sha256, "$.authorityDecision.scope.artifact.sha256");
+  positiveInteger(artifact.byteSize, "$.authorityDecision.scope.artifact.byteSize");
+  requiredString(artifact.objectUri, "$.authorityDecision.scope.artifact.objectUri");
+  return {
+    downloadUrl: canonicalUrl(artifact.downloadUrl as string),
+    resolvedUrl: canonicalUrl(artifact.resolvedUrl as string),
+    objectUri: artifact.objectUri as string,
+    objectVersionId: artifact.objectVersionId as string,
+    mediaType: artifact.mediaType as string,
+    sha256: artifact.sha256 as string,
+    byteSize: artifact.byteSize as number,
+  };
+}
+
 function contentAddressedS3Uri(
   value: unknown,
   expectedBucket: unknown,
@@ -584,6 +1236,7 @@ function contentAddressedS3Uri(
     (segment, index) => segment === "sha256" && pathSegments[index + 1] === digest,
   );
   const canonicalHostname = url.hostname.toLowerCase();
+  const canonicalObjectUri = `s3://${expectedBucket}/${key}`;
   const bucketIsValid =
     /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(canonicalHostname) &&
     !canonicalHostname.includes("..") &&
@@ -597,10 +1250,11 @@ function contentAddressedS3Uri(
       url.search === "" &&
       url.hash === "" &&
       canonicalHostname === expectedBucket &&
+      value === canonicalObjectUri &&
       url.pathname === `/${key}` &&
       digestIsBound,
     "INVALID_ARTIFACT",
-    "Artifact objectUri must be a credential-free content-addressed S3 URI matching objectKey",
+    "Artifact objectUri must be a canonical credential-free content-addressed S3 URI matching objectKey",
   );
 }
 
@@ -702,7 +1356,7 @@ function authenticationMethod(value: unknown, path: string): asserts value is st
 
 function validateExternallyVerifiedIdentity(
   identity: Readonly<Record<string, unknown>>,
-  principalField: "actorPrincipalId" | "principalId",
+  principalField: "actorPrincipalId" | "principalId" | "reviewerPrincipalId",
   path: string,
   authorizedActionAt: unknown,
 ): void {

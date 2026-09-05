@@ -31,6 +31,11 @@ try {
   });
 }
 
+const evidenceObjectUriSchema =
+  schema.properties?.evidenceBundle?.oneOf?.[1]?.properties?.objectUri;
+assert.ok(evidenceObjectUriSchema, "Evidence-bundle object URI schema is missing");
+const validateEvidenceObjectUri = ajv.compile(evidenceObjectUriSchema);
+
 const manifestNames = (await readdir(manifestDirectory))
   .filter((name) => checkedInManifestPattern.test(name))
   .sort();
@@ -59,6 +64,21 @@ for (const manifestName of manifestNames) {
     true,
     `${manifestName} is a checked-in template and must keep templateOnly=true`,
   );
+  assert.equal(
+    manifest.manifestVersion,
+    4,
+    `${manifestName} must use the current manifest-v4 authority contract`,
+  );
+  assert.equal(
+    manifest.releaseClass,
+    "live-reviewed",
+    `${manifestName} must remain classified as a live release candidate`,
+  );
+  assert.equal(
+    manifest.evidenceBundle,
+    null,
+    `${manifestName} is a template and must not bind authority evidence`,
+  );
   assert.throws(
     () => assertImportReadyManifest(manifest),
     undefined,
@@ -67,6 +87,7 @@ for (const manifestName of manifestNames) {
 }
 
 runDriftMutations(await readJson(path.join(manifestDirectory, manifestNames[0])));
+runEvidenceObjectUriSchemaCases();
 
 console.log(
   `Validated ${manifestNames.length} food-source manifest templates with strict JSON Schema and the runtime parser.`,
@@ -80,7 +101,7 @@ function runDriftMutations(fixture) {
     },
     {
       label: "unsupported manifest version",
-      value: { ...structuredClone(fixture), manifestVersion: 2 },
+      value: { ...structuredClone(fixture), manifestVersion: 3 },
     },
     {
       label: "incomplete import-ready promotion",
@@ -98,6 +119,31 @@ function runDriftMutations(fixture) {
       () => parseFoodSourceManifest(mutation.value),
       undefined,
       `Runtime parser unexpectedly accepted mutation: ${mutation.label}`,
+    );
+  }
+}
+
+function runEvidenceObjectUriSchemaCases() {
+  const digest = "c".repeat(64);
+  assert.equal(
+    validateEvidenceObjectUri(`s3://release-evidence/sha256/${digest}/bundle.json`),
+    true,
+    "Schema rejected the canonical evidence-bundle URI",
+  );
+  for (const [label, value] of [
+    [
+      "missing content-addressed digest segment",
+      "s3://release-evidence/not-content-addressed/bundle.json",
+    ],
+    ["empty segment before digest", `s3://release-evidence//sha256/${digest}/bundle.json`],
+    ["empty segment after digest", `s3://release-evidence/sha256/${digest}//bundle.json`],
+    ["dot segment", `s3://release-evidence/sha256/${digest}/nested/../bundle.json`],
+    ["malformed percent escape", `s3://release-evidence/%zz/sha256/${digest}/bundle.json`],
+  ]) {
+    assert.equal(
+      validateEvidenceObjectUri(value),
+      false,
+      `Schema unexpectedly accepted evidence URI with ${label}`,
     );
   }
 }

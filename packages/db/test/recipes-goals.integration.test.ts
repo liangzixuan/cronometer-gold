@@ -47,6 +47,7 @@ import {
 } from "../src/index.js";
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
+const FIXTURE_EVIDENCE_VALID_UNTIL = new Date(Date.now() + 12 * 60 * 60 * 1_000).toISOString();
 const describeDatabase = databaseUrl ? describe : describe.skip;
 
 describeDatabase("versioned recipes, recipe diary entries, and nutrition goals", () => {
@@ -870,10 +871,16 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
           artifact_bytes: 101,
           artifact_sha256: "7".repeat(64),
           artifact_uri: "s3://recipes-test/catalogue-2.json",
+          evidence_bundle_sha256: "9".repeat(64),
+          evidence_bundle_uri: `s3://recipes-test/sha256/${"9".repeat(64)}/bundle.json`,
+          evidence_decision_sha256: "a".repeat(64),
+          evidence_object_version_id: "recipes-test-evidence-2-v1",
+          evidence_valid_until: FIXTURE_EVIDENCE_VALID_UNTIL,
           food_source_id: fixture.catalogue.sourceId,
           media_type: "application/json",
           parser_version: "recipes-test@2",
           record_counts: { records: 0 },
+          release_class: "live-reviewed",
           release_key: "recipes-release-2",
           rights_manifest_sha256: "8".repeat(64),
           rights_manifest_uri: "repo://recipes-rights-2.json",
@@ -1948,10 +1955,16 @@ async function insertRelease(
         artifact_bytes: 100,
         artifact_sha256: "5".repeat(64),
         artifact_uri: "s3://recipes-test/catalogue.json",
+        evidence_bundle_sha256: "7".repeat(64),
+        evidence_bundle_uri: `s3://recipes-test/sha256/${"7".repeat(64)}/bundle.json`,
+        evidence_decision_sha256: "8".repeat(64),
+        evidence_object_version_id: "recipes-test-evidence-v1",
+        evidence_valid_until: FIXTURE_EVIDENCE_VALID_UNTIL,
         food_source_id: sourceId,
         media_type: "application/json",
         parser_version: "recipes-test@1",
         record_counts: { records: 1 },
+        release_class: "live-reviewed",
         release_key: "recipes-release-1",
         rights_manifest_sha256: "6".repeat(64),
         rights_manifest_uri: "repo://recipes-rights.json",
@@ -1968,29 +1981,48 @@ async function insertBatch(
   sourceId: string,
   releaseId: string,
 ): Promise<string> {
-  return (
-    await transaction
-      .insertInto("food_import_batch")
-      .values({
-        acquired_at: "2026-08-15T00:00:00Z",
-        artifact_bytes: 100,
-        artifact_sha256: "5".repeat(64),
-        artifact_uri: "s3://recipes-test/catalogue.json",
-        completed_at: "2026-08-15T01:00:00Z",
-        food_source_id: sourceId,
-        materialized_count: 1,
-        media_type: "application/json",
-        parser_version: "recipes-test@1",
-        release_id: releaseId,
-        release_key: "recipes-release-1",
-        rights_manifest_sha256: "6".repeat(64),
-        rights_manifest_uri: "repo://recipes-rights.json",
-        staged_count: 1,
-        status: "completed",
-        valid_count: 1,
-        validated_at: "2026-08-15T00:30:00Z",
-      })
-      .returning("id")
-      .executeTakeFirstOrThrow()
-  ).id;
+  const batch = await transaction
+    .insertInto("food_import_batch")
+    .values({
+      acquired_at: "2026-08-15T00:00:00Z",
+      artifact_bytes: 100,
+      artifact_sha256: "5".repeat(64),
+      artifact_uri: "s3://recipes-test/catalogue.json",
+      evidence_bundle_sha256: "7".repeat(64),
+      evidence_bundle_uri: `s3://recipes-test/sha256/${"7".repeat(64)}/bundle.json`,
+      evidence_decision_sha256: "8".repeat(64),
+      evidence_object_version_id: "recipes-test-evidence-v1",
+      evidence_valid_until: FIXTURE_EVIDENCE_VALID_UNTIL,
+      food_source_id: sourceId,
+      media_type: "application/json",
+      parser_version: "recipes-test@1",
+      release_class: "live-reviewed",
+      release_key: "recipes-release-1",
+      rights_manifest_sha256: "6".repeat(64),
+      rights_manifest_uri: "repo://recipes-rights.json",
+      staged_count: 1,
+      valid_count: 1,
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow();
+  await transaction
+    .updateTable("food_import_batch")
+    .set({ status: "ready", validated_at: "2026-08-15T00:30:00Z" })
+    .where("id", "=", batch.id)
+    .execute();
+  await transaction
+    .updateTable("food_import_batch")
+    .set({ release_id: releaseId, status: "promoting" })
+    .where("id", "=", batch.id)
+    .execute();
+  await transaction
+    .updateTable("food_import_batch")
+    .set({
+      completed_at: "2026-08-15T01:00:00Z",
+      materialized_count: 1,
+      status: "completed",
+    })
+    .where("id", "=", batch.id)
+    .execute();
+  return batch.id;
 }

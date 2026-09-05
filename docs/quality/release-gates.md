@@ -43,18 +43,43 @@ package boundaries.
   the content-addressed object URI. The later review/authority decision independently
   revalidates current provider retention. Structural parsing produces only
   pending-review evidence; it does not authenticate claims or grant import readiness.
-- The import-ready manifest and batch bind the exact authenticated sidecars,
-  retained-object receipt, assembled candidate, and named review decision by
-  cryptographic digest. Manifest version 3 does not yet implement this binding, so
-  live non-template manifests and staging remain blocked.
-  This is a procedural release-policy stop today; the existing staging runtime does
-  not distinguish live inputs from synthetic/local fixtures.
+- The source gate uses manifest version 4 only; version 3 is rejected instead of
+  being reinterpreted. Version 4 declares `releaseClass` as either
+  `live-reviewed` or `fixture-nonrelease`, and every non-template manifest traverses
+  the same complete canonical evidence-bundle check. The bundle binds the exact
+  authenticated sidecars and retained-object receipt through their deterministic
+  candidate, an externally obtained current-retention verification valid for no
+  more than 24 hours, and a named staging decision that binds the
+  manifest-authority subject, release class and scope, candidate digest, and
+  retention-check digest. The manifest binds the final bundle digest. The gate
+  rejects evidence at the exact expiry boundary and has no test, environment, or
+  CLI bypass.
+- The immutable staging batch persists the release class, evidence-bundle and
+  decision digests, retained-object version, and retention-evidence expiry.
+  Validation evidence commits to all of them, and the existing role approvals bind
+  them transitively through the validation digest. `fixture-nonrelease` follows the
+  identical parsing and staging gate but is permanently ineligible for approval,
+  promotion, activation, and rollback-to. Existing rows migrate to
+  `legacy-unbound` with null evidence rather than fabricated provenance and cannot
+  be used to establish new live authority.
+- Passing the source gate authenticates no identity claim, verifies no signature,
+  performs no current provider query, and proves neither object existence nor
+  retention. Live M0B remains blocked until a protected authenticated runner, two
+  real isolated acquisitions, a distinct immutable-storage workload, a current
+  provider check, and named reviews supply the evidence. A syntactically valid S3
+  URI is not proof that its object or lock exists.
 - Import from the pinned raw artifact is deterministic and reports accepted,
   rejected, quarantined, and missing-nutrient counts.
-- A source cannot publish directly into the active catalogue. Staging, validation,
-  three-role digest-bound approval, atomic activation, and pointer-only rollback
-  are proven by the PostgreSQL integration gate, including an unchanged historical
-  diary nutrient snapshot.
+- Through the supported application service, a source cannot publish directly
+  into the active catalogue. Staging, validation, three-role digest-bound
+  approval, atomic activation, and pointer-only rollback are proven by the
+  PostgreSQL integration gate, including an unchanged historical diary nutrient
+  snapshot. Database constraints independently protect immutable provenance,
+  release classification, canonical evidence fields, and initial workflow
+  states. The table-DML principal remains inside the trusted service boundary:
+  PostgreSQL does not independently recompute parser validation or authenticate
+  reviewer identities. A production least-privilege role/function boundary is a
+  live M0B prerequisite, not something this local gate proves.
 - The product renders unknown, trace, imputed, and label-rounded values distinctly.
 
 ## Local retention privacy drill

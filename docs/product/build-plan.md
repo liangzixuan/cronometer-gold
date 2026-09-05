@@ -230,9 +230,13 @@ acceptance; progress in either lane never waives the gates in the other.
 
 ## Canonical-ingestion boundary
 
-The release pipeline, real FDC/CNF parsers, immutable database workflow, approval
-gates, atomic promotion, idempotent replay, and forward rollback are implemented
-and tested. A live FDC release has intentionally not been promoted: the checked-in
+The release pipeline, real FDC/CNF parsers, supported-service database workflow,
+approval gates, atomic promotion, idempotent replay, and forward rollback are
+implemented and tested. Database constraints independently preserve immutable
+provenance, evidence classification, canonical evidence fields, and initial
+workflow states, but a principal with table DML remains inside the trusted
+service boundary. Production role/function isolation is still required before
+live authority. A live FDC release has intentionally not been promoted: the checked-in
 candidate remains non-importable until two independently authenticated operators
 agree on the streamed artifact, rights review is recorded, immutable object
 storage is provisioned, and the complete nutrient map is reviewed. Current-vs-
@@ -369,13 +373,38 @@ co-located package metadata. This is synthetic source readiness, not live
 evidence: no approved runner or immutable food-release store exists, and no
 current USDA artifact has been acquired.
 
-Manifest version 3 cannot yet bind the authenticated sidecars, retained-object
-receipt, assembled candidate, current-retention check, or named review decision by
-digest. The next source milestone is a reviewed manifest/batch evidence-bundle
-binding and fail-closed runtime gate. Until then, every live non-template manifest,
-staging attempt, approval, and activation remains blocked.
-That block is procedural release policy today; the existing staging runtime does
-not distinguish live inputs from synthetic/local fixtures.
+The source/local M0A gate now uses manifest version 4 only and rejects version 3
+rather than changing version 3 in place. Version 4 has exactly two release classes:
+`live-reviewed` and `fixture-nonrelease`. Every non-template manifest, including a
+fixture, traverses the same fail-closed runtime path with a complete canonical
+authenticated-release evidence bundle. That bundle contains the deterministic
+two-acquisition candidate, an externally obtained current-retention verification
+whose validity window is no longer than 24 hours, and a named decision binding the
+canonical manifest-authority subject, release class and scope, candidate digest,
+and current-retention digest. The manifest binds the resulting complete-bundle
+digest.
+
+The staging database persists the release class, bundle and decision digests,
+retained-object version, and retention-evidence expiry as immutable provenance.
+Validation evidence includes those values, so later role approvals bind them
+transitively through the validation digest. A persisted `fixture-nonrelease` batch
+may exercise parsing, staging, validation, and deterministic replay, but runtime and
+database transitions prevent it from being approved, promoted, activated, or used
+as a rollback target. There is no test-mode, environment-variable, or CLI flag that
+bypasses the bundle gate. The migration preserves pre-gate history as
+`legacy-unbound`; it does not invent provenance for existing rows or allow that
+history to become new live authority.
+
+This closes the source-code enforcement gap, not live M0B. The parser checks
+structure, canonical digests, cross-object identity, and chronology, but it does
+not authenticate OIDC or workload identity, verify signatures, query provider
+state, or prove object existence or retention. No protected live runner, real dual
+acquisition, distinct immutable-storage workload, current provider query, or named
+review has been performed. The production database principal is also not yet
+restricted behind reviewed workflow functions, so unrestricted table DML remains
+inside the trusted service boundary. Every live staging, approval, and activation
+remains blocked until those external controls provide trustworthy evidence and
+receive explicit authorization.
 
 The initial full-CSV inspector implements a database-free candidate contract and
 synthetic-fixture evidence for bounded parsing and joins. It has not inspected
