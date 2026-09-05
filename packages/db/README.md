@@ -61,10 +61,24 @@ guarded state with readiness blocked through its corresponding evidence; repair
 requires a new reviewed forward policy rather than replaying this non-idempotent
 migration.
 
+Forward migration 0016 hardens the existing `food_source` eligibility-to-search
+call chain before any non-owner catalogue DML. It attests the exact two
+application-schema `SECURITY INVOKER` functions and the exact ordinary enabled
+trigger, then pins both function search paths to `pg_catalog`, the captured
+application schema, and `pg_temp`. It changes no function body, owner, ACL, or
+invoker status and grants no privilege.
+`enqueue_food_search_food_eligibility_change`,
+`enqueue_food_search_serving_insert`, `enqueue_food_search_barcode_insert`, and
+`enqueue_food_search_barcode_update` still resolve their own unqualified
+relations and revision-function call through the ambient caller path. They
+remain owner-compatible and require separate review before corresponding
+non-owner table DML.
+
 Logical restores use the transactional policy in
 `restore/0014_catalogue_authority_policy.sql`. It pins the migration-0014
 function/trigger boundary plus the forward migration-0015 activation-null
-constraint and approval/guard-ACL corrections. The repository restore drill
+constraint and approval/guard-ACL corrections plus migration-0016's two
+food-search search paths and source-eligibility trigger. The repository restore drill
 pins that file's SHA-256, requires an explicit expected owner, keeps `PUBLIC CONNECT`
 revoked, enforces an exact effective login allowlist, and requires the exact
 tracked filename/file-byte-SHA ledger in `public.app_schema_migration` before
@@ -118,7 +132,7 @@ from the tracked migration files. It also requires `public` to be the only
 non-system schema and to be owned by `pg_database_owner`. It checks exact
 database/schema ACLs and grantors,
 relation/type/default/column ACL state and owners, the activation constraint,
-all 17 authority function hashes and executable semantics, safe authority on
+all 18 authority function hashes and executable semantics, safe authority on
 every other public routine, all 20 triggers on the six protected catalogue
 tables, the exact effective-login allowlist, role attributes and
 ownership, the complete membership graph, effective privileges, and seven

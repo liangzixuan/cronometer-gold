@@ -789,6 +789,273 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
       }
     }
   });
+
+  it("pins the food-source search rebuild path ahead of hostile permanent and temporary namespaces", async () => {
+    if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
+    const bootstrap = createDatabase({ connectionString: databaseUrl, maxConnections: 1 });
+    const token = randomBytes(6).toString("hex");
+    const schemaName = `food_search_hardening_${token}`;
+    const hostileSchema = `food_search_hostile_${token}`;
+    const scopedUrl = new URL(databaseUrl);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName},public`);
+    const database = createDatabase({ connectionString: scopedUrl.toString(), maxConnections: 1 });
+    let schemaCreated = false;
+    let hostileSchemaCreated = false;
+
+    try {
+      await sql`create schema ${sql.id(schemaName)}`.execute(bootstrap);
+      schemaCreated = true;
+      await sql`create schema ${sql.id(hostileSchema)}`.execute(bootstrap);
+      hostileSchemaCreated = true;
+      const migrations = await discoverMigrations();
+      const hardeningIndex = migrations.findIndex(
+        (migration) => migration.name === "0016_food_search_function_hardening.sql",
+      );
+      expect(hardeningIndex).toBeGreaterThan(0);
+      expect(migrations[hardeningIndex - 1]?.name).toBe(
+        "0015_catalogue_authority_expand_hardening.sql",
+      );
+      for (const migration of migrations.slice(0, hardeningIndex)) {
+        await sql.raw(migration.sql).execute(database);
+      }
+      const hardeningMigration = migrations[hardeningIndex];
+      if (!hardeningMigration) throw new Error("0016 hardening migration was not discovered");
+
+      const { sourceId } = await seedReadyBatch(
+        database,
+        `${token}h`,
+        "d".repeat(64),
+        "b".repeat(64),
+      );
+      await sql`
+        create function ${sql.id(hostileSchema)}.advance_food_search_projection_revision()
+        returns void
+        language plpgsql
+        as $function$
+        begin
+          update shadow_function_call set calls = calls + 1;
+        end;
+        $function$
+      `.execute(database);
+      await sql`
+        create temporary table shadow_function_call (
+          calls integer not null
+        ) on commit preserve rows
+      `.execute(database);
+      await sql`insert into pg_temp.shadow_function_call (calls) values (0)`.execute(database);
+      await sql`
+        create temporary table food_search_projection_revision (
+          singleton boolean primary key,
+          current_revision bigint not null,
+          published_revision bigint,
+          updated_at timestamptz not null
+        ) on commit preserve rows
+      `.execute(database);
+      await sql`
+        insert into pg_temp.food_search_projection_revision (
+          singleton, current_revision, published_revision, updated_at
+        ) values (true, 0, null, pg_catalog.clock_timestamp())
+      `.execute(database);
+      await sql`
+        create temporary table outbox_event (
+          aggregate_type text,
+          aggregate_id text,
+          event_type text,
+          deduplication_key text,
+          payload jsonb
+        ) on commit preserve rows
+      `.execute(database);
+
+      await sql`set search_path = ${sql.id(hostileSchema)}, ${sql.id(schemaName)}, public`.execute(
+        database,
+      );
+      await sql`
+        update ${sql.id(schemaName)}.food_source
+        set display_name = display_name || ' pre-hardening'
+        where id = ${sourceId}::bigint
+      `.execute(database);
+
+      expect(
+        (
+          await sql<{ current_revision: string }>`
+            select current_revision
+            from ${sql.id(schemaName)}.food_search_projection_revision
+            where singleton
+          `.execute(database)
+        ).rows[0],
+      ).toEqual({ current_revision: "0" });
+      expect(
+        (
+          await sql<{ event_count: number }>`
+            select pg_catalog.count(*)::integer as event_count
+            from ${sql.id(schemaName)}.outbox_event
+            where event_type = 'catalogue.source_release_activated'
+              and aggregate_id = ${sourceId}
+          `.execute(database)
+        ).rows[0],
+      ).toEqual({ event_count: 0 });
+      expect(
+        (
+          await sql<{ calls: number }>`
+            select calls from pg_temp.shadow_function_call
+          `.execute(database)
+        ).rows[0],
+      ).toEqual({ calls: 1 });
+      expect(
+        (
+          await sql<{ event_count: number }>`
+            select pg_catalog.count(*)::integer as event_count
+            from pg_temp.outbox_event
+          `.execute(database)
+        ).rows[0],
+      ).toEqual({ event_count: 1 });
+
+      await sql`set search_path = ${sql.id(schemaName)}, public`.execute(database);
+      await sql`
+        create function ${sql.id(hostileSchema)}.enqueue_food_search_source_eligibility_change()
+        returns trigger
+        language plpgsql
+        as $function$
+        begin
+          return new;
+        end;
+        $function$
+      `.execute(database);
+      await sql`
+        drop trigger food_source_search_eligibility_outbox
+        on ${sql.id(schemaName)}.food_source
+      `.execute(database);
+      await sql`
+        create trigger food_source_search_eligibility_outbox
+        after update of
+          active, active_release_id, code, display_name, license_expression,
+          attribution_required, attribution_text, commercial_use_allowed,
+          redistribution_allowed, rights_review_status, rights_reviewed_at,
+          rights_reviewed_by
+        on ${sql.id(schemaName)}.food_source
+        for each row execute function
+          ${sql.id(hostileSchema)}.enqueue_food_search_source_eligibility_change()
+      `.execute(database);
+      await expectPostgresCode(
+        sql.raw(hardeningMigration.sql).execute(database),
+        "55000",
+        "food-search source eligibility trigger identity or definition differs",
+      );
+      await sql`
+        drop trigger food_source_search_eligibility_outbox
+        on ${sql.id(schemaName)}.food_source
+      `.execute(database);
+      await sql`
+        create trigger food_source_search_eligibility_outbox
+        after update of
+          active, active_release_id, code, display_name, license_expression,
+          attribution_required, attribution_text, commercial_use_allowed,
+          redistribution_allowed, rights_review_status, rights_reviewed_at,
+          rights_reviewed_by
+        on ${sql.id(schemaName)}.food_source
+        for each row execute function
+          ${sql.id(schemaName)}.enqueue_food_search_source_eligibility_change()
+      `.execute(database);
+      await sql.raw(hardeningMigration.sql).execute(database);
+      const functionConfigurations = (
+        await sql<{ name: string; proconfig: string[] | null }>`
+          select procedure_row.proname as name, procedure_row.proconfig
+          from pg_catalog.pg_proc as procedure_row
+          join pg_catalog.pg_namespace as namespace_row
+            on namespace_row.oid = procedure_row.pronamespace
+          where namespace_row.nspname = ${schemaName}
+            and procedure_row.proname in (
+              'advance_food_search_projection_revision',
+              'enqueue_food_search_source_eligibility_change'
+            )
+          order by procedure_row.proname
+        `.execute(database)
+      ).rows;
+      expect(functionConfigurations).toEqual([
+        {
+          name: "advance_food_search_projection_revision",
+          proconfig: [`search_path=pg_catalog, ${schemaName}, pg_temp`],
+        },
+        {
+          name: "enqueue_food_search_source_eligibility_change",
+          proconfig: [`search_path=pg_catalog, ${schemaName}, pg_temp`],
+        },
+      ]);
+
+      await sql`update pg_temp.shadow_function_call set calls = 0`.execute(database);
+      await sql`truncate pg_temp.outbox_event`.execute(database);
+      await sql`set search_path = ${sql.id(hostileSchema)}, ${sql.id(schemaName)}, public`.execute(
+        database,
+      );
+      await sql`
+        update ${sql.id(schemaName)}.food_source
+        set display_name = display_name || ' hardened'
+        where id = ${sourceId}::bigint
+      `.execute(database);
+
+      expect(
+        (
+          await sql<{ current_revision: string }>`
+            select current_revision
+            from ${sql.id(schemaName)}.food_search_projection_revision
+            where singleton
+          `.execute(database)
+        ).rows[0],
+      ).toEqual({ current_revision: "1" });
+      expect(
+        (
+          await sql<{ reason: string; source_id: string }>`
+            select payload ->> 'reason' as reason, payload ->> 'sourceId' as source_id
+            from ${sql.id(schemaName)}.outbox_event
+            where event_type = 'catalogue.source_release_activated'
+              and aggregate_id = ${sourceId}
+          `.execute(database)
+        ).rows,
+      ).toEqual([{ reason: "source_eligibility_changed", source_id: sourceId }]);
+      expect(
+        (
+          await sql<{ calls: number }>`
+            select calls from pg_temp.shadow_function_call
+          `.execute(database)
+        ).rows[0],
+      ).toEqual({ calls: 0 });
+      expect(
+        (
+          await sql<{ current_revision: string }>`
+            select current_revision
+            from pg_temp.food_search_projection_revision
+            where singleton
+          `.execute(database)
+        ).rows[0],
+      ).toEqual({ current_revision: "0" });
+      expect(
+        (
+          await sql<{ event_count: number }>`
+            select pg_catalog.count(*)::integer as event_count
+            from pg_temp.outbox_event
+          `.execute(database)
+        ).rows[0],
+      ).toEqual({ event_count: 0 });
+    } finally {
+      try {
+        await database.destroy();
+      } finally {
+        try {
+          if (hostileSchemaCreated) {
+            await sql`drop schema ${sql.id(hostileSchema)} cascade`.execute(bootstrap);
+          }
+        } finally {
+          try {
+            if (schemaCreated) {
+              await sql`drop schema ${sql.id(schemaName)} cascade`.execute(bootstrap);
+            }
+          } finally {
+            await bootstrap.destroy();
+          }
+        }
+      }
+    }
+  });
 });
 
 async function recordApproval(

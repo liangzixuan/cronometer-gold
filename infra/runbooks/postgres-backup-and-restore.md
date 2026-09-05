@@ -80,7 +80,9 @@ target under that reviewed role, revokes `PUBLIC CONNECT`, and transactionally
 applies the SHA-256-pinned
 `packages/db/restore/0014_catalogue_authority_policy.sql`. That policy pins the
 migration-0014 function/trigger manifest and the forward migration-0015
-activation-null constraint and corrected approval/guard ACLs. Before creating a
+activation-null constraint and corrected approval/guard ACLs plus
+migration-0016's two food-search function search paths and exact
+source-eligibility trigger. Before creating a
 dump, the drill requires the exact `public.app_schema_migration` names and
 SHA-256s from the tracked migration files, ignoring any owner-schema shadow
 ledger, and corroborates that ledger after restore. The drill then
@@ -107,8 +109,10 @@ Run and save results without exporting payload values:
    fingerprint must cover capability-role attributes and memberships;
    schema/table/sequence/column and exact function owners and ACLs; every
    authority/`SECURITY DEFINER` signature, owner, executable semantics, trigger
-   definition, and pinned `search_path`; the exact validated migration-0015
-   activation-audit null constraint; and absence of `PUBLIC EXECUTE` on the
+   definition, and pinned `search_path`, including migration-0016's
+   source-eligibility trigger and its two-function projection call chain; the
+   exact validated migration-0015 activation-audit null constraint; and absence
+   of `PUBLIC EXECUTE` on the
    `SECURITY DEFINER` approval function and its approval guard. Other ordinary
    security-invoker functions may retain PostgreSQL default `PUBLIC EXECUTE`.
    Hash and retain the canonical result with the drill evidence.
@@ -138,7 +142,7 @@ Run and save results without exporting payload values:
    tracked `public` migration ledger; requires `public` to be the only
    non-system schema and to be owned by
    `pg_database_owner`; exact database, schema, relation, type, function, and
-   membership ACLs and grantors; no default or column ACL drift; all 17 authority
+   membership ACLs and grantors; no default or column ACL drift; all 18 authority
    function hashes/semantics/configuration values, safe authority on every other
    public routine, all 20 triggers on the six protected catalogue tables, the
    activation constraint, safe roles, and memberships; the

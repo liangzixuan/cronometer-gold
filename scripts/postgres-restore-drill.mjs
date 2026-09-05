@@ -16,7 +16,7 @@ const AUTHORITY_POLICY_PATH = new URL(
 const MIGRATION_DIRECTORY = new URL("../packages/db/migrations/", import.meta.url);
 const MIGRATION_FILE_PATTERN = /^\d{4}_[a-z0-9_]+\.sql$/;
 const EXPECTED_AUTHORITY_POLICY_SHA256 =
-  "d1e1458fba6f1b5ec175ab782ac93e3e82ef16209a2682d871649f78747cd48f";
+  "430ef803236694d6de5af629334fd65874387272fe6192dccfef830b1b4cd75d";
 const CAPABILITY_ROLES = [
   "nutrition_catalogue_stage",
   "nutrition_catalogue_validate",
@@ -47,6 +47,21 @@ const DEFAULT_AUTHORITY_FUNCTION_POLICY = {
   volatility: "v",
 };
 const AUTHORITY_FUNCTION_POLICY = new Map([
+  [
+    "advance_food_search_projection_revision",
+    {
+      arguments: "",
+      config: PINNED_AUTHORITY_SEARCH_PATH,
+      language: "plpgsql",
+      leakproof: false,
+      parallel: "u",
+      resultType: "void",
+      securityDefiner: false,
+      sourceSha256: "d1e4a8a27203104c6339f045a31a4dfdd2aee3c78cdd94e06bfd3db2c9ac2108",
+      strict: false,
+      volatility: "v",
+    },
+  ],
   [
     "catalogue_evidence_bundle_uri_is_valid",
     {
@@ -82,7 +97,6 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
     "enqueue_food_search_source_eligibility_change",
     {
       ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
-      config: [],
       sourceSha256: "3a88f24e4863d8150db21f93efadd528ea5d7811b5c79c6ff5cd38fdcb93ce87",
     },
   ],

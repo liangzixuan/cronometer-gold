@@ -31,7 +31,7 @@ export interface CatalogueAuthorityFunctionPolicy {
   readonly leakproof: boolean;
   readonly name: string;
   readonly parallel: string;
-  readonly resultType: "boolean" | "trigger";
+  readonly resultType: "boolean" | "trigger" | "void";
   readonly securityDefiner: boolean;
   readonly sourceSha256: string;
   readonly strict: boolean;
@@ -51,6 +51,19 @@ const TRIGGER_FUNCTION_POLICY = {
 } as const;
 
 export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFunctionPolicy[] = [
+  {
+    arguments: "",
+    configuration: "application-schema",
+    language: "plpgsql",
+    leakproof: false,
+    name: "advance_food_search_projection_revision",
+    parallel: "u",
+    resultType: "void",
+    securityDefiner: false,
+    sourceSha256: "d1e4a8a27203104c6339f045a31a4dfdd2aee3c78cdd94e06bfd3db2c9ac2108",
+    strict: false,
+    volatility: "v",
+  },
   {
     arguments: "value text, digest text",
     configuration: "application-schema",
@@ -80,7 +93,6 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
   },
   {
     ...TRIGGER_FUNCTION_POLICY,
-    configuration: "none",
     name: "enqueue_food_search_source_eligibility_change",
     sourceSha256: "3a88f24e4863d8150db21f93efadd528ea5d7811b5c79c6ff5cd38fdcb93ce87",
   },

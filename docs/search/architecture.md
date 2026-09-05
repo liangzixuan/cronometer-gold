@@ -50,6 +50,18 @@ transactional outbox. A worker claims a bounded event batch and acknowledges tha
 batch after one full rebuild; events arriving during the rebuild remain for the
 next snapshot.
 
+Migration 0016 pins the existing `food_source` eligibility trigger function and
+the revision function it calls to `pg_catalog`, the captured application schema,
+and `pg_temp`. Its fail-closed preflight attests both exact application-schema
+`SECURITY INVOKER` functions and the exact ordinary enabled trigger before
+changing only those function-local search paths. It grants no privilege and does
+not authorize direct non-owner catalogue DML.
+`enqueue_food_search_food_eligibility_change`,
+`enqueue_food_search_serving_insert`, `enqueue_food_search_barcode_insert`, and
+`enqueue_food_search_barcode_update` still resolve their own unqualified
+relations and revision-function call through the ambient caller path. They
+remain within the owner-only compatibility boundary pending separate review.
+
 Meilisearch documents that settings and document writes are asynchronous tasks and
 that index swaps are atomic. Those behaviors are explicit adapter contracts rather
 than timing assumptions:

@@ -1,4 +1,4 @@
--- Versioned post-restore policy for catalogue authority migrations 0014-0015.
+-- Versioned post-restore policy for catalogue authority migrations 0014-0016.
 --
 -- Logical restores deliberately use --no-owner --no-privileges. Run this only
 -- against a new isolated nutrition_restore_* database while PUBLIC CONNECT is
@@ -233,7 +233,7 @@ begin
       using errcode = '55000';
   end if;
 
-  -- Pin every function whose search_path migration 0014 hardened. The exact
+  -- Pin every function whose search_path migrations 0014 and 0016 hardened. The exact
   -- identity and executable body are policy, not merely source/target parity.
   if (
     select pg_catalog.count(*)
@@ -242,8 +242,10 @@ begin
       on namespace_row.oid = procedure_row.pronamespace
     where namespace_row.nspname = target_schema
       and procedure_row.proname in (
+        'advance_food_search_projection_revision',
         'catalogue_evidence_bundle_uri_is_valid',
         'catalogue_record_import_approval',
+        'enqueue_food_search_source_eligibility_change',
         'guard_food_import_approval_authority',
         'guard_food_import_batch_initial_state',
         'guard_food_import_batch_update',
@@ -257,12 +259,14 @@ begin
         'guard_new_food_source_release_authority',
         'reject_new_legacy_unbound_catalogue_evidence'
       )
-  ) <> 14 or exists (
+  ) <> 16 or exists (
     select 1
     from (
       values
+        ('advance_food_search_projection_revision'::text, ''::text, 'd1e4a8a27203104c6339f045a31a4dfdd2aee3c78cdd94e06bfd3db2c9ac2108'::text, 'void'::text, 'plpgsql'::text, 'v'::text, false, false, 'u'::text, false),
         ('catalogue_evidence_bundle_uri_is_valid'::text, 'value text, digest text'::text, '5403779dc4398446c61d0a27ad8b95d904e2552a5e694496b9e7e8612e0c902e'::text, 'boolean'::text, 'sql'::text, 'i'::text, true, false, 'u'::text, false),
         ('catalogue_record_import_approval', 'p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text', '89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac', 'boolean', 'plpgsql', 'v', false, false, 'u', true),
+        ('enqueue_food_search_source_eligibility_change', '', '3a88f24e4863d8150db21f93efadd528ea5d7811b5c79c6ff5cd38fdcb93ce87', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_approval_authority', '', 'f96feb298d900165172c56a3fa1e99e91aaca010657155e5a996ee04015fdbbd', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_batch_initial_state', '', '2561714155de31151c79f95977156072a66451d1f13f7b5c6e85d13abe9ecb0c', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_batch_update', '', '59dc41d73ec62b554caa721e13a2581a75327688f840cab922fddad0ca7be249', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
@@ -310,7 +314,8 @@ begin
   end if;
 
   -- Pin every non-internal trigger attached to the reviewed authority
-  -- functions, including both grandfather and legacy-evidence trigger sites.
+  -- functions, including the source-eligibility outbox and both grandfather
+  -- and legacy-evidence trigger sites.
   if (
     select pg_catalog.count(*)
     from pg_catalog.pg_trigger as trigger_row
@@ -335,6 +340,7 @@ begin
           'guard_food_source_release_legacy_promotion_grandfather',
           'guard_food_source_release_update',
           'guard_new_food_source_release_authority',
+          'enqueue_food_search_source_eligibility_change',
           'reject_new_legacy_unbound_catalogue_evidence'
         )
         or trigger_row.tgname in (
@@ -346,6 +352,7 @@ begin
           'food_import_record_guard_update',
           'food_source_guard_active_release_authority',
           'food_source_guard_initial_active_release',
+          'food_source_search_eligibility_outbox',
           'food_source_release_guard_initial_state',
           'food_source_release_guard_legacy_grandfather_insert',
           'food_source_release_guard_legacy_grandfather_update',
@@ -354,7 +361,7 @@ begin
           'food_source_release_reject_new_legacy_unbound'
         )
       )
-  ) <> 14 or exists (
+  ) <> 15 or exists (
     select 1
     from (
       values
@@ -366,6 +373,7 @@ begin
         ('food_import_record_guard_update', 'food_import_record', 'guard_food_import_record_update', 'CREATE TRIGGER food_import_record_guard_update BEFORE UPDATE ON food_import_record FOR EACH ROW EXECUTE FUNCTION guard_food_import_record_update()'),
         ('food_source_guard_active_release_authority', 'food_source', 'guard_food_source_active_release_authority', 'CREATE TRIGGER food_source_guard_active_release_authority BEFORE UPDATE OF active_release_id ON food_source FOR EACH ROW EXECUTE FUNCTION guard_food_source_active_release_authority()'),
         ('food_source_guard_initial_active_release', 'food_source', 'guard_food_source_initial_active_release', 'CREATE TRIGGER food_source_guard_initial_active_release BEFORE INSERT ON food_source FOR EACH ROW EXECUTE FUNCTION guard_food_source_initial_active_release()'),
+        ('food_source_search_eligibility_outbox', 'food_source', 'enqueue_food_search_source_eligibility_change', 'CREATE TRIGGER food_source_search_eligibility_outbox AFTER UPDATE OF active, active_release_id, code, display_name, license_expression, attribution_required, attribution_text, commercial_use_allowed, redistribution_allowed, rights_review_status, rights_reviewed_at, rights_reviewed_by ON food_source FOR EACH ROW EXECUTE FUNCTION enqueue_food_search_source_eligibility_change()'),
         ('food_source_release_guard_initial_state', 'food_source_release', 'guard_food_source_release_initial_state', 'CREATE TRIGGER food_source_release_guard_initial_state BEFORE INSERT ON food_source_release FOR EACH ROW EXECUTE FUNCTION guard_food_source_release_initial_state()'),
         ('food_source_release_guard_legacy_grandfather_insert', 'food_source_release', 'guard_food_source_release_legacy_promotion_grandfather', 'CREATE TRIGGER food_source_release_guard_legacy_grandfather_insert BEFORE INSERT ON food_source_release FOR EACH ROW EXECUTE FUNCTION guard_food_source_release_legacy_promotion_grandfather()'),
         ('food_source_release_guard_legacy_grandfather_update', 'food_source_release', 'guard_food_source_release_legacy_promotion_grandfather', 'CREATE TRIGGER food_source_release_guard_legacy_grandfather_update BEFORE UPDATE OF legacy_promotion_grandfathered_at ON food_source_release FOR EACH ROW EXECUTE FUNCTION guard_food_source_release_legacy_promotion_grandfather()'),
@@ -386,10 +394,14 @@ begin
       on procedure_row.oid = trigger_row.tgfoid
       and procedure_row.proname = expected.function_name
       and pg_catalog.pg_get_function_identity_arguments(procedure_row.oid) = ''
+    left join pg_catalog.pg_namespace as procedure_namespace_row
+      on procedure_namespace_row.oid = procedure_row.pronamespace
+      and procedure_namespace_row.nspname = target_schema
     where trigger_row.oid is null
       or class_row.oid is null
       or namespace_row.oid is null
       or procedure_row.oid is null
+      or procedure_namespace_row.oid is null
       or trigger_row.tgenabled <> 'O'
       or pg_catalog.pg_get_triggerdef(trigger_row.oid, true) <> expected.definition
   ) then

@@ -480,4 +480,27 @@ describe("forward migration discovery", () => {
       /grant\s+(?:select|insert|update|delete|all)[\s\S]*?on\s+(?:table\s+)?food_/iu,
     );
   });
+
+  it("pins the food-search source eligibility call chain without granting authority", async () => {
+    const migrationSql = await readFile(
+      resolve(import.meta.dirname, "../migrations/0016_food_search_function_hardening.sql"),
+      "utf8",
+    );
+
+    expect(createHash("sha256").update(migrationSql).digest("hex")).toBe(
+      "bc1b9a38fc1fa6c85662720f4b7f137d18ed61160f5ed5ad75703dedad776033",
+    );
+    expect(migrationSql).toContain("target_schema name := pg_catalog.current_schema()");
+    expect(migrationSql).toContain(
+      "alter function %I.advance_food_search_projection_revision() set search_path = pg_catalog, %I, pg_temp",
+    );
+    expect(migrationSql).toContain(
+      "alter function %I.enqueue_food_search_source_eligibility_change() set search_path = pg_catalog, %I, pg_temp",
+    );
+    expect(migrationSql).toContain("procedure_namespace_row.nspname = target_schema");
+    expect(migrationSql).not.toMatch(/\b(?:grant|revoke)\b/iu);
+    expect(migrationSql).not.toMatch(/\bsecurity\s+definer\b/iu);
+    expect(migrationSql).not.toMatch(/\balter\s+(?:role|table|sequence)\b/iu);
+    expect(migrationSql).not.toMatch(/\b(?:drop|truncate)\b/iu);
+  });
 });

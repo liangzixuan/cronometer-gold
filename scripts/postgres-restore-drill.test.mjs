@@ -401,6 +401,22 @@ test("rejects wrong owners, search paths, and non-definer authority functions", 
     /authority function.*differs from policy/,
   );
 
+  for (const functionName of [
+    "advance_food_search_projection_revision",
+    "enqueue_food_search_source_eligibility_change",
+  ]) {
+    const foodSearchPathDrift = validAuthorityEvidence();
+    const functionPolicy = foodSearchPathDrift.functions.find(
+      (entry) => entry.name === functionName,
+    );
+    if (!functionPolicy) throw new Error(`${functionName} fixture is missing`);
+    functionPolicy.config = [];
+    assert.throws(
+      () => validateRestoreAuthorityEvidence(foodSearchPathDrift, expectedOwner),
+      new RegExp(`authority function ${functionName} differs from policy`),
+    );
+  }
+
   const invokerFunction = validAuthorityEvidence();
   authorityFunction(invokerFunction).security_definer = false;
   assert.throws(
@@ -918,6 +934,19 @@ function validAuthorityFunctions() {
   return [
     {
       ...functionSemantics(
+        "d1e4a8a27203104c6339f045a31a4dfdd2aee3c78cdd94e06bfd3db2c9ac2108",
+        "void",
+      ),
+      acl: [acl("PUBLIC", "EXECUTE"), acl(expectedOwner, "EXECUTE")],
+      acl_is_default: true,
+      arguments: "",
+      config: ["search_path=pg_catalog, public, pg_temp"],
+      name: "advance_food_search_projection_revision",
+      owner: expectedOwner,
+      security_definer: false,
+    },
+    {
+      ...functionSemantics(
         "89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac",
         "boolean",
       ),
@@ -960,7 +989,7 @@ function validAuthorityFunctions() {
       acl: [acl("PUBLIC", "EXECUTE"), acl(expectedOwner, "EXECUTE")],
       acl_is_default: true,
       arguments: "",
-      config: [],
+      config: ["search_path=pg_catalog, public, pg_temp"],
       name: "enqueue_food_search_source_eligibility_change",
       owner: expectedOwner,
       security_definer: false,
@@ -1251,7 +1280,11 @@ function authorityEvidenceRunner(evidence, failures = {}) {
 }
 
 function authorityFunction(evidence) {
-  return evidence.functions[0];
+  const functionPolicy = evidence.functions.find(
+    (entry) => entry.name === "catalogue_record_import_approval",
+  );
+  if (!functionPolicy) throw new Error("Catalogue approval function fixture is missing");
+  return functionPolicy;
 }
 
 function approvalGuardFunction(evidence) {

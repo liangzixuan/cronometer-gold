@@ -77,6 +77,22 @@ through its corresponding ACL, membership, or constraint evidence. Cleanup
 alone does not enable the boundary; repair and enablement require a new reviewed
 forward policy.
 
+Forward migration 0016 hardens the existing food-source eligibility projection
+call chain before any non-owner catalogue DML is introduced. It fails closed
+unless the two application-schema `SECURITY INVOKER` functions retain their
+exact owner, body, executable metadata, default ACL, and unconfigured pre-state,
+and unless the ordinary enabled `food_source` trigger is bound to the exact
+application-schema trigger function and definition. It then pins both functions'
+`search_path` to `pg_catalog`, the captured application schema, and `pg_temp`
+without changing their bodies, owners, ACLs, or invoker semantics and without
+granting any authority. This closes only the `food_source` source-eligibility
+path. `enqueue_food_search_food_eligibility_change`,
+`enqueue_food_search_serving_insert`, `enqueue_food_search_barcode_insert`, and
+`enqueue_food_search_barcode_update` still resolve their own unqualified
+relations and revision-function call through the caller's ambient path. They
+remain inside the owner-only compatibility boundary and must be separately
+attested before any matching non-owner table DML is allowed.
+
 ### Bounded DEPLOY-0 policy and canary contract
 
 This ADR also accepts a bounded DEPLOY-0 source verifier for a canonical,
@@ -114,8 +130,8 @@ logins or grants these deployment memberships.
 The verifier requires `public` to be the only non-system schema and checks its
 exact ACLs, grantors, and `pg_database_owner` ownership; the exact database ACL;
 relation, type, default, and column ACL state; required owners; the versioned
-activation constraint; all 17 authority function signatures, executable semantics, source
-hashes, ACLs, and expected configuration; every other public routine for unsafe
+activation constraint; all 18 authority function signatures, executable
+semantics, source hashes, ACLs, and expected configuration; every other public routine for unsafe
 ownership, explicit ACL, or `SECURITY DEFINER`; and the exact 20-trigger set on
 the six protected catalogue tables. It also checks the exact effective login
 allowlist, revoked `PUBLIC CONNECT`, safe role and login attributes, zero owned
@@ -172,9 +188,10 @@ required before database authority can be considered closed:
    credentials after compatibility evidence passes.
 5. An ordinary-deploy readiness fingerprint and positive and negative role
    canaries. The isolated restore drill pins the migration-0014 function/trigger
-   manifest and the forward migration-0015 activation-null constraint and
-   corrected ACL, but it does not substitute for deployed login separation or
-   canaries through those real identities.
+   manifest, the forward migration-0015 activation-null constraint and corrected
+   ACL, and migration-0016's two food-search function search paths plus exact
+   source-eligibility trigger, but it does not substitute for deployed login
+   separation or canaries through those real identities.
 
 The bounded DEPLOY-0 implementation defines and locally proves the required
 policy, structural evidence, and canary behavior for item 5. It does not satisfy
@@ -198,7 +215,8 @@ not drop or recreate authority evidence in place.
   means direct owner DML remains trusted during EXPAND and live M0B remains
   blocked.
 - Logical restore runs under an explicit expected owner, reapplies the pinned
-  migration-0014 function/trigger and migration-0015 constraint/ACL policy, and
+  migration-0014 function/trigger, migration-0015 constraint/ACL, and
+  migration-0016 food-search function/trigger policy, and
   requires the exact tracked filename/file-byte-SHA ledger from
   `public.app_schema_migration` before `pg_dump`, then version-6 canonical
   authority-fingerprint parity including column ACL state while `PUBLIC

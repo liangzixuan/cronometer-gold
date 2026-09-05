@@ -449,23 +449,38 @@ describe("catalogue authority deployment policy", () => {
     ).toThrow(/trigger set/u);
   });
 
-  it.each(["enqueue_food_search_source_eligibility_change", "set_row_updated_at"])(
-    "rejects protected trigger function body drift for %s",
-    (functionName) => {
-      const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
-      const base = validEvidence(policy);
-      expect(() =>
-        assertCatalogueAuthorityDeploymentEvidence(policy, {
-          ...base,
-          functions: base.functions.map((entry) =>
-            entry.name === functionName ? { ...entry, sourceSha256: "0".repeat(64) } : entry,
-          ),
-        }),
-      ).toThrow(
-        new RegExp(`Catalogue authority function ${functionName} differs from policy`, "u"),
-      );
-    },
-  );
+  it.each([
+    "advance_food_search_projection_revision",
+    "enqueue_food_search_source_eligibility_change",
+    "set_row_updated_at",
+  ])("rejects protected authority function body drift for %s", (functionName) => {
+    const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
+    const base = validEvidence(policy);
+    expect(() =>
+      assertCatalogueAuthorityDeploymentEvidence(policy, {
+        ...base,
+        functions: base.functions.map((entry) =>
+          entry.name === functionName ? { ...entry, sourceSha256: "0".repeat(64) } : entry,
+        ),
+      }),
+    ).toThrow(new RegExp(`Catalogue authority function ${functionName} differs from policy`, "u"));
+  });
+
+  it.each([
+    "advance_food_search_projection_revision",
+    "enqueue_food_search_source_eligibility_change",
+  ])("rejects food-search function search-path drift for %s", (functionName) => {
+    const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
+    const base = validEvidence(policy);
+    expect(() =>
+      assertCatalogueAuthorityDeploymentEvidence(policy, {
+        ...base,
+        functions: base.functions.map((entry) =>
+          entry.name === functionName ? { ...entry, searchPath: [] } : entry,
+        ),
+      }),
+    ).toThrow(new RegExp(`Catalogue authority function ${functionName} differs from policy`, "u"));
+  });
 
   it("requires the exact zero-write canary result set and unchanged state", () => {
     const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
