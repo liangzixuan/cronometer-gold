@@ -23,6 +23,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0015](./0015-password-recovery-boundary.md) | Password-recovery boundary | Accepted for local implementation; production delivery and abuse controls blocked |
 | [0016](./0016-hydration-ledger-boundary.md) | Private hydration-ledger boundary | Accepted for local implementation; targets, offline mutation, and device evidence blocked |
 | [0017](./0017-authenticated-food-artifact-acquisition-retention.md) | Authenticated food-artifact acquisition and retention evidence | Source/local manifest-v4 gate implemented; live runner, immutable storage, acquisition, provider verification, and named review blocked |
+| [0018](./0018-catalogue-database-authority-boundary.md) | Catalogue database-authority boundary | Accepted for bounded EXPAND implementation; deploy and CONTRACT phases blocked |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

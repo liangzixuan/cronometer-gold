@@ -891,7 +891,11 @@ async function insertCompletedBatch(
     .executeTakeFirstOrThrow();
   await transaction
     .updateTable("food_import_batch")
-    .set({ status: "ready", validated_at: "2026-08-15T12:30:00Z" })
+    .set({
+      status: "ready",
+      validated_at: "2026-08-15T12:30:00Z",
+      validation_digest: "d".repeat(64),
+    })
     .where("id", "=", batch.id)
     .execute();
   await transaction

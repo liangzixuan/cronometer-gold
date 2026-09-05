@@ -30,8 +30,12 @@ describeDatabase("0011 catalogue evidence upgrade", { timeout: 30_000 }, () => {
         (migration) => migration.name === "0013_food_release_authority_hardening.sql",
       );
       expect(evidenceMigrationIndex).toBeGreaterThan(0);
+      const authorityMigrationIndex = migrations.findIndex(
+        (migration) => migration.name === "0014_catalogue_workflow_authority_expand.sql",
+      );
       expect(grandfatherMigrationIndex).toBe(evidenceMigrationIndex + 1);
       expect(hardeningMigrationIndex).toBe(grandfatherMigrationIndex + 1);
+      expect(authorityMigrationIndex).toBe(hardeningMigrationIndex + 1);
       expect(migrations[evidenceMigrationIndex - 1]?.name).toBe("0010_hydration_ledger.sql");
       for (const migration of migrations.slice(0, evidenceMigrationIndex)) {
         await sql.raw(migration.sql).execute(database);
@@ -137,15 +141,44 @@ describeDatabase("0011 catalogue evidence upgrade", { timeout: 30_000 }, () => {
         .execute();
 
       const evidenceMigration = migrations[evidenceMigrationIndex];
+      const legacyApproval = await database
+        .insertInto("food_import_approval")
+        .values({
+          approval_reference: "review://pre-authority-boundary",
+          approval_role: "data",
+          batch_id: readyBatch.id,
+          principal_id: "principal:pre-authority-reviewer",
+          rights_manifest_sha256: "b".repeat(64),
+          validation_digest: "d".repeat(64),
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow();
+      const legacyActivation = await database
+        .insertInto("food_source_release_activation")
+        .values({
+          food_source_id: source.id,
+          import_batch_id: completedBatch.id,
+          operation: "activate",
+          performed_by: "principal:pre-authority-release-manager",
+          previous_release_id: null,
+          reason: "Pre-authority-boundary activation",
+          release_id: release.id,
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow();
+
       if (!evidenceMigration) throw new Error("0011 evidence migration was not discovered");
       const grandfatherMigration = migrations[grandfatherMigrationIndex];
       if (!grandfatherMigration) throw new Error("0012 grandfather migration was not discovered");
       const hardeningMigration = migrations[hardeningMigrationIndex];
+      const authorityMigration = migrations[authorityMigrationIndex];
+      if (!authorityMigration) throw new Error("0014 authority migration was not discovered");
       if (!hardeningMigration) throw new Error("0013 hardening migration was not discovered");
       await database.transaction().execute(async (transaction) => {
         await sql.raw(evidenceMigration.sql).execute(transaction);
         await sql.raw(grandfatherMigration.sql).execute(transaction);
         await sql.raw(hardeningMigration.sql).execute(transaction);
+        await sql.raw(authorityMigration.sql).execute(transaction);
       });
 
       const bindingProjection = [
@@ -188,6 +221,39 @@ describeDatabase("0011 catalogue evidence upgrade", { timeout: 30_000 }, () => {
           .where("id", "=", source.id)
           .executeTakeFirstOrThrow(),
       ).toEqual({ active_release_id: release.id });
+      expect(
+        (
+          await sql<{ validation_digest: string | null }>`
+            select validation_digest
+            from food_import_batch
+            where id = ${completedBatch.id}
+          `.execute(database)
+        ).rows[0],
+      ).toEqual({ validation_digest: null });
+      expect(
+        (
+          await sql<{
+            database_capability_role: string | null;
+            database_principal: string | null;
+          }>`
+            select database_capability_role, database_principal
+            from food_import_approval
+            where id = ${legacyApproval.id}
+          `.execute(database)
+        ).rows[0],
+      ).toEqual({ database_capability_role: null, database_principal: null });
+      expect(
+        (
+          await sql<{
+            database_capability_role: string | null;
+            database_principal: string | null;
+          }>`
+            select database_capability_role, database_principal
+            from food_source_release_activation
+            where id = ${legacyActivation.id}
+          `.execute(database)
+        ).rows[0],
+      ).toEqual({ database_capability_role: null, database_principal: null });
       expect(
         (
           await sql<{ count: string }>`

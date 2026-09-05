@@ -391,7 +391,11 @@ async function seedPromotedPublicFood(
       .executeTakeFirstOrThrow();
     await transaction
       .updateTable("food_import_batch")
-      .set({ status: "ready", validated_at: input.now })
+      .set({
+        status: "ready",
+        validated_at: input.now,
+        validation_digest: "d".repeat(64),
+      })
       .where("id", "=", batch.id)
       .execute();
     await transaction

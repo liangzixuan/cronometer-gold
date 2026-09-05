@@ -86,6 +86,23 @@ acceptance; progress in either lane never waives the gates in the other.
    review, rights review, representative-scale resource evidence, a streaming
    staging path, reconciliation, search/index evidence, and every activation
    review above remain open. Changed upstream bytes remain unpinned.
+
+   A bounded M0B database-authority EXPAND phase defines static, non-login
+   capability roles for stage, validate, three independent approval classes,
+   promote-and-activate, and rollback. This phase places only reviewer approval
+   behind a database-authenticated `SECURITY DEFINER` boundary and adds
+   database-derived principal/capability audit fields without fabricating values
+   for existing or owner-compatible local rows. It does not close M0B. The
+   remaining workflow functions, deployment login and credential cutover,
+   external-principal binding, direct-DML revocation, ordinary-deploy readiness
+   fingerprint, and role canaries remain required before live catalogue work.
+   Logical restore now reapplies the pinned migration-0014 function/trigger
+   manifest plus the forward migration-0015 activation-null constraint and ACL
+   correction under an explicit owner. It compares a canonical source/target
+   authority fingerprint while `PUBLIC CONNECT` remains revoked and the
+   effective login allowlist stays exact. The EXPAND CI drill still uses
+   `nutrition_local` as both executor and owner, so it does not prove separate
+   runtime fencing.
 2. **M1 — excellent basic daily loop:** activity/exercise, private diary
    notes, configurable groups, camera barcode scan while preserving exact GTIN
    lookup, durable offline retry/reorder, email-verification release acceptance
@@ -234,9 +251,36 @@ The release pipeline, real FDC/CNF parsers, supported-service database workflow,
 approval gates, atomic promotion, idempotent replay, and forward rollback are
 implemented and tested. Database constraints independently preserve immutable
 provenance, evidence classification, canonical evidence fields, and initial
-workflow states, but a principal with table DML remains inside the trusted
-service boundary. Production role/function isolation is still required before
-live authority. A live FDC release has intentionally not been promoted: the checked-in
+workflow states. The bounded M0B EXPAND change adds seven static `NOLOGIN`
+capability roles and places the three reviewer approval classes behind one narrow
+database-authenticated `SECURITY DEFINER` function. Database-derived approval
+audit fields remain null for historical and owner-compatible local calls rather
+than claiming an identity that was not authenticated.
+
+Migration 0015 hardens that EXPAND state forward-only: database-audit fields on
+new or changed activation and rollback rows remain constrained to paired `NULL`
+values until their reviewed wrappers exist, and the approval function is first
+reduced to owner-only execution after the stricter activation constraint is
+installed as `NOT VALID`.
+With no capability-role members or legacy paired non-NULL activation-authority
+evidence, it grants the exact three reviewer roles. Constraint validation is an
+independent gate: it succeeds whenever no legacy paired non-NULL
+activation-authority evidence exists, even if a capability membership keeps the
+reviewer ACL owner-only. Legacy evidence leaves the constraint unvalidated. Any
+unsafe membership or legacy evidence blocks complete readiness through its
+corresponding ACL, membership, or constraint evidence, avoiding rollback into
+the exposed 0014 policy; a later reviewed forward policy is required for repair
+and enablement.
+
+This is not production role/function isolation. Owner/local compatibility still
+leaves a principal with table DML inside the trusted boundary; stage, validate,
+promote-and-activate, and rollback functions do not yet carry authority; no
+runtime login or external principal is bound to a capability; and deployment
+cutover, direct-DML revocation, ordinary-deploy fingerprinting, and role canaries
+remain open. The isolated logical-restore drill now pins and reapplies the
+migration-0014 function/trigger manifest and migration-0015 constraint/ACL
+correction, rejecting owner, constraint, ACL, or fingerprint drift before replay
+or API probing. A live FDC release has intentionally not been promoted: the checked-in
 candidate remains non-importable until two independently authenticated operators
 agree on the streamed artifact, rights review is recorded, immutable object
 storage is provisioned, and the complete nutrient map is reviewed. Current-vs-
@@ -395,16 +439,19 @@ bypasses the bundle gate. The migration preserves pre-gate history as
 `legacy-unbound`; it does not invent provenance for existing rows or allow that
 history to become new live authority.
 
-This closes the source-code enforcement gap, not live M0B. The parser checks
+This closes the manifest-v4 source-code enforcement gap, not live M0B. The parser checks
 structure, canonical digests, cross-object identity, and chronology, but it does
 not authenticate OIDC or workload identity, verify signatures, query provider
 state, or prove object existence or retention. No protected live runner, real dual
 acquisition, distinct immutable-storage workload, current provider query, or named
-review has been performed. The production database principal is also not yet
-restricted behind reviewed workflow functions, so unrestricted table DML remains
-inside the trusted service boundary. Every live staging, approval, and activation
-remains blocked until those external controls provide trustworthy evidence and
-receive explicit authorization.
+review has been performed. The M0B database-authority EXPAND phase narrows only
+reviewer approval through static capability roles and a database-authenticated
+function. It deliberately retains owner/local compatibility, and the other
+workflow transitions still lack function boundaries and deployed identities.
+Every live staging, approval, promotion, activation, and rollback remains blocked
+until deploy and CONTRACT cutover close direct DML, readiness proves the exact
+owners and ACLs with role canaries, and the external controls provide trustworthy
+evidence and receive explicit authorization.
 
 The initial full-CSV inspector implements a database-free candidate contract and
 synthetic-fixture evidence for bounded parsing and joins. It has not inspected

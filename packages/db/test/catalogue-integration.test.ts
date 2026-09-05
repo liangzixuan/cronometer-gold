@@ -167,7 +167,11 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
       ).rejects.toThrow("approval requires current live-reviewed evidence");
       await database
         .updateTable("food_import_batch")
-        .set({ status: "ready", validated_at: new Date() })
+        .set({
+          status: "ready",
+          validated_at: new Date(),
+          validation_digest: "a".repeat(64),
+        })
         .where("id", "=", fixture.batchId)
         .execute();
       await expect(
@@ -935,6 +939,13 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
         validCount: 2,
       });
       const firstSummary = await validateBatch(database, firstBatch.batchId, policy);
+      expect(
+        await database
+          .selectFrom("food_import_batch")
+          .select("validation_digest")
+          .where("id", "=", firstBatch.batchId)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ validation_digest: firstSummary.validationDigest });
       await expect(
         approveBatch(database, {
           approvalReference: "review://invalid-principal",
@@ -958,6 +969,385 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
           .where("food_source_id", "=", source.id)
           .executeTakeFirstOrThrow(),
       ).toEqual({ count: "0" });
+      const dataApproval = {
+        approvalReference: `review://data/${firstBatch.batchId}`,
+        approvalRole: "data" as const,
+        batchId: firstBatch.batchId,
+        principalId: "principal:data-review",
+        rightsManifestSha256: rightsSha,
+        validationDigest: firstSummary.validationDigest,
+      };
+      const hostileDatabase = createDatabase({
+        applicationName: `catalogue-hostile-path-${suffix}`,
+        connectionString: databaseUrl,
+        maxConnections: 1,
+      });
+      try {
+        await sql`create temporary table food_import_batch (id uuid primary key)`.execute(
+          hostileDatabase,
+        );
+        await expect(approveBatch(hostileDatabase, dataApproval)).rejects.toThrow(
+          "Catalogue database schema shadow detected outside trusted schema public",
+        );
+      } finally {
+        await hostileDatabase.destroy();
+      }
+      const ordinaryShadowSchema = `user-${suffix.toLowerCase()}`;
+      const foreignGrantor = `cat_acl_grantor_${suffix.toLowerCase()}`;
+      await sql`create schema ${sql.id(ordinaryShadowSchema)}`.execute(database);
+      const ordinaryShadowDatabase = createDatabase({
+        applicationName: `catalogue-ordinary-shadow-${suffix}`,
+        connectionString: databaseUrl,
+        maxConnections: 1,
+      });
+      try {
+        await sql`
+          create role ${sql.id(foreignGrantor)}
+          nologin nosuperuser nocreatedb nocreaterole noreplication nobypassrls
+        `.execute(database);
+        await sql`
+          create table ${sql.id(ordinaryShadowSchema, "food_import_batch")}
+          (like ${sql.id("public", "food_import_batch")} including all)
+        `.execute(database);
+        await sql`
+          insert into ${sql.id(ordinaryShadowSchema, "food_import_batch")}
+          select *
+          from ${sql.id("public", "food_import_batch")}
+          where id = ${firstBatch.batchId}::uuid
+        `.execute(database);
+        await sql`
+          create table ${sql.id(ordinaryShadowSchema, "food_import_approval")}
+          (like ${sql.id("public", "food_import_approval")} including all)
+        `.execute(database);
+        for (const tableName of [
+          "food_import_parser_report",
+          "food_import_record",
+          "food_source",
+          "nutrient",
+          "source_nutrient_map",
+          "source_nutrient_map_revision",
+        ]) {
+          await sql`
+            create view ${sql.id(ordinaryShadowSchema, tableName)} as
+            select * from ${sql.id("public", tableName)}
+          `.execute(database);
+        }
+        const authorityFixture = await cloneApprovalAuthority(database, ordinaryShadowSchema);
+        await sql`
+          select pg_catalog.set_config(
+            'search_path',
+            pg_catalog.quote_ident(${ordinaryShadowSchema}) || ', public',
+            false
+          )
+        `.execute(ordinaryShadowDatabase);
+        await expect(approveBatch(ordinaryShadowDatabase, dataApproval)).rejects.toThrow(
+          "Catalogue database schema shadow detected outside trusted schema public",
+        );
+        expect(
+          (
+            await sql<{ count: string }>`
+              select pg_catalog.count(*)::text as count
+              from ${sql.id(ordinaryShadowSchema, "food_import_approval")}
+            `.execute(database)
+          ).rows,
+        ).toEqual([{ count: "0" }]);
+        const quotedSchemaApproval = {
+          ...dataApproval,
+          approvalReference: `review://quoted-schema/${firstBatch.batchId}`,
+          trustedSchema: ordinaryShadowSchema,
+        };
+        await expect(
+          approveBatch(ordinaryShadowDatabase, quotedSchemaApproval),
+        ).resolves.toBeUndefined();
+        expect(
+          (
+            await sql<{ count: string }>`
+              select pg_catalog.count(*)::text as count
+              from ${sql.id(ordinaryShadowSchema, "food_import_approval")}
+            `.execute(database)
+          ).rows,
+        ).toEqual([{ count: "1" }]);
+
+        await sql`
+          create or replace function ${sql.id(
+            ordinaryShadowSchema,
+            "catalogue_record_import_approval",
+          )}(
+            p_batch_id uuid,
+            p_requested_approval_role text,
+            p_validation_digest text,
+            p_rights_digest text,
+            p_external_principal_id text,
+            p_approval_reference text
+          )
+          returns boolean
+          language plpgsql
+          security definer
+          set search_path = pg_catalog, ${sql.id(ordinaryShadowSchema)}, pg_temp
+          as $tampered$
+          begin
+            return true;
+          end;
+          $tampered$
+        `.execute(database);
+        try {
+          await expect(approveBatch(ordinaryShadowDatabase, quotedSchemaApproval)).rejects.toThrow(
+            `Catalogue approval authority in trusted schema ${ordinaryShadowSchema} failed attestation`,
+          );
+        } finally {
+          await restoreApprovalFunction(
+            database,
+            ordinaryShadowSchema,
+            authorityFixture.approvalFunctionDefinition,
+          );
+        }
+
+        await sql`
+          alter function ${sql.id(
+            ordinaryShadowSchema,
+            "catalogue_record_import_approval",
+          )}(uuid, text, text, text, text, text) stable
+        `.execute(database);
+        await sql`
+          alter function ${sql.id(
+            ordinaryShadowSchema,
+            "catalogue_record_import_approval",
+          )}(uuid, text, text, text, text, text) strict
+        `.execute(database);
+        await sql`
+          alter function ${sql.id(
+            ordinaryShadowSchema,
+            "catalogue_record_import_approval",
+          )}(uuid, text, text, text, text, text) parallel safe
+        `.execute(database);
+        await sql`
+          alter function ${sql.id(
+            ordinaryShadowSchema,
+            "catalogue_record_import_approval",
+          )}(uuid, text, text, text, text, text) security invoker
+        `.execute(database);
+        try {
+          await expect(approveBatch(ordinaryShadowDatabase, quotedSchemaApproval)).rejects.toThrow(
+            `Catalogue approval authority in trusted schema ${ordinaryShadowSchema} failed attestation`,
+          );
+        } finally {
+          await restoreApprovalFunction(
+            database,
+            ordinaryShadowSchema,
+            authorityFixture.approvalFunctionDefinition,
+          );
+        }
+
+        await sql`
+          grant execute on function ${sql.id(
+            ordinaryShadowSchema,
+            "catalogue_record_import_approval",
+          )}(uuid, text, text, text, text, text) to public
+        `.execute(database);
+        try {
+          await expect(approveBatch(ordinaryShadowDatabase, quotedSchemaApproval)).rejects.toThrow(
+            `Catalogue approval authority in trusted schema ${ordinaryShadowSchema} failed attestation`,
+          );
+        } finally {
+          await sql`
+            revoke execute on function ${sql.id(
+              ordinaryShadowSchema,
+              "catalogue_record_import_approval",
+            )}(uuid, text, text, text, text, text) from public
+          `.execute(database);
+        }
+
+        await sql`
+          update pg_catalog.pg_proc as procedure_row
+          set proacl = array[
+            pg_catalog.format(
+              '%I=X/%I',
+              pg_catalog.pg_get_userbyid(procedure_row.proowner),
+              pg_catalog.pg_get_userbyid(procedure_row.proowner)
+            )::pg_catalog.aclitem,
+            pg_catalog.format(
+              '%I=X/%I',
+              'nutrition_catalogue_approve_data',
+              ${foreignGrantor}::text
+            )::pg_catalog.aclitem,
+            pg_catalog.format(
+              '%I=X/%I',
+              'nutrition_catalogue_approve_quality',
+              pg_catalog.pg_get_userbyid(procedure_row.proowner)
+            )::pg_catalog.aclitem,
+            pg_catalog.format(
+              '%I=X/%I',
+              'nutrition_catalogue_approve_rights',
+              pg_catalog.pg_get_userbyid(procedure_row.proowner)
+            )::pg_catalog.aclitem
+          ]
+          where procedure_row.oid = pg_catalog.to_regprocedure(
+            pg_catalog.format(
+              '%I.catalogue_record_import_approval(uuid,text,text,text,text,text)',
+              ${ordinaryShadowSchema}::text
+            )
+          )
+        `.execute(database);
+        try {
+          expect(
+            (
+              await sql<{ grantor: string }>`
+                select pg_catalog.pg_get_userbyid(acl.grantor) as grantor
+                from pg_catalog.pg_proc as procedure_row
+                cross join lateral pg_catalog.aclexplode(procedure_row.proacl) as acl
+                where procedure_row.oid = pg_catalog.to_regprocedure(
+                    pg_catalog.format(
+                      '%I.catalogue_record_import_approval(uuid,text,text,text,text,text)',
+                      ${ordinaryShadowSchema}::text
+                    )
+                  )
+                  and acl.grantee = 'nutrition_catalogue_approve_data'::pg_catalog.regrole::oid
+              `.execute(database)
+            ).rows,
+          ).toEqual([{ grantor: foreignGrantor }]);
+          await expect(approveBatch(ordinaryShadowDatabase, quotedSchemaApproval)).rejects.toThrow(
+            `Catalogue approval authority in trusted schema ${ordinaryShadowSchema} failed attestation`,
+          );
+        } finally {
+          await sql`
+            drop function ${sql.id(
+              ordinaryShadowSchema,
+              "catalogue_record_import_approval",
+            )}(uuid, text, text, text, text, text)
+          `.execute(database);
+          await restoreApprovalFunction(
+            database,
+            ordinaryShadowSchema,
+            authorityFixture.approvalFunctionDefinition,
+          );
+        }
+
+        await sql`
+          create or replace function ${sql.id(
+            ordinaryShadowSchema,
+            "guard_food_import_approval_authority",
+          )}()
+          returns trigger
+          language plpgsql
+          set search_path = pg_catalog, ${sql.id(ordinaryShadowSchema)}, pg_temp
+          as $tampered_guard$
+          begin
+            return new;
+          end;
+          $tampered_guard$
+        `.execute(database);
+        try {
+          await expect(approveBatch(ordinaryShadowDatabase, quotedSchemaApproval)).rejects.toThrow(
+            `Catalogue approval authority in trusted schema ${ordinaryShadowSchema} failed attestation`,
+          );
+        } finally {
+          await restoreApprovalGuardFunction(
+            database,
+            ordinaryShadowSchema,
+            authorityFixture.guardFunctionDefinition,
+          );
+        }
+
+        await sql`
+          grant execute on function ${sql.id(
+            ordinaryShadowSchema,
+            "guard_food_import_approval_authority",
+          )}() to public
+        `.execute(database);
+        try {
+          await expect(approveBatch(ordinaryShadowDatabase, quotedSchemaApproval)).rejects.toThrow(
+            `Catalogue approval authority in trusted schema ${ordinaryShadowSchema} failed attestation`,
+          );
+        } finally {
+          await sql`
+            revoke execute on function ${sql.id(
+              ordinaryShadowSchema,
+              "guard_food_import_approval_authority",
+            )}() from public
+          `.execute(database);
+        }
+
+        await sql`
+          alter table ${sql.id(ordinaryShadowSchema, "food_import_approval")}
+          disable trigger food_import_approval_guard_authority
+        `.execute(database);
+        try {
+          await expect(approveBatch(ordinaryShadowDatabase, quotedSchemaApproval)).rejects.toThrow(
+            `Catalogue approval authority in trusted schema ${ordinaryShadowSchema} failed attestation`,
+          );
+        } finally {
+          await sql`
+            alter table ${sql.id(ordinaryShadowSchema, "food_import_approval")}
+            enable trigger food_import_approval_guard_authority
+          `.execute(database);
+        }
+
+        await sql`
+          drop trigger food_import_approval_guard_authority
+          on ${sql.id(ordinaryShadowSchema, "food_import_approval")}
+        `.execute(database);
+        try {
+          await sql`
+            create trigger food_import_approval_guard_authority
+            before insert or update on ${sql.id(ordinaryShadowSchema, "food_import_approval")}
+            for each row execute function ${sql.id(
+              ordinaryShadowSchema,
+              "guard_food_import_approval_authority",
+            )}()
+          `.execute(database);
+          await expect(approveBatch(ordinaryShadowDatabase, quotedSchemaApproval)).rejects.toThrow(
+            `Catalogue approval authority in trusted schema ${ordinaryShadowSchema} failed attestation`,
+          );
+        } finally {
+          await sql`
+            drop trigger food_import_approval_guard_authority
+            on ${sql.id(ordinaryShadowSchema, "food_import_approval")}
+          `.execute(database);
+          await sql.raw(authorityFixture.triggerDefinition).execute(database);
+        }
+      } finally {
+        await ordinaryShadowDatabase.destroy();
+        await sql`drop schema ${sql.id(ordinaryShadowSchema)} cascade`.execute(database);
+        await sql`drop role if exists ${sql.id(foreignGrantor)}`.execute(database);
+      }
+      await sql`
+        alter function public.catalogue_record_import_approval(
+          uuid, text, text, text, text, text
+        ) stable
+      `.execute(database);
+      try {
+        await expect(approveBatch(database, dataApproval)).rejects.toThrow(
+          "Catalogue approval authority in trusted schema public failed attestation",
+        );
+      } finally {
+        await sql`
+          alter function public.catalogue_record_import_approval(
+            uuid, text, text, text, text, text
+          ) volatile
+        `.execute(database);
+      }
+      await approveBatch(database, dataApproval);
+      await approveBatch(database, dataApproval);
+      await expect(
+        approveBatch(database, {
+          ...dataApproval,
+          approvalReference: `review://data/${firstBatch.batchId}/mismatch`,
+        }),
+      ).rejects.toThrow(`Batch ${firstBatch.batchId} already has a different immutable approval`);
+      expect(
+        await database
+          .selectFrom("food_import_approval")
+          .select(["approval_reference", "database_capability_role", "database_principal"])
+          .where("batch_id", "=", firstBatch.batchId)
+          .where("approval_role", "=", "data")
+          .execute(),
+      ).toEqual([
+        {
+          approval_reference: dataApproval.approvalReference,
+          database_capability_role: null,
+          database_principal: null,
+        },
+      ]);
       await approveAll(database, firstBatch.batchId, firstSummary.validationDigest, rightsSha);
 
       const firstPromotion = await promoteBatch(database, {
@@ -2588,6 +2978,219 @@ async function reconciliationMutationSnapshot(
   return JSON.parse(
     JSON.stringify({ activations, batch, foods, outbox, records, releases, source, versions }),
   );
+}
+
+interface ApprovalAuthorityFixture {
+  readonly approvalFunctionDefinition: string;
+  readonly guardFunctionDefinition: string;
+  readonly triggerDefinition: string;
+}
+
+async function cloneApprovalAuthority(
+  database: Kysely<Database>,
+  targetSchema: string,
+): Promise<ApprovalAuthorityFixture> {
+  const source = (
+    await sql<{
+      approval_function_definition: string | null;
+      guard_function_definition: string | null;
+    }>`
+      select
+        (
+          select pg_catalog.pg_get_functiondef(procedure_row.oid)
+          from pg_catalog.pg_proc as procedure_row
+          join pg_catalog.pg_namespace as namespace_row
+            on namespace_row.oid = procedure_row.pronamespace
+          where namespace_row.nspname = 'public'
+            and procedure_row.proname = 'catalogue_record_import_approval'
+            and pg_catalog.pg_get_function_identity_arguments(procedure_row.oid) =
+              'p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text'
+        ) as approval_function_definition,
+        (
+          select pg_catalog.pg_get_functiondef(procedure_row.oid)
+          from pg_catalog.pg_proc as procedure_row
+          join pg_catalog.pg_namespace as namespace_row
+            on namespace_row.oid = procedure_row.pronamespace
+          where namespace_row.nspname = 'public'
+            and procedure_row.proname = 'guard_food_import_approval_authority'
+            and pg_catalog.pg_get_function_identity_arguments(procedure_row.oid) = ''
+        ) as guard_function_definition
+    `.execute(database)
+  ).rows[0];
+  if (!source?.approval_function_definition || !source.guard_function_definition) {
+    throw new Error("Canonical public approval authority functions are unavailable");
+  }
+
+  const quotedSchema = `"${targetSchema.replaceAll('"', '""')}"`;
+  const approvalFunctionDefinition = rewriteFunctionSchema(
+    source.approval_function_definition,
+    "catalogue_record_import_approval",
+    quotedSchema,
+  );
+  const guardFunctionDefinition = rewriteFunctionSchema(
+    source.guard_function_definition,
+    "guard_food_import_approval_authority",
+    quotedSchema,
+  );
+  await sql.raw(approvalFunctionDefinition).execute(database);
+  await sql.raw(guardFunctionDefinition).execute(database);
+  await restoreApprovalFunction(database, targetSchema, approvalFunctionDefinition);
+  await restoreApprovalGuardFunction(database, targetSchema, guardFunctionDefinition);
+  await sql`
+    create trigger food_import_approval_guard_authority
+    before insert on ${sql.id(targetSchema, "food_import_approval")}
+    for each row execute function ${sql.id(targetSchema, "guard_food_import_approval_authority")}()
+  `.execute(database);
+
+  const canonical = (
+    await sql<{
+      approval_function_definition: string | null;
+      guard_function_definition: string | null;
+      trigger_definition: string | null;
+    }>`
+      select
+        (
+          select pg_catalog.pg_get_functiondef(procedure_row.oid)
+          from pg_catalog.pg_proc as procedure_row
+          join pg_catalog.pg_namespace as namespace_row
+            on namespace_row.oid = procedure_row.pronamespace
+          where namespace_row.nspname = ${targetSchema}
+            and procedure_row.proname = 'catalogue_record_import_approval'
+            and pg_catalog.pg_get_function_identity_arguments(procedure_row.oid) =
+              'p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text'
+        ) as approval_function_definition,
+        (
+          select pg_catalog.pg_get_functiondef(procedure_row.oid)
+          from pg_catalog.pg_proc as procedure_row
+          join pg_catalog.pg_namespace as namespace_row
+            on namespace_row.oid = procedure_row.pronamespace
+          where namespace_row.nspname = ${targetSchema}
+            and procedure_row.proname = 'guard_food_import_approval_authority'
+            and pg_catalog.pg_get_function_identity_arguments(procedure_row.oid) = ''
+        ) as guard_function_definition,
+        (
+          select pg_catalog.pg_get_triggerdef(trigger_row.oid, false)
+          from pg_catalog.pg_trigger as trigger_row
+          join pg_catalog.pg_class as class_row
+            on class_row.oid = trigger_row.tgrelid
+          join pg_catalog.pg_namespace as namespace_row
+            on namespace_row.oid = class_row.relnamespace
+          where namespace_row.nspname = ${targetSchema}
+            and class_row.relname = 'food_import_approval'
+            and trigger_row.tgname = 'food_import_approval_guard_authority'
+            and not trigger_row.tgisinternal
+        ) as trigger_definition
+    `.execute(database)
+  ).rows[0];
+  if (
+    !canonical?.approval_function_definition ||
+    !canonical.guard_function_definition ||
+    !canonical.trigger_definition
+  ) {
+    throw new Error("Cloned approval authority policy is incomplete");
+  }
+  return {
+    approvalFunctionDefinition: canonical.approval_function_definition,
+    guardFunctionDefinition: canonical.guard_function_definition,
+    triggerDefinition: canonical.trigger_definition,
+  };
+}
+
+function rewriteFunctionSchema(
+  definition: string,
+  functionName: string,
+  quotedTargetSchema: string,
+): string {
+  const sourcePrefix = `FUNCTION public.${functionName}(`;
+  const targetPrefix = `FUNCTION ${quotedTargetSchema}.${functionName}(`;
+  if (!definition.includes(sourcePrefix)) {
+    throw new Error(`Canonical ${functionName} definition has an unexpected identity`);
+  }
+  return definition.replace(sourcePrefix, targetPrefix);
+}
+
+async function restoreApprovalFunction(
+  database: Kysely<Database>,
+  schemaName: string,
+  definition: string,
+): Promise<void> {
+  await sql.raw(definition).execute(database);
+  await sql`
+    alter function ${sql.id(schemaName, "catalogue_record_import_approval")}(
+      uuid, text, text, text, text, text
+    ) volatile
+  `.execute(database);
+  await sql`
+    alter function ${sql.id(schemaName, "catalogue_record_import_approval")}(
+      uuid, text, text, text, text, text
+    ) called on null input
+  `.execute(database);
+  await sql`
+    alter function ${sql.id(schemaName, "catalogue_record_import_approval")}(
+      uuid, text, text, text, text, text
+    ) not leakproof
+  `.execute(database);
+  await sql`
+    alter function ${sql.id(schemaName, "catalogue_record_import_approval")}(
+      uuid, text, text, text, text, text
+    ) parallel unsafe
+  `.execute(database);
+  await sql`
+    alter function ${sql.id(schemaName, "catalogue_record_import_approval")}(
+      uuid, text, text, text, text, text
+    ) security definer
+  `.execute(database);
+  await sql`
+    alter function ${sql.id(schemaName, "catalogue_record_import_approval")}(
+      uuid, text, text, text, text, text
+    ) set search_path = pg_catalog, ${sql.id(schemaName)}, pg_temp
+  `.execute(database);
+  await sql`
+    revoke all on function ${sql.id(schemaName, "catalogue_record_import_approval")}(
+      uuid, text, text, text, text, text
+    ) from public
+  `.execute(database);
+  await sql`
+    grant execute on function ${sql.id(schemaName, "catalogue_record_import_approval")}(
+      uuid, text, text, text, text, text
+    ) to
+      nutrition_catalogue_approve_data,
+      nutrition_catalogue_approve_quality,
+      nutrition_catalogue_approve_rights
+  `.execute(database);
+}
+
+async function restoreApprovalGuardFunction(
+  database: Kysely<Database>,
+  schemaName: string,
+  definition: string,
+): Promise<void> {
+  await sql.raw(definition).execute(database);
+  await sql`
+    alter function ${sql.id(schemaName, "guard_food_import_approval_authority")}() volatile
+  `.execute(database);
+  await sql`
+    alter function ${sql.id(schemaName, "guard_food_import_approval_authority")}()
+    called on null input
+  `.execute(database);
+  await sql`
+    alter function ${sql.id(schemaName, "guard_food_import_approval_authority")}() not leakproof
+  `.execute(database);
+  await sql`
+    alter function ${sql.id(schemaName, "guard_food_import_approval_authority")}() parallel unsafe
+  `.execute(database);
+  await sql`
+    alter function ${sql.id(schemaName, "guard_food_import_approval_authority")}()
+    security invoker
+  `.execute(database);
+  await sql`
+    alter function ${sql.id(schemaName, "guard_food_import_approval_authority")}()
+    set search_path = pg_catalog, ${sql.id(schemaName)}, pg_temp
+  `.execute(database);
+  await sql`
+    revoke all on function ${sql.id(schemaName, "guard_food_import_approval_authority")}()
+    from public
+  `.execute(database);
 }
 
 function batchInput(

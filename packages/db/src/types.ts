@@ -201,6 +201,7 @@ export interface FoodImportBatchTable {
   nutrient_excluded_count: DefaultInt8;
   materialized_count: DefaultInt8;
   validation_policy: DefaultJson;
+  validation_digest: ColumnType<string | null, undefined, string>;
   release_id: string | null;
   created_at: CreatedTimestamp;
   updated_at: UpdatedTimestamp;
@@ -217,6 +218,8 @@ export interface FoodImportApprovalTable {
   approved_at: CreatedTimestamp;
   principal_id: string;
   approval_reference: string;
+  database_principal: ReadonlyColumn<string | null>;
+  database_capability_role: ReadonlyColumn<string | null>;
   created_at: CreatedTimestamp;
 }
 
@@ -271,6 +274,8 @@ export interface FoodSourceReleaseActivationTable {
   import_batch_id: string | null;
   reason: string;
   performed_by: string;
+  database_principal: ReadonlyColumn<string | null>;
+  database_capability_role: ReadonlyColumn<string | null>;
   occurred_at: CreatedTimestamp;
 }
 

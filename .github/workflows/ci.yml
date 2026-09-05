@@ -295,8 +295,10 @@ jobs:
           fi
           node scripts/postgres-restore-drill.mjs \
             --container "${container_id}" \
+            --connect-allowlist nutrition_local \
             --dump-directory /dev/shm \
             --dump-protection tmpfs \
+            --expected-owner nutrition_local \
             --source-db nutrition_tracker \
             --target-db nutrition_restore_ci_retention \
             --user nutrition_local

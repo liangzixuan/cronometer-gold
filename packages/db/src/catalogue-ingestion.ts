@@ -39,6 +39,15 @@ import type {
 } from "./types.js";
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const TRUSTED_DATABASE_SCHEMA_PATTERN = /^[a-z_][a-z0-9_-]{0,62}$/;
+const APPROVAL_FUNCTION_IDENTITY_ARGUMENTS =
+  "p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text";
+const APPROVAL_FUNCTION_SOURCE_SHA256 =
+  "89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac";
+const APPROVAL_GUARD_FUNCTION_SOURCE_SHA256 =
+  "f96feb298d900165172c56a3fa1e99e91aaca010657155e5a996ee04015fdbbd";
+const APPROVAL_GUARD_TRIGGER_DEFINITION =
+  "CREATE TRIGGER food_import_approval_guard_authority BEFORE INSERT ON food_import_approval FOR EACH ROW EXECUTE FUNCTION guard_food_import_approval_authority()";
 const MAX_EVIDENCE_VALIDITY_MS = 24 * 60 * 60 * 1_000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PINNED_PARSER_VERSION_PATTERN = /^(.+)\+build\.([0-9a-f]{64})\+mapping\.([0-9a-f]{64})$/;
@@ -259,6 +268,11 @@ export interface ApproveBatchInput {
   readonly batchId: string;
   readonly principalId: string;
   readonly rightsManifestSha256: string;
+  /**
+   * Trusted deployment configuration, never request or imported catalogue data.
+   * Defaults to `public`; isolated-schema callers must pass their migration schema.
+   */
+  readonly trustedSchema?: string;
   readonly validationDigest: string;
 }
 
@@ -1008,6 +1022,7 @@ async function validateBatchInTransaction(
       unresolved_error_count: summary.unresolvedErrorCount,
       valid_count: summary.validCount,
       validated_at: validatedAt,
+      validation_digest: summary.validationDigest,
       validation_policy: normalizedPolicy,
       warning_count: summary.warningCount,
     })
@@ -1144,14 +1159,167 @@ export async function approveBatch(
   assertSha256(input.rightsManifestSha256, "rightsManifestSha256");
   const principalId = stablePrincipalId(input.principalId, "principalId");
   requireText(input.approvalReference, "approvalReference");
+  const trustedSchema = trustedCatalogueSchema(input.trustedSchema);
   await database.transaction().execute(async (transaction) => {
-    const batch = await selectBatchForUpdate(transaction, input.batchId);
+    const authorityResult = await sql<{
+      authorityPolicyAttested: boolean;
+      ownersMatch: boolean;
+      resolvedBatchOid: string | null;
+      trustedBatchOid: string;
+    }>`
+      select
+        authority_function.oid is not null
+          and authority_function.prokind = 'f'
+          and authority_function.prorettype = pg_catalog.to_regtype('pg_catalog.bool')
+          and not authority_function.proretset
+          and pg_catalog.pg_get_function_result(authority_function.oid) = 'boolean'
+          and authority_language.lanname = 'plpgsql'
+          and authority_function.provolatile = 'v'
+          and not authority_function.proisstrict
+          and not authority_function.proleakproof
+          and authority_function.proparallel = 'u'
+          and authority_function.prosecdef
+          and authority_function.proowner = approval_relation.relowner
+          and pg_catalog.encode(
+            pg_catalog.sha256(pg_catalog.convert_to(authority_function.prosrc, 'UTF8')),
+            'hex'
+          ) = ${APPROVAL_FUNCTION_SOURCE_SHA256}
+          and authority_function.proconfig is not distinct from
+            array[
+              'search_path=pg_catalog, ' ||
+              pg_catalog.quote_ident(${trustedSchema}) ||
+              ', pg_temp'
+            ]::text[]
+          and (
+            select pg_catalog.count(*)
+            from pg_catalog.aclexplode(authority_function.proacl) as acl
+            left join pg_catalog.pg_roles as grantee
+              on grantee.oid = acl.grantee
+            where acl.privilege_type = 'EXECUTE'
+              and acl.grantor = approval_relation.relowner
+              and not acl.is_grantable
+              and (
+                acl.grantee = approval_relation.relowner
+                or grantee.rolname in (
+                  'nutrition_catalogue_approve_data',
+                  'nutrition_catalogue_approve_quality',
+                  'nutrition_catalogue_approve_rights'
+                )
+              )
+          ) = 4
+          and (
+            select pg_catalog.count(*)
+            from pg_catalog.aclexplode(authority_function.proacl) as acl
+          ) = 4
+          and guard_function.oid is not null
+          and guard_function.prokind = 'f'
+          and guard_function.prorettype = pg_catalog.to_regtype('pg_catalog.trigger')
+          and not guard_function.proretset
+          and pg_catalog.pg_get_function_result(guard_function.oid) = 'trigger'
+          and guard_language.lanname = 'plpgsql'
+          and guard_function.provolatile = 'v'
+          and not guard_function.proisstrict
+          and not guard_function.proleakproof
+          and guard_function.proparallel = 'u'
+          and not guard_function.prosecdef
+          and guard_function.proowner = approval_relation.relowner
+          and (
+            select pg_catalog.count(*)
+            from pg_catalog.aclexplode(guard_function.proacl) as guard_acl
+            where guard_acl.grantee = approval_relation.relowner
+              and guard_acl.grantor = approval_relation.relowner
+              and guard_acl.privilege_type = 'EXECUTE'
+              and not guard_acl.is_grantable
+          ) = 1
+          and (
+            select pg_catalog.count(*)
+            from pg_catalog.aclexplode(guard_function.proacl) as guard_acl
+          ) = 1
+          and pg_catalog.encode(
+            pg_catalog.sha256(pg_catalog.convert_to(guard_function.prosrc, 'UTF8')),
+            'hex'
+          ) = ${APPROVAL_GUARD_FUNCTION_SOURCE_SHA256}
+          and guard_function.proconfig is not distinct from
+            array[
+              'search_path=pg_catalog, ' ||
+              pg_catalog.quote_ident(${trustedSchema}) ||
+              ', pg_temp'
+            ]::text[]
+          and authority_trigger.oid is not null
+          and not authority_trigger.tgisinternal
+          and authority_trigger.tgenabled = 'O'
+          and authority_trigger.tgtype = 7
+          and authority_trigger.tgnargs = 0
+          and authority_trigger.tgconstraint = 0
+          and not authority_trigger.tgdeferrable
+          and not authority_trigger.tginitdeferred
+          and pg_catalog.replace(
+            pg_catalog.pg_get_triggerdef(authority_trigger.oid, false),
+            pg_catalog.quote_ident(${trustedSchema}) || '.',
+            ''
+          ) = ${APPROVAL_GUARD_TRIGGER_DEFINITION}
+          as "authorityPolicyAttested",
+        batch_relation.relowner = approval_relation.relowner as "ownersMatch",
+        pg_catalog.to_regclass('food_import_batch')::oid::text as "resolvedBatchOid",
+        batch_relation.oid::text as "trustedBatchOid"
+      from pg_catalog.pg_namespace as namespace_row
+      join pg_catalog.pg_class as batch_relation
+        on batch_relation.relnamespace = namespace_row.oid
+       and batch_relation.relname = 'food_import_batch'
+       and batch_relation.relkind in ('r', 'p')
+      join pg_catalog.pg_class as approval_relation
+        on approval_relation.relnamespace = namespace_row.oid
+       and approval_relation.relname = 'food_import_approval'
+       and approval_relation.relkind in ('r', 'p')
+      left join pg_catalog.pg_proc as authority_function
+        on authority_function.pronamespace = namespace_row.oid
+       and authority_function.proname = 'catalogue_record_import_approval'
+       and pg_catalog.pg_get_function_identity_arguments(authority_function.oid) =
+         ${APPROVAL_FUNCTION_IDENTITY_ARGUMENTS}
+      left join pg_catalog.pg_language as authority_language
+        on authority_language.oid = authority_function.prolang
+      left join pg_catalog.pg_trigger as authority_trigger
+        on authority_trigger.tgrelid = approval_relation.oid
+       and authority_trigger.tgname = 'food_import_approval_guard_authority'
+       and not authority_trigger.tgisinternal
+      left join pg_catalog.pg_proc as guard_function
+        on guard_function.oid = authority_trigger.tgfoid
+       and guard_function.pronamespace = namespace_row.oid
+       and guard_function.proname = 'guard_food_import_approval_authority'
+       and pg_catalog.pg_get_function_identity_arguments(guard_function.oid) = ''
+      left join pg_catalog.pg_language as guard_language
+        on guard_language.oid = guard_function.prolang
+      where namespace_row.nspname = ${trustedSchema}
+    `.execute(transaction);
+    const authority = authorityResult.rows[0];
+    if (!authority) {
+      throw new Error(`Trusted catalogue database schema ${trustedSchema} is unavailable`);
+    }
+    if (authority.resolvedBatchOid !== authority.trustedBatchOid) {
+      throw new Error(
+        `Catalogue database schema shadow detected outside trusted schema ${trustedSchema}`,
+      );
+    }
+    if (!authority.ownersMatch || !authority.authorityPolicyAttested) {
+      throw new Error(
+        `Catalogue approval authority in trusted schema ${trustedSchema} failed attestation`,
+      );
+    }
+    await sql`
+      select pg_catalog.set_config(
+        'search_path',
+        'pg_catalog, ' || pg_catalog.quote_ident(${trustedSchema}) || ', pg_temp',
+        true
+      )
+    `.execute(transaction);
+    const trustedTransaction = transaction.withSchema(trustedSchema);
+    const batch = await selectBatchForUpdate(trustedTransaction, input.batchId);
     assertLiveReviewedEvidenceCurrent(batch, "approve");
     if (batch.status !== "ready") {
       throw new Error(`Batch ${input.batchId} cannot be approved while ${batch.status}`);
     }
     const summary = await buildValidationSummary(
-      transaction,
+      trustedTransaction,
       batch,
       normalizePolicy(batch.validation_policy),
     );
@@ -1161,35 +1329,16 @@ export async function approveBatch(
     if (input.rightsManifestSha256 !== batch.rights_manifest_sha256) {
       throw new Error("Approval rights-manifest digest does not match the staged batch");
     }
-    const inserted = await transaction
-      .insertInto("food_import_approval")
-      .values({
-        approval_role: input.approvalRole,
-        approval_reference: input.approvalReference,
-        batch_id: input.batchId,
-        principal_id: principalId,
-        rights_manifest_sha256: input.rightsManifestSha256,
-        validation_digest: input.validationDigest,
-      })
-      .onConflict((conflict) => conflict.columns(["batch_id", "approval_role"]).doNothing())
-      .returning("batch_id")
-      .executeTakeFirst();
-    if (!inserted) {
-      const approval = await transaction
-        .selectFrom("food_import_approval")
-        .selectAll()
-        .where("batch_id", "=", input.batchId)
-        .where("approval_role", "=", input.approvalRole)
-        .executeTakeFirstOrThrow();
-      if (
-        approval.validation_digest !== input.validationDigest ||
-        approval.rights_manifest_sha256 !== input.rightsManifestSha256 ||
-        approval.principal_id !== principalId ||
-        approval.approval_reference !== input.approvalReference
-      ) {
-        throw new Error(`Batch ${input.batchId} already has a different immutable approval`);
-      }
-    }
+    await sql<{ inserted: boolean }>`
+      select ${sql.id(trustedSchema, "catalogue_record_import_approval")}(
+        p_batch_id => ${input.batchId}::uuid,
+        p_requested_approval_role => ${input.approvalRole}::text,
+        p_validation_digest => ${input.validationDigest}::text,
+        p_rights_digest => ${input.rightsManifestSha256}::text,
+        p_external_principal_id => ${principalId}::text,
+        p_approval_reference => ${input.approvalReference}::text
+      ) as inserted
+    `.execute(trustedTransaction);
   });
 }
 
@@ -4148,6 +4297,18 @@ function assertSha256(value: string, field: string): void {
 
 function requireText(value: string, field: string): void {
   if (value.trim().length === 0) throw new Error(`${field} is required`);
+}
+
+function trustedCatalogueSchema(value: string | undefined): string {
+  const schema = value ?? "public";
+  if (
+    !TRUSTED_DATABASE_SCHEMA_PATTERN.test(schema) ||
+    schema.startsWith("pg_") ||
+    schema === "information_schema"
+  ) {
+    throw new Error("trustedSchema must be a lowercase non-system PostgreSQL identifier");
+  }
+  return schema;
 }
 
 function requireBoundedText(value: string, field: string, maximumLength: number): void {

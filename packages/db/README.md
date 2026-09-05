@@ -26,6 +26,52 @@ It deliberately has no down-migration API. Use expand/migrate/contract and a new
 forward migration to repair schema. See the
 [migration runbook](../../infra/runbooks/database-migrations.md).
 
+### Catalogue workflow authority EXPAND boundary
+
+The current EXPAND slice freezes the canonical validation digest on
+`food_import_batch` in the same update as the validated summary and routes
+`approveBatch` through `catalogue_record_import_approval`. The function preserves
+exact approval replay while binding non-owner calls to their database principal
+and reviewer capability. Existing owner/local workflows remain compatible and
+record nullable database-audit fields.
+
+`approveBatch` treats `trustedSchema` as internal deployment configuration, not
+request or imported catalogue input. It defaults to `public`; isolated-schema
+tools must pass their migration schema explicitly. Before approval reads, the
+client verifies that the ambient `food_import_batch` resolves to that exact
+relation and attests the exact approval-function body, executable metadata,
+owner, and ACL plus the approval-guard body, exact owner-only ACL, and ordinary
+enabled trigger. It then pins the transaction-local search path before any
+approval read.
+
+This is EXPAND only. Owner compatibility remains in place; non-owner role cutover
+and the database wrappers for the other catalogue workflow phases are still
+pending. Do not revoke owner-era privileges or treat this slice as the CONTRACT
+phase. Forward migration 0015 keeps the database-audit fields on new or changed
+activation/rollback rows constrained to paired `NULL` values until those reviewed
+wrappers exist. It
+detects pre-cutover capability-role membership and legacy paired non-NULL
+activation-authority evidence after installing the stricter constraint as `NOT
+VALID` and reducing the approval function to owner-only execution. It grants the
+exact three reviewer roles only when neither unsafe condition exists.
+Independently, it validates the constraint whenever no legacy paired non-NULL
+activation-authority evidence exists; membership alone keeps reviewer execution
+disabled but leaves the constraint validated. Either unsafe condition commits a
+guarded state with readiness blocked through its corresponding evidence; repair
+requires a new reviewed forward policy rather than replaying this non-idempotent
+migration.
+
+Logical restores use the transactional policy in
+`restore/0014_catalogue_authority_policy.sql`. It pins the migration-0014
+function/trigger boundary plus the forward migration-0015 activation-null
+constraint and approval/guard-ACL corrections. The repository restore drill
+pins that file's SHA-256, requires an explicit expected owner, keeps `PUBLIC CONNECT`
+revoked, enforces an exact effective login allowlist, and compares a canonical
+role/schema/type/relation/function/trigger/authority-constraint fingerprint before
+external-ledger replay or API probing. The current EXPAND CI executor and owner
+are the same local login, so this restore control does not claim deployment
+runtime separation or close the remaining role-canary or CONTRACT work.
+
 ### 0004 legacy diary compatibility gate
 
 Migration `0004_diary_accounts_and_revisions.sql` upgrades the legacy diary into

@@ -298,4 +298,133 @@ describe("forward migration discovery", () => {
     expect(migrationSql).toContain("before insert on food_source");
     expect(migrationSql).not.toMatch(/\bnot\s+valid\b/iu);
   });
+
+  it("expands catalogue workflow authority without granting shared-table access", async () => {
+    const migrationSql = await readFile(
+      resolve(import.meta.dirname, "../migrations/0014_catalogue_workflow_authority_expand.sql"),
+      "utf8",
+    );
+
+    expect(createHash("sha256").update(migrationSql).digest("hex")).toBe(
+      "a3539efa7fef4591ac3f4431e743d77e0ad12a9340c62ad4c315cf9802aa099c",
+    );
+    expect(migrationSql).not.toMatch(/\bdrop\s+(table|column|type|role)\b/iu);
+    expect(migrationSql).not.toMatch(/\btruncate\b/iu);
+    expect(migrationSql).toContain("restore the pre-migration database backup");
+    expect(migrationSql).toContain("pg_advisory_xact_lock");
+    expect(migrationSql).toContain("pg_catalog.pg_auth_members");
+    expect(migrationSql).toContain("membership.member = capability_role_oid");
+    expect(migrationSql).toContain("membership.roleid = capability_role_oid");
+    expect(migrationSql).toContain("membership.admin_option");
+    expect(migrationSql).toContain("pg_catalog.pg_shdepend");
+    expect(migrationSql).toContain("pg_catalog.aclexplode");
+    for (const role of [
+      "nutrition_catalogue_stage",
+      "nutrition_catalogue_validate",
+      "nutrition_catalogue_approve_data",
+      "nutrition_catalogue_approve_quality",
+      "nutrition_catalogue_approve_rights",
+      "nutrition_catalogue_promote_activate",
+      "nutrition_catalogue_rollback",
+    ]) {
+      expect(migrationSql).toContain(`'${role}'`);
+    }
+    for (const attribute of [
+      "nologin",
+      "nosuperuser",
+      "nocreatedb",
+      "nocreaterole",
+      "noreplication",
+      "nobypassrls",
+    ]) {
+      expect(migrationSql).toContain(attribute);
+    }
+    expect(migrationSql).toContain("add column validation_digest text");
+    expect(migrationSql).toContain(
+      "catalogue authority expansion found active live-reviewed batches without a frozen validation digest",
+    );
+    expect(migrationSql).toContain("do not fabricate a validation digest");
+    expect(migrationSql).toContain("add column database_principal text");
+    expect(migrationSql).toContain("add column database_capability_role text");
+    expect(
+      migrationSql.match(/database_capability_role is not null/gu)?.length,
+    ).toBeGreaterThanOrEqual(2);
+    expect(migrationSql).toContain("food_import_approval_database_principal_unique");
+    expect(migrationSql).toContain("where database_principal is not null");
+    expect(migrationSql).toContain("create function catalogue_record_import_approval(");
+    for (const argument of [
+      "p_batch_id uuid",
+      "p_requested_approval_role text",
+      "p_validation_digest text",
+      "p_rights_digest text",
+      "p_external_principal_id text",
+      "p_approval_reference text",
+    ]) {
+      expect(migrationSql).toContain(argument);
+    }
+    expect(migrationSql).toContain("returns boolean");
+    expect(migrationSql).toContain("security definer");
+    expect(migrationSql).toContain("session_user::text");
+    expect(migrationSql).toContain("must hold exactly one catalogue reviewer capability");
+    expect(migrationSql).toContain("batch.validation_digest");
+    expect(migrationSql).toContain("batch.rights_manifest_sha256");
+    expect(migrationSql).toContain("current_schema()");
+    expect(migrationSql).toContain("set search_path = pg_catalog, %I, pg_temp");
+    expect(migrationSql).toContain(
+      "revoke all on function %I.catalogue_record_import_approval(uuid,text,text,text,text,text) from public",
+    );
+    expect(migrationSql).toContain(
+      "grant execute on function %I.catalogue_record_import_approval(uuid,text,text,text,text,text)",
+    );
+    expect(migrationSql).not.toMatch(
+      /grant\s+(?:select|insert|update|delete|all)[\s\S]*?on\s+(?:table\s+)?food_/iu,
+    );
+  });
+
+  it("hardens the catalogue EXPAND boundary with a forward correction", async () => {
+    const migrationSql = await readFile(
+      resolve(import.meta.dirname, "../migrations/0015_catalogue_authority_expand_hardening.sql"),
+      "utf8",
+    );
+
+    expect(createHash("sha256").update(migrationSql).digest("hex")).toBe(
+      "cd5855e2568c0c31891b5a116f5f8e94489f4ff413b3a37bee0b07472567bbde",
+    );
+    expect(migrationSql).not.toMatch(/\bdrop\s+(table|column|type|role)\b/iu);
+    expect(migrationSql).not.toMatch(/\btruncate\b/iu);
+    expect(migrationSql).toContain("capability_role.oid = membership.roleid");
+    expect(migrationSql).not.toContain("membership.admin_option");
+    expect(migrationSql).toContain("has_incoming_capability_membership");
+    expect(migrationSql).toContain("has_legacy_activation_authority_rows");
+    expect(migrationSql).toContain("reviewer EXECUTE remains disabled");
+    expect(migrationSql).toContain("this migration never changes memberships");
+    expect(migrationSql).not.toContain("has pre-existing members");
+    expect(migrationSql).not.toMatch(/\bgrant\s+nutrition_catalogue_[a-z_]+\s+to\b/iu);
+    expect(migrationSql).not.toMatch(/\brevoke\s+nutrition_catalogue_[a-z_]+\s+from\b/iu);
+    expect(migrationSql).toContain("food_source_release_activation_expand_audit_null_check");
+    expect(migrationSql).toContain(") not valid;");
+    expect(migrationSql).toContain(
+      "validate constraint food_source_release_activation_expand_audit_null_check",
+    );
+    expect(migrationSql).toContain("readiness stays blocked pending a reviewed forward repair");
+    expect(migrationSql).toContain(
+      "database_principal is null and database_capability_role is null",
+    );
+    expect(migrationSql).toContain(
+      "cross join lateral pg_catalog.aclexplode(procedure_row.proacl)",
+    );
+    expect(migrationSql).toContain("acl.grantee <> 0");
+    expect(migrationSql).toContain("expected_acl_count");
+    expect(migrationSql).toContain("acl.grantor = function_owner");
+    expect(migrationSql).toContain("guard_food_import_approval_authority()");
+    expect(migrationSql).toContain(
+      "catalogue approval guard function ACL is not the exact owner-only policy",
+    );
+    expect(migrationSql).toContain(
+      "catalogue approval function ACL is not the exact owner-and-reviewer policy",
+    );
+    expect(migrationSql).not.toMatch(
+      /grant\s+(?:select|insert|update|delete|all)[\s\S]*?on\s+(?:table\s+)?food_/iu,
+    );
+  });
 });
