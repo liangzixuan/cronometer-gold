@@ -344,9 +344,9 @@ test("pins the validated 0015 activation-audit null constraint", () => {
   }
 });
 
-test("rejects authority fingerprints from the pre-column-ACL evidence version", () => {
+test("rejects authority fingerprints from the pre-trigger-schema evidence version", () => {
   const evidence = validAuthorityEvidence();
-  evidence.version = 5;
+  evidence.version = 6;
   assert.throws(
     () => validateRestoreAuthorityEvidence(evidence, expectedOwner),
     /unsupported version/,
@@ -563,10 +563,92 @@ test("pins every reviewed authority function and trigger", () => {
     function_name: "ordinary_function",
     function_schema: "public",
     name: "unreviewed_approval_trigger",
+    table_schema: "public",
     table_name: "food_import_approval",
   });
   assert.throws(
     () => validateRestoreAuthorityEvidence(extraProtectedTrigger, expectedOwner),
+    /trigger set/,
+  );
+
+  const reboundReviewedTrigger = validAuthorityEvidence();
+  reboundReviewedTrigger.triggers.push({
+    definition:
+      "CREATE TRIGGER rebound_food_search_trigger AFTER INSERT ON unrelated_table FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_barcode_insert()",
+    enabled: "O",
+    function_arguments: "",
+    function_name: "enqueue_food_search_barcode_insert",
+    function_schema: "public",
+    name: "rebound_food_search_trigger",
+    table_schema: "public",
+    table_name: "unrelated_table",
+  });
+  assert.throws(
+    () => validateRestoreAuthorityEvidence(reboundReviewedTrigger, expectedOwner),
+    /trigger set/,
+  );
+
+  const unrelatedTrigger = validAuthorityEvidence();
+  unrelatedTrigger.triggers.push({
+    definition:
+      "CREATE TRIGGER unrelated_trigger BEFORE INSERT ON unrelated_table FOR EACH ROW EXECUTE FUNCTION ordinary_function()",
+    enabled: "O",
+    function_arguments: "",
+    function_name: "ordinary_function",
+    function_schema: "public",
+    name: "unrelated_trigger",
+    table_schema: "public",
+    table_name: "unrelated_table",
+  });
+  assert.doesNotThrow(() => validateRestoreAuthorityEvidence(unrelatedTrigger, expectedOwner));
+
+  const unrelatedSharedHelperTrigger = validAuthorityEvidence();
+  unrelatedSharedHelperTrigger.triggers.push({
+    definition:
+      "CREATE TRIGGER unrelated_updated_at BEFORE UPDATE ON unrelated_table FOR EACH ROW EXECUTE FUNCTION set_row_updated_at()",
+    enabled: "O",
+    function_arguments: "",
+    function_name: "set_row_updated_at",
+    function_schema: "public",
+    name: "unrelated_updated_at",
+    table_schema: "public",
+    table_name: "unrelated_table",
+  });
+  assert.doesNotThrow(() =>
+    validateRestoreAuthorityEvidence(unrelatedSharedHelperTrigger, expectedOwner),
+  );
+
+  const reboundReviewedName = validAuthorityEvidence();
+  reboundReviewedName.triggers.push({
+    definition:
+      "CREATE TRIGGER food_source_set_updated_at BEFORE UPDATE ON unrelated_table FOR EACH ROW EXECUTE FUNCTION set_row_updated_at()",
+    enabled: "O",
+    function_arguments: "",
+    function_name: "set_row_updated_at",
+    function_schema: "public",
+    name: "food_source_set_updated_at",
+    table_schema: "public",
+    table_name: "unrelated_table",
+  });
+  assert.throws(
+    () => validateRestoreAuthorityEvidence(reboundReviewedName, expectedOwner),
+    /trigger set/,
+  );
+
+  const persistentForeignSchemaBinding = validAuthorityEvidence();
+  persistentForeignSchemaBinding.triggers.push({
+    definition:
+      "CREATE TRIGGER arbitrary_archive_trigger AFTER INSERT ON authority_archive.food_archive FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_barcode_insert()",
+    enabled: "O",
+    function_arguments: "",
+    function_name: "enqueue_food_search_barcode_insert",
+    function_schema: "public",
+    name: "arbitrary_archive_trigger",
+    table_schema: "authority_archive",
+    table_name: "food_archive",
+  });
+  assert.throws(
+    () => validateRestoreAuthorityEvidence(persistentForeignSchemaBinding, expectedOwner),
     /trigger set/,
   );
 });
@@ -723,6 +805,37 @@ test("orchestration rejects cross-schema trigger drift before dump creation", ()
   );
 });
 
+test("orchestration collects and rejects persistent foreign-schema authority bindings", () => {
+  const evidence = validAuthorityEvidence();
+  evidence.triggers.push({
+    definition:
+      "CREATE TRIGGER arbitrary_archive_trigger AFTER INSERT ON authority_archive.food_archive FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_barcode_insert()",
+    enabled: "O",
+    function_arguments: "",
+    function_name: "enqueue_food_search_barcode_insert",
+    function_schema: "public",
+    name: "arbitrary_archive_trigger",
+    table_schema: "authority_archive",
+    table_name: "food_archive",
+  });
+  const { calls, run } = authorityEvidenceRunner(evidence);
+
+  assert.throws(() => runPostgresRestoreDrill(restoreOptions(), { run }), /trigger set/);
+  assert.equal(
+    calls.some((arguments_) => arguments_.join(" ").includes("pg_dump")),
+    false,
+  );
+  const triggerQuery = calls
+    .map((arguments_) => arguments_.at(-1) ?? "")
+    .find((sql) => sql.includes("trigger_policy"));
+  assert.match(triggerQuery ?? "", /namespace_row\.nspname as table_schema/);
+  assert.match(
+    triggerQuery ?? "",
+    /namespace_row\.nspname = 'public' or \( procedure_namespace\.nspname = 'public'/,
+  );
+  assert.match(triggerQuery ?? "", /enqueue_food_search_barcode_insert/);
+});
+
 test("orchestration rejects explicit public column ACL state before dump creation", () => {
   const explicitPrivilege = validAuthorityEvidence();
   explicitPrivilege.columnAcls.push({
@@ -852,7 +965,7 @@ function validAuthorityEvidence() {
         owner: expectedOwner,
       },
     ],
-    version: 6,
+    version: 7,
   };
 }
 
@@ -870,6 +983,22 @@ function functionSemantics(sourceSha256, resultType) {
 
 function validAuthorityFunctions() {
   const triggerFunctions = [
+    [
+      "enqueue_food_search_barcode_insert",
+      "4e888f3ef0b3af1e7eee14568069ae3fe06b65b88718614ed0e2c243a5d22318",
+    ],
+    [
+      "enqueue_food_search_barcode_update",
+      "9d7a90d0fee1a6923631c9b9018d9c813d3c8f7eea2df941fc32fbb4f5d453b0",
+    ],
+    [
+      "enqueue_food_search_food_eligibility_change",
+      "85ada305a6fd6b40cd5fb0652d64c240d1953033a243b0f7ce243caa9bc9c4de",
+    ],
+    [
+      "enqueue_food_search_serving_insert",
+      "223f2d1dc8f90c6bc04c4d85ec763bcb50727473f5576b0bcdbbf394c1c9d804",
+    ],
     [
       "guard_food_import_approval_authority",
       "f96feb298d900165172c56a3fa1e99e91aaca010657155e5a996ee04015fdbbd",
@@ -1084,6 +1213,30 @@ function validAuthorityTriggers() {
       "CREATE TRIGGER food_import_record_reject_delete BEFORE DELETE ON food_import_record FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()",
     ],
     [
+      "food_search_barcode_insert_outbox",
+      "food_barcode",
+      "enqueue_food_search_barcode_insert",
+      "CREATE TRIGGER food_search_barcode_insert_outbox AFTER INSERT ON food_barcode REFERENCING NEW TABLE AS new_food_search_barcodes FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_barcode_insert()",
+    ],
+    [
+      "food_search_barcode_update_outbox",
+      "food_barcode",
+      "enqueue_food_search_barcode_update",
+      "CREATE TRIGGER food_search_barcode_update_outbox AFTER UPDATE ON food_barcode REFERENCING OLD TABLE AS old_food_search_barcodes NEW TABLE AS new_food_search_barcodes FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_barcode_update()",
+    ],
+    [
+      "food_search_eligibility_outbox",
+      "food",
+      "enqueue_food_search_food_eligibility_change",
+      "CREATE TRIGGER food_search_eligibility_outbox AFTER UPDATE ON food REFERENCING OLD TABLE AS old_food_search_rows NEW TABLE AS new_food_search_rows FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_food_eligibility_change()",
+    ],
+    [
+      "food_search_serving_insert_outbox",
+      "food_serving",
+      "enqueue_food_search_serving_insert",
+      "CREATE TRIGGER food_search_serving_insert_outbox AFTER INSERT ON food_serving REFERENCING NEW TABLE AS new_food_search_servings FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_serving_insert()",
+    ],
+    [
       "food_source_guard_active_release_authority",
       "food_source",
       "guard_food_source_active_release_authority",
@@ -1162,6 +1315,7 @@ function validAuthorityTriggers() {
     function_name: functionName,
     function_schema: "public",
     name,
+    table_schema: "public",
     table_name: tableName,
   }));
 }

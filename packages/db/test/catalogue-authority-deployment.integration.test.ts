@@ -9,6 +9,7 @@ import {
   CATALOGUE_CAPABILITY_ROLES,
   type CatalogueAuthorityDeploymentPolicy,
   catalogueAuthorityDeploymentPolicySha256,
+  collectCatalogueAuthorityDeploymentEvidence,
   createDatabase,
   type Database,
   parseCatalogueAuthorityDeploymentPolicy,
@@ -258,23 +259,31 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
         if (!client) throw new Error("Catalogue authority test login client is unavailable");
         return client;
       };
+      const verifierOwner = owner;
+      if (!verifierOwner) throw new Error("Catalogue authority owner client is unavailable");
 
-      const evidence = await runCatalogueReviewerCanaries(
-        {
-          nonReviewers: {
-            api: requireClient(nonReviewerLogins.api),
-            unassigned: requireClient(nonReviewerLogins.unassigned),
-            worker: requireClient(nonReviewerLogins.worker),
+      const runCanaries = () =>
+        runCatalogueReviewerCanaries(
+          {
+            nonReviewers: {
+              api: requireClient(nonReviewerLogins.api),
+              unassigned: requireClient(nonReviewerLogins.unassigned),
+              worker: requireClient(nonReviewerLogins.worker),
+            },
+            owner: verifierOwner,
+            reviewers: {
+              data: requireClient(reviewerLogins.data),
+              quality: requireClient(reviewerLogins.quality),
+              rights: requireClient(reviewerLogins.rights),
+            },
           },
-          owner,
-          reviewers: {
-            data: requireClient(reviewerLogins.data),
-            quality: requireClient(reviewerLogins.quality),
-            rights: requireClient(reviewerLogins.rights),
-          },
-        },
-        policy,
-      );
+          policy,
+        );
+      const assertCurrentTriggerSetRejected = async (): Promise<void> => {
+        await expect(runCanaries()).rejects.toThrow(/trigger set/u);
+      };
+
+      const evidence = await runCanaries();
 
       expect(evidence.policySha256).toBe(catalogueAuthorityDeploymentPolicySha256(policy));
       expect(evidence.beforeApprovalRowCount).toBe("0");
@@ -290,6 +299,127 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
         { canary: "worker-execute", sqlstate: "42501" },
         { canary: "data-direct-dml", sqlstate: "42501" },
       ]);
+      const observedTriggerNames = evidence.structure.triggers.map((trigger) => trigger.name);
+      expect(observedTriggerNames).not.toContain("app_user_set_updated_at");
+      expect(observedTriggerNames).not.toContain("food_version_reject_update");
+
+      const verifierSessions = await Promise.all(
+        [verifierOwner, ...fixtures.map((fixture) => requireClient(fixture.login))].map(
+          async (client) => {
+            const session = (
+              await sql<{
+                readonly application_name: string;
+                readonly login: string;
+                readonly pid: number;
+              }>`
+                select
+                  pg_catalog.current_setting('application_name') as application_name,
+                  pg_catalog.pg_backend_pid() as pid,
+                  session_user as login
+              `.execute(client)
+            ).rows[0];
+            if (!session) throw new Error("Catalogue authority verifier session is unavailable");
+            return {
+              applicationName: session.application_name,
+              login: session.login,
+              pid: session.pid,
+            };
+          },
+        ),
+      );
+      const crossSchema = `cat_dep_trigger_binding_${token}`;
+      const crossSchemaTable = "serving_shadow";
+      const crossSchemaTrigger = "unreviewed_cross_schema_food_search_serving_binding";
+      await sql`
+        create schema ${sql.id(crossSchema)}
+        authorization ${sql.id(databaseState.owner)}
+      `.execute(owner);
+      await sql`
+        create table ${sql.id(crossSchema, crossSchemaTable)} (
+          food_version_id bigint not null
+        )
+      `.execute(owner);
+      await sql`
+        create trigger ${sql.id(crossSchemaTrigger)}
+        after insert on ${sql.id(crossSchema, crossSchemaTable)}
+        referencing new table as new_food_search_servings
+        for each statement execute function public.enqueue_food_search_serving_insert()
+      `.execute(owner);
+      const crossSchemaEvidence = await collectCatalogueAuthorityDeploymentEvidence(
+        verifierOwner,
+        policy,
+        verifierSessions,
+      );
+      expect(crossSchemaEvidence.triggers).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            functionName: "enqueue_food_search_serving_insert",
+            functionSchema: policy.applicationSchema,
+            name: crossSchemaTrigger,
+            tableName: crossSchemaTable,
+          }),
+        ]),
+      );
+      await sql`
+        drop trigger ${sql.id(crossSchemaTrigger)}
+        on ${sql.id(crossSchema, crossSchemaTable)}
+      `.execute(owner);
+      await sql`drop table ${sql.id(crossSchema, crossSchemaTable)}`.execute(owner);
+      await sql`drop schema ${sql.id(crossSchema)}`.execute(owner);
+
+      await sql`
+        create trigger unreviewed_food_search_barcode_insert_binding
+        after insert on food_barcode
+        referencing new table as new_food_search_barcodes
+        for each statement execute function enqueue_food_search_barcode_insert()
+      `.execute(owner);
+      await assertCurrentTriggerSetRejected();
+      await sql`
+        drop trigger unreviewed_food_search_barcode_insert_binding on food_barcode
+      `.execute(owner);
+
+      await sql`
+        create trigger unreviewed_food_search_barcode_update_binding
+        after update on food_barcode
+        referencing old table as old_food_search_barcodes new table as new_food_search_barcodes
+        for each statement execute function enqueue_food_search_barcode_update()
+      `.execute(owner);
+      await assertCurrentTriggerSetRejected();
+      await sql`
+        drop trigger unreviewed_food_search_barcode_update_binding on food_barcode
+      `.execute(owner);
+
+      await sql`
+        create trigger unreviewed_food_search_food_eligibility_binding
+        after update on food
+        referencing old table as old_food_search_rows new table as new_food_search_rows
+        for each statement execute function enqueue_food_search_food_eligibility_change()
+      `.execute(owner);
+      await assertCurrentTriggerSetRejected();
+      await sql`
+        drop trigger unreviewed_food_search_food_eligibility_binding on food
+      `.execute(owner);
+
+      await sql`
+        create trigger unreviewed_food_search_serving_insert_binding
+        after insert on food_serving
+        referencing new table as new_food_search_servings
+        for each statement execute function enqueue_food_search_serving_insert()
+      `.execute(owner);
+      await assertCurrentTriggerSetRejected();
+      await sql`
+        drop trigger unreviewed_food_search_serving_insert_binding on food_serving
+      `.execute(owner);
+
+      await sql`
+        create trigger food_search_eligibility_outbox
+        before update on app_user
+        for each row execute function set_row_updated_at()
+      `.execute(owner);
+      await assertCurrentTriggerSetRejected();
+      await sql`
+        drop trigger food_search_eligibility_outbox on app_user
+      `.execute(owner);
 
       const backdoorSchema = `cat_dep_backdoor_${token}`;
       const backdoorFunction = "catalogue_backdoor_mutate_batch";
@@ -336,24 +466,7 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
         `.execute(owner)
       ).rows[0];
       expect(backdoorCallable).toEqual({ function_execute: true, schema_usage: true });
-      await expect(
-        runCatalogueReviewerCanaries(
-          {
-            nonReviewers: {
-              api: requireClient(nonReviewerLogins.api),
-              unassigned: requireClient(nonReviewerLogins.unassigned),
-              worker: requireClient(nonReviewerLogins.worker),
-            },
-            owner,
-            reviewers: {
-              data: requireClient(reviewerLogins.data),
-              quality: requireClient(reviewerLogins.quality),
-              rights: requireClient(reviewerLogins.rights),
-            },
-          },
-          policy,
-        ),
-      ).rejects.toThrow(/non-system schema set/u);
+      await expect(runCanaries()).rejects.toThrow(/non-system schema set/u);
     } catch (error) {
       primaryFailure = error;
     } finally {

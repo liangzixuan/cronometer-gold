@@ -451,6 +451,10 @@ describe("catalogue authority deployment policy", () => {
 
   it.each([
     "advance_food_search_projection_revision",
+    "enqueue_food_search_barcode_insert",
+    "enqueue_food_search_barcode_update",
+    "enqueue_food_search_food_eligibility_change",
+    "enqueue_food_search_serving_insert",
     "enqueue_food_search_source_eligibility_change",
     "set_row_updated_at",
   ])("rejects protected authority function body drift for %s", (functionName) => {
@@ -468,6 +472,10 @@ describe("catalogue authority deployment policy", () => {
 
   it.each([
     "advance_food_search_projection_revision",
+    "enqueue_food_search_barcode_insert",
+    "enqueue_food_search_barcode_update",
+    "enqueue_food_search_food_eligibility_change",
+    "enqueue_food_search_serving_insert",
     "enqueue_food_search_source_eligibility_change",
   ])("rejects food-search function search-path drift for %s", (functionName) => {
     const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);

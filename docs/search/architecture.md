@@ -56,11 +56,14 @@ and `pg_temp`. Its fail-closed preflight attests both exact application-schema
 `SECURITY INVOKER` functions and the exact ordinary enabled trigger before
 changing only those function-local search paths. It grants no privilege and does
 not authorize direct non-owner catalogue DML.
-`enqueue_food_search_food_eligibility_change`,
-`enqueue_food_search_serving_insert`, `enqueue_food_search_barcode_insert`, and
-`enqueue_food_search_barcode_update` still resolve their own unqualified
-relations and revision-function call through the ambient caller path. They
-remain within the owner-only compatibility boundary pending separate review.
+Migration 0017 closes the corresponding namespace-hijack gap for the remaining
+food, serving, and barcode outbox paths. Its fail-closed preflight attests the
+four exact application-schema `SECURITY INVOKER` functions and their four exact
+ordinary enabled statement triggers before pinning each function to the same
+trusted search path. It changes no function body, owner, ACL, or invoker status
+and grants no privilege. The paths remain within the owner-only compatibility
+boundary: fixed-purpose shared-table wrappers and a database-enforced lock
+protocol are still required before direct non-owner DML or runtime cutover.
 
 Meilisearch documents that settings and document writes are asynchronous tasks and
 that index swaps are atomic. Those behaviors are explicit adapter contracts rather

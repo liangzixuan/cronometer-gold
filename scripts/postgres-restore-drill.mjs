@@ -16,7 +16,7 @@ const AUTHORITY_POLICY_PATH = new URL(
 const MIGRATION_DIRECTORY = new URL("../packages/db/migrations/", import.meta.url);
 const MIGRATION_FILE_PATTERN = /^\d{4}_[a-z0-9_]+\.sql$/;
 const EXPECTED_AUTHORITY_POLICY_SHA256 =
-  "430ef803236694d6de5af629334fd65874387272fe6192dccfef830b1b4cd75d";
+  "a9edd0c42a4912be5745059c0bfb4f5d00bac3cdd49df01b9dd620de5ddf6fbc";
 const CAPABILITY_ROLES = [
   "nutrition_catalogue_stage",
   "nutrition_catalogue_validate",
@@ -91,6 +91,34 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       sourceSha256: "89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac",
       strict: false,
       volatility: "v",
+    },
+  ],
+  [
+    "enqueue_food_search_barcode_insert",
+    {
+      ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
+      sourceSha256: "4e888f3ef0b3af1e7eee14568069ae3fe06b65b88718614ed0e2c243a5d22318",
+    },
+  ],
+  [
+    "enqueue_food_search_barcode_update",
+    {
+      ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
+      sourceSha256: "9d7a90d0fee1a6923631c9b9018d9c813d3c8f7eea2df941fc32fbb4f5d453b0",
+    },
+  ],
+  [
+    "enqueue_food_search_food_eligibility_change",
+    {
+      ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
+      sourceSha256: "85ada305a6fd6b40cd5fb0652d64c240d1953033a243b0f7ce243caa9bc9c4de",
+    },
+  ],
+  [
+    "enqueue_food_search_serving_insert",
+    {
+      ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
+      sourceSha256: "223f2d1dc8f90c6bc04c4d85ec763bcb50727473f5576b0bcdbbf394c1c9d804",
     },
   ],
   [
@@ -275,6 +303,42 @@ const AUTHORITY_TRIGGER_POLICY = new Map([
     },
   ],
   [
+    "food_search_barcode_insert_outbox",
+    {
+      definition:
+        "CREATE TRIGGER food_search_barcode_insert_outbox AFTER INSERT ON food_barcode REFERENCING NEW TABLE AS new_food_search_barcodes FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_barcode_insert()",
+      functionName: "enqueue_food_search_barcode_insert",
+      tableName: "food_barcode",
+    },
+  ],
+  [
+    "food_search_barcode_update_outbox",
+    {
+      definition:
+        "CREATE TRIGGER food_search_barcode_update_outbox AFTER UPDATE ON food_barcode REFERENCING OLD TABLE AS old_food_search_barcodes NEW TABLE AS new_food_search_barcodes FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_barcode_update()",
+      functionName: "enqueue_food_search_barcode_update",
+      tableName: "food_barcode",
+    },
+  ],
+  [
+    "food_search_eligibility_outbox",
+    {
+      definition:
+        "CREATE TRIGGER food_search_eligibility_outbox AFTER UPDATE ON food REFERENCING OLD TABLE AS old_food_search_rows NEW TABLE AS new_food_search_rows FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_food_eligibility_change()",
+      functionName: "enqueue_food_search_food_eligibility_change",
+      tableName: "food",
+    },
+  ],
+  [
+    "food_search_serving_insert_outbox",
+    {
+      definition:
+        "CREATE TRIGGER food_search_serving_insert_outbox AFTER INSERT ON food_serving REFERENCING NEW TABLE AS new_food_search_servings FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_serving_insert()",
+      functionName: "enqueue_food_search_serving_insert",
+      tableName: "food_serving",
+    },
+  ],
+  [
     "food_source_guard_active_release_authority",
     {
       definition:
@@ -383,6 +447,24 @@ const AUTHORITY_TRIGGER_POLICY = new Map([
     },
   ],
 ]);
+const SHARED_TRIGGER_FUNCTION_NAMES = new Set([
+  "reject_immutable_row_update",
+  "set_row_updated_at",
+]);
+const REVIEWED_AUTHORITY_TRIGGER_NAMES = new Set(AUTHORITY_TRIGGER_POLICY.keys());
+// The shared helpers are intentionally bound throughout the application schema;
+// their reviewed catalogue sites are selected by protected table and exact name.
+// Every dedicated authority function is exclusive, so any extra binding of one
+// must enter the fingerprint and fail the exact trigger-set check.
+const REVIEWED_AUTHORITY_TRIGGER_FUNCTION_NAMES = new Set(
+  [...AUTHORITY_TRIGGER_POLICY.values()]
+    .map(({ functionName }) => functionName)
+    .filter((functionName) => !SHARED_TRIGGER_FUNCTION_NAMES.has(functionName)),
+);
+const REVIEWED_AUTHORITY_TRIGGER_FUNCTION_SQL_LIST = [...REVIEWED_AUTHORITY_TRIGGER_FUNCTION_NAMES]
+  .sort()
+  .map((functionName) => `'${functionName}'`)
+  .join(",");
 const AUTHORITY_POLICY_SQL = readFileSync(AUTHORITY_POLICY_PATH, "utf8");
 
 export const RESTORE_AUTHORITY_POLICY_SHA256 = assertRestoreAuthorityPolicyDigest(
@@ -804,9 +886,9 @@ function collectAuthorityFingerprint(run, options, database) {
       ") schema_policy",
     ]),
     triggers: psqlJson(run, options, database, [
-      "select coalesce(json_agg(row_to_json(trigger_policy) order by trigger_policy.name)::text, '[]')",
+      "select coalesce(json_agg(row_to_json(trigger_policy) order by trigger_policy.table_schema, trigger_policy.name, trigger_policy.table_name, trigger_policy.function_schema, trigger_policy.function_name)::text, '[]')",
       "from (",
-      "select trigger_row.tgname as name, class_row.relname as table_name, procedure_namespace.nspname as function_schema, procedure_row.proname as function_name,",
+      "select trigger_row.tgname as name, namespace_row.nspname as table_schema, class_row.relname as table_name, procedure_namespace.nspname as function_schema, procedure_row.proname as function_name,",
       "pg_catalog.pg_get_function_identity_arguments(procedure_row.oid) as function_arguments,",
       "trigger_row.tgenabled as enabled, pg_catalog.pg_get_triggerdef(trigger_row.oid, true) as definition",
       "from pg_catalog.pg_trigger as trigger_row",
@@ -814,7 +896,11 @@ function collectAuthorityFingerprint(run, options, database) {
       "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = class_row.relnamespace",
       "join pg_catalog.pg_proc as procedure_row on procedure_row.oid = trigger_row.tgfoid",
       "join pg_catalog.pg_namespace as procedure_namespace on procedure_namespace.oid = procedure_row.pronamespace",
-      "where namespace_row.nspname = 'public' and not trigger_row.tgisinternal",
+      "where not trigger_row.tgisinternal and (",
+      "namespace_row.nspname = 'public' or (",
+      "procedure_namespace.nspname = 'public'",
+      `and procedure_row.proname in (${REVIEWED_AUTHORITY_TRIGGER_FUNCTION_SQL_LIST})`,
+      "))",
       ") trigger_policy",
     ]),
     types: psqlJson(run, options, database, [
@@ -834,7 +920,7 @@ function collectAuthorityFingerprint(run, options, database) {
       "where namespace_row.nspname = 'public'",
       ") type_policy",
     ]),
-    version: 6,
+    version: 7,
   };
   validateRestoreAuthorityEvidence(evidence, options.expectedOwner);
   const fingerprint = canonicalJson(evidence);
@@ -847,7 +933,7 @@ function collectAuthorityFingerprint(run, options, database) {
 
 export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
   if (!SAFE_ROLE.test(expectedOwner)) throw new Error("Invalid expected PostgreSQL owner name");
-  if (!evidence || typeof evidence !== "object" || evidence.version !== 6) {
+  if (!evidence || typeof evidence !== "object" || evidence.version !== 7) {
     throw new Error("Database-authority fingerprint has an unsupported version");
   }
 
@@ -1046,9 +1132,14 @@ export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
     }
   }
 
-  const triggers = requiredArray(evidence.triggers, "public triggers");
-  const authorityTriggers = triggers.filter((entry) =>
-    PROTECTED_CATALOGUE_TABLES.has(entry.table_name),
+  const triggers = requiredArray(evidence.triggers, "restore triggers");
+  const authorityTriggers = triggers.filter(
+    (entry) =>
+      (entry.table_schema === "public" &&
+        (PROTECTED_CATALOGUE_TABLES.has(entry.table_name) ||
+          REVIEWED_AUTHORITY_TRIGGER_NAMES.has(entry.name))) ||
+      (entry.function_schema === "public" &&
+        REVIEWED_AUTHORITY_TRIGGER_FUNCTION_NAMES.has(entry.function_name)),
   );
   if (authorityTriggers.length !== AUTHORITY_TRIGGER_POLICY.size) {
     throw new Error("Catalogue authority trigger set has missing or unexpected entries");
@@ -1058,6 +1149,7 @@ export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
     if (
       matches.length !== 1 ||
       matches[0].enabled !== "O" ||
+      matches[0].table_schema !== "public" ||
       matches[0].table_name !== expected.tableName ||
       matches[0].function_schema !== "public" ||
       matches[0].function_name !== expected.functionName ||

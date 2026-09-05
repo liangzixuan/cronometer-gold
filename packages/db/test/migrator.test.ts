@@ -503,4 +503,46 @@ describe("forward migration discovery", () => {
     expect(migrationSql).not.toMatch(/\balter\s+(?:role|table|sequence)\b/iu);
     expect(migrationSql).not.toMatch(/\b(?:drop|truncate)\b/iu);
   });
+
+  it("pins the remaining food-search projection triggers without granting authority", async () => {
+    const migrationSql = await readFile(
+      resolve(
+        import.meta.dirname,
+        "../migrations/0017_food_search_projection_trigger_hardening.sql",
+      ),
+      "utf8",
+    );
+
+    expect(createHash("sha256").update(migrationSql).digest("hex")).toBe(
+      "b6b4a152c931a1b0c174fcd291ec1303032e4fede63842069936a2b031fd93e4",
+    );
+    expect(migrationSql).toContain("target_schema name := pg_catalog.current_schema()");
+    expect(migrationSql).toContain(
+      "procedure_row.proname = 'advance_food_search_projection_revision'",
+    );
+    expect(migrationSql).toContain(
+      "d1e4a8a27203104c6339f045a31a4dfdd2aee3c78cdd94e06bfd3db2c9ac2108",
+    );
+    expect(migrationSql).toContain(
+      "food-search projection revision helper identity or hardened semantics differ",
+    );
+    expect(migrationSql).toContain("or (\n          procedure_namespace_row.nspname");
+    for (const functionName of [
+      "enqueue_food_search_barcode_insert",
+      "enqueue_food_search_barcode_update",
+      "enqueue_food_search_food_eligibility_change",
+      "enqueue_food_search_serving_insert",
+    ]) {
+      expect(migrationSql).toContain(
+        `alter function %I.${functionName}() set search_path = pg_catalog, %I, pg_temp`,
+      );
+    }
+    expect(migrationSql.match(/\balter\s+function\b/giu)).toHaveLength(4);
+    expect(migrationSql).not.toMatch(/\bcreate\s+(?:or\s+replace\s+)?function\b/iu);
+    expect(migrationSql).toContain("procedure_namespace_row.nspname <> target_schema");
+    expect(migrationSql).not.toMatch(/\b(?:grant|revoke)\b/iu);
+    expect(migrationSql).not.toMatch(/\bsecurity\s+definer\b/iu);
+    expect(migrationSql).not.toMatch(/\balter\s+(?:role|table|sequence)\b/iu);
+    expect(migrationSql).not.toMatch(/\b(?:drop|truncate)\b/iu);
+  });
 });

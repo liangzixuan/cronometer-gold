@@ -6,6 +6,7 @@ import {
   assertCatalogueAuthorityCanaryEvidence,
   assertCatalogueAuthorityDeploymentEvidence,
   CATALOGUE_AUTHORITY_PROTECTED_TABLES,
+  CATALOGUE_AUTHORITY_TRIGGER_POLICY,
   CATALOGUE_CAPABILITY_ROLES,
   type CatalogueAuthorityCanaryEvidence,
   type CatalogueAuthorityCanaryName,
@@ -120,6 +121,12 @@ const _TABLE_PRIVILEGES = [
   "UPDATE",
 ];
 const _SEQUENCE_PRIVILEGES = ["SELECT", "UPDATE", "USAGE"];
+// These helpers are intentionally reused across the application. Their catalogue
+// bindings are discovered by exact reviewed trigger name instead of function name.
+const SHARED_APPLICATION_TRIGGER_FUNCTIONS = new Set([
+  "reject_immutable_row_update",
+  "set_row_updated_at",
+]);
 
 export async function collectCatalogueAuthorityDeploymentEvidence(
   database: Kysely<Database>,
@@ -777,6 +784,18 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
   const protectedCatalogueTables = sql.join(
     CATALOGUE_AUTHORITY_PROTECTED_TABLES.map((entry) => sql`${entry}`),
   );
+  const reviewedCatalogueTriggerNames = sql.join(
+    CATALOGUE_AUTHORITY_TRIGGER_POLICY.map((entry) => sql`${entry.name}`),
+  );
+  const reviewedCatalogueExclusiveTriggerFunctions = sql.join(
+    [
+      ...new Set(
+        CATALOGUE_AUTHORITY_TRIGGER_POLICY.map((entry) => entry.functionName).filter(
+          (entry) => !SHARED_APPLICATION_TRIGGER_FUNCTIONS.has(entry),
+        ),
+      ),
+    ].map((entry) => sql`${entry}`),
+  );
   const triggers = (
     await sql<{
       readonly definition: string;
@@ -805,10 +824,23 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
         on procedure_row.oid = trigger_row.tgfoid
       join pg_catalog.pg_namespace as procedure_namespace
         on procedure_namespace.oid = procedure_row.pronamespace
-      where namespace_row.nspname = ${policy.applicationSchema}
-        and not trigger_row.tgisinternal
-        and class_row.relname in (${protectedCatalogueTables})
-      order by trigger_row.tgname
+      where not trigger_row.tgisinternal
+        and (
+          (
+            namespace_row.nspname = ${policy.applicationSchema}
+            and class_row.relname in (${protectedCatalogueTables})
+          )
+          or (
+            namespace_row.nspname = ${policy.applicationSchema}
+            and trigger_row.tgname in (${reviewedCatalogueTriggerNames})
+          )
+          or (
+            procedure_namespace.nspname = ${policy.applicationSchema}
+            and procedure_row.proname in (${reviewedCatalogueExclusiveTriggerFunctions})
+            and pg_catalog.pg_get_function_identity_arguments(procedure_row.oid) = ''
+          )
+        )
+      order by trigger_row.tgname, class_row.relname, procedure_row.proname
     `.execute(database)
   ).rows.map((row) => ({
     definition: row.definition,

@@ -1056,6 +1056,644 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
       }
     }
   });
+
+  it("pins every food-search projection trigger ahead of hostile permanent and temporary namespaces", async () => {
+    if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
+    const bootstrap = createDatabase({ connectionString: databaseUrl, maxConnections: 1 });
+    const token = randomBytes(6).toString("hex");
+    const schemaName = `food_projection_hardening_${token}`;
+    const hostileSchema = `food_projection_hostile_${token}`;
+    const scopedUrl = new URL(databaseUrl);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName},public`);
+    const database = createDatabase({ connectionString: scopedUrl.toString(), maxConnections: 1 });
+    let schemaCreated = false;
+    let hostileSchemaCreated = false;
+
+    try {
+      await sql`create schema ${sql.id(schemaName)}`.execute(bootstrap);
+      schemaCreated = true;
+      await sql`create schema ${sql.id(hostileSchema)}`.execute(bootstrap);
+      hostileSchemaCreated = true;
+      const migrations = await discoverMigrations();
+      const hardeningIndex = migrations.findIndex(
+        (migration) => migration.name === "0017_food_search_projection_trigger_hardening.sql",
+      );
+      const evidenceBindingIndex = migrations.findIndex(
+        (migration) => migration.name === "0011_food_import_evidence_binding.sql",
+      );
+      expect(hardeningIndex).toBeGreaterThan(0);
+      expect(evidenceBindingIndex).toBeGreaterThan(0);
+      expect(evidenceBindingIndex).toBeLessThan(hardeningIndex);
+      expect(migrations[hardeningIndex - 1]?.name).toBe("0016_food_search_function_hardening.sql");
+      for (const migration of migrations.slice(0, evidenceBindingIndex)) {
+        await sql.raw(migration.sql).execute(database);
+      }
+      const hardeningMigration = migrations[hardeningIndex];
+      if (!hardeningMigration) throw new Error("0017 hardening migration was not discovered");
+
+      const source = (
+        await sql<{ id: string }>`
+          insert into food_source (
+            active, attribution_required, attribution_text, code,
+            commercial_use_allowed, database_rights_notes, display_name,
+            homepage_url, kind, license_expression, license_url,
+            redistribution_allowed, rights_review_status, rights_reviewed_at,
+            rights_reviewed_by
+          ) values (
+            true, true, 'Projection hardening fixture',
+            ${`PH${token.toUpperCase()}`}, true, 'Reviewed integration fixture',
+            ${`Projection source ${token}`},
+            'https://example.invalid/projection-hardening', 'government',
+            'CC0-1.0', 'https://creativecommons.org/publicdomain/zero/1.0/',
+            true, 'approved', pg_catalog.clock_timestamp(),
+            'principal:projection-hardening'
+          )
+          returning id
+        `.execute(database)
+      ).rows[0];
+      if (!source) throw new Error("projection source fixture was not created");
+      const sourceId = source.id;
+      const release = (
+        await sql<{ id: string }>`
+          insert into food_source_release (
+            acquired_at, artifact_bytes, artifact_sha256, artifact_uri,
+            food_source_id, media_type, parser_version, record_counts, release_key,
+            rights_manifest_sha256, rights_manifest_uri, status, validation_summary
+          ) values (
+            pg_catalog.clock_timestamp(), 1, ${"a".repeat(64)},
+            ${`s3://catalogue-artifacts/${token}.json`}, ${sourceId}::bigint,
+            'application/json', 'projection-hardening@1', '{"fixture":true}'::jsonb,
+            ${`projection-release-${token}`}, ${"b".repeat(64)},
+            'repo://projection-hardening-rights.json', 'imported',
+            '{"fixture":true}'::jsonb
+          )
+          returning id
+        `.execute(database)
+      ).rows[0];
+      if (!release) throw new Error("projection release fixture was not created");
+      await sql`
+        update food_source
+        set active_release_id = ${release.id}::uuid
+        where id = ${sourceId}::bigint
+      `.execute(database);
+      for (const migration of migrations.slice(evidenceBindingIndex, hardeningIndex)) {
+        await sql.raw(migration.sql).execute(database);
+      }
+      const food = (
+        await sql<{ id: string }>`
+          insert into food (
+            kind, food_source_id, source_food_key, visibility
+          ) values (
+            'generic', ${sourceId}::bigint, ${`projection-food-${token}`}, 'public'
+          )
+          returning id
+        `.execute(database)
+      ).rows[0];
+      if (!food) throw new Error("projection food fixture was not created");
+      const version = (
+        await sql<{ id: string }>`
+          insert into food_version (
+            food_id, version_number, source_release_id, name, normalized_name,
+            data_quality, basis_quantity, basis_unit
+          ) values (
+            ${food.id}::bigint, 1, ${release.id}::uuid,
+            'Projection hardening fixture', 'projection hardening fixture',
+            'verified', 100, 'g'
+          )
+          returning id
+        `.execute(database)
+      ).rows[0];
+      if (!version) throw new Error("projection food version fixture was not created");
+      await sql`
+        update food set current_version_id = ${version.id}::bigint
+        where id = ${food.id}::bigint
+      `.execute(database);
+      await sql`
+        insert into food_serving (
+          food_version_id, label, quantity, unit, unit_kind, gram_weight,
+          is_default
+        ) values (
+          ${version.id}::bigint, 'Initial serving', 100, 'g', 'mass', 100, true
+        )
+      `.execute(database);
+      await sql`
+        insert into food_barcode (
+          gtin, food_id, food_version_id, source_release_id
+        ) values (
+          '000000000001', ${food.id}::bigint, ${version.id}::bigint, ${release.id}::uuid
+        )
+      `.execute(database);
+      await sql`delete from outbox_event`.execute(database);
+      await sql`
+        update food_search_projection_revision
+        set current_revision = 0,
+            published_revision = null,
+            updated_at = pg_catalog.clock_timestamp()
+        where singleton
+      `.execute(database);
+
+      const readProjectionFunctionState = async () =>
+        (
+          await sql<{
+            name: string;
+            owner_name: string;
+            proacl: string[] | null;
+            proconfig: string[] | null;
+            prosecdef: boolean;
+            source_sha256: string;
+          }>`
+            select
+              procedure_row.proname as name,
+              pg_catalog.pg_get_userbyid(procedure_row.proowner) as owner_name,
+              procedure_row.proacl,
+              procedure_row.proconfig,
+              procedure_row.prosecdef,
+              pg_catalog.encode(
+                pg_catalog.sha256(pg_catalog.convert_to(procedure_row.prosrc, 'UTF8')),
+                'hex'
+              ) as source_sha256
+            from pg_catalog.pg_proc as procedure_row
+            join pg_catalog.pg_namespace as namespace_row
+              on namespace_row.oid = procedure_row.pronamespace
+            where namespace_row.nspname = ${schemaName}
+              and procedure_row.proname in (
+                'enqueue_food_search_barcode_insert',
+                'enqueue_food_search_barcode_update',
+                'enqueue_food_search_food_eligibility_change',
+                'enqueue_food_search_serving_insert'
+              )
+            order by procedure_row.proname
+          `.execute(database)
+        ).rows;
+      const tableOwner = (
+        await sql<{ owner_name: string }>`
+          select pg_catalog.pg_get_userbyid(class_row.relowner) as owner_name
+          from pg_catalog.pg_class as class_row
+          join pg_catalog.pg_namespace as namespace_row
+            on namespace_row.oid = class_row.relnamespace
+          where namespace_row.nspname = ${schemaName}
+            and class_row.relname = 'food'
+        `.execute(database)
+      ).rows[0]?.owner_name;
+      if (!tableOwner) throw new Error("projection table owner was not returned");
+      const preHardeningFunctionState = await readProjectionFunctionState();
+      expect(preHardeningFunctionState).toEqual([
+        {
+          name: "enqueue_food_search_barcode_insert",
+          owner_name: tableOwner,
+          proacl: null,
+          proconfig: null,
+          prosecdef: false,
+          source_sha256: "4e888f3ef0b3af1e7eee14568069ae3fe06b65b88718614ed0e2c243a5d22318",
+        },
+        {
+          name: "enqueue_food_search_barcode_update",
+          owner_name: tableOwner,
+          proacl: null,
+          proconfig: null,
+          prosecdef: false,
+          source_sha256: "9d7a90d0fee1a6923631c9b9018d9c813d3c8f7eea2df941fc32fbb4f5d453b0",
+        },
+        {
+          name: "enqueue_food_search_food_eligibility_change",
+          owner_name: tableOwner,
+          proacl: null,
+          proconfig: null,
+          prosecdef: false,
+          source_sha256: "85ada305a6fd6b40cd5fb0652d64c240d1953033a243b0f7ce243caa9bc9c4de",
+        },
+        {
+          name: "enqueue_food_search_serving_insert",
+          owner_name: tableOwner,
+          proacl: null,
+          proconfig: null,
+          prosecdef: false,
+          source_sha256: "223f2d1dc8f90c6bc04c4d85ec763bcb50727473f5576b0bcdbbf394c1c9d804",
+        },
+      ]);
+
+      await sql`
+        create function ${sql.id(hostileSchema)}.advance_food_search_projection_revision()
+        returns void
+        language plpgsql
+        as $function$
+        begin
+          update shadow_function_call set calls = calls + 1;
+        end;
+        $function$
+      `.execute(database);
+      await sql`
+        create function ${sql.id(hostileSchema)}.enqueue_food_search_serving_insert()
+        returns trigger
+        language plpgsql
+        as $function$
+        begin
+          return null;
+        end;
+        $function$
+      `.execute(database);
+      await sql`
+        create temporary table shadow_function_call (
+          calls integer not null
+        ) on commit preserve rows
+      `.execute(database);
+      await sql`insert into pg_temp.shadow_function_call (calls) values (0)`.execute(database);
+      await sql`
+        create temporary table food_search_projection_revision (
+          singleton boolean primary key,
+          current_revision bigint not null,
+          published_revision bigint,
+          updated_at timestamptz not null
+        ) on commit preserve rows
+      `.execute(database);
+      await sql`
+        insert into pg_temp.food_search_projection_revision (
+          singleton, current_revision, published_revision, updated_at
+        ) values (true, 0, null, pg_catalog.clock_timestamp())
+      `.execute(database);
+      await sql`
+        create temporary table outbox_event (
+          aggregate_type text,
+          aggregate_id text,
+          event_type text,
+          deduplication_key text,
+          payload jsonb
+        ) on commit preserve rows
+      `.execute(database);
+      await sql`
+        create temporary table food_version (
+          id bigint,
+          food_id bigint,
+          source_release_id uuid
+        ) on commit preserve rows
+      `.execute(database);
+      await sql`
+        create temporary table food (
+          id bigint,
+          kind text,
+          food_source_id bigint,
+          current_version_id bigint
+        ) on commit preserve rows
+      `.execute(database);
+      await sql`
+        create temporary table food_source (
+          id bigint,
+          active_release_id uuid
+        ) on commit preserve rows
+      `.execute(database);
+      await sql`
+        insert into pg_temp.food_version (id, food_id, source_release_id)
+        values (${version.id}::bigint, ${food.id}::bigint, ${release.id}::uuid)
+      `.execute(database);
+      await sql`
+        insert into pg_temp.food (id, kind, food_source_id, current_version_id)
+        values (
+          ${food.id}::bigint, 'generic', ${sourceId}::bigint, ${version.id}::bigint
+        )
+      `.execute(database);
+      await sql`
+        insert into pg_temp.food_source (id, active_release_id)
+        values (${sourceId}::bigint, ${release.id}::uuid)
+      `.execute(database);
+
+      await sql`set search_path = ${sql.id(hostileSchema)}, ${sql.id(schemaName)}, public`.execute(
+        database,
+      );
+      await sql`
+        update ${sql.id(schemaName)}.food
+        set archived_at = pg_catalog.clock_timestamp()
+        where id = ${food.id}::bigint
+      `.execute(database);
+      await sql`
+        insert into ${sql.id(schemaName)}.food_serving (
+          food_version_id, label, quantity, unit, unit_kind, gram_weight
+        ) values (
+          ${version.id}::bigint, 'Pre-hardening serving', 50, 'g', 'mass', 50
+        )
+      `.execute(database);
+      const preHardeningBarcode = (
+        await sql<{ id: string }>`
+          insert into ${sql.id(schemaName)}.food_barcode (
+            gtin, food_id, food_version_id, source_release_id
+          ) values (
+            '000000000002', ${food.id}::bigint, ${version.id}::bigint,
+            ${release.id}::uuid
+          )
+          returning id
+        `.execute(database)
+      ).rows[0];
+      if (!preHardeningBarcode) throw new Error("pre-hardening barcode was not created");
+      await sql`
+        update ${sql.id(schemaName)}.food_barcode
+        set valid_to = pg_catalog.clock_timestamp() + interval '1 second'
+        where id = ${preHardeningBarcode.id}::bigint
+      `.execute(database);
+
+      expect(
+        (
+          await sql<{ reason: string }>`
+            select payload ->> 'reason' as reason
+            from pg_temp.outbox_event
+            order by reason
+          `.execute(database)
+        ).rows,
+      ).toEqual([
+        { reason: "barcode_closed_for_current_version" },
+        { reason: "barcode_inserted_for_current_version" },
+        { reason: "food_eligibility_changed" },
+        { reason: "serving_inserted_for_current_version" },
+      ]);
+      expect(
+        (
+          await sql<{ calls: number }>`
+            select calls from pg_temp.shadow_function_call
+          `.execute(database)
+        ).rows[0],
+      ).toEqual({ calls: 4 });
+      expect(
+        (
+          await sql<{ event_count: number }>`
+            select pg_catalog.count(*)::integer as event_count
+            from ${sql.id(schemaName)}.outbox_event
+          `.execute(database)
+        ).rows[0],
+      ).toEqual({ event_count: 0 });
+      expect(
+        (
+          await sql<{ current_revision: string }>`
+            select current_revision
+            from ${sql.id(schemaName)}.food_search_projection_revision
+            where singleton
+          `.execute(database)
+        ).rows[0],
+      ).toEqual({ current_revision: "0" });
+
+      await sql`set search_path = ${sql.id(schemaName)}, public`.execute(database);
+      await sql`
+        create table ${sql.id(hostileSchema)}.unexpected_food_search_serving (
+          food_version_id bigint
+        )
+      `.execute(database);
+      await sql`
+        create trigger unexpected_food_search_serving_insert_outbox
+        after insert on ${sql.id(hostileSchema)}.unexpected_food_search_serving
+        referencing new table as new_food_search_servings
+        for each statement execute function
+          ${sql.id(schemaName)}.enqueue_food_search_serving_insert()
+      `.execute(database);
+      await expectPostgresCode(
+        sql.raw(hardeningMigration.sql).execute(database),
+        "55000",
+        "food-search projection trigger identity or definition differs",
+      );
+      expect(await readProjectionFunctionState()).toEqual(preHardeningFunctionState);
+      await sql`
+        drop table ${sql.id(hostileSchema)}.unexpected_food_search_serving
+      `.execute(database);
+
+      await sql`
+        drop trigger food_search_serving_insert_outbox
+        on ${sql.id(schemaName)}.food_serving
+      `.execute(database);
+      await sql`
+        create trigger food_search_serving_insert_outbox
+        after insert on ${sql.id(schemaName)}.food_serving
+        referencing new table as new_food_search_servings
+        for each statement execute function
+          ${sql.id(hostileSchema)}.enqueue_food_search_serving_insert()
+      `.execute(database);
+      await expectPostgresCode(
+        sql.raw(hardeningMigration.sql).execute(database),
+        "55000",
+        "food-search projection trigger identity or definition differs",
+      );
+      expect(await readProjectionFunctionState()).toEqual(preHardeningFunctionState);
+      await sql`
+        drop trigger food_search_serving_insert_outbox
+        on ${sql.id(schemaName)}.food_serving
+      `.execute(database);
+      await sql`
+        create trigger food_search_serving_insert_outbox
+        after insert on ${sql.id(schemaName)}.food_serving
+        referencing new table as new_food_search_servings
+        for each statement execute function
+          ${sql.id(schemaName)}.enqueue_food_search_serving_insert()
+      `.execute(database);
+      await sql`
+        set search_path = ${sql.id(schemaName)}, pg_catalog, pg_temp, public
+      `.execute(database);
+      const triggerState = (
+        await sql<{
+          enabled: string;
+          function_arguments: string;
+          function_name: string;
+          function_schema: string;
+          table_name: string;
+          table_schema: string;
+          trigger_definition: string;
+          trigger_name: string;
+        }>`
+          select
+            trigger_row.tgname as trigger_name,
+            table_namespace_row.nspname as table_schema,
+            class_row.relname as table_name,
+            procedure_namespace_row.nspname as function_schema,
+            procedure_row.proname as function_name,
+            pg_catalog.pg_get_function_identity_arguments(procedure_row.oid)
+              as function_arguments,
+            trigger_row.tgenabled as enabled,
+            pg_catalog.pg_get_triggerdef(trigger_row.oid, true) as trigger_definition
+          from pg_catalog.pg_trigger as trigger_row
+          join pg_catalog.pg_proc as procedure_row
+            on procedure_row.oid = trigger_row.tgfoid
+          join pg_catalog.pg_namespace as procedure_namespace_row
+            on procedure_namespace_row.oid = procedure_row.pronamespace
+          join pg_catalog.pg_class as class_row
+            on class_row.oid = trigger_row.tgrelid
+          join pg_catalog.pg_namespace as table_namespace_row
+            on table_namespace_row.oid = class_row.relnamespace
+          where not trigger_row.tgisinternal
+            and (
+              (
+                table_namespace_row.nspname = ${schemaName}
+                and trigger_row.tgname in (
+                  'food_search_barcode_insert_outbox',
+                  'food_search_barcode_update_outbox',
+                  'food_search_eligibility_outbox',
+                  'food_search_serving_insert_outbox'
+                )
+              )
+              or (
+                procedure_namespace_row.nspname = ${schemaName}
+                and procedure_row.proname in (
+                  'enqueue_food_search_barcode_insert',
+                  'enqueue_food_search_barcode_update',
+                  'enqueue_food_search_food_eligibility_change',
+                  'enqueue_food_search_serving_insert'
+                )
+                and pg_catalog.pg_get_function_identity_arguments(procedure_row.oid) = ''
+              )
+            )
+          order by trigger_row.tgname, table_namespace_row.nspname, class_row.relname
+        `.execute(database)
+      ).rows;
+      expect(triggerState).toEqual([
+        {
+          enabled: "O",
+          function_arguments: "",
+          function_name: "enqueue_food_search_barcode_insert",
+          function_schema: schemaName,
+          table_name: "food_barcode",
+          table_schema: schemaName,
+          trigger_definition:
+            "CREATE TRIGGER food_search_barcode_insert_outbox AFTER INSERT ON food_barcode REFERENCING NEW TABLE AS new_food_search_barcodes FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_barcode_insert()",
+          trigger_name: "food_search_barcode_insert_outbox",
+        },
+        {
+          enabled: "O",
+          function_arguments: "",
+          function_name: "enqueue_food_search_barcode_update",
+          function_schema: schemaName,
+          table_name: "food_barcode",
+          table_schema: schemaName,
+          trigger_definition:
+            "CREATE TRIGGER food_search_barcode_update_outbox AFTER UPDATE ON food_barcode REFERENCING OLD TABLE AS old_food_search_barcodes NEW TABLE AS new_food_search_barcodes FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_barcode_update()",
+          trigger_name: "food_search_barcode_update_outbox",
+        },
+        {
+          enabled: "O",
+          function_arguments: "",
+          function_name: "enqueue_food_search_food_eligibility_change",
+          function_schema: schemaName,
+          table_name: "food",
+          table_schema: schemaName,
+          trigger_definition:
+            "CREATE TRIGGER food_search_eligibility_outbox AFTER UPDATE ON food REFERENCING OLD TABLE AS old_food_search_rows NEW TABLE AS new_food_search_rows FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_food_eligibility_change()",
+          trigger_name: "food_search_eligibility_outbox",
+        },
+        {
+          enabled: "O",
+          function_arguments: "",
+          function_name: "enqueue_food_search_serving_insert",
+          function_schema: schemaName,
+          table_name: "food_serving",
+          table_schema: schemaName,
+          trigger_definition:
+            "CREATE TRIGGER food_search_serving_insert_outbox AFTER INSERT ON food_serving REFERENCING NEW TABLE AS new_food_search_servings FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_serving_insert()",
+          trigger_name: "food_search_serving_insert_outbox",
+        },
+      ]);
+      await sql.raw(hardeningMigration.sql).execute(database);
+
+      expect(await readProjectionFunctionState()).toEqual(
+        preHardeningFunctionState.map((state) => ({
+          ...state,
+          proconfig: [`search_path=pg_catalog, ${schemaName}, pg_temp`],
+        })),
+      );
+
+      await sql`update pg_temp.shadow_function_call set calls = 0`.execute(database);
+      await sql`truncate pg_temp.outbox_event`.execute(database);
+      await sql`set search_path = ${sql.id(hostileSchema)}, ${sql.id(schemaName)}, public`.execute(
+        database,
+      );
+      await sql`
+        update ${sql.id(schemaName)}.food
+        set archived_at = null
+        where id = ${food.id}::bigint
+      `.execute(database);
+      await sql`
+        insert into ${sql.id(schemaName)}.food_serving (
+          food_version_id, label, quantity, unit, unit_kind, gram_weight
+        ) values (
+          ${version.id}::bigint, 'Hardened serving', 25, 'g', 'mass', 25
+        )
+      `.execute(database);
+      const hardenedBarcode = (
+        await sql<{ id: string }>`
+          insert into ${sql.id(schemaName)}.food_barcode (
+            gtin, food_id, food_version_id, source_release_id
+          ) values (
+            '000000000003', ${food.id}::bigint, ${version.id}::bigint,
+            ${release.id}::uuid
+          )
+          returning id
+        `.execute(database)
+      ).rows[0];
+      if (!hardenedBarcode) throw new Error("hardened barcode was not created");
+      await sql`
+        update ${sql.id(schemaName)}.food_barcode
+        set valid_to = pg_catalog.clock_timestamp() + interval '1 second'
+        where id = ${hardenedBarcode.id}::bigint
+      `.execute(database);
+
+      expect(
+        (
+          await sql<{ reason: string }>`
+            select payload ->> 'reason' as reason
+            from ${sql.id(schemaName)}.outbox_event
+            order by reason
+          `.execute(database)
+        ).rows,
+      ).toEqual([
+        { reason: "barcode_closed_for_current_version" },
+        { reason: "barcode_inserted_for_current_version" },
+        { reason: "food_eligibility_changed" },
+        { reason: "serving_inserted_for_current_version" },
+      ]);
+      expect(
+        (
+          await sql<{ current_revision: string }>`
+            select current_revision
+            from ${sql.id(schemaName)}.food_search_projection_revision
+            where singleton
+          `.execute(database)
+        ).rows[0],
+      ).toEqual({ current_revision: "4" });
+      expect(
+        (
+          await sql<{ calls: number }>`
+            select calls from pg_temp.shadow_function_call
+          `.execute(database)
+        ).rows[0],
+      ).toEqual({ calls: 0 });
+      expect(
+        (
+          await sql<{ current_revision: string }>`
+            select current_revision
+            from pg_temp.food_search_projection_revision
+            where singleton
+          `.execute(database)
+        ).rows[0],
+      ).toEqual({ current_revision: "0" });
+      expect(
+        (
+          await sql<{ event_count: number }>`
+            select pg_catalog.count(*)::integer as event_count
+            from pg_temp.outbox_event
+          `.execute(database)
+        ).rows[0],
+      ).toEqual({ event_count: 0 });
+    } finally {
+      try {
+        await database.destroy();
+      } finally {
+        try {
+          if (hostileSchemaCreated) {
+            await sql`drop schema ${sql.id(hostileSchema)} cascade`.execute(bootstrap);
+          }
+        } finally {
+          try {
+            if (schemaCreated) {
+              await sql`drop schema ${sql.id(schemaName)} cascade`.execute(bootstrap);
+            }
+          } finally {
+            await bootstrap.destroy();
+          }
+        }
+      }
+    }
+  });
 });
 
 async function recordApproval(

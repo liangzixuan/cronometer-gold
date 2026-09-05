@@ -98,10 +98,14 @@ acceptance; progress in either lane never waives the gates in the other.
    verifier/canary evidence remain required before live catalogue work.
    Logical restore now reapplies the pinned migration-0014 function/trigger
    manifest plus the forward migration-0015 activation-null constraint and ACL
-   correction and migration-0016 food-search function/trigger policy under an
-   explicit owner. It compares a canonical source/target
-   version-6 authority fingerprint, including column ACL state, while `PUBLIC
-   CONNECT` remains revoked and the effective login allowlist stays exact. It
+   correction and migration-0016 plus migration-0017 food-search
+   function/trigger policies under an explicit owner. The transactional repair
+   policy pins 20 hardened function identities and 19 exact trigger bindings. It
+   compares a canonical source/target
+   version-7 authority fingerprint, including column ACL state and trigger table
+   schemas, while `PUBLIC CONNECT` remains revoked and the effective login
+   allowlist stays exact. Public-table triggers and every cross-schema binding
+   of a dedicated public authority trigger function enter that fingerprint. It
    first requires the exact tracked filename/file-byte-SHA ledger in
    `public.app_schema_migration`, ignoring an owner-schema shadow. The EXPAND CI drill still uses
    `nutrition_local` as both executor and owner, so it does not prove separate
@@ -115,10 +119,12 @@ acceptance; progress in either lane never waives the gates in the other.
    `public.app_schema_migration` names and SHA-256s against the tracked migration
    files, requires `public` to be the only non-system schema, and checks exact
    database/schema and object ACLs and grantors, relation/type
-   ownership, default and column ACL absence, the activation constraint, all 18
-   authority functions, unsafe authority on any other public routine, and all 20
-   triggers on the six protected catalogue tables; plus the effective login allowlist,
-   seven isolated sessions, role attributes, object ownership, effective
+   ownership, default and column ACL absence, the activation constraint, all 22
+   authority functions, unsafe authority on any other public routine, and the
+   exact 24-trigger authority set: the prior 20 on six protected catalogue
+   tables plus migration-0017's four food/serving/barcode bindings. It also
+   checks the effective login allowlist, seven isolated sessions, role
+   attributes, object ownership, effective
    privileges, and the complete touched membership graph. Eight zero-write
    `23503`/`42501` canaries then prove matching/mismatched reviewer behavior,
    non-reviewer denial, direct-DML denial, unchanged fingerprints, and zero row
@@ -303,12 +309,22 @@ application-schema `SECURITY INVOKER` function identities, bodies, owners,
 default ACLs, executable metadata, unconfigured pre-state, and exact enabled
 trigger binding before pinning both search paths to `pg_catalog`, the captured
 application schema, and `pg_temp`. It changes no function body, owner, ACL, or
-invoker status and grants no privilege.
+invoker status and grants no privilege. At the 0016 boundary,
 `enqueue_food_search_food_eligibility_change`,
 `enqueue_food_search_serving_insert`, `enqueue_food_search_barcode_insert`, and
-`enqueue_food_search_barcode_update` still resolve their own unqualified
-relations and revision-function call through the ambient caller path; they
-require separate review before any corresponding non-owner table DML.
+`enqueue_food_search_barcode_update` still resolved their own unqualified
+relations and revision-function call through the ambient caller path and
+required the subsequent 0017 review.
+
+Migration 0017 completes that bounded namespace hardening for those four
+remaining food, serving, and barcode outbox paths. It fails closed over each
+exact application-schema `SECURITY INVOKER` function and exact ordinary enabled
+statement-trigger binding before pinning only the four function-local search
+paths. It changes no function body, owner, ACL, invoker status, table, or trigger
+and grants no privilege. This removes the known ambient/temp-schema redirection
+path, but it does not make runtime privilege separation safe: fixed-purpose
+shared-table wrappers and a database-enforced lock protocol remain the next
+M0B prerequisites before role profiles or caller cutover.
 
 This is not production role/function isolation. Owner/local compatibility still
 leaves a principal with table DML inside the trusted boundary; stage, validate,
@@ -318,8 +334,9 @@ cutover, direct-DML revocation, ordinary-deploy fingerprinting, and role canarie
 remain open. The isolated logical-restore drill now pins and reapplies the
 migration-0014 function/trigger manifest and migration-0015 constraint/ACL
 correction plus migration-0016's two search-path pins and exact
-source-eligibility trigger, rejecting owner, constraint, ACL, or fingerprint
-drift before replay or API probing. A live FDC release has intentionally not
+source-eligibility trigger and migration-0017's four search-path pins and exact
+food/serving/barcode trigger bindings, rejecting owner, constraint, ACL, or
+fingerprint drift before replay or API probing. A live FDC release has intentionally not
 been promoted: the checked-in candidate remains non-importable until two
 independently authenticated operators
 agree on the streamed artifact, rights review is recorded, immutable object

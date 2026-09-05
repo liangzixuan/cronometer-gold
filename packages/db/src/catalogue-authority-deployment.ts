@@ -93,6 +93,26 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
   },
   {
     ...TRIGGER_FUNCTION_POLICY,
+    name: "enqueue_food_search_barcode_insert",
+    sourceSha256: "4e888f3ef0b3af1e7eee14568069ae3fe06b65b88718614ed0e2c243a5d22318",
+  },
+  {
+    ...TRIGGER_FUNCTION_POLICY,
+    name: "enqueue_food_search_barcode_update",
+    sourceSha256: "9d7a90d0fee1a6923631c9b9018d9c813d3c8f7eea2df941fc32fbb4f5d453b0",
+  },
+  {
+    ...TRIGGER_FUNCTION_POLICY,
+    name: "enqueue_food_search_food_eligibility_change",
+    sourceSha256: "85ada305a6fd6b40cd5fb0652d64c240d1953033a243b0f7ce243caa9bc9c4de",
+  },
+  {
+    ...TRIGGER_FUNCTION_POLICY,
+    name: "enqueue_food_search_serving_insert",
+    sourceSha256: "223f2d1dc8f90c6bc04c4d85ec763bcb50727473f5576b0bcdbbf394c1c9d804",
+  },
+  {
+    ...TRIGGER_FUNCTION_POLICY,
     name: "enqueue_food_search_source_eligibility_change",
     sourceSha256: "3a88f24e4863d8150db21f93efadd528ea5d7811b5c79c6ff5cd38fdcb93ce87",
   },
@@ -242,6 +262,34 @@ export const CATALOGUE_AUTHORITY_TRIGGER_POLICY: readonly CatalogueAuthorityTrig
     functionName: "reject_immutable_row_update",
     name: "food_import_record_reject_delete",
     tableName: "food_import_record",
+  },
+  {
+    definition:
+      "CREATE TRIGGER food_search_barcode_insert_outbox AFTER INSERT ON food_barcode REFERENCING NEW TABLE AS new_food_search_barcodes FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_barcode_insert()",
+    functionName: "enqueue_food_search_barcode_insert",
+    name: "food_search_barcode_insert_outbox",
+    tableName: "food_barcode",
+  },
+  {
+    definition:
+      "CREATE TRIGGER food_search_barcode_update_outbox AFTER UPDATE ON food_barcode REFERENCING OLD TABLE AS old_food_search_barcodes NEW TABLE AS new_food_search_barcodes FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_barcode_update()",
+    functionName: "enqueue_food_search_barcode_update",
+    name: "food_search_barcode_update_outbox",
+    tableName: "food_barcode",
+  },
+  {
+    definition:
+      "CREATE TRIGGER food_search_eligibility_outbox AFTER UPDATE ON food REFERENCING OLD TABLE AS old_food_search_rows NEW TABLE AS new_food_search_rows FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_food_eligibility_change()",
+    functionName: "enqueue_food_search_food_eligibility_change",
+    name: "food_search_eligibility_outbox",
+    tableName: "food",
+  },
+  {
+    definition:
+      "CREATE TRIGGER food_search_serving_insert_outbox AFTER INSERT ON food_serving REFERENCING NEW TABLE AS new_food_search_servings FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_serving_insert()",
+    functionName: "enqueue_food_search_serving_insert",
+    name: "food_search_serving_insert_outbox",
+    tableName: "food_serving",
   },
   {
     definition:

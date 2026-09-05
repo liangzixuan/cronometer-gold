@@ -1,4 +1,4 @@
--- Versioned post-restore policy for catalogue authority migrations 0014-0016.
+-- Versioned post-restore policy for catalogue authority migrations 0014-0017.
 --
 -- Logical restores deliberately use --no-owner --no-privileges. Run this only
 -- against a new isolated nutrition_restore_* database while PUBLIC CONNECT is
@@ -233,8 +233,9 @@ begin
       using errcode = '55000';
   end if;
 
-  -- Pin every function whose search_path migrations 0014 and 0016 hardened. The exact
-  -- identity and executable body are policy, not merely source/target parity.
+  -- Pin every function whose search_path migrations 0014, 0016, and 0017
+  -- hardened. The exact identity and executable body are policy, not merely
+  -- source/target parity.
   if (
     select pg_catalog.count(*)
     from pg_catalog.pg_proc as procedure_row
@@ -245,6 +246,10 @@ begin
         'advance_food_search_projection_revision',
         'catalogue_evidence_bundle_uri_is_valid',
         'catalogue_record_import_approval',
+        'enqueue_food_search_barcode_insert',
+        'enqueue_food_search_barcode_update',
+        'enqueue_food_search_food_eligibility_change',
+        'enqueue_food_search_serving_insert',
         'enqueue_food_search_source_eligibility_change',
         'guard_food_import_approval_authority',
         'guard_food_import_batch_initial_state',
@@ -259,13 +264,17 @@ begin
         'guard_new_food_source_release_authority',
         'reject_new_legacy_unbound_catalogue_evidence'
       )
-  ) <> 16 or exists (
+  ) <> 20 or exists (
     select 1
     from (
       values
         ('advance_food_search_projection_revision'::text, ''::text, 'd1e4a8a27203104c6339f045a31a4dfdd2aee3c78cdd94e06bfd3db2c9ac2108'::text, 'void'::text, 'plpgsql'::text, 'v'::text, false, false, 'u'::text, false),
         ('catalogue_evidence_bundle_uri_is_valid'::text, 'value text, digest text'::text, '5403779dc4398446c61d0a27ad8b95d904e2552a5e694496b9e7e8612e0c902e'::text, 'boolean'::text, 'sql'::text, 'i'::text, true, false, 'u'::text, false),
         ('catalogue_record_import_approval', 'p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text', '89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac', 'boolean', 'plpgsql', 'v', false, false, 'u', true),
+        ('enqueue_food_search_barcode_insert', '', '4e888f3ef0b3af1e7eee14568069ae3fe06b65b88718614ed0e2c243a5d22318', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('enqueue_food_search_barcode_update', '', '9d7a90d0fee1a6923631c9b9018d9c813d3c8f7eea2df941fc32fbb4f5d453b0', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('enqueue_food_search_food_eligibility_change', '', '85ada305a6fd6b40cd5fb0652d64c240d1953033a243b0f7ce243caa9bc9c4de', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('enqueue_food_search_serving_insert', '', '223f2d1dc8f90c6bc04c4d85ec763bcb50727473f5576b0bcdbbf394c1c9d804', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('enqueue_food_search_source_eligibility_change', '', '3a88f24e4863d8150db21f93efadd528ea5d7811b5c79c6ff5cd38fdcb93ce87', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_approval_authority', '', 'f96feb298d900165172c56a3fa1e99e91aaca010657155e5a996ee04015fdbbd', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_batch_initial_state', '', '2561714155de31151c79f95977156072a66451d1f13f7b5c6e85d13abe9ecb0c', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
@@ -314,54 +323,69 @@ begin
   end if;
 
   -- Pin every non-internal trigger attached to the reviewed authority
-  -- functions, including the source-eligibility outbox and both grandfather
-  -- and legacy-evidence trigger sites.
+  -- functions, including all five food-search outbox paths and both
+  -- grandfather and legacy-evidence trigger sites.
   if (
     select pg_catalog.count(*)
     from pg_catalog.pg_trigger as trigger_row
     join pg_catalog.pg_proc as procedure_row
       on procedure_row.oid = trigger_row.tgfoid
+    join pg_catalog.pg_namespace as procedure_namespace_row
+      on procedure_namespace_row.oid = procedure_row.pronamespace
     join pg_catalog.pg_class as class_row
       on class_row.oid = trigger_row.tgrelid
     join pg_catalog.pg_namespace as namespace_row
       on namespace_row.oid = class_row.relnamespace
-    where namespace_row.nspname = target_schema
-      and not trigger_row.tgisinternal
+    where not trigger_row.tgisinternal
       and (
-        procedure_row.proname in (
-          'guard_food_import_approval_authority',
-          'guard_food_import_batch_initial_state',
-          'guard_food_import_batch_update',
-          'guard_food_import_batch_validation_digest',
-          'guard_food_import_record_update',
-          'guard_food_source_active_release_authority',
-          'guard_food_source_initial_active_release',
-          'guard_food_source_release_initial_state',
-          'guard_food_source_release_legacy_promotion_grandfather',
-          'guard_food_source_release_update',
-          'guard_new_food_source_release_authority',
-          'enqueue_food_search_source_eligibility_change',
-          'reject_new_legacy_unbound_catalogue_evidence'
+        (
+          namespace_row.nspname = target_schema
+          and trigger_row.tgname in (
+            'food_import_approval_guard_authority',
+            'food_import_batch_guard_initial_state',
+            'food_import_batch_guard_update',
+            'food_import_batch_guard_validation_digest',
+            'food_import_batch_reject_new_legacy_unbound',
+            'food_import_record_guard_update',
+            'food_search_barcode_insert_outbox',
+            'food_search_barcode_update_outbox',
+            'food_search_eligibility_outbox',
+            'food_search_serving_insert_outbox',
+            'food_source_guard_active_release_authority',
+            'food_source_guard_initial_active_release',
+            'food_source_search_eligibility_outbox',
+            'food_source_release_guard_initial_state',
+            'food_source_release_guard_legacy_grandfather_insert',
+            'food_source_release_guard_legacy_grandfather_update',
+            'food_source_release_guard_new_authority',
+            'food_source_release_guard_update',
+            'food_source_release_reject_new_legacy_unbound'
+          )
         )
-        or trigger_row.tgname in (
-          'food_import_approval_guard_authority',
-          'food_import_batch_guard_initial_state',
-          'food_import_batch_guard_update',
-          'food_import_batch_guard_validation_digest',
-          'food_import_batch_reject_new_legacy_unbound',
-          'food_import_record_guard_update',
-          'food_source_guard_active_release_authority',
-          'food_source_guard_initial_active_release',
-          'food_source_search_eligibility_outbox',
-          'food_source_release_guard_initial_state',
-          'food_source_release_guard_legacy_grandfather_insert',
-          'food_source_release_guard_legacy_grandfather_update',
-          'food_source_release_guard_new_authority',
-          'food_source_release_guard_update',
-          'food_source_release_reject_new_legacy_unbound'
+        or (
+          procedure_namespace_row.nspname = target_schema
+          and procedure_row.proname in (
+            'guard_food_import_approval_authority',
+            'guard_food_import_batch_initial_state',
+            'guard_food_import_batch_update',
+            'guard_food_import_batch_validation_digest',
+            'guard_food_import_record_update',
+            'guard_food_source_active_release_authority',
+            'guard_food_source_initial_active_release',
+            'guard_food_source_release_initial_state',
+            'guard_food_source_release_legacy_promotion_grandfather',
+            'guard_food_source_release_update',
+            'guard_new_food_source_release_authority',
+            'enqueue_food_search_barcode_insert',
+            'enqueue_food_search_barcode_update',
+            'enqueue_food_search_food_eligibility_change',
+            'enqueue_food_search_serving_insert',
+            'enqueue_food_search_source_eligibility_change',
+            'reject_new_legacy_unbound_catalogue_evidence'
+          )
         )
       )
-  ) <> 15 or exists (
+  ) <> 19 or exists (
     select 1
     from (
       values
@@ -371,6 +395,10 @@ begin
         ('food_import_batch_guard_validation_digest', 'food_import_batch', 'guard_food_import_batch_validation_digest', 'CREATE TRIGGER food_import_batch_guard_validation_digest BEFORE INSERT OR UPDATE ON food_import_batch FOR EACH ROW EXECUTE FUNCTION guard_food_import_batch_validation_digest()'),
         ('food_import_batch_reject_new_legacy_unbound', 'food_import_batch', 'reject_new_legacy_unbound_catalogue_evidence', 'CREATE TRIGGER food_import_batch_reject_new_legacy_unbound BEFORE INSERT ON food_import_batch FOR EACH ROW EXECUTE FUNCTION reject_new_legacy_unbound_catalogue_evidence()'),
         ('food_import_record_guard_update', 'food_import_record', 'guard_food_import_record_update', 'CREATE TRIGGER food_import_record_guard_update BEFORE UPDATE ON food_import_record FOR EACH ROW EXECUTE FUNCTION guard_food_import_record_update()'),
+        ('food_search_barcode_insert_outbox', 'food_barcode', 'enqueue_food_search_barcode_insert', 'CREATE TRIGGER food_search_barcode_insert_outbox AFTER INSERT ON food_barcode REFERENCING NEW TABLE AS new_food_search_barcodes FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_barcode_insert()'),
+        ('food_search_barcode_update_outbox', 'food_barcode', 'enqueue_food_search_barcode_update', 'CREATE TRIGGER food_search_barcode_update_outbox AFTER UPDATE ON food_barcode REFERENCING OLD TABLE AS old_food_search_barcodes NEW TABLE AS new_food_search_barcodes FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_barcode_update()'),
+        ('food_search_eligibility_outbox', 'food', 'enqueue_food_search_food_eligibility_change', 'CREATE TRIGGER food_search_eligibility_outbox AFTER UPDATE ON food REFERENCING OLD TABLE AS old_food_search_rows NEW TABLE AS new_food_search_rows FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_food_eligibility_change()'),
+        ('food_search_serving_insert_outbox', 'food_serving', 'enqueue_food_search_serving_insert', 'CREATE TRIGGER food_search_serving_insert_outbox AFTER INSERT ON food_serving REFERENCING NEW TABLE AS new_food_search_servings FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_serving_insert()'),
         ('food_source_guard_active_release_authority', 'food_source', 'guard_food_source_active_release_authority', 'CREATE TRIGGER food_source_guard_active_release_authority BEFORE UPDATE OF active_release_id ON food_source FOR EACH ROW EXECUTE FUNCTION guard_food_source_active_release_authority()'),
         ('food_source_guard_initial_active_release', 'food_source', 'guard_food_source_initial_active_release', 'CREATE TRIGGER food_source_guard_initial_active_release BEFORE INSERT ON food_source FOR EACH ROW EXECUTE FUNCTION guard_food_source_initial_active_release()'),
         ('food_source_search_eligibility_outbox', 'food_source', 'enqueue_food_search_source_eligibility_change', 'CREATE TRIGGER food_source_search_eligibility_outbox AFTER UPDATE OF active, active_release_id, code, display_name, license_expression, attribution_required, attribution_text, commercial_use_allowed, redistribution_allowed, rights_review_status, rights_reviewed_at, rights_reviewed_by ON food_source FOR EACH ROW EXECUTE FUNCTION enqueue_food_search_source_eligibility_change()'),

@@ -85,13 +85,28 @@ and unless the ordinary enabled `food_source` trigger is bound to the exact
 application-schema trigger function and definition. It then pins both functions'
 `search_path` to `pg_catalog`, the captured application schema, and `pg_temp`
 without changing their bodies, owners, ACLs, or invoker semantics and without
-granting any authority. This closes only the `food_source` source-eligibility
-path. `enqueue_food_search_food_eligibility_change`,
+granting any authority. At the 0016 boundary this closed only the `food_source`
+source-eligibility path; `enqueue_food_search_food_eligibility_change`,
 `enqueue_food_search_serving_insert`, `enqueue_food_search_barcode_insert`, and
-`enqueue_food_search_barcode_update` still resolve their own unqualified
-relations and revision-function call through the caller's ambient path. They
-remain inside the owner-only compatibility boundary and must be separately
-attested before any matching non-owner table DML is allowed.
+`enqueue_food_search_barcode_update` still resolved their own unqualified
+relations and revision-function call through the caller's ambient path and
+required the subsequent 0017 attestation.
+
+Forward migration 0017 completes that bounded namespace hardening for the four
+remaining food-search outbox paths. It fails closed unless
+`enqueue_food_search_food_eligibility_change`,
+`enqueue_food_search_serving_insert`, `enqueue_food_search_barcode_insert`, and
+`enqueue_food_search_barcode_update` retain their exact application-schema
+identity, owner, body, executable metadata, default ACL, unconfigured pre-state,
+and `SECURITY INVOKER` status, and unless their four ordinary enabled statement
+triggers retain the exact application-schema bindings and definitions. It then
+pins only their function-local `search_path` to `pg_catalog`, the captured
+application schema, and `pg_temp`. It changes no function body, owner, ACL,
+invoker status, table, or trigger and grants no privilege. This prevents an
+ambient caller or temporary schema from redirecting those trigger-side relation
+and revision-function lookups; it does not authorize direct non-owner DML.
+Fixed-purpose shared-table wrappers and a database-enforced writer/reader lock
+protocol remain prerequisites to runtime privilege profiles and caller cutover.
 
 ### Bounded DEPLOY-0 policy and canary contract
 
@@ -130,10 +145,12 @@ logins or grants these deployment memberships.
 The verifier requires `public` to be the only non-system schema and checks its
 exact ACLs, grantors, and `pg_database_owner` ownership; the exact database ACL;
 relation, type, default, and column ACL state; required owners; the versioned
-activation constraint; all 18 authority function signatures, executable
-semantics, source hashes, ACLs, and expected configuration; every other public routine for unsafe
-ownership, explicit ACL, or `SECURITY DEFINER`; and the exact 20-trigger set on
-the six protected catalogue tables. It also checks the exact effective login
+activation constraint; all 22 authority function signatures, executable
+semantics, source hashes, ACLs, and expected configuration; every other public
+routine for unsafe ownership, explicit ACL, or `SECURITY DEFINER`; and the exact 24-trigger
+authority set, comprising the prior 20 triggers on six protected catalogue
+tables plus the four migration-0017 food/serving/barcode trigger bindings. It
+also checks the exact effective login
 allowlist, revoked `PUBLIC CONNECT`, safe role and login attributes, zero owned
 objects, the complete touched membership graph, effective table/column/sequence
 privileges, and exactly seven expected backend identities with no other client
@@ -179,7 +196,9 @@ This decision does not yet authorize live catalogue work. The following remain
 required before database authority can be considered closed:
 
 1. Narrow stage, validate, promote-and-activate, and rollback functions that
-   preserve the existing transactional and shared-table invariants.
+   preserve the existing transactional and shared-table invariants, plus
+   fixed-purpose shared-food writers and a database-enforced lock protocol that
+   removes the current API/worker need for unrelated table mutation privilege.
 2. Deployment-specific login identities, short-lived or otherwise reviewed
    credentials, and an externally authenticated principal-to-login binding.
 3. API, worker, ingestion, migration, backup, and restore credential separation,
@@ -190,8 +209,9 @@ required before database authority can be considered closed:
    canaries. The isolated restore drill pins the migration-0014 function/trigger
    manifest, the forward migration-0015 activation-null constraint and corrected
    ACL, and migration-0016's two food-search function search paths plus exact
-   source-eligibility trigger, but it does not substitute for deployed login
-   separation or canaries through those real identities.
+   source-eligibility trigger plus migration-0017's four function search paths
+   and exact food/serving/barcode trigger bindings, but it does not substitute
+   for deployed login separation or canaries through those real identities.
 
 The bounded DEPLOY-0 implementation defines and locally proves the required
 policy, structural evidence, and canary behavior for item 5. It does not satisfy
@@ -216,11 +236,16 @@ not drop or recreate authority evidence in place.
   blocked.
 - Logical restore runs under an explicit expected owner, reapplies the pinned
   migration-0014 function/trigger, migration-0015 constraint/ACL, and
-  migration-0016 food-search function/trigger policy, and
+  migration-0016 and migration-0017 food-search function/trigger policies. The
+  repair policy pins 20 hardened function identities and 19 exact trigger
+  bindings, and the canonical fingerprint covers the full 22-function,
+  24-trigger authority set. It
   requires the exact tracked filename/file-byte-SHA ledger from
-  `public.app_schema_migration` before `pg_dump`, then version-6 canonical
-  authority-fingerprint parity including column ACL state while `PUBLIC
-  CONNECT` remains revoked. An owner-schema shadow and migration-ledger parity
+  `public.app_schema_migration` before `pg_dump`, then version-7 canonical
+  authority-fingerprint parity including column ACL state and each trigger's
+  table schema while `PUBLIC CONNECT` remains revoked. Public-table triggers and
+  every cross-schema binding of a dedicated public authority trigger function
+  enter that fingerprint. An owner-schema shadow and migration-ledger parity
   alone are not sufficient readiness evidence.
 - Nullable audit fields accurately distinguish pre-boundary or owner-compatible
   rows from approvals authenticated by a non-owner database principal.

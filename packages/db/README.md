@@ -67,26 +67,33 @@ application-schema `SECURITY INVOKER` functions and the exact ordinary enabled
 trigger, then pins both function search paths to `pg_catalog`, the captured
 application schema, and `pg_temp`. It changes no function body, owner, ACL, or
 invoker status and grants no privilege.
-`enqueue_food_search_food_eligibility_change`,
-`enqueue_food_search_serving_insert`, `enqueue_food_search_barcode_insert`, and
-`enqueue_food_search_barcode_update` still resolve their own unqualified
-relations and revision-function call through the ambient caller path. They
-remain owner-compatible and require separate review before corresponding
-non-owner table DML.
+Forward migration 0017 applies the same fail-closed contract to the remaining
+food, serving, and barcode outbox paths. It attests the exact four
+application-schema `SECURITY INVOKER` functions and their four ordinary enabled
+statement triggers, then pins each function to that trusted search path without
+changing its body, owner, ACL, or invoker status. It grants no runtime privilege
+and does not make direct non-owner DML safe. Fixed-purpose shared-table wrappers
+and a database-enforced lock protocol remain required before runtime privilege
+profiles or caller cutover.
 
 Logical restores use the transactional policy in
 `restore/0014_catalogue_authority_policy.sql`. It pins the migration-0014
 function/trigger boundary plus the forward migration-0015 activation-null
 constraint and approval/guard-ACL corrections plus migration-0016's two
-food-search search paths and source-eligibility trigger. The repository restore drill
-pins that file's SHA-256, requires an explicit expected owner, keeps `PUBLIC CONNECT`
-revoked, enforces an exact effective login allowlist, and requires the exact
+food-search search paths and source-eligibility trigger plus migration-0017's
+four food/serving/barcode search paths and exact trigger bindings. That
+transactional repair policy pins 20 hardened function identities and 19 exact
+trigger bindings. The repository restore drill pins that file's SHA-256,
+requires an explicit expected owner, keeps `PUBLIC CONNECT` revoked, enforces
+an exact effective login allowlist, and requires the exact
 tracked filename/file-byte-SHA ledger in `public.app_schema_migration` before
 `pg_dump`. It ignores an owner-schema shadow, rechecks the source, corroborates
-the target, and compares a version-6 canonical
+the target, and compares a version-7 canonical
 role/schema/type/relation/column-ACL/function/trigger/authority-constraint
 fingerprint, including the independent non-NULL `pg_attribute.attacl` count,
-before external-ledger replay or API probing. The final report emits that
+trigger table schemas, and every binding of a dedicated public authority
+trigger function even when its table is outside `public`, before external-ledger
+replay or API probing. The final report emits that
 fingerprint's SHA-256. The current EXPAND CI executor and owner
 are the same local login, so this restore control does not claim deployment
 runtime separation or close the remaining role-canary or CONTRACT work.
@@ -132,9 +139,10 @@ from the tracked migration files. It also requires `public` to be the only
 non-system schema and to be owned by `pg_database_owner`. It checks exact
 database/schema ACLs and grantors,
 relation/type/default/column ACL state and owners, the activation constraint,
-all 18 authority function hashes and executable semantics, safe authority on
-every other public routine, all 20 triggers on the six protected catalogue
-tables, the exact effective-login allowlist, role attributes and
+all 22 authority function hashes and executable semantics, safe authority on
+every other public routine, and the exact 24-trigger authority set: the prior 20
+on six protected catalogue tables plus the four migration-0017
+food/serving/barcode bindings. It also checks the exact effective-login allowlist, role attributes and
 ownership, the complete membership graph, effective privileges, and seven
 unique expected sessions with no other target-database client. Eight zero-write
 canaries require `23503` for the three matching reviewers and `42501` for a
