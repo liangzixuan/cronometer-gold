@@ -197,8 +197,12 @@ records before the final strict scan. On 2026-09-05, exact-head supply run
 `33959101567` found seven additional HIGH findings in Alpine `libuuid`
 2.42.1-r0: CVE-2026-53612, CVE-2026-53613, CVE-2026-53614,
 CVE-2026-76642, CVE-2026-78408, CVE-2026-78409, and CVE-2026-78410.
-The derivative therefore also installs exact `libuuid=2.42.3-r0`, records the
-complete trigger set in image labels, and asserts its ARM64 APK inventory.
+Alpine aports commit `d98c55af59055e6ca60fbe36e171546918709965`
+subsequently moved the CVE-2026-78408 patch into package revision
+`2.42.3-r1`; exact-head supply run `33986546382` then failed closed when the
+official v3.24 ARM64 index stopped offering `2.42.3-r0`. The derivative
+therefore installs exact `libuuid=2.42.3-r1`, records the complete trigger set
+in image labels, and asserts its ARM64 APK inventory.
 No ignore or severity waiver is used. It retains PostgreSQL initialization,
 init-script, existing-cluster, TLS, stop-signal, and health semantics. The
 controlled-beta runtime must present PGDATA and the `/var/run/postgresql` and

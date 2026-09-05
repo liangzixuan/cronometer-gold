@@ -42,7 +42,7 @@ const CADDY_WORKFLOW_LABEL_LINE = `                .config.Labels["io.cronometer
 const CADDY_ADMISSION_LABEL_LINE = `            "io.cronometer.upstream.vulnerability-patches": "${CADDY_VULNERABILITY_PATCH_GRAPH}",`;
 const CADDY_X_NET_DOCUMENTATION_LINE = `\`golang.org/x/net\` ${CADDY_X_NET_PATCH_VERSION}, \`golang.org/x/text\` v0.41.0, and`;
 const CADDY_DOCUMENTATION_LINE = `\`google.golang.org/grpc\` ${CADDY_GRPC_PATCH_VERSION}; final image labels disclose that patched`;
-const POSTGRES_LIBUUID_VERSION = "2.42.3-r0";
+const POSTGRES_LIBUUID_VERSION = "2.42.3-r1";
 const POSTGRES_LIBUUID_TRIGGER =
   "CVE-2026-53612,CVE-2026-53613,CVE-2026-53614,CVE-2026-76642,CVE-2026-78408,CVE-2026-78409,CVE-2026-78410";
 const POSTGRES_RUNTIME_CONTRACT = `openssl-3.5.8-r0-libuuid-${POSTGRES_LIBUUID_VERSION}-uid-gid-70-preowned-pgdata-and-tmpfs`;
