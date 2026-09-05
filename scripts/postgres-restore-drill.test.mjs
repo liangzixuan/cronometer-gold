@@ -6,11 +6,13 @@ import {
   assertRegularDumpArtifact,
   assertRestoreAuthorityPolicyDigest,
   canonicalizeRestoreAuthorityEvidence,
+  collectRestoreMigrationLedger,
   compareRestoreEvidence,
   parseRestoreDrillArguments,
   RESTORE_AUTHORITY_POLICY_SHA256,
   removeDumpArtifact,
   runPostgresRestoreDrill,
+  TRACKED_MIGRATION_LEDGER_JSON,
   validateDumpArtifactAttestation,
   validateRestoreAuthorityEvidence,
   validateTargetDatabaseBoundary,
@@ -201,6 +203,52 @@ test("requires exact migration, constraint, table, row-count, policy, and author
   );
 });
 
+test("rejects an incomplete public ledger despite a complete owner-schema shadow", () => {
+  const completeShadowLedger = '[{"name":"0001_initial_domain_schema.sql","checksum":"fake"}]';
+  const calls = [];
+  assert.throws(
+    () =>
+      collectRestoreMigrationLedger(
+        (_command, arguments_) => {
+          calls.push(arguments_);
+          const sql = arguments_.at(-1) ?? "";
+          return sql.includes("from public.app_schema_migration")
+            ? "[]\n"
+            : `${completeShadowLedger}\n`;
+        },
+        restoreOptions(),
+        "nutrition_source",
+      ),
+    /does not match the tracked migration manifest/,
+  );
+
+  assert.equal(calls.length, 1);
+  assert.match(
+    calls[0].at(-1) ?? "",
+    /from \(select name, checksum from public\.app_schema_migration order by name\) m/,
+  );
+  assert.doesNotMatch(calls[0].at(-1) ?? "", /from app_schema_migration/);
+});
+
+test("orchestration rejects public-ledger drift before creating a dump", () => {
+  const { calls, run } = authorityEvidenceRunner(validAuthorityEvidence(), {
+    publicMigrationLedger: "[]",
+  });
+
+  assert.throws(
+    () => runPostgresRestoreDrill(restoreOptions(), { run }),
+    /does not match the tracked migration manifest/,
+  );
+  assert.equal(
+    calls.some((arguments_) => arguments_.join(" ").includes("pg_dump")),
+    false,
+  );
+  const ledgerQuery = calls
+    .map((arguments_) => arguments_.at(-1) ?? "")
+    .find((sql) => sql.includes("app_schema_migration"));
+  assert.match(ledgerQuery ?? "", /from public\.app_schema_migration/);
+});
+
 test("rejects PUBLIC execute and wrong reviewer grants", () => {
   const publicExecute = validAuthorityEvidence();
   authorityFunction(publicExecute).acl.push({
@@ -296,6 +344,41 @@ test("pins the validated 0015 activation-audit null constraint", () => {
   }
 });
 
+test("rejects authority fingerprints from the pre-column-ACL evidence version", () => {
+  const evidence = validAuthorityEvidence();
+  evidence.version = 5;
+  assert.throws(
+    () => validateRestoreAuthorityEvidence(evidence, expectedOwner),
+    /unsupported version/,
+  );
+});
+
+test("rejects nonempty and non-NULL empty public column ACL state", () => {
+  const baseline = canonicalizeRestoreAuthorityEvidence(validAuthorityEvidence());
+  const explicitPrivilege = validAuthorityEvidence();
+  explicitPrivilege.columnAcls.push({
+    column_name: "id",
+    grantable: false,
+    grantee: "nutrition_catalogue_approve_data",
+    grantor: expectedOwner,
+    privilege: "SELECT",
+    relation_name: "food_import_batch",
+  });
+  assert.notEqual(canonicalizeRestoreAuthorityEvidence(explicitPrivilege), baseline);
+  assert.throws(
+    () => validateRestoreAuthorityEvidence(explicitPrivilege, expectedOwner),
+    /column has an explicit ACL/,
+  );
+
+  const nonNullEmptyAttacl = validAuthorityEvidence();
+  nonNullEmptyAttacl.explicitColumnAclAttributeCount = "1";
+  assert.notEqual(canonicalizeRestoreAuthorityEvidence(nonNullEmptyAttacl), baseline);
+  assert.throws(
+    () => validateRestoreAuthorityEvidence(nonNullEmptyAttacl, expectedOwner),
+    /column has an explicit ACL/,
+  );
+});
+
 test("rejects wrong owners, search paths, and non-definer authority functions", () => {
   const wrongRelationOwner = validAuthorityEvidence();
   wrongRelationOwner.relations[0].owner = "restore_operator";
@@ -323,6 +406,15 @@ test("rejects wrong owners, search paths, and non-definer authority functions", 
   assert.throws(
     () => validateRestoreAuthorityEvidence(invokerFunction, expectedOwner),
     /authority function.*differs from policy/,
+  );
+});
+
+test("requires pg_database_owner as the exact public schema ACL grantor", () => {
+  const wrongGrantor = validAuthorityEvidence();
+  wrongGrantor.schema.acl[0].grantor = expectedOwner;
+  assert.throws(
+    () => validateRestoreAuthorityEvidence(wrongGrantor, expectedOwner),
+    /Public schema ACL has an unexpected grantor/,
   );
 });
 
@@ -375,6 +467,24 @@ test("pins every reviewed authority function and trigger", () => {
     );
   }
 
+  const immutableBodyDrift = validAuthorityEvidence();
+  immutableBodyDrift.functions.find(
+    (entry) => entry.name === "reject_immutable_row_update",
+  ).source_sha256 = "0".repeat(64);
+  assert.throws(
+    () => validateRestoreAuthorityEvidence(immutableBodyDrift, expectedOwner),
+    /authority function.*executable semantics/,
+  );
+
+  const immutableConfigDrift = validAuthorityEvidence();
+  immutableConfigDrift.functions.find(
+    (entry) => entry.name === "reject_immutable_row_update",
+  ).config = ["search_path=pg_catalog, public, pg_temp"];
+  assert.throws(
+    () => validateRestoreAuthorityEvidence(immutableConfigDrift, expectedOwner),
+    /authority function.*differs from policy/,
+  );
+
   const signatureDrift = validAuthorityEvidence();
   signatureDrift.functions.find(
     (entry) => entry.name === "catalogue_evidence_bundle_uri_is_valid",
@@ -418,6 +528,31 @@ test("pins every reviewed authority function and trigger", () => {
       reviewedTrigger.name,
     );
   }
+
+  const missingImmutableTrigger = validAuthorityEvidence();
+  missingImmutableTrigger.triggers = missingImmutableTrigger.triggers.filter(
+    (entry) => entry.name !== "food_import_approval_reject_update",
+  );
+  assert.throws(
+    () => validateRestoreAuthorityEvidence(missingImmutableTrigger, expectedOwner),
+    /trigger set/,
+  );
+
+  const extraProtectedTrigger = validAuthorityEvidence();
+  extraProtectedTrigger.triggers.push({
+    definition:
+      "CREATE TRIGGER unreviewed_approval_trigger BEFORE INSERT ON food_import_approval FOR EACH ROW EXECUTE FUNCTION ordinary_function()",
+    enabled: "O",
+    function_arguments: "",
+    function_name: "ordinary_function",
+    function_schema: "public",
+    name: "unreviewed_approval_trigger",
+    table_name: "food_import_approval",
+  });
+  assert.throws(
+    () => validateRestoreAuthorityEvidence(extraProtectedTrigger, expectedOwner),
+    /trigger set/,
+  );
 });
 
 test("rejects public type and global or public-schema default ACL drift", () => {
@@ -572,6 +707,36 @@ test("orchestration rejects cross-schema trigger drift before dump creation", ()
   );
 });
 
+test("orchestration rejects explicit public column ACL state before dump creation", () => {
+  const explicitPrivilege = validAuthorityEvidence();
+  explicitPrivilege.columnAcls.push({
+    column_name: "id",
+    grantable: false,
+    grantee: "nutrition_catalogue_approve_data",
+    grantor: expectedOwner,
+    privilege: "SELECT",
+    relation_name: "food_import_batch",
+  });
+  const nonNullEmptyAttacl = validAuthorityEvidence();
+  nonNullEmptyAttacl.explicitColumnAclAttributeCount = "1";
+
+  for (const evidence of [explicitPrivilege, nonNullEmptyAttacl]) {
+    const { calls, run } = authorityEvidenceRunner(evidence);
+    assert.throws(
+      () => runPostgresRestoreDrill(restoreOptions(), { run }),
+      /column has an explicit ACL/,
+    );
+    assert.equal(
+      calls.some((arguments_) => arguments_.join(" ").includes("pg_dump")),
+      false,
+    );
+    const countQuery = calls
+      .map((arguments_) => arguments_.at(-1) ?? "")
+      .find((sql) => sql.includes("explicit_column_acl_attribute_count"));
+    assert.match(countQuery ?? "", /attribute_row\.attacl is not null/);
+  }
+});
+
 test("orchestration makes cleanup failure-terminal after a post-dump policy failure", () => {
   const cleanupError = new Error("cleanup verification failed");
   const { calls, run } = authorityEvidenceRunner(validAuthorityEvidence(), {
@@ -616,7 +781,9 @@ function validAuthorityEvidence() {
         validated: true,
       },
     ],
+    columnAcls: [],
     defaultAcls: [],
+    explicitColumnAclAttributeCount: "0",
     functions: validAuthorityFunctions(),
     relations: [
       {
@@ -669,7 +836,7 @@ function validAuthorityEvidence() {
         owner: expectedOwner,
       },
     ],
-    version: 4,
+    version: 6,
   };
 }
 
@@ -786,6 +953,45 @@ function validAuthorityFunctions() {
     },
     ...triggerFunctions,
     {
+      ...functionSemantics(
+        "3a88f24e4863d8150db21f93efadd528ea5d7811b5c79c6ff5cd38fdcb93ce87",
+        "trigger",
+      ),
+      acl: [acl("PUBLIC", "EXECUTE"), acl(expectedOwner, "EXECUTE")],
+      acl_is_default: true,
+      arguments: "",
+      config: [],
+      name: "enqueue_food_search_source_eligibility_change",
+      owner: expectedOwner,
+      security_definer: false,
+    },
+    {
+      ...functionSemantics(
+        "631a42e27de6543bc09fd6b8d0f1b0fd336250270b47f13849a2483fd0786e6e",
+        "trigger",
+      ),
+      acl: [acl("PUBLIC", "EXECUTE"), acl(expectedOwner, "EXECUTE")],
+      acl_is_default: true,
+      arguments: "",
+      config: [],
+      name: "reject_immutable_row_update",
+      owner: expectedOwner,
+      security_definer: false,
+    },
+    {
+      ...functionSemantics(
+        "92fa7c305a8b856faea0575b27eaa33c1e39952cf9fe87b4c0cbf7d7eab556bd",
+        "trigger",
+      ),
+      acl: [acl("PUBLIC", "EXECUTE"), acl(expectedOwner, "EXECUTE")],
+      acl_is_default: true,
+      arguments: "",
+      config: [],
+      name: "set_row_updated_at",
+      owner: expectedOwner,
+      security_definer: false,
+    },
+    {
       ...functionSemantics("a".repeat(64), "boolean"),
       acl: [acl("PUBLIC", "EXECUTE"), acl(expectedOwner, "EXECUTE")],
       acl_is_default: true,
@@ -805,6 +1011,12 @@ function validAuthorityTriggers() {
       "food_import_approval",
       "guard_food_import_approval_authority",
       "CREATE TRIGGER food_import_approval_guard_authority BEFORE INSERT ON food_import_approval FOR EACH ROW EXECUTE FUNCTION guard_food_import_approval_authority()",
+    ],
+    [
+      "food_import_approval_reject_update",
+      "food_import_approval",
+      "reject_immutable_row_update",
+      "CREATE TRIGGER food_import_approval_reject_update BEFORE DELETE OR UPDATE ON food_import_approval FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()",
     ],
     [
       "food_import_batch_guard_initial_state",
@@ -837,6 +1049,12 @@ function validAuthorityTriggers() {
       "CREATE TRIGGER food_import_record_guard_update BEFORE UPDATE ON food_import_record FOR EACH ROW EXECUTE FUNCTION guard_food_import_record_update()",
     ],
     [
+      "food_import_record_reject_delete",
+      "food_import_record",
+      "reject_immutable_row_update",
+      "CREATE TRIGGER food_import_record_reject_delete BEFORE DELETE ON food_import_record FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()",
+    ],
+    [
       "food_source_guard_active_release_authority",
       "food_source",
       "guard_food_source_active_release_authority",
@@ -847,6 +1065,24 @@ function validAuthorityTriggers() {
       "food_source",
       "guard_food_source_initial_active_release",
       "CREATE TRIGGER food_source_guard_initial_active_release BEFORE INSERT ON food_source FOR EACH ROW EXECUTE FUNCTION guard_food_source_initial_active_release()",
+    ],
+    [
+      "food_source_search_eligibility_outbox",
+      "food_source",
+      "enqueue_food_search_source_eligibility_change",
+      "CREATE TRIGGER food_source_search_eligibility_outbox AFTER UPDATE OF active, active_release_id, code, display_name, license_expression, attribution_required, attribution_text, commercial_use_allowed, redistribution_allowed, rights_review_status, rights_reviewed_at, rights_reviewed_by ON food_source FOR EACH ROW EXECUTE FUNCTION enqueue_food_search_source_eligibility_change()",
+    ],
+    [
+      "food_source_set_updated_at",
+      "food_source",
+      "set_row_updated_at",
+      "CREATE TRIGGER food_source_set_updated_at BEFORE UPDATE ON food_source FOR EACH ROW EXECUTE FUNCTION set_row_updated_at()",
+    ],
+    [
+      "food_source_release_activation_reject_update",
+      "food_source_release_activation",
+      "reject_immutable_row_update",
+      "CREATE TRIGGER food_source_release_activation_reject_update BEFORE DELETE OR UPDATE ON food_source_release_activation FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()",
     ],
     [
       "food_source_release_guard_initial_state",
@@ -877,6 +1113,12 @@ function validAuthorityTriggers() {
       "food_source_release",
       "guard_food_source_release_update",
       "CREATE TRIGGER food_source_release_guard_update BEFORE UPDATE ON food_source_release FOR EACH ROW EXECUTE FUNCTION guard_food_source_release_update()",
+    ],
+    [
+      "food_source_release_reject_delete",
+      "food_source_release",
+      "reject_immutable_row_update",
+      "CREATE TRIGGER food_source_release_reject_delete BEFORE DELETE ON food_source_release FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()",
     ],
     [
       "food_source_release_reject_new_legacy_unbound",
@@ -988,13 +1230,20 @@ function authorityEvidenceRunner(evidence, failures = {}) {
     if (sql.includes("authority_constraint_policy")) {
       return `${JSON.stringify(evidence.authorityConstraints)}\n`;
     }
+    if (sql.includes("column_acl_policy")) return `${JSON.stringify(evidence.columnAcls)}\n`;
     if (sql.includes("default_policy")) return `${JSON.stringify(evidence.defaultAcls)}\n`;
+    if (sql.includes("explicit_column_acl_attribute_count")) {
+      return `${evidence.explicitColumnAclAttributeCount}\n`;
+    }
     if (sql.includes("function_policy")) return `${JSON.stringify(evidence.functions)}\n`;
     if (sql.includes("relation_policy")) return `${JSON.stringify(evidence.relations)}\n`;
     if (sql.includes("role_policy")) return `${JSON.stringify(evidence.roles)}\n`;
     if (sql.includes("schema_policy")) return `${JSON.stringify(evidence.schema)}\n`;
     if (sql.includes("trigger_policy")) return `${JSON.stringify(evidence.triggers)}\n`;
     if (sql.includes("type_policy")) return `${JSON.stringify(evidence.types)}\n`;
+    if (sql.includes("from public.app_schema_migration")) {
+      return `${failures.publicMigrationLedger ?? TRACKED_MIGRATION_LEDGER_JSON}\n`;
+    }
     if (sql.includes("revoke connect")) return "";
     throw new Error(`Unexpected mocked restore command: ${commandText}`);
   };

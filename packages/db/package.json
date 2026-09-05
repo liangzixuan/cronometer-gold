@@ -16,6 +16,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "catalogue-authority:verify": "tsx src/catalogue-authority-cli.ts",
     "db:migrate": "tsx src/cli.ts",
     "db:migrate:prod": "node dist/cli.js",
     "dev": "node ../../scripts/polling-tsx-watch.mjs --include \"src/**/*.ts\" --include \"../domain/dist/**/*.d.ts\" --include package.json --include tsconfig.build.json --include tsconfig.json --include ../../tsconfig.base.json ../../scripts/watch-typescript-build.mjs",

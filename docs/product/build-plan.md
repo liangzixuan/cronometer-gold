@@ -93,16 +93,40 @@ acceptance; progress in either lane never waives the gates in the other.
    behind a database-authenticated `SECURITY DEFINER` boundary and adds
    database-derived principal/capability audit fields without fabricating values
    for existing or owner-compatible local rows. It does not close M0B. The
-   remaining workflow functions, deployment login and credential cutover,
-   external-principal binding, direct-DML revocation, ordinary-deploy readiness
-   fingerprint, and role canaries remain required before live catalogue work.
+   remaining workflow functions, target deployment login and credential cutover,
+   external-principal binding, direct-DML revocation, and target-environment
+   verifier/canary evidence remain required before live catalogue work.
    Logical restore now reapplies the pinned migration-0014 function/trigger
    manifest plus the forward migration-0015 activation-null constraint and ACL
    correction under an explicit owner. It compares a canonical source/target
-   authority fingerprint while `PUBLIC CONNECT` remains revoked and the
-   effective login allowlist stays exact. The EXPAND CI drill still uses
+   version-6 authority fingerprint, including column ACL state, while `PUBLIC
+   CONNECT` remains revoked and the effective login allowlist stays exact. It
+   first requires the exact tracked filename/file-byte-SHA ledger in
+   `public.app_schema_migration`, ignoring an owner-schema shadow. The EXPAND CI drill still uses
    `nutrition_local` as both executor and owner, so it does not prove separate
    runtime fencing.
+
+   DEPLOY-0 now implements the source-only evidence slice without claiming live
+   deployment. Its canonical, credential-free policy permits exactly three safe
+   reviewer logins, each with its single matching approval capability and
+   PostgreSQL 17 `ADMIN FALSE`, `INHERIT TRUE`, and `SET FALSE`; the other four
+   capabilities remain unassigned. The strict verifier checks the exact
+   `public.app_schema_migration` names and SHA-256s against the tracked migration
+   files, requires `public` to be the only non-system schema, and checks exact
+   database/schema and object ACLs and grantors, relation/type
+   ownership, default and column ACL absence, the activation constraint, all 17
+   authority functions, unsafe authority on any other public routine, and all 20
+   triggers on the six protected catalogue tables; plus the effective login allowlist,
+   seven isolated sessions, role attributes, object ownership, effective
+   privileges, and the complete touched membership graph. Eight zero-write
+   `23503`/`42501` canaries then prove matching/mismatched reviewer behavior,
+   non-reviewer denial, direct-DML denial, unchanged fingerprints, and zero row
+   delta. Persisted credential-free evidence includes the canonical stable
+   structure projection plus its recomputable SHA-256 and excludes volatile
+   backend PIDs. The real-loopback ephemeral-database integration passes and leaves no
+   database or role residue. The policy carries no credentials or private
+   identity claims. Live login provisioning, membership mutation, credentials,
+   external-principal binding, DEPLOY, and CONTRACT remain blocked.
 2. **M1 — excellent basic daily loop:** activity/exercise, private diary
    notes, configurable groups, camera barcode scan while preserving exact GTIN
    lookup, durable offline retry/reorder, email-verification release acceptance

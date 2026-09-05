@@ -1,0 +1,29 @@
+{
+  "applicationSchema": "public",
+  "applicationSchemaOwner": "pg_database_owner",
+  "approvalFunctionSourceSha256": "89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac",
+  "approvalGuardSourceSha256": "f96feb298d900165172c56a3fa1e99e91aaca010657155e5a996ee04015fdbbd",
+  "databaseName": "nutrition_tracker",
+  "databaseOwner": "nutrition_app",
+  "effectiveLoginAllowlist": [
+    "nutrition_api",
+    "nutrition_app",
+    "nutrition_catalogue_data_reviewer",
+    "nutrition_catalogue_quality_reviewer",
+    "nutrition_catalogue_rights_reviewer",
+    "nutrition_catalogue_unassigned_canary",
+    "nutrition_worker"
+  ],
+  "nonReviewerLogins": {
+    "api": "nutrition_api",
+    "unassigned": "nutrition_catalogue_unassigned_canary",
+    "worker": "nutrition_worker"
+  },
+  "policyKind": "catalogue-authority-deployment",
+  "reviewerLogins": {
+    "data": "nutrition_catalogue_data_reviewer",
+    "quality": "nutrition_catalogue_quality_reviewer",
+    "rights": "nutrition_catalogue_rights_reviewer"
+  },
+  "schemaVersion": 1
+}

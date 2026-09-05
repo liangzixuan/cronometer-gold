@@ -5,7 +5,60 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { discoverMigrations } from "../src/migrator.js";
+import {
+  discoverMigrations,
+  migrationSearchPath,
+  selectMigrationSchemaFromSearchPath,
+} from "../src/migrator.js";
+
+describe("migration schema selection", () => {
+  it.each(["default", "database", "user", "environment variable", "override"])(
+    "uses public for a non-client %s search_path source",
+    (source) => {
+      expect(
+        selectMigrationSchemaFromSearchPath({
+          setting: 'attacker_owner, "$user", public',
+          source,
+        }),
+      ).toBe("public");
+    },
+  );
+
+  it("uses the first safe application schema from an explicit client search_path", () => {
+    expect(
+      selectMigrationSchemaFromSearchPath({
+        setting: 'pg_catalog, pg_temp, "$user", scoped_fixture, public',
+        source: "client",
+      }),
+    ).toBe("scoped_fixture");
+    expect(migrationSearchPath("scoped_fixture")).toBe(
+      "scoped_fixture, public, pg_catalog, pg_temp",
+    );
+    expect(migrationSearchPath("public")).toBe("public, pg_catalog, pg_temp");
+  });
+
+  it.each([
+    "scoped_fixture,,public",
+    '"scoped_fixture", public',
+    "ScopedFixture, public",
+    "scoped-fixture, public",
+    "pg_toast, public",
+    "information_schema, public",
+  ])("fails closed for an unsafe client search_path: %s", (setting) => {
+    expect(() => selectMigrationSchemaFromSearchPath({ setting, source: "client" })).toThrow(
+      /Client search_path contains/u,
+    );
+  });
+
+  it("rejects a client search_path containing only PostgreSQL-managed entries", () => {
+    expect(() =>
+      selectMigrationSchemaFromSearchPath({
+        setting: '"$user", pg_catalog, pg_temp',
+        source: "client",
+      }),
+    ).toThrow("Client search_path does not select an application migration schema");
+  });
+});
 
 describe("forward migration discovery", () => {
   it("loads migrations in lexical order and records a stable checksum", async () => {

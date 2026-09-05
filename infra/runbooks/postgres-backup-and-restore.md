@@ -80,10 +80,13 @@ target under that reviewed role, revokes `PUBLIC CONNECT`, and transactionally
 applies the SHA-256-pinned
 `packages/db/restore/0014_catalogue_authority_policy.sql`. That policy pins the
 migration-0014 function/trigger manifest and the forward migration-0015
-activation-null constraint and corrected approval/guard ACLs. The drill then compares a
-canonical source/target role, schema, type, table, sequence, function, trigger,
-and authority-constraint fingerprint. It also rechecks the exact target database
-owner, ACL, effective login allowlist, and session isolation immediately before
+activation-null constraint and corrected approval/guard ACLs. Before creating a
+dump, the drill requires the exact `public.app_schema_migration` names and
+SHA-256s from the tracked migration files, ignoring any owner-schema shadow
+ledger, and corroborates that ledger after restore. The drill then
+compares a canonical source/target role, schema, type, table, sequence,
+column-ACL, function, trigger, and authority-constraint fingerprint. It also
+rechecks the exact target database owner, ACL, effective login allowlist, and session isolation immediately before
 success. It leaves `PUBLIC CONNECT` revoked. If the policy, owner, fingerprint,
 or target isolation differs, stop the rehearsal; do not improvise grants.
 
@@ -94,12 +97,15 @@ drill database is a separate approved action after evidence is retained.
 
 Run and save results without exporting payload values:
 
-1. Compare migration names/checksums in `app_schema_migration`.
+1. Before `pg_dump`, require exact `(name, checksum)` equality between
+   `public.app_schema_migration` and every tracked migration filename/file-byte
+   SHA-256; ignore an owner-schema shadow. Recheck the source ledger and
+   corroborate the restored target against the same tracked manifest.
 2. Verify the target database owner, exact database ACL, revoked `PUBLIC CONNECT`,
    and reviewed effective login allowlist,
    then verify the canonical post-restore database-authority fingerprint. The
    fingerprint must cover capability-role attributes and memberships;
-   schema/table/sequence and exact function owners and ACLs; every
+   schema/table/sequence/column and exact function owners and ACLs; every
    authority/`SECURITY DEFINER` signature, owner, executable semantics, trigger
    definition, and pinned `search_path`; the exact validated migration-0015
    activation-audit null constraint; and absence of `PUBLIC EXECUTE` on the
@@ -108,17 +114,68 @@ Run and save results without exporting payload values:
    Hash and retain the canonical result with the drill evidence.
    Prove denial of owner-capable runtime credentials separately after deployment
    identities exist; the EXPAND local-owner drill does not prove it.
-3. Defer positive real-login role canaries to DEPLOY, where reviewed login-to-
-   capability memberships and their cleanup/final-state policy exist. The EXPAND
-   restore policy requires zero incoming and outgoing capability memberships, so
-   never add an ad hoc membership to make this drill pass. DEPLOY canaries must
-   prove that a reviewer may invoke only its matching approval capability, cannot
-   impersonate another review class, and cannot modify approval rows directly;
-   API, worker, and unrelated roles must be denied. Stage, validate,
-   promote-and-activate, and rollback remain fail-closed until their narrow
-   functions and CONTRACT cutover exist. Save error classes and identifiers,
-   never row payloads or credentials, and run the final fingerprint only after
-   any explicitly approved transient canary membership has been revoked.
+3. Keep target-environment real-login role canaries deferred to live DEPLOY.
+   ADR 0018 now includes a source-only DEPLOY-0 parser, structural verifier,
+   strict CLI, and zero-write canary runner for a canonical credential-free
+   policy, proven with disposable real logins in an isolated loopback database.
+   This tooling never
+   creates a login, issues a credential, or changes an ACL or membership. The
+   policy contains expected identifiers, safe role attributes, and membership
+   options, but no connection URL, credential, private key, token, or private
+   identity-provider claim. It permits only three reviewer logins, each with
+   exactly its matching approval capability and PostgreSQL 17 membership options
+   `ADMIN FALSE`, `INHERIT TRUE`, and `SET FALSE`. Reviewer logins must own no
+   objects, hold no other membership, have no effective catalogue
+   table/column/sequence privilege, and have no schema `CREATE` privilege. Stage,
+   validate, promote-and-activate, and rollback capabilities remain unassigned
+   and fail closed until their narrow functions and caller cutovers exist.
+
+   The EXPAND restore policy continues to require zero incoming and outgoing
+   capability memberships, so never add an ad hoc membership to make this drill
+   pass. After restore policy and its zero-membership fingerprint pass, only a
+   separate reviewed deploy procedure may establish the exact DEPLOY-0 reviewer
+   memberships. After that procedure, the deploy verifier requires the exact
+   tracked `public` migration ledger; requires `public` to be the only
+   non-system schema and to be owned by
+   `pg_database_owner`; exact database, schema, relation, type, function, and
+   membership ACLs and grantors; no default or column ACL drift; all 17 authority
+   function hashes/semantics/configuration values, safe authority on every other
+   public routine, all 20 triggers on the six protected catalogue tables, the
+   activation constraint, safe roles, and memberships; the
+   effective-login allowlist; and seven isolated verifier sessions with no other
+   target-database client. Its zero-write canaries prove all of the following:
+
+   - a matching reviewer reaches `23503` after calling the approval function
+     with valid-shaped input and a nonexistent batch UUID;
+   - a mismatched reviewer reaches `42501` before batch lookup;
+   - unassigned, API, and worker logins reach `42501` at the function `EXECUTE`
+     boundary; and
+   - a non-executing direct reviewer approval-table `EXPLAIN INSERT` reaches
+     `42501` without consuming an identity value.
+
+   The exact membership graph structurally rejects a multi-capability deployment
+   before canaries; the separate authority-boundary integration test retains its
+   transient multi-capability `42501` regression. The final canonical fingerprint
+   and approval row count must equal their initial values. Persist the canonical
+   credential-free stable structure projection alongside its SHA-256 so the
+   digest is independently recomputable; exclude volatile backend PIDs. Save only error classes
+   and bounded identifiers, never row payloads or credentials. Connection URLs
+   are environment-only. TLS defaults to `verify-full`; `disable` is loopback-only,
+   URL query/fragment overrides and process-wide Node TLS bypass are rejected,
+   and successful connection cleanup precedes creation of a new mode-0600
+   evidence file under ignored `.local-data`. A future reviewed procedure must
+   define target login and credential provisioning, authenticated principal
+   binding, API/worker/ingestion/migration/backup/restore credential separation,
+   narrow workflow-function callers, cutover and cleanup, final membership
+   state, target canaries, and CONTRACT direct-DML/owner-runtime revocation. The
+   restore fingerprint itself stays zero-membership. Live DEPLOY and CONTRACT
+   remain blocked.
+
+   Separately, the logical restore drill's internal canonical authority
+   fingerprint schema is version 6. It binds exact public-column ACL rows and
+   the independent count of non-NULL column ACL attributes in addition to the
+   other restore invariants. The final report emits the fingerprint SHA-256,
+   not the internal evidence document.
 4. Compare counts and min/max timestamps for each major table; reconcile expected
    in-flight differences for online logical backups.
 5. Confirm all constraints are validated and required extensions exist.

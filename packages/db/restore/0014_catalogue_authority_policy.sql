@@ -694,8 +694,11 @@ begin
     cross join lateral pg_catalog.aclexplode(namespace_row.nspacl) as acl
     left join pg_catalog.pg_roles as grantee
       on grantee.oid = acl.grantee
+    join pg_catalog.pg_roles as grantor
+      on grantor.oid = acl.grantor
     where namespace_row.nspname = target_schema
       and not acl.is_grantable
+      and grantor.rolname = 'pg_database_owner'
       and (
         (coalesce(grantee.rolname, 'PUBLIC') = 'PUBLIC' and acl.privilege_type = 'USAGE')
         or (grantee.rolname = 'pg_database_owner' and acl.privilege_type in ('CREATE', 'USAGE'))

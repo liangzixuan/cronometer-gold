@@ -66,11 +66,75 @@ Logical restores use the transactional policy in
 function/trigger boundary plus the forward migration-0015 activation-null
 constraint and approval/guard-ACL corrections. The repository restore drill
 pins that file's SHA-256, requires an explicit expected owner, keeps `PUBLIC CONNECT`
-revoked, enforces an exact effective login allowlist, and compares a canonical
-role/schema/type/relation/function/trigger/authority-constraint fingerprint before
-external-ledger replay or API probing. The current EXPAND CI executor and owner
+revoked, enforces an exact effective login allowlist, and requires the exact
+tracked filename/file-byte-SHA ledger in `public.app_schema_migration` before
+`pg_dump`. It ignores an owner-schema shadow, rechecks the source, corroborates
+the target, and compares a version-6 canonical
+role/schema/type/relation/column-ACL/function/trigger/authority-constraint
+fingerprint, including the independent non-NULL `pg_attribute.attacl` count,
+before external-ledger replay or API probing. The final report emits that
+fingerprint's SHA-256. The current EXPAND CI executor and owner
 are the same local login, so this restore control does not claim deployment
 runtime separation or close the remaining role-canary or CONTRACT work.
+
+ADR 0018 now has a bounded DEPLOY-0 source verifier. It accepts only canonical
+credential-free policy JSON with one trailing newline. The policy must be a
+mode-0600 single-link regular file under an ignored `.local-data` directory and
+may name only the expected database, login, capability, and membership state.
+It may not contain a credential, connection URL, private key, token, or private
+identity-provider claim. The tracked
+`deploy/catalogue-authority-deployment-policy.example.json` is a readable
+template; render the deployment-specific copy through the package's
+`canonicalJson` before use rather than passing the pretty-printed template
+directly.
+
+Supply exactly these connection URLs out of band through the environment:
+
+- `CATALOGUE_AUTHORITY_OWNER_DATABASE_URL`
+- `CATALOGUE_AUTHORITY_DATA_REVIEWER_DATABASE_URL`
+- `CATALOGUE_AUTHORITY_QUALITY_REVIEWER_DATABASE_URL`
+- `CATALOGUE_AUTHORITY_RIGHTS_REVIEWER_DATABASE_URL`
+- `CATALOGUE_AUTHORITY_API_DATABASE_URL`
+- `CATALOGUE_AUTHORITY_UNASSIGNED_DATABASE_URL`
+- `CATALOGUE_AUTHORITY_WORKER_DATABASE_URL`
+
+Then run from the repository root:
+
+```sh
+corepack pnpm --dir packages/db catalogue-authority:verify \
+  --policy "$PWD/.local-data/catalogue-authority-policy.json" \
+  --evidence-out "$PWD/.local-data/catalogue-authority-evidence.json"
+```
+
+`CATALOGUE_AUTHORITY_DATABASE_SSL_MODE` defaults to `verify-full`. `disable` is
+accepted only when every URL has a literal `127.0.0.1` or `::1` host. PostgreSQL
+URL query parameters and fragments, non-PostgreSQL schemes, and
+`NODE_TLS_REJECT_UNAUTHORIZED=0` are rejected. The CLI sanitizes failures,
+closes all seven connections successfully before writing, and creates a new
+mode-0600 evidence file without overwriting an existing file.
+
+The verifier requires the exact `public.app_schema_migration` names and SHA-256s
+from the tracked migration files. It also requires `public` to be the only
+non-system schema and to be owned by `pg_database_owner`. It checks exact
+database/schema ACLs and grantors,
+relation/type/default/column ACL state and owners, the activation constraint,
+all 17 authority function hashes and executable semantics, safe authority on
+every other public routine, all 20 triggers on the six protected catalogue
+tables, the exact effective-login allowlist, role attributes and
+ownership, the complete membership graph, effective privileges, and seven
+unique expected sessions with no other target-database client. Eight zero-write
+canaries require `23503` for the three matching reviewers and `42501` for a
+mismatched reviewer, unassigned/API/worker execution, and non-executing direct
+DML planning. Before/after fingerprints and approval row counts must match. The
+evidence retains the credential-free canonical stable structure projection with
+its recomputable SHA-256 while excluding volatile backend PIDs.
+
+Exactly three safe reviewer logins may each hold their single matching approval
+capability with PostgreSQL 17 `ADMIN FALSE`, `INHERIT TRUE`, and `SET FALSE`.
+The exact graph rejects a multi-capability deployment before canaries; the
+separate authority-boundary integration test proves that transient case also
+fails closed. The verifier does not create or change logins, credentials, ACLs,
+or memberships. Live provisioning, DEPLOY, and CONTRACT remain blocked.
 
 ### 0004 legacy diary compatibility gate
 

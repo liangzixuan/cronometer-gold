@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const SAFE_CONTAINER = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
@@ -13,8 +13,10 @@ const AUTHORITY_POLICY_PATH = new URL(
   "../packages/db/restore/0014_catalogue_authority_policy.sql",
   import.meta.url,
 );
+const MIGRATION_DIRECTORY = new URL("../packages/db/migrations/", import.meta.url);
+const MIGRATION_FILE_PATTERN = /^\d{4}_[a-z0-9_]+\.sql$/;
 const EXPECTED_AUTHORITY_POLICY_SHA256 =
-  "7f099eeab83f4d028e8c48abbc904aaacf3d610fe10ce5644a0bce155ff8b7ef";
+  "d1e1458fba6f1b5ec175ab782ac93e3e82ef16209a2682d871649f78747cd48f";
 const CAPABILITY_ROLES = [
   "nutrition_catalogue_stage",
   "nutrition_catalogue_validate",
@@ -24,8 +26,18 @@ const CAPABILITY_ROLES = [
   "nutrition_catalogue_promote_activate",
   "nutrition_catalogue_rollback",
 ];
+const PINNED_AUTHORITY_SEARCH_PATH = ["search_path=pg_catalog, public, pg_temp"];
+const PROTECTED_CATALOGUE_TABLES = new Set([
+  "food_import_approval",
+  "food_import_batch",
+  "food_import_record",
+  "food_source",
+  "food_source_release",
+  "food_source_release_activation",
+]);
 const DEFAULT_AUTHORITY_FUNCTION_POLICY = {
   arguments: "",
+  config: PINNED_AUTHORITY_SEARCH_PATH,
   language: "plpgsql",
   leakproof: false,
   parallel: "u",
@@ -39,6 +51,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
     "catalogue_evidence_bundle_uri_is_valid",
     {
       arguments: "value text, digest text",
+      config: PINNED_AUTHORITY_SEARCH_PATH,
       language: "sql",
       leakproof: false,
       parallel: "u",
@@ -54,6 +67,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
     {
       arguments:
         "p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text",
+      config: PINNED_AUTHORITY_SEARCH_PATH,
       language: "plpgsql",
       leakproof: false,
       parallel: "u",
@@ -62,6 +76,14 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       sourceSha256: "89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac",
       strict: false,
       volatility: "v",
+    },
+  ],
+  [
+    "enqueue_food_search_source_eligibility_change",
+    {
+      ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
+      config: [],
+      sourceSha256: "3a88f24e4863d8150db21f93efadd528ea5d7811b5c79c6ff5cd38fdcb93ce87",
     },
   ],
   [
@@ -148,6 +170,22 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       sourceSha256: "f972295c68b0774f901ce592801a0c8d25ddf6384194a702ca576844f088b14e",
     },
   ],
+  [
+    "reject_immutable_row_update",
+    {
+      ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
+      config: [],
+      sourceSha256: "631a42e27de6543bc09fd6b8d0f1b0fd336250270b47f13849a2483fd0786e6e",
+    },
+  ],
+  [
+    "set_row_updated_at",
+    {
+      ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
+      config: [],
+      sourceSha256: "92fa7c305a8b856faea0575b27eaa33c1e39952cf9fe87b4c0cbf7d7eab556bd",
+    },
+  ],
 ]);
 const AUTHORITY_TRIGGER_POLICY = new Map([
   [
@@ -156,6 +194,15 @@ const AUTHORITY_TRIGGER_POLICY = new Map([
       definition:
         "CREATE TRIGGER food_import_approval_guard_authority BEFORE INSERT ON food_import_approval FOR EACH ROW EXECUTE FUNCTION guard_food_import_approval_authority()",
       functionName: "guard_food_import_approval_authority",
+      tableName: "food_import_approval",
+    },
+  ],
+  [
+    "food_import_approval_reject_update",
+    {
+      definition:
+        "CREATE TRIGGER food_import_approval_reject_update BEFORE DELETE OR UPDATE ON food_import_approval FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()",
+      functionName: "reject_immutable_row_update",
       tableName: "food_import_approval",
     },
   ],
@@ -205,12 +252,48 @@ const AUTHORITY_TRIGGER_POLICY = new Map([
     },
   ],
   [
+    "food_import_record_reject_delete",
+    {
+      definition:
+        "CREATE TRIGGER food_import_record_reject_delete BEFORE DELETE ON food_import_record FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()",
+      functionName: "reject_immutable_row_update",
+      tableName: "food_import_record",
+    },
+  ],
+  [
     "food_source_guard_active_release_authority",
     {
       definition:
         "CREATE TRIGGER food_source_guard_active_release_authority BEFORE UPDATE OF active_release_id ON food_source FOR EACH ROW EXECUTE FUNCTION guard_food_source_active_release_authority()",
       functionName: "guard_food_source_active_release_authority",
       tableName: "food_source",
+    },
+  ],
+  [
+    "food_source_search_eligibility_outbox",
+    {
+      definition:
+        "CREATE TRIGGER food_source_search_eligibility_outbox AFTER UPDATE OF active, active_release_id, code, display_name, license_expression, attribution_required, attribution_text, commercial_use_allowed, redistribution_allowed, rights_review_status, rights_reviewed_at, rights_reviewed_by ON food_source FOR EACH ROW EXECUTE FUNCTION enqueue_food_search_source_eligibility_change()",
+      functionName: "enqueue_food_search_source_eligibility_change",
+      tableName: "food_source",
+    },
+  ],
+  [
+    "food_source_set_updated_at",
+    {
+      definition:
+        "CREATE TRIGGER food_source_set_updated_at BEFORE UPDATE ON food_source FOR EACH ROW EXECUTE FUNCTION set_row_updated_at()",
+      functionName: "set_row_updated_at",
+      tableName: "food_source",
+    },
+  ],
+  [
+    "food_source_release_activation_reject_update",
+    {
+      definition:
+        "CREATE TRIGGER food_source_release_activation_reject_update BEFORE DELETE OR UPDATE ON food_source_release_activation FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()",
+      functionName: "reject_immutable_row_update",
+      tableName: "food_source_release_activation",
     },
   ],
   [
@@ -268,6 +351,15 @@ const AUTHORITY_TRIGGER_POLICY = new Map([
     },
   ],
   [
+    "food_source_release_reject_delete",
+    {
+      definition:
+        "CREATE TRIGGER food_source_release_reject_delete BEFORE DELETE ON food_source_release FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()",
+      functionName: "reject_immutable_row_update",
+      tableName: "food_source_release",
+    },
+  ],
+  [
     "food_source_release_reject_new_legacy_unbound",
     {
       definition:
@@ -283,6 +375,7 @@ export const RESTORE_AUTHORITY_POLICY_SHA256 = assertRestoreAuthorityPolicyDiges
   AUTHORITY_POLICY_SQL,
   EXPECTED_AUTHORITY_POLICY_SHA256,
 );
+export const TRACKED_MIGRATION_LEDGER_JSON = canonicalJson(loadTrackedMigrationLedger());
 
 export function parseRestoreDrillArguments(argv) {
   const values = new Map();
@@ -404,9 +497,14 @@ export function runPostgresRestoreDrill(options, dependencies = {}) {
     throw new Error(`Restore target ${options.targetDatabase} already exists`);
   }
 
-  // Refuse to copy a source that violates the reviewed migrations 0014-0015
-  // authority manifest. This runs before a dump or target is created.
+  // Refuse to copy a source that violates the reviewed authority manifest or
+  // tracked migration ledger. These run before a dump or target is created.
   collectAuthorityFingerprint(run, options, options.sourceDatabase);
+  const preDumpMigrationLedger = collectRestoreMigrationLedger(
+    run,
+    options,
+    options.sourceDatabase,
+  );
 
   try {
     docker(run, options.container, [
@@ -467,6 +565,9 @@ export function runPostgresRestoreDrill(options, dependencies = {}) {
     );
 
     const source = collectEvidence(run, options, options.sourceDatabase);
+    if (source.migrationLedger !== preDumpMigrationLedger) {
+      throw new Error("Source public migration ledger changed during the restore drill");
+    }
     const target = collectEvidence(run, options, options.targetDatabase);
     compareRestoreEvidence(source, target);
     const finalDatabaseBoundary = assertTargetDatabaseBoundary(run, options);
@@ -499,10 +600,7 @@ export function runPostgresRestoreDrill(options, dependencies = {}) {
 
 function collectEvidence(run, options, database) {
   const authority = collectAuthorityFingerprint(run, options, database);
-  const migrationLedger = psqlScalar(run, options, database, [
-    "select coalesce(json_agg(row_to_json(m) order by m.name)::text, '[]')",
-    "from (select name, checksum from app_schema_migration order by name) m",
-  ]);
+  const migrationLedger = collectRestoreMigrationLedger(run, options, database);
   const unvalidatedConstraints = psqlScalar(run, options, database, [
     "select count(*) from pg_constraint where not convalidated",
   ]);
@@ -528,6 +626,41 @@ function collectEvidence(run, options, database) {
   };
 }
 
+export function collectRestoreMigrationLedger(run, options, database) {
+  const migrationLedger = psqlScalar(run, options, database, [
+    "select coalesce(json_agg(row_to_json(m) order by m.name)::text, '[]')",
+    "from (select name, checksum from public.app_schema_migration order by name) m",
+  ]);
+  return validateRestoreMigrationLedger(migrationLedger);
+}
+
+export function validateRestoreMigrationLedger(migrationLedger) {
+  let parsed;
+  try {
+    parsed = JSON.parse(migrationLedger);
+  } catch {
+    throw new Error("Public migration ledger returned malformed JSON");
+  }
+  if (!Array.isArray(parsed) || canonicalJson(parsed) !== TRACKED_MIGRATION_LEDGER_JSON) {
+    throw new Error("Public migration ledger does not match the tracked migration manifest");
+  }
+  return canonicalJson(parsed);
+}
+
+function loadTrackedMigrationLedger() {
+  const names = readdirSync(MIGRATION_DIRECTORY, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && MIGRATION_FILE_PATTERN.test(entry.name))
+    .map((entry) => entry.name)
+    .sort((left, right) => left.localeCompare(right));
+  if (names.length === 0) throw new Error("No tracked database migrations were found");
+  return names.map((name) => ({
+    checksum: createHash("sha256")
+      .update(readFileSync(new URL(name, MIGRATION_DIRECTORY), "utf8"))
+      .digest("hex"),
+    name,
+  }));
+}
+
 function collectAuthorityFingerprint(run, options, database) {
   const evidence = {
     authorityConstraints: psqlJson(run, options, database, [
@@ -543,6 +676,32 @@ function collectAuthorityFingerprint(run, options, database) {
       "and class_row.relname = 'food_source_release_activation'",
       "and constraint_row.conname = 'food_source_release_activation_expand_audit_null_check'",
       ") authority_constraint_policy",
+    ]),
+    columnAcls: psqlJson(run, options, database, [
+      "select coalesce(json_agg(row_to_json(column_acl_policy) order by column_acl_policy.relation_name, column_acl_policy.column_name, column_acl_policy.grantee, column_acl_policy.grantor, column_acl_policy.privilege, column_acl_policy.grantable)::text, '[]')",
+      "from (",
+      "select class_row.relname as relation_name, attribute_row.attname as column_name,",
+      "coalesce(grantee_role.rolname, 'PUBLIC') as grantee, coalesce(grantor_role.rolname, 'PUBLIC') as grantor,",
+      "acl.privilege_type as privilege, acl.is_grantable as grantable",
+      "from pg_catalog.pg_attribute as attribute_row",
+      "join pg_catalog.pg_class as class_row on class_row.oid = attribute_row.attrelid",
+      "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = class_row.relnamespace",
+      "cross join lateral pg_catalog.aclexplode(attribute_row.attacl) as acl",
+      "left join pg_catalog.pg_roles as grantee_role on grantee_role.oid = acl.grantee",
+      "left join pg_catalog.pg_roles as grantor_role on grantor_role.oid = acl.grantor",
+      "where namespace_row.nspname = 'public'",
+      "and attribute_row.attnum > 0 and not attribute_row.attisdropped",
+      "and attribute_row.attacl is not null",
+      ") column_acl_policy",
+    ]),
+    explicitColumnAclAttributeCount: psqlScalar(run, options, database, [
+      "select count(*)::text as explicit_column_acl_attribute_count",
+      "from pg_catalog.pg_attribute as attribute_row",
+      "join pg_catalog.pg_class as class_row on class_row.oid = attribute_row.attrelid",
+      "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = class_row.relnamespace",
+      "where namespace_row.nspname = 'public'",
+      "and attribute_row.attnum > 0 and not attribute_row.attisdropped",
+      "and attribute_row.attacl is not null",
     ]),
     defaultAcls: psqlJson(run, options, database, [
       "select coalesce(json_agg(row_to_json(default_policy) order by default_policy.owner, default_policy.schema_name, default_policy.object_type)::text, '[]')",
@@ -661,7 +820,7 @@ function collectAuthorityFingerprint(run, options, database) {
       "where namespace_row.nspname = 'public'",
       ") type_policy",
     ]),
-    version: 4,
+    version: 6,
   };
   validateRestoreAuthorityEvidence(evidence, options.expectedOwner);
   const fingerprint = canonicalJson(evidence);
@@ -674,7 +833,7 @@ function collectAuthorityFingerprint(run, options, database) {
 
 export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
   if (!SAFE_ROLE.test(expectedOwner)) throw new Error("Invalid expected PostgreSQL owner name");
-  if (!evidence || typeof evidence !== "object" || evidence.version !== 4) {
+  if (!evidence || typeof evidence !== "object" || evidence.version !== 6) {
     throw new Error("Database-authority fingerprint has an unsupported version");
   }
 
@@ -731,8 +890,12 @@ export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
   ) {
     throw new Error("Public schema owner or ACL representation differs from policy");
   }
+  const schemaAcl = requiredArray(schema.acl, "public schema ACL");
+  if (schemaAcl.some((entry) => entry.grantor !== "pg_database_owner")) {
+    throw new Error("Public schema ACL has an unexpected grantor");
+  }
   assertExactAcl(
-    schema.acl,
+    schemaAcl,
     [
       ["PUBLIC", "USAGE"],
       ["nutrition_catalogue_approve_data", "USAGE"],
@@ -743,6 +906,13 @@ export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
     ],
     "public schema",
   );
+
+  if (
+    requiredArray(evidence.columnAcls, "public column ACLs").length > 0 ||
+    evidence.explicitColumnAclAttributeCount !== "0"
+  ) {
+    throw new Error("A public-schema column has an explicit ACL not versioned by policy");
+  }
 
   const relations = requiredArray(evidence.relations, "public relations");
   if (
@@ -809,8 +979,7 @@ export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
       );
       if (
         functionPolicy.security_definer !== expectedFunction.securityDefiner ||
-        canonicalJson(functionPolicy.config) !==
-          canonicalJson(["search_path=pg_catalog, public, pg_temp"])
+        canonicalJson(functionPolicy.config) !== canonicalJson(expectedFunction.config)
       ) {
         throw new Error(`Catalogue authority function ${functionPolicy.name} differs from policy`);
       }
@@ -864,9 +1033,8 @@ export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
   }
 
   const triggers = requiredArray(evidence.triggers, "public triggers");
-  const authorityTriggers = triggers.filter(
-    (entry) =>
-      AUTHORITY_TRIGGER_POLICY.has(entry.name) || authorityFunctionNames.has(entry.function_name),
+  const authorityTriggers = triggers.filter((entry) =>
+    PROTECTED_CATALOGUE_TABLES.has(entry.table_name),
   );
   if (authorityTriggers.length !== AUTHORITY_TRIGGER_POLICY.size) {
     throw new Error("Catalogue authority trigger set has missing or unexpected entries");

@@ -1,7 +1,7 @@
 import { Kysely, PostgresDialect, sql } from "kysely";
 import { Pool, type PoolConfig } from "pg";
 
-import { discoverMigrations } from "./migrator.js";
+import { discoverMigrations, migrationSearchPath, resolveMigrationSchema } from "./migrator.js";
 import { assertDatabaseRestoreReplayReady } from "./restore.js";
 import type { Database } from "./types.js";
 
@@ -96,13 +96,23 @@ export async function assertDatabaseMigrationLedgerReady(
   const expected = await discoverMigrations();
   let applied: readonly { readonly checksum: string; readonly name: string }[];
   try {
-    applied = (
-      await sql<{ checksum: string; name: string }>`
-        select name, checksum
-        from app_schema_migration
-        order by name
-      `.execute(database)
-    ).rows;
+    applied = await database.transaction().execute(async (transaction) => {
+      const migrationSchema = await resolveMigrationSchema(transaction);
+      await sql`
+        select pg_catalog.set_config(
+          'search_path',
+          ${migrationSearchPath(migrationSchema)},
+          true
+        )
+      `.execute(transaction);
+      return (
+        await sql<{ checksum: string; name: string }>`
+          select name, checksum
+          from ${sql.id(migrationSchema)}.app_schema_migration
+          order by name
+        `.execute(transaction)
+      ).rows;
+    });
   } catch {
     throw new Error("Database schema migration ledger is not current");
   }
