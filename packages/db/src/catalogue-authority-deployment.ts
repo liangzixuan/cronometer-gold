@@ -118,6 +118,11 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
   },
   {
     ...TRIGGER_FUNCTION_POLICY,
+    name: "guard_active_nutrient_vector_size",
+    sourceSha256: "24df72943bad96fc758d4a994ac2e8eaa18d9c9538ad117544abc4ccf4a22bda",
+  },
+  {
+    ...TRIGGER_FUNCTION_POLICY,
     name: "guard_food_import_approval_authority",
     sourceSha256: CATALOGUE_APPROVAL_GUARD_SOURCE_SHA256,
   },
@@ -170,6 +175,29 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
     ...TRIGGER_FUNCTION_POLICY,
     name: "guard_new_food_source_release_authority",
     sourceSha256: "93f189e2c097009ac1cbf1129ce10a24d0c7fd2e4cee66c2ea5cdbb1537462b3",
+  },
+  {
+    ...TRIGGER_FUNCTION_POLICY,
+    name: "lock_active_nutrient_registry_before_write",
+    sourceSha256: "c10e7e9df6768e94416aba47afe5639ffa7b3abfe5d2a6486a61e229dbe995de",
+  },
+  {
+    arguments: "",
+    configuration: "application-schema",
+    language: "sql",
+    leakproof: false,
+    name: "lock_active_nutrient_registry_for_read",
+    parallel: "u",
+    resultType: "void",
+    securityDefiner: false,
+    sourceSha256: "22ab05f2e9749ecff7035e5188e1b9353d46533e7bc558748c76c43dbfc37ea5",
+    strict: false,
+    volatility: "v",
+  },
+  {
+    ...TRIGGER_FUNCTION_POLICY,
+    name: "reconcile_recipe_components_v2",
+    sourceSha256: "c82895a20dc837d80959a01991ede3dd1ab0f99ae48bec66984d4ea7368e720a",
   },
   {
     ...TRIGGER_FUNCTION_POLICY,
@@ -318,6 +346,55 @@ export const CATALOGUE_AUTHORITY_TRIGGER_POLICY: readonly CatalogueAuthorityTrig
     functionName: "set_row_updated_at",
     name: "food_source_set_updated_at",
     tableName: "food_source",
+  },
+  {
+    definition:
+      "CREATE CONSTRAINT TRIGGER nutrient_active_vector_size_guard AFTER INSERT OR UPDATE OF active ON nutrient DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION guard_active_nutrient_vector_size()",
+    functionName: "guard_active_nutrient_vector_size",
+    name: "nutrient_active_vector_size_guard",
+    tableName: "nutrient",
+  },
+  {
+    definition:
+      "CREATE TRIGGER nutrient_registry_lock_before_active_update BEFORE DELETE OR UPDATE ON nutrient FOR EACH STATEMENT EXECUTE FUNCTION lock_active_nutrient_registry_before_write()",
+    functionName: "lock_active_nutrient_registry_before_write",
+    name: "nutrient_registry_lock_before_active_update",
+    tableName: "nutrient",
+  },
+  {
+    definition:
+      "CREATE TRIGGER nutrient_registry_lock_before_insert BEFORE INSERT ON nutrient FOR EACH STATEMENT EXECUTE FUNCTION lock_active_nutrient_registry_before_write()",
+    functionName: "lock_active_nutrient_registry_before_write",
+    name: "nutrient_registry_lock_before_insert",
+    tableName: "nutrient",
+  },
+  {
+    definition:
+      "CREATE CONSTRAINT TRIGGER recipe_ingredient_reconcile_v2 AFTER INSERT OR DELETE ON recipe_ingredient DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()",
+    functionName: "reconcile_recipe_components_v2",
+    name: "recipe_ingredient_reconcile_v2",
+    tableName: "recipe_ingredient",
+  },
+  {
+    definition:
+      "CREATE CONSTRAINT TRIGGER recipe_nutrient_reconcile_v2 AFTER INSERT OR DELETE ON recipe_version_nutrient DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()",
+    functionName: "reconcile_recipe_components_v2",
+    name: "recipe_nutrient_reconcile_v2",
+    tableName: "recipe_version_nutrient",
+  },
+  {
+    definition:
+      "CREATE CONSTRAINT TRIGGER recipe_source_reconcile_v2 AFTER INSERT OR DELETE ON recipe_version_source DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()",
+    functionName: "reconcile_recipe_components_v2",
+    name: "recipe_source_reconcile_v2",
+    tableName: "recipe_version_source",
+  },
+  {
+    definition:
+      "CREATE CONSTRAINT TRIGGER recipe_version_components_reconcile_v2 AFTER INSERT ON recipe_version DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()",
+    functionName: "reconcile_recipe_components_v2",
+    name: "recipe_version_components_reconcile_v2",
+    tableName: "recipe_version",
   },
   {
     definition:

@@ -14,6 +14,7 @@ import {
 import { type Kysely, type QueryResult, type Selectable, sql, type Transaction } from "kysely";
 
 import { PasswordCredentialStaleError } from "./accounts.js";
+import { lockActiveNutrientRegistryForRead } from "./nutrient-registry-lock.js";
 import type { Database, JsonObject, JsonValue } from "./types.js";
 
 export type RetentionPersistenceErrorCode =
@@ -1178,7 +1179,7 @@ export async function createCustomFood(
       "create",
     );
     if (replay) return replay;
-    await sql`lock table nutrient in share mode`.execute(transaction);
+    await lockActiveNutrientRegistryForRead(transaction);
     const definitions = await loadCustomFoodNutrients(transaction, draft);
     const customFoodId = randomUUID();
     const food = await transaction
@@ -1254,7 +1255,7 @@ export async function reviseCustomFood(
       .executeTakeFirst();
     if (!root) throw new RetentionNotFoundError();
     if (root.current_revision !== expected) throw new RetentionRevisionConflictError();
-    await sql`lock table nutrient in share mode`.execute(transaction);
+    await lockActiveNutrientRegistryForRead(transaction);
     const definitions = await loadCustomFoodNutrients(transaction, draft);
     const next = (BigInt(root.current_revision) + 1n).toString();
     const version = await insertCustomFoodVersion(transaction, {

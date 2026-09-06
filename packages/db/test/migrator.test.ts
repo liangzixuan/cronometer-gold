@@ -545,4 +545,63 @@ describe("forward migration discovery", () => {
     expect(migrationSql).not.toMatch(/\balter\s+(?:role|table|sequence)\b/iu);
     expect(migrationSql).not.toMatch(/\b(?:drop|truncate)\b/iu);
   });
+
+  it("installs the active nutrient registry reader/writer lock protocol", async () => {
+    const migrationSql = await readFile(
+      resolve(import.meta.dirname, "../migrations/0018_active_nutrient_registry_lock_protocol.sql"),
+      "utf8",
+    );
+
+    expect(createHash("sha256").update(migrationSql).digest("hex")).toBe(
+      "85c1cb24b22ee76f0355ef01802fe91eca52835c706510e8d3dbcc8939f20d22",
+    );
+    expect(migrationSql).toContain("target_schema name := pg_catalog.current_schema()");
+    expect(migrationSql).toContain(
+      "pg_catalog.pg_advisory_xact_lock_shared(\n    pg_catalog.hashtext('nutrition-tracker:active-nutrient-registry:v1')",
+    );
+    for (const [functionName, sourceSha256] of [
+      [
+        "guard_active_nutrient_vector_size",
+        "24df72943bad96fc758d4a994ac2e8eaa18d9c9538ad117544abc4ccf4a22bda",
+      ],
+      [
+        "lock_active_nutrient_registry_before_write",
+        "c10e7e9df6768e94416aba47afe5639ffa7b3abfe5d2a6486a61e229dbe995de",
+      ],
+      [
+        "lock_active_nutrient_registry_for_read",
+        "22ab05f2e9749ecff7035e5188e1b9353d46533e7bc558748c76c43dbfc37ea5",
+      ],
+      [
+        "reconcile_recipe_components_v2",
+        "c82895a20dc837d80959a01991ede3dd1ab0f99ae48bec66984d4ea7368e720a",
+      ],
+    ] as const) {
+      expect(migrationSql).toContain(functionName);
+      expect(migrationSql).toContain(sourceSha256);
+      expect(migrationSql).toContain(
+        `alter function %I.${functionName}() set search_path = pg_catalog, %I, pg_temp`,
+      );
+    }
+    for (const triggerName of [
+      "nutrient_active_vector_size_guard",
+      "nutrient_registry_lock_before_active_update",
+      "nutrient_registry_lock_before_insert",
+      "recipe_ingredient_reconcile_v2",
+      "recipe_nutrient_reconcile_v2",
+      "recipe_source_reconcile_v2",
+      "recipe_version_components_reconcile_v2",
+    ]) {
+      expect(migrationSql).toContain(triggerName);
+    }
+    expect(migrationSql).toContain(
+      "create or replace trigger nutrient_registry_lock_before_active_update before update or delete on %I.nutrient",
+    );
+    expect(migrationSql).toContain("perform lock_active_nutrient_registry_for_read();");
+    expect(migrationSql.match(/\bcreate\s+function\b/giu)).toHaveLength(1);
+    expect(migrationSql).not.toMatch(/\bsecurity\s+definer\b/iu);
+    expect(migrationSql).not.toMatch(/\b(?:grant|revoke)\b/iu);
+    expect(migrationSql).not.toMatch(/\balter\s+(?:role|table|sequence)\b/iu);
+    expect(migrationSql).not.toMatch(/\b(?:drop|truncate)\b/iu);
+  });
 });

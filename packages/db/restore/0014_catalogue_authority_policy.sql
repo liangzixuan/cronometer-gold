@@ -1,4 +1,4 @@
--- Versioned post-restore policy for catalogue authority migrations 0014-0017.
+-- Versioned post-restore policy for catalogue authority migrations 0014-0018.
 --
 -- Logical restores deliberately use --no-owner --no-privileges. Run this only
 -- against a new isolated nutrition_restore_* database while PUBLIC CONNECT is
@@ -233,9 +233,9 @@ begin
       using errcode = '55000';
   end if;
 
-  -- Pin every function whose search_path migrations 0014, 0016, and 0017
-  -- hardened. The exact identity and executable body are policy, not merely
-  -- source/target parity.
+  -- Pin every function whose search_path migrations 0014, 0016, 0017, and
+  -- 0018 hardened. The exact identity and executable body are policy, not
+  -- merely source/target parity.
   if (
     select pg_catalog.count(*)
     from pg_catalog.pg_proc as procedure_row
@@ -251,6 +251,7 @@ begin
         'enqueue_food_search_food_eligibility_change',
         'enqueue_food_search_serving_insert',
         'enqueue_food_search_source_eligibility_change',
+        'guard_active_nutrient_vector_size',
         'guard_food_import_approval_authority',
         'guard_food_import_batch_initial_state',
         'guard_food_import_batch_update',
@@ -262,9 +263,12 @@ begin
         'guard_food_source_release_legacy_promotion_grandfather',
         'guard_food_source_release_update',
         'guard_new_food_source_release_authority',
+        'lock_active_nutrient_registry_before_write',
+        'lock_active_nutrient_registry_for_read',
+        'reconcile_recipe_components_v2',
         'reject_new_legacy_unbound_catalogue_evidence'
       )
-  ) <> 20 or exists (
+  ) <> 24 or exists (
     select 1
     from (
       values
@@ -276,6 +280,7 @@ begin
         ('enqueue_food_search_food_eligibility_change', '', '85ada305a6fd6b40cd5fb0652d64c240d1953033a243b0f7ce243caa9bc9c4de', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('enqueue_food_search_serving_insert', '', '223f2d1dc8f90c6bc04c4d85ec763bcb50727473f5576b0bcdbbf394c1c9d804', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('enqueue_food_search_source_eligibility_change', '', '3a88f24e4863d8150db21f93efadd528ea5d7811b5c79c6ff5cd38fdcb93ce87', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('guard_active_nutrient_vector_size', '', '24df72943bad96fc758d4a994ac2e8eaa18d9c9538ad117544abc4ccf4a22bda', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_approval_authority', '', 'f96feb298d900165172c56a3fa1e99e91aaca010657155e5a996ee04015fdbbd', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_batch_initial_state', '', '2561714155de31151c79f95977156072a66451d1f13f7b5c6e85d13abe9ecb0c', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_batch_update', '', '59dc41d73ec62b554caa721e13a2581a75327688f840cab922fddad0ca7be249', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
@@ -287,6 +292,9 @@ begin
         ('guard_food_source_release_legacy_promotion_grandfather', '', '22340dfcbb5f98e1d0504703b0fb37830b31a4ecde5cbe81e55844968b86f214', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_source_release_update', '', '191701f20750b6e98b8acf290a1df2417bf17bd9c3a4e5e87a7ac7ef56453726', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_new_food_source_release_authority', '', '93f189e2c097009ac1cbf1129ce10a24d0c7fd2e4cee66c2ea5cdbb1537462b3', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('lock_active_nutrient_registry_before_write', '', 'c10e7e9df6768e94416aba47afe5639ffa7b3abfe5d2a6486a61e229dbe995de', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('lock_active_nutrient_registry_for_read', '', '22ab05f2e9749ecff7035e5188e1b9353d46533e7bc558748c76c43dbfc37ea5', 'void', 'sql', 'v', false, false, 'u', false),
+        ('reconcile_recipe_components_v2', '', 'c82895a20dc837d80959a01991ede3dd1ab0f99ae48bec66984d4ea7368e720a', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('reject_new_legacy_unbound_catalogue_evidence', '', 'f972295c68b0774f901ce592801a0c8d25ddf6384194a702ca576844f088b14e', 'trigger', 'plpgsql', 'v', false, false, 'u', false)
     ) as expected(
       function_name, arguments, source_sha256, result_type, language_name,
@@ -323,8 +331,9 @@ begin
   end if;
 
   -- Pin every non-internal trigger attached to the reviewed authority
-  -- functions, including all five food-search outbox paths and both
-  -- grandfather and legacy-evidence trigger sites.
+  -- functions, including all five food-search outbox paths, all seven active
+  -- nutrient registry protocol paths, and both grandfather and legacy-evidence
+  -- trigger sites.
   if (
     select pg_catalog.count(*)
     from pg_catalog.pg_trigger as trigger_row
@@ -359,12 +368,20 @@ begin
             'food_source_release_guard_legacy_grandfather_update',
             'food_source_release_guard_new_authority',
             'food_source_release_guard_update',
-            'food_source_release_reject_new_legacy_unbound'
+            'food_source_release_reject_new_legacy_unbound',
+            'nutrient_active_vector_size_guard',
+            'nutrient_registry_lock_before_active_update',
+            'nutrient_registry_lock_before_insert',
+            'recipe_ingredient_reconcile_v2',
+            'recipe_nutrient_reconcile_v2',
+            'recipe_source_reconcile_v2',
+            'recipe_version_components_reconcile_v2'
           )
         )
         or (
           procedure_namespace_row.nspname = target_schema
           and procedure_row.proname in (
+            'guard_active_nutrient_vector_size',
             'guard_food_import_approval_authority',
             'guard_food_import_batch_initial_state',
             'guard_food_import_batch_update',
@@ -381,11 +398,13 @@ begin
             'enqueue_food_search_food_eligibility_change',
             'enqueue_food_search_serving_insert',
             'enqueue_food_search_source_eligibility_change',
+            'lock_active_nutrient_registry_before_write',
+            'reconcile_recipe_components_v2',
             'reject_new_legacy_unbound_catalogue_evidence'
           )
         )
       )
-  ) <> 19 or exists (
+  ) <> 26 or exists (
     select 1
     from (
       values
@@ -407,7 +426,14 @@ begin
         ('food_source_release_guard_legacy_grandfather_update', 'food_source_release', 'guard_food_source_release_legacy_promotion_grandfather', 'CREATE TRIGGER food_source_release_guard_legacy_grandfather_update BEFORE UPDATE OF legacy_promotion_grandfathered_at ON food_source_release FOR EACH ROW EXECUTE FUNCTION guard_food_source_release_legacy_promotion_grandfather()'),
         ('food_source_release_guard_new_authority', 'food_source_release', 'guard_new_food_source_release_authority', 'CREATE TRIGGER food_source_release_guard_new_authority BEFORE INSERT ON food_source_release FOR EACH ROW EXECUTE FUNCTION guard_new_food_source_release_authority()'),
         ('food_source_release_guard_update', 'food_source_release', 'guard_food_source_release_update', 'CREATE TRIGGER food_source_release_guard_update BEFORE UPDATE ON food_source_release FOR EACH ROW EXECUTE FUNCTION guard_food_source_release_update()'),
-        ('food_source_release_reject_new_legacy_unbound', 'food_source_release', 'reject_new_legacy_unbound_catalogue_evidence', 'CREATE TRIGGER food_source_release_reject_new_legacy_unbound BEFORE INSERT ON food_source_release FOR EACH ROW EXECUTE FUNCTION reject_new_legacy_unbound_catalogue_evidence()')
+        ('food_source_release_reject_new_legacy_unbound', 'food_source_release', 'reject_new_legacy_unbound_catalogue_evidence', 'CREATE TRIGGER food_source_release_reject_new_legacy_unbound BEFORE INSERT ON food_source_release FOR EACH ROW EXECUTE FUNCTION reject_new_legacy_unbound_catalogue_evidence()'),
+        ('nutrient_active_vector_size_guard', 'nutrient', 'guard_active_nutrient_vector_size', 'CREATE CONSTRAINT TRIGGER nutrient_active_vector_size_guard AFTER INSERT OR UPDATE OF active ON nutrient DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION guard_active_nutrient_vector_size()'),
+        ('nutrient_registry_lock_before_active_update', 'nutrient', 'lock_active_nutrient_registry_before_write', 'CREATE TRIGGER nutrient_registry_lock_before_active_update BEFORE DELETE OR UPDATE ON nutrient FOR EACH STATEMENT EXECUTE FUNCTION lock_active_nutrient_registry_before_write()'),
+        ('nutrient_registry_lock_before_insert', 'nutrient', 'lock_active_nutrient_registry_before_write', 'CREATE TRIGGER nutrient_registry_lock_before_insert BEFORE INSERT ON nutrient FOR EACH STATEMENT EXECUTE FUNCTION lock_active_nutrient_registry_before_write()'),
+        ('recipe_ingredient_reconcile_v2', 'recipe_ingredient', 'reconcile_recipe_components_v2', 'CREATE CONSTRAINT TRIGGER recipe_ingredient_reconcile_v2 AFTER INSERT OR DELETE ON recipe_ingredient DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()'),
+        ('recipe_nutrient_reconcile_v2', 'recipe_version_nutrient', 'reconcile_recipe_components_v2', 'CREATE CONSTRAINT TRIGGER recipe_nutrient_reconcile_v2 AFTER INSERT OR DELETE ON recipe_version_nutrient DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()'),
+        ('recipe_source_reconcile_v2', 'recipe_version_source', 'reconcile_recipe_components_v2', 'CREATE CONSTRAINT TRIGGER recipe_source_reconcile_v2 AFTER INSERT OR DELETE ON recipe_version_source DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()'),
+        ('recipe_version_components_reconcile_v2', 'recipe_version', 'reconcile_recipe_components_v2', 'CREATE CONSTRAINT TRIGGER recipe_version_components_reconcile_v2 AFTER INSERT ON recipe_version DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()')
     ) as expected(trigger_name, table_name, function_name, definition)
     left join pg_catalog.pg_trigger as trigger_row
       on trigger_row.tgname = expected.trigger_name

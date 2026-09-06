@@ -62,8 +62,16 @@ four exact application-schema `SECURITY INVOKER` functions and their four exact
 ordinary enabled statement triggers before pinning each function to the same
 trusted search path. It changes no function body, owner, ACL, or invoker status
 and grants no privilege. The paths remain within the owner-only compatibility
-boundary: fixed-purpose shared-table wrappers and a database-enforced lock
-protocol are still required before direct non-owner DML or runtime cutover.
+boundary: fixed-purpose shared-table wrappers are still required before direct
+non-owner DML or runtime cutover.
+
+Migration 0018 establishes the active-nutrient-registry reader/writer lock
+protocol used by catalogue promotion and every application snapshot path. The
+database writer trigger now serializes inserts, every update, and deletes; the
+shared reader helper and all four involved functions are search-path pinned and
+tracked by deploy/restore evidence. This prevents a search generation from
+being based on catalogue materialization that observed a mixed nutrient
+generation, but it does not grant the search worker any base-table access.
 
 Meilisearch documents that settings and document writes are asynchronous tasks and
 that index swaps are atomic. Those behaviors are explicit adapter contracts rather

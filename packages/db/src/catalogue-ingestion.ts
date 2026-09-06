@@ -25,6 +25,10 @@ import {
   type ValidatedCatalogueFood,
   validateCatalogueRecord,
 } from "./catalogue-validation.js";
+import {
+  lockActiveNutrientRegistryForRead,
+  lockActiveNutrientRegistryForWrite,
+} from "./nutrient-registry-lock.js";
 import type {
   Database,
   FoodImportBatchStatus,
@@ -52,7 +56,6 @@ const MAX_EVIDENCE_VALIDITY_MS = 24 * 60 * 60 * 1_000;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const PINNED_PARSER_VERSION_PATTERN = /^(.+)\+build\.([0-9a-f]{64})\+mapping\.([0-9a-f]{64})$/;
 const SOURCE_LOCK_NAMESPACE = "nutrition-tracker:catalogue-source:v1";
-const NUTRIENT_REGISTRY_LOCK_NAMESPACE = "nutrition-tracker:active-nutrient-registry:v1";
 const CNF_PARSER_REPORT_KIND = "health-canada-cnf-stage-v1";
 const CNF_PARSER_EXCLUSION_CODES: ReadonlySet<string> = new Set([
   "DUPLICATE_KEY",
@@ -547,7 +550,7 @@ export async function registerSourceNutrientMappings(
       .executeTakeFirst();
     if (!source) throw new Error(`Unknown food source ${input.sourceCode}`);
     await lockSource(transaction, source.id);
-    await lockNutrientRegistry(transaction);
+    await lockActiveNutrientRegistryForWrite(transaction);
 
     const mappings = [...input.mappings].sort(
       (left, right) =>
@@ -636,7 +639,7 @@ export async function supersedeSourceNutrientMapping(
       .executeTakeFirst();
     if (!source) throw new Error(`Unknown food source ${input.sourceCode}`);
     await lockSource(transaction, source.id);
-    await lockNutrientRegistry(transaction);
+    await lockActiveNutrientRegistryForWrite(transaction);
     const current = await selectCurrentMapping(
       transaction,
       source.id,
@@ -1356,6 +1359,7 @@ export async function promoteBatch(
     assertLiveReviewedEvidenceBound(initialBatch, "promote");
     const source = await selectAndLockSource(transaction, initialBatch.food_source_id);
     await lockSource(transaction, source.id);
+    await lockActiveNutrientRegistryForRead(transaction);
 
     if (initialBatch.status === "completed") {
       if (!initialBatch.release_id) throw new Error("Completed batch is missing its release");
@@ -4045,12 +4049,6 @@ async function ensureCanonicalNutrient(
     throw new Error(`Canonical nutrient ${mapping.canonicalNutrient.code} conflicts with ontology`);
   }
   return nutrient;
-}
-
-async function lockNutrientRegistry(transaction: Transaction<Database>): Promise<void> {
-  await sql`select pg_advisory_xact_lock(hashtext(${NUTRIENT_REGISTRY_LOCK_NAMESPACE}))`.execute(
-    transaction,
-  );
 }
 
 function validateMappingInput(mapping: ReviewedNutrientMappingInput): void {

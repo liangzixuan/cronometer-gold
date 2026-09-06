@@ -456,6 +456,10 @@ describe("catalogue authority deployment policy", () => {
     "enqueue_food_search_food_eligibility_change",
     "enqueue_food_search_serving_insert",
     "enqueue_food_search_source_eligibility_change",
+    "guard_active_nutrient_vector_size",
+    "lock_active_nutrient_registry_before_write",
+    "lock_active_nutrient_registry_for_read",
+    "reconcile_recipe_components_v2",
     "set_row_updated_at",
   ])("rejects protected authority function body drift for %s", (functionName) => {
     const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
@@ -477,7 +481,11 @@ describe("catalogue authority deployment policy", () => {
     "enqueue_food_search_food_eligibility_change",
     "enqueue_food_search_serving_insert",
     "enqueue_food_search_source_eligibility_change",
-  ])("rejects food-search function search-path drift for %s", (functionName) => {
+    "guard_active_nutrient_vector_size",
+    "lock_active_nutrient_registry_before_write",
+    "lock_active_nutrient_registry_for_read",
+    "reconcile_recipe_components_v2",
+  ])("rejects hardened authority function search-path drift for %s", (functionName) => {
     const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
     const base = validEvidence(policy);
     expect(() =>

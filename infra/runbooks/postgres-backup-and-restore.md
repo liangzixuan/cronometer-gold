@@ -83,8 +83,9 @@ migration-0014 function/trigger manifest and the forward migration-0015
 activation-null constraint and corrected approval/guard ACLs plus
 migration-0016's two food-search function search paths and exact
 source-eligibility trigger plus migration-0017's four food/serving/barcode
-function search paths and exact statement-trigger bindings. The transactional
-repair policy pins 20 hardened function identities and 19 exact trigger
+function search paths and exact statement-trigger bindings plus
+migration-0018's four active-nutrient lock functions and seven exact trigger
+bindings. The transactional repair policy pins 24 hardened function identities and 26 exact trigger
 bindings. Before creating a
 dump, the drill requires the exact `public.app_schema_migration` names and
 SHA-256s from the tracked migration files, ignoring any owner-schema shadow
@@ -114,7 +115,8 @@ Run and save results without exporting payload values:
    authority/`SECURITY DEFINER` signature, owner, executable semantics, trigger
    definition, and pinned `search_path`, including migration-0016's
    source-eligibility trigger and its two-function projection call chain and
-   migration-0017's remaining four outbox functions and exact trigger bindings;
+   migration-0017's remaining four outbox functions and exact trigger bindings
+   plus migration-0018's four nutrient-lock functions and seven bindings;
    the
    exact validated migration-0015 activation-audit null constraint; and absence
    of `PUBLIC EXECUTE` on the
@@ -147,11 +149,11 @@ Run and save results without exporting payload values:
    tracked `public` migration ledger; requires `public` to be the only
    non-system schema and to be owned by
    `pg_database_owner`; exact database, schema, relation, type, function, and
-   membership ACLs and grantors; no default or column ACL drift; all 22 authority
+   membership ACLs and grantors; no default or column ACL drift; all 26 authority
    function hashes/semantics/configuration values, safe authority on every other
-   public routine, and the exact 24-trigger authority set (the prior 20 on six
-   protected catalogue tables plus migration-0017's four
-   food/serving/barcode bindings), the
+   public routine, and the exact 31-trigger authority set (the prior 24 plus
+   migration-0018's three nutrient-registry and four recipe-reconciliation
+   bindings), the
    activation constraint, safe roles, and memberships; the
    effective-login allowlist; and seven isolated verifier sessions with no other
    target-database client. Its zero-write canaries prove all of the following:
@@ -164,10 +166,11 @@ Run and save results without exporting payload values:
    - a non-executing direct reviewer approval-table `EXPLAIN INSERT` reaches
      `42501` without consuming an identity value.
 
-   Migration 0017 grants no runtime privilege and does not authorize direct
-   non-owner DML. Keep runtime cutover blocked until fixed-purpose shared-table
-   wrappers and a database-enforced lock protocol are implemented, attested,
-   and exercised by positive and negative role canaries.
+   Migrations 0017 and 0018 grant no runtime privilege and do not authorize
+   direct non-owner DML. Migration 0018's lock protocol is implemented and
+   attested; keep runtime cutover blocked until fixed-purpose shared-table
+   wrappers are implemented and positive and negative role canaries exercise
+   the complete boundary.
 
    The exact membership graph structurally rejects a multi-capability deployment
    before canaries; the separate authority-boundary integration test retains its
@@ -188,7 +191,7 @@ Run and save results without exporting payload values:
    remain blocked.
 
    Separately, the logical restore drill's internal canonical authority
-   fingerprint schema is version 7. It binds exact public-column ACL rows, the
+   fingerprint schema is version 8. It binds exact public-column ACL rows, the
    independent count of non-NULL column ACL attributes, each trigger's table
    schema, every public-table trigger, and every cross-schema binding of a
    dedicated public authority trigger function. The final report emits the

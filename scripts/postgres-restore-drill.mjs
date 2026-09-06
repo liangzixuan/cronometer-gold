@@ -16,7 +16,7 @@ const AUTHORITY_POLICY_PATH = new URL(
 const MIGRATION_DIRECTORY = new URL("../packages/db/migrations/", import.meta.url);
 const MIGRATION_FILE_PATTERN = /^\d{4}_[a-z0-9_]+\.sql$/;
 const EXPECTED_AUTHORITY_POLICY_SHA256 =
-  "a9edd0c42a4912be5745059c0bfb4f5d00bac3cdd49df01b9dd620de5ddf6fbc";
+  "2613d874d765a49e08f450f88917e8a27adc9f3cd3dd847e2a214d7cb5f03f1e";
 const CAPABILITY_ROLES = [
   "nutrition_catalogue_stage",
   "nutrition_catalogue_validate",
@@ -129,6 +129,13 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
     },
   ],
   [
+    "guard_active_nutrient_vector_size",
+    {
+      ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
+      sourceSha256: "24df72943bad96fc758d4a994ac2e8eaa18d9c9538ad117544abc4ccf4a22bda",
+    },
+  ],
+  [
     "guard_food_import_approval_authority",
     {
       ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
@@ -203,6 +210,35 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
     {
       ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
       sourceSha256: "93f189e2c097009ac1cbf1129ce10a24d0c7fd2e4cee66c2ea5cdbb1537462b3",
+    },
+  ],
+  [
+    "lock_active_nutrient_registry_before_write",
+    {
+      ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
+      sourceSha256: "c10e7e9df6768e94416aba47afe5639ffa7b3abfe5d2a6486a61e229dbe995de",
+    },
+  ],
+  [
+    "lock_active_nutrient_registry_for_read",
+    {
+      arguments: "",
+      config: PINNED_AUTHORITY_SEARCH_PATH,
+      language: "sql",
+      leakproof: false,
+      parallel: "u",
+      resultType: "void",
+      securityDefiner: false,
+      sourceSha256: "22ab05f2e9749ecff7035e5188e1b9353d46533e7bc558748c76c43dbfc37ea5",
+      strict: false,
+      volatility: "v",
+    },
+  ],
+  [
+    "reconcile_recipe_components_v2",
+    {
+      ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
+      sourceSha256: "c82895a20dc837d80959a01991ede3dd1ab0f99ae48bec66984d4ea7368e720a",
     },
   ],
   [
@@ -444,6 +480,69 @@ const AUTHORITY_TRIGGER_POLICY = new Map([
         "CREATE TRIGGER food_source_release_reject_new_legacy_unbound BEFORE INSERT ON food_source_release FOR EACH ROW EXECUTE FUNCTION reject_new_legacy_unbound_catalogue_evidence()",
       functionName: "reject_new_legacy_unbound_catalogue_evidence",
       tableName: "food_source_release",
+    },
+  ],
+  [
+    "nutrient_active_vector_size_guard",
+    {
+      definition:
+        "CREATE CONSTRAINT TRIGGER nutrient_active_vector_size_guard AFTER INSERT OR UPDATE OF active ON nutrient DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION guard_active_nutrient_vector_size()",
+      functionName: "guard_active_nutrient_vector_size",
+      tableName: "nutrient",
+    },
+  ],
+  [
+    "nutrient_registry_lock_before_active_update",
+    {
+      definition:
+        "CREATE TRIGGER nutrient_registry_lock_before_active_update BEFORE DELETE OR UPDATE ON nutrient FOR EACH STATEMENT EXECUTE FUNCTION lock_active_nutrient_registry_before_write()",
+      functionName: "lock_active_nutrient_registry_before_write",
+      tableName: "nutrient",
+    },
+  ],
+  [
+    "nutrient_registry_lock_before_insert",
+    {
+      definition:
+        "CREATE TRIGGER nutrient_registry_lock_before_insert BEFORE INSERT ON nutrient FOR EACH STATEMENT EXECUTE FUNCTION lock_active_nutrient_registry_before_write()",
+      functionName: "lock_active_nutrient_registry_before_write",
+      tableName: "nutrient",
+    },
+  ],
+  [
+    "recipe_ingredient_reconcile_v2",
+    {
+      definition:
+        "CREATE CONSTRAINT TRIGGER recipe_ingredient_reconcile_v2 AFTER INSERT OR DELETE ON recipe_ingredient DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()",
+      functionName: "reconcile_recipe_components_v2",
+      tableName: "recipe_ingredient",
+    },
+  ],
+  [
+    "recipe_nutrient_reconcile_v2",
+    {
+      definition:
+        "CREATE CONSTRAINT TRIGGER recipe_nutrient_reconcile_v2 AFTER INSERT OR DELETE ON recipe_version_nutrient DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()",
+      functionName: "reconcile_recipe_components_v2",
+      tableName: "recipe_version_nutrient",
+    },
+  ],
+  [
+    "recipe_source_reconcile_v2",
+    {
+      definition:
+        "CREATE CONSTRAINT TRIGGER recipe_source_reconcile_v2 AFTER INSERT OR DELETE ON recipe_version_source DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()",
+      functionName: "reconcile_recipe_components_v2",
+      tableName: "recipe_version_source",
+    },
+  ],
+  [
+    "recipe_version_components_reconcile_v2",
+    {
+      definition:
+        "CREATE CONSTRAINT TRIGGER recipe_version_components_reconcile_v2 AFTER INSERT ON recipe_version DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()",
+      functionName: "reconcile_recipe_components_v2",
+      tableName: "recipe_version",
     },
   ],
 ]);
@@ -920,7 +1019,7 @@ function collectAuthorityFingerprint(run, options, database) {
       "where namespace_row.nspname = 'public'",
       ") type_policy",
     ]),
-    version: 7,
+    version: 8,
   };
   validateRestoreAuthorityEvidence(evidence, options.expectedOwner);
   const fingerprint = canonicalJson(evidence);
@@ -933,7 +1032,7 @@ function collectAuthorityFingerprint(run, options, database) {
 
 export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
   if (!SAFE_ROLE.test(expectedOwner)) throw new Error("Invalid expected PostgreSQL owner name");
-  if (!evidence || typeof evidence !== "object" || evidence.version !== 7) {
+  if (!evidence || typeof evidence !== "object" || evidence.version !== 8) {
     throw new Error("Database-authority fingerprint has an unsupported version");
   }
 

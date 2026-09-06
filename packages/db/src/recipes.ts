@@ -24,6 +24,7 @@ import {
 import { type Kysely, sql, type Transaction } from "kysely";
 
 import type { DiaryNutrientAggregateRecord, DiaryPortionInput } from "./diary.js";
+import { lockActiveNutrientRegistryForRead } from "./nutrient-registry-lock.js";
 import type { Database, JsonArray, JsonObject } from "./types.js";
 
 const MAX_INGREDIENTS = 50;
@@ -514,7 +515,7 @@ export async function loadRecipeDiaryFacts(
   ) {
     throw new RecipeNotFoundError();
   }
-  await sql`lock table nutrient in share mode`.execute(transaction);
+  await lockActiveNutrientRegistryForRead(transaction);
   const definitions = await loadDefinitions(transaction);
   const version = await loadRecipeVersionRow(transaction, input.userId, input.recipeVersionId);
   if (version.recipe_id !== input.recipeId) throw new RecipeNotFoundError();
@@ -609,7 +610,7 @@ async function materializeRecipe(
       .execute();
     if (roots.length !== nestedClosure.recipeIds.length) throw new RecipeNotFoundError();
   }
-  await sql`lock table nutrient in share mode`.execute(transaction);
+  await lockActiveNutrientRegistryForRead(transaction);
   const definitions = await loadDefinitions(transaction);
   const sourceByIdentity = new Map(
     sources.map((source) => [`${source.foodSourceId}:${source.releaseId}`, source]),

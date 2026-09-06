@@ -108,6 +108,29 @@ and revision-function lookups; it does not authorize direct non-owner DML.
 Fixed-purpose shared-table wrappers and a database-enforced writer/reader lock
 protocol remain prerequisites to runtime privilege profiles and caller cutover.
 
+Forward migration 0018 closes the active-nutrient-registry lock prerequisite
+without introducing a runtime role or elevated function. It attests the exact
+pre-migration writer and recipe-reconciliation functions plus their seven
+trigger bindings, creates a default-ACL `SECURITY INVOKER` shared-reader helper,
+replaces the recipe reconciler's broad table lock with that helper, and pins all
+four function search paths. The writer trigger now covers insert, every update,
+and delete, so changes to activation, display metadata, units, dimensions, or
+row existence serialize against diary, recipe, goal, custom-food, and catalogue
+materialization readers. Application readers use the same shared advisory key,
+and promotion acquires it after the per-source lock. Fixed-purpose shared-food
+and workflow wrappers remain required before non-owner runtime cutover.
+
+The supported protocol is deliberately narrower than arbitrary owner SQL:
+application transactions take the shared lock before entering the affected
+read/write chain. Direct owner recipe DML is unsupported because its row and
+foreign-key locks can precede the deferred reconciler. `TRUNCATE nutrient` and
+nutrient DDL are also outside the trigger protocol because PostgreSQL can take a
+table lock before firing a statement trigger. Maintenance must quiesce runtime
+callers and acquire the exclusive advisory key before any such table-locking
+statement. Generic recipe or truncate triggers must not be used as a shortcut;
+safe non-owner access requires the fixed-purpose wrappers and reviewed lock
+ordering described below.
+
 ### Bounded DEPLOY-0 policy and canary contract
 
 This ADR also accepts a bounded DEPLOY-0 source verifier for a canonical,
@@ -145,11 +168,11 @@ logins or grants these deployment memberships.
 The verifier requires `public` to be the only non-system schema and checks its
 exact ACLs, grantors, and `pg_database_owner` ownership; the exact database ACL;
 relation, type, default, and column ACL state; required owners; the versioned
-activation constraint; all 22 authority function signatures, executable
+activation constraint; all 26 authority function signatures, executable
 semantics, source hashes, ACLs, and expected configuration; every other public
-routine for unsafe ownership, explicit ACL, or `SECURITY DEFINER`; and the exact 24-trigger
-authority set, comprising the prior 20 triggers on six protected catalogue
-tables plus the four migration-0017 food/serving/barcode trigger bindings. It
+routine for unsafe ownership, explicit ACL, or `SECURITY DEFINER`; and the exact
+31-trigger authority set, comprising the prior 24 triggers plus migration-0018's
+three nutrient-registry and four recipe-reconciliation trigger bindings. It
 also checks the exact effective login
 allowlist, revoked `PUBLIC CONNECT`, safe role and login attributes, zero owned
 objects, the complete touched membership graph, effective table/column/sequence
@@ -197,8 +220,9 @@ required before database authority can be considered closed:
 
 1. Narrow stage, validate, promote-and-activate, and rollback functions that
    preserve the existing transactional and shared-table invariants, plus
-   fixed-purpose shared-food writers and a database-enforced lock protocol that
-   removes the current API/worker need for unrelated table mutation privilege.
+   fixed-purpose shared-food writers that participate in the now-enforced lock
+   protocol and remove the current API/worker need for unrelated table mutation
+   privilege.
 2. Deployment-specific login identities, short-lived or otherwise reviewed
    credentials, and an externally authenticated principal-to-login binding.
 3. API, worker, ingestion, migration, backup, and restore credential separation,
@@ -210,8 +234,10 @@ required before database authority can be considered closed:
    manifest, the forward migration-0015 activation-null constraint and corrected
    ACL, and migration-0016's two food-search function search paths plus exact
    source-eligibility trigger plus migration-0017's four function search paths
-   and exact food/serving/barcode trigger bindings, but it does not substitute
-   for deployed login separation or canaries through those real identities.
+   and exact food/serving/barcode trigger bindings plus migration-0018's four
+   nutrient-lock functions and seven trigger bindings, but it does not
+   substitute for deployed login separation or canaries through those real
+   identities.
 
 The bounded DEPLOY-0 implementation defines and locally proves the required
 policy, structural evidence, and canary behavior for item 5. It does not satisfy
@@ -236,12 +262,12 @@ not drop or recreate authority evidence in place.
   blocked.
 - Logical restore runs under an explicit expected owner, reapplies the pinned
   migration-0014 function/trigger, migration-0015 constraint/ACL, and
-  migration-0016 and migration-0017 food-search function/trigger policies. The
-  repair policy pins 20 hardened function identities and 19 exact trigger
-  bindings, and the canonical fingerprint covers the full 22-function,
-  24-trigger authority set. It
+  migration-0016 and migration-0017 food-search function/trigger policies plus
+  migration-0018's nutrient lock protocol. The repair policy pins 24 hardened
+  function identities and 26 exact trigger bindings, and the canonical
+  fingerprint covers the full 26-function, 31-trigger authority set. It
   requires the exact tracked filename/file-byte-SHA ledger from
-  `public.app_schema_migration` before `pg_dump`, then version-7 canonical
+  `public.app_schema_migration` before `pg_dump`, then version-8 canonical
   authority-fingerprint parity including column ACL state and each trigger's
   table schema while `PUBLIC CONNECT` remains revoked. Public-table triggers and
   every cross-schema binding of a dedicated public authority trigger function

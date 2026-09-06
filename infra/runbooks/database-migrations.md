@@ -123,6 +123,23 @@ per-user diary advisory and active-account row lock precede this chain. Reversin
 source/nutrient order can deadlock mapping registration with diary creation;
 locking days in caller order can deadlock opposing moves.
 
+Migration 0018 makes the nutrient-registry position a shared/exclusive advisory
+protocol instead of a broad table lock. Readers acquire the shared key before
+loading the active registry; nutrient inserts, every update, and deletes acquire
+the exclusive key through a pinned statement trigger. Catalogue promotion must
+retain `source -> nutrient registry` order. Never add a registry-dependent read
+before its shared lock or acquire a source lock after the registry lock.
+
+That protocol covers the reviewed transaction-based application paths, not
+arbitrary owner SQL. Do not issue direct owner recipe DML, `TRUNCATE nutrient`,
+or nutrient DDL while the application is running. PostgreSQL may acquire a
+table lock before a truncate/DDL trigger could acquire the advisory key, so a
+generic trigger is not a safe repair. A reviewed maintenance transaction must
+first quiesce runtime callers, then explicitly acquire the exclusive registry
+advisory key, and only then issue the table-locking statement. Fixed-purpose
+recipe/shared-food wrappers must lock their sorted sources before the shared
+registry key.
+
 Imported source-backed servings and nutrient facts may be inserted only while
 their release is `imported`. The insert guard locks and revalidates the
 source/food/version/release chain, so a child either commits before promotion or

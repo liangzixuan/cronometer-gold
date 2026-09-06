@@ -2093,9 +2093,7 @@ describeDatabase("account and append-only diary persistence", () => {
       });
       registryBlocker = database.transaction().execute(async (transaction) => {
         await sql`
-          select pg_advisory_xact_lock(
-            hashtext('nutrition-tracker:active-nutrient-registry:v1')
-          )
+          select ${sql.id(schemaName, "lock_active_nutrient_registry_for_read")}()
         `.execute(transaction);
         registryReady.resolve();
         await releaseRegistry.promise;
@@ -2142,13 +2140,6 @@ describeDatabase("account and append-only diary persistence", () => {
           .where("id", "=", catalogue.sourceId)
           .forUpdate()
           .executeTakeFirstOrThrow();
-        await sql`
-          select pg_advisory_xact_lock(
-            hashtext('nutrition-tracker:active-nutrient-registry:v1')
-          )
-        `.execute(transaction);
-        mappingSourceReady.resolve();
-        await continueMapping.promise;
         await transaction
           .insertInto("nutrient")
           .values({
@@ -2158,6 +2149,8 @@ describeDatabase("account and append-only diary persistence", () => {
             name: "Map Gamma",
           })
           .execute();
+        mappingSourceReady.resolve();
+        await continueMapping.promise;
       });
       await mappingSourceReady.promise;
       diaryOutcome = createFoodDiaryEntry(diaryWriter, {
@@ -2189,6 +2182,116 @@ describeDatabase("account and append-only diary persistence", () => {
       await firstWriter.destroy();
       await secondWriter.destroy();
       await diaryWriter.destroy();
+      await database.destroy();
+      await sql`drop schema ${sql.id(schemaName)} cascade`.execute(bootstrap);
+      await bootstrap.destroy();
+    }
+  }, 30_000);
+
+  it("serializes every nutrient update and delete behind concurrent registry readers", async () => {
+    if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
+    const bootstrap = createDatabase({ connectionString: databaseUrl, maxConnections: 1 });
+    const schemaName = `diary_registry_protocol_${randomBytes(6).toString("hex")}`;
+    await sql`create schema ${sql.id(schemaName)}`.execute(bootstrap);
+    const scopedUrl = new URL(databaseUrl);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName},public`);
+    const database = createDatabase({ connectionString: scopedUrl.toString(), maxConnections: 4 });
+    const namedDatabase = (applicationName: string) => {
+      const url = new URL(scopedUrl);
+      url.searchParams.set("application_name", applicationName);
+      return createDatabase({ connectionString: url.toString(), maxConnections: 1 });
+    };
+    const updateApplicationName = `registry-update-${randomBytes(6).toString("hex")}`;
+    const deleteApplicationName = `registry-delete-${randomBytes(6).toString("hex")}`;
+    const updateWriter = namedDatabase(updateApplicationName);
+    const deleteWriter = namedDatabase(deleteApplicationName);
+    const releaseFirstReader = deferred<void>();
+    const releaseSecondReader = deferred<void>();
+    const firstReaderReady = deferred<void>();
+    const secondReaderReady = deferred<void>();
+    let firstReader: Promise<void> | undefined;
+    let secondReader: Promise<void> | undefined;
+    let updateOutcome: Promise<unknown> | undefined;
+    let deleteOutcome: Promise<unknown> | undefined;
+    try {
+      await runMigrations(database);
+      await database
+        .insertInto("nutrient")
+        .values([
+          {
+            canonical_unit: "g",
+            code: "lock_update_probe",
+            dimension: "mass",
+            name: "Lock Update Probe",
+          },
+          {
+            active: false,
+            canonical_unit: "g",
+            code: "lock_delete_probe",
+            dimension: "mass",
+            name: "Lock Delete Probe",
+          },
+        ])
+        .execute();
+      firstReader = database.transaction().execute(async (transaction) => {
+        await sql`
+          select ${sql.id(schemaName, "lock_active_nutrient_registry_for_read")}()
+        `.execute(transaction);
+        firstReaderReady.resolve();
+        await releaseFirstReader.promise;
+      });
+      await firstReaderReady.promise;
+      secondReader = database.transaction().execute(async (transaction) => {
+        await sql`
+          select ${sql.id(schemaName, "lock_active_nutrient_registry_for_read")}()
+        `.execute(transaction);
+        secondReaderReady.resolve();
+        await releaseSecondReader.promise;
+      });
+      await settleWithin(secondReaderReady.promise, 2_000);
+
+      updateOutcome = updateWriter
+        .updateTable("nutrient")
+        .set({ display_order: 7 })
+        .where("code", "=", "lock_update_probe")
+        .executeTakeFirstOrThrow();
+      deleteOutcome = deleteWriter
+        .deleteFrom("nutrient")
+        .where("code", "=", "lock_delete_probe")
+        .executeTakeFirstOrThrow();
+      await Promise.all([
+        waitForApplicationLock(database, updateApplicationName),
+        waitForApplicationLock(database, deleteApplicationName),
+      ]);
+
+      releaseFirstReader.resolve();
+      await firstReader;
+      await Promise.all([
+        waitForApplicationLock(database, updateApplicationName),
+        waitForApplicationLock(database, deleteApplicationName),
+      ]);
+      releaseSecondReader.resolve();
+      await secondReader;
+      await settleWithin(Promise.all([updateOutcome, deleteOutcome]), 2_000);
+
+      expect(
+        await database
+          .selectFrom("nutrient")
+          .select(["code", "display_order"])
+          .where("code", "in", ["lock_update_probe", "lock_delete_probe"])
+          .orderBy("code")
+          .execute(),
+      ).toEqual([{ code: "lock_update_probe", display_order: 7 }]);
+    } finally {
+      releaseFirstReader.resolve();
+      releaseSecondReader.resolve();
+      await Promise.allSettled(
+        [firstReader, secondReader, updateOutcome, deleteOutcome].filter(
+          (value): value is Promise<unknown> => value !== undefined,
+        ),
+      );
+      await updateWriter.destroy();
+      await deleteWriter.destroy();
       await database.destroy();
       await sql`drop schema ${sql.id(schemaName)} cascade`.execute(bootstrap);
       await bootstrap.destroy();

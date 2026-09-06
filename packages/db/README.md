@@ -73,22 +73,40 @@ application-schema `SECURITY INVOKER` functions and their four ordinary enabled
 statement triggers, then pins each function to that trusted search path without
 changing its body, owner, ACL, or invoker status. It grants no runtime privilege
 and does not make direct non-owner DML safe. Fixed-purpose shared-table wrappers
-and a database-enforced lock protocol remain required before runtime privilege
-profiles or caller cutover.
+remain required before runtime privilege profiles or caller cutover.
+
+Forward migration 0018 closes the active-nutrient-registry lock prerequisite.
+It attests the exact existing writer and recipe-reconciliation functions plus
+seven trigger bindings, adds a default-ACL `SECURITY INVOKER` shared-reader
+helper, replaces the recipe reconciler's broad nutrient table lock, pins all
+four search paths, and expands the writer trigger to every update and delete.
+Diary, recipe, goal, custom-food, mapping, and catalogue materialization callers
+now use the same transaction-scoped advisory protocol. The migration adds no
+runtime role or elevated function; fixed-purpose shared-food and catalogue
+workflow wrappers are still required before non-owner cutover.
+
+The supported lock boundary is the reviewed transaction-based application
+paths. Arbitrary owner recipe DML may take row or foreign-key locks before the
+deferred reconciler and is not supported. `TRUNCATE nutrient` and nutrient DDL
+are likewise maintenance-only: quiesce runtime callers and acquire the
+exclusive registry advisory key before any table-locking statement. Do not add
+generic recipe or truncate triggers, which can invert the source/table and
+registry lock order; the fixed-purpose wrappers must preserve that order.
 
 Logical restores use the transactional policy in
 `restore/0014_catalogue_authority_policy.sql`. It pins the migration-0014
 function/trigger boundary plus the forward migration-0015 activation-null
 constraint and approval/guard-ACL corrections plus migration-0016's two
 food-search search paths and source-eligibility trigger plus migration-0017's
-four food/serving/barcode search paths and exact trigger bindings. That
-transactional repair policy pins 20 hardened function identities and 19 exact
+four food/serving/barcode search paths and exact trigger bindings plus
+migration-0018's four nutrient-lock functions and seven trigger bindings. That
+transactional repair policy pins 24 hardened function identities and 26 exact
 trigger bindings. The repository restore drill pins that file's SHA-256,
 requires an explicit expected owner, keeps `PUBLIC CONNECT` revoked, enforces
 an exact effective login allowlist, and requires the exact
 tracked filename/file-byte-SHA ledger in `public.app_schema_migration` before
 `pg_dump`. It ignores an owner-schema shadow, rechecks the source, corroborates
-the target, and compares a version-7 canonical
+the target, and compares a version-8 canonical
 role/schema/type/relation/column-ACL/function/trigger/authority-constraint
 fingerprint, including the independent non-NULL `pg_attribute.attacl` count,
 trigger table schemas, and every binding of a dedicated public authority
@@ -139,10 +157,10 @@ from the tracked migration files. It also requires `public` to be the only
 non-system schema and to be owned by `pg_database_owner`. It checks exact
 database/schema ACLs and grantors,
 relation/type/default/column ACL state and owners, the activation constraint,
-all 22 authority function hashes and executable semantics, safe authority on
-every other public routine, and the exact 24-trigger authority set: the prior 20
-on six protected catalogue tables plus the four migration-0017
-food/serving/barcode bindings. It also checks the exact effective-login allowlist, role attributes and
+all 26 authority function hashes and executable semantics, safe authority on
+every other public routine, and the exact 31-trigger authority set: the prior 24
+plus migration-0018's three nutrient-registry and four recipe-reconciliation
+bindings. It also checks the exact effective-login allowlist, role attributes and
 ownership, the complete membership graph, effective privileges, and seven
 unique expected sessions with no other target-database client. Eight zero-write
 canaries require `23503` for the three matching reviewers and `42501` for a

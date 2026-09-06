@@ -230,6 +230,14 @@ test("rejects an incomplete public ledger despite a complete owner-schema shadow
   assert.doesNotMatch(calls[0].at(-1) ?? "", /from app_schema_migration/);
 });
 
+test("tracks migration 0018 in the exact restore ledger", () => {
+  const migrationLedger = JSON.parse(TRACKED_MIGRATION_LEDGER_JSON);
+
+  assert.equal(migrationLedger.length, 18);
+  assert.equal(migrationLedger.at(-1)?.name, "0018_active_nutrient_registry_lock_protocol.sql");
+  assert.match(migrationLedger.at(-1)?.checksum ?? "", /^[0-9a-f]{64}$/u);
+});
+
 test("orchestration rejects public-ledger drift before creating a dump", () => {
   const { calls, run } = authorityEvidenceRunner(validAuthorityEvidence(), {
     publicMigrationLedger: "[]",
@@ -344,9 +352,9 @@ test("pins the validated 0015 activation-audit null constraint", () => {
   }
 });
 
-test("rejects authority fingerprints from the pre-trigger-schema evidence version", () => {
+test("rejects authority fingerprints from the pre-nutrient-lock evidence version", () => {
   const evidence = validAuthorityEvidence();
-  evidence.version = 6;
+  evidence.version = 7;
   assert.throws(
     () => validateRestoreAuthorityEvidence(evidence, expectedOwner),
     /unsupported version/,
@@ -519,6 +527,15 @@ test("pins every reviewed authority function and trigger", () => {
     /function set/,
   );
 
+  const missingNutrientReaderFunction = validAuthorityEvidence();
+  missingNutrientReaderFunction.functions = missingNutrientReaderFunction.functions.filter(
+    (entry) => entry.name !== "lock_active_nutrient_registry_for_read",
+  );
+  assert.throws(
+    () => validateRestoreAuthorityEvidence(missingNutrientReaderFunction, expectedOwner),
+    /function set/,
+  );
+
   const disabledTrigger = validAuthorityEvidence();
   disabledTrigger.triggers[0].enabled = "D";
   assert.throws(
@@ -552,6 +569,27 @@ test("pins every reviewed authority function and trigger", () => {
   assert.throws(
     () => validateRestoreAuthorityEvidence(missingImmutableTrigger, expectedOwner),
     /trigger set/,
+  );
+
+  const missingNutrientWriterTrigger = validAuthorityEvidence();
+  missingNutrientWriterTrigger.triggers = missingNutrientWriterTrigger.triggers.filter(
+    (entry) => entry.name !== "nutrient_registry_lock_before_active_update",
+  );
+  assert.throws(
+    () => validateRestoreAuthorityEvidence(missingNutrientWriterTrigger, expectedOwner),
+    /trigger set/,
+  );
+
+  const staleNutrientWriterTrigger = validAuthorityEvidence();
+  const nutrientWriterTrigger = staleNutrientWriterTrigger.triggers.find(
+    (entry) => entry.name === "nutrient_registry_lock_before_active_update",
+  );
+  if (!nutrientWriterTrigger) throw new Error("Nutrient writer trigger fixture is missing");
+  nutrientWriterTrigger.definition =
+    "CREATE TRIGGER nutrient_registry_lock_before_active_update BEFORE UPDATE OF active ON nutrient FOR EACH STATEMENT EXECUTE FUNCTION lock_active_nutrient_registry_before_write()";
+  assert.throws(
+    () => validateRestoreAuthorityEvidence(staleNutrientWriterTrigger, expectedOwner),
+    /trigger.*differs from policy/,
   );
 
   const extraProtectedTrigger = validAuthorityEvidence();
@@ -834,6 +872,8 @@ test("orchestration collects and rejects persistent foreign-schema authority bin
     /namespace_row\.nspname = 'public' or \( procedure_namespace\.nspname = 'public'/,
   );
   assert.match(triggerQuery ?? "", /enqueue_food_search_barcode_insert/);
+  assert.match(triggerQuery ?? "", /lock_active_nutrient_registry_before_write/);
+  assert.match(triggerQuery ?? "", /reconcile_recipe_components_v2/);
 });
 
 test("orchestration rejects explicit public column ACL state before dump creation", () => {
@@ -965,7 +1005,7 @@ function validAuthorityEvidence() {
         owner: expectedOwner,
       },
     ],
-    version: 7,
+    version: 8,
   };
 }
 
@@ -998,6 +1038,10 @@ function validAuthorityFunctions() {
     [
       "enqueue_food_search_serving_insert",
       "223f2d1dc8f90c6bc04c4d85ec763bcb50727473f5576b0bcdbbf394c1c9d804",
+    ],
+    [
+      "guard_active_nutrient_vector_size",
+      "24df72943bad96fc758d4a994ac2e8eaa18d9c9538ad117544abc4ccf4a22bda",
     ],
     [
       "guard_food_import_approval_authority",
@@ -1042,6 +1086,14 @@ function validAuthorityFunctions() {
     [
       "guard_new_food_source_release_authority",
       "93f189e2c097009ac1cbf1129ce10a24d0c7fd2e4cee66c2ea5cdbb1537462b3",
+    ],
+    [
+      "lock_active_nutrient_registry_before_write",
+      "c10e7e9df6768e94416aba47afe5639ffa7b3abfe5d2a6486a61e229dbe995de",
+    ],
+    [
+      "reconcile_recipe_components_v2",
+      "c82895a20dc837d80959a01991ede3dd1ab0f99ae48bec66984d4ea7368e720a",
     ],
     [
       "reject_new_legacy_unbound_catalogue_evidence",
@@ -1108,6 +1160,20 @@ function validAuthorityFunctions() {
       security_definer: false,
       strict: true,
       volatility: "i",
+    },
+    {
+      ...functionSemantics(
+        "22ab05f2e9749ecff7035e5188e1b9353d46533e7bc558748c76c43dbfc37ea5",
+        "void",
+      ),
+      acl: [acl("PUBLIC", "EXECUTE"), acl(expectedOwner, "EXECUTE")],
+      acl_is_default: true,
+      arguments: "",
+      config: ["search_path=pg_catalog, public, pg_temp"],
+      language: "sql",
+      name: "lock_active_nutrient_registry_for_read",
+      owner: expectedOwner,
+      security_definer: false,
     },
     ...triggerFunctions,
     {
@@ -1307,6 +1373,48 @@ function validAuthorityTriggers() {
       "food_source_release",
       "reject_new_legacy_unbound_catalogue_evidence",
       "CREATE TRIGGER food_source_release_reject_new_legacy_unbound BEFORE INSERT ON food_source_release FOR EACH ROW EXECUTE FUNCTION reject_new_legacy_unbound_catalogue_evidence()",
+    ],
+    [
+      "nutrient_active_vector_size_guard",
+      "nutrient",
+      "guard_active_nutrient_vector_size",
+      "CREATE CONSTRAINT TRIGGER nutrient_active_vector_size_guard AFTER INSERT OR UPDATE OF active ON nutrient DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION guard_active_nutrient_vector_size()",
+    ],
+    [
+      "nutrient_registry_lock_before_active_update",
+      "nutrient",
+      "lock_active_nutrient_registry_before_write",
+      "CREATE TRIGGER nutrient_registry_lock_before_active_update BEFORE DELETE OR UPDATE ON nutrient FOR EACH STATEMENT EXECUTE FUNCTION lock_active_nutrient_registry_before_write()",
+    ],
+    [
+      "nutrient_registry_lock_before_insert",
+      "nutrient",
+      "lock_active_nutrient_registry_before_write",
+      "CREATE TRIGGER nutrient_registry_lock_before_insert BEFORE INSERT ON nutrient FOR EACH STATEMENT EXECUTE FUNCTION lock_active_nutrient_registry_before_write()",
+    ],
+    [
+      "recipe_ingredient_reconcile_v2",
+      "recipe_ingredient",
+      "reconcile_recipe_components_v2",
+      "CREATE CONSTRAINT TRIGGER recipe_ingredient_reconcile_v2 AFTER INSERT OR DELETE ON recipe_ingredient DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()",
+    ],
+    [
+      "recipe_nutrient_reconcile_v2",
+      "recipe_version_nutrient",
+      "reconcile_recipe_components_v2",
+      "CREATE CONSTRAINT TRIGGER recipe_nutrient_reconcile_v2 AFTER INSERT OR DELETE ON recipe_version_nutrient DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()",
+    ],
+    [
+      "recipe_source_reconcile_v2",
+      "recipe_version_source",
+      "reconcile_recipe_components_v2",
+      "CREATE CONSTRAINT TRIGGER recipe_source_reconcile_v2 AFTER INSERT OR DELETE ON recipe_version_source DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()",
+    ],
+    [
+      "recipe_version_components_reconcile_v2",
+      "recipe_version",
+      "reconcile_recipe_components_v2",
+      "CREATE CONSTRAINT TRIGGER recipe_version_components_reconcile_v2 AFTER INSERT ON recipe_version DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()",
     ],
   ].map(([name, tableName, functionName, definition]) => ({
     definition,

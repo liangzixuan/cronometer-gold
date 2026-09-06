@@ -80,6 +80,13 @@ package boundaries.
   PostgreSQL does not independently recompute parser validation or authenticate
   reviewer identities. A production least-privilege role/function boundary is a
   live M0B prerequisite, not something this local gate proves.
+- Supported materialization reads and nutrient insert/update/delete writes use
+  the migration-0018 active-registry advisory protocol. Integration evidence
+  must prove that multiple readers coexist,
+  insert/update/delete writers wait, and a waiting reader observes the complete
+  committed generation. Deployment and restore evidence must match the four
+  pinned functions and seven exact trigger bindings; a broad nutrient table
+  lock or an `active`-only writer trigger is a regression.
 - The product renders unknown, trace, imputed, and label-rounded values distinctly.
 
 ## Local retention privacy drill

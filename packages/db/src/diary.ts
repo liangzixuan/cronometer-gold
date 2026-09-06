@@ -23,6 +23,7 @@ import {
   unknownNutrient,
 } from "@nutrition-tracker/domain";
 import { type Kysely, sql, type Transaction } from "kysely";
+import { lockActiveNutrientRegistryForRead } from "./nutrient-registry-lock.js";
 import {
   loadRecipeDiaryFacts,
   RecipeNotFoundError,
@@ -1311,13 +1312,14 @@ async function loadFoodFacts(
   } else if (requireEligible) {
     await lockFoodEligibility(transaction, foodVersionId);
   }
-  // The nutrient registry is intentionally small and bounded. A table SHARE
-  // lock gives this write one coherent active-definition generation and makes
+  // The nutrient registry is intentionally small and bounded. A shared
+  // advisory lock gives this write one coherent active-definition generation
+  // and makes
   // activation/deactivation commit either wholly before or wholly after the
   // immutable snapshot. Source-backed creates acquire the canonical catalogue
-  // locks first (source -> food -> version -> release -> nutrient) so source
-  // mapping registration cannot deadlock with diary logging.
-  await sql`lock table nutrient in share mode`.execute(transaction);
+  // locks first (source -> food -> version -> release -> nutrient registry) so
+  // source mapping registration cannot deadlock with diary logging.
+  await lockActiveNutrientRegistryForRead(transaction);
   const version =
     requireEligible && !isCustom
       ? await transaction

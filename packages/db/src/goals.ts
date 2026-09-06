@@ -15,6 +15,7 @@ import {
 import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 
 import { type DiaryNutrientAggregateRecord, readDiaryDaySnapshot } from "./diary.js";
+import { lockActiveNutrientRegistryForRead } from "./nutrient-registry-lock.js";
 import type {
   Database,
   JsonObject,
@@ -566,7 +567,7 @@ async function materializeGoal(
   targets: readonly NutritionGoalTargetInput[],
 ): Promise<MaterializedGoal> {
   validateRationale(energy.rationale);
-  await sql`lock table nutrient in share mode`.execute(transaction);
+  await lockActiveNutrientRegistryForRead(transaction);
   const targetRecords = await materializeTargets(transaction, targets);
   if (energy.mode === "fixed") {
     return {

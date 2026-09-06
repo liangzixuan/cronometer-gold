@@ -1694,6 +1694,338 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
       }
     }
   });
+
+  it("fails closed on unexpected nutrient-lock bindings before pinning the exact protocol", async () => {
+    if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
+    const bootstrap = createDatabase({ connectionString: databaseUrl, maxConnections: 1 });
+    const token = randomBytes(6).toString("hex");
+    const schemaName = `nutrient_lock_hardening_${token}`;
+    const hostileSchema = `nutrient_lock_hostile_${token}`;
+    const scopedUrl = new URL(databaseUrl);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName},public`);
+    const database = createDatabase({ connectionString: scopedUrl.toString(), maxConnections: 1 });
+    let schemaCreated = false;
+    let hostileSchemaCreated = false;
+
+    try {
+      await sql`create schema ${sql.id(schemaName)}`.execute(bootstrap);
+      schemaCreated = true;
+      await sql`create schema ${sql.id(hostileSchema)}`.execute(bootstrap);
+      hostileSchemaCreated = true;
+
+      const migrations = await discoverMigrations();
+      const hardeningIndex = migrations.findIndex(
+        (migration) => migration.name === "0018_active_nutrient_registry_lock_protocol.sql",
+      );
+      expect(hardeningIndex).toBeGreaterThan(0);
+      expect(migrations[hardeningIndex - 1]?.name).toBe(
+        "0017_food_search_projection_trigger_hardening.sql",
+      );
+      for (const migration of migrations.slice(0, hardeningIndex)) {
+        await sql.raw(migration.sql).execute(database);
+      }
+      const hardeningMigration = migrations[hardeningIndex];
+      if (!hardeningMigration) throw new Error("0018 hardening migration was not discovered");
+
+      const readFunctionState = async () =>
+        (
+          await sql<{
+            language_name: string;
+            name: string;
+            owner_name: string;
+            proacl: string[] | null;
+            proconfig: string[] | null;
+            security_mode: "definer" | "invoker";
+            source_sha256: string;
+          }>`
+            select
+              procedure_row.proname as name,
+              pg_catalog.pg_get_userbyid(procedure_row.proowner) as owner_name,
+              language_row.lanname as language_name,
+              procedure_row.proacl,
+              procedure_row.proconfig,
+              case when procedure_row.prosecdef then 'definer' else 'invoker' end
+                as security_mode,
+              pg_catalog.encode(
+                pg_catalog.sha256(pg_catalog.convert_to(procedure_row.prosrc, 'UTF8')),
+                'hex'
+              ) as source_sha256
+            from pg_catalog.pg_proc as procedure_row
+            join pg_catalog.pg_namespace as namespace_row
+              on namespace_row.oid = procedure_row.pronamespace
+            join pg_catalog.pg_language as language_row
+              on language_row.oid = procedure_row.prolang
+            where namespace_row.nspname = ${schemaName}
+              and procedure_row.proname in (
+                'guard_active_nutrient_vector_size',
+                'lock_active_nutrient_registry_before_write',
+                'lock_active_nutrient_registry_for_read',
+                'reconcile_recipe_components_v2'
+              )
+              and pg_catalog.pg_get_function_identity_arguments(procedure_row.oid) = ''
+            order by procedure_row.proname
+          `.execute(database)
+        ).rows;
+      const readTriggerState = async () =>
+        (
+          await sql<{
+            enabled: string;
+            function_name: string;
+            function_schema: string;
+            table_name: string;
+            table_schema: string;
+            trigger_definition: string;
+            trigger_name: string;
+          }>`
+            select
+              trigger_row.tgname as trigger_name,
+              table_namespace_row.nspname as table_schema,
+              class_row.relname as table_name,
+              procedure_namespace_row.nspname as function_schema,
+              procedure_row.proname as function_name,
+              trigger_row.tgenabled as enabled,
+              pg_catalog.pg_get_triggerdef(trigger_row.oid, true) as trigger_definition
+            from pg_catalog.pg_trigger as trigger_row
+            join pg_catalog.pg_proc as procedure_row
+              on procedure_row.oid = trigger_row.tgfoid
+            join pg_catalog.pg_namespace as procedure_namespace_row
+              on procedure_namespace_row.oid = procedure_row.pronamespace
+            join pg_catalog.pg_class as class_row
+              on class_row.oid = trigger_row.tgrelid
+            join pg_catalog.pg_namespace as table_namespace_row
+              on table_namespace_row.oid = class_row.relnamespace
+            where not trigger_row.tgisinternal
+              and table_namespace_row.nspname = ${schemaName}
+              and trigger_row.tgname in (
+                'nutrient_active_vector_size_guard',
+                'nutrient_registry_lock_before_active_update',
+                'nutrient_registry_lock_before_insert',
+                'recipe_ingredient_reconcile_v2',
+                'recipe_nutrient_reconcile_v2',
+                'recipe_source_reconcile_v2',
+                'recipe_version_components_reconcile_v2'
+              )
+            order by trigger_row.tgname
+          `.execute(database)
+        ).rows;
+
+      const preHardeningFunctions = await readFunctionState();
+      const preHardeningTriggers = await readTriggerState();
+      expect(preHardeningFunctions).toHaveLength(3);
+      expect(preHardeningFunctions.every((state) => state.proconfig === null)).toBe(true);
+      expect(preHardeningTriggers).toHaveLength(7);
+
+      await sql`
+        create table ${sql.id(hostileSchema)}.unexpected_nutrient_write (
+          active boolean not null
+        )
+      `.execute(database);
+      await sql`
+        create trigger unexpected_nutrient_writer_binding
+        before insert on ${sql.id(hostileSchema)}.unexpected_nutrient_write
+        for each statement execute function
+          ${sql.id(schemaName)}.lock_active_nutrient_registry_before_write()
+      `.execute(database);
+
+      await expectPostgresCode(
+        sql.raw(hardeningMigration.sql).execute(database),
+        "55000",
+        "active nutrient registry trigger identity or definition differs",
+      );
+      expect(await readFunctionState()).toEqual(preHardeningFunctions);
+      expect(await readTriggerState()).toEqual(preHardeningTriggers);
+      expect(
+        (
+          await sql<{ binding_count: number }>`
+            select pg_catalog.count(*)::integer as binding_count
+            from pg_catalog.pg_trigger as trigger_row
+            join pg_catalog.pg_class as class_row
+              on class_row.oid = trigger_row.tgrelid
+            join pg_catalog.pg_namespace as namespace_row
+              on namespace_row.oid = class_row.relnamespace
+            where not trigger_row.tgisinternal
+              and namespace_row.nspname = ${hostileSchema}
+              and trigger_row.tgname = 'unexpected_nutrient_writer_binding'
+          `.execute(database)
+        ).rows[0],
+      ).toEqual({ binding_count: 1 });
+
+      await sql`drop table ${sql.id(hostileSchema)}.unexpected_nutrient_write`.execute(database);
+      await sql.raw(hardeningMigration.sql).execute(database);
+
+      const tableOwner = (
+        await sql<{ owner_name: string }>`
+          select pg_catalog.pg_get_userbyid(class_row.relowner) as owner_name
+          from pg_catalog.pg_class as class_row
+          join pg_catalog.pg_namespace as namespace_row
+            on namespace_row.oid = class_row.relnamespace
+          where namespace_row.nspname = ${schemaName}
+            and class_row.relname = 'nutrient'
+        `.execute(database)
+      ).rows[0]?.owner_name;
+      if (!tableOwner) throw new Error("nutrient table owner was not returned");
+      const pinnedSearchPath = [`search_path=pg_catalog, ${schemaName}, pg_temp`];
+      expect(await readFunctionState()).toEqual([
+        {
+          language_name: "plpgsql",
+          name: "guard_active_nutrient_vector_size",
+          owner_name: tableOwner,
+          proacl: null,
+          proconfig: pinnedSearchPath,
+          security_mode: "invoker",
+          source_sha256: "24df72943bad96fc758d4a994ac2e8eaa18d9c9538ad117544abc4ccf4a22bda",
+        },
+        {
+          language_name: "plpgsql",
+          name: "lock_active_nutrient_registry_before_write",
+          owner_name: tableOwner,
+          proacl: null,
+          proconfig: pinnedSearchPath,
+          security_mode: "invoker",
+          source_sha256: "c10e7e9df6768e94416aba47afe5639ffa7b3abfe5d2a6486a61e229dbe995de",
+        },
+        {
+          language_name: "sql",
+          name: "lock_active_nutrient_registry_for_read",
+          owner_name: tableOwner,
+          proacl: null,
+          proconfig: pinnedSearchPath,
+          security_mode: "invoker",
+          source_sha256: "22ab05f2e9749ecff7035e5188e1b9353d46533e7bc558748c76c43dbfc37ea5",
+        },
+        {
+          language_name: "plpgsql",
+          name: "reconcile_recipe_components_v2",
+          owner_name: tableOwner,
+          proacl: null,
+          proconfig: pinnedSearchPath,
+          security_mode: "invoker",
+          source_sha256: "c82895a20dc837d80959a01991ede3dd1ab0f99ae48bec66984d4ea7368e720a",
+        },
+      ]);
+
+      expect(await readTriggerState()).toEqual([
+        {
+          enabled: "O",
+          function_name: "guard_active_nutrient_vector_size",
+          function_schema: schemaName,
+          table_name: "nutrient",
+          table_schema: schemaName,
+          trigger_definition:
+            "CREATE CONSTRAINT TRIGGER nutrient_active_vector_size_guard AFTER INSERT OR UPDATE OF active ON nutrient DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION guard_active_nutrient_vector_size()",
+          trigger_name: "nutrient_active_vector_size_guard",
+        },
+        {
+          enabled: "O",
+          function_name: "lock_active_nutrient_registry_before_write",
+          function_schema: schemaName,
+          table_name: "nutrient",
+          table_schema: schemaName,
+          trigger_definition:
+            "CREATE TRIGGER nutrient_registry_lock_before_active_update BEFORE DELETE OR UPDATE ON nutrient FOR EACH STATEMENT EXECUTE FUNCTION lock_active_nutrient_registry_before_write()",
+          trigger_name: "nutrient_registry_lock_before_active_update",
+        },
+        {
+          enabled: "O",
+          function_name: "lock_active_nutrient_registry_before_write",
+          function_schema: schemaName,
+          table_name: "nutrient",
+          table_schema: schemaName,
+          trigger_definition:
+            "CREATE TRIGGER nutrient_registry_lock_before_insert BEFORE INSERT ON nutrient FOR EACH STATEMENT EXECUTE FUNCTION lock_active_nutrient_registry_before_write()",
+          trigger_name: "nutrient_registry_lock_before_insert",
+        },
+        {
+          enabled: "O",
+          function_name: "reconcile_recipe_components_v2",
+          function_schema: schemaName,
+          table_name: "recipe_ingredient",
+          table_schema: schemaName,
+          trigger_definition:
+            "CREATE CONSTRAINT TRIGGER recipe_ingredient_reconcile_v2 AFTER INSERT OR DELETE ON recipe_ingredient DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()",
+          trigger_name: "recipe_ingredient_reconcile_v2",
+        },
+        {
+          enabled: "O",
+          function_name: "reconcile_recipe_components_v2",
+          function_schema: schemaName,
+          table_name: "recipe_version_nutrient",
+          table_schema: schemaName,
+          trigger_definition:
+            "CREATE CONSTRAINT TRIGGER recipe_nutrient_reconcile_v2 AFTER INSERT OR DELETE ON recipe_version_nutrient DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()",
+          trigger_name: "recipe_nutrient_reconcile_v2",
+        },
+        {
+          enabled: "O",
+          function_name: "reconcile_recipe_components_v2",
+          function_schema: schemaName,
+          table_name: "recipe_version_source",
+          table_schema: schemaName,
+          trigger_definition:
+            "CREATE CONSTRAINT TRIGGER recipe_source_reconcile_v2 AFTER INSERT OR DELETE ON recipe_version_source DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()",
+          trigger_name: "recipe_source_reconcile_v2",
+        },
+        {
+          enabled: "O",
+          function_name: "reconcile_recipe_components_v2",
+          function_schema: schemaName,
+          table_name: "recipe_version",
+          table_schema: schemaName,
+          trigger_definition:
+            "CREATE CONSTRAINT TRIGGER recipe_version_components_reconcile_v2 AFTER INSERT ON recipe_version DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()",
+          trigger_name: "recipe_version_components_reconcile_v2",
+        },
+      ]);
+
+      await sql`
+        create temporary table nutrient (
+          active boolean not null
+        ) on commit preserve rows
+      `.execute(database);
+      await sql`
+        insert into pg_temp.nutrient (active)
+        select true from pg_catalog.generate_series(1, 257)
+      `.execute(database);
+      await sql`set search_path = pg_temp, ${sql.id(schemaName)}, public`.execute(database);
+      await expect(
+        sql`
+          insert into ${sql.id(schemaName)}.nutrient (
+            code, name, canonical_unit, dimension
+          ) values (
+            ${`shadow_safe_${token}`}, 'Shadow-safe nutrient', 'g', 'mass'
+          )
+        `.execute(database),
+      ).resolves.toBeDefined();
+      expect(
+        (
+          await sql<{ application_count: number; shadow_count: number }>`
+            select
+              (select pg_catalog.count(*)::integer from ${sql.id(schemaName)}.nutrient)
+                as application_count,
+              (select pg_catalog.count(*)::integer from pg_temp.nutrient) as shadow_count
+          `.execute(database)
+        ).rows[0],
+      ).toEqual({ application_count: 1, shadow_count: 257 });
+    } finally {
+      try {
+        await database.destroy();
+      } finally {
+        try {
+          if (hostileSchemaCreated) {
+            await sql`drop schema ${sql.id(hostileSchema)} cascade`.execute(bootstrap);
+          }
+        } finally {
+          try {
+            if (schemaCreated) {
+              await sql`drop schema ${sql.id(schemaName)} cascade`.execute(bootstrap);
+            }
+          } finally {
+            await bootstrap.destroy();
+          }
+        }
+      }
+    }
+  });
 });
 
 async function recordApproval(
