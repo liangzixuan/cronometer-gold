@@ -521,8 +521,12 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
       join pg_catalog.pg_namespace as namespace_row
         on namespace_row.oid = class_row.relnamespace
       where namespace_row.nspname = ${policy.applicationSchema}
-        and constraint_row.conname =
-          'food_source_release_activation_expand_audit_null_check'
+        and constraint_row.conname in (
+          'food_import_batch_materialization_contract_check',
+          'food_import_batch_promotable_contract_check',
+          'food_import_record_validated_food_contract_check',
+          'food_source_release_activation_database_authority_check'
+        )
       order by class_row.relname, constraint_row.conname
     `.execute(database)
   ).rows.map((row) => ({
@@ -531,6 +535,120 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
     name: row.name,
     tableName: row.table_name,
     validated: row.validated,
+  }));
+
+  const authorityFrozenColumns = (
+    await sql<{
+      readonly column_name: string;
+      readonly data_type: string;
+      readonly default_expression: string | null;
+      readonly not_null: boolean;
+      readonly schema_name: string;
+      readonly table_name: string;
+    }>`
+      select
+        namespace_row.nspname as schema_name,
+        class_row.relname as table_name,
+        attribute_row.attname as column_name,
+        pg_catalog.format_type(attribute_row.atttypid, attribute_row.atttypmod) as data_type,
+        attribute_row.attnotnull as not_null,
+        pg_catalog.pg_get_expr(default_row.adbin, default_row.adrelid, true) as default_expression
+      from pg_catalog.pg_attribute as attribute_row
+      join pg_catalog.pg_class as class_row
+        on class_row.oid = attribute_row.attrelid
+      join pg_catalog.pg_namespace as namespace_row
+        on namespace_row.oid = class_row.relnamespace
+      left join pg_catalog.pg_attrdef as default_row
+        on default_row.adrelid = attribute_row.attrelid
+        and default_row.adnum = attribute_row.attnum
+      where namespace_row.nspname = ${policy.applicationSchema}
+        and (
+          (class_row.relname = 'food_import_batch' and attribute_row.attname in (
+            'nutrient_mapping_digest',
+            'nutrient_mapping_revision_ids',
+            'validated_food_contract_version'
+          ))
+          or (class_row.relname = 'food_import_record' and attribute_row.attname in (
+            'validated_food_contract_version',
+            'validated_food_document',
+            'validated_food_sha256'
+          ))
+        )
+      order by class_row.relname, attribute_row.attname
+    `.execute(database)
+  ).rows.map((row) => ({
+    columnName: row.column_name,
+    dataType: row.data_type,
+    defaultExpression: row.default_expression,
+    notNull: row.not_null,
+    schemaName: row.schema_name,
+    tableName: row.table_name,
+  }));
+
+  const authorityIndexes = (
+    await sql<{
+      readonly access_method: string;
+      readonly definition: string;
+      readonly is_primary: boolean;
+      readonly is_ready: boolean;
+      readonly is_unique: boolean;
+      readonly is_valid: boolean;
+      readonly key_attribute_count: number;
+      readonly key_expression: string;
+      readonly name: string;
+      readonly owner: string;
+      readonly predicate: string | null;
+      readonly schema_name: string;
+      readonly table_name: string;
+      readonly total_attribute_count: number;
+    }>`
+      select
+        namespace_row.nspname as schema_name,
+        table_row.relname as table_name,
+        index_row.relname as name,
+        pg_catalog.pg_get_userbyid(index_row.relowner) as owner,
+        access_method.amname as access_method,
+        index_metadata.indisunique as is_unique,
+        index_metadata.indisprimary as is_primary,
+        index_metadata.indisvalid as is_valid,
+        index_metadata.indisready as is_ready,
+        index_metadata.indnkeyatts::integer as key_attribute_count,
+        index_metadata.indnatts::integer as total_attribute_count,
+        pg_catalog.pg_get_indexdef(index_metadata.indexrelid, 1, true) as key_expression,
+        pg_catalog.pg_get_expr(
+          index_metadata.indpred,
+          index_metadata.indrelid,
+          true
+        ) as predicate,
+        pg_catalog.pg_get_indexdef(index_metadata.indexrelid) as definition
+      from pg_catalog.pg_index as index_metadata
+      join pg_catalog.pg_class as index_row
+        on index_row.oid = index_metadata.indexrelid
+      join pg_catalog.pg_class as table_row
+        on table_row.oid = index_metadata.indrelid
+      join pg_catalog.pg_namespace as namespace_row
+        on namespace_row.oid = table_row.relnamespace
+      join pg_catalog.pg_am as access_method
+        on access_method.oid = index_row.relam
+      where namespace_row.nspname = ${policy.applicationSchema}
+        and index_row.relname = 'food_source_release_activation_import_batch_unique'
+      order by namespace_row.nspname, table_row.relname, index_row.relname
+    `.execute(database)
+  ).rows.map((row) => ({
+    accessMethod: row.access_method,
+    definition: row.definition,
+    isPrimary: row.is_primary,
+    isReady: row.is_ready,
+    isUnique: row.is_unique,
+    isValid: row.is_valid,
+    keyAttributeCount: row.key_attribute_count,
+    keyExpression: row.key_expression,
+    name: row.name,
+    owner: row.owner,
+    predicate: row.predicate,
+    schemaName: row.schema_name,
+    tableName: row.table_name,
+    totalAttributeCount: row.total_attribute_count,
   }));
 
   const protectedNames = [
@@ -805,9 +923,11 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
       readonly function_schema: string;
       readonly name: string;
       readonly table_name: string;
+      readonly table_schema: string;
     }>`
       select
         trigger_row.tgname as name,
+        namespace_row.nspname as table_schema,
         class_row.relname as table_name,
         procedure_namespace.nspname as function_schema,
         procedure_row.proname as function_name,
@@ -840,7 +960,12 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
             and pg_catalog.pg_get_function_identity_arguments(procedure_row.oid) = ''
           )
         )
-      order by trigger_row.tgname, class_row.relname, procedure_row.proname
+      order by
+        trigger_row.tgname,
+        namespace_row.nspname,
+        class_row.relname,
+        procedure_namespace.nspname,
+        procedure_row.proname
     `.execute(database)
   ).rows.map((row) => ({
     definition: row.definition,
@@ -850,6 +975,7 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
     functionSchema: row.function_schema,
     name: row.name,
     tableName: row.table_name,
+    tableSchema: row.table_schema,
   }));
 
   const roleByName = new Map(roleRows.map((role) => [role.rolname, role]));
@@ -913,6 +1039,8 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
       publicCreate: schemaRow.public_create,
     },
     authorityConstraints,
+    authorityFrozenColumns,
+    authorityIndexes,
     capabilityRoles,
     columnAcls,
     database: {
@@ -932,7 +1060,7 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
     nonSystemSchemas,
     policySha256: catalogueAuthorityDeploymentPolicySha256(policy),
     relations,
-    schemaVersion: 1,
+    schemaVersion: 3,
     triggers,
     types,
   };
@@ -1043,7 +1171,7 @@ export async function runCatalogueReviewerCanaries(
     beforeStructureSha256: catalogueAuthorityDeploymentStructureSha256(before),
     policySha256: catalogueAuthorityDeploymentPolicySha256(policy),
     results,
-    schemaVersion: 1,
+    schemaVersion: 3,
     structure,
   };
   assertCatalogueAuthorityCanaryEvidence(policy, evidence);

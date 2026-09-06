@@ -4,6 +4,7 @@ import { type Kysely, sql, type Transaction } from "kysely";
 import { describe, expect, it } from "vitest";
 
 import {
+  canonicalJson,
   claimFoodSearchRebuildEvents,
   consumeFoodSearchProjectionSnapshot,
   createDatabase,
@@ -18,6 +19,7 @@ import {
   rollbackSourceRelease,
   runMigrations,
   searchPromotedFoodsPostgres,
+  sha256CanonicalJson,
   withFoodSearchRebuildLock,
 } from "../src/index.js";
 
@@ -353,6 +355,7 @@ describeDatabase("promoted food-search projection", () => {
               reason: "Exercise a concurrent search snapshot rollback",
               sourceCode: fixture.sourceCode,
               targetReleaseId: fixture.supersededReleaseId,
+              trustedSchema: schemaName,
             });
           }
         },
@@ -556,6 +559,7 @@ describeDatabase("promoted food-search projection", () => {
         reason: "Exercise search fail-closed deactivation",
         sourceCode: fixture.sourceCode,
         targetReleaseId: null,
+        trustedSchema: schemaName,
       });
       expect(await getFoodSearchProjectionPublicationState(database)).toMatchObject({
         isCurrent: false,
@@ -654,7 +658,7 @@ async function seedSearchCatalogue(database: Kysely<Database>): Promise<SearchFi
       .executeTakeFirstOrThrow();
     const supersededReleaseId = await insertRelease(transaction, source.id, "release-1", "1");
     const modernReleaseId = await insertRelease(transaction, source.id, "release-2", "2");
-    const supersededBatchId = await insertCompletedBatch(
+    const supersededBatchId = await insertPromotingBatch(
       transaction,
       source.id,
       supersededReleaseId,
@@ -662,7 +666,7 @@ async function seedSearchCatalogue(database: Kysely<Database>): Promise<SearchFi
       "1",
       1,
     );
-    const modernBatchId = await insertCompletedBatch(
+    const modernBatchId = await insertPromotingBatch(
       transaction,
       source.id,
       modernReleaseId,
@@ -676,6 +680,7 @@ async function seedSearchCatalogue(database: Kysely<Database>): Promise<SearchFi
       batchId: supersededBatchId,
       dataQuality: "verified",
       foodId: sharedFood,
+      kind: "generic",
       languageTag: "en-US",
       marketCode: "US",
       name: "Heritage Rolled Oatmeal",
@@ -696,6 +701,7 @@ async function seedSearchCatalogue(database: Kysely<Database>): Promise<SearchFi
       batchId: modernBatchId,
       dataQuality: "verified",
       foodId: sharedFood,
+      kind: "generic",
       languageTag: "en-US",
       marketCode: "US",
       name: "Modern Steel Cut Oatmeal",
@@ -735,6 +741,7 @@ async function seedSearchCatalogue(database: Kysely<Database>): Promise<SearchFi
       brandName: "World Pantry",
       dataQuality: "curated",
       foodId: globalFood,
+      kind: "branded",
       languageTag: "en",
       marketCode: "001",
       name: "Global Protein Oatmeal",
@@ -758,6 +765,7 @@ async function seedSearchCatalogue(database: Kysely<Database>): Promise<SearchFi
       brandName: "Home Pantry",
       dataQuality: "verified",
       foodId: usFood,
+      kind: "branded",
       languageTag: "en-US",
       marketCode: "US",
       name: "United States Protein Oatmeal",
@@ -785,6 +793,7 @@ async function seedSearchCatalogue(database: Kysely<Database>): Promise<SearchFi
       batchId: modernBatchId,
       dataQuality: "quarantined",
       foodId: quarantinedFood,
+      kind: "generic",
       languageTag: "en-US",
       marketCode: "US",
       name: "Forbidden Quarantine Oatmeal",
@@ -793,6 +802,9 @@ async function seedSearchCatalogue(database: Kysely<Database>): Promise<SearchFi
       sourceFoodKey: "quarantined-oatmeal",
       versionNumber: 1,
     });
+
+    await completeBatch(transaction, supersededBatchId, 1);
+    await completeBatch(transaction, modernBatchId, 4);
 
     await transaction
       .updateTable("food_source_release")
@@ -854,7 +866,7 @@ async function insertRelease(
   ).id;
 }
 
-async function insertCompletedBatch(
+async function insertPromotingBatch(
   transaction: Transaction<Database>,
   sourceId: string,
   releaseId: string,
@@ -892,8 +904,11 @@ async function insertCompletedBatch(
   await transaction
     .updateTable("food_import_batch")
     .set({
+      nutrient_mapping_digest: sha256CanonicalJson([]),
+      nutrient_mapping_revision_ids: sql`'[]'::jsonb`,
       status: "ready",
       validated_at: "2026-08-15T12:30:00Z",
+      validated_food_contract_version: 1,
       validation_digest: "d".repeat(64),
     })
     .where("id", "=", batch.id)
@@ -903,16 +918,23 @@ async function insertCompletedBatch(
     .set({ release_id: releaseId, status: "promoting" })
     .where("id", "=", batch.id)
     .execute();
+  return batch.id;
+}
+
+async function completeBatch(
+  transaction: Transaction<Database>,
+  batchId: string,
+  materializedCount: number,
+): Promise<void> {
   await transaction
     .updateTable("food_import_batch")
     .set({
       completed_at: "2026-08-15T13:00:00Z",
-      materialized_count: recordCount,
+      materialized_count: materializedCount,
       status: "completed",
     })
-    .where("id", "=", batch.id)
+    .where("id", "=", batchId)
     .execute();
-  return batch.id;
 }
 
 async function insertFood(
@@ -942,6 +964,7 @@ interface InsertVersionInput {
   readonly brandName?: string;
   readonly dataQuality: "curated" | "quarantined" | "verified";
   readonly foodId: string;
+  readonly kind: "branded" | "generic";
   readonly languageTag: string;
   readonly marketCode: string;
   readonly name: string;
@@ -982,22 +1005,61 @@ async function insertVersion(
     .set({ archived_at: null, current_version_id: version.id })
     .where("id", "=", input.foodId)
     .execute();
-  await transaction
+  const validatedFood = {
+    attributes: {
+      idempotencyKey: `${input.sourceFoodKey}:${input.versionNumber}`,
+      sourcePayloadSha256: "c".repeat(64),
+      unlistedNutrientPolicy: "unknown_not_reported",
+    },
+    basisQuantity: "100",
+    brandName: input.brandName ?? null,
+    description: `${input.name} description`,
+    gtin: null,
+    kind: input.kind,
+    languageTag: input.languageTag,
+    marketCode: input.marketCode,
+    name: input.name,
+    normalizedName: input.name.toLowerCase(),
+    nutrients: [],
+    servings: [],
+    sourceDataType: "fixture",
+    sourceFoodKey: input.sourceFoodKey,
+    sourceModifiedAt: "2026-08-15T00:00:00Z",
+  };
+  const validatedFoodDocument = canonicalJson(validatedFood);
+  const record = await transaction
     .insertInto("food_import_record")
     .values({
       batch_id: input.batchId,
       canonical_payload: { fixture: true, name: input.name },
       canonical_payload_sha256: "b".repeat(64),
-      food_version_id: version.id,
-      materialized_at: "2026-08-15T13:00:00Z",
       sequence_number: input.sequenceNumber,
       source_payload_sha256: "c".repeat(64),
       source_record_key: `${input.sourceFoodKey}:${input.versionNumber}`,
       source_record_type: "fixture",
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow();
+  await transaction
+    .updateTable("food_import_record")
+    .set({
       validated_at: "2026-08-15T12:30:00Z",
+      validated_food_contract_version: 1,
+      validated_food_document: validatedFoodDocument,
+      validated_food_sha256: sha256CanonicalJson(validatedFood),
       validation_issues: sql`'[]'::jsonb`,
+      validation_status: "valid",
+    })
+    .where("id", "=", record.id)
+    .execute();
+  await transaction
+    .updateTable("food_import_record")
+    .set({
+      food_version_id: version.id,
+      materialized_at: "2026-08-15T13:00:00Z",
       validation_status: "materialized",
     })
+    .where("id", "=", record.id)
     .execute();
   return version.id;
 }

@@ -1,4 +1,4 @@
--- Versioned post-restore policy for catalogue authority migrations 0014-0018.
+-- Versioned post-restore policy for catalogue authority migrations 0014-0019.
 --
 -- Logical restores deliberately use --no-owner --no-privileges. Run this only
 -- against a new isolated nutrition_restore_* database while PUBLIC CONNECT is
@@ -16,6 +16,7 @@ do $policy$
 declare
   acl_grantee oid;
   acl_grantee_name name;
+  activation_guard_function oid;
   approval_function oid;
   approval_guard_function oid;
   capability_role text;
@@ -25,6 +26,8 @@ declare
     true
   );
   expected_owner_oid oid;
+  promotion_function oid;
+  rollback_function oid;
   target_schema constant name := 'public';
 begin
   if pg_catalog.current_database() !~ '^nutrition_restore_[a-z0-9_]{1,45}$' then
@@ -198,43 +201,171 @@ begin
       using errcode = '42883';
   end if;
 
-  -- Pin the forward 0015 EXPAND guard as known-good authority policy, not
-  -- merely source/target parity.
+  select pg_catalog.to_regprocedure(
+    'public.catalogue_promote_import_batch(uuid,text,text)'
+  )
+  into promotion_function;
+  select pg_catalog.to_regprocedure(
+    'public.catalogue_rollback_source_release(text,uuid,text,text)'
+  )
+  into rollback_function;
+  select pg_catalog.to_regprocedure(
+    'public.guard_food_source_release_activation_authority()'
+  )
+  into activation_guard_function;
+  if promotion_function is null
+    or rollback_function is null
+    or activation_guard_function is null then
+    raise exception 'catalogue promotion, rollback, or activation-guard authority function is absent'
+      using errcode = '42883';
+  end if;
+
+  -- Pin the complete frozen-materialization and activation CHECK boundary as
+  -- known-good authority policy, not merely source/target parity.
   if (
     select pg_catalog.count(*)
     from pg_catalog.pg_constraint as constraint_row
-    join pg_catalog.pg_class as class_row
-      on class_row.oid = constraint_row.conrelid
     join pg_catalog.pg_namespace as namespace_row
-      on namespace_row.oid = class_row.relnamespace
+      on namespace_row.oid = constraint_row.connamespace
     where namespace_row.nspname = target_schema
-      and class_row.relname = 'food_source_release_activation'
-      and constraint_row.conname =
-        'food_source_release_activation_expand_audit_null_check'
-  ) <> 1 or exists (
-    select 1
-    from pg_catalog.pg_constraint as constraint_row
-    join pg_catalog.pg_class as class_row
-      on class_row.oid = constraint_row.conrelid
-    join pg_catalog.pg_namespace as namespace_row
-      on namespace_row.oid = class_row.relnamespace
-    where namespace_row.nspname = target_schema
-      and class_row.relname = 'food_source_release_activation'
-      and constraint_row.conname =
-        'food_source_release_activation_expand_audit_null_check'
-      and (
-        constraint_row.contype <> 'c'
-        or not constraint_row.convalidated
-        or pg_catalog.pg_get_constraintdef(constraint_row.oid, true) <>
-          'CHECK (database_principal IS NULL AND database_capability_role IS NULL)'
+      and constraint_row.conname in (
+        'food_import_batch_materialization_contract_check',
+        'food_import_batch_promotable_contract_check',
+        'food_import_record_validated_food_contract_check',
+        'food_source_release_activation_database_authority_check'
       )
+  ) <> 4 or exists (
+    select 1
+    from (
+      values
+        (
+          'food_import_batch'::text,
+          'food_import_batch_materialization_contract_check'::text,
+          $constraint$CHECK ((validated_food_contract_version IS NULL AND nutrient_mapping_digest IS NULL AND nutrient_mapping_revision_ids IS NULL OR validated_food_contract_version = 1 AND nutrient_mapping_digest ~ '^[0-9a-f]{64}$'::text AND jsonb_typeof(nutrient_mapping_revision_ids) = 'array'::text AND validated_at IS NOT NULL) IS TRUE)$constraint$::text
+        ),
+        (
+          'food_import_batch',
+          'food_import_batch_promotable_contract_check',
+          $constraint$CHECK (((status <> ALL (ARRAY['ready'::text, 'promoting'::text])) OR validated_food_contract_version = 1 AND nutrient_mapping_digest IS NOT NULL AND nutrient_mapping_revision_ids IS NOT NULL) IS TRUE)$constraint$
+        ),
+        (
+          'food_import_record',
+          'food_import_record_validated_food_contract_check',
+          $constraint$CHECK ((validated_food_document IS NULL AND validated_food_sha256 IS NULL AND validated_food_contract_version IS NULL AND (validation_status = ANY (ARRAY['pending'::text, 'quarantined'::text, 'valid'::text, 'materialized'::text])) OR validated_food_document IS NOT NULL AND validated_food_sha256 ~ '^[0-9a-f]{64}$'::text AND validated_food_contract_version = 1 AND (validation_status = ANY (ARRAY['valid'::text, 'materialized'::text])) AND jsonb_typeof(validated_food_document::jsonb) = 'object'::text AND validated_food_sha256 = encode(sha256(convert_to(validated_food_document, 'UTF8'::name)), 'hex'::text)) IS TRUE)$constraint$
+        ),
+        (
+          'food_source_release_activation',
+          'food_source_release_activation_database_authority_check',
+          $constraint$CHECK ((database_principal IS NULL AND database_capability_role IS NULL OR database_principal IS NOT NULL AND database_capability_role IS NOT NULL AND octet_length(database_principal) >= 1 AND octet_length(database_principal) <= 63 AND database_capability_role =
+CASE
+    WHEN import_batch_id IS NOT NULL AND operation = 'activate'::text THEN 'nutrition_catalogue_promote_activate'::text
+    WHEN import_batch_id IS NULL AND (operation = ANY (ARRAY['deactivate'::text, 'rollback'::text])) THEN 'nutrition_catalogue_rollback'::text
+    ELSE NULL::text
+END) IS TRUE)$constraint$
+        )
+    ) as expected(table_name, constraint_name, definition)
+    left join pg_catalog.pg_namespace as namespace_row
+      on namespace_row.nspname = target_schema
+    left join pg_catalog.pg_class as class_row
+      on class_row.relnamespace = namespace_row.oid
+      and class_row.relname = expected.table_name
+    left join pg_catalog.pg_constraint as constraint_row
+      on constraint_row.conrelid = class_row.oid
+      and constraint_row.conname = expected.constraint_name
+    where constraint_row.oid is null
+      or constraint_row.contype <> 'c'
+      or not constraint_row.convalidated
+      or pg_catalog.pg_get_constraintdef(constraint_row.oid, true) <> expected.definition
   ) then
-    raise exception 'catalogue activation authority constraint differs from the forward 0015 policy'
+    raise exception 'catalogue frozen-materialization or activation constraint differs from the forward 0019 policy'
       using errcode = '55000';
   end if;
 
-  -- Pin every function whose search_path migrations 0014, 0016, 0017, and
-  -- 0018 hardened. The exact identity and executable body are policy, not
+  if exists (
+    select 1
+    from (
+      values
+        ('food_import_batch'::text, 'nutrient_mapping_digest'::text, 'text'::text, false, null::text),
+        ('food_import_batch', 'nutrient_mapping_revision_ids', 'jsonb', false, null::text),
+        ('food_import_batch', 'validated_food_contract_version', 'smallint', false, null::text),
+        ('food_import_record', 'validated_food_contract_version', 'smallint', false, null::text),
+        ('food_import_record', 'validated_food_document', 'text', false, null::text),
+        ('food_import_record', 'validated_food_sha256', 'text', false, null::text)
+    ) as expected(table_name, column_name, data_type, not_null, default_expression)
+    left join pg_catalog.pg_namespace as namespace_row
+      on namespace_row.nspname = target_schema
+    left join pg_catalog.pg_class as class_row
+      on class_row.relnamespace = namespace_row.oid
+      and class_row.relname = expected.table_name
+    left join pg_catalog.pg_attribute as attribute_row
+      on attribute_row.attrelid = class_row.oid
+      and attribute_row.attname = expected.column_name
+      and attribute_row.attnum > 0
+      and not attribute_row.attisdropped
+    left join pg_catalog.pg_attrdef as default_row
+      on default_row.adrelid = attribute_row.attrelid
+      and default_row.adnum = attribute_row.attnum
+    where attribute_row.attnum is null
+      or pg_catalog.format_type(attribute_row.atttypid, attribute_row.atttypmod) <>
+        expected.data_type
+      or attribute_row.attnotnull is distinct from expected.not_null
+      or pg_catalog.pg_get_expr(default_row.adbin, default_row.adrelid, true)
+        is distinct from expected.default_expression
+  ) then
+    raise exception 'catalogue frozen-materialization column identity differs from the forward 0019 policy'
+      using errcode = '55000';
+  end if;
+
+  if (
+    select pg_catalog.count(*)
+    from pg_catalog.pg_class as index_row
+    join pg_catalog.pg_namespace as namespace_row
+      on namespace_row.oid = index_row.relnamespace
+    where namespace_row.nspname = target_schema
+      and index_row.relname =
+        'food_source_release_activation_import_batch_unique'
+      and index_row.relkind = 'i'
+  ) <> 1 or exists (
+    select 1
+    from pg_catalog.pg_index as index_metadata
+    join pg_catalog.pg_class as index_row
+      on index_row.oid = index_metadata.indexrelid
+    join pg_catalog.pg_class as table_row
+      on table_row.oid = index_metadata.indrelid
+    join pg_catalog.pg_namespace as namespace_row
+      on namespace_row.oid = table_row.relnamespace
+    join pg_catalog.pg_am as access_method
+      on access_method.oid = index_row.relam
+    where namespace_row.nspname = target_schema
+      and index_row.relname =
+        'food_source_release_activation_import_batch_unique'
+      and (
+        table_row.relname <> 'food_source_release_activation'
+        or index_row.relowner <> expected_owner_oid
+        or access_method.amname <> 'btree'
+        or not index_metadata.indisunique
+        or index_metadata.indisprimary
+        or not index_metadata.indisvalid
+        or not index_metadata.indisready
+        or index_metadata.indnkeyatts <> 1
+        or index_metadata.indnatts <> 1
+        or pg_catalog.pg_get_indexdef(index_metadata.indexrelid, 1, true) <>
+          'import_batch_id'
+        or pg_catalog.pg_get_expr(
+          index_metadata.indpred,
+          index_metadata.indrelid,
+          true
+        ) is distinct from 'import_batch_id IS NOT NULL'
+        or pg_catalog.pg_get_indexdef(index_metadata.indexrelid) <>
+          'CREATE UNIQUE INDEX food_source_release_activation_import_batch_unique ON public.food_source_release_activation USING btree (import_batch_id) WHERE (import_batch_id IS NOT NULL)'
+      )
+  ) then
+    raise exception 'catalogue activation import-batch unique index differs from the forward 0019 policy'
+      using errcode = '55000';
+  end if;
+
+  -- Pin the complete authority function boundary through migration 0019.
+  -- Exact identity, executable body, and search_path are policy, not
   -- merely source/target parity.
   if (
     select pg_catalog.count(*)
@@ -245,67 +376,89 @@ begin
       and procedure_row.proname in (
         'advance_food_search_projection_revision',
         'catalogue_evidence_bundle_uri_is_valid',
+        'catalogue_promote_import_batch',
         'catalogue_record_import_approval',
+        'catalogue_rollback_source_release',
         'enqueue_food_search_barcode_insert',
         'enqueue_food_search_barcode_update',
         'enqueue_food_search_food_eligibility_change',
         'enqueue_food_search_serving_insert',
         'enqueue_food_search_source_eligibility_change',
         'guard_active_nutrient_vector_size',
+        'guard_custom_food_child_insert_v3',
+        'guard_custom_food_immutable_evidence_v3',
+        'guard_food_barcode_validity_update',
         'guard_food_import_approval_authority',
         'guard_food_import_batch_initial_state',
         'guard_food_import_batch_update',
         'guard_food_import_batch_validation_digest',
         'guard_food_import_record_update',
+        'guard_imported_food_version_child_delete',
         'guard_food_source_active_release_authority',
         'guard_food_source_initial_active_release',
+        'guard_food_source_release_activation_authority',
         'guard_food_source_release_initial_state',
         'guard_food_source_release_legacy_promotion_grandfather',
         'guard_food_source_release_update',
         'guard_new_food_source_release_authority',
+        'guard_source_barcode_delete',
         'lock_active_nutrient_registry_before_write',
         'lock_active_nutrient_registry_for_read',
         'reconcile_recipe_components_v2',
-        'reject_new_legacy_unbound_catalogue_evidence'
+        'reject_immutable_row_update',
+        'reject_new_legacy_unbound_catalogue_evidence',
+        'set_row_updated_at',
+        'validate_food_version_child_insert'
       )
-  ) <> 24 or exists (
+  ) <> 35 or exists (
     select 1
     from (
       values
         ('advance_food_search_projection_revision'::text, ''::text, 'd1e4a8a27203104c6339f045a31a4dfdd2aee3c78cdd94e06bfd3db2c9ac2108'::text, 'void'::text, 'plpgsql'::text, 'v'::text, false, false, 'u'::text, false),
         ('catalogue_evidence_bundle_uri_is_valid'::text, 'value text, digest text'::text, '5403779dc4398446c61d0a27ad8b95d904e2552a5e694496b9e7e8612e0c902e'::text, 'boolean'::text, 'sql'::text, 'i'::text, true, false, 'u'::text, false),
+        ('catalogue_promote_import_batch', 'p_batch_id uuid, p_external_principal_id text, p_reason text', '115fdc3ed1943dd77ce70d3a694495da3d2c62ade9c7b82812a89cef82b39f17', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_record_import_approval', 'p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text', '89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac', 'boolean', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_rollback_source_release', 'p_source_code text, p_target_release_id uuid, p_external_principal_id text, p_reason text', '3fe493ee5e0b27e43cc881854dddfe4dc12f862a1c4a242bf712c843b2792ff1', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('enqueue_food_search_barcode_insert', '', '4e888f3ef0b3af1e7eee14568069ae3fe06b65b88718614ed0e2c243a5d22318', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('enqueue_food_search_barcode_update', '', '9d7a90d0fee1a6923631c9b9018d9c813d3c8f7eea2df941fc32fbb4f5d453b0', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('enqueue_food_search_food_eligibility_change', '', '85ada305a6fd6b40cd5fb0652d64c240d1953033a243b0f7ce243caa9bc9c4de', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('enqueue_food_search_serving_insert', '', '223f2d1dc8f90c6bc04c4d85ec763bcb50727473f5576b0bcdbbf394c1c9d804', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('enqueue_food_search_source_eligibility_change', '', '3a88f24e4863d8150db21f93efadd528ea5d7811b5c79c6ff5cd38fdcb93ce87', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_active_nutrient_vector_size', '', '24df72943bad96fc758d4a994ac2e8eaa18d9c9538ad117544abc4ccf4a22bda', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('guard_custom_food_child_insert_v3', '', 'f2fc5d7cc06759696b2656f921d57502326ab4efbd6fe1b1554143b117152d88', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('guard_custom_food_immutable_evidence_v3', '', '5e450518bc31811221ad64826f6879b177ecec760d88abd0353b14c4aebe3317', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('guard_food_barcode_validity_update', '', '7b97f95dd7388565424bd3713081711106a5e3d0c206310a8d405b8772208ecc', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_approval_authority', '', 'f96feb298d900165172c56a3fa1e99e91aaca010657155e5a996ee04015fdbbd', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_batch_initial_state', '', '2561714155de31151c79f95977156072a66451d1f13f7b5c6e85d13abe9ecb0c', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
-        ('guard_food_import_batch_update', '', '59dc41d73ec62b554caa721e13a2581a75327688f840cab922fddad0ca7be249', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
-        ('guard_food_import_batch_validation_digest', '', '511c01c16477a31c2de7639a5b48c65e421167c129dfd83377f9256210288ba2', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
-        ('guard_food_import_record_update', '', 'b111a6db4f4bd43bf2e9183ecf0ee8b19ccda1ed3679c598ef2f73d58d9cb2d9', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('guard_food_import_batch_update', '', '8863eef0e6889a620deec204e249ac3d6efdc87310dcc9d25601e6d7f336101f', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('guard_food_import_batch_validation_digest', '', 'c94c16cef462dfaca5c58908c2784e6d86b9f415c1c081f7b6c8a5ca434bddd7', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('guard_food_import_record_update', '', '300e6853e7a9520b477256b3b32a4381f3143512b013a4e131a4c203ce524479', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('guard_imported_food_version_child_delete', '', '4e36d3ee5cbd53dc6c98d9f457adbb5ee8cb6cbf8fc6b3e45d3133b4305e7cc1', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_source_active_release_authority', '', '306eec1771a7bbf7961bd6d46ba752801fe98f07d27fbf96291a1c454750cd11', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_source_initial_active_release', '', 'e3cbc51f28aafd274ea2bc3b71b824d51180d8e741dbcfd22d0af9e21849be43', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('guard_food_source_release_activation_authority', '', 'd46f53aeffa6469eada5461ab59bd9c23d43bf9aab77704c61b21c44291ae028', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_source_release_initial_state', '', '797445724ddd8d37cdbcc1891c724e9bd8af543548d322db5cf9c3d22ac13b3d', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_source_release_legacy_promotion_grandfather', '', '22340dfcbb5f98e1d0504703b0fb37830b31a4ecde5cbe81e55844968b86f214', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_source_release_update', '', '191701f20750b6e98b8acf290a1df2417bf17bd9c3a4e5e87a7ac7ef56453726', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_new_food_source_release_authority', '', '93f189e2c097009ac1cbf1129ce10a24d0c7fd2e4cee66c2ea5cdbb1537462b3', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('guard_source_barcode_delete', '', 'd4bea8e773166f82f291f1d89b20a7cfb52e2d8416ba80bb455642058d23e3cf', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('lock_active_nutrient_registry_before_write', '', 'c10e7e9df6768e94416aba47afe5639ffa7b3abfe5d2a6486a61e229dbe995de', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('lock_active_nutrient_registry_for_read', '', '22ab05f2e9749ecff7035e5188e1b9353d46533e7bc558748c76c43dbfc37ea5', 'void', 'sql', 'v', false, false, 'u', false),
         ('reconcile_recipe_components_v2', '', 'c82895a20dc837d80959a01991ede3dd1ab0f99ae48bec66984d4ea7368e720a', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
-        ('reject_new_legacy_unbound_catalogue_evidence', '', 'f972295c68b0774f901ce592801a0c8d25ddf6384194a702ca576844f088b14e', 'trigger', 'plpgsql', 'v', false, false, 'u', false)
+        ('reject_immutable_row_update', '', '631a42e27de6543bc09fd6b8d0f1b0fd336250270b47f13849a2483fd0786e6e', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('reject_new_legacy_unbound_catalogue_evidence', '', 'f972295c68b0774f901ce592801a0c8d25ddf6384194a702ca576844f088b14e', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('set_row_updated_at', '', '92fa7c305a8b856faea0575b27eaa33c1e39952cf9fe87b4c0cbf7d7eab556bd', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('validate_food_version_child_insert', '', '5362678168ed713e602e0fd87bc8b13dccd7817db1cf3d3470f09dcbe37e5f07', 'trigger', 'plpgsql', 'v', false, false, 'u', false)
     ) as expected(
       function_name, arguments, source_sha256, result_type, language_name,
       volatility, is_strict, is_leakproof, parallel_mode, security_definer
     )
-    left join pg_catalog.pg_proc as procedure_row
-      on procedure_row.proname = expected.function_name
-      and pg_catalog.pg_get_function_identity_arguments(procedure_row.oid) = expected.arguments
     left join pg_catalog.pg_namespace as namespace_row
-      on namespace_row.oid = procedure_row.pronamespace
-      and namespace_row.nspname = target_schema
+      on namespace_row.nspname = target_schema
+    left join pg_catalog.pg_proc as procedure_row
+      on procedure_row.pronamespace = namespace_row.oid
+      and procedure_row.proname = expected.function_name
+      and pg_catalog.pg_get_function_identity_arguments(procedure_row.oid) = expected.arguments
     left join pg_catalog.pg_language as language_row
       on language_row.oid = procedure_row.prolang
     where procedure_row.oid is null
@@ -322,9 +475,10 @@ begin
       or procedure_row.proleakproof is distinct from expected.is_leakproof
       or procedure_row.proparallel::text <> expected.parallel_mode
       or procedure_row.prosecdef is distinct from expected.security_definer
-      or procedure_row.proconfig is distinct from array[
-        'search_path=pg_catalog, public, pg_temp'
-      ]::text[]
+      or procedure_row.proconfig is distinct from case
+        when expected.function_name = 'reject_immutable_row_update' then null::text[]
+        else array['search_path=pg_catalog, public, pg_temp']::text[]
+      end
   ) then
     raise exception 'catalogue authority function identity or executable semantics differ from policy'
       using errcode = '55000';
@@ -348,6 +502,24 @@ begin
     where not trigger_row.tgisinternal
       and (
         (
+          namespace_row.nspname = target_schema
+          and class_row.relname in (
+            'food',
+            'food_barcode',
+            'food_import_approval',
+            'food_import_batch',
+            'food_import_record',
+            'food_nutrient_value',
+            'food_search_projection_revision',
+            'food_serving',
+            'food_source',
+            'food_source_release',
+            'food_source_release_activation',
+            'food_version',
+            'outbox_event'
+          )
+        )
+        or (
           namespace_row.nspname = target_schema
           and trigger_row.tgname in (
             'food_import_approval_guard_authority',
@@ -381,18 +553,24 @@ begin
         or (
           procedure_namespace_row.nspname = target_schema
           and procedure_row.proname in (
+            'guard_custom_food_child_insert_v3',
+            'guard_custom_food_immutable_evidence_v3',
             'guard_active_nutrient_vector_size',
+            'guard_food_barcode_validity_update',
             'guard_food_import_approval_authority',
             'guard_food_import_batch_initial_state',
             'guard_food_import_batch_update',
             'guard_food_import_batch_validation_digest',
             'guard_food_import_record_update',
+            'guard_food_source_release_activation_authority',
+            'guard_imported_food_version_child_delete',
             'guard_food_source_active_release_authority',
             'guard_food_source_initial_active_release',
             'guard_food_source_release_initial_state',
             'guard_food_source_release_legacy_promotion_grandfather',
             'guard_food_source_release_update',
             'guard_new_food_source_release_authority',
+            'guard_source_barcode_delete',
             'enqueue_food_search_barcode_insert',
             'enqueue_food_search_barcode_update',
             'enqueue_food_search_food_eligibility_change',
@@ -401,19 +579,41 @@ begin
             'lock_active_nutrient_registry_before_write',
             'reconcile_recipe_components_v2',
             'reject_new_legacy_unbound_catalogue_evidence'
+            ,'validate_food_version_child_insert'
           )
         )
       )
-  ) <> 26 or exists (
+  ) <> 47 or exists (
     select 1
     from (
       values
+        ('custom_food_nutrient_guard_delete_v3'::text, 'food_nutrient_value'::text, 'guard_custom_food_immutable_evidence_v3'::text, 'CREATE TRIGGER custom_food_nutrient_guard_delete_v3 BEFORE DELETE ON food_nutrient_value FOR EACH ROW EXECUTE FUNCTION guard_custom_food_immutable_evidence_v3()'::text),
+        ('custom_food_nutrient_guard_insert_v3', 'food_nutrient_value', 'guard_custom_food_child_insert_v3', 'CREATE TRIGGER custom_food_nutrient_guard_insert_v3 BEFORE INSERT ON food_nutrient_value FOR EACH ROW EXECUTE FUNCTION guard_custom_food_child_insert_v3()'),
+        ('custom_food_serving_guard_delete_v3', 'food_serving', 'guard_custom_food_immutable_evidence_v3', 'CREATE TRIGGER custom_food_serving_guard_delete_v3 BEFORE DELETE ON food_serving FOR EACH ROW EXECUTE FUNCTION guard_custom_food_immutable_evidence_v3()'),
+        ('custom_food_serving_guard_insert_v3', 'food_serving', 'guard_custom_food_child_insert_v3', 'CREATE TRIGGER custom_food_serving_guard_insert_v3 BEFORE INSERT ON food_serving FOR EACH ROW EXECUTE FUNCTION guard_custom_food_child_insert_v3()'),
+        ('custom_food_version_guard_delete_v3', 'food_version', 'guard_custom_food_immutable_evidence_v3', 'CREATE TRIGGER custom_food_version_guard_delete_v3 BEFORE DELETE ON food_version FOR EACH ROW EXECUTE FUNCTION guard_custom_food_immutable_evidence_v3()'),
+        ('food_barcode_guard_update', 'food_barcode', 'guard_food_barcode_validity_update', 'CREATE TRIGGER food_barcode_guard_update BEFORE UPDATE ON food_barcode FOR EACH ROW EXECUTE FUNCTION guard_food_barcode_validity_update()'),
+        ('food_barcode_reject_delete', 'food_barcode', 'guard_source_barcode_delete', 'CREATE TRIGGER food_barcode_reject_delete BEFORE DELETE ON food_barcode FOR EACH ROW EXECUTE FUNCTION guard_source_barcode_delete()'),
+        ('food_import_approval_reject_update', 'food_import_approval', 'reject_immutable_row_update', 'CREATE TRIGGER food_import_approval_reject_update BEFORE DELETE OR UPDATE ON food_import_approval FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()'),
+        ('food_import_record_reject_delete', 'food_import_record', 'reject_immutable_row_update', 'CREATE TRIGGER food_import_record_reject_delete BEFORE DELETE ON food_import_record FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()'),
+        ('food_nutrient_value_reject_delete', 'food_nutrient_value', 'guard_imported_food_version_child_delete', 'CREATE TRIGGER food_nutrient_value_reject_delete BEFORE DELETE ON food_nutrient_value FOR EACH ROW EXECUTE FUNCTION guard_imported_food_version_child_delete()'),
+        ('food_nutrient_value_reject_update', 'food_nutrient_value', 'reject_immutable_row_update', 'CREATE TRIGGER food_nutrient_value_reject_update BEFORE UPDATE ON food_nutrient_value FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()'),
+        ('food_nutrient_value_validate_insert', 'food_nutrient_value', 'validate_food_version_child_insert', 'CREATE TRIGGER food_nutrient_value_validate_insert BEFORE INSERT ON food_nutrient_value FOR EACH ROW EXECUTE FUNCTION validate_food_version_child_insert()'),
+        ('food_serving_reject_delete', 'food_serving', 'guard_imported_food_version_child_delete', 'CREATE TRIGGER food_serving_reject_delete BEFORE DELETE ON food_serving FOR EACH ROW EXECUTE FUNCTION guard_imported_food_version_child_delete()'),
+        ('food_serving_reject_update', 'food_serving', 'reject_immutable_row_update', 'CREATE TRIGGER food_serving_reject_update BEFORE UPDATE ON food_serving FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()'),
+        ('food_serving_validate_insert', 'food_serving', 'validate_food_version_child_insert', 'CREATE TRIGGER food_serving_validate_insert BEFORE INSERT ON food_serving FOR EACH ROW EXECUTE FUNCTION validate_food_version_child_insert()'),
+        ('food_set_updated_at', 'food', 'set_row_updated_at', 'CREATE TRIGGER food_set_updated_at BEFORE UPDATE ON food FOR EACH ROW EXECUTE FUNCTION set_row_updated_at()'),
+        ('food_source_release_activation_guard_authority', 'food_source_release_activation', 'guard_food_source_release_activation_authority', 'CREATE TRIGGER food_source_release_activation_guard_authority BEFORE INSERT ON food_source_release_activation FOR EACH ROW EXECUTE FUNCTION guard_food_source_release_activation_authority()'),
+        ('food_source_release_activation_reject_update', 'food_source_release_activation', 'reject_immutable_row_update', 'CREATE TRIGGER food_source_release_activation_reject_update BEFORE DELETE OR UPDATE ON food_source_release_activation FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()'),
+        ('food_source_release_reject_delete', 'food_source_release', 'reject_immutable_row_update', 'CREATE TRIGGER food_source_release_reject_delete BEFORE DELETE ON food_source_release FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()'),
+        ('food_source_set_updated_at', 'food_source', 'set_row_updated_at', 'CREATE TRIGGER food_source_set_updated_at BEFORE UPDATE ON food_source FOR EACH ROW EXECUTE FUNCTION set_row_updated_at()'),
+        ('food_version_reject_update', 'food_version', 'reject_immutable_row_update', 'CREATE TRIGGER food_version_reject_update BEFORE UPDATE ON food_version FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()'),
         ('food_import_approval_guard_authority'::text, 'food_import_approval'::text, 'guard_food_import_approval_authority'::text, 'CREATE TRIGGER food_import_approval_guard_authority BEFORE INSERT ON food_import_approval FOR EACH ROW EXECUTE FUNCTION guard_food_import_approval_authority()'::text),
         ('food_import_batch_guard_initial_state', 'food_import_batch', 'guard_food_import_batch_initial_state', 'CREATE TRIGGER food_import_batch_guard_initial_state BEFORE INSERT ON food_import_batch FOR EACH ROW EXECUTE FUNCTION guard_food_import_batch_initial_state()'),
         ('food_import_batch_guard_update', 'food_import_batch', 'guard_food_import_batch_update', 'CREATE TRIGGER food_import_batch_guard_update BEFORE DELETE OR UPDATE ON food_import_batch FOR EACH ROW EXECUTE FUNCTION guard_food_import_batch_update()'),
         ('food_import_batch_guard_validation_digest', 'food_import_batch', 'guard_food_import_batch_validation_digest', 'CREATE TRIGGER food_import_batch_guard_validation_digest BEFORE INSERT OR UPDATE ON food_import_batch FOR EACH ROW EXECUTE FUNCTION guard_food_import_batch_validation_digest()'),
         ('food_import_batch_reject_new_legacy_unbound', 'food_import_batch', 'reject_new_legacy_unbound_catalogue_evidence', 'CREATE TRIGGER food_import_batch_reject_new_legacy_unbound BEFORE INSERT ON food_import_batch FOR EACH ROW EXECUTE FUNCTION reject_new_legacy_unbound_catalogue_evidence()'),
-        ('food_import_record_guard_update', 'food_import_record', 'guard_food_import_record_update', 'CREATE TRIGGER food_import_record_guard_update BEFORE UPDATE ON food_import_record FOR EACH ROW EXECUTE FUNCTION guard_food_import_record_update()'),
+        ('food_import_record_guard_update', 'food_import_record', 'guard_food_import_record_update', 'CREATE TRIGGER food_import_record_guard_update BEFORE INSERT OR UPDATE ON food_import_record FOR EACH ROW EXECUTE FUNCTION guard_food_import_record_update()'),
         ('food_search_barcode_insert_outbox', 'food_barcode', 'enqueue_food_search_barcode_insert', 'CREATE TRIGGER food_search_barcode_insert_outbox AFTER INSERT ON food_barcode REFERENCING NEW TABLE AS new_food_search_barcodes FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_barcode_insert()'),
         ('food_search_barcode_update_outbox', 'food_barcode', 'enqueue_food_search_barcode_update', 'CREATE TRIGGER food_search_barcode_update_outbox AFTER UPDATE ON food_barcode REFERENCING OLD TABLE AS old_food_search_barcodes NEW TABLE AS new_food_search_barcodes FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_barcode_update()'),
         ('food_search_eligibility_outbox', 'food', 'enqueue_food_search_food_eligibility_change', 'CREATE TRIGGER food_search_eligibility_outbox AFTER UPDATE ON food REFERENCING OLD TABLE AS old_food_search_rows NEW TABLE AS new_food_search_rows FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_food_eligibility_change()'),
@@ -435,15 +635,15 @@ begin
         ('recipe_source_reconcile_v2', 'recipe_version_source', 'reconcile_recipe_components_v2', 'CREATE CONSTRAINT TRIGGER recipe_source_reconcile_v2 AFTER INSERT OR DELETE ON recipe_version_source DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()'),
         ('recipe_version_components_reconcile_v2', 'recipe_version', 'reconcile_recipe_components_v2', 'CREATE CONSTRAINT TRIGGER recipe_version_components_reconcile_v2 AFTER INSERT ON recipe_version DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_recipe_components_v2()')
     ) as expected(trigger_name, table_name, function_name, definition)
-    left join pg_catalog.pg_trigger as trigger_row
-      on trigger_row.tgname = expected.trigger_name
-      and not trigger_row.tgisinternal
-    left join pg_catalog.pg_class as class_row
-      on class_row.oid = trigger_row.tgrelid
-      and class_row.relname = expected.table_name
     left join pg_catalog.pg_namespace as namespace_row
-      on namespace_row.oid = class_row.relnamespace
-      and namespace_row.nspname = target_schema
+      on namespace_row.nspname = target_schema
+    left join pg_catalog.pg_class as class_row
+      on class_row.relnamespace = namespace_row.oid
+      and class_row.relname = expected.table_name
+    left join pg_catalog.pg_trigger as trigger_row
+      on trigger_row.tgrelid = class_row.oid
+      and trigger_row.tgname = expected.trigger_name
+      and not trigger_row.tgisinternal
     left join pg_catalog.pg_proc as procedure_row
       on procedure_row.oid = trigger_row.tgfoid
       and procedure_row.proname = expected.function_name
@@ -507,15 +707,15 @@ begin
         ),
         (
           'guard_food_import_batch_validation_digest'::text,
-          '511c01c16477a31c2de7639a5b48c65e421167c129dfd83377f9256210288ba2'::text
+          'c94c16cef462dfaca5c58908c2784e6d86b9f415c1c081f7b6c8a5ca434bddd7'::text
         )
     ) as expected(function_name, source_sha256)
-    left join pg_catalog.pg_proc as procedure_row
-      on procedure_row.proname = expected.function_name
-      and pg_catalog.pg_get_function_identity_arguments(procedure_row.oid) = ''
     left join pg_catalog.pg_namespace as namespace_row
-      on namespace_row.oid = procedure_row.pronamespace
-      and namespace_row.nspname = target_schema
+      on namespace_row.nspname = target_schema
+    left join pg_catalog.pg_proc as procedure_row
+      on procedure_row.pronamespace = namespace_row.oid
+      and procedure_row.proname = expected.function_name
+      and pg_catalog.pg_get_function_identity_arguments(procedure_row.oid) = ''
     left join pg_catalog.pg_language as language_row
       on language_row.oid = procedure_row.prolang
     where procedure_row.oid is null
@@ -572,22 +772,26 @@ begin
           'CREATE TRIGGER food_import_batch_guard_validation_digest BEFORE INSERT OR UPDATE ON food_import_batch FOR EACH ROW EXECUTE FUNCTION guard_food_import_batch_validation_digest()'::text
         )
     ) as expected(trigger_name, table_name, function_name, definition)
-    left join pg_catalog.pg_trigger as trigger_row
-      on trigger_row.tgname = expected.trigger_name
-      and not trigger_row.tgisinternal
-    left join pg_catalog.pg_class as class_row
-      on class_row.oid = trigger_row.tgrelid
-      and class_row.relname = expected.table_name
     left join pg_catalog.pg_namespace as namespace_row
-      on namespace_row.oid = class_row.relnamespace
-      and namespace_row.nspname = target_schema
+      on namespace_row.nspname = target_schema
+    left join pg_catalog.pg_class as class_row
+      on class_row.relnamespace = namespace_row.oid
+      and class_row.relname = expected.table_name
+    left join pg_catalog.pg_trigger as trigger_row
+      on trigger_row.tgrelid = class_row.oid
+      and trigger_row.tgname = expected.trigger_name
+      and not trigger_row.tgisinternal
     left join pg_catalog.pg_proc as procedure_row
       on procedure_row.oid = trigger_row.tgfoid
       and procedure_row.proname = expected.function_name
+    left join pg_catalog.pg_namespace as procedure_namespace_row
+      on procedure_namespace_row.oid = procedure_row.pronamespace
+      and procedure_namespace_row.nspname = target_schema
     where trigger_row.oid is null
       or class_row.oid is null
       or namespace_row.oid is null
       or procedure_row.oid is null
+      or procedure_namespace_row.oid is null
       or trigger_row.tgenabled <> 'O'
       or pg_catalog.pg_get_triggerdef(trigger_row.oid, true) <> expected.definition
   ) then
@@ -642,7 +846,9 @@ begin
         'pg_database_owner',
         'nutrition_catalogue_approve_data',
         'nutrition_catalogue_approve_quality',
-        'nutrition_catalogue_approve_rights'
+        'nutrition_catalogue_approve_rights',
+        'nutrition_catalogue_promote_activate',
+        'nutrition_catalogue_rollback'
       ])
   ) then
     raise exception 'public schema has an unexpected pre-policy privilege grantee'
@@ -652,6 +858,13 @@ begin
   execute 'revoke all on function public.catalogue_record_import_approval(uuid,text,text,text,text,text) from public';
   execute 'grant execute on function public.catalogue_record_import_approval(uuid,text,text,text,text,text) to nutrition_catalogue_approve_data, nutrition_catalogue_approve_quality, nutrition_catalogue_approve_rights';
   execute 'grant usage on schema public to nutrition_catalogue_approve_data, nutrition_catalogue_approve_quality, nutrition_catalogue_approve_rights';
+
+  execute 'revoke all on function public.catalogue_promote_import_batch(uuid,text,text) from public';
+  execute 'grant execute on function public.catalogue_promote_import_batch(uuid,text,text) to nutrition_catalogue_promote_activate';
+  execute 'revoke all on function public.catalogue_rollback_source_release(text,uuid,text,text) from public';
+  execute 'grant execute on function public.catalogue_rollback_source_release(text,uuid,text,text) to nutrition_catalogue_rollback';
+  execute 'revoke all on function public.guard_food_source_release_activation_authority() from public';
+  execute 'grant usage on schema public to nutrition_catalogue_promote_activate, nutrition_catalogue_rollback';
 
   execute 'revoke all on function public.guard_food_import_approval_authority() from public';
   for acl_grantee in
@@ -721,6 +934,59 @@ begin
       using errcode = '55000';
   end if;
 
+  if exists (
+    select 1
+    from (
+      values
+        (promotion_function, 'nutrition_catalogue_promote_activate'::text),
+        (rollback_function, 'nutrition_catalogue_rollback'::text)
+    ) as expected(function_oid, capability_role)
+    where (
+      select pg_catalog.count(*)
+      from pg_catalog.pg_proc as procedure_row
+      cross join lateral pg_catalog.aclexplode(procedure_row.proacl) as acl
+      left join pg_catalog.pg_roles as grantee
+        on grantee.oid = acl.grantee
+      where procedure_row.oid = expected.function_oid
+        and acl.grantor = expected_owner_oid
+        and acl.privilege_type = 'EXECUTE'
+        and not acl.is_grantable
+        and coalesce(grantee.rolname, 'PUBLIC') in (
+          expected_owner,
+          expected.capability_role
+        )
+    ) <> 2 or exists (
+      select 1
+      from pg_catalog.pg_proc as procedure_row
+      cross join lateral pg_catalog.aclexplode(procedure_row.proacl) as acl
+      where procedure_row.oid = expected.function_oid
+      group by procedure_row.oid
+      having pg_catalog.count(*) <> 2
+    )
+  ) then
+    raise exception 'catalogue promotion or rollback function ACL differs from the exact two-principal policy'
+      using errcode = '55000';
+  end if;
+
+  if (
+    select pg_catalog.count(*)
+    from pg_catalog.pg_proc as procedure_row
+    cross join lateral pg_catalog.aclexplode(procedure_row.proacl) as acl
+    where procedure_row.oid = activation_guard_function
+      and acl.grantee = expected_owner_oid
+      and acl.grantor = expected_owner_oid
+      and acl.privilege_type = 'EXECUTE'
+      and not acl.is_grantable
+  ) <> 1 or (
+    select pg_catalog.count(*)
+    from pg_catalog.pg_proc as procedure_row
+    cross join lateral pg_catalog.aclexplode(procedure_row.proacl) as acl
+    where procedure_row.oid = activation_guard_function
+  ) <> 1 then
+    raise exception 'catalogue activation guard ACL is not the exact owner-only policy'
+      using errcode = '55000';
+  end if;
+
   if (
     select pg_catalog.count(*)
     from pg_catalog.pg_proc as procedure_row
@@ -748,6 +1014,9 @@ begin
     where namespace_row.nspname = target_schema
       and procedure_row.oid <> approval_function
       and procedure_row.oid <> approval_guard_function
+      and procedure_row.oid <> promotion_function
+      and procedure_row.oid <> rollback_function
+      and procedure_row.oid <> activation_guard_function
       and procedure_row.proacl is not null
   ) then
     raise exception 'a non-authority public function has unexpected explicit privileges'
@@ -772,18 +1041,20 @@ begin
           grantee.rolname in (
             'nutrition_catalogue_approve_data',
             'nutrition_catalogue_approve_quality',
-            'nutrition_catalogue_approve_rights'
+            'nutrition_catalogue_approve_rights',
+            'nutrition_catalogue_promote_activate',
+            'nutrition_catalogue_rollback'
           )
           and acl.privilege_type = 'USAGE'
         )
       )
-  ) <> 6 or (
+  ) <> 8 or (
     select pg_catalog.count(*)
     from pg_catalog.pg_namespace as namespace_row
     cross join lateral pg_catalog.aclexplode(namespace_row.nspacl) as acl
     where namespace_row.nspname = target_schema
-  ) <> 6 then
-    raise exception 'public schema ACL is not the exact reviewed six-entry policy'
+  ) <> 8 then
+    raise exception 'public schema ACL is not the exact reviewed eight-entry policy'
       using errcode = '55000';
   end if;
 

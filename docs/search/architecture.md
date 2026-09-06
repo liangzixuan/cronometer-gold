@@ -62,8 +62,7 @@ four exact application-schema `SECURITY INVOKER` functions and their four exact
 ordinary enabled statement triggers before pinning each function to the same
 trusted search path. It changes no function body, owner, ACL, or invoker status
 and grants no privilege. The paths remain within the owner-only compatibility
-boundary: fixed-purpose shared-table wrappers are still required before direct
-non-owner DML or runtime cutover.
+boundary at that migration.
 
 Migration 0018 establishes the active-nutrient-registry reader/writer lock
 protocol used by catalogue promotion and every application snapshot path. The
@@ -72,6 +71,14 @@ shared reader helper and all four involved functions are search-path pinned and
 tracked by deploy/restore evidence. This prevents a search generation from
 being based on catalogue materialization that observed a mixed nutrient
 generation, but it does not grant the search worker any base-table access.
+
+Migration 0019 moves catalogue promotion and rollback behind identifier-only
+database functions while retaining the same transactional outbox and projection
+revision path. Their complete shared-food/outbox trigger surface is bound into
+the 35-function/47-trigger deployment and restore policy, so an unexpected
+trigger cannot silently inherit promotion authority. The capability roles
+remain unassigned; the search worker still receives no base-table or wrapper
+authority, and no index or alias is changed by the migration itself.
 
 Meilisearch documents that settings and document writes are asynchronous tasks and
 that index swaps are atomic. Those behaviors are explicit adapter contracts rather

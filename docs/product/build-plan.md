@@ -89,24 +89,29 @@ acceptance; progress in either lane never waives the gates in the other.
 
    A bounded M0B database-authority EXPAND phase defines static, non-login
    capability roles for stage, validate, three independent approval classes,
-   promote-and-activate, and rollback. This phase places only reviewer approval
-   behind a database-authenticated `SECURITY DEFINER` boundary and adds
-   database-derived principal/capability audit fields without fabricating values
-   for existing or owner-compatible local rows. It does not close M0B. The
-   remaining workflow functions, target deployment login and credential cutover,
-   external-principal binding, direct-DML revocation, and target-environment
-   verifier/canary evidence remain required before live catalogue work.
+   promote-and-activate, and rollback. Reviewer approval plus identifier-only
+   promotion and rollback now sit behind database-authenticated `SECURITY
+   DEFINER` boundaries. Exact validated-food documents and mapping revisions are
+   frozen before approval, and database audit identity is derived without
+   fabricating values for existing or owner-compatible local rows. It does not
+   close M0B. Stage/validate wrappers, target deployment login and credential
+   cutover, external-principal binding, direct-DML revocation, and
+   target-environment verifier/canary evidence remain required before live
+   catalogue work.
    Logical restore now reapplies the pinned migration-0014 function/trigger
-   manifest plus the forward migration-0015 activation-null constraint and ACL
-   correction, migration-0016 plus migration-0017 food-search function/trigger
-   policies, and migration-0018's nutrient-registry lock protocol under an
-   explicit owner. The transactional repair policy pins 24 hardened function
-   identities and 26 exact trigger bindings. It
-   compares a canonical source/target
-   version-8 authority fingerprint, including column ACL state and trigger table
-   schemas, while `PUBLIC CONNECT` remains revoked and the effective login
-   allowlist stays exact. Public-table triggers and every cross-schema binding
-   of a dedicated public authority trigger function enter that fingerprint. It
+   manifest plus the forward migration-0015 approval/guard ACL correction,
+   migration-0016 plus migration-0017 food-search function/trigger
+   policies, migration-0018's nutrient-registry lock protocol, and
+   migration-0019's frozen materialization, replacement activation-authority
+   constraint, and promotion/rollback boundary
+   under an explicit owner. The transactional repair policy pins 35 function
+   identities, 47 exact trigger bindings, the six frozen-evidence columns, all
+   four authority CHECKs, and the unique activation-to-batch index. It compares
+   a canonical source/target version-10 authority fingerprint, including column
+   ACL state and trigger table schemas, while `PUBLIC CONNECT` remains revoked
+   and the effective login allowlist stays exact. Public-table triggers and
+   every cross-schema binding of a dedicated public authority trigger function
+   enter that fingerprint. It
    first requires the exact tracked filename/file-byte-SHA ledger in
    `public.app_schema_migration`, ignoring an owner-schema shadow. The EXPAND CI drill still uses
    `nutrition_local` as both executor and owner, so it does not prove separate
@@ -120,11 +125,14 @@ acceptance; progress in either lane never waives the gates in the other.
    `public.app_schema_migration` names and SHA-256s against the tracked migration
    files, requires `public` to be the only non-system schema, and checks exact
    database/schema and object ACLs and grantors, relation/type
-   ownership, default and column ACL absence, the activation constraint, all 26
-   authority functions, unsafe authority on any other public routine, and the
-   exact 31-trigger authority set: the prior 24 plus migration-0018's three
-   nutrient-registry and four recipe-reconciliation bindings. It also
-   checks the effective login allowlist, seven isolated sessions, role
+   ownership, default and column ACL absence, all four authority CHECKs, the six
+   frozen-evidence columns, the unique activation-to-batch index, all 35
+   authority functions with exact execute ACLs, unsafe authority on any other
+   public routine, and the exact 47-trigger protected shared-food/outbox
+   authority set with exact table and function schemas. Every binding of a
+   dedicated public authority trigger function enters the evidence even when
+   its table is outside `public`. It also checks the effective login allowlist,
+   seven isolated sessions, role
    attributes, object ownership, effective
    privileges, and the complete touched membership graph. Eight zero-write
    `23503`/`42501` canaries then prove matching/mismatched reviewer behavior,
@@ -332,28 +340,39 @@ recipe-reconciliation functions and seven trigger bindings; it then adds a
 default-ACL `SECURITY INVOKER` reader helper, replaces the final runtime nutrient
 table lock, pins all four search paths, and expands writer-trigger coverage to
 every nutrient update and delete. No runtime identity or elevated execution
-authority is added. Fixed-purpose shared-table and workflow wrappers remain the
-next M0B prerequisite before role profiles or caller cutover.
+authority is added.
 
 This closes the application-path lock prerequisite, not arbitrary owner SQL.
 Direct recipe DML, nutrient `TRUNCATE`, and nutrient DDL remain unsupported
 during runtime; maintenance must quiesce callers and acquire the exclusive
-registry advisory key before taking table locks. The future fixed-purpose
-wrappers must discover and order source locks before the registry lock rather
-than adding generic recipe statement triggers.
+registry advisory key before taking table locks. Fixed-purpose writers must
+discover and order source locks before the registry lock rather than adding
+generic recipe statement triggers.
+
+Migration 0019 implements the first fixed-purpose shared-table workflow slice.
+Validation freezes a canonical version-1 materialization document and SHA-256
+per valid food plus the complete active mapping-revision set. Identifier-only
+promotion and rollback functions materialize or repoint only that evidence,
+derive database audit identity, require three authenticated reviewer identities
+for capability-mediated promotion, and preserve lock ordering. Their capability
+roles remain unassigned, and no live catalogue, login, credential, or caller is
+created.
 
 This is not production role/function isolation. Owner/local compatibility still
-leaves a principal with table DML inside the trusted boundary; stage, validate,
-promote-and-activate, and rollback functions do not yet carry authority; no
-runtime login or external principal is bound to a capability; and deployment
+leaves a principal with table DML inside the trusted boundary; stage and
+validate functions do not yet carry authority; no runtime login or external
+principal is bound to the new promotion/rollback capabilities; and deployment
 cutover, direct-DML revocation, ordinary-deploy fingerprinting, and role canaries
 remain open. The isolated logical-restore drill now pins and reapplies the
-migration-0014 function/trigger manifest and migration-0015 constraint/ACL
+migration-0014 function/trigger manifest and migration-0015 approval/guard ACL
 correction plus migration-0016's two search-path pins and exact
 source-eligibility trigger and migration-0017's four search-path pins and exact
 food/serving/barcode trigger bindings plus migration-0018's four nutrient-lock
-functions and seven trigger bindings, rejecting owner, constraint, ACL, or
-fingerprint drift before replay or API probing. A live FDC release has intentionally not
+functions and seven trigger bindings plus migration-0019's six frozen-evidence
+columns, four authority CHECKs, unique activation-to-batch index, and full
+35-function/47-trigger shared-food boundary under the version-10 fingerprint,
+rejecting owner, constraint, ACL, or fingerprint drift before replay or API
+probing. A live FDC release has intentionally not
 been promoted: the checked-in candidate remains non-importable until two
 independently authenticated operators
 agree on the streamed artifact, rights review is recorded, immutable object
@@ -518,10 +537,11 @@ structure, canonical digests, cross-object identity, and chronology, but it does
 not authenticate OIDC or workload identity, verify signatures, query provider
 state, or prove object existence or retention. No protected live runner, real dual
 acquisition, distinct immutable-storage workload, current provider query, or named
-review has been performed. The M0B database-authority EXPAND phase narrows only
-reviewer approval through static capability roles and a database-authenticated
-function. It deliberately retains owner/local compatibility, and the other
-workflow transitions still lack function boundaries and deployed identities.
+review has been performed. The M0B database-authority EXPAND phase narrows
+reviewer approval plus promotion and rollback through static capability roles
+and database-authenticated functions. It deliberately retains owner/local
+compatibility; stage and validation still lack function boundaries, and no
+workflow transition has a deployed identity.
 Every live staging, approval, promotion, activation, and rollback remains blocked
 until deploy and CONTRACT cutover close direct DML, readiness proves the exact
 owners and ACLs with role canaries, and the external controls provide trustworthy

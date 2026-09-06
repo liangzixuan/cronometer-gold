@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   AccountConflictError,
   AccountNotFoundError,
+  canonicalJson,
   createDatabase,
   createFoodDiaryEntry,
   createSession,
@@ -28,6 +29,7 @@ import {
   registerSourceNutrientMappings,
   revokeSession,
   runMigrations,
+  sha256CanonicalJson,
   updateFoodDiaryEntry,
   updateUserProfile,
 } from "../src/index.js";
@@ -2701,6 +2703,15 @@ async function seedCatalogue(database: ReturnType<typeof createDatabase>): Promi
       throw new Error("Corrupt catalogue fixtures were not materialized");
     }
     await transaction
+      .updateTable("food_import_batch")
+      .set({
+        completed_at: "2026-08-15T01:00:00Z",
+        materialized_count: 4,
+        status: "completed",
+      })
+      .where("id", "=", batch)
+      .execute();
+    await transaction
       .updateTable("food_source_release")
       .set({ promoted_at: "2026-08-15T01:00:00Z", status: "promoted" })
       .where("id", "=", release)
@@ -2781,16 +2792,19 @@ async function insertBatch(
       release_key: "diary-release-1",
       rights_manifest_sha256: "8".repeat(64),
       rights_manifest_uri: "repo://diary-rights.json",
-      staged_count: 2,
-      valid_count: 2,
+      staged_count: 4,
+      valid_count: 4,
     })
     .returning("id")
     .executeTakeFirstOrThrow();
   await transaction
     .updateTable("food_import_batch")
     .set({
+      nutrient_mapping_digest: sha256CanonicalJson([]),
+      nutrient_mapping_revision_ids: sql`'[]'::jsonb`,
       status: "ready",
       validated_at: "2026-08-15T00:30:00Z",
+      validated_food_contract_version: 1,
       validation_digest: "d".repeat(64),
     })
     .where("id", "=", batch.id)
@@ -2798,15 +2812,6 @@ async function insertBatch(
   await transaction
     .updateTable("food_import_batch")
     .set({ release_id: releaseId, status: "promoting" })
-    .where("id", "=", batch.id)
-    .execute();
-  await transaction
-    .updateTable("food_import_batch")
-    .set({
-      completed_at: "2026-08-15T01:00:00Z",
-      materialized_count: 2,
-      status: "completed",
-    })
     .where("id", "=", batch.id)
     .execute();
   return batch.id;
@@ -2837,23 +2842,63 @@ async function insertVersion(
     })
     .returning("id")
     .executeTakeFirstOrThrow();
-  if (versionNumber !== 1)
-    await transaction
+  if (versionNumber !== 1) {
+    const validatedFood = {
+      attributes: {
+        idempotencyKey: sourceRecordKey,
+        sourcePayloadSha256: String(versionNumber + 2).repeat(64),
+        unlistedNutrientPolicy: "unknown_not_reported",
+      },
+      basisQuantity,
+      brandName: null,
+      description: null,
+      gtin: null,
+      kind: "generic" as const,
+      languageTag: "en-US",
+      marketCode: "US",
+      name: versionNumber === 1 ? "Old Diary Crackers" : "Current Diary Crackers",
+      normalizedName: versionNumber === 1 ? "old diary crackers" : "current diary crackers",
+      nutrients: [],
+      servings: [],
+      sourceDataType: "fixture",
+      sourceFoodKey: sourceRecordKey.replace(/:\d+$/u, ""),
+      sourceModifiedAt: null,
+    };
+    const validatedFoodDocument = canonicalJson(validatedFood);
+    const record = await transaction
       .insertInto("food_import_record")
       .values({
         batch_id: batchId,
         canonical_payload: { versionNumber },
         canonical_payload_sha256: String(versionNumber).repeat(64),
-        food_version_id: version.id,
-        materialized_at: "2026-08-15T01:00:00Z",
         sequence_number: versionNumber,
         source_payload_sha256: String(versionNumber + 2).repeat(64),
         source_record_key: sourceRecordKey,
         source_record_type: "fixture",
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    await transaction
+      .updateTable("food_import_record")
+      .set({
         validated_at: "2026-08-15T00:30:00Z",
+        validated_food_contract_version: 1,
+        validated_food_document: validatedFoodDocument,
+        validated_food_sha256: sha256CanonicalJson(validatedFood),
         validation_issues: sql`'[]'::jsonb`,
+        validation_status: "valid",
+      })
+      .where("id", "=", record.id)
+      .execute();
+    await transaction
+      .updateTable("food_import_record")
+      .set({
+        food_version_id: version.id,
+        materialized_at: "2026-08-15T01:00:00Z",
         validation_status: "materialized",
       })
+      .where("id", "=", record.id)
       .execute();
+  }
   return version.id;
 }

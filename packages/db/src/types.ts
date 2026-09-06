@@ -202,6 +202,9 @@ export interface FoodImportBatchTable {
   materialized_count: DefaultInt8;
   validation_policy: DefaultJson;
   validation_digest: ColumnType<string | null, undefined, string>;
+  validated_food_contract_version: ColumnType<number | null, undefined, number>;
+  nutrient_mapping_digest: ColumnType<string | null, undefined, string>;
+  nutrient_mapping_revision_ids: JSONColumnType<JsonArray | null, undefined, JsonArray>;
   release_id: string | null;
   created_at: CreatedTimestamp;
   updated_at: UpdatedTimestamp;
@@ -250,6 +253,9 @@ export interface FoodImportRecordTable {
   canonical_payload: ColumnType<JsonValue, JsonValue, never>;
   validation_status: DefaultValue<FoodImportRecordStatus>;
   validation_issues: JSONColumnType<JsonArray, JsonArray | undefined, JsonArray>;
+  validated_food_document: ColumnType<string | null, undefined, string | null>;
+  validated_food_sha256: ColumnType<string | null, undefined, string | null>;
+  validated_food_contract_version: ColumnType<number | null, undefined, number | null>;
   food_version_id: NullableInt8;
   created_at: CreatedTimestamp;
   validated_at: NullableTimestamp;

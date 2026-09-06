@@ -76,17 +76,23 @@ package boundaries.
   PostgreSQL integration gate, including an unchanged historical diary nutrient
   snapshot. Database constraints independently protect immutable provenance,
   release classification, canonical evidence fields, and initial workflow
-  states. The table-DML principal remains inside the trusted service boundary:
-  PostgreSQL does not independently recompute parser validation or authenticate
-  reviewer identities. A production least-privilege role/function boundary is a
-  live M0B prerequisite, not something this local gate proves.
+  states. Validation freezes each valid food's canonical materialization
+  document and SHA-256 plus the complete mapping-revision set. Promotion and
+  rollback are identifier-only database functions: capability callers cannot
+  supply food JSON or direct table/sequence writes, and capability promotion
+  requires three distinct database-authenticated reviewer principals.
+  Stage/validate still remain in the owner-compatible trusted boundary, and the
+  capability roles have no live login membership or caller cutover. A production
+  least-privilege deployment remains a live M0B prerequisite.
 - Supported materialization reads and nutrient insert/update/delete writes use
   the migration-0018 active-registry advisory protocol. Integration evidence
   must prove that multiple readers coexist,
   insert/update/delete writers wait, and a waiting reader observes the complete
   committed generation. Deployment and restore evidence must match the four
-  pinned functions and seven exact trigger bindings; a broad nutrient table
-  lock or an `active`-only writer trigger is a regression.
+  nutrient-lock functions and seven exact bindings plus migration 0019's
+  complete 35-function/47-trigger authority surface; a broad nutrient table lock,
+  an `active`-only writer trigger, or an unexpected shared-food trigger is a
+  regression.
 - The product renders unknown, trace, imputed, and label-rounded values distinctly.
 
 ## Local retention privacy drill

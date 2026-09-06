@@ -4,10 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  canonicalJson,
   createDatabase,
   type Database,
   getFoodSearchProjectionPublicationState,
   runMigrations,
+  sha256CanonicalJson,
 } from "@nutrition-tracker/db";
 import {
   FoodSearchService,
@@ -257,8 +259,11 @@ async function seedCatalogue(database: Parameters<typeof runMigrations>[0]): Pro
     await transaction
       .updateTable("food_import_batch")
       .set({
+        nutrient_mapping_digest: sha256CanonicalJson([]),
+        nutrient_mapping_revision_ids: sql`'[]'::jsonb`,
         status: "ready",
         validated_at: "2026-08-15T12:30:00Z",
+        validated_food_contract_version: 1,
         validation_digest: "d".repeat(64),
       })
       .where("id", "=", batch.id)
@@ -268,16 +273,6 @@ async function seedCatalogue(database: Parameters<typeof runMigrations>[0]): Pro
       .set({ release_id: release.id, status: "promoting" })
       .where("id", "=", batch.id)
       .execute();
-    await transaction
-      .updateTable("food_import_batch")
-      .set({
-        completed_at: "2026-08-15T13:00:00Z",
-        materialized_count: 2,
-        status: "completed",
-      })
-      .where("id", "=", batch.id)
-      .execute();
-
     await insertFood(transaction, {
       batchId: batch.id,
       dataQuality: "verified",
@@ -296,6 +291,15 @@ async function seedCatalogue(database: Parameters<typeof runMigrations>[0]): Pro
       sequence: 1,
       sourceFoodKey: "forbidden-oatmeal",
     });
+    await transaction
+      .updateTable("food_import_batch")
+      .set({
+        completed_at: "2026-08-15T13:00:00Z",
+        materialized_count: 2,
+        status: "completed",
+      })
+      .where("id", "=", batch.id)
+      .execute();
     await transaction
       .updateTable("food_source_release")
       .set({ promoted_at: "2026-08-15T13:00:00Z", status: "promoted" })
@@ -383,38 +387,95 @@ async function insertFood(
     .set({ current_version_id: version.id })
     .where("id", "=", food.id)
     .execute();
-  await transaction
+  const brandName = input.dataQuality === "verified" ? "Example Pantry" : null;
+  const kind = input.dataQuality === "verified" ? ("branded" as const) : ("generic" as const);
+  const canonicalPayload = { fixture: true, name: input.name };
+  const normalizedGtin = input.dataQuality === "verified" ? "00036000291452" : null;
+  const sourcePayloadSha256 = "a".repeat(64);
+  const validatedServing =
+    input.dataQuality === "verified"
+      ? {
+          displayOrder: 0,
+          gramWeight: "40",
+          isDefault: true,
+          label: "1 bowl",
+          metadata: { fixture: true },
+          quantity: "1",
+          sourceServingKey: "bowl",
+          unit: "bowl",
+          unitKind: "count" as const,
+        }
+      : null;
+  const validatedFood = {
+    attributes: {
+      idempotencyKey: input.sourceFoodKey,
+      sourcePayloadSha256,
+      unlistedNutrientPolicy: "unknown_not_reported",
+    },
+    basisQuantity: "100",
+    brandName,
+    description: `${input.name} description`,
+    gtin: normalizedGtin,
+    kind,
+    languageTag: "en-US",
+    marketCode: "US",
+    name: input.name,
+    normalizedName: input.name.toLowerCase(),
+    nutrients: [],
+    servings: validatedServing ? [validatedServing] : [],
+    sourceDataType: "fixture",
+    sourceFoodKey: input.sourceFoodKey,
+    sourceModifiedAt: "2026-08-15T00:00:00Z",
+  };
+  const record = await transaction
     .insertInto("food_import_record")
     .values({
       batch_id: input.batchId,
-      canonical_payload: { fixture: true, name: input.name },
-      canonical_payload_sha256: "f".repeat(64),
-      food_version_id: version.id,
-      materialized_at: "2026-08-15T13:00:00Z",
+      canonical_payload: canonicalPayload,
+      canonical_payload_sha256: sha256CanonicalJson(canonicalPayload),
       sequence_number: input.sequence,
-      source_payload_sha256: "a".repeat(64),
+      source_payload_sha256: sourcePayloadSha256,
       source_record_key: input.sourceFoodKey,
       source_record_type: "fixture",
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow();
+  await transaction
+    .updateTable("food_import_record")
+    .set({
       validated_at: "2026-08-15T12:30:00Z",
+      validated_food_contract_version: 1,
+      validated_food_document: canonicalJson(validatedFood),
+      validated_food_sha256: sha256CanonicalJson(validatedFood),
       validation_issues: sql`'[]'::jsonb`,
+      validation_status: "valid",
+    })
+    .where("id", "=", record.id)
+    .execute();
+  await transaction
+    .updateTable("food_import_record")
+    .set({
+      food_version_id: version.id,
+      materialized_at: "2026-08-15T13:00:00Z",
       validation_status: "materialized",
     })
+    .where("id", "=", record.id)
     .execute();
-  if (input.dataQuality !== "verified") return;
+  if (!normalizedGtin || !validatedServing) return;
   await transaction
     .insertInto("food_serving")
     .values({
-      display_order: 0,
+      display_order: validatedServing.displayOrder,
       food_version_id: version.id,
-      gram_weight: "40",
-      is_default: true,
-      label: "1 bowl",
-      metadata: { fixture: true },
+      gram_weight: validatedServing.gramWeight,
+      is_default: validatedServing.isDefault,
+      label: validatedServing.label,
+      metadata: validatedServing.metadata,
       milliliter_volume: null,
-      quantity: "1",
-      source_serving_key: "bowl",
-      unit: "bowl",
-      unit_kind: "count",
+      quantity: validatedServing.quantity,
+      source_serving_key: validatedServing.sourceServingKey,
+      unit: validatedServing.unit,
+      unit_kind: validatedServing.unitKind,
     })
     .execute();
   await transaction
@@ -423,7 +484,7 @@ async function insertFood(
       food_id: food.id,
       food_serving_id: null,
       food_version_id: version.id,
-      gtin: "036000291452",
+      gtin: normalizedGtin,
       market_code: "US",
       metadata: { fixture: true },
       source_release_id: input.releaseId,

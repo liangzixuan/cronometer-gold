@@ -28,6 +28,75 @@ const capabilityRoles = [
   "nutrition_catalogue_rollback",
 ];
 const expectedOwner = "nutrition_owner";
+const activationAuthorityConstraintDefinition =
+  "CHECK ((database_principal IS NULL AND database_capability_role IS NULL OR database_principal IS NOT NULL AND database_capability_role IS NOT NULL AND octet_length(database_principal) >= 1 AND octet_length(database_principal) <= 63 AND database_capability_role =\nCASE\n    WHEN import_batch_id IS NOT NULL AND operation = 'activate'::text THEN 'nutrition_catalogue_promote_activate'::text\n    WHEN import_batch_id IS NULL AND (operation = ANY (ARRAY['deactivate'::text, 'rollback'::text])) THEN 'nutrition_catalogue_rollback'::text\n    ELSE NULL::text\nEND) IS TRUE)";
+const authorityConstraints = [
+  {
+    constraint_type: "c",
+    definition:
+      "CHECK ((validated_food_contract_version IS NULL AND nutrient_mapping_digest IS NULL AND nutrient_mapping_revision_ids IS NULL OR validated_food_contract_version = 1 AND nutrient_mapping_digest ~ '^[0-9a-f]{64}$'::text AND jsonb_typeof(nutrient_mapping_revision_ids) = 'array'::text AND validated_at IS NOT NULL) IS TRUE)",
+    name: "food_import_batch_materialization_contract_check",
+    table_name: "food_import_batch",
+    validated: true,
+  },
+  {
+    constraint_type: "c",
+    definition:
+      "CHECK (((status <> ALL (ARRAY['ready'::text, 'promoting'::text])) OR validated_food_contract_version = 1 AND nutrient_mapping_digest IS NOT NULL AND nutrient_mapping_revision_ids IS NOT NULL) IS TRUE)",
+    name: "food_import_batch_promotable_contract_check",
+    table_name: "food_import_batch",
+    validated: true,
+  },
+  {
+    constraint_type: "c",
+    definition:
+      "CHECK ((validated_food_document IS NULL AND validated_food_sha256 IS NULL AND validated_food_contract_version IS NULL AND (validation_status = ANY (ARRAY['pending'::text, 'quarantined'::text, 'valid'::text, 'materialized'::text])) OR validated_food_document IS NOT NULL AND validated_food_sha256 ~ '^[0-9a-f]{64}$'::text AND validated_food_contract_version = 1 AND (validation_status = ANY (ARRAY['valid'::text, 'materialized'::text])) AND jsonb_typeof(validated_food_document::jsonb) = 'object'::text AND validated_food_sha256 = encode(sha256(convert_to(validated_food_document, 'UTF8'::name)), 'hex'::text)) IS TRUE)",
+    name: "food_import_record_validated_food_contract_check",
+    table_name: "food_import_record",
+    validated: true,
+  },
+  {
+    constraint_type: "c",
+    definition: activationAuthorityConstraintDefinition,
+    name: "food_source_release_activation_database_authority_check",
+    table_name: "food_source_release_activation",
+    validated: true,
+  },
+];
+const authorityFrozenColumns = [
+  ["food_import_batch", "nutrient_mapping_digest", "text"],
+  ["food_import_batch", "nutrient_mapping_revision_ids", "jsonb"],
+  ["food_import_batch", "validated_food_contract_version", "smallint"],
+  ["food_import_record", "validated_food_contract_version", "smallint"],
+  ["food_import_record", "validated_food_document", "text"],
+  ["food_import_record", "validated_food_sha256", "text"],
+].map(([tableName, columnName, dataType]) => ({
+  column_name: columnName,
+  data_type: dataType,
+  default_expression: null,
+  not_null: false,
+  schema_name: "public",
+  table_name: tableName,
+}));
+const authorityIndexes = [
+  {
+    access_method: "btree",
+    definition:
+      "CREATE UNIQUE INDEX food_source_release_activation_import_batch_unique ON public.food_source_release_activation USING btree (import_batch_id) WHERE (import_batch_id IS NOT NULL)",
+    is_primary: false,
+    is_ready: true,
+    is_unique: true,
+    is_valid: true,
+    key_attribute_count: 1,
+    key_expression: "import_batch_id",
+    name: "food_source_release_activation_import_batch_unique",
+    owner: expectedOwner,
+    predicate: "import_batch_id IS NOT NULL",
+    schema_name: "public",
+    table_name: "food_source_release_activation",
+    total_attribute_count: 1,
+  },
+];
 
 test("accepts only an explicit isolated restore target and owner", () => {
   assert.deepEqual(
@@ -230,11 +299,11 @@ test("rejects an incomplete public ledger despite a complete owner-schema shadow
   assert.doesNotMatch(calls[0].at(-1) ?? "", /from app_schema_migration/);
 });
 
-test("tracks migration 0018 in the exact restore ledger", () => {
+test("tracks migration 0019 in the exact restore ledger", () => {
   const migrationLedger = JSON.parse(TRACKED_MIGRATION_LEDGER_JSON);
 
-  assert.equal(migrationLedger.length, 18);
-  assert.equal(migrationLedger.at(-1)?.name, "0018_active_nutrient_registry_lock_protocol.sql");
+  assert.equal(migrationLedger.length, 19);
+  assert.equal(migrationLedger.at(-1)?.name, "0019_catalogue_promotion_rollback_authority.sql");
   assert.match(migrationLedger.at(-1)?.checksum ?? "", /^[0-9a-f]{64}$/u);
 });
 
@@ -267,7 +336,7 @@ test("rejects PUBLIC execute and wrong reviewer grants", () => {
   });
   assert.throws(
     () => validateRestoreAuthorityEvidence(publicExecute, expectedOwner),
-    /function ACL/,
+    /authority function .*ACL/,
   );
 
   const missingReviewer = validAuthorityEvidence();
@@ -276,14 +345,14 @@ test("rejects PUBLIC execute and wrong reviewer grants", () => {
   );
   assert.throws(
     () => validateRestoreAuthorityEvidence(missingReviewer, expectedOwner),
-    /function ACL/,
+    /authority function .*ACL/,
   );
 
   const wrongApprovalGrantor = validAuthorityEvidence();
   authorityFunction(wrongApprovalGrantor).acl[0].grantor = "restore_operator";
   assert.throws(
     () => validateRestoreAuthorityEvidence(wrongApprovalGrantor, expectedOwner),
-    /approval authority function ACL has an unexpected grantor/,
+    /authority function .*ACL has an unexpected grantor/,
   );
 
   const publicGuardExecute = validAuthorityEvidence();
@@ -295,14 +364,47 @@ test("rejects PUBLIC execute and wrong reviewer grants", () => {
   });
   assert.throws(
     () => validateRestoreAuthorityEvidence(publicGuardExecute, expectedOwner),
-    /approval guard function ACL/,
+    /authority function .*ACL/,
   );
 
   const wrongGuardGrantor = validAuthorityEvidence();
   approvalGuardFunction(wrongGuardGrantor).acl[0].grantor = "restore_operator";
   assert.throws(
     () => validateRestoreAuthorityEvidence(wrongGuardGrantor, expectedOwner),
-    /approval guard function ACL has an unexpected grantor/,
+    /authority function .*ACL has an unexpected grantor/,
+  );
+
+  const wrongPromotionGrantee = validAuthorityEvidence();
+  const promotion = authorityFunctionNamed(wrongPromotionGrantee, "catalogue_promote_import_batch");
+  promotion.acl = promotion.acl.map((entry) =>
+    entry.grantee === "nutrition_catalogue_promote_activate"
+      ? { ...entry, grantee: "nutrition_catalogue_rollback" }
+      : entry,
+  );
+  assert.throws(
+    () => validateRestoreAuthorityEvidence(wrongPromotionGrantee, expectedOwner),
+    /authority function .*ACL/,
+  );
+
+  const missingRollbackCapability = validAuthorityEvidence();
+  const rollback = authorityFunctionNamed(
+    missingRollbackCapability,
+    "catalogue_rollback_source_release",
+  );
+  rollback.acl = rollback.acl.filter((entry) => entry.grantee !== "nutrition_catalogue_rollback");
+  assert.throws(
+    () => validateRestoreAuthorityEvidence(missingRollbackCapability, expectedOwner),
+    /authority function .*ACL/,
+  );
+
+  const publicActivationGuardExecute = validAuthorityEvidence();
+  authorityFunctionNamed(
+    publicActivationGuardExecute,
+    "guard_food_source_release_activation_authority",
+  ).acl.push(acl("PUBLIC", "EXECUTE"));
+  assert.throws(
+    () => validateRestoreAuthorityEvidence(publicActivationGuardExecute, expectedOwner),
+    /authority function .*ACL/,
   );
 });
 
@@ -327,34 +429,66 @@ test("rejects unsafe role attributes and every incoming membership option", () =
   );
 });
 
-test("pins the validated 0015 activation-audit null constraint", () => {
+test("pins all validated 0019 materialization and activation constraints", () => {
   const missingConstraint = validAuthorityEvidence();
   missingConstraint.authorityConstraints = [];
   assert.throws(
     () => validateRestoreAuthorityEvidence(missingConstraint, expectedOwner),
-    /activation authority constraint/,
+    /materialization or activation constraint/,
   );
 
-  for (const [property, value] of [
-    ["name", "renamed_constraint"],
-    ["table_name", "food_source_release"],
-    ["constraint_type", "u"],
-    ["validated", false],
-    ["definition", "CHECK (database_principal IS NULL)"],
-  ]) {
+  for (const expectedConstraint of authorityConstraints) {
     const evidence = validAuthorityEvidence();
-    evidence.authorityConstraints[0][property] = value;
+    evidence.authorityConstraints = evidence.authorityConstraints.map((constraint) =>
+      constraint.name === expectedConstraint.name
+        ? { ...constraint, definition: "CHECK (false)" }
+        : constraint,
+    );
     assert.throws(
       () => validateRestoreAuthorityEvidence(evidence, expectedOwner),
-      /activation authority constraint/,
-      property,
+      /materialization or activation constraint/,
+      expectedConstraint.name,
     );
   }
 });
 
-test("rejects authority fingerprints from the pre-nutrient-lock evidence version", () => {
+test("pins frozen materialization columns and the activation import-batch index", () => {
+  for (const expectedColumn of authorityFrozenColumns) {
+    const evidence = validAuthorityEvidence();
+    evidence.authorityFrozenColumns = evidence.authorityFrozenColumns.map((column) =>
+      column.table_name === expectedColumn.table_name &&
+      column.column_name === expectedColumn.column_name
+        ? { ...column, default_expression: "'unsafe'::text" }
+        : column,
+    );
+    assert.throws(
+      () => validateRestoreAuthorityEvidence(evidence, expectedOwner),
+      /frozen materialization column/,
+      `${expectedColumn.table_name}.${expectedColumn.column_name}`,
+    );
+  }
+
+  for (const drift of [
+    { owner: "unexpected_owner" },
+    { predicate: "import_batch_id IS NULL" },
+    { is_primary: true },
+    { key_attribute_count: 2 },
+  ]) {
+    const evidence = validAuthorityEvidence();
+    evidence.authorityIndexes = evidence.authorityIndexes.map((index) => ({
+      ...index,
+      ...drift,
+    }));
+    assert.throws(
+      () => validateRestoreAuthorityEvidence(evidence, expectedOwner),
+      /authority index/,
+    );
+  }
+});
+
+test("rejects authority fingerprints from the pre-frozen-structure evidence version", () => {
   const evidence = validAuthorityEvidence();
-  evidence.version = 7;
+  evidence.version = 9;
   assert.throws(
     () => validateRestoreAuthorityEvidence(evidence, expectedOwner),
     /unsupported version/,
@@ -461,6 +595,12 @@ test("rejects unexpected table or sequence DML authority", () => {
 });
 
 test("pins every reviewed authority function and trigger", () => {
+  assert.equal(
+    validAuthorityFunctions().filter((entry) => entry.name !== "ordinary_function").length,
+    35,
+  );
+  assert.equal(validAuthorityTriggers().length, 47);
+
   for (const [property, value] of [
     ["source_sha256", "0".repeat(64)],
     ["result_type", "text"],
@@ -941,15 +1081,9 @@ test("pins the exact versioned policy bytes", () => {
 
 function validAuthorityEvidence() {
   return {
-    authorityConstraints: [
-      {
-        constraint_type: "c",
-        definition: "CHECK (database_principal IS NULL AND database_capability_role IS NULL)",
-        name: "food_source_release_activation_expand_audit_null_check",
-        table_name: "food_source_release_activation",
-        validated: true,
-      },
-    ],
+    authorityConstraints: structuredClone(authorityConstraints),
+    authorityFrozenColumns: structuredClone(authorityFrozenColumns),
+    authorityIndexes: structuredClone(authorityIndexes),
     columnAcls: [],
     defaultAcls: [],
     explicitColumnAclAttributeCount: "0",
@@ -988,6 +1122,8 @@ function validAuthorityEvidence() {
         acl("nutrition_catalogue_approve_data", "USAGE", "pg_database_owner"),
         acl("nutrition_catalogue_approve_quality", "USAGE", "pg_database_owner"),
         acl("nutrition_catalogue_approve_rights", "USAGE", "pg_database_owner"),
+        acl("nutrition_catalogue_promote_activate", "USAGE", "pg_database_owner"),
+        acl("nutrition_catalogue_rollback", "USAGE", "pg_database_owner"),
         acl("pg_database_owner", "CREATE", "pg_database_owner"),
         acl("pg_database_owner", "USAGE", "pg_database_owner"),
       ],
@@ -1005,7 +1141,7 @@ function validAuthorityEvidence() {
         owner: expectedOwner,
       },
     ],
-    version: 8,
+    version: 10,
   };
 }
 
@@ -1044,6 +1180,18 @@ function validAuthorityFunctions() {
       "24df72943bad96fc758d4a994ac2e8eaa18d9c9538ad117544abc4ccf4a22bda",
     ],
     [
+      "guard_custom_food_child_insert_v3",
+      "f2fc5d7cc06759696b2656f921d57502326ab4efbd6fe1b1554143b117152d88",
+    ],
+    [
+      "guard_custom_food_immutable_evidence_v3",
+      "5e450518bc31811221ad64826f6879b177ecec760d88abd0353b14c4aebe3317",
+    ],
+    [
+      "guard_food_barcode_validity_update",
+      "7b97f95dd7388565424bd3713081711106a5e3d0c206310a8d405b8772208ecc",
+    ],
+    [
       "guard_food_import_approval_authority",
       "f96feb298d900165172c56a3fa1e99e91aaca010657155e5a996ee04015fdbbd",
     ],
@@ -1053,15 +1201,19 @@ function validAuthorityFunctions() {
     ],
     [
       "guard_food_import_batch_update",
-      "59dc41d73ec62b554caa721e13a2581a75327688f840cab922fddad0ca7be249",
+      "8863eef0e6889a620deec204e249ac3d6efdc87310dcc9d25601e6d7f336101f",
     ],
     [
       "guard_food_import_batch_validation_digest",
-      "511c01c16477a31c2de7639a5b48c65e421167c129dfd83377f9256210288ba2",
+      "c94c16cef462dfaca5c58908c2784e6d86b9f415c1c081f7b6c8a5ca434bddd7",
     ],
     [
       "guard_food_import_record_update",
-      "b111a6db4f4bd43bf2e9183ecf0ee8b19ccda1ed3679c598ef2f73d58d9cb2d9",
+      "300e6853e7a9520b477256b3b32a4381f3143512b013a4e131a4c203ce524479",
+    ],
+    [
+      "guard_imported_food_version_child_delete",
+      "4e36d3ee5cbd53dc6c98d9f457adbb5ee8cb6cbf8fc6b3e45d3133b4305e7cc1",
     ],
     [
       "guard_food_source_active_release_authority",
@@ -1088,6 +1240,10 @@ function validAuthorityFunctions() {
       "93f189e2c097009ac1cbf1129ce10a24d0c7fd2e4cee66c2ea5cdbb1537462b3",
     ],
     [
+      "guard_source_barcode_delete",
+      "d4bea8e773166f82f291f1d89b20a7cfb52e2d8416ba80bb455642058d23e3cf",
+    ],
+    [
       "lock_active_nutrient_registry_before_write",
       "c10e7e9df6768e94416aba47afe5639ffa7b3abfe5d2a6486a61e229dbe995de",
     ],
@@ -1098,6 +1254,10 @@ function validAuthorityFunctions() {
     [
       "reject_new_legacy_unbound_catalogue_evidence",
       "f972295c68b0774f901ce592801a0c8d25ddf6384194a702ca576844f088b14e",
+    ],
+    [
+      "validate_food_version_child_insert",
+      "5362678168ed713e602e0fd87bc8b13dccd7817db1cf3d3470f09dcbe37e5f07",
     ],
   ].map(([name, sourceSha256]) => ({
     ...functionSemantics(sourceSha256, "trigger"),
@@ -1125,6 +1285,19 @@ function validAuthorityFunctions() {
       name: "advance_food_search_projection_revision",
       owner: expectedOwner,
       security_definer: false,
+    },
+    {
+      ...functionSemantics(
+        "115fdc3ed1943dd77ce70d3a694495da3d2c62ade9c7b82812a89cef82b39f17",
+        "jsonb",
+      ),
+      acl: [acl(expectedOwner, "EXECUTE"), acl("nutrition_catalogue_promote_activate", "EXECUTE")],
+      acl_is_default: false,
+      arguments: "p_batch_id uuid, p_external_principal_id text, p_reason text",
+      config: ["search_path=pg_catalog, public, pg_temp"],
+      name: "catalogue_promote_import_batch",
+      owner: expectedOwner,
+      security_definer: true,
     },
     {
       ...functionSemantics(
@@ -1160,6 +1333,33 @@ function validAuthorityFunctions() {
       security_definer: false,
       strict: true,
       volatility: "i",
+    },
+    {
+      ...functionSemantics(
+        "3fe493ee5e0b27e43cc881854dddfe4dc12f862a1c4a242bf712c843b2792ff1",
+        "jsonb",
+      ),
+      acl: [acl(expectedOwner, "EXECUTE"), acl("nutrition_catalogue_rollback", "EXECUTE")],
+      acl_is_default: false,
+      arguments:
+        "p_source_code text, p_target_release_id uuid, p_external_principal_id text, p_reason text",
+      config: ["search_path=pg_catalog, public, pg_temp"],
+      name: "catalogue_rollback_source_release",
+      owner: expectedOwner,
+      security_definer: true,
+    },
+    {
+      ...functionSemantics(
+        "d46f53aeffa6469eada5461ab59bd9c23d43bf9aab77704c61b21c44291ae028",
+        "trigger",
+      ),
+      acl: [acl(expectedOwner, "EXECUTE")],
+      acl_is_default: false,
+      arguments: "",
+      config: ["search_path=pg_catalog, public, pg_temp"],
+      name: "guard_food_source_release_activation_authority",
+      owner: expectedOwner,
+      security_definer: false,
     },
     {
       ...functionSemantics(
@@ -1210,7 +1410,7 @@ function validAuthorityFunctions() {
       acl: [acl("PUBLIC", "EXECUTE"), acl(expectedOwner, "EXECUTE")],
       acl_is_default: true,
       arguments: "",
-      config: [],
+      config: ["search_path=pg_catalog, public, pg_temp"],
       name: "set_row_updated_at",
       owner: expectedOwner,
       security_definer: false,
@@ -1230,6 +1430,96 @@ function validAuthorityFunctions() {
 
 function validAuthorityTriggers() {
   return [
+    [
+      "custom_food_nutrient_guard_delete_v3",
+      "food_nutrient_value",
+      "guard_custom_food_immutable_evidence_v3",
+      "CREATE TRIGGER custom_food_nutrient_guard_delete_v3 BEFORE DELETE ON food_nutrient_value FOR EACH ROW EXECUTE FUNCTION guard_custom_food_immutable_evidence_v3()",
+    ],
+    [
+      "custom_food_nutrient_guard_insert_v3",
+      "food_nutrient_value",
+      "guard_custom_food_child_insert_v3",
+      "CREATE TRIGGER custom_food_nutrient_guard_insert_v3 BEFORE INSERT ON food_nutrient_value FOR EACH ROW EXECUTE FUNCTION guard_custom_food_child_insert_v3()",
+    ],
+    [
+      "custom_food_serving_guard_delete_v3",
+      "food_serving",
+      "guard_custom_food_immutable_evidence_v3",
+      "CREATE TRIGGER custom_food_serving_guard_delete_v3 BEFORE DELETE ON food_serving FOR EACH ROW EXECUTE FUNCTION guard_custom_food_immutable_evidence_v3()",
+    ],
+    [
+      "custom_food_serving_guard_insert_v3",
+      "food_serving",
+      "guard_custom_food_child_insert_v3",
+      "CREATE TRIGGER custom_food_serving_guard_insert_v3 BEFORE INSERT ON food_serving FOR EACH ROW EXECUTE FUNCTION guard_custom_food_child_insert_v3()",
+    ],
+    [
+      "custom_food_version_guard_delete_v3",
+      "food_version",
+      "guard_custom_food_immutable_evidence_v3",
+      "CREATE TRIGGER custom_food_version_guard_delete_v3 BEFORE DELETE ON food_version FOR EACH ROW EXECUTE FUNCTION guard_custom_food_immutable_evidence_v3()",
+    ],
+    [
+      "food_barcode_guard_update",
+      "food_barcode",
+      "guard_food_barcode_validity_update",
+      "CREATE TRIGGER food_barcode_guard_update BEFORE UPDATE ON food_barcode FOR EACH ROW EXECUTE FUNCTION guard_food_barcode_validity_update()",
+    ],
+    [
+      "food_barcode_reject_delete",
+      "food_barcode",
+      "guard_source_barcode_delete",
+      "CREATE TRIGGER food_barcode_reject_delete BEFORE DELETE ON food_barcode FOR EACH ROW EXECUTE FUNCTION guard_source_barcode_delete()",
+    ],
+    [
+      "food_nutrient_value_reject_delete",
+      "food_nutrient_value",
+      "guard_imported_food_version_child_delete",
+      "CREATE TRIGGER food_nutrient_value_reject_delete BEFORE DELETE ON food_nutrient_value FOR EACH ROW EXECUTE FUNCTION guard_imported_food_version_child_delete()",
+    ],
+    [
+      "food_nutrient_value_reject_update",
+      "food_nutrient_value",
+      "reject_immutable_row_update",
+      "CREATE TRIGGER food_nutrient_value_reject_update BEFORE UPDATE ON food_nutrient_value FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()",
+    ],
+    [
+      "food_nutrient_value_validate_insert",
+      "food_nutrient_value",
+      "validate_food_version_child_insert",
+      "CREATE TRIGGER food_nutrient_value_validate_insert BEFORE INSERT ON food_nutrient_value FOR EACH ROW EXECUTE FUNCTION validate_food_version_child_insert()",
+    ],
+    [
+      "food_serving_reject_delete",
+      "food_serving",
+      "guard_imported_food_version_child_delete",
+      "CREATE TRIGGER food_serving_reject_delete BEFORE DELETE ON food_serving FOR EACH ROW EXECUTE FUNCTION guard_imported_food_version_child_delete()",
+    ],
+    [
+      "food_serving_reject_update",
+      "food_serving",
+      "reject_immutable_row_update",
+      "CREATE TRIGGER food_serving_reject_update BEFORE UPDATE ON food_serving FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()",
+    ],
+    [
+      "food_serving_validate_insert",
+      "food_serving",
+      "validate_food_version_child_insert",
+      "CREATE TRIGGER food_serving_validate_insert BEFORE INSERT ON food_serving FOR EACH ROW EXECUTE FUNCTION validate_food_version_child_insert()",
+    ],
+    [
+      "food_set_updated_at",
+      "food",
+      "set_row_updated_at",
+      "CREATE TRIGGER food_set_updated_at BEFORE UPDATE ON food FOR EACH ROW EXECUTE FUNCTION set_row_updated_at()",
+    ],
+    [
+      "food_version_reject_update",
+      "food_version",
+      "reject_immutable_row_update",
+      "CREATE TRIGGER food_version_reject_update BEFORE UPDATE ON food_version FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()",
+    ],
     [
       "food_import_approval_guard_authority",
       "food_import_approval",
@@ -1270,7 +1560,7 @@ function validAuthorityTriggers() {
       "food_import_record_guard_update",
       "food_import_record",
       "guard_food_import_record_update",
-      "CREATE TRIGGER food_import_record_guard_update BEFORE UPDATE ON food_import_record FOR EACH ROW EXECUTE FUNCTION guard_food_import_record_update()",
+      "CREATE TRIGGER food_import_record_guard_update BEFORE INSERT OR UPDATE ON food_import_record FOR EACH ROW EXECUTE FUNCTION guard_food_import_record_update()",
     ],
     [
       "food_import_record_reject_delete",
@@ -1325,6 +1615,12 @@ function validAuthorityTriggers() {
       "food_source",
       "set_row_updated_at",
       "CREATE TRIGGER food_source_set_updated_at BEFORE UPDATE ON food_source FOR EACH ROW EXECUTE FUNCTION set_row_updated_at()",
+    ],
+    [
+      "food_source_release_activation_guard_authority",
+      "food_source_release_activation",
+      "guard_food_source_release_activation_authority",
+      "CREATE TRIGGER food_source_release_activation_guard_authority BEFORE INSERT ON food_source_release_activation FOR EACH ROW EXECUTE FUNCTION guard_food_source_release_activation_authority()",
     ],
     [
       "food_source_release_activation_reject_update",
@@ -1521,6 +1817,12 @@ function authorityEvidenceRunner(evidence, failures = {}) {
     if (sql.includes("authority_constraint_policy")) {
       return `${JSON.stringify(evidence.authorityConstraints)}\n`;
     }
+    if (sql.includes("authority_frozen_column_policy")) {
+      return `${JSON.stringify(evidence.authorityFrozenColumns)}\n`;
+    }
+    if (sql.includes("authority_index_policy")) {
+      return `${JSON.stringify(evidence.authorityIndexes)}\n`;
+    }
     if (sql.includes("column_acl_policy")) return `${JSON.stringify(evidence.columnAcls)}\n`;
     if (sql.includes("default_policy")) return `${JSON.stringify(evidence.defaultAcls)}\n`;
     if (sql.includes("explicit_column_acl_attribute_count")) {
@@ -1555,6 +1857,12 @@ function approvalGuardFunction(evidence) {
   );
   if (!guardFunction) throw new Error("Approval guard function fixture is missing");
   return guardFunction;
+}
+
+function authorityFunctionNamed(evidence, functionName) {
+  const functionPolicy = evidence.functions.find((entry) => entry.name === functionName);
+  if (!functionPolicy) throw new Error(`Authority function fixture ${functionName} is missing`);
+  return functionPolicy;
 }
 
 function acl(grantee, privilege, grantor = expectedOwner) {

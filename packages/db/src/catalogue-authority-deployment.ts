@@ -19,19 +19,139 @@ export const CATALOGUE_REVIEWER_CAPABILITIES = {
   rights: "nutrition_catalogue_approve_rights",
 } as const;
 
+export type CatalogueCapabilityRole = (typeof CATALOGUE_CAPABILITY_ROLES)[number];
+
+export type CatalogueFunctionExecuteGrantees =
+  | "default"
+  | "owner-only"
+  | readonly CatalogueCapabilityRole[];
+
 export const CATALOGUE_APPROVAL_FUNCTION_SOURCE_SHA256 =
   "89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac";
 export const CATALOGUE_APPROVAL_GUARD_SOURCE_SHA256 =
   "f96feb298d900165172c56a3fa1e99e91aaca010657155e5a996ee04015fdbbd";
+export const CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256 =
+  "115fdc3ed1943dd77ce70d3a694495da3d2c62ade9c7b82812a89cef82b39f17";
+export const CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256 =
+  "3fe493ee5e0b27e43cc881854dddfe4dc12f862a1c4a242bf712c843b2792ff1";
+export const CATALOGUE_ACTIVATION_GUARD_SOURCE_SHA256 =
+  "d46f53aeffa6469eada5461ab59bd9c23d43bf9aab77704c61b21c44291ae028";
+export const CATALOGUE_ACTIVATION_AUTHORITY_CONSTRAINT_DEFINITION =
+  "CHECK ((database_principal IS NULL AND database_capability_role IS NULL OR database_principal IS NOT NULL AND database_capability_role IS NOT NULL AND octet_length(database_principal) >= 1 AND octet_length(database_principal) <= 63 AND database_capability_role =\nCASE\n    WHEN import_batch_id IS NOT NULL AND operation = 'activate'::text THEN 'nutrition_catalogue_promote_activate'::text\n    WHEN import_batch_id IS NULL AND (operation = ANY (ARRAY['deactivate'::text, 'rollback'::text])) THEN 'nutrition_catalogue_rollback'::text\n    ELSE NULL::text\nEND) IS TRUE)";
+
+export const CATALOGUE_AUTHORITY_CONSTRAINT_POLICY = [
+  {
+    constraintType: "c",
+    definition:
+      "CHECK ((validated_food_contract_version IS NULL AND nutrient_mapping_digest IS NULL AND nutrient_mapping_revision_ids IS NULL OR validated_food_contract_version = 1 AND nutrient_mapping_digest ~ '^[0-9a-f]{64}$'::text AND jsonb_typeof(nutrient_mapping_revision_ids) = 'array'::text AND validated_at IS NOT NULL) IS TRUE)",
+    name: "food_import_batch_materialization_contract_check",
+    tableName: "food_import_batch",
+    validated: true,
+  },
+  {
+    constraintType: "c",
+    definition:
+      "CHECK (((status <> ALL (ARRAY['ready'::text, 'promoting'::text])) OR validated_food_contract_version = 1 AND nutrient_mapping_digest IS NOT NULL AND nutrient_mapping_revision_ids IS NOT NULL) IS TRUE)",
+    name: "food_import_batch_promotable_contract_check",
+    tableName: "food_import_batch",
+    validated: true,
+  },
+  {
+    constraintType: "c",
+    definition:
+      "CHECK ((validated_food_document IS NULL AND validated_food_sha256 IS NULL AND validated_food_contract_version IS NULL AND (validation_status = ANY (ARRAY['pending'::text, 'quarantined'::text, 'valid'::text, 'materialized'::text])) OR validated_food_document IS NOT NULL AND validated_food_sha256 ~ '^[0-9a-f]{64}$'::text AND validated_food_contract_version = 1 AND (validation_status = ANY (ARRAY['valid'::text, 'materialized'::text])) AND jsonb_typeof(validated_food_document::jsonb) = 'object'::text AND validated_food_sha256 = encode(sha256(convert_to(validated_food_document, 'UTF8'::name)), 'hex'::text)) IS TRUE)",
+    name: "food_import_record_validated_food_contract_check",
+    tableName: "food_import_record",
+    validated: true,
+  },
+  {
+    constraintType: "c",
+    definition: CATALOGUE_ACTIVATION_AUTHORITY_CONSTRAINT_DEFINITION,
+    name: "food_source_release_activation_database_authority_check",
+    tableName: "food_source_release_activation",
+    validated: true,
+  },
+] as const;
+
+export const CATALOGUE_AUTHORITY_FROZEN_COLUMN_POLICY = [
+  {
+    columnName: "nutrient_mapping_digest",
+    dataType: "text",
+    defaultExpression: null,
+    notNull: false,
+    schemaName: "public",
+    tableName: "food_import_batch",
+  },
+  {
+    columnName: "nutrient_mapping_revision_ids",
+    dataType: "jsonb",
+    defaultExpression: null,
+    notNull: false,
+    schemaName: "public",
+    tableName: "food_import_batch",
+  },
+  {
+    columnName: "validated_food_contract_version",
+    dataType: "smallint",
+    defaultExpression: null,
+    notNull: false,
+    schemaName: "public",
+    tableName: "food_import_batch",
+  },
+  {
+    columnName: "validated_food_contract_version",
+    dataType: "smallint",
+    defaultExpression: null,
+    notNull: false,
+    schemaName: "public",
+    tableName: "food_import_record",
+  },
+  {
+    columnName: "validated_food_document",
+    dataType: "text",
+    defaultExpression: null,
+    notNull: false,
+    schemaName: "public",
+    tableName: "food_import_record",
+  },
+  {
+    columnName: "validated_food_sha256",
+    dataType: "text",
+    defaultExpression: null,
+    notNull: false,
+    schemaName: "public",
+    tableName: "food_import_record",
+  },
+] as const;
+
+export const CATALOGUE_AUTHORITY_INDEX_POLICY = [
+  {
+    accessMethod: "btree",
+    definition:
+      "CREATE UNIQUE INDEX food_source_release_activation_import_batch_unique ON public.food_source_release_activation USING btree (import_batch_id) WHERE (import_batch_id IS NOT NULL)",
+    isPrimary: false,
+    isReady: true,
+    isUnique: true,
+    isValid: true,
+    keyAttributeCount: 1,
+    keyExpression: "import_batch_id",
+    name: "food_source_release_activation_import_batch_unique",
+    predicate: "import_batch_id IS NOT NULL",
+    schemaName: "public",
+    tableName: "food_source_release_activation",
+    totalAttributeCount: 1,
+  },
+] as const;
 
 export interface CatalogueAuthorityFunctionPolicy {
   readonly arguments: string;
   readonly configuration: "application-schema" | "none";
+  readonly executeGrantees: CatalogueFunctionExecuteGrantees;
   readonly language: "plpgsql" | "sql";
   readonly leakproof: boolean;
   readonly name: string;
   readonly parallel: string;
-  readonly resultType: "boolean" | "trigger" | "void";
+  readonly resultType: "boolean" | "jsonb" | "trigger" | "void";
   readonly securityDefiner: boolean;
   readonly sourceSha256: string;
   readonly strict: boolean;
@@ -41,6 +161,7 @@ export interface CatalogueAuthorityFunctionPolicy {
 const TRIGGER_FUNCTION_POLICY = {
   arguments: "",
   configuration: "application-schema",
+  executeGrantees: "default",
   language: "plpgsql",
   leakproof: false,
   parallel: "u",
@@ -54,6 +175,7 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
   {
     arguments: "",
     configuration: "application-schema",
+    executeGrantees: "default",
     language: "plpgsql",
     leakproof: false,
     name: "advance_food_search_projection_revision",
@@ -67,6 +189,7 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
   {
     arguments: "value text, digest text",
     configuration: "application-schema",
+    executeGrantees: "default",
     language: "sql",
     leakproof: false,
     name: "catalogue_evidence_bundle_uri_is_valid",
@@ -78,9 +201,28 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
     volatility: "i",
   },
   {
+    arguments: "p_batch_id uuid, p_external_principal_id text, p_reason text",
+    configuration: "application-schema",
+    executeGrantees: ["nutrition_catalogue_promote_activate"],
+    language: "plpgsql",
+    leakproof: false,
+    name: "catalogue_promote_import_batch",
+    parallel: "u",
+    resultType: "jsonb",
+    securityDefiner: true,
+    sourceSha256: CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256,
+    strict: false,
+    volatility: "v",
+  },
+  {
     arguments:
       "p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text",
     configuration: "application-schema",
+    executeGrantees: [
+      "nutrition_catalogue_approve_data",
+      "nutrition_catalogue_approve_quality",
+      "nutrition_catalogue_approve_rights",
+    ],
     language: "plpgsql",
     leakproof: false,
     name: "catalogue_record_import_approval",
@@ -88,6 +230,21 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
     resultType: "boolean",
     securityDefiner: true,
     sourceSha256: CATALOGUE_APPROVAL_FUNCTION_SOURCE_SHA256,
+    strict: false,
+    volatility: "v",
+  },
+  {
+    arguments:
+      "p_source_code text, p_target_release_id uuid, p_external_principal_id text, p_reason text",
+    configuration: "application-schema",
+    executeGrantees: ["nutrition_catalogue_rollback"],
+    language: "plpgsql",
+    leakproof: false,
+    name: "catalogue_rollback_source_release",
+    parallel: "u",
+    resultType: "jsonb",
+    securityDefiner: true,
+    sourceSha256: CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
     strict: false,
     volatility: "v",
   },
@@ -123,6 +280,28 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
   },
   {
     ...TRIGGER_FUNCTION_POLICY,
+    executeGrantees: "owner-only",
+    name: "guard_food_source_release_activation_authority",
+    sourceSha256: CATALOGUE_ACTIVATION_GUARD_SOURCE_SHA256,
+  },
+  {
+    ...TRIGGER_FUNCTION_POLICY,
+    name: "guard_custom_food_child_insert_v3",
+    sourceSha256: "f2fc5d7cc06759696b2656f921d57502326ab4efbd6fe1b1554143b117152d88",
+  },
+  {
+    ...TRIGGER_FUNCTION_POLICY,
+    name: "guard_custom_food_immutable_evidence_v3",
+    sourceSha256: "5e450518bc31811221ad64826f6879b177ecec760d88abd0353b14c4aebe3317",
+  },
+  {
+    ...TRIGGER_FUNCTION_POLICY,
+    name: "guard_food_barcode_validity_update",
+    sourceSha256: "7b97f95dd7388565424bd3713081711106a5e3d0c206310a8d405b8772208ecc",
+  },
+  {
+    ...TRIGGER_FUNCTION_POLICY,
+    executeGrantees: "owner-only",
     name: "guard_food_import_approval_authority",
     sourceSha256: CATALOGUE_APPROVAL_GUARD_SOURCE_SHA256,
   },
@@ -134,17 +313,22 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
   {
     ...TRIGGER_FUNCTION_POLICY,
     name: "guard_food_import_batch_update",
-    sourceSha256: "59dc41d73ec62b554caa721e13a2581a75327688f840cab922fddad0ca7be249",
+    sourceSha256: "8863eef0e6889a620deec204e249ac3d6efdc87310dcc9d25601e6d7f336101f",
   },
   {
     ...TRIGGER_FUNCTION_POLICY,
     name: "guard_food_import_batch_validation_digest",
-    sourceSha256: "511c01c16477a31c2de7639a5b48c65e421167c129dfd83377f9256210288ba2",
+    sourceSha256: "c94c16cef462dfaca5c58908c2784e6d86b9f415c1c081f7b6c8a5ca434bddd7",
   },
   {
     ...TRIGGER_FUNCTION_POLICY,
     name: "guard_food_import_record_update",
-    sourceSha256: "b111a6db4f4bd43bf2e9183ecf0ee8b19ccda1ed3679c598ef2f73d58d9cb2d9",
+    sourceSha256: "300e6853e7a9520b477256b3b32a4381f3143512b013a4e131a4c203ce524479",
+  },
+  {
+    ...TRIGGER_FUNCTION_POLICY,
+    name: "guard_imported_food_version_child_delete",
+    sourceSha256: "4e36d3ee5cbd53dc6c98d9f457adbb5ee8cb6cbf8fc6b3e45d3133b4305e7cc1",
   },
   {
     ...TRIGGER_FUNCTION_POLICY,
@@ -178,12 +362,18 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
   },
   {
     ...TRIGGER_FUNCTION_POLICY,
+    name: "guard_source_barcode_delete",
+    sourceSha256: "d4bea8e773166f82f291f1d89b20a7cfb52e2d8416ba80bb455642058d23e3cf",
+  },
+  {
+    ...TRIGGER_FUNCTION_POLICY,
     name: "lock_active_nutrient_registry_before_write",
     sourceSha256: "c10e7e9df6768e94416aba47afe5639ffa7b3abfe5d2a6486a61e229dbe995de",
   },
   {
     arguments: "",
     configuration: "application-schema",
+    executeGrantees: "default",
     language: "sql",
     leakproof: false,
     name: "lock_active_nutrient_registry_for_read",
@@ -212,19 +402,30 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
   },
   {
     ...TRIGGER_FUNCTION_POLICY,
-    configuration: "none",
     name: "set_row_updated_at",
     sourceSha256: "92fa7c305a8b856faea0575b27eaa33c1e39952cf9fe87b4c0cbf7d7eab556bd",
+  },
+  {
+    ...TRIGGER_FUNCTION_POLICY,
+    name: "validate_food_version_child_insert",
+    sourceSha256: "5362678168ed713e602e0fd87bc8b13dccd7817db1cf3d3470f09dcbe37e5f07",
   },
 ];
 
 export const CATALOGUE_AUTHORITY_PROTECTED_TABLES = [
+  "food",
+  "food_barcode",
   "food_import_approval",
   "food_import_batch",
   "food_import_record",
+  "food_nutrient_value",
+  "food_search_projection_revision",
+  "food_serving",
   "food_source",
   "food_source_release",
   "food_source_release_activation",
+  "food_version",
+  "outbox_event",
 ] as const;
 
 export interface CatalogueAuthorityTriggerPolicy {
@@ -235,6 +436,111 @@ export interface CatalogueAuthorityTriggerPolicy {
 }
 
 export const CATALOGUE_AUTHORITY_TRIGGER_POLICY: readonly CatalogueAuthorityTriggerPolicy[] = [
+  {
+    definition:
+      "CREATE TRIGGER custom_food_nutrient_guard_delete_v3 BEFORE DELETE ON food_nutrient_value FOR EACH ROW EXECUTE FUNCTION guard_custom_food_immutable_evidence_v3()",
+    functionName: "guard_custom_food_immutable_evidence_v3",
+    name: "custom_food_nutrient_guard_delete_v3",
+    tableName: "food_nutrient_value",
+  },
+  {
+    definition:
+      "CREATE TRIGGER custom_food_nutrient_guard_insert_v3 BEFORE INSERT ON food_nutrient_value FOR EACH ROW EXECUTE FUNCTION guard_custom_food_child_insert_v3()",
+    functionName: "guard_custom_food_child_insert_v3",
+    name: "custom_food_nutrient_guard_insert_v3",
+    tableName: "food_nutrient_value",
+  },
+  {
+    definition:
+      "CREATE TRIGGER custom_food_serving_guard_delete_v3 BEFORE DELETE ON food_serving FOR EACH ROW EXECUTE FUNCTION guard_custom_food_immutable_evidence_v3()",
+    functionName: "guard_custom_food_immutable_evidence_v3",
+    name: "custom_food_serving_guard_delete_v3",
+    tableName: "food_serving",
+  },
+  {
+    definition:
+      "CREATE TRIGGER custom_food_serving_guard_insert_v3 BEFORE INSERT ON food_serving FOR EACH ROW EXECUTE FUNCTION guard_custom_food_child_insert_v3()",
+    functionName: "guard_custom_food_child_insert_v3",
+    name: "custom_food_serving_guard_insert_v3",
+    tableName: "food_serving",
+  },
+  {
+    definition:
+      "CREATE TRIGGER custom_food_version_guard_delete_v3 BEFORE DELETE ON food_version FOR EACH ROW EXECUTE FUNCTION guard_custom_food_immutable_evidence_v3()",
+    functionName: "guard_custom_food_immutable_evidence_v3",
+    name: "custom_food_version_guard_delete_v3",
+    tableName: "food_version",
+  },
+  {
+    definition:
+      "CREATE TRIGGER food_barcode_guard_update BEFORE UPDATE ON food_barcode FOR EACH ROW EXECUTE FUNCTION guard_food_barcode_validity_update()",
+    functionName: "guard_food_barcode_validity_update",
+    name: "food_barcode_guard_update",
+    tableName: "food_barcode",
+  },
+  {
+    definition:
+      "CREATE TRIGGER food_barcode_reject_delete BEFORE DELETE ON food_barcode FOR EACH ROW EXECUTE FUNCTION guard_source_barcode_delete()",
+    functionName: "guard_source_barcode_delete",
+    name: "food_barcode_reject_delete",
+    tableName: "food_barcode",
+  },
+  {
+    definition:
+      "CREATE TRIGGER food_nutrient_value_reject_delete BEFORE DELETE ON food_nutrient_value FOR EACH ROW EXECUTE FUNCTION guard_imported_food_version_child_delete()",
+    functionName: "guard_imported_food_version_child_delete",
+    name: "food_nutrient_value_reject_delete",
+    tableName: "food_nutrient_value",
+  },
+  {
+    definition:
+      "CREATE TRIGGER food_nutrient_value_reject_update BEFORE UPDATE ON food_nutrient_value FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()",
+    functionName: "reject_immutable_row_update",
+    name: "food_nutrient_value_reject_update",
+    tableName: "food_nutrient_value",
+  },
+  {
+    definition:
+      "CREATE TRIGGER food_nutrient_value_validate_insert BEFORE INSERT ON food_nutrient_value FOR EACH ROW EXECUTE FUNCTION validate_food_version_child_insert()",
+    functionName: "validate_food_version_child_insert",
+    name: "food_nutrient_value_validate_insert",
+    tableName: "food_nutrient_value",
+  },
+  {
+    definition:
+      "CREATE TRIGGER food_serving_reject_delete BEFORE DELETE ON food_serving FOR EACH ROW EXECUTE FUNCTION guard_imported_food_version_child_delete()",
+    functionName: "guard_imported_food_version_child_delete",
+    name: "food_serving_reject_delete",
+    tableName: "food_serving",
+  },
+  {
+    definition:
+      "CREATE TRIGGER food_serving_reject_update BEFORE UPDATE ON food_serving FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()",
+    functionName: "reject_immutable_row_update",
+    name: "food_serving_reject_update",
+    tableName: "food_serving",
+  },
+  {
+    definition:
+      "CREATE TRIGGER food_serving_validate_insert BEFORE INSERT ON food_serving FOR EACH ROW EXECUTE FUNCTION validate_food_version_child_insert()",
+    functionName: "validate_food_version_child_insert",
+    name: "food_serving_validate_insert",
+    tableName: "food_serving",
+  },
+  {
+    definition:
+      "CREATE TRIGGER food_set_updated_at BEFORE UPDATE ON food FOR EACH ROW EXECUTE FUNCTION set_row_updated_at()",
+    functionName: "set_row_updated_at",
+    name: "food_set_updated_at",
+    tableName: "food",
+  },
+  {
+    definition:
+      "CREATE TRIGGER food_version_reject_update BEFORE UPDATE ON food_version FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()",
+    functionName: "reject_immutable_row_update",
+    name: "food_version_reject_update",
+    tableName: "food_version",
+  },
   {
     definition:
       "CREATE TRIGGER food_import_approval_guard_authority BEFORE INSERT ON food_import_approval FOR EACH ROW EXECUTE FUNCTION guard_food_import_approval_authority()",
@@ -279,7 +585,7 @@ export const CATALOGUE_AUTHORITY_TRIGGER_POLICY: readonly CatalogueAuthorityTrig
   },
   {
     definition:
-      "CREATE TRIGGER food_import_record_guard_update BEFORE UPDATE ON food_import_record FOR EACH ROW EXECUTE FUNCTION guard_food_import_record_update()",
+      "CREATE TRIGGER food_import_record_guard_update BEFORE INSERT OR UPDATE ON food_import_record FOR EACH ROW EXECUTE FUNCTION guard_food_import_record_update()",
     functionName: "guard_food_import_record_update",
     name: "food_import_record_guard_update",
     tableName: "food_import_record",
@@ -447,6 +753,13 @@ export const CATALOGUE_AUTHORITY_TRIGGER_POLICY: readonly CatalogueAuthorityTrig
   },
   {
     definition:
+      "CREATE TRIGGER food_source_release_activation_guard_authority BEFORE INSERT ON food_source_release_activation FOR EACH ROW EXECUTE FUNCTION guard_food_source_release_activation_authority()",
+    functionName: "guard_food_source_release_activation_authority",
+    name: "food_source_release_activation_guard_authority",
+    tableName: "food_source_release_activation",
+  },
+  {
+    definition:
       "CREATE TRIGGER food_source_release_activation_reject_update BEFORE DELETE OR UPDATE ON food_source_release_activation FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()",
     functionName: "reject_immutable_row_update",
     name: "food_source_release_activation_reject_update",
@@ -459,11 +772,11 @@ const SHA256 = /^[0-9a-f]{64}$/u;
 const REVIEWER_CLASSES = ["data", "quality", "rights"] as const;
 const NON_REVIEWER_CLASSES = ["api", "unassigned", "worker"] as const;
 
-export type CatalogueCapabilityRole = (typeof CATALOGUE_CAPABILITY_ROLES)[number];
 export type CatalogueReviewerClass = (typeof REVIEWER_CLASSES)[number];
 export type CatalogueNonReviewerClass = (typeof NON_REVIEWER_CLASSES)[number];
 
 export interface CatalogueAuthorityDeploymentPolicy {
+  readonly activationGuardSourceSha256: string;
   readonly applicationSchema: string;
   readonly applicationSchemaOwner: "pg_database_owner";
   readonly approvalFunctionSourceSha256: string;
@@ -473,8 +786,10 @@ export interface CatalogueAuthorityDeploymentPolicy {
   readonly effectiveLoginAllowlist: readonly string[];
   readonly nonReviewerLogins: Readonly<Record<CatalogueNonReviewerClass, string>>;
   readonly policyKind: "catalogue-authority-deployment";
+  readonly promotionFunctionSourceSha256: string;
   readonly reviewerLogins: Readonly<Record<CatalogueReviewerClass, string>>;
-  readonly schemaVersion: 1;
+  readonly rollbackFunctionSourceSha256: string;
+  readonly schemaVersion: 3;
 }
 
 export interface CatalogueRoleMembershipEvidence {
@@ -579,6 +894,7 @@ export interface CatalogueTriggerEvidence {
   readonly functionSchema: string;
   readonly name: string;
   readonly tableName: string;
+  readonly tableSchema: string;
 }
 
 export interface CatalogueAuthorityConstraintEvidence {
@@ -589,6 +905,32 @@ export interface CatalogueAuthorityConstraintEvidence {
   readonly validated: boolean;
 }
 
+export interface CatalogueAuthorityFrozenColumnEvidence {
+  readonly columnName: string;
+  readonly dataType: string;
+  readonly defaultExpression: string | null;
+  readonly notNull: boolean;
+  readonly schemaName: string;
+  readonly tableName: string;
+}
+
+export interface CatalogueAuthorityIndexEvidence {
+  readonly accessMethod: string;
+  readonly definition: string;
+  readonly isPrimary: boolean;
+  readonly isReady: boolean;
+  readonly isUnique: boolean;
+  readonly isValid: boolean;
+  readonly keyAttributeCount: number;
+  readonly keyExpression: string;
+  readonly name: string;
+  readonly owner: string;
+  readonly predicate: string | null;
+  readonly schemaName: string;
+  readonly tableName: string;
+  readonly totalAttributeCount: number;
+}
+
 export interface CatalogueAuthorityDeploymentEvidence {
   readonly applicationSchema: {
     readonly acl: readonly CatalogueAclEvidence[];
@@ -597,6 +939,8 @@ export interface CatalogueAuthorityDeploymentEvidence {
     readonly publicCreate: boolean;
   };
   readonly authorityConstraints: readonly CatalogueAuthorityConstraintEvidence[];
+  readonly authorityFrozenColumns: readonly CatalogueAuthorityFrozenColumnEvidence[];
+  readonly authorityIndexes: readonly CatalogueAuthorityIndexEvidence[];
   readonly functions: readonly CatalogueFunctionEvidence[];
   readonly triggers: readonly CatalogueTriggerEvidence[];
   readonly capabilityRoles: readonly CatalogueCapabilityRoleEvidence[];
@@ -621,7 +965,7 @@ export interface CatalogueAuthorityDeploymentEvidence {
   readonly nonSystemSchemas: readonly string[];
   readonly policySha256: string;
   readonly relations: readonly CatalogueRelationEvidence[];
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 3;
   readonly types: readonly CatalogueTypeEvidence[];
 }
 
@@ -659,7 +1003,7 @@ export interface CatalogueAuthorityCanaryEvidence {
     readonly canary: CatalogueAuthorityCanaryName;
     readonly sqlstate: "23503" | "42501";
   }[];
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 3;
   readonly structure: CatalogueAuthorityDeploymentStructureEvidence;
 }
 
@@ -667,6 +1011,7 @@ export function parseCatalogueAuthorityDeploymentPolicy(
   value: unknown,
 ): CatalogueAuthorityDeploymentPolicy {
   const policy = exactRecord(value, "catalogue authority deployment policy", [
+    "activationGuardSourceSha256",
     "applicationSchema",
     "applicationSchemaOwner",
     "approvalFunctionSourceSha256",
@@ -676,10 +1021,12 @@ export function parseCatalogueAuthorityDeploymentPolicy(
     "effectiveLoginAllowlist",
     "nonReviewerLogins",
     "policyKind",
+    "promotionFunctionSourceSha256",
     "reviewerLogins",
+    "rollbackFunctionSourceSha256",
     "schemaVersion",
   ]);
-  if (policy.policyKind !== "catalogue-authority-deployment" || policy.schemaVersion !== 1) {
+  if (policy.policyKind !== "catalogue-authority-deployment" || policy.schemaVersion !== 3) {
     throw new Error("Catalogue authority deployment policy identity is unsupported");
   }
   if (
@@ -722,13 +1069,29 @@ export function parseCatalogueAuthorityDeploymentPolicy(
     policy.approvalGuardSourceSha256,
     "approvalGuardSourceSha256",
   );
+  const promotionFunctionSourceSha256 = sha256(
+    policy.promotionFunctionSourceSha256,
+    "promotionFunctionSourceSha256",
+  );
+  const rollbackFunctionSourceSha256 = sha256(
+    policy.rollbackFunctionSourceSha256,
+    "rollbackFunctionSourceSha256",
+  );
+  const activationGuardSourceSha256 = sha256(
+    policy.activationGuardSourceSha256,
+    "activationGuardSourceSha256",
+  );
   if (
     approvalFunctionSourceSha256 !== CATALOGUE_APPROVAL_FUNCTION_SOURCE_SHA256 ||
-    approvalGuardSourceSha256 !== CATALOGUE_APPROVAL_GUARD_SOURCE_SHA256
+    approvalGuardSourceSha256 !== CATALOGUE_APPROVAL_GUARD_SOURCE_SHA256 ||
+    promotionFunctionSourceSha256 !== CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256 ||
+    rollbackFunctionSourceSha256 !== CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256 ||
+    activationGuardSourceSha256 !== CATALOGUE_ACTIVATION_GUARD_SOURCE_SHA256
   ) {
     throw new Error("Catalogue authority deployment function digests differ from source policy");
   }
   return {
+    activationGuardSourceSha256,
     applicationSchema: "public",
     applicationSchemaOwner: "pg_database_owner",
     approvalFunctionSourceSha256,
@@ -738,8 +1101,10 @@ export function parseCatalogueAuthorityDeploymentPolicy(
     effectiveLoginAllowlist,
     nonReviewerLogins,
     policyKind: "catalogue-authority-deployment",
+    promotionFunctionSourceSha256,
     reviewerLogins,
-    schemaVersion: 1,
+    rollbackFunctionSourceSha256,
+    schemaVersion: 3,
   };
 }
 
@@ -770,6 +1135,8 @@ export function catalogueAuthorityDeploymentStructure(
   return {
     applicationSchema: evidence.applicationSchema,
     authorityConstraints: evidence.authorityConstraints,
+    authorityFrozenColumns: evidence.authorityFrozenColumns,
+    authorityIndexes: evidence.authorityIndexes,
     capabilityRoles: evidence.capabilityRoles,
     columnAcls: evidence.columnAcls,
     database: {
@@ -800,7 +1167,7 @@ export function assertCatalogueAuthorityDeploymentEvidence(
   evidence: CatalogueAuthorityDeploymentEvidence,
 ): void {
   if (
-    evidence.schemaVersion !== 1 ||
+    evidence.schemaVersion !== 3 ||
     evidence.policySha256 !== catalogueAuthorityDeploymentPolicySha256(policy)
   ) {
     throw new Error("Catalogue authority deployment evidence identity differs");
@@ -856,6 +1223,8 @@ export function assertCatalogueAuthorityDeploymentEvidence(
       ...REVIEWER_CLASSES.map((role) =>
         expectedAcl(CATALOGUE_REVIEWER_CAPABILITIES[role], policy.applicationSchemaOwner, "USAGE"),
       ),
+      expectedAcl("nutrition_catalogue_promote_activate", policy.applicationSchemaOwner, "USAGE"),
+      expectedAcl("nutrition_catalogue_rollback", policy.applicationSchemaOwner, "USAGE"),
       expectedAcl(policy.applicationSchemaOwner, policy.applicationSchemaOwner, "CREATE"),
       expectedAcl(policy.applicationSchemaOwner, policy.applicationSchemaOwner, "USAGE"),
     ],
@@ -967,7 +1336,7 @@ export function assertCatalogueAuthorityCanaryEvidence(
   evidence: CatalogueAuthorityCanaryEvidence,
 ): void {
   if (
-    evidence.schemaVersion !== 1 ||
+    evidence.schemaVersion !== 3 ||
     evidence.policySha256 !== catalogueAuthorityDeploymentPolicySha256(policy)
   ) {
     throw new Error("Catalogue authority canary evidence identity differs");
@@ -1034,17 +1403,27 @@ function assertCatalogueAuthorityStructure(
   evidence: CatalogueAuthorityDeploymentEvidence,
 ): void {
   if (
-    evidence.authorityConstraints.length !== 1 ||
-    canonicalJson(evidence.authorityConstraints[0] as unknown as JsonValue) !==
-      canonicalJson({
-        constraintType: "c",
-        definition: "CHECK (database_principal IS NULL AND database_capability_role IS NULL)",
-        name: "food_source_release_activation_expand_audit_null_check",
-        tableName: "food_source_release_activation",
-        validated: true,
-      })
+    canonicalJson(evidence.authorityConstraints as unknown as JsonValue) !==
+    canonicalJson(CATALOGUE_AUTHORITY_CONSTRAINT_POLICY as unknown as JsonValue)
   ) {
-    throw new Error("Catalogue activation authority constraint differs from policy");
+    throw new Error("Catalogue materialization or activation constraint differs from policy");
+  }
+  if (
+    canonicalJson(evidence.authorityFrozenColumns as unknown as JsonValue) !==
+    canonicalJson(CATALOGUE_AUTHORITY_FROZEN_COLUMN_POLICY as unknown as JsonValue)
+  ) {
+    throw new Error("Catalogue frozen materialization column differs from policy");
+  }
+  if (
+    canonicalJson(evidence.authorityIndexes as unknown as JsonValue) !==
+    canonicalJson(
+      CATALOGUE_AUTHORITY_INDEX_POLICY.map((index) => ({
+        ...index,
+        owner: policy.databaseOwner,
+      })) as unknown as JsonValue,
+    )
+  ) {
+    throw new Error("Catalogue authority index differs from policy");
   }
   if (evidence.defaultAcls.length !== 0) {
     throw new Error("Catalogue authority database has unreviewed default ACLs");
@@ -1161,21 +1540,16 @@ function assertCatalogueAuthorityStructure(
     ) {
       throw new Error(`Catalogue authority function ${expected.name} differs from policy`);
     }
-    const hardened =
-      expected.name === "catalogue_record_import_approval" ||
-      expected.name === "guard_food_import_approval_authority";
-    if (actual.aclIsDefault === hardened || actual.publicExecute === hardened) {
+    const aclIsDefault = expected.executeGrantees === "default";
+    if (actual.aclIsDefault !== aclIsDefault || actual.publicExecute !== aclIsDefault) {
       throw new Error(`Catalogue authority function ${expected.name} ACL representation differs`);
     }
     const grantees =
-      expected.name === "catalogue_record_import_approval"
-        ? [
-            policy.databaseOwner,
-            ...REVIEWER_CLASSES.map((role) => CATALOGUE_REVIEWER_CAPABILITIES[role]),
-          ]
-        : expected.name === "guard_food_import_approval_authority"
+      expected.executeGrantees === "default"
+        ? ["PUBLIC", policy.databaseOwner]
+        : expected.executeGrantees === "owner-only"
           ? [policy.databaseOwner]
-          : ["PUBLIC", policy.databaseOwner];
+          : [policy.databaseOwner, ...expected.executeGrantees];
     assertExactAcl(
       actual.acl,
       grantees.map((grantee) => expectedAcl(grantee, policy.databaseOwner, "EXECUTE")),
@@ -1194,6 +1568,7 @@ function assertCatalogueAuthorityStructure(
     const actual = triggerByName.get(expected.name);
     if (
       !actual ||
+      actual.tableSchema !== policy.applicationSchema ||
       actual.tableName !== expected.tableName ||
       actual.functionSchema !== policy.applicationSchema ||
       actual.functionName !== expected.functionName ||

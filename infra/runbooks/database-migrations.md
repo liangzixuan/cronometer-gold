@@ -113,6 +113,24 @@ custom-food, audit, and immutable-history edges still require the separately
 reviewed privileged deletion workflow before account-deletion compliance can be
 claimed.
 
+## Migration 0019 catalogue wrapper preflight
+
+Migration 0019 must be rehearsed against a restored snapshot before deployment.
+It intentionally stops with SQLSTATE `55000` when a pre-contract batch is
+`ready` or `promoting`, when a completed batch lacks exactly one matching
+activation record, or when any pinned shared-food function/trigger, owner, ACL,
+or search path differs from the reviewed predecessor. Do not fabricate or
+backfill validated-food documents, hashes, mapping revisions, approval actors,
+or activation lineage. Resolve or fail unfinished attempts through a separately
+reviewed procedure and stage a new attempt under contract version 1.
+
+Successful migration freezes no historical authority. Legacy completed/valid
+records may retain the all-null materialization triplet and remain inert; new
+pending-to-valid transitions require canonical document text, matching SHA-256,
+and exact version 1. The promotion/rollback capability roles remain `NOLOGIN`
+and unassigned. Applying the migration is not permission to provision callers,
+grant membership, activate a live release, or revoke owner compatibility.
+
 ## Catalogue and diary lock-order audit
 
 Keep the canonical order `source -> food -> version -> release -> nutrient

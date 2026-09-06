@@ -44,12 +44,11 @@ owner, and ACL plus the approval-guard body, exact owner-only ACL, and ordinary
 enabled trigger. It then pins the transaction-local search path before any
 approval read.
 
-This is EXPAND only. Owner compatibility remains in place; non-owner role cutover
-and the database wrappers for the other catalogue workflow phases are still
-pending. Do not revoke owner-era privileges or treat this slice as the CONTRACT
-phase. Forward migration 0015 keeps the database-audit fields on new or changed
-activation/rollback rows constrained to paired `NULL` values until those reviewed
-wrappers exist. It
+This remains EXPAND only. Owner compatibility remains in place; stage/validate
+wrappers and non-owner role cutover are still pending. Do not revoke owner-era
+privileges or treat this slice as the CONTRACT phase. Forward migration 0015
+temporarily kept database-audit fields on new or changed activation/rollback
+rows constrained to paired `NULL` values until reviewed wrappers existed. It
 detects pre-cutover capability-role membership and legacy paired non-NULL
 activation-authority evidence after installing the stricter constraint as `NOT
 VALID` and reducing the approval function to owner-only execution. It grants the
@@ -73,7 +72,7 @@ application-schema `SECURITY INVOKER` functions and their four ordinary enabled
 statement triggers, then pins each function to that trusted search path without
 changing its body, owner, ACL, or invoker status. It grants no runtime privilege
 and does not make direct non-owner DML safe. Fixed-purpose shared-table wrappers
-remain required before runtime privilege profiles or caller cutover.
+were still required at that boundary.
 
 Forward migration 0018 closes the active-nutrient-registry lock prerequisite.
 It attests the exact existing writer and recipe-reconciliation functions plus
@@ -82,8 +81,20 @@ helper, replaces the recipe reconciler's broad nutrient table lock, pins all
 four search paths, and expands the writer trigger to every update and delete.
 Diary, recipe, goal, custom-food, mapping, and catalogue materialization callers
 now use the same transaction-scoped advisory protocol. The migration adds no
-runtime role or elevated function; fixed-purpose shared-food and catalogue
-workflow wrappers are still required before non-owner cutover.
+runtime role or elevated function.
+
+Forward migration 0019 freezes the canonical validated-food document, its
+SHA-256, contract version 1, the complete active mapping-revision set, and its
+digest before approval. It exposes only schema-qualified, identifier-driven
+`catalogue_promote_import_batch` and `catalogue_rollback_source_release`
+`SECURITY DEFINER` functions. No capability receives table, column, sequence,
+or caller-authored JSON authority. Non-owner promotion requires three distinct
+database-authenticated reviewer principals; the activation guard derives the
+database principal and exact capability from `session_user`, while owner/local
+compatibility records paired null audit fields. The functions preserve the
+batch/source/per-source/registry lock order, reject divergent evidence, and
+materialize only the frozen document. The promote and rollback capability roles
+remain `NOLOGIN` and unassigned; this migration is not caller cutover.
 
 The supported lock boundary is the reviewed transaction-based application
 paths. Arbitrary owner recipe DML may take row or foreign-key locks before the
@@ -95,23 +106,28 @@ registry lock order; the fixed-purpose wrappers must preserve that order.
 
 Logical restores use the transactional policy in
 `restore/0014_catalogue_authority_policy.sql`. It pins the migration-0014
-function/trigger boundary plus the forward migration-0015 activation-null
-constraint and approval/guard-ACL corrections plus migration-0016's two
+function/trigger boundary plus the forward migration-0015 approval/guard-ACL
+corrections plus migration-0016's two
 food-search search paths and source-eligibility trigger plus migration-0017's
 four food/serving/barcode search paths and exact trigger bindings plus
-migration-0018's four nutrient-lock functions and seven trigger bindings. That
-transactional repair policy pins 24 hardened function identities and 26 exact
-trigger bindings. The repository restore drill pins that file's SHA-256,
+migration-0018's four nutrient-lock functions and seven trigger bindings plus
+migration-0019's frozen materialization contract, replacement
+activation-authority constraint, promotion/rollback wrappers, and complete
+shared-food/outbox trigger surface. That transactional repair
+policy pins 35 function identities, 47 exact trigger bindings, the six
+frozen-evidence column definitions, all four authority CHECKs, and the unique
+activation-to-batch index. The repository restore drill pins that file's SHA-256,
 requires an explicit expected owner, keeps `PUBLIC CONNECT` revoked, enforces
 an exact effective login allowlist, and requires the exact
 tracked filename/file-byte-SHA ledger in `public.app_schema_migration` before
 `pg_dump`. It ignores an owner-schema shadow, rechecks the source, corroborates
-the target, and compares a version-8 canonical
-role/schema/type/relation/column-ACL/function/trigger/authority-constraint
-fingerprint, including the independent non-NULL `pg_attribute.attacl` count,
-trigger table schemas, and every binding of a dedicated public authority
-trigger function even when its table is outside `public`, before external-ledger
-replay or API probing. The final report emits that
+the target, and compares a version-10 canonical
+role/schema/type/relation/column-ACL/function/trigger/authority-constraint/
+authority-index fingerprint, including the six frozen-evidence columns, the
+independent non-NULL `pg_attribute.attacl` count, trigger table schemas, and
+every binding of a dedicated public authority trigger function even when its
+table is outside `public`, before external-ledger replay or API probing. The
+final report emits that
 fingerprint's SHA-256. The current EXPAND CI executor and owner
 are the same local login, so this restore control does not claim deployment
 runtime separation or close the remaining role-canary or CONTRACT work.
@@ -156,12 +172,15 @@ The verifier requires the exact `public.app_schema_migration` names and SHA-256s
 from the tracked migration files. It also requires `public` to be the only
 non-system schema and to be owned by `pg_database_owner`. It checks exact
 database/schema ACLs and grantors,
-relation/type/default/column ACL state and owners, the activation constraint,
-all 26 authority function hashes and executable semantics, safe authority on
-every other public routine, and the exact 31-trigger authority set: the prior 24
-plus migration-0018's three nutrient-registry and four recipe-reconciliation
-bindings. It also checks the exact effective-login allowlist, role attributes and
-ownership, the complete membership graph, effective privileges, and seven
+relation/type/default/column ACL state and owners, all four authority CHECKs,
+the six frozen-evidence columns, the unique activation-to-batch index, all 35
+authority function hashes, executable semantics, and exact per-function
+execute ACLs, safe authority on every other public routine, and the exact
+47-trigger authority set across the complete protected shared-food/outbox
+surface, including each trigger's table and function schema. Every binding of a
+dedicated public authority trigger function enters the evidence even when its
+table is outside `public`. It also checks the exact effective-login allowlist,
+role attributes and ownership, the complete membership graph, effective privileges, and seven
 unique expected sessions with no other target-database client. Eight zero-write
 canaries require `23503` for the three matching reviewers and `42501` for a
 mismatched reviewer, unassigned/API/worker execution, and non-executing direct

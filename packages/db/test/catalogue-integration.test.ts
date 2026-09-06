@@ -11,6 +11,7 @@ import {
   type Database,
   getBatchCheckpoint,
   getSourceNutrientMappingDigest,
+  type JsonArray,
   type JsonObject,
   previewBatchValidation,
   promoteBatch,
@@ -48,6 +49,68 @@ const CNF_TABLE_CONTRACT = [
 ] as const;
 
 describeDatabase("catalogue ingestion PostgreSQL integration", () => {
+  it("rejects malformed results from schema-qualified catalogue authority functions", async () => {
+    if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
+    const database = createDatabase({ connectionString: databaseUrl, maxConnections: 2 });
+    const schema = `contract_${randomBytes(4).toString("hex")}`;
+    try {
+      await runMigrations(database);
+      await sql`create schema ${sql.id(schema)}`.execute(database);
+      await sql`
+        create function ${sql.id(schema, "catalogue_promote_import_batch")}(
+          p_batch_id uuid,
+          p_external_principal_id text,
+          p_reason text
+        ) returns jsonb
+        language sql
+        as $function$
+          select pg_catalog.jsonb_build_object(
+            'activatedReleaseId', '00000000-0000-4000-8000-000000000001',
+            'materializedCount', 9007199254740992,
+            'previousReleaseId', null,
+            'wasAlreadyCompleted', false
+          )
+        $function$
+      `.execute(database);
+      await sql`
+        create function ${sql.id(schema, "catalogue_rollback_source_release")}(
+          p_source_code text,
+          p_target_release_id uuid,
+          p_external_principal_id text,
+          p_reason text
+        ) returns jsonb
+        language sql
+        as $function$
+          select pg_catalog.jsonb_build_object(
+            'activeReleaseId', null,
+            'changed', 'yes',
+            'previousReleaseId', null
+          )
+        $function$
+      `.execute(database);
+
+      await expect(
+        promoteBatch(database, {
+          batchId: randomUUID(),
+          performedBy: "service:catalogue-promoter",
+          trustedSchema: schema,
+        }),
+      ).rejects.toThrow("materializedCount must be a non-negative safe integer");
+      await expect(
+        rollbackSourceRelease(database, {
+          performedBy: "principal:release-manager",
+          reason: "Malformed result contract test",
+          sourceCode: "CONTRACT_TEST",
+          targetReleaseId: null,
+          trustedSchema: schema,
+        }),
+      ).rejects.toThrow("changed must be a boolean");
+    } finally {
+      await sql`drop schema if exists ${sql.id(schema)} cascade`.execute(database);
+      await database.destroy();
+    }
+  });
+
   it("separates renewed evidence attempts and rejects non-live or expired authority", async () => {
     if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
     const database = createDatabase({ connectionString: databaseUrl, maxConnections: 4 });
@@ -151,7 +214,7 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
           batchId: fixture.batchId,
           performedBy: "service:catalogue-promoter",
         }),
-      ).rejects.toThrow("without live-reviewed evidence");
+      ).rejects.toThrow("bound live-reviewed evidence");
       await expect(
         database
           .insertInto("food_import_approval")
@@ -165,11 +228,15 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
           })
           .execute(),
       ).rejects.toThrow("approval requires current live-reviewed evidence");
+      const fixtureMappingDigest = await getSourceNutrientMappingDigest(database, sourceCode);
       await database
         .updateTable("food_import_batch")
         .set({
+          nutrient_mapping_digest: fixtureMappingDigest,
+          nutrient_mapping_revision_ids: sql<JsonArray>`'[]'::jsonb`,
           status: "ready",
           validated_at: new Date(),
+          validated_food_contract_version: 1,
           validation_digest: "a".repeat(64),
         })
         .where("id", "=", fixture.batchId)
@@ -404,8 +471,15 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
       ).rejects.toThrow("food_import_batch_evidence_object_version_id_check");
 
       const evidenceValidUntil = new Date(Date.now() + 8_000);
+      const expiringMappingDigest = await getSourceNutrientMappingDigest(database, sourceCode);
       const expiringCompletedBatch = await stageBatch(database, {
-        ...batchInput(sourceCode, "expiring-live-release", rightsSha, "6".repeat(64)),
+        ...batchInput(
+          sourceCode,
+          "expiring-live-release",
+          rightsSha,
+          "6".repeat(64),
+          pinnedParserVersion("7".repeat(64), expiringMappingDigest),
+        ),
         evidenceValidUntil,
       });
       await recordBatchParserReport(database, {
@@ -468,7 +542,7 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
           batchId: expired.batchId,
           performedBy: "service:catalogue-promoter",
         }),
-      ).rejects.toThrow("with expired evidence");
+      ).rejects.toThrow("current live-reviewed evidence");
       await expect(
         database
           .insertInto("food_import_approval")
@@ -874,7 +948,17 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
         sourceCode,
       });
 
-      const firstBatch = await stageBatch(database, batchInput(sourceCode, "release-1", rightsSha));
+      const initialMappingDigest = await getSourceNutrientMappingDigest(database, sourceCode);
+      const firstBatch = await stageBatch(
+        database,
+        batchInput(
+          sourceCode,
+          "release-1",
+          rightsSha,
+          "b".repeat(64),
+          pinnedParserVersion("8".repeat(64), initialMappingDigest),
+        ),
+      );
       const firstRecords = [
         recordInput(foodPayload(sourceCode, "release-1", "food-1", "Oats", "12.5", true), 0),
         recordInput(foodPayload(sourceCode, "release-1", "food-removed", "Barley", "10"), 1),
@@ -896,6 +980,63 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
         replayed: 3,
         stagedCount: "3",
       });
+      const pendingRecord = await database
+        .selectFrom("food_import_record")
+        .select("id")
+        .where("batch_id", "=", firstBatch.batchId)
+        .where("sequence_number", "=", "0")
+        .executeTakeFirstOrThrow();
+      const directValidationBase = {
+        validated_at: new Date(),
+        validation_status: "valid" as const,
+      };
+      await expect(
+        database
+          .updateTable("food_import_record")
+          .set({
+            ...directValidationBase,
+            validated_food_contract_version: 1,
+            validated_food_sha256: "f".repeat(64),
+          })
+          .where("id", "=", pendingRecord.id)
+          .execute(),
+      ).rejects.toThrow("complete frozen materialization contract");
+      await expect(
+        database
+          .updateTable("food_import_record")
+          .set({
+            ...directValidationBase,
+            validated_food_contract_version: 1,
+            validated_food_document: "[]",
+            validated_food_sha256: sha256CanonicalJson([]),
+          })
+          .where("id", "=", pendingRecord.id)
+          .execute(),
+      ).rejects.toThrow("food_import_record_validated_food_contract_check");
+      await expect(
+        database
+          .updateTable("food_import_record")
+          .set({
+            ...directValidationBase,
+            validated_food_contract_version: 1,
+            validated_food_document: "{}",
+            validated_food_sha256: "f".repeat(64),
+          })
+          .where("id", "=", pendingRecord.id)
+          .execute(),
+      ).rejects.toThrow("food_import_record_validated_food_contract_check");
+      await expect(
+        database
+          .updateTable("food_import_record")
+          .set({
+            ...directValidationBase,
+            validated_food_contract_version: 2,
+            validated_food_document: "{}",
+            validated_food_sha256: sha256CanonicalJson({}),
+          })
+          .where("id", "=", pendingRecord.id)
+          .execute(),
+      ).rejects.toThrow("complete frozen materialization contract");
       await recordBatchParserReport(database, {
         batchId: firstBatch.batchId,
         emittedNutrientCount: 2,
@@ -939,13 +1080,62 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
         validCount: 2,
       });
       const firstSummary = await validateBatch(database, firstBatch.batchId, policy);
-      expect(
-        await database
-          .selectFrom("food_import_batch")
-          .select("validation_digest")
-          .where("id", "=", firstBatch.batchId)
-          .executeTakeFirstOrThrow(),
-      ).toEqual({ validation_digest: firstSummary.validationDigest });
+      const frozenBatch = await database
+        .selectFrom("food_import_batch")
+        .select([
+          "nutrient_mapping_digest",
+          "nutrient_mapping_revision_ids",
+          "validated_food_contract_version",
+          "validation_digest",
+        ])
+        .where("id", "=", firstBatch.batchId)
+        .executeTakeFirstOrThrow();
+      expect(frozenBatch).toEqual({
+        nutrient_mapping_digest: firstSummary.nutrientMappingDigest,
+        nutrient_mapping_revision_ids: firstSummary.nutrientMappingRevisionIds,
+        validated_food_contract_version: 1,
+        validation_digest: firstSummary.validationDigest,
+      });
+      const frozenRecords = await database
+        .selectFrom("food_import_record")
+        .select([
+          "id",
+          "source_record_key",
+          "validated_food_contract_version",
+          "validated_food_document",
+          "validated_food_sha256",
+          "validation_status",
+        ])
+        .where("batch_id", "=", firstBatch.batchId)
+        .orderBy("sequence_number")
+        .execute();
+      for (const record of frozenRecords) {
+        const summaryRecord = firstSummary.records.find(
+          (candidate) => candidate.sourceRecordKey === record.source_record_key,
+        );
+        expect(summaryRecord).toBeDefined();
+        if (record.validation_status === "valid") {
+          expect(record.validated_food_contract_version).toBe(1);
+          expect(record.validated_food_document).not.toBeNull();
+          expect(record.validated_food_sha256).toBe(summaryRecord?.validatedFoodSha256);
+          const parsedDocument = JSON.parse(record.validated_food_document ?? "null") as JsonObject;
+          expect(record.validated_food_document).toBe(canonicalJson(parsedDocument));
+          expect(record.validated_food_sha256).toBe(sha256CanonicalJson(parsedDocument));
+        } else {
+          expect(record.validated_food_contract_version).toBeNull();
+          expect(record.validated_food_document).toBeNull();
+          expect(record.validated_food_sha256).toBeNull();
+        }
+      }
+      const firstValidRecord = frozenRecords.find((record) => record.validation_status === "valid");
+      if (!firstValidRecord) throw new Error("Expected a valid frozen catalogue record");
+      await expect(
+        database
+          .updateTable("food_import_record")
+          .set({ validated_food_sha256: "f".repeat(64) })
+          .where("id", "=", firstValidRecord.id)
+          .execute(),
+      ).rejects.toThrow("validated import record evidence cannot be rewritten");
       await expect(
         approveBatch(database, {
           approvalReference: "review://invalid-principal",
@@ -961,7 +1151,7 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
           batchId: firstBatch.batchId,
           performedBy: "service:catalogue-promoter",
         }),
-      ).rejects.toThrow("Data, quality, and rights approvals");
+      ).rejects.toThrow("data, quality, and rights approvals");
       expect(
         await database
           .selectFrom("food_source_release")
@@ -1488,7 +1678,7 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
           batchId: staleMappingBatch.batchId,
           performedBy: "service:catalogue-promoter",
         }),
-      ).rejects.toThrow("Source nutrient mappings changed after this validation attempt");
+      ).rejects.toThrow("active nutrient mappings changed after catalogue validation");
       await expect(
         database
           .updateTable("source_nutrient_map_revision")
@@ -1497,9 +1687,16 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
           .execute(),
       ).rejects.toThrow("immutable row");
 
+      const correctedMappingDigest = await getSourceNutrientMappingDigest(database, sourceCode);
       const secondBatch = await stageBatch(
         database,
-        batchInput(sourceCode, "release-2", rightsSha, "e".repeat(64)),
+        batchInput(
+          sourceCode,
+          "release-2",
+          rightsSha,
+          "e".repeat(64),
+          pinnedParserVersion("9".repeat(64), correctedMappingDigest),
+        ),
       );
       await stageBatchRecords(database, secondBatch.batchId, [
         recordInput(foodPayload(sourceCode, "release-2", "food-1", "Oats, updated", "13"), 0),
@@ -1623,7 +1820,7 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
           sourceCode,
           targetReleaseId: secondPromotion.activatedReleaseId,
         }),
-      ).rejects.toThrow("disabled");
+      ).rejects.toThrow("not eligible for activation");
       await rollbackSourceRelease(database, {
         performedBy: "principal:release-manager",
         reason: "Emergency deactivation after rights revocation",
@@ -2279,6 +2476,408 @@ describeDatabase("catalogue reconciliation PostgreSQL integration", () => {
       await database.destroy();
     }
   }, 30_000);
+
+  it("accepts an exact pre-0019 baseline but rejects partial or mixed materialization evidence", async () => {
+    if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
+    const bootstrap = createDatabase({ connectionString: databaseUrl, maxConnections: 1 });
+    const suffix = randomBytes(4).toString("hex");
+    const schemaName = `catalogue_legacy_baseline_${suffix}`;
+    const scopedUrl = new URL(databaseUrl);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName},public`);
+    const database = createDatabase({
+      connectionString: scopedUrl.toString(),
+      maxConnections: 2,
+    });
+
+    await sql`create schema ${sql.id(schemaName)}`.execute(bootstrap);
+    try {
+      await runMigrations(database);
+      const sourceCode = `RL${suffix.toUpperCase()}`;
+      const rightsSha = "e".repeat(64);
+      const parserBuildSha256 = "6".repeat(64);
+      const sourceId = await registerFoodSourceFromReviewedManifest(database, {
+        attributionRequired: true,
+        attributionText: "Legacy-baseline reconciliation source",
+        code: sourceCode,
+        commercialUseAllowed: true,
+        databaseRightsNotes: "Synthetic pre-0019 compatibility fixture",
+        displayName: `Legacy-baseline source ${suffix}`,
+        homepageUrl: "https://example.invalid/legacy-baseline",
+        kind: "government",
+        licenseExpression: "CC0-1.0",
+        licenseUrl: "https://creativecommons.org/publicdomain/zero/1.0/",
+        redistributionAllowed: true,
+        rightsReviewStatus: "approved",
+        rightsReviewedAt: "2026-08-23T12:00:00Z",
+        rightsReviewedBy: "principal:legal-review",
+      });
+      const mappingDigest = await getSourceNutrientMappingDigest(database, sourceCode);
+      const parserVersion = pinnedParserVersion(parserBuildSha256, mappingDigest);
+      const permissiveEmptyPolicy = {
+        maximumExcludedNutrientFraction: 1,
+        maximumQuarantineFraction: 1,
+        maximumQuarantinedRecords: 0,
+        requireAtLeastOneValidRecord: false,
+        requireDistinctApprovalPrincipals: true,
+        requireMaterializedNutrientPerValidRecord: true,
+      };
+
+      const baselineBatch = await stageBatch(
+        database,
+        batchInput(sourceCode, "legacy-baseline", rightsSha, "c".repeat(64), parserVersion),
+      );
+      await recordReconciliationParserReport(database, {
+        artifactSha256: "c".repeat(64),
+        batchId: baselineBatch.batchId,
+        emittedNutrientCount: 0,
+        emittedPortionCount: 0,
+        emittedRecordCount: 0,
+        nutrientMappingDigest: mappingDigest,
+        parserBuildSha256,
+        releaseKey: "legacy-baseline",
+        sourceCode,
+      });
+      const baselineSummary = await validateBatch(
+        database,
+        baselineBatch.batchId,
+        permissiveEmptyPolicy,
+      );
+      await approveAll(
+        database,
+        baselineBatch.batchId,
+        baselineSummary.validationDigest,
+        rightsSha,
+        schemaName,
+      );
+      const baselinePromotion = await promoteBatch(database, {
+        batchId: baselineBatch.batchId,
+        performedBy: "service:catalogue-promoter",
+        trustedSchema: schemaName,
+      });
+
+      await database.transaction().execute(async (transaction) => {
+        await sql`
+          alter table ${sql.id(schemaName, "food_import_batch")}
+          disable trigger food_import_batch_guard_update
+        `.execute(transaction);
+        await sql`
+          alter table ${sql.id(schemaName, "food_source_release")}
+          disable trigger food_source_release_guard_update
+        `.execute(transaction);
+        await sql`
+          update ${sql.id(schemaName, "food_import_batch")}
+          set
+            nutrient_mapping_digest = null,
+            nutrient_mapping_revision_ids = null,
+            validated_food_contract_version = null
+          where id = ${baselineBatch.batchId}::uuid
+        `.execute(transaction);
+        await sql`
+          update ${sql.id(schemaName, "food_source_release")}
+          set validation_summary =
+            validation_summary - 'validatedFoodContractVersion'
+          where id = ${baselinePromotion.activatedReleaseId}::uuid
+        `.execute(transaction);
+        await sql`
+          alter table ${sql.id(schemaName, "food_source_release")}
+          enable trigger food_source_release_guard_update
+        `.execute(transaction);
+        await sql`
+          alter table ${sql.id(schemaName, "food_import_batch")}
+          enable trigger food_import_batch_guard_update
+        `.execute(transaction);
+      });
+
+      const partialBatchContracts: readonly {
+        readonly nutrient_mapping_digest: string | null;
+        readonly nutrient_mapping_revision_ids: JsonArray | null;
+        readonly validated_food_contract_version: 1 | null;
+      }[] = [
+        {
+          nutrient_mapping_digest: null,
+          nutrient_mapping_revision_ids: null,
+          validated_food_contract_version: 1,
+        },
+        {
+          nutrient_mapping_digest: mappingDigest,
+          nutrient_mapping_revision_ids: null,
+          validated_food_contract_version: null,
+        },
+        {
+          nutrient_mapping_digest: null,
+          nutrient_mapping_revision_ids: [],
+          validated_food_contract_version: null,
+        },
+        {
+          nutrient_mapping_digest: mappingDigest,
+          nutrient_mapping_revision_ids: null,
+          validated_food_contract_version: 1,
+        },
+        {
+          nutrient_mapping_digest: null,
+          nutrient_mapping_revision_ids: [],
+          validated_food_contract_version: 1,
+        },
+        {
+          nutrient_mapping_digest: mappingDigest,
+          nutrient_mapping_revision_ids: [],
+          validated_food_contract_version: null,
+        },
+      ];
+      for (const partialContract of partialBatchContracts) {
+        await expect(
+          database.transaction().execute(async (transaction) => {
+            await sql`
+              alter table ${sql.id(schemaName, "food_import_batch")}
+              disable trigger user
+            `.execute(transaction);
+            await sql`
+              update ${sql.id(schemaName, "food_import_batch")}
+              set
+                nutrient_mapping_digest = ${partialContract.nutrient_mapping_digest},
+                nutrient_mapping_revision_ids = ${
+                  partialContract.nutrient_mapping_revision_ids === null
+                    ? null
+                    : canonicalJson(partialContract.nutrient_mapping_revision_ids)
+                }::jsonb,
+                validated_food_contract_version =
+                  ${partialContract.validated_food_contract_version}::smallint
+              where id = ${baselineBatch.batchId}::uuid
+            `.execute(transaction);
+          }),
+        ).rejects.toThrow("food_import_batch_materialization_contract_check");
+      }
+
+      const candidateBatch = await stageBatch(
+        database,
+        batchInput(sourceCode, "after-legacy-baseline", rightsSha, "d".repeat(64), parserVersion),
+      );
+      await recordReconciliationParserReport(database, {
+        artifactSha256: "d".repeat(64),
+        batchId: candidateBatch.batchId,
+        emittedNutrientCount: 0,
+        emittedPortionCount: 0,
+        emittedRecordCount: 0,
+        nutrientMappingDigest: mappingDigest,
+        parserBuildSha256,
+        releaseKey: "after-legacy-baseline",
+        sourceCode,
+      });
+      const candidateSummary = await validateBatch(
+        database,
+        candidateBatch.batchId,
+        permissiveEmptyPolicy,
+      );
+      const document = await reconcileCatalogueBatch(database, {
+        batchId: candidateBatch.batchId,
+        expectedCurrentReleaseId: baselinePromotion.activatedReleaseId,
+        expectedValidationDigest: candidateSummary.validationDigest,
+      });
+      verifyCatalogueReconciliationDocument(document);
+      expect(document.evidence.baseline).toMatchObject({
+        releaseId: baselinePromotion.activatedReleaseId,
+        releaseKey: "legacy-baseline",
+      });
+      expect(document.evidence.counts).toMatchObject({
+        baselineRecords: "0",
+        candidateRecords: "0",
+      });
+
+      const probeBatch = await stageBatch(
+        database,
+        batchInput(sourceCode, "constraint-probe", rightsSha, "a".repeat(64), parserVersion),
+      );
+      await stageBatchRecords(database, probeBatch.batchId, [
+        recordInput(
+          foodPayload(sourceCode, "constraint-probe", "probe-food", "Constraint probe", "1"),
+          0,
+        ),
+      ]);
+      const probeRecord = await database
+        .withSchema(schemaName)
+        .selectFrom("food_import_record")
+        .select("id")
+        .where("batch_id", "=", probeBatch.batchId)
+        .executeTakeFirstOrThrow();
+      const validFrozenDocument = canonicalJson({});
+      const validFrozenDocumentSha256 = sha256CanonicalJson({});
+      const partialRecordContracts: readonly {
+        readonly validated_food_contract_version: 1 | null;
+        readonly validated_food_document: string | null;
+        readonly validated_food_sha256: string | null;
+      }[] = [
+        {
+          validated_food_contract_version: 1,
+          validated_food_document: null,
+          validated_food_sha256: null,
+        },
+        {
+          validated_food_contract_version: null,
+          validated_food_document: validFrozenDocument,
+          validated_food_sha256: null,
+        },
+        {
+          validated_food_contract_version: null,
+          validated_food_document: null,
+          validated_food_sha256: validFrozenDocumentSha256,
+        },
+        {
+          validated_food_contract_version: 1,
+          validated_food_document: validFrozenDocument,
+          validated_food_sha256: null,
+        },
+        {
+          validated_food_contract_version: 1,
+          validated_food_document: null,
+          validated_food_sha256: validFrozenDocumentSha256,
+        },
+        {
+          validated_food_contract_version: null,
+          validated_food_document: validFrozenDocument,
+          validated_food_sha256: validFrozenDocumentSha256,
+        },
+      ];
+      for (const partialContract of partialRecordContracts) {
+        await expect(
+          database.transaction().execute(async (transaction) => {
+            await sql`
+              alter table ${sql.id(schemaName, "food_import_record")}
+              disable trigger user
+            `.execute(transaction);
+            await sql`
+              update ${sql.id(schemaName, "food_import_record")}
+              set
+                validated_at = pg_catalog.clock_timestamp(),
+                validated_food_contract_version =
+                  ${partialContract.validated_food_contract_version}::smallint,
+                validated_food_document = ${partialContract.validated_food_document},
+                validated_food_sha256 = ${partialContract.validated_food_sha256},
+                validation_status = 'valid'
+              where id = ${probeRecord.id}::bigint
+            `.execute(transaction);
+          }),
+        ).rejects.toThrow("food_import_record_validated_food_contract_check");
+      }
+
+      await expect(
+        database.transaction().execute(async (transaction) => {
+          await sql`
+            alter table ${sql.id(schemaName, "food_import_batch")}
+            disable trigger user
+          `.execute(transaction);
+          await transaction
+            .withSchema(schemaName)
+            .updateTable("food_import_batch")
+            .set({ status: "ready", validated_at: new Date() })
+            .where("id", "=", probeBatch.batchId)
+            .execute();
+        }),
+      ).rejects.toThrow("food_import_batch_promotable_contract_check");
+
+      const invalidActivationAuthorityTuples = [
+        {
+          databaseCapabilityRole: null,
+          databasePrincipal: "catalogue_check_probe",
+          importBatchId: null,
+          operation: "deactivate",
+          releaseId: null,
+        },
+        {
+          databaseCapabilityRole: "nutrition_catalogue_rollback",
+          databasePrincipal: null,
+          importBatchId: null,
+          operation: "deactivate",
+          releaseId: null,
+        },
+        {
+          databaseCapabilityRole: "nutrition_catalogue_promote_activate",
+          databasePrincipal: "catalogue_check_probe",
+          importBatchId: null,
+          operation: "activate",
+          releaseId: baselinePromotion.activatedReleaseId,
+        },
+        {
+          databaseCapabilityRole: "nutrition_catalogue_rollback",
+          databasePrincipal: "catalogue_check_probe",
+          importBatchId: probeBatch.batchId,
+          operation: "rollback",
+          releaseId: baselinePromotion.activatedReleaseId,
+        },
+      ] as const;
+      for (const invalidAuthority of invalidActivationAuthorityTuples) {
+        await expect(
+          database.transaction().execute(async (transaction) => {
+            await sql`
+              alter table ${sql.id(schemaName, "food_source_release_activation")}
+              disable trigger user
+            `.execute(transaction);
+            await sql`
+              insert into ${sql.id(schemaName, "food_source_release_activation")} (
+                database_capability_role,
+                database_principal,
+                food_source_id,
+                import_batch_id,
+                operation,
+                performed_by,
+                reason,
+                release_id
+              ) values (
+                ${invalidAuthority.databaseCapabilityRole},
+                ${invalidAuthority.databasePrincipal},
+                ${sourceId}::bigint,
+                ${invalidAuthority.importBatchId}::uuid,
+                ${invalidAuthority.operation},
+                'principal:constraint-probe',
+                'Reject partial or context-mixed activation authority',
+                ${invalidAuthority.releaseId}::uuid
+              )
+            `.execute(transaction);
+          }),
+        ).rejects.toThrow("food_source_release_activation_database_authority_check");
+      }
+
+      await database.transaction().execute(async (transaction) => {
+        await sql`
+          alter table ${sql.id(schemaName, "food_source_release")}
+          disable trigger food_source_release_guard_update
+        `.execute(transaction);
+        await sql`
+          update ${sql.id(schemaName, "food_source_release")}
+          set validation_summary =
+            validation_summary ||
+            pg_catalog.jsonb_build_object('validatedFoodContractVersion', 1)
+          where id = ${baselinePromotion.activatedReleaseId}::uuid
+        `.execute(transaction);
+        await sql`
+          alter table ${sql.id(schemaName, "food_source_release")}
+          enable trigger food_source_release_guard_update
+        `.execute(transaction);
+      });
+      await expect(
+        reconcileCatalogueBatch(database, {
+          batchId: candidateBatch.batchId,
+          expectedCurrentReleaseId: baselinePromotion.activatedReleaseId,
+          expectedValidationDigest: candidateSummary.validationDigest,
+        }),
+      ).rejects.toThrow("validation evidence differs");
+
+      expect(
+        await database
+          .withSchema(schemaName)
+          .selectFrom("food_source")
+          .select("active_release_id")
+          .where("id", "=", sourceId)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ active_release_id: baselinePromotion.activatedReleaseId });
+    } finally {
+      await database.destroy();
+      try {
+        await sql`drop schema ${sql.id(schemaName)} cascade`.execute(bootstrap);
+      } finally {
+        await bootstrap.destroy();
+      }
+    }
+  }, 60_000);
 
   it("reports cross-source GTIN conflicts and freezes excluded baseline barcode evidence", async () => {
     if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
@@ -3335,6 +3934,7 @@ async function approveAll(
   batchId: string,
   validationDigest: string,
   rightsManifestSha256: string,
+  trustedSchema?: string,
 ) {
   for (const [approvalRole, principalId] of [
     ["data", "principal:data-review"],
@@ -3347,6 +3947,7 @@ async function approveAll(
       batchId,
       principalId,
       rightsManifestSha256,
+      ...(trustedSchema ? { trustedSchema } : {}),
       validationDigest,
     });
   }

@@ -1,4 +1,5 @@
 {
+  "activationGuardSourceSha256": "d46f53aeffa6469eada5461ab59bd9c23d43bf9aab77704c61b21c44291ae028",
   "applicationSchema": "public",
   "applicationSchemaOwner": "pg_database_owner",
   "approvalFunctionSourceSha256": "89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac",
@@ -20,10 +21,12 @@
     "worker": "nutrition_worker"
   },
   "policyKind": "catalogue-authority-deployment",
+  "promotionFunctionSourceSha256": "115fdc3ed1943dd77ce70d3a694495da3d2c62ade9c7b82812a89cef82b39f17",
   "reviewerLogins": {
     "data": "nutrition_catalogue_data_reviewer",
     "quality": "nutrition_catalogue_quality_reviewer",
     "rights": "nutrition_catalogue_rights_reviewer"
   },
-  "schemaVersion": 1
+  "rollbackFunctionSourceSha256": "3fe493ee5e0b27e43cc881854dddfe4dc12f862a1c4a242bf712c843b2792ff1",
+  "schemaVersion": 3
 }

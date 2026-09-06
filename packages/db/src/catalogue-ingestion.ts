@@ -22,13 +22,11 @@ import {
   type ReviewedCatalogueNutrientMapping,
   readCatalogueBarcodeEvidence,
   sha256CanonicalJson,
+  VALIDATED_CATALOGUE_FOOD_CONTRACT_VERSION,
   type ValidatedCatalogueFood,
   validateCatalogueRecord,
 } from "./catalogue-validation.js";
-import {
-  lockActiveNutrientRegistryForRead,
-  lockActiveNutrientRegistryForWrite,
-} from "./nutrient-registry-lock.js";
+import { lockActiveNutrientRegistryForWrite } from "./nutrient-registry-lock.js";
 import type {
   Database,
   FoodImportBatchStatus,
@@ -157,6 +155,8 @@ export interface BatchRecordValidation {
   readonly excludedNutrientCount: number;
   readonly sourceRecordKey: string;
   readonly status: "quarantined" | "valid";
+  readonly validatedFoodContractVersion: 1 | null;
+  readonly validatedFoodSha256: string | null;
 }
 
 export interface BatchValidationSummary {
@@ -165,6 +165,7 @@ export interface BatchValidationSummary {
   readonly nutrientInputCount: number;
   readonly nutrientMaterializableCount: number;
   readonly nutrientMappingDigest: string;
+  readonly nutrientMappingRevisionIds: readonly string[];
   readonly parserExcludedNutrientCount: number;
   readonly parserExcludedPortionCount: number;
   readonly parserExcludedRecordCount: number;
@@ -178,6 +179,7 @@ export interface BatchValidationSummary {
   readonly unresolvedErrorCount: number;
   readonly validCount: number;
   readonly validationDigest: string;
+  readonly validatedFoodContractVersion: 1;
   readonly validationPolicy: BatchValidationPolicy;
   readonly warningCount: number;
 }
@@ -355,6 +357,8 @@ export interface PromoteBatchOptions {
   readonly batchId: string;
   readonly performedBy: string;
   readonly reason?: string;
+  /** Trusted schema containing the fixed-purpose catalogue authority functions. */
+  readonly trustedSchema?: string;
 }
 
 export interface PromoteBatchResult {
@@ -370,6 +374,8 @@ export interface RollbackSourceReleaseInput {
   readonly sourceCode: string;
   /** null deactivates the complete source catalogue. */
   readonly targetReleaseId: string | null;
+  /** Trusted schema containing the fixed-purpose catalogue authority functions. */
+  readonly trustedSchema?: string;
 }
 
 export interface RollbackSourceReleaseResult {
@@ -999,12 +1005,26 @@ async function validateBatchInTransaction(
     return buildValidationSummary(transaction, batch, savedPolicy);
   }
   const normalizedPolicy = normalizePolicy(policy);
-  const summary = await buildValidationSummary(transaction, batch, normalizedPolicy);
+  const observation = await observeBatchValidation(transaction, batch, normalizedPolicy);
+  const summary = observation.summary;
+  const entryByKey = new Map(
+    observation.entries.map((entry) => [entry.record.source_record_key, entry]),
+  );
   const validatedAt = new Date();
   for (const record of summary.records) {
-    await transaction
+    const entry = entryByKey.get(record.sourceRecordKey);
+    if (!entry) throw new Error(`Missing validation entry for ${record.sourceRecordKey}`);
+    const validatedFoodDocument = entry.result.food
+      ? canonicalJson(entry.result.food as unknown as JsonValue)
+      : null;
+    const classified = await transaction
       .updateTable("food_import_record")
       .set({
+        validated_food_contract_version: entry.result.food
+          ? VALIDATED_CATALOGUE_FOOD_CONTRACT_VERSION
+          : null,
+        validated_food_document: validatedFoodDocument,
+        validated_food_sha256: record.validatedFoodSha256,
         validated_at: validatedAt,
         validation_issues: sql<JsonArray>`${canonicalJson(record.issues as JsonValue)}::jsonb`,
         validation_status: record.status,
@@ -1012,7 +1032,10 @@ async function validateBatchInTransaction(
       .where("batch_id", "=", batchId)
       .where("source_record_key", "=", record.sourceRecordKey)
       .where("validation_status", "=", "pending")
-      .execute();
+      .executeTakeFirst();
+    if (classified.numUpdatedRows !== 1n) {
+      throw new Error(`Record ${record.sourceRecordKey} changed before validation could freeze it`);
+    }
   }
   await transaction
     .updateTable("food_import_batch")
@@ -1026,6 +1049,11 @@ async function validateBatchInTransaction(
       valid_count: summary.validCount,
       validated_at: validatedAt,
       validation_digest: summary.validationDigest,
+      validated_food_contract_version: summary.validatedFoodContractVersion,
+      nutrient_mapping_digest: summary.nutrientMappingDigest,
+      nutrient_mapping_revision_ids: sql<JsonArray>`${canonicalJson(
+        summary.nutrientMappingRevisionIds as unknown as JsonValue,
+      )}::jsonb`,
       validation_policy: normalizedPolicy,
       warning_count: summary.warningCount,
     })
@@ -1353,173 +1381,22 @@ export async function promoteBatch(
   database: Kysely<Database>,
   options: PromoteBatchOptions,
 ): Promise<PromoteBatchResult> {
+  if (!UUID_PATTERN.test(options.batchId)) throw new Error("batchId must be a UUID");
   const performedBy = stablePrincipalId(options.performedBy, "performedBy");
-  return database.transaction().execute(async (transaction) => {
-    const initialBatch = await selectBatchForUpdate(transaction, options.batchId);
-    assertLiveReviewedEvidenceBound(initialBatch, "promote");
-    const source = await selectAndLockSource(transaction, initialBatch.food_source_id);
-    await lockSource(transaction, source.id);
-    await lockActiveNutrientRegistryForRead(transaction);
-
-    if (initialBatch.status === "completed") {
-      if (!initialBatch.release_id) throw new Error("Completed batch is missing its release");
-      const originalActivation = await transaction
-        .selectFrom("food_source_release_activation")
-        .select("previous_release_id")
-        .where("import_batch_id", "=", initialBatch.id)
-        .executeTakeFirstOrThrow();
-      return {
-        activatedReleaseId: initialBatch.release_id,
-        materializedCount: Number(initialBatch.materialized_count),
-        previousReleaseId: originalActivation.previous_release_id,
-        wasAlreadyCompleted: true,
-      };
-    }
-    assertLiveReviewedEvidenceCurrent(initialBatch, "promote");
-    assertSourceMayActivate(source);
-    if (initialBatch.status !== "ready" || Number(initialBatch.unresolved_error_count) !== 0) {
-      throw new Error(`Batch ${options.batchId} is not promotion-ready`);
-    }
-
-    const summary = await buildValidationSummary(
-      transaction,
-      initialBatch,
-      normalizePolicy(initialBatch.validation_policy),
-    );
-    if (!summary.promotionEligible || summary.unresolvedErrorCount !== 0) {
-      throw new Error("Validation evidence no longer satisfies promotion policy");
-    }
-    const approvals = await transaction
-      .selectFrom("food_import_approval")
-      .selectAll()
-      .where("batch_id", "=", options.batchId)
-      .execute();
-    const roles = new Set(approvals.map((approval) => approval.approval_role));
-    const approvalsMatch = approvals.every(
-      (approval) =>
-        approval.validation_digest === summary.validationDigest &&
-        approval.rights_manifest_sha256 === initialBatch.rights_manifest_sha256,
-    );
-    if (!approvalsMatch || !roles.has("data") || !roles.has("quality") || !roles.has("rights")) {
-      throw new Error("Data, quality, and rights approvals for current evidence are required");
-    }
-    if (
-      summary.validationPolicy.requireDistinctApprovalPrincipals &&
-      new Set(approvals.map((approval) => approval.principal_id)).size !== approvals.length
-    ) {
-      throw new Error("Promotion policy requires distinct approval principals");
-    }
-
-    const nutrientRegistry = await loadNutrientMappings(transaction, source.id);
-    if (nutrientRegistry.revisionDigest !== summary.nutrientMappingDigest) {
-      throw new Error("Approved validation no longer matches the reviewed nutrient registry");
-    }
-    const release = await createOrLoadRelease(
-      transaction,
-      initialBatch,
-      summary,
-      nutrientRegistry.revisionIds,
-    );
-    await transaction
-      .updateTable("food_import_batch")
-      .set({ release_id: release.id, status: "promoting" })
-      .where("id", "=", initialBatch.id)
-      .execute();
-
-    const validRecords = await transaction
-      .selectFrom("food_import_record")
-      .selectAll()
-      .where("batch_id", "=", options.batchId)
-      .where("validation_status", "=", "valid")
-      .orderBy("sequence_number")
-      .execute();
-    if (validRecords.length !== summary.validCount) {
-      throw new Error("Validated record count changed before promotion");
-    }
-    const forbiddenGtins = await loadForbiddenGtins(transaction, source.id, validRecords);
-
-    const materialized: Array<{
-      foodId: string;
-      foodVersionId: string;
-      gtin: string | null;
-      marketCode: string;
-    }> = [];
-    for (const record of validRecords) {
-      const validation = validateRecordRow(
-        record,
-        initialBatch,
-        source.code,
-        nutrientRegistry.mappings,
-        forbiddenGtins,
-      );
-      if (!validation.recordIsValid || !validation.food) {
-        throw new Error(`Validated record ${record.source_record_key} no longer materializes`);
-      }
-      const linked = await materializeRecord(
-        transaction,
-        initialBatch,
-        release.id,
-        record,
-        validation,
-      );
-      materialized.push(linked);
-    }
-
-    const previousReleaseId = source.active_release_id;
-    assertLiveReviewedEvidenceCurrent(initialBatch, "promote");
-    if (release.status === "imported") {
-      await transaction
-        .updateTable("food_source_release")
-        .set({ promoted_at: new Date(), status: "promoted" })
-        .where("id", "=", release.id)
-        .where("status", "=", "imported")
-        .execute();
-    }
-    await activateCataloguePointers(transaction, source.id, release.id);
-    await replaceActiveBarcodes(transaction, source.id, release.id, materialized);
-    await transaction
-      .updateTable("food_source")
-      .set({ active_release_id: release.id })
-      .where("id", "=", source.id)
-      .execute();
-
-    const activation = await transaction
-      .insertInto("food_source_release_activation")
-      .values({
-        food_source_id: source.id,
-        import_batch_id: initialBatch.id,
-        operation: "activate",
-        performed_by: performedBy,
-        previous_release_id: previousReleaseId,
-        reason: options.reason ?? `Promote import batch ${initialBatch.id}`,
-        release_id: release.id,
-      })
-      .returning("id")
-      .executeTakeFirstOrThrow();
-    await writeActivationOutbox(
-      transaction,
-      source.id,
-      activation.id,
-      previousReleaseId,
-      release.id,
-    );
-
-    await transaction
-      .updateTable("food_import_batch")
-      .set({
-        completed_at: new Date(),
-        materialized_count: materialized.length,
-        status: "completed",
-      })
-      .where("id", "=", initialBatch.id)
-      .execute();
-    return {
-      activatedReleaseId: release.id,
-      materializedCount: materialized.length,
-      previousReleaseId,
-      wasAlreadyCompleted: false,
-    };
-  });
+  const reason = options.reason ?? `Promote import batch ${options.batchId}`;
+  requireBoundedText(reason, "reason", 2_048);
+  const trustedSchema = trustedCatalogueSchema(options.trustedSchema);
+  const result = await sql<{ result: JsonValue }>`
+    select ${sql.id(trustedSchema, "catalogue_promote_import_batch")}(
+      p_batch_id => ${options.batchId}::uuid,
+      p_external_principal_id => ${performedBy}::text,
+      p_reason => ${reason}::text
+    ) as result
+  `.execute(database);
+  if (result.rows.length !== 1) {
+    throw new Error("Catalogue promotion authority returned an unexpected row count");
+  }
+  return parsePromoteBatchResult(result.rows[0]?.result);
 }
 
 /** Repoint or deactivate one source; immutable versions and diary rows are never touched. */
@@ -1529,79 +1406,23 @@ export async function rollbackSourceRelease(
 ): Promise<RollbackSourceReleaseResult> {
   requireText(input.sourceCode, "sourceCode");
   const performedBy = stablePrincipalId(input.performedBy, "performedBy");
-  requireText(input.reason, "reason");
-  return database.transaction().execute(async (transaction) => {
-    const source = await transaction
-      .selectFrom("food_source")
-      .selectAll()
-      .where("code", "=", input.sourceCode)
-      .forUpdate()
-      .executeTakeFirst();
-    if (!source) throw new Error(`Unknown food source ${input.sourceCode}`);
-    await lockSource(transaction, source.id);
-
-    if (input.targetReleaseId) {
-      assertSourceMayActivate(source);
-      const target = await transaction
-        .selectFrom("food_source_release")
-        .select(["id", "release_class", "status"])
-        .where("id", "=", input.targetReleaseId)
-        .where("food_source_id", "=", source.id)
-        .executeTakeFirst();
-      if (!target) {
-        throw new Error(`Release ${input.targetReleaseId} does not belong to ${input.sourceCode}`);
-      }
-      if (target.status !== "promoted") {
-        throw new Error(`Release ${input.targetReleaseId} has never been promoted`);
-      }
-      if (target.release_class !== "live-reviewed") {
-        throw new Error(`Release ${input.targetReleaseId} is not live-reviewed`);
-      }
-    }
-
-    const previousReleaseId = source.active_release_id;
-    if (previousReleaseId === input.targetReleaseId) {
-      return { activeReleaseId: input.targetReleaseId, changed: false, previousReleaseId };
-    }
-    await activateCataloguePointers(transaction, source.id, input.targetReleaseId);
-    await restoreReleaseBarcodes(transaction, source.id, input.targetReleaseId);
-    await transaction
-      .updateTable("food_source")
-      .set({ active_release_id: input.targetReleaseId })
-      .where("id", "=", source.id)
-      .execute();
-
-    const operation = input.targetReleaseId
-      ? previousReleaseId
-        ? "rollback"
-        : "activate"
-      : "deactivate";
-    const activation = await transaction
-      .insertInto("food_source_release_activation")
-      .values({
-        food_source_id: source.id,
-        import_batch_id: null,
-        operation,
-        performed_by: performedBy,
-        previous_release_id: previousReleaseId,
-        reason: input.reason,
-        release_id: input.targetReleaseId,
-      })
-      .returning("id")
-      .executeTakeFirstOrThrow();
-    await writeActivationOutbox(
-      transaction,
-      source.id,
-      activation.id,
-      previousReleaseId,
-      input.targetReleaseId,
-    );
-    return {
-      activeReleaseId: input.targetReleaseId,
-      changed: true,
-      previousReleaseId,
-    };
-  });
+  requireBoundedText(input.reason, "reason", 2_048);
+  if (input.targetReleaseId !== null && !UUID_PATTERN.test(input.targetReleaseId)) {
+    throw new Error("targetReleaseId must be a UUID or null");
+  }
+  const trustedSchema = trustedCatalogueSchema(input.trustedSchema);
+  const result = await sql<{ result: JsonValue }>`
+    select ${sql.id(trustedSchema, "catalogue_rollback_source_release")}(
+      p_source_code => ${input.sourceCode}::text,
+      p_target_release_id => ${input.targetReleaseId}::uuid,
+      p_external_principal_id => ${performedBy}::text,
+      p_reason => ${input.reason}::text
+    ) as result
+  `.execute(database);
+  if (result.rows.length !== 1) {
+    throw new Error("Catalogue rollback authority returned an unexpected row count");
+  }
+  return parseRollbackSourceReleaseResult(result.rows[0]?.result);
 }
 
 interface PinnedParserEvidence {
@@ -2825,6 +2646,27 @@ async function assertBaselineReleaseProvenance(
     validationSummary.nutrientMappingRevisionIds,
     "release validationSummary.nutrientMappingRevisionIds",
   );
+  const frozenContractVersion = batch.validated_food_contract_version;
+  const frozenMappingDigest = batch.nutrient_mapping_digest;
+  const frozenMappingRevisionIds = batch.nutrient_mapping_revision_ids;
+  const isLegacyMaterializationContract =
+    frozenContractVersion === null &&
+    frozenMappingDigest === null &&
+    frozenMappingRevisionIds === null;
+  const isVersionOneMaterializationContract =
+    frozenContractVersion === VALIDATED_CATALOGUE_FOOD_CONTRACT_VERSION &&
+    frozenMappingDigest !== null &&
+    frozenMappingRevisionIds !== null;
+  if (!isLegacyMaterializationContract && !isVersionOneMaterializationContract) {
+    throw new Error("Current release has partial or unsupported frozen materialization evidence");
+  }
+  if (
+    isVersionOneMaterializationContract &&
+    (frozenMappingDigest !== parser.nutrientMappingDigest ||
+      canonicalJson(frozenMappingRevisionIds) !== canonicalJson(nutrientMappingRevisionIds))
+  ) {
+    throw new Error("Current release differs from its frozen batch materialization contract");
+  }
   const nutrientInputCount = Number(batch.nutrient_input_count);
   const validationEvidence: JsonObject = {
     recordErrors,
@@ -2836,6 +2678,9 @@ async function assertBaselineReleaseProvenance(
     parserExcludedPortions: Number(parser.report.excluded_portion_count),
     parserReportSha256: parser.report.report_sha256,
     unresolvedErrors: Number(batch.unresolved_error_count),
+    ...(isVersionOneMaterializationContract
+      ? { validatedFoodContractVersion: VALIDATED_CATALOGUE_FOOD_CONTRACT_VERSION }
+      : {}),
     validationDigest,
     warnings,
   };
@@ -2947,6 +2792,71 @@ function jsonNonNegativeInteger(value: JsonValue | undefined, field: string): nu
     throw new Error(`${field} must be a non-negative safe integer`);
   }
   return value;
+}
+
+function jsonUuid(value: JsonValue | undefined, field: string): string {
+  if (typeof value !== "string" || !UUID_PATTERN.test(value)) {
+    throw new Error(`${field} must be a UUID`);
+  }
+  return value;
+}
+
+function jsonNullableUuid(value: JsonValue | undefined, field: string): string | null {
+  if (value === null) return null;
+  return jsonUuid(value, field);
+}
+
+function jsonBoolean(value: JsonValue | undefined, field: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`${field} must be a boolean`);
+  return value;
+}
+
+function parsePromoteBatchResult(value: JsonValue | undefined): PromoteBatchResult {
+  const result = exactJsonObjectValue(value, "Catalogue promotion authority result", [
+    "activatedReleaseId",
+    "materializedCount",
+    "previousReleaseId",
+    "wasAlreadyCompleted",
+  ]);
+  return {
+    activatedReleaseId: jsonUuid(
+      result.activatedReleaseId,
+      "Catalogue promotion authority result activatedReleaseId",
+    ),
+    materializedCount: jsonNonNegativeInteger(
+      result.materializedCount,
+      "Catalogue promotion authority result materializedCount",
+    ),
+    previousReleaseId: jsonNullableUuid(
+      result.previousReleaseId,
+      "Catalogue promotion authority result previousReleaseId",
+    ),
+    wasAlreadyCompleted: jsonBoolean(
+      result.wasAlreadyCompleted,
+      "Catalogue promotion authority result wasAlreadyCompleted",
+    ),
+  };
+}
+
+function parseRollbackSourceReleaseResult(
+  value: JsonValue | undefined,
+): RollbackSourceReleaseResult {
+  const result = exactJsonObjectValue(value, "Catalogue rollback authority result", [
+    "activeReleaseId",
+    "changed",
+    "previousReleaseId",
+  ]);
+  return {
+    activeReleaseId: jsonNullableUuid(
+      result.activeReleaseId,
+      "Catalogue rollback authority result activeReleaseId",
+    ),
+    changed: jsonBoolean(result.changed, "Catalogue rollback authority result changed"),
+    previousReleaseId: jsonNullableUuid(
+      result.previousReleaseId,
+      "Catalogue rollback authority result previousReleaseId",
+    ),
+  };
 }
 
 function assertSafeCnfArchivePath(value: string): void {
@@ -3365,6 +3275,9 @@ async function observeBatchValidation(
   const records = rows.map((record, index) => {
     const result = validationResults[index];
     if (!result) throw new Error(`Missing validation result for ${record.source_record_key}`);
+    const validatedFoodSha256 = result.food
+      ? sha256CanonicalJson(result.food as unknown as JsonValue)
+      : null;
     return {
       canonicalPayloadSha256: record.canonical_payload_sha256,
       excludedNutrientCount: result.excludedNutrientCount,
@@ -3374,8 +3287,48 @@ async function observeBatchValidation(
       portionInputCount: result.portionInputCount,
       sourceRecordKey: record.source_record_key,
       status: result.recordIsValid ? ("valid" as const) : ("quarantined" as const),
+      validatedFoodContractVersion: result.food ? VALIDATED_CATALOGUE_FOOD_CONTRACT_VERSION : null,
+      validatedFoodSha256,
     };
   });
+  const hasFrozenValidationContract =
+    batch.validated_food_contract_version !== null ||
+    batch.nutrient_mapping_digest !== null ||
+    batch.nutrient_mapping_revision_ids !== null;
+  if (hasFrozenValidationContract) {
+    if (
+      batch.validated_food_contract_version !== VALIDATED_CATALOGUE_FOOD_CONTRACT_VERSION ||
+      batch.nutrient_mapping_digest !== nutrientRegistry.revisionDigest ||
+      batch.nutrient_mapping_revision_ids === null ||
+      canonicalJson(batch.nutrient_mapping_revision_ids) !==
+        canonicalJson(nutrientRegistry.revisionIds as unknown as JsonValue)
+    ) {
+      throw new Error(
+        "Frozen catalogue validation contract no longer matches its nutrient registry",
+      );
+    }
+    for (let index = 0; index < rows.length; index += 1) {
+      const record = rows[index];
+      const result = validationResults[index];
+      if (!record || !result) throw new Error("Catalogue validation observation is incomplete");
+      const expectedDocument = result.food
+        ? canonicalJson(result.food as unknown as JsonValue)
+        : null;
+      const expectedSha256 = result.food
+        ? sha256CanonicalJson(result.food as unknown as JsonValue)
+        : null;
+      const expectedVersion = result.food ? VALIDATED_CATALOGUE_FOOD_CONTRACT_VERSION : null;
+      if (
+        record.validated_food_document !== expectedDocument ||
+        record.validated_food_sha256 !== expectedSha256 ||
+        record.validated_food_contract_version !== expectedVersion
+      ) {
+        throw new Error(
+          `Record ${record.source_record_key} no longer matches its frozen materialization document`,
+        );
+      }
+    }
+  }
   const parserReport = await database
     .selectFrom("food_import_parser_report")
     .selectAll()
@@ -3414,16 +3367,19 @@ async function observeBatchValidation(
     evidenceObjectVersionId: batch.evidence_object_version_id,
     evidenceValidUntil: batch.evidence_valid_until?.toISOString() ?? null,
     nutrientMappingDigest: nutrientRegistry.revisionDigest,
+    nutrientMappingRevisionIds: nutrientRegistry.revisionIds as unknown as JsonArray,
     policy,
     parserEvidence: { ...parserEvidence },
     parserReportSha256: parserReport.report_sha256,
     records: records as unknown as JsonArray,
     releaseClass: batch.release_class,
     rightsManifestSha256: batch.rights_manifest_sha256,
+    validatedFoodContractVersion: VALIDATED_CATALOGUE_FOOD_CONTRACT_VERSION,
   };
   const summary: BatchValidationSummary = {
     ...evaluation,
     nutrientMappingDigest: nutrientRegistry.revisionDigest,
+    nutrientMappingRevisionIds: nutrientRegistry.revisionIds,
     parserExcludedNutrientCount: parserEvidence.excludedNutrientCount,
     parserExcludedPortionCount: parserEvidence.excludedPortionCount,
     parserExcludedRecordCount: parserEvidence.excludedRecordCount,
@@ -3432,6 +3388,7 @@ async function observeBatchValidation(
     records,
     stagedCount: records.length,
     validationDigest: sha256CanonicalJson(digestEvidence),
+    validatedFoodContractVersion: VALIDATED_CATALOGUE_FOOD_CONTRACT_VERSION,
     validationPolicy: policy,
   };
   return {
@@ -3468,422 +3425,6 @@ function validateRecordRow(
     forbiddenGtins,
     duplicateSourceFoodKeys,
   );
-}
-
-async function createOrLoadRelease(
-  transaction: Transaction<Database>,
-  batch: BatchRow,
-  summary: BatchValidationSummary,
-  nutrientMappingRevisionIds: readonly string[],
-): Promise<Selectable<Database["food_source_release"]>> {
-  const recordCounts: JsonObject = {
-    materializable: summary.validCount,
-    nutrientInput: summary.nutrientInputCount,
-    nutrientMaterializable: summary.nutrientMaterializableCount,
-    nutrientExcluded: summary.excludedNutrientCount,
-    parserExcludedRecords: summary.parserExcludedRecordCount,
-    quarantined: summary.quarantinedCount,
-    sourcePortions: summary.portionInputCount,
-    sourceRecords: summary.stagedCount + summary.parserExcludedRecordCount,
-    staged: summary.stagedCount,
-  };
-  const validationSummary: JsonObject = {
-    recordErrors: summary.recordErrorCount,
-    excludedNutrientFraction: summary.excludedNutrientFraction,
-    nutrientMappingDigest: summary.nutrientMappingDigest,
-    nutrientMappingRevisionIds,
-    parserExcludedNutrients: summary.parserExcludedNutrientCount,
-    parserExcludedPortions: summary.parserExcludedPortionCount,
-    parserReportSha256: summary.parserReportSha256,
-    unresolvedErrors: summary.unresolvedErrorCount,
-    validationDigest: summary.validationDigest,
-    warnings: summary.warningCount,
-  };
-  const inserted = await transaction
-    .insertInto("food_source_release")
-    .values({
-      acquired_at: batch.acquired_at,
-      artifact_bytes: batch.artifact_bytes,
-      artifact_sha256: batch.artifact_sha256,
-      artifact_uri: batch.artifact_uri,
-      evidence_bundle_sha256: batch.evidence_bundle_sha256,
-      evidence_bundle_uri: batch.evidence_bundle_uri,
-      evidence_decision_sha256: batch.evidence_decision_sha256,
-      evidence_object_version_id: batch.evidence_object_version_id,
-      evidence_valid_until: batch.evidence_valid_until,
-      food_source_id: batch.food_source_id,
-      media_type: batch.media_type,
-      parser_version: batch.parser_version,
-      published_on: batch.published_on,
-      record_counts: recordCounts,
-      release_class: batch.release_class,
-      release_key: batch.release_key,
-      rights_manifest_uri: batch.rights_manifest_uri,
-      rights_manifest_sha256: batch.rights_manifest_sha256,
-      status: "imported",
-      upstream_schema_version: batch.upstream_schema_version,
-      validation_summary: validationSummary,
-    })
-    .onConflict((conflict) =>
-      conflict.columns(["food_source_id", "release_key", "artifact_sha256"]).doNothing(),
-    )
-    .returningAll()
-    .executeTakeFirst();
-  const release =
-    inserted ??
-    (await transaction
-      .selectFrom("food_source_release")
-      .selectAll()
-      .where("food_source_id", "=", batch.food_source_id)
-      .where("release_key", "=", batch.release_key)
-      .where("artifact_sha256", "=", batch.artifact_sha256)
-      .executeTakeFirstOrThrow());
-  if (
-    release.parser_version !== batch.parser_version ||
-    release.rights_manifest_uri !== batch.rights_manifest_uri ||
-    release.rights_manifest_sha256 !== batch.rights_manifest_sha256 ||
-    release.release_class !== batch.release_class ||
-    release.evidence_bundle_sha256 !== batch.evidence_bundle_sha256 ||
-    release.evidence_bundle_uri !== batch.evidence_bundle_uri ||
-    release.evidence_decision_sha256 !== batch.evidence_decision_sha256 ||
-    release.evidence_object_version_id !== batch.evidence_object_version_id ||
-    timestampIso(release.evidence_valid_until) !== timestampIso(batch.evidence_valid_until) ||
-    canonicalJson(release.record_counts) !== canonicalJson(recordCounts) ||
-    canonicalJson(release.validation_summary) !== canonicalJson(validationSummary)
-  ) {
-    throw new Error("Existing source release provenance differs from the approved batch");
-  }
-  if (release.status !== "imported" && release.status !== "promoted") {
-    throw new Error(`Source release ${release.id} cannot be promoted while ${release.status}`);
-  }
-  return release;
-}
-
-async function materializeRecord(
-  transaction: Transaction<Database>,
-  batch: BatchRow,
-  releaseId: string,
-  record: RecordRow,
-  validation: CatalogueRecordValidationResult,
-): Promise<{
-  foodId: string;
-  foodVersionId: string;
-  gtin: string | null;
-  marketCode: string;
-}> {
-  const food = validation.food;
-  if (!food) throw new Error("Cannot materialize an invalid record");
-  await transaction
-    .insertInto("food")
-    .values({
-      food_source_id: batch.food_source_id,
-      kind: food.kind,
-      owner_user_id: null,
-      source_food_key: food.sourceFoodKey,
-      visibility: "public",
-    })
-    .onConflict((conflict) =>
-      conflict
-        .columns(["food_source_id", "source_food_key"])
-        .where("food_source_id", "is not", null)
-        .doNothing(),
-    )
-    .execute();
-  const foodRow = await transaction
-    .selectFrom("food")
-    .select(["id", "kind"])
-    .where("food_source_id", "=", batch.food_source_id)
-    .where("source_food_key", "=", food.sourceFoodKey)
-    .executeTakeFirstOrThrow();
-  if (foodRow.kind !== food.kind) {
-    throw new Error(`Food ${food.sourceFoodKey} changed kind across source releases`);
-  }
-
-  const existingVersion = await transaction
-    .selectFrom("food_version")
-    .selectAll()
-    .where("food_id", "=", foodRow.id)
-    .where("source_release_id", "=", releaseId)
-    .executeTakeFirst();
-  if (
-    existingVersion &&
-    (existingVersion.attributes.canonicalPayloadSha256 !== record.canonical_payload_sha256 ||
-      existingVersion.attributes.importBatchId !== batch.id)
-  ) {
-    throw new Error(
-      `Source food ${food.sourceFoodKey} maps to conflicting payloads in release ${releaseId}`,
-    );
-  }
-  let foodVersion = existingVersion;
-  if (!foodVersion) {
-    const versionResult = await sql<{ version_number: number }>`
-      select (coalesce(max(version_number), 0) + 1)::integer as version_number
-      from food_version where food_id = ${foodRow.id}
-    `.execute(transaction);
-    const versionNumber = versionResult.rows[0]?.version_number ?? 1;
-    const attributes: JsonObject = {
-      ...food.attributes,
-      canonicalPayloadSha256: record.canonical_payload_sha256,
-      importBatchId: batch.id,
-    };
-    foodVersion = await transaction
-      .insertInto("food_version")
-      .values({
-        attributes,
-        basis_quantity: food.basisQuantity,
-        basis_unit: "g",
-        brand_name: food.brandName,
-        created_by_user_id: null,
-        data_quality: "provisional",
-        description: food.description,
-        food_id: foodRow.id,
-        ingredients_text: null,
-        language_tag: food.languageTag,
-        market_code: food.marketCode,
-        name: food.name,
-        normalized_name: food.normalizedName,
-        source_modified_at: food.sourceModifiedAt,
-        source_release_id: releaseId,
-        version_number: versionNumber,
-      })
-      .returningAll()
-      .executeTakeFirstOrThrow();
-  }
-
-  for (const value of food.nutrients) {
-    const nutrient = await transaction
-      .selectFrom("nutrient")
-      .select(["id", "canonical_unit"])
-      .where("id", "=", value.nutrientId)
-      .where("code", "=", value.nutrientCode)
-      .executeTakeFirstOrThrow();
-    if (nutrient.canonical_unit !== value.canonicalUnit) {
-      throw new Error(`Nutrient ${value.nutrientCode} changed canonical unit during promotion`);
-    }
-    await transaction
-      .insertInto("food_nutrient_value")
-      .values({
-        amount: value.amount,
-        basis_quantity: food.basisQuantity,
-        basis_unit: "g",
-        confidence: null,
-        derivation_code: value.derivationCode,
-        food_version_id: foodVersion.id,
-        metadata: value.metadata,
-        nutrient_id: nutrient.id,
-        source_amount: value.sourceAmount,
-        source_basis_quantity: value.sourceBasisQuantity,
-        source_basis_unit: value.sourceBasisUnit,
-        source_unit: value.sourceUnit,
-        unit: value.canonicalUnit,
-        value_status: value.valueStatus,
-      })
-      .onConflict((conflict) => conflict.columns(["food_version_id", "nutrient_id"]).doNothing())
-      .execute();
-  }
-
-  for (const serving of food.servings) {
-    await transaction
-      .insertInto("food_serving")
-      .values({
-        display_order: serving.displayOrder,
-        food_version_id: foodVersion.id,
-        gram_weight: serving.gramWeight,
-        is_default: serving.isDefault,
-        label: serving.label,
-        metadata: serving.metadata,
-        milliliter_volume: null,
-        quantity: serving.quantity,
-        source_serving_key: serving.sourceServingKey,
-        unit: serving.unit,
-        unit_kind: serving.unitKind,
-      })
-      .onConflict((conflict) =>
-        conflict
-          .columns(["food_version_id", "source_serving_key"])
-          .where("source_serving_key", "is not", null)
-          .doNothing(),
-      )
-      .execute();
-  }
-
-  await transaction
-    .updateTable("food_import_record")
-    .set({
-      food_version_id: foodVersion.id,
-      materialized_at: new Date(),
-      validation_status: "materialized",
-    })
-    .where("id", "=", record.id)
-    .where("validation_status", "=", "valid")
-    .execute();
-  return {
-    foodId: foodRow.id,
-    foodVersionId: foodVersion.id,
-    gtin: food.gtin,
-    marketCode: food.marketCode,
-  };
-}
-
-async function activateCataloguePointers(
-  transaction: Transaction<Database>,
-  sourceId: string,
-  releaseId: string | null,
-): Promise<void> {
-  await sql`
-    update food
-    set current_version_id = null, archived_at = clock_timestamp()
-    where food_source_id = ${sourceId}
-  `.execute(transaction);
-  if (!releaseId) return;
-  await sql`
-    update food as target
-    set current_version_id = version.id, archived_at = null
-    from food_version as version
-    where target.food_source_id = ${sourceId}
-      and version.food_id = target.id
-      and version.source_release_id = ${releaseId}
-  `.execute(transaction);
-}
-
-async function replaceActiveBarcodes(
-  transaction: Transaction<Database>,
-  sourceId: string,
-  releaseId: string,
-  materialized: readonly {
-    foodId: string;
-    foodVersionId: string;
-    gtin: string | null;
-    marketCode: string;
-  }[],
-): Promise<void> {
-  await closeActiveBarcodes(transaction, sourceId);
-  for (const item of materialized) {
-    if (!item.gtin) continue;
-    const inserted = await sql<{ id: string }>`
-      insert into food_barcode (
-        food_id,
-        food_serving_id,
-        food_version_id,
-        gtin,
-        market_code,
-        metadata,
-        source_release_id
-      ) values (
-        ${item.foodId},
-        null,
-        ${item.foodVersionId},
-        ${item.gtin},
-        ${item.marketCode},
-        jsonb_build_object('activation', 'promotion'),
-        ${releaseId}
-      )
-      on conflict ((lpad(gtin, 14, '0')), market_code)
-        where valid_to is null
-        do nothing
-      returning id
-    `.execute(transaction);
-    if (!inserted.rows[0]) {
-      throw new Error(`GTIN ${item.gtin} became unavailable after validation`);
-    }
-  }
-}
-
-async function restoreReleaseBarcodes(
-  transaction: Transaction<Database>,
-  sourceId: string,
-  releaseId: string | null,
-): Promise<void> {
-  if (!releaseId) {
-    await closeActiveBarcodes(transaction, sourceId);
-    return;
-  }
-  const conflicts = await sql<{ gtin: string; market_code: string }>`
-    select distinct desired.gtin, desired.market_code
-    from food_barcode as desired
-    join food as desired_food on desired_food.id = desired.food_id
-    join food_barcode as active
-      on lpad(active.gtin, 14, '0') = lpad(desired.gtin, 14, '0')
-      and active.market_code = desired.market_code
-      and active.valid_to is null
-    join food as active_food on active_food.id = active.food_id
-    where desired_food.food_source_id = ${sourceId}
-      and desired.source_release_id = ${releaseId}
-      and active_food.food_source_id is distinct from ${sourceId}
-  `.execute(transaction);
-  if (conflicts.rows.length > 0) {
-    const conflict = conflicts.rows[0];
-    throw new Error(
-      `Cannot restore GTIN ${conflict?.gtin}/${conflict?.market_code}; another source owns it`,
-    );
-  }
-  await closeActiveBarcodes(transaction, sourceId);
-  await sql`
-    insert into food_barcode (
-      gtin, market_code, food_id, food_version_id, food_serving_id,
-      source_release_id, valid_from, metadata
-    )
-    select distinct on (lpad(barcode.gtin, 14, '0'), barcode.market_code)
-      lpad(barcode.gtin, 14, '0'),
-      barcode.market_code,
-      barcode.food_id,
-      barcode.food_version_id,
-      barcode.food_serving_id,
-      barcode.source_release_id,
-      clock_timestamp(),
-      jsonb_build_object('activation', 'rollback', 'priorBarcodeId', barcode.id)
-    from food_barcode as barcode
-    join food as source_food on source_food.id = barcode.food_id
-    where source_food.food_source_id = ${sourceId}
-      and barcode.source_release_id = ${releaseId}
-    order by
-      lpad(barcode.gtin, 14, '0'),
-      barcode.market_code,
-      barcode.created_at desc,
-      barcode.id desc
-  `.execute(transaction);
-}
-
-async function closeActiveBarcodes(
-  transaction: Transaction<Database>,
-  sourceId: string,
-): Promise<void> {
-  await sql`
-    update food_barcode as barcode
-    set valid_to = clock_timestamp()
-    from food as source_food
-    where source_food.id = barcode.food_id
-      and source_food.food_source_id = ${sourceId}
-      and barcode.valid_to is null
-  `.execute(transaction);
-}
-
-async function writeActivationOutbox(
-  transaction: Transaction<Database>,
-  sourceId: string,
-  activationId: string,
-  previousReleaseId: string | null,
-  releaseId: string | null,
-): Promise<void> {
-  const payload: JsonObject = { activationId, previousReleaseId, releaseId, sourceId };
-  await transaction
-    .insertInto("outbox_event")
-    .values({
-      aggregate_id: sourceId,
-      aggregate_type: "food_source",
-      attempt_count: 0,
-      available_at: new Date(),
-      deduplication_key: `catalogue-activation:${activationId}`,
-      event_version: 1,
-      event_type: "catalogue.source_release_activated",
-      headers: {},
-      last_error: null,
-      locked_at: null,
-      locked_by: null,
-      payload,
-      published_at: null,
-    })
-    .execute();
 }
 
 interface NutrientMappingDigestRow {
@@ -4193,35 +3734,10 @@ async function selectBatchForUpdate(
   return batch;
 }
 
-async function selectAndLockSource(
-  transaction: Transaction<Database>,
-  sourceId: string,
-): Promise<Selectable<Database["food_source"]>> {
-  return transaction
-    .selectFrom("food_source")
-    .selectAll()
-    .where("id", "=", sourceId)
-    .forUpdate()
-    .executeTakeFirstOrThrow();
-}
-
 async function lockSource(transaction: Transaction<Database>, sourceId: string): Promise<void> {
   await sql`
     select pg_advisory_xact_lock(hashtext(${SOURCE_LOCK_NAMESPACE}), hashtext(${sourceId}))
   `.execute(transaction);
-}
-
-function assertSourceMayActivate(source: Selectable<Database["food_source"]>): void {
-  if (!source.active) throw new Error(`Food source ${source.code} is disabled`);
-  if (source.commercial_use_allowed !== true) {
-    throw new Error(`Food source ${source.code} is not approved for commercial use`);
-  }
-  if (source.rights_review_status !== "approved" && source.rights_review_status !== "restricted") {
-    throw new Error(`Food source ${source.code} does not have an approved rights review`);
-  }
-  if (!source.rights_reviewed_at || !source.rights_reviewed_by) {
-    throw new Error(`Food source ${source.code} rights review evidence is incomplete`);
-  }
 }
 
 function normalizePolicy(

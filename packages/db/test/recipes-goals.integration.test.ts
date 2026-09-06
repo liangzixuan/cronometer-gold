@@ -12,6 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   assertDatabaseMigrationLedgerReady,
+  canonicalJson,
   createDatabase,
   createFoodDiaryEntry,
   createNutritionGoal,
@@ -42,6 +43,7 @@ import {
   reviseNutritionGoal,
   reviseRecipe,
   runMigrations,
+  sha256CanonicalJson,
   updateDiaryEntry,
   updateUserProfile,
 } from "../src/index.js";
@@ -1864,22 +1866,61 @@ async function seedCatalogue(database: ReturnType<typeof createDatabase>): Promi
       })
       .returning("id")
       .executeTakeFirstOrThrow();
-    await transaction
+    const validatedFood = {
+      attributes: {
+        idempotencyKey: `recipe-food-${suffix}:1`,
+        sourcePayloadSha256: "4".repeat(64),
+        unlistedNutrientPolicy: "unknown_not_reported",
+      },
+      basisQuantity: "100",
+      brandName: null,
+      description: null,
+      gtin: null,
+      kind: "generic" as const,
+      languageTag: "en-US",
+      marketCode: "US",
+      name: "Recipe Crackers",
+      normalizedName: "recipe crackers",
+      nutrients: [],
+      servings: [],
+      sourceDataType: "fixture",
+      sourceFoodKey: `recipe-food-${suffix}`,
+      sourceModifiedAt: null,
+    };
+    const validatedFoodDocument = canonicalJson(validatedFood);
+    const record = await transaction
       .insertInto("food_import_record")
       .values({
         batch_id: batch,
         canonical_payload: { fixture: true },
         canonical_payload_sha256: "3".repeat(64),
-        food_version_id: version.id,
-        materialized_at: "2026-08-15T01:00:00Z",
         sequence_number: 1,
         source_payload_sha256: "4".repeat(64),
         source_record_key: `recipe-food-${suffix}:1`,
         source_record_type: "fixture",
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    await transaction
+      .updateTable("food_import_record")
+      .set({
         validated_at: "2026-08-15T00:30:00Z",
+        validated_food_contract_version: 1,
+        validated_food_document: validatedFoodDocument,
+        validated_food_sha256: sha256CanonicalJson(validatedFood),
         validation_issues: sql`'[]'::jsonb`,
+        validation_status: "valid",
+      })
+      .where("id", "=", record.id)
+      .execute();
+    await transaction
+      .updateTable("food_import_record")
+      .set({
+        food_version_id: version.id,
+        materialized_at: "2026-08-15T01:00:00Z",
         validation_status: "materialized",
       })
+      .where("id", "=", record.id)
       .execute();
     await transaction
       .updateTable("food")
@@ -1918,6 +1959,15 @@ async function seedCatalogue(database: ReturnType<typeof createDatabase>): Promi
         })
         .execute();
     }
+    await transaction
+      .updateTable("food_import_batch")
+      .set({
+        completed_at: "2026-08-15T01:00:00Z",
+        materialized_count: 1,
+        status: "completed",
+      })
+      .where("id", "=", batch)
+      .execute();
     await transaction
       .updateTable("food_source_release")
       .set({ promoted_at: "2026-08-15T02:00:00Z", status: "promoted" })
@@ -2008,8 +2058,11 @@ async function insertBatch(
   await transaction
     .updateTable("food_import_batch")
     .set({
+      nutrient_mapping_digest: sha256CanonicalJson([]),
+      nutrient_mapping_revision_ids: sql`'[]'::jsonb`,
       status: "ready",
       validated_at: "2026-08-15T00:30:00Z",
+      validated_food_contract_version: 1,
       validation_digest: "d".repeat(64),
     })
     .where("id", "=", batch.id)
@@ -2017,15 +2070,6 @@ async function insertBatch(
   await transaction
     .updateTable("food_import_batch")
     .set({ release_id: releaseId, status: "promoting" })
-    .where("id", "=", batch.id)
-    .execute();
-  await transaction
-    .updateTable("food_import_batch")
-    .set({
-      completed_at: "2026-08-15T01:00:00Z",
-      materialized_count: 1,
-      status: "completed",
-    })
     .where("id", "=", batch.id)
     .execute();
   return batch.id;

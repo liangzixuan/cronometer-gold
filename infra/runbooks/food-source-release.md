@@ -470,6 +470,15 @@ Only a `live-reviewed` batch with current bound evidence and all three distinct
 role approvals may enter a new promotion. `fixture-nonrelease` and
 `legacy-unbound` batches are rejected before they can become live authority.
 
+Validation must already have frozen contract-version-1 canonical food documents,
+their SHA-256 values, and the complete active mapping-revision set. Promotion
+accepts only the batch UUID, external descriptive principal, and bounded reason
+through `catalogue_promote_import_batch`; it never accepts caller-authored food,
+nutrient, serving, or barcode JSON. A non-owner caller must hold exactly the
+promote/activate capability, and all three approvals must carry distinct
+database-authenticated reviewer principals. Owner/local rehearsal retains paired
+null database-audit fields.
+
 In one database transaction, create the imported source release and immutable food
 versions, advance only validated food current-version pointers, mark the source
 release promoted, and enqueue an
@@ -489,3 +498,11 @@ Any rollback target must already be a promoted `live-reviewed` release for the s
 source. A fixture or `legacy-unbound` row cannot be newly selected or reactivated;
 the migration may preserve an existing historical pointer until a reviewed live
 release replaces it.
+
+Rollback accepts only source code, target release UUID (or null to deactivate),
+external descriptive principal, and bounded reason through
+`catalogue_rollback_source_release`. The database derives the authenticated
+principal/capability and records every non-null target as operation `rollback`;
+callers cannot supply audit fields or mutate pointers/barcodes/outbox tables
+directly. These functions are source-complete but their `NOLOGIN` capability
+roles remain unassigned until the separately reviewed deployment/caller cutover.

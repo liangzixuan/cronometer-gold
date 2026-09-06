@@ -39,6 +39,7 @@ import {
   getPrivacyExportJob,
   issueEmailVerificationToken,
   issuePasswordRecoveryToken,
+  type JsonArray,
   MAX_PRIVACY_EXPORT_SNAPSHOT_BYTES,
   type PrivacyExportEntity,
   reconcileErasedAccountRows,
@@ -335,6 +336,84 @@ async function seedPromotedPublicFood(
       })
       .returning("id")
       .executeTakeFirstOrThrow();
+    const mappingReviewedBy = "principal:retention-privacy-drill";
+    const nutrientMappings = [
+      {
+        canonicalUnit: "kcal",
+        conversionMultiplier: "1",
+        nutrientCode: "energy",
+        nutrientDimension: "energy",
+        nutrientId: input.energyNutrientId,
+        nutrientName: "Energy",
+        revisionId: randomUUID(),
+        sourceName: "Energy",
+        sourceNutrientKey: "energy",
+        sourceUnit: "kcal",
+      },
+      {
+        canonicalUnit: "g",
+        conversionMultiplier: "1",
+        nutrientCode: "retention_e2e_protein",
+        nutrientDimension: "mass",
+        nutrientId: input.proteinNutrientId,
+        nutrientName: "Retention E2E protein",
+        revisionId: randomUUID(),
+        sourceName: "Protein",
+        sourceNutrientKey: "protein",
+        sourceUnit: "g",
+      },
+    ] as const;
+    const nutrientMappingDigest = sha256(
+      canonicalJson(
+        nutrientMappings.map((mapping) => ({
+          canonicalUnit: mapping.canonicalUnit,
+          conversionMultiplier: mapping.conversionMultiplier,
+          nutrientCode: mapping.nutrientCode,
+          nutrientDimension: mapping.nutrientDimension,
+          nutrientId: mapping.nutrientId,
+          nutrientName: mapping.nutrientName,
+          revisionId: mapping.revisionId,
+          sourceNutrientKey: mapping.sourceNutrientKey,
+          sourceUnit: mapping.sourceUnit,
+        })),
+      ),
+    );
+    await transaction
+      .insertInto("source_nutrient_map")
+      .values(
+        nutrientMappings.map((mapping) => ({
+          conversion_multiplier: mapping.conversionMultiplier,
+          current_revision_id: mapping.revisionId,
+          food_source_id: source.id,
+          mapping_notes: null,
+          nutrient_id: mapping.nutrientId,
+          reviewed_at: input.now,
+          reviewed_by: mappingReviewedBy,
+          source_name: mapping.sourceName,
+          source_nutrient_key: mapping.sourceNutrientKey,
+          source_unit: mapping.sourceUnit,
+        })),
+      )
+      .execute();
+    await transaction
+      .insertInto("source_nutrient_map_revision")
+      .values(
+        nutrientMappings.map((mapping) => ({
+          change_reason: "Initial retention integration fixture mapping",
+          conversion_multiplier: mapping.conversionMultiplier,
+          food_source_id: source.id,
+          id: mapping.revisionId,
+          mapping_notes: null,
+          nutrient_id: mapping.nutrientId,
+          reviewed_at: input.now,
+          reviewed_by: mappingReviewedBy,
+          source_name: mapping.sourceName,
+          source_nutrient_key: mapping.sourceNutrientKey,
+          source_unit: mapping.sourceUnit,
+          supersedes_revision_id: null,
+        })),
+      )
+      .execute();
     const release = await transaction
       .insertInto("food_source_release")
       .values({
@@ -349,7 +428,7 @@ async function seedPromotedPublicFood(
         evidence_valid_until: evidenceValidUntil,
         food_source_id: source.id,
         media_type: "application/json",
-        parser_version: "retention-privacy-drill@1",
+        parser_version: `retention-privacy-drill@1+mapping.${nutrientMappingDigest}`,
         promoted_at: null,
         published_on: instant.slice(0, 10),
         record_counts: { records: 1 },
@@ -377,7 +456,9 @@ async function seedPromotedPublicFood(
         evidence_valid_until: evidenceValidUntil,
         food_source_id: source.id,
         media_type: "application/json",
-        parser_version: "retention-privacy-drill@1",
+        nutrient_input_count: nutrientMappings.length,
+        nutrient_materializable_count: nutrientMappings.length,
+        parser_version: `retention-privacy-drill@1+mapping.${nutrientMappingDigest}`,
         published_on: instant.slice(0, 10),
         release_class: "live-reviewed",
         release_key: `retention-public-${suffix}`,
@@ -392,8 +473,19 @@ async function seedPromotedPublicFood(
     await transaction
       .updateTable("food_import_batch")
       .set({
+        nutrient_mapping_digest: nutrientMappingDigest,
+        nutrient_mapping_revision_ids: transaction
+          .selectFrom("source_nutrient_map")
+          .select((expressionBuilder) =>
+            expressionBuilder.fn
+              .agg<JsonArray>("jsonb_agg", ["current_revision_id"])
+              .orderBy("current_revision_id")
+              .as("revision_ids"),
+          )
+          .where("food_source_id", "=", source.id),
         status: "ready",
         validated_at: input.now,
+        validated_food_contract_version: 1,
         validation_digest: "d".repeat(64),
       })
       .where("id", "=", batch.id)
@@ -401,11 +493,6 @@ async function seedPromotedPublicFood(
     await transaction
       .updateTable("food_import_batch")
       .set({ release_id: release.id, status: "promoting" })
-      .where("id", "=", batch.id)
-      .execute();
-    await transaction
-      .updateTable("food_import_batch")
-      .set({ completed_at: input.now, materialized_count: 1, status: "completed" })
       .where("id", "=", batch.id)
       .execute();
     const food = await transaction
@@ -442,21 +529,89 @@ async function seedPromotedPublicFood(
       })
       .returning("id")
       .executeTakeFirstOrThrow();
-    await transaction
+    const sourcePayloadSha256 = sha256("retention-public-source-payload");
+    const validatedNutrients = nutrientMappings.map((mapping) => {
+      const amount = mapping.nutrientCode === "energy" ? "321" : "17.5";
+      return {
+        amount,
+        canonicalUnit: mapping.canonicalUnit,
+        dataPoints: null,
+        derivationCode: null,
+        metadata: {
+          dataPoints: null,
+          derivationCode: null,
+          mappingRevisionId: mapping.revisionId,
+          sourceName: mapping.sourceName,
+          sourceNutrientId: mapping.sourceNutrientKey,
+          sourceUnit: mapping.sourceUnit,
+        },
+        mappingRevisionId: mapping.revisionId,
+        nutrientCode: mapping.nutrientCode,
+        nutrientId: mapping.nutrientId,
+        sourceAmount: amount,
+        sourceBasisQuantity: "100",
+        sourceBasisUnit: "g" as const,
+        sourceName: mapping.sourceName,
+        sourceNutrientId: mapping.sourceNutrientKey,
+        sourceUnit: mapping.sourceUnit,
+        valueStatus: "measured" as const,
+      };
+    });
+    const validatedFood = {
+      attributes: {
+        idempotencyKey: `retention-public-${suffix}`,
+        sourcePayloadSha256,
+        unlistedNutrientPolicy: "unknown_not_reported",
+      },
+      basisQuantity: "100",
+      brandName: null,
+      description: "Synthetic source-backed public food",
+      gtin: null,
+      kind: "generic" as const,
+      languageTag: "en-US",
+      marketCode: "US",
+      name: "Retention public food",
+      normalizedName: "retention public food",
+      nutrients: validatedNutrients,
+      servings: [],
+      sourceDataType: "fixture",
+      sourceFoodKey: `retention-public-${suffix}`,
+      sourceModifiedAt: instant,
+    };
+    const canonicalPayload = { name: "Retention public food", synthetic: true };
+    const record = await transaction
       .insertInto("food_import_record")
       .values({
         batch_id: batch.id,
-        canonical_payload: { name: "Retention public food", synthetic: true },
-        canonical_payload_sha256: sha256("retention-public-canonical-payload"),
-        food_version_id: version.id,
-        materialized_at: input.now,
+        canonical_payload: canonicalPayload,
+        canonical_payload_sha256: sha256(canonicalJson(canonicalPayload)),
         sequence_number: 0,
-        source_payload_sha256: sha256("retention-public-source-payload"),
+        source_payload_sha256: sourcePayloadSha256,
         source_record_key: `retention-public-${suffix}`,
         source_record_type: "fixture",
+      })
+      .returning("id")
+      .executeTakeFirstOrThrow();
+    await transaction
+      .updateTable("food_import_record")
+      .set({
         validated_at: input.now,
+        validated_food_contract_version: 1,
+        validated_food_document: canonicalJson(validatedFood),
+        validated_food_sha256: sha256(canonicalJson(validatedFood)),
+        validation_issues: transaction.fn<JsonArray>("jsonb_build_array", []),
+        validation_status: "valid",
+      })
+      .where("id", "=", record.id)
+      .execute();
+    await transaction
+      .updateTable("food_import_record")
+      .set({
+        food_version_id: version.id,
+        materialized_at: input.now,
         validation_status: "materialized",
       })
+      .where("id", "=", record.id)
       .execute();
     await transaction
       .updateTable("food")
@@ -465,26 +620,28 @@ async function seedPromotedPublicFood(
       .execute();
     await transaction
       .insertInto("food_nutrient_value")
-      .values([
-        {
-          amount: "321",
+      .values(
+        validatedNutrients.map((nutrient) => ({
+          amount: nutrient.amount,
           basis_quantity: "100",
-          basis_unit: "g",
+          basis_unit: "g" as const,
+          derivation_code: nutrient.derivationCode,
           food_version_id: version.id,
-          nutrient_id: input.energyNutrientId,
-          unit: "kcal",
-          value_status: "measured",
-        },
-        {
-          amount: "17.5",
-          basis_quantity: "100",
-          basis_unit: "g",
-          food_version_id: version.id,
-          nutrient_id: input.proteinNutrientId,
-          unit: "g",
-          value_status: "measured",
-        },
-      ])
+          metadata: nutrient.metadata,
+          nutrient_id: nutrient.nutrientId,
+          source_amount: nutrient.sourceAmount,
+          source_basis_quantity: nutrient.sourceBasisQuantity,
+          source_basis_unit: nutrient.sourceBasisUnit,
+          source_unit: nutrient.sourceUnit,
+          unit: nutrient.canonicalUnit,
+          value_status: nutrient.valueStatus,
+        })),
+      )
+      .execute();
+    await transaction
+      .updateTable("food_import_batch")
+      .set({ completed_at: input.now, materialized_count: 1, status: "completed" })
+      .where("id", "=", batch.id)
       .execute();
     await transaction
       .updateTable("food_source_release")

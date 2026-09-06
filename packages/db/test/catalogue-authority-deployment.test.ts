@@ -5,12 +5,18 @@ import { describe, expect, it } from "vitest";
 import {
   assertCatalogueAuthorityCanaryEvidence,
   assertCatalogueAuthorityDeploymentEvidence,
+  CATALOGUE_ACTIVATION_GUARD_SOURCE_SHA256,
   CATALOGUE_APPROVAL_FUNCTION_SOURCE_SHA256,
   CATALOGUE_APPROVAL_GUARD_SOURCE_SHA256,
+  CATALOGUE_AUTHORITY_CONSTRAINT_POLICY,
+  CATALOGUE_AUTHORITY_FROZEN_COLUMN_POLICY,
   CATALOGUE_AUTHORITY_FUNCTION_POLICY,
+  CATALOGUE_AUTHORITY_INDEX_POLICY,
   CATALOGUE_AUTHORITY_TRIGGER_POLICY,
   CATALOGUE_CAPABILITY_ROLES,
+  CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256,
   CATALOGUE_REVIEWER_CAPABILITIES,
+  CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
   type CatalogueAuthorityDeploymentEvidence,
   type CatalogueAuthorityDeploymentPolicy,
   catalogueAuthorityDeploymentPolicySha256,
@@ -22,6 +28,7 @@ import { canonicalJson } from "../src/catalogue-validation.js";
 import type { JsonValue } from "../src/types.js";
 
 const rawPolicy = {
+  activationGuardSourceSha256: CATALOGUE_ACTIVATION_GUARD_SOURCE_SHA256,
   applicationSchema: "public",
   applicationSchemaOwner: "pg_database_owner",
   approvalFunctionSourceSha256: CATALOGUE_APPROVAL_FUNCTION_SOURCE_SHA256,
@@ -43,12 +50,14 @@ const rawPolicy = {
     worker: "nutrition_worker",
   },
   policyKind: "catalogue-authority-deployment",
+  promotionFunctionSourceSha256: CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256,
   reviewerLogins: {
     data: "nutrition_catalogue_data_reviewer",
     quality: "nutrition_catalogue_quality_reviewer",
     rights: "nutrition_catalogue_rights_reviewer",
   },
-  schemaVersion: 1,
+  rollbackFunctionSourceSha256: CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
+  schemaVersion: 3,
 } as const;
 
 function validEvidence(
@@ -95,6 +104,8 @@ function validEvidence(
         ...Object.values(CATALOGUE_REVIEWER_CAPABILITIES).map((role) =>
           acl(role, policy.applicationSchemaOwner, "USAGE"),
         ),
+        acl("nutrition_catalogue_promote_activate", policy.applicationSchemaOwner, "USAGE"),
+        acl("nutrition_catalogue_rollback", policy.applicationSchemaOwner, "USAGE"),
         acl(policy.applicationSchemaOwner, policy.applicationSchemaOwner, "CREATE"),
         acl(policy.applicationSchemaOwner, policy.applicationSchemaOwner, "USAGE"),
       ],
@@ -102,30 +113,26 @@ function validEvidence(
       owner: policy.applicationSchemaOwner,
       publicCreate: false,
     },
-    authorityConstraints: [
-      {
-        constraintType: "c",
-        definition: "CHECK (database_principal IS NULL AND database_capability_role IS NULL)",
-        name: "food_source_release_activation_expand_audit_null_check",
-        tableName: "food_source_release_activation",
-        validated: true,
-      },
-    ],
+    authorityConstraints: CATALOGUE_AUTHORITY_CONSTRAINT_POLICY,
+    authorityFrozenColumns: CATALOGUE_AUTHORITY_FROZEN_COLUMN_POLICY,
+    authorityIndexes: CATALOGUE_AUTHORITY_INDEX_POLICY.map((index) => ({
+      ...index,
+      owner: policy.databaseOwner,
+    })),
     functions: CATALOGUE_AUTHORITY_FUNCTION_POLICY.map((entry) => {
-      const { configuration, ...semantics } = entry;
-      const approval = entry.name === "catalogue_record_import_approval";
-      const guard = entry.name === "guard_food_import_approval_authority";
-      const grantees = approval
-        ? [policy.databaseOwner, ...Object.values(CATALOGUE_REVIEWER_CAPABILITIES)]
-        : guard
+      const { configuration, executeGrantees, ...semantics } = entry;
+      const aclIsDefault = executeGrantees === "default";
+      const grantees = aclIsDefault
+        ? ["PUBLIC", policy.databaseOwner]
+        : executeGrantees === "owner-only"
           ? [policy.databaseOwner]
-          : ["PUBLIC", policy.databaseOwner];
+          : [policy.databaseOwner, ...executeGrantees];
       return {
         ...semantics,
         acl: grantees.map((grantee) => acl(grantee, policy.databaseOwner, "EXECUTE")),
-        aclIsDefault: !approval && !guard,
+        aclIsDefault,
         owner: policy.databaseOwner,
-        publicExecute: !approval && !guard,
+        publicExecute: aclIsDefault,
         searchPath:
           configuration === "application-schema"
             ? [`search_path=pg_catalog, ${policy.applicationSchema}, pg_temp`]
@@ -140,6 +147,7 @@ function validEvidence(
       functionSchema: policy.applicationSchema,
       name: entry.name,
       tableName: entry.tableName,
+      tableSchema: policy.applicationSchema,
     })),
     capabilityRoles: CATALOGUE_CAPABILITY_ROLES.map((name) => ({
       bypassRls: false,
@@ -249,7 +257,7 @@ function validEvidence(
           owner: policy.databaseOwner,
         })),
       ),
-    schemaVersion: 1,
+    schemaVersion: 3,
     types: [
       {
         acl: [
@@ -266,6 +274,11 @@ function validEvidence(
 }
 
 describe("catalogue authority deployment policy", () => {
+  it("pins the complete whole-table authority manifest", () => {
+    expect(CATALOGUE_AUTHORITY_FUNCTION_POLICY).toHaveLength(35);
+    expect(CATALOGUE_AUTHORITY_TRIGGER_POLICY).toHaveLength(47);
+  });
+
   it("accepts the exact credential-free policy and deterministic evidence", () => {
     const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
     expect(catalogueAuthorityDeploymentPolicySha256(policy)).toMatch(/^[0-9a-f]{64}$/u);
@@ -318,6 +331,8 @@ describe("catalogue authority deployment policy", () => {
       (role) => role.name === "nutrition_catalogue_approve_data",
     );
     if (!dataRole) throw new Error("data role fixture is missing");
+    const firstTrigger = base.triggers[0];
+    if (!firstTrigger) throw new Error("trigger fixture is missing");
     expect(() =>
       assertCatalogueAuthorityDeploymentEvidence(policy, {
         ...base,
@@ -350,6 +365,57 @@ describe("catalogue authority deployment policy", () => {
         ),
       }),
     ).toThrow(/ACL representation differs/u);
+    expect(() =>
+      assertCatalogueAuthorityDeploymentEvidence(policy, {
+        ...base,
+        functions: base.functions.map((entry) =>
+          entry.name === "catalogue_promote_import_batch"
+            ? {
+                ...entry,
+                acl: entry.acl.map((grant) =>
+                  grant.grantee === "nutrition_catalogue_promote_activate"
+                    ? { ...grant, grantee: "nutrition_catalogue_rollback" }
+                    : grant,
+                ),
+              }
+            : entry,
+        ),
+      }),
+    ).toThrow(/ACL/u);
+    expect(() =>
+      assertCatalogueAuthorityDeploymentEvidence(policy, {
+        ...base,
+        functions: base.functions.map((entry) =>
+          entry.name === "catalogue_rollback_source_release"
+            ? {
+                ...entry,
+                acl: entry.acl.filter((grant) => grant.grantee !== "nutrition_catalogue_rollback"),
+              }
+            : entry,
+        ),
+      }),
+    ).toThrow(/ACL/u);
+    expect(() =>
+      assertCatalogueAuthorityDeploymentEvidence(policy, {
+        ...base,
+        functions: base.functions.map((entry) =>
+          entry.name === "guard_food_source_release_activation_authority"
+            ? {
+                ...entry,
+                acl: [
+                  ...entry.acl,
+                  {
+                    grantable: false,
+                    grantee: "PUBLIC",
+                    grantor: policy.databaseOwner,
+                    privilege: "EXECUTE",
+                  },
+                ],
+              }
+            : entry,
+        ),
+      }),
+    ).toThrow(/ACL/u);
     expect(() =>
       assertCatalogueAuthorityDeploymentEvidence(policy, {
         ...base,
@@ -429,6 +495,24 @@ describe("catalogue authority deployment policy", () => {
         ),
       }),
     ).toThrow(/trigger .* differs/u);
+    const temporaryReplacementEvidence = {
+      ...base,
+      triggers: base.triggers.map((trigger, index) =>
+        index === 0 ? { ...trigger, tableSchema: "pg_temp_3" } : trigger,
+      ),
+    };
+    expect(catalogueAuthorityDeploymentStructureSha256(temporaryReplacementEvidence)).not.toBe(
+      catalogueAuthorityDeploymentStructureSha256(base),
+    );
+    expect(() =>
+      assertCatalogueAuthorityDeploymentEvidence(policy, temporaryReplacementEvidence),
+    ).toThrow(/trigger .* differs/u);
+    expect(() =>
+      assertCatalogueAuthorityDeploymentEvidence(policy, {
+        ...base,
+        triggers: [...base.triggers, { ...firstTrigger, tableSchema: "pg_temp_3" }],
+      }),
+    ).toThrow(/trigger set/u);
     expect(() =>
       assertCatalogueAuthorityDeploymentEvidence(policy, {
         ...base,
@@ -443,24 +527,100 @@ describe("catalogue authority deployment policy", () => {
             functionSchema: policy.applicationSchema,
             name: "unsafe_extra",
             tableName: "food_import_approval",
+            tableSchema: policy.applicationSchema,
           },
         ],
       }),
     ).toThrow(/trigger set/u);
   });
 
+  it("pins all materialization constraints, frozen columns, and the activation batch index", () => {
+    const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
+    for (const expectedConstraint of CATALOGUE_AUTHORITY_CONSTRAINT_POLICY) {
+      const base = validEvidence(policy);
+      expect(() =>
+        assertCatalogueAuthorityDeploymentEvidence(policy, {
+          ...base,
+          authorityConstraints: base.authorityConstraints.map((constraint) =>
+            constraint.name === expectedConstraint.name
+              ? { ...constraint, definition: "CHECK (false)" }
+              : constraint,
+          ),
+        }),
+      ).toThrow(/constraint differs/u);
+    }
+
+    for (const expectedColumn of CATALOGUE_AUTHORITY_FROZEN_COLUMN_POLICY) {
+      const base = validEvidence(policy);
+      expect(() =>
+        assertCatalogueAuthorityDeploymentEvidence(policy, {
+          ...base,
+          authorityFrozenColumns: base.authorityFrozenColumns.map((column) =>
+            column.tableName === expectedColumn.tableName &&
+            column.columnName === expectedColumn.columnName
+              ? { ...column, defaultExpression: "'unsafe'::text" }
+              : column,
+          ),
+        }),
+      ).toThrow(/frozen materialization column differs/u);
+    }
+
+    const base = validEvidence(policy);
+    expect(() =>
+      assertCatalogueAuthorityDeploymentEvidence(policy, {
+        ...base,
+        authorityIndexes: base.authorityIndexes.map((index) => ({
+          ...index,
+          predicate: "import_batch_id IS NULL",
+        })),
+      }),
+    ).toThrow(/authority index differs/u);
+    expect(() =>
+      assertCatalogueAuthorityDeploymentEvidence(policy, {
+        ...base,
+        authorityIndexes: base.authorityIndexes.map((index) => ({
+          ...index,
+          owner: "unexpected_owner",
+        })),
+      }),
+    ).toThrow(/authority index differs/u);
+    expect(() =>
+      assertCatalogueAuthorityDeploymentEvidence(policy, {
+        ...base,
+        authorityIndexes: base.authorityIndexes.map((index) => ({
+          ...index,
+          isPrimary: true,
+          keyAttributeCount: 2,
+        })),
+      }),
+    ).toThrow(/authority index differs/u);
+  });
+
   it.each([
     "advance_food_search_projection_revision",
+    "catalogue_promote_import_batch",
+    "catalogue_record_import_approval",
+    "catalogue_rollback_source_release",
     "enqueue_food_search_barcode_insert",
     "enqueue_food_search_barcode_update",
     "enqueue_food_search_food_eligibility_change",
     "enqueue_food_search_serving_insert",
     "enqueue_food_search_source_eligibility_change",
     "guard_active_nutrient_vector_size",
+    "guard_custom_food_child_insert_v3",
+    "guard_custom_food_immutable_evidence_v3",
+    "guard_food_import_approval_authority",
+    "guard_food_import_batch_update",
+    "guard_food_import_batch_validation_digest",
+    "guard_food_import_record_update",
+    "guard_food_source_release_activation_authority",
+    "guard_imported_food_version_child_delete",
+    "guard_source_barcode_delete",
     "lock_active_nutrient_registry_before_write",
     "lock_active_nutrient_registry_for_read",
     "reconcile_recipe_components_v2",
     "set_row_updated_at",
+    "validate_food_version_child_insert",
   ])("rejects protected authority function body drift for %s", (functionName) => {
     const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
     const base = validEvidence(policy);
@@ -519,7 +679,7 @@ describe("catalogue authority deployment policy", () => {
         { canary: "worker-execute", sqlstate: "42501" },
         { canary: "data-direct-dml", sqlstate: "42501" },
       ],
-      schemaVersion: 1,
+      schemaVersion: 3,
       structure,
     } as const;
 

@@ -46,7 +46,7 @@ these names are a migration failure, not something the migration silently
 alters. Login identities and membership are deployment concerns and are not
 created by the application migration.
 
-This first phase places only reviewer approval behind a narrow
+At the migration-0014 boundary, this first phase placed only reviewer approval behind a narrow
 `SECURITY DEFINER` function. The migration pins its trusted per-schema
 `search_path` to `pg_catalog`, the captured application schema, and `pg_temp` in
 that order; caller and temporary-schema paths cannot redirect relation lookup.
@@ -59,10 +59,11 @@ digests, preserves exact idempotent replay, and rejects a divergent replay.
 Persisted audit evidence records the database login principal and capability
 role; those values are database-derived rather than accepted from the caller.
 
-The database-audit fields on new or changed activation-history rows remain
-constrained to a paired `NULL` state during EXPAND. Stage, validation, promotion,
-activation, and rollback cannot claim database-derived authority until their own
-reviewed wrappers exist.
+At the migration-0015 boundary, database-audit fields on new or changed
+activation-history rows remained constrained to a paired `NULL` state. Stage,
+validation, promotion, activation, and rollback could not claim database-derived
+authority until their own reviewed wrappers existed. Migration 0019 later
+replaced that temporary fence for its fixed-purpose promotion/rollback functions.
 The forward 0015 hardening also detects any pre-existing ordinary or admin
 membership in the capability roles and any paired non-NULL activation-authority
 evidence accepted by 0014. It installs the stricter activation constraint as
@@ -118,7 +119,21 @@ and delete, so changes to activation, display metadata, units, dimensions, or
 row existence serialize against diary, recipe, goal, custom-food, and catalogue
 materialization readers. Application readers use the same shared advisory key,
 and promotion acquires it after the per-source lock. Fixed-purpose shared-food
-and workflow wrappers remain required before non-owner runtime cutover.
+and workflow wrappers were still required at that boundary.
+
+Forward migration 0019 closes the promotion/rollback portion of that wrapper
+prerequisite without performing a deployment cutover. Validation now freezes
+the exact canonical materialization document and SHA-256 for each valid record,
+contract version 1, and the complete active nutrient-mapping revision set before
+any approval. Identifier-only promotion and rollback `SECURITY DEFINER`
+functions consume that frozen evidence; no caller can submit materialization
+JSON, write shared tables directly, or supply database audit identity. A pinned
+activation guard derives principal and capability from `session_user`.
+Capability-mediated promotion requires three distinct database-authenticated
+reviewers, while owner/local compatibility retains paired null audit fields.
+Promotion preserves batch, source, per-source advisory, then shared registry
+lock order. The roles remain `NOLOGIN` and unassigned, so source availability
+does not authorize live identities or calls.
 
 The supported protocol is deliberately narrower than arbitrary owner SQL:
 application transactions take the shared lock before entering the affected
@@ -160,21 +175,24 @@ PostgreSQL 17 that membership must be represented by `ADMIN FALSE`,
 `INHERIT TRUE`, and `SET FALSE`. The reviewer must have no direct catalogue table or
 sequence DML and no `CREATE` privilege on the application schema. The seven
 capability roles remain safe `NOLOGIN` roles with no owned objects and no
-outgoing memberships. Stage, validate, promote/activate, and rollback
-capabilities must retain zero incoming memberships until their reviewed
-functions and callers exist. No application migration creates production
-logins or grants these deployment memberships.
+outgoing memberships. Stage and validate still lack reviewed functions;
+promotion and rollback now have fixed-purpose functions but no deployed caller.
+All four capabilities retain zero incoming memberships in DEPLOY-0. No
+application migration creates production logins or grants these deployment
+memberships.
 
 The verifier requires `public` to be the only non-system schema and checks its
 exact ACLs, grantors, and `pg_database_owner` ownership; the exact database ACL;
-relation, type, default, and column ACL state; required owners; the versioned
-activation constraint; all 26 authority function signatures, executable
-semantics, source hashes, ACLs, and expected configuration; every other public
-routine for unsafe ownership, explicit ACL, or `SECURITY DEFINER`; and the exact
-31-trigger authority set, comprising the prior 24 triggers plus migration-0018's
-three nutrient-registry and four recipe-reconciliation trigger bindings. It
-also checks the exact effective login
-allowlist, revoked `PUBLIC CONNECT`, safe role and login attributes, zero owned
+relation, type, default, and column ACL state; required owners; all four
+authority CHECKs; the six frozen-evidence columns; the unique
+activation-to-batch index; all 35 authority function signatures, executable
+semantics, source hashes, exact per-function ACLs, and expected configuration;
+every other public routine for unsafe ownership, explicit ACL, or
+`SECURITY DEFINER`; and the exact 47-trigger authority set across the complete
+protected shared-food/outbox surface, including each trigger's table and
+function schema. Every binding of a dedicated public authority trigger function
+enters the evidence even when its table is outside `public`. It also checks the
+exact effective login allowlist, revoked `PUBLIC CONNECT`, safe role and login attributes, zero owned
 objects, the complete touched membership graph, effective table/column/sequence
 privileges, and exactly seven expected backend identities with no other client
 session in the target database. The migration ledger must match source before
@@ -218,11 +236,10 @@ database actors or capability grants.
 This decision does not yet authorize live catalogue work. The following remain
 required before database authority can be considered closed:
 
-1. Narrow stage, validate, promote-and-activate, and rollback functions that
-   preserve the existing transactional and shared-table invariants, plus
-   fixed-purpose shared-food writers that participate in the now-enforced lock
-   protocol and remove the current API/worker need for unrelated table mutation
-   privilege.
+1. Narrow stage and validate functions, plus any remaining fixed-purpose
+   recipe/shared-food writers needed to remove the API/worker need for unrelated
+   table mutation privilege. Migration 0019 supplies the promotion-and-activation
+   and rollback functions but does not deploy their callers.
 2. Deployment-specific login identities, short-lived or otherwise reviewed
    credentials, and an externally authenticated principal-to-login binding.
 3. API, worker, ingestion, migration, backup, and restore credential separation,
@@ -231,11 +248,12 @@ required before database authority can be considered closed:
    credentials after compatibility evidence passes.
 5. An ordinary-deploy readiness fingerprint and positive and negative role
    canaries. The isolated restore drill pins the migration-0014 function/trigger
-   manifest, the forward migration-0015 activation-null constraint and corrected
+   manifest, the forward migration-0015 interim activation constraint and corrected
    ACL, and migration-0016's two food-search function search paths plus exact
    source-eligibility trigger plus migration-0017's four function search paths
    and exact food/serving/barcode trigger bindings plus migration-0018's four
-   nutrient-lock functions and seven trigger bindings, but it does not
+   nutrient-lock functions and seven trigger bindings plus migration-0019's
+   frozen materialization and promotion/rollback authority boundary, but it does not
    substitute for deployed login separation or canaries through those real
    identities.
 
@@ -261,15 +279,20 @@ not drop or recreate authority evidence in place.
   means direct owner DML remains trusted during EXPAND and live M0B remains
   blocked.
 - Logical restore runs under an explicit expected owner, reapplies the pinned
-  migration-0014 function/trigger, migration-0015 constraint/ACL, and
+  migration-0014 function/trigger, migration-0015 approval/guard ACL
+  corrections, and
   migration-0016 and migration-0017 food-search function/trigger policies plus
-  migration-0018's nutrient lock protocol. The repair policy pins 24 hardened
-  function identities and 26 exact trigger bindings, and the canonical
-  fingerprint covers the full 26-function, 31-trigger authority set. It
+  migration-0018's nutrient lock protocol plus migration-0019's frozen
+  materialization, replacement activation-authority constraint, and
+  promotion/rollback boundary. The repair policy pins 35 function identities,
+  47 exact trigger bindings, the six frozen-evidence columns, all four authority
+  CHECKs, and the unique activation-to-batch index; the canonical fingerprint
+  covers that same full authority set. It
   requires the exact tracked filename/file-byte-SHA ledger from
-  `public.app_schema_migration` before `pg_dump`, then version-8 canonical
-  authority-fingerprint parity including column ACL state and each trigger's
-  table schema while `PUBLIC CONNECT` remains revoked. Public-table triggers and
+  `public.app_schema_migration` before `pg_dump`, then version-10 canonical
+  authority-fingerprint parity including column ACL state, the frozen-evidence
+  column definitions, the authority index, and each trigger's table schema while
+  `PUBLIC CONNECT` remains revoked. Public-table triggers and
   every cross-schema binding of a dedicated public authority trigger function
   enter that fingerprint. An owner-schema shadow and migration-ledger parity
   alone are not sufficient readiness evidence.

@@ -25,14 +25,18 @@ import {
   writePrivateNewFile,
 } from "../src/catalogue-authority-cli.js";
 import {
+  CATALOGUE_ACTIVATION_GUARD_SOURCE_SHA256,
   CATALOGUE_APPROVAL_FUNCTION_SOURCE_SHA256,
   CATALOGUE_APPROVAL_GUARD_SOURCE_SHA256,
+  CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256,
+  CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
   parseCatalogueAuthorityDeploymentPolicy,
 } from "../src/catalogue-authority-deployment.js";
 import { canonicalJson } from "../src/catalogue-validation.js";
 import type { JsonValue } from "../src/types.js";
 
 const rawPolicy = {
+  activationGuardSourceSha256: CATALOGUE_ACTIVATION_GUARD_SOURCE_SHA256,
   applicationSchema: "public",
   applicationSchemaOwner: "pg_database_owner",
   approvalFunctionSourceSha256: CATALOGUE_APPROVAL_FUNCTION_SOURCE_SHA256,
@@ -54,12 +58,14 @@ const rawPolicy = {
     worker: "nutrition_worker",
   },
   policyKind: "catalogue-authority-deployment",
+  promotionFunctionSourceSha256: CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256,
   reviewerLogins: {
     data: "nutrition_catalogue_data_reviewer",
     quality: "nutrition_catalogue_quality_reviewer",
     rights: "nutrition_catalogue_rights_reviewer",
   },
-  schemaVersion: 1,
+  rollbackFunctionSourceSha256: CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
+  schemaVersion: 3,
 } as const;
 
 function canonicalPolicyBytes(): string {

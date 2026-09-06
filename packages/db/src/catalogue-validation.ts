@@ -11,6 +11,8 @@ const MAX_BRAND_NAME_LENGTH = 300;
 const MAX_SERVING_LABEL_LENGTH = 200;
 const MAX_SERVING_UNIT_LENGTH = 50;
 
+export const VALIDATED_CATALOGUE_FOOD_CONTRACT_VERSION = 1 as const;
+
 export type CatalogueValidationIssueSeverity = "error" | "warning";
 export type CatalogueValidationDisposition =
   | "exclude_barcode"

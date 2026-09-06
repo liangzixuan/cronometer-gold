@@ -604,4 +604,50 @@ describe("forward migration discovery", () => {
     expect(migrationSql).not.toMatch(/\balter\s+(?:role|table|sequence)\b/iu);
     expect(migrationSql).not.toMatch(/\b(?:drop|truncate)\b/iu);
   });
+
+  it("freezes identifier-only catalogue promotion and rollback authority", async () => {
+    const migrationSql = await readFile(
+      resolve(import.meta.dirname, "../migrations/0019_catalogue_promotion_rollback_authority.sql"),
+      "utf8",
+    );
+
+    expect(createHash("sha256").update(migrationSql).digest("hex")).toBe(
+      "5e8cae5872e7c8c8e92b762a907de2a78850967e857f55461d8cc10ba79469ba",
+    );
+    expect(migrationSql).not.toMatch(/\bdrop\s+(table|column|type|role)\b/iu);
+    expect(migrationSql).not.toMatch(/\btruncate\b/iu);
+    for (const frozenColumn of [
+      "validated_food_document text",
+      "validated_food_sha256 text",
+      "validated_food_contract_version smallint",
+      "nutrient_mapping_digest text",
+      "nutrient_mapping_revision_ids jsonb",
+    ]) {
+      expect(migrationSql).toContain(frozenColumn);
+    }
+    for (const functionSignature of [
+      "catalogue_promote_import_batch(uuid,text,text)",
+      "catalogue_rollback_source_release(text,uuid,text,text)",
+      "guard_food_source_release_activation_authority()",
+    ]) {
+      expect(migrationSql).toContain(functionSignature);
+      expect(migrationSql).toContain(`set search_path = pg_catalog, %I, pg_temp`);
+    }
+    expect(migrationSql.match(/\bsecurity\s+definer\b/giu)).toHaveLength(2);
+    expect(migrationSql).toContain("session_user::text");
+    expect(migrationSql).toContain(
+      "revoke all on function %I.guard_food_source_release_activation_authority() from public",
+    );
+    expect(migrationSql).toContain(
+      "grant execute on function %I.catalogue_promote_import_batch(uuid,text,text) to nutrition_catalogue_promote_activate",
+    );
+    expect(migrationSql).toContain(
+      "grant execute on function %I.catalogue_rollback_source_release(text,uuid,text,text) to nutrition_catalogue_rollback",
+    );
+    expect(migrationSql).toContain("accepts no food JSON");
+    expect(migrationSql).not.toMatch(
+      /grant\s+(?:select|insert|update|delete|all)[\s\S]*?on\s+(?:table\s+)?(?:food|outbox_event)/iu,
+    );
+    expect(migrationSql).not.toMatch(/\bgrant\s+nutrition_catalogue_[a-z_]+\s+to\b/iu);
+  });
 });

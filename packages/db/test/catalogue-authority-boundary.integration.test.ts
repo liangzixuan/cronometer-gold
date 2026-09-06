@@ -27,9 +27,23 @@ interface ApprovalCall {
 }
 
 interface LoginCredential {
+  readonly additionalCapabilities?: readonly (typeof capabilityRoles)[number][];
   readonly capability: (typeof capabilityRoles)[number] | null;
   readonly login: string;
   readonly password: string;
+}
+
+interface PromotionResult {
+  readonly activatedReleaseId: string;
+  readonly materializedCount: number;
+  readonly previousReleaseId: string | null;
+  readonly wasAlreadyCompleted: boolean;
+}
+
+interface RollbackResult {
+  readonly activeReleaseId: string | null;
+  readonly changed: boolean;
+  readonly previousReleaseId: string | null;
 }
 
 describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, () => {
@@ -61,6 +75,27 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
       {
         capability: null,
         login: `cat_unassigned_${token}`,
+        password: randomBytes(24).toString("hex"),
+      },
+      {
+        capability: "nutrition_catalogue_promote_activate",
+        login: `cat_promote_${token}`,
+        password: randomBytes(24).toString("hex"),
+      },
+      {
+        capability: "nutrition_catalogue_rollback",
+        login: `cat_rollback_${token}`,
+        password: randomBytes(24).toString("hex"),
+      },
+      {
+        capability: "nutrition_catalogue_validate",
+        login: `cat_validate_${token}`,
+        password: randomBytes(24).toString("hex"),
+      },
+      {
+        additionalCapabilities: ["nutrition_catalogue_rollback"],
+        capability: "nutrition_catalogue_promote_activate",
+        login: `cat_multi_${token}`,
         password: randomBytes(24).toString("hex"),
       },
     ];
@@ -157,12 +192,19 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
           ).rows[0]?.allowed,
         ).toBe(expectedExecute);
         for (const tableName of [
+          "food",
+          "food_barcode",
           "food_import_batch",
           "food_import_approval",
           "food_import_record",
+          "food_nutrient_value",
+          "food_search_projection_revision",
+          "food_serving",
           "food_source",
           "food_source_release",
           "food_source_release_activation",
+          "food_version",
+          "outbox_event",
         ]) {
           for (const privilege of ["select", "insert", "update", "delete"]) {
             expect(
@@ -179,8 +221,12 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
           }
         }
         for (const sequenceName of [
+          "food_barcode_id_seq",
+          "food_id_seq",
           "food_import_approval_id_seq",
+          "food_serving_id_seq",
           "food_source_release_activation_id_seq",
+          "food_version_id_seq",
         ]) {
           for (const privilege of ["usage", "select", "update"]) {
             expect(
@@ -205,8 +251,12 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
             `create role ${credential.login} login inherit nosuperuser nocreatedb nocreaterole noreplication nobypassrls password '${credential.password}' valid until '${validUntil}'`,
           )
           .execute(bootstrap);
-        if (credential.capability) {
-          await sql.raw(`grant ${credential.capability} to ${credential.login}`).execute(bootstrap);
+        const grantedCapabilities = [
+          ...(credential.capability ? [credential.capability] : []),
+          ...(credential.additionalCapabilities ?? []),
+        ];
+        for (const capability of grantedCapabilities) {
+          await sql.raw(`grant ${capability} to ${credential.login}`).execute(bootstrap);
         }
       }
 
@@ -223,14 +273,32 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
         roleClients.push(client);
         return client;
       });
-      const [dataReviewer, qualityReviewer, rightsReviewer, unassignedReviewer] = clients;
-      if (!dataReviewer || !qualityReviewer || !rightsReviewer || !unassignedReviewer) {
+      const [
+        dataReviewer,
+        qualityReviewer,
+        rightsReviewer,
+        unassignedReviewer,
+        promoteOperator,
+        rollbackOperator,
+        validateOperator,
+        multiCapabilityOperator,
+      ] = clients;
+      if (
+        !dataReviewer ||
+        !qualityReviewer ||
+        !rightsReviewer ||
+        !unassignedReviewer ||
+        !promoteOperator ||
+        !rollbackOperator ||
+        !validateOperator ||
+        !multiCapabilityOperator
+      ) {
         throw new Error("reviewer database clients were not created");
       }
 
       const validationDigest = "d".repeat(64);
       const rightsDigest = "b".repeat(64);
-      const { batchId, sourceId } = await seedReadyBatch(
+      const { batchId, sourceCode, sourceId } = await seedReadyBatch(
         owner,
         token,
         validationDigest,
@@ -282,7 +350,7 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
             'principal:authority-pair-check', 'cat_unpaired_audit'
           )
         `.execute(owner),
-        "23514",
+        "42501",
       );
       await expectPostgresCode(
         sql`
@@ -295,7 +363,7 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
             'nutrition_catalogue_rollback'
           )
         `.execute(owner),
-        "23514",
+        "42501",
       );
 
       await expect(recordApproval(dataReviewer, schemaName, dataCall)).resolves.toBe(true);
@@ -388,6 +456,207 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
           `.execute(owner)
         ).rows[0],
       ).toEqual({ database_capability_role: null, database_principal: null });
+
+      const promoteFunctionIdentity = `${schemaName}.catalogue_promote_import_batch(uuid,text,text)`;
+      const rollbackFunctionIdentity = `${schemaName}.catalogue_rollback_source_release(text,uuid,text,text)`;
+      for (const capability of capabilityRoles) {
+        expect(
+          (
+            await sql<{ allowed: boolean }>`
+              select pg_catalog.has_function_privilege(
+                ${capability},
+                ${promoteFunctionIdentity},
+                'execute'
+              ) as allowed
+            `.execute(owner)
+          ).rows[0]?.allowed,
+        ).toBe(capability === "nutrition_catalogue_promote_activate");
+        expect(
+          (
+            await sql<{ allowed: boolean }>`
+              select pg_catalog.has_function_privilege(
+                ${capability},
+                ${rollbackFunctionIdentity},
+                'execute'
+              ) as allowed
+            `.execute(owner)
+          ).rows[0]?.allowed,
+        ).toBe(capability === "nutrition_catalogue_rollback");
+      }
+
+      await expectPostgresCode(
+        promoteImportBatch(
+          rollbackOperator,
+          schemaName,
+          batchId,
+          "principal:wrong-role-promote",
+          "Reject rollback capability on promotion",
+        ),
+        "42501",
+      );
+      await expectPostgresCode(
+        promoteImportBatch(
+          validateOperator,
+          schemaName,
+          batchId,
+          "principal:validate-role-promote",
+          "Reject validation capability on promotion",
+        ),
+        "42501",
+      );
+      await expectPostgresCode(
+        promoteImportBatch(
+          multiCapabilityOperator,
+          schemaName,
+          batchId,
+          "principal:multi-role-promote",
+          "Reject ambiguous multi-capability promotion",
+        ),
+        "42501",
+      );
+
+      const promotion = await promoteImportBatch(
+        promoteOperator,
+        schemaName,
+        batchId,
+        "principal:authority-promoter",
+        "Exercise database-authenticated catalogue promotion",
+      );
+      expect(promotion).toMatchObject({
+        materializedCount: 0,
+        previousReleaseId: null,
+        wasAlreadyCompleted: false,
+      });
+      expect(promotion.activatedReleaseId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
+      expect(
+        await promoteImportBatch(
+          promoteOperator,
+          schemaName,
+          batchId,
+          "principal:authority-promoter",
+          "Exercise idempotent completed-batch replay",
+        ),
+      ).toEqual({ ...promotion, wasAlreadyCompleted: true });
+
+      expect(
+        (
+          await sql<{
+            database_capability_role: string | null;
+            database_principal: string | null;
+            operation: string;
+          }>`
+            select operation, database_principal, database_capability_role
+            from food_source_release_activation
+            where import_batch_id = ${batchId}::uuid
+          `.execute(owner)
+        ).rows[0],
+      ).toEqual({
+        database_capability_role: "nutrition_catalogue_promote_activate",
+        database_principal: credentials[4]?.login,
+        operation: "activate",
+      });
+      expect(
+        (
+          await sql<{ activation_count: number }>`
+            select pg_catalog.count(*)::integer as activation_count
+            from food_source_release_activation
+            where import_batch_id = ${batchId}::uuid
+          `.execute(owner)
+        ).rows[0],
+      ).toEqual({ activation_count: 1 });
+
+      await expectPostgresCode(
+        rollbackSourceRelease(
+          promoteOperator,
+          schemaName,
+          sourceCode,
+          null,
+          "principal:wrong-role-rollback",
+          "Reject promotion capability on rollback",
+        ),
+        "42501",
+      );
+      await expectPostgresCode(
+        rollbackSourceRelease(
+          multiCapabilityOperator,
+          schemaName,
+          sourceCode,
+          null,
+          "principal:multi-role-rollback",
+          "Reject ambiguous multi-capability rollback",
+        ),
+        "42501",
+      );
+
+      expect(
+        await rollbackSourceRelease(
+          rollbackOperator,
+          schemaName,
+          sourceCode,
+          null,
+          "principal:authority-rollback",
+          "Exercise database-authenticated catalogue deactivation",
+        ),
+      ).toEqual({
+        activeReleaseId: null,
+        changed: true,
+        previousReleaseId: promotion.activatedReleaseId,
+      });
+      expect(
+        (
+          await sql<{
+            database_capability_role: string | null;
+            database_principal: string | null;
+            operation: string;
+          }>`
+            select operation, database_principal, database_capability_role
+            from food_source_release_activation
+            where food_source_id = ${sourceId}::bigint
+            order by id desc
+            limit 1
+          `.execute(owner)
+        ).rows[0],
+      ).toEqual({
+        database_capability_role: "nutrition_catalogue_rollback",
+        database_principal: credentials[5]?.login,
+        operation: "deactivate",
+      });
+
+      expect(
+        await rollbackSourceRelease(
+          owner,
+          schemaName,
+          sourceCode,
+          promotion.activatedReleaseId,
+          "principal:authority-owner",
+          "Exercise owner-local rollback audit semantics",
+        ),
+      ).toEqual({
+        activeReleaseId: promotion.activatedReleaseId,
+        changed: true,
+        previousReleaseId: null,
+      });
+      expect(
+        (
+          await sql<{
+            database_capability_role: string | null;
+            database_principal: string | null;
+            operation: string;
+          }>`
+            select operation, database_principal, database_capability_role
+            from food_source_release_activation
+            where food_source_id = ${sourceId}::bigint
+            order by id desc
+            limit 1
+          `.execute(owner)
+        ).rows[0],
+      ).toEqual({
+        database_capability_role: null,
+        database_principal: null,
+        operation: "rollback",
+      });
     } finally {
       for (const client of roleClients) await client.destroy();
       await owner.destroy();
@@ -397,6 +666,85 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
         for (const credential of credentials.reverse()) {
           await sql.raw(`drop role if exists ${credential.login}`).execute(bootstrap);
         }
+        await bootstrap.destroy();
+      }
+    }
+  });
+
+  it("replays a completed pre-0019 activation without fabricating frozen evidence", async () => {
+    if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
+    const bootstrap = createDatabase({ connectionString: databaseUrl, maxConnections: 1 });
+    const token = randomBytes(6).toString("hex");
+    const schemaName = `catalogue_authority_replay_${token}`;
+    const scopedUrl = new URL(databaseUrl);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName},public`);
+    const database = createDatabase({
+      connectionString: scopedUrl.toString(),
+      maxConnections: 1,
+    });
+
+    await sql`create schema ${sql.id(schemaName)}`.execute(bootstrap);
+    try {
+      const migrations = await discoverMigrations();
+      const promotionMigrationIndex = migrations.findIndex(
+        (migration) => migration.name === "0019_catalogue_promotion_rollback_authority.sql",
+      );
+      expect(promotionMigrationIndex).toBeGreaterThan(0);
+      expect(migrations[promotionMigrationIndex - 1]?.name).toBe(
+        "0018_active_nutrient_registry_lock_protocol.sql",
+      );
+      for (const migration of migrations.slice(0, promotionMigrationIndex)) {
+        await sql.raw(migration.sql).execute(database);
+      }
+
+      const legacy = await seedCompletedLegacyBatch(database, token);
+      const promotionMigration = migrations[promotionMigrationIndex];
+      if (!promotionMigration) throw new Error("0019 promotion migration was not discovered");
+      await sql.raw(promotionMigration.sql).execute(database);
+
+      expect(
+        await promoteImportBatch(
+          database,
+          schemaName,
+          legacy.batchId,
+          "principal:legacy-replay",
+          "Replay completed pre-0019 catalogue activation",
+        ),
+      ).toEqual({
+        activatedReleaseId: legacy.releaseId,
+        materializedCount: 0,
+        previousReleaseId: null,
+        wasAlreadyCompleted: true,
+      });
+      expect(
+        (
+          await sql<{
+            activation_count: number;
+            nutrient_mapping_digest: string | null;
+            validated_food_contract_version: number | null;
+          }>`
+            select
+              (
+                select pg_catalog.count(*)::integer
+                from food_source_release_activation
+                where import_batch_id = ${legacy.batchId}::uuid
+              ) as activation_count,
+              nutrient_mapping_digest,
+              validated_food_contract_version
+            from food_import_batch
+            where id = ${legacy.batchId}::uuid
+          `.execute(database)
+        ).rows[0],
+      ).toEqual({
+        activation_count: 1,
+        nutrient_mapping_digest: null,
+        validated_food_contract_version: null,
+      });
+    } finally {
+      await database.destroy();
+      try {
+        await sql`drop schema ${sql.id(schemaName)} cascade`.execute(bootstrap);
+      } finally {
         await bootstrap.destroy();
       }
     }
@@ -2048,12 +2396,56 @@ async function recordApproval(
   return recorded;
 }
 
+async function promoteImportBatch(
+  database: Kysely<Database>,
+  schemaName: string,
+  batchId: string,
+  principalId: string,
+  reason: string,
+): Promise<PromotionResult> {
+  const result = (
+    await sql<{ result: PromotionResult }>`
+      select ${sql.id(schemaName)}.catalogue_promote_import_batch(
+        p_batch_id => ${batchId}::uuid,
+        p_external_principal_id => ${principalId},
+        p_reason => ${reason}
+      ) as result
+    `.execute(database)
+  ).rows[0]?.result;
+  if (!result) throw new Error("catalogue promotion function returned no row");
+  return result;
+}
+
+async function rollbackSourceRelease(
+  database: Kysely<Database>,
+  schemaName: string,
+  sourceCode: string,
+  targetReleaseId: string | null,
+  principalId: string,
+  reason: string,
+): Promise<RollbackResult> {
+  const result = (
+    await sql<{ result: RollbackResult }>`
+      select ${sql.id(schemaName)}.catalogue_rollback_source_release(
+        p_source_code => ${sourceCode},
+        p_target_release_id => ${targetReleaseId}::uuid,
+        p_external_principal_id => ${principalId},
+        p_reason => ${reason}
+      ) as result
+    `.execute(database)
+  ).rows[0]?.result;
+  if (!result) throw new Error("catalogue rollback function returned no row");
+  return result;
+}
+
 async function seedReadyBatch(
   database: Kysely<Database>,
   suffix: string,
   validationDigest: string,
   rightsDigest: string,
-): Promise<{ batchId: string; sourceId: string }> {
+): Promise<{ batchId: string; sourceCode: string; sourceId: string }> {
+  const sourceCode = `AB${suffix.toUpperCase()}`;
+  const mappingDigest = "a".repeat(64);
   const source = (
     await sql<{ id: string }>`
       insert into food_source (
@@ -2063,7 +2455,7 @@ async function seedReadyBatch(
         redistribution_allowed, rights_review_status, rights_reviewed_at,
         rights_reviewed_by
       ) values (
-        true, true, 'Authority boundary fixture', ${`AB${suffix.toUpperCase()}`},
+        true, true, 'Authority boundary fixture', ${sourceCode},
         true, 'Reviewed integration fixture', ${`Authority source ${suffix}`},
         'https://example.invalid/catalogue-authority', 'government', 'CC0-1.0',
         'https://creativecommons.org/publicdomain/zero/1.0/', true, 'approved',
@@ -2091,7 +2483,7 @@ async function seedReadyBatch(
         ${`s3://catalogue-evidence/sha256/${evidenceDigest}/bundle.json`},
         ${"f".repeat(64)}, ${`authority-version-${suffix}`},
         pg_catalog.clock_timestamp() + interval '12 hours', ${source.id},
-        'application/json', 'authority-parser@1', 'live-reviewed',
+        'application/json', ${`authority-parser@1+mapping.${mappingDigest}`}, 'live-reviewed',
         ${`authority-release-${suffix}`}, ${rightsDigest},
         'repo://catalogue-authority-rights.json'
       )
@@ -2100,13 +2492,128 @@ async function seedReadyBatch(
   ).rows[0];
   if (!batch) throw new Error("batch fixture was not created");
   await sql`
-    update food_import_batch
-    set status = 'ready',
-        validated_at = pg_catalog.clock_timestamp(),
-        validation_digest = ${validationDigest}
-    where id = ${batch.id}::uuid
+    insert into food_import_parser_report (
+      batch_id, emitted_nutrient_count, emitted_portion_count,
+      emitted_record_count, excluded_nutrient_count, excluded_portion_count,
+      excluded_record_count, report, report_sha256, source_nutrient_count,
+      source_portion_count, source_record_count
+    ) values (
+      ${batch.id}::uuid, 0, 0, 0, 0, 0, 0,
+      pg_catalog.jsonb_build_object('fixture', 'catalogue-authority-boundary'),
+      ${"c".repeat(64)}, 0, 0, 0
+    )
   `.execute(database);
-  return { batchId: batch.id, sourceId: source.id };
+  const materializationContractPresent = (
+    await sql<{ present: boolean }>`
+      select exists (
+        select 1
+        from pg_catalog.pg_attribute as attribute_row
+        where attribute_row.attrelid = 'food_import_batch'::pg_catalog.regclass
+          and attribute_row.attname = 'validated_food_contract_version'
+          and not attribute_row.attisdropped
+      ) as present
+    `.execute(database)
+  ).rows[0]?.present;
+  if (materializationContractPresent) {
+    await sql`
+      update food_import_batch
+      set status = 'ready',
+          validated_at = pg_catalog.clock_timestamp(),
+          validation_digest = ${validationDigest},
+          validated_food_contract_version = 1,
+          nutrient_mapping_digest = ${mappingDigest},
+          nutrient_mapping_revision_ids = '[]'::jsonb
+      where id = ${batch.id}::uuid
+    `.execute(database);
+  } else {
+    await sql`
+      update food_import_batch
+      set status = 'ready',
+          validated_at = pg_catalog.clock_timestamp(),
+          validation_digest = ${validationDigest}
+      where id = ${batch.id}::uuid
+    `.execute(database);
+  }
+  return { batchId: batch.id, sourceCode, sourceId: source.id };
+}
+
+async function seedCompletedLegacyBatch(
+  database: Kysely<Database>,
+  suffix: string,
+): Promise<{
+  batchId: string;
+  releaseId: string;
+  sourceCode: string;
+  sourceId: string;
+}> {
+  const rightsDigest = "b".repeat(64);
+  const { batchId, sourceCode, sourceId } = await seedReadyBatch(
+    database,
+    `${suffix}r`,
+    "d".repeat(64),
+    rightsDigest,
+  );
+  const release = (
+    await sql<{ id: string }>`
+      insert into food_source_release (
+        acquired_at, artifact_bytes, artifact_sha256, artifact_uri,
+        evidence_bundle_sha256, evidence_bundle_uri, evidence_decision_sha256,
+        evidence_object_version_id, evidence_valid_until, food_source_id,
+        media_type, parser_version, record_counts, release_class,
+        release_key, rights_manifest_sha256, rights_manifest_uri, status,
+        validation_summary
+      )
+      select
+        batch.acquired_at, batch.artifact_bytes, batch.artifact_sha256,
+        batch.artifact_uri, batch.evidence_bundle_sha256,
+        batch.evidence_bundle_uri, batch.evidence_decision_sha256,
+        batch.evidence_object_version_id, batch.evidence_valid_until,
+        batch.food_source_id, batch.media_type, batch.parser_version,
+        '{}'::jsonb, batch.release_class,
+        batch.release_key, batch.rights_manifest_sha256,
+        batch.rights_manifest_uri, 'imported', '{}'::jsonb
+      from food_import_batch as batch
+      where batch.id = ${batchId}::uuid
+      returning id
+    `.execute(database)
+  ).rows[0];
+  if (!release) throw new Error("legacy release fixture was not created");
+
+  await sql`
+    update food_source_release
+    set promoted_at = pg_catalog.clock_timestamp(), status = 'promoted'
+    where id = ${release.id}::uuid
+  `.execute(database);
+  await sql`
+    update food_import_batch
+    set release_id = ${release.id}::uuid, status = 'promoting'
+    where id = ${batchId}::uuid
+  `.execute(database);
+  await sql`
+    update food_import_batch
+    set
+      completed_at = pg_catalog.clock_timestamp(),
+      materialized_count = 0,
+      status = 'completed'
+    where id = ${batchId}::uuid
+  `.execute(database);
+  await sql`
+    update food_source
+    set active_release_id = ${release.id}::uuid
+    where id = ${sourceId}::bigint
+  `.execute(database);
+  await sql`
+    insert into food_source_release_activation (
+      food_source_id, import_batch_id, operation, performed_by,
+      previous_release_id, reason, release_id
+    ) values (
+      ${sourceId}::bigint, ${batchId}::uuid, 'activate',
+      'principal:legacy-promoter', null,
+      'Completed before database-owned promotion authority',
+      ${release.id}::uuid
+    )
+  `.execute(database);
+  return { batchId, releaseId: release.id, sourceCode, sourceId };
 }
 
 async function expectPostgresCode(

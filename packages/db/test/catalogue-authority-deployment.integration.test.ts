@@ -4,9 +4,13 @@ import { type Kysely, sql } from "kysely";
 import { describe, expect, it } from "vitest";
 
 import {
+  assertCatalogueAuthorityDeploymentEvidence,
+  CATALOGUE_ACTIVATION_GUARD_SOURCE_SHA256,
   CATALOGUE_APPROVAL_FUNCTION_SOURCE_SHA256,
   CATALOGUE_APPROVAL_GUARD_SOURCE_SHA256,
   CATALOGUE_CAPABILITY_ROLES,
+  CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256,
+  CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
   type CatalogueAuthorityDeploymentPolicy,
   catalogueAuthorityDeploymentPolicySha256,
   collectCatalogueAuthorityDeploymentEvidence,
@@ -229,6 +233,7 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
         `.execute(owner)
       ).rows.map((row) => row.name);
       const policy: CatalogueAuthorityDeploymentPolicy = parseCatalogueAuthorityDeploymentPolicy({
+        activationGuardSourceSha256: CATALOGUE_ACTIVATION_GUARD_SOURCE_SHA256,
         applicationSchema: "public",
         applicationSchemaOwner: "pg_database_owner",
         approvalFunctionSourceSha256: CATALOGUE_APPROVAL_FUNCTION_SOURCE_SHA256,
@@ -238,8 +243,10 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
         effectiveLoginAllowlist,
         nonReviewerLogins,
         policyKind: "catalogue-authority-deployment",
+        promotionFunctionSourceSha256: CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256,
         reviewerLogins,
-        schemaVersion: 1,
+        rollbackFunctionSourceSha256: CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
+        schemaVersion: 3,
       });
 
       for (const fixture of fixtures) {
@@ -300,8 +307,9 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
         { canary: "data-direct-dml", sqlstate: "42501" },
       ]);
       const observedTriggerNames = evidence.structure.triggers.map((trigger) => trigger.name);
+      expect(observedTriggerNames).toHaveLength(47);
       expect(observedTriggerNames).not.toContain("app_user_set_updated_at");
-      expect(observedTriggerNames).not.toContain("food_version_reject_update");
+      expect(observedTriggerNames).toContain("food_version_reject_update");
 
       const verifierSessions = await Promise.all(
         [verifierOwner, ...fixtures.map((fixture) => requireClient(fixture.login))].map(
@@ -327,6 +335,78 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
           },
         ),
       );
+
+      const temporaryTriggerName = "food_import_batch_guard_validation_digest";
+      const temporaryTableName = "food_import_batch";
+      await sql.raw("begin").execute(verifierOwner);
+      try {
+        await sql`
+          create temporary table ${sql.id(temporaryTableName)} (id integer)
+        `.execute(verifierOwner);
+        await sql`
+          create trigger ${sql.id(temporaryTriggerName)}
+          before insert or update on ${sql.id(temporaryTableName)}
+          for each row
+          execute function public.guard_food_import_batch_validation_digest()
+        `.execute(verifierOwner);
+
+        const extraTemporaryBinding = await collectCatalogueAuthorityDeploymentEvidence(
+          verifierOwner,
+          policy,
+          verifierSessions,
+        );
+        const publicTrigger = extraTemporaryBinding.triggers.find(
+          (trigger) =>
+            trigger.name === temporaryTriggerName &&
+            trigger.tableSchema === policy.applicationSchema,
+        );
+        const baselineTrigger = evidence.structure.triggers.find(
+          (trigger) => trigger.name === temporaryTriggerName,
+        );
+        const temporaryTrigger = extraTemporaryBinding.triggers.find(
+          (trigger) =>
+            trigger.name === temporaryTriggerName && /^pg_temp_\d+$/u.test(trigger.tableSchema),
+        );
+        if (!baselineTrigger || !publicTrigger || !temporaryTrigger) {
+          throw new Error("Expected public and temporary trigger evidence is unavailable");
+        }
+        expect(temporaryTrigger).toEqual({
+          ...baselineTrigger,
+          tableSchema: temporaryTrigger.tableSchema,
+        });
+        expect(() =>
+          assertCatalogueAuthorityDeploymentEvidence(policy, extraTemporaryBinding),
+        ).toThrow(/trigger set/u);
+
+        await sql`
+          drop trigger ${sql.id(temporaryTriggerName)}
+          on ${sql.id(policy.applicationSchema, temporaryTableName)}
+        `.execute(verifierOwner);
+        const temporaryReplacement = await collectCatalogueAuthorityDeploymentEvidence(
+          verifierOwner,
+          policy,
+          verifierSessions,
+        );
+        expect(temporaryReplacement.nonSystemSchemas).toEqual([policy.applicationSchema]);
+        const replacementTrigger = temporaryReplacement.triggers.filter(
+          (trigger) => trigger.name === temporaryTriggerName,
+        );
+        expect(replacementTrigger).toEqual([temporaryTrigger]);
+        expect(() =>
+          assertCatalogueAuthorityDeploymentEvidence(policy, temporaryReplacement),
+        ).toThrow(/trigger .* differs/u);
+      } finally {
+        await sql.raw("rollback").execute(verifierOwner);
+      }
+      const postTemporaryEvidence = await collectCatalogueAuthorityDeploymentEvidence(
+        verifierOwner,
+        policy,
+        verifierSessions,
+      );
+      expect(() =>
+        assertCatalogueAuthorityDeploymentEvidence(policy, postTemporaryEvidence),
+      ).not.toThrow();
+
       const crossSchema = `cat_dep_trigger_binding_${token}`;
       const crossSchemaTable = "serving_shadow";
       const crossSchemaTrigger = "unreviewed_cross_schema_food_search_serving_binding";
@@ -357,6 +437,7 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
             functionSchema: policy.applicationSchema,
             name: crossSchemaTrigger,
             tableName: crossSchemaTable,
+            tableSchema: crossSchema,
           }),
         ]),
       );

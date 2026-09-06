@@ -831,6 +831,8 @@ describe("catalogue record validation", () => {
       portionInputCount: result.portionInputCount,
       sourceRecordKey: RECORD_KEY,
       status: "valid",
+      validatedFoodContractVersion: 1,
+      validatedFoodSha256: "c".repeat(64),
     };
 
     expect(evaluateBatchPolicy([record], POLICY)).toMatchObject({
@@ -871,6 +873,8 @@ describe("catalogue record validation", () => {
       portionInputCount: 0,
       sourceRecordKey: RECORD_KEY,
       status: "valid",
+      validatedFoodContractVersion: 1,
+      validatedFoodSha256: "d".repeat(64),
     };
     const records = Array.from({ length: 363 }, (_, index) => ({
       ...emittedRecord,
