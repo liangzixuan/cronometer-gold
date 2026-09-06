@@ -45,8 +45,9 @@ enabled trigger. It then pins the transaction-local search path before any
 approval read.
 
 This remains EXPAND only. Owner compatibility remains in place; stage/validate
-wrappers and non-owner role cutover are still pending. Do not revoke owner-era
-privileges or treat this slice as the CONTRACT phase. Forward migration 0015
+caller cutover, remaining shared-writer profiles, and non-owner runtime cutover
+are still pending. Do not revoke owner-era privileges or treat this slice as the
+CONTRACT phase. Forward migration 0015
 temporarily kept database-audit fields on new or changed activation/rollback
 rows constrained to paired `NULL` values until reviewed wrappers existed. It
 detects pre-cutover capability-role membership and legacy paired non-NULL
@@ -96,6 +97,32 @@ batch/source/per-source/registry lock order, reject divergent evidence, and
 materialize only the frozen document. The promote and rollback capability roles
 remain `NOLOGIN` and unassigned; this migration is not caller cutover.
 
+Forward migration 0020 adds fixed-purpose staging and validation authority. A
+stage-only principal can create or exactly resume a bounded attempt, append
+contiguous maximum-250-record chunks with atomic checkpoints, and persist the
+parser report. A complete batch is capped at 10,000 records and 64 MiB of stored
+canonical-payload JSON. PostgreSQL then computes a one-time seal over the
+immutable provenance, ordered record set, full parser evidence, exact stage
+checkpoint, and active mapping revisions;
+record inserts and stage-checkpoint changes are rejected after sealing. A
+different validate-only database login can obtain a digest-bound observation
+and atomically finalize only the exact sealed batch. Observation output and the
+validation request are each capped at 128 MiB. The five public workflow
+functions, owner-only seal helper, and three guards have pinned search paths,
+bodies, owners, and exact ACLs. Stage and validate receive schema `USAGE` plus
+only their matching function `EXECUTE`; they receive no table, column, or
+sequence privilege. Six nullable database audit/seal fields preserve the
+owner/local path. The `NOLOGIN` capabilities remain unassigned, so this is still
+EXPAND rather than a credential or caller cutover.
+
+The validation document is structurally bounded and digest-bound, but its food
+classification semantics are still produced by the application validator rather
+than independently recomputed by PostgreSQL. Treat that as an explicit remaining
+deployment control, not as proof of two independent semantic validators. The
+hard limits are safety ceilings, not representative full-catalogue scale proof;
+a bounded paged production protocol and measured resource/lock budgets remain
+open.
+
 The supported lock boundary is the reviewed transaction-based application
 paths. Arbitrary owner recipe DML may take row or foreign-key locks before the
 deferred reconciler and is not supported. `TRUNCATE nutrient` and nutrient DDL
@@ -112,18 +139,19 @@ food-search search paths and source-eligibility trigger plus migration-0017's
 four food/serving/barcode search paths and exact trigger bindings plus
 migration-0018's four nutrient-lock functions and seven trigger bindings plus
 migration-0019's frozen materialization contract, replacement
-activation-authority constraint, promotion/rollback wrappers, and complete
-shared-food/outbox trigger surface. That transactional repair
-policy pins 35 function identities, 47 exact trigger bindings, the six
-frozen-evidence column definitions, all four authority CHECKs, and the unique
+activation-authority constraint, promotion/rollback wrappers, plus
+migration-0020's sealed stage/validate boundary and complete shared-food/outbox
+trigger surface. That transactional repair policy pins 44 function identities,
+52 exact trigger bindings, the twelve authority-evidence column definitions,
+all six authority CHECKs, and the unique
 activation-to-batch index. The repository restore drill pins that file's SHA-256,
 requires an explicit expected owner, keeps `PUBLIC CONNECT` revoked, enforces
 an exact effective login allowlist, and requires the exact
 tracked filename/file-byte-SHA ledger in `public.app_schema_migration` before
 `pg_dump`. It ignores an owner-schema shadow, rechecks the source, corroborates
-the target, and compares a version-10 canonical
+the target, and compares a version-11 canonical
 role/schema/type/relation/column-ACL/function/trigger/authority-constraint/
-authority-index fingerprint, including the six frozen-evidence columns, the
+authority-index fingerprint, including all twelve authority-evidence columns, the
 independent non-NULL `pg_attribute.attacl` count, trigger table schemas, and
 every binding of a dedicated public authority trigger function even when its
 table is outside `public`, before external-ledger replay or API probing. The
@@ -172,11 +200,11 @@ The verifier requires the exact `public.app_schema_migration` names and SHA-256s
 from the tracked migration files. It also requires `public` to be the only
 non-system schema and to be owned by `pg_database_owner`. It checks exact
 database/schema ACLs and grantors,
-relation/type/default/column ACL state and owners, all four authority CHECKs,
-the six frozen-evidence columns, the unique activation-to-batch index, all 35
+relation/type/default/column ACL state and owners, all six authority CHECKs,
+the twelve authority-evidence columns, the unique activation-to-batch index, all 44
 authority function hashes, executable semantics, and exact per-function
 execute ACLs, safe authority on every other public routine, and the exact
-47-trigger authority set across the complete protected shared-food/outbox
+52-trigger authority set across the complete protected shared-food/outbox
 surface, including each trigger's table and function schema. Every binding of a
 dedicated public authority trigger function enters the evidence even when its
 table is outside `public`. It also checks the exact effective-login allowlist,

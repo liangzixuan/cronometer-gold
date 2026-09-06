@@ -131,6 +131,42 @@ and exact version 1. The promotion/rollback capability roles remain `NOLOGIN`
 and unassigned. Applying the migration is not permission to provision callers,
 grant membership, activate a live release, or revoke owner compatibility.
 
+## Migration 0020 stage/validate authority preflight
+
+Migration 0020 must be rehearsed against a restored snapshot and a fresh schema.
+It stops if the seven capability roles are absent, unsafe, or already assigned;
+if workflow tables do not share the expected owner; if the legacy immutable
+parser-report or checkpoint timestamp trigger binding differs; or if the final
+function, trigger, constraint, schema-ACL, or relation-privilege postflight differs. Do not
+grant a login membership before applying this EXPAND migration. The migration
+adds six nullable audit/seal columns, five fixed-purpose workflow functions, an
+owner-only seal helper, and three invariant guards. It grants the stage and
+validate capabilities schema `USAGE` and only the matching function `EXECUTE`;
+it grants no table, column, or sequence authority.
+
+Rehearsal must cover a distinct stage and validate login. Prove exact stage-batch
+replay; contiguous maximum-250-record chunks and atomic checkpoints; parser-report
+replay; seal recomputation; validator observation and finalize replay; and denial
+for unassigned, wrong, and multi-capability principals. Also prove rejection of
+changed provenance, sequence/key/hash drift, mapping-revision drift, late record
+insertion, checkpoint update/deletion after sealing, and temporary-schema
+shadows. Prove the 10,000-record ceiling transactionally and statically pin the
+64 MiB stored canonical-payload and 128 MiB observation/request ceilings. Retain
+an owner/local compatibility test whose database audit lineage is all null.
+Never fabricate the six new audit/seal fields or backfill historical database
+principals.
+
+The staged batch accepts at most 10,000 records and 64 MiB of canonical-payload
+JSON; the observation response and validation request are each capped at 128
+MiB. These are safety ceilings, not representative-scale proof. Keep live
+ingestion blocked until a bounded, paged full-catalogue protocol validates within
+reviewed memory, disk, lock-duration, timeout, and retry budgets. PostgreSQL
+authenticates and binds the validator's document but does not independently
+recompute its nutrition classification semantics; deployed independent-validation
+evidence is still required. Applying 0020 is not permission to provision
+credentials, add role memberships, cut over a caller, revoke direct DML, or
+activate catalogue data.
+
 ## Catalogue and diary lock-order audit
 
 Keep the canonical order `source -> food -> version -> release -> nutrient

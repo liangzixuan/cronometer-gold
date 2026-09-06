@@ -71,6 +71,20 @@ describeDatabase("catalogue restore authority schema identity", { timeout: 120_0
       });
       await runMigrations(isolated);
 
+      // Simulate the ACL loss and drift that a --no-privileges logical restore
+      // can leave behind. The reviewed policy must reconstruct only the fixed
+      // stage/validate surface.
+      await sql
+        .raw(`
+        revoke execute on function public.catalogue_stage_import_batch(text)
+          from nutrition_catalogue_stage;
+        grant execute on function public.catalogue_stage_import_batch(text)
+          to nutrition_catalogue_validate;
+        revoke usage on schema public
+          from nutrition_catalogue_stage, nutrition_catalogue_validate;
+      `)
+        .execute(isolated);
+
       await sql
         .raw(`
         create schema ${shadowSchema};
@@ -103,21 +117,62 @@ describeDatabase("catalogue restore authority schema identity", { timeout: 120_0
 
       await expect(sql.raw(restorePolicySql).execute(isolated)).resolves.toBeDefined();
 
+      const repairedAuthority = (
+        await sql<{
+          readonly stage_can_execute_stage: boolean;
+          readonly stage_can_execute_seal_helper: boolean;
+          readonly stage_has_schema_usage: boolean;
+          readonly validate_can_execute_stage: boolean;
+          readonly validate_has_schema_usage: boolean;
+        }>`
+          select
+            pg_catalog.has_function_privilege(
+              'nutrition_catalogue_stage',
+              'public.catalogue_stage_import_batch(text)',
+              'EXECUTE'
+            ) as stage_can_execute_stage,
+            pg_catalog.has_function_privilege(
+              'nutrition_catalogue_stage',
+              'public.catalogue_compute_import_staging_seal(uuid)',
+              'EXECUTE'
+            ) as stage_can_execute_seal_helper,
+            pg_catalog.has_schema_privilege(
+              'nutrition_catalogue_stage',
+              'public',
+              'USAGE'
+            ) as stage_has_schema_usage,
+            pg_catalog.has_function_privilege(
+              'nutrition_catalogue_validate',
+              'public.catalogue_stage_import_batch(text)',
+              'EXECUTE'
+            ) as validate_can_execute_stage,
+            pg_catalog.has_schema_privilege(
+              'nutrition_catalogue_validate',
+              'public',
+              'USAGE'
+            ) as validate_has_schema_usage
+        `.execute(isolated)
+      ).rows[0];
+      expect(repairedAuthority).toEqual({
+        stage_can_execute_seal_helper: false,
+        stage_can_execute_stage: true,
+        stage_has_schema_usage: true,
+        validate_can_execute_stage: false,
+        validate_has_schema_usage: true,
+      });
+
       await sql
         .raw(`
-        create or replace function public.guard_food_import_batch_validation_digest()
-        returns trigger
-        language plpgsql
-        set search_path = pg_catalog, public, pg_temp
-        as $function$
-        begin
-          raise exception 'deliberate public authority drift';
-        end;
-        $function$;
+        drop trigger food_import_checkpoint_set_updated_at
+          on public.food_import_checkpoint;
+        create trigger food_import_checkpoint_set_updated_at
+        before insert on public.food_import_checkpoint
+        for each row
+        execute function public.set_row_updated_at();
       `)
         .execute(isolated);
       await expect(sql.raw(restorePolicySql).execute(isolated)).rejects.toThrow(
-        "catalogue authority function identity or executable semantics differ from policy",
+        "catalogue authority trigger identity, definition, or enabled state differs from policy",
       );
       await sql.raw("rollback").execute(isolated);
     } catch (error) {

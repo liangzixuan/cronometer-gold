@@ -28,8 +28,14 @@ import {
   CATALOGUE_ACTIVATION_GUARD_SOURCE_SHA256,
   CATALOGUE_APPROVAL_FUNCTION_SOURCE_SHA256,
   CATALOGUE_APPROVAL_GUARD_SOURCE_SHA256,
+  CATALOGUE_OBSERVE_VALIDATION_FUNCTION_SOURCE_SHA256,
   CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256,
   CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
+  CATALOGUE_STAGE_BATCH_FUNCTION_SOURCE_SHA256,
+  CATALOGUE_STAGE_PARSER_REPORT_FUNCTION_SOURCE_SHA256,
+  CATALOGUE_STAGE_RECORD_CHUNK_FUNCTION_SOURCE_SHA256,
+  CATALOGUE_STAGE_VALIDATE_GUARD_SOURCE_SHA256,
+  CATALOGUE_VALIDATE_BATCH_FUNCTION_SOURCE_SHA256,
   parseCatalogueAuthorityDeploymentPolicy,
 } from "../src/catalogue-authority-deployment.js";
 import { canonicalJson } from "../src/catalogue-validation.js";
@@ -57,6 +63,7 @@ const rawPolicy = {
     unassigned: "nutrition_catalogue_unassigned_canary",
     worker: "nutrition_worker",
   },
+  observeValidationFunctionSourceSha256: CATALOGUE_OBSERVE_VALIDATION_FUNCTION_SOURCE_SHA256,
   policyKind: "catalogue-authority-deployment",
   promotionFunctionSourceSha256: CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256,
   reviewerLogins: {
@@ -65,7 +72,12 @@ const rawPolicy = {
     rights: "nutrition_catalogue_rights_reviewer",
   },
   rollbackFunctionSourceSha256: CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
-  schemaVersion: 3,
+  schemaVersion: 4,
+  stageBatchFunctionSourceSha256: CATALOGUE_STAGE_BATCH_FUNCTION_SOURCE_SHA256,
+  stageParserReportFunctionSourceSha256: CATALOGUE_STAGE_PARSER_REPORT_FUNCTION_SOURCE_SHA256,
+  stageRecordChunkFunctionSourceSha256: CATALOGUE_STAGE_RECORD_CHUNK_FUNCTION_SOURCE_SHA256,
+  stageValidateGuardSourceSha256: CATALOGUE_STAGE_VALIDATE_GUARD_SOURCE_SHA256,
+  validateBatchFunctionSourceSha256: CATALOGUE_VALIDATE_BATCH_FUNCTION_SOURCE_SHA256,
 } as const;
 
 function canonicalPolicyBytes(): string {

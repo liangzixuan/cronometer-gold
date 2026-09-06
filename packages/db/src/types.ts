@@ -205,6 +205,12 @@ export interface FoodImportBatchTable {
   validated_food_contract_version: ColumnType<number | null, undefined, number>;
   nutrient_mapping_digest: ColumnType<string | null, undefined, string>;
   nutrient_mapping_revision_ids: JSONColumnType<JsonArray | null, undefined, JsonArray>;
+  staged_database_principal: ReadonlyColumn<string | null>;
+  staged_database_capability_role: ReadonlyColumn<string | null>;
+  staging_seal_sha256: ReadonlyColumn<string | null>;
+  staging_sealed_at: ReadonlyColumn<Date | null>;
+  validated_database_principal: ReadonlyColumn<string | null>;
+  validated_database_capability_role: ReadonlyColumn<string | null>;
   release_id: string | null;
   created_at: CreatedTimestamp;
   updated_at: UpdatedTimestamp;

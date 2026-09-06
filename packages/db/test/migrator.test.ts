@@ -650,4 +650,65 @@ describe("forward migration discovery", () => {
     );
     expect(migrationSql).not.toMatch(/\bgrant\s+nutrition_catalogue_[a-z_]+\s+to\b/iu);
   });
+
+  it("separates catalogue staging from validation with sealed fixed-purpose authority", async () => {
+    const migrationSql = await readFile(
+      resolve(import.meta.dirname, "../migrations/0020_catalogue_stage_validate_authority.sql"),
+      "utf8",
+    );
+
+    expect(createHash("sha256").update(migrationSql).digest("hex")).toBe(
+      "55c6370dee779edec8e7d2bad529b328c9d9b41fa6b7160b5584e5d52f634374",
+    );
+    expect(migrationSql).not.toMatch(/\bdrop\s+(table|column|type|role)\b/iu);
+    expect(migrationSql).not.toMatch(/\btruncate\b/iu);
+    for (const frozenColumn of [
+      "staged_database_principal text",
+      "staged_database_capability_role text",
+      "staging_seal_sha256 text",
+      "staging_sealed_at timestamptz",
+      "validated_database_principal text",
+      "validated_database_capability_role text",
+    ]) {
+      expect(migrationSql).toContain(frozenColumn);
+    }
+    for (const functionSignature of [
+      "catalogue_stage_import_batch(text)",
+      "catalogue_stage_import_record_chunk(uuid,bigint,text)",
+      "catalogue_stage_import_parser_report(uuid,text)",
+      "catalogue_observe_import_validation(uuid)",
+      "catalogue_validate_import_batch(uuid,text,text,text)",
+      "catalogue_compute_import_staging_seal(uuid)",
+      "guard_food_import_batch_stage_validate_authority()",
+      "guard_food_import_record_insert_before_staging_seal()",
+      "guard_food_import_stage_checkpoint_before_staging_seal()",
+    ]) {
+      expect(migrationSql).toContain(functionSignature);
+      expect(migrationSql).toContain("set search_path = pg_catalog, %I, pg_temp");
+    }
+    expect(migrationSql).toContain("validated_database_principal <> staged_database_principal");
+    expect(migrationSql).toContain("catalogue staging seal can only be recorded once");
+    expect(migrationSql).toContain("catalogue records cannot be appended after the staging seal");
+    expect(migrationSql).toContain(
+      "catalogue stage checkpoint cannot change after the staging seal",
+    );
+    expect(migrationSql).toContain("record_count not between 1 and 250");
+    expect(migrationSql).toContain("if end_offset > 10000 then");
+    expect(migrationSql).toContain("total_canonical_payload_bytes > 67108864");
+    expect(migrationSql).toContain("pg_catalog.pg_column_size(observation) > 134217728");
+    expect(migrationSql).toContain("'observationSha256', observation_sha256");
+    expect(migrationSql).toContain("'parserEvidence', parser_evidence");
+    expect(migrationSql).toContain("'stageCheckpoint', stage_checkpoint");
+    expect(migrationSql).toContain(
+      "grant usage on schema %I to nutrition_catalogue_stage, nutrition_catalogue_validate",
+    );
+    expect(migrationSql).toContain("grant execute on function %I.%s to nutrition_catalogue_stage");
+    expect(migrationSql).toContain(
+      "grant execute on function %I.%s to nutrition_catalogue_validate",
+    );
+    expect(migrationSql).not.toMatch(
+      /grant\s+(?:select|insert|update|delete|all)[\s\S]*?on\s+(?:table\s+)?(?:food|outbox_event)/iu,
+    );
+    expect(migrationSql).not.toMatch(/\bgrant\s+nutrition_catalogue_[a-z_]+\s+to\b/iu);
+  });
 });

@@ -1,4 +1,4 @@
--- Versioned post-restore policy for catalogue authority migrations 0014-0019.
+-- Versioned post-restore policy for catalogue authority migrations 0014-0020.
 --
 -- Logical restores deliberately use --no-owner --no-privileges. Run this only
 -- against a new isolated nutrition_restore_* database while PUBLIC CONNECT is
@@ -9,7 +9,7 @@
 begin;
 
 select pg_catalog.pg_advisory_xact_lock(
-  pg_catalog.hashtext('nutrition-tracker:restore:catalogue-authority:v1')
+  pg_catalog.hashtext('nutrition-tracker:restore:catalogue-authority:v2')
 );
 
 do $policy$
@@ -21,6 +21,7 @@ declare
   approval_guard_function oid;
   capability_role text;
   capability_role_oid oid;
+  expected_acl_count integer;
   expected_owner text := pg_catalog.current_setting(
     'nutrition.expected_restore_owner',
     true
@@ -28,6 +29,9 @@ declare
   expected_owner_oid oid;
   promotion_function oid;
   rollback_function oid;
+  stage_validate_function oid;
+  stage_validate_function_spec record;
+  stage_validate_functions oid[] := array[]::oid[];
   target_schema constant name := 'public';
 begin
   if pg_catalog.current_database() !~ '^nutrition_restore_[a-z0-9_]{1,45}$' then
@@ -183,6 +187,22 @@ begin
       using errcode = '55000';
   end if;
 
+  if exists (
+    select 1
+    from pg_catalog.pg_attribute as attribute_row
+    join pg_catalog.pg_class as class_row
+      on class_row.oid = attribute_row.attrelid
+    join pg_catalog.pg_namespace as namespace_row
+      on namespace_row.oid = class_row.relnamespace
+    where namespace_row.nspname = target_schema
+      and attribute_row.attnum > 0
+      and not attribute_row.attisdropped
+      and attribute_row.attacl is not null
+  ) then
+    raise exception 'restored public columns contain unexpected explicit privileges'
+      using errcode = '55000';
+  end if;
+
   select pg_catalog.to_regprocedure(
     'public.catalogue_record_import_approval(uuid,text,text,text,text,text)'
   )
@@ -220,7 +240,8 @@ begin
       using errcode = '42883';
   end if;
 
-  -- Pin the complete frozen-materialization and activation CHECK boundary as
+  -- Pin the complete frozen-materialization, stage/validate, and activation
+  -- CHECK boundary as
   -- known-good authority policy, not merely source/target parity.
   if (
     select pg_catalog.count(*)
@@ -231,10 +252,12 @@ begin
       and constraint_row.conname in (
         'food_import_batch_materialization_contract_check',
         'food_import_batch_promotable_contract_check',
+        'food_import_batch_stage_validate_database_authority_check',
+        'food_import_batch_staging_seal_check',
         'food_import_record_validated_food_contract_check',
         'food_source_release_activation_database_authority_check'
       )
-  ) <> 4 or exists (
+  ) <> 6 or exists (
     select 1
     from (
       values
@@ -247,6 +270,16 @@ begin
           'food_import_batch',
           'food_import_batch_promotable_contract_check',
           $constraint$CHECK (((status <> ALL (ARRAY['ready'::text, 'promoting'::text])) OR validated_food_contract_version = 1 AND nutrient_mapping_digest IS NOT NULL AND nutrient_mapping_revision_ids IS NOT NULL) IS TRUE)$constraint$
+        ),
+        (
+          'food_import_batch',
+          'food_import_batch_stage_validate_database_authority_check',
+          $constraint$CHECK ((staged_database_principal IS NULL AND staged_database_capability_role IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR staged_database_principal IS NOT NULL AND octet_length(staged_database_principal) >= 1 AND octet_length(staged_database_principal) <= 63 AND staged_database_capability_role = 'nutrition_catalogue_stage'::text AND (validated_at IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR validated_at IS NOT NULL AND validated_database_principal IS NOT NULL AND octet_length(validated_database_principal) >= 1 AND octet_length(validated_database_principal) <= 63 AND validated_database_capability_role = 'nutrition_catalogue_validate'::text AND validated_database_principal <> staged_database_principal)) IS TRUE)$constraint$
+        ),
+        (
+          'food_import_batch',
+          'food_import_batch_staging_seal_check',
+          $constraint$CHECK ((staging_seal_sha256 IS NULL AND staging_sealed_at IS NULL OR staging_seal_sha256 ~ '^[0-9a-f]{64}$'::text AND staging_sealed_at IS NOT NULL AND (staging_sealed_at <> ALL (ARRAY['-infinity'::timestamp with time zone, 'infinity'::timestamp with time zone]))) IS TRUE AND (validated_at IS NULL OR staged_database_principal IS NULL OR staging_seal_sha256 IS NOT NULL))$constraint$
         ),
         (
           'food_import_record',
@@ -277,7 +310,7 @@ END) IS TRUE)$constraint$
       or not constraint_row.convalidated
       or pg_catalog.pg_get_constraintdef(constraint_row.oid, true) <> expected.definition
   ) then
-    raise exception 'catalogue frozen-materialization or activation constraint differs from the forward 0019 policy'
+    raise exception 'catalogue frozen-materialization, stage/validate, or activation constraint differs from the forward 0020 policy'
       using errcode = '55000';
   end if;
 
@@ -288,6 +321,12 @@ END) IS TRUE)$constraint$
         ('food_import_batch'::text, 'nutrient_mapping_digest'::text, 'text'::text, false, null::text),
         ('food_import_batch', 'nutrient_mapping_revision_ids', 'jsonb', false, null::text),
         ('food_import_batch', 'validated_food_contract_version', 'smallint', false, null::text),
+        ('food_import_batch', 'staged_database_principal', 'text', false, null::text),
+        ('food_import_batch', 'staged_database_capability_role', 'text', false, null::text),
+        ('food_import_batch', 'staging_seal_sha256', 'text', false, null::text),
+        ('food_import_batch', 'staging_sealed_at', 'timestamp with time zone', false, null::text),
+        ('food_import_batch', 'validated_database_principal', 'text', false, null::text),
+        ('food_import_batch', 'validated_database_capability_role', 'text', false, null::text),
         ('food_import_record', 'validated_food_contract_version', 'smallint', false, null::text),
         ('food_import_record', 'validated_food_document', 'text', false, null::text),
         ('food_import_record', 'validated_food_sha256', 'text', false, null::text)
@@ -312,7 +351,7 @@ END) IS TRUE)$constraint$
       or pg_catalog.pg_get_expr(default_row.adbin, default_row.adrelid, true)
         is distinct from expected.default_expression
   ) then
-    raise exception 'catalogue frozen-materialization column identity differs from the forward 0019 policy'
+    raise exception 'catalogue frozen-materialization or stage/validate column identity differs from the forward 0020 policy'
       using errcode = '55000';
   end if;
 
@@ -364,7 +403,7 @@ END) IS TRUE)$constraint$
       using errcode = '55000';
   end if;
 
-  -- Pin the complete authority function boundary through migration 0019.
+  -- Pin the complete authority function boundary through migration 0020.
   -- Exact identity, executable body, and search_path are policy, not
   -- merely source/target parity.
   if (
@@ -375,10 +414,16 @@ END) IS TRUE)$constraint$
     where namespace_row.nspname = target_schema
       and procedure_row.proname in (
         'advance_food_search_projection_revision',
+        'catalogue_compute_import_staging_seal',
         'catalogue_evidence_bundle_uri_is_valid',
+        'catalogue_observe_import_validation',
         'catalogue_promote_import_batch',
         'catalogue_record_import_approval',
         'catalogue_rollback_source_release',
+        'catalogue_stage_import_batch',
+        'catalogue_stage_import_parser_report',
+        'catalogue_stage_import_record_chunk',
+        'catalogue_validate_import_batch',
         'enqueue_food_search_barcode_insert',
         'enqueue_food_search_barcode_update',
         'enqueue_food_search_food_eligibility_change',
@@ -390,9 +435,12 @@ END) IS TRUE)$constraint$
         'guard_food_barcode_validity_update',
         'guard_food_import_approval_authority',
         'guard_food_import_batch_initial_state',
+        'guard_food_import_batch_stage_validate_authority',
         'guard_food_import_batch_update',
         'guard_food_import_batch_validation_digest',
+        'guard_food_import_record_insert_before_staging_seal',
         'guard_food_import_record_update',
+        'guard_food_import_stage_checkpoint_before_staging_seal',
         'guard_imported_food_version_child_delete',
         'guard_food_source_active_release_authority',
         'guard_food_source_initial_active_release',
@@ -410,15 +458,21 @@ END) IS TRUE)$constraint$
         'set_row_updated_at',
         'validate_food_version_child_insert'
       )
-  ) <> 35 or exists (
+  ) <> 44 or exists (
     select 1
     from (
       values
         ('advance_food_search_projection_revision'::text, ''::text, 'd1e4a8a27203104c6339f045a31a4dfdd2aee3c78cdd94e06bfd3db2c9ac2108'::text, 'void'::text, 'plpgsql'::text, 'v'::text, false, false, 'u'::text, false),
+        ('catalogue_compute_import_staging_seal', 'p_batch_id uuid', '399d40c2913c2022c0a2921d5870a2d26a5dcd9949d81715882f70899db4f5f8', 'text', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_evidence_bundle_uri_is_valid'::text, 'value text, digest text'::text, '5403779dc4398446c61d0a27ad8b95d904e2552a5e694496b9e7e8612e0c902e'::text, 'boolean'::text, 'sql'::text, 'i'::text, true, false, 'u'::text, false),
+        ('catalogue_observe_import_validation', 'p_batch_id uuid', '0a87bc99f5df97282c48b6202799bcc75cdb914e7473c0c38e092aaf4a132acf', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_promote_import_batch', 'p_batch_id uuid, p_external_principal_id text, p_reason text', '115fdc3ed1943dd77ce70d3a694495da3d2c62ade9c7b82812a89cef82b39f17', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_record_import_approval', 'p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text', '89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac', 'boolean', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_rollback_source_release', 'p_source_code text, p_target_release_id uuid, p_external_principal_id text, p_reason text', '3fe493ee5e0b27e43cc881854dddfe4dc12f862a1c4a242bf712c843b2792ff1', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_stage_import_batch', 'p_stage_document text', '11b0a983c9cf3d4a7451978d37e5fe997a40290a10e741ba0626b89bfd2611c4', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_stage_import_parser_report', 'p_batch_id uuid, p_parser_report_document text', 'd89defb335e21228c38968ef69b2ed7342f5a5440762ae31f170969fbcc9c9e8', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_stage_import_record_chunk', 'p_batch_id uuid, p_expected_next_offset bigint, p_records_document text', '4cc2b310ba6fda051a125bb203c0cf2c6a5fbe227a55daf517a0376ab79e4c7f', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_validate_import_batch', 'p_batch_id uuid, p_expected_staging_seal_sha256 text, p_expected_observation_sha256 text, p_validation_document text', '5b7ae15625fb0ae0d88a9512fe82fca69a9d0dd9e179af8bc1b2f42d1e85ac8a', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('enqueue_food_search_barcode_insert', '', '4e888f3ef0b3af1e7eee14568069ae3fe06b65b88718614ed0e2c243a5d22318', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('enqueue_food_search_barcode_update', '', '9d7a90d0fee1a6923631c9b9018d9c813d3c8f7eea2df941fc32fbb4f5d453b0', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('enqueue_food_search_food_eligibility_change', '', '85ada305a6fd6b40cd5fb0652d64c240d1953033a243b0f7ce243caa9bc9c4de', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
@@ -430,9 +484,12 @@ END) IS TRUE)$constraint$
         ('guard_food_barcode_validity_update', '', '7b97f95dd7388565424bd3713081711106a5e3d0c206310a8d405b8772208ecc', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_approval_authority', '', 'f96feb298d900165172c56a3fa1e99e91aaca010657155e5a996ee04015fdbbd', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_batch_initial_state', '', '2561714155de31151c79f95977156072a66451d1f13f7b5c6e85d13abe9ecb0c', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('guard_food_import_batch_stage_validate_authority', '', 'f21dfa9d5455a40ab9f50bdbace02ffc19f53ab252e0eab99a4f50769f678eda', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_batch_update', '', '8863eef0e6889a620deec204e249ac3d6efdc87310dcc9d25601e6d7f336101f', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_batch_validation_digest', '', 'c94c16cef462dfaca5c58908c2784e6d86b9f415c1c081f7b6c8a5ca434bddd7', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('guard_food_import_record_insert_before_staging_seal', '', '2fc46ef24e03309e61832491438746967642911b02e97896f8a0bdf6fc5aa8bc', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_record_update', '', '300e6853e7a9520b477256b3b32a4381f3143512b013a4e131a4c203ce524479', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('guard_food_import_stage_checkpoint_before_staging_seal', '', '66e2078cf57d658268f547c25df26750ebe5b7b6402de9fcecdc2249c14f28ef', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_imported_food_version_child_delete', '', '4e36d3ee5cbd53dc6c98d9f457adbb5ee8cb6cbf8fc6b3e45d3133b4305e7cc1', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_source_active_release_authority', '', '306eec1771a7bbf7961bd6d46ba752801fe98f07d27fbf96291a1c454750cd11', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_source_initial_active_release', '', 'e3cbc51f28aafd274ea2bc3b71b824d51180d8e741dbcfd22d0af9e21849be43', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
@@ -508,6 +565,8 @@ END) IS TRUE)$constraint$
             'food_barcode',
             'food_import_approval',
             'food_import_batch',
+            'food_import_checkpoint',
+            'food_import_parser_report',
             'food_import_record',
             'food_nutrient_value',
             'food_search_projection_revision',
@@ -524,9 +583,14 @@ END) IS TRUE)$constraint$
           and trigger_row.tgname in (
             'food_import_approval_guard_authority',
             'food_import_batch_guard_initial_state',
+            'food_import_batch_guard_stage_validate_authority',
             'food_import_batch_guard_update',
             'food_import_batch_guard_validation_digest',
             'food_import_batch_reject_new_legacy_unbound',
+            'food_import_checkpoint_guard_staging_seal',
+            'food_import_checkpoint_set_updated_at',
+            'food_import_parser_report_reject_update',
+            'food_import_record_guard_staging_seal',
             'food_import_record_guard_update',
             'food_search_barcode_insert_outbox',
             'food_search_barcode_update_outbox',
@@ -559,9 +623,12 @@ END) IS TRUE)$constraint$
             'guard_food_barcode_validity_update',
             'guard_food_import_approval_authority',
             'guard_food_import_batch_initial_state',
+            'guard_food_import_batch_stage_validate_authority',
             'guard_food_import_batch_update',
             'guard_food_import_batch_validation_digest',
+            'guard_food_import_record_insert_before_staging_seal',
             'guard_food_import_record_update',
+            'guard_food_import_stage_checkpoint_before_staging_seal',
             'guard_food_source_release_activation_authority',
             'guard_imported_food_version_child_delete',
             'guard_food_source_active_release_authority',
@@ -583,7 +650,7 @@ END) IS TRUE)$constraint$
           )
         )
       )
-  ) <> 47 or exists (
+  ) <> 52 or exists (
     select 1
     from (
       values
@@ -610,9 +677,14 @@ END) IS TRUE)$constraint$
         ('food_version_reject_update', 'food_version', 'reject_immutable_row_update', 'CREATE TRIGGER food_version_reject_update BEFORE UPDATE ON food_version FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()'),
         ('food_import_approval_guard_authority'::text, 'food_import_approval'::text, 'guard_food_import_approval_authority'::text, 'CREATE TRIGGER food_import_approval_guard_authority BEFORE INSERT ON food_import_approval FOR EACH ROW EXECUTE FUNCTION guard_food_import_approval_authority()'::text),
         ('food_import_batch_guard_initial_state', 'food_import_batch', 'guard_food_import_batch_initial_state', 'CREATE TRIGGER food_import_batch_guard_initial_state BEFORE INSERT ON food_import_batch FOR EACH ROW EXECUTE FUNCTION guard_food_import_batch_initial_state()'),
+        ('food_import_batch_guard_stage_validate_authority', 'food_import_batch', 'guard_food_import_batch_stage_validate_authority', 'CREATE TRIGGER food_import_batch_guard_stage_validate_authority BEFORE INSERT OR UPDATE ON food_import_batch FOR EACH ROW EXECUTE FUNCTION guard_food_import_batch_stage_validate_authority()'),
         ('food_import_batch_guard_update', 'food_import_batch', 'guard_food_import_batch_update', 'CREATE TRIGGER food_import_batch_guard_update BEFORE DELETE OR UPDATE ON food_import_batch FOR EACH ROW EXECUTE FUNCTION guard_food_import_batch_update()'),
         ('food_import_batch_guard_validation_digest', 'food_import_batch', 'guard_food_import_batch_validation_digest', 'CREATE TRIGGER food_import_batch_guard_validation_digest BEFORE INSERT OR UPDATE ON food_import_batch FOR EACH ROW EXECUTE FUNCTION guard_food_import_batch_validation_digest()'),
         ('food_import_batch_reject_new_legacy_unbound', 'food_import_batch', 'reject_new_legacy_unbound_catalogue_evidence', 'CREATE TRIGGER food_import_batch_reject_new_legacy_unbound BEFORE INSERT ON food_import_batch FOR EACH ROW EXECUTE FUNCTION reject_new_legacy_unbound_catalogue_evidence()'),
+        ('food_import_checkpoint_guard_staging_seal', 'food_import_checkpoint', 'guard_food_import_stage_checkpoint_before_staging_seal', 'CREATE TRIGGER food_import_checkpoint_guard_staging_seal BEFORE INSERT OR DELETE OR UPDATE ON food_import_checkpoint FOR EACH ROW EXECUTE FUNCTION guard_food_import_stage_checkpoint_before_staging_seal()'),
+        ('food_import_checkpoint_set_updated_at', 'food_import_checkpoint', 'set_row_updated_at', 'CREATE TRIGGER food_import_checkpoint_set_updated_at BEFORE UPDATE ON food_import_checkpoint FOR EACH ROW EXECUTE FUNCTION set_row_updated_at()'),
+        ('food_import_parser_report_reject_update', 'food_import_parser_report', 'reject_immutable_row_update', 'CREATE TRIGGER food_import_parser_report_reject_update BEFORE DELETE OR UPDATE ON food_import_parser_report FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()'),
+        ('food_import_record_guard_staging_seal', 'food_import_record', 'guard_food_import_record_insert_before_staging_seal', 'CREATE TRIGGER food_import_record_guard_staging_seal BEFORE INSERT ON food_import_record FOR EACH ROW EXECUTE FUNCTION guard_food_import_record_insert_before_staging_seal()'),
         ('food_import_record_guard_update', 'food_import_record', 'guard_food_import_record_update', 'CREATE TRIGGER food_import_record_guard_update BEFORE INSERT OR UPDATE ON food_import_record FOR EACH ROW EXECUTE FUNCTION guard_food_import_record_update()'),
         ('food_search_barcode_insert_outbox', 'food_barcode', 'enqueue_food_search_barcode_insert', 'CREATE TRIGGER food_search_barcode_insert_outbox AFTER INSERT ON food_barcode REFERENCING NEW TABLE AS new_food_search_barcodes FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_barcode_insert()'),
         ('food_search_barcode_update_outbox', 'food_barcode', 'enqueue_food_search_barcode_update', 'CREATE TRIGGER food_search_barcode_update_outbox AFTER UPDATE ON food_barcode REFERENCING OLD TABLE AS old_food_search_barcodes NEW TABLE AS new_food_search_barcodes FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_barcode_update()'),
@@ -844,6 +916,8 @@ END) IS TRUE)$constraint$
       and coalesce(grantee.rolname, 'PUBLIC') <> all (array[
         'PUBLIC',
         'pg_database_owner',
+        'nutrition_catalogue_stage',
+        'nutrition_catalogue_validate',
         'nutrition_catalogue_approve_data',
         'nutrition_catalogue_approve_quality',
         'nutrition_catalogue_approve_rights',
@@ -854,6 +928,118 @@ END) IS TRUE)$constraint$
     raise exception 'public schema has an unexpected pre-policy privilege grantee'
       using errcode = '55000';
   end if;
+
+  -- Logical restore omits ACLs. Reconstruct the nine migration-0020 function
+  -- ACLs from the reviewed manifest, stripping any named grants first.
+  for stage_validate_function_spec in
+    select *
+    from (
+      values
+        ('guard_food_import_batch_stage_validate_authority()'::text, 'owner'::text),
+        ('guard_food_import_record_insert_before_staging_seal()', 'owner'),
+        ('guard_food_import_stage_checkpoint_before_staging_seal()', 'owner'),
+        ('catalogue_compute_import_staging_seal(uuid)', 'owner'),
+        ('catalogue_stage_import_batch(text)', 'stage'),
+        ('catalogue_stage_import_record_chunk(uuid,bigint,text)', 'stage'),
+        ('catalogue_stage_import_parser_report(uuid,text)', 'stage'),
+        ('catalogue_observe_import_validation(uuid)', 'validate'),
+        ('catalogue_validate_import_batch(uuid,text,text,text)', 'validate')
+    ) as expected(function_identity, acl_kind)
+  loop
+    stage_validate_function := pg_catalog.to_regprocedure(
+      pg_catalog.format('public.%s', stage_validate_function_spec.function_identity)
+    );
+    if stage_validate_function is null then
+      raise exception 'catalogue stage/validate function % is absent',
+        stage_validate_function_spec.function_identity using errcode = '42883';
+    end if;
+    stage_validate_functions := pg_catalog.array_append(
+      stage_validate_functions,
+      stage_validate_function
+    );
+
+    execute pg_catalog.format(
+      'revoke all on function public.%s from public',
+      stage_validate_function_spec.function_identity
+    );
+    for acl_grantee in
+      select distinct function_acl.grantee
+      from pg_catalog.pg_proc as procedure_row
+      cross join lateral pg_catalog.aclexplode(procedure_row.proacl) as function_acl
+      where procedure_row.oid = stage_validate_function
+        and function_acl.grantee <> 0
+    loop
+      select role_row.rolname
+      into acl_grantee_name
+      from pg_catalog.pg_roles as role_row
+      where role_row.oid = acl_grantee;
+      if acl_grantee_name is null then
+        raise exception 'catalogue stage/validate function % has an unknown ACL grantee',
+          stage_validate_function_spec.function_identity using errcode = '55000';
+      end if;
+      execute pg_catalog.format(
+        'revoke all on function public.%s from %I',
+        stage_validate_function_spec.function_identity,
+        acl_grantee_name
+      );
+    end loop;
+
+    execute pg_catalog.format(
+      'grant execute on function public.%s to %I',
+      stage_validate_function_spec.function_identity,
+      expected_owner
+    );
+    if stage_validate_function_spec.acl_kind = 'stage' then
+      execute pg_catalog.format(
+        'grant execute on function public.%s to nutrition_catalogue_stage',
+        stage_validate_function_spec.function_identity
+      );
+    elsif stage_validate_function_spec.acl_kind = 'validate' then
+      execute pg_catalog.format(
+        'grant execute on function public.%s to nutrition_catalogue_validate',
+        stage_validate_function_spec.function_identity
+      );
+    end if;
+
+    expected_acl_count := case
+      when stage_validate_function_spec.acl_kind = 'owner' then 1
+      else 2
+    end;
+    if (
+      select pg_catalog.count(*)
+      from pg_catalog.pg_proc as procedure_row
+      cross join lateral pg_catalog.aclexplode(procedure_row.proacl) as function_acl
+      where procedure_row.oid = stage_validate_function
+    ) <> expected_acl_count or exists (
+      select 1
+      from pg_catalog.pg_proc as procedure_row
+      cross join lateral pg_catalog.aclexplode(procedure_row.proacl) as function_acl
+      left join pg_catalog.pg_roles as grantee_role
+        on grantee_role.oid = function_acl.grantee
+      where procedure_row.oid = stage_validate_function
+        and (
+          function_acl.grantor <> expected_owner_oid
+          or function_acl.privilege_type <> 'EXECUTE'
+          or function_acl.is_grantable
+          or not (
+            function_acl.grantee = expected_owner_oid
+            or (
+              stage_validate_function_spec.acl_kind = 'stage'
+              and grantee_role.rolname = 'nutrition_catalogue_stage'
+            )
+            or (
+              stage_validate_function_spec.acl_kind = 'validate'
+              and grantee_role.rolname = 'nutrition_catalogue_validate'
+            )
+          )
+        )
+    ) then
+      raise exception 'catalogue stage/validate function % ACL differs from policy',
+        stage_validate_function_spec.function_identity using errcode = '55000';
+    end if;
+  end loop;
+
+  execute 'grant usage on schema public to nutrition_catalogue_stage, nutrition_catalogue_validate';
 
   execute 'revoke all on function public.catalogue_record_import_approval(uuid,text,text,text,text,text) from public';
   execute 'grant execute on function public.catalogue_record_import_approval(uuid,text,text,text,text,text) to nutrition_catalogue_approve_data, nutrition_catalogue_approve_quality, nutrition_catalogue_approve_rights';
@@ -1017,6 +1203,7 @@ END) IS TRUE)$constraint$
       and procedure_row.oid <> promotion_function
       and procedure_row.oid <> rollback_function
       and procedure_row.oid <> activation_guard_function
+      and not (procedure_row.oid = any (stage_validate_functions))
       and procedure_row.proacl is not null
   ) then
     raise exception 'a non-authority public function has unexpected explicit privileges'
@@ -1042,19 +1229,21 @@ END) IS TRUE)$constraint$
             'nutrition_catalogue_approve_data',
             'nutrition_catalogue_approve_quality',
             'nutrition_catalogue_approve_rights',
+            'nutrition_catalogue_stage',
+            'nutrition_catalogue_validate',
             'nutrition_catalogue_promote_activate',
             'nutrition_catalogue_rollback'
           )
           and acl.privilege_type = 'USAGE'
         )
       )
-  ) <> 8 or (
+  ) <> 10 or (
     select pg_catalog.count(*)
     from pg_catalog.pg_namespace as namespace_row
     cross join lateral pg_catalog.aclexplode(namespace_row.nspacl) as acl
     where namespace_row.nspname = target_schema
-  ) <> 8 then
-    raise exception 'public schema ACL is not the exact reviewed eight-entry policy'
+  ) <> 10 then
+    raise exception 'public schema ACL is not the exact reviewed ten-entry policy'
       using errcode = '55000';
   end if;
 

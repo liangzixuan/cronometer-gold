@@ -87,9 +87,10 @@ function search paths and exact statement-trigger bindings plus
 migration-0018's four active-nutrient lock functions and seven exact trigger
 bindings plus migration-0019's frozen materialization contract, replacement
 activation-authority constraint, identifier-only promotion/rollback functions,
-activation authority guard, and complete shared-food/outbox trigger surface.
-The transactional repair policy pins 35 function identities, 47 exact trigger
-bindings, the six frozen-evidence column definitions, all four authority CHECKs,
+activation authority guard, plus migration-0020's sealed stage/validate boundary
+and complete shared-food/outbox trigger surface. The transactional repair policy
+pins 44 function identities, 52 exact trigger bindings, the twelve
+authority-evidence column definitions, all six authority CHECKs,
 and the unique activation-to-batch index. Before creating a
 dump, the drill requires the exact `public.app_schema_migration` names and
 SHA-256s from the tracked migration files, ignoring any owner-schema shadow
@@ -122,8 +123,10 @@ Run and save results without exporting payload values:
    source-eligibility trigger and its two-function projection call chain and
    migration-0017's remaining four outbox functions and exact trigger bindings
    plus migration-0018's four nutrient-lock functions and seven bindings and
-   migration-0019's exact wrapper/guard bodies, per-function ACLs, six
-   frozen-evidence column definitions, all four authority CHECKs, the unique
+   migration-0019's exact wrapper/guard bodies plus migration-0020's five
+   stage/validate workflow functions, owner-only seal helper, three guards,
+   per-function ACLs, twelve authority-evidence column definitions, all six
+   authority CHECKs, the unique
    activation-to-batch index, and the complete protected trigger surface; and
    absence of `PUBLIC EXECUTE` on every `SECURITY DEFINER` workflow function and
    owner-only authority guard. Other reviewed ordinary security-invoker
@@ -145,7 +148,8 @@ Run and save results without exporting payload values:
    objects, hold no other membership, have no effective catalogue
    table/column/sequence privilege, and have no schema `CREATE` privilege. Stage,
    validate, promote-and-activate, and rollback capabilities remain unassigned
-   and fail closed until their narrow functions and caller cutovers exist.
+   and fail closed until their caller profiles and cutovers exist. Their narrow
+   functions are present and pinned after migrations 0019 and 0020.
 
    The EXPAND restore policy continues to require zero incoming and outgoing
    capability memberships, so never add an ad hoc membership to make this drill
@@ -155,13 +159,13 @@ Run and save results without exporting payload values:
    tracked `public` migration ledger; requires `public` to be the only
    non-system schema and to be owned by
    `pg_database_owner`; exact database, schema, relation, type, function, and
-   membership ACLs and grantors; no default or column ACL drift; all 35 authority
+   membership ACLs and grantors; no default or column ACL drift; all 44 authority
    function hashes/semantics/configuration values and exact execute ACLs, safe
-   authority on every other public routine, and the exact 47-trigger protected
+   authority on every other public routine, and the exact 52-trigger protected
    shared-food/outbox authority set with exact table and function schemas,
    including every binding of a dedicated public authority trigger function
-   even when its table is outside `public`; all four authority CHECKs, the six
-   frozen-evidence columns, the unique activation-to-batch index, safe roles,
+   even when its table is outside `public`; all six authority CHECKs, the twelve
+   authority-evidence columns, the unique activation-to-batch index, safe roles,
    and memberships; the
    effective-login allowlist; and seven isolated verifier sessions with no other
    target-database client. Its zero-write canaries prove all of the following:
@@ -175,11 +179,12 @@ Run and save results without exporting payload values:
      `42501` without consuming an identity value.
 
    Migrations 0017 and 0018 grant no runtime privilege and do not authorize
-   direct non-owner DML. Migration 0019 grants execute only to unassigned
-   `NOLOGIN` promotion and rollback capabilities and grants no table, column,
-   or sequence privilege. Keep runtime cutover blocked until stage/validate and
-   any remaining fixed-purpose writer profiles exist and target positive and
-   negative role canaries exercise the complete boundary.
+   direct non-owner DML. Migrations 0019 and 0020 grant execute only to unassigned
+   `NOLOGIN` workflow capabilities and grant no table, column, or sequence
+   privilege. Keep runtime cutover blocked until the stage/validate callers,
+   independent validation semantics, and any remaining fixed-purpose writer
+   profiles exist and target positive and negative role canaries exercise the
+   complete boundary.
 
    The exact membership graph structurally rejects a multi-capability deployment
    before canaries; the separate authority-boundary integration test retains its
@@ -200,8 +205,8 @@ Run and save results without exporting payload values:
    remain blocked.
 
    Separately, the logical restore drill's internal canonical authority
-   fingerprint schema is version 10. It binds exact public-column ACL rows, the
-   six frozen-evidence column definitions, all four authority CHECKs, the unique
+   fingerprint schema is version 11. It binds exact public-column ACL rows, the
+   twelve authority-evidence column definitions, all six authority CHECKs, the unique
    activation-to-batch index, the independent count of non-NULL column ACL
    attributes, each trigger's table schema, every public-table trigger, and every
    cross-schema binding of a dedicated public authority trigger function. The

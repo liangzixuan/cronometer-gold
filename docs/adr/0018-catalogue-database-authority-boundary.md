@@ -135,6 +135,38 @@ Promotion preserves batch, source, per-source advisory, then shared registry
 lock order. The roles remain `NOLOGIN` and unassigned, so source availability
 does not authorize live identities or calls.
 
+Forward migration 0020 closes the fixed-purpose stage/validate portion of the
+wrapper prerequisite without assigning a login or performing caller cutover.
+Three stage functions create or exactly resume a pre-registered source attempt,
+append an atomic contiguous chunk of at most 250 records with its durable
+checkpoint, and persist immutable parser evidence. A batch is capped at 10,000
+records and 64 MiB of stored canonical-payload JSON. The last stage operation
+records a database-computed seal over provenance, the full parser evidence, the
+exact stage checkpoint, the complete ordered record set, and the active
+nutrient-mapping revisions. After sealing,
+guards reject record insertion, stage-checkpoint mutation, and audit/seal
+rewrites. A validate-only observation function exposes the bounded sealed input,
+and a validate-only finalizer accepts only that exact observation and seal. The
+observation response and validation request are each capped at 128 MiB. Both
+recompute the seal under the established source and nutrient-registry lock order,
+and validation must use a different authenticated database login from staging.
+The functions derive principals and capabilities from `session_user`; callers
+cannot submit those audit fields. The stage and validate roles receive only
+schema `USAGE` and exact function `EXECUTE`, never table, column, or sequence
+privileges. Six nullable audit/seal columns preserve owner/local and historical
+compatibility. Both capability roles remain `NOLOGIN` and unassigned.
+
+This migration authenticates who may stage and finalize validation, but it does
+not make PostgreSQL an independent food-validation engine. The validator still
+supplies a tightly bounded, digest-bound classification document whose nutrition
+semantics are checked by application code rather than recomputed from the staged
+payload by PostgreSQL. Independent validator execution, caller profiles,
+credentials, external-principal binding, and cutover evidence therefore remain
+required before live catalogue ingestion is authorized. The hard limits are
+safety ceilings, not representative full-catalogue scale evidence; a bounded,
+paged production protocol and measured memory, disk, lock, timeout, and retry
+budgets remain open.
+
 The supported protocol is deliberately narrower than arbitrary owner SQL:
 application transactions take the shared lock before entering the affected
 read/write chain. Direct owner recipe DML is unsupported because its row and
@@ -175,20 +207,20 @@ PostgreSQL 17 that membership must be represented by `ADMIN FALSE`,
 `INHERIT TRUE`, and `SET FALSE`. The reviewer must have no direct catalogue table or
 sequence DML and no `CREATE` privilege on the application schema. The seven
 capability roles remain safe `NOLOGIN` roles with no owned objects and no
-outgoing memberships. Stage and validate still lack reviewed functions;
-promotion and rollback now have fixed-purpose functions but no deployed caller.
-All four capabilities retain zero incoming memberships in DEPLOY-0. No
+outgoing memberships. Stage, validate, promotion, and rollback now have
+fixed-purpose functions but no deployed caller. All four capabilities retain
+zero incoming memberships in DEPLOY-0. No
 application migration creates production logins or grants these deployment
 memberships.
 
 The verifier requires `public` to be the only non-system schema and checks its
 exact ACLs, grantors, and `pg_database_owner` ownership; the exact database ACL;
-relation, type, default, and column ACL state; required owners; all four
-authority CHECKs; the six frozen-evidence columns; the unique
-activation-to-batch index; all 35 authority function signatures, executable
+relation, type, default, and column ACL state; required owners; all six
+authority CHECKs; the twelve pinned authority-evidence columns; the unique
+activation-to-batch index; all 44 authority function signatures, executable
 semantics, source hashes, exact per-function ACLs, and expected configuration;
 every other public routine for unsafe ownership, explicit ACL, or
-`SECURITY DEFINER`; and the exact 47-trigger authority set across the complete
+`SECURITY DEFINER`; and the exact 52-trigger authority set across the complete
 protected shared-food/outbox surface, including each trigger's table and
 function schema. Every binding of a dedicated public authority trigger function
 enters the evidence even when its table is outside `public`. It also checks the
@@ -236,10 +268,12 @@ database actors or capability grants.
 This decision does not yet authorize live catalogue work. The following remain
 required before database authority can be considered closed:
 
-1. Narrow stage and validate functions, plus any remaining fixed-purpose
-   recipe/shared-food writers needed to remove the API/worker need for unrelated
-   table mutation privilege. Migration 0019 supplies the promotion-and-activation
-   and rollback functions but does not deploy their callers.
+1. Any remaining fixed-purpose recipe/shared-food writers needed to remove the
+   API/worker need for unrelated table mutation privilege. Migrations 0019 and
+   0020 supply promotion/rollback and stage/validate functions but do not deploy
+   their callers. A deployed validator must also independently produce or
+   recheck the caller-generated nutrition classification semantics rather than
+   treating PostgreSQL's structural validation as a second semantic review.
 2. Deployment-specific login identities, short-lived or otherwise reviewed
    credentials, and an externally authenticated principal-to-login binding.
 3. API, worker, ingestion, migration, backup, and restore credential separation,
@@ -253,7 +287,8 @@ required before database authority can be considered closed:
    source-eligibility trigger plus migration-0017's four function search paths
    and exact food/serving/barcode trigger bindings plus migration-0018's four
    nutrient-lock functions and seven trigger bindings plus migration-0019's
-   frozen materialization and promotion/rollback authority boundary, but it does not
+   frozen materialization and promotion/rollback authority boundary plus
+   migration-0020's sealed stage/validate boundary, but it does not
    substitute for deployed login separation or canaries through those real
    identities.
 
@@ -268,8 +303,9 @@ not drop or recreate authority evidence in place.
 
 ## Consequences
 
-- Reviewer approval can be tested against a database-authenticated boundary
-  without claiming that the remaining catalogue workflow is isolated.
+- Staging, validation, reviewer approval, promotion, and rollback can be tested
+  through fixed-purpose database-authenticated boundaries without claiming that
+  runtime identity separation or caller cutover is complete.
 - Static capability names make deployment, restore, and evidence expectations
   reviewable, while cluster login creation and secrets stay outside migrations.
 - DEPLOY-0 now has a reviewable credential-free policy, structural verifier,
@@ -284,12 +320,14 @@ not drop or recreate authority evidence in place.
   migration-0016 and migration-0017 food-search function/trigger policies plus
   migration-0018's nutrient lock protocol plus migration-0019's frozen
   materialization, replacement activation-authority constraint, and
-  promotion/rollback boundary. The repair policy pins 35 function identities,
-  47 exact trigger bindings, the six frozen-evidence columns, all four authority
+  promotion/rollback boundary plus migration-0020's stage/validate functions,
+  immutable staging seal, audit columns, constraints, and guards. The repair
+  policy pins 44 function identities, 52 exact trigger bindings, the twelve
+  authority-evidence columns, all six authority
   CHECKs, and the unique activation-to-batch index; the canonical fingerprint
   covers that same full authority set. It
   requires the exact tracked filename/file-byte-SHA ledger from
-  `public.app_schema_migration` before `pg_dump`, then version-10 canonical
+  `public.app_schema_migration` before `pg_dump`, then version-11 canonical
   authority-fingerprint parity including column ACL state, the frozen-evidence
   column definitions, the authority index, and each trigger's table schema while
   `PUBLIC CONNECT` remains revoked. Public-table triggers and

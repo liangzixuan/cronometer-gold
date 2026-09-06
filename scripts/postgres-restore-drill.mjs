@@ -16,7 +16,7 @@ const AUTHORITY_POLICY_PATH = new URL(
 const MIGRATION_DIRECTORY = new URL("../packages/db/migrations/", import.meta.url);
 const MIGRATION_FILE_PATTERN = /^\d{4}_[a-z0-9_]+\.sql$/;
 const EXPECTED_AUTHORITY_POLICY_SHA256 =
-  "a80a155c3db8dc3db517bf04181e309d037e61be3cb5ada7e4a7160384b2641a";
+  "bc2e36d3561c692b1b44231af38f1d788de645f42c5af1a65e3552fdb9824f72";
 const CAPABILITY_ROLES = [
   "nutrition_catalogue_stage",
   "nutrition_catalogue_validate",
@@ -29,6 +29,10 @@ const CAPABILITY_ROLES = [
 const PINNED_AUTHORITY_SEARCH_PATH = ["search_path=pg_catalog, public, pg_temp"];
 const ACTIVATION_AUTHORITY_CONSTRAINT_DEFINITION =
   "CHECK ((database_principal IS NULL AND database_capability_role IS NULL OR database_principal IS NOT NULL AND database_capability_role IS NOT NULL AND octet_length(database_principal) >= 1 AND octet_length(database_principal) <= 63 AND database_capability_role =\nCASE\n    WHEN import_batch_id IS NOT NULL AND operation = 'activate'::text THEN 'nutrition_catalogue_promote_activate'::text\n    WHEN import_batch_id IS NULL AND (operation = ANY (ARRAY['deactivate'::text, 'rollback'::text])) THEN 'nutrition_catalogue_rollback'::text\n    ELSE NULL::text\nEND) IS TRUE)";
+const STAGE_VALIDATE_AUTHORITY_CONSTRAINT_DEFINITION =
+  "CHECK ((staged_database_principal IS NULL AND staged_database_capability_role IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR staged_database_principal IS NOT NULL AND octet_length(staged_database_principal) >= 1 AND octet_length(staged_database_principal) <= 63 AND staged_database_capability_role = 'nutrition_catalogue_stage'::text AND (validated_at IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR validated_at IS NOT NULL AND validated_database_principal IS NOT NULL AND octet_length(validated_database_principal) >= 1 AND octet_length(validated_database_principal) <= 63 AND validated_database_capability_role = 'nutrition_catalogue_validate'::text AND validated_database_principal <> staged_database_principal)) IS TRUE)";
+const STAGING_SEAL_CONSTRAINT_DEFINITION =
+  "CHECK ((staging_seal_sha256 IS NULL AND staging_sealed_at IS NULL OR staging_seal_sha256 ~ '^[0-9a-f]{64}$'::text AND staging_sealed_at IS NOT NULL AND (staging_sealed_at <> ALL (ARRAY['-infinity'::timestamp with time zone, 'infinity'::timestamp with time zone]))) IS TRUE AND (validated_at IS NULL OR staged_database_principal IS NULL OR staging_seal_sha256 IS NOT NULL))";
 const AUTHORITY_CONSTRAINT_POLICY = [
   {
     constraint_type: "c",
@@ -43,6 +47,20 @@ const AUTHORITY_CONSTRAINT_POLICY = [
     definition:
       "CHECK (((status <> ALL (ARRAY['ready'::text, 'promoting'::text])) OR validated_food_contract_version = 1 AND nutrient_mapping_digest IS NOT NULL AND nutrient_mapping_revision_ids IS NOT NULL) IS TRUE)",
     name: "food_import_batch_promotable_contract_check",
+    table_name: "food_import_batch",
+    validated: true,
+  },
+  {
+    constraint_type: "c",
+    definition: STAGE_VALIDATE_AUTHORITY_CONSTRAINT_DEFINITION,
+    name: "food_import_batch_stage_validate_database_authority_check",
+    table_name: "food_import_batch",
+    validated: true,
+  },
+  {
+    constraint_type: "c",
+    definition: STAGING_SEAL_CONSTRAINT_DEFINITION,
+    name: "food_import_batch_staging_seal_check",
     table_name: "food_import_batch",
     validated: true,
   },
@@ -74,6 +92,54 @@ const AUTHORITY_FROZEN_COLUMN_POLICY = [
   {
     column_name: "nutrient_mapping_revision_ids",
     data_type: "jsonb",
+    default_expression: null,
+    not_null: false,
+    schema_name: "public",
+    table_name: "food_import_batch",
+  },
+  {
+    column_name: "staged_database_capability_role",
+    data_type: "text",
+    default_expression: null,
+    not_null: false,
+    schema_name: "public",
+    table_name: "food_import_batch",
+  },
+  {
+    column_name: "staged_database_principal",
+    data_type: "text",
+    default_expression: null,
+    not_null: false,
+    schema_name: "public",
+    table_name: "food_import_batch",
+  },
+  {
+    column_name: "staging_seal_sha256",
+    data_type: "text",
+    default_expression: null,
+    not_null: false,
+    schema_name: "public",
+    table_name: "food_import_batch",
+  },
+  {
+    column_name: "staging_sealed_at",
+    data_type: "timestamp with time zone",
+    default_expression: null,
+    not_null: false,
+    schema_name: "public",
+    table_name: "food_import_batch",
+  },
+  {
+    column_name: "validated_database_capability_role",
+    data_type: "text",
+    default_expression: null,
+    not_null: false,
+    schema_name: "public",
+    table_name: "food_import_batch",
+  },
+  {
+    column_name: "validated_database_principal",
+    data_type: "text",
     default_expression: null,
     not_null: false,
     schema_name: "public",
@@ -135,6 +201,8 @@ const PROTECTED_CATALOGUE_TABLES = new Set([
   "food_barcode",
   "food_import_approval",
   "food_import_batch",
+  "food_import_checkpoint",
+  "food_import_parser_report",
   "food_import_record",
   "food_nutrient_value",
   "food_search_projection_revision",
@@ -175,6 +243,22 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
     },
   ],
   [
+    "catalogue_compute_import_staging_seal",
+    {
+      arguments: "p_batch_id uuid",
+      config: PINNED_AUTHORITY_SEARCH_PATH,
+      executeGrantees: "owner-only",
+      language: "plpgsql",
+      leakproof: false,
+      parallel: "u",
+      resultType: "text",
+      securityDefiner: true,
+      sourceSha256: "399d40c2913c2022c0a2921d5870a2d26a5dcd9949d81715882f70899db4f5f8",
+      strict: false,
+      volatility: "v",
+    },
+  ],
+  [
     "catalogue_evidence_bundle_uri_is_valid",
     {
       arguments: "value text, digest text",
@@ -188,6 +272,22 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       sourceSha256: "5403779dc4398446c61d0a27ad8b95d904e2552a5e694496b9e7e8612e0c902e",
       strict: true,
       volatility: "i",
+    },
+  ],
+  [
+    "catalogue_observe_import_validation",
+    {
+      arguments: "p_batch_id uuid",
+      config: PINNED_AUTHORITY_SEARCH_PATH,
+      executeGrantees: ["nutrition_catalogue_validate"],
+      language: "plpgsql",
+      leakproof: false,
+      parallel: "u",
+      resultType: "jsonb",
+      securityDefiner: true,
+      sourceSha256: "0a87bc99f5df97282c48b6202799bcc75cdb914e7473c0c38e092aaf4a132acf",
+      strict: false,
+      volatility: "v",
     },
   ],
   [
@@ -240,6 +340,71 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       resultType: "jsonb",
       securityDefiner: true,
       sourceSha256: "3fe493ee5e0b27e43cc881854dddfe4dc12f862a1c4a242bf712c843b2792ff1",
+      strict: false,
+      volatility: "v",
+    },
+  ],
+  [
+    "catalogue_stage_import_batch",
+    {
+      arguments: "p_stage_document text",
+      config: PINNED_AUTHORITY_SEARCH_PATH,
+      executeGrantees: ["nutrition_catalogue_stage"],
+      language: "plpgsql",
+      leakproof: false,
+      parallel: "u",
+      resultType: "jsonb",
+      securityDefiner: true,
+      sourceSha256: "11b0a983c9cf3d4a7451978d37e5fe997a40290a10e741ba0626b89bfd2611c4",
+      strict: false,
+      volatility: "v",
+    },
+  ],
+  [
+    "catalogue_stage_import_parser_report",
+    {
+      arguments: "p_batch_id uuid, p_parser_report_document text",
+      config: PINNED_AUTHORITY_SEARCH_PATH,
+      executeGrantees: ["nutrition_catalogue_stage"],
+      language: "plpgsql",
+      leakproof: false,
+      parallel: "u",
+      resultType: "jsonb",
+      securityDefiner: true,
+      sourceSha256: "d89defb335e21228c38968ef69b2ed7342f5a5440762ae31f170969fbcc9c9e8",
+      strict: false,
+      volatility: "v",
+    },
+  ],
+  [
+    "catalogue_stage_import_record_chunk",
+    {
+      arguments: "p_batch_id uuid, p_expected_next_offset bigint, p_records_document text",
+      config: PINNED_AUTHORITY_SEARCH_PATH,
+      executeGrantees: ["nutrition_catalogue_stage"],
+      language: "plpgsql",
+      leakproof: false,
+      parallel: "u",
+      resultType: "jsonb",
+      securityDefiner: true,
+      sourceSha256: "4cc2b310ba6fda051a125bb203c0cf2c6a5fbe227a55daf517a0376ab79e4c7f",
+      strict: false,
+      volatility: "v",
+    },
+  ],
+  [
+    "catalogue_validate_import_batch",
+    {
+      arguments:
+        "p_batch_id uuid, p_expected_staging_seal_sha256 text, p_expected_observation_sha256 text, p_validation_document text",
+      config: PINNED_AUTHORITY_SEARCH_PATH,
+      executeGrantees: ["nutrition_catalogue_validate"],
+      language: "plpgsql",
+      leakproof: false,
+      parallel: "u",
+      resultType: "jsonb",
+      securityDefiner: true,
+      sourceSha256: "5b7ae15625fb0ae0d88a9512fe82fca69a9d0dd9e179af8bc1b2f42d1e85ac8a",
       strict: false,
       volatility: "v",
     },
@@ -330,6 +495,14 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
     },
   ],
   [
+    "guard_food_import_batch_stage_validate_authority",
+    {
+      ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
+      executeGrantees: "owner-only",
+      sourceSha256: "f21dfa9d5455a40ab9f50bdbace02ffc19f53ab252e0eab99a4f50769f678eda",
+    },
+  ],
+  [
     "guard_food_import_batch_update",
     {
       ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
@@ -344,10 +517,26 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
     },
   ],
   [
+    "guard_food_import_record_insert_before_staging_seal",
+    {
+      ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
+      executeGrantees: "owner-only",
+      sourceSha256: "2fc46ef24e03309e61832491438746967642911b02e97896f8a0bdf6fc5aa8bc",
+    },
+  ],
+  [
     "guard_food_import_record_update",
     {
       ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
       sourceSha256: "300e6853e7a9520b477256b3b32a4381f3143512b013a4e131a4c203ce524479",
+    },
+  ],
+  [
+    "guard_food_import_stage_checkpoint_before_staging_seal",
+    {
+      ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
+      executeGrantees: "owner-only",
+      sourceSha256: "66e2078cf57d658268f547c25df26750ebe5b7b6402de9fcecdc2249c14f28ef",
     },
   ],
   [
@@ -631,6 +820,15 @@ const AUTHORITY_TRIGGER_POLICY = new Map([
     },
   ],
   [
+    "food_import_batch_guard_stage_validate_authority",
+    {
+      definition:
+        "CREATE TRIGGER food_import_batch_guard_stage_validate_authority BEFORE INSERT OR UPDATE ON food_import_batch FOR EACH ROW EXECUTE FUNCTION guard_food_import_batch_stage_validate_authority()",
+      functionName: "guard_food_import_batch_stage_validate_authority",
+      tableName: "food_import_batch",
+    },
+  ],
+  [
     "food_import_batch_guard_update",
     {
       definition:
@@ -655,6 +853,42 @@ const AUTHORITY_TRIGGER_POLICY = new Map([
         "CREATE TRIGGER food_import_batch_reject_new_legacy_unbound BEFORE INSERT ON food_import_batch FOR EACH ROW EXECUTE FUNCTION reject_new_legacy_unbound_catalogue_evidence()",
       functionName: "reject_new_legacy_unbound_catalogue_evidence",
       tableName: "food_import_batch",
+    },
+  ],
+  [
+    "food_import_checkpoint_guard_staging_seal",
+    {
+      definition:
+        "CREATE TRIGGER food_import_checkpoint_guard_staging_seal BEFORE INSERT OR DELETE OR UPDATE ON food_import_checkpoint FOR EACH ROW EXECUTE FUNCTION guard_food_import_stage_checkpoint_before_staging_seal()",
+      functionName: "guard_food_import_stage_checkpoint_before_staging_seal",
+      tableName: "food_import_checkpoint",
+    },
+  ],
+  [
+    "food_import_checkpoint_set_updated_at",
+    {
+      definition:
+        "CREATE TRIGGER food_import_checkpoint_set_updated_at BEFORE UPDATE ON food_import_checkpoint FOR EACH ROW EXECUTE FUNCTION set_row_updated_at()",
+      functionName: "set_row_updated_at",
+      tableName: "food_import_checkpoint",
+    },
+  ],
+  [
+    "food_import_parser_report_reject_update",
+    {
+      definition:
+        "CREATE TRIGGER food_import_parser_report_reject_update BEFORE DELETE OR UPDATE ON food_import_parser_report FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()",
+      functionName: "reject_immutable_row_update",
+      tableName: "food_import_parser_report",
+    },
+  ],
+  [
+    "food_import_record_guard_staging_seal",
+    {
+      definition:
+        "CREATE TRIGGER food_import_record_guard_staging_seal BEFORE INSERT ON food_import_record FOR EACH ROW EXECUTE FUNCTION guard_food_import_record_insert_before_staging_seal()",
+      functionName: "guard_food_import_record_insert_before_staging_seal",
+      tableName: "food_import_record",
     },
   ],
   [
@@ -1214,7 +1448,7 @@ function collectAuthorityFingerprint(run, options, database) {
       "join pg_catalog.pg_class as class_row on class_row.oid = constraint_row.conrelid",
       "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = class_row.relnamespace",
       "where namespace_row.nspname = 'public'",
-      "and constraint_row.conname in ('food_import_batch_materialization_contract_check','food_import_batch_promotable_contract_check','food_import_record_validated_food_contract_check','food_source_release_activation_database_authority_check')",
+      "and constraint_row.conname in ('food_import_batch_materialization_contract_check','food_import_batch_promotable_contract_check','food_import_batch_stage_validate_database_authority_check','food_import_batch_staging_seal_check','food_import_record_validated_food_contract_check','food_source_release_activation_database_authority_check')",
       ") authority_constraint_policy",
     ]),
     authorityFrozenColumns: psqlJson(run, options, database, [
@@ -1229,7 +1463,7 @@ function collectAuthorityFingerprint(run, options, database) {
       "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = class_row.relnamespace",
       "left join pg_catalog.pg_attrdef as default_row on default_row.adrelid = attribute_row.attrelid and default_row.adnum = attribute_row.attnum",
       "where namespace_row.nspname = 'public'",
-      "and ((class_row.relname = 'food_import_batch' and attribute_row.attname in ('nutrient_mapping_digest','nutrient_mapping_revision_ids','validated_food_contract_version'))",
+      "and ((class_row.relname = 'food_import_batch' and attribute_row.attname in ('nutrient_mapping_digest','nutrient_mapping_revision_ids','validated_food_contract_version','staged_database_principal','staged_database_capability_role','staging_seal_sha256','staging_sealed_at','validated_database_principal','validated_database_capability_role'))",
       "or (class_row.relname = 'food_import_record' and attribute_row.attname in ('validated_food_contract_version','validated_food_document','validated_food_sha256'))) ",
       ") authority_frozen_column_policy",
     ]),
@@ -1400,7 +1634,7 @@ function collectAuthorityFingerprint(run, options, database) {
       "where namespace_row.nspname = 'public'",
       ") type_policy",
     ]),
-    version: 10,
+    version: 11,
   };
   validateRestoreAuthorityEvidence(evidence, options.expectedOwner);
   const fingerprint = canonicalJson(evidence);
@@ -1413,7 +1647,7 @@ function collectAuthorityFingerprint(run, options, database) {
 
 export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
   if (!SAFE_ROLE.test(expectedOwner)) throw new Error("Invalid expected PostgreSQL owner name");
-  if (!evidence || typeof evidence !== "object" || evidence.version !== 10) {
+  if (!evidence || typeof evidence !== "object" || evidence.version !== 11) {
     throw new Error("Database-authority fingerprint has an unsupported version");
   }
 
@@ -1487,6 +1721,8 @@ export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
     schemaAcl,
     [
       ["PUBLIC", "USAGE"],
+      ["nutrition_catalogue_stage", "USAGE"],
+      ["nutrition_catalogue_validate", "USAGE"],
       ["nutrition_catalogue_approve_data", "USAGE"],
       ["nutrition_catalogue_approve_quality", "USAGE"],
       ["nutrition_catalogue_approve_rights", "USAGE"],

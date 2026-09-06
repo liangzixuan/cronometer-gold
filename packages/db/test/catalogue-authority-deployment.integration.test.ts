@@ -9,8 +9,14 @@ import {
   CATALOGUE_APPROVAL_FUNCTION_SOURCE_SHA256,
   CATALOGUE_APPROVAL_GUARD_SOURCE_SHA256,
   CATALOGUE_CAPABILITY_ROLES,
+  CATALOGUE_OBSERVE_VALIDATION_FUNCTION_SOURCE_SHA256,
   CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256,
   CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
+  CATALOGUE_STAGE_BATCH_FUNCTION_SOURCE_SHA256,
+  CATALOGUE_STAGE_PARSER_REPORT_FUNCTION_SOURCE_SHA256,
+  CATALOGUE_STAGE_RECORD_CHUNK_FUNCTION_SOURCE_SHA256,
+  CATALOGUE_STAGE_VALIDATE_GUARD_SOURCE_SHA256,
+  CATALOGUE_VALIDATE_BATCH_FUNCTION_SOURCE_SHA256,
   type CatalogueAuthorityDeploymentPolicy,
   catalogueAuthorityDeploymentPolicySha256,
   collectCatalogueAuthorityDeploymentEvidence,
@@ -242,11 +248,17 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
         databaseOwner: databaseState.owner,
         effectiveLoginAllowlist,
         nonReviewerLogins,
+        observeValidationFunctionSourceSha256: CATALOGUE_OBSERVE_VALIDATION_FUNCTION_SOURCE_SHA256,
         policyKind: "catalogue-authority-deployment",
         promotionFunctionSourceSha256: CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256,
         reviewerLogins,
         rollbackFunctionSourceSha256: CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
-        schemaVersion: 3,
+        schemaVersion: 4,
+        stageBatchFunctionSourceSha256: CATALOGUE_STAGE_BATCH_FUNCTION_SOURCE_SHA256,
+        stageParserReportFunctionSourceSha256: CATALOGUE_STAGE_PARSER_REPORT_FUNCTION_SOURCE_SHA256,
+        stageRecordChunkFunctionSourceSha256: CATALOGUE_STAGE_RECORD_CHUNK_FUNCTION_SOURCE_SHA256,
+        stageValidateGuardSourceSha256: CATALOGUE_STAGE_VALIDATE_GUARD_SOURCE_SHA256,
+        validateBatchFunctionSourceSha256: CATALOGUE_VALIDATE_BATCH_FUNCTION_SOURCE_SHA256,
       });
 
       for (const fixture of fixtures) {
@@ -307,7 +319,7 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
         { canary: "data-direct-dml", sqlstate: "42501" },
       ]);
       const observedTriggerNames = evidence.structure.triggers.map((trigger) => trigger.name);
-      expect(observedTriggerNames).toHaveLength(47);
+      expect(observedTriggerNames).toHaveLength(52);
       expect(observedTriggerNames).not.toContain("app_user_set_updated_at");
       expect(observedTriggerNames).toContain("food_version_reject_update");
 

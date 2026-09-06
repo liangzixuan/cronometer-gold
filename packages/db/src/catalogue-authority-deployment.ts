@@ -36,8 +36,30 @@ export const CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256 =
   "3fe493ee5e0b27e43cc881854dddfe4dc12f862a1c4a242bf712c843b2792ff1";
 export const CATALOGUE_ACTIVATION_GUARD_SOURCE_SHA256 =
   "d46f53aeffa6469eada5461ab59bd9c23d43bf9aab77704c61b21c44291ae028";
+export const CATALOGUE_COMPUTE_STAGING_SEAL_FUNCTION_SOURCE_SHA256 =
+  "399d40c2913c2022c0a2921d5870a2d26a5dcd9949d81715882f70899db4f5f8";
+export const CATALOGUE_OBSERVE_VALIDATION_FUNCTION_SOURCE_SHA256 =
+  "0a87bc99f5df97282c48b6202799bcc75cdb914e7473c0c38e092aaf4a132acf";
+export const CATALOGUE_STAGE_BATCH_FUNCTION_SOURCE_SHA256 =
+  "11b0a983c9cf3d4a7451978d37e5fe997a40290a10e741ba0626b89bfd2611c4";
+export const CATALOGUE_STAGE_PARSER_REPORT_FUNCTION_SOURCE_SHA256 =
+  "d89defb335e21228c38968ef69b2ed7342f5a5440762ae31f170969fbcc9c9e8";
+export const CATALOGUE_STAGE_RECORD_CHUNK_FUNCTION_SOURCE_SHA256 =
+  "4cc2b310ba6fda051a125bb203c0cf2c6a5fbe227a55daf517a0376ab79e4c7f";
+export const CATALOGUE_VALIDATE_BATCH_FUNCTION_SOURCE_SHA256 =
+  "5b7ae15625fb0ae0d88a9512fe82fca69a9d0dd9e179af8bc1b2f42d1e85ac8a";
+export const CATALOGUE_STAGE_VALIDATE_GUARD_SOURCE_SHA256 =
+  "f21dfa9d5455a40ab9f50bdbace02ffc19f53ab252e0eab99a4f50769f678eda";
+export const CATALOGUE_RECORD_STAGING_SEAL_GUARD_SOURCE_SHA256 =
+  "2fc46ef24e03309e61832491438746967642911b02e97896f8a0bdf6fc5aa8bc";
+export const CATALOGUE_CHECKPOINT_STAGING_SEAL_GUARD_SOURCE_SHA256 =
+  "66e2078cf57d658268f547c25df26750ebe5b7b6402de9fcecdc2249c14f28ef";
 export const CATALOGUE_ACTIVATION_AUTHORITY_CONSTRAINT_DEFINITION =
   "CHECK ((database_principal IS NULL AND database_capability_role IS NULL OR database_principal IS NOT NULL AND database_capability_role IS NOT NULL AND octet_length(database_principal) >= 1 AND octet_length(database_principal) <= 63 AND database_capability_role =\nCASE\n    WHEN import_batch_id IS NOT NULL AND operation = 'activate'::text THEN 'nutrition_catalogue_promote_activate'::text\n    WHEN import_batch_id IS NULL AND (operation = ANY (ARRAY['deactivate'::text, 'rollback'::text])) THEN 'nutrition_catalogue_rollback'::text\n    ELSE NULL::text\nEND) IS TRUE)";
+export const CATALOGUE_STAGE_VALIDATE_AUTHORITY_CONSTRAINT_DEFINITION =
+  "CHECK ((staged_database_principal IS NULL AND staged_database_capability_role IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR staged_database_principal IS NOT NULL AND octet_length(staged_database_principal) >= 1 AND octet_length(staged_database_principal) <= 63 AND staged_database_capability_role = 'nutrition_catalogue_stage'::text AND (validated_at IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR validated_at IS NOT NULL AND validated_database_principal IS NOT NULL AND octet_length(validated_database_principal) >= 1 AND octet_length(validated_database_principal) <= 63 AND validated_database_capability_role = 'nutrition_catalogue_validate'::text AND validated_database_principal <> staged_database_principal)) IS TRUE)";
+export const CATALOGUE_STAGING_SEAL_CONSTRAINT_DEFINITION =
+  "CHECK ((staging_seal_sha256 IS NULL AND staging_sealed_at IS NULL OR staging_seal_sha256 ~ '^[0-9a-f]{64}$'::text AND staging_sealed_at IS NOT NULL AND (staging_sealed_at <> ALL (ARRAY['-infinity'::timestamp with time zone, 'infinity'::timestamp with time zone]))) IS TRUE AND (validated_at IS NULL OR staged_database_principal IS NULL OR staging_seal_sha256 IS NOT NULL))";
 
 export const CATALOGUE_AUTHORITY_CONSTRAINT_POLICY = [
   {
@@ -53,6 +75,20 @@ export const CATALOGUE_AUTHORITY_CONSTRAINT_POLICY = [
     definition:
       "CHECK (((status <> ALL (ARRAY['ready'::text, 'promoting'::text])) OR validated_food_contract_version = 1 AND nutrient_mapping_digest IS NOT NULL AND nutrient_mapping_revision_ids IS NOT NULL) IS TRUE)",
     name: "food_import_batch_promotable_contract_check",
+    tableName: "food_import_batch",
+    validated: true,
+  },
+  {
+    constraintType: "c",
+    definition: CATALOGUE_STAGE_VALIDATE_AUTHORITY_CONSTRAINT_DEFINITION,
+    name: "food_import_batch_stage_validate_database_authority_check",
+    tableName: "food_import_batch",
+    validated: true,
+  },
+  {
+    constraintType: "c",
+    definition: CATALOGUE_STAGING_SEAL_CONSTRAINT_DEFINITION,
+    name: "food_import_batch_staging_seal_check",
     tableName: "food_import_batch",
     validated: true,
   },
@@ -85,6 +121,54 @@ export const CATALOGUE_AUTHORITY_FROZEN_COLUMN_POLICY = [
   {
     columnName: "nutrient_mapping_revision_ids",
     dataType: "jsonb",
+    defaultExpression: null,
+    notNull: false,
+    schemaName: "public",
+    tableName: "food_import_batch",
+  },
+  {
+    columnName: "staged_database_capability_role",
+    dataType: "text",
+    defaultExpression: null,
+    notNull: false,
+    schemaName: "public",
+    tableName: "food_import_batch",
+  },
+  {
+    columnName: "staged_database_principal",
+    dataType: "text",
+    defaultExpression: null,
+    notNull: false,
+    schemaName: "public",
+    tableName: "food_import_batch",
+  },
+  {
+    columnName: "staging_seal_sha256",
+    dataType: "text",
+    defaultExpression: null,
+    notNull: false,
+    schemaName: "public",
+    tableName: "food_import_batch",
+  },
+  {
+    columnName: "staging_sealed_at",
+    dataType: "timestamp with time zone",
+    defaultExpression: null,
+    notNull: false,
+    schemaName: "public",
+    tableName: "food_import_batch",
+  },
+  {
+    columnName: "validated_database_capability_role",
+    dataType: "text",
+    defaultExpression: null,
+    notNull: false,
+    schemaName: "public",
+    tableName: "food_import_batch",
+  },
+  {
+    columnName: "validated_database_principal",
+    dataType: "text",
     defaultExpression: null,
     notNull: false,
     schemaName: "public",
@@ -151,7 +235,7 @@ export interface CatalogueAuthorityFunctionPolicy {
   readonly leakproof: boolean;
   readonly name: string;
   readonly parallel: string;
-  readonly resultType: "boolean" | "jsonb" | "trigger" | "void";
+  readonly resultType: "boolean" | "jsonb" | "text" | "trigger" | "void";
   readonly securityDefiner: boolean;
   readonly sourceSha256: string;
   readonly strict: boolean;
@@ -187,6 +271,20 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
     volatility: "v",
   },
   {
+    arguments: "p_batch_id uuid",
+    configuration: "application-schema",
+    executeGrantees: "owner-only",
+    language: "plpgsql",
+    leakproof: false,
+    name: "catalogue_compute_import_staging_seal",
+    parallel: "u",
+    resultType: "text",
+    securityDefiner: true,
+    sourceSha256: CATALOGUE_COMPUTE_STAGING_SEAL_FUNCTION_SOURCE_SHA256,
+    strict: false,
+    volatility: "v",
+  },
+  {
     arguments: "value text, digest text",
     configuration: "application-schema",
     executeGrantees: "default",
@@ -199,6 +297,20 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
     sourceSha256: "5403779dc4398446c61d0a27ad8b95d904e2552a5e694496b9e7e8612e0c902e",
     strict: true,
     volatility: "i",
+  },
+  {
+    arguments: "p_batch_id uuid",
+    configuration: "application-schema",
+    executeGrantees: ["nutrition_catalogue_validate"],
+    language: "plpgsql",
+    leakproof: false,
+    name: "catalogue_observe_import_validation",
+    parallel: "u",
+    resultType: "jsonb",
+    securityDefiner: true,
+    sourceSha256: CATALOGUE_OBSERVE_VALIDATION_FUNCTION_SOURCE_SHA256,
+    strict: false,
+    volatility: "v",
   },
   {
     arguments: "p_batch_id uuid, p_external_principal_id text, p_reason text",
@@ -245,6 +357,63 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
     resultType: "jsonb",
     securityDefiner: true,
     sourceSha256: CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
+    strict: false,
+    volatility: "v",
+  },
+  {
+    arguments: "p_stage_document text",
+    configuration: "application-schema",
+    executeGrantees: ["nutrition_catalogue_stage"],
+    language: "plpgsql",
+    leakproof: false,
+    name: "catalogue_stage_import_batch",
+    parallel: "u",
+    resultType: "jsonb",
+    securityDefiner: true,
+    sourceSha256: CATALOGUE_STAGE_BATCH_FUNCTION_SOURCE_SHA256,
+    strict: false,
+    volatility: "v",
+  },
+  {
+    arguments: "p_batch_id uuid, p_parser_report_document text",
+    configuration: "application-schema",
+    executeGrantees: ["nutrition_catalogue_stage"],
+    language: "plpgsql",
+    leakproof: false,
+    name: "catalogue_stage_import_parser_report",
+    parallel: "u",
+    resultType: "jsonb",
+    securityDefiner: true,
+    sourceSha256: CATALOGUE_STAGE_PARSER_REPORT_FUNCTION_SOURCE_SHA256,
+    strict: false,
+    volatility: "v",
+  },
+  {
+    arguments: "p_batch_id uuid, p_expected_next_offset bigint, p_records_document text",
+    configuration: "application-schema",
+    executeGrantees: ["nutrition_catalogue_stage"],
+    language: "plpgsql",
+    leakproof: false,
+    name: "catalogue_stage_import_record_chunk",
+    parallel: "u",
+    resultType: "jsonb",
+    securityDefiner: true,
+    sourceSha256: CATALOGUE_STAGE_RECORD_CHUNK_FUNCTION_SOURCE_SHA256,
+    strict: false,
+    volatility: "v",
+  },
+  {
+    arguments:
+      "p_batch_id uuid, p_expected_staging_seal_sha256 text, p_expected_observation_sha256 text, p_validation_document text",
+    configuration: "application-schema",
+    executeGrantees: ["nutrition_catalogue_validate"],
+    language: "plpgsql",
+    leakproof: false,
+    name: "catalogue_validate_import_batch",
+    parallel: "u",
+    resultType: "jsonb",
+    securityDefiner: true,
+    sourceSha256: CATALOGUE_VALIDATE_BATCH_FUNCTION_SOURCE_SHA256,
     strict: false,
     volatility: "v",
   },
@@ -312,6 +481,12 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
   },
   {
     ...TRIGGER_FUNCTION_POLICY,
+    executeGrantees: "owner-only",
+    name: "guard_food_import_batch_stage_validate_authority",
+    sourceSha256: CATALOGUE_STAGE_VALIDATE_GUARD_SOURCE_SHA256,
+  },
+  {
+    ...TRIGGER_FUNCTION_POLICY,
     name: "guard_food_import_batch_update",
     sourceSha256: "8863eef0e6889a620deec204e249ac3d6efdc87310dcc9d25601e6d7f336101f",
   },
@@ -322,8 +497,20 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
   },
   {
     ...TRIGGER_FUNCTION_POLICY,
+    executeGrantees: "owner-only",
+    name: "guard_food_import_record_insert_before_staging_seal",
+    sourceSha256: CATALOGUE_RECORD_STAGING_SEAL_GUARD_SOURCE_SHA256,
+  },
+  {
+    ...TRIGGER_FUNCTION_POLICY,
     name: "guard_food_import_record_update",
     sourceSha256: "300e6853e7a9520b477256b3b32a4381f3143512b013a4e131a4c203ce524479",
+  },
+  {
+    ...TRIGGER_FUNCTION_POLICY,
+    executeGrantees: "owner-only",
+    name: "guard_food_import_stage_checkpoint_before_staging_seal",
+    sourceSha256: CATALOGUE_CHECKPOINT_STAGING_SEAL_GUARD_SOURCE_SHA256,
   },
   {
     ...TRIGGER_FUNCTION_POLICY,
@@ -417,6 +604,8 @@ export const CATALOGUE_AUTHORITY_PROTECTED_TABLES = [
   "food_barcode",
   "food_import_approval",
   "food_import_batch",
+  "food_import_checkpoint",
+  "food_import_parser_report",
   "food_import_record",
   "food_nutrient_value",
   "food_search_projection_revision",
@@ -564,6 +753,13 @@ export const CATALOGUE_AUTHORITY_TRIGGER_POLICY: readonly CatalogueAuthorityTrig
   },
   {
     definition:
+      "CREATE TRIGGER food_import_batch_guard_stage_validate_authority BEFORE INSERT OR UPDATE ON food_import_batch FOR EACH ROW EXECUTE FUNCTION guard_food_import_batch_stage_validate_authority()",
+    functionName: "guard_food_import_batch_stage_validate_authority",
+    name: "food_import_batch_guard_stage_validate_authority",
+    tableName: "food_import_batch",
+  },
+  {
+    definition:
       "CREATE TRIGGER food_import_batch_guard_update BEFORE DELETE OR UPDATE ON food_import_batch FOR EACH ROW EXECUTE FUNCTION guard_food_import_batch_update()",
     functionName: "guard_food_import_batch_update",
     name: "food_import_batch_guard_update",
@@ -582,6 +778,34 @@ export const CATALOGUE_AUTHORITY_TRIGGER_POLICY: readonly CatalogueAuthorityTrig
     functionName: "reject_new_legacy_unbound_catalogue_evidence",
     name: "food_import_batch_reject_new_legacy_unbound",
     tableName: "food_import_batch",
+  },
+  {
+    definition:
+      "CREATE TRIGGER food_import_checkpoint_guard_staging_seal BEFORE INSERT OR DELETE OR UPDATE ON food_import_checkpoint FOR EACH ROW EXECUTE FUNCTION guard_food_import_stage_checkpoint_before_staging_seal()",
+    functionName: "guard_food_import_stage_checkpoint_before_staging_seal",
+    name: "food_import_checkpoint_guard_staging_seal",
+    tableName: "food_import_checkpoint",
+  },
+  {
+    definition:
+      "CREATE TRIGGER food_import_checkpoint_set_updated_at BEFORE UPDATE ON food_import_checkpoint FOR EACH ROW EXECUTE FUNCTION set_row_updated_at()",
+    functionName: "set_row_updated_at",
+    name: "food_import_checkpoint_set_updated_at",
+    tableName: "food_import_checkpoint",
+  },
+  {
+    definition:
+      "CREATE TRIGGER food_import_parser_report_reject_update BEFORE DELETE OR UPDATE ON food_import_parser_report FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()",
+    functionName: "reject_immutable_row_update",
+    name: "food_import_parser_report_reject_update",
+    tableName: "food_import_parser_report",
+  },
+  {
+    definition:
+      "CREATE TRIGGER food_import_record_guard_staging_seal BEFORE INSERT ON food_import_record FOR EACH ROW EXECUTE FUNCTION guard_food_import_record_insert_before_staging_seal()",
+    functionName: "guard_food_import_record_insert_before_staging_seal",
+    name: "food_import_record_guard_staging_seal",
+    tableName: "food_import_record",
   },
   {
     definition:
@@ -785,11 +1009,17 @@ export interface CatalogueAuthorityDeploymentPolicy {
   readonly databaseOwner: string;
   readonly effectiveLoginAllowlist: readonly string[];
   readonly nonReviewerLogins: Readonly<Record<CatalogueNonReviewerClass, string>>;
+  readonly observeValidationFunctionSourceSha256: string;
   readonly policyKind: "catalogue-authority-deployment";
   readonly promotionFunctionSourceSha256: string;
   readonly reviewerLogins: Readonly<Record<CatalogueReviewerClass, string>>;
   readonly rollbackFunctionSourceSha256: string;
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
+  readonly stageBatchFunctionSourceSha256: string;
+  readonly stageParserReportFunctionSourceSha256: string;
+  readonly stageRecordChunkFunctionSourceSha256: string;
+  readonly stageValidateGuardSourceSha256: string;
+  readonly validateBatchFunctionSourceSha256: string;
 }
 
 export interface CatalogueRoleMembershipEvidence {
@@ -965,7 +1195,7 @@ export interface CatalogueAuthorityDeploymentEvidence {
   readonly nonSystemSchemas: readonly string[];
   readonly policySha256: string;
   readonly relations: readonly CatalogueRelationEvidence[];
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly types: readonly CatalogueTypeEvidence[];
 }
 
@@ -1003,7 +1233,7 @@ export interface CatalogueAuthorityCanaryEvidence {
     readonly canary: CatalogueAuthorityCanaryName;
     readonly sqlstate: "23503" | "42501";
   }[];
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   readonly structure: CatalogueAuthorityDeploymentStructureEvidence;
 }
 
@@ -1020,13 +1250,19 @@ export function parseCatalogueAuthorityDeploymentPolicy(
     "databaseOwner",
     "effectiveLoginAllowlist",
     "nonReviewerLogins",
+    "observeValidationFunctionSourceSha256",
     "policyKind",
     "promotionFunctionSourceSha256",
     "reviewerLogins",
     "rollbackFunctionSourceSha256",
     "schemaVersion",
+    "stageBatchFunctionSourceSha256",
+    "stageParserReportFunctionSourceSha256",
+    "stageRecordChunkFunctionSourceSha256",
+    "stageValidateGuardSourceSha256",
+    "validateBatchFunctionSourceSha256",
   ]);
-  if (policy.policyKind !== "catalogue-authority-deployment" || policy.schemaVersion !== 3) {
+  if (policy.policyKind !== "catalogue-authority-deployment" || policy.schemaVersion !== 4) {
     throw new Error("Catalogue authority deployment policy identity is unsupported");
   }
   if (
@@ -1081,12 +1317,43 @@ export function parseCatalogueAuthorityDeploymentPolicy(
     policy.activationGuardSourceSha256,
     "activationGuardSourceSha256",
   );
+  const observeValidationFunctionSourceSha256 = sha256(
+    policy.observeValidationFunctionSourceSha256,
+    "observeValidationFunctionSourceSha256",
+  );
+  const stageBatchFunctionSourceSha256 = sha256(
+    policy.stageBatchFunctionSourceSha256,
+    "stageBatchFunctionSourceSha256",
+  );
+  const stageParserReportFunctionSourceSha256 = sha256(
+    policy.stageParserReportFunctionSourceSha256,
+    "stageParserReportFunctionSourceSha256",
+  );
+  const stageRecordChunkFunctionSourceSha256 = sha256(
+    policy.stageRecordChunkFunctionSourceSha256,
+    "stageRecordChunkFunctionSourceSha256",
+  );
+  const stageValidateGuardSourceSha256 = sha256(
+    policy.stageValidateGuardSourceSha256,
+    "stageValidateGuardSourceSha256",
+  );
+  const validateBatchFunctionSourceSha256 = sha256(
+    policy.validateBatchFunctionSourceSha256,
+    "validateBatchFunctionSourceSha256",
+  );
   if (
     approvalFunctionSourceSha256 !== CATALOGUE_APPROVAL_FUNCTION_SOURCE_SHA256 ||
     approvalGuardSourceSha256 !== CATALOGUE_APPROVAL_GUARD_SOURCE_SHA256 ||
     promotionFunctionSourceSha256 !== CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256 ||
     rollbackFunctionSourceSha256 !== CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256 ||
-    activationGuardSourceSha256 !== CATALOGUE_ACTIVATION_GUARD_SOURCE_SHA256
+    activationGuardSourceSha256 !== CATALOGUE_ACTIVATION_GUARD_SOURCE_SHA256 ||
+    observeValidationFunctionSourceSha256 !== CATALOGUE_OBSERVE_VALIDATION_FUNCTION_SOURCE_SHA256 ||
+    stageBatchFunctionSourceSha256 !== CATALOGUE_STAGE_BATCH_FUNCTION_SOURCE_SHA256 ||
+    stageParserReportFunctionSourceSha256 !==
+      CATALOGUE_STAGE_PARSER_REPORT_FUNCTION_SOURCE_SHA256 ||
+    stageRecordChunkFunctionSourceSha256 !== CATALOGUE_STAGE_RECORD_CHUNK_FUNCTION_SOURCE_SHA256 ||
+    stageValidateGuardSourceSha256 !== CATALOGUE_STAGE_VALIDATE_GUARD_SOURCE_SHA256 ||
+    validateBatchFunctionSourceSha256 !== CATALOGUE_VALIDATE_BATCH_FUNCTION_SOURCE_SHA256
   ) {
     throw new Error("Catalogue authority deployment function digests differ from source policy");
   }
@@ -1100,11 +1367,17 @@ export function parseCatalogueAuthorityDeploymentPolicy(
     databaseOwner,
     effectiveLoginAllowlist,
     nonReviewerLogins,
+    observeValidationFunctionSourceSha256,
     policyKind: "catalogue-authority-deployment",
     promotionFunctionSourceSha256,
     reviewerLogins,
     rollbackFunctionSourceSha256,
-    schemaVersion: 3,
+    schemaVersion: 4,
+    stageBatchFunctionSourceSha256,
+    stageParserReportFunctionSourceSha256,
+    stageRecordChunkFunctionSourceSha256,
+    stageValidateGuardSourceSha256,
+    validateBatchFunctionSourceSha256,
   };
 }
 
@@ -1167,7 +1440,7 @@ export function assertCatalogueAuthorityDeploymentEvidence(
   evidence: CatalogueAuthorityDeploymentEvidence,
 ): void {
   if (
-    evidence.schemaVersion !== 3 ||
+    evidence.schemaVersion !== 4 ||
     evidence.policySha256 !== catalogueAuthorityDeploymentPolicySha256(policy)
   ) {
     throw new Error("Catalogue authority deployment evidence identity differs");
@@ -1223,6 +1496,8 @@ export function assertCatalogueAuthorityDeploymentEvidence(
       ...REVIEWER_CLASSES.map((role) =>
         expectedAcl(CATALOGUE_REVIEWER_CAPABILITIES[role], policy.applicationSchemaOwner, "USAGE"),
       ),
+      expectedAcl("nutrition_catalogue_stage", policy.applicationSchemaOwner, "USAGE"),
+      expectedAcl("nutrition_catalogue_validate", policy.applicationSchemaOwner, "USAGE"),
       expectedAcl("nutrition_catalogue_promote_activate", policy.applicationSchemaOwner, "USAGE"),
       expectedAcl("nutrition_catalogue_rollback", policy.applicationSchemaOwner, "USAGE"),
       expectedAcl(policy.applicationSchemaOwner, policy.applicationSchemaOwner, "CREATE"),
@@ -1336,7 +1611,7 @@ export function assertCatalogueAuthorityCanaryEvidence(
   evidence: CatalogueAuthorityCanaryEvidence,
 ): void {
   if (
-    evidence.schemaVersion !== 3 ||
+    evidence.schemaVersion !== 4 ||
     evidence.policySha256 !== catalogueAuthorityDeploymentPolicySha256(policy)
   ) {
     throw new Error("Catalogue authority canary evidence identity differs");
