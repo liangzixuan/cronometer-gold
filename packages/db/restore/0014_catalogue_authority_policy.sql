@@ -1,4 +1,4 @@
--- Versioned post-restore policy for catalogue authority migrations 0014-0021.
+-- Versioned post-restore policy for catalogue authority migrations 0014-0022.
 --
 -- Logical restores deliberately use --no-owner --no-privileges. Run this only
 -- against a new isolated nutrition_restore_* database while PUBLIC CONNECT is
@@ -241,8 +241,7 @@ begin
   end if;
 
   -- Pin the complete frozen-materialization, nutrition-semantic,
-  -- stage/validate, and activation
-  -- CHECK boundary as
+  -- stage/validate, and authenticated-actor CHECK boundary as
   -- known-good authority policy, not merely source/target parity.
   if (
     select pg_catalog.count(*)
@@ -258,9 +257,10 @@ begin
         'food_import_batch_staging_seal_check',
         'food_import_record_nutrition_semantic_contract_check',
         'food_import_record_validated_food_contract_check',
+        'food_import_approval_database_authority_check',
         'food_source_release_activation_database_authority_check'
       )
-  ) <> 8 or exists (
+  ) <> 9 or exists (
     select 1
     from (
       values
@@ -300,9 +300,20 @@ begin
           $constraint$CHECK ((validated_food_document IS NULL AND validated_food_sha256 IS NULL AND validated_food_contract_version IS NULL AND (validation_status = ANY (ARRAY['pending'::text, 'quarantined'::text, 'valid'::text, 'materialized'::text])) OR validated_food_document IS NOT NULL AND validated_food_sha256 ~ '^[0-9a-f]{64}$'::text AND validated_food_contract_version = 1 AND (validation_status = ANY (ARRAY['valid'::text, 'materialized'::text])) AND jsonb_typeof(validated_food_document::jsonb) = 'object'::text AND validated_food_sha256 = encode(sha256(convert_to(validated_food_document, 'UTF8'::name)), 'hex'::text)) IS TRUE)$constraint$
         ),
         (
+          'food_import_approval',
+          'food_import_approval_database_authority_check',
+          $constraint$CHECK ((database_principal IS NULL AND database_capability_role IS NULL OR database_principal IS NOT NULL AND principal_id = database_principal AND octet_length(database_principal) >= 1 AND octet_length(database_principal) <= 63 AND database_capability_role =
+CASE approval_role
+    WHEN 'data'::text THEN 'nutrition_catalogue_approve_data'::text
+    WHEN 'quality'::text THEN 'nutrition_catalogue_approve_quality'::text
+    WHEN 'rights'::text THEN 'nutrition_catalogue_approve_rights'::text
+    ELSE NULL::text
+END) IS TRUE)$constraint$
+        ),
+        (
           'food_source_release_activation',
           'food_source_release_activation_database_authority_check',
-          $constraint$CHECK ((database_principal IS NULL AND database_capability_role IS NULL OR database_principal IS NOT NULL AND database_capability_role IS NOT NULL AND octet_length(database_principal) >= 1 AND octet_length(database_principal) <= 63 AND database_capability_role =
+          $constraint$CHECK ((database_principal IS NULL AND database_capability_role IS NULL OR database_principal IS NOT NULL AND performed_by = database_principal AND database_capability_role IS NOT NULL AND octet_length(database_principal) >= 1 AND octet_length(database_principal) <= 63 AND database_capability_role =
 CASE
     WHEN import_batch_id IS NOT NULL AND operation = 'activate'::text THEN 'nutrition_catalogue_promote_activate'::text
     WHEN import_batch_id IS NULL AND (operation = ANY (ARRAY['deactivate'::text, 'rollback'::text])) THEN 'nutrition_catalogue_rollback'::text
@@ -323,7 +334,7 @@ END) IS TRUE)$constraint$
       or not constraint_row.convalidated
       or pg_catalog.pg_get_constraintdef(constraint_row.oid, true) <> expected.definition
   ) then
-    raise exception 'catalogue frozen-materialization, nutrition-semantic, stage/validate, or activation constraint differs from the forward 0021 policy'
+    raise exception 'catalogue frozen-materialization, nutrition-semantic, stage/validate, or authenticated-actor constraint differs from the forward 0022 policy'
       using errcode = '55000';
   end if;
 
@@ -368,7 +379,7 @@ END) IS TRUE)$constraint$
       or pg_catalog.pg_get_expr(default_row.adbin, default_row.adrelid, true)
         is distinct from expected.default_expression
   ) then
-    raise exception 'catalogue frozen-materialization, nutrition-semantic, or stage/validate column identity differs from the forward 0021 policy'
+    raise exception 'catalogue frozen-materialization, nutrition-semantic, or stage/validate column identity differs from the forward 0022 policy'
       using errcode = '55000';
   end if;
 
@@ -420,7 +431,7 @@ END) IS TRUE)$constraint$
       using errcode = '55000';
   end if;
 
-  -- Pin the complete authority function boundary through migration 0021.
+  -- Pin the complete authority function boundary through migration 0022.
   -- Exact identity, executable body, and search_path are policy, not
   -- merely source/target parity.
   if (
@@ -496,11 +507,11 @@ END) IS TRUE)$constraint$
         ('catalogue_compute_record_nutrition_semantics', 'p_record_id bigint', '41f048090dce80b794615f135f5368f7f501eaecfc3513471eb6d1f36c022783', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_evidence_bundle_uri_is_valid'::text, 'value text, digest text'::text, '5403779dc4398446c61d0a27ad8b95d904e2552a5e694496b9e7e8612e0c902e'::text, 'boolean'::text, 'sql'::text, 'i'::text, true, false, 'u'::text, false),
         ('catalogue_observe_import_validation', 'p_batch_id uuid', '0a87bc99f5df97282c48b6202799bcc75cdb914e7473c0c38e092aaf4a132acf', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_promote_import_batch', 'p_batch_id uuid, p_external_principal_id text, p_reason text', '309861b6850a99bb565466981602ee19054b9c2500dfee21bf27edc6be382111', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_promote_import_batch', 'p_batch_id uuid, p_external_principal_id text, p_reason text', 'bd8f0714717baf626507a2d40799cea75085f20e9df7295b77fb5899529f2142', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_promote_import_batch_v1', 'p_batch_id uuid, p_external_principal_id text, p_reason text', '115fdc3ed1943dd77ce70d3a694495da3d2c62ade9c7b82812a89cef82b39f17', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_record_import_approval', 'p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text', 'abb0ca990b74fedffd4ec77cf666e404da89af8158f4b990b6c0de48cd3dfc41', 'boolean', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_record_import_approval', 'p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text', '73314f5d97251a648093a82d8d9f6d3575a8f3b571d16349ca60a9795de04719', 'boolean', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_record_import_approval_v1', 'p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text', '89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac', 'boolean', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_rollback_source_release', 'p_source_code text, p_target_release_id uuid, p_external_principal_id text, p_reason text', '56e9fa2cce7f532c1f405658ff9f07908394d0fb9734b70d0bdb92a12292068a', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_rollback_source_release', 'p_source_code text, p_target_release_id uuid, p_external_principal_id text, p_reason text', 'a6b7cce658727edcfc889eac7272e65b094592361459130c815436c8f1cc14d7', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_rollback_source_release_v1', 'p_source_code text, p_target_release_id uuid, p_external_principal_id text, p_reason text', '3fe493ee5e0b27e43cc881854dddfe4dc12f862a1c4a242bf712c843b2792ff1', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_stage_import_batch', 'p_stage_document text', '11b0a983c9cf3d4a7451978d37e5fe997a40290a10e741ba0626b89bfd2611c4', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_stage_import_parser_report', 'p_batch_id uuid, p_parser_report_document text', 'd89defb335e21228c38968ef69b2ed7342f5a5440762ae31f170969fbcc9c9e8', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
@@ -788,7 +799,7 @@ END) IS TRUE)$constraint$
         pg_catalog.encode(
           pg_catalog.sha256(pg_catalog.convert_to(procedure_row.prosrc, 'UTF8')),
           'hex'
-        ) <> 'abb0ca990b74fedffd4ec77cf666e404da89af8158f4b990b6c0de48cd3dfc41'
+        ) <> '73314f5d97251a648093a82d8d9f6d3575a8f3b571d16349ca60a9795de04719'
         or pg_catalog.pg_get_function_result(procedure_row.oid) <> 'boolean'
         or language_row.lanname <> 'plpgsql'
         or procedure_row.provolatile <> 'v'
@@ -972,7 +983,7 @@ END) IS TRUE)$constraint$
       using errcode = '55000';
   end if;
 
-  -- Logical restore omits ACLs. Reconstruct the nineteen migration-0020/0021
+  -- Logical restore omits ACLs. Reconstruct the nineteen migration-0020-through-0022
   -- function ACLs from the reviewed manifest, stripping named grants first.
   for stage_validate_function_spec in
     select *

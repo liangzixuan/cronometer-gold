@@ -143,6 +143,16 @@ bind external principals, cut over a caller, revoke compatibility DML, or prove
 full-catalogue scale. The hard limits remain safety ceilings; a bounded paged
 production protocol and measured resource/lock budgets remain open.
 
+Forward migration 0022 closes caller-spoofable audit attribution on the
+capability path. Approval, promotion, and rollback keep their public signatures,
+but a non-owner call now records the authenticated PostgreSQL `session_user` as
+both its database principal and human-readable actor label, regardless of the
+supplied compatibility argument. Both authority CHECKs enforce that equality.
+The migration stops rather than rewriting any historical capability-mediated
+row whose label differs. Owner/local calls retain their supplied descriptive
+label and paired-null database authority. This authenticates only the database
+login; external OIDC/workload identity binding and caller cutover remain open.
+
 The supported lock boundary is the reviewed transaction-based application
 paths. Arbitrary owner recipe DML may take row or foreign-key locks before the
 deferred reconciler and is not supported. `TRUNCATE nutrient` and nutrient DDL
@@ -160,24 +170,25 @@ four food/serving/barcode search paths and exact trigger bindings plus
 migration-0018's four nutrient-lock functions and seven trigger bindings plus
 migration-0019's frozen materialization contract, replacement
 activation-authority constraint, promotion/rollback wrappers, plus
-migration-0020's sealed stage/validate boundary, plus migration-0021's
-independent exact-100-gram semantic attestation and complete shared-food/outbox
-trigger surface. That transactional repair policy pins 54 function identities,
-54 exact trigger bindings, the sixteen
-authority-evidence column definitions, all eight authority CHECKs, and the unique
+migration-0020's sealed stage/validate boundary, migration-0021's independent
+exact-100-gram semantic attestation, plus migration-0022's authenticated
+database-actor binding and complete shared-food/outbox trigger surface. That
+transactional repair policy pins 54 function identities, 54 exact trigger
+bindings, the sixteen authority-evidence column definitions, all nine authority
+CHECKs, and the unique
 activation-to-batch index. The repository restore drill pins that file's SHA-256,
 requires an explicit expected owner, keeps `PUBLIC CONNECT` revoked, enforces
 an exact effective login allowlist, and requires the exact
 tracked filename/file-byte-SHA ledger in `public.app_schema_migration` before
 `pg_dump`. It ignores an owner-schema shadow, rechecks the source, corroborates
-the target, and compares a version-12 canonical
+the target, and compares a version-13 canonical
 role/schema/type/relation/column-ACL/function/trigger/authority-constraint/
 authority-index fingerprint, including all sixteen authority-evidence columns, the
 independent non-NULL `pg_attribute.attacl` count, trigger table schemas, and
 every binding of a dedicated public authority trigger function even when its
 table is outside `public`, before external-ledger replay or API probing. The
 final report emits that fingerprint's SHA-256. The deployment policy, evidence,
-canary, and CLI report use schema version 5. The current EXPAND CI executor and
+canary, and CLI report use schema version 6. The current EXPAND CI executor and
 owner are the same local login, so this restore control does not claim
 deployment runtime separation or close the remaining role-canary or CONTRACT
 work.
@@ -222,7 +233,7 @@ The verifier requires the exact `public.app_schema_migration` names and SHA-256s
 from the tracked migration files. It also requires `public` to be the only
 non-system schema and to be owned by `pg_database_owner`. It checks exact
 database/schema ACLs and grantors,
-relation/type/default/column ACL state and owners, all eight authority CHECKs,
+relation/type/default/column ACL state and owners, all nine authority CHECKs,
 the sixteen authority-evidence columns, the unique activation-to-batch index,
 all 54 authority function hashes, executable semantics,
 and exact per-function execute ACLs, safe authority on every other public

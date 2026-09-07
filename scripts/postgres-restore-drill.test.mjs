@@ -28,8 +28,10 @@ const capabilityRoles = [
   "nutrition_catalogue_rollback",
 ];
 const expectedOwner = "nutrition_owner";
+const approvalAuthorityConstraintDefinition =
+  "CHECK ((database_principal IS NULL AND database_capability_role IS NULL OR database_principal IS NOT NULL AND principal_id = database_principal AND octet_length(database_principal) >= 1 AND octet_length(database_principal) <= 63 AND database_capability_role =\nCASE approval_role\n    WHEN 'data'::text THEN 'nutrition_catalogue_approve_data'::text\n    WHEN 'quality'::text THEN 'nutrition_catalogue_approve_quality'::text\n    WHEN 'rights'::text THEN 'nutrition_catalogue_approve_rights'::text\n    ELSE NULL::text\nEND) IS TRUE)";
 const activationAuthorityConstraintDefinition =
-  "CHECK ((database_principal IS NULL AND database_capability_role IS NULL OR database_principal IS NOT NULL AND database_capability_role IS NOT NULL AND octet_length(database_principal) >= 1 AND octet_length(database_principal) <= 63 AND database_capability_role =\nCASE\n    WHEN import_batch_id IS NOT NULL AND operation = 'activate'::text THEN 'nutrition_catalogue_promote_activate'::text\n    WHEN import_batch_id IS NULL AND (operation = ANY (ARRAY['deactivate'::text, 'rollback'::text])) THEN 'nutrition_catalogue_rollback'::text\n    ELSE NULL::text\nEND) IS TRUE)";
+  "CHECK ((database_principal IS NULL AND database_capability_role IS NULL OR database_principal IS NOT NULL AND performed_by = database_principal AND database_capability_role IS NOT NULL AND octet_length(database_principal) >= 1 AND octet_length(database_principal) <= 63 AND database_capability_role =\nCASE\n    WHEN import_batch_id IS NOT NULL AND operation = 'activate'::text THEN 'nutrition_catalogue_promote_activate'::text\n    WHEN import_batch_id IS NULL AND (operation = ANY (ARRAY['deactivate'::text, 'rollback'::text])) THEN 'nutrition_catalogue_rollback'::text\n    ELSE NULL::text\nEND) IS TRUE)";
 const stageValidateAuthorityConstraintDefinition =
   "CHECK ((staged_database_principal IS NULL AND staged_database_capability_role IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR staged_database_principal IS NOT NULL AND octet_length(staged_database_principal) >= 1 AND octet_length(staged_database_principal) <= 63 AND staged_database_capability_role = 'nutrition_catalogue_stage'::text AND (validated_at IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR validated_at IS NOT NULL AND validated_database_principal IS NOT NULL AND octet_length(validated_database_principal) >= 1 AND octet_length(validated_database_principal) <= 63 AND validated_database_capability_role = 'nutrition_catalogue_validate'::text AND validated_database_principal <> staged_database_principal)) IS TRUE)";
 const stagingSealConstraintDefinition =
@@ -39,6 +41,13 @@ const batchNutritionSemanticConstraintDefinition =
 const recordNutritionSemanticConstraintDefinition =
   "CHECK ((nutrition_semantic_contract_version IS NULL AND nutrition_semantic_sha256 IS NULL OR nutrition_semantic_contract_version = 1 AND nutrition_semantic_sha256 ~ '^[0-9a-f]{64}$'::text AND validated_at IS NOT NULL AND (validation_status = ANY (ARRAY['quarantined'::text, 'valid'::text, 'materialized'::text]))) IS TRUE)";
 const authorityConstraints = [
+  {
+    constraint_type: "c",
+    definition: approvalAuthorityConstraintDefinition,
+    name: "food_import_approval_database_authority_check",
+    table_name: "food_import_approval",
+    validated: true,
+  },
   {
     constraint_type: "c",
     definition:
@@ -345,14 +354,14 @@ test("rejects an incomplete public ledger despite a complete owner-schema shadow
   assert.doesNotMatch(calls[0].at(-1) ?? "", /from app_schema_migration/);
 });
 
-test("tracks migration 0021 in the exact restore ledger", () => {
+test("tracks migration 0022 in the exact restore ledger", () => {
   const migrationLedger = JSON.parse(TRACKED_MIGRATION_LEDGER_JSON);
 
-  assert.equal(migrationLedger.length, 21);
-  assert.equal(migrationLedger.at(-1)?.name, "0021_catalogue_nutrition_semantic_recheck.sql");
+  assert.equal(migrationLedger.length, 22);
+  assert.equal(migrationLedger.at(-1)?.name, "0022_catalogue_authenticated_actor_binding.sql");
   assert.equal(
     migrationLedger.at(-1)?.checksum,
-    "b9a737f006a2d3c12efaf50de3b55578e5eb24a768dbdde97ac6ca00990a16a0",
+    "72b4a284b22e7ed497c759fe087ece6a97c5d459ecbac6a79e32ba5a50cb76ca",
   );
 });
 
@@ -508,12 +517,12 @@ test("rejects unsafe role attributes and every incoming membership option", () =
   );
 });
 
-test("pins all validated 0021 materialization, semantic, stage/validate, and activation constraints", () => {
+test("pins all validated 0022 materialization, semantic, stage/validate, and authenticated-actor constraints", () => {
   const missingConstraint = validAuthorityEvidence();
   missingConstraint.authorityConstraints = [];
   assert.throws(
     () => validateRestoreAuthorityEvidence(missingConstraint, expectedOwner),
-    /materialization, nutrition-semantic, or activation constraint/,
+    /materialization, nutrition-semantic, stage\/validate, or authenticated-actor constraint/,
   );
 
   for (const expectedConstraint of authorityConstraints) {
@@ -525,7 +534,7 @@ test("pins all validated 0021 materialization, semantic, stage/validate, and act
     );
     assert.throws(
       () => validateRestoreAuthorityEvidence(evidence, expectedOwner),
-      /materialization, nutrition-semantic, or activation constraint/,
+      /materialization, nutrition-semantic, stage\/validate, or authenticated-actor constraint/,
       expectedConstraint.name,
     );
   }
@@ -565,9 +574,9 @@ test("pins frozen materialization columns and the activation import-batch index"
   }
 });
 
-test("rejects authority fingerprints from the pre-nutrition-semantic evidence version", () => {
+test("rejects authority fingerprints from the pre-authenticated-actor evidence version", () => {
   const evidence = validAuthorityEvidence();
-  evidence.version = 11;
+  evidence.version = 12;
   assert.throws(
     () => validateRestoreAuthorityEvidence(evidence, expectedOwner),
     /unsupported version/,
@@ -1241,7 +1250,7 @@ function validAuthorityEvidence() {
         owner: expectedOwner,
       },
     ],
-    version: 12,
+    version: 13,
   };
 }
 
@@ -1476,7 +1485,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "309861b6850a99bb565466981602ee19054b9c2500dfee21bf27edc6be382111",
+        "bd8f0714717baf626507a2d40799cea75085f20e9df7295b77fb5899529f2142",
         "jsonb",
       ),
       acl: [acl(expectedOwner, "EXECUTE"), acl("nutrition_catalogue_promote_activate", "EXECUTE")],
@@ -1515,7 +1524,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "abb0ca990b74fedffd4ec77cf666e404da89af8158f4b990b6c0de48cd3dfc41",
+        "73314f5d97251a648093a82d8d9f6d3575a8f3b571d16349ca60a9795de04719",
         "boolean",
       ),
       acl: [
@@ -1564,7 +1573,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "56e9fa2cce7f532c1f405658ff9f07908394d0fb9734b70d0bdb92a12292068a",
+        "a6b7cce658727edcfc889eac7272e65b094592361459130c815436c8f1cc14d7",
         "jsonb",
       ),
       acl: [acl(expectedOwner, "EXECUTE"), acl("nutrition_catalogue_rollback", "EXECUTE")],

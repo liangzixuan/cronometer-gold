@@ -767,4 +767,65 @@ describe("forward migration discovery", () => {
     );
     expect(migrationSql).not.toMatch(/\bgrant\s+nutrition_catalogue_[a-z_]+\s+to\b/iu);
   });
+
+  it("binds capability-mediated catalogue actors to authenticated database sessions", async () => {
+    const migrationSql = await readFile(
+      resolve(import.meta.dirname, "../migrations/0022_catalogue_authenticated_actor_binding.sql"),
+      "utf8",
+    );
+
+    expect(createHash("sha256").update(migrationSql).digest("hex")).toBe(
+      "72b4a284b22e7ed497c759fe087ece6a97c5d459ecbac6a79e32ba5a50cb76ca",
+    );
+    expect(migrationSql).not.toMatch(/\bdrop\s+(table|column|type|role)\b/iu);
+    expect(migrationSql).not.toMatch(/\btruncate\b/iu);
+    expect(migrationSql).toContain(
+      "lock table food_import_approval, food_source_release_activation in access exclusive mode",
+    );
+    expect(migrationSql).toContain(
+      "catalogue authenticated actor binding found capability-mediated audit labels that differ from database principals",
+    );
+    expect(migrationSql).toContain(
+      "Preserve and adjudicate the historical audit rows; never rewrite or infer an authenticated actor.",
+    );
+    for (const constraint of [
+      "food_import_approval_database_authority_check",
+      "food_source_release_activation_database_authority_check",
+    ]) {
+      expect(migrationSql).toContain(constraint);
+    }
+    expect(migrationSql).toContain(
+      "approval.principal_id is distinct from approval.database_principal",
+    );
+    expect(migrationSql).toContain(
+      "activation.performed_by is distinct from activation.database_principal",
+    );
+    expect(migrationSql).toContain("and principal_id = database_principal");
+    expect(migrationSql).toContain("and performed_by = database_principal");
+    expect(migrationSql.match(/\beffective_principal_id\s*:=\s*case\b/giu)).toHaveLength(3);
+    expect(
+      migrationSql.match(
+        /when\s+session_user::text\s*=\s*table_owner\s+then\s+p_external_principal_id\s+else\s+session_user::text/giu,
+      ),
+    ).toHaveLength(3);
+    for (const ownerFunction of [
+      "catalogue_record_import_approval_v1",
+      "catalogue_promote_import_batch_v1",
+      "catalogue_rollback_source_release_v1",
+    ]) {
+      expect(migrationSql).toMatch(
+        new RegExp(`${ownerFunction}\\([\\s\\S]*?effective_principal_id`, "u"),
+      );
+    }
+    expect(migrationSql.match(/\bcreate\s+or\s+replace\s+function\b/giu)).toHaveLength(3);
+    expect(migrationSql).toContain(
+      "alter function %I.%s set search_path = pg_catalog, %I, pg_temp",
+    );
+    expect(migrationSql).not.toMatch(
+      /grant\s+(?:select|insert|update|delete|all)[\s\S]*?on\s+(?:table\s+)?(?:food|outbox_event)/iu,
+    );
+    expect(migrationSql).not.toMatch(
+      /\b(?:grant|revoke)\s+nutrition_catalogue_[a-z_]+\s+(?:to|from)\b/iu,
+    );
+  });
 });

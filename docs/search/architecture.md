@@ -72,7 +72,7 @@ tracked by deploy/restore evidence. This prevents a search generation from
 being based on catalogue materialization that observed a mixed nutrient
 generation, but it does not grant the search worker any base-table access.
 
-Migrations 0019 through 0021 move catalogue promotion, rollback, staging, and
+Migrations 0019 through 0022 move catalogue promotion, rollback, staging, and
 validation behind fixed-purpose database functions while retaining the same
 transactional outbox and projection revision path. Migration 0021 independently
 recomputes and freezes the exact 100-gram nutrient transformation before
@@ -84,6 +84,9 @@ deployment and restore manifests, so an unexpected
 trigger cannot silently inherit workflow authority. The capability roles
 remain unassigned; the search worker still receives no base-table or wrapper
 authority, and no index or alias is changed by the migration itself.
+Migration 0022 changes no search path or privilege: it only makes non-owner
+approval, promotion, and rollback audit labels equal their authenticated
+PostgreSQL session principal.
 
 Meilisearch documents that settings and document writes are asynchronous tasks and
 that index swaps are atomic. Those behaviors are explicit adapter contracts rather

@@ -64,7 +64,7 @@ const rawPolicy = {
     rights: "nutrition_catalogue_rights_reviewer",
   },
   rollbackFunctionSourceSha256: CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
-  schemaVersion: 5,
+  schemaVersion: 6,
   stageBatchFunctionSourceSha256: CATALOGUE_STAGE_BATCH_FUNCTION_SOURCE_SHA256,
   stageParserReportFunctionSourceSha256: CATALOGUE_STAGE_PARSER_REPORT_FUNCTION_SOURCE_SHA256,
   stageRecordChunkFunctionSourceSha256: CATALOGUE_STAGE_RECORD_CHUNK_FUNCTION_SOURCE_SHA256,
@@ -271,7 +271,7 @@ function validEvidence(
           owner: policy.databaseOwner,
         })),
       ),
-    schemaVersion: 5,
+    schemaVersion: 6,
     types: [
       {
         acl: [
@@ -306,6 +306,12 @@ describe("catalogue authority deployment policy", () => {
     expect(() =>
       assertCatalogueAuthorityDeploymentEvidence(policy, validEvidence(policy)),
     ).not.toThrow();
+    expect(() =>
+      assertCatalogueAuthorityDeploymentEvidence(policy, {
+        ...validEvidence(policy),
+        schemaVersion: 5 as 6,
+      }),
+    ).toThrow(/evidence identity differs/u);
   });
 
   it("rejects any additional non-system schema", () => {
@@ -340,6 +346,7 @@ describe("catalogue authority deployment policy", () => {
       { ...rawPolicy, effectiveLoginAllowlist: [...rawPolicy.effectiveLoginAllowlist].reverse() },
     ],
     ["wrong schema owner", { ...rawPolicy, applicationSchemaOwner: "nutrition_app" }],
+    ["legacy schema version", { ...rawPolicy, schemaVersion: 5 }],
     ["wrong function digest", { ...rawPolicy, approvalFunctionSourceSha256: "a".repeat(64) }],
     [
       "wrong stage function digest",
@@ -790,11 +797,17 @@ describe("catalogue authority deployment policy", () => {
         { canary: "worker-execute", sqlstate: "42501" },
         { canary: "data-direct-dml", sqlstate: "42501" },
       ],
-      schemaVersion: 5,
+      schemaVersion: 6,
       structure,
     } as const;
 
     expect(() => assertCatalogueAuthorityCanaryEvidence(policy, evidence)).not.toThrow();
+    expect(() =>
+      assertCatalogueAuthorityCanaryEvidence(policy, {
+        ...evidence,
+        schemaVersion: 5 as 6,
+      }),
+    ).toThrow(/canary evidence identity differs/u);
     expect(() =>
       assertCatalogueAuthorityCanaryEvidence(policy, {
         ...evidence,

@@ -16,7 +16,7 @@ const AUTHORITY_POLICY_PATH = new URL(
 const MIGRATION_DIRECTORY = new URL("../packages/db/migrations/", import.meta.url);
 const MIGRATION_FILE_PATTERN = /^\d{4}_[a-z0-9_]+\.sql$/;
 const EXPECTED_AUTHORITY_POLICY_SHA256 =
-  "2f8e3034057c482cf4e9ec6891aed7f613480795e58ec1dc6a31d1e9ae377646";
+  "463a4083ae8decac3ad447aefeffecb1f610cc9d419ef7da7cfcd45225dd909d";
 const CAPABILITY_ROLES = [
   "nutrition_catalogue_stage",
   "nutrition_catalogue_validate",
@@ -27,8 +27,10 @@ const CAPABILITY_ROLES = [
   "nutrition_catalogue_rollback",
 ];
 const PINNED_AUTHORITY_SEARCH_PATH = ["search_path=pg_catalog, public, pg_temp"];
+const APPROVAL_AUTHORITY_CONSTRAINT_DEFINITION =
+  "CHECK ((database_principal IS NULL AND database_capability_role IS NULL OR database_principal IS NOT NULL AND principal_id = database_principal AND octet_length(database_principal) >= 1 AND octet_length(database_principal) <= 63 AND database_capability_role =\nCASE approval_role\n    WHEN 'data'::text THEN 'nutrition_catalogue_approve_data'::text\n    WHEN 'quality'::text THEN 'nutrition_catalogue_approve_quality'::text\n    WHEN 'rights'::text THEN 'nutrition_catalogue_approve_rights'::text\n    ELSE NULL::text\nEND) IS TRUE)";
 const ACTIVATION_AUTHORITY_CONSTRAINT_DEFINITION =
-  "CHECK ((database_principal IS NULL AND database_capability_role IS NULL OR database_principal IS NOT NULL AND database_capability_role IS NOT NULL AND octet_length(database_principal) >= 1 AND octet_length(database_principal) <= 63 AND database_capability_role =\nCASE\n    WHEN import_batch_id IS NOT NULL AND operation = 'activate'::text THEN 'nutrition_catalogue_promote_activate'::text\n    WHEN import_batch_id IS NULL AND (operation = ANY (ARRAY['deactivate'::text, 'rollback'::text])) THEN 'nutrition_catalogue_rollback'::text\n    ELSE NULL::text\nEND) IS TRUE)";
+  "CHECK ((database_principal IS NULL AND database_capability_role IS NULL OR database_principal IS NOT NULL AND performed_by = database_principal AND database_capability_role IS NOT NULL AND octet_length(database_principal) >= 1 AND octet_length(database_principal) <= 63 AND database_capability_role =\nCASE\n    WHEN import_batch_id IS NOT NULL AND operation = 'activate'::text THEN 'nutrition_catalogue_promote_activate'::text\n    WHEN import_batch_id IS NULL AND (operation = ANY (ARRAY['deactivate'::text, 'rollback'::text])) THEN 'nutrition_catalogue_rollback'::text\n    ELSE NULL::text\nEND) IS TRUE)";
 const STAGE_VALIDATE_AUTHORITY_CONSTRAINT_DEFINITION =
   "CHECK ((staged_database_principal IS NULL AND staged_database_capability_role IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR staged_database_principal IS NOT NULL AND octet_length(staged_database_principal) >= 1 AND octet_length(staged_database_principal) <= 63 AND staged_database_capability_role = 'nutrition_catalogue_stage'::text AND (validated_at IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR validated_at IS NOT NULL AND validated_database_principal IS NOT NULL AND octet_length(validated_database_principal) >= 1 AND octet_length(validated_database_principal) <= 63 AND validated_database_capability_role = 'nutrition_catalogue_validate'::text AND validated_database_principal <> staged_database_principal)) IS TRUE)";
 const STAGING_SEAL_CONSTRAINT_DEFINITION =
@@ -38,6 +40,13 @@ const BATCH_NUTRITION_SEMANTIC_CONSTRAINT_DEFINITION =
 const RECORD_NUTRITION_SEMANTIC_CONSTRAINT_DEFINITION =
   "CHECK ((nutrition_semantic_contract_version IS NULL AND nutrition_semantic_sha256 IS NULL OR nutrition_semantic_contract_version = 1 AND nutrition_semantic_sha256 ~ '^[0-9a-f]{64}$'::text AND validated_at IS NOT NULL AND (validation_status = ANY (ARRAY['quarantined'::text, 'valid'::text, 'materialized'::text]))) IS TRUE)";
 const AUTHORITY_CONSTRAINT_POLICY = [
+  {
+    constraint_type: "c",
+    definition: APPROVAL_AUTHORITY_CONSTRAINT_DEFINITION,
+    name: "food_import_approval_database_authority_check",
+    table_name: "food_import_approval",
+    validated: true,
+  },
   {
     constraint_type: "c",
     definition:
@@ -399,7 +408,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "309861b6850a99bb565466981602ee19054b9c2500dfee21bf27edc6be382111",
+      sourceSha256: "bd8f0714717baf626507a2d40799cea75085f20e9df7295b77fb5899529f2142",
       strict: false,
       volatility: "v",
     },
@@ -436,7 +445,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "boolean",
       securityDefiner: true,
-      sourceSha256: "abb0ca990b74fedffd4ec77cf666e404da89af8158f4b990b6c0de48cd3dfc41",
+      sourceSha256: "73314f5d97251a648093a82d8d9f6d3575a8f3b571d16349ca60a9795de04719",
       strict: false,
       volatility: "v",
     },
@@ -470,7 +479,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "56e9fa2cce7f532c1f405658ff9f07908394d0fb9734b70d0bdb92a12292068a",
+      sourceSha256: "a6b7cce658727edcfc889eac7272e65b094592361459130c815436c8f1cc14d7",
       strict: false,
       volatility: "v",
     },
@@ -1663,7 +1672,7 @@ function collectAuthorityFingerprint(run, options, database) {
       "join pg_catalog.pg_class as class_row on class_row.oid = constraint_row.conrelid",
       "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = class_row.relnamespace",
       "where namespace_row.nspname = 'public'",
-      "and constraint_row.conname in ('food_import_batch_materialization_contract_check','food_import_batch_nutrition_semantic_contract_check','food_import_batch_promotable_contract_check','food_import_batch_stage_validate_database_authority_check','food_import_batch_staging_seal_check','food_import_record_nutrition_semantic_contract_check','food_import_record_validated_food_contract_check','food_source_release_activation_database_authority_check')",
+      "and constraint_row.conname in ('food_import_approval_database_authority_check','food_import_batch_materialization_contract_check','food_import_batch_nutrition_semantic_contract_check','food_import_batch_promotable_contract_check','food_import_batch_stage_validate_database_authority_check','food_import_batch_staging_seal_check','food_import_record_nutrition_semantic_contract_check','food_import_record_validated_food_contract_check','food_source_release_activation_database_authority_check')",
       ") authority_constraint_policy",
     ]),
     authorityFrozenColumns: psqlJson(run, options, database, [
@@ -1849,7 +1858,7 @@ function collectAuthorityFingerprint(run, options, database) {
       "where namespace_row.nspname = 'public'",
       ") type_policy",
     ]),
-    version: 12,
+    version: 13,
   };
   validateRestoreAuthorityEvidence(evidence, options.expectedOwner);
   const fingerprint = canonicalJson(evidence);
@@ -1862,7 +1871,7 @@ function collectAuthorityFingerprint(run, options, database) {
 
 export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
   if (!SAFE_ROLE.test(expectedOwner)) throw new Error("Invalid expected PostgreSQL owner name");
-  if (!evidence || typeof evidence !== "object" || evidence.version !== 12) {
+  if (!evidence || typeof evidence !== "object" || evidence.version !== 13) {
     throw new Error("Database-authority fingerprint has an unsupported version");
   }
 
@@ -1872,7 +1881,7 @@ export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
   );
   if (canonicalJson(authorityConstraints) !== canonicalJson(AUTHORITY_CONSTRAINT_POLICY)) {
     throw new Error(
-      "Catalogue materialization, nutrition-semantic, or activation constraint differs from policy",
+      "Catalogue materialization, nutrition-semantic, stage/validate, or authenticated-actor constraint differs from policy",
     );
   }
   const authorityFrozenColumns = requiredArray(

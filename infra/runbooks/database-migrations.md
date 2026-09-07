@@ -212,7 +212,8 @@ order can deadlock. Semantic compute helpers must not update guarded rows or
 recursively fire their guards, and no user-settable session setting may bypass
 the invariant.
 
-Postflight must show the exact 21-file tracked migration ledger, all sixteen
+At an isolated migration-0021 checkpoint, postflight must show the exact 21-file
+tracked migration ledger, all sixteen
 frozen authority columns, all eight authority CHECKs, all 54 authority functions
 and 54 exact trigger bindings, deployment policy/evidence
 schema version 5, and restore fingerprint version 12. Prove new semantic fields
@@ -222,6 +223,28 @@ approval, promotion, rollback, API, or worker identities. Retain an explicit
 owner/local test because schema-owner SQL remains trusted during EXPAND.
 Migration 0021 creates no live login, grants no membership or table authority,
 performs no caller cutover, and supplies no representative-scale evidence.
+
+## Migration 0022 authenticated database actor preflight
+
+Rehearse migration 0022 against a fresh schema and a restored snapshot. It must
+take exclusive locks on both audit relations and stop with SQLSTATE `55000` if a
+capability-mediated approval has `principal_id <> database_principal` or an
+activation has `performed_by <> database_principal`. Preserve and adjudicate
+such historical evidence; never rewrite it to make migration pass.
+
+After migration, a non-owner approval, promotion, or rollback call with a
+different descriptive principal argument must store `session_user` in both the
+actor-label and database-principal columns. Direct mismatched tuples must fail
+their CHECK. Owner/local calls must preserve the supplied label with paired-null
+database authority. The three public signatures, 54-function/54-trigger totals,
+ACLs, owners, and pinned search paths remain unchanged. This proves database
+identity binding only, not an external identity-provider assertion.
+
+Postflight must show the exact 22-file migration ledger, sixteen frozen
+authority columns, nine authority CHECKs, 54 authority functions, 54 exact
+trigger bindings, deployment schema version 6, and restore fingerprint version
+13. Migration 0022 creates no login, role, membership, credential, or live
+caller and does not revoke compatibility DML.
 
 ## Catalogue and diary lock-order audit
 

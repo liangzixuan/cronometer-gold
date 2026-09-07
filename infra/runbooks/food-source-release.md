@@ -478,12 +478,14 @@ attestation is absent or malformed. Verification must cover NFC normalization,
 the exact ECMAScript whitespace trim/collapse set, JavaScript UTF-16-unit length
 bounds, JSON numeric `100.0` as numeric `100`, and rejection of string
 `"100.0"` where only exact `"100"` is allowed. Promotion
-accepts only the batch UUID, external descriptive principal, and bounded reason
+accepts only the batch UUID, compatibility principal label, and bounded reason
 through `catalogue_promote_import_batch`; it never accepts caller-authored food,
 nutrient, serving, or barcode JSON. A non-owner caller must hold exactly the
 promote/activate capability, and all three approvals must carry distinct
-database-authenticated reviewer principals. Owner/local rehearsal retains paired
-null database-audit fields.
+database-authenticated reviewer principals. Migration 0022 ignores that label
+for a non-owner and records `session_user` as the actor; owner/local rehearsal
+retains its supplied label and paired-null database-audit fields. Neither path
+proves an external identity-provider assertion.
 
 In one database transaction, create the imported source release and immutable food
 versions, advance only validated food current-version pointers, mark the source
@@ -510,9 +512,10 @@ release remains inert and cannot be reactivated; process it through a new
 reviewed batch instead of backfilling or inventing evidence.
 
 Rollback accepts only source code, target release UUID (or null to deactivate),
-external descriptive principal, and bounded reason through
+compatibility principal label, and bounded reason through
 `catalogue_rollback_source_release`. The database derives the authenticated
-principal/capability and records every non-null target as operation `rollback`;
+principal/capability, binds a non-owner audit label to `session_user`, and
+records every non-null target as operation `rollback`;
 callers cannot supply audit fields or mutate pointers/barcodes/outbox tables
 directly. A null target remains available for deactivation and requires no
 fabricated semantic attestation. These functions are source-complete but their `NOLOGIN` capability

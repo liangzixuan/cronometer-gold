@@ -100,7 +100,11 @@ acceptance; progress in either lane never waives the gates in the other.
    decision boundary. Its text parity is explicit: NFC normalization, exact
    ECMAScript whitespace trim/collapse, and JavaScript UTF-16-unit bounds; JSON
    numeric `100.0` equals `100`, while a string must be exactly `"100"`. It does
-   not close M0B. Target deployment logins and
+   not close M0B. Migration 0022 additionally binds capability-mediated
+   approval, promotion, and rollback audit labels to authenticated PostgreSQL
+   `session_user`, while preserving the explicitly trusted owner/local path.
+   External OIDC/workload-principal verification is still absent. Target
+   deployment logins and
    credential/caller cutover, independently operated validator execution,
    external-principal binding, remaining shared-writer profiles, direct-DML
    revocation, representative-scale evidence, and target-environment
@@ -111,11 +115,11 @@ acceptance; progress in either lane never waives the gates in the other.
    policies, migration-0018's nutrient-registry lock protocol, and
    migration-0019's frozen materialization, replacement activation-authority
    constraint, and promotion/rollback boundary plus migration-0020's sealed
-   stage/validate boundary and migration-0021's exact-100-gram semantic
-   attestation under an explicit owner. The transactional repair policy pins
-   54 function identities, 54 exact trigger bindings, sixteen
-   authority-evidence columns, all eight authority CHECKs, and the unique
-   activation-to-batch index. It compares a canonical source/target version-12
+   stage/validate boundary, migration-0021's exact-100-gram semantic
+   attestation, and migration-0022's database-actor binding under an explicit
+   owner. The transactional repair policy pins 54 function identities, 54 exact
+   trigger bindings, sixteen authority-evidence columns, all nine authority
+   CHECKs, and the unique activation-to-batch index. It compares a canonical source/target version-13
    authority fingerprint, including column
    ACL state and trigger table schemas, while `PUBLIC CONNECT` remains revoked
    and the effective login allowlist stays exact. Public-table triggers and
@@ -134,7 +138,7 @@ acceptance; progress in either lane never waives the gates in the other.
    `public.app_schema_migration` names and SHA-256s against the tracked migration
    files, requires `public` to be the only non-system schema, and checks exact
    database/schema and object ACLs and grantors, relation/type
-   ownership, default and column ACL absence, all eight authority CHECKs, the
+   ownership, default and column ACL absence, all nine authority CHECKs, the
    sixteen authority-evidence columns, the unique activation-to-batch index, all
    54 authority functions with exact execute ACLs, unsafe authority on any
    other public routine, and the exact 54-trigger protected shared-food/outbox
@@ -150,7 +154,7 @@ acceptance; progress in either lane never waives the gates in the other.
    delta. Persisted credential-free evidence includes the canonical stable
    structure projection plus its recomputable SHA-256 and excludes volatile
    backend PIDs. The policy, evidence, canary, and CLI report use schema version
-   5. The real-loopback ephemeral-database integration passes and leaves no
+   6. The real-loopback ephemeral-database integration passes and leaves no
    database or role residue. The policy carries no credentials or private
    identity claims. Live login provisioning, membership mutation, credentials,
    external-principal binding, DEPLOY, and CONTRACT remain blocked.
@@ -395,13 +399,22 @@ retain an existing active pointer, but cannot be newly approved, promoted,
 claimed as attested, or selected for rollback. Direct schema-owner SQL remains
 trusted, and the migration assigns no live identity or caller.
 
+Migration 0022 prevents capability callers from choosing the actor label stored
+for approval, promotion, or rollback. Non-owner wrappers derive that label from
+authenticated PostgreSQL `session_user`, and both authority CHECKs require it to
+match `database_principal`; migration preflight refuses conflicting historical
+rows instead of rewriting them. Owner/local calls retain their supplied label
+with paired-null database authority. This closes spoofable database audit text,
+not external identity verification, live role assignment, or caller cutover.
+
 These limits are safety ceilings rather than
 representative full-catalogue scale proof; a bounded paged production protocol
 and measured resource/lock budgets remain open.
 
 This is not production role/function isolation. Owner/local compatibility still
-leaves a principal with table DML inside the trusted boundary; no runtime login
-or external principal is bound to the stage, validate, promotion, or rollback
+leaves a principal with table DML inside the trusted boundary; no live runtime
+login or externally verified workload principal is bound to stage, validate,
+promotion, or rollback
 capabilities; and deployment cutover, independent validator execution,
 direct-DML revocation, ordinary-deploy fingerprinting, and role canaries remain
 open. The isolated logical-restore drill now pins and reapplies the
@@ -411,10 +424,11 @@ source-eligibility trigger and migration-0017's four search-path pins and exact
 food/serving/barcode trigger bindings plus migration-0018's four nutrient-lock
 functions and seven trigger bindings plus migration-0019's frozen-evidence
 boundary and migration-0020's six audit/seal columns, two checks, five workflow
-functions, owner-only helper, and three guards, plus migration-0021's four
-semantic-attestation columns, two checks, independent semantic functions, and
-two guards: the complete 54-function/54-trigger shared-food boundary under the
-version-12 fingerprint,
+functions, owner-only helper, and three guards, migration-0021's four
+semantic-attestation columns, two checks, independent semantic functions and
+two guards, plus migration-0022's two actor-binding checks and three public
+wrapper bodies: the complete 54-function/54-trigger shared-food boundary under
+the version-13 fingerprint,
 rejecting owner, constraint, ACL, or fingerprint drift before replay or API
 probing. A live FDC release has intentionally not
 been promoted: the checked-in candidate remains non-importable until two

@@ -188,20 +188,102 @@ describeDatabase("catalogue restore authority schema identity", { timeout: 120_0
         validate_has_schema_usage: true,
       });
 
-      await sql
-        .raw(`
+      const isolatedDatabase = isolated;
+      const assertPolicyRejectsTransactionalDrift = async (
+        mutation: string,
+        expectedMessage: string,
+      ): Promise<void> => {
+        await sql.raw("begin").execute(isolatedDatabase);
+        try {
+          await sql.raw(mutation).execute(isolatedDatabase);
+          await expect(sql.raw(restorePolicySql).execute(isolatedDatabase)).rejects.toThrow(
+            expectedMessage,
+          );
+        } finally {
+          await sql.raw("rollback").execute(isolatedDatabase);
+        }
+      };
+
+      for (const [tableName, constraintName] of [
+        ["food_import_approval", "food_import_approval_database_authority_check"],
+        [
+          "food_source_release_activation",
+          "food_source_release_activation_database_authority_check",
+        ],
+      ] as const) {
+        await assertPolicyRejectsTransactionalDrift(
+          `alter table public.${tableName}
+             drop constraint ${constraintName},
+             add constraint ${constraintName} check (true)`,
+          "catalogue frozen-materialization, nutrition-semantic, stage/validate, or authenticated-actor constraint differs from the forward 0022 policy",
+        );
+      }
+
+      for (const functionDrift of [
+        `create or replace function public.catalogue_record_import_approval(
+          p_batch_id uuid,
+          p_requested_approval_role text,
+          p_validation_digest text,
+          p_rights_digest text,
+          p_external_principal_id text,
+          p_approval_reference text
+        )
+        returns boolean
+        language plpgsql
+        security definer
+        set search_path = pg_catalog, public, pg_temp
+        as $function$
+        begin
+          return false;
+        end;
+        $function$`,
+        `create or replace function public.catalogue_promote_import_batch(
+          p_batch_id uuid,
+          p_external_principal_id text,
+          p_reason text
+        )
+        returns jsonb
+        language plpgsql
+        security definer
+        set search_path = pg_catalog, public, pg_temp
+        as $function$
+        begin
+          return '{}'::jsonb;
+        end;
+        $function$`,
+        `create or replace function public.catalogue_rollback_source_release(
+          p_source_code text,
+          p_target_release_id uuid,
+          p_external_principal_id text,
+          p_reason text
+        )
+        returns jsonb
+        language plpgsql
+        security definer
+        set search_path = pg_catalog, public, pg_temp
+        as $function$
+        begin
+          return '{}'::jsonb;
+        end;
+        $function$`,
+      ]) {
+        await assertPolicyRejectsTransactionalDrift(
+          functionDrift,
+          "catalogue authority function identity or executable semantics differ from policy",
+        );
+      }
+
+      await assertPolicyRejectsTransactionalDrift(
+        `
         drop trigger food_import_record_guard_nutrition_semantics
           on public.food_import_record;
         create trigger food_import_record_guard_nutrition_semantics
         before update on public.food_import_record
         for each row
         execute function public.guard_food_import_record_nutrition_semantics();
-      `)
-        .execute(isolated);
-      await expect(sql.raw(restorePolicySql).execute(isolated)).rejects.toThrow(
+      `,
         "catalogue authority trigger identity, definition, or enabled state differs from policy",
       );
-      await sql.raw("rollback").execute(isolated);
     } catch (error) {
       primaryFailure = error;
     } finally {

@@ -27,17 +27,17 @@ export type CatalogueFunctionExecuteGrantees =
   | readonly CatalogueCapabilityRole[];
 
 export const CATALOGUE_APPROVAL_FUNCTION_SOURCE_SHA256 =
-  "abb0ca990b74fedffd4ec77cf666e404da89af8158f4b990b6c0de48cd3dfc41";
+  "73314f5d97251a648093a82d8d9f6d3575a8f3b571d16349ca60a9795de04719";
 export const CATALOGUE_APPROVAL_V1_FUNCTION_SOURCE_SHA256 =
   "89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac";
 export const CATALOGUE_APPROVAL_GUARD_SOURCE_SHA256 =
   "f96feb298d900165172c56a3fa1e99e91aaca010657155e5a996ee04015fdbbd";
 export const CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256 =
-  "309861b6850a99bb565466981602ee19054b9c2500dfee21bf27edc6be382111";
+  "bd8f0714717baf626507a2d40799cea75085f20e9df7295b77fb5899529f2142";
 export const CATALOGUE_PROMOTION_V1_FUNCTION_SOURCE_SHA256 =
   "115fdc3ed1943dd77ce70d3a694495da3d2c62ade9c7b82812a89cef82b39f17";
 export const CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256 =
-  "56e9fa2cce7f532c1f405658ff9f07908394d0fb9734b70d0bdb92a12292068a";
+  "a6b7cce658727edcfc889eac7272e65b094592361459130c815436c8f1cc14d7";
 export const CATALOGUE_ROLLBACK_V1_FUNCTION_SOURCE_SHA256 =
   "3fe493ee5e0b27e43cc881854dddfe4dc12f862a1c4a242bf712c843b2792ff1";
 export const CATALOGUE_ACTIVATION_GUARD_SOURCE_SHA256 =
@@ -74,8 +74,10 @@ export const CATALOGUE_RECORD_STAGING_SEAL_GUARD_SOURCE_SHA256 =
   "2fc46ef24e03309e61832491438746967642911b02e97896f8a0bdf6fc5aa8bc";
 export const CATALOGUE_CHECKPOINT_STAGING_SEAL_GUARD_SOURCE_SHA256 =
   "66e2078cf57d658268f547c25df26750ebe5b7b6402de9fcecdc2249c14f28ef";
+export const CATALOGUE_APPROVAL_AUTHORITY_CONSTRAINT_DEFINITION =
+  "CHECK ((database_principal IS NULL AND database_capability_role IS NULL OR database_principal IS NOT NULL AND principal_id = database_principal AND octet_length(database_principal) >= 1 AND octet_length(database_principal) <= 63 AND database_capability_role =\nCASE approval_role\n    WHEN 'data'::text THEN 'nutrition_catalogue_approve_data'::text\n    WHEN 'quality'::text THEN 'nutrition_catalogue_approve_quality'::text\n    WHEN 'rights'::text THEN 'nutrition_catalogue_approve_rights'::text\n    ELSE NULL::text\nEND) IS TRUE)";
 export const CATALOGUE_ACTIVATION_AUTHORITY_CONSTRAINT_DEFINITION =
-  "CHECK ((database_principal IS NULL AND database_capability_role IS NULL OR database_principal IS NOT NULL AND database_capability_role IS NOT NULL AND octet_length(database_principal) >= 1 AND octet_length(database_principal) <= 63 AND database_capability_role =\nCASE\n    WHEN import_batch_id IS NOT NULL AND operation = 'activate'::text THEN 'nutrition_catalogue_promote_activate'::text\n    WHEN import_batch_id IS NULL AND (operation = ANY (ARRAY['deactivate'::text, 'rollback'::text])) THEN 'nutrition_catalogue_rollback'::text\n    ELSE NULL::text\nEND) IS TRUE)";
+  "CHECK ((database_principal IS NULL AND database_capability_role IS NULL OR database_principal IS NOT NULL AND performed_by = database_principal AND database_capability_role IS NOT NULL AND octet_length(database_principal) >= 1 AND octet_length(database_principal) <= 63 AND database_capability_role =\nCASE\n    WHEN import_batch_id IS NOT NULL AND operation = 'activate'::text THEN 'nutrition_catalogue_promote_activate'::text\n    WHEN import_batch_id IS NULL AND (operation = ANY (ARRAY['deactivate'::text, 'rollback'::text])) THEN 'nutrition_catalogue_rollback'::text\n    ELSE NULL::text\nEND) IS TRUE)";
 export const CATALOGUE_STAGE_VALIDATE_AUTHORITY_CONSTRAINT_DEFINITION =
   "CHECK ((staged_database_principal IS NULL AND staged_database_capability_role IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR staged_database_principal IS NOT NULL AND octet_length(staged_database_principal) >= 1 AND octet_length(staged_database_principal) <= 63 AND staged_database_capability_role = 'nutrition_catalogue_stage'::text AND (validated_at IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR validated_at IS NOT NULL AND validated_database_principal IS NOT NULL AND octet_length(validated_database_principal) >= 1 AND octet_length(validated_database_principal) <= 63 AND validated_database_capability_role = 'nutrition_catalogue_validate'::text AND validated_database_principal <> staged_database_principal)) IS TRUE)";
 export const CATALOGUE_STAGING_SEAL_CONSTRAINT_DEFINITION =
@@ -86,6 +88,13 @@ export const CATALOGUE_RECORD_NUTRITION_SEMANTIC_CONSTRAINT_DEFINITION =
   "CHECK ((nutrition_semantic_contract_version IS NULL AND nutrition_semantic_sha256 IS NULL OR nutrition_semantic_contract_version = 1 AND nutrition_semantic_sha256 ~ '^[0-9a-f]{64}$'::text AND validated_at IS NOT NULL AND (validation_status = ANY (ARRAY['quarantined'::text, 'valid'::text, 'materialized'::text]))) IS TRUE)";
 
 export const CATALOGUE_AUTHORITY_CONSTRAINT_POLICY = [
+  {
+    constraintType: "c",
+    definition: CATALOGUE_APPROVAL_AUTHORITY_CONSTRAINT_DEFINITION,
+    name: "food_import_approval_database_authority_check",
+    tableName: "food_import_approval",
+    validated: true,
+  },
   {
     constraintType: "c",
     definition:
@@ -1225,7 +1234,7 @@ export interface CatalogueAuthorityDeploymentPolicy {
   readonly promotionFunctionSourceSha256: string;
   readonly reviewerLogins: Readonly<Record<CatalogueReviewerClass, string>>;
   readonly rollbackFunctionSourceSha256: string;
-  readonly schemaVersion: 5;
+  readonly schemaVersion: 6;
   readonly stageBatchFunctionSourceSha256: string;
   readonly stageParserReportFunctionSourceSha256: string;
   readonly stageRecordChunkFunctionSourceSha256: string;
@@ -1406,7 +1415,7 @@ export interface CatalogueAuthorityDeploymentEvidence {
   readonly nonSystemSchemas: readonly string[];
   readonly policySha256: string;
   readonly relations: readonly CatalogueRelationEvidence[];
-  readonly schemaVersion: 5;
+  readonly schemaVersion: 6;
   readonly types: readonly CatalogueTypeEvidence[];
 }
 
@@ -1444,7 +1453,7 @@ export interface CatalogueAuthorityCanaryEvidence {
     readonly canary: CatalogueAuthorityCanaryName;
     readonly sqlstate: "23503" | "42501";
   }[];
-  readonly schemaVersion: 5;
+  readonly schemaVersion: 6;
   readonly structure: CatalogueAuthorityDeploymentStructureEvidence;
 }
 
@@ -1473,7 +1482,7 @@ export function parseCatalogueAuthorityDeploymentPolicy(
     "stageValidateGuardSourceSha256",
     "validateBatchFunctionSourceSha256",
   ]);
-  if (policy.policyKind !== "catalogue-authority-deployment" || policy.schemaVersion !== 5) {
+  if (policy.policyKind !== "catalogue-authority-deployment" || policy.schemaVersion !== 6) {
     throw new Error("Catalogue authority deployment policy identity is unsupported");
   }
   if (
@@ -1583,7 +1592,7 @@ export function parseCatalogueAuthorityDeploymentPolicy(
     promotionFunctionSourceSha256,
     reviewerLogins,
     rollbackFunctionSourceSha256,
-    schemaVersion: 5,
+    schemaVersion: 6,
     stageBatchFunctionSourceSha256,
     stageParserReportFunctionSourceSha256,
     stageRecordChunkFunctionSourceSha256,
@@ -1651,7 +1660,7 @@ export function assertCatalogueAuthorityDeploymentEvidence(
   evidence: CatalogueAuthorityDeploymentEvidence,
 ): void {
   if (
-    evidence.schemaVersion !== 5 ||
+    evidence.schemaVersion !== 6 ||
     evidence.policySha256 !== catalogueAuthorityDeploymentPolicySha256(policy)
   ) {
     throw new Error("Catalogue authority deployment evidence identity differs");
@@ -1822,7 +1831,7 @@ export function assertCatalogueAuthorityCanaryEvidence(
   evidence: CatalogueAuthorityCanaryEvidence,
 ): void {
   if (
-    evidence.schemaVersion !== 5 ||
+    evidence.schemaVersion !== 6 ||
     evidence.policySha256 !== catalogueAuthorityDeploymentPolicySha256(policy)
   ) {
     throw new Error("Catalogue authority canary evidence identity differs");
@@ -1892,7 +1901,9 @@ function assertCatalogueAuthorityStructure(
     canonicalJson(evidence.authorityConstraints as unknown as JsonValue) !==
     canonicalJson(CATALOGUE_AUTHORITY_CONSTRAINT_POLICY as unknown as JsonValue)
   ) {
-    throw new Error("Catalogue materialization or activation constraint differs from policy");
+    throw new Error(
+      "Catalogue materialization, semantic, stage/validate, or authenticated-actor constraint differs from policy",
+    );
   }
   if (
     canonicalJson(evidence.authorityFrozenColumns as unknown as JsonValue) !==

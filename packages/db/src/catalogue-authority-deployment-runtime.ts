@@ -522,6 +522,7 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
         on namespace_row.oid = class_row.relnamespace
       where namespace_row.nspname = ${policy.applicationSchema}
         and constraint_row.conname in (
+          'food_import_approval_database_authority_check',
           'food_import_batch_materialization_contract_check',
           'food_import_batch_nutrition_semantic_contract_check',
           'food_import_batch_promotable_contract_check',
@@ -1074,7 +1075,7 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
     nonSystemSchemas,
     policySha256: catalogueAuthorityDeploymentPolicySha256(policy),
     relations,
-    schemaVersion: 5,
+    schemaVersion: 6,
     triggers,
     types,
   };
@@ -1185,7 +1186,7 @@ export async function runCatalogueReviewerCanaries(
     beforeStructureSha256: catalogueAuthorityDeploymentStructureSha256(before),
     policySha256: catalogueAuthorityDeploymentPolicySha256(policy),
     results,
-    schemaVersion: 5,
+    schemaVersion: 6,
     structure,
   };
   assertCatalogueAuthorityCanaryEvidence(policy, evidence);

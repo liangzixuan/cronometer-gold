@@ -45,7 +45,7 @@ const TRUSTED_DATABASE_SCHEMA_PATTERN = /^[a-z_][a-z0-9_-]{0,62}$/;
 const APPROVAL_FUNCTION_IDENTITY_ARGUMENTS =
   "p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text";
 const APPROVAL_FUNCTION_SOURCE_SHA256 =
-  "abb0ca990b74fedffd4ec77cf666e404da89af8158f4b990b6c0de48cd3dfc41";
+  "73314f5d97251a648093a82d8d9f6d3575a8f3b571d16349ca60a9795de04719";
 const APPROVAL_GUARD_FUNCTION_SOURCE_SHA256 =
   "f96feb298d900165172c56a3fa1e99e91aaca010657155e5a996ee04015fdbbd";
 const APPROVAL_GUARD_TRIGGER_DEFINITION =

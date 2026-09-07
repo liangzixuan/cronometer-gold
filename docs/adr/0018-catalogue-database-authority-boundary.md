@@ -183,6 +183,17 @@ ceilings, not representative full-catalogue scale evidence; a bounded, paged
 production protocol and measured memory, disk, lock, timeout, and retry budgets
 remain open.
 
+Forward migration 0022 binds capability-mediated audit labels to PostgreSQL's
+authenticated session identity. The public approval, promotion, and rollback
+signatures remain compatible, but for a non-owner session their descriptive
+principal argument is ignored and the owner-only implementation receives
+`session_user`. The approval and activation authority CHECKs require the stored
+label to equal `database_principal`, and migration preflight refuses ambiguous
+historical rows rather than rewriting them. Owner/local calls retain a supplied
+label with paired-null database authority. This closes database-audit
+misattribution only; it does not verify an external OIDC/workload assertion,
+provision a login, assign a capability, or perform caller cutover.
+
 The supported protocol is deliberately narrower than arbitrary owner SQL:
 application transactions take the shared lock before entering the affected
 read/write chain. Direct owner recipe DML is unsupported because its row and
@@ -231,7 +242,7 @@ memberships.
 
 The verifier requires `public` to be the only non-system schema and checks its
 exact ACLs, grantors, and `pg_database_owner` ownership; the exact database ACL;
-relation, type, default, and column ACL state; required owners; all eight
+relation, type, default, and column ACL state; required owners; all nine
 authority CHECKs; the sixteen pinned authority-evidence columns; the unique
 activation-to-batch index; all 54 authority function signatures,
 executable semantics, source hash, exact per-function ACL, and expected
@@ -282,13 +293,13 @@ capability membership, and its new database-principal audit fields remain null.
 Existing rows are also left null. The migration never invents historical
 database actors or capability grants.
 
-The deployment policy, evidence, canary, and CLI report use schema version 5.
+The deployment policy, evidence, canary, and CLI report use schema version 6.
 This decision does not yet authorize live catalogue work. The following remain
 required before database authority can be considered closed:
 
 1. Any remaining fixed-purpose recipe/shared-food writers needed to remove the
    API/worker need for unrelated table mutation privilege. Migrations 0019
-   through 0021 supply promotion/rollback, stage/validate, and independent
+   through 0022 supply promotion/rollback, stage/validate, independent
    database semantic-attestation functions but do not deploy their callers.
 2. Deployment-specific login identities, short-lived or otherwise reviewed
    credentials, and an externally authenticated principal-to-login binding.
@@ -339,13 +350,14 @@ not drop or recreate authority evidence in place.
   materialization, replacement activation-authority constraint, and
   promotion/rollback boundary plus migration-0020's stage/validate functions,
   immutable staging seal, audit columns, constraints, and guards, and
-  migration-0021's independent exact-100-gram semantic attestation. The repair
-  policy pins 54 function identities, 54 exact trigger bindings, the sixteen
-  authority-evidence columns, all eight authority CHECKs, and the unique
+  migration-0021's independent exact-100-gram semantic attestation, and
+  migration-0022's authenticated database-actor binding. The repair policy pins
+  54 function identities, 54 exact trigger bindings, the sixteen
+  authority-evidence columns, all nine authority CHECKs, and the unique
   activation-to-batch index; the canonical fingerprint
   covers that same full authority set. It
   requires the exact tracked filename/file-byte-SHA ledger from
-  `public.app_schema_migration` before `pg_dump`, then version-12 canonical
+  `public.app_schema_migration` before `pg_dump`, then version-13 canonical
   authority-fingerprint parity including column ACL state, the frozen-evidence
   column definitions, the authority index, and each trigger's table schema while
   `PUBLIC CONNECT` remains revoked. Public-table triggers and

@@ -341,6 +341,32 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
         `.execute(dataReviewer),
         "42501",
       );
+      await sql`
+        alter table ${sql.id(schemaName)}.food_import_approval
+        disable trigger food_import_approval_guard_authority
+      `.execute(owner);
+      try {
+        await expectPostgresCode(
+          sql`
+            insert into ${sql.id(schemaName)}.food_import_approval (
+              approval_reference, approval_role, batch_id,
+              database_capability_role, database_principal, principal_id,
+              rights_manifest_sha256, validation_digest
+            ) values (
+              'review://direct-mismatched-actor', 'data', ${batchId}::uuid,
+              'nutrition_catalogue_approve_data', ${credentials[0]?.login},
+              'principal:direct-mismatched-actor', ${rightsDigest}, ${validationDigest}
+            )
+          `.execute(owner),
+          "23514",
+          "food_import_approval_database_authority_check",
+        );
+      } finally {
+        await sql`
+          alter table ${sql.id(schemaName)}.food_import_approval
+          enable trigger food_import_approval_guard_authority
+        `.execute(owner);
+      }
       await expectPostgresCode(
         sql`
           insert into ${sql.id(schemaName)}.food_source_release_activation (
@@ -352,22 +378,39 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
         `.execute(owner),
         "42501",
       );
-      await expectPostgresCode(
-        sql`
-          insert into ${sql.id(schemaName)}.food_source_release_activation (
-            food_source_id, operation, reason, performed_by,
-            database_principal, database_capability_role
-          ) values (
-            ${sourceId}::bigint, 'deactivate', 'Reject paired activation forgery',
-            'principal:authority-pair-forgery', 'cat_paired_audit',
-            'nutrition_catalogue_rollback'
-          )
-        `.execute(owner),
-        "42501",
-      );
+      await sql`
+        alter table ${sql.id(schemaName)}.food_source_release_activation
+        disable trigger food_source_release_activation_guard_authority
+      `.execute(owner);
+      try {
+        await expectPostgresCode(
+          sql`
+            insert into ${sql.id(schemaName)}.food_source_release_activation (
+              food_source_id, operation, reason, performed_by,
+              database_principal, database_capability_role
+            ) values (
+              ${sourceId}::bigint, 'deactivate', 'Reject paired activation forgery',
+              'principal:authority-pair-forgery', 'cat_paired_audit',
+              'nutrition_catalogue_rollback'
+            )
+          `.execute(owner),
+          "23514",
+          "food_source_release_activation_database_authority_check",
+        );
+      } finally {
+        await sql`
+          alter table ${sql.id(schemaName)}.food_source_release_activation
+          enable trigger food_source_release_activation_guard_authority
+        `.execute(owner);
+      }
 
       await expect(recordApproval(dataReviewer, schemaName, dataCall)).resolves.toBe(true);
-      await expect(recordApproval(dataReviewer, schemaName, dataCall)).resolves.toBe(false);
+      await expect(
+        recordApproval(dataReviewer, schemaName, {
+          ...dataCall,
+          principalId: "principal:ignored-replay-spoof",
+        }),
+      ).resolves.toBe(false);
       await expectPostgresCode(
         recordApproval(dataReviewer, schemaName, {
           ...dataCall,
@@ -400,8 +443,9 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
           approval_role: string;
           database_capability_role: string | null;
           database_principal: string | null;
+          principal_id: string;
         }>`
-          select approval_role, database_capability_role, database_principal
+          select approval_role, database_capability_role, database_principal, principal_id
           from food_import_approval
           where batch_id = ${batchId}::uuid
           order by approval_role
@@ -412,16 +456,19 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
           approval_role: "data",
           database_capability_role: "nutrition_catalogue_approve_data",
           database_principal: credentials[0]?.login,
+          principal_id: credentials[0]?.login,
         },
         {
           approval_role: "quality",
           database_capability_role: "nutrition_catalogue_approve_quality",
           database_principal: credentials[1]?.login,
+          principal_id: credentials[1]?.login,
         },
         {
           approval_role: "rights",
           database_capability_role: "nutrition_catalogue_approve_rights",
           database_principal: credentials[2]?.login,
+          principal_id: credentials[2]?.login,
         },
       ]);
 
@@ -444,18 +491,72 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
       };
       await expect(recordApproval(owner, schemaName, ownerCall)).resolves.toBe(true);
       await expect(recordApproval(owner, schemaName, ownerCall)).resolves.toBe(false);
+      await expect(
+        recordApproval(owner, schemaName, {
+          ...ownerCall,
+          approvalReference: "review://authority/owner-local-quality",
+          approvalRole: "quality",
+          principalId: "principal:authority-owner-local-quality",
+        }),
+      ).resolves.toBe(true);
+      await expect(
+        recordApproval(owner, schemaName, {
+          ...ownerCall,
+          approvalReference: "review://authority/owner-local-rights",
+          approvalRole: "rights",
+          principalId: "principal:authority-owner-local-rights",
+        }),
+      ).resolves.toBe(true);
       expect(
         (
           await sql<{
             database_capability_role: string | null;
             database_principal: string | null;
+            principal_id: string;
           }>`
-            select database_capability_role, database_principal
+            select database_capability_role, database_principal, principal_id
             from food_import_approval
             where batch_id = ${ownerBatchId}::uuid
+              and approval_role = 'data'
           `.execute(owner)
         ).rows[0],
-      ).toEqual({ database_capability_role: null, database_principal: null });
+      ).toEqual({
+        database_capability_role: null,
+        database_principal: null,
+        principal_id: ownerCall.principalId,
+      });
+
+      const ownerPromotion = await promoteImportBatch(
+        owner,
+        schemaName,
+        ownerBatchId,
+        "principal:authority-owner-local-promoter",
+        "Exercise owner-local promotion audit semantics",
+      );
+      expect(ownerPromotion).toMatchObject({
+        materializedCount: 0,
+        previousReleaseId: null,
+        wasAlreadyCompleted: false,
+      });
+      expect(
+        (
+          await sql<{
+            database_capability_role: string | null;
+            database_principal: string | null;
+            operation: string;
+            performed_by: string;
+          }>`
+            select operation, performed_by, database_principal, database_capability_role
+            from food_source_release_activation
+            where import_batch_id = ${ownerBatchId}::uuid
+          `.execute(owner)
+        ).rows[0],
+      ).toEqual({
+        database_capability_role: null,
+        database_principal: null,
+        operation: "activate",
+        performed_by: "principal:authority-owner-local-promoter",
+      });
 
       const promoteFunctionIdentity = `${schemaName}.catalogue_promote_import_batch(uuid,text,text)`;
       const rollbackFunctionIdentity = `${schemaName}.catalogue_rollback_source_release(text,uuid,text,text)`;
@@ -519,7 +620,7 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
         promoteOperator,
         schemaName,
         batchId,
-        "principal:authority-promoter",
+        "principal:ignored-promoter-spoof",
         "Exercise database-authenticated catalogue promotion",
       );
       expect(promotion).toMatchObject({
@@ -535,7 +636,7 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
           promoteOperator,
           schemaName,
           batchId,
-          "principal:authority-promoter",
+          "principal:different-ignored-promoter-spoof",
           "Exercise idempotent completed-batch replay",
         ),
       ).toEqual({ ...promotion, wasAlreadyCompleted: true });
@@ -546,8 +647,9 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
             database_capability_role: string | null;
             database_principal: string | null;
             operation: string;
+            performed_by: string;
           }>`
-            select operation, database_principal, database_capability_role
+            select operation, performed_by, database_principal, database_capability_role
             from food_source_release_activation
             where import_batch_id = ${batchId}::uuid
           `.execute(owner)
@@ -556,6 +658,7 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
         database_capability_role: "nutrition_catalogue_promote_activate",
         database_principal: credentials[4]?.login,
         operation: "activate",
+        performed_by: credentials[4]?.login,
       });
       expect(
         (
@@ -596,7 +699,7 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
           schemaName,
           sourceCode,
           null,
-          "principal:authority-rollback",
+          "principal:ignored-rollback-spoof",
           "Exercise database-authenticated catalogue deactivation",
         ),
       ).toEqual({
@@ -610,8 +713,9 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
             database_capability_role: string | null;
             database_principal: string | null;
             operation: string;
+            performed_by: string;
           }>`
-            select operation, database_principal, database_capability_role
+            select operation, performed_by, database_principal, database_capability_role
             from food_source_release_activation
             where food_source_id = ${sourceId}::bigint
             order by id desc
@@ -622,6 +726,7 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
         database_capability_role: "nutrition_catalogue_rollback",
         database_principal: credentials[5]?.login,
         operation: "deactivate",
+        performed_by: credentials[5]?.login,
       });
 
       expect(
@@ -644,8 +749,9 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
             database_capability_role: string | null;
             database_principal: string | null;
             operation: string;
+            performed_by: string;
           }>`
-            select operation, database_principal, database_capability_role
+            select operation, performed_by, database_principal, database_capability_role
             from food_source_release_activation
             where food_source_id = ${sourceId}::bigint
             order by id desc
@@ -656,6 +762,7 @@ describeDatabase("catalogue database authority boundary", { timeout: 60_000 }, (
         database_capability_role: null,
         database_principal: null,
         operation: "rollback",
+        performed_by: "principal:authority-owner",
       });
     } finally {
       for (const client of roleClients) await client.destroy();

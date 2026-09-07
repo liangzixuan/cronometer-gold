@@ -92,6 +92,10 @@ package boundaries.
   `100`; string `"100.0"` is not exact string `"100"`. Approval, promotion, and
   non-null rollback fail closed without complete attestation;
   historical unattested releases remain inert rather than being backfilled.
+  Migration 0022 also requires every capability-mediated approval or activation
+  actor label to equal its authenticated PostgreSQL `session_user`; caller text
+  cannot impersonate a different audit actor. Owner/local descriptive labels
+  remain explicitly trusted compatibility data, not external identity proof.
   Owner compatibility remains, and the capability roles have no live login
   membership or caller cutover. Production least-privilege identities,
   external-principal binding, caller cutover, and representative-scale evidence
@@ -102,8 +106,8 @@ package boundaries.
   insert/update/delete writers wait, and a waiting reader observes the complete
   committed generation. Deployment and restore evidence must match the four
   nutrient-lock functions and seven exact bindings plus migrations 0019 through
-  0021's complete 54-function/54-trigger authority surface, sixteen
-  frozen authority columns, and eight authority CHECKs; a broad nutrient table lock,
+  0022's complete 54-function/54-trigger authority surface, sixteen
+  frozen authority columns, and nine authority CHECKs; a broad nutrient table lock,
   an `active`-only writer trigger, or an unexpected shared-food trigger is a
   regression.
 - The product renders unknown, trace, imputed, and label-rounded values distinctly.
