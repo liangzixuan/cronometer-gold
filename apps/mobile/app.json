@@ -23,11 +23,13 @@
     "android": {
       "allowBackup": false,
       "permissions": [
+        "android.permission.CAMERA",
         "android.permission.health.READ_WEIGHT",
         "android.permission.POST_NOTIFICATIONS"
       ],
       "blockedPermissions": [
         "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO",
         "android.permission.SYSTEM_ALERT_WINDOW",
         "android.permission.VIBRATE",
         "android.permission.WRITE_EXTERNAL_STORAGE"
@@ -43,6 +45,15 @@
             "minSdkVersion": 26,
             "targetSdkVersion": 36
           }
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Nutrition Tracker to scan food barcodes.",
+          "microphonePermission": false,
+          "recordAudioAndroid": false,
+          "barcodeScannerEnabled": true
         }
       ],
       [

@@ -1,7 +1,10 @@
+import { useCameraPermissions } from "expo-camera";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  AppState,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -27,6 +30,12 @@ import {
   type QuickAddReceipt,
 } from "../diary/quick-add-outbox";
 import { palette } from "../theme";
+import { BarcodeScannerModal } from "./BarcodeScannerModal";
+import {
+  canOpenBarcodeScanner,
+  parseScannedFoodBarcode,
+  type ScannedBarcodePayload,
+} from "./barcode-scanner";
 import {
   buildAutocompleteUrl,
   buildBarcodeUrl,
@@ -188,6 +197,10 @@ export function FoodSearchScreen({
     "Enter every digit printed beneath a UPC, EAN, or GTIN.",
   );
   const [barcodeResult, setBarcodeResult] = useState<FoodSearchHit | null>(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [cameraRequesting, setCameraRequesting] = useState(false);
+  const cameraPermissionRequestInFlight = useRef(false);
+  const [cameraPermission, requestCameraPermission, getCameraPermission] = useCameraPermissions();
   const autocompleteController = useRef<AbortController | null>(null);
   const searchController = useRef<AbortController | null>(null);
   const barcodeController = useRef<AbortController | null>(null);
@@ -368,10 +381,12 @@ export function FoodSearchScreen({
     void runSearch(suggestion.label);
   }
 
-  async function lookupBarcode() {
+  async function lookupBarcode(requestedBarcode: string = barcode) {
+    const normalized = normalizeBarcodeInput(requestedBarcode);
     barcodeController.current?.abort();
     setBarcodeResult(null);
-    if (!isExactBarcode(barcode)) {
+    setBarcode(normalized);
+    if (!isExactBarcode(normalized)) {
       setBarcodeState("error");
       setBarcodeMessage("A barcode must contain exactly 8, 12, 13, or 14 digits.");
       return;
@@ -387,7 +402,7 @@ export function FoodSearchScreen({
     setBarcodeState("loading");
     setBarcodeMessage("Checking the exact public barcode…");
     try {
-      const response = await fetch(buildBarcodeUrl(apiBase, barcode).toString(), {
+      const response = await fetch(buildBarcodeUrl(apiBase, normalized).toString(), {
         headers: { accept: "application/json" },
         signal: controller.signal,
       });
@@ -414,6 +429,108 @@ export function FoodSearchScreen({
         setBarcodeState("error");
         setBarcodeMessage("Barcode lookup is unavailable right now. Please try again.");
       }
+    }
+  }
+
+  const closeBarcodeScanner = useCallback(() => {
+    setScannerOpen(false);
+    setBarcodeState("idle");
+    setBarcodeMessage("Camera closed. You can scan again or type the barcode.");
+  }, []);
+
+  function openBarcodeScannerIfForeground(): boolean {
+    if (!canOpenBarcodeScanner(AppState.currentState)) {
+      setBarcodeState("idle");
+      setBarcodeMessage(
+        "Camera stayed closed because the app is not active. Return and tap Scan barcode again.",
+      );
+      return false;
+    }
+    setScannerOpen(true);
+    return true;
+  }
+
+  async function beginBarcodeScan() {
+    if (cameraPermissionRequestInFlight.current || barcodeState === "loading") return;
+    cameraPermissionRequestInFlight.current = true;
+    setCameraRequesting(true);
+    setBarcodeResult(null);
+
+    try {
+      const currentPermission = await getCameraPermission();
+      if (currentPermission.granted) {
+        openBarcodeScannerIfForeground();
+        return;
+      }
+      if (!currentPermission.canAskAgain) {
+        setBarcodeState("error");
+        setBarcodeMessage(
+          "Camera access is blocked in device settings. You can enable it there or type the barcode.",
+        );
+        return;
+      }
+
+      if (!canOpenBarcodeScanner(AppState.currentState)) {
+        setBarcodeState("idle");
+        setBarcodeMessage(
+          "Camera stayed closed because the app is not active. Return and tap Scan barcode again.",
+        );
+        return;
+      }
+
+      setBarcodeState("idle");
+      setBarcodeMessage("Waiting for camera permission. No photo or video will be saved.");
+      const nextPermission = await requestCameraPermission();
+      if (nextPermission.granted) {
+        if (openBarcodeScannerIfForeground()) {
+          setBarcodeMessage("Center a supported food barcode inside the camera frame.");
+        }
+      } else {
+        setBarcodeState("error");
+        setBarcodeMessage(
+          nextPermission.canAskAgain
+            ? "Camera access was not granted. Tap Scan barcode to try again, or type the code."
+            : "Camera access is blocked in device settings. You can enable it there or type the barcode.",
+        );
+      }
+    } catch {
+      setBarcodeState("error");
+      setBarcodeMessage(
+        "Camera availability could not be checked. You can still type the barcode.",
+      );
+    } finally {
+      cameraPermissionRequestInFlight.current = false;
+      setCameraRequesting(false);
+    }
+  }
+
+  function handleScannedBarcode(result: ScannedBarcodePayload) {
+    closeBarcodeScanner();
+    const scannedBarcode = parseScannedFoodBarcode(result);
+    if (scannedBarcode === null) {
+      setBarcodeResult(null);
+      setBarcodeState("error");
+      setBarcodeMessage(
+        "The camera did not read a supported EAN-8, EAN-13, UPC-A, or ITF-14 code. Try again or type it.",
+      );
+      return;
+    }
+    setBarcode(scannedBarcode);
+    void lookupBarcode(scannedBarcode);
+  }
+
+  function handleBarcodeCameraError() {
+    closeBarcodeScanner();
+    setBarcodeState("error");
+    setBarcodeMessage("The camera is unavailable. You can try again or type the barcode.");
+  }
+
+  async function openCameraSettings() {
+    try {
+      await Linking.openSettings();
+    } catch {
+      setBarcodeState("error");
+      setBarcodeMessage("Device settings could not be opened. You can still type the barcode.");
     }
   }
 
@@ -615,6 +732,13 @@ export function FoodSearchScreen({
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
+      {scannerOpen ? (
+        <BarcodeScannerModal
+          onCancel={closeBarcodeScanner}
+          onError={handleBarcodeCameraError}
+          onScanned={handleScannedBarcode}
+        />
+      ) : null}
       <ScrollView
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
@@ -895,7 +1019,8 @@ export function FoodSearchScreen({
           Have the barcode?
         </Text>
         <Text style={styles.intro}>
-          Type every digit. Partial codes are never guessed or sent to search.
+          Scan a supported food barcode or type every digit. Partial codes are never guessed or sent
+          to search.
         </Text>
         <TextInput
           accessibilityLabel="UPC, EAN, or GTIN digits"
@@ -910,16 +1035,45 @@ export function FoodSearchScreen({
           value={barcode}
         />
         <Pressable
+          accessibilityHint="Requests camera access only when needed and saves no photo or video"
+          accessibilityLabel="Scan a food barcode"
           accessibilityRole="button"
-          accessibilityState={{ disabled: barcodeState === "loading" }}
-          disabled={barcodeState === "loading"}
-          onPress={() => void lookupBarcode()}
+          accessibilityState={{
+            disabled: cameraRequesting || barcodeState === "loading",
+          }}
+          disabled={cameraRequesting || barcodeState === "loading"}
+          onPress={() => void beginBarcodeScan()}
           style={({ pressed }) => [styles.barcodeButton, pressed && styles.pressed]}
         >
           <Text style={styles.primaryButtonLabel}>
-            {barcodeState === "loading" ? "Checking…" : "Look up barcode"}
+            {cameraRequesting ? "Requesting camera…" : "Scan barcode"}
           </Text>
         </Pressable>
+        <Pressable
+          accessibilityHint="Looks up the exact digits typed above"
+          accessibilityLabel="Look up typed barcode"
+          accessibilityRole="button"
+          accessibilityState={{
+            disabled: cameraRequesting || barcodeState === "loading",
+          }}
+          disabled={cameraRequesting || barcodeState === "loading"}
+          onPress={() => void lookupBarcode()}
+          style={({ pressed }) => [styles.barcodeLookupButton, pressed && styles.pressed]}
+        >
+          <Text style={styles.barcodeLookupButtonLabel}>
+            {barcodeState === "loading" ? "Checking…" : "Look up typed barcode"}
+          </Text>
+        </Pressable>
+        {cameraPermission?.granted === false && cameraPermission.canAskAgain === false ? (
+          <Pressable
+            accessibilityHint="Opens device settings so you can allow camera access"
+            accessibilityRole="button"
+            onPress={() => void openCameraSettings()}
+            style={({ pressed }) => [styles.cameraSettingsButton, pressed && styles.pressed]}
+          >
+            <Text style={styles.cameraSettingsButtonLabel}>Open camera settings</Text>
+          </Pressable>
+        ) : null}
         <Text
           accessibilityLiveRegion="polite"
           style={[styles.statusCopy, barcodeState === "error" && styles.errorCopy]}
@@ -995,7 +1149,31 @@ const styles = StyleSheet.create({
     minHeight: 50,
     paddingHorizontal: 18,
   },
+  barcodeLookupButton: {
+    alignItems: "center",
+    borderColor: palette.forest,
+    borderRadius: 10,
+    borderWidth: 1,
+    justifyContent: "center",
+    marginTop: 10,
+    minHeight: 50,
+    paddingHorizontal: 18,
+  },
+  barcodeLookupButtonLabel: { color: palette.forest, fontSize: 14, fontWeight: "800" },
   barcodeResult: { marginTop: 8 },
+  cameraSettingsButton: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 8,
+    minHeight: 44,
+    paddingHorizontal: 14,
+  },
+  cameraSettingsButtonLabel: {
+    color: palette.forest,
+    fontSize: 13,
+    fontWeight: "800",
+    textDecorationLine: "underline",
+  },
   content: { padding: 24, paddingBottom: 64 },
   disclaimer: { color: palette.muted, fontSize: 12, marginTop: 36 },
   destination: {

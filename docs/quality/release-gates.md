@@ -3,6 +3,11 @@
 No environment is promoted because a date arrived. A release needs evidence for
 every applicable gate and an owner who records the decision.
 
+Source-work priority does not change gate applicability. A gate may interrupt
+the user-visible roadmap only when it names the affected release decision or
+demonstrated defect, an owner, and a testable exit condition; otherwise it stays
+queued without being weakened or silently reclassified.
+
 ## Every pull request
 
 - Formatting, lint, workspace-boundary, type, and unit checks pass.
@@ -32,7 +37,7 @@ sandbox. It detects direct forbidden imports and direct environment/network
 global access; review still rejects alias-based or computed attempts to bypass
 package boundaries.
 
-## Food-data release
+## Food-data activation gate
 
 - Source manifest has URL, release identifier, retrieval timestamp, checksum,
   rights classification, attribution, and reviewer.
@@ -236,6 +241,16 @@ acceptance.
   threshold, with a 200-case set running on every ranking change.
 - Each launch market has a stratified sample of at least 1,000 known GTINs; exact
   match is at least 85%, with the Wilson lower bound at least 82%.
+- Signed native camera-barcode acceptance proves permission grant, temporary and
+  permanent denial with manual fallback, unavailable/cancel/background camera
+  teardown, one lookup across repeated detections, EAN-8/EAN-13/UPC-A/ITF-14
+  behavior on both platforms, invalid check digit, no-match and network-error
+  handling, exact parity with typed lookup, and user confirmation before the
+  existing mutation. It also proves no microphone prompt, frame/image
+  retention or upload, background capture, durable/on-disk barcode persistence,
+  or widening of the durable quick-add envelope. Existing P0 v2 evidence cannot satisfy this
+  new claim; the capture/report/reviewer contract must be versioned before
+  signed-device acceptance.
 - Core generic foods meet the agreed nutrient-completeness definition at least
   90% of the time.
 - The bounded native public-food create outbox proves a 50-item encrypted,

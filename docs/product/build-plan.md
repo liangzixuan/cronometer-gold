@@ -53,11 +53,38 @@ reviewer, or production-release acceptance.
 
 ## Forward milestones
 
-M0's authenticated acquisition, review, and activation trust lane and M1's
-safe local source-work lane proceed in parallel. M2 requires both M0 and M1
-acceptance; progress in either lane never waives the gates in the other.
+Roadmap priority is user-visible product parity and a provable release path, not
+depth in any one infrastructure lane. While live catalogue, hosting, device, or
+external-identity work awaits its separate approval or external evidence, the
+default next work is the smallest safe user-visible source milestone. Only a
+demonstrated P0/P1 correctness, privacy, security, data-loss, cross-owner, or
+release-authority defect—or work required by the next beta exit gate—interrupts
+that order. This is scheduling, not a waiver: every M0 and M2 acceptance gate
+remains fail-closed.
 
-1. **M0 — live catalogue evidence and controlled activation (current blocker):**
+M1A camera barcode capture is implemented at source level and awaits signed-device
+acceptance. M1B configurable diary groups and reviewed reference targets is next,
+followed by the remaining daily-loop
+offline and production-service gaps. M0's authenticated acquisition, review,
+and activation lane proceeds in parallel when its separately approved external
+work is available. M2 still requires both M0 and M1 acceptance.
+
+Remaining database writer closure, runtime-identity cutover,
+external-principal binding, target canaries, and CONTRACT revocation remain
+mandatory before live staging, promotion, rollback, or activation. They do not
+preempt safe M1 source work while the affected capabilities remain
+`NOLOGIN` and unassigned unless a concrete high-severity defect is
+demonstrated. Hardening without a named release gate, observed defect, owner,
+and testable exit condition stays queued.
+
+No OCI retry automation, live acquisition/staging/activation, cloud cost or paid
+fallback, Azure/OCI Terraform plan/apply, Name.com DNS change, workflow
+dispatch/rerun/cancel, Tailscale join/policy/routes/Serve, firewall/listener/
+phone exposure, or EAS build/signing is authorized by this sequencing decision.
+Each retains its separate explicit-approval gate.
+
+1. **M0 — parallel live-catalogue and release-authority gate (required before
+   real-user beta or activation):**
    revalidate upstream release identity; build verified, database-free parser
    evidence; obtain two genuinely independent authenticated acquisitions,
    immutable artifacts, rights/attribution approval, and reviewed nutrient
@@ -158,11 +185,23 @@ acceptance; progress in either lane never waives the gates in the other.
    database or role residue. The policy carries no credentials or private
    identity claims. Live login provisioning, membership mutation, credentials,
    external-principal binding, DEPLOY, and CONTRACT remain blocked.
-2. **M1 — excellent basic daily loop:** activity/exercise, private diary
-   notes, configurable groups, camera barcode scan while preserving exact GTIN
-   lookup, durable offline retry/reorder, email-verification release acceptance
+2. **M1 — user-visible daily loop (current source priority):** activity/exercise,
+   private diary notes, configurable groups, durable offline retry/reorder,
+   email-verification release acceptance
    and password recovery, reviewed reference targets, and production-grade
    weight sync, with cross-client end-to-end and accessibility acceptance.
+   M1A implements camera barcode capture only as an ephemeral input adapter to the
+   existing authoritative exact lookup. Permission starts only from an explicit
+   Scan action; frames stay on-device and are not retained; repeated detections
+   are consumed once; only EAN-8, EAN-13, UPC-A, and ITF-14 decimal payloads
+   reach the existing GTIN/check-digit path; and the person must still confirm
+   the existing add action. Manual entry remains available for denial, cancel,
+   invalid, no-match, and network-error states. The durable quick-add envelope
+   is unchanged and still contains no barcode. Local source acceptance covers
+   classification/deduplication tests, native permission policy, dependency
+   checks, typecheck, lint, and mobile export. Signed iOS/Android camera,
+   lifecycle, and accessibility evidence remains an M2 gate and authorizes no
+   phone exposure or EAS action.
    Plain-water hydration is implemented locally across PostgreSQL, the private
    API, web, and mobile as an owner-scoped exact-integer milliliter ledger.
    Server-derived profile-local coordinates, strong entry/day revisions,
@@ -270,7 +309,9 @@ acceptance; progress in either lane never waives the gates in the other.
    note writes while `note` output remains optional; editors stay hidden until
    they observe that capability; tolerant clients are staged; only then may
    server output become required.
-3. **M2 — controlled beta:** reviewed hosting and digest-pinned seven-image
+3. **M2 — controlled beta:** source-only hosting and signed-build preparation may
+   proceed in parallel, but real execution still requires reviewed hosting and
+   digest-pinned seven-image
    deployment; HTTPS, access-control, and off-host restore evidence; controlled-
    beta review of the locally complete 61-family API/worker export-erasure flow;
    a reviewed Windows-host/WSL private-phone boundary; a signed iOS/Android device
@@ -542,7 +583,7 @@ is implemented and locally drilled under the retention milestone. Automatic
 reference targets, retention-factor datasets, therapeutic goals, and signed-device
 validation remain controlled-beta work and are not claimed here.
 
-## Current acceptance target — live catalogue evidence
+## Parallel release acceptance target — live catalogue evidence
 
 M0 is complete only when an exact publisher artifact is independently acquired
 by two authenticated principals, content-addressed and immutably retained,

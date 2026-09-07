@@ -28,6 +28,33 @@ documentation or loopback hostname.
 native bundles. Local HTTP is supported only by the development runtime; a
 release never falls back to loopback.
 
+## Camera barcode capture
+
+The food-search screen can request camera access only after the person chooses
+**Scan barcode**. While its full-screen scanner is open, frames are processed on
+device and are never saved as photos or videos, retained, uploaded, logged, or
+added to the durable outbox. The scanner accepts only EAN-8, EAN-13, UPC-A, and ITF-14
+decimal payloads; it deliberately rejects UPC-E because the current exact-GTIN
+contract does not expand that compressed representation. QR, Code 128, OCR, and
+fuzzy correction are outside this boundary.
+
+One shared terminal-event boundary lets only the first detection, cancellation,
+app lifecycle exit, or camera error act. On iOS, Expo Camera reports UPC-A as a
+12-digit `ean13` event; that exact platform representation follows the same
+authoritative lookup as typed UPC-A. PostgreSQL remains authoritative for GS1
+check-digit validation. A result is never logged automatically: the person
+must still choose the existing add action. Cancellation, denial, permanent
+denial, camera failure, invalid data, no match, and network failure all retain
+manual entry as a fallback. Backgrounding the app closes the scanner, and an
+inactive app cannot open it. Native configuration grants CAMERA only for this
+feature and explicitly removes microphone/audio access.
+
+This source slice does not claim signed-device acceptance. Before controlled
+beta, a versioned iOS/Android evidence flow must prove permission, lifecycle,
+supported-format, duplicate-detection, no-microphone, scan-to-add, and
+VoiceOver/TalkBack behavior; existing P0 v2 food-search evidence cannot be
+reinterpreted to cover the camera.
+
 ## Durable public-food quick add
 
 The native search screen has one deliberately bounded durable outbox for

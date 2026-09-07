@@ -85,6 +85,12 @@ if (
 ) {
   failures.push("Generated iOS Info.plist is missing the reviewed weight-read purpose string");
 }
+if (iosInfo.NSCameraUsageDescription !== "Allow Nutrition Tracker to scan food barcodes.") {
+  failures.push("Generated iOS Info.plist is missing the reviewed barcode-camera purpose string");
+}
+if ("NSMicrophoneUsageDescription" in iosInfo) {
+  failures.push("Barcode scanning must not declare an unused microphone purpose string");
+}
 if ("NSHealthUpdateUsageDescription" in iosInfo) {
   failures.push("Read-only HealthKit scope must not declare an update purpose string");
 }
@@ -92,19 +98,21 @@ if ("NSFaceIDUsageDescription" in iosInfo) {
   failures.push("Prompt-free device signing must not declare an unused Face ID purpose string");
 }
 const expectedActivePermissions = [
+  "android.permission.CAMERA",
   "android.permission.INTERNET",
   "android.permission.POST_NOTIFICATIONS",
   "android.permission.health.READ_WEIGHT",
 ].sort();
 const expectedRemovedPermissions = [
   "android.permission.READ_EXTERNAL_STORAGE",
+  "android.permission.RECORD_AUDIO",
   "android.permission.SYSTEM_ALERT_WINDOW",
   "android.permission.VIBRATE",
   "android.permission.WRITE_EXTERNAL_STORAGE",
 ].sort();
 if (JSON.stringify(activePermissions) !== JSON.stringify(expectedActivePermissions)) {
   failures.push(
-    "Android generated manifest exceeds the reviewed INTERNET, notification, and weight-read baseline",
+    "Android generated manifest exceeds the reviewed camera, INTERNET, notification, and weight-read baseline",
   );
 }
 
@@ -135,10 +143,32 @@ if (
 const packageJson = JSON.parse(
   readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
 );
+const appJson = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../app.json", import.meta.url)), "utf8"),
+);
+const cameraPlugins = (appJson.expo?.plugins ?? []).filter(
+  (plugin) => Array.isArray(plugin) && plugin[0] === "expo-camera",
+);
+const cameraPluginOptions = cameraPlugins[0]?.[1];
+if (
+  cameraPlugins.length !== 1 ||
+  typeof cameraPluginOptions !== "object" ||
+  cameraPluginOptions === null ||
+  Array.isArray(cameraPluginOptions) ||
+  Object.keys(cameraPluginOptions).sort().join(",") !==
+    "barcodeScannerEnabled,cameraPermission,microphonePermission,recordAudioAndroid" ||
+  cameraPluginOptions.cameraPermission !== "Allow Nutrition Tracker to scan food barcodes." ||
+  cameraPluginOptions.microphonePermission !== false ||
+  cameraPluginOptions.recordAudioAndroid !== false ||
+  cameraPluginOptions.barcodeScannerEnabled !== true
+) {
+  failures.push("Expo Camera must retain the exact reviewed barcode-only plugin configuration");
+}
 const exactDependencies = {
   "@kingstinct/react-native-healthkit": "14.0.2",
   "@sbaiahmed1/react-native-biometrics": "0.16.0",
   "expo-build-properties": "57.0.17",
+  "expo-camera": "57.0.4",
   "expo-notifications": "57.0.17",
   "react-native-health-connect": "4.1.3",
   "react-native-nitro-modules": "0.36.5",
@@ -178,5 +208,5 @@ if (failures.length > 0) {
 }
 
 console.log(
-  "Generated native configuration matches the reviewed transport, HealthKit, Health Connect, notification, and permission baseline.",
+  "Generated native configuration matches the reviewed transport, barcode camera, HealthKit, Health Connect, notification, and permission baseline.",
 );
