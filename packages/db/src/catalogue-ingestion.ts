@@ -45,7 +45,7 @@ const TRUSTED_DATABASE_SCHEMA_PATTERN = /^[a-z_][a-z0-9_-]{0,62}$/;
 const APPROVAL_FUNCTION_IDENTITY_ARGUMENTS =
   "p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text";
 const APPROVAL_FUNCTION_SOURCE_SHA256 =
-  "89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac";
+  "abb0ca990b74fedffd4ec77cf666e404da89af8158f4b990b6c0de48cd3dfc41";
 const APPROVAL_GUARD_FUNCTION_SOURCE_SHA256 =
   "f96feb298d900165172c56a3fa1e99e91aaca010657155e5a996ee04015fdbbd";
 const APPROVAL_GUARD_TRIGGER_DEFINITION =
@@ -1059,6 +1059,9 @@ async function validateBatchInTransaction(
     })
     .where("id", "=", batchId)
     .execute();
+  await sql`
+    select catalogue_attest_import_nutrition_semantics(${batchId}::uuid)
+  `.execute(transaction);
   return summary;
 }
 

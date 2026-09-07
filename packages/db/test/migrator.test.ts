@@ -711,4 +711,60 @@ describe("forward migration discovery", () => {
     );
     expect(migrationSql).not.toMatch(/\bgrant\s+nutrition_catalogue_[a-z_]+\s+to\b/iu);
   });
+
+  it("freezes independent database nutrition semantics before catalogue decisions", async () => {
+    const migrationSql = await readFile(
+      resolve(import.meta.dirname, "../migrations/0021_catalogue_nutrition_semantic_recheck.sql"),
+      "utf8",
+    );
+
+    expect(createHash("sha256").update(migrationSql).digest("hex")).toBe(
+      "b9a737f006a2d3c12efaf50de3b55578e5eb24a768dbdde97ac6ca00990a16a0",
+    );
+    expect(migrationSql).not.toMatch(/\bdrop\s+(table|column|type|role)\b/iu);
+    expect(migrationSql).not.toMatch(/\btruncate\b/iu);
+    expect(migrationSql).toContain("lock table food_import_batch in access exclusive mode");
+    expect(migrationSql).toContain("lock table food_import_record in access exclusive mode");
+    expect(migrationSql).toContain(
+      "catalogue nutrition semantic migration found an unattested ready or promoting batch",
+    );
+    for (const frozenColumn of [
+      "nutrition_semantic_contract_version smallint",
+      "nutrition_semantic_sha256 text",
+    ]) {
+      expect(migrationSql).toContain(frozenColumn);
+    }
+    for (const identity of [
+      "food_import_batch_nutrition_semantic_contract_check",
+      "food_import_record_nutrition_semantic_contract_check",
+      "food_import_batch_guard_nutrition_semantics",
+      "food_import_record_guard_nutrition_semantics",
+      "catalogue_attest_import_nutrition_semantics(uuid)",
+      "catalogue_canonical_decimal_product(text,text)",
+      "catalogue_compute_record_nutrition_semantics(bigint)",
+      "catalogue_utf16_length(text)",
+      "catalogue_validate_import_batch_v1(uuid,text,text,text)",
+      "catalogue_record_import_approval_v1(uuid,text,text,text,text,text)",
+      "catalogue_promote_import_batch_v1(uuid,text,text)",
+      "catalogue_rollback_source_release_v1(text,uuid,text,text)",
+    ]) {
+      expect(migrationSql).toContain(identity);
+    }
+    expect(migrationSql).toContain(
+      "catalogue approval requires prior nutrition semantic attestation",
+    );
+    expect(migrationSql).toContain(
+      "catalogue promotion requires prior nutrition semantic attestation",
+    );
+    expect(migrationSql).toContain(
+      "catalogue rollback target lacks one completed nutrition semantic attestation",
+    );
+    expect(migrationSql).toContain(
+      "revoke all on function %I.catalogue_attest_import_nutrition_semantics(uuid) from public",
+    );
+    expect(migrationSql).not.toMatch(
+      /grant\s+(?:select|insert|update|delete|all)[\s\S]*?on\s+(?:table\s+)?(?:food|outbox_event)/iu,
+    );
+    expect(migrationSql).not.toMatch(/\bgrant\s+nutrition_catalogue_[a-z_]+\s+to\b/iu);
+  });
 });

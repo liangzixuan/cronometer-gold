@@ -523,10 +523,12 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
       where namespace_row.nspname = ${policy.applicationSchema}
         and constraint_row.conname in (
           'food_import_batch_materialization_contract_check',
+          'food_import_batch_nutrition_semantic_contract_check',
           'food_import_batch_promotable_contract_check',
           'food_import_batch_stage_validate_database_authority_check',
           'food_import_batch_staging_seal_check',
           'food_import_record_validated_food_contract_check',
+          'food_import_record_nutrition_semantic_contract_check',
           'food_source_release_activation_database_authority_check'
         )
       order by class_row.relname, constraint_row.conname
@@ -568,6 +570,8 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
           (class_row.relname = 'food_import_batch' and attribute_row.attname in (
             'nutrient_mapping_digest',
             'nutrient_mapping_revision_ids',
+            'nutrition_semantic_contract_version',
+            'nutrition_semantic_sha256',
             'staged_database_capability_role',
             'staged_database_principal',
             'staging_seal_sha256',
@@ -577,6 +581,8 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
             'validated_food_contract_version'
           ))
           or (class_row.relname = 'food_import_record' and attribute_row.attname in (
+            'nutrition_semantic_contract_version',
+            'nutrition_semantic_sha256',
             'validated_food_contract_version',
             'validated_food_document',
             'validated_food_sha256'
@@ -1068,7 +1074,7 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
     nonSystemSchemas,
     policySha256: catalogueAuthorityDeploymentPolicySha256(policy),
     relations,
-    schemaVersion: 4,
+    schemaVersion: 5,
     triggers,
     types,
   };
@@ -1179,7 +1185,7 @@ export async function runCatalogueReviewerCanaries(
     beforeStructureSha256: catalogueAuthorityDeploymentStructureSha256(before),
     policySha256: catalogueAuthorityDeploymentPolicySha256(policy),
     results,
-    schemaVersion: 4,
+    schemaVersion: 5,
     structure,
   };
   assertCatalogueAuthorityCanaryEvidence(policy, evidence);

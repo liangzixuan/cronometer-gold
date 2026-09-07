@@ -73,12 +73,18 @@ describeDatabase("catalogue restore authority schema identity", { timeout: 120_0
 
       // Simulate the ACL loss and drift that a --no-privileges logical restore
       // can leave behind. The reviewed policy must reconstruct only the fixed
-      // stage/validate surface.
+      // public stage/validate surface and keep semantic helpers/v1 bodies owner-only.
       await sql
         .raw(`
         revoke execute on function public.catalogue_stage_import_batch(text)
           from nutrition_catalogue_stage;
         grant execute on function public.catalogue_stage_import_batch(text)
+          to nutrition_catalogue_validate;
+        revoke execute on function public.catalogue_validate_import_batch(uuid,text,text,text)
+          from nutrition_catalogue_validate;
+        grant execute on function public.catalogue_validate_import_batch_v1(uuid,text,text,text)
+          to nutrition_catalogue_validate;
+        grant execute on function public.catalogue_attest_import_nutrition_semantics(uuid)
           to nutrition_catalogue_validate;
         revoke usage on schema public
           from nutrition_catalogue_stage, nutrition_catalogue_validate;
@@ -122,7 +128,10 @@ describeDatabase("catalogue restore authority schema identity", { timeout: 120_0
           readonly stage_can_execute_stage: boolean;
           readonly stage_can_execute_seal_helper: boolean;
           readonly stage_has_schema_usage: boolean;
+          readonly validate_can_execute_attestor: boolean;
           readonly validate_can_execute_stage: boolean;
+          readonly validate_can_execute_validate: boolean;
+          readonly validate_can_execute_validate_v1: boolean;
           readonly validate_has_schema_usage: boolean;
         }>`
           select
@@ -143,9 +152,24 @@ describeDatabase("catalogue restore authority schema identity", { timeout: 120_0
             ) as stage_has_schema_usage,
             pg_catalog.has_function_privilege(
               'nutrition_catalogue_validate',
+              'public.catalogue_attest_import_nutrition_semantics(uuid)',
+              'EXECUTE'
+            ) as validate_can_execute_attestor,
+            pg_catalog.has_function_privilege(
+              'nutrition_catalogue_validate',
               'public.catalogue_stage_import_batch(text)',
               'EXECUTE'
             ) as validate_can_execute_stage,
+            pg_catalog.has_function_privilege(
+              'nutrition_catalogue_validate',
+              'public.catalogue_validate_import_batch(uuid,text,text,text)',
+              'EXECUTE'
+            ) as validate_can_execute_validate,
+            pg_catalog.has_function_privilege(
+              'nutrition_catalogue_validate',
+              'public.catalogue_validate_import_batch_v1(uuid,text,text,text)',
+              'EXECUTE'
+            ) as validate_can_execute_validate_v1,
             pg_catalog.has_schema_privilege(
               'nutrition_catalogue_validate',
               'public',
@@ -157,18 +181,21 @@ describeDatabase("catalogue restore authority schema identity", { timeout: 120_0
         stage_can_execute_seal_helper: false,
         stage_can_execute_stage: true,
         stage_has_schema_usage: true,
+        validate_can_execute_attestor: false,
         validate_can_execute_stage: false,
+        validate_can_execute_validate: true,
+        validate_can_execute_validate_v1: false,
         validate_has_schema_usage: true,
       });
 
       await sql
         .raw(`
-        drop trigger food_import_checkpoint_set_updated_at
-          on public.food_import_checkpoint;
-        create trigger food_import_checkpoint_set_updated_at
-        before insert on public.food_import_checkpoint
+        drop trigger food_import_record_guard_nutrition_semantics
+          on public.food_import_record;
+        create trigger food_import_record_guard_nutrition_semantics
+        before update on public.food_import_record
         for each row
-        execute function public.set_row_updated_at();
+        execute function public.guard_food_import_record_nutrition_semantics();
       `)
         .execute(isolated);
       await expect(sql.raw(restorePolicySql).execute(isolated)).rejects.toThrow(

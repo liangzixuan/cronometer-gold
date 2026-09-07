@@ -376,14 +376,18 @@ export function validateCatalogueRecord(
   }
 
   const basis = objectValue(root.basis);
-  if (basis?.unit !== "g" || !positiveDecimal(basis.amount, 12, 6)) {
+  if (
+    basis?.unit !== "g" ||
+    !positiveDecimal(basis.amount, 12, 6) ||
+    String(basis.amount) !== "100"
+  ) {
     issues.push(
       issue(
         "INVALID_BASIS",
         "error",
         "exclude_record",
         "$.basis",
-        "Food basis must be a positive gram quantity representable by the database",
+        "Food basis must be exactly 100 grams",
       ),
     );
   }
@@ -931,6 +935,7 @@ function multiplyDecimals(left: string, right: string): string | null {
   const rightParts = decimalParts(right);
   if (!leftParts || !rightParts) return null;
   const product = leftParts.coefficient * rightParts.coefficient;
+  if (product === 0n) return "0";
   let digits = product.toString();
   let scale = leftParts.scale + rightParts.scale;
   while (scale > 0 && digits.endsWith("0")) {

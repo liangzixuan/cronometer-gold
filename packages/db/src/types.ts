@@ -205,6 +205,8 @@ export interface FoodImportBatchTable {
   validated_food_contract_version: ColumnType<number | null, undefined, number>;
   nutrient_mapping_digest: ColumnType<string | null, undefined, string>;
   nutrient_mapping_revision_ids: JSONColumnType<JsonArray | null, undefined, JsonArray>;
+  nutrition_semantic_contract_version: ColumnType<number | null, undefined, number>;
+  nutrition_semantic_sha256: ColumnType<string | null, undefined, string>;
   staged_database_principal: ReadonlyColumn<string | null>;
   staged_database_capability_role: ReadonlyColumn<string | null>;
   staging_seal_sha256: ReadonlyColumn<string | null>;
@@ -262,6 +264,8 @@ export interface FoodImportRecordTable {
   validated_food_document: ColumnType<string | null, undefined, string | null>;
   validated_food_sha256: ColumnType<string | null, undefined, string | null>;
   validated_food_contract_version: ColumnType<number | null, undefined, number | null>;
+  nutrition_semantic_contract_version: ColumnType<number | null, undefined, number | null>;
+  nutrition_semantic_sha256: ColumnType<string | null, undefined, string | null>;
   food_version_id: NullableInt8;
   created_at: CreatedTimestamp;
   validated_at: NullableTimestamp;

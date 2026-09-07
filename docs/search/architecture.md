@@ -72,12 +72,16 @@ tracked by deploy/restore evidence. This prevents a search generation from
 being based on catalogue materialization that observed a mixed nutrient
 generation, but it does not grant the search worker any base-table access.
 
-Migrations 0019 and 0020 move catalogue promotion, rollback, staging, and
+Migrations 0019 through 0021 move catalogue promotion, rollback, staging, and
 validation behind fixed-purpose database functions while retaining the same
-transactional outbox and projection revision path. Their complete shared-food/
-outbox trigger surface is bound into the 44-function/52-trigger deployment and
-restore policy, so an unexpected trigger cannot silently inherit workflow
-authority. The capability roles
+transactional outbox and projection revision path. Migration 0021 independently
+recomputes and freezes the exact 100-gram nutrient transformation before
+approval or activation, including NFC normalization, exact ECMAScript whitespace
+trim/collapse, and JavaScript UTF-16-unit length bounds. JSON numeric `100.0`
+equals numeric `100`; string input must remain exactly `"100"`. Their complete
+shared-food/outbox trigger surface is bound into the 54-function/54-trigger
+deployment and restore manifests, so an unexpected
+trigger cannot silently inherit workflow authority. The capability roles
 remain unassigned; the search worker still receives no base-table or wrapper
 authority, and no index or alias is changed by the migration itself.
 

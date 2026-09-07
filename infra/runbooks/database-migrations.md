@@ -160,12 +160,68 @@ The staged batch accepts at most 10,000 records and 64 MiB of canonical-payload
 JSON; the observation response and validation request are each capped at 128
 MiB. These are safety ceilings, not representative-scale proof. Keep live
 ingestion blocked until a bounded, paged full-catalogue protocol validates within
-reviewed memory, disk, lock-duration, timeout, and retry budgets. PostgreSQL
-authenticates and binds the validator's document but does not independently
-recompute its nutrition classification semantics; deployed independent-validation
-evidence is still required. Applying 0020 is not permission to provision
-credentials, add role memberships, cut over a caller, revoke direct DML, or
-activate catalogue data.
+reviewed memory, disk, lock-duration, timeout, and retry budgets. PostgreSQL 0020
+authenticates and binds the validator's document but does not by itself
+independently recompute its nutrition classification semantics. Migration 0021
+adds that database recomputation. Applying either migration is not permission to
+provision credentials, add role memberships, cut over a caller, revoke direct
+DML, or activate catalogue data.
+
+## Migration 0021 nutrition semantic attestation preflight
+
+Rehearse migration 0021 against both a fresh schema and a restored production
+snapshot. Before adding any column, function, constraint, or trigger, the
+migration must stop if a batch is already `ready` or `promoting`. Those states
+predate the new evidence columns and cannot be made attested by inference. Fail
+the in-flight attempt or move it through a separately reviewed recovery; never
+write a plausible contract version or SHA-256 as a backfill.
+
+The migration independently reconstructs each record's exact 100-gram nutrient
+result from the sealed canonical payload and reviewed mapping revision. Prove
+exact known-value conversion and decimal canonicalization, known zero, trace,
+unknown/omitted values, mapping and unit identity, duplicate handling, and
+rejection of a noncanonical basis such as numeric `50` or string `"100.0"`.
+JSON numeric `100.0` must be accepted as numeric `100`, while only exact string
+`"100"` is accepted. Prove NFC normalization, exact ECMAScript whitespace
+trim/collapse, and bounded length measured in JavaScript UTF-16 code units. The
+database result must exactly match the validator's frozen food document before it freezes
+contract-version-1 record and batch semantic SHA-256 attestations. Replay must
+return the same result; a changed or recomputed caller digest must not authorize
+altered, fabricated, or omitted nutrition.
+
+`catalogue_attest_import_nutrition_semantics(uuid)` is owner-only and derives
+its result exclusively from locked database state. The validation wrapper may
+create the attestation; approval, promotion, and rollback use verification mode
+and must never manufacture or repair one. The retained `_v1` implementations
+are owner-only implementation details, not new capability entry points.
+
+Approval and promotion must reject a batch unless its semantic attestation and
+every record attestation are complete. A rollback to a non-null release must
+resolve exactly one original `activate` event and require its completed source
+batch and complete record set to be attested. A null target remains valid for
+deactivation. Historical unattested completed releases remain representable and
+an existing pointer may remain, but they are inert and cannot be newly approved,
+promoted, described as attested, or selected for rollback.
+
+Preserve lock order while adding the rollback check. Discover the immutable
+target/source/origin identifiers without taking row locks, then lock and
+revalidate the origin batch before the source row and per-source advisory lock.
+Never lock the source and then the origin batch; promotion already uses
+`batch -> source -> source advisory -> nutrient registry`, and reversing that
+order can deadlock. Semantic compute helpers must not update guarded rows or
+recursively fire their guards, and no user-settable session setting may bypass
+the invariant.
+
+Postflight must show the exact 21-file tracked migration ledger, all sixteen
+frozen authority columns, all eight authority CHECKs, all 54 authority functions
+and 54 exact trigger bindings, deployment policy/evidence
+schema version 5, and restore fingerprint version 12. Prove new semantic fields
+cannot be supplied on insert, changed, or cleared after freezing; prove the
+owner-only implementation helpers are not executable by stage, validate,
+approval, promotion, rollback, API, or worker identities. Retain an explicit
+owner/local test because schema-owner SQL remains trusted during EXPAND.
+Migration 0021 creates no live login, grants no membership or table authority,
+performs no caller cutover, and supplies no representative-scale evidence.
 
 ## Catalogue and diary lock-order audit
 

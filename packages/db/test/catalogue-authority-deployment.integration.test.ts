@@ -253,7 +253,7 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
         promotionFunctionSourceSha256: CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256,
         reviewerLogins,
         rollbackFunctionSourceSha256: CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
-        schemaVersion: 4,
+        schemaVersion: 5,
         stageBatchFunctionSourceSha256: CATALOGUE_STAGE_BATCH_FUNCTION_SOURCE_SHA256,
         stageParserReportFunctionSourceSha256: CATALOGUE_STAGE_PARSER_REPORT_FUNCTION_SOURCE_SHA256,
         stageRecordChunkFunctionSourceSha256: CATALOGUE_STAGE_RECORD_CHUNK_FUNCTION_SOURCE_SHA256,
@@ -319,7 +319,7 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
         { canary: "data-direct-dml", sqlstate: "42501" },
       ]);
       const observedTriggerNames = evidence.structure.triggers.map((trigger) => trigger.name);
-      expect(observedTriggerNames).toHaveLength(52);
+      expect(observedTriggerNames).toHaveLength(54);
       expect(observedTriggerNames).not.toContain("app_user_set_updated_at");
       expect(observedTriggerNames).toContain("food_version_reject_update");
 

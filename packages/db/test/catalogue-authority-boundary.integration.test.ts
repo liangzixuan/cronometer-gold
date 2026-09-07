@@ -2534,6 +2534,23 @@ async function seedReadyBatch(
       where id = ${batch.id}::uuid
     `.execute(database);
   }
+  const nutritionSemanticAttestor = (
+    await sql<{ present: boolean; schema_name: string }>`
+      select
+        pg_catalog.current_schema()::text as schema_name,
+        pg_catalog.to_regprocedure(pg_catalog.format(
+          '%I.catalogue_attest_import_nutrition_semantics(uuid)',
+          pg_catalog.current_schema()
+        )) is not null as present
+    `.execute(database)
+  ).rows[0];
+  if (nutritionSemanticAttestor?.present) {
+    await sql`
+      select ${sql.id(
+        nutritionSemanticAttestor.schema_name,
+      )}.catalogue_attest_import_nutrition_semantics(${batch.id}::uuid)
+    `.execute(database);
+  }
   return { batchId: batch.id, sourceCode, sourceId: source.id };
 }
 

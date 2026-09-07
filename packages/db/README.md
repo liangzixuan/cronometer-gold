@@ -115,13 +115,33 @@ sequence privilege. Six nullable database audit/seal fields preserve the
 owner/local path. The `NOLOGIN` capabilities remain unassigned, so this is still
 EXPAND rather than a credential or caller cutover.
 
-The validation document is structurally bounded and digest-bound, but its food
-classification semantics are still produced by the application validator rather
-than independently recomputed by PostgreSQL. Treat that as an explicit remaining
-deployment control, not as proof of two independent semantic validators. The
-hard limits are safety ceilings, not representative full-catalogue scale proof;
-a bounded paged production protocol and measured resource/lock budgets remain
-open.
+Forward migration 0021 independently recomputes the exact 100-gram nutrient
+transformation from each sealed canonical payload and the reviewed mapping
+revision before accepting the validator's frozen food document. It freezes a
+contract-version-1 semantic SHA-256 on every classified record and on the batch,
+and makes those fields immutable. The owner-only
+`catalogue_attest_import_nutrition_semantics` helper derives the batch
+attestation only from database state; the public authority names retain their
+existing caller contracts while their owner-only `_v1` implementations remain
+unexposed. Approval, promotion, and rollback to a
+non-null release fail closed unless the batch and its complete record set carry
+that database-computed attestation. A null rollback target may still deactivate
+a source. The migration refuses any pre-existing `ready` or `promoting` batch
+rather than inventing evidence. Historical unattested completed releases remain
+representable and may retain an existing pointer, but they are inert: they
+cannot be newly approved, promoted, replayed as semantically attested, or
+selected as a rollback target.
+
+This closes the validator-document nutrient-semantic trust gap inside the
+database boundary, including exact known-value conversion, known zero, trace,
+unknown/omitted nutrients, mapping identity, and exact 100-gram basis handling.
+Text parity uses NFC normalization, the exact ECMAScript whitespace
+trim/collapse set, and JavaScript UTF-16-unit length bounds. JSON numeric
+`100.0` is accepted as numeric `100`; a string must be exactly `"100"`.
+It does not make direct schema-owner SQL untrusted, provision live identities,
+bind external principals, cut over a caller, revoke compatibility DML, or prove
+full-catalogue scale. The hard limits remain safety ceilings; a bounded paged
+production protocol and measured resource/lock budgets remain open.
 
 The supported lock boundary is the reviewed transaction-based application
 paths. Arbitrary owner recipe DML may take row or foreign-key locks before the
@@ -140,25 +160,27 @@ four food/serving/barcode search paths and exact trigger bindings plus
 migration-0018's four nutrient-lock functions and seven trigger bindings plus
 migration-0019's frozen materialization contract, replacement
 activation-authority constraint, promotion/rollback wrappers, plus
-migration-0020's sealed stage/validate boundary and complete shared-food/outbox
-trigger surface. That transactional repair policy pins 44 function identities,
-52 exact trigger bindings, the twelve authority-evidence column definitions,
-all six authority CHECKs, and the unique
+migration-0020's sealed stage/validate boundary, plus migration-0021's
+independent exact-100-gram semantic attestation and complete shared-food/outbox
+trigger surface. That transactional repair policy pins 54 function identities,
+54 exact trigger bindings, the sixteen
+authority-evidence column definitions, all eight authority CHECKs, and the unique
 activation-to-batch index. The repository restore drill pins that file's SHA-256,
 requires an explicit expected owner, keeps `PUBLIC CONNECT` revoked, enforces
 an exact effective login allowlist, and requires the exact
 tracked filename/file-byte-SHA ledger in `public.app_schema_migration` before
 `pg_dump`. It ignores an owner-schema shadow, rechecks the source, corroborates
-the target, and compares a version-11 canonical
+the target, and compares a version-12 canonical
 role/schema/type/relation/column-ACL/function/trigger/authority-constraint/
-authority-index fingerprint, including all twelve authority-evidence columns, the
+authority-index fingerprint, including all sixteen authority-evidence columns, the
 independent non-NULL `pg_attribute.attacl` count, trigger table schemas, and
 every binding of a dedicated public authority trigger function even when its
 table is outside `public`, before external-ledger replay or API probing. The
-final report emits that
-fingerprint's SHA-256. The current EXPAND CI executor and owner
-are the same local login, so this restore control does not claim deployment
-runtime separation or close the remaining role-canary or CONTRACT work.
+final report emits that fingerprint's SHA-256. The deployment policy, evidence,
+canary, and CLI report use schema version 5. The current EXPAND CI executor and
+owner are the same local login, so this restore control does not claim
+deployment runtime separation or close the remaining role-canary or CONTRACT
+work.
 
 ADR 0018 now has a bounded DEPLOY-0 source verifier. It accepts only canonical
 credential-free policy JSON with one trailing newline. The policy must be a
@@ -200,11 +222,12 @@ The verifier requires the exact `public.app_schema_migration` names and SHA-256s
 from the tracked migration files. It also requires `public` to be the only
 non-system schema and to be owned by `pg_database_owner`. It checks exact
 database/schema ACLs and grantors,
-relation/type/default/column ACL state and owners, all six authority CHECKs,
-the twelve authority-evidence columns, the unique activation-to-batch index, all 44
-authority function hashes, executable semantics, and exact per-function
-execute ACLs, safe authority on every other public routine, and the exact
-52-trigger authority set across the complete protected shared-food/outbox
+relation/type/default/column ACL state and owners, all eight authority CHECKs,
+the sixteen authority-evidence columns, the unique activation-to-batch index,
+all 54 authority function hashes, executable semantics,
+and exact per-function execute ACLs, safe authority on every other public
+routine, and the exact 54-trigger authority set across the complete
+protected shared-food/outbox
 surface, including each trigger's table and function schema. Every binding of a
 dedicated public authority trigger function enters the evidence even when its
 table is outside `public`. It also checks the exact effective-login allowlist,

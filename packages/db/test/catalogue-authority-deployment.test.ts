@@ -64,7 +64,7 @@ const rawPolicy = {
     rights: "nutrition_catalogue_rights_reviewer",
   },
   rollbackFunctionSourceSha256: CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
-  schemaVersion: 4,
+  schemaVersion: 5,
   stageBatchFunctionSourceSha256: CATALOGUE_STAGE_BATCH_FUNCTION_SOURCE_SHA256,
   stageParserReportFunctionSourceSha256: CATALOGUE_STAGE_PARSER_REPORT_FUNCTION_SOURCE_SHA256,
   stageRecordChunkFunctionSourceSha256: CATALOGUE_STAGE_RECORD_CHUNK_FUNCTION_SOURCE_SHA256,
@@ -271,7 +271,7 @@ function validEvidence(
           owner: policy.databaseOwner,
         })),
       ),
-    schemaVersion: 4,
+    schemaVersion: 5,
     types: [
       {
         acl: [
@@ -289,8 +289,8 @@ function validEvidence(
 
 describe("catalogue authority deployment policy", () => {
   it("pins the complete whole-table authority manifest", () => {
-    expect(CATALOGUE_AUTHORITY_FUNCTION_POLICY).toHaveLength(44);
-    expect(CATALOGUE_AUTHORITY_TRIGGER_POLICY).toHaveLength(52);
+    expect(CATALOGUE_AUTHORITY_FUNCTION_POLICY).toHaveLength(54);
+    expect(CATALOGUE_AUTHORITY_TRIGGER_POLICY).toHaveLength(54);
   });
 
   it("keeps frozen-column evidence in the runtime query's canonical order", () => {
@@ -564,12 +564,14 @@ describe("catalogue authority deployment policy", () => {
   });
 
   it.each([
+    "food_import_batch_guard_nutrition_semantics",
     "food_import_batch_guard_stage_validate_authority",
     "food_import_checkpoint_guard_staging_seal",
     "food_import_checkpoint_set_updated_at",
     "food_import_parser_report_reject_update",
+    "food_import_record_guard_nutrition_semantics",
     "food_import_record_guard_staging_seal",
-  ])("rejects normalized 0020 trigger drift for %s", (triggerName) => {
+  ])("rejects normalized authority trigger drift for %s", (triggerName) => {
     const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
     const base = validEvidence(policy);
     expect(() =>
@@ -669,15 +671,23 @@ describe("catalogue authority deployment policy", () => {
 
   it.each([
     "advance_food_search_projection_revision",
+    "catalogue_attest_import_nutrition_semantics",
+    "catalogue_canonical_decimal_product",
     "catalogue_compute_import_staging_seal",
+    "catalogue_compute_record_nutrition_semantics",
     "catalogue_observe_import_validation",
     "catalogue_promote_import_batch",
+    "catalogue_promote_import_batch_v1",
     "catalogue_record_import_approval",
+    "catalogue_record_import_approval_v1",
     "catalogue_rollback_source_release",
+    "catalogue_rollback_source_release_v1",
     "catalogue_stage_import_batch",
     "catalogue_stage_import_parser_report",
     "catalogue_stage_import_record_chunk",
+    "catalogue_utf16_length",
     "catalogue_validate_import_batch",
+    "catalogue_validate_import_batch_v1",
     "enqueue_food_search_barcode_insert",
     "enqueue_food_search_barcode_update",
     "enqueue_food_search_food_eligibility_change",
@@ -687,10 +697,12 @@ describe("catalogue authority deployment policy", () => {
     "guard_custom_food_child_insert_v3",
     "guard_custom_food_immutable_evidence_v3",
     "guard_food_import_approval_authority",
+    "guard_food_import_batch_nutrition_semantics",
     "guard_food_import_batch_stage_validate_authority",
     "guard_food_import_batch_update",
     "guard_food_import_batch_validation_digest",
     "guard_food_import_record_insert_before_staging_seal",
+    "guard_food_import_record_nutrition_semantics",
     "guard_food_import_record_update",
     "guard_food_import_stage_checkpoint_before_staging_seal",
     "guard_food_source_release_activation_authority",
@@ -716,20 +728,30 @@ describe("catalogue authority deployment policy", () => {
 
   it.each([
     "advance_food_search_projection_revision",
+    "catalogue_attest_import_nutrition_semantics",
+    "catalogue_canonical_decimal_product",
     "catalogue_compute_import_staging_seal",
+    "catalogue_compute_record_nutrition_semantics",
     "catalogue_observe_import_validation",
+    "catalogue_promote_import_batch_v1",
+    "catalogue_record_import_approval_v1",
+    "catalogue_rollback_source_release_v1",
     "catalogue_stage_import_batch",
     "catalogue_stage_import_parser_report",
     "catalogue_stage_import_record_chunk",
+    "catalogue_utf16_length",
     "catalogue_validate_import_batch",
+    "catalogue_validate_import_batch_v1",
     "enqueue_food_search_barcode_insert",
     "enqueue_food_search_barcode_update",
     "enqueue_food_search_food_eligibility_change",
     "enqueue_food_search_serving_insert",
     "enqueue_food_search_source_eligibility_change",
     "guard_active_nutrient_vector_size",
+    "guard_food_import_batch_nutrition_semantics",
     "guard_food_import_batch_stage_validate_authority",
     "guard_food_import_record_insert_before_staging_seal",
+    "guard_food_import_record_nutrition_semantics",
     "guard_food_import_stage_checkpoint_before_staging_seal",
     "lock_active_nutrient_registry_before_write",
     "lock_active_nutrient_registry_for_read",
@@ -768,7 +790,7 @@ describe("catalogue authority deployment policy", () => {
         { canary: "worker-execute", sqlstate: "42501" },
         { canary: "data-direct-dml", sqlstate: "42501" },
       ],
-      schemaVersion: 4,
+      schemaVersion: 5,
       structure,
     } as const;
 

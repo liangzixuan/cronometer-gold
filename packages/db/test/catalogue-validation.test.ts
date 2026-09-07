@@ -683,6 +683,253 @@ describe("catalogue record validation", () => {
     expect(result.nutrientMaterializableCount).toBe(1);
   });
 
+  it("preserves measured zero through a scale-bearing reviewed conversion", () => {
+    const payload = foodPayload({
+      nutrients: [
+        {
+          ...(foodPayload().nutrients as readonly JsonObject[])[0],
+          value: { amount: "0", quality: "measured", state: "known" },
+        } as JsonObject,
+      ],
+    });
+    const result = validate(payload);
+
+    expect(result.issues).toEqual([]);
+    expect(result.excludedNutrientCount).toBe(0);
+    expect(result.food?.nutrients).toHaveLength(1);
+    expect(result.food?.nutrients[0]).toMatchObject({ amount: "0", sourceAmount: "0" });
+  });
+
+  it("accepts mathematical 100 from either canonical or scale-bearing JSON numbers", () => {
+    for (const encodedAmount of ["100", "100.0"]) {
+      const amount = JSON.parse(encodedAmount) as number;
+      const result = validate(foodPayload({ basis: { amount, unit: "g" } }));
+
+      expect(result.recordIsValid, encodedAmount).toBe(true);
+      expect(result.food?.basisQuantity, encodedAmount).toBe("100");
+    }
+  });
+
+  it("normalizes nutrient text and enforces source-name bounds in UTF-16 units", () => {
+    const atLimit = "😀".repeat(1_000);
+    const overLimit = "😀".repeat(1_001);
+    const mappings = [
+      PROTEIN_MAPPING,
+      {
+        ...PROTEIN_MAPPING,
+        mappingRevisionId: "revision:fat:1",
+        nutrientCode: "fat",
+        nutrientId: "2",
+        sourceNutrientId: "1004",
+      },
+      {
+        ...PROTEIN_MAPPING,
+        mappingRevisionId: "revision:carbohydrate:1",
+        nutrientCode: "carbohydrate",
+        nutrientId: "3",
+        sourceNutrientId: "1005",
+      },
+    ];
+    const result = validate(
+      foodPayload({
+        nutrients: [
+          {
+            canonicalNutrientId: null,
+            canonicalUnit: null,
+            originalUnit: "  g  ",
+            provenance: { dataPoints: 1, derivationCode: "  dérived   value  " },
+            sourceName: "  Protéin   source  ",
+            sourceNutrientId: "  1003  ",
+            value: { amount: "1", quality: "measured", state: "known" },
+          },
+          {
+            canonicalNutrientId: null,
+            canonicalUnit: null,
+            originalUnit: "g",
+            provenance: { dataPoints: 1, derivationCode: null },
+            sourceName: atLimit,
+            sourceNutrientId: "1004",
+            value: { amount: "1", quality: "measured", state: "known" },
+          },
+          {
+            canonicalNutrientId: null,
+            canonicalUnit: null,
+            originalUnit: "g",
+            provenance: { dataPoints: 1, derivationCode: null },
+            sourceName: overLimit,
+            sourceNutrientId: "1005",
+            value: { amount: "1", quality: "measured", state: "known" },
+          },
+        ],
+      }),
+      mappings,
+    );
+
+    expect(result.recordIsValid).toBe(true);
+    expect(result.excludedNutrientCount).toBe(1);
+    expect(result.food?.nutrients).toHaveLength(2);
+    expect(result.food?.nutrients[0]).toMatchObject({
+      derivationCode: "dérived value",
+      metadata: {
+        derivationCode: "dérived value",
+        sourceName: "Protéin source",
+        sourceNutrientId: "1003",
+        sourceUnit: "g",
+      },
+      sourceName: "Protéin source",
+      sourceNutrientId: "1003",
+      sourceUnit: "g",
+    });
+    expect(result.food?.nutrients[1]?.sourceName).toBe(atLimit);
+    expect(result.issues.map((entry) => entry.code)).toContain("NUTRIENT_INVALID_FIELDS");
+  });
+
+  it("accepts the 12+12 decimal boundary and excludes input and product overflow", () => {
+    const mapping = (
+      sourceNutrientId: string,
+      nutrientCode: string,
+      nutrientId: string,
+      conversionMultiplier: string,
+    ): ReviewedCatalogueNutrientMapping => ({
+      ...PROTEIN_MAPPING,
+      conversionMultiplier,
+      mappingRevisionId: `revision:${nutrientCode}:bounds`,
+      nutrientCode,
+      nutrientId,
+      sourceNutrientId,
+    });
+    const mappings = [
+      mapping("boundary", "boundary", "10", "1"),
+      mapping("product-integer", "product_integer", "11", "10"),
+      mapping("product-scale", "product_scale", "12", "0.1"),
+      mapping("input-integer", "input_integer", "13", "1"),
+      mapping("input-scale", "input_scale", "14", "1"),
+    ];
+    const nutrient = (sourceNutrientId: string, amount: string): JsonObject => ({
+      canonicalNutrientId: null,
+      canonicalUnit: null,
+      originalUnit: "g",
+      provenance: { dataPoints: null, derivationCode: null },
+      sourceName: sourceNutrientId,
+      sourceNutrientId,
+      value: { amount, quality: "measured", state: "known" },
+    });
+    const result = validate(
+      foodPayload({
+        nutrients: [
+          nutrient("boundary", "999999999999.999999999999"),
+          nutrient("product-integer", "999999999999.999999999999"),
+          nutrient("product-scale", "0.000000000001"),
+          nutrient("input-integer", "1000000000000"),
+          nutrient("input-scale", "0.0000000000001"),
+        ],
+      }),
+      mappings,
+    );
+
+    expect(result.recordIsValid).toBe(true);
+    expect(result.food?.nutrients).toHaveLength(1);
+    expect(result.food?.nutrients[0]).toMatchObject({
+      amount: "999999999999.999999999999",
+      sourceAmount: "999999999999.999999999999",
+    });
+    expect(result.excludedNutrientCount).toBe(4);
+    expect(result.issues.filter((entry) => entry.code === "NUTRIENT_AMOUNT_INVALID")).toHaveLength(
+      2,
+    );
+    expect(
+      result.issues.filter((entry) => entry.code === "NUTRIENT_CONVERSION_NOT_EXACT"),
+    ).toHaveLength(2);
+  });
+
+  it("matches JavaScript numeric exponent boundaries for known amounts and trace limits", () => {
+    const mapping = (
+      sourceNutrientId: string,
+      nutrientCode: string,
+      nutrientId: string,
+    ): ReviewedCatalogueNutrientMapping => ({
+      ...PROTEIN_MAPPING,
+      mappingRevisionId: `revision:${nutrientCode}:exponent`,
+      nutrientCode,
+      nutrientId,
+      sourceNutrientId,
+    });
+    const mappings = [
+      mapping("known-accepted", "known_accepted", "20"),
+      mapping("known-excluded", "known_excluded", "21"),
+      mapping("trace-accepted", "trace_accepted", "22"),
+      mapping("trace-excluded", "trace_excluded", "23"),
+    ];
+    const nutrient = (sourceNutrientId: string, value: JsonObject): JsonObject => ({
+      canonicalNutrientId: null,
+      canonicalUnit: null,
+      originalUnit: "g",
+      provenance: { dataPoints: null, derivationCode: null },
+      sourceName: sourceNutrientId,
+      sourceNutrientId,
+      value,
+    });
+    const result = validate(
+      foodPayload({
+        nutrients: [
+          nutrient("known-accepted", {
+            amount: 0.000001,
+            quality: "measured",
+            state: "known",
+          }),
+          nutrient("known-excluded", {
+            amount: 1e-7,
+            quality: "measured",
+            state: "known",
+          }),
+          nutrient("trace-accepted", {
+            detectionLimit: 0.000001,
+            state: "trace",
+          }),
+          nutrient("trace-excluded", {
+            detectionLimit: 1e-7,
+            state: "trace",
+          }),
+        ],
+      }),
+      mappings,
+    );
+
+    expect(result.recordIsValid).toBe(true);
+    expect(result.food?.nutrients.map((entry) => entry.nutrientCode)).toEqual([
+      "known_accepted",
+      "trace_accepted",
+    ]);
+    expect(result.food?.nutrients[0]).toMatchObject({
+      amount: "0.000001",
+      sourceAmount: "0.000001",
+      valueStatus: "measured",
+    });
+    expect(result.food?.nutrients[1]).toMatchObject({
+      amount: "0",
+      metadata: { detectionLimit: 0.000001 },
+      valueStatus: "trace",
+    });
+    expect(result.excludedNutrientCount).toBe(2);
+    expect(result.issues.filter((entry) => entry.code === "NUTRIENT_AMOUNT_INVALID")).toHaveLength(
+      1,
+    );
+    expect(
+      result.issues.filter((entry) => entry.code === "NUTRIENT_TRACE_LIMIT_INVALID"),
+    ).toHaveLength(1);
+  });
+
+  it.each(["50", "100.0", 50])(
+    "quarantines a food whose nutrient basis is not canonical 100 grams (%s)",
+    (amount) => {
+      const result = validate(foodPayload({ basis: { amount, unit: "g" } }));
+
+      expect(result.recordIsValid).toBe(false);
+      expect(result.food).toBeNull();
+      expect(result.issues.map((issue) => issue.code)).toContain("INVALID_BASIS");
+    },
+  );
+
   it("quarantines a non-object top-level record without losing its checksum identity", () => {
     const result = validate(null);
 

@@ -214,7 +214,7 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
           batchId: fixture.batchId,
           performedBy: "service:catalogue-promoter",
         }),
-      ).rejects.toThrow("bound live-reviewed evidence");
+      ).rejects.toThrow("nutrition semantic attestation");
       await expect(
         database
           .insertInto("food_import_approval")
@@ -542,7 +542,7 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
           batchId: expired.batchId,
           performedBy: "service:catalogue-promoter",
         }),
-      ).rejects.toThrow("current live-reviewed evidence");
+      ).rejects.toThrow("nutrition semantic attestation");
       await expect(
         database
           .insertInto("food_import_approval")
@@ -2206,6 +2206,11 @@ describeDatabase("catalogue reconciliation PostgreSQL integration", () => {
           source_record_type: "Foundation",
         })
         .execute();
+      await database
+        .updateTable("food_import_batch")
+        .set({ staged_count: 2 })
+        .where("id", "=", payloadDriftBatch.batchId)
+        .execute();
       await recordReconciliationParserReport(database, {
         artifactSha256: "7".repeat(64),
         batchId: payloadDriftBatch.batchId,
@@ -3621,6 +3626,7 @@ async function cloneApprovalAuthority(
   }
 
   const quotedSchema = `"${targetSchema.replaceAll('"', '""')}"`;
+  await cloneApprovalAuthorityDependencies(database, targetSchema);
   const approvalFunctionDefinition = rewriteFunctionSchema(
     source.approval_function_definition,
     "catalogue_record_import_approval",
@@ -3693,6 +3699,80 @@ async function cloneApprovalAuthority(
     guardFunctionDefinition: canonical.guard_function_definition,
     triggerDefinition: canonical.trigger_definition,
   };
+}
+
+interface ApprovalAuthorityDependency {
+  readonly argumentTypes: string;
+  readonly functionName: string;
+  readonly identityArguments: string;
+}
+
+const APPROVAL_AUTHORITY_DEPENDENCIES: readonly ApprovalAuthorityDependency[] = [
+  {
+    argumentTypes: "",
+    functionName: "lock_active_nutrient_registry_for_read",
+    identityArguments: "",
+  },
+  {
+    argumentTypes: "text, text",
+    functionName: "catalogue_canonical_decimal_product",
+    identityArguments: "p_left text, p_right text",
+  },
+  {
+    argumentTypes: "text",
+    functionName: "catalogue_utf16_length",
+    identityArguments: "p_value text",
+  },
+  {
+    argumentTypes: "bigint",
+    functionName: "catalogue_compute_record_nutrition_semantics",
+    identityArguments: "p_record_id bigint",
+  },
+  {
+    argumentTypes: "uuid",
+    functionName: "catalogue_attest_import_nutrition_semantics",
+    identityArguments: "p_batch_id uuid",
+  },
+  {
+    argumentTypes: "uuid, text, text, text, text, text",
+    functionName: "catalogue_record_import_approval_v1",
+    identityArguments:
+      "p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text",
+  },
+];
+
+async function cloneApprovalAuthorityDependencies(
+  database: Kysely<Database>,
+  targetSchema: string,
+): Promise<void> {
+  const quotedSchema = `"${targetSchema.replaceAll('"', '""')}"`;
+  for (const dependency of APPROVAL_AUTHORITY_DEPENDENCIES) {
+    const definition = (
+      await sql<{ readonly definition: string | null }>`
+        select pg_catalog.pg_get_functiondef(procedure_row.oid) as definition
+        from pg_catalog.pg_proc as procedure_row
+        join pg_catalog.pg_namespace as namespace_row
+          on namespace_row.oid = procedure_row.pronamespace
+        where namespace_row.nspname = 'public'
+          and procedure_row.proname = ${dependency.functionName}
+          and pg_catalog.pg_get_function_identity_arguments(procedure_row.oid) =
+            ${dependency.identityArguments}
+      `.execute(database)
+    ).rows[0]?.definition;
+    if (!definition) {
+      throw new Error(`Canonical approval dependency ${dependency.functionName} is unavailable`);
+    }
+    await sql
+      .raw(rewriteFunctionSchema(definition, dependency.functionName, quotedSchema))
+      .execute(database);
+    const clonedIdentity = `${quotedSchema}.${dependency.functionName}(${dependency.argumentTypes})`;
+    await sql
+      .raw(
+        `alter function ${clonedIdentity} set search_path = pg_catalog, ${quotedSchema}, pg_temp`,
+      )
+      .execute(database);
+    await sql.raw(`revoke all on function ${clonedIdentity} from public`).execute(database);
+  }
 }
 
 function rewriteFunctionSchema(

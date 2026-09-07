@@ -34,12 +34,23 @@ const stageValidateAuthorityConstraintDefinition =
   "CHECK ((staged_database_principal IS NULL AND staged_database_capability_role IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR staged_database_principal IS NOT NULL AND octet_length(staged_database_principal) >= 1 AND octet_length(staged_database_principal) <= 63 AND staged_database_capability_role = 'nutrition_catalogue_stage'::text AND (validated_at IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR validated_at IS NOT NULL AND validated_database_principal IS NOT NULL AND octet_length(validated_database_principal) >= 1 AND octet_length(validated_database_principal) <= 63 AND validated_database_capability_role = 'nutrition_catalogue_validate'::text AND validated_database_principal <> staged_database_principal)) IS TRUE)";
 const stagingSealConstraintDefinition =
   "CHECK ((staging_seal_sha256 IS NULL AND staging_sealed_at IS NULL OR staging_seal_sha256 ~ '^[0-9a-f]{64}$'::text AND staging_sealed_at IS NOT NULL AND (staging_sealed_at <> ALL (ARRAY['-infinity'::timestamp with time zone, 'infinity'::timestamp with time zone]))) IS TRUE AND (validated_at IS NULL OR staged_database_principal IS NULL OR staging_seal_sha256 IS NOT NULL))";
+const batchNutritionSemanticConstraintDefinition =
+  "CHECK ((nutrition_semantic_contract_version IS NULL AND nutrition_semantic_sha256 IS NULL OR nutrition_semantic_contract_version = 1 AND nutrition_semantic_sha256 ~ '^[0-9a-f]{64}$'::text AND validated_at IS NOT NULL AND (status = ANY (ARRAY['quarantined'::text, 'ready'::text, 'promoting'::text, 'completed'::text]))) IS TRUE)";
+const recordNutritionSemanticConstraintDefinition =
+  "CHECK ((nutrition_semantic_contract_version IS NULL AND nutrition_semantic_sha256 IS NULL OR nutrition_semantic_contract_version = 1 AND nutrition_semantic_sha256 ~ '^[0-9a-f]{64}$'::text AND validated_at IS NOT NULL AND (validation_status = ANY (ARRAY['quarantined'::text, 'valid'::text, 'materialized'::text]))) IS TRUE)";
 const authorityConstraints = [
   {
     constraint_type: "c",
     definition:
       "CHECK ((validated_food_contract_version IS NULL AND nutrient_mapping_digest IS NULL AND nutrient_mapping_revision_ids IS NULL OR validated_food_contract_version = 1 AND nutrient_mapping_digest ~ '^[0-9a-f]{64}$'::text AND jsonb_typeof(nutrient_mapping_revision_ids) = 'array'::text AND validated_at IS NOT NULL) IS TRUE)",
     name: "food_import_batch_materialization_contract_check",
+    table_name: "food_import_batch",
+    validated: true,
+  },
+  {
+    constraint_type: "c",
+    definition: batchNutritionSemanticConstraintDefinition,
+    name: "food_import_batch_nutrition_semantic_contract_check",
     table_name: "food_import_batch",
     validated: true,
   },
@@ -67,6 +78,13 @@ const authorityConstraints = [
   },
   {
     constraint_type: "c",
+    definition: recordNutritionSemanticConstraintDefinition,
+    name: "food_import_record_nutrition_semantic_contract_check",
+    table_name: "food_import_record",
+    validated: true,
+  },
+  {
+    constraint_type: "c",
     definition:
       "CHECK ((validated_food_document IS NULL AND validated_food_sha256 IS NULL AND validated_food_contract_version IS NULL AND (validation_status = ANY (ARRAY['pending'::text, 'quarantined'::text, 'valid'::text, 'materialized'::text])) OR validated_food_document IS NOT NULL AND validated_food_sha256 ~ '^[0-9a-f]{64}$'::text AND validated_food_contract_version = 1 AND (validation_status = ANY (ARRAY['valid'::text, 'materialized'::text])) AND jsonb_typeof(validated_food_document::jsonb) = 'object'::text AND validated_food_sha256 = encode(sha256(convert_to(validated_food_document, 'UTF8'::name)), 'hex'::text)) IS TRUE)",
     name: "food_import_record_validated_food_contract_check",
@@ -84,6 +102,8 @@ const authorityConstraints = [
 const authorityFrozenColumns = [
   ["food_import_batch", "nutrient_mapping_digest", "text"],
   ["food_import_batch", "nutrient_mapping_revision_ids", "jsonb"],
+  ["food_import_batch", "nutrition_semantic_contract_version", "smallint"],
+  ["food_import_batch", "nutrition_semantic_sha256", "text"],
   ["food_import_batch", "staged_database_capability_role", "text"],
   ["food_import_batch", "staged_database_principal", "text"],
   ["food_import_batch", "staging_seal_sha256", "text"],
@@ -91,6 +111,8 @@ const authorityFrozenColumns = [
   ["food_import_batch", "validated_database_capability_role", "text"],
   ["food_import_batch", "validated_database_principal", "text"],
   ["food_import_batch", "validated_food_contract_version", "smallint"],
+  ["food_import_record", "nutrition_semantic_contract_version", "smallint"],
+  ["food_import_record", "nutrition_semantic_sha256", "text"],
   ["food_import_record", "validated_food_contract_version", "smallint"],
   ["food_import_record", "validated_food_document", "text"],
   ["food_import_record", "validated_food_sha256", "text"],
@@ -323,14 +345,14 @@ test("rejects an incomplete public ledger despite a complete owner-schema shadow
   assert.doesNotMatch(calls[0].at(-1) ?? "", /from app_schema_migration/);
 });
 
-test("tracks migration 0020 in the exact restore ledger", () => {
+test("tracks migration 0021 in the exact restore ledger", () => {
   const migrationLedger = JSON.parse(TRACKED_MIGRATION_LEDGER_JSON);
 
-  assert.equal(migrationLedger.length, 20);
-  assert.equal(migrationLedger.at(-1)?.name, "0020_catalogue_stage_validate_authority.sql");
+  assert.equal(migrationLedger.length, 21);
+  assert.equal(migrationLedger.at(-1)?.name, "0021_catalogue_nutrition_semantic_recheck.sql");
   assert.equal(
     migrationLedger.at(-1)?.checksum,
-    "55c6370dee779edec8e7d2bad529b328c9d9b41fa6b7160b5584e5d52f634374",
+    "b9a737f006a2d3c12efaf50de3b55578e5eb24a768dbdde97ac6ca00990a16a0",
   );
 });
 
@@ -486,12 +508,12 @@ test("rejects unsafe role attributes and every incoming membership option", () =
   );
 });
 
-test("pins all validated 0020 materialization, stage/validate, and activation constraints", () => {
+test("pins all validated 0021 materialization, semantic, stage/validate, and activation constraints", () => {
   const missingConstraint = validAuthorityEvidence();
   missingConstraint.authorityConstraints = [];
   assert.throws(
     () => validateRestoreAuthorityEvidence(missingConstraint, expectedOwner),
-    /materialization or activation constraint/,
+    /materialization, nutrition-semantic, or activation constraint/,
   );
 
   for (const expectedConstraint of authorityConstraints) {
@@ -503,7 +525,7 @@ test("pins all validated 0020 materialization, stage/validate, and activation co
     );
     assert.throws(
       () => validateRestoreAuthorityEvidence(evidence, expectedOwner),
-      /materialization or activation constraint/,
+      /materialization, nutrition-semantic, or activation constraint/,
       expectedConstraint.name,
     );
   }
@@ -520,7 +542,7 @@ test("pins frozen materialization columns and the activation import-batch index"
     );
     assert.throws(
       () => validateRestoreAuthorityEvidence(evidence, expectedOwner),
-      /frozen materialization column/,
+      /frozen materialization or nutrition-semantic column/,
       `${expectedColumn.table_name}.${expectedColumn.column_name}`,
     );
   }
@@ -543,9 +565,9 @@ test("pins frozen materialization columns and the activation import-batch index"
   }
 });
 
-test("rejects authority fingerprints from the pre-stage/validate evidence version", () => {
+test("rejects authority fingerprints from the pre-nutrition-semantic evidence version", () => {
   const evidence = validAuthorityEvidence();
-  evidence.version = 10;
+  evidence.version = 11;
   assert.throws(
     () => validateRestoreAuthorityEvidence(evidence, expectedOwner),
     /unsupported version/,
@@ -654,9 +676,9 @@ test("rejects unexpected table or sequence DML authority", () => {
 test("pins every reviewed authority function and trigger", () => {
   assert.equal(
     validAuthorityFunctions().filter((entry) => entry.name !== "ordinary_function").length,
-    44,
+    54,
   );
-  assert.equal(validAuthorityTriggers().length, 52);
+  assert.equal(validAuthorityTriggers().length, 54);
 
   for (const [property, value] of [
     ["source_sha256", "0".repeat(64)],
@@ -1219,7 +1241,7 @@ function validAuthorityEvidence() {
         owner: expectedOwner,
       },
     ],
-    version: 11,
+    version: 12,
   };
 }
 
@@ -1278,6 +1300,10 @@ function validAuthorityFunctions() {
       "2561714155de31151c79f95977156072a66451d1f13f7b5c6e85d13abe9ecb0c",
     ],
     [
+      "guard_food_import_batch_nutrition_semantics",
+      "298b898cd252f08aa9a5f212e85750aeba79cc41616c71afcd3f129471a6cf5c",
+    ],
+    [
       "guard_food_import_batch_stage_validate_authority",
       "f21dfa9d5455a40ab9f50bdbace02ffc19f53ab252e0eab99a4f50769f678eda",
     ],
@@ -1292,6 +1318,10 @@ function validAuthorityFunctions() {
     [
       "guard_food_import_record_insert_before_staging_seal",
       "2fc46ef24e03309e61832491438746967642911b02e97896f8a0bdf6fc5aa8bc",
+    ],
+    [
+      "guard_food_import_record_nutrition_semantics",
+      "489c1c4b970c6ba369503854701c980ebcb1510c754050e78355fed94647e0e8",
     ],
     [
       "guard_food_import_record_update",
@@ -1353,16 +1383,20 @@ function validAuthorityFunctions() {
     ...functionSemantics(sourceSha256, "trigger"),
     acl: [
       "guard_food_import_approval_authority",
+      "guard_food_import_batch_nutrition_semantics",
       "guard_food_import_batch_stage_validate_authority",
       "guard_food_import_record_insert_before_staging_seal",
+      "guard_food_import_record_nutrition_semantics",
       "guard_food_import_stage_checkpoint_before_staging_seal",
     ].includes(name)
       ? [acl(expectedOwner, "EXECUTE")]
       : [acl("PUBLIC", "EXECUTE"), acl(expectedOwner, "EXECUTE")],
     acl_is_default: ![
       "guard_food_import_approval_authority",
+      "guard_food_import_batch_nutrition_semantics",
       "guard_food_import_batch_stage_validate_authority",
       "guard_food_import_record_insert_before_staging_seal",
+      "guard_food_import_record_nutrition_semantics",
       "guard_food_import_stage_checkpoint_before_staging_seal",
     ].includes(name),
     arguments: "",
@@ -1387,6 +1421,35 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
+        "e2c35dfabb653636a9640475227104a485a24129558b11511175831ef9bc5b8b",
+        "jsonb",
+      ),
+      acl: [acl(expectedOwner, "EXECUTE")],
+      acl_is_default: false,
+      arguments: "p_batch_id uuid",
+      config: ["search_path=pg_catalog, public, pg_temp"],
+      name: "catalogue_attest_import_nutrition_semantics",
+      owner: expectedOwner,
+      security_definer: true,
+    },
+    {
+      ...functionSemantics(
+        "299a2c88226123f167fe2d7001fdaf6a2e02425007f2426c8def9d0bb83a46c0",
+        "text",
+      ),
+      acl: [acl(expectedOwner, "EXECUTE")],
+      acl_is_default: false,
+      arguments: "p_left text, p_right text",
+      config: ["search_path=pg_catalog, public, pg_temp"],
+      name: "catalogue_canonical_decimal_product",
+      owner: expectedOwner,
+      parallel: "s",
+      security_definer: false,
+      strict: true,
+      volatility: "i",
+    },
+    {
+      ...functionSemantics(
         "399d40c2913c2022c0a2921d5870a2d26a5dcd9949d81715882f70899db4f5f8",
         "text",
       ),
@@ -1400,7 +1463,20 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "115fdc3ed1943dd77ce70d3a694495da3d2c62ade9c7b82812a89cef82b39f17",
+        "41f048090dce80b794615f135f5368f7f501eaecfc3513471eb6d1f36c022783",
+        "jsonb",
+      ),
+      acl: [acl(expectedOwner, "EXECUTE")],
+      acl_is_default: false,
+      arguments: "p_record_id bigint",
+      config: ["search_path=pg_catalog, public, pg_temp"],
+      name: "catalogue_compute_record_nutrition_semantics",
+      owner: expectedOwner,
+      security_definer: true,
+    },
+    {
+      ...functionSemantics(
+        "309861b6850a99bb565466981602ee19054b9c2500dfee21bf27edc6be382111",
         "jsonb",
       ),
       acl: [acl(expectedOwner, "EXECUTE"), acl("nutrition_catalogue_promote_activate", "EXECUTE")],
@@ -1408,6 +1484,19 @@ function validAuthorityFunctions() {
       arguments: "p_batch_id uuid, p_external_principal_id text, p_reason text",
       config: ["search_path=pg_catalog, public, pg_temp"],
       name: "catalogue_promote_import_batch",
+      owner: expectedOwner,
+      security_definer: true,
+    },
+    {
+      ...functionSemantics(
+        "115fdc3ed1943dd77ce70d3a694495da3d2c62ade9c7b82812a89cef82b39f17",
+        "jsonb",
+      ),
+      acl: [acl(expectedOwner, "EXECUTE")],
+      acl_is_default: false,
+      arguments: "p_batch_id uuid, p_external_principal_id text, p_reason text",
+      config: ["search_path=pg_catalog, public, pg_temp"],
+      name: "catalogue_promote_import_batch_v1",
       owner: expectedOwner,
       security_definer: true,
     },
@@ -1426,7 +1515,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac",
+        "abb0ca990b74fedffd4ec77cf666e404da89af8158f4b990b6c0de48cd3dfc41",
         "boolean",
       ),
       acl: [
@@ -1440,6 +1529,20 @@ function validAuthorityFunctions() {
         "p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text",
       config: ["search_path=pg_catalog, public, pg_temp"],
       name: "catalogue_record_import_approval",
+      owner: expectedOwner,
+      security_definer: true,
+    },
+    {
+      ...functionSemantics(
+        "89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac",
+        "boolean",
+      ),
+      acl: [acl(expectedOwner, "EXECUTE")],
+      acl_is_default: false,
+      arguments:
+        "p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text",
+      config: ["search_path=pg_catalog, public, pg_temp"],
+      name: "catalogue_record_import_approval_v1",
       owner: expectedOwner,
       security_definer: true,
     },
@@ -1461,7 +1564,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "3fe493ee5e0b27e43cc881854dddfe4dc12f862a1c4a242bf712c843b2792ff1",
+        "56e9fa2cce7f532c1f405658ff9f07908394d0fb9734b70d0bdb92a12292068a",
         "jsonb",
       ),
       acl: [acl(expectedOwner, "EXECUTE"), acl("nutrition_catalogue_rollback", "EXECUTE")],
@@ -1470,6 +1573,20 @@ function validAuthorityFunctions() {
         "p_source_code text, p_target_release_id uuid, p_external_principal_id text, p_reason text",
       config: ["search_path=pg_catalog, public, pg_temp"],
       name: "catalogue_rollback_source_release",
+      owner: expectedOwner,
+      security_definer: true,
+    },
+    {
+      ...functionSemantics(
+        "3fe493ee5e0b27e43cc881854dddfe4dc12f862a1c4a242bf712c843b2792ff1",
+        "jsonb",
+      ),
+      acl: [acl(expectedOwner, "EXECUTE")],
+      acl_is_default: false,
+      arguments:
+        "p_source_code text, p_target_release_id uuid, p_external_principal_id text, p_reason text",
+      config: ["search_path=pg_catalog, public, pg_temp"],
+      name: "catalogue_rollback_source_release_v1",
       owner: expectedOwner,
       security_definer: true,
     },
@@ -1514,7 +1631,24 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "5b7ae15625fb0ae0d88a9512fe82fca69a9d0dd9e179af8bc1b2f42d1e85ac8a",
+        "3a1759986b190b3ccac086e5da943ada91f3cc8c3a94ce6942657faae389ef39",
+        "bigint",
+      ),
+      acl: [acl(expectedOwner, "EXECUTE")],
+      acl_is_default: false,
+      arguments: "p_value text",
+      config: ["search_path=pg_catalog, public, pg_temp"],
+      language: "sql",
+      name: "catalogue_utf16_length",
+      owner: expectedOwner,
+      parallel: "s",
+      security_definer: false,
+      strict: true,
+      volatility: "i",
+    },
+    {
+      ...functionSemantics(
+        "10c59084d8e5c7debb581c6e749f6779dbc3f5867fc4cb18ffc009293f9f50a5",
         "jsonb",
       ),
       acl: [acl(expectedOwner, "EXECUTE"), acl("nutrition_catalogue_validate", "EXECUTE")],
@@ -1523,6 +1657,20 @@ function validAuthorityFunctions() {
         "p_batch_id uuid, p_expected_staging_seal_sha256 text, p_expected_observation_sha256 text, p_validation_document text",
       config: ["search_path=pg_catalog, public, pg_temp"],
       name: "catalogue_validate_import_batch",
+      owner: expectedOwner,
+      security_definer: true,
+    },
+    {
+      ...functionSemantics(
+        "5b7ae15625fb0ae0d88a9512fe82fca69a9d0dd9e179af8bc1b2f42d1e85ac8a",
+        "jsonb",
+      ),
+      acl: [acl(expectedOwner, "EXECUTE")],
+      acl_is_default: false,
+      arguments:
+        "p_batch_id uuid, p_expected_staging_seal_sha256 text, p_expected_observation_sha256 text, p_validation_document text",
+      config: ["search_path=pg_catalog, public, pg_temp"],
+      name: "catalogue_validate_import_batch_v1",
       owner: expectedOwner,
       security_definer: true,
     },
@@ -1717,6 +1865,12 @@ function validAuthorityTriggers() {
       "CREATE TRIGGER food_import_batch_guard_initial_state BEFORE INSERT ON food_import_batch FOR EACH ROW EXECUTE FUNCTION guard_food_import_batch_initial_state()",
     ],
     [
+      "food_import_batch_guard_nutrition_semantics",
+      "food_import_batch",
+      "guard_food_import_batch_nutrition_semantics",
+      "CREATE TRIGGER food_import_batch_guard_nutrition_semantics BEFORE INSERT OR UPDATE ON food_import_batch FOR EACH ROW EXECUTE FUNCTION guard_food_import_batch_nutrition_semantics()",
+    ],
+    [
       "food_import_batch_guard_stage_validate_authority",
       "food_import_batch",
       "guard_food_import_batch_stage_validate_authority",
@@ -1757,6 +1911,12 @@ function validAuthorityTriggers() {
       "food_import_parser_report",
       "reject_immutable_row_update",
       "CREATE TRIGGER food_import_parser_report_reject_update BEFORE DELETE OR UPDATE ON food_import_parser_report FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()",
+    ],
+    [
+      "food_import_record_guard_nutrition_semantics",
+      "food_import_record",
+      "guard_food_import_record_nutrition_semantics",
+      "CREATE TRIGGER food_import_record_guard_nutrition_semantics BEFORE INSERT OR UPDATE ON food_import_record FOR EACH ROW EXECUTE FUNCTION guard_food_import_record_nutrition_semantics()",
     ],
     [
       "food_import_record_guard_staging_seal",

@@ -83,17 +83,27 @@ package boundaries.
   requires three distinct database-authenticated reviewer principals.
   Fixed-purpose stage/validate functions bind distinct authenticated principals,
   immutable parser evidence, a database-computed staging seal, and the exact
-  validation observation. Owner compatibility remains, and the capability roles
-  have no live login membership or caller cutover. A production least-privilege
-  deployment and independently proven validation semantics remain live M0B
-  prerequisites.
+  validation observation. Migration 0021 independently reconstructs the exact
+  100-gram nutrient result from the sealed canonical payload and reviewed mapping
+  revisions, freezes record and batch semantic SHA-256 attestations, and rejects
+  changed, fabricated, or omitted known/trace/unknown semantics. Text parity
+  must prove NFC normalization, the exact ECMAScript whitespace trim/collapse
+  set, and JavaScript UTF-16-unit length bounds. JSON numeric `100.0` is numeric
+  `100`; string `"100.0"` is not exact string `"100"`. Approval, promotion, and
+  non-null rollback fail closed without complete attestation;
+  historical unattested releases remain inert rather than being backfilled.
+  Owner compatibility remains, and the capability roles have no live login
+  membership or caller cutover. Production least-privilege identities,
+  external-principal binding, caller cutover, and representative-scale evidence
+  remain live M0B prerequisites.
 - Supported materialization reads and nutrient insert/update/delete writes use
   the migration-0018 active-registry advisory protocol. Integration evidence
   must prove that multiple readers coexist,
   insert/update/delete writers wait, and a waiting reader observes the complete
   committed generation. Deployment and restore evidence must match the four
-  nutrient-lock functions and seven exact bindings plus migrations 0019 and
-  0020's complete 44-function/52-trigger authority surface; a broad nutrient table lock,
+  nutrient-lock functions and seven exact bindings plus migrations 0019 through
+  0021's complete 54-function/54-trigger authority surface, sixteen
+  frozen authority columns, and eight authority CHECKs; a broad nutrient table lock,
   an `active`-only writer trigger, or an unexpected shared-food trigger is a
   regression.
 - The product renders unknown, trace, imputed, and label-rounded values distinctly.

@@ -1,4 +1,4 @@
--- Versioned post-restore policy for catalogue authority migrations 0014-0020.
+-- Versioned post-restore policy for catalogue authority migrations 0014-0021.
 --
 -- Logical restores deliberately use --no-owner --no-privileges. Run this only
 -- against a new isolated nutrition_restore_* database while PUBLIC CONNECT is
@@ -240,7 +240,8 @@ begin
       using errcode = '42883';
   end if;
 
-  -- Pin the complete frozen-materialization, stage/validate, and activation
+  -- Pin the complete frozen-materialization, nutrition-semantic,
+  -- stage/validate, and activation
   -- CHECK boundary as
   -- known-good authority policy, not merely source/target parity.
   if (
@@ -251,13 +252,15 @@ begin
     where namespace_row.nspname = target_schema
       and constraint_row.conname in (
         'food_import_batch_materialization_contract_check',
+        'food_import_batch_nutrition_semantic_contract_check',
         'food_import_batch_promotable_contract_check',
         'food_import_batch_stage_validate_database_authority_check',
         'food_import_batch_staging_seal_check',
+        'food_import_record_nutrition_semantic_contract_check',
         'food_import_record_validated_food_contract_check',
         'food_source_release_activation_database_authority_check'
       )
-  ) <> 6 or exists (
+  ) <> 8 or exists (
     select 1
     from (
       values
@@ -265,6 +268,11 @@ begin
           'food_import_batch'::text,
           'food_import_batch_materialization_contract_check'::text,
           $constraint$CHECK ((validated_food_contract_version IS NULL AND nutrient_mapping_digest IS NULL AND nutrient_mapping_revision_ids IS NULL OR validated_food_contract_version = 1 AND nutrient_mapping_digest ~ '^[0-9a-f]{64}$'::text AND jsonb_typeof(nutrient_mapping_revision_ids) = 'array'::text AND validated_at IS NOT NULL) IS TRUE)$constraint$::text
+        ),
+        (
+          'food_import_batch',
+          'food_import_batch_nutrition_semantic_contract_check',
+          $constraint$CHECK ((nutrition_semantic_contract_version IS NULL AND nutrition_semantic_sha256 IS NULL OR nutrition_semantic_contract_version = 1 AND nutrition_semantic_sha256 ~ '^[0-9a-f]{64}$'::text AND validated_at IS NOT NULL AND (status = ANY (ARRAY['quarantined'::text, 'ready'::text, 'promoting'::text, 'completed'::text]))) IS TRUE)$constraint$
         ),
         (
           'food_import_batch',
@@ -280,6 +288,11 @@ begin
           'food_import_batch',
           'food_import_batch_staging_seal_check',
           $constraint$CHECK ((staging_seal_sha256 IS NULL AND staging_sealed_at IS NULL OR staging_seal_sha256 ~ '^[0-9a-f]{64}$'::text AND staging_sealed_at IS NOT NULL AND (staging_sealed_at <> ALL (ARRAY['-infinity'::timestamp with time zone, 'infinity'::timestamp with time zone]))) IS TRUE AND (validated_at IS NULL OR staged_database_principal IS NULL OR staging_seal_sha256 IS NOT NULL))$constraint$
+        ),
+        (
+          'food_import_record',
+          'food_import_record_nutrition_semantic_contract_check',
+          $constraint$CHECK ((nutrition_semantic_contract_version IS NULL AND nutrition_semantic_sha256 IS NULL OR nutrition_semantic_contract_version = 1 AND nutrition_semantic_sha256 ~ '^[0-9a-f]{64}$'::text AND validated_at IS NOT NULL AND (validation_status = ANY (ARRAY['quarantined'::text, 'valid'::text, 'materialized'::text]))) IS TRUE)$constraint$
         ),
         (
           'food_import_record',
@@ -310,7 +323,7 @@ END) IS TRUE)$constraint$
       or not constraint_row.convalidated
       or pg_catalog.pg_get_constraintdef(constraint_row.oid, true) <> expected.definition
   ) then
-    raise exception 'catalogue frozen-materialization, stage/validate, or activation constraint differs from the forward 0020 policy'
+    raise exception 'catalogue frozen-materialization, nutrition-semantic, stage/validate, or activation constraint differs from the forward 0021 policy'
       using errcode = '55000';
   end if;
 
@@ -320,6 +333,8 @@ END) IS TRUE)$constraint$
       values
         ('food_import_batch'::text, 'nutrient_mapping_digest'::text, 'text'::text, false, null::text),
         ('food_import_batch', 'nutrient_mapping_revision_ids', 'jsonb', false, null::text),
+        ('food_import_batch', 'nutrition_semantic_contract_version', 'smallint', false, null::text),
+        ('food_import_batch', 'nutrition_semantic_sha256', 'text', false, null::text),
         ('food_import_batch', 'validated_food_contract_version', 'smallint', false, null::text),
         ('food_import_batch', 'staged_database_principal', 'text', false, null::text),
         ('food_import_batch', 'staged_database_capability_role', 'text', false, null::text),
@@ -327,6 +342,8 @@ END) IS TRUE)$constraint$
         ('food_import_batch', 'staging_sealed_at', 'timestamp with time zone', false, null::text),
         ('food_import_batch', 'validated_database_principal', 'text', false, null::text),
         ('food_import_batch', 'validated_database_capability_role', 'text', false, null::text),
+        ('food_import_record', 'nutrition_semantic_contract_version', 'smallint', false, null::text),
+        ('food_import_record', 'nutrition_semantic_sha256', 'text', false, null::text),
         ('food_import_record', 'validated_food_contract_version', 'smallint', false, null::text),
         ('food_import_record', 'validated_food_document', 'text', false, null::text),
         ('food_import_record', 'validated_food_sha256', 'text', false, null::text)
@@ -351,7 +368,7 @@ END) IS TRUE)$constraint$
       or pg_catalog.pg_get_expr(default_row.adbin, default_row.adrelid, true)
         is distinct from expected.default_expression
   ) then
-    raise exception 'catalogue frozen-materialization or stage/validate column identity differs from the forward 0020 policy'
+    raise exception 'catalogue frozen-materialization, nutrition-semantic, or stage/validate column identity differs from the forward 0021 policy'
       using errcode = '55000';
   end if;
 
@@ -403,7 +420,7 @@ END) IS TRUE)$constraint$
       using errcode = '55000';
   end if;
 
-  -- Pin the complete authority function boundary through migration 0020.
+  -- Pin the complete authority function boundary through migration 0021.
   -- Exact identity, executable body, and search_path are policy, not
   -- merely source/target parity.
   if (
@@ -414,16 +431,24 @@ END) IS TRUE)$constraint$
     where namespace_row.nspname = target_schema
       and procedure_row.proname in (
         'advance_food_search_projection_revision',
+        'catalogue_attest_import_nutrition_semantics',
+        'catalogue_canonical_decimal_product',
         'catalogue_compute_import_staging_seal',
+        'catalogue_compute_record_nutrition_semantics',
         'catalogue_evidence_bundle_uri_is_valid',
         'catalogue_observe_import_validation',
         'catalogue_promote_import_batch',
+        'catalogue_promote_import_batch_v1',
         'catalogue_record_import_approval',
+        'catalogue_record_import_approval_v1',
         'catalogue_rollback_source_release',
+        'catalogue_rollback_source_release_v1',
         'catalogue_stage_import_batch',
         'catalogue_stage_import_parser_report',
         'catalogue_stage_import_record_chunk',
+        'catalogue_utf16_length',
         'catalogue_validate_import_batch',
+        'catalogue_validate_import_batch_v1',
         'enqueue_food_search_barcode_insert',
         'enqueue_food_search_barcode_update',
         'enqueue_food_search_food_eligibility_change',
@@ -435,10 +460,12 @@ END) IS TRUE)$constraint$
         'guard_food_barcode_validity_update',
         'guard_food_import_approval_authority',
         'guard_food_import_batch_initial_state',
+        'guard_food_import_batch_nutrition_semantics',
         'guard_food_import_batch_stage_validate_authority',
         'guard_food_import_batch_update',
         'guard_food_import_batch_validation_digest',
         'guard_food_import_record_insert_before_staging_seal',
+        'guard_food_import_record_nutrition_semantics',
         'guard_food_import_record_update',
         'guard_food_import_stage_checkpoint_before_staging_seal',
         'guard_imported_food_version_child_delete',
@@ -458,21 +485,29 @@ END) IS TRUE)$constraint$
         'set_row_updated_at',
         'validate_food_version_child_insert'
       )
-  ) <> 44 or exists (
+  ) <> 54 or exists (
     select 1
     from (
       values
         ('advance_food_search_projection_revision'::text, ''::text, 'd1e4a8a27203104c6339f045a31a4dfdd2aee3c78cdd94e06bfd3db2c9ac2108'::text, 'void'::text, 'plpgsql'::text, 'v'::text, false, false, 'u'::text, false),
+        ('catalogue_attest_import_nutrition_semantics', 'p_batch_id uuid', 'e2c35dfabb653636a9640475227104a485a24129558b11511175831ef9bc5b8b', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_canonical_decimal_product', 'p_left text, p_right text', '299a2c88226123f167fe2d7001fdaf6a2e02425007f2426c8def9d0bb83a46c0', 'text', 'plpgsql', 'i', true, false, 's', false),
         ('catalogue_compute_import_staging_seal', 'p_batch_id uuid', '399d40c2913c2022c0a2921d5870a2d26a5dcd9949d81715882f70899db4f5f8', 'text', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_compute_record_nutrition_semantics', 'p_record_id bigint', '41f048090dce80b794615f135f5368f7f501eaecfc3513471eb6d1f36c022783', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_evidence_bundle_uri_is_valid'::text, 'value text, digest text'::text, '5403779dc4398446c61d0a27ad8b95d904e2552a5e694496b9e7e8612e0c902e'::text, 'boolean'::text, 'sql'::text, 'i'::text, true, false, 'u'::text, false),
         ('catalogue_observe_import_validation', 'p_batch_id uuid', '0a87bc99f5df97282c48b6202799bcc75cdb914e7473c0c38e092aaf4a132acf', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_promote_import_batch', 'p_batch_id uuid, p_external_principal_id text, p_reason text', '115fdc3ed1943dd77ce70d3a694495da3d2c62ade9c7b82812a89cef82b39f17', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_record_import_approval', 'p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text', '89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac', 'boolean', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_rollback_source_release', 'p_source_code text, p_target_release_id uuid, p_external_principal_id text, p_reason text', '3fe493ee5e0b27e43cc881854dddfe4dc12f862a1c4a242bf712c843b2792ff1', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_promote_import_batch', 'p_batch_id uuid, p_external_principal_id text, p_reason text', '309861b6850a99bb565466981602ee19054b9c2500dfee21bf27edc6be382111', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_promote_import_batch_v1', 'p_batch_id uuid, p_external_principal_id text, p_reason text', '115fdc3ed1943dd77ce70d3a694495da3d2c62ade9c7b82812a89cef82b39f17', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_record_import_approval', 'p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text', 'abb0ca990b74fedffd4ec77cf666e404da89af8158f4b990b6c0de48cd3dfc41', 'boolean', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_record_import_approval_v1', 'p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text', '89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac', 'boolean', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_rollback_source_release', 'p_source_code text, p_target_release_id uuid, p_external_principal_id text, p_reason text', '56e9fa2cce7f532c1f405658ff9f07908394d0fb9734b70d0bdb92a12292068a', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_rollback_source_release_v1', 'p_source_code text, p_target_release_id uuid, p_external_principal_id text, p_reason text', '3fe493ee5e0b27e43cc881854dddfe4dc12f862a1c4a242bf712c843b2792ff1', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_stage_import_batch', 'p_stage_document text', '11b0a983c9cf3d4a7451978d37e5fe997a40290a10e741ba0626b89bfd2611c4', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_stage_import_parser_report', 'p_batch_id uuid, p_parser_report_document text', 'd89defb335e21228c38968ef69b2ed7342f5a5440762ae31f170969fbcc9c9e8', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_stage_import_record_chunk', 'p_batch_id uuid, p_expected_next_offset bigint, p_records_document text', '4cc2b310ba6fda051a125bb203c0cf2c6a5fbe227a55daf517a0376ab79e4c7f', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_validate_import_batch', 'p_batch_id uuid, p_expected_staging_seal_sha256 text, p_expected_observation_sha256 text, p_validation_document text', '5b7ae15625fb0ae0d88a9512fe82fca69a9d0dd9e179af8bc1b2f42d1e85ac8a', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_utf16_length', 'p_value text', '3a1759986b190b3ccac086e5da943ada91f3cc8c3a94ce6942657faae389ef39', 'bigint', 'sql', 'i', true, false, 's', false),
+        ('catalogue_validate_import_batch', 'p_batch_id uuid, p_expected_staging_seal_sha256 text, p_expected_observation_sha256 text, p_validation_document text', '10c59084d8e5c7debb581c6e749f6779dbc3f5867fc4cb18ffc009293f9f50a5', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_validate_import_batch_v1', 'p_batch_id uuid, p_expected_staging_seal_sha256 text, p_expected_observation_sha256 text, p_validation_document text', '5b7ae15625fb0ae0d88a9512fe82fca69a9d0dd9e179af8bc1b2f42d1e85ac8a', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('enqueue_food_search_barcode_insert', '', '4e888f3ef0b3af1e7eee14568069ae3fe06b65b88718614ed0e2c243a5d22318', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('enqueue_food_search_barcode_update', '', '9d7a90d0fee1a6923631c9b9018d9c813d3c8f7eea2df941fc32fbb4f5d453b0', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('enqueue_food_search_food_eligibility_change', '', '85ada305a6fd6b40cd5fb0652d64c240d1953033a243b0f7ce243caa9bc9c4de', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
@@ -484,10 +519,12 @@ END) IS TRUE)$constraint$
         ('guard_food_barcode_validity_update', '', '7b97f95dd7388565424bd3713081711106a5e3d0c206310a8d405b8772208ecc', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_approval_authority', '', 'f96feb298d900165172c56a3fa1e99e91aaca010657155e5a996ee04015fdbbd', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_batch_initial_state', '', '2561714155de31151c79f95977156072a66451d1f13f7b5c6e85d13abe9ecb0c', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('guard_food_import_batch_nutrition_semantics', '', '298b898cd252f08aa9a5f212e85750aeba79cc41616c71afcd3f129471a6cf5c', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_batch_stage_validate_authority', '', 'f21dfa9d5455a40ab9f50bdbace02ffc19f53ab252e0eab99a4f50769f678eda', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_batch_update', '', '8863eef0e6889a620deec204e249ac3d6efdc87310dcc9d25601e6d7f336101f', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_batch_validation_digest', '', 'c94c16cef462dfaca5c58908c2784e6d86b9f415c1c081f7b6c8a5ca434bddd7', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_record_insert_before_staging_seal', '', '2fc46ef24e03309e61832491438746967642911b02e97896f8a0bdf6fc5aa8bc', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('guard_food_import_record_nutrition_semantics', '', '489c1c4b970c6ba369503854701c980ebcb1510c754050e78355fed94647e0e8', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_record_update', '', '300e6853e7a9520b477256b3b32a4381f3143512b013a4e131a4c203ce524479', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_import_stage_checkpoint_before_staging_seal', '', '66e2078cf57d658268f547c25df26750ebe5b7b6402de9fcecdc2249c14f28ef', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_imported_food_version_child_delete', '', '4e36d3ee5cbd53dc6c98d9f457adbb5ee8cb6cbf8fc6b3e45d3133b4305e7cc1', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
@@ -583,6 +620,7 @@ END) IS TRUE)$constraint$
           and trigger_row.tgname in (
             'food_import_approval_guard_authority',
             'food_import_batch_guard_initial_state',
+            'food_import_batch_guard_nutrition_semantics',
             'food_import_batch_guard_stage_validate_authority',
             'food_import_batch_guard_update',
             'food_import_batch_guard_validation_digest',
@@ -591,6 +629,7 @@ END) IS TRUE)$constraint$
             'food_import_checkpoint_set_updated_at',
             'food_import_parser_report_reject_update',
             'food_import_record_guard_staging_seal',
+            'food_import_record_guard_nutrition_semantics',
             'food_import_record_guard_update',
             'food_search_barcode_insert_outbox',
             'food_search_barcode_update_outbox',
@@ -623,10 +662,12 @@ END) IS TRUE)$constraint$
             'guard_food_barcode_validity_update',
             'guard_food_import_approval_authority',
             'guard_food_import_batch_initial_state',
+            'guard_food_import_batch_nutrition_semantics',
             'guard_food_import_batch_stage_validate_authority',
             'guard_food_import_batch_update',
             'guard_food_import_batch_validation_digest',
             'guard_food_import_record_insert_before_staging_seal',
+            'guard_food_import_record_nutrition_semantics',
             'guard_food_import_record_update',
             'guard_food_import_stage_checkpoint_before_staging_seal',
             'guard_food_source_release_activation_authority',
@@ -650,7 +691,7 @@ END) IS TRUE)$constraint$
           )
         )
       )
-  ) <> 52 or exists (
+  ) <> 54 or exists (
     select 1
     from (
       values
@@ -677,6 +718,7 @@ END) IS TRUE)$constraint$
         ('food_version_reject_update', 'food_version', 'reject_immutable_row_update', 'CREATE TRIGGER food_version_reject_update BEFORE UPDATE ON food_version FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()'),
         ('food_import_approval_guard_authority'::text, 'food_import_approval'::text, 'guard_food_import_approval_authority'::text, 'CREATE TRIGGER food_import_approval_guard_authority BEFORE INSERT ON food_import_approval FOR EACH ROW EXECUTE FUNCTION guard_food_import_approval_authority()'::text),
         ('food_import_batch_guard_initial_state', 'food_import_batch', 'guard_food_import_batch_initial_state', 'CREATE TRIGGER food_import_batch_guard_initial_state BEFORE INSERT ON food_import_batch FOR EACH ROW EXECUTE FUNCTION guard_food_import_batch_initial_state()'),
+        ('food_import_batch_guard_nutrition_semantics', 'food_import_batch', 'guard_food_import_batch_nutrition_semantics', 'CREATE TRIGGER food_import_batch_guard_nutrition_semantics BEFORE INSERT OR UPDATE ON food_import_batch FOR EACH ROW EXECUTE FUNCTION guard_food_import_batch_nutrition_semantics()'),
         ('food_import_batch_guard_stage_validate_authority', 'food_import_batch', 'guard_food_import_batch_stage_validate_authority', 'CREATE TRIGGER food_import_batch_guard_stage_validate_authority BEFORE INSERT OR UPDATE ON food_import_batch FOR EACH ROW EXECUTE FUNCTION guard_food_import_batch_stage_validate_authority()'),
         ('food_import_batch_guard_update', 'food_import_batch', 'guard_food_import_batch_update', 'CREATE TRIGGER food_import_batch_guard_update BEFORE DELETE OR UPDATE ON food_import_batch FOR EACH ROW EXECUTE FUNCTION guard_food_import_batch_update()'),
         ('food_import_batch_guard_validation_digest', 'food_import_batch', 'guard_food_import_batch_validation_digest', 'CREATE TRIGGER food_import_batch_guard_validation_digest BEFORE INSERT OR UPDATE ON food_import_batch FOR EACH ROW EXECUTE FUNCTION guard_food_import_batch_validation_digest()'),
@@ -684,6 +726,7 @@ END) IS TRUE)$constraint$
         ('food_import_checkpoint_guard_staging_seal', 'food_import_checkpoint', 'guard_food_import_stage_checkpoint_before_staging_seal', 'CREATE TRIGGER food_import_checkpoint_guard_staging_seal BEFORE INSERT OR DELETE OR UPDATE ON food_import_checkpoint FOR EACH ROW EXECUTE FUNCTION guard_food_import_stage_checkpoint_before_staging_seal()'),
         ('food_import_checkpoint_set_updated_at', 'food_import_checkpoint', 'set_row_updated_at', 'CREATE TRIGGER food_import_checkpoint_set_updated_at BEFORE UPDATE ON food_import_checkpoint FOR EACH ROW EXECUTE FUNCTION set_row_updated_at()'),
         ('food_import_parser_report_reject_update', 'food_import_parser_report', 'reject_immutable_row_update', 'CREATE TRIGGER food_import_parser_report_reject_update BEFORE DELETE OR UPDATE ON food_import_parser_report FOR EACH ROW EXECUTE FUNCTION reject_immutable_row_update()'),
+        ('food_import_record_guard_nutrition_semantics', 'food_import_record', 'guard_food_import_record_nutrition_semantics', 'CREATE TRIGGER food_import_record_guard_nutrition_semantics BEFORE INSERT OR UPDATE ON food_import_record FOR EACH ROW EXECUTE FUNCTION guard_food_import_record_nutrition_semantics()'),
         ('food_import_record_guard_staging_seal', 'food_import_record', 'guard_food_import_record_insert_before_staging_seal', 'CREATE TRIGGER food_import_record_guard_staging_seal BEFORE INSERT ON food_import_record FOR EACH ROW EXECUTE FUNCTION guard_food_import_record_insert_before_staging_seal()'),
         ('food_import_record_guard_update', 'food_import_record', 'guard_food_import_record_update', 'CREATE TRIGGER food_import_record_guard_update BEFORE INSERT OR UPDATE ON food_import_record FOR EACH ROW EXECUTE FUNCTION guard_food_import_record_update()'),
         ('food_search_barcode_insert_outbox', 'food_barcode', 'enqueue_food_search_barcode_insert', 'CREATE TRIGGER food_search_barcode_insert_outbox AFTER INSERT ON food_barcode REFERENCING NEW TABLE AS new_food_search_barcodes FOR EACH STATEMENT EXECUTE FUNCTION enqueue_food_search_barcode_insert()'),
@@ -745,7 +788,7 @@ END) IS TRUE)$constraint$
         pg_catalog.encode(
           pg_catalog.sha256(pg_catalog.convert_to(procedure_row.prosrc, 'UTF8')),
           'hex'
-        ) <> '89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac'
+        ) <> 'abb0ca990b74fedffd4ec77cf666e404da89af8158f4b990b6c0de48cd3dfc41'
         or pg_catalog.pg_get_function_result(procedure_row.oid) <> 'boolean'
         or language_row.lanname <> 'plpgsql'
         or procedure_row.provolatile <> 'v'
@@ -929,21 +972,31 @@ END) IS TRUE)$constraint$
       using errcode = '55000';
   end if;
 
-  -- Logical restore omits ACLs. Reconstruct the nine migration-0020 function
-  -- ACLs from the reviewed manifest, stripping any named grants first.
+  -- Logical restore omits ACLs. Reconstruct the nineteen migration-0020/0021
+  -- function ACLs from the reviewed manifest, stripping named grants first.
   for stage_validate_function_spec in
     select *
     from (
       values
+        ('guard_food_import_batch_nutrition_semantics()'::text, 'owner'::text),
         ('guard_food_import_batch_stage_validate_authority()'::text, 'owner'::text),
+        ('guard_food_import_record_nutrition_semantics()', 'owner'),
         ('guard_food_import_record_insert_before_staging_seal()', 'owner'),
         ('guard_food_import_stage_checkpoint_before_staging_seal()', 'owner'),
+        ('catalogue_attest_import_nutrition_semantics(uuid)', 'owner'),
+        ('catalogue_canonical_decimal_product(text,text)', 'owner'),
         ('catalogue_compute_import_staging_seal(uuid)', 'owner'),
+        ('catalogue_compute_record_nutrition_semantics(bigint)', 'owner'),
+        ('catalogue_promote_import_batch_v1(uuid,text,text)', 'owner'),
+        ('catalogue_record_import_approval_v1(uuid,text,text,text,text,text)', 'owner'),
+        ('catalogue_rollback_source_release_v1(text,uuid,text,text)', 'owner'),
         ('catalogue_stage_import_batch(text)', 'stage'),
         ('catalogue_stage_import_record_chunk(uuid,bigint,text)', 'stage'),
         ('catalogue_stage_import_parser_report(uuid,text)', 'stage'),
+        ('catalogue_utf16_length(text)', 'owner'),
         ('catalogue_observe_import_validation(uuid)', 'validate'),
-        ('catalogue_validate_import_batch(uuid,text,text,text)', 'validate')
+        ('catalogue_validate_import_batch(uuid,text,text,text)', 'validate'),
+        ('catalogue_validate_import_batch_v1(uuid,text,text,text)', 'owner')
     ) as expected(function_identity, acl_kind)
   loop
     stage_validate_function := pg_catalog.to_regprocedure(

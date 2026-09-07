@@ -471,7 +471,13 @@ role approvals may enter a new promotion. `fixture-nonrelease` and
 `legacy-unbound` batches are rejected before they can become live authority.
 
 Validation must already have frozen contract-version-1 canonical food documents,
-their SHA-256 values, and the complete active mapping-revision set. Promotion
+their SHA-256 values, the complete active mapping-revision set, and migration
+0021's database-computed contract-version-1 nutrition semantic SHA-256 for every
+classified record and the batch. Approval and promotion fail closed if any
+attestation is absent or malformed. Verification must cover NFC normalization,
+the exact ECMAScript whitespace trim/collapse set, JavaScript UTF-16-unit length
+bounds, JSON numeric `100.0` as numeric `100`, and rejection of string
+`"100.0"` where only exact `"100"` is allowed. Promotion
 accepts only the batch UUID, external descriptive principal, and bounded reason
 through `catalogue_promote_import_batch`; it never accepts caller-authored food,
 nutrient, serving, or barcode JSON. A non-owner caller must hold exactly the
@@ -497,12 +503,17 @@ raw artifact, failed validation, and audit trail for investigation and retention
 Any rollback target must already be a promoted `live-reviewed` release for the same
 source. A fixture or `legacy-unbound` row cannot be newly selected or reactivated;
 the migration may preserve an existing historical pointer until a reviewed live
-release replaces it.
+release replaces it. A non-null target must also trace through exactly one
+original `activate` event to a completed source batch carrying migration 0021's
+batch and complete record-set semantic attestation. An historical unattested
+release remains inert and cannot be reactivated; process it through a new
+reviewed batch instead of backfilling or inventing evidence.
 
 Rollback accepts only source code, target release UUID (or null to deactivate),
 external descriptive principal, and bounded reason through
 `catalogue_rollback_source_release`. The database derives the authenticated
 principal/capability and records every non-null target as operation `rollback`;
 callers cannot supply audit fields or mutate pointers/barcodes/outbox tables
-directly. These functions are source-complete but their `NOLOGIN` capability
+directly. A null target remains available for deactivation and requires no
+fabricated semantic attestation. These functions are source-complete but their `NOLOGIN` capability
 roles remain unassigned until the separately reviewed deployment/caller cutover.

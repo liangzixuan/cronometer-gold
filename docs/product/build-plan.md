@@ -95,9 +95,15 @@ acceptance; progress in either lane never waives the gates in the other.
    parser evidence, records, mapping revisions, and validated-food documents are
    sealed or frozen before later authority acts, and database audit identity is
    derived without fabricating values for existing or owner-compatible local
-   rows. It does not close M0B. Target deployment logins and credential/caller
-   cutover, independent validation semantics, external-principal binding,
-   remaining shared-writer profiles, direct-DML revocation, and target-environment
+   rows. Migration 0021 independently recomputes the exact 100-gram nutrient
+   transformation and freezes record and batch semantic attestations before any
+   decision boundary. Its text parity is explicit: NFC normalization, exact
+   ECMAScript whitespace trim/collapse, and JavaScript UTF-16-unit bounds; JSON
+   numeric `100.0` equals `100`, while a string must be exactly `"100"`. It does
+   not close M0B. Target deployment logins and
+   credential/caller cutover, independently operated validator execution,
+   external-principal binding, remaining shared-writer profiles, direct-DML
+   revocation, representative-scale evidence, and target-environment
    verifier/canary evidence remain required before live catalogue work.
    Logical restore now reapplies the pinned migration-0014 function/trigger
    manifest plus the forward migration-0015 approval/guard ACL correction,
@@ -105,10 +111,11 @@ acceptance; progress in either lane never waives the gates in the other.
    policies, migration-0018's nutrient-registry lock protocol, and
    migration-0019's frozen materialization, replacement activation-authority
    constraint, and promotion/rollback boundary plus migration-0020's sealed
-   stage/validate boundary under an explicit owner. The transactional repair
-   policy pins 44 function identities, 52 exact trigger bindings, twelve
-   authority-evidence columns, all six authority CHECKs, and the unique
-   activation-to-batch index. It compares a canonical source/target version-11
+   stage/validate boundary and migration-0021's exact-100-gram semantic
+   attestation under an explicit owner. The transactional repair policy pins
+   54 function identities, 54 exact trigger bindings, sixteen
+   authority-evidence columns, all eight authority CHECKs, and the unique
+   activation-to-batch index. It compares a canonical source/target version-12
    authority fingerprint, including column
    ACL state and trigger table schemas, while `PUBLIC CONNECT` remains revoked
    and the effective login allowlist stays exact. Public-table triggers and
@@ -127,11 +134,12 @@ acceptance; progress in either lane never waives the gates in the other.
    `public.app_schema_migration` names and SHA-256s against the tracked migration
    files, requires `public` to be the only non-system schema, and checks exact
    database/schema and object ACLs and grantors, relation/type
-   ownership, default and column ACL absence, all six authority CHECKs, the
-   twelve authority-evidence columns, the unique activation-to-batch index, all 44
-   authority functions with exact execute ACLs, unsafe authority on any other
-   public routine, and the exact 52-trigger protected shared-food/outbox
-   authority set with exact table and function schemas. Every binding of a
+   ownership, default and column ACL absence, all eight authority CHECKs, the
+   sixteen authority-evidence columns, the unique activation-to-batch index, all
+   54 authority functions with exact execute ACLs, unsafe authority on any
+   other public routine, and the exact 54-trigger protected shared-food/outbox
+   authority set with exact table and function
+   schemas. Every binding of a
    dedicated public authority trigger function enters the evidence even when
    its table is outside `public`. It also checks the effective login allowlist,
    seven isolated sessions, role
@@ -141,7 +149,8 @@ acceptance; progress in either lane never waives the gates in the other.
    non-reviewer denial, direct-DML denial, unchanged fingerprints, and zero row
    delta. Persisted credential-free evidence includes the canonical stable
    structure projection plus its recomputable SHA-256 and excludes volatile
-   backend PIDs. The real-loopback ephemeral-database integration passes and leaves no
+   backend PIDs. The policy, evidence, canary, and CLI report use schema version
+   5. The real-loopback ephemeral-database integration passes and leaves no
    database or role residue. The policy carries no credentials or private
    identity claims. Live login provisioning, membership mutation, credentials,
    external-principal binding, DEPLOY, and CONTRACT remain blocked.
@@ -372,9 +381,21 @@ login may observe and finalize only that exact sealed input; observation output
 and the validation request are each capped at 128 MiB. The roles receive
 only schema `USAGE` and their exact function `EXECUTE`, with no direct relation
 privilege. Owner/local null-lineage compatibility remains and both capabilities
-remain unassigned. PostgreSQL bounds and binds the validation document but does
-not independently recompute its nutrition semantics, so deployed independent
-validation evidence remains open. These limits are safety ceilings rather than
+remain unassigned.
+
+Migration 0021 independently recomputes the exact 100-gram nutrient
+transformation from the sealed canonical payload and reviewed mapping revisions,
+then compares it with the validator's frozen food document. It freezes
+contract-version-1 record and batch semantic SHA-256 attestations. Approval,
+promotion, and rollback to a non-null release fail closed unless the complete
+attestation is present; a null rollback target may still deactivate. The
+migration refuses pre-existing `ready` or `promoting` rows instead of backfilling
+evidence. Historical unattested completed releases remain representable and may
+retain an existing active pointer, but cannot be newly approved, promoted,
+claimed as attested, or selected for rollback. Direct schema-owner SQL remains
+trusted, and the migration assigns no live identity or caller.
+
+These limits are safety ceilings rather than
 representative full-catalogue scale proof; a bounded paged production protocol
 and measured resource/lock budgets remain open.
 
@@ -390,8 +411,10 @@ source-eligibility trigger and migration-0017's four search-path pins and exact
 food/serving/barcode trigger bindings plus migration-0018's four nutrient-lock
 functions and seven trigger bindings plus migration-0019's frozen-evidence
 boundary and migration-0020's six audit/seal columns, two checks, five workflow
-functions, owner-only helper, and three guards: a full 44-function/52-trigger
-shared-food boundary under the version-11 fingerprint,
+functions, owner-only helper, and three guards, plus migration-0021's four
+semantic-attestation columns, two checks, independent semantic functions, and
+two guards: the complete 54-function/54-trigger shared-food boundary under the
+version-12 fingerprint,
 rejecting owner, constraint, ACL, or fingerprint drift before replay or API
 probing. A live FDC release has intentionally not
 been promoted: the checked-in candidate remains non-importable until two

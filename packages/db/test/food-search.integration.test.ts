@@ -658,22 +658,8 @@ async function seedSearchCatalogue(database: Kysely<Database>): Promise<SearchFi
       .executeTakeFirstOrThrow();
     const supersededReleaseId = await insertRelease(transaction, source.id, "release-1", "1");
     const modernReleaseId = await insertRelease(transaction, source.id, "release-2", "2");
-    const supersededBatchId = await insertPromotingBatch(
-      transaction,
-      source.id,
-      supersededReleaseId,
-      "release-1",
-      "1",
-      1,
-    );
-    const modernBatchId = await insertPromotingBatch(
-      transaction,
-      source.id,
-      modernReleaseId,
-      "release-2",
-      "2",
-      4,
-    );
+    const supersededBatchId = await insertReadyBatch(transaction, source.id, "release-1", "1", 1);
+    const modernBatchId = await insertReadyBatch(transaction, source.id, "release-2", "2", 4);
 
     const sharedFood = await insertFood(transaction, source.id, "shared-oatmeal", "generic");
     const supersededVersionId = await insertVersion(transaction, {
@@ -803,6 +789,34 @@ async function seedSearchCatalogue(database: Kysely<Database>): Promise<SearchFi
       versionNumber: 1,
     });
 
+    await attestSearchBatch(transaction, supersededBatchId, "release-1", 1);
+    await attestSearchBatch(transaction, modernBatchId, "release-2", 4);
+    await markBatchPromoting(transaction, supersededBatchId, supersededReleaseId);
+    await markBatchPromoting(transaction, modernBatchId, modernReleaseId);
+    await transaction
+      .insertInto("food_source_release_activation")
+      .values([
+        {
+          food_source_id: source.id,
+          import_batch_id: supersededBatchId,
+          operation: "activate",
+          performed_by: "service:search-fixture-promoter",
+          previous_release_id: null,
+          reason: "Record the attested origin of search fixture release 1",
+          release_id: supersededReleaseId,
+        },
+        {
+          food_source_id: source.id,
+          import_batch_id: modernBatchId,
+          operation: "activate",
+          performed_by: "service:search-fixture-promoter",
+          previous_release_id: supersededReleaseId,
+          reason: "Record the attested origin of search fixture release 2",
+          release_id: modernReleaseId,
+        },
+      ])
+      .execute();
+
     await completeBatch(transaction, supersededBatchId, 1);
     await completeBatch(transaction, modernBatchId, 4);
 
@@ -866,10 +880,9 @@ async function insertRelease(
   ).id;
 }
 
-async function insertPromotingBatch(
+async function insertReadyBatch(
   transaction: Transaction<Database>,
   sourceId: string,
-  releaseId: string,
   releaseKey: string,
   hashCharacter: string,
   recordCount: number,
@@ -913,12 +926,52 @@ async function insertPromotingBatch(
     })
     .where("id", "=", batch.id)
     .execute();
+  return batch.id;
+}
+
+async function markBatchPromoting(
+  transaction: Transaction<Database>,
+  batchId: string,
+  releaseId: string,
+): Promise<void> {
   await transaction
     .updateTable("food_import_batch")
     .set({ release_id: releaseId, status: "promoting" })
-    .where("id", "=", batch.id)
+    .where("id", "=", batchId)
     .execute();
-  return batch.id;
+}
+
+async function attestSearchBatch(
+  transaction: Transaction<Database>,
+  batchId: string,
+  releaseKey: string,
+  recordCount: number,
+): Promise<void> {
+  const report = {
+    fixture: "food-search-semantic-origin",
+    releaseKey,
+    schemaVersion: 1,
+  };
+  await transaction
+    .insertInto("food_import_parser_report")
+    .values({
+      batch_id: batchId,
+      emitted_nutrient_count: 0,
+      emitted_portion_count: 0,
+      emitted_record_count: recordCount,
+      excluded_nutrient_count: 0,
+      excluded_portion_count: 0,
+      excluded_record_count: 0,
+      report,
+      report_sha256: sha256CanonicalJson(report),
+      source_nutrient_count: 0,
+      source_portion_count: 0,
+      source_record_count: recordCount,
+    })
+    .execute();
+  await sql`
+    select catalogue_attest_import_nutrition_semantics(${batchId}::uuid)
+  `.execute(transaction);
 }
 
 async function completeBatch(
@@ -1027,12 +1080,18 @@ async function insertVersion(
     sourceModifiedAt: "2026-08-15T00:00:00Z",
   };
   const validatedFoodDocument = canonicalJson(validatedFood);
+  const canonicalPayload = {
+    basis: { amount: "100", unit: "g" },
+    fixture: true,
+    name: input.name,
+    nutrients: [],
+  };
   const record = await transaction
     .insertInto("food_import_record")
     .values({
       batch_id: input.batchId,
-      canonical_payload: { fixture: true, name: input.name },
-      canonical_payload_sha256: "b".repeat(64),
+      canonical_payload: canonicalPayload,
+      canonical_payload_sha256: sha256CanonicalJson(canonicalPayload),
       sequence_number: input.sequenceNumber,
       source_payload_sha256: "c".repeat(64),
       source_record_key: `${input.sourceFoodKey}:${input.versionNumber}`,

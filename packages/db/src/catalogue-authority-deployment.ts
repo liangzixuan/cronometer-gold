@@ -27,12 +27,18 @@ export type CatalogueFunctionExecuteGrantees =
   | readonly CatalogueCapabilityRole[];
 
 export const CATALOGUE_APPROVAL_FUNCTION_SOURCE_SHA256 =
+  "abb0ca990b74fedffd4ec77cf666e404da89af8158f4b990b6c0de48cd3dfc41";
+export const CATALOGUE_APPROVAL_V1_FUNCTION_SOURCE_SHA256 =
   "89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac";
 export const CATALOGUE_APPROVAL_GUARD_SOURCE_SHA256 =
   "f96feb298d900165172c56a3fa1e99e91aaca010657155e5a996ee04015fdbbd";
 export const CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256 =
+  "309861b6850a99bb565466981602ee19054b9c2500dfee21bf27edc6be382111";
+export const CATALOGUE_PROMOTION_V1_FUNCTION_SOURCE_SHA256 =
   "115fdc3ed1943dd77ce70d3a694495da3d2c62ade9c7b82812a89cef82b39f17";
 export const CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256 =
+  "56e9fa2cce7f532c1f405658ff9f07908394d0fb9734b70d0bdb92a12292068a";
+export const CATALOGUE_ROLLBACK_V1_FUNCTION_SOURCE_SHA256 =
   "3fe493ee5e0b27e43cc881854dddfe4dc12f862a1c4a242bf712c843b2792ff1";
 export const CATALOGUE_ACTIVATION_GUARD_SOURCE_SHA256 =
   "d46f53aeffa6469eada5461ab59bd9c23d43bf9aab77704c61b21c44291ae028";
@@ -47,7 +53,21 @@ export const CATALOGUE_STAGE_PARSER_REPORT_FUNCTION_SOURCE_SHA256 =
 export const CATALOGUE_STAGE_RECORD_CHUNK_FUNCTION_SOURCE_SHA256 =
   "4cc2b310ba6fda051a125bb203c0cf2c6a5fbe227a55daf517a0376ab79e4c7f";
 export const CATALOGUE_VALIDATE_BATCH_FUNCTION_SOURCE_SHA256 =
+  "10c59084d8e5c7debb581c6e749f6779dbc3f5867fc4cb18ffc009293f9f50a5";
+export const CATALOGUE_VALIDATE_BATCH_V1_FUNCTION_SOURCE_SHA256 =
   "5b7ae15625fb0ae0d88a9512fe82fca69a9d0dd9e179af8bc1b2f42d1e85ac8a";
+export const CATALOGUE_NUTRITION_ATTESTATION_FUNCTION_SOURCE_SHA256 =
+  "e2c35dfabb653636a9640475227104a485a24129558b11511175831ef9bc5b8b";
+export const CATALOGUE_NUTRITION_DECIMAL_PRODUCT_FUNCTION_SOURCE_SHA256 =
+  "299a2c88226123f167fe2d7001fdaf6a2e02425007f2426c8def9d0bb83a46c0";
+export const CATALOGUE_NUTRITION_UTF16_LENGTH_FUNCTION_SOURCE_SHA256 =
+  "3a1759986b190b3ccac086e5da943ada91f3cc8c3a94ce6942657faae389ef39";
+export const CATALOGUE_NUTRITION_COMPUTE_RECORD_FUNCTION_SOURCE_SHA256 =
+  "41f048090dce80b794615f135f5368f7f501eaecfc3513471eb6d1f36c022783";
+export const CATALOGUE_RECORD_NUTRITION_SEMANTIC_GUARD_SOURCE_SHA256 =
+  "489c1c4b970c6ba369503854701c980ebcb1510c754050e78355fed94647e0e8";
+export const CATALOGUE_BATCH_NUTRITION_SEMANTIC_GUARD_SOURCE_SHA256 =
+  "298b898cd252f08aa9a5f212e85750aeba79cc41616c71afcd3f129471a6cf5c";
 export const CATALOGUE_STAGE_VALIDATE_GUARD_SOURCE_SHA256 =
   "f21dfa9d5455a40ab9f50bdbace02ffc19f53ab252e0eab99a4f50769f678eda";
 export const CATALOGUE_RECORD_STAGING_SEAL_GUARD_SOURCE_SHA256 =
@@ -60,6 +80,10 @@ export const CATALOGUE_STAGE_VALIDATE_AUTHORITY_CONSTRAINT_DEFINITION =
   "CHECK ((staged_database_principal IS NULL AND staged_database_capability_role IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR staged_database_principal IS NOT NULL AND octet_length(staged_database_principal) >= 1 AND octet_length(staged_database_principal) <= 63 AND staged_database_capability_role = 'nutrition_catalogue_stage'::text AND (validated_at IS NULL AND validated_database_principal IS NULL AND validated_database_capability_role IS NULL OR validated_at IS NOT NULL AND validated_database_principal IS NOT NULL AND octet_length(validated_database_principal) >= 1 AND octet_length(validated_database_principal) <= 63 AND validated_database_capability_role = 'nutrition_catalogue_validate'::text AND validated_database_principal <> staged_database_principal)) IS TRUE)";
 export const CATALOGUE_STAGING_SEAL_CONSTRAINT_DEFINITION =
   "CHECK ((staging_seal_sha256 IS NULL AND staging_sealed_at IS NULL OR staging_seal_sha256 ~ '^[0-9a-f]{64}$'::text AND staging_sealed_at IS NOT NULL AND (staging_sealed_at <> ALL (ARRAY['-infinity'::timestamp with time zone, 'infinity'::timestamp with time zone]))) IS TRUE AND (validated_at IS NULL OR staged_database_principal IS NULL OR staging_seal_sha256 IS NOT NULL))";
+export const CATALOGUE_BATCH_NUTRITION_SEMANTIC_CONSTRAINT_DEFINITION =
+  "CHECK ((nutrition_semantic_contract_version IS NULL AND nutrition_semantic_sha256 IS NULL OR nutrition_semantic_contract_version = 1 AND nutrition_semantic_sha256 ~ '^[0-9a-f]{64}$'::text AND validated_at IS NOT NULL AND (status = ANY (ARRAY['quarantined'::text, 'ready'::text, 'promoting'::text, 'completed'::text]))) IS TRUE)";
+export const CATALOGUE_RECORD_NUTRITION_SEMANTIC_CONSTRAINT_DEFINITION =
+  "CHECK ((nutrition_semantic_contract_version IS NULL AND nutrition_semantic_sha256 IS NULL OR nutrition_semantic_contract_version = 1 AND nutrition_semantic_sha256 ~ '^[0-9a-f]{64}$'::text AND validated_at IS NOT NULL AND (validation_status = ANY (ARRAY['quarantined'::text, 'valid'::text, 'materialized'::text]))) IS TRUE)";
 
 export const CATALOGUE_AUTHORITY_CONSTRAINT_POLICY = [
   {
@@ -67,6 +91,13 @@ export const CATALOGUE_AUTHORITY_CONSTRAINT_POLICY = [
     definition:
       "CHECK ((validated_food_contract_version IS NULL AND nutrient_mapping_digest IS NULL AND nutrient_mapping_revision_ids IS NULL OR validated_food_contract_version = 1 AND nutrient_mapping_digest ~ '^[0-9a-f]{64}$'::text AND jsonb_typeof(nutrient_mapping_revision_ids) = 'array'::text AND validated_at IS NOT NULL) IS TRUE)",
     name: "food_import_batch_materialization_contract_check",
+    tableName: "food_import_batch",
+    validated: true,
+  },
+  {
+    constraintType: "c",
+    definition: CATALOGUE_BATCH_NUTRITION_SEMANTIC_CONSTRAINT_DEFINITION,
+    name: "food_import_batch_nutrition_semantic_contract_check",
     tableName: "food_import_batch",
     validated: true,
   },
@@ -90,6 +121,13 @@ export const CATALOGUE_AUTHORITY_CONSTRAINT_POLICY = [
     definition: CATALOGUE_STAGING_SEAL_CONSTRAINT_DEFINITION,
     name: "food_import_batch_staging_seal_check",
     tableName: "food_import_batch",
+    validated: true,
+  },
+  {
+    constraintType: "c",
+    definition: CATALOGUE_RECORD_NUTRITION_SEMANTIC_CONSTRAINT_DEFINITION,
+    name: "food_import_record_nutrition_semantic_contract_check",
+    tableName: "food_import_record",
     validated: true,
   },
   {
@@ -121,6 +159,22 @@ export const CATALOGUE_AUTHORITY_FROZEN_COLUMN_POLICY = [
   {
     columnName: "nutrient_mapping_revision_ids",
     dataType: "jsonb",
+    defaultExpression: null,
+    notNull: false,
+    schemaName: "public",
+    tableName: "food_import_batch",
+  },
+  {
+    columnName: "nutrition_semantic_contract_version",
+    dataType: "smallint",
+    defaultExpression: null,
+    notNull: false,
+    schemaName: "public",
+    tableName: "food_import_batch",
+  },
+  {
+    columnName: "nutrition_semantic_sha256",
+    dataType: "text",
     defaultExpression: null,
     notNull: false,
     schemaName: "public",
@@ -183,6 +237,22 @@ export const CATALOGUE_AUTHORITY_FROZEN_COLUMN_POLICY = [
     tableName: "food_import_batch",
   },
   {
+    columnName: "nutrition_semantic_contract_version",
+    dataType: "smallint",
+    defaultExpression: null,
+    notNull: false,
+    schemaName: "public",
+    tableName: "food_import_record",
+  },
+  {
+    columnName: "nutrition_semantic_sha256",
+    dataType: "text",
+    defaultExpression: null,
+    notNull: false,
+    schemaName: "public",
+    tableName: "food_import_record",
+  },
+  {
     columnName: "validated_food_contract_version",
     dataType: "smallint",
     defaultExpression: null,
@@ -235,7 +305,7 @@ export interface CatalogueAuthorityFunctionPolicy {
   readonly leakproof: boolean;
   readonly name: string;
   readonly parallel: string;
-  readonly resultType: "boolean" | "jsonb" | "text" | "trigger" | "void";
+  readonly resultType: "bigint" | "boolean" | "jsonb" | "text" | "trigger" | "void";
   readonly securityDefiner: boolean;
   readonly sourceSha256: string;
   readonly strict: boolean;
@@ -276,11 +346,53 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
     executeGrantees: "owner-only",
     language: "plpgsql",
     leakproof: false,
+    name: "catalogue_attest_import_nutrition_semantics",
+    parallel: "u",
+    resultType: "jsonb",
+    securityDefiner: true,
+    sourceSha256: CATALOGUE_NUTRITION_ATTESTATION_FUNCTION_SOURCE_SHA256,
+    strict: false,
+    volatility: "v",
+  },
+  {
+    arguments: "p_left text, p_right text",
+    configuration: "application-schema",
+    executeGrantees: "owner-only",
+    language: "plpgsql",
+    leakproof: false,
+    name: "catalogue_canonical_decimal_product",
+    parallel: "s",
+    resultType: "text",
+    securityDefiner: false,
+    sourceSha256: CATALOGUE_NUTRITION_DECIMAL_PRODUCT_FUNCTION_SOURCE_SHA256,
+    strict: true,
+    volatility: "i",
+  },
+  {
+    arguments: "p_batch_id uuid",
+    configuration: "application-schema",
+    executeGrantees: "owner-only",
+    language: "plpgsql",
+    leakproof: false,
     name: "catalogue_compute_import_staging_seal",
     parallel: "u",
     resultType: "text",
     securityDefiner: true,
     sourceSha256: CATALOGUE_COMPUTE_STAGING_SEAL_FUNCTION_SOURCE_SHA256,
+    strict: false,
+    volatility: "v",
+  },
+  {
+    arguments: "p_record_id bigint",
+    configuration: "application-schema",
+    executeGrantees: "owner-only",
+    language: "plpgsql",
+    leakproof: false,
+    name: "catalogue_compute_record_nutrition_semantics",
+    parallel: "u",
+    resultType: "jsonb",
+    securityDefiner: true,
+    sourceSha256: CATALOGUE_NUTRITION_COMPUTE_RECORD_FUNCTION_SOURCE_SHA256,
     strict: false,
     volatility: "v",
   },
@@ -327,6 +439,20 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
     volatility: "v",
   },
   {
+    arguments: "p_batch_id uuid, p_external_principal_id text, p_reason text",
+    configuration: "application-schema",
+    executeGrantees: "owner-only",
+    language: "plpgsql",
+    leakproof: false,
+    name: "catalogue_promote_import_batch_v1",
+    parallel: "u",
+    resultType: "jsonb",
+    securityDefiner: true,
+    sourceSha256: CATALOGUE_PROMOTION_V1_FUNCTION_SOURCE_SHA256,
+    strict: false,
+    volatility: "v",
+  },
+  {
     arguments:
       "p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text",
     configuration: "application-schema",
@@ -347,6 +473,21 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
   },
   {
     arguments:
+      "p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text",
+    configuration: "application-schema",
+    executeGrantees: "owner-only",
+    language: "plpgsql",
+    leakproof: false,
+    name: "catalogue_record_import_approval_v1",
+    parallel: "u",
+    resultType: "boolean",
+    securityDefiner: true,
+    sourceSha256: CATALOGUE_APPROVAL_V1_FUNCTION_SOURCE_SHA256,
+    strict: false,
+    volatility: "v",
+  },
+  {
+    arguments:
       "p_source_code text, p_target_release_id uuid, p_external_principal_id text, p_reason text",
     configuration: "application-schema",
     executeGrantees: ["nutrition_catalogue_rollback"],
@@ -357,6 +498,21 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
     resultType: "jsonb",
     securityDefiner: true,
     sourceSha256: CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
+    strict: false,
+    volatility: "v",
+  },
+  {
+    arguments:
+      "p_source_code text, p_target_release_id uuid, p_external_principal_id text, p_reason text",
+    configuration: "application-schema",
+    executeGrantees: "owner-only",
+    language: "plpgsql",
+    leakproof: false,
+    name: "catalogue_rollback_source_release_v1",
+    parallel: "u",
+    resultType: "jsonb",
+    securityDefiner: true,
+    sourceSha256: CATALOGUE_ROLLBACK_V1_FUNCTION_SOURCE_SHA256,
     strict: false,
     volatility: "v",
   },
@@ -403,6 +559,20 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
     volatility: "v",
   },
   {
+    arguments: "p_value text",
+    configuration: "application-schema",
+    executeGrantees: "owner-only",
+    language: "sql",
+    leakproof: false,
+    name: "catalogue_utf16_length",
+    parallel: "s",
+    resultType: "bigint",
+    securityDefiner: false,
+    sourceSha256: CATALOGUE_NUTRITION_UTF16_LENGTH_FUNCTION_SOURCE_SHA256,
+    strict: true,
+    volatility: "i",
+  },
+  {
     arguments:
       "p_batch_id uuid, p_expected_staging_seal_sha256 text, p_expected_observation_sha256 text, p_validation_document text",
     configuration: "application-schema",
@@ -414,6 +584,21 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
     resultType: "jsonb",
     securityDefiner: true,
     sourceSha256: CATALOGUE_VALIDATE_BATCH_FUNCTION_SOURCE_SHA256,
+    strict: false,
+    volatility: "v",
+  },
+  {
+    arguments:
+      "p_batch_id uuid, p_expected_staging_seal_sha256 text, p_expected_observation_sha256 text, p_validation_document text",
+    configuration: "application-schema",
+    executeGrantees: "owner-only",
+    language: "plpgsql",
+    leakproof: false,
+    name: "catalogue_validate_import_batch_v1",
+    parallel: "u",
+    resultType: "jsonb",
+    securityDefiner: true,
+    sourceSha256: CATALOGUE_VALIDATE_BATCH_V1_FUNCTION_SOURCE_SHA256,
     strict: false,
     volatility: "v",
   },
@@ -482,6 +667,12 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
   {
     ...TRIGGER_FUNCTION_POLICY,
     executeGrantees: "owner-only",
+    name: "guard_food_import_batch_nutrition_semantics",
+    sourceSha256: CATALOGUE_BATCH_NUTRITION_SEMANTIC_GUARD_SOURCE_SHA256,
+  },
+  {
+    ...TRIGGER_FUNCTION_POLICY,
+    executeGrantees: "owner-only",
     name: "guard_food_import_batch_stage_validate_authority",
     sourceSha256: CATALOGUE_STAGE_VALIDATE_GUARD_SOURCE_SHA256,
   },
@@ -500,6 +691,12 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
     executeGrantees: "owner-only",
     name: "guard_food_import_record_insert_before_staging_seal",
     sourceSha256: CATALOGUE_RECORD_STAGING_SEAL_GUARD_SOURCE_SHA256,
+  },
+  {
+    ...TRIGGER_FUNCTION_POLICY,
+    executeGrantees: "owner-only",
+    name: "guard_food_import_record_nutrition_semantics",
+    sourceSha256: CATALOGUE_RECORD_NUTRITION_SEMANTIC_GUARD_SOURCE_SHA256,
   },
   {
     ...TRIGGER_FUNCTION_POLICY,
@@ -753,6 +950,13 @@ export const CATALOGUE_AUTHORITY_TRIGGER_POLICY: readonly CatalogueAuthorityTrig
   },
   {
     definition:
+      "CREATE TRIGGER food_import_batch_guard_nutrition_semantics BEFORE INSERT OR UPDATE ON food_import_batch FOR EACH ROW EXECUTE FUNCTION guard_food_import_batch_nutrition_semantics()",
+    functionName: "guard_food_import_batch_nutrition_semantics",
+    name: "food_import_batch_guard_nutrition_semantics",
+    tableName: "food_import_batch",
+  },
+  {
+    definition:
       "CREATE TRIGGER food_import_batch_guard_stage_validate_authority BEFORE INSERT OR UPDATE ON food_import_batch FOR EACH ROW EXECUTE FUNCTION guard_food_import_batch_stage_validate_authority()",
     functionName: "guard_food_import_batch_stage_validate_authority",
     name: "food_import_batch_guard_stage_validate_authority",
@@ -799,6 +1003,13 @@ export const CATALOGUE_AUTHORITY_TRIGGER_POLICY: readonly CatalogueAuthorityTrig
     functionName: "reject_immutable_row_update",
     name: "food_import_parser_report_reject_update",
     tableName: "food_import_parser_report",
+  },
+  {
+    definition:
+      "CREATE TRIGGER food_import_record_guard_nutrition_semantics BEFORE INSERT OR UPDATE ON food_import_record FOR EACH ROW EXECUTE FUNCTION guard_food_import_record_nutrition_semantics()",
+    functionName: "guard_food_import_record_nutrition_semantics",
+    name: "food_import_record_guard_nutrition_semantics",
+    tableName: "food_import_record",
   },
   {
     definition:
@@ -1014,7 +1225,7 @@ export interface CatalogueAuthorityDeploymentPolicy {
   readonly promotionFunctionSourceSha256: string;
   readonly reviewerLogins: Readonly<Record<CatalogueReviewerClass, string>>;
   readonly rollbackFunctionSourceSha256: string;
-  readonly schemaVersion: 4;
+  readonly schemaVersion: 5;
   readonly stageBatchFunctionSourceSha256: string;
   readonly stageParserReportFunctionSourceSha256: string;
   readonly stageRecordChunkFunctionSourceSha256: string;
@@ -1195,7 +1406,7 @@ export interface CatalogueAuthorityDeploymentEvidence {
   readonly nonSystemSchemas: readonly string[];
   readonly policySha256: string;
   readonly relations: readonly CatalogueRelationEvidence[];
-  readonly schemaVersion: 4;
+  readonly schemaVersion: 5;
   readonly types: readonly CatalogueTypeEvidence[];
 }
 
@@ -1233,7 +1444,7 @@ export interface CatalogueAuthorityCanaryEvidence {
     readonly canary: CatalogueAuthorityCanaryName;
     readonly sqlstate: "23503" | "42501";
   }[];
-  readonly schemaVersion: 4;
+  readonly schemaVersion: 5;
   readonly structure: CatalogueAuthorityDeploymentStructureEvidence;
 }
 
@@ -1262,7 +1473,7 @@ export function parseCatalogueAuthorityDeploymentPolicy(
     "stageValidateGuardSourceSha256",
     "validateBatchFunctionSourceSha256",
   ]);
-  if (policy.policyKind !== "catalogue-authority-deployment" || policy.schemaVersion !== 4) {
+  if (policy.policyKind !== "catalogue-authority-deployment" || policy.schemaVersion !== 5) {
     throw new Error("Catalogue authority deployment policy identity is unsupported");
   }
   if (
@@ -1372,7 +1583,7 @@ export function parseCatalogueAuthorityDeploymentPolicy(
     promotionFunctionSourceSha256,
     reviewerLogins,
     rollbackFunctionSourceSha256,
-    schemaVersion: 4,
+    schemaVersion: 5,
     stageBatchFunctionSourceSha256,
     stageParserReportFunctionSourceSha256,
     stageRecordChunkFunctionSourceSha256,
@@ -1440,7 +1651,7 @@ export function assertCatalogueAuthorityDeploymentEvidence(
   evidence: CatalogueAuthorityDeploymentEvidence,
 ): void {
   if (
-    evidence.schemaVersion !== 4 ||
+    evidence.schemaVersion !== 5 ||
     evidence.policySha256 !== catalogueAuthorityDeploymentPolicySha256(policy)
   ) {
     throw new Error("Catalogue authority deployment evidence identity differs");
@@ -1611,7 +1822,7 @@ export function assertCatalogueAuthorityCanaryEvidence(
   evidence: CatalogueAuthorityCanaryEvidence,
 ): void {
   if (
-    evidence.schemaVersion !== 4 ||
+    evidence.schemaVersion !== 5 ||
     evidence.policySha256 !== catalogueAuthorityDeploymentPolicySha256(policy)
   ) {
     throw new Error("Catalogue authority canary evidence identity differs");
