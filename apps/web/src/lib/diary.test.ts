@@ -1,23 +1,30 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  defaultDiaryGroups,
   diaryEditErrorMessage,
   diaryEditorOperationKey,
   diaryEditorOrigin,
   diaryEditorOriginMatches,
   diaryEntryNoteCharacterCount,
+  diaryGroupLabel,
   diaryPagePath,
   entryEnergyDisplay,
   isDiaryPageStaleProblem,
   isLocalDate,
   localDateTimeToInstant,
   mergeDiaryPages,
+  moveDiaryGroup,
   nutrientDisplay,
   parseDiaryDay,
+  parseDiaryGroups,
   parseDiaryMutation,
   parseDiaryPage,
+  parseProfileResponse,
+  parseSession,
   prepareDiaryEntryNote,
   prepareDiaryEntryNotePatch,
+  prepareDiaryGroups,
   prepareQuickAddOperation,
   quickAddOccurredAt,
   resolveDiaryRouteDate,
@@ -165,6 +172,114 @@ function diaryPageFixture(
 }
 
 describe("web diary contract", () => {
+  it("supplies cloned defaults for legacy profiles but rejects malformed present groups", () => {
+    const legacyProfile = {
+      displayName: null,
+      birthDate: null,
+      sexAtBirth: "not_specified",
+      heightCm: null,
+      baselineWeightKg: null,
+      activityLevelCode: null,
+      locale: "en-US",
+      timeZone: "America/Chicago",
+      unitSystem: "metric",
+      onboardingCompletedAt: null,
+      revision: "1",
+    };
+    const parsed = parseSession({
+      data: {
+        user: {
+          id: "70eedafb-9d6e-4adc-b924-8e55e87ff5d0",
+          email: "ada@example.com",
+          emailVerified: true,
+        },
+        profile: legacyProfile,
+      },
+    });
+
+    expect(parsed.profile.diaryGroups).toEqual(defaultDiaryGroups);
+    expect(parsed.profile.diaryGroups).not.toBe(defaultDiaryGroups);
+    expect(parsed.profile.diaryGroups[0]).not.toBe(defaultDiaryGroups[0]);
+    expect(() =>
+      parseProfileResponse({
+        data: { profile: { ...legacyProfile, diaryGroups: [] } },
+      }),
+    ).toThrow(TypeError);
+  });
+
+  it("parses custom diary group order and resolves labels by stable meal slot", () => {
+    const groups = parseDiaryGroups([
+      { mealSlot: "snacks", label: "Evening snack" },
+      { mealSlot: "breakfast", label: "Morning" },
+      { mealSlot: "lunch", label: "Midday" },
+      { mealSlot: "dinner", label: "Supper" },
+    ]);
+    expect(groups.map((group) => group.mealSlot)).toEqual([
+      "snacks",
+      "breakfast",
+      "lunch",
+      "dinner",
+    ]);
+    expect(diaryGroupLabel(groups, "dinner")).toBe("Supper");
+  });
+
+  it("normalizes editable group labels and reorders without changing canonical slot values", () => {
+    const normalized = prepareDiaryGroups([
+      { mealSlot: "breakfast", label: "  Morning  " },
+      { mealSlot: "lunch", label: "Midday" },
+      { mealSlot: "dinner", label: "Supper" },
+      { mealSlot: "snacks", label: "Treats" },
+    ]);
+    expect(normalized[0]).toEqual({ mealSlot: "breakfast", label: "Morning" });
+    expect(moveDiaryGroup(normalized, 0, 1).map((group) => group.mealSlot)).toEqual([
+      "lunch",
+      "breakfast",
+      "dinner",
+      "snacks",
+    ]);
+    expect(defaultDiaryGroups.map((group) => group.mealSlot)).toEqual([
+      "breakfast",
+      "lunch",
+      "dinner",
+      "snacks",
+    ]);
+  });
+
+  it("rejects malformed, duplicate, non-canonical, or oversized diary group labels", () => {
+    expect(() =>
+      parseDiaryGroups([
+        { mealSlot: "breakfast", label: "Morning" },
+        { mealSlot: "lunch", label: "morning" },
+        { mealSlot: "dinner", label: "Dinner" },
+        { mealSlot: "snacks", label: "Snacks" },
+      ]),
+    ).toThrow(TypeError);
+    expect(() =>
+      parseDiaryGroups([
+        { mealSlot: "breakfast", label: " Breakfast " },
+        ...defaultDiaryGroups.slice(1),
+      ]),
+    ).toThrow(TypeError);
+    expect(() =>
+      prepareDiaryGroups([
+        { mealSlot: "breakfast", label: "Morning\nmeal" },
+        ...defaultDiaryGroups.slice(1),
+      ]),
+    ).toThrow(TypeError);
+    expect(() =>
+      prepareDiaryGroups([
+        { mealSlot: "breakfast", label: "🍽".repeat(40) },
+        ...defaultDiaryGroups.slice(1),
+      ]),
+    ).toThrow(TypeError);
+    expect(() =>
+      prepareDiaryGroups([
+        { mealSlot: "breakfast", label: "\ud800" },
+        ...defaultDiaryGroups.slice(1),
+      ]),
+    ).toThrow(TypeError);
+  });
+
   it("preserves exact decimal strings and labels partial totals as lower bounds", () => {
     const diary = parseDiaryDay({
       data: {

@@ -10,13 +10,16 @@ import {
   type DiaryDay,
   type DiaryEditorOrigin,
   type DiaryEntry,
+  type DiaryGroup,
   type DiaryMutationResult,
   type DiaryPage,
+  defaultDiaryGroups,
   diaryEditErrorMessage,
   diaryEditorOperationKey,
   diaryEditorOrigin,
   diaryEditorOriginMatches,
   diaryEntryNoteCharacterCount,
+  diaryGroupLabel,
   diaryPagePath,
   entryEnergyDisplay,
   isDiaryPageStaleProblem,
@@ -27,13 +30,15 @@ import {
   localTimeInTimeZone,
   type MealSlot,
   mealLabel,
-  mealSlots,
   mergeDiaryPages,
+  moveDiaryGroup,
   nutrientDisplay,
   parseDiaryMutation,
   parseDiaryPage,
+  parseProfileResponse,
   parseSession,
   prepareDiaryEntryNotePatch,
+  prepareDiaryGroups,
   quoteRevision,
   resolveDiaryRouteDate,
   type SessionSummary,
@@ -74,6 +79,12 @@ function responseError(value: unknown, fallback: string): string {
   return typeof error === "string" && error.length <= 500 ? error : fallback;
 }
 
+function responseCode(value: unknown): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const code = (value as Record<string, unknown>).code;
+  return typeof code === "string" ? code : null;
+}
+
 function editState(entry: DiaryEntry, day: DiaryDay): EntryEditor {
   const localTime = entry.localTime.slice(0, 5);
   return {
@@ -111,8 +122,12 @@ export function DiaryClient() {
   const [message, setMessage] = useState("Opening your private diary…");
   const [editor, setEditor] = useState<EntryEditor | null>(null);
   const [mutationBusy, setMutationBusy] = useState<string | null>(null);
+  const [diaryGroupDraft, setDiaryGroupDraft] = useState<readonly DiaryGroup[]>(defaultDiaryGroups);
+  const [diaryGroupSettingsOpen, setDiaryGroupSettingsOpen] = useState(false);
+  const [profileBusy, setProfileBusy] = useState(false);
   const operationIds = useRef(new Map<string, string>());
   const loadController = useRef<AbortController | null>(null);
+  const profileController = useRef<AbortController | null>(null);
   const pageRequestBusy = useRef(false);
   const requestGeneration = useRef(0);
   const statusRef = useRef<HTMLParagraphElement | null>(null);
@@ -121,9 +136,12 @@ export function DiaryClient() {
   const activeMutation = useRef<number | null>(null);
   const privateUiGeneration = useRef(0);
   const privateUiClosed = useRef(false);
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
   const dateRef = useRef(date);
   dateRef.current = date;
   const diary = diaryPage?.data.localDate === date ? diaryPage.data : null;
+  const diaryGroups = session?.profile.diaryGroups ?? defaultDiaryGroups;
 
   const signInAgain = useCallback(() => {
     privateUiClosed.current = true;
@@ -133,12 +151,17 @@ export function DiaryClient() {
     mutationSequence.current += 1;
     activeMutation.current = null;
     loadController.current?.abort();
+    profileController.current?.abort();
+    profileController.current = null;
     pageRequestBusy.current = false;
     operationIds.current.clear();
     setDiaryPage(null);
     setEditor(null);
     setSession(null);
     setMutationBusy(null);
+    setProfileBusy(false);
+    setDiaryGroupSettingsOpen(false);
+    setDiaryGroupDraft(defaultDiaryGroups);
     setPageState("idle");
     setState("loading");
     setMessage("Closing your private diary…");
@@ -258,6 +281,7 @@ export function DiaryClient() {
           privateUiGeneration.current === generation
         ) {
           setSession(nextSession);
+          setDiaryGroupDraft(nextSession.profile.diaryGroups);
         }
       } catch (error) {
         if (
@@ -295,6 +319,9 @@ export function DiaryClient() {
       activeMutation.current = null;
       requestGeneration.current += 1;
       loadController.current?.abort();
+      privateUiGeneration.current += 1;
+      profileController.current?.abort();
+      profileController.current = null;
     },
     [],
   );
@@ -505,7 +532,7 @@ export function DiaryClient() {
       await reportMutationReceipt(
         owner,
         mutation,
-        "Diary entry saved with fresh totals.",
+        `Diary entry saved in ${diaryGroupLabel(diaryGroups, editor.mealSlot)} with fresh totals.`,
         "The entry was saved, but fresh diary data could not be confirmed. Choose Retry.",
       );
     } catch (error) {
@@ -518,7 +545,9 @@ export function DiaryClient() {
   async function deleteEntry(entry: DiaryEntry) {
     if (
       !diary ||
-      !window.confirm(`Delete ${entryName(entry)} from ${mealLabel(entry.mealSlot)}?`)
+      !window.confirm(
+        `Delete ${entryName(entry)} from ${diaryGroupLabel(diaryGroups, entry.mealSlot)}?`,
+      )
     ) {
       return;
     }
@@ -559,7 +588,7 @@ export function DiaryClient() {
       await reportMutationReceipt(
         owner,
         mutation,
-        "Diary entry deleted and totals refreshed.",
+        `${entryName(entry)} deleted from ${diaryGroupLabel(diaryGroups, entry.mealSlot)} and totals refreshed.`,
         "The entry was deleted, but fresh diary data could not be confirmed. Choose Retry.",
       );
     } catch (error) {
@@ -625,8 +654,8 @@ export function DiaryClient() {
         owner,
         mutation,
         repeatedDate === owner.sourceDate
-          ? "Pinned entry version repeated with fresh authoritative totals."
-          : `Pinned entry version repeated for ${repeatedDate}.`,
+          ? `Pinned entry version repeated in ${diaryGroupLabel(diaryGroups, entry.mealSlot)} with fresh authoritative totals.`
+          : `Pinned entry version repeated in ${diaryGroupLabel(diaryGroups, entry.mealSlot)} for ${repeatedDate}.`,
         "The entry was repeated, but fresh diary data could not be confirmed. Choose Retry.",
       );
     } catch (error) {
@@ -637,6 +666,101 @@ export function DiaryClient() {
       }
     } finally {
       finishMutation(owner);
+    }
+  }
+
+  async function saveDiaryGroups() {
+    if (!session || profileBusy || profileController.current || privateUiClosed.current) return;
+    const initiatingOwnerUserId = session.user.id;
+    const generation = privateUiGeneration.current;
+    let prepared: readonly DiaryGroup[];
+    try {
+      prepared = prepareDiaryGroups(diaryGroupDraft);
+    } catch (error) {
+      setMessage(
+        error instanceof Error ? error.message : "The diary group labels could not be validated.",
+      );
+      return;
+    }
+    const controller = new AbortController();
+    profileController.current = controller;
+    const requestOwnsUi = () =>
+      profileController.current === controller &&
+      !controller.signal.aborted &&
+      !privateUiClosed.current &&
+      privateUiGeneration.current === generation &&
+      sessionRef.current?.user.id === initiatingOwnerUserId;
+    setProfileBusy(true);
+    setMessage("Saving your diary group names and order…");
+    try {
+      const response = await fetch("/api/profile", {
+        method: "PATCH",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "if-match": quoteRevision(session.profile.revision),
+        },
+        body: JSON.stringify({ expectedOwnerUserId: initiatingOwnerUserId, diaryGroups: prepared }),
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (!requestOwnsUi()) return;
+      if (response.status === 401) return signInAgain();
+      const body = await json(response);
+      if (!requestOwnsUi()) return;
+      if (response.status === 409 && responseCode(body) === "PROFILE_OWNER_CHANGED") {
+        return signInAgain();
+      }
+      if (response.status === 412) {
+        const freshResponse = await fetch("/api/auth/me", {
+          headers: { accept: "application/json" },
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!requestOwnsUi()) return;
+        if (freshResponse.status === 401) return signInAgain();
+        const freshBody = await json(freshResponse);
+        if (!requestOwnsUi()) return;
+        if (!freshResponse.ok) {
+          throw new Error(
+            "Your profile changed elsewhere, but fresh settings could not be loaded.",
+          );
+        }
+        const freshSession = parseSession(freshBody);
+        if (freshSession.user.id !== initiatingOwnerUserId) return signInAgain();
+        if (!requestOwnsUi()) return;
+        setSession((current) =>
+          current?.user.id === initiatingOwnerUserId ? freshSession : current,
+        );
+        setDiaryGroupDraft(freshSession.profile.diaryGroups);
+        setMessage("Your profile changed elsewhere. Fresh diary group settings were loaded.");
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(responseError(body, "The diary groups could not be saved."));
+      }
+      const profile = parseProfileResponse(body);
+      if (!requestOwnsUi()) return;
+      setSession((current) =>
+        current?.user.id === initiatingOwnerUserId ? { ...current, profile } : current,
+      );
+      setDiaryGroupDraft(profile.diaryGroups);
+      setDiaryGroupSettingsOpen(false);
+      setMessage("Diary group names and order saved everywhere you log food.");
+    } catch (error) {
+      if (!requestOwnsUi()) return;
+      setMessage(error instanceof Error ? error.message : "The diary groups could not be saved.");
+    } finally {
+      if (profileController.current === controller) {
+        profileController.current = null;
+        if (
+          !privateUiClosed.current &&
+          privateUiGeneration.current === generation &&
+          sessionRef.current?.user.id === initiatingOwnerUserId
+        ) {
+          setProfileBusy(false);
+        }
+      }
     }
   }
 
@@ -658,6 +782,13 @@ export function DiaryClient() {
 
   const hasCommittedDate = isLocalDate(date);
   const dateQuery = hasCommittedDate ? `?date=${encodeURIComponent(date)}` : "";
+  const diaryGroupsChanged = session
+    ? diaryGroupDraft.some((group, index) => {
+        const saved = session.profile.diaryGroups[index];
+        return !saved || group.mealSlot !== saved.mealSlot || group.label !== saved.label;
+      })
+    : false;
+  const controlsBusy = mutationBusy !== null || profileBusy;
 
   return (
     <>
@@ -683,7 +814,7 @@ export function DiaryClient() {
         ) : null}
         <button
           className="signOutButton"
-          disabled={mutationBusy !== null}
+          disabled={controlsBusy}
           onClick={() => void signOut()}
           type="button"
         >
@@ -712,7 +843,7 @@ export function DiaryClient() {
         <fieldset className="dateNavigator">
           <legend className="srOnly">Diary date</legend>
           <button
-            disabled={!hasCommittedDate || mutationBusy !== null}
+            disabled={!hasCommittedDate || controlsBusy}
             onClick={() => {
               if (hasCommittedDate) chooseDate(shiftLocalDate(date, -1));
             }}
@@ -723,14 +854,14 @@ export function DiaryClient() {
           </button>
           <label htmlFor="diary-date">Local date</label>
           <input
-            disabled={!hasCommittedDate || mutationBusy !== null}
+            disabled={!hasCommittedDate || controlsBusy}
             id="diary-date"
             onChange={(event) => chooseDate(event.target.value)}
             type="date"
             value={date}
           />
           <button
-            disabled={!hasCommittedDate || mutationBusy !== null}
+            disabled={!hasCommittedDate || controlsBusy}
             onClick={() => {
               if (hasCommittedDate) chooseDate(shiftLocalDate(date, 1));
             }}
@@ -740,7 +871,7 @@ export function DiaryClient() {
             →
           </button>
           <button
-            disabled={!session || mutationBusy !== null}
+            disabled={!session || controlsBusy}
             onClick={() => {
               if (session) {
                 chooseDate(localDateInTimeZone(new Date(), session.profile.timeZone));
@@ -751,6 +882,130 @@ export function DiaryClient() {
             Today
           </button>
         </fieldset>
+
+        <div className="diaryGroupSettingsLauncher">
+          <button
+            aria-controls="diary-group-settings"
+            aria-expanded={diaryGroupSettingsOpen}
+            className="secondaryAction"
+            disabled={!session || controlsBusy}
+            onClick={() => {
+              const opening = !diaryGroupSettingsOpen;
+              if (opening && session) setDiaryGroupDraft(session.profile.diaryGroups);
+              setDiaryGroupSettingsOpen(opening);
+            }}
+            type="button"
+          >
+            {diaryGroupSettingsOpen ? "Close diary group settings" : "Customize diary groups"}
+          </button>
+        </div>
+
+        {diaryGroupSettingsOpen && session ? (
+          <section
+            aria-labelledby="diary-group-settings-title"
+            className="diaryGroupSettings"
+            id="diary-group-settings"
+          >
+            <div>
+              <p className="kicker">Your diary layout</p>
+              <h2 id="diary-group-settings-title">Name and order meal groups</h2>
+              <p>
+                Labels and order change everywhere you choose a diary destination. Existing entries
+                keep their stable saved destination.
+              </p>
+            </div>
+            <form
+              aria-busy={profileBusy}
+              onSubmit={(event) => {
+                event.preventDefault();
+                void saveDiaryGroups();
+              }}
+            >
+              <ol className="diaryGroupList">
+                {diaryGroupDraft.map((group, index) => (
+                  <li key={group.mealSlot}>
+                    <label htmlFor={`diary-group-${group.mealSlot}`}>
+                      Group {index + 1} label
+                      <input
+                        disabled={profileBusy}
+                        id={`diary-group-${group.mealSlot}`}
+                        maxLength={120}
+                        onChange={(event) =>
+                          setDiaryGroupDraft((current) =>
+                            current.map((candidate) =>
+                              candidate.mealSlot === group.mealSlot
+                                ? { ...candidate, label: event.target.value }
+                                : candidate,
+                            ),
+                          )
+                        }
+                        value={group.label}
+                      />
+                    </label>
+                    <small>Stable destination: {mealLabel(group.mealSlot)}</small>
+                    <div className="entryActions">
+                      <button
+                        aria-label={`Move group ${index + 1} up`}
+                        disabled={profileBusy || index === 0}
+                        onClick={() =>
+                          setDiaryGroupDraft((current) => moveDiaryGroup(current, index, -1))
+                        }
+                        type="button"
+                      >
+                        Move up
+                      </button>
+                      <button
+                        aria-label={`Move group ${index + 1} down`}
+                        disabled={profileBusy || index === diaryGroupDraft.length - 1}
+                        onClick={() =>
+                          setDiaryGroupDraft((current) => moveDiaryGroup(current, index, 1))
+                        }
+                        type="button"
+                      >
+                        Move down
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+              <p className="fieldHelp">
+                Use four unique labels, each 1–40 characters. Reset prepares Breakfast, Lunch,
+                Dinner, and Snacks; nothing changes until you save.
+              </p>
+              <div className="entryActions">
+                <button
+                  disabled={profileBusy}
+                  onClick={() => {
+                    setDiaryGroupDraft(defaultDiaryGroups);
+                    setMessage(
+                      "Default diary group names and order prepared. Choose Save groups to apply them.",
+                    );
+                  }}
+                  type="button"
+                >
+                  Reset defaults
+                </button>
+                <button
+                  disabled={profileBusy}
+                  onClick={() => {
+                    setDiaryGroupDraft(session.profile.diaryGroups);
+                    setDiaryGroupSettingsOpen(false);
+                  }}
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  className="buttonPrimary"
+                  disabled={profileBusy || mutationBusy !== null || !diaryGroupsChanged}
+                  type="submit"
+                >
+                  {profileBusy ? "Saving…" : "Save groups"}
+                </button>
+              </div>
+            </form>
+          </section>
+        ) : null}
 
         <p
           className={`diaryStatus diaryStatus--${pageState === "error" ? "error" : state}`}
@@ -789,7 +1044,10 @@ export function DiaryClient() {
                 will remain unknown.
               </p>
             </div>
-            <Link className="emptyDiaryAction" href={`/foods?date=${date}`}>
+            <Link
+              className="emptyDiaryAction"
+              href={`/foods?date=${date}&meal=${diaryGroups[0]?.mealSlot ?? "breakfast"}`}
+            >
               Find a food
             </Link>
           </section>
@@ -803,13 +1061,17 @@ export function DiaryClient() {
               className="mealLedger"
               id="diary-entry-groups"
             >
-              {mealSlots.map((meal) => {
-                const entries = diary.entries.filter((entry) => entry.mealSlot === meal);
+              {diaryGroups.map((group) => {
+                const entries = diary.entries.filter((entry) => entry.mealSlot === group.mealSlot);
                 return (
-                  <section className="mealSection" key={meal} aria-labelledby={`meal-${meal}`}>
+                  <section
+                    className="mealSection"
+                    key={group.mealSlot}
+                    aria-labelledby={`meal-${group.mealSlot}`}
+                  >
                     <div className="mealHeading">
-                      <h2 id={`meal-${meal}`}>{mealLabel(meal)}</h2>
-                      <Link href={`/foods?date=${date}&meal=${meal}`}>Add food</Link>
+                      <h2 id={`meal-${group.mealSlot}`}>{group.label}</h2>
+                      <Link href={`/foods?date=${date}&meal=${group.mealSlot}`}>Add food</Link>
                     </div>
                     {entries.length === 0 ? (
                       <p className="emptyMeal">
@@ -845,9 +1107,12 @@ export function DiaryClient() {
                                     }
                                     value={editor.mealSlot}
                                   >
-                                    {mealSlots.map((slot) => (
-                                      <option key={slot} value={slot}>
-                                        {mealLabel(slot)}
+                                    {diaryGroups.map((groupOption) => (
+                                      <option
+                                        key={groupOption.mealSlot}
+                                        value={groupOption.mealSlot}
+                                      >
+                                        {groupOption.label}
                                       </option>
                                     ))}
                                   </select>

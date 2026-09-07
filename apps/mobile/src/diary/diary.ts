@@ -5,12 +5,28 @@ export const DIARY_CURSOR_MAX_LENGTH = 512;
 export type MealSlot = (typeof mealSlots)[number];
 export type NutrientCompleteness = "complete" | "partial" | "unknown";
 
+export interface DiaryGroup {
+  readonly mealSlot: MealSlot;
+  readonly label: string;
+}
+
+export const defaultDiaryGroups: readonly DiaryGroup[] = [
+  { mealSlot: "breakfast", label: "Breakfast" },
+  { mealSlot: "lunch", label: "Lunch" },
+  { mealSlot: "dinner", label: "Dinner" },
+  { mealSlot: "snacks", label: "Snacks" },
+];
+
+export const MAX_DIARY_GROUP_LABEL_LENGTH = 40;
+export const MAX_DIARY_GROUP_LABEL_BYTES = 120;
+
 export interface ProfileSummary {
   readonly displayName: string | null;
   readonly locale: string;
   readonly timeZone: string;
   readonly unitSystem: string;
   readonly revision: string;
+  readonly diaryGroups: readonly DiaryGroup[];
   readonly [field: string]: unknown;
 }
 
@@ -18,6 +34,53 @@ export interface SessionSummary {
   readonly user: { readonly id: string; readonly email: string; readonly emailVerified: boolean };
   readonly profile: ProfileSummary;
   readonly expiresAt?: string;
+}
+
+export interface ProfileSessionUpdate {
+  readonly initiatingSessionEpoch: number;
+  readonly initiatingUserId: string;
+  readonly profile: ProfileSummary;
+}
+
+function comparableRevision(value: string): string {
+  if (!/^\d+$/u.test(value)) throw new TypeError("The profile revision was invalid.");
+  return value.replace(/^0+(?=\d)/u, "");
+}
+
+/** Compare parsed decimal revisions without narrowing them through JavaScript numbers. */
+export function profileRevisionIsOlder(candidate: string, current: string): boolean {
+  const candidateRevision = comparableRevision(candidate);
+  const currentRevision = comparableRevision(current);
+  return (
+    candidateRevision.length < currentRevision.length ||
+    (candidateRevision.length === currentRevision.length && candidateRevision < currentRevision)
+  );
+}
+
+export function acceptProfileSessionUpdate(
+  currentSession: SessionSummary | null,
+  currentSessionEpoch: number,
+  update: ProfileSessionUpdate,
+): SessionSummary | null {
+  if (
+    currentSessionEpoch !== update.initiatingSessionEpoch ||
+    currentSession?.user.id !== update.initiatingUserId ||
+    profileRevisionIsOlder(update.profile.revision, currentSession.profile.revision)
+  ) {
+    return currentSession;
+  }
+  return { ...currentSession, profile: update.profile };
+}
+
+export function profileRequestIdentityMatches(
+  currentOwnerUserId: string,
+  currentSessionEpoch: number,
+  initiatingOwnerUserId: string,
+  initiatingSessionEpoch: number,
+): boolean {
+  return (
+    currentOwnerUserId === initiatingOwnerUserId && currentSessionEpoch === initiatingSessionEpoch
+  );
 }
 
 export interface DiaryNutrient {
@@ -215,6 +278,116 @@ function isWellFormedUnicode(value: string): boolean {
     }
   }
   return true;
+}
+
+function utf8ByteLength(value: string): number {
+  let bytes = 0;
+  for (const scalar of value) {
+    const codePoint = scalar.codePointAt(0) ?? 0;
+    bytes += codePoint <= 0x7f ? 1 : codePoint <= 0x7ff ? 2 : codePoint <= 0xffff ? 3 : 4;
+  }
+  return bytes;
+}
+
+export function normalizeDiaryGroupLabel(value: string): string {
+  if (!isWellFormedUnicode(value)) {
+    throw new TypeError("Diary group names must be valid Unicode text.");
+  }
+  const normalized = value.normalize("NFKC").trim();
+  if (!normalized) throw new RangeError("Every diary group needs a name.");
+  if (/\p{Cc}|\p{Cf}/u.test(normalized)) {
+    throw new TypeError("Diary group names cannot contain control or formatting characters.");
+  }
+  if ([...normalized].length > MAX_DIARY_GROUP_LABEL_LENGTH) {
+    throw new RangeError(
+      `Diary group names cannot exceed ${MAX_DIARY_GROUP_LABEL_LENGTH} characters.`,
+    );
+  }
+  if (utf8ByteLength(normalized) > MAX_DIARY_GROUP_LABEL_BYTES) {
+    throw new RangeError(`Diary group names cannot exceed ${MAX_DIARY_GROUP_LABEL_BYTES} bytes.`);
+  }
+  return normalized;
+}
+
+export function normalizeDiaryGroups(groups: readonly DiaryGroup[]): readonly DiaryGroup[] {
+  if (groups.length !== mealSlots.length) {
+    throw new RangeError("Exactly four diary groups are required.");
+  }
+  const seenSlots = new Set<MealSlot>();
+  const seenLabels = new Set<string>();
+  const normalized = groups.map((group) => {
+    if (!isMeal(group.mealSlot) || seenSlots.has(group.mealSlot)) {
+      throw new TypeError("Every canonical diary group must appear exactly once.");
+    }
+    const label = normalizeDiaryGroupLabel(group.label);
+    const folded = label.toLowerCase();
+    if (seenLabels.has(folded)) {
+      throw new RangeError("Diary group names must be unique.");
+    }
+    seenSlots.add(group.mealSlot);
+    seenLabels.add(folded);
+    return { mealSlot: group.mealSlot, label };
+  });
+  return normalized;
+}
+
+export function parseDiaryGroups(value: unknown): readonly DiaryGroup[] {
+  if (!Array.isArray(value) || value.length !== mealSlots.length) {
+    throw new TypeError("The diary group response was invalid.");
+  }
+  const groups = value.map((item) => {
+    if (
+      !record(item) ||
+      Object.keys(item).length !== 2 ||
+      !("mealSlot" in item) ||
+      !("label" in item) ||
+      !isMeal(item.mealSlot) ||
+      typeof item.label !== "string"
+    ) {
+      throw new TypeError("The diary group response was invalid.");
+    }
+    return { mealSlot: item.mealSlot, label: item.label };
+  });
+  try {
+    const normalized = normalizeDiaryGroups(groups);
+    if (normalized.some((group, index) => group.label !== groups[index]?.label)) {
+      throw new TypeError("The diary group response was not normalized.");
+    }
+    return normalized;
+  } catch (error) {
+    if (
+      error instanceof TypeError &&
+      error.message === "The diary group response was not normalized."
+    ) {
+      throw error;
+    }
+    throw new TypeError("The diary group response was invalid.");
+  }
+}
+
+export function diaryGroupLabel(groups: readonly DiaryGroup[], mealSlot: MealSlot): string {
+  return groups.find((group) => group.mealSlot === mealSlot)?.label ?? mealLabel(mealSlot);
+}
+
+export function moveDiaryGroup(
+  groups: readonly DiaryGroup[],
+  mealSlot: MealSlot,
+  direction: -1 | 1,
+): readonly DiaryGroup[] {
+  const index = groups.findIndex((group) => group.mealSlot === mealSlot);
+  const destination = index + direction;
+  if (index < 0 || destination < 0 || destination >= groups.length) return groups;
+  const next = [...groups];
+  const current = next[index];
+  const adjacent = next[destination];
+  if (!current || !adjacent) return groups;
+  next[index] = adjacent;
+  next[destination] = current;
+  return next;
+}
+
+export function resetDiaryGroups(): readonly DiaryGroup[] {
+  return defaultDiaryGroups.map((group) => ({ ...group }));
 }
 
 /** Preserve note bytes exactly; an empty draft is the explicit clear operation. */
@@ -767,6 +940,37 @@ function parseEntry(value: unknown): DiaryEntry {
   throw new TypeError("A diary entry discriminant was invalid.");
 }
 
+export function parseProfile(value: unknown): ProfileSummary {
+  if (
+    !record(value) ||
+    !text(value.locale, 35) ||
+    !text(value.timeZone, 63) ||
+    !text(value.unitSystem, 30) ||
+    !/^\d+$/u.test(String(value.revision)) ||
+    !(value.displayName === null || text(value.displayName, 100))
+  )
+    throw new TypeError("The profile response was invalid.");
+  const diaryGroups = Object.hasOwn(value, "diaryGroups")
+    ? parseDiaryGroups(value.diaryGroups)
+    : resetDiaryGroups();
+  return {
+    ...value,
+    displayName: value.displayName,
+    locale: value.locale,
+    timeZone: value.timeZone,
+    unitSystem: value.unitSystem,
+    revision: String(value.revision),
+    diaryGroups,
+  };
+}
+
+export function parseProfileResponse(value: unknown): ProfileSummary {
+  if (!record(value) || !record(value.data) || !record(value.data.profile)) {
+    throw new TypeError("The profile response was invalid.");
+  }
+  return parseProfile(value.data.profile);
+}
+
 export function parseSession(value: unknown): SessionSummary {
   if (
     !record(value) ||
@@ -776,28 +980,22 @@ export function parseSession(value: unknown): SessionSummary {
     !text(value.data.user.email, 254) ||
     typeof value.data.user.emailVerified !== "boolean" ||
     !record(value.data.profile) ||
-    !text(value.data.profile.locale, 35) ||
-    !text(value.data.profile.timeZone, 63) ||
-    !text(value.data.profile.unitSystem, 30) ||
-    !/^\d+$/u.test(String(value.data.profile.revision)) ||
-    !(value.data.profile.displayName === null || text(value.data.profile.displayName, 100)) ||
     !(value.data.expiresAt === undefined || text(value.data.expiresAt, 64))
   )
     throw new TypeError("The session response was invalid.");
+  let profile: ProfileSummary;
+  try {
+    profile = parseProfile(value.data.profile);
+  } catch {
+    throw new TypeError("The session response was invalid.");
+  }
   return {
     user: {
       id: value.data.user.id,
       email: value.data.user.email,
       emailVerified: value.data.user.emailVerified,
     },
-    profile: {
-      ...value.data.profile,
-      displayName: value.data.profile.displayName,
-      locale: value.data.profile.locale,
-      timeZone: value.data.profile.timeZone,
-      unitSystem: value.data.profile.unitSystem,
-      revision: String(value.data.profile.revision),
-    },
+    profile,
     ...(typeof value.data.expiresAt === "string" ? { expiresAt: value.data.expiresAt } : {}),
   };
 }
@@ -962,6 +1160,10 @@ export function diaryPagePath(localDate: string, nextCursor?: string | null): st
 
 export function isDiaryPageStaleProblem(status: number, value: unknown): boolean {
   return status === 409 && record(value) && value.code === "DIARY_PAGE_STALE";
+}
+
+export function isProfileOwnerChangedProblem(status: number, value: unknown): boolean {
+  return status === 409 && record(value) && value.code === "PROFILE_OWNER_CHANGED";
 }
 
 export function diaryEditorOrigin(day: DiaryDay, entry: DiaryEntry): DiaryEditorOrigin {

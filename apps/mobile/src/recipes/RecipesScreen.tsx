@@ -13,12 +13,12 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { apiUrl, authenticatedHeaders, jsonBody, responseError } from "../api/private-api";
 import { newOperationId } from "../auth/operation-id";
 import {
+  type DiaryGroup,
   defaultMealForTime,
+  diaryGroupLabel,
   isLocalDate,
   localDateInTimeZone,
   type MealSlot,
-  mealLabel,
-  mealSlots,
   parseDiaryDay,
   parseDiaryMutation,
   parseSession,
@@ -48,6 +48,7 @@ interface Props {
   readonly apiBase: URL;
   readonly accessToken: string;
   readonly profileTimeZone: string;
+  readonly diaryGroups: readonly DiaryGroup[];
   readonly onUnauthorized: () => Promise<void>;
   readonly onLogged: (date: string) => void;
   readonly onGoals: () => void;
@@ -200,6 +201,7 @@ export function RecipesScreen({
   apiBase,
   accessToken,
   profileTimeZone,
+  diaryGroups,
   onUnauthorized,
   onLogged,
   onGoals,
@@ -501,7 +503,12 @@ export function RecipesScreen({
       const mutation = parseDiaryMutation(body);
       pendingLogs.current.delete(operation.intentKey);
       const loggedDate = mutation.entry?.localDate ?? date;
-      setMessage(mutation.replayed ? "The earlier log was confirmed safely." : "Recipe logged.");
+      const loggedGroup = diaryGroupLabel(diaryGroups, mutation.entry?.mealSlot ?? meal);
+      setMessage(
+        mutation.replayed
+          ? `The earlier ${loggedGroup} log on ${loggedDate} was confirmed safely.`
+          : `Recipe logged to ${loggedGroup} on ${loggedDate}.`,
+      );
       onLogged(loggedDate);
     } catch (caught) {
       setMessage(
@@ -806,11 +813,11 @@ export function RecipesScreen({
             />
             <Field label="Local date" maxLength={10} value={date} onChange={setDate} />
             <View style={styles.row}>
-              {mealSlots.map((slot) => (
+              {diaryGroups.map(({ mealSlot: slot, label }) => (
                 <Chip
                   active={meal === slot}
                   key={slot}
-                  label={mealLabel(slot)}
+                  label={label}
                   onPress={() => setMeal(slot)}
                 />
               ))}

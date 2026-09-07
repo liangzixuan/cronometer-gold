@@ -73,6 +73,15 @@ packages, captures, and source-bundle digest domain are historical only and are
 rejected by the current normalizer and release verifier. Never append a result
 to v1, relabel v1 bytes as v2, or infer a v2 pass from earlier evidence.
 
+Version 2 also predates owner-configurable diary labels and display order. It
+can continue to prove the exact 19 flows above, but it cannot prove rename,
+reorder, reset, cross-client convergence, profile-revision conflict, or
+canonical-slot quick-add behavior after configuration. Do not append those
+assertions to the closed v2 inventory or reinterpret a v2 signature. A future
+review must version the capture, review package, normalizer, source bundle, and
+health-release manifest together before that capability can clear signed-device
+acceptance.
+
 ## Capture envelopes
 
 Create a mode `0700` review directory. Preserve the original reviewer-observed

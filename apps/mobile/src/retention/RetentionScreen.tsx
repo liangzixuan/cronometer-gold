@@ -29,13 +29,13 @@ import { apiUrl, authenticatedHeaders, jsonBody, responseError } from "../api/pr
 import { newOperationId } from "../auth/operation-id";
 import {
   currentLocalTime,
+  type DiaryGroup,
+  diaryGroupLabel,
   isLocalDate,
   isPositiveDecimal,
   localDateTimeToInstant,
   localTimeInTimeZone,
   type MealSlot,
-  mealLabel,
-  mealSlots,
   parseDiaryMutation,
   shiftLocalDate,
 } from "../diary/diary";
@@ -87,6 +87,7 @@ interface Props {
   readonly apiBase: URL;
   readonly accessToken: string;
   readonly profileTimeZone: string;
+  readonly diaryGroups: readonly DiaryGroup[];
   readonly onUnauthorized: () => Promise<void>;
   /** Fence queued diary delivery after the erasure request is durable and before it is sent. */
   readonly onErasurePrepared: () => void;
@@ -276,6 +277,7 @@ export function RetentionScreen({
   apiBase,
   accessToken,
   profileTimeZone,
+  diaryGroups,
   onUnauthorized,
   onErasurePrepared,
   onErasureAccepted,
@@ -633,7 +635,7 @@ export function RetentionScreen({
       );
       setCustomLog(null);
       setMessage(
-        `Pinned custom-food version logged on ${result.entry?.localDate ?? customLog.localDate}.`,
+        `Pinned custom-food version logged to ${diaryGroupLabel(diaryGroups, result.entry?.mealSlot ?? customLog.mealSlot)} on ${result.entry?.localDate ?? customLog.localDate}.`,
       );
     } catch (error) {
       setMessage(
@@ -1544,7 +1546,7 @@ export function RetentionScreen({
                 maxLength={19}
               />
               <ChipRow
-                items={mealSlots.map((meal) => ({ key: meal, label: mealLabel(meal) }))}
+                items={diaryGroups.map(({ mealSlot, label }) => ({ key: mealSlot, label }))}
                 selected={customLog.mealSlot}
                 onSelect={(mealSlot) =>
                   setCustomLog({ ...customLog, mealSlot: mealSlot as MealSlot })

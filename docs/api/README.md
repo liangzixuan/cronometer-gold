@@ -22,7 +22,24 @@
   strong `If-Match` root revision; a diary recipe log additionally pins the exact
   `recipeVersionId` selected by the client.
 - Entry and profile edits use one quoted, strong revision `If-Match` value. Entry
-  preconditions are independent of unrelated day changes.
+  preconditions are independent of unrelated day changes. Every diary-group
+  profile patch also carries `expectedOwnerUserId`; the API compares any supplied
+  value with the authenticated principal before normalization or persistence and
+  never stores it as profile data. During API-first rollout, legacy profile
+  patches that omit `diaryGroups` may omit this new transport precondition.
+- Every private profile response includes `diaryGroups`, an ordered array with
+  each canonical `breakfast`, `lunch`, `dinner`, and `snacks` slot exactly once
+  and its owner-configured presentation label. `PATCH /v1/profile` accepts the
+  same array as an optional field. It changes labels and client display order
+  only: diary requests, immutable revisions, URLs, pagination, and quick-add
+  retries continue to use the canonical slot. Profile optimistic concurrency
+  protects the preference, and updating another profile field preserves it.
+  Labels are NFKC-normalized and trimmed, unique after deterministic ECMAScript
+  default lowercase mapping, bounded to 40 Unicode scalar values and 120 UTF-8
+  bytes, and reject control or format code points. This is not a full Unicode
+  case-folding claim. Ordinary profile and session responses expose only this
+  typed projection, not the raw preferences object; the existing authenticated
+  account-export path retains its separately reviewed full-profile treatment.
 - Timestamps are RFC 3339 UTC instants; diary grouping also stores the user's
   effective IANA time zone and local date.
 - Legacy `GET /v1/diary?date=` reads remain complete and are capped at 50
@@ -38,6 +55,9 @@
   failures. A valid continuation after the day or effective time zone changes
   returns `409 DIARY_PAGE_STALE`; clients discard accumulated pages and restart
   from page one.
+- Configured diary display order does not change the canonical server page
+  order or cursor digest. Clients regroup each loaded page for presentation and
+  retain non-authoritative empty wording until all pages are present.
 - Cursor pagination uses stable ordering and opaque cursors. Page-number APIs are
   reserved for bounded administrative datasets.
 - ETags may cache public/versioned food records. Private diary or biometric

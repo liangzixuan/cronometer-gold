@@ -89,17 +89,52 @@ describeDatabase("live private API adapters", () => {
       expect(me.statusCode).toBe(200);
       expect(me.json()).toMatchObject({ data: { profile: { timeZone: "America/Chicago" } } });
 
+      await database
+        .updateTable("user_profile")
+        .set({ preferences: { accessibility: { dense: true }, theme: "dark" } })
+        .where("user_id", "=", registered.data.user.id)
+        .executeTakeFirstOrThrow();
+      const diaryGroups = [
+        { mealSlot: "snacks" as const, label: "Small bites" },
+        { mealSlot: "breakfast" as const, label: "Morning" },
+        { mealSlot: "dinner" as const, label: "Evening" },
+        { mealSlot: "lunch" as const, label: "Midday" },
+      ];
       const profile = await app.inject({
         method: "PATCH",
         url: "/v1/profile",
         headers: { authorization, "if-match": '"0"' },
-        payload: { heightCm: "170.000" },
+        payload: {
+          expectedOwnerUserId: registered.data.user.id,
+          diaryGroups,
+          heightCm: "170.000",
+        },
       });
       expect(profile.statusCode).toBe(200);
       expect(profile.headers.etag).toBe('"1"');
       expect(profile.json()).toMatchObject({
-        data: { profile: { heightCm: "170", revision: "1" } },
+        data: { profile: { diaryGroups, heightCm: "170", revision: "1" } },
       });
+      expect(
+        await database
+          .selectFrom("user_profile")
+          .select("preferences")
+          .where("user_id", "=", registered.data.user.id)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({
+        preferences: {
+          accessibility: { dense: true },
+          theme: "dark",
+          diaryGroups: { version: 1, groups: diaryGroups },
+        },
+      });
+      const staleProfile = await app.inject({
+        method: "PATCH",
+        url: "/v1/profile",
+        headers: { authorization, "if-match": '"0"' },
+        payload: { expectedOwnerUserId: registered.data.user.id, diaryGroups },
+      });
+      expect(staleProfile.statusCode).toBe(412);
 
       const diary = await app.inject({
         method: "GET",

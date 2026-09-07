@@ -20,6 +20,12 @@ export const profile: UserProfile = {
   heightCm: null,
   baselineWeightKg: null,
   activityLevelCode: null,
+  diaryGroups: [
+    { mealSlot: "breakfast", label: "Breakfast" },
+    { mealSlot: "lunch", label: "Lunch" },
+    { mealSlot: "dinner", label: "Dinner" },
+    { mealSlot: "snacks", label: "Snacks" },
+  ],
   locale: "en-US",
   timeZone: "America/Chicago",
   unitSystem: "metric",

@@ -8,13 +8,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createOperationId,
   currentLocalDate,
+  type DiaryGroup,
+  defaultDiaryGroups,
   defaultMealForHour,
   defaultMealForTime,
+  diaryGroupLabel,
   isLocalDate,
   localDateInTimeZone,
   localTimeInTimeZone,
   type MealSlot,
-  mealLabel,
   mealSlots,
   parseDiaryMutation,
   parseSession,
@@ -95,6 +97,7 @@ export function FoodSearchClient() {
       : defaultMealForTime(),
   );
   const [timeZone, setTimeZone] = useState<string | null>(null);
+  const [diaryGroups, setDiaryGroups] = useState<readonly DiaryGroup[]>(defaultDiaryGroups);
   const [addState, setAddState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [addingFoodVersion, setAddingFoodVersion] = useState<string | null>(null);
   const [addMessage, setAddMessage] = useState(
@@ -199,6 +202,7 @@ export function FoodSearchClient() {
         const session = parseSession(await responseJson(response));
         if (!controller.signal.aborted) {
           setTimeZone(session.profile.timeZone);
+          setDiaryGroups(session.profile.diaryGroups);
           const now = new Date();
           if (!(requestedDate && isLocalDate(requestedDate))) {
             setDiaryDate(localDateInTimeZone(now, session.profile.timeZone));
@@ -426,7 +430,9 @@ export function FoodSearchClient() {
         pendingAdds.current.delete(operation.intentKey);
       }
       setAddState("ready");
-      setAddMessage(`${food.name} was added to ${mealLabel(mealSlot)} on ${loggedDate}.`);
+      setAddMessage(
+        `${food.name} was added to ${diaryGroupLabel(diaryGroups, mealSlot)} on ${loggedDate}.`,
+      );
     } catch (error) {
       setAddState("error");
       setAddMessage(
@@ -473,9 +479,9 @@ export function FoodSearchClient() {
               onChange={(event) => setMealSlot(event.target.value as MealSlot)}
               value={mealSlot}
             >
-              {mealSlots.map((meal) => (
-                <option key={meal} value={meal}>
-                  {mealLabel(meal)}
+              {diaryGroups.map((group) => (
+                <option key={group.mealSlot} value={group.mealSlot}>
+                  {group.label}
                 </option>
               ))}
             </select>

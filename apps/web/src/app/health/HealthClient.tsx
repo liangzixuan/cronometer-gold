@@ -5,12 +5,13 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  defaultDiaryGroups,
+  diaryGroupLabel,
   isLocalDate,
   localDateInTimeZone,
   localDateTimeToInstant,
   localTimeInTimeZone,
   type MealSlot,
-  mealSlots,
   parseDiaryMutation,
   parseSession,
   quoteRevision,
@@ -203,6 +204,7 @@ export function HealthClient() {
   const operations = useRef(new Map<string, string>());
   const loadController = useRef<AbortController | null>(null);
   const trendController = useRef<AbortController | null>(null);
+  const diaryGroups = session?.profile.diaryGroups ?? defaultDiaryGroups;
 
   const signInAgain = useCallback(() => {
     router.replace("/login");
@@ -606,7 +608,7 @@ export function HealthClient() {
       operations.current.delete(key);
       setCustomLog(null);
       setMessage(
-        `Pinned private food version logged to ${mutation.entry?.localDate ?? customLog.localDate}.`,
+        `Pinned private food version logged to ${diaryGroupLabel(diaryGroups, customLog.mealSlot)} on ${mutation.entry?.localDate ?? customLog.localDate}.`,
       );
     } catch (error) {
       setMessage(
@@ -1355,9 +1357,9 @@ export function HealthClient() {
                           setCustomLog({ ...customLog, mealSlot: event.target.value as MealSlot })
                         }
                       >
-                        {mealSlots.map((slot) => (
-                          <option key={slot} value={slot}>
-                            {slot}
+                        {diaryGroups.map((group) => (
+                          <option key={group.mealSlot} value={group.mealSlot}>
+                            {group.label}
                           </option>
                         ))}
                       </select>

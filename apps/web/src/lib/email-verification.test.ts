@@ -33,6 +33,12 @@ const webProfile = {
   locale: "en-US",
   onboardingCompletedAt: null,
   revision: "1",
+  diaryGroups: [
+    { mealSlot: "breakfast", label: "Breakfast" },
+    { mealSlot: "lunch", label: "Lunch" },
+    { mealSlot: "dinner", label: "Dinner" },
+    { mealSlot: "snacks", label: "Snacks" },
+  ],
   sexAtBirth: null,
   timeZone: "America/Chicago",
   unitSystem: "metric",

@@ -18,6 +18,12 @@ const profile = {
   timeZone: "America/Chicago",
   unitSystem: "metric",
   revision: "1",
+  diaryGroups: [
+    { mealSlot: "breakfast", label: "Breakfast" },
+    { mealSlot: "lunch", label: "Lunch" },
+    { mealSlot: "dinner", label: "Dinner" },
+    { mealSlot: "snacks", label: "Snacks" },
+  ] as const,
 };
 
 describe("mobile email verification", () => {
@@ -250,5 +256,82 @@ describe("mobile email verification", () => {
 
     expect(accepted).toBe(currentSession);
     expect(accepted?.user.email).toBe("grace@example.test");
+  });
+
+  it("accepts fresh verification status without regressing a newer profile revision", () => {
+    const currentProfile = {
+      ...profile,
+      revision: "12",
+      diaryGroups: [
+        { mealSlot: "dinner" as const, label: "Supper" },
+        { mealSlot: "breakfast" as const, label: "Morning" },
+        { mealSlot: "lunch" as const, label: "Midday" },
+        { mealSlot: "snacks" as const, label: "Small bites" },
+      ],
+    };
+    const currentSession = {
+      user: {
+        id: "96aac405-c107-4776-923e-a40ca5014975",
+        email: "ada@example.test",
+        emailVerified: false,
+      },
+      profile: currentProfile,
+    };
+    const delayedVerificationSession = {
+      user: { ...currentSession.user, emailVerified: true },
+      profile: { ...profile, revision: "9" },
+    };
+
+    const accepted = acceptEmailVerificationSessionUpdate(currentSession, 4, {
+      initiatingSessionEpoch: 4,
+      initiatingUserId: currentSession.user.id,
+      session: delayedVerificationSession,
+    });
+
+    expect(accepted?.user.emailVerified).toBe(true);
+    expect(accepted?.profile).toBe(currentProfile);
+
+    const newerProfile = { ...currentProfile, revision: "13" };
+    expect(
+      acceptEmailVerificationSessionUpdate(currentSession, 4, {
+        initiatingSessionEpoch: 4,
+        initiatingUserId: currentSession.user.id,
+        session: { ...delayedVerificationSession, profile: newerProfile },
+      })?.profile,
+    ).toBe(newerProfile);
+  });
+
+  it("does not regress verified status or a newer profile from a delayed older response", () => {
+    const currentProfile = {
+      ...profile,
+      revision: "12",
+      diaryGroups: [
+        { mealSlot: "dinner" as const, label: "Supper" },
+        { mealSlot: "breakfast" as const, label: "Morning" },
+        { mealSlot: "lunch" as const, label: "Midday" },
+        { mealSlot: "snacks" as const, label: "Small bites" },
+      ],
+    };
+    const currentSession = {
+      user: {
+        id: "96aac405-c107-4776-923e-a40ca5014975",
+        email: "ada@example.test",
+        emailVerified: true,
+      },
+      profile: currentProfile,
+    };
+    const delayedSession = {
+      user: { ...currentSession.user, emailVerified: false },
+      profile: { ...profile, revision: "9" },
+    };
+
+    const accepted = acceptEmailVerificationSessionUpdate(currentSession, 4, {
+      initiatingSessionEpoch: 4,
+      initiatingUserId: currentSession.user.id,
+      session: delayedSession,
+    });
+
+    expect(accepted?.user.emailVerified).toBe(true);
+    expect(accepted?.profile).toBe(currentProfile);
   });
 });

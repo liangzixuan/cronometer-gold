@@ -1,5 +1,5 @@
 import { apiUrl, authenticatedHeaders, jsonBody, responseError } from "../api/private-api";
-import { parseSession, type SessionSummary } from "../diary/diary";
+import { parseSession, profileRevisionIsOlder, type SessionSummary } from "../diary/diary";
 
 export class EmailVerificationUnauthorizedError extends Error {
   constructor() {
@@ -144,5 +144,18 @@ export function acceptEmailVerificationSessionUpdate(
   ) {
     return currentSession;
   }
-  return update.session;
+  const profile = profileRevisionIsOlder(
+    update.session.profile.revision,
+    currentSession.profile.revision,
+  )
+    ? currentSession.profile
+    : update.session.profile;
+  return {
+    ...update.session,
+    user: {
+      ...update.session.user,
+      emailVerified: currentSession.user.emailVerified || update.session.user.emailVerified,
+    },
+    profile,
+  };
 }

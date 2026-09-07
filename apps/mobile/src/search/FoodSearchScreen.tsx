@@ -15,11 +15,11 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import {
+  type DiaryGroup,
+  diaryGroupLabel,
   isLocalDate,
   localDateInTimeZone,
   type MealSlot,
-  mealLabel,
-  mealSlots,
   quickAddOccurredAt,
 } from "../diary/diary";
 import {
@@ -94,6 +94,7 @@ interface FoodSearchScreenProps {
   readonly profileTimeZone: string;
   readonly diaryDate: string;
   readonly mealSlot: MealSlot;
+  readonly diaryGroups: readonly DiaryGroup[];
   readonly quickAddOutboxController: QuickAddOutboxController;
   readonly quickAddOutboxState: QuickAddOutboxControllerState;
   readonly subscribeQuickAddReceipts: (listener: (receipt: QuickAddReceipt) => void) => () => void;
@@ -118,7 +119,10 @@ function quickAddEnqueueDisabled(state: QuickAddOutboxControllerState): boolean 
   );
 }
 
-function quickAddQueueMessage(state: QuickAddOutboxControllerState): string {
+function quickAddQueueMessage(
+  state: QuickAddOutboxControllerState,
+  diaryGroups: readonly DiaryGroup[],
+): string {
   const count = state.pendingCount;
   const noun = count === 1 ? "add" : "adds";
   switch (state.status) {
@@ -129,7 +133,7 @@ function quickAddQueueMessage(state: QuickAddOutboxControllerState): string {
     case "draining":
       return `Sending the oldest of ${count} queued food ${noun}. Nothing is included in diary totals until the server confirms it.`;
     case "blocked": {
-      const destination = `${mealLabel(state.mealSlot)} on ${state.localDate}`;
+      const destination = `${diaryGroupLabel(diaryGroups, state.mealSlot)} on ${state.localDate}`;
       const waiting =
         count > 1
           ? ` ${count - 1} more queued ${count === 2 ? "add waits" : "adds wait"} behind it.`
@@ -161,6 +165,7 @@ export function FoodSearchScreen({
   profileTimeZone,
   diaryDate: initialDate,
   mealSlot: initialMeal,
+  diaryGroups,
   quickAddOutboxController,
   quickAddOutboxState,
   subscribeQuickAddReceipts,
@@ -173,7 +178,7 @@ export function FoodSearchScreen({
   const [addingVersion, setAddingVersion] = useState<string | null>(null);
   const [addState, setAddState] = useState<LoadState>("idle");
   const [addMessage, setAddMessage] = useState(
-    "Choose a local day and meal, then add one reviewed gram-resolved serving.",
+    "Choose a local day and diary group, then add one reviewed gram-resolved serving.",
   );
   const enqueueInFlight = useRef(false);
   const ownedOperations = useRef(new Set<string>());
@@ -224,11 +229,11 @@ export function FoodSearchScreen({
         }
         setAddState("ready");
         setAddMessage(
-          `A queued food was confirmed in ${entry ? mealLabel(entry.mealSlot) : "the selected meal"} on ${loggedDate}.`,
+          `A queued food was confirmed in ${entry ? diaryGroupLabel(diaryGroups, entry.mealSlot) : "the selected diary group"} on ${loggedDate}.`,
         );
         onAddedRef.current(loggedDate);
       }),
-    [subscribeQuickAddReceipts],
+    [diaryGroups, subscribeQuickAddReceipts],
   );
 
   useEffect(() => {
@@ -596,7 +601,7 @@ export function FoodSearchScreen({
       ownedOperations.current.add(item.operationId);
       setAddState("ready");
       setAddMessage(
-        `${food.name} is queued securely for ${mealLabel(mealSlot)} on ${diaryDate}. It is not included in diary totals until the server confirms it.`,
+        `${food.name} is queued securely for ${diaryGroupLabel(diaryGroups, mealSlot)} on ${diaryDate}. It is not included in diary totals until the server confirms it.`,
       );
       void quickAddOutboxController.requestDrain(item.operationId);
     } catch (error) {
@@ -704,7 +709,7 @@ export function FoodSearchScreen({
   ) {
     Alert.alert(
       "Discard blocked food add?",
-      `This permanently removes only ${state.foodName} (${state.servingLabel}) for ${mealLabel(state.mealSlot)} on ${state.localDate}. It has not been added. Remaining queued adds stay in order.`,
+      `This permanently removes only ${state.foodName} (${state.servingLabel}) for ${diaryGroupLabel(diaryGroups, state.mealSlot)} on ${state.localDate}. It has not been added. Remaining queued adds stay in order.`,
       [
         { text: "Cancel", style: "cancel" },
         {
@@ -765,7 +770,7 @@ export function FoodSearchScreen({
             value={diaryDate}
           />
           <View accessibilityRole="radiogroup" style={styles.intentRow}>
-            {mealSlots.map((meal) => (
+            {diaryGroups.map(({ mealSlot: meal, label }) => (
               <Pressable
                 accessibilityRole="radio"
                 accessibilityState={{ checked: mealSlot === meal }}
@@ -774,7 +779,7 @@ export function FoodSearchScreen({
                 style={[styles.intentButton, mealSlot === meal && styles.intentButtonSelected]}
               >
                 <Text style={[styles.intentLabel, mealSlot === meal && styles.intentLabelSelected]}>
-                  {mealLabel(meal)}
+                  {label}
                 </Text>
               </Pressable>
             ))}
@@ -789,7 +794,7 @@ export function FoodSearchScreen({
             accessibilityLiveRegion="polite"
             style={[styles.queueStatus, quickAddQueueError && styles.errorCopy]}
           >
-            {quickAddQueueMessage(quickAddOutboxState)}
+            {quickAddQueueMessage(quickAddOutboxState, diaryGroups)}
           </Text>
           {quickAddOutboxState.status === "blocked" ? (
             <View style={styles.queueActions}>

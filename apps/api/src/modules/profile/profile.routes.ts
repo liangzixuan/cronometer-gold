@@ -2,6 +2,7 @@ import {
   problemDetailsSchema,
   type UpdateUserProfileRequest,
   type UserProfile,
+  type UserProfilePatch,
   type UserProfileResponse,
   updateUserProfileRequestSchema,
   userProfileResponseSchema,
@@ -23,7 +24,7 @@ export interface ProfileService {
   update(input: {
     readonly userId: string;
     readonly expectedRevision: string;
-    readonly patch: UpdateUserProfileRequest;
+    readonly patch: UserProfilePatch;
   }): Promise<UserProfile>;
 }
 
@@ -126,6 +127,8 @@ export const profileRoutes: FastifyPluginAsync<ProfileRoutesOptions> = async (ap
           "locale",
           "timeZone",
           "unitSystem",
+          "diaryGroups",
+          "expectedOwnerUserId",
         ]),
       ],
       schema: {
@@ -134,6 +137,7 @@ export const profileRoutes: FastifyPluginAsync<ProfileRoutesOptions> = async (ap
           200: userProfileResponseSchema,
           400: problemDetailsSchema,
           401: problemDetailsSchema,
+          409: problemDetailsSchema,
           412: problemDetailsSchema,
           428: problemDetailsSchema,
           503: problemDetailsSchema,
@@ -143,12 +147,22 @@ export const profileRoutes: FastifyPluginAsync<ProfileRoutesOptions> = async (ap
     async (request, reply): Promise<UserProfileResponse> => {
       if (!options.profileService) throw unavailable();
       const principal = authenticatedPrincipal(request);
+      const { expectedOwnerUserId, ...profilePatch } = request.body;
+      if (expectedOwnerUserId !== undefined && expectedOwnerUserId !== principal.userId) {
+        throw new HttpProblem({
+          statusCode: 409,
+          code: "PROFILE_OWNER_CHANGED",
+          title: "Conflict",
+          detail: "The signed-in account changed. Reload before updating the profile.",
+          expose: true,
+        });
+      }
       const expectedRevision = requireRevision(request.headers["if-match"], { allowZero: true });
       try {
         const profile = await options.profileService.update({
           userId: principal.userId,
           expectedRevision,
-          patch: normalizeProfilePatch(request.body),
+          patch: normalizeProfilePatch(profilePatch),
         });
         reply.header("cache-control", "no-store").header("etag", revisionEtag(profile.revision));
         return { data: { profile } };

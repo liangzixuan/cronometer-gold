@@ -88,6 +88,24 @@ process-kill, lock/unlock, storage, accessibility, and lifecycle evidence also
 remain controlled-beta gates. See
 [ADR 0013](../../docs/adr/0013-durable-native-public-food-quick-add-outbox.md).
 
+## Configurable diary presentation groups
+
+The account profile carries one ordered label for each stable `breakfast`,
+`lunch`, `dinner`, and `snacks` meal slot. Diary settings can rename the four
+sections, move them earlier or later, and reset the defaults. Food, recipe,
+custom-food/retention, diary-edit, and quick-add receipt surfaces use the same
+current labels and visual order, while every network request and durable outbox
+item continues to store the canonical meal slot.
+
+Saving uses the strong profile revision. If another client changed the profile,
+mobile reloads instead of overwriting it. Labels are private profile data and
+must not be added to logs or analytics. This slice does not create, delete,
+archive, restore, or hide groups, and it does not change canonical server
+pagination order. Signed VoiceOver/TalkBack, cross-client, process-restart, and
+configuration-conflict evidence remains a controlled-beta gate; the closed P0
+v2 evidence format cannot be widened to claim it. See
+[ADR 0020](../../docs/adr/0020-configurable-diary-presentation-groups.md).
+
 ## Signed EAS releases
 
 The app is linked to the personal EAS project

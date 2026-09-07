@@ -63,11 +63,15 @@ that order. This is scheduling, not a waiver: every M0 and M2 acceptance gate
 remains fail-closed.
 
 M1A camera barcode capture is implemented at source level and awaits signed-device
-acceptance. M1B configurable diary groups and reviewed reference targets is next,
-followed by the remaining daily-loop
-offline and production-service gaps. M0's authenticated acquisition, review,
-and activation lane proceeds in parallel when its separately approved external
-work is available. M2 still requires both M0 and M1 acceptance.
+acceptance. M1B-G's bounded configuration of the four existing diary labels and
+their display order is implemented in source and has passed the ordered local
+validation runbook; hosted and signed-device acceptance remain pending. M1B-R
+reviewed reference targets is the next source milestone, followed by the remaining
+daily-loop offline and production-service gaps. Arbitrary add/delete/hide group
+identities remain a future migration milestone rather than part of M1B-G. M0's
+authenticated acquisition, review, and activation lane proceeds in parallel when
+its separately approved external work is available. M2 still requires both M0 and
+M1 acceptance.
 
 Remaining database writer closure, runtime-identity cutover,
 external-principal binding, target canaries, and CONTRACT revocation remain
@@ -202,6 +206,16 @@ Each retains its separate explicit-approval gate.
    checks, typecheck, lint, and mobile export. Signed iOS/Android camera,
    lifecycle, and accessibility evidence remains an M2 gate and authorizes no
    phone exposure or EAS action.
+   M1B-G implements owner-specific names and display order for exactly the four
+   stable `breakfast`, `lunch`, `dinner`, and `snacks` identities across the
+   private API, web, and mobile. It does not rewrite diary history, cursors,
+   idempotency inputs, or queued quick-add envelopes. Source implementation and
+   ordered local validation are complete while hosted validation and signed
+   cross-client evidence remain pending, so it does not yet meet this plan's full
+   **implemented** definition. M1B-R's reviewed, explicitly applied
+   reference-target experience is next. Creating, deleting, hiding, archiving, or
+   restoring arbitrary groups remains future work requiring durable identity and
+   history semantics.
    Plain-water hydration is implemented locally across PostgreSQL, the private
    API, web, and mobile as an owner-scoped exact-integer milliliter ledger.
    Server-derived profile-local coordinates, strong entry/day revisions,

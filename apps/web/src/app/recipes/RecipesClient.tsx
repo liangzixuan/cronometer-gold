@@ -7,12 +7,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   createOperationId,
+  type DiaryGroup,
+  defaultDiaryGroups,
   defaultMealForTime,
+  diaryGroupLabel,
   isLocalDate,
   localDateInTimeZone,
   type MealSlot,
-  mealLabel,
-  mealSlots,
   parseDiaryDay,
   parseDiaryMutation,
   parseSession,
@@ -230,6 +231,7 @@ export function RecipesClient() {
   const [foodResults, setFoodResults] = useState<readonly FoodSearchHit[]>([]);
   const [searchState, setSearchState] = useState<"idle" | LoadState>("idle");
   const [mealSlot, setMealSlot] = useState<MealSlot>(() => defaultMealForTime());
+  const [diaryGroups, setDiaryGroups] = useState<readonly DiaryGroup[]>(defaultDiaryGroups);
   const [logKind, setLogKind] = useState<"grams" | "serving">("serving");
   const [logAmount, setLogAmount] = useState("1");
   const pendingSaves = useRef(
@@ -307,6 +309,7 @@ export function RecipesClient() {
           // The authenticated profile zone remains authoritative when no diary exists yet.
         }
         if (!controller.signal.aborted) {
+          setDiaryGroups(session.profile.diaryGroups);
           setDate(localDate);
           setTimeZone(authoritativeZone);
           void loadRecipes();
@@ -549,8 +552,8 @@ export function RecipesClient() {
       setDate(loggedDate);
       setMessage(
         mutation.replayed
-          ? "The earlier diary log was confirmed safely."
-          : `Recipe logged to ${mealLabel(mealSlot)}.`,
+          ? `The earlier diary log to ${diaryGroupLabel(diaryGroups, mealSlot)} was confirmed safely.`
+          : `Recipe logged to ${diaryGroupLabel(diaryGroups, mealSlot)}.`,
       );
     } catch (caught) {
       setMessage(
@@ -1005,9 +1008,9 @@ export function RecipesClient() {
                         onChange={(event) => setMealSlot(event.target.value as MealSlot)}
                         value={mealSlot}
                       >
-                        {mealSlots.map((meal) => (
-                          <option key={meal} value={meal}>
-                            {mealLabel(meal)}
+                        {diaryGroups.map((group) => (
+                          <option key={group.mealSlot} value={group.mealSlot}>
+                            {group.label}
                           </option>
                         ))}
                       </select>

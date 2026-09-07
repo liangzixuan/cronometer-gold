@@ -1,10 +1,21 @@
 export const mealSlots = ["breakfast", "lunch", "dinner", "snacks"] as const;
+export const defaultDiaryGroups = [
+  { mealSlot: "breakfast", label: "Breakfast" },
+  { mealSlot: "lunch", label: "Lunch" },
+  { mealSlot: "dinner", label: "Dinner" },
+  { mealSlot: "snacks", label: "Snacks" },
+] as const;
 export const DIARY_PAGE_SIZE = 20;
 export const DIARY_DAY_MAX_ENTRIES = 50;
 export const DIARY_CURSOR_MAX_LENGTH = 512;
 
 export type MealSlot = (typeof mealSlots)[number];
 export type NutrientCompleteness = "complete" | "partial" | "unknown";
+
+export interface DiaryGroup {
+  readonly mealSlot: MealSlot;
+  readonly label: string;
+}
 
 export interface UserSummary {
   readonly id: string;
@@ -24,6 +35,7 @@ export interface ProfileSummary {
   readonly unitSystem: string;
   readonly onboardingCompletedAt: string | null;
   readonly revision: string;
+  readonly diaryGroups: readonly DiaryGroup[];
 }
 
 export interface SessionSummary {
@@ -270,7 +282,100 @@ function isMealSlot(value: unknown): value is MealSlot {
   return mealSlots.some((slot) => slot === value);
 }
 
-type RuntimeProfile = Omit<ProfileSummary, "revision"> & { readonly revision: string | number };
+function normalizedDiaryGroupLabel(value: unknown): string {
+  if (typeof value !== "string" || !wellFormedUnicode(value)) {
+    throw new TypeError("A diary group label was invalid.");
+  }
+  const normalized = value.normalize("NFKC").trim();
+  if (
+    normalized.length === 0 ||
+    Array.from(normalized).length > 40 ||
+    new TextEncoder().encode(normalized).length > 120 ||
+    /[\p{Cc}\p{Cf}]/u.test(normalized)
+  ) {
+    throw new TypeError(
+      "Each diary group needs a unique label of 1–40 characters and at most 120 UTF-8 bytes, without control characters.",
+    );
+  }
+  return normalized;
+}
+
+function validateDiaryGroups(
+  value: unknown,
+  requireCanonicalLabels: boolean,
+): readonly DiaryGroup[] {
+  if (!Array.isArray(value) || value.length !== mealSlots.length) {
+    throw new TypeError("The diary groups were invalid.");
+  }
+  const slots = new Set<MealSlot>();
+  const labels = new Set<string>();
+  const groups = value.map((candidate) => {
+    if (
+      !record(candidate) ||
+      Object.keys(candidate).length !== 2 ||
+      !("mealSlot" in candidate) ||
+      !("label" in candidate) ||
+      !isMealSlot(candidate.mealSlot)
+    ) {
+      throw new TypeError("A diary group was invalid.");
+    }
+    const label = normalizedDiaryGroupLabel(candidate.label);
+    if (requireCanonicalLabels && label !== candidate.label) {
+      throw new TypeError("A diary group label was not normalized.");
+    }
+    const foldedLabel = label.toLowerCase();
+    if (slots.has(candidate.mealSlot) || labels.has(foldedLabel)) {
+      throw new TypeError("Diary group slots and labels must be unique.");
+    }
+    slots.add(candidate.mealSlot);
+    labels.add(foldedLabel);
+    return { mealSlot: candidate.mealSlot, label };
+  });
+  if (!mealSlots.every((slot) => slots.has(slot))) {
+    throw new TypeError("Every canonical diary group is required.");
+  }
+  return groups;
+}
+
+export function parseDiaryGroups(value: unknown): readonly DiaryGroup[] {
+  return validateDiaryGroups(value, true);
+}
+
+export function prepareDiaryGroups(value: readonly DiaryGroup[]): readonly DiaryGroup[] {
+  return validateDiaryGroups(value, false);
+}
+
+export function moveDiaryGroup(
+  groups: readonly DiaryGroup[],
+  index: number,
+  direction: -1 | 1,
+): readonly DiaryGroup[] {
+  const next = groups.map((group) => ({ ...group }));
+  const destination = index + direction;
+  if (index < 0 || index >= next.length || destination < 0 || destination >= next.length) {
+    return next;
+  }
+  const current = next[index];
+  const displaced = next[destination];
+  if (!current || !displaced) return next;
+  next[index] = displaced;
+  next[destination] = current;
+  return next;
+}
+
+function isDiaryGroups(value: unknown): value is readonly DiaryGroup[] {
+  try {
+    parseDiaryGroups(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+type RuntimeProfile = Omit<ProfileSummary, "diaryGroups" | "revision"> & {
+  readonly diaryGroups?: unknown;
+  readonly revision: string | number;
+};
 
 function isProfile(value: unknown): value is RuntimeProfile {
   return (
@@ -285,6 +390,7 @@ function isProfile(value: unknown): value is RuntimeProfile {
     text(value.timeZone, 63) &&
     text(value.unitSystem, 30) &&
     (value.onboardingCompletedAt === null || text(value.onboardingCompletedAt, 64)) &&
+    (!("diaryGroups" in value) || isDiaryGroups(value.diaryGroups)) &&
     ((typeof value.revision === "string" && /^\d+$/u.test(value.revision)) ||
       (typeof value.revision === "number" && Number.isSafeInteger(value.revision)))
   );
@@ -300,7 +406,14 @@ function isUser(value: unknown): value is UserSummary {
 }
 
 function normalizeProfile(value: RuntimeProfile) {
-  return { ...value, revision: String(value.revision) } as ProfileSummary;
+  return {
+    ...value,
+    diaryGroups:
+      "diaryGroups" in value
+        ? parseDiaryGroups(value.diaryGroups)
+        : defaultDiaryGroups.map((group) => ({ ...group })),
+    revision: String(value.revision),
+  } as ProfileSummary;
 }
 
 export function parseSession(value: unknown): SessionSummary {
@@ -320,6 +433,13 @@ export function parseSession(value: unknown): SessionSummary {
     profile: normalizeProfile(value.data.profile),
     ...(typeof value.data.expiresAt === "string" ? { expiresAt: value.data.expiresAt } : {}),
   };
+}
+
+export function parseProfileResponse(value: unknown): ProfileSummary {
+  if (!record(value) || !record(value.data) || !isProfile(value.data.profile)) {
+    throw new TypeError("The profile response was invalid.");
+  }
+  return normalizeProfile(value.data.profile);
 }
 
 export function parseDiaryNutrient(value: unknown): DiaryNutrient {
@@ -1179,4 +1299,8 @@ export function parseDiaryMutation(value: unknown): DiaryMutationResult {
 
 export function mealLabel(meal: MealSlot): string {
   return meal === "snacks" ? "Snacks" : `${meal[0]?.toUpperCase()}${meal.slice(1)}`;
+}
+
+export function diaryGroupLabel(groups: readonly DiaryGroup[], meal: MealSlot): string {
+  return groups.find((group) => group.mealSlot === meal)?.label ?? mealLabel(meal);
 }

@@ -1,9 +1,10 @@
-import type { UpdateUserProfileRequest } from "@nutrition-tracker/contracts";
+import type { UserProfilePatch } from "@nutrition-tracker/contracts";
 import {
   canonicalIanaTimeZone,
   canonicalPositiveDecimal,
   decimal,
 } from "@nutrition-tracker/domain";
+import { normalizeDiaryGroups } from "./diary-groups.js";
 
 function measurement(
   value: string | null,
@@ -46,9 +47,9 @@ function birthDate(value: string | null, now: Date): string | null {
 
 /** Normalize the complete public profile patch before any persistence adapter is called. */
 export function normalizeProfilePatch(
-  patch: UpdateUserProfileRequest,
+  patch: UserProfilePatch,
   now: Date = new Date(),
-): UpdateUserProfileRequest {
+): UserProfilePatch {
   try {
     const displayName = patch.displayName?.normalize("NFKC").trim();
     if (displayName !== undefined && Buffer.byteLength(displayName, "utf8") > 300) {
@@ -61,6 +62,8 @@ export function normalizeProfilePatch(
     }
     const timeZone =
       patch.timeZone === undefined ? undefined : canonicalIanaTimeZone(patch.timeZone);
+    const diaryGroups =
+      patch.diaryGroups === undefined ? undefined : normalizeDiaryGroups(patch.diaryGroups);
     return {
       ...patch,
       ...(patch.baselineWeightKg === undefined
@@ -73,6 +76,7 @@ export function normalizeProfilePatch(
         : { heightCm: measurement(patch.heightCm, "heightCm", 30, 300) }),
       ...(locale === undefined ? {} : { locale }),
       ...(timeZone === undefined ? {} : { timeZone }),
+      ...(diaryGroups === undefined ? {} : { diaryGroups }),
     };
   } catch (error) {
     if (error instanceof RangeError) throw error;

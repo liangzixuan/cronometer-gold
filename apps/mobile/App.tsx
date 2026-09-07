@@ -1,4 +1,9 @@
-import { NavigationContainer, useNavigation, useRoute } from "@react-navigation/native";
+import {
+  NavigationContainer,
+  useFocusEffect,
+  useNavigation,
+  useRoute,
+} from "@react-navigation/native";
 import type {
   NativeStackNavigationProp,
   NativeStackScreenProps,
@@ -32,7 +37,14 @@ import {
   saveSecureSession,
 } from "./src/auth/secure-session";
 import { DiaryScreen } from "./src/diary/DiaryScreen";
-import { type MealSlot, parseSession, type SessionSummary } from "./src/diary/diary";
+import {
+  acceptProfileSessionUpdate,
+  type MealSlot,
+  type ProfileSessionUpdate,
+  parseProfileResponse,
+  parseSession,
+  type SessionSummary,
+} from "./src/diary/diary";
 import {
   createQuickAddOutboxController,
   type FatalQuickAddOutboxStoreReason,
@@ -111,6 +123,7 @@ interface AuthenticatedAppProps {
   readonly onUnauthorized: () => Promise<void>;
   readonly onSignOut: () => Promise<void>;
   readonly onSessionUpdated: (update: EmailVerificationSessionUpdate) => void;
+  readonly onProfileUpdated: (update: ProfileSessionUpdate) => void;
   readonly onErasurePrepared: () => void;
   readonly quickAddOutboxController: QuickAddOutboxController;
   readonly quickAddOutboxState: QuickAddOutboxControllerState;
@@ -150,10 +163,50 @@ function quickAddOutboxState(snapshot: QuickAddOutboxSnapshot): QuickAddOutboxCo
 function TodayRoute(props: AuthenticatedAppProps) {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute<NativeStackScreenProps<RootStackParamList, "Today">["route"]>();
+  useFocusEffect(
+    useCallback(() => {
+      const controller = new AbortController();
+      const initiatingSessionEpoch = props.sessionEpoch;
+      const initiatingUserId = props.session.user.id;
+      let active = true;
+      void (async () => {
+        try {
+          const response = await fetch(apiUrl(props.apiBase, "/v1/profile").toString(), {
+            headers: authenticatedHeaders(props.accessToken),
+            signal: controller.signal,
+          });
+          if (!active || controller.signal.aborted) return;
+          if (response.status === 401) {
+            await props.onUnauthorized();
+            return;
+          }
+          if (!response.ok) return;
+          const profile = parseProfileResponse(await jsonBody(response));
+          if (!active || controller.signal.aborted) return;
+          props.onProfileUpdated({ initiatingSessionEpoch, initiatingUserId, profile });
+        } catch {
+          // Keep the last authenticated profile; the next Today focus retries the refresh.
+        }
+      })();
+      return () => {
+        active = false;
+        controller.abort();
+      };
+    }, [
+      props.accessToken,
+      props.apiBase,
+      props.onProfileUpdated,
+      props.onUnauthorized,
+      props.session.user.id,
+      props.sessionEpoch,
+    ]),
+  );
   return (
     <DiaryScreen
+      key={`${props.sessionEpoch}:${props.session.user.id}`}
       accessToken={props.accessToken}
       apiBase={props.apiBase}
+      expectedOwnerUserId={props.session.user.id}
       onSearch={(date, meal, timeZone) =>
         navigation.navigate(authenticatedRoutes.search, { date, meal, timeZone })
       }
@@ -161,9 +214,19 @@ function TodayRoute(props: AuthenticatedAppProps) {
       onGoals={() => navigation.navigate(authenticatedRoutes.goals)}
       onHydration={() => navigation.navigate(authenticatedRoutes.hydration)}
       onHealth={() => navigation.navigate(authenticatedRoutes.health)}
+      onProfileUpdated={(profile) =>
+        props.onProfileUpdated({
+          initiatingSessionEpoch: props.sessionEpoch,
+          initiatingUserId: props.session.user.id,
+          profile,
+        })
+      }
       onUnauthorized={props.onUnauthorized}
+      diaryGroups={props.session.profile.diaryGroups}
+      profileRevision={props.session.profile.revision}
       profileTimeZone={props.session.profile.timeZone}
       quickAddOutboxState={props.quickAddOutboxState}
+      sessionEpoch={props.sessionEpoch}
       subscribeQuickAddReceipts={props.subscribeQuickAddReceipts}
       {...(route.params?.refreshKey ? { refreshKey: route.params.refreshKey } : {})}
       {...(route.params?.date ? { requestedDate: route.params.date } : {})}
@@ -198,6 +261,7 @@ function HealthRoute(
       onErasureAccepted={props.onErasureAccepted}
       onErasurePrepared={props.onErasurePrepared}
       onUnauthorized={props.onUnauthorized}
+      diaryGroups={props.session.profile.diaryGroups}
       profileTimeZone={props.session.profile.timeZone}
     />
   );
@@ -217,6 +281,7 @@ function RecipesRoute(props: AuthenticatedAppProps) {
         })
       }
       onUnauthorized={props.onUnauthorized}
+      diaryGroups={props.session.profile.diaryGroups}
       profileTimeZone={props.session.profile.timeZone}
     />
   );
@@ -256,6 +321,7 @@ function SearchRoute(props: AuthenticatedAppProps) {
         })
       }
       profileTimeZone={route.params.timeZone}
+      diaryGroups={props.session.profile.diaryGroups}
       quickAddOutboxController={props.quickAddOutboxController}
       quickAddOutboxState={props.quickAddOutboxState}
       subscribeQuickAddReceipts={props.subscribeQuickAddReceipts}
@@ -427,6 +493,12 @@ export default function App() {
     if (privateSessionEpochRef.current !== update.initiatingSessionEpoch) return;
     setSession((current) =>
       acceptEmailVerificationSessionUpdate(current, privateSessionEpochRef.current, update),
+    );
+  }, []);
+
+  const updateProfileSession = useCallback((update: ProfileSessionUpdate) => {
+    setSession((current) =>
+      acceptProfileSessionUpdate(current, privateSessionEpochRef.current, update),
     );
   }, []);
 
@@ -669,20 +741,24 @@ export default function App() {
     }
   }, [buildCleanupDependencies, cleanupRetryReason, erasureCapability]);
 
+  const activeSessionUserId = session?.user.id;
+  const activeProfileTimeZone = session?.profile.timeZone;
+
   useEffect(() => {
     if (
       !apiBase ||
       !accessToken ||
-      !session ||
+      !activeSessionUserId ||
+      !activeProfileTimeZone ||
       !preparedQuickAddOutbox ||
-      preparedQuickAddOutbox.ownerUserId !== session.user.id
+      preparedQuickAddOutbox.ownerUserId !== activeSessionUserId
     ) {
       return;
     }
     const controller = createQuickAddOutboxController({
       apiBase,
-      ownerUserId: session.user.id,
-      expectedTimeZone: session.profile.timeZone,
+      ownerUserId: activeSessionUserId,
+      expectedTimeZone: activeProfileTimeZone,
       store: quickAddOutboxStore,
       fetcher: (input, init) => fetch(input, init),
       accessToken: () => accessToken,
@@ -714,12 +790,13 @@ export default function App() {
     };
   }, [
     accessToken,
+    activeProfileTimeZone,
+    activeSessionUserId,
     apiBase,
     handleFatalQuickAddOutbox,
     handleUnauthorized,
     preparedQuickAddOutbox,
     quickAddOutboxStore,
-    session,
   ]);
 
   useEffect(() => {
@@ -1050,6 +1127,7 @@ export default function App() {
           onErasureAccepted={acceptErasure}
           onErasurePrepared={fenceQuickAddOutboxForErasure}
           onSessionUpdated={updateEmailVerificationSession}
+          onProfileUpdated={updateProfileSession}
           onSignOut={signOut}
           onUnauthorized={handleUnauthorized}
           quickAddOutboxController={quickAddOutboxController}

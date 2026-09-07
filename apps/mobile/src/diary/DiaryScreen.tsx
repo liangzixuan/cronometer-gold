@@ -20,12 +20,14 @@ import {
   DIARY_PAGE_SIZE,
   type DiaryEditorOrigin,
   type DiaryEntry,
+  type DiaryGroup,
   type DiaryMutationResult,
   type DiaryPage,
   type DiaryUnauthorizedSingleFlight,
   diaryEditorOperationKey,
   diaryEditorOrigin,
   diaryEditorOriginMatches,
+  diaryGroupLabel,
   diaryNoteFromDraft,
   diaryPagePath,
   diaryRouteTransitionGeneration,
@@ -33,17 +35,22 @@ import {
   isDiaryPageStaleProblem,
   isLocalDate,
   isPositiveDecimal,
+  isProfileOwnerChangedProblem,
   localDateInTimeZone,
   localDateTimeToInstant,
   MAX_DIARY_NOTE_LENGTH,
   type MealSlot,
-  mealLabel,
-  mealSlots,
   mergeDiaryPages,
+  moveDiaryGroup,
+  normalizeDiaryGroups,
   nutrientDisplay,
+  type ProfileSummary,
   parseDiaryMutation,
   parseDiaryPage,
+  parseProfileResponse,
+  profileRequestIdentityMatches,
   quickAddOccurredAt,
+  resetDiaryGroups,
   shiftLocalDate,
 } from "./diary";
 import type { QuickAddOutboxControllerState, QuickAddReceipt } from "./quick-add-outbox";
@@ -70,7 +77,11 @@ interface MutationOwner {
 interface DiaryScreenProps {
   readonly apiBase: URL;
   readonly accessToken: string;
+  readonly expectedOwnerUserId: string;
   readonly profileTimeZone: string;
+  readonly profileRevision: string;
+  readonly diaryGroups: readonly DiaryGroup[];
+  readonly sessionEpoch: number;
   readonly requestedDate?: string;
   readonly refreshKey?: string;
   readonly onSearch: (date: string, meal: MealSlot, timeZone: string) => void;
@@ -78,6 +89,7 @@ interface DiaryScreenProps {
   readonly onGoals: () => void;
   readonly onHydration: () => void;
   readonly onHealth: () => void;
+  readonly onProfileUpdated: (profile: ProfileSummary) => void;
   readonly onUnauthorized: () => Promise<void>;
   readonly quickAddOutboxState: QuickAddOutboxControllerState;
   readonly subscribeQuickAddReceipts: (listener: (receipt: QuickAddReceipt) => void) => () => void;
@@ -142,7 +154,11 @@ function queuedQuickAddMessage(state: QuickAddOutboxControllerState): string | n
 export function DiaryScreen({
   apiBase,
   accessToken,
+  expectedOwnerUserId,
   profileTimeZone,
+  profileRevision,
+  diaryGroups,
+  sessionEpoch,
   requestedDate,
   refreshKey,
   onSearch,
@@ -150,6 +166,7 @@ export function DiaryScreen({
   onGoals,
   onHydration,
   onHealth,
+  onProfileUpdated,
   onUnauthorized,
   quickAddOutboxState,
   subscribeQuickAddReceipts,
@@ -166,9 +183,20 @@ export function DiaryScreen({
   const [message, setMessage] = useState("Opening your private diary…");
   const [editor, setEditor] = useState<Editor | null>(null);
   const [busyEntry, setBusyEntry] = useState<string | null>(null);
+  const [groupEditorOpen, setGroupEditorOpen] = useState(false);
+  const [groupDraft, setGroupDraft] = useState<readonly DiaryGroup[]>(() =>
+    diaryGroups.map((group) => ({ ...group })),
+  );
+  const [groupBusy, setGroupBusy] = useState(false);
   const [routeReloadGeneration, setRouteReloadGeneration] = useState(0);
   const operationIds = useRef(new Map<string, string>());
   const loadController = useRef<AbortController | null>(null);
+  const profileController = useRef<AbortController | null>(null);
+  const expectedOwnerUserIdRef = useRef(expectedOwnerUserId);
+  expectedOwnerUserIdRef.current = expectedOwnerUserId;
+  const sessionEpochRef = useRef(sessionEpoch);
+  sessionEpochRef.current = sessionEpoch;
+  const previousProfileIdentity = useRef({ expectedOwnerUserId, sessionEpoch });
   const pageRequestBusy = useRef(false);
   const requestGeneration = useRef(0);
   const viewEpoch = useRef(0);
@@ -191,11 +219,14 @@ export function DiaryScreen({
       activeMutation.current = null;
       requestGeneration.current += 1;
       loadController.current?.abort();
+      profileController.current?.abort();
       pageRequestBusy.current = false;
       operationIds.current.clear();
       dateRef.current = "";
       setDiaryPage(null);
       setEditor(null);
+      setGroupEditorOpen(false);
+      setGroupBusy(false);
       setBusyEntry(null);
       setPageState("idle");
       setState("loading");
@@ -318,6 +349,29 @@ export function DiaryScreen({
     };
   }, [date, load, routeReloadGeneration]);
 
+  useEffect(() => {
+    if (!groupEditorOpen && !groupBusy) {
+      setGroupDraft(diaryGroups.map((group) => ({ ...group })));
+    }
+  }, [diaryGroups, groupBusy, groupEditorOpen]);
+
+  useEffect(() => {
+    const previous = previousProfileIdentity.current;
+    if (
+      previous.expectedOwnerUserId === expectedOwnerUserId &&
+      previous.sessionEpoch === sessionEpoch
+    ) {
+      return;
+    }
+    previousProfileIdentity.current = { expectedOwnerUserId, sessionEpoch };
+    profileController.current?.abort();
+    profileController.current = null;
+    setGroupBusy(false);
+    setGroupEditorOpen(false);
+    setGroupDraft(diaryGroups.map((group) => ({ ...group })));
+    setMessage("The signed-in account changed. Diary group settings were closed.");
+  }, [diaryGroups, expectedOwnerUserId, sessionEpoch]);
+
   useEffect(
     () => () => {
       privateUiClosed.current = true;
@@ -325,6 +379,7 @@ export function DiaryScreen({
       activeMutation.current = null;
       requestGeneration.current += 1;
       loadController.current?.abort();
+      profileController.current?.abort();
     },
     [],
   );
@@ -683,12 +738,163 @@ export function DiaryScreen({
   function confirmRemove(entry: DiaryEntry) {
     Alert.alert(
       "Delete diary entry?",
-      `${entryName(entry)} will be removed from ${mealLabel(entry.mealSlot)}.`,
+      `${entryName(entry)} will be removed from ${diaryGroupLabel(diaryGroups, entry.mealSlot)}.`,
       [
         { text: "Cancel", style: "cancel" },
         { text: "Delete", style: "destructive", onPress: () => void remove(entry) },
       ],
     );
+  }
+
+  function openGroupEditor() {
+    setGroupDraft(diaryGroups.map((group) => ({ ...group })));
+    setGroupEditorOpen(true);
+  }
+
+  function profileRequestIsCurrent(
+    controller: AbortController,
+    initiatingOwnerUserId: string,
+    initiatingSessionEpoch: number,
+  ): boolean {
+    return (
+      !privateUiClosed.current &&
+      profileController.current === controller &&
+      !controller.signal.aborted &&
+      profileRequestIdentityMatches(
+        expectedOwnerUserIdRef.current,
+        sessionEpochRef.current,
+        initiatingOwnerUserId,
+        initiatingSessionEpoch,
+      )
+    );
+  }
+
+  async function refreshGroupsAfterConflict(
+    controller: AbortController,
+    initiatingOwnerUserId: string,
+    initiatingSessionEpoch: number,
+  ): Promise<void> {
+    if (!profileRequestIsCurrent(controller, initiatingOwnerUserId, initiatingSessionEpoch)) {
+      return;
+    }
+    const response = await fetch(apiUrl(apiBase, "/v1/profile").toString(), {
+      headers: authenticatedHeaders(accessToken),
+      signal: controller.signal,
+    });
+    if (!profileRequestIsCurrent(controller, initiatingOwnerUserId, initiatingSessionEpoch)) {
+      return;
+    }
+    if (response.status === 401) {
+      await closeForUnauthorized();
+      return;
+    }
+    const body = await jsonBody(response);
+    if (!profileRequestIsCurrent(controller, initiatingOwnerUserId, initiatingSessionEpoch)) {
+      return;
+    }
+    if (!response.ok) {
+      throw new Error(responseError(body, "Fresh diary groups could not be loaded."));
+    }
+    const profile = parseProfileResponse(body);
+    if (!profileRequestIsCurrent(controller, initiatingOwnerUserId, initiatingSessionEpoch)) {
+      return;
+    }
+    onProfileUpdated(profile);
+    setGroupDraft(profile.diaryGroups.map((group) => ({ ...group })));
+    setGroupEditorOpen(false);
+    setMessage(
+      "Diary groups changed elsewhere. Fresh names and order were loaded; review them before editing again.",
+    );
+  }
+
+  async function saveDiaryGroups() {
+    if (privateUiClosed.current || groupBusy) return;
+    const renderedIdentity = previousProfileIdentity.current;
+    if (
+      !profileRequestIdentityMatches(
+        expectedOwnerUserId,
+        sessionEpoch,
+        renderedIdentity.expectedOwnerUserId,
+        renderedIdentity.sessionEpoch,
+      )
+    ) {
+      return;
+    }
+    let normalized: readonly DiaryGroup[];
+    try {
+      normalized = normalizeDiaryGroups(groupDraft);
+    } catch (caught) {
+      setMessage(
+        caught instanceof Error ? caught.message : "The diary group settings are invalid.",
+      );
+      return;
+    }
+    const initiatingOwnerUserId = expectedOwnerUserId;
+    const initiatingSessionEpoch = sessionEpoch;
+    const controller = new AbortController();
+    profileController.current?.abort();
+    profileController.current = controller;
+    setGroupBusy(true);
+    setMessage("Saving diary group names and order…");
+    try {
+      const response = await fetch(apiUrl(apiBase, "/v1/profile").toString(), {
+        method: "PATCH",
+        headers: authenticatedHeaders(accessToken, {
+          "content-type": "application/json",
+          "if-match": `"${profileRevision}"`,
+        }),
+        body: JSON.stringify({
+          diaryGroups: normalized,
+          expectedOwnerUserId: initiatingOwnerUserId,
+        }),
+        signal: controller.signal,
+      });
+      if (!profileRequestIsCurrent(controller, initiatingOwnerUserId, initiatingSessionEpoch)) {
+        return;
+      }
+      if (response.status === 401) {
+        await closeForUnauthorized();
+        return;
+      }
+      const body = await jsonBody(response);
+      if (!profileRequestIsCurrent(controller, initiatingOwnerUserId, initiatingSessionEpoch)) {
+        return;
+      }
+      if (isProfileOwnerChangedProblem(response.status, body)) {
+        await closeForUnauthorized();
+        return;
+      }
+      if (response.status === 412) {
+        await refreshGroupsAfterConflict(controller, initiatingOwnerUserId, initiatingSessionEpoch);
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(responseError(body, "Diary groups could not be saved."));
+      }
+      const profile = parseProfileResponse(body);
+      if (!profileRequestIsCurrent(controller, initiatingOwnerUserId, initiatingSessionEpoch)) {
+        return;
+      }
+      onProfileUpdated(profile);
+      setGroupDraft(profile.diaryGroups.map((group) => ({ ...group })));
+      setGroupEditorOpen(false);
+      setMessage(
+        "Diary group names and order saved. Existing entries stayed in their original canonical groups.",
+      );
+      AccessibilityInfo.announceForAccessibility("Diary group names and order saved.");
+    } catch (caught) {
+      if (!profileRequestIsCurrent(controller, initiatingOwnerUserId, initiatingSessionEpoch)) {
+        return;
+      }
+      setMessage(
+        `${caught instanceof Error ? caught.message : "Diary groups could not be saved."} Refresh the profile before retrying if the result is uncertain.`,
+      );
+    } finally {
+      if (profileController.current === controller) {
+        profileController.current = null;
+        setGroupBusy(false);
+      }
+    }
   }
 
   const activeTimeZone = diary?.timeZone ?? profileTimeZone;
@@ -763,6 +969,92 @@ export function DiaryScreen({
           <Text style={styles.todayText}>Jump to today</Text>
         </Pressable>
 
+        <Pressable
+          accessibilityRole="button"
+          accessibilityState={{ expanded: groupEditorOpen, disabled: groupBusy }}
+          disabled={groupBusy}
+          onPress={() => (groupEditorOpen ? setGroupEditorOpen(false) : openGroupEditor())}
+          style={styles.groupSettingsButton}
+        >
+          <Text style={styles.secondaryText}>
+            {groupEditorOpen ? "Close diary group settings" : "Customize diary groups"}
+          </Text>
+        </Pressable>
+
+        {groupEditorOpen ? (
+          <View style={styles.groupSettingsCard}>
+            <Text accessibilityRole="header" style={styles.groupSettingsTitle}>
+              Diary groups
+            </Text>
+            <Text style={styles.groupSettingsHelp}>
+              Rename and reorder the four diary sections. Entries keep their canonical destinations,
+              so changing a name never rewrites diary history.
+            </Text>
+            {groupDraft.map((group, index) => (
+              <View key={group.mealSlot} style={styles.groupSettingsRow}>
+                <TextInput
+                  accessibilityLabel={`Name for diary group ${index + 1}`}
+                  editable={!groupBusy}
+                  maxLength={120}
+                  onChangeText={(label) =>
+                    setGroupDraft((current) =>
+                      current.map((candidate) =>
+                        candidate.mealSlot === group.mealSlot ? { ...candidate, label } : candidate,
+                      ),
+                    )
+                  }
+                  style={[styles.input, styles.groupNameInput]}
+                  value={group.label}
+                />
+                <Pressable
+                  accessibilityLabel={`Move ${group.label || `group ${index + 1}`} up`}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: groupBusy || index === 0 }}
+                  disabled={groupBusy || index === 0}
+                  onPress={() =>
+                    setGroupDraft((current) => moveDiaryGroup(current, group.mealSlot, -1))
+                  }
+                  style={styles.groupMoveButton}
+                >
+                  <Text style={styles.secondaryText}>↑</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityLabel={`Move ${group.label || `group ${index + 1}`} down`}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: groupBusy || index === groupDraft.length - 1 }}
+                  disabled={groupBusy || index === groupDraft.length - 1}
+                  onPress={() =>
+                    setGroupDraft((current) => moveDiaryGroup(current, group.mealSlot, 1))
+                  }
+                  style={styles.groupMoveButton}
+                >
+                  <Text style={styles.secondaryText}>↓</Text>
+                </Pressable>
+              </View>
+            ))}
+            <View style={styles.actionRow}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: groupBusy }}
+                disabled={groupBusy}
+                onPress={() => void saveDiaryGroups()}
+                style={styles.primarySmall}
+              >
+                <Text style={styles.primaryText}>{groupBusy ? "Saving…" : "Save groups"}</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: groupBusy }}
+                disabled={groupBusy}
+                onPress={() => setGroupDraft(resetDiaryGroups())}
+                style={styles.secondarySmall}
+              >
+                <Text style={styles.secondaryText}>Use defaults</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+
         <Text
           accessibilityLiveRegion="polite"
           style={[styles.status, (state === "error" || pageState === "error") && styles.error]}
@@ -822,7 +1114,9 @@ export function DiaryScreen({
             </Text>
             <Pressable
               accessibilityRole="button"
-              onPress={() => onSearch(date, "breakfast", diary.timeZone)}
+              onPress={() =>
+                onSearch(date, diaryGroups[0]?.mealSlot ?? "breakfast", diary.timeZone)
+              }
               style={styles.primaryButton}
             >
               <Text style={styles.primaryText}>Find a food</Text>
@@ -831,13 +1125,13 @@ export function DiaryScreen({
         ) : null}
 
         {diary && diary.entries.length > 0
-          ? mealSlots.map((meal) => {
+          ? diaryGroups.map(({ mealSlot: meal, label }) => {
               const entries = diary.entries.filter((entry) => entry.mealSlot === meal);
               return (
                 <View key={meal} style={styles.mealSection}>
                   <View style={styles.mealHeading}>
                     <Text accessibilityRole="header" style={styles.mealTitle}>
-                      {mealLabel(meal)}
+                      {label}
                     </Text>
                     <Pressable
                       accessibilityRole="button"
@@ -928,7 +1222,7 @@ export function DiaryScreen({
                             />
                             <Text style={styles.label}>Meal</Text>
                             <View accessibilityRole="radiogroup" style={styles.chips}>
-                              {mealSlots.map((slot) => (
+                              {diaryGroups.map(({ mealSlot: slot, label }) => (
                                 <Pressable
                                   accessibilityRole="radio"
                                   accessibilityState={{ checked: editor.mealSlot === slot }}
@@ -945,7 +1239,7 @@ export function DiaryScreen({
                                       editor.mealSlot === slot && styles.chipTextActive,
                                     ]}
                                   >
-                                    {mealLabel(slot)}
+                                    {label}
                                   </Text>
                                 </Pressable>
                               ))}
@@ -1210,6 +1504,36 @@ const styles = StyleSheet.create({
   entrySource: { color: palette.muted, fontSize: 11, lineHeight: 16, marginTop: 5 },
   entryTitle: { color: palette.ink, fontSize: 18, fontWeight: "700" },
   error: { color: "#8a3128" },
+  groupMoveButton: {
+    alignItems: "center",
+    borderColor: palette.line,
+    borderRadius: 9,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 46,
+    minWidth: 46,
+  },
+  groupNameInput: { flex: 1 },
+  groupSettingsButton: {
+    alignSelf: "flex-start",
+    borderColor: palette.forest,
+    borderRadius: 999,
+    borderWidth: 1,
+    marginTop: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  groupSettingsCard: {
+    backgroundColor: palette.white,
+    borderColor: palette.line,
+    borderRadius: 14,
+    borderWidth: 1,
+    marginTop: 14,
+    padding: 16,
+  },
+  groupSettingsHelp: { color: palette.muted, fontSize: 13, lineHeight: 19, marginTop: 6 },
+  groupSettingsRow: { alignItems: "center", flexDirection: "row", gap: 8, marginTop: 12 },
+  groupSettingsTitle: { color: palette.ink, fontSize: 20, fontWeight: "700" },
   input: {
     backgroundColor: palette.white,
     borderColor: palette.line,

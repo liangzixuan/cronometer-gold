@@ -1,24 +1,35 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  acceptProfileSessionUpdate,
   createDiaryUnauthorizedSingleFlight,
   createOperationId,
+  defaultDiaryGroups,
   diaryEditorOperationKey,
   diaryEditorOrigin,
   diaryEditorOriginMatches,
+  diaryGroupLabel,
   diaryNoteFromDraft,
   diaryPagePath,
   diaryRouteTransitionGeneration,
   entryEnergyDisplay,
   isDiaryPageStaleProblem,
   isLocalDate,
+  isProfileOwnerChangedProblem,
   localDateTimeToInstant,
   mergeDiaryPages,
+  moveDiaryGroup,
+  normalizeDiaryGroups,
   nutrientDisplay,
   parseDiaryDay,
+  parseDiaryGroups,
   parseDiaryMutation,
   parseDiaryPage,
+  parseProfileResponse,
+  parseSession,
+  profileRequestIdentityMatches,
   quickAddOccurredAt,
+  resetDiaryGroups,
 } from "./diary";
 
 const nutrient = {
@@ -158,6 +169,168 @@ function diaryPageFixture(
 }
 
 describe("mobile diary contract", () => {
+  it("requires normalized, uniquely named canonical diary groups in the chosen order", () => {
+    const groups = normalizeDiaryGroups([
+      { mealSlot: "snacks", label: "  Evening Ｓnack  " },
+      { mealSlot: "breakfast", label: "Morning" },
+      { mealSlot: "lunch", label: "Midday" },
+      { mealSlot: "dinner", label: "Supper" },
+    ]);
+    expect(groups).toEqual([
+      { mealSlot: "snacks", label: "Evening Snack" },
+      { mealSlot: "breakfast", label: "Morning" },
+      { mealSlot: "lunch", label: "Midday" },
+      { mealSlot: "dinner", label: "Supper" },
+    ]);
+    expect(parseDiaryGroups(groups)).toEqual(groups);
+    expect(diaryGroupLabel(groups, "snacks")).toBe("Evening Snack");
+    expect(() => parseDiaryGroups([...groups, { extra: true }])).toThrow(TypeError);
+    expect(() => parseDiaryGroups(groups.map((group) => ({ ...group, extra: true })))).toThrow(
+      TypeError,
+    );
+    expect(() =>
+      normalizeDiaryGroups([...groups.slice(0, 3), { mealSlot: "dinner", label: "morning" }]),
+    ).toThrow("unique");
+    const firstGroup = groups[0];
+    if (!firstGroup) throw new Error("Expected four normalized diary groups.");
+    expect(() =>
+      normalizeDiaryGroups([{ ...firstGroup, label: "hidden\u200djoiner" }, ...groups.slice(1)]),
+    ).toThrow("control or formatting");
+    expect(() =>
+      normalizeDiaryGroups([{ ...firstGroup, label: "😀".repeat(31) }, ...groups.slice(1)]),
+    ).toThrow("120 bytes");
+  });
+
+  it("moves and resets presentation order without changing canonical meal-slot identities", () => {
+    const moved = moveDiaryGroup(defaultDiaryGroups, "dinner", -1);
+    expect(moved.map((group) => group.mealSlot)).toEqual([
+      "breakfast",
+      "dinner",
+      "lunch",
+      "snacks",
+    ]);
+    expect(moveDiaryGroup(moved, "breakfast", -1)).toBe(moved);
+    expect(resetDiaryGroups()).toEqual(defaultDiaryGroups);
+    expect(resetDiaryGroups()).not.toBe(defaultDiaryGroups);
+  });
+
+  it("parses diary groups from session and profile mutation responses", () => {
+    const profile = {
+      displayName: null,
+      locale: "en-US",
+      timeZone: "America/Chicago",
+      unitSystem: "metric",
+      revision: "8",
+      diaryGroups: defaultDiaryGroups,
+    };
+    expect(
+      parseSession({
+        data: {
+          user: {
+            id: "user_123",
+            email: "person@example.test",
+            emailVerified: true,
+          },
+          profile,
+        },
+      }).profile.diaryGroups,
+    ).toEqual(defaultDiaryGroups);
+    expect(parseProfileResponse({ data: { profile } }).revision).toBe("8");
+
+    const legacyProfile = {
+      displayName: profile.displayName,
+      locale: profile.locale,
+      timeZone: profile.timeZone,
+      unitSystem: profile.unitSystem,
+      revision: profile.revision,
+    };
+    const legacySession = parseSession({
+      data: {
+        user: {
+          id: "user_123",
+          email: "person@example.test",
+          emailVerified: true,
+        },
+        profile: legacyProfile,
+      },
+    });
+    expect(legacySession.profile.diaryGroups).toEqual(defaultDiaryGroups);
+    expect(legacySession.profile.diaryGroups).not.toBe(defaultDiaryGroups);
+    expect(legacySession.profile.diaryGroups[0]).not.toBe(defaultDiaryGroups[0]);
+
+    expect(() =>
+      parseSession({
+        data: {
+          user: {
+            id: "user_123",
+            email: "person@example.test",
+            emailVerified: true,
+          },
+          profile: { ...profile, diaryGroups: undefined },
+        },
+      }),
+    ).toThrow("session response");
+    expect(() =>
+      parseProfileResponse({
+        data: { profile: { ...profile, diaryGroups: defaultDiaryGroups.slice(0, 3) } },
+      }),
+    ).toThrow("diary group response");
+  });
+
+  it("applies only monotonic profile updates for the initiating private session owner and epoch", () => {
+    const current = parseSession({
+      data: {
+        user: { id: "user_123", email: "person@example.test", emailVerified: true },
+        profile: {
+          displayName: null,
+          locale: "en-US",
+          timeZone: "America/Chicago",
+          unitSystem: "metric",
+          revision: "8",
+          diaryGroups: defaultDiaryGroups,
+        },
+      },
+    });
+    const profile = {
+      ...current.profile,
+      revision: "9",
+      diaryGroups: [
+        { mealSlot: "dinner" as const, label: "Supper" },
+        ...defaultDiaryGroups.filter((group) => group.mealSlot !== "dinner"),
+      ],
+    };
+    const update = {
+      initiatingSessionEpoch: 3,
+      initiatingUserId: "user_123",
+      profile,
+    };
+    expect(acceptProfileSessionUpdate(current, 3, update)?.profile).toBe(profile);
+    expect(acceptProfileSessionUpdate(current, 4, update)).toBe(current);
+    expect(
+      acceptProfileSessionUpdate(current, 3, { ...update, initiatingUserId: "other_user" }),
+    ).toBe(current);
+    expect(
+      acceptProfileSessionUpdate(current, 3, {
+        ...update,
+        profile: { ...profile, revision: "7" },
+      }),
+    ).toBe(current);
+    expect(acceptProfileSessionUpdate(null, 3, update)).toBeNull();
+  });
+
+  it("fences profile requests by exact owner and session epoch", () => {
+    expect(profileRequestIdentityMatches("user_123", 4, "user_123", 4)).toBe(true);
+    expect(profileRequestIdentityMatches("user_456", 4, "user_123", 4)).toBe(false);
+    expect(profileRequestIdentityMatches("user_123", 5, "user_123", 4)).toBe(false);
+  });
+
+  it("recognizes only the exact profile-owner conflict problem", () => {
+    expect(isProfileOwnerChangedProblem(409, { code: "PROFILE_OWNER_CHANGED" })).toBe(true);
+    expect(isProfileOwnerChangedProblem(412, { code: "PROFILE_OWNER_CHANGED" })).toBe(false);
+    expect(isProfileOwnerChangedProblem(409, { code: "DIARY_PAGE_STALE" })).toBe(false);
+    expect(isProfileOwnerChangedProblem(409, null)).toBe(false);
+  });
+
   it("preserves portions, revisions, and exact nutrient decimal strings", () => {
     const day = parseDiaryDay({
       data: {

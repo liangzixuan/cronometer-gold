@@ -1,12 +1,17 @@
+import { Ajv } from "ajv";
+import * as addFormatsModule from "ajv-formats";
 import { describe, expect, it } from "vitest";
 
 import {
   createDiaryEntryHeadersSchema,
   createDiaryEntryQuerySchema,
   createDiaryEntryRequestSchema,
+  defaultDiaryGroups,
   diaryDayResponseSchema,
   diaryEntrySchema,
   diaryFoodEntrySchema,
+  diaryGroupsSchema,
+  diaryMealSlots,
   diaryMutationResponseSchema,
   diaryNutrientAggregateSchema,
   diaryRecipeEntrySchema,
@@ -21,8 +26,11 @@ import {
   publicFoodKinds,
   registerAccountRequestSchema,
   updateDiaryEntryRequestSchema,
+  updateUserProfileRequestSchema,
   userProfileSchema,
 } from "./index.js";
+
+const addFormats = addFormatsModule.default as unknown as (ajv: Ajv) => Ajv;
 
 describe("public contracts", () => {
   it("keeps the liveness response intentionally small", () => {
@@ -33,6 +41,7 @@ describe("public contracts", () => {
   it("keeps the problem schema and code taxonomy synchronized", () => {
     expect(problemDetailsSchema.properties.code.enum).toEqual(problemCodes);
     expect(problemCodes).toContain("INTERNAL_ERROR");
+    expect(problemCodes).toContain("PROFILE_OWNER_CHANGED");
     expect(new Set(problemCodes).size).toBe(problemCodes.length);
   });
 
@@ -65,6 +74,55 @@ describe("public contracts", () => {
     expect(registerAccountRequestSchema.additionalProperties).toBe(false);
     expect(registerAccountRequestSchema.required).toContain("timeZone");
     expect(userProfileSchema.required).toContain("revision");
+    expect(userProfileSchema.required).toContain("diaryGroups");
+    expect(updateUserProfileRequestSchema.dependencies).toEqual({
+      diaryGroups: ["expectedOwnerUserId"],
+      expectedOwnerUserId: { minProperties: 2 },
+    });
+    const profileUpdateAjv = new Ajv({ allErrors: true, strict: true });
+    addFormats(profileUpdateAjv);
+    const validateProfileUpdate = profileUpdateAjv.compile(updateUserProfileRequestSchema);
+    expect(validateProfileUpdate({ displayName: "Legacy edit" })).toBe(true);
+    expect(
+      validateProfileUpdate({
+        expectedOwnerUserId: "70eedafb-9d6e-4adc-b924-8e55e87ff5d0",
+        diaryGroups: defaultDiaryGroups,
+      }),
+    ).toBe(true);
+    expect(validateProfileUpdate({ diaryGroups: defaultDiaryGroups })).toBe(false);
+    expect(
+      validateProfileUpdate({
+        expectedOwnerUserId: "70eedafb-9d6e-4adc-b924-8e55e87ff5d0",
+      }),
+    ).toBe(false);
+    expect(diaryGroupsSchema).toMatchObject({
+      minItems: 4,
+      maxItems: 4,
+      uniqueItems: true,
+    });
+    expect(diaryGroupsSchema.items).toMatchObject({
+      additionalProperties: false,
+      required: ["mealSlot", "label"],
+      properties: {
+        mealSlot: { enum: diaryMealSlots },
+        label: { minLength: 1, maxLength: 40 },
+      },
+    });
+    expect(
+      diaryGroupsSchema.allOf.map((constraint) => constraint.contains.properties.mealSlot.const),
+    ).toEqual(diaryMealSlots);
+    const validateDiaryGroups = new Ajv({ allErrors: true, strict: true }).compile(
+      diaryGroupsSchema,
+    );
+    expect(validateDiaryGroups(defaultDiaryGroups)).toBe(true);
+    expect(
+      validateDiaryGroups([
+        { mealSlot: "breakfast", label: "Morning" },
+        { mealSlot: "breakfast", label: "Second breakfast" },
+        { mealSlot: "dinner", label: "Dinner" },
+        { mealSlot: "snacks", label: "Snacks" },
+      ]),
+    ).toBe(false);
     expect(createDiaryEntryRequestSchema.required).not.toContain("localDate");
     expect(createDiaryEntryHeadersSchema).toMatchObject({
       additionalProperties: true,

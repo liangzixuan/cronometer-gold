@@ -23,8 +23,8 @@ import {
   type RecipeWarningCode,
   type TargetableNutrient,
   type TargetableNutrientListResponse,
-  type UpdateUserProfileRequest,
   type UserProfile,
+  type UserProfilePatch,
 } from "@nutrition-tracker/contracts";
 import {
   AccountConflictError,
@@ -169,6 +169,10 @@ import {
   HydrationValidationServiceError,
 } from "./modules/hydration/hydration.routes.js";
 import {
+  diaryGroupsFromPreferences,
+  preferencesWithDiaryGroups,
+} from "./modules/profile/diary-groups.js";
+import {
   ProfileRevisionConflictServiceError,
   type ProfileService,
   ProfileValidationServiceError,
@@ -193,6 +197,7 @@ function profile(record: UserProfileRecord): UserProfile {
         ? null
         : canonicalPositiveDecimal(record.baselineWeightKg, "baselineWeightKg"),
     birthDate: record.birthDate,
+    diaryGroups: diaryGroupsFromPreferences(record.preferences),
     displayName: record.displayName,
     heightCm:
       record.heightCm === null ? null : canonicalPositiveDecimal(record.heightCm, "heightCm"),
@@ -389,12 +394,24 @@ export class DatabaseProfileService implements ProfileService {
   async update(input: {
     readonly userId: string;
     readonly expectedRevision: string;
-    readonly patch: UpdateUserProfileRequest;
+    readonly patch: UserProfilePatch;
   }): Promise<UserProfile> {
     try {
+      const normalized = normalizeProfilePatch(input.patch);
+      const { diaryGroups, ...profilePatch } = normalized;
+      const databasePatch =
+        diaryGroups === undefined
+          ? profilePatch
+          : {
+              ...profilePatch,
+              preferences: preferencesWithDiaryGroups(
+                (await getUserProfile(this.#database, input.userId))?.preferences ?? {},
+                diaryGroups,
+              ),
+            };
       const result = await updateUserProfile(this.#database, {
         expectedRevision: input.expectedRevision,
-        patch: normalizeProfilePatch(input.patch),
+        patch: databasePatch,
         userId: input.userId,
       });
       return profile(result);

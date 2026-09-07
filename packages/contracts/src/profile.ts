@@ -1,8 +1,22 @@
+import { type DiaryMealSlot, diaryMealSlots } from "./diary.js";
+
 export const sexAtBirthValues = ["female", "intersex", "male", "not_specified"] as const;
 export const unitSystemValues = ["metric", "us_customary"] as const;
 
 export type SexAtBirth = (typeof sexAtBirthValues)[number];
 export type UnitSystem = (typeof unitSystemValues)[number];
+
+export interface DiaryGroup {
+  readonly mealSlot: DiaryMealSlot;
+  readonly label: string;
+}
+
+export const defaultDiaryGroups = [
+  { mealSlot: "breakfast", label: "Breakfast" },
+  { mealSlot: "lunch", label: "Lunch" },
+  { mealSlot: "dinner", label: "Dinner" },
+  { mealSlot: "snacks", label: "Snacks" },
+] as const satisfies readonly DiaryGroup[];
 
 export interface UserProfile {
   readonly displayName: string | null;
@@ -16,6 +30,8 @@ export interface UserProfile {
   readonly locale: string;
   readonly timeZone: string;
   readonly unitSystem: UnitSystem;
+  /** User-selected display order and labels for the four stable diary meal slots. */
+  readonly diaryGroups: readonly DiaryGroup[];
   readonly onboardingCompletedAt: string | null;
   /** Monotonic optimistic-concurrency token serialized as a string. */
   readonly revision: string;
@@ -25,7 +41,8 @@ export interface UserProfileResponse {
   readonly data: { readonly profile: UserProfile };
 }
 
-export interface UpdateUserProfileRequest {
+/** Profile fields accepted by the service and persistence layers. */
+export interface UserProfilePatch {
   readonly displayName?: string | null;
   readonly birthDate?: string | null;
   readonly sexAtBirth?: SexAtBirth;
@@ -35,7 +52,24 @@ export interface UpdateUserProfileRequest {
   readonly locale?: string;
   readonly timeZone?: string;
   readonly unitSystem?: UnitSystem;
+  readonly diaryGroups?: readonly DiaryGroup[];
 }
+
+/**
+ * Public PATCH request. Diary-group writes are statically and dynamically bound
+ * to the account that rendered the editor; legacy patches remain rollout-safe.
+ */
+export type UpdateUserProfileRequest = UserProfilePatch &
+  (
+    | {
+        readonly diaryGroups?: never;
+        readonly expectedOwnerUserId?: string;
+      }
+    | {
+        readonly diaryGroups: readonly DiaryGroup[];
+        readonly expectedOwnerUserId: string;
+      }
+  );
 
 const nullableString = (schema: Readonly<Record<string, unknown>>) => ({
   anyOf: [schema, { type: "null" }],
@@ -50,6 +84,41 @@ const weightKgSchema = {
   type: "string",
   maxLength: 8,
   pattern: "^(?:(?:[1-9]|[1-9][0-9]{1,2})(?:\\.[0-9]{1,3})?|1000(?:\\.0{1,3})?)$",
+} as const;
+const userIdSchema = {
+  type: "string",
+  pattern:
+    "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+} as const;
+
+export const diaryGroupSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["mealSlot", "label"],
+  properties: {
+    mealSlot: { type: "string", enum: diaryMealSlots },
+    label: { type: "string", minLength: 1, maxLength: 40 },
+  },
+} as const;
+
+const diaryGroupsResponseSchema = {
+  type: "array",
+  minItems: diaryMealSlots.length,
+  maxItems: diaryMealSlots.length,
+  uniqueItems: true,
+  items: diaryGroupSchema,
+} as const;
+
+/** Strict mutation schema; kept out of response serializers that merge allOf branches. */
+export const diaryGroupsSchema = {
+  ...diaryGroupsResponseSchema,
+  allOf: diaryMealSlots.map((mealSlot) => ({
+    contains: {
+      type: "object",
+      required: ["mealSlot"],
+      properties: { mealSlot: { const: mealSlot } },
+    },
+  })),
 } as const;
 
 export const userProfileSchema = {
@@ -66,6 +135,7 @@ export const userProfileSchema = {
     "locale",
     "timeZone",
     "unitSystem",
+    "diaryGroups",
     "onboardingCompletedAt",
     "revision",
   ],
@@ -84,6 +154,7 @@ export const userProfileSchema = {
     locale: { type: "string", minLength: 2, maxLength: 35 },
     timeZone: { type: "string", minLength: 1, maxLength: 63 },
     unitSystem: { type: "string", enum: unitSystemValues },
+    diaryGroups: diaryGroupsResponseSchema,
     onboardingCompletedAt: nullableString({ type: "string", format: "date-time" }),
     revision: { type: "string", pattern: "^(?:0|[1-9][0-9]*)$" },
   },
@@ -109,7 +180,12 @@ export const updateUserProfileRequestSchema = {
   type: "object",
   additionalProperties: false,
   minProperties: 1,
+  dependencies: {
+    diaryGroups: ["expectedOwnerUserId"],
+    expectedOwnerUserId: { minProperties: 2 },
+  },
   properties: {
+    expectedOwnerUserId: userIdSchema,
     displayName: userProfileSchema.properties.displayName,
     birthDate: userProfileSchema.properties.birthDate,
     sexAtBirth: userProfileSchema.properties.sexAtBirth,
@@ -119,5 +195,6 @@ export const updateUserProfileRequestSchema = {
     locale: userProfileSchema.properties.locale,
     timeZone: userProfileSchema.properties.timeZone,
     unitSystem: userProfileSchema.properties.unitSystem,
+    diaryGroups: diaryGroupsSchema,
   },
 } as const;

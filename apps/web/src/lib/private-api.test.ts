@@ -29,6 +29,12 @@ function profile() {
     unitSystem: "metric",
     onboardingCompletedAt: null,
     revision: "0",
+    diaryGroups: [
+      { mealSlot: "breakfast", label: "Breakfast" },
+      { mealSlot: "lunch", label: "Lunch" },
+      { mealSlot: "dinner", label: "Dinner" },
+      { mealSlot: "snacks", label: "Snacks" },
+    ],
   };
 }
 
@@ -148,6 +154,22 @@ describe("private web API boundary", () => {
     );
     expect(rejected.status).toBe(401);
     expect(rejected.headers.get("set-cookie")).toContain("Max-Age=0");
+
+    const ownerChanged = await safeUpstreamProblem(
+      Response.json(
+        {
+          detail: "The signed-in account changed. Reload before updating the profile.",
+          code: "PROFILE_OWNER_CHANGED",
+        },
+        { status: 409 },
+      ),
+      "The profile could not be updated.",
+    );
+    expect(ownerChanged.status).toBe(409);
+    await expect(ownerChanged.json()).resolves.toEqual({
+      error: "The signed-in account changed. Reload before updating the profile.",
+      code: "PROFILE_OWNER_CHANGED",
+    });
   });
 
   it("does not leave the diary after an unconfirmed browser logout", async () => {

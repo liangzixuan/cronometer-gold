@@ -25,6 +25,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0017](./0017-authenticated-food-artifact-acquisition-retention.md) | Authenticated food-artifact acquisition and retention evidence | Source/local manifest-v4 gate implemented; live runner, immutable storage, acquisition, provider verification, and named review blocked |
 | [0018](./0018-catalogue-database-authority-boundary.md) | Catalogue database-authority boundary | Accepted for bounded EXPAND implementation; deploy and CONTRACT phases blocked |
 | [0019](./0019-first-release-parity-and-camera-barcode-capture.md) | First-release parity sequencing and camera barcode capture | Source implementation complete; signed-device and live-catalogue evidence blocked |
+| [0020](./0020-configurable-diary-presentation-groups.md) | Owner-configurable labels and display order for stable diary meal slots | Accepted for local implementation; signed-device evidence blocked |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

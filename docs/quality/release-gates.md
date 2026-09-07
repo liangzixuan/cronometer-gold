@@ -328,7 +328,14 @@ acceptance.
   or mutate the previous day. Partially loaded groups never claim a false empty
   state. Reviewer-preserved evidence covers keyboard plus a browser screen
   reader, VoiceOver, and TalkBack load-more, progress, error/retry, group, and
-  date-switch behavior.
+  date-switch behavior. The same clients must rename and reorder all four diary
+  presentation groups, preserve canonical entry destinations and queued
+  quick-add delivery, converge after a cross-client profile refresh, reset to
+  defaults, and surface a stale profile edit without overwriting it. Existing
+  P0 v2 evidence does not contain that configuration flow and cannot satisfy
+  this added claim; the capture, package, normalizer, and signed release-manifest
+  contracts require their next reviewed version before controlled-beta
+  acceptance.
 - Export, account deletion, backup restore, and search reindex drills pass.
 - Signed internal Android APK and iOS IPA binaries compile from one clean commit
   and pass the physical-device matrix. A reviewer-signed manifest separately
