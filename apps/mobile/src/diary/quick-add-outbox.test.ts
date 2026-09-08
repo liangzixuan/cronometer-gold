@@ -1014,7 +1014,7 @@ describe("durable v3 diary corrections and atomic order", () => {
 
     const occupiedDayStore = createQuickAddOutboxStore({
       storage: new MemoryProtectedStore(),
-      lockKey: "v3-occupied-day",
+      lockKey: "test",
     });
     await occupiedDayStore.append(owner, await draft(50));
     await expect(
