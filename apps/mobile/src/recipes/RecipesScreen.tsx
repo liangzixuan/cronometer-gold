@@ -19,23 +19,25 @@ import {
   isLocalDate,
   localDateInTimeZone,
   type MealSlot,
-  parseDiaryDay,
-  parseDiaryMutation,
-  parseSession,
+  quickAddOccurredAt,
 } from "../diary/diary";
+import {
+  MAX_QUICK_ADD_OUTBOX_ITEMS,
+  QuickAddEnqueueAmbiguousError,
+  type QuickAddOutboxController,
+  type QuickAddOutboxControllerState,
+  type QuickAddReceipt,
+} from "../diary/quick-add-outbox";
 import { buildSearchUrl, type FoodSearchHit, parseSearchPage } from "../search/food-search";
 import { palette } from "../theme";
 import {
-  authoritativeRecipeDate,
   isRecipePositiveDecimal,
   mergeRecipePage,
   parseRecipeCollection,
   parseRecipeMutation,
   parseRecipeResponse,
-  prepareRecipeLogOperation,
   prepareStableMutation,
   type RecipeIngredientDraft,
-  type RecipeLogBody,
   type RecipeSummaryView,
   type RecipeView,
   recipeDraftIngredients,
@@ -52,6 +54,9 @@ interface Props {
   readonly onUnauthorized: () => Promise<void>;
   readonly onLogged: (date: string) => void;
   readonly onGoals: () => void;
+  readonly quickAddOutboxController: QuickAddOutboxController;
+  readonly quickAddOutboxState: QuickAddOutboxControllerState;
+  readonly subscribeQuickAddReceipts: (listener: (receipt: QuickAddReceipt) => void) => () => void;
 }
 
 interface Builder {
@@ -205,6 +210,9 @@ export function RecipesScreen({
   onUnauthorized,
   onLogged,
   onGoals,
+  quickAddOutboxController,
+  quickAddOutboxState,
+  subscribeQuickAddReceipts,
 }: Props) {
   const [recipes, setRecipes] = useState<readonly RecipeSummaryView[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -216,12 +224,37 @@ export function RecipesScreen({
   const [query, setQuery] = useState("");
   const [foods, setFoods] = useState<readonly FoodSearchHit[]>([]);
   const [date, setDate] = useState(() => localDateInTimeZone(new Date(), profileTimeZone));
-  const [authoritativeTimeZone, setAuthoritativeTimeZone] = useState(profileTimeZone);
   const [meal, setMeal] = useState<MealSlot>(() => defaultMealForTime());
   const [logKind, setLogKind] = useState<"grams" | "serving">("serving");
   const [logAmount, setLogAmount] = useState("1");
   const pending = useRef(new Map<string, StableMutation<ReturnType<typeof requestBody>>>());
-  const pendingLogs = useRef(new Map<string, StableMutation<RecipeLogBody>>());
+  const recipeLogEnqueueInFlight = useRef(false);
+  const ownedRecipeLogOperations = useRef(new Set<string>());
+  const onLoggedRef = useRef(onLogged);
+  onLoggedRef.current = onLogged;
+
+  useEffect(
+    () =>
+      subscribeQuickAddReceipts((receipt) => {
+        if (!ownedRecipeLogOperations.current.delete(receipt.operationId)) return;
+        const entry = receipt.mutation.entry;
+        if (entry?.entryKind !== "recipe") {
+          setMessage(
+            "The queued recipe was accepted, but its diary day could not be read. Refresh the diary before logging it again.",
+          );
+          return;
+        }
+        const loggedDate = entry.localDate;
+        const loggedGroup = diaryGroupLabel(diaryGroups, entry.mealSlot);
+        setMessage(
+          receipt.mutation.replayed
+            ? `The earlier queued ${loggedGroup} recipe log on ${loggedDate} was confirmed safely.`
+            : `The queued recipe was confirmed in ${loggedGroup} on ${loggedDate}.`,
+        );
+        onLoggedRef.current(loggedDate);
+      }),
+    [diaryGroups, subscribeQuickAddReceipts],
+  );
 
   const loadRecipes = useCallback(
     async (cursor: string | null = null) => {
@@ -259,51 +292,6 @@ export function RecipesScreen({
   useEffect(() => {
     void loadRecipes();
   }, [loadRecipes]);
-
-  useEffect(() => {
-    const controller = new AbortController();
-    void (async () => {
-      try {
-        const sessionResponse = await fetch(apiUrl(apiBase, "/v1/auth/me").toString(), {
-          headers: authenticatedHeaders(accessToken),
-          signal: controller.signal,
-        });
-        if (sessionResponse.status === 401) return onUnauthorized();
-        const sessionBody = await jsonBody(sessionResponse);
-        if (!sessionResponse.ok)
-          throw new Error(
-            responseError(sessionBody, "Your recipe session could not be refreshed."),
-          );
-        const session = parseSession(sessionBody);
-        const currentDate = authoritativeRecipeDate(new Date(), session.profile.timeZone);
-        let zone = session.profile.timeZone;
-        const diaryUrl = apiUrl(apiBase, "/v1/diary");
-        diaryUrl.searchParams.set("date", currentDate);
-        try {
-          const diaryResponse = await fetch(diaryUrl.toString(), {
-            headers: authenticatedHeaders(accessToken),
-            signal: controller.signal,
-          });
-          if (diaryResponse.status === 401) return onUnauthorized();
-          if (diaryResponse.ok) zone = parseDiaryDay(await jsonBody(diaryResponse)).timeZone;
-        } catch {
-          // The freshly authenticated profile remains authoritative when a day snapshot is unavailable.
-        }
-        if (!controller.signal.aborted) {
-          setAuthoritativeTimeZone(zone);
-          setDate(authoritativeRecipeDate(new Date(), zone));
-        }
-      } catch (caught) {
-        if (!controller.signal.aborted)
-          setMessage(
-            caught instanceof Error
-              ? caught.message
-              : "Your recipe session could not be refreshed.",
-          );
-      }
-    })();
-    return () => controller.abort();
-  }, [accessToken, apiBase, onUnauthorized]);
 
   async function open(recipeId: string) {
     setBusy(`open:${recipeId}`);
@@ -469,55 +457,84 @@ export function RecipesScreen({
       setMessage("Choose a real local date and positive amount.");
       return;
     }
+    if (recipeLogEnqueueInFlight.current) {
+      setMessage("Wait for the current recipe log to be secured on this device.");
+      return;
+    }
+    const currentQueue = quickAddOutboxController.getState();
+    if (currentQueue.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS) {
+      setMessage(
+        `The secure diary queue is full at ${MAX_QUICK_ADD_OUTBOX_ITEMS} items. Review queued logs before adding another.`,
+      );
+      return;
+    }
+    if (
+      currentQueue.status === "closed" ||
+      currentQueue.status === "owner_mismatch" ||
+      (currentQueue.status === "unavailable" &&
+        (currentQueue.reason === "storage" || currentQueue.reason === "credential"))
+    ) {
+      setMessage("Diary logging is unavailable until secure storage and authentication recover.");
+      return;
+    }
+    const effectiveLogKind = selected.servingCount === null ? "grams" : logKind;
+    let occurredAt: string;
+    try {
+      occurredAt = quickAddOccurredAt(date, profileTimeZone, new Date());
+    } catch {
+      setMessage("That local date is not valid in your diary time zone.");
+      return;
+    }
+    recipeLogEnqueueInFlight.current = true;
     setBusy("log");
     try {
-      const effectiveLogKind = selected.servingCount === null ? "grams" : logKind;
-      const operation = prepareRecipeLogOperation(
-        pendingLogs.current,
-        {
-          recipeId: selected.id,
-          recipeVersionId: selected.versionId,
-          portion:
-            effectiveLogKind === "grams"
-              ? { kind: "grams", grams: logAmount }
-              : { kind: "serving", amount: logAmount },
-          mealSlot: meal,
-          localDate: date,
-          timeZone: authoritativeTimeZone,
-        },
-        new Date(),
-        newOperationId,
-      );
-      pendingLogs.current.set(operation.intentKey, operation);
-      const response = await fetch(apiUrl(apiBase, `/v1/recipes/${selected.id}/log`).toString(), {
-        method: "POST",
-        headers: authenticatedHeaders(accessToken, {
-          "content-type": "application/json",
-          "idempotency-key": operation.operationId,
-        }),
-        body: JSON.stringify(operation.body),
+      const item = await quickAddOutboxController.enqueueOperation({
+        operationKind: "recipe",
+        recipeName: selected.name,
+        recipeId: selected.id,
+        recipeVersionId: selected.versionId,
+        portion:
+          effectiveLogKind === "grams"
+            ? { kind: "grams", grams: logAmount }
+            : {
+                kind: "serving",
+                amount: logAmount,
+                servingLabel: selected.servingLabel ?? "serving",
+              },
+        mealSlot: meal,
+        localDate: date,
+        occurredAt,
       });
-      if (response.status === 401) return onUnauthorized();
-      const body = await jsonBody(response);
-      if (!response.ok) throw new Error(responseError(body, "The recipe could not be logged."));
-      const mutation = parseDiaryMutation(body);
-      pendingLogs.current.delete(operation.intentKey);
-      const loggedDate = mutation.entry?.localDate ?? date;
-      const loggedGroup = diaryGroupLabel(diaryGroups, mutation.entry?.mealSlot ?? meal);
+      ownedRecipeLogOperations.current.add(item.operationId);
       setMessage(
-        mutation.replayed
-          ? `The earlier ${loggedGroup} log on ${loggedDate} was confirmed safely.`
-          : `Recipe logged to ${loggedGroup} on ${loggedDate}.`,
+        `${selected.name} is queued securely for ${diaryGroupLabel(diaryGroups, meal)} on ${date}. It is not included in diary totals until the server confirms it.`,
       );
-      onLogged(loggedDate);
+      void quickAddOutboxController.requestDrain(item.operationId);
     } catch (caught) {
-      setMessage(
-        `${caught instanceof Error ? caught.message : "The recipe could not be logged."} Press Log again to retry safely.`,
-      );
+      if (caught instanceof QuickAddEnqueueAmbiguousError) {
+        ownedRecipeLogOperations.current.add(caught.operationId);
+        void quickAddOutboxController.requestDrain(caught.operationId);
+        setMessage(
+          "Secure storage could not confirm whether the recipe was queued. Do not press Log again until the queue status recovers.",
+        );
+      } else {
+        setMessage(
+          "The recipe was not queued. Refresh this screen and try again after the diary session is current.",
+        );
+      }
     } finally {
+      recipeLogEnqueueInFlight.current = false;
       setBusy(null);
     }
   }
+
+  const recipeLogUnavailable =
+    busy !== null ||
+    quickAddOutboxState.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS ||
+    quickAddOutboxState.status === "closed" ||
+    quickAddOutboxState.status === "owner_mismatch" ||
+    (quickAddOutboxState.status === "unavailable" &&
+      (quickAddOutboxState.reason === "storage" || quickAddOutboxState.reason === "credential"));
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
@@ -823,10 +840,30 @@ export function RecipesScreen({
               ))}
             </View>
             <Text style={styles.help}>
-              Interpreted in {authoritativeTimeZone}; the exact recipe revision is pinned.
+              Interpreted in {profileTimeZone}; the exact recipe revision is pinned.
             </Text>
-            <Pressable accessibilityRole="button" onPress={() => void log()} style={styles.primary}>
-              <Text style={styles.primaryText}>{busy === "log" ? "Logging…" : "Log recipe"}</Text>
+            {quickAddOutboxState.pendingCount > 0 ? (
+              <Text accessibilityLiveRegion="polite" style={styles.help}>
+                {quickAddOutboxState.pendingCount} diary{" "}
+                {quickAddOutboxState.pendingCount === 1 ? "log is" : "logs are"} waiting securely on
+                this device.
+              </Text>
+            ) : null}
+            <Pressable
+              accessibilityHint="Stores the exact recipe log on this device before sending"
+              accessibilityRole="button"
+              accessibilityState={{ disabled: recipeLogUnavailable }}
+              disabled={recipeLogUnavailable}
+              onPress={() => void log()}
+              style={[styles.primary, recipeLogUnavailable && styles.disabled]}
+            >
+              <Text style={styles.primaryText}>
+                {busy === "log"
+                  ? "Securing…"
+                  : quickAddOutboxState.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS
+                    ? `Queue full (${MAX_QUICK_ADD_OUTBOX_ITEMS})`
+                    : "Secure & log recipe"}
+              </Text>
             </Pressable>
           </View>
         ) : null}
@@ -901,6 +938,7 @@ const styles = StyleSheet.create({
   chipTextActive: { color: palette.white },
   content: { padding: 22, paddingBottom: 72 },
   danger: { color: "#8a3128", fontSize: 13, fontWeight: "800", marginTop: 8 },
+  disabled: { opacity: 0.5 },
   help: { color: palette.muted, fontSize: 12, lineHeight: 18, marginVertical: 10 },
   ingredient: { borderTopColor: palette.line, borderTopWidth: 1, marginTop: 14, paddingTop: 14 },
   input: {

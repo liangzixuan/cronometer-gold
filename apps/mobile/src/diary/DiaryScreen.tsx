@@ -53,7 +53,11 @@ import {
   resetDiaryGroups,
   shiftLocalDate,
 } from "./diary";
-import type { QuickAddOutboxControllerState, QuickAddReceipt } from "./quick-add-outbox";
+import type {
+  QuickAddOutboxController,
+  QuickAddOutboxControllerState,
+  QuickAddReceipt,
+} from "./quick-add-outbox";
 
 type LoadState = "loading" | "ready" | "error";
 type PageLoadState = "idle" | "loading" | "error";
@@ -92,6 +96,7 @@ interface DiaryScreenProps {
   readonly onHealth: () => void;
   readonly onProfileUpdated: (profile: ProfileSummary) => void;
   readonly onUnauthorized: () => Promise<void>;
+  readonly quickAddOutboxController: QuickAddOutboxController;
   readonly quickAddOutboxState: QuickAddOutboxControllerState;
   readonly subscribeQuickAddReceipts: (listener: (receipt: QuickAddReceipt) => void) => () => void;
 }
@@ -123,31 +128,31 @@ function loadedMessage(page: DiaryPage): string {
 
 function queuedQuickAddMessage(state: QuickAddOutboxControllerState): string | null {
   const queued =
-    state.pendingCount === 1 ? "1 queued food add" : `${state.pendingCount} queued food adds`;
+    state.pendingCount === 1 ? "1 queued diary log" : `${state.pendingCount} queued diary logs`;
   switch (state.status) {
     case "idle":
       return null;
     case "pending":
       return `${queued} ${state.pendingCount === 1 ? "is" : "are"} not yet included in diary totals.`;
     case "draining":
-      return `Sending ${queued}. ${state.pendingCount === 1 ? "It is" : "They are"} not included in diary totals until the server confirms each add.`;
+      return `Sending ${queued}. ${state.pendingCount === 1 ? "It is" : "They are"} not included in diary totals until the server confirms each log.`;
     case "blocked":
       return state.blockedReason === "time_zone_changed"
         ? `${queued} stopped because your diary time zone changed. ${state.foodName} (${state.servingLabel}) for ${state.localDate} is still queued and is not included in diary totals.`
         : `${queued} stopped at ${state.foodName} (${state.servingLabel}) for ${state.localDate} after the server returned HTTP ${state.httpStatus}. The exact request is retained and is not included in diary totals.`;
     case "unavailable":
       if (state.reason === "storage") {
-        return "Queued food delivery is unavailable because secure storage could not be read. Do not assume a queued add is included in diary totals.";
+        return "Queued diary delivery is unavailable because secure storage could not be read. Do not assume a queued log is included in diary totals.";
       }
       if (state.reason === "credential") {
         return `${queued} ${state.pendingCount === 1 ? "is" : "are"} paused until authentication is restored and ${state.pendingCount === 1 ? "is" : "are"} not included in diary totals.`;
       }
       return `${queued} ${state.pendingCount === 1 ? "is" : "are"} retained after a ${state.reason === "network" ? "network" : "server response"} interruption and ${state.pendingCount === 1 ? "is" : "are"} not included in diary totals.`;
     case "owner_mismatch":
-      return "Queued food delivery was fenced because its private owner could not be verified. Private-device cleanup is required, and no queued add is included in diary totals.";
+      return "Queued diary delivery was fenced because its private owner could not be verified. Private-device cleanup is required, and no queued log is included in diary totals.";
     case "closed":
       return state.pendingCount > 0
-        ? `Food delivery is closed with ${queued}; ${state.pendingCount === 1 ? "it is" : "they are"} not included in diary totals.`
+        ? `Diary delivery is closed with ${queued}; ${state.pendingCount === 1 ? "it is" : "they are"} not included in diary totals.`
         : null;
   }
 }
@@ -170,6 +175,7 @@ export function DiaryScreen({
   onHealth,
   onProfileUpdated,
   onUnauthorized,
+  quickAddOutboxController,
   quickAddOutboxState,
   subscribeQuickAddReceipts,
 }: DiaryScreenProps) {
@@ -190,6 +196,7 @@ export function DiaryScreen({
     diaryGroups.map((group) => ({ ...group })),
   );
   const [groupBusy, setGroupBusy] = useState(false);
+  const [outboxAction, setOutboxAction] = useState<"retry" | "discard" | null>(null);
   const [routeReloadGeneration, setRouteReloadGeneration] = useState(0);
   const operationIds = useRef(new Map<string, string>());
   const loadController = useRef<AbortController | null>(null);
@@ -899,6 +906,60 @@ export function DiaryScreen({
     }
   }
 
+  async function retryQueuedDiaryLogs() {
+    if (outboxAction !== null) return;
+    const current = quickAddOutboxController.getState();
+    setOutboxAction("retry");
+    setMessage("Retrying the exact oldest queued diary log…");
+    try {
+      if (current.status === "blocked") {
+        await quickAddOutboxController.retryBlockedHead(current.operationId);
+      } else {
+        await quickAddOutboxController.requestDrain();
+      }
+      const after = quickAddOutboxController.getState();
+      if (after.status === "idle") setMessage("All queued diary logs were confirmed or removed.");
+      else if (after.status === "blocked")
+        setMessage("The oldest diary log is still blocked. Review it before retrying again.");
+      else setMessage("The retry finished; retained diary logs remain shown below.");
+    } catch {
+      setMessage("The exact retry could not be completed. The queued diary log remains retained.");
+    } finally {
+      setOutboxAction(null);
+    }
+  }
+
+  async function discardBlockedDiaryLog(operationId: string, itemName: string) {
+    if (outboxAction !== null) return;
+    setOutboxAction("discard");
+    setMessage(`Discarding only the blocked ${itemName} log…`);
+    try {
+      await quickAddOutboxController.discardBlockedHead(operationId);
+      setMessage(`The blocked ${itemName} log was discarded. It was not added to the diary.`);
+    } catch {
+      setMessage("Discard could not be confirmed. The exact queued log remains retained.");
+    } finally {
+      setOutboxAction(null);
+    }
+  }
+
+  function confirmDiscardBlockedDiaryLog(
+    blocked: Extract<QuickAddOutboxControllerState, { status: "blocked" }>,
+  ) {
+    Alert.alert(
+      "Discard blocked diary log?",
+      `This permanently removes only ${blocked.foodName} (${blocked.servingLabel}) for ${diaryGroupLabel(diaryGroups, blocked.mealSlot)} on ${blocked.localDate}. It has not been added. Later queued logs stay in order.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Discard queued log",
+          style: "destructive",
+          onPress: () => void discardBlockedDiaryLog(blocked.operationId, blocked.foodName),
+        },
+      ],
+    );
+  }
+
   const activeTimeZone = diary?.timeZone ?? profileTimeZone;
 
   return (
@@ -1072,19 +1133,52 @@ export function DiaryScreen({
               {queuedMessage}
             </Text>
             {quickAddOutboxState.status === "blocked" ? (
+              <View style={styles.queueActions}>
+                <Pressable
+                  accessibilityLabel={`Retry queued ${quickAddOutboxState.foodName} log exactly`}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: outboxAction !== null }}
+                  disabled={outboxAction !== null}
+                  onPress={() => void retryQueuedDiaryLogs()}
+                  style={[styles.queueAction, outboxAction !== null && styles.disabled]}
+                >
+                  <Text style={styles.secondaryText}>
+                    {outboxAction === "retry" ? "Retrying…" : "Retry exact log"}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  accessibilityLabel={`Discard only queued ${quickAddOutboxState.foodName} log`}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: outboxAction !== null }}
+                  disabled={outboxAction !== null}
+                  onPress={() => confirmDiscardBlockedDiaryLog(quickAddOutboxState)}
+                  style={[
+                    styles.queueAction,
+                    styles.queueDangerAction,
+                    outboxAction !== null && styles.disabled,
+                  ]}
+                >
+                  <Text style={styles.queueDangerText}>
+                    {outboxAction === "discard" ? "Discarding…" : "Discard only this log"}
+                  </Text>
+                </Pressable>
+              </View>
+            ) : (quickAddOutboxState.pendingCount > 0 &&
+                (quickAddOutboxState.status === "pending" ||
+                  (quickAddOutboxState.status === "unavailable" &&
+                    quickAddOutboxState.reason !== "credential"))) ||
+              (quickAddOutboxState.status === "unavailable" &&
+                quickAddOutboxState.reason === "storage") ? (
               <Pressable
-                accessibilityLabel={`Review queued ${quickAddOutboxState.foodName} add`}
                 accessibilityRole="button"
-                onPress={() =>
-                  onSearch(
-                    quickAddOutboxState.localDate,
-                    quickAddOutboxState.mealSlot,
-                    profileTimeZone,
-                  )
-                }
-                style={styles.queueAction}
+                accessibilityState={{ disabled: outboxAction !== null }}
+                disabled={outboxAction !== null}
+                onPress={() => void retryQueuedDiaryLogs()}
+                style={[styles.queueAction, outboxAction !== null && styles.disabled]}
               >
-                <Text style={styles.secondaryText}>Review queued add</Text>
+                <Text style={styles.secondaryText}>
+                  {outboxAction === "retry" ? "Retrying…" : "Retry queued logs"}
+                </Text>
               </Pressable>
             ) : null}
           </View>
@@ -1599,6 +1693,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   primaryText: { color: palette.white, fontSize: 13, fontWeight: "800" },
+  disabled: { opacity: 0.5 },
   queueAction: {
     alignSelf: "flex-start",
     borderColor: palette.forest,
@@ -1608,6 +1703,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 9,
   },
+  queueActions: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   queueCard: {
     backgroundColor: palette.white,
     borderColor: palette.line,
@@ -1616,6 +1712,8 @@ const styles = StyleSheet.create({
     marginBottom: 18,
     padding: 14,
   },
+  queueDangerAction: { borderColor: "#8a332b" },
+  queueDangerText: { color: "#8a332b", fontSize: 13, fontWeight: "800" },
   queueStatus: { color: palette.ink, fontSize: 13, lineHeight: 19 },
   screen: { backgroundColor: palette.paper, flex: 1 },
   secondaryButton: {

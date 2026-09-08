@@ -9,7 +9,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import type { AuthService } from "../src/modules/auth/auth-service.js";
-import { assertDiaryEntry } from "../src/modules/diary/diary.routes.js";
+import {
+  assertDiaryEntry,
+  DiaryTimeZoneChangedServiceError,
+} from "../src/modules/diary/diary.routes.js";
 import type { RecipeService } from "../src/modules/recipes/recipe.routes.js";
 import { RecipeCursorServiceError } from "../src/modules/recipes/recipe.routes.js";
 import {
@@ -25,6 +28,7 @@ import {
 const apps: ReturnType<typeof buildApp>[] = [];
 const testConfig = loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" });
 const recipeId = "2a29e851-eab0-4af6-82f2-5ac633420c2b";
+const secondOperationId = "10000000-0000-4000-8000-000000000010";
 const recipeVersionId = "d696b6c8-782a-4783-b459-af4698470cf0";
 const secondRecipeVersionId = "f2693690-3803-4a65-97f5-8e856f81f01e";
 const repeatingResolvedGrams = `33.${"3".repeat(150)}`;
@@ -363,5 +367,130 @@ describe("recipe routes", () => {
       1,
       expect.objectContaining({ recipeId, entry: body }),
     );
+  });
+
+  it("binds a canonical expected profile time zone into recipe-log idempotency", async () => {
+    const service = recipeStub();
+    const app = createTestApp(service);
+    const body = {
+      recipeVersionId,
+      portion: { kind: "serving" as const, amount: "1" },
+      mealSlot: "breakfast" as const,
+      occurredAt: "2026-08-16T12:00:00.000Z",
+    };
+    const guarded = await app.inject({
+      method: "POST",
+      url: `/v1/recipes/${recipeId}/log?profileTimeZonePrecondition=v1`,
+      headers: {
+        ...authHeaders,
+        "idempotency-key": operationId,
+        "x-expected-profile-time-zone": "US/Central",
+      },
+      payload: body,
+    });
+    const legacy = await app.inject({
+      method: "POST",
+      url: `/v1/recipes/${recipeId}/log`,
+      headers: { ...authHeaders, "idempotency-key": secondOperationId },
+      payload: body,
+    });
+
+    expect(guarded.statusCode, guarded.body).toBe(201);
+    expect(guarded.headers["cache-control"]).toBe("no-store");
+    expect(legacy.statusCode, legacy.body).toBe(201);
+    const guardedCall = vi.mocked(service.log).mock.calls[0]?.[0];
+    const legacyCall = vi.mocked(service.log).mock.calls[1]?.[0];
+    expect(guardedCall).toMatchObject({
+      expectedProfileTimeZone: "America/Chicago",
+      recipeId,
+    });
+    expect(guardedCall?.requestDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(legacyCall?.requestDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(guardedCall?.requestDigest).not.toBe(legacyCall?.requestDigest);
+  });
+
+  it("requires the recipe-log capability marker and expected-zone header as one pair", async () => {
+    const service = recipeStub();
+    const app = createTestApp(service);
+    const body = {
+      recipeVersionId,
+      portion: { kind: "serving" as const, amount: "1" },
+      mealSlot: "breakfast" as const,
+      occurredAt: "2026-08-16T12:00:00.000Z",
+    };
+    const guardedHeaders = {
+      ...authHeaders,
+      "idempotency-key": operationId,
+      "x-expected-profile-time-zone": "America/Chicago",
+    };
+    const requests = [
+      { url: `/v1/recipes/${recipeId}/log`, headers: guardedHeaders },
+      {
+        url: `/v1/recipes/${recipeId}/log?profileTimeZonePrecondition=v1`,
+        headers: { ...authHeaders, "idempotency-key": operationId },
+      },
+      {
+        url: `/v1/recipes/${recipeId}/log?profileTimeZonePrecondition=v2`,
+        headers: guardedHeaders,
+      },
+      {
+        url: `/v1/recipes/${recipeId}/log?profileTimeZonePrecondition=v1&profileTimeZonePrecondition=v1`,
+        headers: guardedHeaders,
+      },
+      {
+        url: `/v1/recipes/${recipeId}/log?profileTimeZonePrecondition=v1&unknownCapability=v1`,
+        headers: guardedHeaders,
+      },
+    ];
+
+    for (const request of requests) {
+      const response = await app.inject({
+        method: "POST",
+        url: request.url,
+        headers: request.headers,
+        payload: body,
+      });
+      expect(response.statusCode, response.body).toBe(400);
+      expect(response.json()).toMatchObject({ code: "VALIDATION_ERROR" });
+    }
+    const invalidZone = await app.inject({
+      method: "POST",
+      url: `/v1/recipes/${recipeId}/log?profileTimeZonePrecondition=v1`,
+      headers: {
+        ...authHeaders,
+        "idempotency-key": operationId,
+        "x-expected-profile-time-zone": "Not/A_Private_Zone",
+      },
+      payload: body,
+    });
+    expect(invalidZone.statusCode).toBe(400);
+    expect(invalidZone.body).not.toContain("Not/A_Private_Zone");
+    expect(service.log).not.toHaveBeenCalled();
+  });
+
+  it("maps guarded recipe-log time-zone drift to the typed private conflict", async () => {
+    const service = recipeStub({
+      log: vi.fn(async () => Promise.reject(new DiaryTimeZoneChangedServiceError())),
+    });
+    const response = await createTestApp(service).inject({
+      method: "POST",
+      url: `/v1/recipes/${recipeId}/log?profileTimeZonePrecondition=v1`,
+      headers: {
+        ...authHeaders,
+        "idempotency-key": operationId,
+        "x-expected-profile-time-zone": "America/Chicago",
+      },
+      payload: {
+        recipeVersionId,
+        portion: { kind: "serving", amount: "1" },
+        mealSlot: "breakfast",
+        occurredAt: "2026-08-16T12:00:00.000Z",
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.json()).toMatchObject({ code: "DIARY_TIME_ZONE_CHANGED" });
+    expect(response.body).not.toContain("America/Chicago");
   });
 });

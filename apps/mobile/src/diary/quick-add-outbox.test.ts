@@ -2,11 +2,17 @@ import { describe, expect, it } from "vitest";
 
 import { parseDiaryMutation } from "./diary";
 import {
+  createDiaryOutboxDraft,
   createQuickAddOutboxController,
   createQuickAddOutboxDraft,
+  type DiaryOutboxEnqueueInput,
+  diaryOutboxOperationKind,
+  diaryOutboxRequest,
   type FatalQuickAddOutboxStoreReason,
+  matchesDiaryOutboxReceipt,
   matchesQuickAddReceipt,
   parseQuickAddOutboxItem,
+  QuickAddEnqueueAmbiguousError,
   type QuickAddEnqueueInput,
   type QuickAddOutboxItem,
   type QuickAddReceipt,
@@ -52,6 +58,7 @@ class MemoryProtectedStore implements ProtectedQuickAddKeyValue {
   failDelete: ((key: string) => boolean) | null = null;
   corruptSet: ((key: string, value: string) => string | null) | null = null;
   beforeSet: ((key: string, value: string) => Promise<void>) | null = null;
+  afterSet: ((key: string, value: string) => Promise<void>) | null = null;
 
   async get(key: string): Promise<string | null> {
     if (this.failGet?.(key)) throw new Error("injected-get-failure");
@@ -63,6 +70,7 @@ class MemoryProtectedStore implements ProtectedQuickAddKeyValue {
     if (this.failSet?.(key, value)) throw new Error("injected-set-failure");
     this.values.set(key, this.corruptSet?.(key, value) ?? value);
     if (this.failAfterSet?.(key, value)) throw new Error("injected-after-set-crash");
+    await this.afterSet?.(key, value);
   }
 
   async delete(key: string): Promise<void> {
@@ -89,34 +97,97 @@ function source() {
 
 function receiptBody(item: QuickAddOutboxItem, replayed: boolean): unknown {
   const provenanceSource = source();
+  const portion =
+    item.body.portion.kind === "grams"
+      ? item.body.portion
+      : item.version === 2 && item.operationKind === "recipe"
+        ? {
+            kind: "serving" as const,
+            amount: item.body.portion.amount,
+            servingLabel: item.display.servingLabel,
+          }
+        : {
+            kind: "serving" as const,
+            servingId: item.body.portion.servingId,
+            amount: item.body.portion.amount,
+            servingLabel: item.display.servingLabel,
+          };
+  const common = {
+    id: "entry-1",
+    revision: "1",
+    portion,
+    mealSlot: item.body.mealSlot,
+    resolvedGrams: "182",
+    occurredAt: item.body.occurredAt,
+    localDate: item.localDate,
+    timeZone: item.expectedTimeZone,
+    localTime: "08:30:00",
+    position: 0,
+    nutrients: [],
+    note: null,
+  };
+  const entry =
+    item.version === 2 && item.operationKind === "recipe"
+      ? {
+          ...common,
+          entryKind: "recipe" as const,
+          foodVersionId: null,
+          recipeVersionId: item.body.recipeVersionId,
+          food: null,
+          recipe: {
+            id: item.recipeId,
+            name: item.display.foodName,
+            versionNumber: 3,
+            yieldGrams: "728",
+            yieldSource: "measured" as const,
+            servingCount: "4",
+            servingLabel: item.display.servingLabel,
+            calculationVersion: "recipe-v1",
+            retentionPolicy: {
+              code: "identity-retention-default" as const,
+              version: "1" as const,
+              assumption: "No cooking-retention factor was applied.",
+            },
+            warnings: [
+              {
+                code: "RETENTION_FACTORS_DEFAULTED" as const,
+                message: "Nutrients use identity retention.",
+                nutrientIds: [],
+              },
+            ],
+          },
+          source: null,
+          sources: [provenanceSource],
+        }
+      : item.version === 2 && item.operationKind === "custom_food"
+        ? {
+            ...common,
+            entryKind: "food" as const,
+            foodVersionId: item.body.customFoodVersionId,
+            recipeVersionId: null,
+            food: { name: item.display.foodName, brandName: null },
+            recipe: null,
+            source: null,
+            foodProvenance: {
+              kind: "private_custom" as const,
+              customFoodId: item.customFoodId,
+              customFoodVersionNumber: item.customFoodVersionNumber,
+            },
+          }
+        : {
+            ...common,
+            entryKind: "food" as const,
+            foodVersionId: item.body.foodVersionId,
+            recipeVersionId: null,
+            food: { name: item.display.foodName, brandName: null },
+            recipe: null,
+            source: provenanceSource,
+            foodProvenance: { kind: "public" as const, source: provenanceSource },
+          };
   return {
     data: {
       replayed,
-      entry: {
-        id: "entry-1",
-        revision: "1",
-        entryKind: "food",
-        foodVersionId: item.body.foodVersionId,
-        recipeVersionId: null,
-        portion: {
-          kind: "serving",
-          servingId: item.body.portion.servingId,
-          amount: "1",
-          servingLabel: item.display.servingLabel,
-        },
-        food: { name: item.display.foodName, brandName: null },
-        recipe: null,
-        source: provenanceSource,
-        foodProvenance: { kind: "public", source: provenanceSource },
-        mealSlot: item.body.mealSlot,
-        resolvedGrams: "182",
-        occurredAt: item.body.occurredAt,
-        localDate: item.localDate,
-        timeZone: item.expectedTimeZone,
-        localTime: "08:30:00",
-        position: 0,
-        nutrients: [],
-      },
+      entry,
       affectedDays: [{ localDate: item.localDate, revision: "1" }],
     },
   };
@@ -134,6 +205,69 @@ async function draft(index = 1, draftOwner = owner) {
     draftOwner,
     timeZone,
     input(index),
+    operationId(index),
+    new Date("2001-01-01T00:00:00.000Z"),
+  );
+}
+
+const recipeId = "418f6f58-4e2c-7b62-8f0b-3d75491713b5";
+const recipeVersionId = "518f6f58-4e2c-7b62-8f0b-3d75491713b5";
+const customFoodId = "618f6f58-4e2c-7b62-8f0b-3d75491713b5";
+
+function typedInput(
+  kind: DiaryOutboxEnqueueInput["operationKind"],
+  index: number,
+): DiaryOutboxEnqueueInput {
+  const common = {
+    localDate: "2026-08-15",
+    mealSlot: "breakfast" as const,
+    occurredAt,
+  };
+  if (kind === "public_food") {
+    return {
+      ...common,
+      operationKind: "public_food",
+      foodKind: "generic",
+      foodName: `Oats ${index}`,
+      foodVersionId: String(700 + index),
+      portion:
+        index % 2 === 0
+          ? { kind: "grams", grams: "125.250" }
+          : { kind: "serving", servingId: "801", amount: "2.500", servingLabel: "cup" },
+    };
+  }
+  if (kind === "recipe") {
+    return {
+      ...common,
+      operationKind: "recipe",
+      recipeName: "Bean stew",
+      recipeId,
+      recipeVersionId,
+      portion:
+        index % 2 === 0
+          ? { kind: "serving", amount: "1.500", servingLabel: "bowl" }
+          : { kind: "grams", grams: "250.125000" },
+    };
+  }
+  return {
+    ...common,
+    operationKind: "custom_food",
+    customFoodName: "Owner oats",
+    customFoodId,
+    customFoodVersionId: "901",
+    customFoodVersionNumber: 7,
+    portion:
+      index % 2 === 0
+        ? { kind: "serving", servingId: "902", amount: "0.750", servingLabel: "bar" }
+        : { kind: "grams", grams: "42.7500" },
+  };
+}
+
+async function typedDraft(kind: DiaryOutboxEnqueueInput["operationKind"], index: number) {
+  return createDiaryOutboxDraft(
+    owner,
+    timeZone,
+    typedInput(kind, index),
     operationId(index),
     new Date("2001-01-01T00:00:00.000Z"),
   );
@@ -403,6 +537,162 @@ describe("protected public-food quick-add outbox journal", () => {
   });
 });
 
+describe("closed mixed diary-log outbox envelopes", () => {
+  it("keeps legacy v1 items and all v2 log kinds in one lossless bounded FIFO", async () => {
+    const storage = new MemoryProtectedStore();
+    const store = createQuickAddOutboxStore({ storage, lockKey: "mixed-envelope" });
+    const legacy = await store.append(owner, await draft(1));
+    const publicServing = await store.append(owner, await typedDraft("public_food", 3));
+    const publicGrams = await store.append(owner, await typedDraft("public_food", 2));
+    const recipeServing = await store.append(owner, await typedDraft("recipe", 4));
+    const recipeGrams = await store.append(owner, await typedDraft("recipe", 5));
+    const customServing = await store.append(owner, await typedDraft("custom_food", 6));
+    const customGrams = await store.append(owner, await typedDraft("custom_food", 7));
+
+    expect(
+      [
+        legacy,
+        publicServing,
+        publicGrams,
+        recipeServing,
+        recipeGrams,
+        customServing,
+        customGrams,
+      ].map(diaryOutboxOperationKind),
+    ).toEqual([
+      "public_food",
+      "public_food",
+      "public_food",
+      "recipe",
+      "recipe",
+      "custom_food",
+      "custom_food",
+    ]);
+    expect(publicServing.version).toBe(2);
+    if (publicServing.version !== 2 || publicServing.operationKind !== "public_food") {
+      throw new Error("missing typed public-food item");
+    }
+    expect(publicServing.body.portion).toEqual({
+      kind: "serving",
+      servingId: "801",
+      amount: "2.5",
+    });
+    expect(publicServing.display.servingLabel).toBe("2.5 cup");
+    if (publicGrams.version !== 2 || publicGrams.operationKind !== "public_food") {
+      throw new Error("missing typed gram item");
+    }
+    expect(publicGrams.body.portion).toEqual({ kind: "grams", grams: "125.25" });
+    expect(publicGrams.display.servingLabel).toBe("125.25 g");
+    if (recipeServing.version !== 2 || recipeServing.operationKind !== "recipe") {
+      throw new Error("missing typed recipe serving item");
+    }
+    expect(recipeServing.body.portion).toEqual({ kind: "serving", amount: "1.5" });
+    expect(recipeServing.display.servingLabel).toBe("1.5 bowl");
+    expect(diaryOutboxRequest(recipeServing).path).toBe(
+      `/v1/recipes/${recipeId}/log?profileTimeZonePrecondition=v1`,
+    );
+    expect(diaryOutboxRequest(customServing).path).toBe(
+      `/v1/custom-foods/${customFoodId}/log?profileTimeZonePrecondition=v1`,
+    );
+    if (recipeGrams.version !== 2 || recipeGrams.operationKind !== "recipe") {
+      throw new Error("missing typed recipe gram item");
+    }
+    expect(recipeGrams.body.portion).toEqual({ kind: "grams", grams: "250.125" });
+    expect(recipeGrams.display.servingLabel).toBe("250.125 g");
+    if (customServing.version !== 2 || customServing.operationKind !== "custom_food") {
+      throw new Error("missing typed custom-food serving item");
+    }
+    expect(customServing.body.portion).toEqual({
+      kind: "serving",
+      servingId: "902",
+      amount: "0.75",
+    });
+    expect(customServing.display.servingLabel).toBe("0.75 bar");
+    if (customGrams.version !== 2 || customGrams.operationKind !== "custom_food") {
+      throw new Error("missing typed custom-food gram item");
+    }
+    expect(customGrams.body.portion).toEqual({ kind: "grams", grams: "42.75" });
+    expect(customGrams.display.servingLabel).toBe("42.75 g");
+
+    const restarted = createQuickAddOutboxStore({ storage, lockKey: "mixed-envelope" });
+    const restored = await restarted.snapshot(owner);
+    expect(restored.items).toEqual([
+      legacy,
+      publicServing,
+      publicGrams,
+      recipeServing,
+      recipeGrams,
+      customServing,
+      customGrams,
+    ]);
+    expect(restored.items.map((item) => item.sequence)).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    for (const item of restored.items) {
+      expect(new TextEncoder().encode(JSON.stringify(item)).byteLength).toBeLessThanOrEqual(1_600);
+    }
+    const persisted = [...storage.values.values()].join("\n");
+    expect(persisted).not.toContain("accessToken");
+    expect(persisted).not.toContain('"path"');
+    expect(persisted).not.toContain("profileTimeZonePrecondition");
+  });
+
+  it("rejects widened envelopes, malformed quantities, and mismatched immutable coordinates", async () => {
+    const storage = new MemoryProtectedStore();
+    const store = createQuickAddOutboxStore({ storage, lockKey: "typed-rejection" });
+    const publicItem = await store.append(owner, await typedDraft("public_food", 3));
+    const recipeItem = await store.append(owner, await typedDraft("recipe", 4));
+    const customItem = await store.append(owner, await typedDraft("custom_food", 5));
+
+    if (publicItem.version !== 2 || publicItem.operationKind !== "public_food") {
+      throw new Error("missing typed public-food item");
+    }
+    if (recipeItem.version !== 2 || recipeItem.operationKind !== "recipe") {
+      throw new Error("missing typed recipe item");
+    }
+    if (customItem.version !== 2 || customItem.operationKind !== "custom_food") {
+      throw new Error("missing typed custom-food item");
+    }
+
+    expect(() => parseQuickAddOutboxItem({ ...publicItem, accessToken: "secret" })).toThrow(
+      /discriminant/u,
+    );
+    expect(() => parseQuickAddOutboxItem({ ...recipeItem, path: "/arbitrary" })).toThrow(
+      /discriminant/u,
+    );
+    expect(() =>
+      parseQuickAddOutboxItem({
+        ...publicItem,
+        body: { ...publicItem.body, portion: { kind: "grams", grams: "0" } },
+      }),
+    ).toThrow(/portion/u);
+    expect(() =>
+      parseQuickAddOutboxItem({
+        ...recipeItem,
+        body: {
+          ...recipeItem.body,
+          portion: { kind: "serving", servingId: "1", amount: "1" },
+        },
+      }),
+    ).toThrow(/recipe portion/u);
+    expect(() => parseQuickAddOutboxItem({ ...customItem, customFoodVersionNumber: 0 })).toThrow(
+      /discriminant/u,
+    );
+    expect(() => parseQuickAddOutboxItem({ ...customItem, localDate: "2026-08-16" })).toThrow(
+      /date/u,
+    );
+  });
+
+  it("clears every fixed slot for a mixed queue without trusting item discriminants", async () => {
+    const storage = new MemoryProtectedStore();
+    const store = createQuickAddOutboxStore({ storage, lockKey: "mixed-clear" });
+    await store.append(owner, await draft(1));
+    await store.append(owner, await typedDraft("recipe", 2));
+    await store.append(owner, await typedDraft("custom_food", 3));
+    await store.clear();
+    expect(storage.values.size).toBe(0);
+    expect((await store.snapshot(owner)).items).toEqual([]);
+  });
+});
+
 function controllerFor(
   store: ReturnType<typeof createQuickAddOutboxStore>,
   fetcher: (input: URL, init: RequestInit) => Promise<Response>,
@@ -432,6 +722,44 @@ function controllerFor(
 }
 
 describe("foreground public-food quick-add outbox controller", () => {
+  it("keeps deterministic draft rejection separate from unavailable storage", async () => {
+    const storage = new MemoryProtectedStore();
+    const store = createQuickAddOutboxStore({
+      storage,
+      lockKey: "deterministic-draft-rejection",
+    });
+    let appendCalls = 0;
+    let snapshotCalls = 0;
+    const unavailableStore = {
+      ...store,
+      append: async () => {
+        appendCalls += 1;
+        throw new Error("append-must-not-run");
+      },
+      snapshot: async () => {
+        snapshotCalls += 1;
+        throw new Error("snapshot-must-not-run");
+      },
+    };
+    const controller = controllerFor(unavailableStore, async () => {
+      throw new Error("fetch-must-not-run");
+    });
+    let rejection: unknown;
+
+    try {
+      await controller.enqueue({ ...input(), localDate: "2026-02-30" });
+    } catch (error) {
+      rejection = error;
+    }
+
+    expect(rejection).toBeInstanceOf(TypeError);
+    expect(rejection).not.toBeInstanceOf(QuickAddEnqueueAmbiguousError);
+    expect((rejection as Error).message).toBe("The diary outbox envelope was invalid.");
+    expect(appendCalls).toBe(0);
+    expect(snapshotCalls).toBe(0);
+    controller.close();
+  });
+
   it("requires status/replay and every immutable request field to match before acknowledgement", async () => {
     const storage = new MemoryProtectedStore();
     const store = createQuickAddOutboxStore({ storage, lockKey: "receipt-match" });
@@ -444,9 +772,333 @@ describe("foreground public-food quick-add outbox controller", () => {
     expect(
       matchesQuickAddReceipt(item, 201, {
         ...created,
+        affectedDays: [...created.affectedDays, { localDate: "2026-08-16", revision: "1" }],
+      }),
+    ).toBe(false);
+    expect(
+      matchesQuickAddReceipt(item, 201, {
+        ...created,
         entry: created.entry ? { ...created.entry, occurredAt: "2026-08-15T13:31:00.000Z" } : null,
       }),
     ).toBe(false);
+  });
+
+  it("matches exact created and replayed receipts for every v2 kind and quantity", async () => {
+    const storage = new MemoryProtectedStore();
+    const store = createQuickAddOutboxStore({ storage, lockKey: "typed-receipts" });
+    const items = [
+      await store.append(owner, await typedDraft("public_food", 11)),
+      await store.append(owner, await typedDraft("public_food", 12)),
+      await store.append(owner, await typedDraft("recipe", 14)),
+      await store.append(owner, await typedDraft("recipe", 15)),
+      await store.append(owner, await typedDraft("custom_food", 16)),
+      await store.append(owner, await typedDraft("custom_food", 17)),
+    ];
+
+    for (const item of items) {
+      const created = parseDiaryMutation(receiptBody(item, false));
+      const replayed = parseDiaryMutation(receiptBody(item, true));
+      expect(matchesDiaryOutboxReceipt(item, 201, created)).toBe(true);
+      expect(matchesDiaryOutboxReceipt(item, 200, replayed)).toBe(true);
+      expect(matchesDiaryOutboxReceipt(item, 200, created)).toBe(false);
+      expect(
+        matchesDiaryOutboxReceipt(item, 201, {
+          ...created,
+          entry: created.entry
+            ? { ...created.entry, occurredAt: "2026-08-15T13:31:00.000Z" }
+            : null,
+        }),
+      ).toBe(false);
+
+      const persistedTrailingZeroItem = parseQuickAddOutboxItem({
+        ...item,
+        body: {
+          ...item.body,
+          portion:
+            item.body.portion.kind === "grams"
+              ? { ...item.body.portion, grams: `${item.body.portion.grams}0` }
+              : { ...item.body.portion, amount: `${item.body.portion.amount}0` },
+        },
+      });
+      expect(matchesDiaryOutboxReceipt(persistedTrailingZeroItem, 201, created)).toBe(true);
+    }
+
+    const publicItem = items[0];
+    const publicMutation = publicItem ? parseDiaryMutation(receiptBody(publicItem, false)) : null;
+    if (
+      publicItem?.version !== 2 ||
+      publicItem.operationKind !== "public_food" ||
+      publicMutation?.entry?.entryKind !== "food" ||
+      publicMutation.entry.foodProvenance.kind !== "public" ||
+      publicMutation.entry.portion.kind !== "serving"
+    ) {
+      throw new Error("missing public-food serving receipt");
+    }
+    expect(
+      matchesDiaryOutboxReceipt(publicItem, 201, {
+        ...publicMutation,
+        entry: {
+          ...publicMutation.entry,
+          portion: { ...publicMutation.entry.portion, amount: "9" },
+        },
+      }),
+    ).toBe(false);
+
+    const recipeItem = items[2];
+    const recipeMutation = recipeItem ? parseDiaryMutation(receiptBody(recipeItem, false)) : null;
+    if (
+      recipeItem?.version !== 2 ||
+      recipeItem.operationKind !== "recipe" ||
+      recipeMutation?.entry?.entryKind !== "recipe"
+    ) {
+      throw new Error("missing recipe receipt");
+    }
+    expect(
+      matchesDiaryOutboxReceipt(recipeItem, 201, {
+        ...recipeMutation,
+        entry: { ...recipeMutation.entry, recipeVersionId: recipeId },
+      }),
+    ).toBe(false);
+
+    const customItem = items[4];
+    const customMutation = customItem ? parseDiaryMutation(receiptBody(customItem, false)) : null;
+    if (
+      customItem?.version !== 2 ||
+      customItem.operationKind !== "custom_food" ||
+      customMutation?.entry?.entryKind !== "food" ||
+      customMutation.entry.foodProvenance.kind !== "private_custom"
+    ) {
+      throw new Error("missing custom-food receipt");
+    }
+    expect(
+      matchesDiaryOutboxReceipt(customItem, 201, {
+        ...customMutation,
+        entry: {
+          ...customMutation.entry,
+          source: null,
+          foodProvenance: {
+            ...customMutation.entry.foodProvenance,
+            customFoodVersionNumber: customItem.customFoodVersionNumber + 1,
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      matchesDiaryOutboxReceipt(customItem, 201, {
+        ...customMutation,
+        entry: { ...customMutation.entry, foodVersionId: "999999" },
+      }),
+    ).toBe(false);
+  });
+
+  it("canonicalizes uppercase enqueue IDs before persistence and matches lowercase receipts", async () => {
+    const recipeInput = typedInput("recipe", 18);
+    if (recipeInput.operationKind !== "recipe") {
+      throw new Error("missing recipe input");
+    }
+    const uppercaseRecipe = await createDiaryOutboxDraft(
+      owner,
+      timeZone,
+      {
+        ...recipeInput,
+        recipeId: recipeId.toUpperCase(),
+        recipeVersionId: recipeVersionId.toUpperCase(),
+      },
+      operationId(18),
+      new Date("2001-01-01T00:00:00.000Z"),
+    );
+    const recipeItem = parseQuickAddOutboxItem({ ...uppercaseRecipe, sequence: 0, blocked: null });
+    if (recipeItem.version !== 2 || recipeItem.operationKind !== "recipe") {
+      throw new Error("missing canonical recipe item");
+    }
+    expect(recipeItem.recipeId).toBe(recipeId);
+    expect(recipeItem.body.recipeVersionId).toBe(recipeVersionId);
+    const recipeMutation = parseDiaryMutation(receiptBody(recipeItem, false));
+    if (recipeMutation.entry?.entryKind !== "recipe") {
+      throw new Error("missing uppercase recipe receipt");
+    }
+    expect(
+      matchesDiaryOutboxReceipt(recipeItem, 201, {
+        ...recipeMutation,
+        entry: {
+          ...recipeMutation.entry,
+          recipeVersionId: recipeMutation.entry.recipeVersionId.toLowerCase(),
+          recipe: {
+            ...recipeMutation.entry.recipe,
+            id: recipeMutation.entry.recipe.id.toLowerCase(),
+          },
+        },
+      }),
+    ).toBe(true);
+
+    const customInput = typedInput("custom_food", 19);
+    if (customInput.operationKind !== "custom_food") {
+      throw new Error("missing custom-food input");
+    }
+    const uppercaseCustom = await createDiaryOutboxDraft(
+      owner,
+      timeZone,
+      {
+        ...customInput,
+        customFoodId: customFoodId.toUpperCase(),
+      },
+      operationId(19),
+      new Date("2001-01-01T00:00:00.000Z"),
+    );
+    const customItem = parseQuickAddOutboxItem({ ...uppercaseCustom, sequence: 0, blocked: null });
+    if (customItem.version !== 2 || customItem.operationKind !== "custom_food") {
+      throw new Error("missing canonical custom-food item");
+    }
+    expect(customItem.customFoodId).toBe(customFoodId);
+    const customMutation = parseDiaryMutation(receiptBody(customItem, false));
+    if (
+      customMutation.entry?.entryKind !== "food" ||
+      customMutation.entry.foodProvenance.kind !== "private_custom"
+    ) {
+      throw new Error("missing uppercase custom-food receipt");
+    }
+    expect(
+      matchesDiaryOutboxReceipt(customItem, 201, {
+        ...customMutation,
+        entry: {
+          ...customMutation.entry,
+          source: null,
+          foodProvenance: {
+            ...customMutation.entry.foodProvenance,
+            customFoodId: customMutation.entry.foodProvenance.customFoodId.toLowerCase(),
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("drains a mixed legacy and v2 journal through fixed endpoints in strict FIFO order", async () => {
+    const storage = new MemoryProtectedStore();
+    const store = createQuickAddOutboxStore({ storage, lockKey: "mixed-drain" });
+    const queued = [
+      await store.append(owner, await draft(21)),
+      await store.append(owner, await typedDraft("public_food", 22)),
+      await store.append(owner, await typedDraft("recipe", 23)),
+      await store.append(owner, await typedDraft("custom_food", 24)),
+    ];
+    const sent: Array<{
+      readonly operationId: string;
+      readonly url: string;
+      readonly body: string | null;
+      readonly expectedTimeZone: string | null;
+    }> = [];
+    const receipts: string[] = [];
+    const controller = controllerFor(
+      store,
+      async (url, init) => {
+        const expected = queued[sent.length];
+        const head = (await store.snapshot(owner)).items[0];
+        if (!expected || !head || head.operationId !== expected.operationId) {
+          throw new Error("mixed FIFO head changed");
+        }
+        const headers = new Headers(init.headers);
+        sent.push({
+          operationId: headers.get("idempotency-key") ?? "missing",
+          url: url.toString(),
+          body: typeof init.body === "string" ? init.body : null,
+          expectedTimeZone: headers.get("x-expected-profile-time-zone"),
+        });
+        return receiptResponse(head, sent.length % 2 === 0 ? 200 : 201);
+      },
+      { onReceipt: (receipt) => void receipts.push(receipt.operationId) },
+    );
+
+    await controller.requestDrain();
+
+    expect(sent.map((request) => request.operationId)).toEqual(
+      queued.map((item) => item.operationId),
+    );
+    expect(sent.map((request) => request.url)).toEqual(
+      queued.map((item) => `https://api.example.test${diaryOutboxRequest(item).path}`),
+    );
+    expect(sent.map((request) => request.body)).toEqual(
+      queued.map((item) => JSON.stringify(item.body)),
+    );
+    expect(sent.map((request) => request.expectedTimeZone)).toEqual(queued.map(() => timeZone));
+    expect(receipts).toEqual(queued.map((item) => item.operationId));
+    expect((await store.snapshot(owner)).items).toEqual([]);
+  });
+
+  it("retains every typed head when a success response is malformed", async () => {
+    const cases = [
+      ["public_food", 31],
+      ["recipe", 32],
+      ["custom_food", 33],
+    ] as const;
+    for (const [kind, index] of cases) {
+      const storage = new MemoryProtectedStore();
+      const store = createQuickAddOutboxStore({ storage, lockKey: `malformed-${kind}` });
+      const queued = await store.append(owner, await typedDraft(kind, index));
+      const controller = controllerFor(
+        store,
+        async () =>
+          new Response(
+            JSON.stringify({
+              data: { replayed: false, entry: { invalid: true }, affectedDays: [] },
+            }),
+            { status: 201, headers: { "content-type": "application/json" } },
+          ),
+      );
+
+      await controller.requestDrain();
+
+      expect(controller.getState(), kind).toMatchObject({
+        status: "unavailable",
+        reason: "response",
+      });
+      expect((await store.snapshot(owner)).items, kind).toEqual([queued]);
+      controller.close();
+    }
+  });
+
+  it("replays typed recipe and custom-food bytes exactly after an ambiguous failure", async () => {
+    const cases = [
+      ["recipe", 41],
+      ["custom_food", 42],
+    ] as const;
+    for (const [kind, index] of cases) {
+      const storage = new MemoryProtectedStore();
+      const store = createQuickAddOutboxStore({ storage, lockKey: `typed-replay-${kind}` });
+      let firstRequests = 0;
+      const first = controllerFor(
+        store,
+        async () => {
+          firstRequests += 1;
+          throw new Error("connection-lost-after-commit");
+        },
+        { firstOperationId: index },
+      );
+      const queued = await first.enqueueOperation(typedInput(kind, index));
+      expect(firstRequests).toBe(0);
+      await first.requestDrain(queued.operationId);
+      expect(firstRequests).toBe(1);
+      expect((await store.snapshot(owner)).items).toEqual([queued]);
+      first.close();
+
+      const replayed: Array<{ readonly url: string; readonly init: RequestInit }> = [];
+      const restarted = controllerFor(store, async (url, init) => {
+        replayed.push({ url: url.toString(), init });
+        const head = (await store.snapshot(owner)).items[0];
+        if (!head) throw new Error("missing typed replay head");
+        return receiptResponse(head, 200);
+      });
+      await restarted.requestDrain();
+
+      expect(replayed).toHaveLength(1);
+      const request = replayed[0];
+      if (!request) throw new Error("missing typed replay request");
+      expect(request.url).toBe(`https://api.example.test${diaryOutboxRequest(queued).path}`);
+      expect(new Headers(request.init.headers).get("idempotency-key")).toBe(queued.operationId);
+      expect(new Headers(request.init.headers).get("x-expected-profile-time-zone")).toBe(timeZone);
+      expect(request.init.body).toBe(JSON.stringify(queued.body));
+      expect((await store.snapshot(owner)).items).toEqual([]);
+      restarted.close();
+    }
   });
 
   it("never sends when the protected slot fails read-back verification", async () => {
@@ -670,6 +1322,7 @@ describe("foreground public-food quick-add outbox controller", () => {
       operationId: first.operationId,
       httpStatus: 422,
       blockedReason: "terminal_http",
+      operationKind: "public_food",
       foodName: first.display.foodName,
       servingLabel: first.display.servingLabel,
       localDate: first.localDate,
@@ -931,6 +1584,47 @@ describe("foreground public-food quick-add outbox controller", () => {
     expect((await store.snapshot(owner)).items).toEqual([]);
   });
 
+  it("reports an ambiguous enqueue when close crosses the durable final manifest commit", async () => {
+    const storage = new MemoryProtectedStore();
+    let releaseCommit: () => void = () => undefined;
+    let reachCommit: () => void = () => undefined;
+    const commitGate = new Promise<void>((resolve) => {
+      releaseCommit = resolve;
+    });
+    const commitReached = new Promise<void>((resolve) => {
+      reachCommit = resolve;
+    });
+    let paused = false;
+    storage.afterSet = async (key, value) => {
+      if (
+        !paused &&
+        key === QUICK_ADD_OUTBOX_MANIFEST_KEY &&
+        value.includes('"state":"ready"') &&
+        value.includes('"count":1')
+      ) {
+        paused = true;
+        reachCommit();
+        await commitGate;
+      }
+    };
+    const store = createQuickAddOutboxStore({ storage, lockKey: "close-final-commit" });
+    const controller = controllerFor(store, async () => {
+      throw new Error("must-not-send-before-receipt-registration");
+    });
+
+    const enqueue = controller.enqueue(input());
+    await commitReached;
+    controller.close();
+    releaseCommit();
+
+    const rejection = await enqueue.catch((error: unknown) => error);
+    expect(rejection).toBeInstanceOf(QuickAddEnqueueAmbiguousError);
+    expect(rejection).toMatchObject({ operationId: operationId(1) });
+    const committed = await store.snapshot(owner);
+    expect(committed.items).toHaveLength(1);
+    expect(committed.items[0]?.operationId).toBe(operationId(1));
+  });
+
   it("fences and delegates owner or corruption faults while retaining transient storage failures", async () => {
     const fatalReasons: FatalQuickAddOutboxStoreReason[] = [];
     const ownerStorage = new MemoryProtectedStore();
@@ -1123,7 +1817,7 @@ describe("foreground public-food quick-add outbox controller", () => {
     const clear = store.clear();
     releaseSet();
 
-    await expect(enqueue).rejects.toThrow(/epoch/u);
+    await expect(enqueue).rejects.toBeInstanceOf(QuickAddEnqueueAmbiguousError);
     await clear;
     expect(requests).toBe(0);
     expect(storage.values.size).toBe(0);

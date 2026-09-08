@@ -28,7 +28,6 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { apiUrl, authenticatedHeaders, jsonBody, responseError } from "../api/private-api";
 import { newOperationId } from "../auth/operation-id";
 import {
-  currentLocalTime,
   type DiaryGroup,
   diaryGroupLabel,
   isLocalDate,
@@ -36,9 +35,15 @@ import {
   localDateTimeToInstant,
   localTimeInTimeZone,
   type MealSlot,
-  parseDiaryMutation,
   shiftLocalDate,
 } from "../diary/diary";
+import {
+  MAX_QUICK_ADD_OUTBOX_ITEMS,
+  QuickAddEnqueueAmbiguousError,
+  type QuickAddOutboxController,
+  type QuickAddOutboxControllerState,
+  type QuickAddReceipt,
+} from "../diary/quick-add-outbox";
 import { parseTargetableNutrients, type TargetableNutrient } from "../recipes/recipes-goals";
 import { palette } from "../theme";
 import {
@@ -91,6 +96,9 @@ interface Props {
   readonly onUnauthorized: () => Promise<void>;
   /** Fence queued diary delivery after the erasure request is durable and before it is sent. */
   readonly onErasurePrepared: () => void;
+  readonly quickAddOutboxController: QuickAddOutboxController;
+  readonly quickAddOutboxState: QuickAddOutboxControllerState;
+  readonly subscribeQuickAddReceipts: (listener: (receipt: QuickAddReceipt) => void) => () => void;
   readonly onErasureAccepted: (input: {
     readonly job: AccountErasureJob;
     readonly token: string;
@@ -139,6 +147,21 @@ interface CustomLogDraft {
   readonly mealSlot: MealSlot;
   readonly localDate: string;
   readonly localTime: string;
+}
+
+function initialCustomLog(
+  food: CustomFood,
+  profileTimeZone: string,
+  now = new Date(),
+): CustomLogDraft {
+  return {
+    food,
+    quantity: "1",
+    kind: food.currentVersion.serving ? "serving" : "grams",
+    mealSlot: "breakfast",
+    localDate: new Intl.DateTimeFormat("en-CA", { timeZone: profileTimeZone }).format(now),
+    localTime: localTimeInTimeZone(now, profileTimeZone).slice(0, 5),
+  };
 }
 
 const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
@@ -281,6 +304,9 @@ export function RetentionScreen({
   onUnauthorized,
   onErasurePrepared,
   onErasureAccepted,
+  quickAddOutboxController,
+  quickAddOutboxState,
+  subscribeQuickAddReceipts,
 }: Props) {
   const today = useMemo(
     () => new Intl.DateTimeFormat("en-CA", { timeZone: profileTimeZone }).format(new Date()),
@@ -328,6 +354,28 @@ export function RetentionScreen({
   const operations = useRef(new Map<string, StableOperation>());
   const loadController = useRef<AbortController | null>(null);
   const trendController = useRef<AbortController | null>(null);
+  const customLogEnqueueInFlight = useRef(false);
+  const ownedCustomLogOperations = useRef(new Set<string>());
+
+  useEffect(
+    () =>
+      subscribeQuickAddReceipts((receipt) => {
+        if (!ownedCustomLogOperations.current.delete(receipt.operationId)) return;
+        const entry = receipt.mutation.entry;
+        if (entry?.entryKind !== "food" || entry.foodProvenance.kind !== "private_custom") {
+          setMessage(
+            "The queued custom food was accepted, but its diary entry could not be read. Refresh the diary before logging it again.",
+          );
+          return;
+        }
+        setMessage(
+          receipt.mutation.replayed
+            ? `The earlier queued custom-food log in ${diaryGroupLabel(diaryGroups, entry.mealSlot)} on ${entry.localDate} was confirmed safely.`
+            : `The queued custom food was confirmed in ${diaryGroupLabel(diaryGroups, entry.mealSlot)} on ${entry.localDate}.`,
+        );
+      }),
+    [diaryGroups, subscribeQuickAddReceipts],
+  );
 
   const stableOperation = useCallback((key: string, serializedBody: string | null) => {
     const existing = operations.current.get(key);
@@ -601,9 +649,28 @@ export function RetentionScreen({
     if (!customLog || !isPositiveDecimal(customLog.quantity)) {
       return setMessage("Enter a positive custom-food quantity.");
     }
+    if (customLogEnqueueInFlight.current) {
+      return setMessage("Wait for the current custom-food log to be secured on this device.");
+    }
     const serving = customLog.food.currentVersion.serving;
     if (customLog.kind === "serving" && !serving)
       return setMessage("This food has no serving definition.");
+    const currentQueue = quickAddOutboxController.getState();
+    if (currentQueue.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS) {
+      return setMessage(
+        `The secure diary queue is full at ${MAX_QUICK_ADD_OUTBOX_ITEMS} items. Review queued logs before adding another.`,
+      );
+    }
+    if (
+      currentQueue.status === "closed" ||
+      currentQueue.status === "owner_mismatch" ||
+      (currentQueue.status === "unavailable" &&
+        (currentQueue.reason === "storage" || currentQueue.reason === "credential"))
+    ) {
+      return setMessage(
+        "Diary logging is unavailable until secure storage and authentication recover.",
+      );
+    }
     let occurredAt: string;
     try {
       occurredAt = localDateTimeToInstant(
@@ -614,34 +681,49 @@ export function RetentionScreen({
     } catch (error) {
       return setMessage(error instanceof Error ? error.message : "Log time was invalid.");
     }
-    const body = {
-      customFoodVersionId: customLog.food.currentVersion.id,
-      portion:
-        customLog.kind === "serving" && serving
-          ? { kind: "serving" as const, servingId: serving.id, amount: customLog.quantity }
-          : { kind: "grams" as const, grams: customLog.quantity },
-      mealSlot: customLog.mealSlot,
-      occurredAt,
-    };
-    const key = `custom-log:${customLog.food.id}:${customLog.food.currentVersion.id}:${JSON.stringify(body)}`;
+    customLogEnqueueInFlight.current = true;
     setBusy("custom-log");
     try {
-      const result = parseDiaryMutation(
-        await request(`/v1/custom-foods/${customLog.food.id}/log`, {
-          method: "POST",
-          body,
-          operationKey: key,
-        }),
-      );
+      const item = await quickAddOutboxController.enqueueOperation({
+        operationKind: "custom_food",
+        customFoodName: customLog.food.currentVersion.name,
+        customFoodId: customLog.food.id,
+        customFoodVersionId: customLog.food.currentVersion.id,
+        customFoodVersionNumber: customLog.food.currentVersion.versionNumber,
+        portion:
+          customLog.kind === "serving" && serving
+            ? {
+                kind: "serving",
+                servingId: serving.id,
+                amount: customLog.quantity,
+                servingLabel: serving.label,
+              }
+            : { kind: "grams", grams: customLog.quantity },
+        mealSlot: customLog.mealSlot,
+        localDate: customLog.localDate,
+        occurredAt,
+      });
+      ownedCustomLogOperations.current.add(item.operationId);
       setCustomLog(null);
       setMessage(
-        `Pinned custom-food version logged to ${diaryGroupLabel(diaryGroups, result.entry?.mealSlot ?? customLog.mealSlot)} on ${result.entry?.localDate ?? customLog.localDate}.`,
+        `${customLog.food.currentVersion.name} v${customLog.food.currentVersion.versionNumber} is queued securely for ${diaryGroupLabel(diaryGroups, customLog.mealSlot)} on ${customLog.localDate}. It is not included in diary totals until the server confirms it.`,
       );
+      void quickAddOutboxController.requestDrain(item.operationId);
     } catch (error) {
-      setMessage(
-        `${error instanceof Error ? error.message : "Log failed."} Submit again for the same retry.`,
-      );
+      if (error instanceof QuickAddEnqueueAmbiguousError) {
+        ownedCustomLogOperations.current.add(error.operationId);
+        setCustomLog(null);
+        void quickAddOutboxController.requestDrain(error.operationId);
+        setMessage(
+          "Secure storage could not confirm whether the custom food was queued. Do not submit it again until the queue status recovers.",
+        );
+      } else {
+        setMessage(
+          "The custom food was not queued. Refresh this screen and try again after the diary session is current.",
+        );
+      }
     } finally {
+      customLogEnqueueInFlight.current = false;
       setBusy(null);
     }
   }
@@ -1350,6 +1432,14 @@ export function RetentionScreen({
     });
   }
 
+  const customLogUnavailable =
+    busy !== null ||
+    quickAddOutboxState.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS ||
+    quickAddOutboxState.status === "closed" ||
+    quickAddOutboxState.status === "owner_mismatch" ||
+    (quickAddOutboxState.status === "unavailable" &&
+      (quickAddOutboxState.reason === "storage" || quickAddOutboxState.reason === "credential"));
+
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
       <ScrollView
@@ -1485,16 +1575,7 @@ export function RetentionScreen({
                 <Button label="Revise" onPress={() => setCustom(customDraft(food))} secondary />
                 <Button
                   label="Log exact version"
-                  onPress={() =>
-                    setCustomLog({
-                      food,
-                      quantity: "1",
-                      kind: food.currentVersion.serving ? "serving" : "grams",
-                      mealSlot: "breakfast",
-                      localDate: today,
-                      localTime: currentLocalTime(),
-                    })
-                  }
+                  onPress={() => setCustomLog(initialCustomLog(food, profileTimeZone))}
                   secondary
                 />
                 {food.status === "active" ? (
@@ -1564,8 +1645,25 @@ export function RetentionScreen({
                 onChangeText={(localTime) => setCustomLog({ ...customLog, localTime })}
                 maxLength={5}
               />
+              {quickAddOutboxState.pendingCount > 0 ? (
+                <Text accessibilityLiveRegion="polite" style={styles.help}>
+                  {quickAddOutboxState.pendingCount} diary{" "}
+                  {quickAddOutboxState.pendingCount === 1 ? "log is" : "logs are"} waiting securely
+                  on this device.
+                </Text>
+              ) : null}
               <View style={styles.actions}>
-                <Button label="Log pinned version" onPress={() => void logCustomFood()} />
+                <Button
+                  disabled={customLogUnavailable}
+                  label={
+                    busy === "custom-log"
+                      ? "Securing…"
+                      : quickAddOutboxState.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS
+                        ? `Queue full (${MAX_QUICK_ADD_OUTBOX_ITEMS})`
+                        : "Secure & log pinned version"
+                  }
+                  onPress={() => void logCustomFood()}
+                />
                 <Button label="Cancel" onPress={() => setCustomLog(null)} secondary />
               </View>
             </View>

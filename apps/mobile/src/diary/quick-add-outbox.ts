@@ -17,6 +17,19 @@ export const terminalQuickAddStatuses = [400, 403, 404, 409, 410, 412, 422, 428]
 export type TerminalQuickAddStatus = (typeof terminalQuickAddStatuses)[number];
 export type PublicFoodKind = "generic" | "branded";
 
+export interface PublicFoodLogRequestBody {
+  readonly foodVersionId: string;
+  readonly portion:
+    | {
+        readonly kind: "serving";
+        readonly servingId: string;
+        readonly amount: string;
+      }
+    | { readonly kind: "grams"; readonly grams: string };
+  readonly mealSlot: MealSlot;
+  readonly occurredAt: string;
+}
+
 export interface QuickAddRequestBody {
   readonly foodVersionId: string;
   readonly portion: {
@@ -28,30 +41,90 @@ export interface QuickAddRequestBody {
   readonly occurredAt: string;
 }
 
+export interface RecipeLogRequestBody {
+  readonly recipeVersionId: string;
+  readonly portion:
+    | { readonly kind: "serving"; readonly amount: string }
+    | { readonly kind: "grams"; readonly grams: string };
+  readonly mealSlot: MealSlot;
+  readonly occurredAt: string;
+}
+
+export interface CustomFoodLogRequestBody {
+  readonly customFoodVersionId: string;
+  readonly portion:
+    | {
+        readonly kind: "serving";
+        readonly servingId: string;
+        readonly amount: string;
+      }
+    | { readonly kind: "grams"; readonly grams: string };
+  readonly mealSlot: MealSlot;
+  readonly occurredAt: string;
+}
+
 export interface QuickAddOutboxBlockedState {
   readonly kind: "terminal_http";
   readonly status: TerminalQuickAddStatus;
   readonly reason: "terminal_http" | "time_zone_changed";
 }
 
-export interface QuickAddOutboxItem {
-  readonly version: 1;
+interface DiaryOutboxItemCommon {
   readonly sequence: number;
   readonly ownerUserId: string;
   readonly operationId: string;
   readonly enqueuedAt: string;
   readonly expectedTimeZone: string;
   readonly localDate: string;
-  readonly foodKind: PublicFoodKind;
   readonly display: {
+    /** Compatibility name retained for the existing quick-add UI; may describe any logged item. */
     readonly foodName: string;
     readonly servingLabel: string;
   };
-  readonly body: QuickAddRequestBody;
   readonly blocked: QuickAddOutboxBlockedState | null;
 }
 
-export type QuickAddOutboxDraft = Omit<QuickAddOutboxItem, "sequence" | "blocked">;
+export interface LegacyQuickAddOutboxItem extends DiaryOutboxItemCommon {
+  readonly version: 1;
+  readonly foodKind: PublicFoodKind;
+  readonly body: QuickAddRequestBody;
+}
+
+export type DiaryOutboxOperationKind = "public_food" | "recipe" | "custom_food";
+
+export interface PublicFoodOutboxItem extends DiaryOutboxItemCommon {
+  readonly version: 2;
+  readonly operationKind: "public_food";
+  readonly foodKind: PublicFoodKind;
+  readonly body: PublicFoodLogRequestBody;
+}
+
+export interface RecipeOutboxItem extends DiaryOutboxItemCommon {
+  readonly version: 2;
+  readonly operationKind: "recipe";
+  readonly recipeId: string;
+  readonly body: RecipeLogRequestBody;
+}
+
+export interface CustomFoodOutboxItem extends DiaryOutboxItemCommon {
+  readonly version: 2;
+  readonly operationKind: "custom_food";
+  readonly customFoodId: string;
+  /** The immutable response exposes the owner-scoped version number, not only its internal ID. */
+  readonly customFoodVersionNumber: number;
+  readonly body: CustomFoodLogRequestBody;
+}
+
+export type QuickAddOutboxItem =
+  | LegacyQuickAddOutboxItem
+  | PublicFoodOutboxItem
+  | RecipeOutboxItem
+  | CustomFoodOutboxItem;
+export type DiaryOutboxItem = QuickAddOutboxItem;
+
+type WithoutJournalState<T> = T extends unknown ? Omit<T, "sequence" | "blocked"> : never;
+export type QuickAddOutboxDraft = WithoutJournalState<QuickAddOutboxItem>;
+export type DiaryOutboxDraft = QuickAddOutboxDraft;
 
 export interface QuickAddEnqueueInput {
   readonly foodKind: PublicFoodKind;
@@ -63,6 +136,58 @@ export interface QuickAddEnqueueInput {
   readonly mealSlot: MealSlot;
   readonly occurredAt: string;
 }
+
+interface DiaryOutboxEnqueueCommon {
+  readonly localDate: string;
+  readonly mealSlot: MealSlot;
+  readonly occurredAt: string;
+}
+
+export interface PublicFoodOutboxEnqueueInput extends DiaryOutboxEnqueueCommon {
+  readonly operationKind: "public_food";
+  readonly foodKind: PublicFoodKind;
+  readonly foodName: string;
+  readonly foodVersionId: string;
+  readonly portion:
+    | {
+        readonly kind: "serving";
+        readonly servingId: string;
+        readonly amount: string;
+        readonly servingLabel: string;
+      }
+    | { readonly kind: "grams"; readonly grams: string };
+}
+
+export interface RecipeOutboxEnqueueInput extends DiaryOutboxEnqueueCommon {
+  readonly operationKind: "recipe";
+  readonly recipeName: string;
+  readonly recipeId: string;
+  readonly recipeVersionId: string;
+  readonly portion:
+    | { readonly kind: "serving"; readonly amount: string; readonly servingLabel: string }
+    | { readonly kind: "grams"; readonly grams: string };
+}
+
+export interface CustomFoodOutboxEnqueueInput extends DiaryOutboxEnqueueCommon {
+  readonly operationKind: "custom_food";
+  readonly customFoodName: string;
+  readonly customFoodId: string;
+  readonly customFoodVersionId: string;
+  readonly customFoodVersionNumber: number;
+  readonly portion:
+    | {
+        readonly kind: "serving";
+        readonly servingId: string;
+        readonly amount: string;
+        readonly servingLabel: string;
+      }
+    | { readonly kind: "grams"; readonly grams: string };
+}
+
+export type DiaryOutboxEnqueueInput =
+  | PublicFoodOutboxEnqueueInput
+  | RecipeOutboxEnqueueInput
+  | CustomFoodOutboxEnqueueInput;
 
 export interface QuickAddOutboxSnapshot {
   readonly ownerUserId: string;
@@ -148,50 +273,146 @@ function parseBlocked(value: unknown): QuickAddOutboxBlockedState | null {
   return { kind: "terminal_http", status: value.status, reason: value.reason };
 }
 
-function parseBody(value: unknown): QuickAddRequestBody {
+const POSITIVE_DECIMAL = /^(?=.*[1-9])(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,6})?$/u;
+
+function positiveDecimal(value: unknown): value is string {
+  return typeof value === "string" && value.length <= 19 && POSITIVE_DECIMAL.test(value);
+}
+
+function canonicalPositiveDecimal(value: string): string {
+  if (!positiveDecimal(value)) {
+    throw new RangeError("Diary quantity must be a positive decimal.");
+  }
+  const decimalPoint = value.indexOf(".");
+  if (decimalPoint === -1) return value;
+  const fraction = value.slice(decimalPoint + 1).replace(/0+$/u, "");
+  return fraction.length === 0
+    ? value.slice(0, decimalPoint)
+    : `${value.slice(0, decimalPoint)}.${fraction}`;
+}
+
+function samePositiveDecimal(expected: string, actual: unknown): boolean {
+  return (
+    typeof actual === "string" &&
+    positiveDecimal(actual) &&
+    canonicalPositiveDecimal(expected) === canonicalPositiveDecimal(actual)
+  );
+}
+
+function parseFoodPortion(
+  value: unknown,
+): PublicFoodLogRequestBody["portion"] | CustomFoodLogRequestBody["portion"] {
+  if (!record(value)) throw new TypeError("The diary outbox portion was invalid.");
+  if (
+    value.kind === "serving" &&
+    exactKeys(value, ["kind", "servingId", "amount"]) &&
+    typeof value.servingId === "string" &&
+    POSITIVE_ID.test(value.servingId) &&
+    positiveDecimal(value.amount)
+  ) {
+    return { kind: "serving", servingId: value.servingId, amount: value.amount };
+  }
+  if (
+    value.kind === "grams" &&
+    exactKeys(value, ["kind", "grams"]) &&
+    positiveDecimal(value.grams)
+  ) {
+    return { kind: "grams", grams: value.grams };
+  }
+  throw new TypeError("The diary outbox portion was invalid.");
+}
+
+function parseRecipePortion(value: unknown): RecipeLogRequestBody["portion"] {
+  if (!record(value)) throw new TypeError("The diary outbox recipe portion was invalid.");
+  if (
+    value.kind === "serving" &&
+    exactKeys(value, ["kind", "amount"]) &&
+    positiveDecimal(value.amount)
+  ) {
+    return { kind: "serving", amount: value.amount };
+  }
+  if (
+    value.kind === "grams" &&
+    exactKeys(value, ["kind", "grams"]) &&
+    positiveDecimal(value.grams)
+  ) {
+    return { kind: "grams", grams: value.grams };
+  }
+  throw new TypeError("The diary outbox recipe portion was invalid.");
+}
+
+function parsePublicFoodBody(value: unknown): PublicFoodLogRequestBody {
   if (
     !record(value) ||
     !exactKeys(value, ["foodVersionId", "portion", "mealSlot", "occurredAt"]) ||
     typeof value.foodVersionId !== "string" ||
     !POSITIVE_ID.test(value.foodVersionId) ||
-    !record(value.portion) ||
-    !exactKeys(value.portion, ["kind", "servingId", "amount"]) ||
-    value.portion.kind !== "serving" ||
-    typeof value.portion.servingId !== "string" ||
-    !POSITIVE_ID.test(value.portion.servingId) ||
-    value.portion.amount !== "1" ||
     !mealSlot(value.mealSlot) ||
     !instant(value.occurredAt)
   ) {
-    throw new TypeError("The quick-add outbox request body was invalid.");
+    throw new TypeError("The diary outbox public-food request body was invalid.");
   }
   return {
     foodVersionId: value.foodVersionId,
-    portion: { kind: "serving", servingId: value.portion.servingId, amount: "1" },
+    portion: parseFoodPortion(value.portion),
     mealSlot: value.mealSlot,
     occurredAt: value.occurredAt,
   };
 }
 
-/** Parse a closed, bounded envelope. Unknown fields are rejected, including credentials and queries. */
-export function parseQuickAddOutboxItem(value: unknown): QuickAddOutboxItem {
-  const candidate: unknown = typeof value === "string" ? JSON.parse(value) : value;
+function parseLegacyBody(value: unknown): QuickAddRequestBody {
+  const parsed = parsePublicFoodBody(value);
+  if (parsed.portion.kind !== "serving" || parsed.portion.amount !== "1") {
+    throw new TypeError("The legacy quick-add outbox request body was invalid.");
+  }
+  return {
+    foodVersionId: parsed.foodVersionId,
+    portion: { ...parsed.portion, amount: "1" },
+    mealSlot: parsed.mealSlot,
+    occurredAt: parsed.occurredAt,
+  };
+}
+
+function parseRecipeBody(value: unknown): RecipeLogRequestBody {
   if (
-    !record(candidate) ||
-    !exactKeys(candidate, [
-      "version",
-      "sequence",
-      "ownerUserId",
-      "operationId",
-      "enqueuedAt",
-      "expectedTimeZone",
-      "localDate",
-      "foodKind",
-      "display",
-      "body",
-      "blocked",
-    ]) ||
-    candidate.version !== 1 ||
+    !record(value) ||
+    !exactKeys(value, ["recipeVersionId", "portion", "mealSlot", "occurredAt"]) ||
+    typeof value.recipeVersionId !== "string" ||
+    !UUID.test(value.recipeVersionId) ||
+    !mealSlot(value.mealSlot) ||
+    !instant(value.occurredAt)
+  ) {
+    throw new TypeError("The diary outbox recipe request body was invalid.");
+  }
+  return {
+    recipeVersionId: value.recipeVersionId,
+    portion: parseRecipePortion(value.portion),
+    mealSlot: value.mealSlot,
+    occurredAt: value.occurredAt,
+  };
+}
+
+function parseCustomFoodBody(value: unknown): CustomFoodLogRequestBody {
+  if (
+    !record(value) ||
+    !exactKeys(value, ["customFoodVersionId", "portion", "mealSlot", "occurredAt"]) ||
+    typeof value.customFoodVersionId !== "string" ||
+    !POSITIVE_ID.test(value.customFoodVersionId) ||
+    !mealSlot(value.mealSlot) ||
+    !instant(value.occurredAt)
+  ) {
+    throw new TypeError("The diary outbox custom-food request body was invalid.");
+  }
+  return {
+    customFoodVersionId: value.customFoodVersionId,
+    portion: parseFoodPortion(value.portion),
+    mealSlot: value.mealSlot,
+    occurredAt: value.occurredAt,
+  };
+}
+
+function parseCommonEnvelope(candidate: Record<string, unknown>) {
+  if (
     !Number.isSafeInteger(candidate.sequence) ||
     Number(candidate.sequence) < 0 ||
     typeof candidate.ownerUserId !== "string" ||
@@ -202,41 +423,123 @@ export function parseQuickAddOutboxItem(value: unknown): QuickAddOutboxItem {
     typeof candidate.expectedTimeZone !== "string" ||
     !isSupportedTimeZone(candidate.expectedTimeZone) ||
     !isLocalDate(candidate.localDate) ||
-    !(candidate.foodKind === "generic" || candidate.foodKind === "branded") ||
     !record(candidate.display) ||
     !exactKeys(candidate.display, ["foodName", "servingLabel"]) ||
     !validUnicodeText(candidate.display.foodName, 96) ||
     !validUnicodeText(candidate.display.servingLabel, 64)
   ) {
-    throw new TypeError("The quick-add outbox envelope was invalid.");
+    throw new TypeError("The diary outbox envelope was invalid.");
   }
-  const body = parseBody(candidate.body);
-  if (
-    localDateInTimeZone(new Date(body.occurredAt), candidate.expectedTimeZone) !==
-    candidate.localDate
-  ) {
-    throw new TypeError("The quick-add outbox date did not match its immutable request.");
-  }
-  const item: QuickAddOutboxItem = {
-    version: 1,
+  return {
     sequence: Number(candidate.sequence),
     ownerUserId: candidate.ownerUserId,
     operationId: candidate.operationId,
     enqueuedAt: candidate.enqueuedAt,
     expectedTimeZone: candidate.expectedTimeZone,
     localDate: candidate.localDate,
-    foodKind: candidate.foodKind,
     display: {
       foodName: candidate.display.foodName,
       servingLabel: candidate.display.servingLabel,
     },
-    body,
     blocked: parseBlocked(candidate.blocked),
   };
+}
+
+function finishParsedItem<T extends QuickAddOutboxItem>(item: T): T {
+  if (
+    localDateInTimeZone(new Date(item.body.occurredAt), item.expectedTimeZone) !== item.localDate
+  ) {
+    throw new TypeError("The diary outbox date did not match its immutable request.");
+  }
   if (new TextEncoder().encode(JSON.stringify(item)).byteLength > MAX_QUICK_ADD_OUTBOX_SLOT_BYTES) {
-    throw new RangeError("The quick-add outbox envelope exceeded its reviewed storage bound.");
+    throw new RangeError("The diary outbox envelope exceeded its reviewed storage bound.");
   }
   return item;
+}
+
+/** Parse one closed, bounded envelope. Unknown fields, credentials, queries, and paths are rejected. */
+export function parseQuickAddOutboxItem(value: unknown): QuickAddOutboxItem {
+  const candidate: unknown = typeof value === "string" ? JSON.parse(value) : value;
+  if (!record(candidate)) throw new TypeError("The diary outbox envelope was invalid.");
+  const baseKeys = [
+    "version",
+    "sequence",
+    "ownerUserId",
+    "operationId",
+    "enqueuedAt",
+    "expectedTimeZone",
+    "localDate",
+    "display",
+    "body",
+    "blocked",
+  ];
+  const common = parseCommonEnvelope(candidate);
+
+  if (
+    candidate.version === 1 &&
+    exactKeys(candidate, [...baseKeys, "foodKind"]) &&
+    (candidate.foodKind === "generic" || candidate.foodKind === "branded")
+  ) {
+    return finishParsedItem({
+      version: 1,
+      ...common,
+      foodKind: candidate.foodKind,
+      body: parseLegacyBody(candidate.body),
+    });
+  }
+  if (
+    candidate.version === 2 &&
+    candidate.operationKind === "public_food" &&
+    exactKeys(candidate, [...baseKeys, "operationKind", "foodKind"]) &&
+    (candidate.foodKind === "generic" || candidate.foodKind === "branded")
+  ) {
+    return finishParsedItem({
+      version: 2,
+      ...common,
+      operationKind: "public_food",
+      foodKind: candidate.foodKind,
+      body: parsePublicFoodBody(candidate.body),
+    });
+  }
+  if (
+    candidate.version === 2 &&
+    candidate.operationKind === "recipe" &&
+    exactKeys(candidate, [...baseKeys, "operationKind", "recipeId"]) &&
+    typeof candidate.recipeId === "string" &&
+    UUID.test(candidate.recipeId)
+  ) {
+    return finishParsedItem({
+      version: 2,
+      ...common,
+      operationKind: "recipe",
+      recipeId: candidate.recipeId,
+      body: parseRecipeBody(candidate.body),
+    });
+  }
+  if (
+    candidate.version === 2 &&
+    candidate.operationKind === "custom_food" &&
+    exactKeys(candidate, [
+      ...baseKeys,
+      "operationKind",
+      "customFoodId",
+      "customFoodVersionNumber",
+    ]) &&
+    typeof candidate.customFoodId === "string" &&
+    UUID.test(candidate.customFoodId) &&
+    Number.isSafeInteger(candidate.customFoodVersionNumber) &&
+    Number(candidate.customFoodVersionNumber) >= 1
+  ) {
+    return finishParsedItem({
+      version: 2,
+      ...common,
+      operationKind: "custom_food",
+      customFoodId: candidate.customFoodId,
+      customFoodVersionNumber: Number(candidate.customFoodVersionNumber),
+      body: parseCustomFoodBody(candidate.body),
+    });
+  }
+  throw new TypeError("The diary outbox envelope discriminant was invalid.");
 }
 
 function truncate(value: string, maximum: number): string {
@@ -275,27 +578,212 @@ export function createQuickAddOutboxDraft(
   return draft;
 }
 
-export function matchesQuickAddReceipt(
+function inputPortionLabel(
+  portion:
+    | PublicFoodOutboxEnqueueInput["portion"]
+    | RecipeOutboxEnqueueInput["portion"]
+    | CustomFoodOutboxEnqueueInput["portion"],
+): string {
+  return portion.kind === "grams"
+    ? truncate(`${canonicalPositiveDecimal(portion.grams)} g`, 64)
+    : truncate(`${canonicalPositiveDecimal(portion.amount)} ${portion.servingLabel}`, 64);
+}
+
+/** Build a version-2 journal item without accepting an arbitrary URL, header, or request body. */
+export function createDiaryOutboxDraft(
+  ownerUserId: string,
+  expectedTimeZone: string,
+  input: DiaryOutboxEnqueueInput,
+  operationId: string,
+  now: Date,
+): DiaryOutboxDraft {
+  const common = {
+    version: 2 as const,
+    sequence: 0,
+    ownerUserId,
+    operationId,
+    enqueuedAt: now.toISOString(),
+    expectedTimeZone,
+    localDate: input.localDate,
+    display: {
+      foodName: truncate(
+        input.operationKind === "public_food"
+          ? input.foodName
+          : input.operationKind === "recipe"
+            ? input.recipeName
+            : input.customFoodName,
+        96,
+      ),
+      servingLabel: inputPortionLabel(input.portion),
+    },
+    blocked: null,
+  };
+  let item: QuickAddOutboxItem;
+  switch (input.operationKind) {
+    case "public_food":
+      item = parseQuickAddOutboxItem({
+        ...common,
+        operationKind: "public_food",
+        foodKind: input.foodKind,
+        body: {
+          foodVersionId: input.foodVersionId,
+          portion:
+            input.portion.kind === "serving"
+              ? {
+                  kind: "serving",
+                  servingId: input.portion.servingId,
+                  amount: canonicalPositiveDecimal(input.portion.amount),
+                }
+              : { kind: "grams", grams: canonicalPositiveDecimal(input.portion.grams) },
+          mealSlot: input.mealSlot,
+          occurredAt: input.occurredAt,
+        },
+      });
+      break;
+    case "recipe":
+      item = parseQuickAddOutboxItem({
+        ...common,
+        operationKind: "recipe",
+        recipeId: input.recipeId.toLowerCase(),
+        body: {
+          recipeVersionId: input.recipeVersionId.toLowerCase(),
+          portion:
+            input.portion.kind === "serving"
+              ? { kind: "serving", amount: canonicalPositiveDecimal(input.portion.amount) }
+              : { kind: "grams", grams: canonicalPositiveDecimal(input.portion.grams) },
+          mealSlot: input.mealSlot,
+          occurredAt: input.occurredAt,
+        },
+      });
+      break;
+    case "custom_food":
+      item = parseQuickAddOutboxItem({
+        ...common,
+        operationKind: "custom_food",
+        customFoodId: input.customFoodId.toLowerCase(),
+        customFoodVersionNumber: input.customFoodVersionNumber,
+        body: {
+          customFoodVersionId: input.customFoodVersionId,
+          portion:
+            input.portion.kind === "serving"
+              ? {
+                  kind: "serving",
+                  servingId: input.portion.servingId,
+                  amount: canonicalPositiveDecimal(input.portion.amount),
+                }
+              : { kind: "grams", grams: canonicalPositiveDecimal(input.portion.grams) },
+          mealSlot: input.mealSlot,
+          occurredAt: input.occurredAt,
+        },
+      });
+      break;
+  }
+  const { sequence: _sequence, blocked: _blocked, ...draft } = item;
+  return draft;
+}
+
+export function diaryOutboxOperationKind(item: QuickAddOutboxItem): DiaryOutboxOperationKind {
+  return item.version === 1 ? "public_food" : item.operationKind;
+}
+
+export interface DiaryOutboxRequest {
+  readonly path: string;
+  readonly body: PublicFoodLogRequestBody | RecipeLogRequestBody | CustomFoodLogRequestBody;
+}
+
+/** Derive only reviewed endpoints; persisted items never carry a URL or headers. */
+export function diaryOutboxRequest(item: QuickAddOutboxItem): DiaryOutboxRequest {
+  if (item.version === 1 || item.operationKind === "public_food") {
+    return {
+      path: "/v1/diary/entries?profileTimeZonePrecondition=v1",
+      body: item.body,
+    };
+  }
+  if (item.operationKind === "recipe") {
+    return {
+      path: `/v1/recipes/${item.recipeId}/log?profileTimeZonePrecondition=v1`,
+      body: item.body,
+    };
+  }
+  return {
+    path: `/v1/custom-foods/${item.customFoodId}/log?profileTimeZonePrecondition=v1`,
+    body: item.body,
+  };
+}
+
+function matchesFoodPortion(
+  expected: PublicFoodLogRequestBody["portion"] | CustomFoodLogRequestBody["portion"],
+  actual: unknown,
+): boolean {
+  if (!record(actual) || actual.kind !== expected.kind) return false;
+  return expected.kind === "grams"
+    ? samePositiveDecimal(expected.grams, actual.grams)
+    : actual.servingId === expected.servingId &&
+        samePositiveDecimal(expected.amount, actual.amount);
+}
+
+function matchesUuidIdentity(expected: string, actual: string): boolean {
+  return expected.toLowerCase() === actual.toLowerCase();
+}
+
+function matchesRecipePortion(expected: RecipeLogRequestBody["portion"], actual: unknown): boolean {
+  if (!record(actual) || actual.kind !== expected.kind) return false;
+  return expected.kind === "grams"
+    ? samePositiveDecimal(expected.grams, actual.grams)
+    : samePositiveDecimal(expected.amount, actual.amount);
+}
+
+export function matchesDiaryOutboxReceipt(
   item: QuickAddOutboxItem,
   status: number,
   mutation: DiaryMutationResult,
 ): boolean {
   const entry = mutation.entry;
+  if (
+    !((status === 201 && !mutation.replayed) || (status === 200 && mutation.replayed)) ||
+    entry === null ||
+    entry.mealSlot !== item.body.mealSlot ||
+    entry.occurredAt !== item.body.occurredAt ||
+    entry.localDate !== item.localDate ||
+    entry.timeZone !== item.expectedTimeZone ||
+    mutation.affectedDays.length !== 1 ||
+    mutation.affectedDays[0]?.localDate !== item.localDate
+  ) {
+    return false;
+  }
+  if (item.version === 1 || item.operationKind === "public_food") {
+    return (
+      entry.entryKind === "food" &&
+      entry.foodProvenance.kind === "public" &&
+      entry.foodVersionId === item.body.foodVersionId &&
+      matchesFoodPortion(item.body.portion, entry.portion)
+    );
+  }
+  if (item.operationKind === "recipe") {
+    return (
+      entry.entryKind === "recipe" &&
+      matchesUuidIdentity(item.recipeId, entry.recipe.id) &&
+      matchesUuidIdentity(item.body.recipeVersionId, entry.recipeVersionId) &&
+      matchesRecipePortion(item.body.portion, entry.portion)
+    );
+  }
   return (
-    ((status === 201 && !mutation.replayed) || (status === 200 && mutation.replayed)) &&
-    entry !== null &&
     entry.entryKind === "food" &&
-    entry.foodProvenance.kind === "public" &&
-    entry.foodVersionId === item.body.foodVersionId &&
-    entry.portion.kind === "serving" &&
-    entry.portion.servingId === item.body.portion.servingId &&
-    entry.portion.amount === "1" &&
-    entry.mealSlot === item.body.mealSlot &&
-    entry.occurredAt === item.body.occurredAt &&
-    entry.localDate === item.localDate &&
-    entry.timeZone === item.expectedTimeZone &&
-    mutation.affectedDays.some((day) => day.localDate === item.localDate)
+    entry.foodProvenance.kind === "private_custom" &&
+    matchesUuidIdentity(item.customFoodId, entry.foodProvenance.customFoodId) &&
+    entry.foodProvenance.customFoodVersionNumber === item.customFoodVersionNumber &&
+    entry.foodVersionId === item.body.customFoodVersionId &&
+    matchesFoodPortion(item.body.portion, entry.portion)
   );
+}
+
+/** Compatibility alias retained while existing quick-add screens migrate to typed enqueue. */
+export function matchesQuickAddReceipt(
+  item: QuickAddOutboxItem,
+  status: number,
+  mutation: DiaryMutationResult,
+): boolean {
+  return matchesDiaryOutboxReceipt(item, status, mutation);
 }
 
 export type QuickAddOutboxControllerState =
@@ -312,6 +800,7 @@ export type QuickAddOutboxControllerState =
       readonly operationId: string;
       readonly httpStatus: TerminalQuickAddStatus;
       readonly blockedReason: "terminal_http" | "time_zone_changed";
+      readonly operationKind?: DiaryOutboxOperationKind;
       readonly foodName: string;
       readonly servingLabel: string;
       readonly localDate: string;
@@ -344,7 +833,11 @@ export interface QuickAddOutboxControllerOptions {
 export interface QuickAddOutboxController {
   readonly getState: () => QuickAddOutboxControllerState;
   readonly subscribe: (listener: (state: QuickAddOutboxControllerState) => void) => () => void;
-  readonly enqueue: (input: QuickAddEnqueueInput) => Promise<QuickAddOutboxItem>;
+  readonly enqueue: (
+    input: QuickAddEnqueueInput | DiaryOutboxEnqueueInput,
+  ) => Promise<QuickAddOutboxItem>;
+  /** Preferred typed API for public-food, recipe, and custom-food log operations. */
+  readonly enqueueOperation: (input: DiaryOutboxEnqueueInput) => Promise<QuickAddOutboxItem>;
   /**
    * Release one newly persisted operation after its receipt owner is registered, then request a
    * drain. Calls without an operation ID never release a new enqueue.
@@ -379,6 +872,7 @@ function pendingState(snapshot: QuickAddOutboxSnapshot): QuickAddOutboxControlle
       operationId: head.operationId,
       httpStatus: head.blocked.status,
       blockedReason: head.blocked.reason,
+      operationKind: diaryOutboxOperationKind(head),
       foodName: head.display.foodName,
       servingLabel: head.display.servingLabel,
       localDate: head.localDate,
@@ -633,19 +1127,17 @@ export function createQuickAddOutboxController(
       activeRequest = request;
       let response: Response;
       try {
-        response = await options.fetcher(
-          apiUrl(options.apiBase, "/v1/diary/entries?profileTimeZonePrecondition=v1"),
-          {
-            method: "POST",
-            headers: authenticatedHeaders(token, {
-              "content-type": "application/json",
-              "idempotency-key": head.operationId,
-              "x-expected-profile-time-zone": head.expectedTimeZone,
-            }),
-            body: JSON.stringify(head.body),
-            signal: request.signal,
-          },
-        );
+        const outbound = diaryOutboxRequest(head);
+        response = await options.fetcher(apiUrl(options.apiBase, outbound.path), {
+          method: "POST",
+          headers: authenticatedHeaders(token, {
+            "content-type": "application/json",
+            "idempotency-key": head.operationId,
+            "x-expected-profile-time-zone": head.expectedTimeZone,
+          }),
+          body: JSON.stringify(outbound.body),
+          signal: request.signal,
+        });
       } catch {
         if (alive(capturedEpoch) && !suspended) {
           publish({
@@ -680,6 +1172,7 @@ export function createQuickAddOutboxController(
               operationId: head.operationId,
               httpStatus: response.status,
               blockedReason: reason,
+              operationKind: diaryOutboxOperationKind(head),
               foodName: head.display.foodName,
               servingLabel: head.display.servingLabel,
               localDate: head.localDate,
@@ -708,7 +1201,7 @@ export function createQuickAddOutboxController(
         }
         return;
       }
-      if (!alive(capturedEpoch) || !matchesQuickAddReceipt(head, response.status, mutation)) {
+      if (!alive(capturedEpoch) || !matchesDiaryOutboxReceipt(head, response.status, mutation)) {
         if (alive(capturedEpoch)) {
           publish({
             status: "unavailable",
@@ -770,21 +1263,32 @@ export function createQuickAddOutboxController(
     return pending;
   }
 
-  async function enqueue(input: QuickAddEnqueueInput): Promise<QuickAddOutboxItem> {
+  async function enqueue(
+    input: QuickAddEnqueueInput | DiaryOutboxEnqueueInput,
+  ): Promise<QuickAddOutboxItem> {
     if (closed || authExpired || fatalStoreFailure) {
       throw new Error("The quick-add outbox controller is fenced.");
     }
     const capturedStorageEpoch = storageEpoch;
     const operationId = options.operationId();
+    const draft =
+      "operationKind" in input
+        ? createDiaryOutboxDraft(
+            options.ownerUserId,
+            options.expectedTimeZone,
+            input,
+            operationId,
+            (options.now ?? (() => new Date()))(),
+          )
+        : createQuickAddOutboxDraft(
+            options.ownerUserId,
+            options.expectedTimeZone,
+            input,
+            operationId,
+            (options.now ?? (() => new Date()))(),
+          );
     registrationHolds.add(operationId);
     try {
-      const draft = createQuickAddOutboxDraft(
-        options.ownerUserId,
-        options.expectedTimeZone,
-        input,
-        operationId,
-        (options.now ?? (() => new Date()))(),
-      );
       const item = await options.store.append(options.ownerUserId, draft, () =>
         storageAlive(capturedStorageEpoch),
       );
@@ -825,12 +1329,13 @@ export function createQuickAddOutboxController(
         }
       }
       registrationHolds.delete(operationId);
-      if (storageAlive(capturedStorageEpoch)) {
-        const fatal = fatalStoreReason(error);
-        if (fatal) await fenceFatalStore(fatal, state.pendingCount);
-        else if (recoveredWithoutOperation) publish(pendingState(recoveredWithoutOperation));
-        else fail(error, "storage", state.pendingCount);
+      if (!storageAlive(capturedStorageEpoch)) {
+        throw new QuickAddEnqueueAmbiguousError(operationId, error);
       }
+      const fatal = fatalStoreReason(error);
+      if (fatal) await fenceFatalStore(fatal, state.pendingCount);
+      else if (recoveredWithoutOperation) publish(pendingState(recoveredWithoutOperation));
+      else fail(error, "storage", state.pendingCount);
       throw error;
     }
   }
@@ -898,6 +1403,7 @@ export function createQuickAddOutboxController(
       return () => listeners.delete(listener);
     },
     enqueue,
+    enqueueOperation: enqueue,
     requestDrain,
     retryBlockedHead,
     discardBlockedHead,

@@ -1,4 +1,9 @@
-import { parseDiaryMutation, parseDiaryPage } from "../../../lib/diary";
+import {
+  isLocalDate,
+  isSupportedTimeZone,
+  parseDiaryMutation,
+  parseDiaryPage,
+} from "../../../lib/diary";
 import {
   authenticatedFetch,
   isTrustedMutationRequest,
@@ -54,24 +59,54 @@ async function mutationResponse(upstream: Response): Promise<Response> {
   }
 }
 
+function guardedDiaryCreateTimeZone(request: Request): string | null {
+  const query = new URL(request.url).searchParams;
+  const allowed = new Set(["date", "profileTimeZonePrecondition"]);
+  if ([...query.keys()].some((key) => !allowed.has(key))) return null;
+  const dates = query.getAll("date");
+  const markers = query.getAll("profileTimeZonePrecondition");
+  const expectedTimeZone = request.headers.get("x-expected-profile-time-zone");
+  if (
+    dates.length !== 1 ||
+    !isLocalDate(dates[0]) ||
+    markers.length !== 1 ||
+    markers[0] !== "v1" ||
+    expectedTimeZone === null ||
+    !isSupportedTimeZone(expectedTimeZone)
+  ) {
+    return null;
+  }
+  return expectedTimeZone;
+}
+
 export async function proxyDiaryCreate(request: Request): Promise<Response> {
   if (!isTrustedMutationRequest(request)) {
     return privateJsonError(403, "This diary request did not come from this application.");
   }
-  const date = validatedDiaryDate(request);
+  const expectedTimeZone = guardedDiaryCreateTimeZone(request);
   const operationId = validatedIdempotencyKey(request);
-  if (!date || !operationId) return privateJsonError(400, "The diary request is invalid.");
+  if (!expectedTimeZone || !operationId) {
+    return privateJsonError(400, "The diary request is invalid.");
+  }
   let body: unknown;
   try {
     body = await readBoundedJson(request, 16_384);
   } catch {
     return privateJsonError(400, "The diary request must contain valid JSON.");
   }
-  const upstream = await authenticatedFetch(request, "/v1/diary/entries", {
-    method: "POST",
-    headers: { "content-type": "application/json", "idempotency-key": operationId },
-    body: JSON.stringify(body),
-  });
+  const upstream = await authenticatedFetch(
+    request,
+    "/v1/diary/entries?profileTimeZonePrecondition=v1",
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": operationId,
+        "x-expected-profile-time-zone": expectedTimeZone,
+      },
+      body: JSON.stringify(body),
+    },
+  );
   return mutationResponse(upstream);
 }
 

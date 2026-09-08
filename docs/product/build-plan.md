@@ -88,9 +88,10 @@ cross-client, and accessibility acceptance still gate release. It must not be
 described as clinically reviewed, government-endorsed, or commercially
 available while those gates are open. M3A's bounded multi-day nutrition report
 and charts are source-complete and have passed the ordered local validation
-runbook. M1C's general daily-loop offline reliability is now the next safe
-user-visible source priority while external M0/M2 work remains separately
-gated. Production-service gaps follow. Arbitrary add/delete/hide group identities remain a future migration
+runbook. M1C is split into M1C-A durable logging and M1C-B durable corrections
+plus atomic entry ordering. M1C-A is the current safe user-visible source
+priority while external M0/M2 work remains separately gated; M1C does not close
+until both slices pass. Production-service gaps follow. Arbitrary add/delete/hide group identities remain a future migration
 milestone rather than part of M1B-G. M0's authenticated acquisition, review,
 and activation lane proceeds in parallel when its separately approved external
 work is available. M2 still requires both M0 and M1 acceptance.
@@ -287,21 +288,26 @@ Each retains its separate explicit-approval gate.
    acceptance. A future staggered pagination deployment must remain API-first as
    specified by ADR 0012.
 
-   A bounded native public-food quick-add outbox is implemented locally. It
-   persists at most 50 owner-bound, create-only operations in device-only
-   SecureStore before sending, replays one exact idempotent request at a time in
-   the foreground, and blocks at a terminal FIFO head until exact retry or
-   confirmed head-only discard. A paired API query marker and expected-profile-
-   time-zone header fail closed on an older server and prevent a delayed first
-   delivery from silently moving to a different local day. Sign-out,
-   unauthorized-session, accepted-erasure, owner-mismatch, and corruption paths
-   participate in the retryable private-device cleanup ledger. This closes only
-   the public-food, default-serving, amount-one native create source slice.
-   Signed iOS/Android crash-boundary and lifecycle evidence remains open, as do
-   offline edits, deletes, repeats, recipes, custom foods, quantities, web
-   persistence, background delivery, manual reorder, and cross-client
-   convergence. A staggered deployment must be API-first as specified by ADR
-   0013.
+   M1C-A generalizes the bounded native public-food quick-add outbox into one
+   durable diary-log FIFO for positive default-serving or gram quantities of
+   public foods, exact recipe versions, and exact private custom-food versions.
+   It preserves the existing 50 owner-bound device-only SecureStore slots and
+   legacy version-1 items, persists before sending, replays one exact
+   idempotent request at a time in the foreground, and blocks at a terminal head
+   until exact retry or confirmed head-only discard. Every new operation uses a
+   paired API query marker and expected-profile-time-zone header so an older
+   server fails closed and a delayed first delivery cannot silently move to a
+   different local day. Sign-out, unauthorized-session, accepted-erasure,
+   owner-mismatch, and corruption paths keep the same retryable private-device
+   cleanup ledger. Web and mobile public-food search also accept a positive
+   default-serving amount or grams. Web recipe and custom-food logging remain legacy
+   online-only flows: they have neither durable browser storage nor the paired
+   profile-time-zone precondition, retain a concurrent profile-time-zone race, and
+   are excluded from M1C-A cross-client convergence. Signed iOS/Android crash-boundary,
+   lifecycle, and accessibility evidence remains open, as do offline catalogue
+   and diary reads, web persistence, background delivery, and M1C-B's durable
+   repeat/edit/delete plus atomic manual reorder. Rollout remains API-first as
+   specified by ADR 0023; ADR 0013 remains the historical first slice.
 
    Additive email verification is implemented locally across PostgreSQL, an
    authenticated request route, a public confirmation route, web, and mobile.
@@ -357,13 +363,24 @@ Each retains its separate explicit-approval gate.
    they observe that capability; tolerant clients are staged; only then may
    server output become required.
 
-   M1C is the next source slice: extend durable, bounded, owner-fenced offline
-   operation beyond the existing native public-food quick-add envelope to the
-   normal daily loop—edits, deletes, repeats, recipes, custom foods, quantities,
-   and deliberate reordering. Acceptance requires crash/restart-safe FIFO
-   semantics, explicit terminal-conflict recovery, profile/time-zone drift
-   handling, and cross-client convergence evidence. It does not authorize
-   background delivery, phone exposure, signed builds, or controlled beta.
+   M1C-A is durable logging parity: one bounded, owner-fenced native FIFO for
+   quantity-aware public-food, exact recipe-version, and exact custom-food-
+   version creates. Acceptance requires lossless legacy-item replay,
+   persist-before-send across crash/restart boundaries, mixed-kind FIFO order,
+   explicit terminal-head recovery, atomic profile-time-zone drift rejection,
+   exact receipts, cleanup, and browser/mobile public-food convergence. Browser
+   recipe/custom-food logging remains legacy online-only and unguarded against a
+   concurrent profile-time-zone change; it is explicitly outside M1C-A. M1C-A does
+   not claim an offline catalogue or a readable offline diary after cold restart.
+
+   M1C-B follows with durable repeat, edit, and delete plus a new day-revision-
+   bound atomic entry-ordering protocol. It must define correction dependencies,
+   stronger subject/revision receipts, note storage bounds, all-or-nothing meal
+   ordering, stale-day behavior, and cross-client convergence. A series of
+   scalar `position` patches is not accepted as atomic reorder evidence. M1C
+   remains open until M1C-B and signed-device acceptance pass. Neither slice
+   authorizes background delivery, phone exposure, signed builds, or controlled
+   beta.
 3. **M2 — controlled beta:** source-only hosting and signed-build preparation may
    proceed in parallel, but real execution still requires reviewed hosting and
    digest-pinned seven-image
@@ -601,13 +618,13 @@ distinct through the clients.
 The checked-in food-release candidates are still deliberately non-promotable,
 so diary integration evidence uses a synthetic promoted catalogue fixture rather
 than claiming a live USDA or CNF release. Production password-recovery
-acceptance, general cross-restart offline mutation/reorder support, and signed-
-device preview testing remain controlled-beta gates rather than hidden claims
-of this milestone. The bounded native public-food quick-add path is the sole
-durable
-exception: it stores a closed create-only envelope, never a bearer token, search
-query, private note, arbitrary request, or response body. It preserves exact
-FIFO replay across restarts but does not claim general offline synchronization.
+acceptance, M1C-B cross-restart correction/reorder support, and signed-device
+preview testing remain controlled-beta gates rather than hidden claims of this
+milestone. M1C-A's bounded native diary-log path is the sole durable exception:
+it stores a closed public-food/recipe/custom-food create union, never a bearer
+token, search query, private note, arbitrary request, or response body. It
+preserves exact mixed-kind FIFO replay across restarts but does not claim an
+offline catalogue, an offline diary cache, or general offline synchronization.
 Account
 export and deletion are implemented and locally drilled under the retention and
 privacy milestone; they are not production evidence. Diary screens now opt into

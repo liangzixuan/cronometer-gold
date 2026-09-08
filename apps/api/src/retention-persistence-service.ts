@@ -38,6 +38,7 @@ import {
   DiaryIdempotencyConflictError,
   DiaryLockedError,
   DiaryNotFoundError,
+  DiaryTimeZoneChangedError,
   DiaryValidationError,
   deleteBiometricEvent,
   disconnectPlatformIntegration,
@@ -78,6 +79,7 @@ import {
   revokeReminderSchedule,
   type TrendNutrientRecord,
 } from "@nutrition-tracker/db";
+import { DiaryTimeZoneChangedServiceError } from "./modules/diary/diary.routes.js";
 import { verifyP256DerSignature } from "./modules/retention/device-signatures.js";
 import {
   RetentionConsentRequiredServiceError,
@@ -368,6 +370,7 @@ function mapPersistenceError(error: unknown): never {
     error instanceof DiaryIdempotencyConflictError
   )
     throw new RetentionIdempotencyConflictServiceError();
+  if (error instanceof DiaryTimeZoneChangedError) throw new DiaryTimeZoneChangedServiceError();
   if (error instanceof RetentionImportConflictError)
     throw new RetentionImportConflictServiceError();
   if (error instanceof RetentionConsentRequiredError)
@@ -566,6 +569,9 @@ export class DatabaseRetentionService implements RetentionService {
     try {
       const result = await createFoodDiaryEntry(this.#database, {
         ...operation(input),
+        ...(input.expectedProfileTimeZone === undefined
+          ? {}
+          : { expectedProfileTimeZone: input.expectedProfileTimeZone }),
         expectedCustomFoodId: input.customFoodId,
         foodVersionId: input.entry.customFoodVersionId,
         mealSlot: input.entry.mealSlot,

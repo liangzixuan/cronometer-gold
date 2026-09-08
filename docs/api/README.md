@@ -8,15 +8,17 @@
   `requestId`, and optional structured `issues`.
 - Diary create/update/delete endpoints require a UUID `Idempotency-Key`; an exact
   replay returns the original result and key reuse with changed input conflicts.
-- A native public-food create may opt into the atomic profile-time-zone
-  precondition only by sending both
+- A public-food create, exact recipe-version log, or exact private custom-food-
+  version log may opt into the atomic profile-time-zone precondition only by
+  sending both
   `profileTimeZonePrecondition=v1` and
   `X-Expected-Profile-Time-Zone`. Either signal alone is invalid. A first
   delivery whose canonical profile zone changed returns
   `409 DIARY_TIME_ZONE_CHANGED` without a diary write; an exact stored replay is
   returned before that comparison. Requests with neither signal preserve the
-  legacy digest and behavior. The query marker makes rollout fail closed because
-  pre-feature servers reject it; backend convergence precedes guarded clients.
+  endpoint's legacy digest and behavior. The query marker makes rollout fail
+  closed because pre-feature servers reject it; backend convergence precedes
+  guarded clients.
 - Recipe create/revise/log and goal create/revise endpoints use the same
   digest-bound idempotency rule. Recipe and goal revisions also require a quoted,
   strong `If-Match` root revision; a diary recipe log additionally pins the exact
@@ -213,6 +215,21 @@ The authenticated recipe surface is `GET|POST /v1/recipes`,
 recipe revision resolves every ingredient to an immutable food or nested-recipe
 version, records final yield and the identity-retention assumption, and returns
 reason-counted nutrient coverage plus transitive source attribution.
+
+The recipe-log route accepts the paired profile-time-zone precondition described
+above. The expected canonical zone participates in its guarded idempotency
+digest; exact stored replay precedes the zone comparison, while a first delivery
+after drift returns `409 DIARY_TIME_ZONE_CHANGED` without a diary write.
+
+The authenticated private custom-food surface includes
+`GET|POST /v1/custom-foods`, `POST /v1/custom-foods/:customFoodId/revisions`,
+`DELETE /v1/custom-foods/:customFoodId`, and
+`POST /v1/custom-foods/:customFoodId/log`. A log pins the submitted
+`customFoodVersionId`; its response diary entry exposes the owner-scoped custom-
+food root ID and immutable version number. The log route accepts the same paired
+profile-time-zone precondition, guarded digest, replay-before-drift order, and
+typed no-write conflict as recipe and public-food logging. Create, revise, and
+archive keep their existing idempotency and strong root-revision semantics.
 
 The authenticated goal surface is `GET /v1/goals/current?date=`,
 `POST /v1/goals`, `POST /v1/goals/:goalId/revisions`, and

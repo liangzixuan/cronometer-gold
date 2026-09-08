@@ -47,6 +47,7 @@ import {
 } from "./src/diary/diary";
 import {
   createQuickAddOutboxController,
+  diaryOutboxOperationKind,
   type FatalQuickAddOutboxStoreReason,
   type QuickAddOutboxController,
   type QuickAddOutboxControllerState,
@@ -155,6 +156,7 @@ function quickAddOutboxState(snapshot: QuickAddOutboxSnapshot): QuickAddOutboxCo
     operationId: head.operationId,
     httpStatus: head.blocked.status,
     blockedReason: head.blocked.reason,
+    operationKind: diaryOutboxOperationKind(head),
     foodName: head.display.foodName,
     servingLabel: head.display.servingLabel,
     localDate: head.localDate,
@@ -229,6 +231,7 @@ function TodayRoute(props: AuthenticatedAppProps) {
       profileRevision={props.session.profile.revision}
       profileTimeZone={props.session.profile.timeZone}
       quickAddOutboxState={props.quickAddOutboxState}
+      quickAddOutboxController={props.quickAddOutboxController}
       sessionEpoch={props.sessionEpoch}
       subscribeQuickAddReceipts={props.subscribeQuickAddReceipts}
       {...(route.params?.refreshKey ? { refreshKey: route.params.refreshKey } : {})}
@@ -266,6 +269,9 @@ function HealthRoute(
       onUnauthorized={props.onUnauthorized}
       diaryGroups={props.session.profile.diaryGroups}
       profileTimeZone={props.session.profile.timeZone}
+      quickAddOutboxController={props.quickAddOutboxController}
+      quickAddOutboxState={props.quickAddOutboxState}
+      subscribeQuickAddReceipts={props.subscribeQuickAddReceipts}
     />
   );
 }
@@ -286,6 +292,9 @@ function RecipesRoute(props: AuthenticatedAppProps) {
       onUnauthorized={props.onUnauthorized}
       diaryGroups={props.session.profile.diaryGroups}
       profileTimeZone={props.session.profile.timeZone}
+      quickAddOutboxController={props.quickAddOutboxController}
+      quickAddOutboxState={props.quickAddOutboxState}
+      subscribeQuickAddReceipts={props.subscribeQuickAddReceipts}
     />
   );
 }
@@ -357,7 +366,7 @@ function SearchRoute(props: AuthenticatedAppProps) {
           refreshKey: String(Date.now()),
         })
       }
-      profileTimeZone={route.params.timeZone}
+      profileTimeZone={props.session.profile.timeZone}
       diaryGroups={props.session.profile.diaryGroups}
       quickAddOutboxController={props.quickAddOutboxController}
       quickAddOutboxState={props.quickAddOutboxState}
@@ -568,7 +577,7 @@ export default function App() {
           !(error instanceof QuickAddOutboxCorruptError)
         ) {
           throw new QuickAddOutboxPreparationError(
-            "Protected queued diary adds could not be prepared on this device.",
+            "Protected queued diary logs could not be prepared on this device.",
           );
         }
         reset = true;
@@ -577,7 +586,7 @@ export default function App() {
           snapshot = await quickAddOutboxStore.snapshot(ownerUserId);
         } catch {
           throw new QuickAddOutboxPreparationError(
-            "Protected queued diary adds could not be prepared on this device.",
+            "Protected queued diary logs could not be prepared on this device.",
           );
         }
       }
@@ -886,7 +895,7 @@ export default function App() {
             await quickAddOutboxStore.clear();
           } catch {
             throw new QuickAddOutboxPreparationError(
-              "Protected queued diary adds could not be cleared on this device.",
+              "Protected queued diary logs could not be cleared on this device.",
             );
           }
         }
@@ -1057,7 +1066,7 @@ export default function App() {
             Private-device cleanup needs attention
           </Text>
           <Text style={styles.status}>
-            Private screens are closed, but one or more queued diary adds, local reminders, health
+            Private screens are closed, but one or more queued diary logs, local reminders, health
             cursors, device records, signing keys, or credentials could not be removed. Retry before
             handing this device to someone else.
           </Text>
@@ -1096,11 +1105,11 @@ export default function App() {
       ) : outboxResetWarning ? (
         <SafeAreaView style={styles.center}>
           <Text accessibilityRole="header" style={styles.errorTitle}>
-            Queued diary adds were reset
+            Queued diary logs were reset
           </Text>
           <Text style={styles.status}>
-            Protected queued adds on this device could not be safely read or attributed to this
-            account and were removed before private screens opened.
+            Protected queued diary logs on this device could not be safely read or attributed to
+            this account and were removed before private screens opened.
           </Text>
           <Pressable
             accessibilityRole="button"
@@ -1123,7 +1132,7 @@ export default function App() {
             {erasureRecoveryPending
               ? "The exact erasure request and session proof were preserved. Reconnect and retry; do not clear this device until the one-purpose status capability is recovered."
               : outboxPreparationError
-                ? "The app could not safely read or clear protected queued diary adds, so private screens remain closed. Retry first. Signing out on this device will retry removing the queue."
+                ? "The app could not safely read or clear protected queued diary logs, so private screens remain closed. Retry first. Signing out on this device will retry removing the queue."
                 : "Your saved credential was preserved. Reconnect and try again, or sign out on this device."}
           </Text>
           <Pressable
@@ -1179,7 +1188,7 @@ export default function App() {
       ) : accessToken && session ? (
         <SafeAreaView style={styles.center}>
           <ActivityIndicator color={palette.forest} size="large" />
-          <Text style={styles.status}>Preparing protected queued diary adds…</Text>
+          <Text style={styles.status}>Preparing protected queued diary logs…</Text>
         </SafeAreaView>
       ) : (
         <AuthScreen apiBase={apiBase} onAuthenticated={authenticated} />

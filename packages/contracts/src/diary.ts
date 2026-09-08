@@ -185,14 +185,18 @@ export interface CreateDiaryEntryRequest {
   readonly position?: number;
 }
 
-/** Optional guarded-create precondition; unrelated standard headers remain allowed. */
-export interface CreateDiaryEntryHeaders {
+/** Optional guarded diary-day derivation precondition; standard headers remain allowed. */
+export interface ProfileTimeZonePreconditionHeaders {
   readonly "x-expected-profile-time-zone"?: string;
 }
 
-export interface CreateDiaryEntryQuery {
+export interface ProfileTimeZonePreconditionQuery {
   readonly profileTimeZonePrecondition?: "v1";
 }
+
+/** Backward-compatible names retained for the original public-food create route. */
+export type CreateDiaryEntryHeaders = ProfileTimeZonePreconditionHeaders;
+export type CreateDiaryEntryQuery = ProfileTimeZonePreconditionQuery;
 
 export interface UpdateDiaryEntryRequest {
   readonly portion?: DiaryMutablePortion;
@@ -700,8 +704,7 @@ export const createDiaryEntryRequestSchema = {
   },
 } as const;
 
-export const createDiaryEntryHeadersSchema = {
-  $id: "CreateDiaryEntryHeaders",
+export const profileTimeZonePreconditionHeadersSchema = {
   type: "object",
   additionalProperties: true,
   properties: {
@@ -709,13 +712,22 @@ export const createDiaryEntryHeadersSchema = {
   },
 } as const;
 
-export const createDiaryEntryQuerySchema = {
-  $id: "CreateDiaryEntryQuery",
+export const profileTimeZonePreconditionQuerySchema = {
   type: "object",
   additionalProperties: false,
   properties: {
     profileTimeZonePrecondition: { type: "string", const: "v1" },
   },
+} as const;
+
+export const createDiaryEntryHeadersSchema = {
+  $id: "CreateDiaryEntryHeaders",
+  ...profileTimeZonePreconditionHeadersSchema,
+} as const;
+
+export const createDiaryEntryQuerySchema = {
+  $id: "CreateDiaryEntryQuery",
+  ...profileTimeZonePreconditionQuerySchema,
 } as const;
 
 export const createRecipeDiaryEntryRequestSchema = {

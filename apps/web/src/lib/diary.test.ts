@@ -714,7 +714,7 @@ describe("local diary dates", () => {
     const pending = new Map<string, ReturnType<typeof prepareQuickAddOperation>>();
     const input = {
       foodVersionId: "202",
-      servingId: "303",
+      portion: { kind: "serving" as const, servingId: "303", amount: "1" },
       localDate: "2026-11-01",
       mealSlot: "breakfast" as const,
       timeZone: "America/Chicago",
@@ -735,6 +735,17 @@ describe("local diary dates", () => {
     expect(retry).toBe(first);
     expect(JSON.stringify(retry.body)).toBe(JSON.stringify(first.body));
     expect(retry.operationId).toBe("a7183708-7725-4b7c-a180-58e03ca01234");
+    expect(retry.expectedTimeZone).toBe("America/Chicago");
+
+    const retryAfterProfileZoneChange = prepareQuickAddOperation(
+      pending,
+      { ...input, timeZone: "Pacific/Kiritimati" },
+      new Date("2026-11-01T07:32:00.000Z"),
+      () => "f2a47c26-8e02-4057-8b48-cda619302452",
+    );
+    expect(retryAfterProfileZoneChange).toBe(first);
+    expect(retryAfterProfileZoneChange.expectedTimeZone).toBe("America/Chicago");
+    expect(JSON.stringify(retryAfterProfileZoneChange.body)).toBe(JSON.stringify(first.body));
 
     const secondIntent = prepareQuickAddOperation(
       pending,
@@ -754,5 +765,72 @@ describe("local diary dates", () => {
       () => "93f88742-d39c-4f6c-95a1-8b292b12a93d",
     );
     expect(firstAfterSecond).toBe(first);
+  });
+
+  it("binds serving or gram quantity into an exact independent quick-add intent", () => {
+    const pending = new Map<string, ReturnType<typeof prepareQuickAddOperation>>();
+    const common = {
+      foodVersionId: "202",
+      localDate: "2026-11-01",
+      mealSlot: "breakfast" as const,
+      timeZone: "America/Chicago",
+    };
+    const serving = prepareQuickAddOperation(
+      pending,
+      {
+        ...common,
+        portion: { kind: "serving", servingId: "303", amount: "2.500" },
+      },
+      new Date("2026-11-01T07:30:45.123Z"),
+      () => "a7183708-7725-4b7c-a180-58e03ca01234",
+    );
+    pending.set(serving.intentKey, serving);
+    const grams = prepareQuickAddOperation(
+      pending,
+      { ...common, portion: { kind: "grams", grams: "125.500" } },
+      new Date("2026-11-01T07:30:45.123Z"),
+      () => "f2a47c26-8e02-4057-8b48-cda619302452",
+    );
+    const anotherServingAmount = prepareQuickAddOperation(
+      pending,
+      {
+        ...common,
+        portion: { kind: "serving", servingId: "303", amount: "3.000" },
+      },
+      new Date("2026-11-01T07:30:45.123Z"),
+      () => "93f88742-d39c-4f6c-95a1-8b292b12a93d",
+    );
+
+    expect(serving.body.portion).toEqual({ kind: "serving", servingId: "303", amount: "2.5" });
+    expect(grams.body.portion).toEqual({ kind: "grams", grams: "125.5" });
+    expect(grams.intentKey).not.toBe(serving.intentKey);
+    expect(anotherServingAmount.intentKey).not.toBe(serving.intentKey);
+    expect(
+      prepareQuickAddOperation(
+        pending,
+        {
+          ...common,
+          portion: { kind: "serving", servingId: "303", amount: "2.5" },
+        },
+        new Date("2026-11-01T07:31:00.000Z"),
+        () => "7ab34784-068d-4a3a-ac42-205058e35526",
+      ),
+    ).toBe(serving);
+    expect(() =>
+      prepareQuickAddOperation(
+        pending,
+        { ...common, portion: { kind: "grams", grams: "0" } },
+        new Date("2026-11-01T07:30:45.123Z"),
+        () => "7ab34784-068d-4a3a-ac42-205058e35526",
+      ),
+    ).toThrow(RangeError);
+    expect(() =>
+      prepareQuickAddOperation(
+        pending,
+        { ...common, portion: { kind: "grams", grams: "01" } },
+        new Date("2026-11-01T07:30:45.123Z"),
+        () => "7ab34784-068d-4a3a-ac42-205058e35526",
+      ),
+    ).toThrow(RangeError);
   });
 });

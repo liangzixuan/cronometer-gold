@@ -299,6 +299,7 @@ export interface CreateRecipeDiaryEntryInput {
   readonly clientOperationId: string;
   readonly requestDigest: string;
   readonly occurredAt: string;
+  readonly expectedProfileTimeZone?: string;
   readonly recipeId: string;
   readonly recipeVersionId: string;
   readonly portion:
@@ -454,6 +455,7 @@ export async function createRecipeDiaryEntry(
   input: CreateRecipeDiaryEntryInput,
 ): Promise<DiaryRecipeMutationResult> {
   validateOperationIdentity(input.clientOperationId, input.requestDigest);
+  const expectedProfileTimeZone = optionalExpectedProfileTimeZone(input.expectedProfileTimeZone);
   validateMealSlot(input.mealSlot);
   validateMutableDiaryNote(input.note);
   return database
@@ -461,7 +463,7 @@ export async function createRecipeDiaryEntry(
     .setIsolationLevel("read committed")
     .execute(async (transaction) => {
       await lockUserDiary(transaction, input.userId);
-      const profile = await requireWritableProfile(transaction, input.userId);
+      await lockActiveDiaryUser(transaction, input.userId);
       const replay = await readOperationReplay(
         transaction,
         input.userId,
@@ -472,6 +474,10 @@ export async function createRecipeDiaryEntry(
       if (replay) {
         if (replay.entry.kind !== "recipe") throw new DiaryIdempotencyConflictError();
         return { ...replay, entry: replay.entry };
+      }
+      const profile = await requireLockedProfile(transaction, input.userId);
+      if (expectedProfileTimeZone !== undefined && profile.timeZone !== expectedProfileTimeZone) {
+        throw new DiaryTimeZoneChangedError();
       }
       const coordinates = deriveLocalCoordinates(input.occurredAt, profile.timeZone);
       let facts: Awaited<ReturnType<typeof loadRecipeDiaryFacts>>;
@@ -1293,6 +1299,9 @@ async function loadFoodFacts(
     .where("version.id", "=", foodVersionId)
     .executeTakeFirst();
   const isCustom = custom?.kind === "custom";
+  if (expectedCustomFoodId !== undefined && !isCustom) {
+    throw new DiaryValidationError("Food version is unavailable for diary logging");
+  }
   if (isCustom) {
     if (
       custom.owner_user_id !== userId ||

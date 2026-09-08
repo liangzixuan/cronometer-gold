@@ -5,7 +5,11 @@ import {
   createRecipeDiaryEntryRequestSchema,
   type DiaryMutationResponse,
   diaryMutationResponseSchema,
+  type ProfileTimeZonePreconditionHeaders,
+  type ProfileTimeZonePreconditionQuery,
   problemDetailsSchema,
+  profileTimeZonePreconditionHeadersSchema,
+  profileTimeZonePreconditionQuerySchema,
   type Recipe,
   type RecipeDraftRequest,
   type RecipeListResponse,
@@ -25,6 +29,10 @@ import { authenticatedPrincipal, requireAuthentication } from "../../http/authen
 import { requireIdempotencyKey, requireRevision, revisionEtag } from "../../http/preconditions.js";
 import { HttpProblem } from "../../http/problem.js";
 import {
+  expectedProfileTimeZone,
+  rejectUnpairedProfileTimeZonePrecondition,
+} from "../../http/profile-time-zone-precondition.js";
+import {
   rejectUnexpectedBodyKeys,
   rejectUnexpectedQueryKeys,
 } from "../../http/request-validation.js";
@@ -35,6 +43,7 @@ import {
   DiaryIdempotencyConflictServiceError,
   DiaryLockedServiceError,
   DiaryNotFoundServiceError,
+  DiaryTimeZoneChangedServiceError,
   DiaryValidationServiceError,
 } from "../diary/diary.routes.js";
 
@@ -71,6 +80,7 @@ export interface RecipeService {
     readonly recipeId: string;
     readonly clientOperationId: string;
     readonly requestDigest: string;
+    readonly expectedProfileTimeZone?: string;
     readonly entry: CreateRecipeDiaryEntryRequest;
     readonly signal?: AbortSignal;
   }): Promise<DiaryMutationResponse>;
@@ -137,6 +147,16 @@ function mapRecipeError(error: unknown): HttpProblem {
       code: "CONFLICT",
       title: "Conflict",
       detail: "The Idempotency-Key was already used for a different recipe operation.",
+      expose: true,
+    });
+  }
+  if (error instanceof DiaryTimeZoneChangedServiceError) {
+    return new HttpProblem({
+      statusCode: 409,
+      code: "DIARY_TIME_ZONE_CHANGED",
+      title: "Conflict",
+      detail:
+        "The profile time zone changed before the diary entry was saved. Review the date and try again.",
       expose: true,
     });
   }
@@ -538,12 +558,17 @@ export const recipeRoutes: FastifyPluginAsync<RecipeRoutesOptions> = async (app,
     },
   );
 
-  app.post<{ Params: RecipeParams; Body: CreateRecipeDiaryEntryRequest }>(
+  app.post<{
+    Params: RecipeParams;
+    Body: CreateRecipeDiaryEntryRequest;
+    Headers: ProfileTimeZonePreconditionHeaders;
+    Querystring: ProfileTimeZonePreconditionQuery;
+  }>(
     "/:recipeId/log",
     {
       preHandler: requireAuth,
       preValidation: [
-        rejectUnexpectedQueryKeys([]),
+        rejectUnexpectedQueryKeys(["profileTimeZonePrecondition"]),
         rejectUnexpectedBodyKeys([
           "recipeVersionId",
           "portion",
@@ -551,9 +576,12 @@ export const recipeRoutes: FastifyPluginAsync<RecipeRoutesOptions> = async (app,
           "occurredAt",
           "position",
         ]),
+        rejectUnpairedProfileTimeZonePrecondition,
       ],
       schema: {
         params: recipeParamsSchema,
+        headers: profileTimeZonePreconditionHeadersSchema,
+        querystring: profileTimeZonePreconditionQuerySchema,
         body: createRecipeDiaryEntryRequestSchema,
         response: {
           200: diaryMutationResponseSchema,
@@ -573,6 +601,9 @@ export const recipeRoutes: FastifyPluginAsync<RecipeRoutesOptions> = async (app,
       const clientOperationId = requireIdempotencyKey(request.headers["idempotency-key"]);
       try {
         const digestInput = { recipeId: request.params.recipeId, entry: request.body };
+        const expectedTimeZone = expectedProfileTimeZone(
+          request.headers["x-expected-profile-time-zone"],
+        );
         const result = await withRequestSignal(
           request,
           (signal) =>
@@ -580,7 +611,16 @@ export const recipeRoutes: FastifyPluginAsync<RecipeRoutesOptions> = async (app,
               userId: principal.userId,
               recipeId: request.params.recipeId,
               clientOperationId,
-              requestDigest: requestDigest("log-recipe", digestInput),
+              requestDigest:
+                expectedTimeZone === undefined
+                  ? requestDigest("log-recipe", digestInput)
+                  : requestDigest("log-recipe-with-expected-profile-time-zone-v1", {
+                      ...digestInput,
+                      expectedProfileTimeZone: expectedTimeZone,
+                    }),
+              ...(expectedTimeZone === undefined
+                ? {}
+                : { expectedProfileTimeZone: expectedTimeZone }),
               entry: request.body,
               signal,
             }) ?? Promise.reject(unavailable()),

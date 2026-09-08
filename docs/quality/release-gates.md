@@ -253,15 +253,28 @@ acceptance.
   signed-device acceptance.
 - Core generic foods meet the agreed nutrient-completeness definition at least
   90% of the time.
-- The bounded native public-food create outbox proves a 50-item encrypted,
-  owner-bound FIFO; persist-before-send and exact idempotent replay across every
-  slot/manifest crash boundary; one foreground request; selected-day
-  time-zone preconditions; terminal-head review; corruption/overflow failure;
-  and retryable sign-out, unauthorized, and erasure cleanup with no duplicate
-  diary entry.
-- General offline mutation retry/reorder acceptance still covers supported
-  edits, deletes, repeats, recipes, custom foods, manual reorder, and cross-client
-  convergence; the create-only outbox does not satisfy that broader gate.
+- M1C-A's native diary-log outbox proves one 50-item encrypted, owner-bound FIFO
+  across legacy version-1 quick adds and version-2 public-food, exact recipe-
+  version, and exact custom-food-version creates. Evidence covers positive
+  default-serving and gram quantities; lossless legacy replay; persist-before-
+  send and exact idempotent replay across every slot/manifest crash boundary;
+  one foreground request; a shared capacity with no eviction; mixed-kind order;
+  paired selected-day time-zone preconditions on every new endpoint; exact
+  kind/version/portion/meal/instant/date/zone/affected-day receipts; malformed
+  success retention; terminal-head retry and confirmed discard; corruption and
+  overflow failure; and retryable sign-out, unauthorized, erasure, and owner-
+  mismatch cleanup with no duplicate diary entry. Browser refresh must observe
+  the same confirmed entry and totals. Browser/mobile convergence in M1C-A is limited
+  to public-food quantities and observing native-confirmed entries: browser recipe and
+  custom-food logging remain legacy online-only, have no paired profile-time-zone
+  precondition, and are outside this gate. Source evidence does not substitute for
+  signed iOS/Android lifecycle, keystore, OS-kill, or accessibility acceptance.
+- M1C-B general offline correction and ordering acceptance still covers durable
+  repeat, edits, deletes, note bounds and dependencies, plus one day-revision-
+  bound atomic manual reorder protocol and cross-client convergence. M1C-A does
+  not provide an offline catalogue, readable offline diary cache, web
+  persistence, browser recipe/custom-food time-zone convergence, background delivery,
+  or that broader correction/reorder gate.
 - Email verification proves digest-only token storage, current-email binding,
   prior-link preservation on pre-acceptance delivery failure, concurrent resend
   ordering, acceptance-to-commit confirmation fencing, expiry, atomic one-time

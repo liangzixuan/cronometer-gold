@@ -206,11 +206,17 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
     if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
     const fixture = await createFixture(databaseUrl, "retention_custom");
     try {
-      const created = await createCustomFood(fixture.database, {
+      const createInput = {
         clientOperationId: randomUUID(),
         food: customDraft(fixture.nutrients.energyId, fixture.nutrients.proteinId, "Original"),
         requestDigest: digest("1"),
         userId: fixture.owner.userId,
+      };
+      const created = await createCustomFood(fixture.database, createInput);
+      expect(created.replayed).toBe(false);
+      await expect(createCustomFood(fixture.database, createInput)).resolves.toMatchObject({
+        food: { id: created.food.id },
+        replayed: true,
       });
       expect(created.food.currentVersion).toMatchObject({
         brandName: "Owner brand",
@@ -271,13 +277,19 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         versionNumber: 1,
       });
 
-      const revised = await reviseCustomFood(fixture.database, {
+      const reviseInput = {
         clientOperationId: randomUUID(),
         customFoodId: created.food.id,
         expectedRevision: "1",
         food: customDraft(fixture.nutrients.energyId, fixture.nutrients.proteinId, "Revised"),
         requestDigest: digest("4"),
         userId: fixture.owner.userId,
+      };
+      const revised = await reviseCustomFood(fixture.database, reviseInput);
+      expect(revised.replayed).toBe(false);
+      await expect(reviseCustomFood(fixture.database, reviseInput)).resolves.toMatchObject({
+        food: { currentRevision: "2", id: created.food.id },
+        replayed: true,
       });
       expect(revised.food.currentVersion.id).not.toBe(created.food.currentVersion.id);
       const repeated = await repeatDiaryEntry(fixture.database, {
@@ -294,12 +306,18 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       expect(repeated.entry.note).toBe(firstLog.entry.note);
       expect(repeated.entry.repeatedFromRevisionId).not.toBeNull();
 
-      await archiveCustomFood(fixture.database, {
+      const archiveInput = {
         clientOperationId: randomUUID(),
         customFoodId: created.food.id,
         expectedRevision: "2",
         requestDigest: digest("6"),
         userId: fixture.owner.userId,
+      };
+      const archived = await archiveCustomFood(fixture.database, archiveInput);
+      expect(archived.replayed).toBe(false);
+      await expect(archiveCustomFood(fixture.database, archiveInput)).resolves.toMatchObject({
+        food: { id: created.food.id, status: "archived" },
+        replayed: true,
       });
       await expect(
         createRecipe(fixture.database, {

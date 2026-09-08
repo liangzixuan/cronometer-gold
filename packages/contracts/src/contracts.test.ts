@@ -23,6 +23,8 @@ import {
   probeResponseSchema,
   problemCodes,
   problemDetailsSchema,
+  profileTimeZonePreconditionHeadersSchema,
+  profileTimeZonePreconditionQuerySchema,
   publicFoodKinds,
   registerAccountRequestSchema,
   updateDiaryEntryRequestSchema,
@@ -125,19 +127,27 @@ describe("public contracts", () => {
       ]),
     ).toBe(false);
     expect(createDiaryEntryRequestSchema.required).not.toContain("localDate");
-    expect(createDiaryEntryHeadersSchema).toMatchObject({
+    expect(profileTimeZonePreconditionHeadersSchema).toEqual({
       additionalProperties: true,
       properties: {
         "x-expected-profile-time-zone": { type: "string", minLength: 1, maxLength: 63 },
       },
-    });
-    expect(createDiaryEntryQuerySchema).toEqual({
-      $id: "CreateDiaryEntryQuery",
       type: "object",
+    });
+    expect(createDiaryEntryHeadersSchema).toEqual({
+      $id: "CreateDiaryEntryHeaders",
+      ...profileTimeZonePreconditionHeadersSchema,
+    });
+    expect(profileTimeZonePreconditionQuerySchema).toEqual({
       additionalProperties: false,
       properties: {
         profileTimeZonePrecondition: { type: "string", const: "v1" },
       },
+      type: "object",
+    });
+    expect(createDiaryEntryQuerySchema).toEqual({
+      $id: "CreateDiaryEntryQuery",
+      ...profileTimeZonePreconditionQuerySchema,
     });
     expect(problemCodes).toContain("DIARY_TIME_ZONE_CHANGED");
     expect(updateDiaryEntryRequestSchema.properties).not.toHaveProperty("localDate");

@@ -15,12 +15,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import type { AuthService } from "../src/modules/auth/auth-service.js";
+import { DiaryTimeZoneChangedServiceError } from "../src/modules/diary/diary.routes.js";
 import {
   RetentionDeviceAuthenticationServiceError,
   RetentionExportInProgressServiceError,
   type RetentionService,
 } from "../src/modules/retention/retention.routes.js";
-import { account, bearerToken, diaryEntry, operationId, userId } from "./fixtures.js";
+import {
+  account,
+  bearerToken,
+  diaryEntry,
+  mutationResponse,
+  operationId,
+  userId,
+} from "./fixtures.js";
 
 const apps: ReturnType<typeof buildApp>[] = [];
 const testConfig = loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent" });
@@ -30,6 +38,8 @@ const batchId = "40000000-0000-4000-8000-000000000004";
 const exportId = "50000000-0000-4000-8000-000000000005";
 const erasureId = "51000000-0000-4000-8000-000000000005";
 const now = "2026-08-16T12:00:00.000Z";
+const customFoodId = "90000000-0000-4000-8000-000000000009";
+const secondOperationId = "10000000-0000-4000-8000-000000000010";
 const sessionTokenHash = "a".repeat(64);
 
 function authStub(): AuthService {
@@ -573,11 +583,142 @@ describe("retention routes", () => {
     });
   });
 
+  it("binds the canonical expected zone into custom-food log idempotency", async () => {
+    const logCustomFood = vi.fn(
+      async (_input: Parameters<RetentionService["logCustomFood"]>[0]) => mutationResponse,
+    );
+    const app = createTestApp(retentionStub({ logCustomFood }));
+    const body = {
+      customFoodVersionId: "202",
+      portion: { kind: "grams" as const, grams: "100" },
+      mealSlot: "breakfast" as const,
+      occurredAt: now,
+    };
+    const guarded = await app.inject({
+      method: "POST",
+      url: `/v1/custom-foods/${customFoodId}/log?profileTimeZonePrecondition=v1`,
+      headers: {
+        ...authHeaders,
+        "idempotency-key": operationId,
+        "x-expected-profile-time-zone": "US/Central",
+      },
+      payload: body,
+    });
+    const legacy = await app.inject({
+      method: "POST",
+      url: `/v1/custom-foods/${customFoodId}/log`,
+      headers: { ...authHeaders, "idempotency-key": secondOperationId },
+      payload: body,
+    });
+
+    expect(guarded.statusCode, guarded.body).toBe(201);
+    expect(guarded.headers["cache-control"]).toBe("no-store");
+    expect(legacy.statusCode, legacy.body).toBe(201);
+    const guardedCall = logCustomFood.mock.calls[0]?.[0];
+    const legacyCall = logCustomFood.mock.calls[1]?.[0];
+    expect(guardedCall).toMatchObject({
+      customFoodId,
+      expectedProfileTimeZone: "America/Chicago",
+    });
+    expect(guardedCall?.requestDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(legacyCall?.requestDigest).toMatch(/^[0-9a-f]{64}$/);
+    expect(guardedCall?.requestDigest).not.toBe(legacyCall?.requestDigest);
+  });
+
+  it("requires the custom-food log capability marker and expected-zone header as one pair", async () => {
+    const logCustomFood = vi.fn(
+      async (_input: Parameters<RetentionService["logCustomFood"]>[0]) => mutationResponse,
+    );
+    const app = createTestApp(retentionStub({ logCustomFood }));
+    const body = {
+      customFoodVersionId: "202",
+      portion: { kind: "grams" as const, grams: "100" },
+      mealSlot: "breakfast" as const,
+      occurredAt: now,
+    };
+    const guardedHeaders = {
+      ...authHeaders,
+      "idempotency-key": operationId,
+      "x-expected-profile-time-zone": "America/Chicago",
+    };
+    const requests = [
+      { url: `/v1/custom-foods/${customFoodId}/log`, headers: guardedHeaders },
+      {
+        url: `/v1/custom-foods/${customFoodId}/log?profileTimeZonePrecondition=v1`,
+        headers: { ...authHeaders, "idempotency-key": operationId },
+      },
+      {
+        url: `/v1/custom-foods/${customFoodId}/log?profileTimeZonePrecondition=v2`,
+        headers: guardedHeaders,
+      },
+      {
+        url: `/v1/custom-foods/${customFoodId}/log?profileTimeZonePrecondition=v1&profileTimeZonePrecondition=v1`,
+        headers: guardedHeaders,
+      },
+      {
+        url: `/v1/custom-foods/${customFoodId}/log?profileTimeZonePrecondition=v1&unknownCapability=v1`,
+        headers: guardedHeaders,
+      },
+    ];
+
+    for (const request of requests) {
+      const response = await app.inject({
+        method: "POST",
+        url: request.url,
+        headers: request.headers,
+        payload: body,
+      });
+      expect(response.statusCode, response.body).toBe(400);
+      expect(response.json()).toMatchObject({ code: "VALIDATION_ERROR" });
+    }
+    const invalidZone = await app.inject({
+      method: "POST",
+      url: `/v1/custom-foods/${customFoodId}/log?profileTimeZonePrecondition=v1`,
+      headers: {
+        ...authHeaders,
+        "idempotency-key": operationId,
+        "x-expected-profile-time-zone": "Not/A_Private_Zone",
+      },
+      payload: body,
+    });
+    expect(invalidZone.statusCode).toBe(400);
+    expect(invalidZone.body).not.toContain("Not/A_Private_Zone");
+    expect(logCustomFood).not.toHaveBeenCalled();
+  });
+
+  it("maps guarded custom-food log time-zone drift to the typed private conflict", async () => {
+    const app = createTestApp(
+      retentionStub({
+        logCustomFood: vi.fn(async () => Promise.reject(new DiaryTimeZoneChangedServiceError())),
+      }),
+    );
+    const response = await app.inject({
+      method: "POST",
+      url: `/v1/custom-foods/${customFoodId}/log?profileTimeZonePrecondition=v1`,
+      headers: {
+        ...authHeaders,
+        "idempotency-key": operationId,
+        "x-expected-profile-time-zone": "America/Chicago",
+      },
+      payload: {
+        customFoodVersionId: "202",
+        portion: { kind: "grams", grams: "100" },
+        mealSlot: "breakfast",
+        occurredAt: now,
+      },
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.json()).toMatchObject({ code: "DIARY_TIME_ZONE_CHANGED" });
+    expect(response.body).not.toContain("America/Chicago");
+  });
+
   it("uses ownership-indistinguishable not-found responses", async () => {
     const app = createTestApp(retentionStub({ getCustomFood: vi.fn(async () => null) }));
     const response = await app.inject({
       method: "GET",
-      url: "/v1/custom-foods/90000000-0000-4000-8000-000000000009",
+      url: `/v1/custom-foods/${customFoodId}`,
       headers: authHeaders,
     });
     expect(response.statusCode).toBe(404);

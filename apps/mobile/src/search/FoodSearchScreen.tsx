@@ -18,6 +18,7 @@ import {
   type DiaryGroup,
   diaryGroupLabel,
   isLocalDate,
+  isPositiveDecimal,
   localDateInTimeZone,
   type MealSlot,
   quickAddOccurredAt,
@@ -109,6 +110,30 @@ function hasGramServing(food: FoodSearchHit): boolean {
   );
 }
 
+type PublicFoodPortionKind = "serving" | "grams";
+
+interface PublicFoodPortionDraft {
+  readonly kind: PublicFoodPortionKind;
+  readonly amount: string;
+}
+
+function defaultPortionDraft(food: FoodSearchHit): PublicFoodPortionDraft {
+  return { kind: hasGramServing(food) ? "serving" : "grams", amount: "1" };
+}
+
+function portionDraft(
+  drafts: Readonly<Record<string, PublicFoodPortionDraft>>,
+  food: FoodSearchHit,
+): PublicFoodPortionDraft {
+  return drafts[food.foodVersionId] ?? defaultPortionDraft(food);
+}
+
+function portionAmountLabel(draft: PublicFoodPortionDraft): string {
+  return draft.kind === "grams"
+    ? `${draft.amount} g`
+    : `${draft.amount} default ${draft.amount === "1" ? "serving" : "servings"}`;
+}
+
 function quickAddEnqueueDisabled(state: QuickAddOutboxControllerState): boolean {
   return (
     state.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS ||
@@ -124,39 +149,39 @@ function quickAddQueueMessage(
   diaryGroups: readonly DiaryGroup[],
 ): string {
   const count = state.pendingCount;
-  const noun = count === 1 ? "add" : "adds";
+  const noun = count === 1 ? "diary log" : "diary logs";
   switch (state.status) {
     case "idle":
-      return "No food adds are waiting on this device.";
+      return "No diary logs are waiting on this device.";
     case "pending":
-      return `${count} queued food ${noun} ${count === 1 ? "is" : "are"} stored on this device and not yet included in diary totals.`;
+      return `${count} queued ${noun} ${count === 1 ? "is" : "are"} stored on this device and not yet included in diary totals.`;
     case "draining":
-      return `Sending the oldest of ${count} queued food ${noun}. Nothing is included in diary totals until the server confirms it.`;
+      return `Sending the oldest of ${count} queued ${noun}. Nothing is included in diary totals until the server confirms it.`;
     case "blocked": {
       const destination = `${diaryGroupLabel(diaryGroups, state.mealSlot)} on ${state.localDate}`;
       const waiting =
         count > 1
-          ? ` ${count - 1} more queued ${count === 2 ? "add waits" : "adds wait"} behind it.`
+          ? ` ${count - 1} more queued diary ${count === 2 ? "log waits" : "logs wait"} behind it.`
           : "";
       return state.blockedReason === "time_zone_changed"
-        ? `The oldest queued add, ${state.foodName} (${state.servingLabel}) for ${destination}, is blocked because your diary time zone changed. It has not been added.${waiting}`
-        : `The server rejected the oldest queued add, ${state.foodName} (${state.servingLabel}) for ${destination} (HTTP ${state.httpStatus}). It has not been added.${waiting}`;
+        ? `The oldest queued diary log, ${state.foodName} (${state.servingLabel}) for ${destination}, is blocked because your diary time zone changed. It has not been added.${waiting}`
+        : `The server rejected the oldest queued diary log, ${state.foodName} (${state.servingLabel}) for ${destination} (HTTP ${state.httpStatus}). It has not been added.${waiting}`;
     }
     case "unavailable":
       if (state.reason === "storage") {
-        return "Secure storage could not confirm the quick-add queue. Adding is disabled until storage recovers.";
+        return "Secure storage could not confirm the diary queue. Logging is disabled until storage recovers.";
       }
       if (state.reason === "credential") {
-        return `${count} queued food ${noun} ${count === 1 ? "is" : "are"} retained, but sending is disabled until authentication recovers.`;
+        return `${count} queued ${noun} ${count === 1 ? "is" : "are"} retained, but sending is disabled until authentication recovers.`;
       }
       if (state.reason === "response") {
-        return `${count} queued food ${noun} ${count === 1 ? "is" : "are"} retained because the server response could not be verified. Nothing unverified is included in diary totals.`;
+        return `${count} queued ${noun} ${count === 1 ? "is" : "are"} retained because the server response could not be verified. Nothing unverified is included in diary totals.`;
       }
-      return `${count} queued food ${noun} ${count === 1 ? "is" : "are"} retained because the network is unavailable. Nothing unconfirmed is included in diary totals.`;
+      return `${count} queued ${noun} ${count === 1 ? "is" : "are"} retained because the network is unavailable. Nothing unconfirmed is included in diary totals.`;
     case "owner_mismatch":
-      return "This device queue does not belong to the active account. Quick add is fenced and private-device cleanup is required.";
+      return "This device queue does not belong to the active account. Diary logging is fenced and private-device cleanup is required.";
     case "closed":
-      return `Quick add is closed for this private session. ${count} queued food ${noun} ${count === 1 ? "is" : "are"} not included in diary totals.`;
+      return `Diary logging is closed for this private session. ${count} queued ${noun} ${count === 1 ? "is" : "are"} not included in diary totals.`;
   }
 }
 
@@ -178,8 +203,11 @@ export function FoodSearchScreen({
   const [addingVersion, setAddingVersion] = useState<string | null>(null);
   const [addState, setAddState] = useState<LoadState>("idle");
   const [addMessage, setAddMessage] = useState(
-    "Choose a local day and diary group, then add one reviewed gram-resolved serving.",
+    "Choose a local day, diary group, unit, and positive quantity.",
   );
+  const [portionDrafts, setPortionDrafts] = useState<
+    Readonly<Record<string, PublicFoodPortionDraft>>
+  >({});
   const enqueueInFlight = useRef(false);
   const ownedOperations = useRef(new Set<string>());
   const receivedOwnedReceiptCount = useRef(0);
@@ -539,7 +567,7 @@ export function FoodSearchScreen({
     }
   }
 
-  async function addFood(food: FoodSearchHit) {
+  async function addFood(food: FoodSearchHit, draft: PublicFoodPortionDraft) {
     if (outboxActionInFlight.current) {
       setAddState("error");
       setAddMessage("Wait for the current queued-request action to finish.");
@@ -550,17 +578,22 @@ export function FoodSearchScreen({
       setAddMessage("Wait for the current food to be secured on this device.");
       return;
     }
-    const serving = food.defaultServing;
-    if (!serving || !hasGramServing(food)) {
+    if (!isPositiveDecimal(draft.amount)) {
       setAddState("error");
-      setAddMessage("This food needs a gram-resolved serving before it can be added.");
+      setAddMessage("Enter a positive quantity with at most 12 whole digits and 6 decimals.");
+      return;
+    }
+    const serving = food.defaultServing;
+    if (draft.kind === "serving" && (!serving || !hasGramServing(food))) {
+      setAddState("error");
+      setAddMessage("This food has no gram-resolved default serving. Choose grams instead.");
       return;
     }
     const currentState = quickAddOutboxController.getState();
     if (currentState.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS) {
       setAddState("error");
       setAddMessage(
-        `The secure quick-add queue is full at ${MAX_QUICK_ADD_OUTBOX_ITEMS} items. Confirm or review queued adds before adding another.`,
+        `The secure diary queue is full at ${MAX_QUICK_ADD_OUTBOX_ITEMS} items. Confirm or review queued logs before adding another.`,
       );
       return;
     }
@@ -568,10 +601,10 @@ export function FoodSearchScreen({
       setAddState("error");
       setAddMessage(
         currentState.status === "owner_mismatch"
-          ? "Quick add is disabled because this device queue belongs to another account."
+          ? "Diary logging is disabled because this device queue belongs to another account."
           : currentState.status === "closed"
-            ? "Quick add is closed for this private session."
-            : "Quick add is disabled until secure storage and authentication recover.",
+            ? "Diary logging is closed for this private session."
+            : "Diary logging is disabled until secure storage and authentication recover.",
       );
       return;
     }
@@ -586,14 +619,24 @@ export function FoodSearchScreen({
     enqueueInFlight.current = true;
     setAddingVersion(food.foodVersionId);
     setAddState("loading");
-    setAddMessage(`Securing ${food.name} on this device before sending…`);
+    setAddMessage(
+      `Securing ${portionAmountLabel(draft)} of ${food.name} on this device before sending…`,
+    );
     try {
-      const item = await quickAddOutboxController.enqueue({
+      const item = await quickAddOutboxController.enqueueOperation({
+        operationKind: "public_food",
         foodKind: food.kind,
         foodName: food.name,
         foodVersionId: food.foodVersionId,
-        servingId: serving.servingId,
-        servingLabel: serving.label,
+        portion:
+          draft.kind === "serving" && serving
+            ? {
+                kind: "serving",
+                servingId: serving.servingId,
+                amount: draft.amount,
+                servingLabel: serving.label,
+              }
+            : { kind: "grams", grams: draft.amount },
         localDate: diaryDate,
         mealSlot,
         occurredAt,
@@ -601,18 +644,23 @@ export function FoodSearchScreen({
       ownedOperations.current.add(item.operationId);
       setAddState("ready");
       setAddMessage(
-        `${food.name} is queued securely for ${diaryGroupLabel(diaryGroups, mealSlot)} on ${diaryDate}. It is not included in diary totals until the server confirms it.`,
+        `${portionAmountLabel(draft)} of ${food.name} is queued securely for ${diaryGroupLabel(diaryGroups, mealSlot)} on ${diaryDate}. It is not included in diary totals until the server confirms it.`,
       );
       void quickAddOutboxController.requestDrain(item.operationId);
     } catch (error) {
       if (error instanceof QuickAddEnqueueAmbiguousError) {
         ownedOperations.current.add(error.operationId);
         void quickAddOutboxController.requestDrain(error.operationId);
+        setAddState("error");
+        setAddMessage(
+          "Secure storage could not confirm whether the food was queued. Do not tap Add again until the queue status recovers.",
+        );
+      } else {
+        setAddState("error");
+        setAddMessage(
+          "The food was not queued. Refresh this screen and try again after the diary session is current.",
+        );
       }
-      setAddState("error");
-      setAddMessage(
-        "Secure storage could not confirm whether the food was queued. Do not tap Add again until the queue status recovers.",
-      );
     } finally {
       enqueueInFlight.current = false;
       setAddingVersion(null);
@@ -708,17 +756,24 @@ export function FoodSearchScreen({
     state: Extract<QuickAddOutboxControllerState, { status: "blocked" }>,
   ) {
     Alert.alert(
-      "Discard blocked food add?",
-      `This permanently removes only ${state.foodName} (${state.servingLabel}) for ${diaryGroupLabel(diaryGroups, state.mealSlot)} on ${state.localDate}. It has not been added. Remaining queued adds stay in order.`,
+      "Discard blocked diary log?",
+      `This permanently removes only ${state.foodName} (${state.servingLabel}) for ${diaryGroupLabel(diaryGroups, state.mealSlot)} on ${state.localDate}. It has not been added. Remaining queued diary logs stay in order.`,
       [
         { text: "Cancel", style: "cancel" },
         {
-          text: "Discard queued add",
+          text: "Discard queued log",
           style: "destructive",
           onPress: () => void discardBlockedAdd(state.operationId, state.foodName),
         },
       ],
     );
+  }
+
+  function updatePortionDraft(food: FoodSearchHit, patch: Partial<PublicFoodPortionDraft>) {
+    setPortionDrafts((current) => ({
+      ...current,
+      [food.foodVersionId]: { ...portionDraft(current, food), ...patch },
+    }));
   }
 
   const quickAddUnavailable = quickAddEnqueueDisabled(quickAddOutboxState) || outboxAction !== null;
@@ -734,6 +789,113 @@ export function FoodSearchScreen({
     canRetryQueue &&
     (quickAddOutboxState.pendingCount > 0 ||
       (quickAddOutboxState.status === "unavailable" && quickAddOutboxState.reason === "storage"));
+
+  function renderPortionControls(food: FoodSearchHit) {
+    const draft = portionDraft(portionDrafts, food);
+    const validAmount = isPositiveDecimal(draft.amount);
+    const disabled = addingVersion !== null || quickAddUnavailable;
+    return (
+      <View style={styles.portionControls}>
+        <Text style={styles.portionHeading}>Quantity</Text>
+        <View accessibilityRole="radiogroup" style={styles.portionKinds}>
+          {hasGramServing(food) ? (
+            <Pressable
+              accessibilityLabel={`Use ${food.defaultServing?.label ?? "default serving"}`}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: draft.kind === "serving", disabled }}
+              disabled={disabled}
+              onPress={() => updatePortionDraft(food, { kind: "serving" })}
+              style={({ pressed }) => [
+                styles.portionKind,
+                draft.kind === "serving" && styles.portionKindActive,
+                disabled && styles.disabled,
+                pressed && styles.pressed,
+              ]}
+            >
+              <Text
+                style={[
+                  styles.portionKindText,
+                  draft.kind === "serving" && styles.portionKindTextActive,
+                ]}
+              >
+                {food.defaultServing?.label ?? "Serving"}
+              </Text>
+            </Pressable>
+          ) : null}
+          <Pressable
+            accessibilityLabel="Use grams"
+            accessibilityRole="radio"
+            accessibilityState={{ checked: draft.kind === "grams", disabled }}
+            disabled={disabled}
+            onPress={() => updatePortionDraft(food, { kind: "grams" })}
+            style={({ pressed }) => [
+              styles.portionKind,
+              draft.kind === "grams" && styles.portionKindActive,
+              disabled && styles.disabled,
+              pressed && styles.pressed,
+            ]}
+          >
+            <Text
+              style={[
+                styles.portionKindText,
+                draft.kind === "grams" && styles.portionKindTextActive,
+              ]}
+            >
+              Grams
+            </Text>
+          </Pressable>
+        </View>
+        <TextInput
+          accessibilityHint={
+            draft.kind === "grams"
+              ? "Enter the exact grams to add"
+              : "Enter how many of the listed default serving to add"
+          }
+          accessibilityLabel={`${food.name} quantity`}
+          accessibilityState={{ disabled }}
+          editable={!disabled}
+          inputMode="decimal"
+          keyboardType="decimal-pad"
+          maxLength={19}
+          onChangeText={(amount) => updatePortionDraft(food, { amount })}
+          placeholder={draft.kind === "grams" ? "Grams" : "Servings"}
+          placeholderTextColor="#6f7b75"
+          style={[styles.portionInput, !validAmount && styles.portionInputError]}
+          value={draft.amount}
+        />
+        {!validAmount ? (
+          <Text accessibilityLiveRegion="polite" style={styles.portionError}>
+            Enter a positive decimal, up to 12 whole digits and 6 decimal places.
+          </Text>
+        ) : null}
+        <Pressable
+          accessibilityHint="Stores this exact diary request on the device before sending"
+          accessibilityLabel={`Add ${portionAmountLabel(draft)} of ${food.name}`}
+          accessibilityRole="button"
+          accessibilityState={{ disabled: disabled || !validAmount }}
+          disabled={disabled || !validAmount}
+          onPress={() => void addFood(food, draft)}
+          style={({ pressed }) => [
+            styles.addButton,
+            (disabled || !validAmount) && styles.disabled,
+            pressed && styles.pressed,
+          ]}
+        >
+          <Text style={styles.addButtonText}>
+            {addingVersion === food.foodVersionId
+              ? "Securing…"
+              : quickAddOutboxState.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS
+                ? `Queue full (${MAX_QUICK_ADD_OUTBOX_ITEMS})`
+                : quickAddUnavailable
+                  ? "Diary logging unavailable"
+                  : validAmount
+                    ? `Add ${portionAmountLabel(draft)}`
+                    : "Enter a valid amount"}
+          </Text>
+        </Pressable>
+      </View>
+    );
+  }
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
@@ -832,7 +994,7 @@ export function FoodSearchScreen({
                 ]}
               >
                 <Text style={[styles.queueButtonText, styles.queueDangerButtonText]}>
-                  {outboxAction === "discard" ? "Discarding…" : "Discard blocked add"}
+                  {outboxAction === "discard" ? "Discarding…" : "Discard blocked log"}
                 </Text>
               </Pressable>
             </View>
@@ -851,7 +1013,7 @@ export function FoodSearchScreen({
               ]}
             >
               <Text style={styles.queueButtonText}>
-                {outboxAction === "retry" ? "Retrying…" : "Retry queued adds"}
+                {outboxAction === "retry" ? "Retrying…" : "Retry queued logs"}
               </Text>
             </Pressable>
           ) : null}
@@ -972,37 +1134,7 @@ export function FoodSearchScreen({
             <Text style={styles.resultLicense}>
               {food.source.licenseExpression} · {food.marketCode}
             </Text>
-            <Pressable
-              accessibilityHint="Adds one reviewed default serving to the selected diary day"
-              accessibilityLabel={
-                hasGramServing(food)
-                  ? `Add ${food.name}`
-                  : `${food.name} needs a gram-resolved serving`
-              }
-              accessibilityRole="button"
-              accessibilityState={{
-                disabled: !hasGramServing(food) || addingVersion !== null || quickAddUnavailable,
-              }}
-              disabled={!hasGramServing(food) || addingVersion !== null || quickAddUnavailable}
-              onPress={() => void addFood(food)}
-              style={({ pressed }) => [
-                styles.addButton,
-                (!hasGramServing(food) || quickAddUnavailable) && styles.disabled,
-                pressed && styles.pressed,
-              ]}
-            >
-              <Text style={styles.addButtonText}>
-                {addingVersion === food.foodVersionId
-                  ? "Securing…"
-                  : !hasGramServing(food)
-                    ? "Needs a gram-resolved serving"
-                    : quickAddOutboxState.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS
-                      ? `Queue full (${MAX_QUICK_ADD_OUTBOX_ITEMS})`
-                      : quickAddUnavailable
-                        ? "Quick add unavailable"
-                        : "Add default serving"}
-              </Text>
-            </Pressable>
+            {renderPortionControls(food)}
           </View>
         ))}
 
@@ -1098,33 +1230,7 @@ export function FoodSearchScreen({
             <Text style={styles.resultServing}>{servingText(barcodeResult)}</Text>
             <Text style={styles.resultSource}>{sourceText(barcodeResult.source)}</Text>
             <Text style={styles.resultLicense}>{barcodeResult.source.licenseExpression}</Text>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityState={{
-                disabled:
-                  !hasGramServing(barcodeResult) || addingVersion !== null || quickAddUnavailable,
-              }}
-              disabled={
-                !hasGramServing(barcodeResult) || addingVersion !== null || quickAddUnavailable
-              }
-              onPress={() => void addFood(barcodeResult)}
-              style={[
-                styles.addButton,
-                (!hasGramServing(barcodeResult) || quickAddUnavailable) && styles.disabled,
-              ]}
-            >
-              <Text style={styles.addButtonText}>
-                {addingVersion === barcodeResult.foodVersionId
-                  ? "Securing…"
-                  : !hasGramServing(barcodeResult)
-                    ? "Needs a gram-resolved serving"
-                    : quickAddOutboxState.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS
-                      ? `Queue full (${MAX_QUICK_ADD_OUTBOX_ITEMS})`
-                      : quickAddUnavailable
-                        ? "Quick add unavailable"
-                        : "Add default serving"}
-              </Text>
-            </Pressable>
+            {renderPortionControls(barcodeResult)}
           </View>
         ) : null}
 
@@ -1243,6 +1349,42 @@ const styles = StyleSheet.create({
   kindBranded: { backgroundColor: "#f7e6b0", color: "#6b4c00" },
   kindGeneric: { backgroundColor: "#dcefd8", color: "#245a3a" },
   mutedCopy: { color: palette.muted, fontSize: 13, lineHeight: 19 },
+  portionControls: { marginTop: 14 },
+  portionError: { color: "#8a332b", fontSize: 12, marginTop: 6 },
+  portionHeading: {
+    color: palette.muted,
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 1,
+    textTransform: "uppercase",
+  },
+  portionInput: {
+    backgroundColor: palette.white,
+    borderColor: "rgba(23, 33, 29, 0.3)",
+    borderRadius: 9,
+    borderWidth: 1,
+    color: palette.ink,
+    fontSize: 16,
+    marginTop: 9,
+    minHeight: 48,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  portionInputError: { borderColor: "#8a332b" },
+  portionKind: {
+    alignItems: "center",
+    backgroundColor: palette.white,
+    borderColor: palette.line,
+    borderRadius: 999,
+    borderWidth: 1,
+    justifyContent: "center",
+    minHeight: 44,
+    paddingHorizontal: 14,
+  },
+  portionKindActive: { backgroundColor: palette.forest, borderColor: palette.forest },
+  portionKindText: { color: palette.muted, fontSize: 13, fontWeight: "700" },
+  portionKindTextActive: { color: palette.white },
+  portionKinds: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 8 },
   pressed: { opacity: 0.72 },
   primaryButton: {
     alignItems: "center",

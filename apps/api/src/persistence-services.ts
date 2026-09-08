@@ -1314,6 +1314,9 @@ export class DatabaseRecipeService implements RecipeService {
         recipeVersionId: input.entry.recipeVersionId,
         portion: input.entry.portion,
         mealSlot: input.entry.mealSlot,
+        ...(input.expectedProfileTimeZone === undefined
+          ? {}
+          : { expectedProfileTimeZone: input.expectedProfileTimeZone }),
         occurredAt: input.entry.occurredAt,
         ...(input.entry.position === undefined ? {} : { position: input.entry.position }),
         clientOperationId: input.clientOperationId,

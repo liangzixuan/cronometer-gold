@@ -14,6 +14,7 @@ import {
   defaultMealForTime,
   diaryGroupLabel,
   isLocalDate,
+  isPositiveDecimal,
   localDateInTimeZone,
   localTimeInTimeZone,
   type MealSlot,
@@ -76,12 +77,66 @@ function hasGramResolvedServing(food: FoodSearchHit): boolean {
   );
 }
 
+type QuickAddPortionKind = "serving" | "grams";
+
+interface QuickAddDraft {
+  readonly kind: QuickAddPortionKind;
+  readonly amount: string;
+}
+
+function defaultQuickAddDraft(food: FoodSearchHit): QuickAddDraft {
+  return { kind: hasGramResolvedServing(food) ? "serving" : "grams", amount: "1" };
+}
+
+function quickAddDraft(
+  drafts: Readonly<Record<string, QuickAddDraft>>,
+  food: FoodSearchHit,
+): QuickAddDraft {
+  return drafts[food.foodVersionId] ?? defaultQuickAddDraft(food);
+}
+
+function quickAddAmountLabel(draft: QuickAddDraft): string {
+  return draft.kind === "serving"
+    ? `${draft.amount} default ${draft.amount === "1" ? "serving" : "servings"}`
+    : `${draft.amount} g`;
+}
+
 async function responseJson(response: Response): Promise<unknown> {
   try {
     return await response.json();
   } catch {
     throw new TypeError("The server response was not JSON.");
   }
+}
+
+/** A typed time-zone conflict proves no write occurred, so its stale retry must not survive. */
+export function fenceQuickAddForTimeZoneChange(
+  pendingByIntent: Map<string, QuickAddOperation>,
+  operation: QuickAddOperation,
+  status: number,
+  body: unknown,
+): boolean {
+  const timeZoneChanged =
+    status === 409 &&
+    typeof body === "object" &&
+    body !== null &&
+    !Array.isArray(body) &&
+    "code" in body &&
+    body.code === "DIARY_TIME_ZONE_CHANGED";
+  if (!timeZoneChanged) return false;
+  if (pendingByIntent.get(operation.intentKey) === operation) {
+    pendingByIntent.delete(operation.intentKey);
+  }
+  return true;
+}
+
+export function quickAddTimeZoneReviewMessage(
+  localDate: string,
+  currentTimeZone: string | null,
+): string {
+  return currentTimeZone
+    ? `Your diary time zone changed to ${currentTimeZone}. This food was not added. Review ${localDate} as a local day in that zone, then confirm the day before adding again.`
+    : "Your diary time zone changed. This food was not added, and its stale retry was cleared. Current account settings could not be reloaded; refresh this page, then review the local diary day before adding again.";
 }
 
 export function FoodSearchClient() {
@@ -101,10 +156,12 @@ export function FoodSearchClient() {
   const [addState, setAddState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const [addingFoodVersion, setAddingFoodVersion] = useState<string | null>(null);
   const [addMessage, setAddMessage] = useState(
-    "Sign in to add a reviewed default serving to your diary.",
+    "Sign in to choose a quantity and add it to your diary.",
   );
+  const [quickAddDrafts, setQuickAddDrafts] = useState<Readonly<Record<string, QuickAddDraft>>>({});
   const pendingAdds = useRef(new Map<string, QuickAddOperation>());
   const activeAddOperation = useRef<string | null>(null);
+  const [dateReviewRequired, setDateReviewRequired] = useState(false);
   const [query, setQuery] = useState("");
   const [intent, setIntent] = useState<FoodSearchIntent>("all");
   const [suggestions, setSuggestions] = useState<readonly FoodAutocompleteSuggestion[]>([]);
@@ -125,6 +182,7 @@ export function FoodSearchClient() {
   const autocompleteController = useRef<AbortController | null>(null);
   const searchController = useRef<AbortController | null>(null);
   const barcodeController = useRef<AbortController | null>(null);
+  const profileRefreshController = useRef<AbortController | null>(null);
   const suppressedAutocompleteValue = useRef<string | null>(null);
 
   useEffect(() => {
@@ -185,6 +243,7 @@ export function FoodSearchClient() {
       autocompleteController.current?.abort();
       searchController.current?.abort();
       barcodeController.current?.abort();
+      profileRefreshController.current?.abort();
     },
     [],
   );
@@ -214,7 +273,7 @@ export function FoodSearchClient() {
               ),
             );
           }
-          setAddMessage("Choose a local day and meal, then add one reviewed default serving.");
+          setAddMessage("Choose a local day, meal, serving type, and positive quantity.");
         }
       } catch {
         // Catalogue search remains public if session discovery is unavailable.
@@ -362,15 +421,50 @@ export function FoodSearchClient() {
     }
   }
 
-  async function addFood(food: FoodSearchHit) {
+  async function refreshDiaryProfileAfterTimeZoneChange(): Promise<string | null> {
+    profileRefreshController.current?.abort();
+    const controller = new AbortController();
+    profileRefreshController.current = controller;
+    try {
+      const response = await fetch("/api/auth/me", {
+        headers: { accept: "application/json" },
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (!response.ok) return null;
+      const session = parseSession(await responseJson(response));
+      if (controller.signal.aborted) return null;
+      setTimeZone(session.profile.timeZone);
+      setDiaryGroups(session.profile.diaryGroups);
+      return session.profile.timeZone;
+    } catch {
+      return null;
+    } finally {
+      if (profileRefreshController.current === controller) {
+        profileRefreshController.current = null;
+      }
+    }
+  }
+
+  async function addFood(food: FoodSearchHit, draft: QuickAddDraft) {
     if (activeAddOperation.current !== null) {
       setAddState("error");
       setAddMessage("Wait for the current diary addition to finish before adding another food.");
       return;
     }
-    if (!food.defaultServing || !hasGramResolvedServing(food)) {
+    if (dateReviewRequired) {
       setAddState("error");
-      setAddMessage("This food needs a gram-resolved serving before it can be added.");
+      setAddMessage("Review and confirm the local diary day before adding this food again.");
+      return;
+    }
+    if (!isPositiveDecimal(draft.amount)) {
+      setAddState("error");
+      setAddMessage("Enter a positive quantity with at most 12 whole digits and 6 decimals.");
+      return;
+    }
+    if (draft.kind === "serving" && (!food.defaultServing || !hasGramResolvedServing(food))) {
+      setAddState("error");
+      setAddMessage("This food has no gram-resolved default serving. Choose grams instead.");
       return;
     }
     if (!timeZone) {
@@ -384,7 +478,14 @@ export function FoodSearchClient() {
         pendingAdds.current,
         {
           foodVersionId: food.foodVersionId,
-          servingId: food.defaultServing.servingId,
+          portion:
+            draft.kind === "serving" && food.defaultServing
+              ? {
+                  kind: "serving",
+                  servingId: food.defaultServing.servingId,
+                  amount: draft.amount,
+                }
+              : { kind: "grams", grams: draft.amount },
           localDate: diaryDate,
           mealSlot,
           timeZone,
@@ -401,20 +502,32 @@ export function FoodSearchClient() {
     activeAddOperation.current = operation.operationId;
     setAddingFoodVersion(food.foodVersionId);
     setAddState("loading");
-    setAddMessage(`Adding ${food.name}…`);
+    setAddMessage(`Adding ${quickAddAmountLabel(draft)} of ${food.name}…`);
     try {
-      const response = await fetch(`/api/diary/entries?date=${encodeURIComponent(diaryDate)}`, {
-        method: "POST",
-        headers: {
-          accept: "application/json",
-          "content-type": "application/json",
-          "idempotency-key": operation.operationId,
+      const response = await fetch(
+        `/api/diary/entries?date=${encodeURIComponent(diaryDate)}&profileTimeZonePrecondition=v1`,
+        {
+          method: "POST",
+          headers: {
+            accept: "application/json",
+            "content-type": "application/json",
+            "idempotency-key": operation.operationId,
+            "x-expected-profile-time-zone": operation.expectedTimeZone,
+          },
+          body: JSON.stringify(operation.body),
+          cache: "no-store",
         },
-        body: JSON.stringify(operation.body),
-        cache: "no-store",
-      });
+      );
       const body = await responseJson(response);
       if (!response.ok) {
+        if (fenceQuickAddForTimeZoneChange(pendingAdds.current, operation, response.status, body)) {
+          setDateReviewRequired(true);
+          setTimeZone(null);
+          const currentTimeZone = await refreshDiaryProfileAfterTimeZoneChange();
+          setAddState("error");
+          setAddMessage(quickAddTimeZoneReviewMessage(diaryDate, currentTimeZone));
+          return;
+        }
         const message =
           typeof body === "object" &&
           body !== null &&
@@ -431,7 +544,7 @@ export function FoodSearchClient() {
       }
       setAddState("ready");
       setAddMessage(
-        `${food.name} was added to ${diaryGroupLabel(diaryGroups, mealSlot)} on ${loggedDate}.`,
+        `${quickAddAmountLabel(draft)} of ${food.name} was added to ${diaryGroupLabel(diaryGroups, mealSlot)} on ${loggedDate}.`,
       );
     } catch (error) {
       setAddState("error");
@@ -444,6 +557,98 @@ export function FoodSearchClient() {
       }
       setAddingFoodVersion(null);
     }
+  }
+
+  function confirmDiaryDateReview() {
+    if (!timeZone) {
+      setAddState("error");
+      setAddMessage(
+        "Current account settings are unavailable. Refresh this page before confirming a local diary day.",
+      );
+      return;
+    }
+    setDateReviewRequired(false);
+    setAddState("idle");
+    setAddMessage(
+      `${diaryDate} is confirmed as a local diary day in ${timeZone}. Choose Add when ready.`,
+    );
+  }
+
+  function updateQuickAddDraft(food: FoodSearchHit, patch: Partial<QuickAddDraft>) {
+    setQuickAddDrafts((current) => ({
+      ...current,
+      [food.foodVersionId]: { ...quickAddDraft(current, food), ...patch },
+    }));
+  }
+
+  function quickAddControls(food: FoodSearchHit, instance: "barcode" | "search") {
+    const draft = quickAddDraft(quickAddDrafts, food);
+    const amountIsValid = isPositiveDecimal(draft.amount);
+    const servingAvailable = hasGramResolvedServing(food);
+    const controlId = `quick-add-${instance}-${food.foodVersionId}`;
+    const busy = addingFoodVersion !== null;
+    return (
+      <fieldset className="quickAddControls">
+        <legend className="srOnly">Add {food.name} to the diary</legend>
+        <label htmlFor={`${controlId}-kind`}>
+          Unit
+          <select
+            disabled={busy}
+            id={`${controlId}-kind`}
+            onChange={(event) =>
+              updateQuickAddDraft(food, {
+                kind: event.target.value as QuickAddPortionKind,
+              })
+            }
+            value={draft.kind}
+          >
+            {servingAvailable && food.defaultServing ? (
+              <option value="serving">Default serving: {food.defaultServing.label}</option>
+            ) : null}
+            <option value="grams">Grams</option>
+          </select>
+        </label>
+        <label htmlFor={`${controlId}-amount`}>
+          Amount
+          <input
+            aria-describedby={`${controlId}-amount-help`}
+            aria-invalid={!amountIsValid}
+            autoComplete="off"
+            disabled={busy}
+            id={`${controlId}-amount`}
+            inputMode="decimal"
+            maxLength={19}
+            onChange={(event) => updateQuickAddDraft(food, { amount: event.target.value })}
+            pattern="(?=.*[1-9])(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,6})?"
+            value={draft.amount}
+          />
+        </label>
+        <small id={`${controlId}-amount-help`}>
+          {amountIsValid
+            ? draft.kind === "serving"
+              ? "How many of the listed default serving."
+              : "Exact grams to add."
+            : "Enter a positive decimal, up to 12 whole digits and 6 decimal places."}
+        </small>
+        <button
+          aria-label={`Add ${quickAddAmountLabel(draft)} of ${food.name}`}
+          className="quickAddButton"
+          disabled={busy || dateReviewRequired || !amountIsValid}
+          onClick={() => void addFood(food, draft)}
+          type="button"
+        >
+          {addingFoodVersion === food.foodVersionId
+            ? "Adding…"
+            : busy
+              ? "Wait for current add"
+              : dateReviewRequired
+                ? "Review diary day first"
+                : amountIsValid
+                  ? `Add ${quickAddAmountLabel(draft)}`
+                  : "Enter a valid amount"}
+        </button>
+      </fieldset>
+    );
   }
 
   const showSuggestionPanel = normalizeSearchText(query).length >= 2 && suggestionState !== "idle";
@@ -487,6 +692,16 @@ export function FoodSearchClient() {
             </select>
           </label>
           <Link href="/login">Account</Link>
+          {dateReviewRequired ? (
+            <button
+              className="quickAddButton"
+              disabled={!timeZone || addingFoodVersion !== null}
+              onClick={confirmDiaryDateReview}
+              type="button"
+            >
+              Confirm {diaryDate} as local day
+            </button>
+          ) : null}
         </fieldset>
         <p className={`addStatus addStatus--${addState}`} role="status" aria-live="polite">
           {addMessage}
@@ -592,18 +807,7 @@ export function FoodSearchClient() {
                     <small>
                       {food.source.licenseExpression} · {food.marketCode} · {food.languageTag}
                     </small>
-                    <button
-                      className="quickAddButton"
-                      disabled={!hasGramResolvedServing(food) || addingFoodVersion !== null}
-                      onClick={() => void addFood(food)}
-                      type="button"
-                    >
-                      {addingFoodVersion === food.foodVersionId
-                        ? "Adding…"
-                        : hasGramResolvedServing(food)
-                          ? "Add default serving"
-                          : "Needs a gram-resolved serving"}
-                    </button>
+                    {quickAddControls(food, "search")}
                   </div>
                 </article>
               </li>
@@ -669,18 +873,7 @@ export function FoodSearchClient() {
               {displayServing(barcodeResult)} · {displaySource(barcodeResult.source)} ·{" "}
               {barcodeResult.source.licenseExpression}
             </small>
-            <button
-              className="quickAddButton"
-              disabled={!hasGramResolvedServing(barcodeResult) || addingFoodVersion !== null}
-              onClick={() => void addFood(barcodeResult)}
-              type="button"
-            >
-              {addingFoodVersion === barcodeResult.foodVersionId
-                ? "Adding…"
-                : hasGramResolvedServing(barcodeResult)
-                  ? "Add default serving"
-                  : "Needs a gram-resolved serving"}
-            </button>
+            {quickAddControls(barcodeResult, "barcode")}
           </article>
         ) : null}
       </section>

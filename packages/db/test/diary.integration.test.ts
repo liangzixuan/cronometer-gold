@@ -193,6 +193,31 @@ describeDatabase("account and append-only diary persistence", () => {
           .where("client_operation_id", "=", mismatchedOperationId)
           .executeTakeFirstOrThrow(),
       ).toEqual({ count: "0" });
+      const publicVersionOnCustomPathOperationId = randomUUID();
+      await expect(
+        createFoodDiaryEntry(database, {
+          ...createInput,
+          clientOperationId: publicVersionOnCustomPathOperationId,
+          expectedCustomFoodId: randomUUID(),
+          requestDigest: "8".repeat(64),
+        }),
+      ).rejects.toBeInstanceOf(DiaryValidationError);
+      expect(
+        await database
+          .selectFrom("diary_entry")
+          .select(({ fn }) => fn.countAll<string>().as("count"))
+          .where("user_id", "=", owner.userId)
+          .where("client_operation_id", "=", publicVersionOnCustomPathOperationId)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ count: "0" });
+      expect(
+        await database
+          .selectFrom("diary_operation")
+          .select(({ fn }) => fn.countAll<string>().as("count"))
+          .where("user_id", "=", owner.userId)
+          .where("client_operation_id", "=", publicVersionOnCustomPathOperationId)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ count: "0" });
       const created = await createFoodDiaryEntry(database, createInput);
       expect(created).toMatchObject({
         days: [{ localDate: "2026-08-15", revision: "1" }],

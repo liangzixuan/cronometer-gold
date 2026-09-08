@@ -1154,16 +1154,31 @@ export function quickAddOccurredAt(localDate: string, timeZone: string, now = ne
 export interface QuickAddOperation {
   readonly intentKey: string;
   readonly operationId: string;
+  readonly expectedTimeZone: string;
   readonly body: {
     readonly foodVersionId: string;
-    readonly portion: {
-      readonly kind: "serving";
-      readonly servingId: string;
-      readonly amount: "1";
-    };
+    readonly portion:
+      | {
+          readonly kind: "serving";
+          readonly servingId: string;
+          readonly amount: string;
+        }
+      | { readonly kind: "grams"; readonly grams: string };
     readonly mealSlot: MealSlot;
     readonly occurredAt: string;
   };
+}
+
+function canonicalPositiveDiaryDecimal(value: string): string {
+  if (!isPositiveDecimal(value)) {
+    throw new RangeError("Diary quantity must be a positive decimal.");
+  }
+  const decimalPoint = value.indexOf(".");
+  if (decimalPoint === -1) return value;
+  const fraction = value.slice(decimalPoint + 1).replace(/0+$/u, "");
+  return fraction.length === 0
+    ? value.slice(0, decimalPoint)
+    : `${value.slice(0, decimalPoint)}.${fraction}`;
 }
 
 /** Retain both identity and bytes after an ambiguous response so retry cannot duplicate the entry. */
@@ -1171,7 +1186,7 @@ export function prepareQuickAddOperation(
   pendingByIntent: ReadonlyMap<string, QuickAddOperation>,
   input: {
     readonly foodVersionId: string;
-    readonly servingId: string;
+    readonly portion: QuickAddOperation["body"]["portion"];
     readonly localDate: string;
     readonly mealSlot: MealSlot;
     readonly timeZone: string;
@@ -1179,20 +1194,29 @@ export function prepareQuickAddOperation(
   now: Date,
   operationIdFactory: () => string,
 ): QuickAddOperation {
-  const intentKey = JSON.stringify([
-    input.foodVersionId,
-    input.servingId,
-    input.localDate,
-    input.mealSlot,
-  ]);
+  const quantity = input.portion.kind === "serving" ? input.portion.amount : input.portion.grams;
+  if (!isPositiveDecimal(quantity)) {
+    throw new RangeError("Diary quantity must be a positive decimal.");
+  }
+  const canonicalQuantity = canonicalPositiveDiaryDecimal(quantity);
+  const portion =
+    input.portion.kind === "serving"
+      ? {
+          kind: "serving" as const,
+          servingId: input.portion.servingId,
+          amount: canonicalQuantity,
+        }
+      : { kind: "grams" as const, grams: canonicalQuantity };
+  const intentKey = JSON.stringify([input.foodVersionId, portion, input.localDate, input.mealSlot]);
   const pending = pendingByIntent.get(intentKey);
   if (pending) return pending;
   return {
     intentKey,
     operationId: operationIdFactory(),
+    expectedTimeZone: input.timeZone,
     body: {
       foodVersionId: input.foodVersionId,
-      portion: { kind: "serving", servingId: input.servingId, amount: "1" },
+      portion,
       mealSlot: input.mealSlot,
       occurredAt: quickAddOccurredAt(input.localDate, input.timeZone, now),
     },

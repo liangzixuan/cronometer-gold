@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { proxyDiaryChange, proxyDiaryGet, proxyDiaryRepeat } from "../app/api/diary/proxy";
+import {
+  proxyDiaryChange,
+  proxyDiaryCreate,
+  proxyDiaryGet,
+  proxyDiaryRepeat,
+} from "../app/api/diary/proxy";
 import { SESSION_COOKIE, validatedDiaryDate, validatedDiaryReadQuery } from "./private-api";
 
 const entry = {
@@ -176,6 +181,150 @@ describe("web diary read query and proxy", () => {
 });
 
 describe("web diary mutation proxy", () => {
+  it("forwards a guarded create marker and canonical expected profile time zone as one pair", async () => {
+    const calls: Array<{ readonly url: string; readonly init?: RequestInit }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL, init?: RequestInit) => {
+        calls.push({ url: url.href, ...(init ? { init } : {}) });
+        return Response.json(
+          {
+            data: {
+              replayed: false,
+              entry: {
+                ...entry,
+                revision: "1",
+                portion: { kind: "grams", grams: "125.5" },
+                resolvedGrams: "125.5",
+              },
+              affectedDays: [{ localDate: "2026-08-15", revision: "5" }],
+            },
+          },
+          { status: 201 },
+        );
+      }),
+    );
+    const body = {
+      foodVersionId: "202",
+      portion: { kind: "grams", grams: "125.5" },
+      mealSlot: "breakfast",
+      occurredAt: "2026-08-15T13:30:00.000Z",
+    };
+    const response = await proxyDiaryCreate(
+      new Request(
+        "https://app.example.test/api/diary/entries?date=2026-08-15&profileTimeZonePrecondition=v1",
+        {
+          method: "POST",
+          headers: {
+            cookie: `${SESSION_COOKIE}=${"t".repeat(43)}`,
+            "content-type": "application/json",
+            "idempotency-key": "61eec75e-fe16-47e4-9f7b-efb6914ad9dc", // gitleaks:allow -- deterministic UUID fixture
+            origin: "https://app.example.test",
+            "sec-fetch-site": "same-origin",
+            "x-expected-profile-time-zone": "America/Chicago",
+          },
+          body: JSON.stringify(body),
+        },
+      ),
+    );
+
+    expect(response.status).toBe(201);
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    expect(calls[0]?.url).toBe(
+      "http://127.0.0.1:4000/v1/diary/entries?profileTimeZonePrecondition=v1",
+    );
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual(body);
+    const headers = new Headers(calls[0]?.init?.headers);
+    expect(headers.get("authorization")).toBe(`Bearer ${"t".repeat(43)}`);
+    expect(headers.get("idempotency-key")).toBe("61eec75e-fe16-47e4-9f7b-efb6914ad9dc");
+    expect(headers.get("x-expected-profile-time-zone")).toBe("America/Chicago");
+  });
+
+  it("rejects missing, unpaired, duplicate, or unsupported create guards before upstream", async () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    const create = (query: string, expectedTimeZone?: string) =>
+      proxyDiaryCreate(
+        new Request(`https://app.example.test/api/diary/entries${query}`, {
+          method: "POST",
+          headers: {
+            cookie: `${SESSION_COOKIE}=${"t".repeat(43)}`,
+            "content-type": "application/json",
+            "idempotency-key": "61eec75e-fe16-47e4-9f7b-efb6914ad9dc", // gitleaks:allow -- deterministic UUID fixture
+            origin: "https://app.example.test",
+            "sec-fetch-site": "same-origin",
+            ...(expectedTimeZone ? { "x-expected-profile-time-zone": expectedTimeZone } : {}),
+          },
+          body: JSON.stringify({
+            foodVersionId: "202",
+            portion: { kind: "grams", grams: "125.5" },
+            mealSlot: "breakfast",
+            occurredAt: "2026-08-15T13:30:00.000Z",
+          }),
+        }),
+      );
+
+    const rejected = await Promise.all([
+      create("?date=2026-08-15"),
+      create("?date=2026-08-15", "America/Chicago"),
+      create("?date=2026-08-15&profileTimeZonePrecondition=v1"),
+      create("?date=2026-08-15&profileTimeZonePrecondition=v2", "America/Chicago"),
+      create("?date=2026-08-15&profileTimeZonePrecondition=v1", "Not/A-Time-Zone"),
+      create(
+        "?date=2026-08-15&profileTimeZonePrecondition=v1&profileTimeZonePrecondition=v1",
+        "America/Chicago",
+      ),
+      create("?date=2026-08-15&profileTimeZonePrecondition=v1&extra=true", "America/Chicago"),
+    ]);
+    expect(rejected.map((response) => response.status)).toEqual([
+      400, 400, 400, 400, 400, 400, 400,
+    ]);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it("keeps guarded creates behind the trusted-origin and bounded-body checks", async () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal("fetch", fetcher);
+    const headers = {
+      cookie: `${SESSION_COOKIE}=${"t".repeat(43)}`,
+      "content-type": "application/json",
+      "idempotency-key": "61eec75e-fe16-47e4-9f7b-efb6914ad9dc", // gitleaks:allow -- deterministic UUID fixture
+      "x-expected-profile-time-zone": "America/Chicago",
+    };
+    const crossOrigin = await proxyDiaryCreate(
+      new Request(
+        "https://app.example.test/api/diary/entries?date=2026-08-15&profileTimeZonePrecondition=v1",
+        {
+          method: "POST",
+          headers: {
+            ...headers,
+            origin: "https://evil.example.test",
+            "sec-fetch-site": "cross-site",
+          },
+          body: JSON.stringify({ foodVersionId: "202" }),
+        },
+      ),
+    );
+    expect(crossOrigin.status).toBe(403);
+
+    const oversized = await proxyDiaryCreate(
+      new Request(
+        "https://app.example.test/api/diary/entries?date=2026-08-15&profileTimeZonePrecondition=v1",
+        {
+          method: "POST",
+          headers: {
+            ...headers,
+            origin: "https://app.example.test",
+            "sec-fetch-site": "same-origin",
+          },
+          body: JSON.stringify({ value: "x".repeat(16_385) }),
+        },
+      ),
+    );
+    expect(oversized.status).toBe(400);
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it("preserves a serving portion patch and forwards only reviewed concurrency headers", async () => {
     const calls: Array<{ readonly url: string; readonly init?: RequestInit }> = [];
     vi.stubGlobal(

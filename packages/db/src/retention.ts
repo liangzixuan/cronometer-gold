@@ -1178,7 +1178,7 @@ export async function createCustomFood(
       "custom_food",
       "create",
     );
-    if (replay) return replay;
+    if (replay) return { ...replay, replayed: true };
     await lockActiveNutrientRegistryForRead(transaction);
     const definitions = await loadCustomFoodNutrients(transaction, draft);
     const customFoodId = randomUUID();
@@ -1244,7 +1244,7 @@ export async function reviseCustomFood(
       "custom_food",
       "revise",
     );
-    if (replay) return replay;
+    if (replay) return { ...replay, replayed: true };
     const root = await transaction
       .selectFrom("custom_food")
       .selectAll()
@@ -1353,7 +1353,7 @@ export async function archiveCustomFood(
       "custom_food",
       "archive",
     );
-    if (replay) return replay;
+    if (replay) return { ...replay, replayed: true };
     const root = await transaction
       .selectFrom("custom_food")
       .selectAll()

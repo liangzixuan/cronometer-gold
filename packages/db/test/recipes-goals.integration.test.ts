@@ -20,6 +20,7 @@ import {
   createRecipeDiaryEntry,
   type Database,
   DiaryIdempotencyConflictError,
+  DiaryTimeZoneChangedError,
   deleteDiaryEntry,
   getCurrentNutritionGoal,
   getDiaryDay,
@@ -203,6 +204,81 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
           });
         }
       }
+    } finally {
+      await fixture.close();
+    }
+  }, 30_000);
+
+  it("guards recipe logging against profile-zone drift and replays exact commits first", async () => {
+    if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
+    const fixture = await createFixture(databaseUrl, "recipe_zone_guard");
+    try {
+      const recipe = await createRecipe(fixture.database, {
+        clientOperationId: randomUUID(),
+        recipe: foodRecipeDraft(fixture.catalogue.foodVersionId, fixture.catalogue.servingId, {
+          servingCount: "1",
+          servingLabel: "bowl",
+          yieldGrams: "50",
+        }),
+        requestDigest: "1".repeat(64),
+        userId: fixture.owner.userId,
+      });
+      const guardedInput = {
+        clientOperationId: randomUUID(),
+        expectedProfileTimeZone: "America/Chicago",
+        mealSlot: "breakfast" as const,
+        occurredAt: "2026-08-15T05:30:00Z",
+        portion: { amount: "1", kind: "serving" as const },
+        recipeId: recipe.recipe.id,
+        recipeVersionId: recipe.recipe.currentVersion.id,
+        requestDigest: "2".repeat(64),
+        userId: fixture.owner.userId,
+      };
+      const mismatchedOperationId = randomUUID();
+      await expect(
+        createRecipeDiaryEntry(fixture.database, {
+          ...guardedInput,
+          clientOperationId: mismatchedOperationId,
+          expectedProfileTimeZone: "Asia/Tokyo",
+          requestDigest: "3".repeat(64),
+        }),
+      ).rejects.toBeInstanceOf(DiaryTimeZoneChangedError);
+      for (const table of ["diary_entry", "diary_operation"] as const) {
+        expect(
+          await fixture.database
+            .selectFrom(table)
+            .select(({ fn }) => fn.countAll<string>().as("count"))
+            .where("user_id", "=", fixture.owner.userId)
+            .where("client_operation_id", "=", mismatchedOperationId)
+            .executeTakeFirstOrThrow(),
+        ).toEqual({ count: "0" });
+      }
+
+      const created = await createRecipeDiaryEntry(fixture.database, guardedInput);
+      expect(created).toMatchObject({
+        entry: { localDate: "2026-08-15", timeZone: "America/Chicago" },
+        replayed: false,
+      });
+      await updateUserProfile(fixture.database, {
+        expectedRevision: "0",
+        patch: { timeZone: "Asia/Tokyo" },
+        userId: fixture.owner.userId,
+      });
+      await expect(createRecipeDiaryEntry(fixture.database, guardedInput)).resolves.toMatchObject({
+        entry: {
+          id: created.entry.id,
+          localDate: "2026-08-15",
+          timeZone: "America/Chicago",
+        },
+        replayed: true,
+      });
+      await expect(
+        createRecipeDiaryEntry(fixture.database, {
+          ...guardedInput,
+          expectedProfileTimeZone: "Asia/Tokyo",
+          requestDigest: "4".repeat(64),
+        }),
+      ).rejects.toBeInstanceOf(DiaryIdempotencyConflictError);
     } finally {
       await fixture.close();
     }

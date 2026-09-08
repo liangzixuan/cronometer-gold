@@ -78,11 +78,15 @@ import {
   type PlatformConsentRequest,
   type PlatformIntegrationListResponse,
   type PlatformIntegrationResponse,
+  type ProfileTimeZonePreconditionHeaders,
+  type ProfileTimeZonePreconditionQuery,
   platformConsentRequestSchema,
   platformIntegrationListResponseSchema,
   platformIntegrationResponseSchema,
   platformParamsSchema,
   problemDetailsSchema,
+  profileTimeZonePreconditionHeadersSchema,
+  profileTimeZonePreconditionQuerySchema,
   type RebindPlatformIntegrationRequest,
   type RegisterHealthDeviceRequest,
   type ReminderDraftRequest,
@@ -109,9 +113,14 @@ import {
 } from "../../http/authentication.js";
 import { requireIdempotencyKey, requireRevision, revisionEtag } from "../../http/preconditions.js";
 import { HttpProblem } from "../../http/problem.js";
+import {
+  expectedProfileTimeZone,
+  rejectUnpairedProfileTimeZonePrecondition,
+} from "../../http/profile-time-zone-precondition.js";
 import { rejectUnexpectedQueryKeys } from "../../http/request-validation.js";
 import type { AuthService } from "../auth/auth-service.js";
 import { BoundedAuthRateLimiter } from "../auth/rate-limiter.js";
+import { DiaryTimeZoneChangedServiceError } from "../diary/diary.routes.js";
 import { verifyDeviceRegistration } from "./device-signatures.js";
 
 type Signal = { readonly signal?: AbortSignal };
@@ -175,6 +184,7 @@ export interface RetentionService {
     input: Operation & {
       readonly customFoodId: string;
       readonly entry: CreateCustomFoodDiaryEntryRequest;
+      readonly expectedProfileTimeZone?: string;
     },
   ): Promise<DiaryMutationResponse>;
   listBiometricDefinitions(
@@ -459,6 +469,16 @@ function mapError(error: unknown): HttpProblem {
       expose: true,
     });
   }
+  if (error instanceof DiaryTimeZoneChangedServiceError) {
+    return new HttpProblem({
+      statusCode: 409,
+      code: "DIARY_TIME_ZONE_CHANGED",
+      title: "Conflict",
+      detail:
+        "The profile time zone changed before the diary entry was saved. Review the date and try again.",
+      expose: true,
+    });
+  }
   if (error instanceof RetentionImportConflictServiceError) {
     return new HttpProblem({
       statusCode: 409,
@@ -685,9 +705,11 @@ export const retentionRoutes: FastifyPluginAsync<RetentionRoutesOptions> = async
         ? new Set(["definitionId", "from", "to"])
         : route.endsWith("/custom-foods") && request.method === "GET"
           ? new Set(["cursor", "limit"])
-          : route.endsWith("/biometrics/events") && request.method === "GET"
-            ? new Set(["from", "to", "definitionId", "cursor", "limit"])
-            : new Set<string>();
+          : route.endsWith("/custom-foods/:customFoodId/log") && request.method === "POST"
+            ? new Set(["profileTimeZonePrecondition"])
+            : route.endsWith("/biometrics/events") && request.method === "GET"
+              ? new Set(["from", "to", "definitionId", "cursor", "limit"])
+              : new Set<string>();
     const unexpected = Object.keys((request.query ?? {}) as object).find(
       (key) => !allowed.has(key),
     );
@@ -1020,11 +1042,22 @@ export const retentionRoutes: FastifyPluginAsync<RetentionRoutesOptions> = async
     },
   );
 
-  app.post<{ Params: CustomFoodParams; Body: CreateCustomFoodDiaryEntryRequest }>(
+  app.post<{
+    Params: CustomFoodParams;
+    Body: CreateCustomFoodDiaryEntryRequest;
+    Headers: ProfileTimeZonePreconditionHeaders;
+    Querystring: ProfileTimeZonePreconditionQuery;
+  }>(
     "/custom-foods/:customFoodId/log",
     {
+      preValidation: [
+        rejectUnexpectedQueryKeys(["profileTimeZonePrecondition"]),
+        rejectUnpairedProfileTimeZonePrecondition,
+      ],
       schema: {
         params: customFoodParamsSchema,
+        headers: profileTimeZonePreconditionHeadersSchema,
+        querystring: profileTimeZonePreconditionQuerySchema,
         body: createCustomFoodDiaryEntryRequestSchema,
         response: {
           200: diaryMutationResponseSchema,
@@ -1043,15 +1076,28 @@ export const retentionRoutes: FastifyPluginAsync<RetentionRoutesOptions> = async
       try {
         consumeMutation(limiter, principal.userId);
         const clientOperationId = requireIdempotencyKey(request.headers["idempotency-key"]);
+        const expectedTimeZone = expectedProfileTimeZone(
+          request.headers["x-expected-profile-time-zone"],
+        );
+        const digestInput = {
+          customFoodId: request.params.customFoodId,
+          entry: request.body,
+        };
         const result = await withSignal(request, (signal) =>
           service(options).logCustomFood({
             userId: principal.userId,
             customFoodId: request.params.customFoodId,
             clientOperationId,
-            requestDigest: digest("log-custom-food", {
-              customFoodId: request.params.customFoodId,
-              entry: request.body,
-            }),
+            requestDigest:
+              expectedTimeZone === undefined
+                ? digest("log-custom-food", digestInput)
+                : digest("log-custom-food-with-expected-profile-time-zone-v1", {
+                    ...digestInput,
+                    expectedProfileTimeZone: expectedTimeZone,
+                  }),
+            ...(expectedTimeZone === undefined
+              ? {}
+              : { expectedProfileTimeZone: expectedTimeZone }),
             entry: request.body,
             signal,
           }),
