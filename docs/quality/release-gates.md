@@ -320,6 +320,21 @@ acceptance.
   energy accounting.
 - Goal progress proves lower-bound semantics with incomplete nutrient panels and
   never labels an unknown contribution as measured zero or exact completion.
+- The optional M1B-R reference-template candidate remains disabled for
+  controlled-beta and commercial users until a named registered dietitian or
+  qualified clinical-science owner approves its exact values, canonical units,
+  RDA/AI/UL meanings, applicability boundaries, cautions, copy, and test
+  evidence; legal/privacy review approves its intended use and sensitive
+  profile/acknowledgement handling; and copyright review approves the commercial
+  source presentation. Acceptance proves explicit profile-revision-bound group
+  selection and versioned acknowledgement, server-authoritative all-or-nothing
+  materialization, no client-authored fallback vector, reference-applicability
+  expiry at the 51st birthday, no silent source upgrade, manual-goal
+  compatibility, export and erasure, and browser plus signed iOS/Android
+  preview/detail accessibility. The product must not reproduce source tables or
+  branding, imply Government of Canada or NASEM endorsement, call a UL a target
+  or guarantee of safety, or infer diagnosis, deficiency, toxicity, or adequacy
+  from diary intake.
 - Diary client acceptance exercises a synthetic multi-page day spanning
   breakfast, lunch, dinner, and snacks on browser, physical iOS, and physical
   Android. Every immutable entry appears exactly once; repeated `totalEntries`

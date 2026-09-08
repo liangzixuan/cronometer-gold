@@ -7,7 +7,7 @@ import Fastify, {
   LogController,
 } from "fastify";
 
-import { type AppConfig, loadConfig } from "./config.js";
+import { type AppConfig, ConfigValidationError, loadConfig } from "./config.js";
 import { registerAuthContext } from "./http/authentication.js";
 import { registerErrorHandling } from "./http/error-handler.js";
 import { createLoggerOptions } from "./logging.js";
@@ -33,6 +33,7 @@ export interface BuildAppOptions {
   hydrationService?: HydrationService;
   recipeService?: RecipeService;
   goalService?: GoalService;
+  referenceTargetsEnabled?: boolean;
   retentionService?: RetentionService;
   retentionClock?: () => Date;
 }
@@ -41,6 +42,14 @@ const defaultReadinessCheck: ReadinessCheck = (_signal) => true;
 
 export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   const config = options.config ?? loadConfig();
+  if (config.nodeEnv === "production" && options.referenceTargetsEnabled === true) {
+    throw new ConfigValidationError([
+      {
+        field: "REFERENCE_TARGETS_ENABLED",
+        message: "Production approval gate has not been released",
+      },
+    ]);
+  }
   const requestStartedAt = new WeakMap<FastifyRequest, bigint>();
   const app = Fastify({
     ajv: { customOptions: { removeAdditional: false } },
@@ -98,6 +107,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     ...(options.hydrationService ? { hydrationService: options.hydrationService } : {}),
     ...(options.recipeService ? { recipeService: options.recipeService } : {}),
     ...(options.goalService ? { goalService: options.goalService } : {}),
+    ...(options.referenceTargetsEnabled === true ? { referenceTargetsEnabled: true } : {}),
     ...(options.retentionService ? { retentionService: options.retentionService } : {}),
     ...(options.retentionClock ? { clock: options.retentionClock } : {}),
   });

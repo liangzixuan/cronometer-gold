@@ -36,6 +36,7 @@ describe.skipIf(!enabled)("API restored-database readiness", () => {
           databaseUrl: scopedUrl.toString(),
           emailVerification: null,
           meiliUrl: "http://127.0.0.1:7700",
+          referenceTargetsEnabled: false,
           requireDatabaseRestoreAttestation: true,
           retention: null,
           searchDatabaseMaxConcurrency: 1,

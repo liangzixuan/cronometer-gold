@@ -828,4 +828,38 @@ describe("forward migration discovery", () => {
       /\b(?:grant|revoke)\s+nutrition_catalogue_[a-z_]+\s+(?:to|from)\b/iu,
     );
   });
+
+  it("admits one immutable reviewed-reference candidate with deferred vector integrity", async () => {
+    const migrationSql = await readFile(
+      resolve(import.meta.dirname, "../migrations/0023_reviewed_reference_targets.sql"),
+      "utf8",
+    );
+
+    expect(createHash("sha256").update(migrationSql).digest("hex")).toBe(
+      "d162133908e62b4df43fd67ee91f8296e69fd47099bc2f8aaab0b3c737fba93c",
+    );
+    expect(migrationSql).not.toMatch(/\bdrop\s+(table|column|type|role)\b/iu);
+    expect(migrationSql).not.toMatch(/\btruncate\b/iu);
+    expect(migrationSql).toContain(
+      "lock table nutrition_goal_version, nutrition_goal_target, nutrient in access exclusive mode",
+    );
+    expect(migrationSql).toContain("nutrition_goal_version_reference_identity_v1");
+    expect(migrationSql).toContain("nutrition_goal_target_reference_metadata_v1");
+    expect(migrationSql.match(/\) is true\);/gu)).toHaveLength(2);
+    expect(migrationSql).toContain(
+      "jsonb_typeof(assumptions #> '{referenceTargetSet,ageYears}') = 'number'",
+    );
+    expect(migrationSql).toContain("pg_catalog.pg_input_is_valid(");
+    expect(migrationSql).toContain("version_row.policy_digest is null");
+    expect(migrationSql).toContain("reconcile_goal_reference_vector_v1");
+    expect(migrationSql).toContain("set search_path = pg_catalog, %I, pg_temp");
+    expect(migrationSql.match(/deferrable initially deferred/giu)).toHaveLength(2);
+    expect(migrationSql).not.toContain("nutrition_goal_version_reject_update_v1");
+    expect(migrationSql).not.toContain("nutrition_goal_target_reject_update_v1");
+    expect(migrationSql).toContain("reference goal must contain the complete 12-target vector");
+    expect(migrationSql).toContain("custom goal targets cannot claim reference provenance");
+    for (const identity of ["male-19-50", "female-19-50"]) {
+      expect(migrationSql).toContain(identity);
+    }
+  });
 });

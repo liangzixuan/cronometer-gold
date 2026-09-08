@@ -16,6 +16,23 @@ import { type Kysely, type Selectable, sql, type Transaction } from "kysely";
 
 import { type DiaryNutrientAggregateRecord, readDiaryDaySnapshot } from "./diary.js";
 import { lockActiveNutrientRegistryForRead } from "./nutrient-registry-lock.js";
+import {
+  assertReferenceTargetSelection,
+  REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_CODE,
+  REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_VERSION,
+  REFERENCE_TARGET_ACKNOWLEDGEMENT_TEXT,
+  REFERENCE_TARGET_CAUTIONS,
+  REFERENCE_TARGET_NOTICE,
+  REFERENCE_TARGET_SOURCES,
+  REFERENCE_TARGET_TEMPLATE_CODE,
+  REFERENCE_TARGET_TEMPLATE_VERSION,
+  type ReferenceTargetAvailabilityReasonCode,
+  type ReferenceTargetGroupCode,
+  type ReferenceTargetSelectionInput,
+  referenceEligibleThroughExclusive,
+  referenceSourceRows,
+  referenceTargetPolicy,
+} from "./reference-targets.js";
 import type {
   Database,
   JsonObject,
@@ -28,6 +45,7 @@ const MAX_TARGETS = 256;
 export type NutritionGoalPersistenceErrorCode =
   | "GOAL_IDEMPOTENCY_CONFLICT"
   | "GOAL_NOT_FOUND"
+  | "GOAL_PERSISTED_INTEGRITY"
   | "GOAL_REVISION_CONFLICT"
   | "GOAL_VALIDATION";
 
@@ -73,6 +91,24 @@ export class NutritionGoalPeriodConflictError extends NutritionGoalValidationErr
   override readonly name = "NutritionGoalPeriodConflictError";
 }
 
+export class NutritionGoalProfileRevisionConflictError extends NutritionGoalValidationError {
+  override readonly name = "NutritionGoalProfileRevisionConflictError";
+  constructor() {
+    super("Profile revision does not match");
+  }
+}
+
+export class NutritionGoalReferenceUnavailableError extends NutritionGoalValidationError {
+  override readonly name = "NutritionGoalReferenceUnavailableError";
+}
+
+export class NutritionGoalPersistedIntegrityError extends NutritionGoalPersistenceError {
+  override readonly name = "NutritionGoalPersistedIntegrityError";
+  constructor(message = "Persisted nutrition goal integrity verification failed") {
+    super("GOAL_PERSISTED_INTEGRITY", message);
+  }
+}
+
 export type GoalActivityLevelCode = "active_or_moderate" | "sedentary_or_light" | "vigorous";
 
 export type NutritionGoalEnergyInput =
@@ -98,9 +134,15 @@ export interface NutritionGoalTargetInput {
   readonly rationale: string | null;
 }
 
+export interface NutritionGoalReferenceInput {
+  readonly expectedProfileRevision: string;
+  readonly selection: ReferenceTargetSelectionInput;
+}
+
 export interface NutritionGoalDraft {
   readonly energy: NutritionGoalEnergyInput;
   readonly targets: readonly NutritionGoalTargetInput[];
+  readonly referenceTargetSet?: NutritionGoalReferenceInput;
 }
 
 export interface CreateNutritionGoalInput extends NutritionGoalDraft {
@@ -167,6 +209,23 @@ export interface NutritionGoalTargetRecord {
   readonly maximumAmount: string | null;
   readonly source: { readonly label: string; readonly version: string | null };
   readonly rationale: string | null;
+  readonly metadata?: JsonObject;
+}
+
+export interface NutritionGoalReferenceRecord {
+  readonly templateCode: typeof REFERENCE_TARGET_TEMPLATE_CODE;
+  readonly templateVersion: typeof REFERENCE_TARGET_TEMPLATE_VERSION;
+  readonly groupCode: ReferenceTargetGroupCode;
+  readonly appliedProfileRevision: string;
+  readonly ageYears: number;
+  readonly eligibleThroughExclusive: string;
+  readonly policyDigest: string;
+  readonly acknowledgement: {
+    readonly accepted: true;
+    readonly acceptedAt: string;
+    readonly policyCode: typeof REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_CODE;
+    readonly policyVersion: typeof REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_VERSION;
+  };
 }
 
 export interface NutritionGoalVersionRecord {
@@ -179,6 +238,7 @@ export interface NutritionGoalVersionRecord {
   readonly targets: readonly NutritionGoalTargetRecord[];
   readonly calculationVersion: string;
   readonly createdAt: string;
+  readonly referenceTargetSet?: NutritionGoalReferenceRecord | null;
 }
 
 export interface NutritionGoalRecord {
@@ -244,17 +304,76 @@ export interface NutritionGoalProgressRecord {
   readonly targets: readonly NutritionGoalTargetProgressRecord[];
 }
 
+export interface ReferenceTargetSetListRecord {
+  readonly date: string;
+  readonly profileRevision: string;
+  readonly availability: {
+    readonly available: boolean;
+    readonly reasonCodes: readonly ReferenceTargetAvailabilityReasonCode[];
+  };
+  readonly sets: readonly {
+    readonly templateCode: typeof REFERENCE_TARGET_TEMPLATE_CODE;
+    readonly templateVersion: typeof REFERENCE_TARGET_TEMPLATE_VERSION;
+    readonly groupCode: ReferenceTargetGroupCode;
+    readonly title: string;
+    readonly policyDigest: string;
+    readonly eligibleThroughExclusive: string;
+    readonly targets: readonly {
+      readonly definition: GoalNutrientDefinitionRecord;
+      readonly minimumAmount: null;
+      readonly targetAmount: string;
+      readonly maximumAmount: string | null;
+      readonly basis: {
+        readonly timeBasis: "usual-average-daily-intake";
+        readonly referenceType: "rda" | "ai";
+        readonly maximumReferenceType: "ul" | null;
+        readonly sourceRows: readonly string[];
+      };
+      readonly source: {
+        readonly label: string;
+        readonly version: string;
+        readonly url: string;
+        readonly table: string;
+      };
+      readonly rationale: string;
+    }[];
+  }[];
+  readonly acknowledgementPolicy: {
+    readonly code: typeof REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_CODE;
+    readonly version: typeof REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_VERSION;
+    readonly text: string;
+  };
+  readonly sources: typeof REFERENCE_TARGET_SOURCES;
+  readonly cautions: typeof REFERENCE_TARGET_CAUTIONS;
+  readonly applied: {
+    readonly goalId: string;
+    readonly goalVersionId: string;
+    readonly goalRevision: string;
+    readonly templateCode: typeof REFERENCE_TARGET_TEMPLATE_CODE;
+    readonly templateVersion: typeof REFERENCE_TARGET_TEMPLATE_VERSION;
+    readonly groupCode: ReferenceTargetGroupCode;
+    readonly appliedProfileRevision: string;
+    readonly policyDigest: string;
+    readonly eligibleThroughExclusive: string;
+    readonly acknowledgement: NutritionGoalReferenceRecord["acknowledgement"];
+    readonly set: ReferenceTargetSetListRecord["sets"][number];
+  } | null;
+  readonly notice: typeof REFERENCE_TARGET_NOTICE;
+}
+
 interface LockedProfile {
   readonly revision: string;
   readonly birthDate: string | null;
   readonly sexAtBirth: "female" | "intersex" | "male" | "not_specified";
   readonly heightCm: string | null;
   readonly weightKg: string | null;
+  readonly currentLocalDate?: string;
 }
 
 interface MaterializedGoal {
   readonly energy: NutritionGoalEnergyRecord;
   readonly targets: readonly NutritionGoalTargetRecord[];
+  readonly referenceTargetSet: NutritionGoalReferenceRecord | null;
 }
 
 export async function createNutritionGoal(
@@ -269,9 +388,9 @@ export async function createNutritionGoal(
       .setIsolationLevel("read committed")
       .execute(async (transaction) => {
         await lockGoalUser(transaction, input.userId);
-        const profile = await requireWritableGoalProfile(transaction, input.userId);
         const replay = await readGoalReplay(transaction, input, "create");
         if (replay) return replay;
+        const profile = await requireWritableGoalProfile(transaction, input.userId);
         const activeGoals = await transaction
           .selectFrom("nutrition_goal as goal")
           .innerJoin("nutrition_goal_version as version", "version.id", "goal.current_version_id")
@@ -310,6 +429,7 @@ export async function createNutritionGoal(
           input.effectiveFrom,
           input.energy,
           input.targets,
+          input.referenceTargetSet,
         );
         const goalId = randomUUID();
         const versionId = randomUUID();
@@ -363,9 +483,9 @@ export async function reviseNutritionGoal(
     .setIsolationLevel("read committed")
     .execute(async (transaction) => {
       await lockGoalUser(transaction, input.userId);
-      const profile = await requireWritableGoalProfile(transaction, input.userId);
       const replay = await readGoalReplay(transaction, input, "revise", input.goalId);
       if (replay) return replay;
+      const profile = await requireWritableGoalProfile(transaction, input.userId);
       const root = await transaction
         .selectFrom("nutrition_goal as goal")
         .innerJoin("nutrition_goal_version as version", "version.id", "goal.current_version_id")
@@ -396,6 +516,8 @@ export async function reviseNutritionGoal(
         effectiveFrom,
         input.energy,
         input.targets,
+        input.referenceTargetSet,
+        profile.currentLocalDate,
       );
       const versionNumber = Number(expectedRevision) + 1;
       if (!Number.isSafeInteger(versionNumber) || versionNumber > 2_147_483_647) {
@@ -502,6 +624,200 @@ export async function getNutritionGoalProgress(
     });
 }
 
+export async function listReferenceTargetSets(
+  database: Kysely<Database>,
+  input: { readonly userId: string; readonly localDate: string },
+): Promise<ReferenceTargetSetListRecord> {
+  validateLocalDate(input.localDate);
+  return database
+    .transaction()
+    .setIsolationLevel("repeatable read")
+    .setAccessMode("read only")
+    .execute(async (transaction) => {
+      const profile = await requireReadableGoalProfile(transaction, input.userId);
+      const reasons: ReferenceTargetAvailabilityReasonCode[] = [];
+      let groupCode: ReferenceTargetGroupCode | null = null;
+      let ageYears: number | null = null;
+      if (profile.birthDate === null) reasons.push("profile_missing_birth_date");
+      else ageYears = ageOnDate(profile.birthDate, input.localDate);
+      if (profile.sexAtBirth !== "female" && profile.sexAtBirth !== "male") {
+        reasons.push("profile_sex_unsupported");
+      } else {
+        groupCode = `${profile.sexAtBirth}-19-50` as ReferenceTargetGroupCode;
+      }
+      if (ageYears !== null && (ageYears < 19 || ageYears > 50)) {
+        reasons.push("outside_reviewed_age");
+      }
+      const sets: ReferenceTargetSetListRecord["sets"] extends readonly (infer T)[] ? T[] : never =
+        [];
+      if (reasons.length === 0 && groupCode !== null && profile.birthDate !== null) {
+        try {
+          const policy = referenceTargetPolicy(groupCode);
+          const targets = await resolveReferenceCatalogueTargets(transaction, groupCode);
+          sets.push({
+            eligibleThroughExclusive: referenceEligibleThroughExclusive(profile.birthDate),
+            groupCode,
+            policyDigest: policy.policyDigest,
+            targets,
+            templateCode: REFERENCE_TARGET_TEMPLATE_CODE,
+            templateVersion: REFERENCE_TARGET_TEMPLATE_VERSION,
+            title: policy.title,
+          });
+        } catch (error) {
+          if (!(error instanceof NutritionGoalReferenceUnavailableError)) throw error;
+          reasons.push("nutrient_registry_unavailable");
+        }
+      }
+      const current = await loadGoalForDate(transaction, input.userId, input.localDate);
+      const appliedReference = current?.currentVersion.referenceTargetSet ?? null;
+      const appliedSet =
+        current && appliedReference
+          ? resolvedStoredReferenceTargetSet(current.currentVersion.targets, appliedReference)
+          : null;
+      return {
+        acknowledgementPolicy: {
+          code: REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_CODE,
+          text: REFERENCE_TARGET_ACKNOWLEDGEMENT_TEXT,
+          version: REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_VERSION,
+        },
+        applied:
+          current && appliedReference && appliedSet
+            ? {
+                appliedProfileRevision: appliedReference.appliedProfileRevision,
+                acknowledgement: appliedReference.acknowledgement,
+                eligibleThroughExclusive: appliedReference.eligibleThroughExclusive,
+                goalId: current.id,
+                goalRevision: current.currentRevision,
+                goalVersionId: current.currentVersion.id,
+                groupCode: appliedReference.groupCode,
+                policyDigest: appliedReference.policyDigest,
+                templateCode: appliedReference.templateCode,
+                templateVersion: appliedReference.templateVersion,
+                set: appliedSet,
+              }
+            : null,
+        availability: { available: sets.length === 1, reasonCodes: reasons },
+        cautions: REFERENCE_TARGET_CAUTIONS,
+        date: input.localDate,
+        notice: REFERENCE_TARGET_NOTICE,
+        profileRevision: profile.revision,
+        sets,
+        sources: REFERENCE_TARGET_SOURCES,
+      };
+    });
+}
+
+function resolvedStoredReferenceTargetSet(
+  storedTargets: readonly NutritionGoalTargetRecord[],
+  reference: NutritionGoalReferenceRecord,
+): ReferenceTargetSetListRecord["sets"][number] {
+  const policy = referenceTargetPolicy(reference.groupCode);
+  const sourceRows = referenceSourceRows(reference.groupCode);
+  const byCode = new Map(storedTargets.map((target) => [target.nutrient.code, target]));
+  const targets = policy.rows.map((expected) => {
+    const stored = byCode.get(expected.code);
+    if (
+      !stored ||
+      stored.source.version === null ||
+      stored.rationale === null ||
+      stored.targetAmount === null
+    ) {
+      throw new NutritionGoalPersistedIntegrityError();
+    }
+    return {
+      basis: {
+        maximumReferenceType: expected.maximumReferenceType,
+        referenceType: expected.referenceType,
+        sourceRows,
+        timeBasis: "usual-average-daily-intake" as const,
+      },
+      definition: stored.nutrient,
+      maximumAmount: stored.maximumAmount,
+      minimumAmount: null,
+      rationale: stored.rationale,
+      source: {
+        label: stored.source.label,
+        table: expected.sourceTable,
+        url: expected.sourceUrl,
+        version: stored.source.version,
+      },
+      targetAmount: stored.targetAmount,
+    };
+  });
+  return {
+    eligibleThroughExclusive: reference.eligibleThroughExclusive,
+    groupCode: reference.groupCode,
+    policyDigest: reference.policyDigest,
+    targets,
+    templateCode: reference.templateCode,
+    templateVersion: reference.templateVersion,
+    title: policy.title,
+  };
+}
+
+async function resolveReferenceCatalogueTargets(
+  database: Kysely<Database>,
+  groupCode: ReferenceTargetGroupCode,
+): Promise<ReferenceTargetSetListRecord["sets"][number]["targets"]> {
+  const policy = referenceTargetPolicy(groupCode);
+  const rows = await database
+    .selectFrom("nutrient")
+    .select(["id", "code", "name", "canonical_unit", "active", "is_targetable", "dimension"])
+    .where(
+      "code",
+      "in",
+      policy.rows.map((target) => target.code),
+    )
+    .orderBy("code")
+    .execute();
+  if (rows.length !== policy.rows.length) {
+    throw new NutritionGoalReferenceUnavailableError(
+      "Reference target nutrient registry is incomplete",
+    );
+  }
+  const byCode = new Map(rows.map((row) => [row.code, row]));
+  const sourceRows = referenceSourceRows(groupCode);
+  return policy.rows.map((target) => {
+    const nutrient = byCode.get(target.code);
+    if (
+      !nutrient?.active ||
+      !nutrient.is_targetable ||
+      nutrient.dimension === "energy" ||
+      nutrient.canonical_unit !== target.unit ||
+      !target.sourceUrl.startsWith("https://")
+    ) {
+      throw new NutritionGoalReferenceUnavailableError(
+        "Reference target nutrient registry is incompatible",
+      );
+    }
+    return {
+      basis: {
+        maximumReferenceType: target.maximumReferenceType,
+        referenceType: target.referenceType,
+        sourceRows,
+        timeBasis: "usual-average-daily-intake",
+      },
+      definition: {
+        category: nutrientCategory(nutrient.dimension),
+        code: nutrient.code,
+        id: nutrient.id,
+        name: nutrient.name,
+        unit: supportedUnit(nutrient.canonical_unit),
+      },
+      maximumAmount: target.maximumAmount,
+      minimumAmount: null,
+      rationale: target.rationale,
+      source: {
+        label: target.sourceLabel,
+        table: target.sourceTable,
+        url: target.sourceUrl,
+        version: target.sourceVersion,
+      },
+      targetAmount: target.targetAmount,
+    };
+  });
+}
+
 export async function listTargetableNutrients(
   database: Kysely<Database>,
   input: { readonly userId: string },
@@ -565,10 +881,24 @@ async function materializeGoal(
   effectiveFrom: string,
   energy: NutritionGoalEnergyInput,
   targets: readonly NutritionGoalTargetInput[],
+  referenceTargetSet: NutritionGoalReferenceInput | undefined,
+  referenceEligibilityDate?: string,
 ): Promise<MaterializedGoal> {
   validateRationale(energy.rationale);
   await lockActiveNutrientRegistryForRead(transaction);
-  const targetRecords = await materializeTargets(transaction, targets);
+  const reference =
+    referenceTargetSet === undefined
+      ? null
+      : await materializeReferenceTargetSet(
+          transaction,
+          profile,
+          effectiveFrom,
+          targets,
+          referenceTargetSet,
+          referenceEligibilityDate,
+        );
+  const targetRecords =
+    reference === null ? await materializeTargets(transaction, targets) : reference.targets;
   if (energy.mode === "fixed") {
     return {
       energy: {
@@ -577,6 +907,7 @@ async function materializeGoal(
         source: { code: "user-fixed", version: "1" },
         targetKcal: positiveInputDecimal(energy.targetKcal, "fixed energy target"),
       },
+      referenceTargetSet: reference?.snapshot ?? null,
       targets: targetRecords,
     };
   }
@@ -640,6 +971,7 @@ async function materializeGoal(
       targetKcal,
       weightKg,
     },
+    referenceTargetSet: reference?.snapshot ?? null,
     targets: targetRecords,
   };
 }
@@ -702,8 +1034,138 @@ async function materializeTargets(
       rationale: input.rationale,
       source: input.source,
       targetAmount,
+      metadata: {},
     };
   });
+}
+
+async function materializeReferenceTargetSet(
+  transaction: Transaction<Database>,
+  profile: LockedProfile,
+  effectiveFrom: string,
+  clientTargets: readonly NutritionGoalTargetInput[],
+  input: NutritionGoalReferenceInput,
+  referenceEligibilityDate?: string,
+): Promise<{
+  readonly snapshot: NutritionGoalReferenceRecord;
+  readonly targets: readonly NutritionGoalTargetRecord[];
+}> {
+  if (clientTargets.length !== 0) {
+    throw new NutritionGoalValidationError(
+      "Reference target amounts must not be supplied by the client",
+    );
+  }
+  if (!/^(?:0|[1-9][0-9]{0,19})$/.test(input.expectedProfileRevision)) {
+    throw new NutritionGoalValidationError("Expected profile revision is invalid");
+  }
+  if (profile.revision !== input.expectedProfileRevision) {
+    throw new NutritionGoalProfileRevisionConflictError();
+  }
+  let groupCode: ReferenceTargetGroupCode;
+  try {
+    groupCode = assertReferenceTargetSelection(input.selection);
+  } catch {
+    throw new NutritionGoalValidationError("Reference target selection is unsupported");
+  }
+  if (
+    profile.birthDate === null ||
+    (profile.sexAtBirth !== "female" && profile.sexAtBirth !== "male")
+  ) {
+    throw new NutritionGoalValidationError(
+      "Reference targets require birth date and female or male sex at birth",
+    );
+  }
+  const ageYears = ageOnDate(profile.birthDate, effectiveFrom);
+  if (ageYears < 19 || ageYears > 50) {
+    throw new NutritionGoalValidationError("Reference targets support ages 19 through 50");
+  }
+  const eligibleThroughExclusive = referenceEligibleThroughExclusive(profile.birthDate);
+  if (
+    referenceEligibilityDate !== undefined &&
+    referenceEligibilityDate >= eligibleThroughExclusive
+  ) {
+    throw new NutritionGoalValidationError(
+      "Reference target revisions expire at the 51st birthday",
+    );
+  }
+  const expectedGroup = `${profile.sexAtBirth}-19-50` as ReferenceTargetGroupCode;
+  if (groupCode !== expectedGroup) {
+    throw new NutritionGoalValidationError("Reference target group does not match the profile");
+  }
+  const policy = referenceTargetPolicy(groupCode);
+  const codes = policy.rows.map((target) => target.code);
+  const nutrients = await transaction
+    .selectFrom("nutrient")
+    .select(["id", "code", "name", "canonical_unit", "active", "is_targetable", "dimension"])
+    .where("code", "in", codes)
+    .orderBy("code")
+    .forKeyShare()
+    .execute();
+  if (nutrients.length !== policy.rows.length) {
+    throw new NutritionGoalReferenceUnavailableError(
+      "Reference target nutrient registry is incomplete",
+    );
+  }
+  const byCode = new Map(nutrients.map((nutrient) => [nutrient.code, nutrient]));
+  const sourceRows = referenceSourceRows(groupCode);
+  const targets = policy.rows.map((target): NutritionGoalTargetRecord => {
+    const nutrient = byCode.get(target.code);
+    if (
+      !nutrient?.active ||
+      !nutrient.is_targetable ||
+      nutrient.dimension === "energy" ||
+      nutrient.canonical_unit !== target.unit ||
+      !target.sourceUrl.startsWith("https://")
+    ) {
+      throw new NutritionGoalReferenceUnavailableError(
+        "Reference target nutrient registry is incompatible",
+      );
+    }
+    return {
+      maximumAmount: target.maximumAmount,
+      metadata: {
+        maximumReferenceType: target.maximumReferenceType,
+        policyDigest: policy.policyDigest,
+        referenceType: target.referenceType,
+        sourceRows,
+        sourceTable: target.sourceTable,
+        sourceUrl: target.sourceUrl,
+        templateCode: REFERENCE_TARGET_TEMPLATE_CODE,
+        templateVersion: REFERENCE_TARGET_TEMPLATE_VERSION,
+        groupCode,
+        timeBasis: "usual-average-daily-intake",
+      },
+      minimumAmount: null,
+      nutrient: {
+        category: nutrientCategory(nutrient.dimension),
+        code: nutrient.code,
+        id: nutrient.id,
+        name: nutrient.name,
+        unit: supportedUnit(nutrient.canonical_unit),
+      },
+      rationale: target.rationale,
+      source: { label: target.sourceLabel, version: target.sourceVersion },
+      targetAmount: target.targetAmount,
+    };
+  });
+  return {
+    snapshot: {
+      acknowledgement: {
+        accepted: true,
+        acceptedAt: new Date().toISOString(),
+        policyCode: REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_CODE,
+        policyVersion: REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_VERSION,
+      },
+      ageYears,
+      appliedProfileRevision: profile.revision,
+      eligibleThroughExclusive,
+      groupCode,
+      policyDigest: policy.policyDigest,
+      templateCode: REFERENCE_TARGET_TEMPLATE_CODE,
+      templateVersion: REFERENCE_TARGET_TEMPLATE_VERSION,
+    },
+    targets,
+  };
 }
 
 async function insertGoalVersion(
@@ -719,6 +1181,7 @@ async function insertGoalVersion(
   },
 ): Promise<void> {
   const energy = input.materialized.energy;
+  const reference = input.materialized.referenceTargetSet;
   await transaction
     .insertInto("nutrition_goal_version")
     .values({
@@ -730,14 +1193,33 @@ async function insertGoalVersion(
       activity_policy_version:
         energy.mode === "derived" ? energy.source.activityPolicy.version : null,
       age_years: energy.mode === "derived" ? energy.ageYears : null,
-      assumptions: {},
+      assumptions:
+        reference === null
+          ? {}
+          : {
+              referenceTargetSet: {
+                acknowledgement: {
+                  ...reference.acknowledgement,
+                },
+                ageYears: reference.ageYears,
+                appliedProfileRevision: reference.appliedProfileRevision,
+                eligibleThroughExclusive: reference.eligibleThroughExclusive,
+                groupCode: reference.groupCode,
+                policyDigest: reference.policyDigest,
+                sourceCode: REFERENCE_TARGET_SOURCES.code,
+                sourceReviewedOn: REFERENCE_TARGET_SOURCES.reviewedOn,
+                sourceVersion: REFERENCE_TARGET_SOURCES.version,
+                templateCode: reference.templateCode,
+                templateVersion: reference.templateVersion,
+              },
+            },
       bmr_equation_code: energy.mode === "derived" ? energy.source.equation.code : null,
       bmr_equation_version: energy.mode === "derived" ? energy.source.equation.version : null,
       bmr_kcal: energy.mode === "derived" ? energy.bmrKcal : null,
       calculation_version: NUTRITION_ENGINE_VERSION,
       created_by_user_id: input.userId,
-      dri_reference_group_code: null,
-      dri_reference_version: null,
+      dri_reference_group_code: reference?.groupCode ?? null,
+      dri_reference_version: reference?.templateVersion ?? null,
       effective_from: input.effectiveFrom,
       effective_to: input.effectiveTo,
       energy_adjustment_kcal: energy.mode === "derived" ? energy.adjustmentKcal : null,
@@ -769,7 +1251,7 @@ async function insertGoalVersion(
       .values(
         input.materialized.targets.map((target) => ({
           maximum_amount: target.maximumAmount,
-          metadata: {},
+          metadata: target.metadata ?? {},
           minimum_amount: target.minimumAmount,
           nutrient_id: target.nutrient.id,
           nutrition_goal_version_id: input.versionId,
@@ -861,7 +1343,11 @@ async function loadGoalForDate(
     .limit(2)
     .execute();
   if (root.length > 1) throw new NutritionGoalPeriodConflictError("Active goal periods overlap");
-  return root[0] ? loadOwnedGoal(database, userId, root[0].id) : null;
+  if (!root[0]) return null;
+  const goal = await loadOwnedGoal(database, userId, root[0].id);
+  const reference = goal.currentVersion.referenceTargetSet;
+  if (reference && localDate >= reference.eligibleThroughExclusive) return null;
+  return goal;
 }
 
 async function loadOwnedGoal(
@@ -921,6 +1407,7 @@ async function loadGoalVersion(
       "target.unit",
       "target.target_source",
       "target.target_source_version",
+      "target.metadata",
       "target.rationale",
       "nutrient.code",
       "nutrient.name",
@@ -931,6 +1418,11 @@ async function loadGoalVersion(
     .limit(MAX_TARGETS + 1)
     .execute();
   if (targets.length !== row.target_count || targets.length > MAX_TARGETS) {
+    if (row.dri_reference_group_code !== null || row.dri_reference_version !== null) {
+      throw new NutritionGoalPersistedIntegrityError(
+        "Stored reference target count is inconsistent",
+      );
+    }
     throw new NutritionGoalValidationError("Goal target count is inconsistent");
   }
   const energy: NutritionGoalEnergyRecord =
@@ -949,6 +1441,7 @@ async function loadGoalVersion(
     effectiveTo: row.effective_to === null ? null : normalizeDate(row.effective_to),
     energy,
     id: row.id,
+    referenceTargetSet: loadReferenceTargetSetSnapshot(row, targets),
     status: row.goal_status,
     targets: targets.map((target) => ({
       maximumAmount: nullableCanonical(target.maximum_amount),
@@ -963,9 +1456,156 @@ async function loadGoalVersion(
       rationale: target.rationale,
       source: { label: target.target_source, version: target.target_source_version },
       targetAmount: nullableCanonical(target.target_amount),
+      metadata: target.metadata,
     })),
     versionNumber: String(row.version_number),
   };
+}
+
+function loadReferenceTargetSetSnapshot(
+  row: Selectable<NutritionGoalVersionTable>,
+  targets: readonly {
+    readonly code: string;
+    readonly minimum_amount: string | null;
+    readonly target_amount: string | null;
+    readonly maximum_amount: string | null;
+    readonly unit: string;
+    readonly target_source: string;
+    readonly target_source_version: string | null;
+    readonly rationale: string | null;
+    readonly metadata: JsonObject;
+  }[],
+): NutritionGoalReferenceRecord | null {
+  if (row.dri_reference_group_code === null && row.dri_reference_version === null) return null;
+  try {
+    return loadReferenceTargetSetSnapshotUnchecked(row, targets);
+  } catch (error) {
+    if (error instanceof NutritionGoalPersistedIntegrityError) throw error;
+    throw new NutritionGoalPersistedIntegrityError();
+  }
+}
+
+function loadReferenceTargetSetSnapshotUnchecked(
+  row: Selectable<NutritionGoalVersionTable>,
+  targets: readonly {
+    readonly code: string;
+    readonly minimum_amount: string | null;
+    readonly target_amount: string | null;
+    readonly maximum_amount: string | null;
+    readonly unit: string;
+    readonly target_source: string;
+    readonly target_source_version: string | null;
+    readonly rationale: string | null;
+    readonly metadata: JsonObject;
+  }[],
+): NutritionGoalReferenceRecord {
+  if (
+    (row.dri_reference_group_code !== "male-19-50" &&
+      row.dri_reference_group_code !== "female-19-50") ||
+    row.dri_reference_version !== REFERENCE_TARGET_TEMPLATE_VERSION
+  ) {
+    throw new NutritionGoalValidationError("Reference target identity is unsupported");
+  }
+  const groupCode = row.dri_reference_group_code;
+  const assumptions = jsonObject(row.assumptions);
+  const snapshot = jsonObject(assumptions.referenceTargetSet);
+  const acknowledgement = jsonObject(snapshot.acknowledgement);
+  const policy = referenceTargetPolicy(groupCode);
+  const ageYears = snapshot.ageYears;
+  const appliedProfileRevision = snapshot.appliedProfileRevision;
+  const eligibleThroughExclusive = snapshot.eligibleThroughExclusive;
+  const acceptedAt = acknowledgement.acceptedAt;
+  if (
+    snapshot.templateCode !== REFERENCE_TARGET_TEMPLATE_CODE ||
+    snapshot.templateVersion !== REFERENCE_TARGET_TEMPLATE_VERSION ||
+    snapshot.groupCode !== groupCode ||
+    snapshot.sourceCode !== REFERENCE_TARGET_SOURCES.code ||
+    snapshot.sourceReviewedOn !== REFERENCE_TARGET_SOURCES.reviewedOn ||
+    snapshot.sourceVersion !== REFERENCE_TARGET_SOURCES.version ||
+    snapshot.policyDigest !== policy.policyDigest ||
+    typeof ageYears !== "number" ||
+    !Number.isInteger(ageYears) ||
+    ageYears < 19 ||
+    ageYears > 50 ||
+    typeof appliedProfileRevision !== "string" ||
+    !/^(?:0|[1-9][0-9]{0,19})$/.test(appliedProfileRevision) ||
+    typeof eligibleThroughExclusive !== "string" ||
+    acknowledgement.accepted !== true ||
+    acknowledgement.policyCode !== REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_CODE ||
+    acknowledgement.policyVersion !== REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_VERSION ||
+    typeof acceptedAt !== "string" ||
+    !/^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}Z$/.test(acceptedAt) ||
+    !Number.isFinite(Date.parse(acceptedAt)) ||
+    new Date(acceptedAt).toISOString() !== acceptedAt
+  ) {
+    throw new NutritionGoalValidationError("Reference target snapshot is invalid");
+  }
+  validateLocalDate(eligibleThroughExclusive);
+  const byCode = new Map(targets.map((target) => [target.code, target]));
+  const sourceRows = referenceSourceRows(groupCode);
+  if (byCode.size !== policy.rows.length) {
+    throw new NutritionGoalValidationError("Reference target vector is incomplete");
+  }
+  for (const expected of policy.rows) {
+    const actual = byCode.get(expected.code);
+    const expectedMetadata: JsonObject = {
+      maximumReferenceType: expected.maximumReferenceType,
+      policyDigest: policy.policyDigest,
+      referenceType: expected.referenceType,
+      sourceRows,
+      sourceTable: expected.sourceTable,
+      sourceUrl: expected.sourceUrl,
+      templateCode: REFERENCE_TARGET_TEMPLATE_CODE,
+      templateVersion: REFERENCE_TARGET_TEMPLATE_VERSION,
+      groupCode,
+      timeBasis: "usual-average-daily-intake",
+    };
+    if (
+      !actual ||
+      nullableCanonical(actual.minimum_amount) !== null ||
+      nullableCanonical(actual.target_amount) !== expected.targetAmount ||
+      nullableCanonical(actual.maximum_amount) !== expected.maximumAmount ||
+      actual.unit !== expected.unit ||
+      actual.target_source !== expected.sourceLabel ||
+      actual.target_source_version !== expected.sourceVersion ||
+      actual.rationale !== expected.rationale ||
+      stableJson(actual.metadata) !== stableJson(expectedMetadata)
+    ) {
+      throw new NutritionGoalValidationError("Reference target vector is invalid");
+    }
+  }
+  return {
+    acknowledgement: {
+      accepted: true,
+      acceptedAt,
+      policyCode: REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_CODE,
+      policyVersion: REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_VERSION,
+    },
+    ageYears,
+    appliedProfileRevision,
+    eligibleThroughExclusive,
+    groupCode,
+    policyDigest: policy.policyDigest,
+    templateCode: REFERENCE_TARGET_TEMPLATE_CODE,
+    templateVersion: REFERENCE_TARGET_TEMPLATE_VERSION,
+  };
+}
+
+function jsonObject(value: unknown): Readonly<Record<string, unknown>> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new NutritionGoalValidationError("Reference target JSON is invalid");
+  }
+  return value as Readonly<Record<string, unknown>>;
+}
+
+function stableJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  const record = value as Readonly<Record<string, unknown>>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+    .join(",")}}`;
 }
 
 function loadDerivedEnergy(row: Selectable<NutritionGoalVersionTable>): NutritionGoalEnergyRecord {
@@ -1026,11 +1666,47 @@ async function requireWritableGoalProfile(
       "profile.sex_at_birth",
       "profile.height_cm",
       "profile.baseline_weight_kg",
+      "profile.time_zone",
     ])
     .where("profile.user_id", "=", userId)
     .where("user.status", "=", "active")
     .where("user.deleted_at", "is", null)
     .forUpdate(["user", "profile"])
+    .executeTakeFirst();
+  if (!row) throw new NutritionGoalNotFoundError();
+  const localDateResult = await sql<{ readonly local_date: string }>`
+    select to_char(transaction_timestamp() at time zone ${row.time_zone}, 'YYYY-MM-DD') as local_date
+  `.execute(transaction);
+  const currentLocalDate = localDateResult.rows[0]?.local_date;
+  if (!currentLocalDate)
+    throw new NutritionGoalValidationError("Profile local date is unavailable");
+  return {
+    birthDate: row.birth_date === null ? null : normalizeDate(row.birth_date),
+    heightCm: row.height_cm,
+    revision: row.revision,
+    sexAtBirth: row.sex_at_birth,
+    weightKg: row.baseline_weight_kg,
+    currentLocalDate,
+  };
+}
+
+async function requireReadableGoalProfile(
+  database: Kysely<Database>,
+  userId: string,
+): Promise<LockedProfile> {
+  const row = await database
+    .selectFrom("user_profile as profile")
+    .innerJoin("app_user as user", "user.id", "profile.user_id")
+    .select([
+      "profile.revision",
+      "profile.birth_date",
+      "profile.sex_at_birth",
+      "profile.height_cm",
+      "profile.baseline_weight_kg",
+    ])
+    .where("profile.user_id", "=", userId)
+    .where("user.status", "=", "active")
+    .where("user.deleted_at", "is", null)
     .executeTakeFirst();
   if (!row) throw new NutritionGoalNotFoundError();
   return {

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Linking,
   Pressable,
@@ -13,7 +14,13 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { apiUrl, authenticatedHeaders, jsonBody, responseError } from "../api/private-api";
 import { newOperationId } from "../auth/operation-id";
-import { isLocalDate, localDateInTimeZone, parseSession } from "../diary/diary";
+import {
+  isLocalDate,
+  localDateInTimeZone,
+  type ProfileSummary,
+  parseProfileResponse,
+  profileRequestIdentityMatches,
+} from "../diary/diary";
 import { palette } from "../theme";
 import {
   type GoalProgressRowView,
@@ -30,6 +37,19 @@ import {
   type StableMutation,
   type TargetableNutrient,
 } from "./recipes-goals";
+import {
+  type NativeReferenceTargetList,
+  type NativeReferenceTargetSet,
+  nativeAppliedReferenceMatchesGoal,
+  nativeAppliedReferenceSetForDisplay,
+  nativeCarriedReferenceSet,
+  nativeReferenceAvailability,
+  nativeReferenceDraftTargets,
+  nativeReferenceGoalRequest,
+  nativeReferenceSelection,
+  nativeReferenceTargetSectionVisible,
+  parseNativeReferenceTargetSets,
+} from "./reference-targets";
 
 type PalCode = "" | "sedentary_or_light" | "active_or_moderate" | "vigorous";
 
@@ -55,12 +75,23 @@ interface GoalBuilder {
   readonly palAcknowledged: boolean;
   readonly rationale: string;
   readonly targets: readonly TargetDraft[];
+  readonly reference: {
+    readonly selection: ReturnType<typeof nativeReferenceSelection>;
+    readonly expectedProfileRevision: string;
+    readonly policyDigest: string;
+  } | null;
 }
 
 interface Props {
   readonly apiBase: URL;
   readonly accessToken: string;
   readonly profileTimeZone: string;
+  readonly profileRevision: string;
+  readonly profileBirthDate: string | null;
+  readonly profileSexAtBirth: string | null;
+  readonly expectedOwnerUserId: string;
+  readonly sessionEpoch: number;
+  readonly onProfileUpdated: (profile: ProfileSummary) => void;
   readonly onUnauthorized: () => Promise<void>;
   readonly onRecipes: () => void;
   readonly onDiary: (date: string) => void;
@@ -70,7 +101,13 @@ const ENERGY_INPUT = /^(?=.*[1-9])(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,6})?$/u;
 const SIGNED_ENERGY_INPUT = /^-?(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,6})?$/u;
 const TARGET_INPUT = /^(?:0|[1-9][0-9]{0,17})(?:\.[0-9]{1,12})?$/u;
 
-function emptyGoal(date: string): GoalBuilder {
+function problemCode(value: unknown): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const code = (value as Record<string, unknown>).code;
+  return typeof code === "string" ? code : null;
+}
+
+export function emptyGoal(date: string): GoalBuilder {
   return {
     goalId: null,
     revision: null,
@@ -83,6 +120,7 @@ function emptyGoal(date: string): GoalBuilder {
     palAcknowledged: false,
     rationale: "",
     targets: [],
+    reference: null,
   };
 }
 
@@ -108,6 +146,7 @@ export function nativeGoalBuilderFromGoal(goal: GoalView): GoalBuilder {
       sourceVersion: target.targetSourceVersion ?? "",
       rationale: target.rationale ?? "",
     })),
+    reference: null,
   };
 }
 
@@ -117,7 +156,7 @@ function palRange(code: Exclude<PalCode, "">): readonly [number, number] {
   return [2, 2.4];
 }
 
-export function nativeGoalRequest(builder: GoalBuilder) {
+export function nativeGoalRequest(builder: GoalBuilder, expectedOwnerUserId?: string) {
   if (!isLocalDate(builder.effectiveFrom))
     throw new RangeError("Effective date must be a real YYYY-MM-DD local date.");
   const rationale = builder.rationale;
@@ -154,6 +193,19 @@ export function nativeGoalRequest(builder: GoalBuilder) {
         })();
   if (builder.targets.length > 256)
     throw new RangeError("A goal supports at most 256 nutrient targets.");
+  if (builder.reference !== null) {
+    if (!expectedOwnerUserId) {
+      throw new RangeError("Refresh this account before publishing a source-verified candidate.");
+    }
+    return nativeReferenceGoalRequest(
+      builder.goalId,
+      builder.effectiveFrom,
+      energy,
+      expectedOwnerUserId,
+      builder.reference.expectedProfileRevision,
+      builder.reference.selection,
+    );
+  }
   const nutrientTargets = builder.targets.map((target) => {
     const minimumAmount = target.minimumAmount || null;
     const targetAmount = target.targetAmount || null;
@@ -184,13 +236,22 @@ export function nativeGoalRequest(builder: GoalBuilder) {
       rationale: targetRationale,
     };
   });
-  return goalWriteBody(builder.goalId, builder.effectiveFrom, energy, nutrientTargets);
+  return {
+    ...goalWriteBody(builder.goalId, builder.effectiveFrom, energy, nutrientTargets),
+    ...(expectedOwnerUserId ? { expectedOwnerUserId } : {}),
+  };
 }
 
 export function GoalsScreen({
   apiBase,
   accessToken,
   profileTimeZone,
+  profileRevision,
+  profileBirthDate,
+  profileSexAtBirth,
+  expectedOwnerUserId,
+  sessionEpoch,
+  onProfileUpdated,
   onUnauthorized,
   onRecipes,
   onDiary,
@@ -204,35 +265,103 @@ export function GoalsScreen({
   const [message, setMessage] = useState("Loading versioned goals…");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [referenceSets, setReferenceSets] = useState<NativeReferenceTargetList | null>(null);
+  const [templatesSupported, setTemplatesSupported] = useState(true);
+  const [selectedReferenceGroup, setSelectedReferenceGroup] = useState("");
+  const [referenceAcknowledged, setReferenceAcknowledged] = useState(false);
+  const [referenceCustomized, setReferenceCustomized] = useState(false);
+  const [birthDateDraft, setBirthDateDraft] = useState(profileBirthDate ?? "");
+  const [sexAtBirthDraft, setSexAtBirthDraft] = useState(profileSexAtBirth ?? "");
   const pending = useRef(new Map<string, StableMutation<ReturnType<typeof nativeGoalRequest>>>());
+  const ownerRef = useRef(expectedOwnerUserId);
+  ownerRef.current = expectedOwnerUserId;
+  const epochRef = useRef(sessionEpoch);
+  epochRef.current = sessionEpoch;
+  const profileRevisionRef = useRef(profileRevision);
+  profileRevisionRef.current = profileRevision;
+  const dateRef = useRef(date);
+  const effectiveDateRef = useRef(builder.effectiveFrom);
+  const generation = useRef(0);
+  const loadController = useRef<AbortController | null>(null);
+  const writeController = useRef<AbortController | null>(null);
+  const profileController = useRef<AbortController | null>(null);
+  const candidateController = useRef<AbortController | null>(null);
+  const candidateGeneration = useRef(0);
   const historicalGoal = goalSelectionIsHistorical(goal, builder.goalId);
+  const selectedReferenceSet = referenceSets?.sets.find(
+    (candidate) => candidate.groupCode === selectedReferenceGroup,
+  );
+  const verifiedApplied = nativeAppliedReferenceMatchesGoal(referenceSets?.applied ?? null, goal);
+  const appliedReferenceSet = nativeAppliedReferenceSetForDisplay(referenceSets, goal);
+  const appliedProfileDrift =
+    verifiedApplied &&
+    referenceSets?.applied?.appliedProfileRevision !== referenceSets?.profileRevision;
+  const referenceLocked = !referenceCustomized && (builder.reference !== null || verifiedApplied);
 
   const load = useCallback(
     async (localDate: string) => {
+      loadController.current?.abort();
+      const controller = new AbortController();
+      loadController.current = controller;
+      const requestGeneration = generation.current + 1;
+      generation.current = requestGeneration;
+      const initiatingOwner = expectedOwnerUserId;
+      const initiatingEpoch = sessionEpoch;
+      const initiatingProfileRevision = profileRevisionRef.current;
+      dateRef.current = localDate;
+      const requestIsCurrent = () =>
+        loadController.current === controller &&
+        !controller.signal.aborted &&
+        generation.current === requestGeneration &&
+        dateRef.current === localDate &&
+        profileRequestIdentityMatches(
+          ownerRef.current,
+          epochRef.current,
+          initiatingOwner,
+          initiatingEpoch,
+        );
       setLoading(true);
       try {
         const currentUrl = apiUrl(apiBase, "/v1/goals/current");
         currentUrl.searchParams.set("date", localDate);
         const progressUrl = apiUrl(apiBase, "/v1/goals/progress");
         progressUrl.searchParams.set("date", localDate);
-        const [currentResponse, progressResponse, definitionsResponse] = await Promise.all([
-          fetch(currentUrl.toString(), { headers: authenticatedHeaders(accessToken) }),
-          fetch(progressUrl.toString(), { headers: authenticatedHeaders(accessToken) }),
-          fetch(apiUrl(apiBase, "/v1/nutrients/targetable").toString(), {
-            headers: authenticatedHeaders(accessToken),
-          }),
-        ]);
+        const referenceUrl = apiUrl(apiBase, "/v1/goals/reference-target-sets");
+        referenceUrl.searchParams.set("date", localDate);
+        const [currentResponse, progressResponse, definitionsResponse, referenceResponse] =
+          await Promise.all([
+            fetch(currentUrl.toString(), {
+              headers: authenticatedHeaders(accessToken),
+              signal: controller.signal,
+            }),
+            fetch(progressUrl.toString(), {
+              headers: authenticatedHeaders(accessToken),
+              signal: controller.signal,
+            }),
+            fetch(apiUrl(apiBase, "/v1/nutrients/targetable").toString(), {
+              headers: authenticatedHeaders(accessToken),
+              signal: controller.signal,
+            }),
+            fetch(referenceUrl.toString(), {
+              headers: authenticatedHeaders(accessToken),
+              signal: controller.signal,
+            }),
+          ]);
+        if (!requestIsCurrent()) return;
         if (
-          [currentResponse, progressResponse, definitionsResponse].some(
+          [currentResponse, progressResponse, definitionsResponse, referenceResponse].some(
             (response) => response.status === 401,
           )
         )
           return onUnauthorized();
-        const [currentBody, progressBody, definitionsBody] = await Promise.all([
+        const [currentBody, progressBody, definitionsBody, referenceBody] = await Promise.all([
           jsonBody(currentResponse),
           jsonBody(progressResponse),
           jsonBody(definitionsResponse),
+          jsonBody(referenceResponse),
         ]);
+        if (!requestIsCurrent()) return;
         if (!currentResponse.ok)
           throw new Error(responseError(currentBody, "The current goal could not be loaded."));
         if (!progressResponse.ok)
@@ -242,55 +371,337 @@ export function GoalsScreen({
             responseError(definitionsBody, "Targetable nutrients could not be loaded."),
           );
         const nextGoal = parseCurrentGoal(currentBody);
+        const candidateDate = nextGoal?.effectiveFrom ?? localDate;
+        let effectiveReferenceResponse = referenceResponse;
+        let effectiveReferenceBody = referenceBody;
+        if (candidateDate !== localDate && referenceResponse.status !== 404) {
+          const effectiveReferenceUrl = apiUrl(apiBase, "/v1/goals/reference-target-sets");
+          effectiveReferenceUrl.searchParams.set("date", candidateDate);
+          effectiveReferenceResponse = await fetch(effectiveReferenceUrl.toString(), {
+            headers: authenticatedHeaders(accessToken),
+            signal: controller.signal,
+          });
+          if (!requestIsCurrent()) return;
+          if (effectiveReferenceResponse.status === 401) return onUnauthorized();
+          effectiveReferenceBody = await jsonBody(effectiveReferenceResponse);
+          if (!requestIsCurrent()) return;
+        }
+        let nextReferenceSets: NativeReferenceTargetList | null = null;
+        let candidateWarning = "";
+        if (effectiveReferenceResponse.status === 404) {
+          candidateWarning =
+            " Candidate templates are unavailable on this API; manual goals still work.";
+        } else if (!effectiveReferenceResponse.ok) {
+          throw new Error(
+            responseError(effectiveReferenceBody, "Candidate targets could not be loaded."),
+          );
+        } else {
+          const parsed = parseNativeReferenceTargetSets(effectiveReferenceBody);
+          if (
+            parsed.date !== candidateDate ||
+            parsed.profileRevision !== initiatingProfileRevision
+          ) {
+            candidateWarning =
+              " Candidate targets were withheld because the profile changed; refresh to retry.";
+          } else {
+            nextReferenceSets = parsed;
+          }
+        }
+        if (!requestIsCurrent()) return;
         setGoal(nextGoal);
         setProgress(parseGoalProgress(progressBody));
         setDefinitions(parseTargetableNutrients(definitionsBody));
-        setBuilder(nextGoal ? nativeGoalBuilderFromGoal(nextGoal) : emptyGoal(localDate));
+        let nextBuilder = nextGoal ? nativeGoalBuilderFromGoal(nextGoal) : emptyGoal(localDate);
+        const applied = nextReferenceSets?.applied ?? null;
+        const appliedSet = nextReferenceSets
+          ? nativeCarriedReferenceSet(nextReferenceSets, nextGoal)
+          : null;
+        if (nextReferenceSets && appliedSet) {
+          nextBuilder = {
+            ...nextBuilder,
+            targets: nativeReferenceDraftTargets(appliedSet),
+            reference: {
+              selection: nativeReferenceSelection(nextReferenceSets, appliedSet),
+              expectedProfileRevision: nextReferenceSets.profileRevision,
+              policyDigest: appliedSet.policyDigest,
+            },
+          };
+        }
+        effectiveDateRef.current = nextBuilder.effectiveFrom;
+        setBuilder(nextBuilder);
+        setTemplatesSupported(effectiveReferenceResponse.status !== 404);
+        setReferenceSets(nextReferenceSets);
+        setSelectedReferenceGroup(appliedSet?.groupCode ?? "");
+        setReferenceAcknowledged(false);
+        setReferenceCustomized(false);
         setMessage(
           nextGoal
-            ? `Goal version ${nextGoal.versionNumber} applies on ${localDate}.`
-            : "No active goal applies to this local day.",
+            ? `Goal version ${nextGoal.versionNumber} applies on ${localDate}.${nativeAppliedReferenceMatchesGoal(applied, nextGoal) ? " Its source-verified candidate provenance was confirmed." : ""}${candidateWarning}`
+            : `No active goal applies to this local day.${candidateWarning}`,
         );
       } catch (caught) {
+        if (!requestIsCurrent()) return;
         setMessage(caught instanceof Error ? caught.message : "Goals could not be loaded.");
       } finally {
-        setLoading(false);
+        if (loadController.current === controller) {
+          loadController.current = null;
+          setLoading(false);
+        }
       }
     },
-    [accessToken, apiBase, onUnauthorized],
+    [accessToken, apiBase, expectedOwnerUserId, onUnauthorized, sessionEpoch],
   );
 
   useEffect(() => {
-    const controller = new AbortController();
-    void (async () => {
+    const localDate = localDateInTimeZone(new Date(), profileTimeZone);
+    dateRef.current = localDate;
+    setDate(localDate);
+    void load(localDate);
+    return () => {
+      generation.current += 1;
+      loadController.current?.abort();
+      writeController.current?.abort();
+      profileController.current?.abort();
+      candidateController.current?.abort();
+      pending.current.clear();
+    };
+  }, [load, profileTimeZone]);
+
+  const loadCandidates = useCallback(
+    async (effectiveFrom: string, expectedProfileRevision: string) => {
+      if (!isLocalDate(effectiveFrom)) {
+        setMessage("Choose a real effective date before loading candidate targets.");
+        return;
+      }
+      candidateController.current?.abort();
+      const controller = new AbortController();
+      candidateController.current = controller;
+      const requestGeneration = candidateGeneration.current + 1;
+      candidateGeneration.current = requestGeneration;
+      const initiatingOwner = expectedOwnerUserId;
+      const initiatingEpoch = sessionEpoch;
+      const requestIsCurrent = () =>
+        candidateController.current === controller &&
+        !controller.signal.aborted &&
+        candidateGeneration.current === requestGeneration &&
+        effectiveDateRef.current === effectiveFrom &&
+        profileRevisionRef.current === expectedProfileRevision &&
+        profileRequestIdentityMatches(
+          ownerRef.current,
+          epochRef.current,
+          initiatingOwner,
+          initiatingEpoch,
+        );
       try {
-        const response = await fetch(apiUrl(apiBase, "/v1/auth/me").toString(), {
+        const url = apiUrl(apiBase, "/v1/goals/reference-target-sets");
+        url.searchParams.set("date", effectiveFrom);
+        const response = await fetch(url.toString(), {
           headers: authenticatedHeaders(accessToken),
           signal: controller.signal,
         });
+        if (!requestIsCurrent()) return;
         if (response.status === 401) return onUnauthorized();
+        if (response.status === 404) {
+          setTemplatesSupported(false);
+          setReferenceSets(null);
+          setSelectedReferenceGroup("");
+          setReferenceAcknowledged(false);
+          setMessage("Candidate templates are unavailable on this API; manual goals still work.");
+          return;
+        }
         const body = await jsonBody(response);
-        if (!response.ok)
-          throw new Error(responseError(body, "Your goal session could not be refreshed."));
-        const session = parseSession(body);
-        const localDate = localDateInTimeZone(new Date(), session.profile.timeZone);
-        if (!controller.signal.aborted) {
-          setDate(localDate);
-          void load(localDate);
+        if (!requestIsCurrent()) return;
+        if (!response.ok) {
+          throw new Error(responseError(body, "Candidate targets could not be loaded."));
         }
+        const parsed = parseNativeReferenceTargetSets(body);
+        if (parsed.date !== effectiveFrom || parsed.profileRevision !== expectedProfileRevision) {
+          throw new Error("The effective date or profile changed while candidates were loading.");
+        }
+        if (!requestIsCurrent()) return;
+        setTemplatesSupported(true);
+        setReferenceSets(parsed);
+        setSelectedReferenceGroup("");
+        setReferenceAcknowledged(false);
+        setReferenceCustomized(false);
+        const nextMessage = parsed.availability.available
+          ? "Source-verified candidate loaded. Review it before applying anything to the draft."
+          : nativeReferenceAvailability(parsed.availability.reasonCodes);
+        setMessage(nextMessage);
+        AccessibilityInfo.announceForAccessibility(nextMessage);
       } catch (caught) {
-        if (!controller.signal.aborted) {
-          setLoading(false);
-          setMessage(
-            caught instanceof Error ? caught.message : "Your goal session could not be refreshed.",
-          );
-        }
+        if (!requestIsCurrent()) return;
+        setMessage(
+          caught instanceof Error ? caught.message : "Candidate targets could not be loaded.",
+        );
+      } finally {
+        if (candidateController.current === controller) candidateController.current = null;
       }
-    })();
-    return () => controller.abort();
-  }, [accessToken, apiBase, load, onUnauthorized]);
+    },
+    [accessToken, apiBase, expectedOwnerUserId, onUnauthorized, sessionEpoch],
+  );
+
+  async function refreshProfileAfterConflict(
+    controller: AbortController,
+    initiatingOwner: string,
+    initiatingEpoch: number,
+  ): Promise<void> {
+    const current = () =>
+      profileController.current === controller &&
+      !controller.signal.aborted &&
+      profileRequestIdentityMatches(
+        ownerRef.current,
+        epochRef.current,
+        initiatingOwner,
+        initiatingEpoch,
+      );
+    const response = await fetch(apiUrl(apiBase, "/v1/profile").toString(), {
+      headers: authenticatedHeaders(accessToken),
+      signal: controller.signal,
+    });
+    if (!current()) return;
+    if (response.status === 401) return onUnauthorized();
+    const body = await jsonBody(response);
+    if (!current()) return;
+    if (!response.ok)
+      throw new Error(responseError(body, "Fresh profile values could not be loaded."));
+    const profile = parseProfileResponse(body);
+    if (!current()) return;
+    profileRevisionRef.current = profile.revision;
+    setBirthDateDraft(typeof profile.birthDate === "string" ? profile.birthDate : "");
+    setSexAtBirthDraft(typeof profile.sexAtBirth === "string" ? profile.sexAtBirth : "");
+    onProfileUpdated(profile);
+    await loadCandidates(effectiveDateRef.current, profile.revision);
+  }
+
+  async function saveProfilePrerequisites() {
+    if (profileSaving || profileController.current) return;
+    if (birthDateDraft !== "" && !isLocalDate(birthDateDraft)) {
+      setMessage("Birth date must be a real YYYY-MM-DD date.");
+      return;
+    }
+    if (!["female", "male", "intersex", "not_specified"].includes(sexAtBirthDraft)) {
+      setMessage("Choose a profile sex-at-birth value before saving.");
+      return;
+    }
+    const initiatingOwner = expectedOwnerUserId;
+    const initiatingEpoch = sessionEpoch;
+    const requestGeneration = generation.current;
+    const controller = new AbortController();
+    profileController.current = controller;
+    const requestIsCurrent = () =>
+      profileController.current === controller &&
+      !controller.signal.aborted &&
+      generation.current === requestGeneration &&
+      profileRequestIdentityMatches(
+        ownerRef.current,
+        epochRef.current,
+        initiatingOwner,
+        initiatingEpoch,
+      );
+    setProfileSaving(true);
+    setMessage("Saving the profile fields used to check candidate eligibility…");
+    try {
+      const response = await fetch(apiUrl(apiBase, "/v1/profile").toString(), {
+        method: "PATCH",
+        headers: authenticatedHeaders(accessToken, {
+          "content-type": "application/json",
+          "if-match": `"${profileRevisionRef.current}"`,
+        }),
+        body: JSON.stringify({
+          expectedOwnerUserId: initiatingOwner,
+          birthDate: birthDateDraft || null,
+          sexAtBirth: sexAtBirthDraft,
+        }),
+        signal: controller.signal,
+      });
+      if (!requestIsCurrent()) return;
+      if (response.status === 401) return onUnauthorized();
+      const body = await jsonBody(response);
+      if (!requestIsCurrent()) return;
+      if (response.status === 409 && problemCode(body) === "PROFILE_OWNER_CHANGED") {
+        return onUnauthorized();
+      }
+      if (response.status === 409 || response.status === 412) {
+        await refreshProfileAfterConflict(controller, initiatingOwner, initiatingEpoch);
+        if (requestIsCurrent()) {
+          setMessage("Your profile changed elsewhere. Fresh values were loaded for review.");
+        }
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(responseError(body, "The eligibility profile fields could not be saved."));
+      }
+      const profile = parseProfileResponse(body);
+      if (!requestIsCurrent()) return;
+      profileRevisionRef.current = profile.revision;
+      setBirthDateDraft(typeof profile.birthDate === "string" ? profile.birthDate : "");
+      setSexAtBirthDraft(typeof profile.sexAtBirth === "string" ? profile.sexAtBirth : "");
+      onProfileUpdated(profile);
+      await loadCandidates(effectiveDateRef.current, profile.revision);
+    } catch (caught) {
+      if (!requestIsCurrent()) return;
+      setMessage(
+        `${caught instanceof Error ? caught.message : "Profile fields could not be saved."} Review fresh values before retrying.`,
+      );
+    } finally {
+      if (profileController.current === controller) {
+        profileController.current = null;
+        setProfileSaving(false);
+      }
+    }
+  }
+
+  function applyReferenceDraft(set: NativeReferenceTargetSet) {
+    if (!referenceSets || !referenceAcknowledged) {
+      setMessage("Review and accept the exact eligibility acknowledgement before applying.");
+      return;
+    }
+    if (
+      referenceSets.date !== builder.effectiveFrom ||
+      referenceSets.profileRevision !== profileRevisionRef.current ||
+      set.groupCode !== selectedReferenceGroup
+    ) {
+      setMessage(
+        "The profile, group, or effective date changed. Reload the candidate before applying.",
+      );
+      return;
+    }
+    setBuilder({
+      ...builder,
+      targets: nativeReferenceDraftTargets(set),
+      reference: {
+        selection: nativeReferenceSelection(referenceSets, set),
+        expectedProfileRevision: referenceSets.profileRevision,
+        policyDigest: set.policyDigest,
+      },
+    });
+    setReferenceCustomized(false);
+    const nextMessage =
+      "Candidate values are now in a read-only unsaved draft. Create or Publish is still required.";
+    setMessage(nextMessage);
+    AccessibilityInfo.announceForAccessibility(nextMessage);
+  }
+
+  function customizeReferenceDraft(set?: NativeReferenceTargetSet) {
+    const targets = set
+      ? nativeReferenceDraftTargets(set, true)
+      : builder.targets.map((target) => ({
+          ...target,
+          sourceLabel: `User-customized copy of ${target.sourceLabel}`.slice(0, 160),
+          rationale: "User-editable copy; verified reference-template identity cleared.",
+        }));
+    setBuilder({ ...builder, targets, reference: null });
+    setReferenceAcknowledged(false);
+    setReferenceCustomized(true);
+    const nextMessage =
+      "Editable custom targets created; verified template provenance was cleared.";
+    setMessage(nextMessage);
+    AccessibilityInfo.announceForAccessibility(nextMessage);
+  }
 
   function patchTarget(index: number, patch: Partial<TargetDraft>) {
+    if (referenceLocked) return;
     setBuilder({
       ...builder,
       targets: builder.targets.map((target, candidate) =>
@@ -300,6 +711,7 @@ export function GoalsScreen({
   }
 
   function addTarget(definition: TargetableNutrient) {
+    if (referenceLocked) return;
     if (
       builder.targets.some((target) => target.definition.nutrientId === definition.nutrientId) ||
       builder.targets.length >= 256
@@ -323,9 +735,16 @@ export function GoalsScreen({
   }
 
   async function save() {
+    if (verifiedApplied && builder.reference === null && !referenceCustomized) {
+      setMessage(
+        "Choose Customize explicitly before publishing custom rows from this verified goal.",
+      );
+      return;
+    }
+    if (saving || writeController.current) return;
     let body: ReturnType<typeof nativeGoalRequest>;
     try {
-      body = nativeGoalRequest(builder);
+      body = nativeGoalRequest(builder, templatesSupported ? expectedOwnerUserId : undefined);
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Review the goal fields.");
       return;
@@ -333,6 +752,23 @@ export function GoalsScreen({
     const key = `${builder.goalId ?? "create"}:${builder.revision ?? "new"}:${JSON.stringify(body)}`;
     const operation = prepareStableMutation(pending.current, key, () => body, newOperationId);
     pending.current.set(key, operation);
+    const initiatingOwner = expectedOwnerUserId;
+    const initiatingEpoch = sessionEpoch;
+    const requestGeneration = generation.current;
+    const savedDate = date;
+    const controller = new AbortController();
+    writeController.current = controller;
+    const requestIsCurrent = () =>
+      writeController.current === controller &&
+      !controller.signal.aborted &&
+      generation.current === requestGeneration &&
+      dateRef.current === savedDate &&
+      profileRequestIdentityMatches(
+        ownerRef.current,
+        epochRef.current,
+        initiatingOwner,
+        initiatingEpoch,
+      );
     setSaving(true);
     setMessage(builder.goalId ? "Publishing an immutable goal revision…" : "Creating goal…");
     try {
@@ -345,33 +781,73 @@ export function GoalsScreen({
           ...(builder.revision ? { "if-match": `"${builder.revision}"` } : {}),
         }),
         body: JSON.stringify(operation.body),
+        signal: controller.signal,
       });
+      if (!requestIsCurrent()) return;
       if (response.status === 401) return onUnauthorized();
       const responseBody = await jsonBody(response);
-      if (response.status === 412) {
+      if (!requestIsCurrent()) return;
+      if (
+        response.status === 409 &&
+        ["PROFILE_OWNER_CHANGED", "GOAL_OWNER_CHANGED"].includes(problemCode(responseBody) ?? "")
+      ) {
+        return onUnauthorized();
+      }
+      if (response.status === 409 || response.status === 412) {
         pending.current.delete(key);
-        await load(date);
-        setMessage("This goal changed elsewhere. Fresh values were loaded for review.");
+        const profileResponse = await fetch(apiUrl(apiBase, "/v1/profile").toString(), {
+          headers: authenticatedHeaders(accessToken),
+          signal: controller.signal,
+        });
+        if (!requestIsCurrent()) return;
+        if (profileResponse.status === 401) return onUnauthorized();
+        const profileBody = await jsonBody(profileResponse);
+        if (!requestIsCurrent()) return;
+        if (profileResponse.ok) {
+          const profile = parseProfileResponse(profileBody);
+          profileRevisionRef.current = profile.revision;
+          setBirthDateDraft(typeof profile.birthDate === "string" ? profile.birthDate : "");
+          setSexAtBirthDraft(typeof profile.sexAtBirth === "string" ? profile.sexAtBirth : "");
+          onProfileUpdated(profile);
+        }
+        await load(savedDate);
+        if (
+          profileRequestIdentityMatches(
+            ownerRef.current,
+            epochRef.current,
+            initiatingOwner,
+            initiatingEpoch,
+          )
+        ) {
+          setMessage(
+            "The goal or eligibility profile changed elsewhere. Fresh values were loaded for review.",
+          );
+        }
         return;
       }
       if (!response.ok)
         throw new Error(responseError(responseBody, "The goal could not be saved."));
       const mutation = parseGoalMutation(responseBody);
+      if (!requestIsCurrent()) return;
       pending.current.delete(key);
       setGoal(mutation.goal);
       setBuilder(nativeGoalBuilderFromGoal(mutation.goal));
-      await load(date);
+      await load(savedDate);
       setMessage(
         mutation.replayed
           ? "The earlier goal save was confirmed safely."
           : `Goal version ${mutation.goal.versionNumber} published.`,
       );
     } catch (caught) {
+      if (!requestIsCurrent()) return;
       setMessage(
         `${caught instanceof Error ? caught.message : "The goal could not be saved."} Press Save again to retry safely.`,
       );
     } finally {
-      setSaving(false);
+      if (writeController.current === controller) {
+        writeController.current = null;
+        setSaving(false);
+      }
     }
   }
 
@@ -380,7 +856,11 @@ export function GoalsScreen({
       setMessage("Choose a real progress date before starting a new goal.");
       return;
     }
-    setBuilder(emptyGoal(date));
+    const next = emptyGoal(date);
+    effectiveDateRef.current = next.effectiveFrom;
+    setBuilder(next);
+    setReferenceAcknowledged(false);
+    setReferenceCustomized(false);
     setMessage("New goal draft started. Choose its effective date and explicit targets.");
   }
 
@@ -443,7 +923,25 @@ export function GoalsScreen({
             label="Effective from YYYY-MM-DD"
             value={builder.effectiveFrom}
             maxLength={10}
-            onChange={(effectiveFrom) => setBuilder({ ...builder, effectiveFrom })}
+            onChange={(effectiveFrom) => {
+              effectiveDateRef.current = effectiveFrom;
+              candidateController.current?.abort();
+              setReferenceSets(null);
+              setSelectedReferenceGroup("");
+              setReferenceAcknowledged(false);
+              setBuilder({
+                ...builder,
+                effectiveFrom,
+                ...(builder.reference ? { targets: [], reference: null } : {}),
+              });
+            }}
+            onEnd={() => {
+              if (isLocalDate(builder.effectiveFrom)) {
+                void loadCandidates(builder.effectiveFrom, profileRevisionRef.current);
+              } else {
+                setMessage("Effective date must be a real YYYY-MM-DD local date.");
+              }
+            }}
           />
           {builder.goalId ? (
             <Text style={styles.help}>
@@ -580,36 +1078,266 @@ export function GoalsScreen({
             multiline
             onChange={(rationale) => setBuilder({ ...builder, rationale })}
           />
+          {nativeReferenceTargetSectionVisible(templatesSupported, referenceSets) ? (
+            <View style={styles.candidate}>
+              <Text style={styles.kicker}>OPTIONAL SOURCE-VERIFIED CANDIDATE</Text>
+              <Text accessibilityRole="header" style={styles.sectionTitle}>
+                U.S.–Canada population references
+              </Text>
+              {verifiedApplied ? <Text style={styles.badge}>Verified on this goal</Text> : null}
+              <Text style={styles.help}>
+                Choosing a group changes nothing. Apply copies 12 values into this unsaved draft;
+                Create or Publish remains a separate action.
+              </Text>
+              {verifiedApplied && referenceSets?.applied && appliedReferenceSet ? (
+                <View accessibilityLiveRegion="polite">
+                  <Text style={styles.help}>
+                    <Text style={styles.targetTitle}>Applied reference snapshot: </Text>
+                    {appliedReferenceSet.title}. Template {appliedReferenceSet.templateVersion}
+                    {"; acknowledgement accepted "}
+                    {referenceSets.applied.acknowledgement.acceptedAt}. Eligible through the day
+                    before {appliedReferenceSet.eligibleThroughExclusive}.
+                  </Text>
+                  {appliedProfileDrift ? (
+                    <Text style={styles.help}>
+                      Your profile changed after this snapshot was applied. Its saved values and
+                      sources remain visible, but its acknowledgement is not reused. Select the
+                      current group, acknowledge it, and Apply again—or choose Customize.
+                    </Text>
+                  ) : null}
+                  {appliedProfileDrift || !selectedReferenceSet ? (
+                    <NativeReferenceRows
+                      label="Applied 12-value source snapshot"
+                      set={appliedReferenceSet}
+                    />
+                  ) : null}
+                </View>
+              ) : null}
+              {templatesSupported ? (
+                <>
+                  <Text style={styles.label}>Profile fields used for eligibility</Text>
+                  <Field
+                    editable={!profileSaving && !saving}
+                    label="Birth date YYYY-MM-DD"
+                    value={birthDateDraft}
+                    maxLength={10}
+                    onChange={setBirthDateDraft}
+                  />
+                  <Text style={styles.label}>Sex at birth</Text>
+                  <View accessibilityRole="radiogroup" style={styles.row}>
+                    {[
+                      ["female", "Female"],
+                      ["male", "Male"],
+                      ["intersex", "Intersex"],
+                      ["not_specified", "Prefer not to specify"],
+                    ].map(([value, label]) => (
+                      <Choice
+                        active={sexAtBirthDraft === value}
+                        disabled={profileSaving || saving}
+                        key={value}
+                        label={label ?? value ?? ""}
+                        onPress={() => setSexAtBirthDraft(value ?? "")}
+                      />
+                    ))}
+                  </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: profileSaving || saving }}
+                    disabled={profileSaving || saving}
+                    onPress={() => void saveProfilePrerequisites()}
+                    style={styles.secondary}
+                  >
+                    <Text style={styles.secondaryText}>
+                      {profileSaving ? "Saving profile…" : "Save profile and check eligibility"}
+                    </Text>
+                  </Pressable>
+                  {referenceSets ? (
+                    <>
+                      <Text style={styles.help}>{referenceSets.notice}</Text>
+                      {referenceSets.availability.available ? (
+                        <>
+                          <Text style={styles.label}>Choose the matching source group</Text>
+                          <View accessibilityRole="radiogroup" style={styles.row}>
+                            {referenceSets.sets.map((candidate) => (
+                              <Choice
+                                active={selectedReferenceGroup === candidate.groupCode}
+                                disabled={
+                                  historicalGoal ||
+                                  saving ||
+                                  (referenceLocked && !appliedProfileDrift)
+                                }
+                                key={candidate.groupCode}
+                                label={candidate.title}
+                                onPress={() => {
+                                  setSelectedReferenceGroup(candidate.groupCode);
+                                  setReferenceAcknowledged(false);
+                                  const nextMessage = `${candidate.title} selected for preview. The goal draft is unchanged.`;
+                                  setMessage(nextMessage);
+                                  AccessibilityInfo.announceForAccessibility(nextMessage);
+                                }}
+                              />
+                            ))}
+                          </View>
+                        </>
+                      ) : (
+                        <Text style={styles.help}>
+                          {nativeReferenceAvailability(referenceSets.availability.reasonCodes)}
+                        </Text>
+                      )}
+                      {selectedReferenceSet ? (
+                        <View accessibilityLiveRegion="polite">
+                          <Text style={styles.help}>
+                            This candidate expires on your 51st birthday (
+                            {selectedReferenceSet.eligibleThroughExclusive}); the day before is the
+                            final eligible day.
+                          </Text>
+                          <NativeReferenceRows
+                            label="12-value candidate preview"
+                            set={selectedReferenceSet}
+                          />
+                          <Pressable
+                            accessibilityRole="checkbox"
+                            accessibilityState={{
+                              checked: referenceAcknowledged,
+                              disabled:
+                                historicalGoal ||
+                                saving ||
+                                (referenceLocked && !appliedProfileDrift),
+                            }}
+                            disabled={
+                              historicalGoal || saving || (referenceLocked && !appliedProfileDrift)
+                            }
+                            onPress={() => setReferenceAcknowledged(!referenceAcknowledged)}
+                            style={styles.check}
+                          >
+                            <Text style={styles.checkText}>
+                              {referenceAcknowledged ? "☑" : "☐"}{" "}
+                              {referenceSets.acknowledgementPolicy.text}
+                            </Text>
+                          </Pressable>
+                          <Pressable
+                            accessibilityLabel="Apply 12 source-verified values to unsaved draft"
+                            accessibilityRole="button"
+                            accessibilityState={{
+                              disabled:
+                                historicalGoal ||
+                                saving ||
+                                (referenceLocked && !appliedProfileDrift) ||
+                                !referenceAcknowledged,
+                            }}
+                            disabled={
+                              historicalGoal ||
+                              saving ||
+                              (referenceLocked && !appliedProfileDrift) ||
+                              !referenceAcknowledged
+                            }
+                            onPress={() => applyReferenceDraft(selectedReferenceSet)}
+                            style={styles.secondary}
+                          >
+                            <Text style={styles.secondaryText}>
+                              Apply 12 values to unsaved draft
+                            </Text>
+                          </Pressable>
+                        </View>
+                      ) : null}
+                      {referenceLocked ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          disabled={historicalGoal || saving}
+                          onPress={() =>
+                            customizeReferenceDraft(
+                              verifiedApplied
+                                ? (appliedReferenceSet ?? undefined)
+                                : selectedReferenceSet,
+                            )
+                          }
+                          style={styles.secondary}
+                        >
+                          <Text style={styles.secondaryText}>
+                            Customize editable copy and clear verified provenance
+                          </Text>
+                        </Pressable>
+                      ) : null}
+                      <Text style={styles.label}>Official sources</Text>
+                      {[
+                        ["Overview", referenceSets.sources.overviewUrl],
+                        ["Macronutrients", referenceSets.sources.macronutrientsUrl],
+                        ["Elements", referenceSets.sources.elementsUrl],
+                        ["Vitamins", referenceSets.sources.vitaminsUrl],
+                        ["Reports", referenceSets.sources.reportListUrl],
+                      ].map(([label, url]) => (
+                        <Pressable
+                          accessibilityRole="link"
+                          key={label}
+                          onPress={() => void Linking.openURL(url ?? "")}
+                        >
+                          <Text style={styles.link}>{label}</Text>
+                        </Pressable>
+                      ))}
+                      <Text style={styles.help}>
+                        Source snapshot {referenceSets.sources.version}, checked{" "}
+                        {referenceSets.sources.reviewedOn}.
+                      </Text>
+                      <Text style={styles.label}>Important cautions</Text>
+                      {referenceSets.cautions.map((caution) => (
+                        <Text key={caution.code} style={styles.help}>
+                          • {caution.text}
+                        </Text>
+                      ))}
+                    </>
+                  ) : (
+                    <Text style={styles.help}>
+                      Save the profile fields or reload this effective date to check eligibility.
+                    </Text>
+                  )}
+                </>
+              ) : (
+                <Text style={styles.help}>
+                  Candidate templates are not supported by this API version. Manual nutrient goals
+                  remain available.
+                </Text>
+              )}
+            </View>
+          ) : null}
           <Text style={styles.sectionTitle}>
             Nutrient thresholds ({builder.targets.length}/256)
           </Text>
-          <Field
-            editable={!historicalGoal}
-            label="Find a nutrient"
-            value={nutrientQuery}
-            maxLength={100}
-            onChange={setNutrientQuery}
-          />
-          {available.map((definition) => (
-            <Pressable
-              accessibilityLabel={`Add ${definition.name} target`}
-              accessibilityRole="button"
-              disabled={historicalGoal}
-              key={definition.nutrientId}
-              onPress={() => addTarget(definition)}
-              style={styles.addRow}
-            >
-              <Text style={styles.addName}>{definition.name}</Text>
-              <Text style={styles.link}>Add</Text>
-            </Pressable>
-          ))}
+          {referenceLocked ? (
+            <Text style={styles.help}>
+              These source-verified candidate rows are read-only. Choose Customize to make an
+              editable copy and clear verified provenance.
+            </Text>
+          ) : (
+            <>
+              <Field
+                editable={!historicalGoal}
+                label="Find a nutrient"
+                value={nutrientQuery}
+                maxLength={100}
+                onChange={setNutrientQuery}
+              />
+              {available.map((definition) => (
+                <Pressable
+                  accessibilityLabel={`Add ${definition.name} target`}
+                  accessibilityRole="button"
+                  disabled={historicalGoal}
+                  key={definition.nutrientId}
+                  onPress={() => addTarget(definition)}
+                  style={styles.addRow}
+                >
+                  <Text style={styles.addName}>{definition.name}</Text>
+                  <Text style={styles.link}>Add</Text>
+                </Pressable>
+              ))}
+            </>
+          )}
           {builder.targets.map((target, index) => (
             <View key={target.definition.nutrientId} style={styles.target}>
               <Text style={styles.targetTitle}>
                 {target.definition.name} ({target.definition.unit})
               </Text>
               <Field
-                editable={!historicalGoal}
+                editable={!historicalGoal && !referenceLocked}
                 label={`${target.definition.name} minimum`}
                 value={target.minimumAmount}
                 maxLength={31}
@@ -617,7 +1345,7 @@ export function GoalsScreen({
                 onChange={(minimumAmount) => patchTarget(index, { minimumAmount })}
               />
               <Field
-                editable={!historicalGoal}
+                editable={!historicalGoal && !referenceLocked}
                 label={`${target.definition.name} target`}
                 value={target.targetAmount}
                 maxLength={31}
@@ -625,7 +1353,7 @@ export function GoalsScreen({
                 onChange={(targetAmount) => patchTarget(index, { targetAmount })}
               />
               <Field
-                editable={!historicalGoal}
+                editable={!historicalGoal && !referenceLocked}
                 label={`${target.definition.name} maximum`}
                 value={target.maximumAmount}
                 maxLength={31}
@@ -633,21 +1361,21 @@ export function GoalsScreen({
                 onChange={(maximumAmount) => patchTarget(index, { maximumAmount })}
               />
               <Field
-                editable={!historicalGoal}
+                editable={!historicalGoal && !referenceLocked}
                 label={`${target.definition.name} source (required)`}
                 value={target.sourceLabel}
                 maxLength={160}
                 onChange={(sourceLabel) => patchTarget(index, { sourceLabel })}
               />
               <Field
-                editable={!historicalGoal}
+                editable={!historicalGoal && !referenceLocked}
                 label={`${target.definition.name} source version`}
                 value={target.sourceVersion}
                 maxLength={100}
                 onChange={(sourceVersion) => patchTarget(index, { sourceVersion })}
               />
               <Field
-                editable={!historicalGoal}
+                editable={!historicalGoal && !referenceLocked}
                 label={`${target.definition.name} rationale`}
                 value={target.rationale}
                 maxLength={1_000}
@@ -657,7 +1385,7 @@ export function GoalsScreen({
               <Pressable
                 accessibilityLabel={`Remove ${target.definition.name} target`}
                 accessibilityRole="button"
-                disabled={historicalGoal}
+                disabled={historicalGoal || referenceLocked}
                 onPress={() =>
                   setBuilder({
                     ...builder,
@@ -671,7 +1399,11 @@ export function GoalsScreen({
           ))}
           <Pressable
             accessibilityRole="button"
-            disabled={saving || historicalGoal}
+            disabled={
+              saving ||
+              historicalGoal ||
+              (verifiedApplied && builder.reference === null && !referenceCustomized)
+            }
             onPress={() => void save()}
             style={styles.primary}
           >
@@ -695,7 +1427,11 @@ export function GoalsScreen({
             label="Progress date YYYY-MM-DD"
             value={date}
             maxLength={10}
-            onChange={setDate}
+            onChange={(nextDate) => {
+              dateRef.current = nextDate;
+              loadController.current?.abort();
+              setDate(nextDate);
+            }}
             onEnd={() => {
               if (isLocalDate(date)) void load(date);
               else setMessage("Progress date must be a real YYYY-MM-DD local date.");
@@ -716,6 +1452,44 @@ export function GoalsScreen({
         </View>
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function NativeReferenceRows({
+  label,
+  set,
+}: {
+  readonly label: string;
+  readonly set: NativeReferenceTargetSet;
+}) {
+  return (
+    <View>
+      <Text accessibilityRole="header" style={styles.label}>
+        {label}
+      </Text>
+      {set.targets.map((target) => (
+        <View key={target.definition.nutrientId} style={styles.previewRow}>
+          <Text style={styles.targetTitle}>{target.definition.name}</Text>
+          <Text style={styles.help}>
+            {target.basis.referenceType.toUpperCase()} target {target.targetAmount}{" "}
+            {target.definition.unit}
+            {target.maximumAmount
+              ? ` · UL ${target.maximumAmount} ${target.definition.unit}`
+              : " · no compatible UL copied"}
+          </Text>
+          <Text style={styles.help}>
+            {target.source.version} · {target.source.table}
+          </Text>
+          <Pressable
+            accessibilityLabel={`Open official source for ${target.definition.name}`}
+            accessibilityRole="link"
+            onPress={() => void Linking.openURL(target.source.url)}
+          >
+            <Text style={styles.link}>Official source</Text>
+          </Pressable>
+        </View>
+      ))}
+    </View>
   );
 }
 
@@ -853,6 +1627,25 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingVertical: 11,
   },
+  badge: {
+    alignSelf: "flex-start",
+    backgroundColor: "#e7f1df",
+    borderRadius: 999,
+    color: palette.forest,
+    fontSize: 11,
+    fontWeight: "800",
+    marginTop: 6,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  candidate: {
+    backgroundColor: "#f7f8f3",
+    borderColor: palette.line,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginTop: 20,
+    padding: 14,
+  },
   check: { borderColor: palette.line, borderRadius: 9, borderWidth: 1, marginTop: 14, padding: 12 },
   checkText: { color: palette.ink, fontSize: 13, lineHeight: 19 },
   choice: {
@@ -913,10 +1706,21 @@ const styles = StyleSheet.create({
   progressHead: { flexDirection: "row", gap: 10, justifyContent: "space-between" },
   progressName: { color: palette.ink, flex: 1, fontSize: 14, fontWeight: "700" },
   progressValue: { color: palette.ink, fontSize: 13, fontWeight: "800" },
+  previewRow: { borderTopColor: palette.line, borderTopWidth: 1, paddingVertical: 10 },
   readonly: { backgroundColor: "#f0f1ec", color: palette.muted },
   refresh: { alignSelf: "flex-start", paddingVertical: 6 },
   row: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
   screen: { backgroundColor: palette.paper, flex: 1 },
+  secondary: {
+    alignSelf: "flex-start",
+    borderColor: palette.forest,
+    borderRadius: 9,
+    borderWidth: 1,
+    marginTop: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  secondaryText: { color: palette.forest, fontSize: 12, fontWeight: "800" },
   sectionTitle: {
     color: palette.ink,
     fontSize: 22,

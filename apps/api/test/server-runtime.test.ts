@@ -19,6 +19,7 @@ function environment(): NodeJS.ProcessEnv {
     DATABASE_URL: "postgresql://local.invalid/nutrition",
     LOG_LEVEL: "silent",
     NODE_ENV: "test",
+    REFERENCE_TARGETS_ENABLED: "true",
   };
 }
 
@@ -100,6 +101,7 @@ describe("API application runtime factory", () => {
         hydrationService: runtimeDependencies.hydrationService,
         logger: false,
         readinessCheck: runtimeDependencies.readinessCheck,
+        referenceTargetsEnabled: true,
         retentionClock: clock,
         retentionService: runtimeDependencies.retentionService,
       }),

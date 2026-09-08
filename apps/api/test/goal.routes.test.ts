@@ -2,6 +2,7 @@ import type {
   NutritionGoal,
   NutritionGoalMutationResponse,
   NutritionGoalProgressResponse,
+  ReferenceTargetSetListResponse,
   TargetableNutrientListResponse,
 } from "@nutrition-tracker/contracts";
 import { canonicalNonNegativeDecimal, decimal } from "@nutrition-tracker/domain";
@@ -11,6 +12,9 @@ import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import type { AuthService } from "../src/modules/auth/auth-service.js";
 import {
+  GoalPersistedIntegrityServiceError,
+  GoalProfileRevisionConflictServiceError,
+  GoalReferenceUnavailableServiceError,
   type GoalService,
   GoalUnsupportedProfileServiceError,
 } from "../src/modules/goals/goal.routes.js";
@@ -121,6 +125,116 @@ const progress: NutritionGoalProgressResponse = {
 
 const targetable: TargetableNutrientListResponse = { data: [fiber] };
 
+const referenceBase: Omit<ReferenceTargetSetListResponse["data"], "availability" | "sets"> = {
+  acknowledgementPolicy: {
+    code: "us-ca-dri-adults-19-50-eligibility-ack",
+    version: "1",
+    text: "Eligibility acknowledgement.",
+  },
+  applied: null,
+  cautions: [{ code: "clinical-exclusions", text: "Clinical exclusions apply." }],
+  date: "2026-08-16",
+  notice:
+    "This optional template copies U.S.–Canada population reference values into your goals. It is for usual intake by apparently healthy adults in the selected group, not a diagnosis, prescription, or proof of adequacy. A single day above or below a reference does not determine nutrient status.",
+  profileRevision: "0",
+  sources: {
+    code: "health-canada-dri-tables",
+    version: "2025-11-19",
+    reviewedOn: "2026-09-07",
+    overviewUrl: "https://example.test/overview",
+    macronutrientsUrl: "https://example.test/macros",
+    elementsUrl: "https://example.test/elements",
+    vitaminsUrl: "https://example.test/vitamins",
+    reportListUrl: "https://example.test/reports",
+  },
+};
+
+const unavailableReferenceTargets: ReferenceTargetSetListResponse = {
+  data: {
+    ...referenceBase,
+    availability: { available: false, reasonCodes: ["profile_missing_birth_date"] },
+    sets: [],
+  },
+};
+
+const persistedReferenceSet: ReferenceTargetSetListResponse["data"]["sets"][number] = {
+  eligibleThroughExclusive: "2041-01-01",
+  groupCode: "male-19-50",
+  policyDigest: "a".repeat(64),
+  targets: Array.from({ length: 12 }, (_, index) => ({
+    basis: {
+      maximumReferenceType: null,
+      referenceType: "rda",
+      sourceRows: ["Males 19–30 y", "Males 31–50 y"],
+      timeBasis: "usual-average-daily-intake",
+    },
+    definition: {
+      category: "other",
+      code: `reference-${index + 1}`,
+      id: String(index + 1),
+      name: `Reference nutrient ${index + 1}`,
+      unit: "mg",
+    },
+    maximumAmount: null,
+    minimumAmount: null,
+    rationale: "Source-verified population reference.",
+    source: {
+      label: "Health Canada Dietary Reference Intakes",
+      table: "Table 1",
+      url: "https://example.test/reference",
+      version: "HC-2025-11-19/IOM-2005",
+    },
+    targetAmount: "1",
+  })),
+  templateCode: "us-ca-dri-adults-19-50",
+  templateVersion: "1",
+  title: "Source-verified adult reference candidate",
+};
+
+const appliedReferenceTargets: ReferenceTargetSetListResponse = {
+  data: {
+    ...referenceBase,
+    applied: {
+      acknowledgement: {
+        accepted: true,
+        acceptedAt: "2026-08-16T12:34:56.789Z",
+        policyCode: "us-ca-dri-adults-19-50-eligibility-ack",
+        policyVersion: "1",
+      },
+      appliedProfileRevision: "0",
+      eligibleThroughExclusive: persistedReferenceSet.eligibleThroughExclusive,
+      goalId,
+      goalRevision: "2",
+      goalVersionId,
+      groupCode: persistedReferenceSet.groupCode,
+      policyDigest: persistedReferenceSet.policyDigest,
+      set: persistedReferenceSet,
+      templateCode: persistedReferenceSet.templateCode,
+      templateVersion: persistedReferenceSet.templateVersion,
+    },
+    availability: { available: true, reasonCodes: [] },
+    sets: [persistedReferenceSet],
+  },
+};
+
+const referenceRequest = {
+  effectiveFrom: "2026-08-16",
+  energy: { mode: "fixed" as const, targetKcal: "2000", rationale: "User-entered target." },
+  nutrientTargets: [],
+  expectedOwnerUserId: userId,
+  expectedProfileRevision: "0",
+  referenceTargetSet: {
+    templateCode: "us-ca-dri-adults-19-50" as const,
+    templateVersion: "1" as const,
+    groupCode: "male-19-50" as const,
+    eligibilityAcknowledgement: {
+      policyCode: "us-ca-dri-adults-19-50-eligibility-ack" as const,
+      policyVersion: "1" as const,
+      accepted: true as const,
+    },
+  },
+};
+
 function authStub(): AuthService {
   return {
     confirmEmailVerification: vi.fn(),
@@ -147,16 +261,23 @@ function goalStub(overrides: Partial<GoalService> = {}): GoalService {
     revise: vi.fn(async () => mutation),
     progress: vi.fn(async () => progress),
     listTargetable: vi.fn(async () => targetable),
+    listReferenceTargetSets: vi.fn(async () => {
+      throw new Error("Reference target catalogue not stubbed");
+    }),
     ...overrides,
   };
 }
 
-function createTestApp(goalService: GoalService): ReturnType<typeof buildApp> {
+function createTestApp(
+  goalService: GoalService,
+  referenceTargetsEnabled = false,
+): ReturnType<typeof buildApp> {
   const app = buildApp({
     config: testConfig,
     logger: false,
     authService: authStub(),
     goalService,
+    referenceTargetsEnabled,
   });
   apps.push(app);
   return app;
@@ -187,8 +308,212 @@ const request = {
   ],
 };
 const revisionRequest = { energy: request.energy, nutrientTargets: request.nutrientTargets };
+const referenceRevisionRequest = {
+  energy: referenceRequest.energy,
+  nutrientTargets: referenceRequest.nutrientTargets,
+  expectedOwnerUserId: referenceRequest.expectedOwnerUserId,
+  expectedProfileRevision: referenceRequest.expectedProfileRevision,
+  referenceTargetSet: referenceRequest.referenceTargetSet,
+};
 
 describe("nutrition goal routes", () => {
+  it("keeps reference discovery and writes fail-closed by default", async () => {
+    const service = goalStub({
+      listReferenceTargetSets: vi.fn(async () => unavailableReferenceTargets),
+    });
+    const app = createTestApp(service);
+
+    const discovery = await app.inject({
+      method: "GET",
+      url: "/v1/goals/reference-target-sets?date=2026-08-16",
+      headers: authHeaders,
+    });
+    expect(discovery.statusCode).toBe(404);
+    expect(discovery.json().code).toBe("NOT_FOUND");
+
+    const create = await app.inject({
+      method: "POST",
+      url: "/v1/goals",
+      headers: { ...authHeaders, "idempotency-key": operationId },
+      payload: referenceRequest,
+    });
+    expect(create.statusCode).toBe(503);
+    expect(create.json().code).toBe("SERVICE_NOT_READY");
+
+    const revise = await app.inject({
+      method: "POST",
+      url: `/v1/goals/${goalId}/revisions`,
+      headers: { ...authHeaders, "idempotency-key": operationId, "if-match": '"1"' },
+      payload: referenceRevisionRequest,
+    });
+    expect(revise.statusCode).toBe(503);
+    expect(revise.json().code).toBe("SERVICE_NOT_READY");
+    expect(service.listReferenceTargetSets).not.toHaveBeenCalled();
+    expect(service.create).not.toHaveBeenCalled();
+    expect(service.revise).not.toHaveBeenCalled();
+  });
+
+  it("lists authenticated revision-zero reference availability when explicitly enabled", async () => {
+    const service = goalStub({
+      listReferenceTargetSets: vi.fn(async () => unavailableReferenceTargets),
+    });
+    const app = createTestApp(service, true);
+    expect(
+      (await app.inject({ method: "GET", url: "/v1/goals/reference-target-sets?date=2026-08-16" }))
+        .statusCode,
+    ).toBe(401);
+    const response = await app.inject({
+      method: "GET",
+      url: "/v1/goals/reference-target-sets?date=2026-08-16",
+      headers: authHeaders,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.json()).toEqual(unavailableReferenceTargets);
+    expect(service.listReferenceTargetSets).toHaveBeenCalledWith(
+      expect.objectContaining({ localDate: "2026-08-16", userId }),
+    );
+  });
+
+  it("fails malformed catalogue states and unavailable registry reads closed", async () => {
+    const inconsistent = goalStub({
+      listReferenceTargetSets: vi.fn(async () => ({
+        data: {
+          ...unavailableReferenceTargets.data,
+          availability: { available: true, reasonCodes: [] },
+        },
+      })),
+    });
+    const malformed = await createTestApp(inconsistent, true).inject({
+      method: "GET",
+      url: "/v1/goals/reference-target-sets?date=2026-08-16",
+      headers: authHeaders,
+    });
+    expect(malformed.statusCode).toBe(503);
+
+    const unavailable = goalStub({
+      listReferenceTargetSets: vi.fn(async () => {
+        throw new GoalReferenceUnavailableServiceError();
+      }),
+    });
+    const unavailableResponse = await createTestApp(unavailable, true).inject({
+      method: "GET",
+      url: "/v1/goals/reference-target-sets?date=2026-08-16",
+      headers: authHeaders,
+    });
+    expect(unavailableResponse.statusCode).toBe(503);
+    expect(unavailableResponse.json().code).toBe("SERVICE_NOT_READY");
+
+    const corrupted = goalStub({
+      listReferenceTargetSets: vi.fn(async () => {
+        throw new GoalPersistedIntegrityServiceError();
+      }),
+    });
+    const corruptedResponse = await createTestApp(corrupted, true).inject({
+      method: "GET",
+      url: "/v1/goals/reference-target-sets?date=2026-08-16",
+      headers: authHeaders,
+    });
+    expect(corruptedResponse.statusCode).toBe(503);
+    expect(corruptedResponse.json().code).toBe("SERVICE_NOT_READY");
+  });
+
+  it("returns the verified persisted applied snapshot and rejects identity divergence", async () => {
+    const persistedApplied = appliedReferenceTargets.data.applied;
+    if (!persistedApplied) throw new Error("Expected persisted applied reference fixture");
+    const service = goalStub({
+      listReferenceTargetSets: vi.fn(async () => appliedReferenceTargets),
+    });
+    const response = await createTestApp(service, true).inject({
+      method: "GET",
+      url: "/v1/goals/reference-target-sets?date=2026-08-16",
+      headers: authHeaders,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().data.applied).toEqual(appliedReferenceTargets.data.applied);
+    expect(response.json().data.applied.set.targets).toHaveLength(12);
+
+    const divergent = goalStub({
+      listReferenceTargetSets: vi.fn(async () => ({
+        ...appliedReferenceTargets,
+        data: {
+          ...appliedReferenceTargets.data,
+          applied: {
+            ...persistedApplied,
+            policyDigest: "b".repeat(64),
+          },
+        },
+      })),
+    });
+    const rejected = await createTestApp(divergent, true).inject({
+      method: "GET",
+      url: "/v1/goals/reference-target-sets?date=2026-08-16",
+      headers: authHeaders,
+    });
+    expect(rejected.statusCode).toBe(503);
+  });
+
+  it("binds reference selection, profile revision, acknowledgement, and owner into exact retries", async () => {
+    const service = goalStub();
+    const app = createTestApp(service, true);
+    const first = await app.inject({
+      method: "POST",
+      url: "/v1/goals",
+      headers: { ...authHeaders, "idempotency-key": operationId },
+      payload: referenceRequest,
+    });
+    const retry = await app.inject({
+      method: "POST",
+      url: "/v1/goals",
+      headers: { ...authHeaders, "idempotency-key": operationId },
+      payload: referenceRequest,
+    });
+    expect(first.statusCode).toBe(201);
+    expect(retry.statusCode).toBe(201);
+    const calls = vi.mocked(service.create).mock.calls;
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.[0].requestDigest).toBe(calls[1]?.[0].requestDigest);
+    expect(calls[0]?.[0].goal).toEqual(referenceRequest);
+
+    const switchedOwner = await app.inject({
+      method: "POST",
+      url: "/v1/goals",
+      headers: { ...authHeaders, "idempotency-key": operationId },
+      payload: {
+        ...referenceRequest,
+        expectedOwnerUserId: "30000000-0000-4000-8000-000000000099",
+      },
+    });
+    expect(switchedOwner.statusCode).toBe(409);
+    expect(switchedOwner.json().code).toBe("GOAL_OWNER_CHANGED");
+    expect(service.create).toHaveBeenCalledTimes(2);
+  });
+
+  it("maps stale profile reference writes and rejects client-owned reference amounts", async () => {
+    const service = goalStub({
+      create: vi.fn(async () => {
+        throw new GoalProfileRevisionConflictServiceError();
+      }),
+    });
+    const app = createTestApp(service, true);
+    const stale = await app.inject({
+      method: "POST",
+      url: "/v1/goals",
+      headers: { ...authHeaders, "idempotency-key": operationId },
+      payload: referenceRequest,
+    });
+    expect(stale.statusCode).toBe(409);
+    expect(stale.json().code).toBe("GOAL_PROFILE_CHANGED");
+    const amounts = await app.inject({
+      method: "POST",
+      url: "/v1/goals",
+      headers: { ...authHeaders, "idempotency-key": operationId },
+      payload: { ...referenceRequest, nutrientTargets: request.nutrientTargets },
+    });
+    expect(amounts.statusCode).toBe(400);
+    expect(service.create).toHaveBeenCalledTimes(1);
+  });
+
   it("reads the effective private goal by explicit local date without caching", async () => {
     const service = goalStub();
     const app = createTestApp(service);

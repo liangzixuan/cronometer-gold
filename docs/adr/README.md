@@ -26,6 +26,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0018](./0018-catalogue-database-authority-boundary.md) | Catalogue database-authority boundary | Accepted for bounded EXPAND implementation; deploy and CONTRACT phases blocked |
 | [0019](./0019-first-release-parity-and-camera-barcode-capture.md) | First-release parity sequencing and camera barcode capture | Source implementation complete; signed-device and live-catalogue evidence blocked |
 | [0020](./0020-configurable-diary-presentation-groups.md) | Owner-configurable labels and display order for stable diary meal slots | Accepted for local implementation; signed-device evidence blocked |
+| [0021](./0021-source-verified-adult-dri-reference-targets.md) | Source-verified adult U.S.–Canada DRI reference-target candidate | Accepted for local source implementation; clinical, legal/privacy, copyright, and commercial-enablement reviews blocked |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

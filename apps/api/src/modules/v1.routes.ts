@@ -86,6 +86,7 @@ export const v1Routes: FastifyPluginAsync<V1RoutesOptions> = async (app, options
     prefix: "/goals",
     ...(options.authService ? { authService: options.authService } : {}),
     ...(options.goalService ? { goalService: options.goalService } : {}),
+    ...(options.referenceTargetsEnabled === true ? { referenceTargetsEnabled: true } : {}),
   });
   void app.register(targetableNutrientRoutes, {
     prefix: "/nutrients",

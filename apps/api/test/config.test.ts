@@ -57,10 +57,25 @@ describe("loadApiDependencyConfig", () => {
       databaseRestoreEpoch: null,
       databaseUrl: "postgresql://local.invalid/nutrition",
       meiliUrl: "http://127.0.0.1:7700",
+      referenceTargetsEnabled: false,
       searchDatabaseMaxConcurrency: 4,
       searchDatabaseMaxQueue: 16,
       searchRequestTimeoutMs: 5_000,
     });
+  });
+
+  it("enables reference targets only from the exact non-production opt-in", () => {
+    const base = {
+      DATABASE_URL: "postgresql://local.invalid/nutrition",
+      NODE_ENV: "test",
+    } as const;
+    expect(
+      loadApiDependencyConfig({ ...base, REFERENCE_TARGETS_ENABLED: "true" })
+        .referenceTargetsEnabled,
+    ).toBe(true);
+    expect(() => loadApiDependencyConfig({ ...base, REFERENCE_TARGETS_ENABLED: "TRUE" })).toThrow(
+      ConfigValidationError,
+    );
   });
 
   it("bounds the process-local search database bulkhead configuration", () => {
@@ -154,6 +169,7 @@ describe("loadApiDependencyConfig", () => {
         DATABASE_URL: "postgresql://production.invalid/nutrition",
         MEILI_URL: "http://search.internal:7700",
         NODE_ENV: "production",
+        REFERENCE_TARGETS_ENABLED: "true",
       });
       throw new Error("expected production dependency configuration to fail");
     } catch (error) {
@@ -164,6 +180,7 @@ describe("loadApiDependencyConfig", () => {
         "DATABASE_SSL_MODE",
         "MEILI_SEARCH_KEY",
         "MEILI_URL",
+        "REFERENCE_TARGETS_ENABLED",
         "RETENTION_FEATURES_ENABLED",
       ]);
     }

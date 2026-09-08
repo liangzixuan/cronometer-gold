@@ -17,6 +17,8 @@ import {
   nutritionGoalResponseSchema,
   nutritionGoalRevisionRequestSchema,
   problemDetailsSchema,
+  type ReferenceTargetSetListResponse,
+  referenceTargetSetListResponseSchema,
   type TargetableNutrientListResponse,
   targetableNutrientListResponseSchema,
 } from "@nutrition-tracker/contracts";
@@ -68,11 +70,17 @@ export interface GoalService {
     readonly userId: string;
     readonly signal?: AbortSignal;
   }): Promise<TargetableNutrientListResponse>;
+  listReferenceTargetSets(input: {
+    readonly userId: string;
+    readonly localDate: string;
+    readonly signal?: AbortSignal;
+  }): Promise<ReferenceTargetSetListResponse>;
 }
 
 export interface GoalRoutesOptions {
   readonly authService?: AuthService;
   readonly goalService?: GoalService;
+  readonly referenceTargetsEnabled?: boolean;
 }
 
 export class GoalNotFoundServiceError extends Error {}
@@ -81,6 +89,10 @@ export class GoalIdempotencyConflictServiceError extends Error {}
 export class GoalValidationServiceError extends Error {}
 export class GoalUnsupportedProfileServiceError extends Error {}
 export class GoalPeriodConflictServiceError extends Error {}
+export class GoalOwnerChangedServiceError extends Error {}
+export class GoalProfileRevisionConflictServiceError extends Error {}
+export class GoalReferenceUnavailableServiceError extends Error {}
+export class GoalPersistedIntegrityServiceError extends Error {}
 
 interface GoalParams {
   goalId: string;
@@ -99,6 +111,25 @@ function unavailable(cause?: unknown): HttpProblem {
     expose: true,
     cause,
   });
+}
+
+function referenceTargetsDisabled(): HttpProblem {
+  return new HttpProblem({
+    statusCode: 404,
+    code: "NOT_FOUND",
+    title: "Not Found",
+    detail: "Reference target templates are not enabled.",
+    expose: true,
+  });
+}
+
+function rejectDisabledReferenceTargetWrite(
+  goal: NutritionGoalDraftRequest | NutritionGoalRevisionRequest,
+  options: GoalRoutesOptions,
+): void {
+  if ("referenceTargetSet" in goal && options.referenceTargetsEnabled !== true) {
+    throw unavailable();
+  }
 }
 
 function mapGoalError(error: unknown): HttpProblem {
@@ -139,6 +170,26 @@ function mapGoalError(error: unknown): HttpProblem {
       expose: true,
     });
   }
+  if (error instanceof GoalOwnerChangedServiceError) {
+    return new HttpProblem({
+      statusCode: 409,
+      code: "GOAL_OWNER_CHANGED",
+      title: "Conflict",
+      detail: "The signed-in account changed. Review this goal before retrying.",
+      expose: true,
+    });
+  }
+  if (error instanceof GoalProfileRevisionConflictServiceError) {
+    return new HttpProblem({
+      statusCode: 409,
+      code: "GOAL_PROFILE_CHANGED",
+      title: "Conflict",
+      detail: "The profile changed. Refresh the reference targets before retrying.",
+      expose: true,
+    });
+  }
+  if (error instanceof GoalReferenceUnavailableServiceError) return unavailable(error);
+  if (error instanceof GoalPersistedIntegrityServiceError) return unavailable(error);
   if (error instanceof GoalUnsupportedProfileServiceError) {
     return new HttpProblem({
       statusCode: 422,
@@ -223,6 +274,50 @@ function assertGoal(goal: NutritionGoal): void {
   }
 }
 
+function assertReferenceTargetSetList(result: ReferenceTargetSetListResponse): void {
+  const { applied, availability, sets, sources } = result.data;
+  if (
+    availability.available !== (sets.length === 1 && availability.reasonCodes.length === 0) ||
+    (!availability.available && (sets.length !== 0 || availability.reasonCodes.length === 0))
+  ) {
+    throw new Error("Invalid reference target availability state");
+  }
+  for (const [key, value] of Object.entries(sources)) {
+    if (key.endsWith("Url") && (typeof value !== "string" || !value.startsWith("https://"))) {
+      throw new Error("Reference target source URLs must use HTTPS");
+    }
+  }
+  for (const set of sets) {
+    if (set.targets.length !== 12) throw new Error("Reference target vector is incomplete");
+    const codes = new Set<string>();
+    for (const target of set.targets) {
+      if (!target.source.url.startsWith("https://") || codes.has(target.definition.code)) {
+        throw new Error("Invalid reference target source or duplicate nutrient");
+      }
+      codes.add(target.definition.code);
+    }
+  }
+  if (applied) {
+    if (
+      applied.set.templateCode !== applied.templateCode ||
+      applied.set.templateVersion !== applied.templateVersion ||
+      applied.set.groupCode !== applied.groupCode ||
+      applied.set.policyDigest !== applied.policyDigest ||
+      applied.set.eligibleThroughExclusive !== applied.eligibleThroughExclusive ||
+      applied.set.targets.length !== 12
+    ) {
+      throw new Error("Applied reference target snapshot identity is inconsistent");
+    }
+    const codes = new Set<string>();
+    for (const target of applied.set.targets) {
+      if (!target.source.url.startsWith("https://") || codes.has(target.definition.code)) {
+        throw new Error("Invalid applied reference target provenance or duplicate nutrient");
+      }
+      codes.add(target.definition.code);
+    }
+  }
+}
+
 function expectedMinimumState(
   row: GoalProgressRow,
 ): GoalProgressRow["minimum"] extends infer _ ? "met" | "below" | "indeterminate" | null : never {
@@ -292,6 +387,48 @@ export const goalRoutes: FastifyPluginAsync<GoalRoutesOptions> = async (app, opt
   const requireAuth = requireAuthentication(options.authService);
 
   app.get<{ Querystring: GoalDateQuery }>(
+    "/reference-target-sets",
+    {
+      preHandler: requireAuth,
+      preValidation: rejectUnexpectedQueryKeys(["date"]),
+      schema: {
+        querystring: goalDateQuerySchema,
+        response: {
+          200: referenceTargetSetListResponseSchema,
+          400: problemDetailsSchema,
+          401: problemDetailsSchema,
+          404: problemDetailsSchema,
+          503: problemDetailsSchema,
+        },
+      },
+    },
+    async (request, reply): Promise<ReferenceTargetSetListResponse> => {
+      if (options.referenceTargetsEnabled !== true) throw referenceTargetsDisabled();
+      if (!options.goalService) throw unavailable();
+      const principal = authenticatedPrincipal(request);
+      try {
+        const result = await withRequestSignal(
+          request,
+          (signal) =>
+            options.goalService?.listReferenceTargetSets({
+              localDate: request.query.date,
+              signal,
+              userId: principal.userId,
+            }) ?? Promise.reject(unavailable()),
+        );
+        if (result.data.date !== request.query.date) {
+          throw new Error("Reference target response date does not match the request");
+        }
+        assertReferenceTargetSetList(result);
+        reply.header("cache-control", "no-store");
+        return result;
+      } catch (error) {
+        throw mapGoalError(error);
+      }
+    },
+  );
+
+  app.get<{ Querystring: GoalDateQuery }>(
     "/current",
     {
       preHandler: requireAuth,
@@ -335,7 +472,14 @@ export const goalRoutes: FastifyPluginAsync<GoalRoutesOptions> = async (app, opt
       preHandler: requireAuth,
       preValidation: [
         rejectUnexpectedQueryKeys([]),
-        rejectUnexpectedBodyKeys(["effectiveFrom", "energy", "nutrientTargets"]),
+        rejectUnexpectedBodyKeys([
+          "effectiveFrom",
+          "energy",
+          "nutrientTargets",
+          "expectedOwnerUserId",
+          "expectedProfileRevision",
+          "referenceTargetSet",
+        ]),
       ],
       schema: {
         body: nutritionGoalDraftRequestSchema,
@@ -355,6 +499,14 @@ export const goalRoutes: FastifyPluginAsync<GoalRoutesOptions> = async (app, opt
       const principal = authenticatedPrincipal(request);
       const clientOperationId = requireIdempotencyKey(request.headers["idempotency-key"]);
       try {
+        rejectDisabledReferenceTargetWrite(request.body, options);
+        if (
+          "expectedOwnerUserId" in request.body &&
+          request.body.expectedOwnerUserId !== undefined &&
+          request.body.expectedOwnerUserId !== principal.userId
+        ) {
+          throw new GoalOwnerChangedServiceError();
+        }
         assertDraft(request.body);
         const result = await withRequestSignal(
           request,
@@ -385,7 +537,13 @@ export const goalRoutes: FastifyPluginAsync<GoalRoutesOptions> = async (app, opt
       preHandler: requireAuth,
       preValidation: [
         rejectUnexpectedQueryKeys([]),
-        rejectUnexpectedBodyKeys(["energy", "nutrientTargets"]),
+        rejectUnexpectedBodyKeys([
+          "energy",
+          "nutrientTargets",
+          "expectedOwnerUserId",
+          "expectedProfileRevision",
+          "referenceTargetSet",
+        ]),
       ],
       schema: {
         params: goalParamsSchema,
@@ -409,6 +567,14 @@ export const goalRoutes: FastifyPluginAsync<GoalRoutesOptions> = async (app, opt
       const clientOperationId = requireIdempotencyKey(request.headers["idempotency-key"]);
       const expectedRevision = requireRevision(request.headers["if-match"]);
       try {
+        rejectDisabledReferenceTargetWrite(request.body, options);
+        if (
+          "expectedOwnerUserId" in request.body &&
+          request.body.expectedOwnerUserId !== undefined &&
+          request.body.expectedOwnerUserId !== principal.userId
+        ) {
+          throw new GoalOwnerChangedServiceError();
+        }
         assertDraft(request.body);
         const digestInput = {
           goalId: request.params.goalId,

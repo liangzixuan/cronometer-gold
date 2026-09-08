@@ -291,8 +291,10 @@ function GoalsRoute(props: AuthenticatedAppProps) {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   return (
     <GoalsScreen
+      key={`${props.sessionEpoch}:${props.session.user.id}`}
       accessToken={props.accessToken}
       apiBase={props.apiBase}
+      expectedOwnerUserId={props.session.user.id}
       onDiary={(date) =>
         navigation.navigate(authenticatedRoutes.today, {
           date,
@@ -300,8 +302,25 @@ function GoalsRoute(props: AuthenticatedAppProps) {
         })
       }
       onRecipes={() => navigation.navigate(authenticatedRoutes.recipes)}
+      onProfileUpdated={(profile) =>
+        props.onProfileUpdated({
+          initiatingSessionEpoch: props.sessionEpoch,
+          initiatingUserId: props.session.user.id,
+          profile,
+        })
+      }
       onUnauthorized={props.onUnauthorized}
+      profileBirthDate={
+        typeof props.session.profile.birthDate === "string" ? props.session.profile.birthDate : null
+      }
+      profileRevision={props.session.profile.revision}
+      profileSexAtBirth={
+        typeof props.session.profile.sexAtBirth === "string"
+          ? props.session.profile.sexAtBirth
+          : null
+      }
       profileTimeZone={props.session.profile.timeZone}
+      sessionEpoch={props.sessionEpoch}
     />
   );
 }

@@ -107,6 +107,22 @@ const AUTHORITY_CONSTRAINT_POLICY = [
     validated: true,
   },
 ];
+const REFERENCE_INTEGRITY_CONSTRAINT_POLICY = [
+  {
+    constraint_type: "c",
+    definition_sha256: "872d15549977d02b3df53796476046edf9729b2d9ebbbfc88e219d0a1006785f",
+    name: "nutrition_goal_target_reference_metadata_v1",
+    table_name: "nutrition_goal_target",
+    validated: true,
+  },
+  {
+    constraint_type: "c",
+    definition_sha256: "563e297e091034e9f88bac6835c14a75751be826673e84d0bef563538a3d82f9",
+    name: "nutrition_goal_version_reference_identity_v1",
+    table_name: "nutrition_goal_version",
+    validated: true,
+  },
+];
 const AUTHORITY_FROZEN_COLUMN_POLICY = [
   {
     column_name: "nutrient_mapping_digest",
@@ -826,6 +842,13 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
     },
   ],
   [
+    "reconcile_goal_reference_vector_v1",
+    {
+      ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
+      sourceSha256: "cab5878b72b7aaaf94b7c7b50e39f6114e992afc395036e56418465fa67ed123",
+    },
+  ],
+  [
     "reconcile_recipe_components_v2",
     {
       ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
@@ -1314,6 +1337,24 @@ const AUTHORITY_TRIGGER_POLICY = new Map([
     },
   ],
   [
+    "nutrition_goal_reference_vector_from_target_v1",
+    {
+      definition:
+        "CREATE CONSTRAINT TRIGGER nutrition_goal_reference_vector_from_target_v1 AFTER INSERT OR DELETE ON nutrition_goal_target DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_goal_reference_vector_v1()",
+      functionName: "reconcile_goal_reference_vector_v1",
+      tableName: "nutrition_goal_target",
+    },
+  ],
+  [
+    "nutrition_goal_reference_vector_from_version_v1",
+    {
+      definition:
+        "CREATE CONSTRAINT TRIGGER nutrition_goal_reference_vector_from_version_v1 AFTER INSERT ON nutrition_goal_version DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_goal_reference_vector_v1()",
+      functionName: "reconcile_goal_reference_vector_v1",
+      tableName: "nutrition_goal_version",
+    },
+  ],
+  [
     "recipe_ingredient_reconcile_v2",
     {
       definition:
@@ -1675,6 +1716,19 @@ function collectAuthorityFingerprint(run, options, database) {
       "and constraint_row.conname in ('food_import_approval_database_authority_check','food_import_batch_materialization_contract_check','food_import_batch_nutrition_semantic_contract_check','food_import_batch_promotable_contract_check','food_import_batch_stage_validate_database_authority_check','food_import_batch_staging_seal_check','food_import_record_nutrition_semantic_contract_check','food_import_record_validated_food_contract_check','food_source_release_activation_database_authority_check')",
       ") authority_constraint_policy",
     ]),
+    referenceIntegrityConstraints: psqlJson(run, options, database, [
+      "select coalesce(json_agg(row_to_json(reference_constraint_policy) order by reference_constraint_policy.name)::text, '[]')",
+      "from (",
+      "select constraint_row.conname as name, class_row.relname as table_name,",
+      "constraint_row.contype as constraint_type, constraint_row.convalidated as validated,",
+      "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(pg_catalog.pg_get_constraintdef(constraint_row.oid, true), 'UTF8')), 'hex') as definition_sha256",
+      "from pg_catalog.pg_constraint as constraint_row",
+      "join pg_catalog.pg_class as class_row on class_row.oid = constraint_row.conrelid",
+      "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = class_row.relnamespace",
+      "where namespace_row.nspname = 'public'",
+      "and constraint_row.conname in ('nutrition_goal_target_reference_metadata_v1','nutrition_goal_version_reference_identity_v1')",
+      ") reference_constraint_policy",
+    ]),
     authorityFrozenColumns: psqlJson(run, options, database, [
       "select coalesce(json_agg(row_to_json(authority_frozen_column_policy) order by authority_frozen_column_policy.table_name, authority_frozen_column_policy.column_name)::text, '[]')",
       "from (",
@@ -1858,7 +1912,7 @@ function collectAuthorityFingerprint(run, options, database) {
       "where namespace_row.nspname = 'public'",
       ") type_policy",
     ]),
-    version: 13,
+    version: 14,
   };
   validateRestoreAuthorityEvidence(evidence, options.expectedOwner);
   const fingerprint = canonicalJson(evidence);
@@ -1871,7 +1925,7 @@ function collectAuthorityFingerprint(run, options, database) {
 
 export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
   if (!SAFE_ROLE.test(expectedOwner)) throw new Error("Invalid expected PostgreSQL owner name");
-  if (!evidence || typeof evidence !== "object" || evidence.version !== 13) {
+  if (!evidence || typeof evidence !== "object" || evidence.version !== 14) {
     throw new Error("Database-authority fingerprint has an unsupported version");
   }
 
@@ -1883,6 +1937,16 @@ export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
     throw new Error(
       "Catalogue materialization, nutrition-semantic, stage/validate, or authenticated-actor constraint differs from policy",
     );
+  }
+  const referenceIntegrityConstraints = requiredArray(
+    evidence.referenceIntegrityConstraints,
+    "reference-target integrity constraints",
+  );
+  if (
+    canonicalJson(referenceIntegrityConstraints) !==
+    canonicalJson(REFERENCE_INTEGRITY_CONSTRAINT_POLICY)
+  ) {
+    throw new Error("Reference-target integrity constraints differ from policy");
   }
   const authorityFrozenColumns = requiredArray(
     evidence.authorityFrozenColumns,

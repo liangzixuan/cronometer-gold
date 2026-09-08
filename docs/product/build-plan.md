@@ -31,7 +31,11 @@ reviewer, or production-release acceptance.
    compatibility. The reviewed 50-active-entry day cap remains.
 5. **Recipes and goals (implemented):** yield-aware versioned recipes, immutable
    recipe diary snapshots, versioned targets, bounded energy estimates, and
-   lower-bound nutrient progress.
+   lower-bound nutrient progress. This implemented claim covers user-authored
+   nutrient targets. M1B-R's source-verified reference-template candidate is
+   source-complete across the database, API, web, and mobile and has passed the
+   ordered local validation run. It remains blocked from clinical review,
+   controlled-beta enablement, and commercial enablement.
 6. **Retention and privacy (implemented; release-gated):** timezone-correct
    nutrient and biometric trends, exact-version repeat logging, private versioned
    custom foods, biometrics, and hydration entries, consented local reminders,
@@ -65,13 +69,21 @@ remains fail-closed.
 M1A camera barcode capture is implemented at source level and awaits signed-device
 acceptance. M1B-G's bounded configuration of the four existing diary labels and
 their display order is implemented in source and has passed the ordered local
-validation runbook; hosted and signed-device acceptance remain pending. M1B-R
-reviewed reference targets is the next source milestone, followed by the remaining
-daily-loop offline and production-service gaps. Arbitrary add/delete/hide group
-identities remain a future migration milestone rather than part of M1B-G. M0's
-authenticated acquisition, review, and activation lane proceeds in parallel when
-its separately approved external work is available. M2 still requires both M0 and
-M1 acceptance.
+validation runbook; hosted and signed-device acceptance remain pending. M1B-R's
+database, API, web, and mobile source implementation and ordered local
+validation are complete. ADR 0021 pins its source-verified candidate
+policy, exact adult 19–50 vector, exclusions, expiry, and rollout boundary. A
+named RD or qualified clinical-science approval, legal/privacy approval,
+commercial copyright approval, hosted acceptance, and signed-device,
+cross-client, and accessibility acceptance still gate release. It must not be
+described as clinically reviewed, government-endorsed, or commercially
+available while those gates are open. M3A's bounded multi-day nutrition report
+and charts are the next source priority while external M0/M2 work remains
+separately gated. The remaining daily-loop offline and production-service gaps
+follow. Arbitrary add/delete/hide group identities remain a future migration
+milestone rather than part of M1B-G. M0's authenticated acquisition, review,
+and activation lane proceeds in parallel when its separately approved external
+work is available. M2 still requires both M0 and M1 acceptance.
 
 Remaining database writer closure, runtime-identity cutover,
 external-principal binding, target canaries, and CONTRACT revocation remain
@@ -147,10 +159,12 @@ Each retains its separate explicit-approval gate.
    migration-0019's frozen materialization, replacement activation-authority
    constraint, and promotion/rollback boundary plus migration-0020's sealed
    stage/validate boundary, migration-0021's exact-100-gram semantic
-   attestation, and migration-0022's database-actor binding under an explicit
-   owner. The transactional repair policy pins 54 function identities, 54 exact
-   trigger bindings, sixteen authority-evidence columns, all nine authority
-   CHECKs, and the unique activation-to-batch index. It compares a canonical source/target version-13
+   attestation, migration-0022's database-actor binding under an explicit owner,
+   and migration-0023's reference-target identity and vector integrity boundary.
+   The transactional repair policy pins 55 function identities, 56 exact trigger
+   bindings, sixteen catalogue authority-evidence columns, all nine catalogue
+   authority CHECKs, both reference-integrity CHECKs, and the unique
+   activation-to-batch index. It compares a canonical source/target version-14
    authority fingerprint, including column
    ACL state and trigger table schemas, while `PUBLIC CONNECT` remains revoked
    and the effective login allowlist stays exact. Public-table triggers and
@@ -192,8 +206,9 @@ Each retains its separate explicit-approval gate.
 2. **M1 — user-visible daily loop (current source priority):** activity/exercise,
    private diary notes, configurable groups, durable offline retry/reorder,
    email-verification release acceptance
-   and password recovery, reviewed reference targets, and production-grade
-   weight sync, with cross-client end-to-end and accessibility acceptance.
+   and password recovery, a source-verified reference-target candidate, and
+   production-grade weight sync, with cross-client end-to-end and accessibility
+   acceptance.
    M1A implements camera barcode capture only as an ephemeral input adapter to the
    existing authoritative exact lookup. Permission starts only from an explicit
    Scan action; frames stay on-device and are not retained; repeated detections
@@ -212,10 +227,18 @@ Each retains its separate explicit-approval gate.
    idempotency inputs, or queued quick-add envelopes. Source implementation and
    ordered local validation are complete while hosted validation and signed
    cross-client evidence remain pending, so it does not yet meet this plan's full
-   **implemented** definition. M1B-R's reviewed, explicitly applied
-   reference-target experience is next. Creating, deleting, hiding, archiving, or
-   restoring arbitrary groups remains future work requiring durable identity and
-   history semantics.
+   **implemented** definition. M1B-R's database, API, web, and mobile source
+   implementation and ordered local validation are complete. Its
+   `us-ca-dri-adults-19-50` version-1 policy is source-verified and bounded to an
+   explicitly selected, profile-matched `male-19-50` or `female-19-50` group,
+   nonpregnant/nonlactating scope, server materialization, versioned
+   acknowledgement, and exclusive reference applicability/current-read expiry
+   on the 51st birthday. That policy is not clinical approval: a named RD or
+   qualified clinical-science approval, legal/privacy approval, commercial
+   copyright approval, hosted acceptance, and signed-device, cross-client, and
+   accessibility reviews still block controlled beta and commercial enablement.
+   Creating, deleting, hiding, archiving, or restoring arbitrary groups remains
+   future work requiring durable identity and history semantics.
    Plain-water hydration is implemented locally across PostgreSQL, the private
    API, web, and mobile as an owner-scoped exact-integer milliliter ledger.
    Server-derived profile-local coordinates, strong entry/day revisions,
@@ -332,9 +355,17 @@ Each retains its separate explicit-approval gate.
    matrix; and independent security, browser/device, accessibility, scientific,
    and legal review. Cloud, DNS, Terraform, Tailscale, firewall, and EAS actions
    keep their separate approval gates.
-4. **M3 — premium analysis and planning:** arbitrary-range reports and custom
-   charts, printable/PDF output, scheduled repeats, macro scheduling, fasting,
-   and nutrition scores/balance meters.
+4. **M3 — premium analysis and planning:** M3A's bounded multi-day nutrition
+   report and charts are the next source priority while separately approved M0
+   and M2 external work is unavailable. The first slice uses authoritative,
+   immutable diary and goal evidence to present a bounded profile-local date
+   range, calories, macronutrients, micronutrients, target comparisons, and
+   explicit known/trace/unknown or missing coverage across web and mobile. It
+   must preserve timezone and target-version boundaries and provide selectable
+   nutrient charts without medical interpretation. Printable/PDF output,
+   scheduled reports, nutrition scores/balance meters, macro scheduling,
+   fasting, sharing, and production or signed-device acceptance remain later
+   work. This source sequencing does not waive M0, M1, or M2 release gates.
 5. **M4 — premium capture and discovery:** recipe URL/text import, food and
    nutrient suggestions, photo/voice input, private sharing, and coaching, only
    after their privacy and claims boundaries are reviewed.
@@ -482,8 +513,10 @@ boundary and migration-0020's six audit/seal columns, two checks, five workflow
 functions, owner-only helper, and three guards, migration-0021's four
 semantic-attestation columns, two checks, independent semantic functions and
 two guards, plus migration-0022's two actor-binding checks and three public
-wrapper bodies: the complete 54-function/54-trigger shared-food boundary under
-the version-13 fingerprint,
+wrapper bodies, plus migration-0023's two reference-integrity checks, reference
+reconciliation function, and two deferred triggers: the complete
+55-function/56-trigger combined catalogue/reference boundary under the
+version-14 fingerprint,
 rejecting owner, constraint, ACL, or fingerprint drift before replay or API
 probing. A live FDC release has intentionally not
 been promoted: the checked-in candidate remains non-importable until two
@@ -583,18 +616,22 @@ Daily goals are immutable revisions with explicit effective dates. Energy can be
 a user-supplied fixed value or a visibly estimated Mifflin–St Jeor result for the
 reviewed adult/profile boundary, multiplied by an explicitly selected PAL. The
 snapshot retains every input and source and does not add ordinary exercise a
-second time. Nutrient targets are user-supplied and source-labelled; this
-milestone does not silently invent DRI defaults. Progress is derived from one
-coherent diary/goal snapshot and labels trace, partial, or unknown intake as a
-known lower bound rather than exact completion. Web and native clients preserve
-idempotent retry bodies and exact recipe versions.
+second time. The existing goal path remains user-supplied and source-labelled;
+it does not silently invent DRI defaults. ADR 0021 separately defines an
+explicit, previewed, server-materialized M1B-R candidate whose immutable source,
+group, applicability, acknowledgement, and expiry must remain visible. Progress
+is derived from one coherent diary/goal snapshot and labels trace, partial, or
+unknown intake as a known lower bound rather than exact completion. Web and
+native clients preserve idempotent retry bodies and exact recipe versions.
 
 Migration `0005` deliberately refuses experimental legacy recipe or goal roots
 that lack the immutable evidence required by these contracts. They require a
 reviewed export/remediation and API-based recreation; the migration does not
 fabricate nutrition, yield, source, or equation history. Whole-account erasure
-is implemented and locally drilled under the retention milestone. Automatic
-reference targets, retention-factor datasets, therapeutic goals, and signed-device
+is implemented and locally drilled under the retention milestone. M1B-R policy
+is source-verified candidate evidence only; it remains blocked from clinical and
+commercial claims until ADR 0021's reviews pass. Inferred or automatic reference
+targets, retention-factor datasets, therapeutic goals, and signed-device
 validation remain controlled-beta work and are not claimed here.
 
 ## Parallel release acceptance target — live catalogue evidence

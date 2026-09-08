@@ -94,4 +94,58 @@ describe("web goal builder integrity", () => {
       }),
     ).toThrow("outside the selected reviewed category");
   });
+
+  it("submits a source candidate as an owner/profile-bound selection with no client amounts", () => {
+    const request = goalBody(
+      {
+        ...emptyGoal("2026-09-07"),
+        fixedKcal: "2100",
+        rationale: "My separately selected energy target.",
+        targets: fixedGoal.targets.map((target) => ({
+          definition: target,
+          minimumAmount: "",
+          targetAmount: "1000",
+          maximumAmount: "2500",
+          sourceLabel: "Health Canada Dietary Reference Intakes",
+          sourceVersion: "HC-2025-11-19/IOM-2011",
+          rationale: "Source-verified candidate.",
+        })),
+        reference: {
+          expectedProfileRevision: "4",
+          policyDigest: "a".repeat(64),
+          selection: {
+            templateCode: "us-ca-dri-adults-19-50",
+            templateVersion: "1",
+            groupCode: "male-19-50",
+            eligibilityAcknowledgement: {
+              policyCode: "us-ca-dri-adults-19-50-eligibility-ack",
+              policyVersion: "1",
+              accepted: true,
+            },
+          },
+        },
+      },
+      "70eedafb-9d6e-4adc-b924-8e55e87ff5d0",
+    );
+    expect(request).toMatchObject({
+      effectiveFrom: "2026-09-07",
+      expectedOwnerUserId: "70eedafb-9d6e-4adc-b924-8e55e87ff5d0",
+      expectedProfileRevision: "4",
+      nutrientTargets: [],
+      referenceTargetSet: {
+        groupCode: "male-19-50",
+        eligibilityAcknowledgement: { accepted: true },
+      },
+    });
+  });
+
+  it("keeps the old manual body compatible until candidate capability is present", () => {
+    const request = goalBody({
+      ...emptyGoal("2026-09-07"),
+      fixedKcal: "2100",
+      rationale: "My manual goal.",
+    });
+    expect(request).not.toHaveProperty("expectedOwnerUserId");
+    expect(request).not.toHaveProperty("referenceTargetSet");
+  });
 });

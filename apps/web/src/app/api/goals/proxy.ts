@@ -15,6 +15,7 @@ import {
   parseGoalProgress,
   parseTargetableNutrients,
 } from "../../../lib/recipes-goals";
+import { parseReferenceTargetSets } from "../../../lib/reference-targets";
 
 function datePath(request: Request, upstreamPath: string): string | null {
   const incoming = new URL(request.url);
@@ -60,6 +61,16 @@ export async function proxyGoalProgress(request: Request): Promise<Response> {
     await authenticatedFetch(request, path),
     parseGoalProgress,
     "Goal progress could not be loaded.",
+  );
+}
+
+export async function proxyReferenceTargetSets(request: Request): Promise<Response> {
+  const path = datePath(request, "/v1/goals/reference-target-sets");
+  if (!path) return privateJsonError(400, "Choose a valid local candidate-set date.");
+  return checked(
+    await authenticatedFetch(request, path),
+    parseReferenceTargetSets,
+    "Source-verified candidate targets could not be loaded.",
   );
 }
 

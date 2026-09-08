@@ -108,6 +108,22 @@ const authorityConstraints = [
     validated: true,
   },
 ];
+const referenceIntegrityConstraints = [
+  {
+    constraint_type: "c",
+    definition_sha256: "872d15549977d02b3df53796476046edf9729b2d9ebbbfc88e219d0a1006785f",
+    name: "nutrition_goal_target_reference_metadata_v1",
+    table_name: "nutrition_goal_target",
+    validated: true,
+  },
+  {
+    constraint_type: "c",
+    definition_sha256: "563e297e091034e9f88bac6835c14a75751be826673e84d0bef563538a3d82f9",
+    name: "nutrition_goal_version_reference_identity_v1",
+    table_name: "nutrition_goal_version",
+    validated: true,
+  },
+];
 const authorityFrozenColumns = [
   ["food_import_batch", "nutrient_mapping_digest", "text"],
   ["food_import_batch", "nutrient_mapping_revision_ids", "jsonb"],
@@ -354,14 +370,14 @@ test("rejects an incomplete public ledger despite a complete owner-schema shadow
   assert.doesNotMatch(calls[0].at(-1) ?? "", /from app_schema_migration/);
 });
 
-test("tracks migration 0022 in the exact restore ledger", () => {
+test("tracks migration 0023 in the exact restore ledger", () => {
   const migrationLedger = JSON.parse(TRACKED_MIGRATION_LEDGER_JSON);
 
-  assert.equal(migrationLedger.length, 22);
-  assert.equal(migrationLedger.at(-1)?.name, "0022_catalogue_authenticated_actor_binding.sql");
+  assert.equal(migrationLedger.length, 23);
+  assert.equal(migrationLedger.at(-1)?.name, "0023_reviewed_reference_targets.sql");
   assert.equal(
     migrationLedger.at(-1)?.checksum,
-    "72b4a284b22e7ed497c759fe087ece6a97c5d459ecbac6a79e32ba5a50cb76ca",
+    "d162133908e62b4df43fd67ee91f8296e69fd47099bc2f8aaab0b3c737fba93c",
   );
 });
 
@@ -540,6 +556,27 @@ test("pins all validated 0022 materialization, semantic, stage/validate, and aut
   }
 });
 
+test("pins the validated reference-target identity and target-metadata constraints", () => {
+  for (const mutation of [
+    (evidence) => {
+      evidence.referenceIntegrityConstraints = [];
+    },
+    (evidence) => {
+      evidence.referenceIntegrityConstraints[0].validated = false;
+    },
+    (evidence) => {
+      evidence.referenceIntegrityConstraints[1].definition_sha256 = "0".repeat(64);
+    },
+  ]) {
+    const evidence = validAuthorityEvidence();
+    mutation(evidence);
+    assert.throws(
+      () => validateRestoreAuthorityEvidence(evidence, expectedOwner),
+      /Reference-target integrity constraints differ from policy/,
+    );
+  }
+});
+
 test("pins frozen materialization columns and the activation import-batch index", () => {
   for (const expectedColumn of authorityFrozenColumns) {
     const evidence = validAuthorityEvidence();
@@ -574,9 +611,9 @@ test("pins frozen materialization columns and the activation import-batch index"
   }
 });
 
-test("rejects authority fingerprints from the pre-authenticated-actor evidence version", () => {
+test("rejects authority fingerprints from the pre-reference-integrity evidence version", () => {
   const evidence = validAuthorityEvidence();
-  evidence.version = 12;
+  evidence.version = 13;
   assert.throws(
     () => validateRestoreAuthorityEvidence(evidence, expectedOwner),
     /unsupported version/,
@@ -685,9 +722,9 @@ test("rejects unexpected table or sequence DML authority", () => {
 test("pins every reviewed authority function and trigger", () => {
   assert.equal(
     validAuthorityFunctions().filter((entry) => entry.name !== "ordinary_function").length,
-    54,
+    55,
   );
-  assert.equal(validAuthorityTriggers().length, 54);
+  assert.equal(validAuthorityTriggers().length, 56);
 
   for (const [property, value] of [
     ["source_sha256", "0".repeat(64)],
@@ -764,6 +801,15 @@ test("pins every reviewed authority function and trigger", () => {
     /function set/,
   );
 
+  const missingReferenceFunction = validAuthorityEvidence();
+  missingReferenceFunction.functions = missingReferenceFunction.functions.filter(
+    (entry) => entry.name !== "reconcile_goal_reference_vector_v1",
+  );
+  assert.throws(
+    () => validateRestoreAuthorityEvidence(missingReferenceFunction, expectedOwner),
+    /function set/,
+  );
+
   const disabledTrigger = validAuthorityEvidence();
   disabledTrigger.triggers[0].enabled = "D";
   assert.throws(
@@ -817,6 +863,17 @@ test("pins every reviewed authority function and trigger", () => {
     "CREATE TRIGGER nutrient_registry_lock_before_active_update BEFORE UPDATE OF active ON nutrient FOR EACH STATEMENT EXECUTE FUNCTION lock_active_nutrient_registry_before_write()";
   assert.throws(
     () => validateRestoreAuthorityEvidence(staleNutrientWriterTrigger, expectedOwner),
+    /trigger.*differs from policy/,
+  );
+
+  const disabledReferenceTrigger = validAuthorityEvidence();
+  const referenceTrigger = disabledReferenceTrigger.triggers.find(
+    (entry) => entry.name === "nutrition_goal_reference_vector_from_target_v1",
+  );
+  if (!referenceTrigger) throw new Error("Reference-target trigger fixture is missing");
+  referenceTrigger.enabled = "D";
+  assert.throws(
+    () => validateRestoreAuthorityEvidence(disabledReferenceTrigger, expectedOwner),
     /trigger.*differs from policy/,
   );
 
@@ -1211,6 +1268,7 @@ function validAuthorityEvidence() {
         owner: expectedOwner,
       },
     ],
+    referenceIntegrityConstraints: structuredClone(referenceIntegrityConstraints),
     roles: capabilityRoles.map((name) => ({
       bypass_rls: false,
       can_login: false,
@@ -1250,7 +1308,7 @@ function validAuthorityEvidence() {
         owner: expectedOwner,
       },
     ],
-    version: 13,
+    version: 14,
   };
 }
 
@@ -1375,6 +1433,10 @@ function validAuthorityFunctions() {
     [
       "lock_active_nutrient_registry_before_write",
       "c10e7e9df6768e94416aba47afe5639ffa7b3abfe5d2a6486a61e229dbe995de",
+    ],
+    [
+      "reconcile_goal_reference_vector_v1",
+      "cab5878b72b7aaaf94b7c7b50e39f6114e992afc395036e56418465fa67ed123",
     ],
     [
       "reconcile_recipe_components_v2",
@@ -2066,6 +2128,18 @@ function validAuthorityTriggers() {
       "CREATE TRIGGER nutrient_registry_lock_before_insert BEFORE INSERT ON nutrient FOR EACH STATEMENT EXECUTE FUNCTION lock_active_nutrient_registry_before_write()",
     ],
     [
+      "nutrition_goal_reference_vector_from_target_v1",
+      "nutrition_goal_target",
+      "reconcile_goal_reference_vector_v1",
+      "CREATE CONSTRAINT TRIGGER nutrition_goal_reference_vector_from_target_v1 AFTER INSERT OR DELETE ON nutrition_goal_target DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_goal_reference_vector_v1()",
+    ],
+    [
+      "nutrition_goal_reference_vector_from_version_v1",
+      "nutrition_goal_version",
+      "reconcile_goal_reference_vector_v1",
+      "CREATE CONSTRAINT TRIGGER nutrition_goal_reference_vector_from_version_v1 AFTER INSERT ON nutrition_goal_version DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION reconcile_goal_reference_vector_v1()",
+    ],
+    [
       "recipe_ingredient_reconcile_v2",
       "recipe_ingredient",
       "reconcile_recipe_components_v2",
@@ -2193,6 +2267,9 @@ function authorityEvidenceRunner(evidence, failures = {}) {
     if (sql.includes("pg_get_userbyid(database_row.datdba)")) return `${boundary.owner}\n`;
     if (sql.includes("authority_constraint_policy")) {
       return `${JSON.stringify(evidence.authorityConstraints)}\n`;
+    }
+    if (sql.includes("reference_constraint_policy")) {
+      return `${JSON.stringify(evidence.referenceIntegrityConstraints)}\n`;
     }
     if (sql.includes("authority_frozen_column_policy")) {
       return `${JSON.stringify(evidence.authorityFrozenColumns)}\n`;

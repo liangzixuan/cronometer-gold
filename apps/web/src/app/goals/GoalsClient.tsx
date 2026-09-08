@@ -5,7 +5,15 @@ import { useRouter, useSearchParams } from "next/navigation";
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { createOperationId, isLocalDate, localDateInTimeZone, parseSession } from "../../lib/diary";
+import {
+  createOperationId,
+  isLocalDate,
+  localDateInTimeZone,
+  parseProfileResponse,
+  parseSession,
+  quoteRevision,
+  type SessionSummary,
+} from "../../lib/diary";
 import {
   type GoalProgressView,
   type GoalView,
@@ -22,6 +30,19 @@ import {
   type StableMutation,
   type TargetableNutrient,
 } from "../../lib/recipes-goals";
+import {
+  appliedReferenceMatchesGoal,
+  appliedReferenceSetForDisplay,
+  carriedReferenceSet,
+  parseReferenceTargetSets,
+  type ReferenceTargetSelection,
+  type ReferenceTargetSet,
+  type ReferenceTargetSetList,
+  referenceAvailabilityMessage,
+  referenceTargetSectionVisible,
+  referenceTargetSelection,
+  referenceTargetsForDraft,
+} from "../../lib/reference-targets";
 
 interface TargetDraft {
   readonly definition: TargetableNutrient;
@@ -45,6 +66,11 @@ interface GoalBuilder {
   readonly adjustmentKcal: string;
   readonly rationale: string;
   readonly targets: readonly TargetDraft[];
+  readonly reference: {
+    readonly selection: ReferenceTargetSelection;
+    readonly expectedProfileRevision: string;
+    readonly policyDigest: string;
+  } | null;
 }
 
 export function emptyGoal(date: string): GoalBuilder {
@@ -60,6 +86,7 @@ export function emptyGoal(date: string): GoalBuilder {
     adjustmentKcal: "0",
     rationale: "",
     targets: [],
+    reference: null,
   };
 }
 
@@ -87,6 +114,7 @@ export function goalBuilderFromGoal(goal: GoalView): GoalBuilder {
       sourceVersion: target.targetSourceVersion ?? "",
       rationale: target.rationale ?? "",
     })),
+    reference: null,
   };
 }
 
@@ -111,13 +139,19 @@ function errorMessage(value: unknown, fallback: string): string {
   return typeof candidate === "string" && candidate.length <= 500 ? candidate : fallback;
 }
 
+function responseCode(value: unknown): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const candidate = (value as Record<string, unknown>).code;
+  return typeof candidate === "string" ? candidate : null;
+}
+
 function palRange(code: Exclude<GoalBuilder["activityLevelCode"], "">): readonly [number, number] {
   if (code === "sedentary_or_light") return [1.4, 1.69];
   if (code === "active_or_moderate") return [1.7, 1.99];
   return [2, 2.4];
 }
 
-export function goalBody(builder: GoalBuilder) {
+export function goalBody(builder: GoalBuilder, expectedOwnerUserId?: string) {
   if (!isLocalDate(builder.effectiveFrom))
     throw new RangeError("Effective date must be a real YYYY-MM-DD local date.");
   const rationale = builder.rationale;
@@ -152,6 +186,18 @@ export function goalBody(builder: GoalBuilder) {
         })();
   if (builder.targets.length > 256)
     throw new RangeError("A goal supports at most 256 nutrient targets.");
+  if (builder.reference !== null) {
+    if (!expectedOwnerUserId) {
+      throw new RangeError("Refresh this account before publishing a source-verified candidate.");
+    }
+    const base = goalWriteBody(builder.goalId, builder.effectiveFrom, energy, [] as const);
+    return {
+      ...base,
+      expectedOwnerUserId,
+      expectedProfileRevision: builder.reference.expectedProfileRevision,
+      referenceTargetSet: builder.reference.selection,
+    };
+  }
   const nutrientTargets = builder.targets.map((target) => {
     const minimumAmount = target.minimumAmount || null;
     const targetAmount = target.targetAmount || null;
@@ -182,7 +228,10 @@ export function goalBody(builder: GoalBuilder) {
       rationale: targetRationale,
     };
   });
-  return goalWriteBody(builder.goalId, builder.effectiveFrom, energy, nutrientTargets);
+  return {
+    ...goalWriteBody(builder.goalId, builder.effectiveFrom, energy, nutrientTargets),
+    ...(expectedOwnerUserId ? { expectedOwnerUserId } : {}),
+  };
 }
 
 export function GoalsClient() {
@@ -197,45 +246,97 @@ export function GoalsClient() {
   const [selectedNutrientId, setSelectedNutrientId] = useState("");
   const [goal, setGoal] = useState<GoalView | null>(null);
   const [progress, setProgress] = useState<GoalProgressView | null>(null);
+  const [referenceSets, setReferenceSets] = useState<ReferenceTargetSetList | null>(null);
+  const [templatesSupported, setTemplatesSupported] = useState(true);
+  const [selectedReferenceGroup, setSelectedReferenceGroup] = useState("");
+  const [referenceAcknowledged, setReferenceAcknowledged] = useState(false);
+  const [referenceCustomized, setReferenceCustomized] = useState(false);
+  const [profileBirthDate, setProfileBirthDate] = useState("");
+  const [profileSexAtBirth, setProfileSexAtBirth] = useState("");
+  const [profileBusy, setProfileBusy] = useState(false);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [message, setMessage] = useState("Loading your versioned goals…");
   const [busy, setBusy] = useState(false);
   const pending = useRef(new Map<string, StableMutation<ReturnType<typeof goalBody>>>());
+  const sessionRef = useRef<SessionSummary | null>(null);
+  const selectedDateRef = useRef(date);
+  const generation = useRef(0);
+  const loadController = useRef<AbortController | null>(null);
+  const authController = useRef<AbortController | null>(null);
+  const writeController = useRef<AbortController | null>(null);
+  const profileController = useRef<AbortController | null>(null);
+  const candidateController = useRef<AbortController | null>(null);
+  const candidateGeneration = useRef(0);
+  const effectiveDateRef = useRef(builder.effectiveFrom);
 
   const signInAgain = useCallback(() => {
+    generation.current += 1;
+    loadController.current?.abort();
+    authController.current?.abort();
+    writeController.current?.abort();
+    profileController.current?.abort();
+    candidateController.current?.abort();
+    pending.current.clear();
+    sessionRef.current = null;
+    setReferenceSets(null);
     router.replace("/login");
     router.refresh();
   }, [router]);
 
   const load = useCallback(
-    async (localDate: string) => {
+    async (localDate: string, ownerSession: SessionSummary) => {
+      loadController.current?.abort();
+      const controller = new AbortController();
+      loadController.current = controller;
+      const requestGeneration = generation.current + 1;
+      generation.current = requestGeneration;
+      const ownerUserId = ownerSession.user.id;
+      selectedDateRef.current = localDate;
       setState("loading");
+      const requestIsCurrent = () =>
+        loadController.current === controller &&
+        !controller.signal.aborted &&
+        generation.current === requestGeneration &&
+        selectedDateRef.current === localDate &&
+        sessionRef.current?.user.id === ownerUserId;
       try {
-        const [currentResponse, progressResponse, nutrientResponse] = await Promise.all([
-          fetch(`/api/goals/current?date=${encodeURIComponent(localDate)}`, {
-            headers: { accept: "application/json" },
-            cache: "no-store",
-          }),
-          fetch(`/api/goals/progress?date=${encodeURIComponent(localDate)}`, {
-            headers: { accept: "application/json" },
-            cache: "no-store",
-          }),
-          fetch("/api/nutrients/targetable", {
-            headers: { accept: "application/json" },
-            cache: "no-store",
-          }),
-        ]);
+        const [currentResponse, progressResponse, nutrientResponse, referenceResponse] =
+          await Promise.all([
+            fetch(`/api/goals/current?date=${encodeURIComponent(localDate)}`, {
+              headers: { accept: "application/json" },
+              cache: "no-store",
+              signal: controller.signal,
+            }),
+            fetch(`/api/goals/progress?date=${encodeURIComponent(localDate)}`, {
+              headers: { accept: "application/json" },
+              cache: "no-store",
+              signal: controller.signal,
+            }),
+            fetch("/api/nutrients/targetable", {
+              headers: { accept: "application/json" },
+              cache: "no-store",
+              signal: controller.signal,
+            }),
+            fetch(`/api/goals/reference-target-sets?date=${encodeURIComponent(localDate)}`, {
+              headers: { accept: "application/json" },
+              cache: "no-store",
+              signal: controller.signal,
+            }),
+          ]);
+        if (!requestIsCurrent()) return;
         if (
-          [currentResponse, progressResponse, nutrientResponse].some(
+          [currentResponse, progressResponse, nutrientResponse, referenceResponse].some(
             (response) => response.status === 401,
           )
         )
           return signInAgain();
-        const [currentBody, progressBody, nutrientBody] = await Promise.all([
+        const [currentBody, progressBody, nutrientBody, referenceBody] = await Promise.all([
           json(currentResponse),
           json(progressResponse),
           json(nutrientResponse),
+          json(referenceResponse),
         ]);
+        if (!requestIsCurrent()) return;
         if (!currentResponse.ok)
           throw new Error(errorMessage(currentBody, "The current goal could not be loaded."));
         if (!progressResponse.ok)
@@ -245,28 +346,101 @@ export function GoalsClient() {
         const nextGoal = parseCurrentGoal(currentBody);
         const nextProgress = parseGoalProgress(progressBody);
         const nextDefinitions = parseTargetableNutrients(nutrientBody);
+        const candidateDate = nextGoal?.effectiveFrom ?? localDate;
+        let effectiveReferenceResponse = referenceResponse;
+        let effectiveReferenceBody = referenceBody;
+        if (candidateDate !== localDate && referenceResponse.status !== 404) {
+          effectiveReferenceResponse = await fetch(
+            `/api/goals/reference-target-sets?date=${encodeURIComponent(candidateDate)}`,
+            {
+              headers: { accept: "application/json" },
+              cache: "no-store",
+              signal: controller.signal,
+            },
+          );
+          if (!requestIsCurrent()) return;
+          if (effectiveReferenceResponse.status === 401) return signInAgain();
+          effectiveReferenceBody = await json(effectiveReferenceResponse);
+          if (!requestIsCurrent()) return;
+        }
+        const nextReferenceSets =
+          effectiveReferenceResponse.status === 404
+            ? null
+            : (() => {
+                if (!effectiveReferenceResponse.ok) {
+                  throw new Error(
+                    errorMessage(
+                      effectiveReferenceBody,
+                      "Source-verified candidate targets could not be loaded.",
+                    ),
+                  );
+                }
+                const parsed = parseReferenceTargetSets(effectiveReferenceBody);
+                if (parsed.date !== candidateDate) {
+                  throw new Error("Candidate targets were returned for the wrong effective date.");
+                }
+                return parsed;
+              })();
+        if (
+          nextReferenceSets !== null &&
+          nextReferenceSets.profileRevision !== ownerSession.profile.revision
+        ) {
+          throw new Error("Your profile changed while candidate targets were loading. Refresh.");
+        }
+        if (!requestIsCurrent()) return;
         setGoal(nextGoal);
         setProgress(nextProgress);
         setDefinitions(nextDefinitions);
         setSelectedNutrientId(nextDefinitions[0]?.nutrientId ?? "");
-        setBuilder(nextGoal ? goalBuilderFromGoal(nextGoal) : emptyGoal(localDate));
+        let nextBuilder = nextGoal ? goalBuilderFromGoal(nextGoal) : emptyGoal(localDate);
+        const appliedSet = nextReferenceSets
+          ? carriedReferenceSet(nextReferenceSets, nextGoal)
+          : null;
+        if (nextReferenceSets && appliedSet) {
+          nextBuilder = {
+            ...nextBuilder,
+            targets: referenceTargetsForDraft(appliedSet),
+            reference: {
+              selection: referenceTargetSelection(nextReferenceSets, appliedSet),
+              expectedProfileRevision: nextReferenceSets.profileRevision,
+              policyDigest: appliedSet.policyDigest,
+            },
+          };
+        }
+        effectiveDateRef.current = nextBuilder.effectiveFrom;
+        setBuilder(nextBuilder);
+        setTemplatesSupported(effectiveReferenceResponse.status !== 404);
+        setReferenceSets(nextReferenceSets);
+        setSelectedReferenceGroup(appliedSet?.groupCode ?? "");
+        setReferenceAcknowledged(false);
+        setReferenceCustomized(false);
         setState("ready");
         setMessage(
           nextGoal
-            ? `Goal version ${nextGoal.versionNumber} applies on ${localDate}.`
+            ? `Goal version ${nextGoal.versionNumber} applies on ${localDate}.${
+                nextReferenceSets &&
+                appliedReferenceMatchesGoal(nextReferenceSets.applied, nextGoal)
+                  ? " Its source-verified candidate provenance was confirmed."
+                  : ""
+              }`
             : "No active goal applies to this local day. Create one below.",
         );
       } catch (caught) {
+        if (!requestIsCurrent()) return;
         setState("error");
         setMessage(caught instanceof Error ? caught.message : "Goals could not be loaded.");
+      } finally {
+        if (loadController.current === controller) loadController.current = null;
       }
     },
     [signInAgain],
   );
 
-  useEffect(() => {
-    const controller = new AbortController();
-    void (async () => {
+  const refreshSessionAndGoals = useCallback(
+    async (preferredDate?: string, expectedOwnerUserId?: string) => {
+      authController.current?.abort();
+      const controller = new AbortController();
+      authController.current = controller;
       try {
         const response = await fetch("/api/auth/me", {
           headers: { accept: "application/json" },
@@ -274,26 +448,255 @@ export function GoalsClient() {
           signal: controller.signal,
         });
         if (response.status === 401) return signInAgain();
-        const session = parseSession(await json(response));
+        const body = await json(response);
+        if (!response.ok) {
+          throw new Error(errorMessage(body, "Your private goal session could not be verified."));
+        }
+        const nextSession = parseSession(body);
+        if (expectedOwnerUserId && nextSession.user.id !== expectedOwnerUserId) {
+          return signInAgain();
+        }
+        if (authController.current !== controller || controller.signal.aborted) return;
+        sessionRef.current = nextSession;
+        setProfileBirthDate(nextSession.profile.birthDate ?? "");
+        setProfileSexAtBirth(nextSession.profile.sexAtBirth ?? "");
         const localDate =
-          requestedDate && isLocalDate(requestedDate)
-            ? requestedDate
-            : localDateInTimeZone(new Date(), session.profile.timeZone);
-        if (!controller.signal.aborted) {
-          setDate(localDate);
-          void load(localDate);
-        }
-      } catch {
-        if (!controller.signal.aborted) {
-          setState("error");
-          setMessage("Your private goal session could not be verified.");
-        }
+          preferredDate && isLocalDate(preferredDate)
+            ? preferredDate
+            : localDateInTimeZone(new Date(), nextSession.profile.timeZone);
+        selectedDateRef.current = localDate;
+        setDate(localDate);
+        await load(localDate, nextSession);
+      } catch (caught) {
+        if (authController.current !== controller || controller.signal.aborted) return;
+        setState("error");
+        setMessage(
+          caught instanceof Error
+            ? caught.message
+            : "Your private goal session could not be verified.",
+        );
+      } finally {
+        if (authController.current === controller) authController.current = null;
       }
-    })();
-    return () => controller.abort();
-  }, [load, requestedDate, signInAgain]);
+    },
+    [load, signInAgain],
+  );
+
+  useEffect(() => {
+    void refreshSessionAndGoals(
+      requestedDate && isLocalDate(requestedDate) ? requestedDate : undefined,
+    );
+    return () => {
+      authController.current?.abort();
+      loadController.current?.abort();
+      writeController.current?.abort();
+      profileController.current?.abort();
+      candidateController.current?.abort();
+      generation.current += 1;
+    };
+  }, [refreshSessionAndGoals, requestedDate]);
+
+  const loadCandidates = useCallback(
+    async (effectiveFrom: string, ownerSession: SessionSummary) => {
+      if (!isLocalDate(effectiveFrom)) {
+        setMessage("Choose a real effective date before loading candidate targets.");
+        return;
+      }
+      candidateController.current?.abort();
+      const controller = new AbortController();
+      candidateController.current = controller;
+      const requestGeneration = candidateGeneration.current + 1;
+      candidateGeneration.current = requestGeneration;
+      const ownerUserId = ownerSession.user.id;
+      const requestIsCurrent = () =>
+        candidateController.current === controller &&
+        !controller.signal.aborted &&
+        candidateGeneration.current === requestGeneration &&
+        effectiveDateRef.current === effectiveFrom &&
+        sessionRef.current?.user.id === ownerUserId;
+      try {
+        const response = await fetch(
+          `/api/goals/reference-target-sets?date=${encodeURIComponent(effectiveFrom)}`,
+          {
+            headers: { accept: "application/json" },
+            cache: "no-store",
+            signal: controller.signal,
+          },
+        );
+        if (!requestIsCurrent()) return;
+        if (response.status === 401) return signInAgain();
+        if (response.status === 404) {
+          setTemplatesSupported(false);
+          setReferenceSets(null);
+          setSelectedReferenceGroup("");
+          setReferenceAcknowledged(false);
+          setReferenceCustomized(false);
+          setMessage("Candidate templates are unavailable on this API; manual goals still work.");
+          return;
+        }
+        const body = await json(response);
+        if (!requestIsCurrent()) return;
+        if (!response.ok) {
+          throw new Error(errorMessage(body, "Candidate targets could not be loaded."));
+        }
+        const parsed = parseReferenceTargetSets(body);
+        if (
+          parsed.date !== effectiveFrom ||
+          parsed.profileRevision !== ownerSession.profile.revision
+        ) {
+          throw new Error("Your effective date or profile changed while candidates were loading.");
+        }
+        if (!requestIsCurrent()) return;
+        setTemplatesSupported(true);
+        setReferenceSets(parsed);
+        setSelectedReferenceGroup("");
+        setReferenceAcknowledged(false);
+        setReferenceCustomized(false);
+        setMessage(
+          parsed.availability.available
+            ? "Source-verified candidate loaded. Review it before applying anything to the draft."
+            : referenceAvailabilityMessage(parsed.availability.reasonCodes),
+        );
+      } catch (caught) {
+        if (!requestIsCurrent()) return;
+        setMessage(
+          caught instanceof Error ? caught.message : "Candidate targets could not be loaded.",
+        );
+      } finally {
+        if (candidateController.current === controller) candidateController.current = null;
+      }
+    },
+    [signInAgain],
+  );
+
+  async function saveProfilePrerequisites() {
+    const ownerSession = sessionRef.current;
+    if (!ownerSession || profileBusy) return;
+    if (profileBirthDate !== "" && !isLocalDate(profileBirthDate)) {
+      setMessage("Birth date must be a real YYYY-MM-DD date.");
+      return;
+    }
+    if (!["female", "male", "intersex", "not_specified"].includes(profileSexAtBirth)) {
+      setMessage("Choose a profile sex-at-birth value before saving.");
+      return;
+    }
+    const ownerUserId = ownerSession.user.id;
+    const requestGeneration = generation.current;
+    const controller = new AbortController();
+    profileController.current?.abort();
+    profileController.current = controller;
+    const requestIsCurrent = () =>
+      profileController.current === controller &&
+      !controller.signal.aborted &&
+      generation.current === requestGeneration &&
+      sessionRef.current?.user.id === ownerUserId;
+    setProfileBusy(true);
+    setMessage("Saving the profile fields used to check candidate eligibility…");
+    try {
+      const response = await fetch("/api/profile", {
+        method: "PATCH",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "if-match": quoteRevision(ownerSession.profile.revision),
+        },
+        body: JSON.stringify({
+          expectedOwnerUserId: ownerUserId,
+          birthDate: profileBirthDate || null,
+          sexAtBirth: profileSexAtBirth,
+        }),
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (!requestIsCurrent()) return;
+      if (response.status === 401) return signInAgain();
+      const body = await json(response);
+      if (!requestIsCurrent()) return;
+      if (response.status === 409 && responseCode(body) === "PROFILE_OWNER_CHANGED") {
+        return signInAgain();
+      }
+      if (response.status === 409 || response.status === 412) {
+        await refreshSessionAndGoals(selectedDateRef.current, ownerUserId);
+        if (sessionRef.current?.user.id === ownerUserId) {
+          setMessage("Your profile changed elsewhere. Fresh values were loaded for review.");
+        }
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(errorMessage(body, "The eligibility profile fields could not be saved."));
+      }
+      const profile = parseProfileResponse(body);
+      if (!requestIsCurrent()) return;
+      const nextSession = { ...ownerSession, profile };
+      sessionRef.current = nextSession;
+      setProfileBirthDate(profile.birthDate ?? "");
+      setProfileSexAtBirth(profile.sexAtBirth ?? "");
+      await loadCandidates(effectiveDateRef.current, nextSession);
+    } catch (caught) {
+      if (!requestIsCurrent()) return;
+      setMessage(
+        `${caught instanceof Error ? caught.message : "Profile fields could not be saved."} Review fresh profile values before retrying.`,
+      );
+    } finally {
+      if (profileController.current === controller) {
+        profileController.current = null;
+        setProfileBusy(false);
+      }
+    }
+  }
+
+  function applyReferenceDraft(set: ReferenceTargetSet) {
+    const ownerSession = sessionRef.current;
+    if (!ownerSession || !referenceSets || !referenceAcknowledged) {
+      setMessage("Review and accept the exact eligibility acknowledgement before applying.");
+      return;
+    }
+    if (
+      referenceSets.date !== builder.effectiveFrom ||
+      referenceSets.profileRevision !== ownerSession.profile.revision ||
+      set.groupCode !== selectedReferenceGroup
+    ) {
+      setMessage(
+        "The profile, group, or effective date changed. Reload the candidate before applying.",
+      );
+      return;
+    }
+    setBuilder({
+      ...builder,
+      targets: referenceTargetsForDraft(set),
+      reference: {
+        selection: referenceTargetSelection(referenceSets, set),
+        expectedProfileRevision: referenceSets.profileRevision,
+        policyDigest: set.policyDigest,
+      },
+    });
+    setReferenceCustomized(false);
+    setMessage(
+      "Candidate values were copied into a read-only draft. Nothing is saved until you choose Create or Publish below.",
+    );
+  }
+
+  function customizeReferenceDraft(set?: ReferenceTargetSet) {
+    const targets = set
+      ? referenceTargetsForDraft(set, true)
+      : builder.targets.map((target) => ({
+          ...target,
+          sourceLabel: `User-customized copy of ${target.sourceLabel}`.slice(0, 160),
+          rationale: "User-editable copy; verified reference-template identity cleared.",
+        }));
+    setBuilder({ ...builder, targets, reference: null });
+    setReferenceAcknowledged(false);
+    setReferenceCustomized(true);
+    setMessage(
+      "Candidate values were copied into editable custom targets. Verified template provenance was cleared.",
+    );
+  }
 
   function addTarget() {
+    if (builder.reference) {
+      setMessage("Choose Customize before editing a source-verified candidate draft.");
+      return;
+    }
     const definition = definitions.find((candidate) => candidate.nutrientId === selectedNutrientId);
     if (
       !definition ||
@@ -322,6 +725,7 @@ export function GoalsClient() {
   }
 
   function updateTarget(index: number, patch: Partial<TargetDraft>) {
+    if (builder.reference) return;
     setBuilder({
       ...builder,
       targets: builder.targets.map((target, candidate) =>
@@ -332,9 +736,17 @@ export function GoalsClient() {
 
   async function save(event: FormEvent) {
     event.preventDefault();
+    if (verifiedApplied && builder.reference === null && !referenceCustomized) {
+      setMessage(
+        "This goal has verified candidate provenance. Choose Customize explicitly before publishing custom rows.",
+      );
+      return;
+    }
+    const ownerSession = sessionRef.current;
+    if (!ownerSession || busy || writeController.current) return;
     let body: ReturnType<typeof goalBody>;
     try {
-      body = goalBody(builder);
+      body = goalBody(builder, templatesSupported ? ownerSession.user.id : undefined);
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Review the goal fields.");
       return;
@@ -347,6 +759,17 @@ export function GoalsClient() {
       createOperationId,
     );
     pending.current.set(intentKey, operation);
+    const ownerUserId = ownerSession.user.id;
+    const requestGeneration = generation.current;
+    const savedDate = date;
+    const controller = new AbortController();
+    writeController.current = controller;
+    const requestIsCurrent = () =>
+      writeController.current === controller &&
+      !controller.signal.aborted &&
+      generation.current === requestGeneration &&
+      selectedDateRef.current === savedDate &&
+      sessionRef.current?.user.id === ownerUserId;
     setBusy(true);
     setMessage(
       builder.goalId ? "Publishing a new immutable goal revision…" : "Creating your goal…",
@@ -365,34 +788,50 @@ export function GoalsClient() {
         },
         body: JSON.stringify(operation.body),
         cache: "no-store",
+        signal: controller.signal,
       });
+      if (!requestIsCurrent()) return;
       if (response.status === 401) return signInAgain();
       const responseBody = await json(response);
-      if (response.status === 412) {
+      if (!requestIsCurrent()) return;
+      if (
+        response.status === 409 &&
+        ["PROFILE_OWNER_CHANGED", "GOAL_OWNER_CHANGED"].includes(responseCode(responseBody) ?? "")
+      ) {
+        return signInAgain();
+      }
+      if (response.status === 409 || response.status === 412) {
         pending.current.delete(intentKey);
-        await load(date);
+        await refreshSessionAndGoals(savedDate, ownerUserId);
+        if (sessionRef.current?.user.id !== ownerUserId) return;
         setMessage(
-          "This goal changed elsewhere. Fresh values were loaded; review before saving again.",
+          "The goal or eligibility profile changed elsewhere. Fresh values were loaded; review before saving again.",
         );
         return;
       }
       if (!response.ok) throw new Error(errorMessage(responseBody, "The goal could not be saved."));
       const mutation = parseGoalMutation(responseBody);
+      if (!requestIsCurrent()) return;
       pending.current.delete(intentKey);
       setGoal(mutation.goal);
       setBuilder(goalBuilderFromGoal(mutation.goal));
-      await load(date);
+      await load(savedDate, ownerSession);
+      if (sessionRef.current?.user.id !== ownerUserId) return;
       setMessage(
         mutation.replayed
           ? "The earlier goal save was confirmed safely."
           : `Goal version ${mutation.goal.versionNumber} published.`,
       );
     } catch (caught) {
+      if (!requestIsCurrent()) return;
       setMessage(
         `${caught instanceof Error ? caught.message : "The goal could not be saved."} Choose Save again to retry safely.`,
       );
     } finally {
-      setBusy(false);
+      if (writeController.current === controller) {
+        writeController.current = null;
+        setBusy(false);
+      }
     }
   }
 
@@ -401,11 +840,24 @@ export function GoalsClient() {
       setMessage("Choose a real progress date before starting a new goal.");
       return;
     }
-    setBuilder(emptyGoal(date));
+    const next = emptyGoal(date);
+    effectiveDateRef.current = next.effectiveFrom;
+    setBuilder(next);
+    setReferenceAcknowledged(false);
+    setReferenceCustomized(false);
     setMessage("New goal draft started. Choose its effective date and explicit targets.");
   }
 
   const historicalGoal = goalBuilderIsHistorical(goal, builder);
+  const selectedReferenceSet = referenceSets?.sets.find(
+    (candidate) => candidate.groupCode === selectedReferenceGroup,
+  );
+  const verifiedApplied = appliedReferenceMatchesGoal(referenceSets?.applied ?? null, goal);
+  const appliedReferenceSet = appliedReferenceSetForDisplay(referenceSets, goal);
+  const appliedProfileDrift =
+    verifiedApplied &&
+    referenceSets?.applied?.appliedProfileRevision !== referenceSets?.profileRevision;
+  const referenceLocked = !referenceCustomized && (builder.reference !== null || verifiedApplied);
 
   return (
     <>
@@ -440,7 +892,14 @@ export function GoalsClient() {
           {message}
         </p>
         {state === "error" ? (
-          <button className="buttonSecondary" onClick={() => void load(date)} type="button">
+          <button
+            className="buttonSecondary"
+            onClick={() => {
+              const ownerSession = sessionRef.current;
+              if (ownerSession && isLocalDate(date)) void load(date, ownerSession);
+            }}
+            type="button"
+          >
             Retry goals
           </button>
         ) : null}
@@ -474,9 +933,26 @@ export function GoalsClient() {
                   <input
                     aria-describedby={builder.goalId ? "effective-date-help" : undefined}
                     maxLength={10}
-                    onChange={(event) =>
-                      setBuilder({ ...builder, effectiveFrom: event.target.value })
-                    }
+                    onBlur={() => {
+                      const ownerSession = sessionRef.current;
+                      if (ownerSession && isLocalDate(builder.effectiveFrom)) {
+                        void loadCandidates(builder.effectiveFrom, ownerSession);
+                      }
+                    }}
+                    onChange={(event) => {
+                      const effectiveFrom = event.target.value;
+                      effectiveDateRef.current = effectiveFrom;
+                      candidateController.current?.abort();
+                      setReferenceSets(null);
+                      setSelectedReferenceGroup("");
+                      setReferenceAcknowledged(false);
+                      if (builder.reference) setReferenceCustomized(false);
+                      setBuilder({
+                        ...builder,
+                        effectiveFrom,
+                        ...(builder.reference ? { targets: [], reference: null } : {}),
+                      });
+                    }}
                     readOnly={builder.goalId !== null}
                     value={builder.effectiveFrom}
                   />
@@ -609,31 +1085,281 @@ export function GoalsClient() {
                     value={builder.rationale}
                   />
                 </label>
+                {referenceTargetSectionVisible(templatesSupported, referenceSets) ? (
+                  <section className="workspaceSection" aria-labelledby="candidate-targets-heading">
+                    <div className="workspaceHeading">
+                      <div>
+                        <p className="kicker">OPTIONAL SOURCE-VERIFIED CANDIDATE</p>
+                        <h3 id="candidate-targets-heading">U.S.–Canada population references</h3>
+                      </div>
+                      {verifiedApplied ? (
+                        <span className="statusPill">Verified on this goal</span>
+                      ) : null}
+                    </div>
+                    <p className="coverageCopy">
+                      Choosing a group changes nothing. Applying copies its 12 values into this
+                      unsaved draft; Create or Publish remains a separate action.
+                    </p>
+                    {verifiedApplied && referenceSets?.applied && appliedReferenceSet ? (
+                      <div aria-live="polite">
+                        <p className="fieldHelp">
+                          <strong>Applied reference snapshot:</strong> {appliedReferenceSet.title}.{" "}
+                          Template {appliedReferenceSet.templateVersion}; acknowledgement accepted{" "}
+                          <time dateTime={referenceSets.applied.acknowledgement.acceptedAt}>
+                            {referenceSets.applied.acknowledgement.acceptedAt}
+                          </time>
+                          . Eligible through the day before{" "}
+                          {appliedReferenceSet.eligibleThroughExclusive}.
+                        </p>
+                        {appliedProfileDrift ? (
+                          <p className="fieldHelp">
+                            Your profile changed after this snapshot was applied. Its saved values
+                            and sources remain visible, but its acknowledgement is not reused.
+                            Select the current group, acknowledge it, and Apply again—or choose
+                            Customize.
+                          </p>
+                        ) : null}
+                        {appliedProfileDrift || !selectedReferenceSet ? (
+                          <ReferenceTargetRows
+                            legend="Applied 12-value source snapshot"
+                            set={appliedReferenceSet}
+                          />
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {templatesSupported ? (
+                      <>
+                        <fieldset className="goalEditorFields">
+                          <legend className="fieldLegend">
+                            Profile fields used for eligibility
+                          </legend>
+                          <div className="formGrid">
+                            <label className="formField">
+                              <span>Birth date (YYYY-MM-DD)</span>
+                              <input
+                                disabled={profileBusy || busy}
+                                maxLength={10}
+                                onChange={(event) => setProfileBirthDate(event.target.value)}
+                                value={profileBirthDate}
+                              />
+                            </label>
+                            <label className="formField">
+                              <span>Sex at birth</span>
+                              <select
+                                disabled={profileBusy || busy}
+                                onChange={(event) => setProfileSexAtBirth(event.target.value)}
+                                value={profileSexAtBirth}
+                              >
+                                <option value="">Choose…</option>
+                                <option value="female">Female</option>
+                                <option value="male">Male</option>
+                                <option value="intersex">Intersex</option>
+                                <option value="not_specified">Prefer not to specify</option>
+                              </select>
+                            </label>
+                          </div>
+                          <button
+                            className="buttonSecondary"
+                            disabled={profileBusy || busy}
+                            onClick={() => void saveProfilePrerequisites()}
+                            type="button"
+                          >
+                            {profileBusy ? "Saving profile…" : "Save profile and check eligibility"}
+                          </button>
+                        </fieldset>
+                        {referenceSets ? (
+                          <>
+                            <p className="coverageCopy">{referenceSets.notice}</p>
+                            {referenceSets.availability.available ? (
+                              <fieldset className="modeChooser">
+                                <legend className="fieldLegend">
+                                  Choose the matching source group
+                                </legend>
+                                {referenceSets.sets.map((candidate) => (
+                                  <label className="intentOption" key={candidate.groupCode}>
+                                    <input
+                                      checked={selectedReferenceGroup === candidate.groupCode}
+                                      disabled={
+                                        busy ||
+                                        historicalGoal ||
+                                        (referenceLocked && !appliedProfileDrift)
+                                      }
+                                      name="reference-target-group"
+                                      onChange={() => {
+                                        setSelectedReferenceGroup(candidate.groupCode);
+                                        setReferenceAcknowledged(false);
+                                      }}
+                                      type="radio"
+                                    />
+                                    <span>{candidate.title}</span>
+                                  </label>
+                                ))}
+                              </fieldset>
+                            ) : (
+                              <p className="fieldHelp">
+                                {referenceAvailabilityMessage(
+                                  referenceSets.availability.reasonCodes,
+                                )}
+                              </p>
+                            )}
+                            {selectedReferenceSet ? (
+                              <div aria-live="polite">
+                                <p className="fieldHelp">
+                                  This candidate expires on your 51st birthday (
+                                  {selectedReferenceSet.eligibleThroughExclusive}); the day before
+                                  is the final eligible day.
+                                </p>
+                                <ReferenceTargetRows
+                                  legend="Candidate target preview"
+                                  set={selectedReferenceSet}
+                                />
+                                <label className="formField formField--wide">
+                                  <span>
+                                    <input
+                                      checked={referenceAcknowledged}
+                                      disabled={
+                                        busy ||
+                                        historicalGoal ||
+                                        (referenceLocked && !appliedProfileDrift)
+                                      }
+                                      onChange={(event) =>
+                                        setReferenceAcknowledged(event.target.checked)
+                                      }
+                                      type="checkbox"
+                                    />{" "}
+                                    {referenceSets.acknowledgementPolicy.text}
+                                  </span>
+                                </label>
+                                <button
+                                  className="buttonSecondary"
+                                  disabled={
+                                    busy ||
+                                    historicalGoal ||
+                                    (referenceLocked && !appliedProfileDrift) ||
+                                    !referenceAcknowledged
+                                  }
+                                  onClick={() => applyReferenceDraft(selectedReferenceSet)}
+                                  type="button"
+                                >
+                                  Apply 12 values to unsaved draft
+                                </button>
+                              </div>
+                            ) : null}
+                            {referenceLocked ? (
+                              <button
+                                className="buttonSecondary"
+                                disabled={busy || historicalGoal}
+                                onClick={() =>
+                                  customizeReferenceDraft(
+                                    verifiedApplied
+                                      ? (appliedReferenceSet ?? undefined)
+                                      : selectedReferenceSet,
+                                  )
+                                }
+                                type="button"
+                              >
+                                Customize as editable targets and clear verified provenance
+                              </button>
+                            ) : null}
+                            <details>
+                              <summary>Official sources and important cautions</summary>
+                              <p className="sourceLine">
+                                Source snapshot {referenceSets.sources.version}, checked{" "}
+                                {referenceSets.sources.reviewedOn}:{" "}
+                                <a
+                                  href={referenceSets.sources.overviewUrl}
+                                  rel="noreferrer"
+                                  target="_blank"
+                                >
+                                  Overview
+                                </a>
+                                {" · "}
+                                <a
+                                  href={referenceSets.sources.macronutrientsUrl}
+                                  rel="noreferrer"
+                                  target="_blank"
+                                >
+                                  Macronutrients
+                                </a>
+                                {" · "}
+                                <a
+                                  href={referenceSets.sources.elementsUrl}
+                                  rel="noreferrer"
+                                  target="_blank"
+                                >
+                                  Elements
+                                </a>
+                                {" · "}
+                                <a
+                                  href={referenceSets.sources.vitaminsUrl}
+                                  rel="noreferrer"
+                                  target="_blank"
+                                >
+                                  Vitamins
+                                </a>
+                                {" · "}
+                                <a
+                                  href={referenceSets.sources.reportListUrl}
+                                  rel="noreferrer"
+                                  target="_blank"
+                                >
+                                  Reports
+                                </a>
+                              </p>
+                              <ul className="coverageCopy">
+                                {referenceSets.cautions.map((caution) => (
+                                  <li key={caution.code}>{caution.text}</li>
+                                ))}
+                              </ul>
+                            </details>
+                          </>
+                        ) : (
+                          <p className="fieldHelp">
+                            Save the profile fields or reload this effective date to check
+                            eligibility.
+                          </p>
+                        )}
+                      </>
+                    ) : (
+                      <p className="fieldHelp">
+                        Candidate templates are not supported by this API version. Manual nutrient
+                        goals below remain available.
+                      </p>
+                    )}
+                  </section>
+                ) : null}
                 <section className="workspaceSection" aria-labelledby="targets-heading">
                   <h3 id="targets-heading">Nutrient thresholds ({builder.targets.length}/256)</h3>
-                  <div className="searchInputRow">
-                    <select
-                      aria-label="Nutrient to add"
-                      onChange={(event) => setSelectedNutrientId(event.target.value)}
-                      value={selectedNutrientId}
-                    >
-                      {definitions
-                        .filter(
-                          (definition) =>
-                            !builder.targets.some(
-                              (target) => target.definition.nutrientId === definition.nutrientId,
-                            ),
-                        )
-                        .map((definition) => (
-                          <option key={definition.nutrientId} value={definition.nutrientId}>
-                            {definition.name} ({definition.unit})
-                          </option>
-                        ))}
-                    </select>
-                    <button className="buttonSecondary" onClick={addTarget} type="button">
-                      Add nutrient
-                    </button>
-                  </div>
+                  {referenceLocked ? (
+                    <p className="fieldHelp">
+                      These source-verified candidate rows are read-only. Choose Customize above to
+                      make an editable copy and clear verified provenance.
+                    </p>
+                  ) : (
+                    <div className="searchInputRow">
+                      <select
+                        aria-label="Nutrient to add"
+                        onChange={(event) => setSelectedNutrientId(event.target.value)}
+                        value={selectedNutrientId}
+                      >
+                        {definitions
+                          .filter(
+                            (definition) =>
+                              !builder.targets.some(
+                                (target) => target.definition.nutrientId === definition.nutrientId,
+                              ),
+                          )
+                          .map((definition) => (
+                            <option key={definition.nutrientId} value={definition.nutrientId}>
+                              {definition.name} ({definition.unit})
+                            </option>
+                          ))}
+                      </select>
+                      <button className="buttonSecondary" onClick={addTarget} type="button">
+                        Add nutrient
+                      </button>
+                    </div>
+                  )}
                   <div className="goalTargetGrid">
                     {builder.targets.map((target, index) => (
                       <div className="goalTargetRow" key={target.definition.nutrientId}>
@@ -649,6 +1375,7 @@ export function GoalsClient() {
                               updateTarget(index, { sourceLabel: event.target.value })
                             }
                             placeholder="Source label (required)"
+                            readOnly={referenceLocked}
                             value={target.sourceLabel}
                           />
                           <input
@@ -658,6 +1385,7 @@ export function GoalsClient() {
                               updateTarget(index, { sourceVersion: event.target.value })
                             }
                             placeholder="Source version (optional)"
+                            readOnly={referenceLocked}
                             value={target.sourceVersion}
                           />
                           <input
@@ -667,6 +1395,7 @@ export function GoalsClient() {
                               updateTarget(index, { rationale: event.target.value })
                             }
                             placeholder="Rationale (optional)"
+                            readOnly={referenceLocked}
                             value={target.rationale}
                           />
                         </div>
@@ -678,6 +1407,7 @@ export function GoalsClient() {
                             updateTarget(index, { minimumAmount: event.target.value })
                           }
                           placeholder="Minimum"
+                          readOnly={referenceLocked}
                           value={target.minimumAmount}
                         />
                         <input
@@ -688,6 +1418,7 @@ export function GoalsClient() {
                             updateTarget(index, { targetAmount: event.target.value })
                           }
                           placeholder="Target"
+                          readOnly={referenceLocked}
                           value={target.targetAmount}
                         />
                         <input
@@ -698,10 +1429,12 @@ export function GoalsClient() {
                             updateTarget(index, { maximumAmount: event.target.value })
                           }
                           placeholder="Maximum"
+                          readOnly={referenceLocked}
                           value={target.maximumAmount}
                         />
                         <button
                           className="buttonDanger"
+                          disabled={referenceLocked}
                           onClick={() =>
                             setBuilder({
                               ...builder,
@@ -719,7 +1452,15 @@ export function GoalsClient() {
                   </div>
                 </section>
               </fieldset>
-              <button className="buttonPrimary" disabled={busy || historicalGoal} type="submit">
+              <button
+                className="buttonPrimary"
+                disabled={
+                  busy ||
+                  historicalGoal ||
+                  (verifiedApplied && builder.reference === null && !referenceCustomized)
+                }
+                type="submit"
+              >
                 {historicalGoal
                   ? "Closed goal history is read-only"
                   : busy
@@ -769,9 +1510,15 @@ export function GoalsClient() {
               <span>Progress date</span>
               <input
                 maxLength={10}
-                onChange={(event) => setDate(event.target.value)}
+                onChange={(event) => {
+                  const nextDate = event.target.value;
+                  selectedDateRef.current = nextDate;
+                  loadController.current?.abort();
+                  setDate(nextDate);
+                }}
                 onBlur={() => {
-                  if (isLocalDate(date)) void load(date);
+                  const ownerSession = sessionRef.current;
+                  if (ownerSession && isLocalDate(date)) void load(date, ownerSession);
                 }}
                 value={date}
               />
@@ -796,6 +1543,42 @@ export function GoalsClient() {
         </div>
       </section>
     </>
+  );
+}
+
+function ReferenceTargetRows({
+  legend,
+  set,
+}: {
+  readonly legend: string;
+  readonly set: ReferenceTargetSet;
+}) {
+  return (
+    <fieldset className="goalTargetGrid">
+      <legend className="fieldLegend">{legend}</legend>
+      {set.targets.map((target) => (
+        <div className="goalTargetRow" key={target.definition.nutrientId}>
+          <div>
+            <strong>{target.definition.name}</strong>
+            <p className="sourceLine">
+              {target.basis.referenceType.toUpperCase()} · usual average daily intake ·{" "}
+              {target.source.version} · {target.source.table}
+            </p>
+          </div>
+          <span>
+            Target {target.targetAmount} {target.definition.unit}
+          </span>
+          <span>
+            {target.maximumAmount
+              ? `UL ${target.maximumAmount} ${target.definition.unit}`
+              : "No compatible UL copied"}
+          </span>
+          <a href={target.source.url} rel="noreferrer" target="_blank">
+            Official source
+          </a>
+        </div>
+      ))}
+    </fieldset>
   );
 }
 

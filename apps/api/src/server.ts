@@ -81,6 +81,7 @@ export async function createApiApplicationRuntime(
       hydrationService: dependencies.hydrationService,
       profileService: dependencies.profileService,
       recipeService: dependencies.recipeService,
+      referenceTargetsEnabled: dependencyConfig.referenceTargetsEnabled,
       ...(options.logger === undefined ? {} : { logger: options.logger }),
       ...(options.clock ? { retentionClock: options.clock } : {}),
       ...(dependencies.retentionService ? { retentionService: dependencies.retentionService } : {}),

@@ -18,6 +18,7 @@ describe("production API runtime", () => {
         databaseUrl: "postgresql://local.invalid/nutrition",
         emailVerification: null,
         meiliUrl: "http://127.0.0.1:7700",
+        referenceTargetsEnabled: false,
         retention: null,
         requireDatabaseRestoreAttestation: false,
         searchDatabaseMaxConcurrency: 2,

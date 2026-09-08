@@ -150,6 +150,7 @@ function dependencyConfig(retention = retentionConfig()): ApiDependencyConfig {
     emailVerification: null,
     meiliSearchKey: "scoped-search-key",
     meiliUrl: "http://127.0.0.1:7700",
+    referenceTargetsEnabled: false,
     requireDatabaseRestoreAttestation: false,
     retention,
     searchDatabaseMaxConcurrency: 2,

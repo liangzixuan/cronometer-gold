@@ -21,6 +21,7 @@ import {
   type RecipeMutationResponse,
   type RecipeSummary,
   type RecipeWarningCode,
+  type ReferenceTargetSetListResponse,
   type TargetableNutrient,
   type TargetableNutrientListResponse,
   type UserProfile,
@@ -83,14 +84,18 @@ import {
   issuePasswordRecoveryToken,
   type JsonObject,
   listRecipes,
+  listReferenceTargetSets,
   listTargetableNutrients,
   type NutritionGoalEnergyRecord,
   NutritionGoalIdempotencyConflictError,
   type NutritionGoalMutationResult,
   NutritionGoalNotFoundError,
   NutritionGoalPeriodConflictError,
+  NutritionGoalPersistedIntegrityError,
+  NutritionGoalProfileRevisionConflictError,
   type NutritionGoalProgressRecord,
   type NutritionGoalRecord,
+  NutritionGoalReferenceUnavailableError,
   NutritionGoalRevisionConflictError,
   type NutritionGoalTargetProgressRecord,
   NutritionGoalUnsupportedProfileError,
@@ -155,6 +160,9 @@ import {
   GoalIdempotencyConflictServiceError,
   GoalNotFoundServiceError,
   GoalPeriodConflictServiceError,
+  GoalPersistedIntegrityServiceError,
+  GoalProfileRevisionConflictServiceError,
+  GoalReferenceUnavailableServiceError,
   GoalRevisionConflictServiceError,
   type GoalService,
   GoalUnsupportedProfileServiceError,
@@ -1607,6 +1615,15 @@ function mapGoalPersistenceError(error: unknown): never {
   if (error instanceof NutritionGoalPeriodConflictError) {
     throw new GoalPeriodConflictServiceError();
   }
+  if (error instanceof NutritionGoalProfileRevisionConflictError) {
+    throw new GoalProfileRevisionConflictServiceError();
+  }
+  if (error instanceof NutritionGoalPersistedIntegrityError) {
+    throw new GoalPersistedIntegrityServiceError();
+  }
+  if (error instanceof NutritionGoalReferenceUnavailableError) {
+    throw new GoalReferenceUnavailableServiceError();
+  }
   if (error instanceof NutritionGoalValidationError || error instanceof RangeError) {
     throw new GoalValidationServiceError();
   }
@@ -1646,6 +1663,14 @@ export class DatabaseGoalService implements GoalService {
         effectiveFrom: input.goal.effectiveFrom,
         energy: input.goal.energy,
         targets: input.goal.nutrientTargets,
+        ...(input.goal.referenceTargetSet
+          ? {
+              referenceTargetSet: {
+                expectedProfileRevision: input.goal.expectedProfileRevision,
+                selection: input.goal.referenceTargetSet,
+              },
+            }
+          : {}),
       });
       input.signal?.throwIfAborted();
       return mapGoalMutation(result);
@@ -1667,6 +1692,14 @@ export class DatabaseGoalService implements GoalService {
         requestDigest: input.requestDigest,
         energy: input.goal.energy,
         targets: input.goal.nutrientTargets,
+        ...(input.goal.referenceTargetSet
+          ? {
+              referenceTargetSet: {
+                expectedProfileRevision: input.goal.expectedProfileRevision,
+                selection: input.goal.referenceTargetSet,
+              },
+            }
+          : {}),
       });
       input.signal?.throwIfAborted();
       return mapGoalMutation(result);
@@ -1702,6 +1735,22 @@ export class DatabaseGoalService implements GoalService {
           notice: GENERAL_WELLNESS_NOTICE,
         },
       };
+    } catch (error) {
+      mapGoalPersistenceError(error);
+    }
+  }
+
+  async listReferenceTargetSets(
+    input: Parameters<GoalService["listReferenceTargetSets"]>[0],
+  ): Promise<ReferenceTargetSetListResponse> {
+    input.signal?.throwIfAborted();
+    try {
+      const result = await listReferenceTargetSets(this.#database, {
+        localDate: input.localDate,
+        userId: input.userId,
+      });
+      input.signal?.throwIfAborted();
+      return { data: result };
     } catch (error) {
       mapGoalPersistenceError(error);
     }

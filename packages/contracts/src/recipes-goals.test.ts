@@ -12,6 +12,7 @@ import {
   nutritionGoalSchema,
   recipeDraftRequestSchema,
   recipeSchema,
+  referenceTargetSetListResponseSchema,
   updateDiaryEntryRequestSchema,
 } from "./index.js";
 
@@ -267,6 +268,199 @@ describe("goal transport schemas", () => {
     ).toBe(false);
     expect(
       validate({ ...request, nutrientTargets: Array.from({ length: 257 }, () => target) }),
+    ).toBe(false);
+  });
+
+  it("keeps legacy goal mutations compatible and requires a closed reference selection", () => {
+    const validateDraft = validator(nutritionGoalDraftRequestSchema);
+    const validateRevision = validator(nutritionGoalRevisionRequestSchema);
+    const legacy = {
+      effectiveFrom: "2026-09-07",
+      energy: { mode: "fixed", targetKcal: "2000", rationale: "User-entered target." },
+      nutrientTargets: [],
+    } as const;
+    expect(validateDraft(legacy), JSON.stringify(validateDraft.errors)).toBe(true);
+    expect(
+      validateDraft({
+        ...legacy,
+        expectedOwnerUserId: "30000000-0000-4000-8000-000000000001",
+      }),
+      JSON.stringify(validateDraft.errors),
+    ).toBe(true);
+    const reference = {
+      ...legacy,
+      expectedOwnerUserId: "30000000-0000-4000-8000-000000000001",
+      expectedProfileRevision: "0",
+      referenceTargetSet: {
+        templateCode: "us-ca-dri-adults-19-50",
+        templateVersion: "1",
+        groupCode: "female-19-50",
+        eligibilityAcknowledgement: {
+          policyCode: "us-ca-dri-adults-19-50-eligibility-ack",
+          policyVersion: "1",
+          accepted: true,
+        },
+      },
+    } as const;
+    expect(validateDraft(reference), JSON.stringify(validateDraft.errors)).toBe(true);
+    expect(validateRevision({ ...reference, effectiveFrom: undefined })).toBe(false);
+    const { effectiveFrom: _effectiveFrom, ...revision } = reference;
+    expect(validateRevision(revision), JSON.stringify(validateRevision.errors)).toBe(true);
+    const { expectedOwnerUserId: _owner, ...withoutOwner } = reference;
+    expect(validateDraft(withoutOwner)).toBe(false);
+    const { expectedProfileRevision: _profile, ...withoutProfile } = reference;
+    expect(validateDraft(withoutProfile)).toBe(false);
+    expect(
+      validateDraft({
+        ...reference,
+        referenceTargetSet: {
+          ...reference.referenceTargetSet,
+          eligibilityAcknowledgement: {
+            ...reference.referenceTargetSet.eligibilityAcknowledgement,
+            accepted: false,
+          },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      validateDraft({
+        ...reference,
+        nutrientTargets: [
+          {
+            nutrientId: "1",
+            minimumAmount: null,
+            targetAmount: "999",
+            maximumAmount: null,
+            source: { label: "Client", version: null },
+            rationale: null,
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts unavailable revision-zero catalogues and enforces HTTPS response sources", () => {
+    const validate = validator(referenceTargetSetListResponseSchema);
+    const response = {
+      data: {
+        date: "2026-09-07",
+        profileRevision: "0",
+        availability: { available: false, reasonCodes: ["profile_missing_birth_date"] },
+        sets: [],
+        acknowledgementPolicy: {
+          code: "us-ca-dri-adults-19-50-eligibility-ack",
+          version: "1",
+          text: "Eligibility acknowledgement.",
+        },
+        sources: {
+          code: "health-canada-dri-tables",
+          version: "2025-11-19",
+          reviewedOn: "2026-09-07",
+          overviewUrl: "https://example.test/overview",
+          macronutrientsUrl: "https://example.test/macros",
+          elementsUrl: "https://example.test/elements",
+          vitaminsUrl: "https://example.test/vitamins",
+          reportListUrl: "https://example.test/reports",
+        },
+        cautions: [{ code: "clinical-exclusions", text: "Clinical exclusions apply." }],
+        applied: null,
+        notice:
+          "This optional template copies U.S.–Canada population reference values into your goals. It is for usual intake by apparently healthy adults in the selected group, not a diagnosis, prescription, or proof of adequacy. A single day above or below a reference does not determine nutrient status.",
+      },
+    } as const;
+    expect(validate(response), JSON.stringify(validate.errors)).toBe(true);
+    expect(
+      validate({
+        ...response,
+        data: {
+          ...response.data,
+          sources: { ...response.data.sources, overviewUrl: "http://example.test/overview" },
+        },
+      }),
+    ).toBe(false);
+    const { acknowledgementPolicy: _policy, ...missingPolicy } = response.data;
+    expect(validate({ data: missingPolicy })).toBe(false);
+
+    const persistedSet = {
+      templateCode: "us-ca-dri-adults-19-50",
+      templateVersion: "1",
+      groupCode: "male-19-50",
+      title: "Source-verified adult reference candidate",
+      policyDigest: "a".repeat(64),
+      eligibleThroughExclusive: "2041-01-01",
+      targets: Array.from({ length: 12 }, (_, index) => ({
+        definition: {
+          id: String(index + 1),
+          code: `reference-${index + 1}`,
+          name: `Reference nutrient ${index + 1}`,
+          unit: "mg",
+          category: "other",
+        },
+        minimumAmount: null,
+        targetAmount: "1",
+        maximumAmount: null,
+        basis: {
+          timeBasis: "usual-average-daily-intake",
+          referenceType: "rda",
+          maximumReferenceType: null,
+          sourceRows: ["Males 19–30 y", "Males 31–50 y"],
+        },
+        source: {
+          label: "Health Canada Dietary Reference Intakes",
+          version: "HC-2025-11-19/IOM-2005",
+          url: "https://example.test/reference",
+          table: "Table 1",
+        },
+        rationale: "Source-verified population reference.",
+      })),
+    } as const;
+    const appliedResponse = {
+      data: {
+        ...response.data,
+        availability: { available: true, reasonCodes: [] },
+        sets: [persistedSet],
+        applied: {
+          goalId: "30000000-0000-4000-8000-000000000001",
+          goalVersionId: "30000000-0000-4000-8000-000000000002",
+          goalRevision: "2",
+          templateCode: persistedSet.templateCode,
+          templateVersion: persistedSet.templateVersion,
+          groupCode: persistedSet.groupCode,
+          appliedProfileRevision: "0",
+          policyDigest: persistedSet.policyDigest,
+          eligibleThroughExclusive: persistedSet.eligibleThroughExclusive,
+          acknowledgement: {
+            accepted: true,
+            acceptedAt: "2026-09-07T12:34:56.789Z",
+            policyCode: "us-ca-dri-adults-19-50-eligibility-ack",
+            policyVersion: "1",
+          },
+          set: persistedSet,
+        },
+      },
+    } as const;
+    expect(validate(appliedResponse), JSON.stringify(validate.errors)).toBe(true);
+    expect(
+      validate({
+        ...appliedResponse,
+        data: {
+          ...appliedResponse.data,
+          applied: {
+            ...appliedResponse.data.applied,
+            acknowledgement: {
+              ...appliedResponse.data.applied.acknowledgement,
+              acceptedAt: "2026-99-99T99:99:99Z",
+            },
+          },
+        },
+      }),
+    ).toBe(false);
+    const { set: _set, ...appliedWithoutSet } = appliedResponse.data.applied;
+    expect(
+      validate({
+        ...appliedResponse,
+        data: { ...appliedResponse.data, applied: appliedWithoutSet },
+      }),
     ).toBe(false);
   });
 

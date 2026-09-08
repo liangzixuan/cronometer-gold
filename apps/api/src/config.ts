@@ -91,6 +91,10 @@ const dependencyEnvironmentSchema = z.object({
   MEILI_SEARCH_KEY: z.string().trim().min(16).optional(),
   MEILI_URL: z.url().default("http://127.0.0.1:7700"),
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  REFERENCE_TARGETS_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((value) => value === "true"),
   RETENTION_FEATURES_ENABLED: z
     .enum(["true", "false"])
     .default("false")
@@ -136,6 +140,7 @@ export interface ApiDependencyConfig {
   readonly emailVerification: ApiEmailVerificationDependencyConfig | null;
   readonly meiliSearchKey?: string;
   readonly meiliUrl: string;
+  readonly referenceTargetsEnabled: boolean;
   readonly searchDatabaseMaxConcurrency: number;
   readonly searchDatabaseMaxQueue: number;
   readonly searchRequestTimeoutMs: number;
@@ -311,6 +316,12 @@ export function loadApiDependencyConfig(
     if (new URL(result.data.MEILI_URL).protocol !== "https:") {
       issues.push({ field: "MEILI_URL", message: "HTTPS is required in production" });
     }
+    if (result.data.REFERENCE_TARGETS_ENABLED) {
+      issues.push({
+        field: "REFERENCE_TARGETS_ENABLED",
+        message: "Production approval gate has not been released",
+      });
+    }
     if (!result.data.RETENTION_FEATURES_ENABLED) {
       issues.push({ field: "RETENTION_FEATURES_ENABLED", message: "Must be explicitly enabled" });
     }
@@ -473,6 +484,7 @@ export function loadApiDependencyConfig(
       ? {}
       : { meiliSearchKey: result.data.MEILI_SEARCH_KEY }),
     meiliUrl: result.data.MEILI_URL,
+    referenceTargetsEnabled: result.data.REFERENCE_TARGETS_ENABLED,
     requireDatabaseRestoreAttestation: result.data.NODE_ENV === "production",
     searchDatabaseMaxConcurrency: result.data.SEARCH_DB_MAX_CONCURRENCY,
     searchDatabaseMaxQueue: result.data.SEARCH_DB_MAX_QUEUE,

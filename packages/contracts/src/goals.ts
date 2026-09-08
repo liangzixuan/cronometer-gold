@@ -40,16 +40,156 @@ export interface NutrientTargetRequest {
   readonly rationale: string | null;
 }
 
-export interface NutritionGoalDraftRequest {
+export const REFERENCE_TARGET_TEMPLATE_CODE = "us-ca-dri-adults-19-50" as const;
+export const REFERENCE_TARGET_TEMPLATE_VERSION = "1" as const;
+export const REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_CODE =
+  "us-ca-dri-adults-19-50-eligibility-ack" as const;
+export const REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_VERSION = "1" as const;
+export const REFERENCE_TARGET_NOTICE =
+  "This optional template copies U.S.–Canada population reference values into your goals. It is for usual intake by apparently healthy adults in the selected group, not a diagnosis, prescription, or proof of adequacy. A single day above or below a reference does not determine nutrient status." as const;
+
+export const referenceTargetGroupCodes = ["male-19-50", "female-19-50"] as const;
+export type ReferenceTargetGroupCode = (typeof referenceTargetGroupCodes)[number];
+
+export interface ReferenceTargetSetSelectionRequest {
+  readonly templateCode: typeof REFERENCE_TARGET_TEMPLATE_CODE;
+  readonly templateVersion: typeof REFERENCE_TARGET_TEMPLATE_VERSION;
+  readonly groupCode: ReferenceTargetGroupCode;
+  readonly eligibilityAcknowledgement: {
+    readonly policyCode: typeof REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_CODE;
+    readonly policyVersion: typeof REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_VERSION;
+    readonly accepted: true;
+  };
+}
+
+export interface NutritionGoalCustomDraftRequest {
   readonly effectiveFrom: string;
   readonly energy: EnergyTargetRequest;
   readonly nutrientTargets: readonly NutrientTargetRequest[];
+  /** Optional replay guard for clients that can detect an account switch. */
+  readonly expectedOwnerUserId?: string;
+  readonly expectedProfileRevision?: never;
+  readonly referenceTargetSet?: never;
 }
 
 /** Revisions update target policy only; the immutable goal interval stays on the root. */
-export interface NutritionGoalRevisionRequest {
+export interface NutritionGoalCustomRevisionRequest {
   readonly energy: EnergyTargetRequest;
   readonly nutrientTargets: readonly NutrientTargetRequest[];
+  readonly expectedOwnerUserId?: string;
+  readonly expectedProfileRevision?: never;
+  readonly referenceTargetSet?: never;
+}
+
+export interface NutritionGoalReferenceDraftRequest {
+  readonly effectiveFrom: string;
+  readonly energy: EnergyTargetRequest;
+  readonly nutrientTargets: readonly [];
+  readonly expectedOwnerUserId: string;
+  readonly expectedProfileRevision: string;
+  readonly referenceTargetSet: ReferenceTargetSetSelectionRequest;
+}
+
+export interface NutritionGoalReferenceRevisionRequest {
+  readonly energy: EnergyTargetRequest;
+  readonly nutrientTargets: readonly [];
+  readonly expectedOwnerUserId: string;
+  readonly expectedProfileRevision: string;
+  readonly referenceTargetSet: ReferenceTargetSetSelectionRequest;
+}
+
+export type NutritionGoalDraftRequest =
+  | NutritionGoalCustomDraftRequest
+  | NutritionGoalReferenceDraftRequest;
+export type NutritionGoalRevisionRequest =
+  | NutritionGoalCustomRevisionRequest
+  | NutritionGoalReferenceRevisionRequest;
+
+export interface ReferenceTargetSourceSet {
+  readonly code: "health-canada-dri-tables";
+  readonly version: "2025-11-19";
+  readonly reviewedOn: "2026-09-07";
+  readonly overviewUrl: string;
+  readonly macronutrientsUrl: string;
+  readonly elementsUrl: string;
+  readonly vitaminsUrl: string;
+  readonly reportListUrl: string;
+}
+
+export interface ResolvedReferenceTarget {
+  readonly definition: TargetableNutrient;
+  readonly minimumAmount: null;
+  readonly targetAmount: string;
+  readonly maximumAmount: string | null;
+  readonly basis: {
+    readonly timeBasis: "usual-average-daily-intake";
+    readonly referenceType: "rda" | "ai";
+    readonly maximumReferenceType: "ul" | null;
+    readonly sourceRows: readonly string[];
+  };
+  readonly source: {
+    readonly label: string;
+    readonly version: string;
+    readonly url: string;
+    readonly table: string;
+  };
+  readonly rationale: string;
+}
+
+export interface ResolvedReferenceTargetSet {
+  readonly templateCode: typeof REFERENCE_TARGET_TEMPLATE_CODE;
+  readonly templateVersion: typeof REFERENCE_TARGET_TEMPLATE_VERSION;
+  readonly groupCode: ReferenceTargetGroupCode;
+  readonly title: string;
+  readonly policyDigest: string;
+  readonly eligibleThroughExclusive: string;
+  readonly targets: readonly ResolvedReferenceTarget[];
+}
+
+export interface AppliedReferenceTargetAcknowledgement {
+  readonly accepted: true;
+  readonly acceptedAt: string;
+  readonly policyCode: typeof REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_CODE;
+  readonly policyVersion: typeof REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_VERSION;
+}
+
+export type ReferenceTargetAvailabilityReasonCode =
+  | "profile_missing_birth_date"
+  | "profile_sex_unsupported"
+  | "outside_reviewed_age"
+  | "nutrient_registry_unavailable";
+
+export interface ReferenceTargetSetListResponse {
+  readonly data: {
+    readonly date: string;
+    readonly profileRevision: string;
+    readonly availability: {
+      readonly available: boolean;
+      readonly reasonCodes: readonly ReferenceTargetAvailabilityReasonCode[];
+    };
+    readonly sets: readonly ResolvedReferenceTargetSet[];
+    readonly acknowledgementPolicy: {
+      readonly code: typeof REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_CODE;
+      readonly version: typeof REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_VERSION;
+      readonly text: string;
+    };
+    readonly sources: ReferenceTargetSourceSet;
+    readonly cautions: readonly { readonly code: string; readonly text: string }[];
+    readonly applied: {
+      readonly goalId: string;
+      readonly goalVersionId: string;
+      readonly goalRevision: string;
+      readonly templateCode: typeof REFERENCE_TARGET_TEMPLATE_CODE;
+      readonly templateVersion: typeof REFERENCE_TARGET_TEMPLATE_VERSION;
+      readonly groupCode: ReferenceTargetGroupCode;
+      readonly appliedProfileRevision: string;
+      readonly policyDigest: string;
+      readonly eligibleThroughExclusive: string;
+      readonly acknowledgement: AppliedReferenceTargetAcknowledgement;
+      readonly set: ResolvedReferenceTargetSet;
+    } | null;
+    readonly notice: typeof REFERENCE_TARGET_NOTICE;
+  };
 }
 
 export interface TargetableNutrient {
@@ -174,6 +314,10 @@ const uuidSchema = {
     "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
 } as const;
 const positiveIdentifierSchema = { type: "string", pattern: "^[1-9][0-9]{0,19}$" } as const;
+const nonNegativeRevisionSchema = {
+  type: "string",
+  pattern: "^(?:0|[1-9][0-9]{0,19})$",
+} as const;
 const nonNegativeExactDecimalSchema = {
   type: "string",
   maxLength: 160,
@@ -243,13 +387,16 @@ const derivedEnergyRequestSchema = {
   },
 } as const;
 
-export const energyTargetRequestSchema = {
-  $id: "EnergyTargetRequest",
+const energyTargetRequestValueSchema = {
   oneOf: [fixedEnergyRequestSchema, derivedEnergyRequestSchema],
 } as const;
 
-export const nutrientTargetRequestSchema = {
-  $id: "NutrientTargetRequest",
+export const energyTargetRequestSchema = {
+  $id: "EnergyTargetRequest",
+  ...energyTargetRequestValueSchema,
+} as const;
+
+const nutrientTargetRequestValueSchema = {
   type: "object",
   additionalProperties: false,
   required: ["nutrientId", "minimumAmount", "targetAmount", "maximumAmount", "source", "rationale"],
@@ -276,39 +423,120 @@ export const nutrientTargetRequestSchema = {
   ],
 } as const;
 
-export const nutritionGoalDraftRequestSchema = {
-  $id: "NutritionGoalDraftRequest",
+export const nutrientTargetRequestSchema = {
+  $id: "NutrientTargetRequest",
+  ...nutrientTargetRequestValueSchema,
+} as const;
+
+const referenceTargetSetSelectionRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["templateCode", "templateVersion", "groupCode", "eligibilityAcknowledgement"],
+  properties: {
+    templateCode: { type: "string", const: REFERENCE_TARGET_TEMPLATE_CODE },
+    templateVersion: { type: "string", const: REFERENCE_TARGET_TEMPLATE_VERSION },
+    groupCode: { type: "string", enum: referenceTargetGroupCodes },
+    eligibilityAcknowledgement: {
+      type: "object",
+      additionalProperties: false,
+      required: ["policyCode", "policyVersion", "accepted"],
+      properties: {
+        policyCode: {
+          type: "string",
+          const: REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_CODE,
+        },
+        policyVersion: {
+          type: "string",
+          const: REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_VERSION,
+        },
+        accepted: { type: "boolean", const: true },
+      },
+    },
+  },
+} as const;
+
+const nutritionGoalCustomDraftRequestSchema = {
   type: "object",
   additionalProperties: false,
   required: ["effectiveFrom", "energy", "nutrientTargets"],
   properties: {
     effectiveFrom: localDateSchema,
-    energy: energyTargetRequestSchema,
+    energy: energyTargetRequestValueSchema,
+    expectedOwnerUserId: uuidSchema,
     nutrientTargets: {
       type: "array",
       maxItems: 256,
-      items: nutrientTargetRequestSchema,
+      items: nutrientTargetRequestValueSchema,
     },
+  },
+} as const;
+
+const nutritionGoalReferenceDraftRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "effectiveFrom",
+    "energy",
+    "nutrientTargets",
+    "expectedOwnerUserId",
+    "expectedProfileRevision",
+    "referenceTargetSet",
+  ],
+  properties: {
+    effectiveFrom: localDateSchema,
+    energy: energyTargetRequestValueSchema,
+    nutrientTargets: { type: "array", maxItems: 0 },
+    expectedOwnerUserId: uuidSchema,
+    expectedProfileRevision: nonNegativeRevisionSchema,
+    referenceTargetSet: referenceTargetSetSelectionRequestSchema,
+  },
+} as const;
+
+export const nutritionGoalDraftRequestSchema = {
+  $id: "NutritionGoalDraftRequest",
+  oneOf: [nutritionGoalCustomDraftRequestSchema, nutritionGoalReferenceDraftRequestSchema],
+} as const;
+
+const nutritionGoalCustomRevisionRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["energy", "nutrientTargets"],
+  properties: {
+    energy: energyTargetRequestValueSchema,
+    expectedOwnerUserId: uuidSchema,
+    nutrientTargets: {
+      type: "array",
+      maxItems: 256,
+      items: nutrientTargetRequestValueSchema,
+    },
+  },
+} as const;
+
+const nutritionGoalReferenceRevisionRequestSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "energy",
+    "nutrientTargets",
+    "expectedOwnerUserId",
+    "expectedProfileRevision",
+    "referenceTargetSet",
+  ],
+  properties: {
+    energy: energyTargetRequestValueSchema,
+    nutrientTargets: { type: "array", maxItems: 0 },
+    expectedOwnerUserId: uuidSchema,
+    expectedProfileRevision: nonNegativeRevisionSchema,
+    referenceTargetSet: referenceTargetSetSelectionRequestSchema,
   },
 } as const;
 
 export const nutritionGoalRevisionRequestSchema = {
   $id: "NutritionGoalRevisionRequest",
-  type: "object",
-  additionalProperties: false,
-  required: ["energy", "nutrientTargets"],
-  properties: {
-    energy: energyTargetRequestSchema,
-    nutrientTargets: {
-      type: "array",
-      maxItems: 256,
-      items: nutrientTargetRequestSchema,
-    },
-  },
+  oneOf: [nutritionGoalCustomRevisionRequestSchema, nutritionGoalReferenceRevisionRequestSchema],
 } as const;
 
-export const targetableNutrientSchema = {
-  $id: "TargetableNutrient",
+const targetableNutrientValueSchema = {
   type: "object",
   additionalProperties: false,
   required: ["id", "code", "name", "unit", "category"],
@@ -319,6 +547,11 @@ export const targetableNutrientSchema = {
     unit: { type: "string", minLength: 1, maxLength: 32 },
     category: { type: "string", enum: nutrientCategories },
   },
+} as const;
+
+export const targetableNutrientSchema = {
+  $id: "TargetableNutrient",
+  ...targetableNutrientValueSchema,
 } as const;
 
 const fixedEnergySnapshotSchema = {
@@ -413,7 +646,7 @@ export const nutritionGoalTargetSchema = {
   additionalProperties: false,
   required: ["definition", "minimumAmount", "targetAmount", "maximumAmount", "source", "rationale"],
   properties: {
-    definition: targetableNutrientSchema,
+    definition: targetableNutrientValueSchema,
     minimumAmount: nullableAmountSchema,
     targetAmount: nullableAmountSchema,
     maximumAmount: nullableAmountSchema,
@@ -490,6 +723,240 @@ export const nutritionGoalMutationResponseSchema = {
       additionalProperties: false,
       required: ["replayed", "goal"],
       properties: { replayed: { type: "boolean" }, goal: nutritionGoalSchema },
+    },
+  },
+} as const;
+
+const referenceTargetSourceSetSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "code",
+    "version",
+    "reviewedOn",
+    "overviewUrl",
+    "macronutrientsUrl",
+    "elementsUrl",
+    "vitaminsUrl",
+    "reportListUrl",
+  ],
+  properties: {
+    code: { type: "string", const: "health-canada-dri-tables" },
+    version: { type: "string", const: "2025-11-19" },
+    reviewedOn: { type: "string", const: "2026-09-07" },
+    overviewUrl: { type: "string", format: "uri", pattern: "^https://", maxLength: 500 },
+    macronutrientsUrl: { type: "string", format: "uri", pattern: "^https://", maxLength: 500 },
+    elementsUrl: { type: "string", format: "uri", pattern: "^https://", maxLength: 500 },
+    vitaminsUrl: { type: "string", format: "uri", pattern: "^https://", maxLength: 500 },
+    reportListUrl: { type: "string", format: "uri", pattern: "^https://", maxLength: 500 },
+  },
+} as const;
+
+const resolvedReferenceTargetSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "definition",
+    "minimumAmount",
+    "targetAmount",
+    "maximumAmount",
+    "basis",
+    "source",
+    "rationale",
+  ],
+  properties: {
+    definition: targetableNutrientValueSchema,
+    minimumAmount: { type: "null" },
+    targetAmount: nonNegativeExactDecimalSchema,
+    maximumAmount: { anyOf: [nonNegativeExactDecimalSchema, { type: "null" }] },
+    basis: {
+      type: "object",
+      additionalProperties: false,
+      required: ["timeBasis", "referenceType", "maximumReferenceType", "sourceRows"],
+      properties: {
+        timeBasis: { type: "string", const: "usual-average-daily-intake" },
+        referenceType: { type: "string", enum: ["rda", "ai"] },
+        maximumReferenceType: { anyOf: [{ type: "string", const: "ul" }, { type: "null" }] },
+        sourceRows: {
+          type: "array",
+          minItems: 2,
+          maxItems: 2,
+          uniqueItems: true,
+          items: { type: "string", minLength: 1, maxLength: 80 },
+        },
+      },
+    },
+    source: {
+      type: "object",
+      additionalProperties: false,
+      required: ["label", "version", "url", "table"],
+      properties: {
+        label: { type: "string", minLength: 1, maxLength: 160 },
+        version: { type: "string", minLength: 1, maxLength: 100 },
+        url: { type: "string", format: "uri", pattern: "^https://", maxLength: 500 },
+        table: { type: "string", minLength: 1, maxLength: 32 },
+      },
+    },
+    rationale: { type: "string", minLength: 1, maxLength: 1_000 },
+  },
+} as const;
+
+const resolvedReferenceTargetSetSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "templateCode",
+    "templateVersion",
+    "groupCode",
+    "title",
+    "policyDigest",
+    "eligibleThroughExclusive",
+    "targets",
+  ],
+  properties: {
+    templateCode: { type: "string", const: REFERENCE_TARGET_TEMPLATE_CODE },
+    templateVersion: { type: "string", const: REFERENCE_TARGET_TEMPLATE_VERSION },
+    groupCode: { type: "string", enum: referenceTargetGroupCodes },
+    title: { type: "string", minLength: 1, maxLength: 160 },
+    policyDigest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    eligibleThroughExclusive: localDateSchema,
+    targets: {
+      type: "array",
+      minItems: 12,
+      maxItems: 12,
+      items: resolvedReferenceTargetSchema,
+    },
+  },
+} as const;
+
+const referenceTargetAppliedSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "goalId",
+    "goalVersionId",
+    "goalRevision",
+    "templateCode",
+    "templateVersion",
+    "groupCode",
+    "appliedProfileRevision",
+    "policyDigest",
+    "eligibleThroughExclusive",
+    "acknowledgement",
+    "set",
+  ],
+  properties: {
+    goalId: uuidSchema,
+    goalVersionId: uuidSchema,
+    goalRevision: positiveIdentifierSchema,
+    templateCode: { type: "string", const: REFERENCE_TARGET_TEMPLATE_CODE },
+    templateVersion: { type: "string", const: REFERENCE_TARGET_TEMPLATE_VERSION },
+    groupCode: { type: "string", enum: referenceTargetGroupCodes },
+    appliedProfileRevision: nonNegativeRevisionSchema,
+    policyDigest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    eligibleThroughExclusive: localDateSchema,
+    acknowledgement: {
+      type: "object",
+      additionalProperties: false,
+      required: ["accepted", "acceptedAt", "policyCode", "policyVersion"],
+      properties: {
+        accepted: { type: "boolean", const: true },
+        acceptedAt: {
+          type: "string",
+          format: "date-time",
+          pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$",
+        },
+        policyCode: {
+          type: "string",
+          const: REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_CODE,
+        },
+        policyVersion: {
+          type: "string",
+          const: REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_VERSION,
+        },
+      },
+    },
+    set: resolvedReferenceTargetSetSchema,
+  },
+} as const;
+
+export const referenceTargetSetListResponseSchema = {
+  $id: "ReferenceTargetSetListResponse",
+  type: "object",
+  additionalProperties: false,
+  required: ["data"],
+  properties: {
+    data: {
+      type: "object",
+      additionalProperties: false,
+      required: [
+        "date",
+        "profileRevision",
+        "availability",
+        "sets",
+        "acknowledgementPolicy",
+        "sources",
+        "cautions",
+        "applied",
+        "notice",
+      ],
+      properties: {
+        date: localDateSchema,
+        profileRevision: nonNegativeRevisionSchema,
+        availability: {
+          type: "object",
+          additionalProperties: false,
+          required: ["available", "reasonCodes"],
+          properties: {
+            available: { type: "boolean" },
+            reasonCodes: {
+              type: "array",
+              maxItems: 4,
+              uniqueItems: true,
+              items: {
+                type: "string",
+                enum: [
+                  "profile_missing_birth_date",
+                  "profile_sex_unsupported",
+                  "outside_reviewed_age",
+                  "nutrient_registry_unavailable",
+                ],
+              },
+            },
+          },
+        },
+        sets: { type: "array", maxItems: 1, items: resolvedReferenceTargetSetSchema },
+        acknowledgementPolicy: {
+          type: "object",
+          additionalProperties: false,
+          required: ["code", "version", "text"],
+          properties: {
+            code: { type: "string", const: REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_CODE },
+            version: {
+              type: "string",
+              const: REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_VERSION,
+            },
+            text: { type: "string", minLength: 1, maxLength: 1_000 },
+          },
+        },
+        sources: referenceTargetSourceSetSchema,
+        cautions: {
+          type: "array",
+          minItems: 1,
+          maxItems: 32,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["code", "text"],
+            properties: {
+              code: { type: "string", minLength: 1, maxLength: 80 },
+              text: { type: "string", minLength: 1, maxLength: 1_000 },
+            },
+          },
+        },
+        applied: { anyOf: [referenceTargetAppliedSchema, { type: "null" }] },
+        notice: { type: "string", const: REFERENCE_TARGET_NOTICE },
+      },
     },
   },
 } as const;
@@ -596,7 +1063,7 @@ export const targetableNutrientListResponseSchema = {
   type: "object",
   additionalProperties: false,
   required: ["data"],
-  properties: { data: { type: "array", maxItems: 256, items: targetableNutrientSchema } },
+  properties: { data: { type: "array", maxItems: 256, items: targetableNutrientValueSchema } },
 } as const;
 
 export const goalDateQuerySchema = {

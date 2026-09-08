@@ -26,12 +26,21 @@ import {
   getNutritionGoal,
   getNutritionGoalProgress,
   getRecipe,
+  type JsonObject,
   listRecipes,
+  listReferenceTargetSets,
   listTargetableNutrients,
   NutritionGoalPeriodConflictError,
+  NutritionGoalPersistedIntegrityError,
+  NutritionGoalProfileRevisionConflictError,
+  NutritionGoalReferenceUnavailableError,
   NutritionGoalRevisionConflictError,
   NutritionGoalUnsupportedProfileError,
   NutritionGoalValidationError,
+  REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_CODE,
+  REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_VERSION,
+  REFERENCE_TARGET_TEMPLATE_CODE,
+  REFERENCE_TARGET_TEMPLATE_VERSION,
   RecipeCursorError,
   type RecipeDraft,
   RecipeIdempotencyConflictError,
@@ -535,9 +544,9 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
         .insertInto("nutrient")
         .values({
           canonical_unit: "mg",
-          code: "potassium",
+          code: "zinc",
           dimension: "mass",
-          name: "Potassium",
+          name: "Zinc",
         })
         .returning("id")
         .executeTakeFirstOrThrow();
@@ -1414,6 +1423,608 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
     }
   });
 
+  it("materializes, replays, expires, and attests reviewed reference targets", async () => {
+    if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
+    const fixture = await createFixture(databaseUrl, "reference_goals");
+    try {
+      const dates = (
+        await sql<{
+          birth_date: string;
+          today: string;
+          tomorrow: string;
+          yesterday: string;
+        }>`
+          with local_day as (
+            select (transaction_timestamp() at time zone 'America/Chicago')::date as day
+          )
+          select
+            to_char(day - interval '51 years', 'YYYY-MM-DD') as birth_date,
+            to_char(day, 'YYYY-MM-DD') as today,
+            to_char(day + 1, 'YYYY-MM-DD') as tomorrow,
+            to_char(day - 1, 'YYYY-MM-DD') as yesterday
+          from local_day
+        `.execute(fixture.database)
+      ).rows[0];
+      if (!dates) throw new Error("Expected server-local reference test dates");
+
+      const selection = {
+        eligibilityAcknowledgement: {
+          accepted: true as const,
+          policyCode: REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_CODE,
+          policyVersion: REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_VERSION,
+        },
+        groupCode: "male-19-50" as const,
+        templateCode: REFERENCE_TARGET_TEMPLATE_CODE,
+        templateVersion: REFERENCE_TARGET_TEMPLATE_VERSION,
+      };
+
+      const revisionZeroOwner = await registerPasswordAccount(
+        fixture.database,
+        accountInput("reference-revision-zero"),
+      );
+      await fixture.database
+        .updateTable("user_profile")
+        .set({ birth_date: "1990-01-01", sex_at_birth: "male" })
+        .where("user_id", "=", revisionZeroOwner.userId)
+        .executeTakeFirstOrThrow();
+      const revisionZeroList = await listReferenceTargetSets(fixture.database, {
+        localDate: dates.today,
+        userId: revisionZeroOwner.userId,
+      });
+      expect(revisionZeroList).toMatchObject({
+        availability: { available: true, reasonCodes: [] },
+        profileRevision: "0",
+        sets: [{ groupCode: "male-19-50", targets: expect.any(Array) }],
+      });
+      expect(revisionZeroList.sets[0]?.targets).toHaveLength(12);
+      await expect(
+        createNutritionGoal(fixture.database, {
+          clientOperationId: randomUUID(),
+          effectiveFrom: dates.today,
+          energy: { mode: "fixed", rationale: "Revision zero reference", targetKcal: "2000" },
+          referenceTargetSet: { expectedProfileRevision: "0", selection },
+          requestDigest: randomBytes(32).toString("hex"),
+          targets: [],
+          userId: revisionZeroOwner.userId,
+        }),
+      ).resolves.toMatchObject({ replayed: false });
+
+      const firstProfile = await updateUserProfile(fixture.database, {
+        expectedRevision: "0",
+        patch: {
+          birthDate: "1990-01-01",
+          sexAtBirth: "male",
+        },
+        userId: fixture.owner.userId,
+      });
+      expect(firstProfile.revision).toBe("1");
+
+      await fixture.database
+        .updateTable("nutrient")
+        .set({ is_targetable: false })
+        .where("code", "=", "vitamin-a-rae")
+        .executeTakeFirstOrThrow();
+      try {
+        expect(
+          await listReferenceTargetSets(fixture.database, {
+            localDate: dates.today,
+            userId: fixture.owner.userId,
+          }),
+        ).toMatchObject({
+          availability: {
+            available: false,
+            reasonCodes: ["nutrient_registry_unavailable"],
+          },
+          sets: [],
+        });
+        await expect(
+          createNutritionGoal(fixture.database, {
+            clientOperationId: randomUUID(),
+            effectiveFrom: dates.today,
+            energy: { mode: "fixed", rationale: "Unavailable registry", targetKcal: "2000" },
+            referenceTargetSet: { expectedProfileRevision: firstProfile.revision, selection },
+            requestDigest: randomBytes(32).toString("hex"),
+            targets: [],
+            userId: fixture.owner.userId,
+          }),
+        ).rejects.toBeInstanceOf(NutritionGoalReferenceUnavailableError);
+      } finally {
+        await fixture.database
+          .updateTable("nutrient")
+          .set({ is_targetable: true })
+          .where("code", "=", "vitamin-a-rae")
+          .executeTakeFirstOrThrow();
+      }
+
+      const available = await listReferenceTargetSets(fixture.database, {
+        localDate: dates.today,
+        userId: fixture.owner.userId,
+      });
+      expect(available).toMatchObject({
+        applied: null,
+        availability: { available: true, reasonCodes: [] },
+        profileRevision: firstProfile.revision,
+        sets: [
+          {
+            groupCode: "male-19-50",
+            templateCode: REFERENCE_TARGET_TEMPLATE_CODE,
+            templateVersion: REFERENCE_TARGET_TEMPLATE_VERSION,
+          },
+        ],
+      });
+      expect(available.sets[0]?.targets).toHaveLength(12);
+      expect(
+        available.sets[0]?.targets.find((target) => target.definition.code === "protein"),
+      ).toMatchObject({
+        basis: { referenceType: "rda" },
+        targetAmount: "56",
+      });
+      expect(
+        available.sets[0]?.targets.find((target) => target.definition.code === "potassium"),
+      ).toMatchObject({
+        basis: { referenceType: "ai" },
+        targetAmount: "3400",
+      });
+      expect(
+        available.sets[0]?.targets.find((target) => target.definition.code === "calcium"),
+      ).toMatchObject({
+        basis: { maximumReferenceType: "ul" },
+        maximumAmount: "2500",
+        targetAmount: "1000",
+      });
+
+      const createInput = {
+        clientOperationId: randomUUID(),
+        effectiveFrom: dates.today,
+        energy: {
+          mode: "fixed" as const,
+          rationale: "Source-verified reference",
+          targetKcal: "2100",
+        },
+        referenceTargetSet: { expectedProfileRevision: firstProfile.revision, selection },
+        requestDigest: randomBytes(32).toString("hex"),
+        targets: [],
+        userId: fixture.owner.userId,
+      };
+      const created = await createNutritionGoal(fixture.database, createInput);
+      expect(created).toMatchObject({
+        replayed: false,
+        goal: {
+          currentRevision: "1",
+          currentVersion: {
+            referenceTargetSet: {
+              acknowledgement: {
+                accepted: true,
+                policyCode: REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_CODE,
+                policyVersion: REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_VERSION,
+              },
+              appliedProfileRevision: firstProfile.revision,
+              groupCode: "male-19-50",
+            },
+          },
+        },
+      });
+      expect(created.goal.currentVersion.targets).toHaveLength(12);
+      const storedVersion = await fixture.database
+        .selectFrom("nutrition_goal_version")
+        .select(["assumptions", "dri_reference_group_code", "dri_reference_version"])
+        .where("id", "=", created.goal.currentVersion.id)
+        .executeTakeFirstOrThrow();
+      expect(storedVersion).toMatchObject({
+        dri_reference_group_code: "male-19-50",
+        dri_reference_version: "1",
+        assumptions: {
+          referenceTargetSet: {
+            sourceCode: "health-canada-dri-tables",
+            sourceReviewedOn: "2026-09-07",
+            sourceVersion: "2025-11-19",
+          },
+        },
+      });
+      const storedTargetRows = await fixture.database
+        .selectFrom("nutrition_goal_target")
+        .select(["metadata", "minimum_amount"])
+        .where("nutrition_goal_version_id", "=", created.goal.currentVersion.id)
+        .execute();
+      expect(storedTargetRows).toHaveLength(12);
+      expect(storedTargetRows.every((row) => row.minimum_amount === null)).toBe(true);
+      expect(storedTargetRows).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            metadata: expect.objectContaining({
+              sourceUrl: expect.stringMatching(/^https:\/\//u),
+              timeBasis: "usual-average-daily-intake",
+            }),
+          }),
+        ]),
+      );
+
+      const secondProfile = await updateUserProfile(fixture.database, {
+        expectedRevision: firstProfile.revision,
+        patch: { displayName: "Reference owner" },
+        userId: fixture.owner.userId,
+      });
+      expect(await createNutritionGoal(fixture.database, createInput)).toMatchObject({
+        replayed: true,
+        goal: { id: created.goal.id },
+      });
+      await expect(
+        createNutritionGoal(fixture.database, {
+          ...createInput,
+          clientOperationId: randomUUID(),
+          effectiveFrom: dates.tomorrow,
+          requestDigest: randomBytes(32).toString("hex"),
+        }),
+      ).rejects.toBeInstanceOf(NutritionGoalProfileRevisionConflictError);
+
+      const reviseInput = {
+        clientOperationId: randomUUID(),
+        energy: { mode: "fixed" as const, rationale: "Reference revision", targetKcal: "2150" },
+        expectedRevision: created.goal.currentRevision,
+        goalId: created.goal.id,
+        referenceTargetSet: { expectedProfileRevision: secondProfile.revision, selection },
+        requestDigest: randomBytes(32).toString("hex"),
+        targets: [],
+        userId: fixture.owner.userId,
+      };
+      const revised = await reviseNutritionGoal(fixture.database, reviseInput);
+      expect(revised).toMatchObject({
+        replayed: false,
+        goal: {
+          currentRevision: "2",
+          currentVersion: {
+            referenceTargetSet: { appliedProfileRevision: secondProfile.revision },
+          },
+        },
+      });
+      const thirdProfile = await updateUserProfile(fixture.database, {
+        expectedRevision: secondProfile.revision,
+        patch: { displayName: "Reference owner updated" },
+        userId: fixture.owner.userId,
+      });
+      expect(await reviseNutritionGoal(fixture.database, reviseInput)).toMatchObject({
+        replayed: true,
+        goal: { currentRevision: "2", id: created.goal.id },
+      });
+      await expect(
+        reviseNutritionGoal(fixture.database, {
+          ...reviseInput,
+          clientOperationId: randomUUID(),
+          expectedRevision: revised.goal.currentRevision,
+          requestDigest: randomBytes(32).toString("hex"),
+        }),
+      ).rejects.toBeInstanceOf(NutritionGoalProfileRevisionConflictError);
+
+      const applied = await listReferenceTargetSets(fixture.database, {
+        localDate: dates.today,
+        userId: fixture.owner.userId,
+      });
+      expect(applied.applied).toMatchObject({
+        acknowledgement: {
+          accepted: true,
+          acceptedAt: expect.stringMatching(/Z$/u),
+          policyCode: REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_CODE,
+          policyVersion: REFERENCE_TARGET_ACKNOWLEDGEMENT_POLICY_VERSION,
+        },
+        appliedProfileRevision: secondProfile.revision,
+        goalId: created.goal.id,
+        goalRevision: "2",
+        set: {
+          groupCode: "male-19-50",
+          policyDigest: revised.goal.currentVersion.referenceTargetSet?.policyDigest,
+          targets: expect.any(Array),
+        },
+      });
+      expect(applied.applied?.set.targets).toHaveLength(12);
+
+      const unsupportedProfile = await updateUserProfile(fixture.database, {
+        expectedRevision: thirdProfile.revision,
+        patch: { sexAtBirth: "not_specified" },
+        userId: fixture.owner.userId,
+      });
+      const appliedDuringProfileDrift = await listReferenceTargetSets(fixture.database, {
+        localDate: dates.today,
+        userId: fixture.owner.userId,
+      });
+      expect(appliedDuringProfileDrift).toMatchObject({
+        applied: { goalId: created.goal.id, set: { targets: expect.any(Array) } },
+        availability: { available: false, reasonCodes: ["profile_sex_unsupported"] },
+        profileRevision: unsupportedProfile.revision,
+        sets: [],
+      });
+      expect(appliedDuringProfileDrift.applied?.set.targets).toHaveLength(12);
+
+      const malformedOwner = await registerPasswordAccount(
+        fixture.database,
+        accountInput("reference-malformed"),
+      );
+      for (const nullReferencePath of [
+        "referenceTargetSet.policyDigest",
+        "referenceTargetSet.sourceCode",
+        "referenceTargetSet.appliedProfileRevision",
+        "referenceTargetSet.eligibleThroughExclusive",
+        "referenceTargetSet.acknowledgement",
+        "referenceTargetSet.acknowledgement.acceptedAt",
+        "referenceTargetSet.ageYears",
+      ]) {
+        await expect(
+          fixture.database.transaction().execute((transaction) =>
+            cloneGoalVersionForInvariantTest(transaction, {
+              nullReferencePath,
+              sourceVersionId: revised.goal.currentVersion.id,
+              userId: malformedOwner.userId,
+            }),
+          ),
+        ).rejects.toMatchObject({ code: "23514" });
+      }
+      for (const referenceJsonReplacement of [
+        { path: "referenceTargetSet.ageYears", value: "36" },
+        {
+          path: "referenceTargetSet.acknowledgement.acceptedAt",
+          value: "2026-99-99T99:99:99.999Z",
+        },
+        { path: "referenceTargetSet.eligibleThroughExclusive", value: "2026-99-99" },
+      ]) {
+        await expect(
+          fixture.database.transaction().execute((transaction) =>
+            cloneGoalVersionForInvariantTest(transaction, {
+              referenceJsonReplacement,
+              sourceVersionId: revised.goal.currentVersion.id,
+              userId: malformedOwner.userId,
+            }),
+          ),
+        ).rejects.toMatchObject({ code: "23514" });
+      }
+      await expect(
+        fixture.database.transaction().execute((transaction) =>
+          cloneGoalVersionForInvariantTest(transaction, {
+            nullTargetMetadataField: "sourceUrl",
+            sourceVersionId: revised.goal.currentVersion.id,
+            userId: malformedOwner.userId,
+          }),
+        ),
+      ).rejects.toMatchObject({ code: "23514" });
+
+      const hostileSchema = `reference_hostile_${randomBytes(6).toString("hex")}`;
+      await sql`create schema ${sql.id(hostileSchema)}`.execute(fixture.bootstrap);
+      try {
+        await sql`
+          create view ${sql.id(hostileSchema, "nutrition_goal_version")} as
+          select null::uuid as id
+        `.execute(fixture.bootstrap);
+        await sql`
+          create view ${sql.id(hostileSchema, "nutrition_goal_target")} as
+          select null::uuid as nutrition_goal_version_id
+        `.execute(fixture.bootstrap);
+        await sql`
+          create view ${sql.id(hostileSchema, "nutrient")} as
+          select null::uuid as id
+        `.execute(fixture.bootstrap);
+        await sql`alter table nutrition_goal disable trigger user`.execute(fixture.database);
+        await sql`alter table nutrition_goal_version disable trigger user`.execute(
+          fixture.database,
+        );
+        await sql`alter table nutrition_goal_target disable trigger user`.execute(fixture.database);
+        await sql`
+          alter table nutrition_goal_version
+          enable trigger nutrition_goal_reference_vector_from_version_v1
+        `.execute(fixture.database);
+        await sql`
+          alter table nutrition_goal_target
+          enable trigger nutrition_goal_reference_vector_from_target_v1
+        `.execute(fixture.database);
+        await fixture.database.transaction().execute(async (transaction) => {
+          await sql`select pg_catalog.set_config(
+            'search_path',
+            ${`${hostileSchema},${fixture.schemaName},pg_catalog`},
+            true
+          )`.execute(transaction);
+          await cloneGoalVersionForInvariantTest(transaction.withSchema(fixture.schemaName), {
+            sourceVersionId: revised.goal.currentVersion.id,
+            userId: malformedOwner.userId,
+          });
+        });
+      } finally {
+        await sql`alter table nutrition_goal enable trigger user`.execute(fixture.database);
+        await sql`alter table nutrition_goal_version enable trigger user`.execute(fixture.database);
+        await sql`alter table nutrition_goal_target enable trigger user`.execute(fixture.database);
+        await sql`drop schema ${sql.id(hostileSchema)} cascade`.execute(fixture.bootstrap);
+      }
+
+      const functionConfig = await sql<{ proconfig: string[] | null }>`
+        select p.proconfig
+        from pg_catalog.pg_proc p
+        join pg_catalog.pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = ${fixture.schemaName}
+          and p.proname = 'reconcile_goal_reference_vector_v1'
+      `.execute(fixture.database);
+      expect(functionConfig.rows).toEqual([
+        { proconfig: [`search_path=pg_catalog, ${fixture.schemaName}, pg_temp`] },
+      ]);
+      const referenceConstraints = await sql<{
+        conname: string;
+        convalidated: boolean;
+      }>`
+        select c.conname, c.convalidated
+        from pg_catalog.pg_constraint c
+        join pg_catalog.pg_namespace n on n.oid = c.connamespace
+        where n.nspname = ${fixture.schemaName}
+          and c.conname in (
+            'nutrition_goal_version_reference_identity_v1',
+            'nutrition_goal_target_reference_metadata_v1'
+          )
+        order by c.conname
+      `.execute(fixture.database);
+      expect(referenceConstraints.rows).toEqual([
+        { conname: "nutrition_goal_target_reference_metadata_v1", convalidated: true },
+        { conname: "nutrition_goal_version_reference_identity_v1", convalidated: true },
+      ]);
+      const referenceTriggers = await sql<{
+        tgdeferrable: boolean;
+        tgenabled: string;
+        tginitdeferred: boolean;
+        tgname: string;
+      }>`
+        select t.tgdeferrable, t.tgenabled, t.tginitdeferred, t.tgname
+        from pg_catalog.pg_trigger t
+        join pg_catalog.pg_class r on r.oid = t.tgrelid
+        join pg_catalog.pg_namespace n on n.oid = r.relnamespace
+        where n.nspname = ${fixture.schemaName}
+          and t.tgname like 'nutrition_goal_reference_vector_%'
+        order by t.tgname
+      `.execute(fixture.database);
+      expect(referenceTriggers.rows).toEqual([
+        {
+          tgdeferrable: true,
+          tgenabled: "O",
+          tginitdeferred: true,
+          tgname: "nutrition_goal_reference_vector_from_target_v1",
+        },
+        {
+          tgdeferrable: true,
+          tgenabled: "O",
+          tginitdeferred: true,
+          tgname: "nutrition_goal_reference_vector_from_version_v1",
+        },
+      ]);
+
+      const expiryOwner = await registerPasswordAccount(
+        fixture.database,
+        accountInput("reference-expiry"),
+      );
+      const expiryProfile = await updateUserProfile(fixture.database, {
+        expectedRevision: "0",
+        patch: { birthDate: dates.birth_date, sexAtBirth: "male" },
+        userId: expiryOwner.userId,
+      });
+      const expiring = await createNutritionGoal(fixture.database, {
+        clientOperationId: randomUUID(),
+        effectiveFrom: dates.yesterday,
+        energy: { mode: "fixed", rationale: "Expires at 51", targetKcal: "2000" },
+        referenceTargetSet: { expectedProfileRevision: expiryProfile.revision, selection },
+        requestDigest: randomBytes(32).toString("hex"),
+        targets: [],
+        userId: expiryOwner.userId,
+      });
+      expect(
+        (
+          await getCurrentNutritionGoal(fixture.database, {
+            localDate: dates.yesterday,
+            userId: expiryOwner.userId,
+          })
+        )?.id,
+      ).toBe(expiring.goal.id);
+      expect(
+        await getCurrentNutritionGoal(fixture.database, {
+          localDate: dates.today,
+          userId: expiryOwner.userId,
+        }),
+      ).toBeNull();
+      await expect(
+        reviseNutritionGoal(fixture.database, {
+          clientOperationId: randomUUID(),
+          energy: { mode: "fixed", rationale: "Expired revision", targetKcal: "2000" },
+          expectedRevision: expiring.goal.currentRevision,
+          goalId: expiring.goal.id,
+          referenceTargetSet: { expectedProfileRevision: expiryProfile.revision, selection },
+          requestDigest: randomBytes(32).toString("hex"),
+          targets: [],
+          userId: expiryOwner.userId,
+        }),
+      ).rejects.toBeInstanceOf(NutritionGoalValidationError);
+      const customAfterExpiry = await reviseNutritionGoal(fixture.database, {
+        clientOperationId: randomUUID(),
+        energy: { mode: "fixed", rationale: "Custom after expiry", targetKcal: "2000" },
+        expectedRevision: expiring.goal.currentRevision,
+        goalId: expiring.goal.id,
+        requestDigest: randomBytes(32).toString("hex"),
+        targets: [],
+        userId: expiryOwner.userId,
+      });
+      expect(customAfterExpiry.goal.currentVersion.referenceTargetSet).toBeNull();
+      expect(
+        (
+          await getCurrentNutritionGoal(fixture.database, {
+            localDate: dates.today,
+            userId: expiryOwner.userId,
+          })
+        )?.id,
+      ).toBe(expiring.goal.id);
+
+      await sql`
+        alter table nutrition_goal_target
+        disable trigger nutrition_goal_target_reject_update
+      `.execute(fixture.database);
+      await sql`
+        alter table nutrition_goal_target
+        drop constraint nutrition_goal_target_reference_metadata_v1
+      `.execute(fixture.database);
+      await sql`
+        update nutrition_goal_target target
+        set target_amount = 999
+        from nutrient definition
+        where target.nutrient_id = definition.id
+          and target.nutrition_goal_version_id = ${revised.goal.currentVersion.id}
+          and definition.code = 'vitamin-b12'
+      `.execute(fixture.database);
+      await expect(
+        getNutritionGoal(fixture.database, {
+          goalId: revised.goal.id,
+          userId: fixture.owner.userId,
+        }),
+      ).rejects.toBeInstanceOf(NutritionGoalPersistedIntegrityError);
+      await expect(
+        listReferenceTargetSets(fixture.database, {
+          localDate: dates.today,
+          userId: fixture.owner.userId,
+        }),
+      ).rejects.toBeInstanceOf(NutritionGoalPersistedIntegrityError);
+      await sql`
+        update nutrition_goal_target target
+        set target_amount = 2.4
+        from nutrient definition
+        where target.nutrient_id = definition.id
+          and target.nutrition_goal_version_id = ${revised.goal.currentVersion.id}
+          and definition.code = 'vitamin-b12'
+      `.execute(fixture.database);
+      await sql`
+        alter table nutrition_goal_target
+        enable trigger nutrition_goal_target_reject_update
+      `.execute(fixture.database);
+      await sql`
+        alter table nutrition_goal_version
+        disable trigger nutrition_goal_version_reject_update
+      `.execute(fixture.database);
+      await sql`
+        alter table nutrition_goal_version
+        drop constraint nutrition_goal_version_reference_identity_v1
+      `.execute(fixture.database);
+      await sql`
+        update nutrition_goal_version
+        set assumptions = pg_catalog.jsonb_set(
+          assumptions,
+          '{referenceTargetSet,policyDigest}',
+          to_jsonb(${"0".repeat(64)}::text)
+        )
+        where id = ${revised.goal.currentVersion.id}
+      `.execute(fixture.database);
+      await expect(
+        getNutritionGoal(fixture.database, {
+          goalId: revised.goal.id,
+          userId: fixture.owner.userId,
+        }),
+      ).rejects.toBeInstanceOf(NutritionGoalPersistedIntegrityError);
+      await expect(
+        listReferenceTargetSets(fixture.database, {
+          localDate: dates.today,
+          userId: fixture.owner.userId,
+        }),
+      ).rejects.toBeInstanceOf(NutritionGoalPersistedIntegrityError);
+    } finally {
+      await fixture.close();
+    }
+  }, 60_000);
+
   it("fails the 0005 upgrade transaction before DDL when experimental roots exist", async () => {
     if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
     const bootstrap = createDatabase({ connectionString: databaseUrl, maxConnections: 1 });
@@ -1650,6 +2261,12 @@ async function cloneGoalVersionForInvariantTest(
   input: {
     readonly clearDerivedBmr?: boolean;
     readonly effectiveFrom?: string;
+    readonly nullReferencePath?: string;
+    readonly nullTargetMetadataField?: string;
+    readonly referenceJsonReplacement?: {
+      readonly path: string;
+      readonly value: unknown;
+    };
     readonly sourceVersionId: string;
     readonly userId: string;
     readonly versionNumber?: number;
@@ -1662,6 +2279,19 @@ async function cloneGoalVersionForInvariantTest(
     .executeTakeFirstOrThrow();
   const goalId = randomUUID();
   const versionId = randomUUID();
+  const assumptions = input.nullReferencePath
+    ? sql<JsonObject>`pg_catalog.jsonb_set(
+        ${JSON.stringify(sourceVersion.assumptions)}::jsonb,
+        pg_catalog.string_to_array(${input.nullReferencePath}, '.'),
+        'null'::jsonb
+      )`
+    : input.referenceJsonReplacement
+      ? sql<JsonObject>`pg_catalog.jsonb_set(
+          ${JSON.stringify(sourceVersion.assumptions)}::jsonb,
+          pg_catalog.string_to_array(${input.referenceJsonReplacement.path}, '.'),
+          ${JSON.stringify(input.referenceJsonReplacement.value)}::jsonb
+        )`
+      : sourceVersion.assumptions;
   await transaction
     .insertInto("nutrition_goal")
     .values({
@@ -1677,6 +2307,7 @@ async function cloneGoalVersionForInvariantTest(
     .insertInto("nutrition_goal_version")
     .values({
       ...sourceVersion,
+      assumptions,
       bmr_kcal: input.clearDerivedBmr ? sql<string>`null` : sourceVersion.bmr_kcal,
       created_by_user_id: input.userId,
       effective_from: input.effectiveFrom ?? sourceVersion.effective_from,
@@ -1693,7 +2324,17 @@ async function cloneGoalVersionForInvariantTest(
     .execute()) {
     await transaction
       .insertInto("nutrition_goal_target")
-      .values({ ...row, nutrition_goal_version_id: versionId })
+      .values({
+        ...row,
+        metadata: input.nullTargetMetadataField
+          ? sql<JsonObject>`pg_catalog.jsonb_set(
+              ${JSON.stringify(row.metadata)}::jsonb,
+              array[${input.nullTargetMetadataField}]::text[],
+              'null'::jsonb
+            )`
+          : row.metadata,
+        nutrition_goal_version_id: versionId,
+      })
       .execute();
   }
 }
@@ -1801,8 +2442,18 @@ async function seedCatalogue(database: ReturnType<typeof createDatabase>): Promi
     const nutrients = new Map<string, string>();
     for (const nutrient of [
       { code: "energy", dimension: "energy" as const, name: "Energy", unit: "kcal" },
+      { code: "carbohydrate", dimension: "mass" as const, name: "Carbohydrate", unit: "g" },
       { code: "protein", dimension: "mass" as const, name: "Protein", unit: "g" },
+      { code: "fiber", dimension: "mass" as const, name: "Fiber", unit: "g" },
       { code: "sodium", dimension: "mass" as const, name: "Sodium", unit: "mg" },
+      { code: "potassium", dimension: "mass" as const, name: "Potassium", unit: "mg" },
+      { code: "calcium", dimension: "mass" as const, name: "Calcium", unit: "mg" },
+      { code: "iron", dimension: "mass" as const, name: "Iron", unit: "mg" },
+      { code: "vitamin-c", dimension: "mass" as const, name: "Vitamin C", unit: "mg" },
+      { code: "vitamin-d", dimension: "mass" as const, name: "Vitamin D", unit: "ug" },
+      { code: "vitamin-b12", dimension: "mass" as const, name: "Vitamin B12", unit: "ug" },
+      { code: "folate-dfe", dimension: "mass" as const, name: "Folate DFE", unit: "ug_DFE" },
+      { code: "vitamin-a-rae", dimension: "mass" as const, name: "Vitamin A RAE", unit: "ug_RAE" },
     ]) {
       const row = await transaction
         .insertInto("nutrient")

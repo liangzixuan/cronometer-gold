@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildApp } from "../src/app.js";
-import { loadConfig } from "../src/config.js";
+import { ConfigValidationError, loadConfig } from "../src/config.js";
 import { HttpProblem } from "../src/http/problem.js";
 
 const apps: ReturnType<typeof buildApp>[] = [];
@@ -20,6 +20,28 @@ afterEach(async () => {
 });
 
 describe("API platform shell", () => {
+  it("rejects a direct production reference-target override before app construction", () => {
+    const productionConfig = loadConfig({ NODE_ENV: "production", LOG_LEVEL: "silent" });
+
+    expect(() =>
+      buildApp({
+        config: productionConfig,
+        logger: false,
+        referenceTargetsEnabled: true,
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        issues: [
+          {
+            field: "REFERENCE_TARGETS_ENABLED",
+            message: "Production approval gate has not been released",
+          },
+        ],
+        name: ConfigValidationError.name,
+      }),
+    );
+  });
+
   it("reports liveness and assigns an opaque request ID", async () => {
     const app = createTestApp();
     const untrustedId = randomUUID();
