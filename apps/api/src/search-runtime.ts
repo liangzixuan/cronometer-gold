@@ -14,7 +14,9 @@ import type { GoalService } from "./modules/goals/goal.routes.js";
 import type { HydrationService } from "./modules/hydration/hydration.routes.js";
 import type { ProfileService } from "./modules/profile/profile.routes.js";
 import type { RecipeService } from "./modules/recipes/recipe.routes.js";
+import type { NutritionReportService } from "./modules/reports/nutrition-report.routes.js";
 import type { RetentionService } from "./modules/retention/retention.routes.js";
+import { DatabaseNutritionReportService } from "./nutrition-report-persistence-service.js";
 import {
   DatabaseAuthRepository,
   DatabaseDiaryService,
@@ -31,6 +33,7 @@ export interface ApiSearchRuntime {
   readonly diaryService: DiaryService;
   readonly foodSearchService: DatabaseBackedFoodSearchService;
   readonly goalService: GoalService;
+  readonly nutritionReportService: NutritionReportService;
   readonly hydrationService: HydrationService;
   readonly profileService: ProfileService;
   readonly recipeService: RecipeService;
@@ -117,6 +120,7 @@ export async function createApiSearchRuntime(
         maxQueuedDatabaseOperations: config.searchDatabaseMaxQueue,
       }),
       goalService: new DatabaseGoalService(database),
+      nutritionReportService: new DatabaseNutritionReportService(database),
       hydrationService: new DatabaseHydrationService(database),
       profileService: new DatabaseProfileService(database),
       recipeService: new DatabaseRecipeService(database),

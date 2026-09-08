@@ -42,6 +42,7 @@ describe("public contracts", () => {
     expect(problemDetailsSchema.properties.code.enum).toEqual(problemCodes);
     expect(problemCodes).toContain("INTERNAL_ERROR");
     expect(problemCodes).toContain("PROFILE_OWNER_CHANGED");
+    expect(problemCodes).toContain("REPORT_CAPACITY_EXCEEDED");
     expect(new Set(problemCodes).size).toBe(problemCodes.length);
   });
 

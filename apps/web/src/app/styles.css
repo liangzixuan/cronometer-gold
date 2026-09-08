@@ -1876,6 +1876,340 @@ button:disabled {
   border-color: var(--forest);
 }
 
+.reportDashboard {
+  width: min(1320px, 100%);
+}
+
+.reportControls {
+  padding: 22px;
+  margin-top: 34px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+}
+
+.reportPresets {
+  padding: 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  border: 0;
+}
+
+.reportPresets legend,
+.reportDateFields label > span,
+.reportNutrientSelect > span {
+  margin: 0 12px 0 0;
+  color: var(--ink-muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.reportPresets button {
+  min-height: 40px;
+  padding: 8px 13px;
+  color: var(--forest);
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 800;
+}
+
+.reportDateFields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(150px, 220px)) auto;
+  gap: 12px;
+  margin-top: 18px;
+  align-items: end;
+}
+
+.reportDateFields label,
+.reportNutrientSelect {
+  display: grid;
+  gap: 6px;
+}
+
+.reportDateFields input,
+.reportNutrientSelect select {
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 11px;
+  color: var(--ink);
+  background: var(--white);
+  border: 1px solid rgba(23, 33, 29, 0.3);
+  border-radius: 9px;
+  font: inherit;
+}
+
+.reportRangeError {
+  min-height: 20px;
+  margin: 10px 0 0;
+  color: #8a332b;
+  font-size: 0.78rem;
+}
+
+.reportControls button:focus-visible,
+.reportControls input:focus-visible,
+.reportNutrientSelect select:focus-visible {
+  outline: 3px solid #4c8c65;
+  outline-offset: 3px;
+}
+
+.reportWorkspace {
+  display: grid;
+  gap: 24px;
+  margin-top: 34px;
+}
+
+.reportOverview,
+.reportPanel {
+  padding: clamp(22px, 4vw, 38px);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+}
+
+.reportOverview {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1fr);
+  gap: 28px;
+  color: var(--white);
+  background: var(--forest);
+}
+
+.reportOverview h2,
+.reportPanel h2 {
+  margin: 0;
+  font-size: clamp(1.8rem, 4vw, 3rem);
+  letter-spacing: -0.045em;
+  line-height: 1;
+}
+
+.reportOverview p:last-child {
+  color: rgba(255, 254, 250, 0.72);
+}
+
+.reportStats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.reportStats div {
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.reportStats dt {
+  color: rgba(255, 254, 250, 0.68);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.reportStats dd {
+  margin: 3px 0 0;
+  font-size: 1.7rem;
+  font-weight: 800;
+}
+
+.reportPanel {
+  min-width: 0;
+  background: var(--white);
+}
+
+.reportPanelHeading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.reportNutrientSelect {
+  min-width: min(300px, 100%);
+}
+
+.reportChart {
+  margin: 28px 0 0;
+}
+
+.reportChart ol {
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 12px;
+  list-style: none;
+}
+
+.reportChart li {
+  display: grid;
+  grid-template-columns: 72px minmax(180px, 1fr) minmax(110px, auto);
+  gap: 12px;
+  align-items: center;
+}
+
+.reportChart time {
+  color: var(--ink-muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.reportChart li > strong {
+  font-size: 0.78rem;
+  text-align: right;
+}
+
+.reportBarTrack {
+  position: relative;
+  height: 22px;
+  background: var(--paper-deep);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+}
+
+.reportBarFill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  display: block;
+  min-width: 2px;
+  background: #2f7048;
+  border-radius: 4px;
+}
+
+.reportBarFill--partial {
+  background: #b66a16;
+}
+
+.reportBarFill--unknown {
+  background: repeating-linear-gradient(135deg, #786f66 0 4px, #a69c91 4px 8px);
+}
+
+.reportThreshold {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 2px;
+  transform: translateX(-1px);
+  background: #7d4e00;
+}
+
+.reportThreshold--target {
+  width: 3px;
+  background: #633b9b;
+}
+
+.reportThreshold--maximum {
+  background: #9b3029;
+}
+
+.reportLegend {
+  padding: 0;
+  margin: 22px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  color: var(--ink-muted);
+  font-size: 0.74rem;
+  list-style: none;
+}
+
+.reportLegend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.reportLegendSwatch {
+  width: 24px;
+  height: 10px;
+  display: inline-block;
+  background: #2f7048;
+  border-radius: 3px;
+}
+
+.reportLegendLine {
+  width: 3px;
+  height: 16px;
+  display: inline-block;
+  background: #7d4e00;
+}
+
+.reportLegendLine--target {
+  background: #633b9b;
+}
+
+.reportLegendLine--maximum {
+  background: #9b3029;
+}
+
+.reportBoundaryList {
+  padding: 0;
+  margin: 22px 0 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+
+.reportBoundaryList li {
+  padding: 14px 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.reportBoundaryList span {
+  color: var(--ink-muted);
+}
+
+.reportTableScroller {
+  margin-top: 22px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.reportTable {
+  width: 100%;
+  min-width: 1120px;
+  border-collapse: collapse;
+  font-size: 0.76rem;
+}
+
+.reportTable th,
+.reportTable td {
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.reportTable thead th {
+  color: var(--ink-muted);
+  background: var(--paper);
+  font-size: 0.68rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.reportTable tbody tr:last-child th,
+.reportTable tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.reportEvidenceNote {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.72rem;
+}
+
 @media (max-width: 760px) {
   .trustBar,
   .cardGrid {
@@ -1937,8 +2271,32 @@ button:disabled {
   .hydrationGrid,
   .retentionColumns,
   .trendTables,
-  .privacyGrid {
+  .privacyGrid,
+  .reportOverview {
     grid-template-columns: 1fr;
+  }
+
+  .reportDateFields {
+    grid-template-columns: 1fr;
+  }
+
+  .reportPanelHeading,
+  .reportBoundaryList li {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .reportNutrientSelect {
+    width: 100%;
+  }
+
+  .reportChart li {
+    grid-template-columns: 64px minmax(110px, 1fr);
+  }
+
+  .reportChart li > strong {
+    grid-column: 2;
+    text-align: left;
   }
 
   .sectionHeading,

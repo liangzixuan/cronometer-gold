@@ -227,3 +227,35 @@ All recipe, goal, targetable-nutrient, and diary responses are private and send
 `Cache-Control: no-store`. Legacy diary ETags retain the day revision; paged
 diary ETags hash the exact response representation because authenticated cursor
 nonces make separately generated page bodies byte-distinct.
+
+## Nutrition reports
+
+`GET /v1/reports/nutrition?from=YYYY-MM-DD&to=YYYY-MM-DD` returns one
+authenticated, owner-scoped, no-store nutrition report for an inclusive range of
+1 through 31 local dates. Unknown query keys are rejected. The response binds
+the active profile time zone, profile revision, user-data watermark, and one
+database snapshot instant. It declares
+`dateBasis: active-profile-time-zone-v1` and returns each day's UTC boundaries,
+source diary revisions and original source time zones; changing the profile zone
+can rebucket the read-only report view but never rewrites immutable diary
+coordinates.
+
+The response always contains the fixed 15 core nutrient series and at most 465
+points. A day with no diary entries has `aggregate: null`. On a nonempty day,
+every core series has an aggregate; a nutrient absent from an entry snapshot is
+explicitly `unknown/not_reported`. Exact zero, trace, partial, unknown, and
+missing states are not interchangeable. Each series includes reconciled coverage
+counts and exact-decimal server-computed chart percentages under
+`max-intake-or-saved-threshold-v1`.
+
+Saved goal intervals appear as contiguous target segments. Their target snapshots
+use the current immutable version of each applicable goal root in the same report
+transaction, honor reference-target expiry, and declare
+`goalVersionBasis: current-version-at-report-snapshot-v1`. The API does not
+claim historical intra-root goal-version validity that the schema cannot prove.
+
+A malformed closed query is 400, a well-formed range outside the 1–31-day bound
+is 422, an inactive or absent owner is 404, and unavailable or inconsistent
+persistence is 503. Authentication retains the shared 401 contract. The route
+returns descriptive general-wellness data, not deficiency, toxicity, diagnosis,
+or treatment guidance.

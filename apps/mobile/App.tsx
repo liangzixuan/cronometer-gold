@@ -63,6 +63,7 @@ import { HydrationScreen } from "./src/hydration/HydrationScreen";
 import { authenticatedRoutes } from "./src/navigation/routes";
 import { GoalsScreen } from "./src/recipes/GoalsScreen";
 import { RecipesScreen } from "./src/recipes/RecipesScreen";
+import { ReportsScreen } from "./src/reports/ReportsScreen";
 import {
   beginPrivateDeviceCleanup,
   createSecurePrivateCleanupStore,
@@ -108,6 +109,7 @@ type RootStackParamList = {
   Search: { readonly date: string; readonly meal: MealSlot; readonly timeZone: string };
   Recipes: undefined;
   Goals: undefined;
+  Reports: undefined;
   Hydration: undefined;
   Health: undefined;
   VerifyEmail: undefined;
@@ -212,6 +214,7 @@ function TodayRoute(props: AuthenticatedAppProps) {
       }
       onRecipes={() => navigation.navigate(authenticatedRoutes.recipes)}
       onGoals={() => navigation.navigate(authenticatedRoutes.goals)}
+      onReports={() => navigation.navigate(authenticatedRoutes.reports)}
       onHydration={() => navigation.navigate(authenticatedRoutes.hydration)}
       onHealth={() => navigation.navigate(authenticatedRoutes.health)}
       onProfileUpdated={(profile) =>
@@ -319,6 +322,21 @@ function GoalsRoute(props: AuthenticatedAppProps) {
           ? props.session.profile.sexAtBirth
           : null
       }
+      profileTimeZone={props.session.profile.timeZone}
+      sessionEpoch={props.sessionEpoch}
+    />
+  );
+}
+
+function ReportsRoute(props: AuthenticatedAppProps) {
+  return (
+    <ReportsScreen
+      key={`${props.sessionEpoch}:${props.session.user.id}:${props.session.profile.revision}:${props.session.profile.timeZone}`}
+      accessToken={props.accessToken}
+      apiBase={props.apiBase}
+      expectedOwnerUserId={props.session.user.id}
+      onUnauthorized={props.onUnauthorized}
+      profileRevision={props.session.profile.revision}
       profileTimeZone={props.session.profile.timeZone}
       sessionEpoch={props.sessionEpoch}
     />
@@ -451,6 +469,9 @@ function AuthenticatedApp(
         </Stack.Screen>
         <Stack.Screen name={authenticatedRoutes.goals} options={{ title: "Goals" }}>
           {() => <GoalsRoute {...props} />}
+        </Stack.Screen>
+        <Stack.Screen name={authenticatedRoutes.reports} options={{ title: "Nutrition report" }}>
+          {() => <ReportsRoute {...props} />}
         </Stack.Screen>
         <Stack.Screen name={authenticatedRoutes.hydration} options={{ title: "Hydration" }}>
           {() => <HydrationRoute {...props} />}

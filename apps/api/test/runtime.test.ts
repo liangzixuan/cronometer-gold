@@ -34,5 +34,6 @@ describe("production API runtime", () => {
     expect(runtime.foodSearchService).toBeDefined();
     expect(runtime.recipeService).toBeDefined();
     expect(runtime.goalService).toBeDefined();
+    expect(runtime.nutritionReportService).toBeDefined();
   });
 });

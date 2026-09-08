@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   databaseDiaryService: vi.fn(),
   databaseGoalService: vi.fn(),
   databaseHydrationService: vi.fn(),
+  databaseNutritionReportService: vi.fn(),
   databaseProfileService: vi.fn(),
   databaseRecipeService: vi.fn(),
   databaseRetentionService: vi.fn(),
@@ -101,6 +102,14 @@ vi.mock("../src/persistence-services.js", () => ({
 
 vi.mock("../src/retention-artifact-runtime.js", () => ({
   createApiRetentionArtifactRuntime: mocks.createApiRetentionArtifactRuntime,
+}));
+
+vi.mock("../src/nutrition-report-persistence-service.js", () => ({
+  DatabaseNutritionReportService: class {
+    constructor(database: unknown) {
+      mocks.databaseNutritionReportService(database);
+    }
+  },
 }));
 
 vi.mock("../src/retention-persistence-service.js", () => ({
@@ -221,6 +230,7 @@ describe("API dependency runtime composition", () => {
       cursorSecret: config.cursorSecret,
     });
     expect(mocks.databaseHydrationService).toHaveBeenCalledWith(database);
+    expect(mocks.databaseNutritionReportService).toHaveBeenCalledWith(database);
     expect(mocks.databaseRetentionService).toHaveBeenCalledWith(
       expect.objectContaining({
         artifacts: artifactRuntime,

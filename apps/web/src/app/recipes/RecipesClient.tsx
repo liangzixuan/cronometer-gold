@@ -582,6 +582,7 @@ export function RecipesClient() {
             Recipes
           </Link>
           <Link href={`/goals?date=${date}`}>Goals</Link>
+          <Link href={date ? `/reports?to=${encodeURIComponent(date)}` : "/reports"}>Reports</Link>
           <Link href="/health">Health & privacy</Link>
         </nav>
         <p className="wellnessNote">Wellness information only—not medical advice.</p>

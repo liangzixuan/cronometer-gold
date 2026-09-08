@@ -18,6 +18,7 @@ import type { GoalService } from "./modules/goals/goal.routes.js";
 import type { HydrationService } from "./modules/hydration/hydration.routes.js";
 import type { ProfileService } from "./modules/profile/profile.routes.js";
 import type { RecipeService } from "./modules/recipes/recipe.routes.js";
+import type { NutritionReportService } from "./modules/reports/nutrition-report.routes.js";
 import type { RetentionService } from "./modules/retention/retention.routes.js";
 import { type ReadinessCheck, systemRoutes } from "./modules/system/system.routes.js";
 import { v1Routes } from "./modules/v1.routes.js";
@@ -33,6 +34,7 @@ export interface BuildAppOptions {
   hydrationService?: HydrationService;
   recipeService?: RecipeService;
   goalService?: GoalService;
+  nutritionReportService?: NutritionReportService;
   referenceTargetsEnabled?: boolean;
   retentionService?: RetentionService;
   retentionClock?: () => Date;
@@ -107,6 +109,9 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     ...(options.hydrationService ? { hydrationService: options.hydrationService } : {}),
     ...(options.recipeService ? { recipeService: options.recipeService } : {}),
     ...(options.goalService ? { goalService: options.goalService } : {}),
+    ...(options.nutritionReportService
+      ? { nutritionReportService: options.nutritionReportService }
+      : {}),
     ...(options.referenceTargetsEnabled === true ? { referenceTargetsEnabled: true } : {}),
     ...(options.retentionService ? { retentionService: options.retentionService } : {}),
     ...(options.retentionClock ? { clock: options.retentionClock } : {}),

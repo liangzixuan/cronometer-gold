@@ -1,10 +1,20 @@
 import Link from "next/link";
 
+import { isLocalDate } from "../../lib/diary";
 import { FoodSearchClient } from "./FoodSearchClient";
 
 export const dynamic = "force-dynamic";
 
-export default function FoodsPage() {
+interface FoodsPageProps {
+  readonly searchParams: Promise<{ readonly date?: string | readonly string[] }>;
+}
+
+export default async function FoodsPage({ searchParams }: FoodsPageProps) {
+  const { date } = await searchParams;
+  const reportHref =
+    typeof date === "string" && isLocalDate(date)
+      ? `/reports?to=${encodeURIComponent(date)}`
+      : "/reports";
   return (
     <main className="shell">
       <aside className="sidebar">
@@ -18,6 +28,7 @@ export default function FoodsPage() {
           </Link>
           <Link href="/recipes">Recipes</Link>
           <Link href="/goals">Goals</Link>
+          <Link href={reportHref}>Reports</Link>
           <Link href="/health">Health & privacy</Link>
         </nav>
         <p className="wellnessNote">Wellness information only—not medical advice.</p>

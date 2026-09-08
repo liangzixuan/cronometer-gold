@@ -5,6 +5,7 @@ import {
   canonicalNonNegativeDecimal,
   canonicalPositiveDecimal,
   decimal,
+  MAX_NUTRITION_REPORT_DAYS,
   MIFFLIN_ST_JEOR_SOURCE,
   NUTRIENT_UNITS,
   NUTRITION_ENGINE_VERSION,
@@ -622,6 +623,59 @@ export async function getNutritionGoalProgress(
         timeZone: day.timeZone,
       };
     });
+}
+
+/**
+ * Reads every active goal root intersecting a bounded report range from the caller's
+ * transaction. Each root resolves to its authoritative current immutable version at
+ * the report snapshot; the schema does not model historical intra-root head validity.
+ */
+export async function readNutritionGoalsForRangeSnapshot(
+  transaction: Transaction<Database>,
+  input: {
+    readonly userId: string;
+    readonly fromLocalDate: string;
+    readonly toLocalDate: string;
+  },
+): Promise<readonly NutritionGoalRecord[]> {
+  validateLocalDate(input.fromLocalDate);
+  validateLocalDate(input.toLocalDate);
+  const roots = await transaction
+    .selectFrom("nutrition_goal")
+    .select(["id", "effective_from", "effective_to"])
+    .where("user_id", "=", input.userId)
+    .where("status", "=", "active")
+    .where("effective_from", "<=", input.toLocalDate)
+    .where((expression) =>
+      expression.or([
+        expression("effective_to", "is", null),
+        expression("effective_to", ">", input.fromLocalDate),
+      ]),
+    )
+    .orderBy("effective_from")
+    .orderBy("id")
+    .limit(MAX_NUTRITION_REPORT_DAYS + 1)
+    .execute();
+  if (roots.length > MAX_NUTRITION_REPORT_DAYS) {
+    throw new NutritionGoalPersistedIntegrityError("Report goal interval count exceeds its bound");
+  }
+  for (let index = 1; index < roots.length; index += 1) {
+    const previous = roots[index - 1];
+    const current = roots[index];
+    if (
+      !previous ||
+      !current ||
+      previous.effective_to === null ||
+      normalizeDate(previous.effective_to) > normalizeDate(current.effective_from)
+    ) {
+      throw new NutritionGoalPersistedIntegrityError("Report goal intervals overlap");
+    }
+  }
+  const goals: NutritionGoalRecord[] = [];
+  for (const root of roots) {
+    goals.push(await loadOwnedGoal(transaction, input.userId, root.id));
+  }
+  return goals;
 }
 
 export async function listReferenceTargetSets(

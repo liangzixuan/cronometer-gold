@@ -7,6 +7,7 @@ import { loadConfig } from "../src/config.js";
 import { createLoggerOptions } from "../src/logging.js";
 import type { AuthService } from "../src/modules/auth/auth-service.js";
 import type { DiaryService } from "../src/modules/diary/diary.routes.js";
+import type { NutritionReportService } from "../src/modules/reports/nutrition-report.routes.js";
 import { account, bearerToken, operationId, userId } from "./fixtures.js";
 
 const apps: ReturnType<typeof buildApp>[] = [];
@@ -49,7 +50,16 @@ describe("private-route telemetry boundary", () => {
       updateEntry: vi.fn(),
       deleteEntry: vi.fn(),
     };
-    const app = buildApp({ config, logger, authService, diaryService });
+    const nutritionReportService: NutritionReportService = {
+      getNutritionReport: vi.fn(async () => Promise.reject(new Error(privateFailure))),
+    };
+    const app = buildApp({
+      config,
+      logger,
+      authService,
+      diaryService,
+      nutritionReportService,
+    });
     apps.push(app);
     const password = "private password value";
     const recoveryEmail = "recovery-private@example.com";
@@ -57,6 +67,8 @@ describe("private-route telemetry boundary", () => {
     const recoveryToken = `${"z".repeat(42)}A`;
     const occurredAt = "2026-08-15T13:30:00.000Z";
     const expectedProfileTimeZone = "America/Chicago";
+    const reportFrom = "2026-09-01";
+    const reportTo = "2026-09-03";
 
     await app.inject({
       method: "POST",
@@ -88,11 +100,17 @@ describe("private-route telemetry boundary", () => {
         occurredAt,
       },
     });
+    await app.inject({
+      headers: { authorization: `Bearer ${bearerToken}` },
+      method: "GET",
+      url: `/v1/reports/nutrition?from=${reportFrom}&to=${reportTo}`,
+    });
 
     expect(output).toContain("/v1/auth/login");
     expect(output).toContain("/v1/auth/password-recovery/request");
     expect(output).toContain("/v1/auth/password-recovery/confirm");
     expect(output).toContain("/v1/diary/entries");
+    expect(output).toContain("/v1/reports/nutrition");
     for (const privateValue of [
       bearerToken,
       password,
@@ -102,6 +120,8 @@ describe("private-route telemetry boundary", () => {
       occurredAt,
       expectedProfileTimeZone,
       operationId,
+      reportFrom,
+      reportTo,
       "private@example.com",
       privateFailure,
     ]) {

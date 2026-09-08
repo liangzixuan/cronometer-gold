@@ -27,6 +27,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0019](./0019-first-release-parity-and-camera-barcode-capture.md) | First-release parity sequencing and camera barcode capture | Source implementation complete; signed-device and live-catalogue evidence blocked |
 | [0020](./0020-configurable-diary-presentation-groups.md) | Owner-configurable labels and display order for stable diary meal slots | Accepted for local implementation; signed-device evidence blocked |
 | [0021](./0021-source-verified-adult-dri-reference-targets.md) | Source-verified adult U.S.–Canada DRI reference-target candidate | Accepted for local source implementation; clinical, legal/privacy, copyright, and commercial-enablement reviews blocked |
+| [0022](./0022-bounded-multi-day-nutrition-reports.md) | Bounded owner-private multi-day nutrition reports | Accepted for local implementation; hosted, signed-device, cross-client, and accessibility evidence blocked |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

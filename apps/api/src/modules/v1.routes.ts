@@ -11,6 +11,10 @@ import {
 import { type HydrationRoutesOptions, hydrationRoutes } from "./hydration/hydration.routes.js";
 import { type ProfileRoutesOptions, profileRoutes } from "./profile/profile.routes.js";
 import { type RecipeRoutesOptions, recipeRoutes } from "./recipes/recipe.routes.js";
+import {
+  type NutritionReportRoutesOptions,
+  nutritionReportRoutes,
+} from "./reports/nutrition-report.routes.js";
 import { type RetentionRoutesOptions, retentionRoutes } from "./retention/retention.routes.js";
 
 export interface V1RoutesOptions
@@ -21,6 +25,7 @@ export interface V1RoutesOptions
     HydrationRoutesOptions,
     RecipeRoutesOptions,
     GoalRoutesOptions,
+    NutritionReportRoutesOptions,
     RetentionRoutesOptions {}
 
 const versionResponseSchema = {
@@ -92,6 +97,13 @@ export const v1Routes: FastifyPluginAsync<V1RoutesOptions> = async (app, options
     prefix: "/nutrients",
     ...(options.authService ? { authService: options.authService } : {}),
     ...(options.goalService ? { goalService: options.goalService } : {}),
+  });
+  void app.register(nutritionReportRoutes, {
+    prefix: "/reports/nutrition",
+    ...(options.authService ? { authService: options.authService } : {}),
+    ...(options.nutritionReportService
+      ? { nutritionReportService: options.nutritionReportService }
+      : {}),
   });
   void app.register(retentionRoutes, {
     ...(options.authService ? { authService: options.authService } : {}),

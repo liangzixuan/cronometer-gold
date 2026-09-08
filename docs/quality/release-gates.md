@@ -320,6 +320,18 @@ acceptance.
   energy accounting.
 - Goal progress proves lower-bound semantics with incomplete nutrient panels and
   never labels an unknown contribution as measured zero or exact completion.
+- Multi-day nutrition-report acceptance proves a closed, owner-scoped 1–31-day
+  query and one read-only repeatable-read snapshot across profile, diary,
+  nutrient-registry, watermark, and goal evidence. It covers active-profile-zone
+  day boundaries including daylight-saving transitions, immutable source
+  coordinates, exact zero, trace, partial, wholly unknown, synthesized
+  not-reported nutrients on nonempty days, null aggregates only on empty days,
+  current-goal-version-at-snapshot segments and reference expiry, exact-decimal
+  chart scales, all 15 core series, and summary reconciliation. Cross-owner and
+  malformed persisted evidence fail closed, private dates and amounts stay out of
+  logs, and every response is no-store. Browser, signed iOS/Android,
+  cross-client, keyboard/screen-reader, hosted-load, and controlled-beta evidence
+  remain required before release.
 - The optional M1B-R reference-template candidate remains disabled for
   controlled-beta and commercial users until a named registered dietitian or
   qualified clinical-science owner approves its exact values, canonical units,

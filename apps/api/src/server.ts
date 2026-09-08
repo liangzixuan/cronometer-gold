@@ -78,6 +78,7 @@ export async function createApiApplicationRuntime(
       diaryService: dependencies.diaryService,
       foodSearchService: dependencies.foodSearchService,
       goalService: dependencies.goalService,
+      nutritionReportService: dependencies.nutritionReportService,
       hydrationService: dependencies.hydrationService,
       profileService: dependencies.profileService,
       recipeService: dependencies.recipeService,

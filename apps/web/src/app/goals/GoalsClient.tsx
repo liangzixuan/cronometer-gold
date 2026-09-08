@@ -872,6 +872,9 @@ export function GoalsClient() {
           <Link aria-current="page" href={`/goals?date=${date}`}>
             Goals
           </Link>
+          <Link href={isLocalDate(date) ? `/reports?to=${encodeURIComponent(date)}` : "/reports"}>
+            Reports
+          </Link>
           <Link href="/health">Health & privacy</Link>
         </nav>
         <p className="wellnessNote">General wellness estimates—not medical advice.</p>

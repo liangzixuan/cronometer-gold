@@ -54,6 +54,15 @@ reviewer, or production-release acceptance.
    all-retained-entity source gate, not M2. Signed physical-device, independent-
    reviewer, hosted access/restore, notification-delivery, and controlled-beta
    evidence still block release.
+7. **Bounded nutrition reports (implemented; release-gated):** one coherent,
+   owner-scoped snapshot now provides 7-, 14-, 30-, or custom 1–31-day reports
+   across all 15 core nutrients on web and mobile. It preserves profile-local
+   day boundaries, immutable diary provenance, current saved-goal versions,
+   reference-target expiry, quantified zero, trace, partial, unknown, and
+   completely missing days. This closes M3A's local source slice only; it does
+   not claim clinical interpretation, signed-device acceptance, hosted
+   availability, printable/PDF output, scheduled delivery, or full premium
+   parity.
 
 ## Forward milestones
 
@@ -78,9 +87,10 @@ commercial copyright approval, hosted acceptance, and signed-device,
 cross-client, and accessibility acceptance still gate release. It must not be
 described as clinically reviewed, government-endorsed, or commercially
 available while those gates are open. M3A's bounded multi-day nutrition report
-and charts are the next source priority while external M0/M2 work remains
-separately gated. The remaining daily-loop offline and production-service gaps
-follow. Arbitrary add/delete/hide group identities remain a future migration
+and charts are source-complete and have passed the ordered local validation
+runbook. M1C's general daily-loop offline reliability is now the next safe
+user-visible source priority while external M0/M2 work remains separately
+gated. Production-service gaps follow. Arbitrary add/delete/hide group identities remain a future migration
 milestone rather than part of M1B-G. M0's authenticated acquisition, review,
 and activation lane proceeds in parallel when its separately approved external
 work is available. M2 still requires both M0 and M1 acceptance.
@@ -346,6 +356,14 @@ Each retains its separate explicit-approval gate.
    note writes while `note` output remains optional; editors stay hidden until
    they observe that capability; tolerant clients are staged; only then may
    server output become required.
+
+   M1C is the next source slice: extend durable, bounded, owner-fenced offline
+   operation beyond the existing native public-food quick-add envelope to the
+   normal daily loop—edits, deletes, repeats, recipes, custom foods, quantities,
+   and deliberate reordering. Acceptance requires crash/restart-safe FIFO
+   semantics, explicit terminal-conflict recovery, profile/time-zone drift
+   handling, and cross-client convergence evidence. It does not authorize
+   background delivery, phone exposure, signed builds, or controlled beta.
 3. **M2 — controlled beta:** source-only hosting and signed-build preparation may
    proceed in parallel, but real execution still requires reviewed hosting and
    digest-pinned seven-image
@@ -356,13 +374,14 @@ Each retains its separate explicit-approval gate.
    and legal review. Cloud, DNS, Terraform, Tailscale, firewall, and EAS actions
    keep their separate approval gates.
 4. **M3 — premium analysis and planning:** M3A's bounded multi-day nutrition
-   report and charts are the next source priority while separately approved M0
-   and M2 external work is unavailable. The first slice uses authoritative,
+   report and charts are source-complete with ordered local evidence. This first
+   slice uses authoritative,
    immutable diary and goal evidence to present a bounded profile-local date
    range, calories, macronutrients, micronutrients, target comparisons, and
    explicit known/trace/unknown or missing coverage across web and mobile. It
    must preserve timezone and target-version boundaries and provide selectable
-   nutrient charts without medical interpretation. Printable/PDF output,
+   nutrient charts without medical interpretation. Hosted and signed-device
+   acceptance remain open. Printable/PDF output,
    scheduled reports, nutrition scores/balance meters, macro scheduling,
    fasting, sharing, and production or signed-device acceptance remain later
    work. This source sequencing does not waive M0, M1, or M2 release gates.

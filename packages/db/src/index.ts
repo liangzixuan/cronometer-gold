@@ -307,6 +307,7 @@ export {
   type NutritionGoalVersionRecord,
   type ReferenceTargetSetListRecord,
   type ReviseNutritionGoalInput,
+  readNutritionGoalsForRangeSnapshot,
   reviseNutritionGoal,
 } from "./goals.js";
 export {
@@ -336,6 +337,16 @@ export {
   type MigrationResult,
   runMigrations,
 } from "./migrator.js";
+export {
+  getNutritionReportSnapshot,
+  type NutritionReportAggregateRecord,
+  NutritionReportCapacityError,
+  type NutritionReportDayRecord,
+  NutritionReportNotFoundError,
+  NutritionReportPersistedIntegrityError,
+  type NutritionReportSnapshotRecord,
+  NutritionReportValidationError,
+} from "./nutrition-reports.js";
 export {
   type CreateRecipeInput,
   createRecipe,
