@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
 
-import { parseDiaryMutation } from "./diary";
 import {
+  type DiaryOrderCanonicalGroups,
+  diaryOrderDigestPayload,
+  parseDiaryMutation,
+} from "./diary";
+import {
+  createDiaryCorrectionOutboxDraft,
   createDiaryOutboxDraft,
   createQuickAddOutboxController,
   createQuickAddOutboxDraft,
+  DiaryOutboxCapacityError,
   type DiaryOutboxEnqueueInput,
+  diaryOutboxAffectedLocalDates,
+  diaryOutboxDisplayMealSlot,
   diaryOutboxOperationKind,
   diaryOutboxRequest,
   type FatalQuickAddOutboxStoreReason,
@@ -31,6 +39,37 @@ const owner = "018f6f58-4e2c-7b62-8f0b-3d75491713b5";
 const otherOwner = "118f6f58-4e2c-7b62-8f0b-3d75491713b5";
 const timeZone = "America/Chicago";
 const occurredAt = "2026-08-15T13:30:00.000Z";
+const reorderResultCanonicalGroups = [
+  [
+    "breakfast",
+    [
+      ["85d7fa63-4e26-42de-a1f8-0683ce268f63", "4", 0],
+      ["75d7fa63-4e26-42de-a1f8-0683ce268f62", "3", 1],
+    ],
+  ],
+  ["lunch", []],
+  ["dinner", []],
+  ["snacks", []],
+] as const satisfies DiaryOrderCanonicalGroups;
+
+const reorderResultDigests = new Map([
+  [
+    diaryOrderDigestPayload("2026-08-15", "America/Chicago", reorderResultCanonicalGroups),
+    "94b5a3d2b64377e23a93b02c9f0834c284984985593817e2f77d93208824a44b",
+  ],
+  [
+    diaryOrderDigestPayload("2026-08-15", "America/New_York", reorderResultCanonicalGroups),
+    "e16bfe2133be55b9b7f2f7eff2cb09bc97c61a4b6c5269466bc93d5795255fa1",
+  ],
+]);
+
+function testSha256HexSync(payload: string): string {
+  return reorderResultDigests.get(payload) ?? "f".repeat(64);
+}
+
+async function testSha256Hex(payload: string): Promise<string> {
+  return testSha256HexSync(payload);
+}
 
 function operationId(index: number): string {
   return `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`;
@@ -96,6 +135,7 @@ function source() {
 }
 
 function receiptBody(item: QuickAddOutboxItem, replayed: boolean): unknown {
+  if (item.version === 3) throw new TypeError("The log receipt helper accepts only v1/v2 items.");
   const provenanceSource = source();
   const portion =
     item.body.portion.kind === "grams"
@@ -271,6 +311,136 @@ async function typedDraft(kind: DiaryOutboxEnqueueInput["operationKind"], index:
     operationId(index),
     new Date("2001-01-01T00:00:00.000Z"),
   );
+}
+
+const confirmedEntryId = "75d7fa63-4e26-42de-a1f8-0683ce268f62";
+
+function correctionInput(
+  kind: "repeat" | "update" | "delete",
+  overrides: Readonly<Record<string, unknown>> = {},
+) {
+  const common = {
+    entryId: confirmedEntryId,
+    expectedEntryRevision: "3",
+    entryName: "Apple",
+    portionLabel: "1 medium",
+    localDate: "2026-08-15",
+    mealSlot: "breakfast" as const,
+  };
+  if (kind === "repeat") {
+    return {
+      ...common,
+      operationKind: "repeat" as const,
+      sourceLocalDate: "2026-08-15",
+      occurredAt,
+      targetMealSlot: "breakfast" as const,
+      ...overrides,
+    };
+  }
+  if (kind === "update") {
+    return {
+      ...common,
+      operationKind: "update" as const,
+      body: { portion: { kind: "grams" as const, grams: "125.500" }, note: "felt good" },
+      ...overrides,
+    };
+  }
+  return { ...common, operationKind: "delete" as const, ...overrides };
+}
+
+function reorderInput(overrides: Readonly<Record<string, unknown>> = {}) {
+  const localDate = typeof overrides.localDate === "string" ? overrides.localDate : "2026-08-15";
+  const dayTimeZone =
+    typeof overrides.dayTimeZone === "string" ? overrides.dayTimeZone : "America/Chicago";
+  return {
+    operationKind: "reorder" as const,
+    localDate,
+    expectedDayRevision: "8",
+    dayTimeZone,
+    expectedOrderDigest: "a".repeat(64),
+    expectedResultOrderDigest: testSha256HexSync(
+      diaryOrderDigestPayload(localDate, dayTimeZone, reorderResultCanonicalGroups),
+    ),
+    groups: { breakfast: [1, 0], lunch: [], dinner: [], snacks: [] },
+    ...overrides,
+  };
+}
+
+function correctionReceiptBody(item: QuickAddOutboxItem, replayed = false): unknown {
+  if (item.version !== 3 || item.operationKind === "reorder") {
+    throw new TypeError("Expected a v3 entry correction.");
+  }
+  const resultEntryId =
+    item.operationKind === "repeat" ? "85d7fa63-4e26-42de-a1f8-0683ce268f63" : item.entryId;
+  const resultRevision = item.operationKind === "repeat" ? "1" : "4";
+  const basePortion = {
+    kind: "serving" as const,
+    servingId: "303",
+    amount: "1",
+    servingLabel: "medium",
+  };
+  const portion =
+    item.operationKind === "update" && item.body.portion
+      ? item.body.portion.kind === "grams"
+        ? item.body.portion
+        : { ...item.body.portion, servingLabel: "medium" }
+      : basePortion;
+  const entry =
+    item.operationKind === "delete"
+      ? null
+      : {
+          id: resultEntryId,
+          revision: resultRevision,
+          entryKind: "food" as const,
+          foodVersionId: "201",
+          recipeVersionId: null,
+          portion,
+          food: { name: "Apple", brandName: null },
+          recipe: null,
+          source: source(),
+          foodProvenance: { kind: "public" as const, source: source() },
+          mealSlot:
+            item.operationKind === "repeat"
+              ? item.body.mealSlot
+              : (item.body.mealSlot ?? item.sourceMealSlot),
+          resolvedGrams: "125.5",
+          occurredAt:
+            item.operationKind === "repeat"
+              ? item.body.occurredAt
+              : (item.body.occurredAt ?? occurredAt),
+          localDate:
+            item.operationKind === "update" && item.body.occurredAt ? "2026-08-15" : item.localDate,
+          timeZone,
+          localTime: "08:30:00",
+          position: 0,
+          nutrients: [],
+          note: item.operationKind === "update" ? (item.body.note ?? null) : null,
+        };
+  const affectedDays = diaryOutboxAffectedLocalDates(item).map((localDate) => ({
+    localDate,
+    revision: "9",
+  }));
+  return {
+    data: {
+      replayed,
+      entry,
+      affectedDays,
+      receipt: {
+        protocol: "v1",
+        operationId: item.operationId,
+        kind: item.operationKind,
+        expectedSubjects: [{ entryId: item.entryId, revision: item.expectedEntryRevision }],
+        resultSubjects: [
+          {
+            entryId: resultEntryId,
+            revision: resultRevision,
+            state: item.operationKind === "delete" ? "deleted" : "active",
+          },
+        ],
+        affectedDays,
+      },
+    },
+  };
 }
 
 describe("protected public-food quick-add outbox journal", () => {
@@ -693,6 +863,531 @@ describe("closed mixed diary-log outbox envelopes", () => {
   });
 });
 
+describe("durable v3 diary corrections and atomic order", () => {
+  it("derives fixed correction routes, methods, revisions, and conditional zone guards", async () => {
+    const update = parseQuickAddOutboxItem({
+      ...createDiaryCorrectionOutboxDraft(
+        owner,
+        timeZone,
+        correctionInput("update"),
+        operationId(41),
+        new Date("2026-08-15T13:31:00.000Z"),
+      ),
+      sequence: 0,
+      blocked: null,
+    });
+    const moved = parseQuickAddOutboxItem({
+      ...createDiaryCorrectionOutboxDraft(
+        owner,
+        timeZone,
+        correctionInput("update", { body: { occurredAt, mealSlot: "lunch" } }),
+        operationId(42),
+        new Date("2026-08-15T13:31:00.000Z"),
+      ),
+      sequence: 1,
+      blocked: null,
+    });
+    const deleted = parseQuickAddOutboxItem({
+      ...createDiaryCorrectionOutboxDraft(
+        owner,
+        timeZone,
+        correctionInput("delete"),
+        operationId(43),
+        new Date("2026-08-15T13:31:00.000Z"),
+      ),
+      sequence: 2,
+      blocked: null,
+    });
+    const repeated = parseQuickAddOutboxItem({
+      ...createDiaryCorrectionOutboxDraft(
+        owner,
+        timeZone,
+        correctionInput("repeat"),
+        operationId(44),
+        new Date("2026-08-15T13:31:00.000Z"),
+      ),
+      sequence: 3,
+      blocked: null,
+    });
+
+    expect(diaryOutboxRequest(update)).toMatchObject({
+      method: "PATCH",
+      path: `/v1/diary/entries/${confirmedEntryId}?diaryCorrectionProtocol=v1`,
+      expectedRevision: "3",
+      sendExpectedTimeZone: false,
+    });
+    expect(diaryOutboxRequest(moved)).toMatchObject({
+      method: "PATCH",
+      path: `/v1/diary/entries/${confirmedEntryId}?diaryCorrectionProtocol=v1&profileTimeZonePrecondition=v1`,
+      sendExpectedTimeZone: true,
+    });
+    expect(diaryOutboxRequest(deleted)).toEqual({
+      method: "DELETE",
+      path: `/v1/diary/entries/${confirmedEntryId}?diaryCorrectionProtocol=v1`,
+      body: undefined,
+      expectedRevision: "3",
+      sendExpectedTimeZone: false,
+    });
+    expect(diaryOutboxRequest(repeated)).toMatchObject({
+      method: "POST",
+      path: `/v1/diary/corrections/entries/${confirmedEntryId}/repeat?profileTimeZonePrecondition=v1`,
+      expectedRevision: "3",
+      sendExpectedTimeZone: true,
+    });
+  });
+
+  it("keeps note patches lossless only within the reviewed slot and rejects unknown dependencies", () => {
+    const short = createDiaryCorrectionOutboxDraft(
+      owner,
+      timeZone,
+      correctionInput("update", { body: { note: "exact 🙂 note" } }),
+      operationId(45),
+      new Date("2026-08-15T13:31:00.000Z"),
+    );
+    expect(short.version === 3 && short.operationKind === "update" && short.body.note).toBe(
+      "exact 🙂 note",
+    );
+    expect(() =>
+      createDiaryCorrectionOutboxDraft(
+        owner,
+        timeZone,
+        correctionInput("update", { body: { note: "🙂".repeat(500) } }),
+        operationId(46),
+        new Date("2026-08-15T13:31:00.000Z"),
+      ),
+    ).toThrow(DiaryOutboxCapacityError);
+    expect(() =>
+      parseQuickAddOutboxItem({
+        ...short,
+        sequence: 0,
+        blocked: null,
+        dependsOnOperationId: operationId(1),
+      }),
+    ).toThrow(/envelope|discriminant/u);
+  });
+
+  it("enforces serialized entry and day dependencies without splitting the FIFO", async () => {
+    const entryStore = createQuickAddOutboxStore({
+      storage: new MemoryProtectedStore(),
+      lockKey: "v3-entry-dependency",
+    });
+    await entryStore.append(
+      owner,
+      createDiaryCorrectionOutboxDraft(
+        owner,
+        timeZone,
+        correctionInput("update"),
+        operationId(47),
+        new Date("2026-08-15T13:31:00.000Z"),
+      ),
+    );
+    await expect(
+      entryStore.append(
+        owner,
+        createDiaryCorrectionOutboxDraft(
+          owner,
+          timeZone,
+          correctionInput("repeat"),
+          operationId(48),
+          new Date("2026-08-15T13:32:00.000Z"),
+        ),
+      ),
+    ).rejects.toMatchObject({
+      name: "DiaryOutboxDependencyError",
+      reason: "entry_correction_pending",
+    });
+    await expect(
+      entryStore.append(
+        owner,
+        createDiaryCorrectionOutboxDraft(
+          owner,
+          timeZone,
+          correctionInput("delete"),
+          operationId(49),
+          new Date("2026-08-15T13:32:00.000Z"),
+        ),
+      ),
+    ).rejects.toMatchObject({
+      name: "DiaryOutboxDependencyError",
+      reason: "entry_correction_pending",
+    });
+
+    const occupiedDayStore = createQuickAddOutboxStore({
+      storage: new MemoryProtectedStore(),
+      lockKey: "v3-occupied-day",
+    });
+    await occupiedDayStore.append(owner, await draft(50));
+    await expect(
+      occupiedDayStore.append(
+        owner,
+        createDiaryCorrectionOutboxDraft(
+          owner,
+          timeZone,
+          reorderInput(),
+          operationId(51),
+          new Date("2026-08-15T13:32:00.000Z"),
+        ),
+      ),
+    ).rejects.toMatchObject({ reason: "day_has_pending_operation" });
+
+    const orderedDayStore = createQuickAddOutboxStore({
+      storage: new MemoryProtectedStore(),
+      lockKey: "v3-reordered-day",
+    });
+    await orderedDayStore.append(
+      owner,
+      createDiaryCorrectionOutboxDraft(
+        owner,
+        timeZone,
+        reorderInput(),
+        operationId(52),
+        new Date("2026-08-15T13:32:00.000Z"),
+      ),
+    );
+    await expect(
+      orderedDayStore.append(
+        owner,
+        createDiaryCorrectionOutboxDraft(
+          owner,
+          timeZone,
+          correctionInput("repeat", {
+            localDate: "2026-08-16",
+            occurredAt: "2026-08-16T13:30:00.000Z",
+          }),
+          operationId(53),
+          new Date("2026-08-15T13:33:00.000Z"),
+        ),
+      ),
+    ).rejects.toMatchObject({ reason: "day_reorder_pending" });
+  });
+
+  it("rejects pre-source-date v3 repeat envelopes instead of guessing their dependencies", () => {
+    const repeat = createDiaryCorrectionOutboxDraft(
+      owner,
+      timeZone,
+      correctionInput("repeat"),
+      operationId(54),
+      new Date("2026-08-15T13:31:00.000Z"),
+    );
+    if (repeat.version !== 3 || repeat.operationKind !== "repeat") {
+      throw new TypeError("Expected a v3 repeat draft.");
+    }
+    const { sourceLocalDate: _sourceLocalDate, ...preSourceDateEnvelope } = repeat;
+
+    expect(() =>
+      parseQuickAddOutboxItem({
+        ...preSourceDateEnvelope,
+        sequence: 0,
+        blocked: null,
+      }),
+    ).toThrow(/discriminant/u);
+  });
+
+  it("rejects reorder target day, then repeat another-day source into target day", async () => {
+    const store = createQuickAddOutboxStore({
+      storage: new MemoryProtectedStore(),
+      lockKey: "v3-repeat-target-reordered",
+    });
+    await store.append(
+      owner,
+      createDiaryCorrectionOutboxDraft(
+        owner,
+        timeZone,
+        reorderInput({ localDate: "2026-08-16" }),
+        operationId(55),
+        new Date("2026-08-15T13:31:00.000Z"),
+      ),
+    );
+
+    await expect(
+      store.append(
+        owner,
+        createDiaryCorrectionOutboxDraft(
+          owner,
+          timeZone,
+          correctionInput("repeat", {
+            localDate: "2026-08-16",
+            occurredAt: "2026-08-16T13:30:00.000Z",
+          }),
+          operationId(56),
+          new Date("2026-08-15T13:32:00.000Z"),
+        ),
+      ),
+    ).rejects.toMatchObject({ reason: "day_reorder_pending" });
+  });
+
+  it("fits a 50-entry permutation and requires exact strong correction receipts", async () => {
+    const fullPermutation = Array.from({ length: 50 }, (_, index) => 49 - index);
+    const reorderDraft = createDiaryCorrectionOutboxDraft(
+      owner,
+      timeZone,
+      reorderInput({ groups: { breakfast: fullPermutation, lunch: [], dinner: [], snacks: [] } }),
+      operationId(53),
+      new Date("2026-08-15T13:31:00.000Z"),
+    );
+    expect(
+      new TextEncoder().encode(JSON.stringify({ ...reorderDraft, sequence: 0, blocked: null }))
+        .byteLength,
+    ).toBeLessThanOrEqual(1_600);
+    expect(() =>
+      parseQuickAddOutboxItem({
+        ...reorderDraft,
+        sequence: 0,
+        blocked: null,
+        body: { groups: { breakfast: ["1", "0"], lunch: [], dinner: [], snacks: [] } },
+      }),
+    ).toThrow(TypeError);
+
+    for (const [offset, kind] of (["repeat", "update", "delete"] as const).entries()) {
+      const item = parseQuickAddOutboxItem({
+        ...createDiaryCorrectionOutboxDraft(
+          owner,
+          timeZone,
+          correctionInput(kind),
+          operationId(54 + offset),
+          new Date("2026-08-15T13:31:00.000Z"),
+        ),
+        sequence: offset,
+        blocked: null,
+      });
+      const responseBody = correctionReceiptBody(item);
+      const mutation = parseDiaryMutation(responseBody);
+      expect(
+        matchesDiaryOutboxReceipt(item, kind === "repeat" ? 201 : 200, mutation, responseBody),
+      ).toBe(true);
+      expect(
+        matchesDiaryOutboxReceipt(item, kind === "repeat" ? 201 : 200, mutation, {
+          ...(responseBody as Record<string, unknown>),
+          data: {
+            ...(responseBody as { data: Record<string, unknown> }).data,
+            receipt: {
+              ...(responseBody as { data: { receipt: Record<string, unknown> } }).data.receipt,
+              operationId: operationId(99),
+            },
+          },
+        }),
+      ).toBe(false);
+      if (kind === "repeat") {
+        if (item.version !== 3 || item.operationKind !== "repeat") {
+          throw new TypeError("Expected a v3 repeat item.");
+        }
+        const data = (responseBody as { data: Record<string, unknown> }).data;
+        const entry = data.entry as Record<string, unknown>;
+        const receipt = data.receipt as Record<string, unknown>;
+        const resultSubject = (receipt.resultSubjects as Record<string, unknown>[])[0];
+        if (!resultSubject) throw new TypeError("Expected one repeat result subject.");
+        const tamperedRevisionBody = {
+          data: {
+            ...data,
+            entry: { ...entry, revision: "2" },
+            receipt: {
+              ...receipt,
+              resultSubjects: [{ ...resultSubject, revision: "2" }],
+            },
+          },
+        };
+        expect(
+          matchesDiaryOutboxReceipt(
+            item,
+            201,
+            parseDiaryMutation(tamperedRevisionBody),
+            tamperedRevisionBody,
+          ),
+        ).toBe(false);
+
+        for (const tamperedEntryId of [item.entryId.toUpperCase(), "not-a-uuid"]) {
+          const tamperedIdentityBody = {
+            data: {
+              ...data,
+              entry: { ...entry, id: tamperedEntryId },
+              receipt: {
+                ...receipt,
+                resultSubjects: [{ ...resultSubject, entryId: tamperedEntryId }],
+              },
+            },
+          };
+          expect(
+            matchesDiaryOutboxReceipt(
+              item,
+              201,
+              parseDiaryMutation(tamperedIdentityBody),
+              tamperedIdentityBody,
+            ),
+          ).toBe(false);
+        }
+      } else {
+        expect(
+          matchesDiaryOutboxReceipt(item, 200, mutation, {
+            ...(responseBody as Record<string, unknown>),
+            data: {
+              ...(responseBody as { data: Record<string, unknown> }).data,
+              receipt: {
+                ...(responseBody as { data: { receipt: Record<string, unknown> } }).data.receipt,
+                resultSubjects: [
+                  {
+                    entryId: confirmedEntryId,
+                    revision: "5",
+                    state: kind === "delete" ? "deleted" : "active",
+                  },
+                ],
+              },
+            },
+          }),
+        ).toBe(false);
+      }
+    }
+  });
+
+  it("sends one atomic reorder with distinct profile/day zones and accepts only its strong receipt", async () => {
+    const store = createQuickAddOutboxStore({
+      storage: new MemoryProtectedStore(),
+      lockKey: "v3-reorder-controller",
+    });
+    const requests: Array<{ readonly url: string; readonly init: RequestInit }> = [];
+    let calls = 0;
+    const controller = controllerFor(store, async (url, init) => {
+      calls += 1;
+      requests.push({ url: url.toString(), init });
+      const head = (await store.snapshot(owner)).items[0];
+      if (head?.version !== 3 || head.operationKind !== "reorder") {
+        throw new TypeError("Expected the durable reorder head.");
+      }
+      return new Response(
+        JSON.stringify({
+          data: {
+            replayed: calls > 1,
+            receipt: {
+              operationId: calls === 1 ? operationId(99) : head.operationId,
+              localDate: head.localDate,
+              timeZone: head.dayTimeZone,
+              expectedDayRevision: head.expectedDayRevision,
+              resultingDayRevision: "9",
+              previousOrderDigest: head.expectedOrderDigest,
+              orderDigest: head.expectedResultOrderDigest,
+              groups: [
+                {
+                  mealSlot: "breakfast",
+                  entries: [
+                    {
+                      entryId: "85d7fa63-4e26-42de-a1f8-0683ce268f63",
+                      entryRevision: "4",
+                      position: 0,
+                    },
+                    {
+                      entryId: confirmedEntryId,
+                      entryRevision: "3",
+                      position: 1,
+                    },
+                  ],
+                },
+                { mealSlot: "lunch", entries: [] },
+                { mealSlot: "dinner", entries: [] },
+                { mealSlot: "snacks", entries: [] },
+              ],
+            },
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    });
+    const queued = await controller.enqueueOperation(
+      reorderInput({ dayTimeZone: "America/New_York" }),
+    );
+
+    await controller.requestDrain(queued.operationId);
+
+    expect(controller.getState()).toMatchObject({ status: "unavailable", reason: "response" });
+    expect((await store.snapshot(owner)).items).toEqual([queued]);
+    const first = requests[0];
+    if (!first) throw new TypeError("Expected an atomic reorder request.");
+    const headers = new Headers(first.init.headers);
+    expect(first.url).toBe(
+      "https://api.example.test/v1/diary/days/2026-08-15/order?profileTimeZonePrecondition=v1",
+    );
+    expect(first.init.method).toBe("PUT");
+    expect(first.init.body).toBe(
+      JSON.stringify({ groups: { breakfast: [1, 0], lunch: [], dinner: [], snacks: [] } }),
+    );
+    expect(headers.get("if-match")).toBe('"8"');
+    expect(headers.get("x-expected-profile-time-zone")).toBe("America/Chicago");
+    expect(headers.get("x-expected-diary-order-digest")).toBe("a".repeat(64));
+
+    await controller.requestDrain();
+
+    expect(calls).toBe(2);
+    expect((await store.snapshot(owner)).items).toEqual([]);
+    expect(controller.getState()).toEqual({ status: "idle", pendingCount: 0 });
+    controller.close();
+  });
+
+  it("keeps a reorder queued when returned groups contradict their advertised digest", async () => {
+    const store = createQuickAddOutboxStore({
+      storage: new MemoryProtectedStore(),
+      lockKey: "v3-reorder-tampered-groups",
+    });
+    let receipts = 0;
+    const controller = controllerFor(
+      store,
+      async () => {
+        const head = (await store.snapshot(owner)).items[0];
+        if (head?.version !== 3 || head.operationKind !== "reorder") {
+          throw new TypeError("Expected the durable reorder head.");
+        }
+        return new Response(
+          JSON.stringify({
+            data: {
+              replayed: false,
+              receipt: {
+                operationId: head.operationId,
+                localDate: head.localDate,
+                timeZone: head.dayTimeZone,
+                expectedDayRevision: head.expectedDayRevision,
+                resultingDayRevision: "9",
+                previousOrderDigest: head.expectedOrderDigest,
+                orderDigest: head.expectedResultOrderDigest,
+                groups: [
+                  {
+                    mealSlot: "breakfast",
+                    entries: [
+                      {
+                        entryId: "85d7fa63-4e26-42de-a1f8-0683ce268f63",
+                        entryRevision: "5",
+                        position: 0,
+                      },
+                      {
+                        entryId: confirmedEntryId,
+                        entryRevision: "3",
+                        position: 1,
+                      },
+                    ],
+                  },
+                  { mealSlot: "lunch", entries: [] },
+                  { mealSlot: "dinner", entries: [] },
+                  { mealSlot: "snacks", entries: [] },
+                ],
+              },
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      },
+      {
+        onReceipt: () => {
+          receipts += 1;
+        },
+      },
+    );
+    const queued = await controller.enqueueOperation(reorderInput());
+
+    await controller.requestDrain(queued.operationId);
+
+    expect(controller.getState()).toMatchObject({ status: "unavailable", reason: "response" });
+    expect((await store.snapshot(owner)).items).toEqual([queued]);
+    expect(receipts).toBe(0);
+    controller.close();
+  });
+});
+
 function controllerFor(
   store: ReturnType<typeof createQuickAddOutboxStore>,
   fetcher: (input: URL, init: RequestInit) => Promise<Response>,
@@ -702,6 +1397,7 @@ function controllerFor(
     readonly onReceipt?: (receipt: QuickAddReceipt) => void | Promise<void>;
     readonly onUnauthorized?: () => Promise<void>;
     readonly firstOperationId?: number;
+    readonly sha256Hex?: (payload: string) => Promise<string>;
   },
 ) {
   let nextOperationId = overrides?.firstOperationId ?? 1;
@@ -714,6 +1410,7 @@ function controllerFor(
     accessToken: () => "in-memory-bearer-sentinel",
     isForeground: overrides?.foreground ?? (() => true),
     operationId: () => operationId(nextOperationId++),
+    sha256Hex: overrides?.sha256Hex ?? testSha256Hex,
     now: () => new Date("2026-08-15T13:31:00.000Z"),
     onFatalStoreError: overrides?.onFatalStoreError ?? (async () => undefined),
     onUnauthorized: overrides?.onUnauthorized ?? (async () => undefined),
@@ -796,6 +1493,7 @@ describe("foreground public-food quick-add outbox controller", () => {
     ];
 
     for (const item of items) {
+      if (item.version === 3) throw new TypeError("Expected a v2 log item.");
       const created = parseDiaryMutation(receiptBody(item, false));
       const replayed = parseDiaryMutation(receiptBody(item, true));
       expect(matchesDiaryOutboxReceipt(item, 201, created)).toBe(true);
@@ -1192,6 +1890,7 @@ describe("foreground public-food quick-add outbox controller", () => {
     );
     const first = await controller.enqueue(input(1));
     const second = await controller.enqueue(input(2));
+    if (first.version === 3) throw new TypeError("Expected a legacy log item.");
     foreground = true;
     const firstDrain = controller.requestDrain(first.operationId);
     const duplicateDrain = controller.requestDrain(second.operationId);
@@ -1326,7 +2025,7 @@ describe("foreground public-food quick-add outbox controller", () => {
       foodName: first.display.foodName,
       servingLabel: first.display.servingLabel,
       localDate: first.localDate,
-      mealSlot: first.body.mealSlot,
+      mealSlot: diaryOutboxDisplayMealSlot(first),
     });
     expect((await store.snapshot(owner)).items[0]?.blocked).toEqual({
       kind: "terminal_http",

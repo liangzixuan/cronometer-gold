@@ -14,6 +14,7 @@ import {
   type DiaryMutationResult,
   type DiaryPage,
   defaultDiaryGroups,
+  diaryCorrectionMatchesRequest,
   diaryEditErrorMessage,
   diaryEditorOperationKey,
   diaryEditorOrigin,
@@ -21,6 +22,7 @@ import {
   diaryEntryNoteCharacterCount,
   diaryGroupLabel,
   diaryPagePath,
+  diaryRepeatOperationKey,
   entryEnergyDisplay,
   isDiaryPageStaleProblem,
   isLocalDate,
@@ -33,10 +35,12 @@ import {
   mergeDiaryPages,
   moveDiaryGroup,
   nutrientDisplay,
-  parseDiaryMutation,
+  parseDiaryCorrectionMutation,
+  parseDiaryDayReorder,
   parseDiaryPage,
   parseProfileResponse,
   parseSession,
+  prepareDiaryDayReorderOperation,
   prepareDiaryEntryNotePatch,
   prepareDiaryGroups,
   quoteRevision,
@@ -85,15 +89,17 @@ function responseCode(value: unknown): string | null {
   return typeof code === "string" ? code : null;
 }
 
-function editState(entry: DiaryEntry, day: DiaryDay): EntryEditor {
-  const localTime = entry.localTime.slice(0, 5);
+function editState(entry: DiaryEntry, day: DiaryDay, currentProfileTimeZone: string): EntryEditor {
+  const occurredAt = new Date(entry.occurredAt);
+  const localDate = localDateInTimeZone(occurredAt, currentProfileTimeZone);
+  const localTime = localTimeInTimeZone(occurredAt, currentProfileTimeZone).slice(0, 5);
   return {
-    ...diaryEditorOrigin(day, entry),
-    originalEntryLocalDate: entry.localDate,
+    ...diaryEditorOrigin(day, entry, currentProfileTimeZone),
+    originalEntryLocalDate: localDate,
     quantity: entry.portion.kind === "serving" ? entry.portion.amount : entry.portion.grams,
     note: entry.note ?? "",
     mealSlot: entry.mealSlot,
-    localDate: entry.localDate,
+    localDate,
     localTime,
     originalLocalTime: localTime,
   };
@@ -128,6 +134,7 @@ export function DiaryClient() {
   const operationIds = useRef(new Map<string, string>());
   const loadController = useRef<AbortController | null>(null);
   const profileController = useRef<AbortController | null>(null);
+  const timeZoneRefreshController = useRef<AbortController | null>(null);
   const pageRequestBusy = useRef(false);
   const requestGeneration = useRef(0);
   const statusRef = useRef<HTMLParagraphElement | null>(null);
@@ -140,6 +147,8 @@ export function DiaryClient() {
   sessionRef.current = session;
   const dateRef = useRef(date);
   dateRef.current = date;
+  const diaryPageRef = useRef(diaryPage);
+  diaryPageRef.current = diaryPage;
   const diary = diaryPage?.data.localDate === date ? diaryPage.data : null;
   const diaryGroups = session?.profile.diaryGroups ?? defaultDiaryGroups;
 
@@ -153,6 +162,8 @@ export function DiaryClient() {
     loadController.current?.abort();
     profileController.current?.abort();
     profileController.current = null;
+    timeZoneRefreshController.current?.abort();
+    timeZoneRefreshController.current = null;
     pageRequestBusy.current = false;
     operationIds.current.clear();
     setDiaryPage(null);
@@ -322,6 +333,8 @@ export function DiaryClient() {
       privateUiGeneration.current += 1;
       profileController.current?.abort();
       profileController.current = null;
+      timeZoneRefreshController.current?.abort();
+      timeZoneRefreshController.current = null;
     },
     [],
   );
@@ -439,6 +452,44 @@ export function DiaryClient() {
     setMessage(reloaded ? successMessage : reloadFailureMessage);
   }
 
+  async function refreshProfileAfterTimeZoneChange(owner: MutationOwner): Promise<string | null> {
+    timeZoneRefreshController.current?.abort();
+    const controller = new AbortController();
+    timeZoneRefreshController.current = controller;
+    const originalUserId = sessionRef.current?.user.id ?? null;
+    try {
+      const response = await fetch("/api/auth/me", {
+        headers: { accept: "application/json" },
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (response.status === 401) {
+        signInAgain();
+        return null;
+      }
+      const body = await json(response);
+      if (!response.ok) return null;
+      const nextSession = parseSession(body);
+      if (
+        controller.signal.aborted ||
+        !mutationIsCurrent(owner) ||
+        (originalUserId !== null && nextSession.user.id !== originalUserId)
+      ) {
+        if (originalUserId !== null && nextSession.user.id !== originalUserId) signInAgain();
+        return null;
+      }
+      setSession(nextSession);
+      setDiaryGroupDraft(nextSession.profile.diaryGroups);
+      return nextSession.profile.timeZone;
+    } catch {
+      return null;
+    } finally {
+      if (timeZoneRefreshController.current === controller) {
+        timeZoneRefreshController.current = null;
+      }
+    }
+  }
+
   async function saveEntry() {
     if (!editor || !diary) return;
     const entry = diary.entries.find((candidate) => candidate.id === editor.entryId);
@@ -447,7 +498,7 @@ export function DiaryClient() {
       setMessage("That entry is no longer present. Fresh diary data is required.");
       return;
     }
-    if (!diaryEditorOriginMatches(editor, diary, entry)) {
+    if (!diaryEditorOriginMatches(editor, diary, entry, session?.profile.timeZone ?? null)) {
       setEditor(null);
       setMessage(
         "The diary changed after editing began. Review the fresh entry before editing again.",
@@ -493,15 +544,17 @@ export function DiaryClient() {
           : {}),
       };
       const key = diaryEditorOperationKey(editor, body);
+      const requestOperationId = operationId(key);
       const response = await fetch(
-        `/api/diary/entries/${encodeURIComponent(editor.entryId)}?date=${encodeURIComponent(editor.originLocalDate)}`,
+        `/api/diary/entries/${encodeURIComponent(editor.entryId)}?date=${encodeURIComponent(editor.originLocalDate)}${timestampChanged ? "&profileTimeZonePrecondition=v1" : ""}`,
         {
           method: "PATCH",
           headers: {
             accept: "application/json",
             "content-type": "application/json",
-            "idempotency-key": operationId(key),
+            "idempotency-key": requestOperationId,
             "if-match": quoteRevision(editor.originEntryRevision),
+            ...(timestampChanged ? { "x-expected-profile-time-zone": editor.originTimeZone } : {}),
           },
           body: JSON.stringify(body),
           cache: "no-store",
@@ -509,6 +562,24 @@ export function DiaryClient() {
       );
       if (response.status === 401) return signInAgain();
       const responseBody = await json(response);
+      if (
+        timestampChanged &&
+        response.status === 409 &&
+        responseCode(responseBody) === "DIARY_TIME_ZONE_CHANGED"
+      ) {
+        operationIds.current.delete(key);
+        if (!mutationIsCurrent(owner)) return;
+        setEditor(null);
+        const currentTimeZone = await refreshProfileAfterTimeZoneChange(owner);
+        if (!mutationIsCurrent(owner)) return;
+        await loadDiary(owner.sourceDate);
+        if (mutationIsCurrent(owner)) {
+          setMessage(
+            `Your profile time zone changed${currentTimeZone ? ` to ${currentTimeZone}` : ""}. No edit was made; review the local date and time before saving again.`,
+          );
+        }
+        return;
+      }
       if (response.status === 412) {
         operationIds.current.delete(key);
         if (!mutationIsCurrent(owner)) return;
@@ -525,7 +596,20 @@ export function DiaryClient() {
       }
       if (!response.ok)
         throw new Error(responseError(responseBody, "The entry could not be saved."));
-      const mutation = parseDiaryMutation(responseBody);
+      const mutation = parseDiaryCorrectionMutation(responseBody);
+      if (
+        !diaryCorrectionMatchesRequest(mutation, {
+          body,
+          entryId: editor.entryId,
+          entryRevision: editor.originEntryRevision,
+          expectedTimeZone: timestampChanged ? editor.originTimeZone : null,
+          kind: "update",
+          operationId: requestOperationId,
+          sourceLocalDate: editor.originLocalDate,
+        })
+      ) {
+        throw new TypeError("The server returned a correction receipt for a different edit.");
+      }
       operationIds.current.delete(key);
       if (!mutationIsCurrent(owner)) return;
       setEditor(null);
@@ -552,6 +636,7 @@ export function DiaryClient() {
       return;
     }
     const key = `delete:${entry.id}:${diary.revision}`;
+    const requestOperationId = operationId(key);
     const owner = beginMutation(diary.localDate, entry.id);
     setMessage("Deleting the diary entry…");
     try {
@@ -561,7 +646,7 @@ export function DiaryClient() {
           method: "DELETE",
           headers: {
             accept: "application/json",
-            "idempotency-key": operationId(key),
+            "idempotency-key": requestOperationId,
             "if-match": quoteRevision(entry.revision),
           },
           cache: "no-store",
@@ -583,7 +668,20 @@ export function DiaryClient() {
         return;
       }
       if (!response.ok) throw new Error(responseError(body, "The entry could not be deleted."));
-      const mutation = parseDiaryMutation(body);
+      const mutation = parseDiaryCorrectionMutation(body);
+      if (
+        !diaryCorrectionMatchesRequest(mutation, {
+          body: null,
+          entryId: entry.id,
+          entryRevision: entry.revision,
+          expectedTimeZone: null,
+          kind: "delete",
+          operationId: requestOperationId,
+          sourceLocalDate: owner.sourceDate,
+        })
+      ) {
+        throw new TypeError("The server returned a correction receipt for a different deletion.");
+      }
       operationIds.current.delete(key);
       await reportMutationReceipt(
         owner,
@@ -614,23 +712,41 @@ export function DiaryClient() {
       occurredAt: localDateTimeToInstant(targetDate, targetTime, session.profile.timeZone),
       mealSlot: entry.mealSlot,
     };
-    const key = `repeat:${entry.id}:${entry.revision}:${JSON.stringify(body)}`;
+    const key = diaryRepeatOperationKey(entry.id, entry.revision, session.profile.timeZone, body);
+    const requestOperationId = operationId(key);
     const owner = beginMutation(diary.localDate, entry.id);
     setMessage(`Repeating the pinned ${entryName(entry)} version…`);
     try {
-      const response = await fetch(`/api/diary/entries/${encodeURIComponent(entry.id)}/repeat`, {
-        method: "POST",
-        headers: {
-          accept: "application/json",
-          "content-type": "application/json",
-          "idempotency-key": operationId(key),
-          "if-match": quoteRevision(entry.revision),
+      const response = await fetch(
+        `/api/diary/entries/${encodeURIComponent(entry.id)}/repeat?date=${encodeURIComponent(owner.sourceDate)}&profileTimeZonePrecondition=v1`,
+        {
+          method: "POST",
+          headers: {
+            accept: "application/json",
+            "content-type": "application/json",
+            "idempotency-key": requestOperationId,
+            "if-match": quoteRevision(entry.revision),
+            "x-expected-profile-time-zone": session.profile.timeZone,
+          },
+          body: JSON.stringify(body),
+          cache: "no-store",
         },
-        body: JSON.stringify(body),
-        cache: "no-store",
-      });
+      );
       if (response.status === 401) return signInAgain();
       const responseBody = await json(response);
+      if (response.status === 409 && responseCode(responseBody) === "DIARY_TIME_ZONE_CHANGED") {
+        operationIds.current.delete(key);
+        if (!mutationIsCurrent(owner)) return;
+        const currentTimeZone = await refreshProfileAfterTimeZoneChange(owner);
+        if (!mutationIsCurrent(owner)) return;
+        await loadDiary(owner.sourceDate);
+        if (mutationIsCurrent(owner)) {
+          setMessage(
+            `Your profile time zone changed${currentTimeZone ? ` to ${currentTimeZone}` : ""}. Nothing was repeated; review the destination day before trying again.`,
+          );
+        }
+        return;
+      }
       if (response.status === 412) {
         operationIds.current.delete(key);
         if (!mutationIsCurrent(owner)) return;
@@ -647,7 +763,20 @@ export function DiaryClient() {
       if (!response.ok) {
         throw new Error(responseError(responseBody, "The entry could not be repeated."));
       }
-      const mutation = parseDiaryMutation(responseBody);
+      const mutation = parseDiaryCorrectionMutation(responseBody);
+      if (
+        !diaryCorrectionMatchesRequest(mutation, {
+          body,
+          entryId: entry.id,
+          entryRevision: entry.revision,
+          expectedTimeZone: session.profile.timeZone,
+          kind: "repeat",
+          operationId: requestOperationId,
+          sourceLocalDate: owner.sourceDate,
+        })
+      ) {
+        throw new TypeError("The server returned a correction receipt for a different repeat.");
+      }
       operationIds.current.delete(key);
       const repeatedDate = mutation.entry?.localDate ?? targetDate;
       await reportMutationReceipt(
@@ -662,6 +791,105 @@ export function DiaryClient() {
       if (mutationIsCurrent(owner)) {
         setMessage(
           `${error instanceof Error ? error.message : "The entry could not be repeated."} Choose Repeat again to retry the same operation safely.`,
+        );
+      }
+    } finally {
+      finishMutation(owner);
+    }
+  }
+
+  async function reorderEntry(entry: DiaryEntry, direction: "down" | "up") {
+    const sourcePage = diaryPage;
+    if (!sourcePage || sourcePage.data.localDate !== date || !diary || !session) {
+      setMessage("Your current profile time zone is required before changing diary order.");
+      return;
+    }
+    const owner = beginMutation(diary.localDate, entry.id);
+    setMessage(`Moving ${entryName(entry)} ${direction}…`);
+    try {
+      const operation = await prepareDiaryDayReorderOperation(
+        sourcePage,
+        session.profile.timeZone,
+        entry.id,
+        direction,
+      );
+      if (!mutationIsCurrent(owner) || diaryPageRef.current !== sourcePage) {
+        setMessage("The diary changed while the order was being prepared. Review the fresh day.");
+        return;
+      }
+      const key = `reorder:${owner.sourceDate}:${operation.expectedDayRevision}:${operation.expectedProfileTimeZone}:${operation.expectedOrderDigest}:${operation.expectedResultOrderDigest}`;
+      const requestOperationId = operationId(key);
+      const response = await fetch(
+        `/api/diary/days/${encodeURIComponent(owner.sourceDate)}/order?profileTimeZonePrecondition=v1`,
+        {
+          method: "PUT",
+          headers: {
+            accept: "application/json",
+            "content-type": "application/json",
+            "idempotency-key": requestOperationId,
+            "if-match": quoteRevision(operation.expectedDayRevision),
+            "x-expected-diary-order-digest": operation.expectedOrderDigest,
+            "x-expected-profile-time-zone": operation.expectedProfileTimeZone,
+          },
+          body: JSON.stringify(operation.body),
+          cache: "no-store",
+        },
+      );
+      if (response.status === 401) return signInAgain();
+      const responseBody = await json(response);
+      if (response.status === 412) {
+        operationIds.current.delete(key);
+        if (!mutationIsCurrent(owner)) return;
+        const reloaded = await loadDiary(owner.sourceDate);
+        if (mutationIsCurrent(owner)) {
+          setMessage(
+            reloaded
+              ? "The diary order changed elsewhere. The complete day was refreshed; move it again if needed."
+              : "The diary order changed elsewhere, but fresh data could not be confirmed. Choose Retry.",
+          );
+        }
+        return;
+      }
+      if (response.status === 409 && responseCode(responseBody) === "DIARY_TIME_ZONE_CHANGED") {
+        operationIds.current.delete(key);
+        if (!mutationIsCurrent(owner)) return;
+        const currentTimeZone = await refreshProfileAfterTimeZoneChange(owner);
+        if (!mutationIsCurrent(owner)) return;
+        await loadDiary(owner.sourceDate);
+        if (mutationIsCurrent(owner)) {
+          setMessage(
+            `Your profile time zone changed${currentTimeZone ? ` to ${currentTimeZone}` : ""}. The order was not changed; review this day before trying again.`,
+          );
+        }
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(responseError(responseBody, "The diary order could not be saved."));
+      }
+      const result = parseDiaryDayReorder(responseBody);
+      if (
+        result.receipt.operationId !== requestOperationId ||
+        result.receipt.localDate !== owner.sourceDate ||
+        result.receipt.timeZone !== operation.dayTimeZone ||
+        result.receipt.expectedDayRevision !== operation.expectedDayRevision ||
+        result.receipt.previousOrderDigest !== operation.expectedOrderDigest ||
+        result.receipt.orderDigest !== operation.expectedResultOrderDigest
+      ) {
+        throw new TypeError("The server returned a receipt for a different diary order.");
+      }
+      operationIds.current.delete(key);
+      const reloaded = await loadDiary(owner.sourceDate);
+      if (mutationIsCurrent(owner)) {
+        setMessage(
+          reloaded
+            ? `${entryName(entry)} moved ${direction}; the complete authoritative day was refreshed.`
+            : "The order was saved, but fresh diary data could not be confirmed. Choose Retry.",
+        );
+      }
+    } catch (error) {
+      if (mutationIsCurrent(owner)) {
+        setMessage(
+          `${error instanceof Error ? error.message : "The diary order could not be saved."} Choose Move again to retry safely.`,
         );
       }
     } finally {
@@ -789,6 +1017,11 @@ export function DiaryClient() {
       })
     : false;
   const controlsBusy = mutationBusy !== null || profileBusy;
+  const completeDayLoaded =
+    diaryPage !== null &&
+    diaryPage.data.localDate === date &&
+    diaryPage.page.nextCursor === null &&
+    diaryPage.data.entries.length === diaryPage.page.totalEntries;
 
   return (
     <>
@@ -839,7 +1072,7 @@ export function DiaryClient() {
             </h1>
           </div>
           <span className="statusPill">
-            {diary?.timeZone ?? session?.profile.timeZone ?? "Local time"}
+            {session?.profile.timeZone ?? diary?.timeZone ?? "Local time"}
           </span>
         </header>
 
@@ -1031,10 +1264,15 @@ export function DiaryClient() {
         ) : null}
 
         {diary && diaryPage && state === "ready" ? (
-          <p className="diaryPageCount" id="diary-page-count">
-            {diary.entries.length} of {diaryPage.page.totalEntries} entries loaded. Nutrition totals
-            include all {diaryPage.page.totalEntries}.
-          </p>
+          <>
+            <p className="diaryPageCount" id="diary-page-count">
+              {diary.entries.length} of {diaryPage.page.totalEntries} entries loaded. Nutrition
+              totals include all {diaryPage.page.totalEntries}.
+            </p>
+            {!completeDayLoaded ? (
+              <p className="fieldHelp">Load the complete day before changing entry order.</p>
+            ) : null}
+          </>
         ) : null}
 
         {diary && diaryPage?.page.totalEntries === 0 && state === "ready" ? (
@@ -1084,7 +1322,7 @@ export function DiaryClient() {
                       </p>
                     ) : (
                       <ul>
-                        {entries.map((entry) => (
+                        {entries.map((entry, entryIndex) => (
                           <li key={entry.id}>
                             {editor?.entryId === entry.id ? (
                               <div className="entryEditor">
@@ -1243,9 +1481,47 @@ export function DiaryClient() {
                                 </div>
                                 <div className="entryActions">
                                   <button
+                                    aria-label={`Move ${entryName(entry)} up within ${group.label}`}
+                                    disabled={
+                                      mutationBusy !== null ||
+                                      editor !== null ||
+                                      diary.status === "locked" ||
+                                      !completeDayLoaded ||
+                                      entryIndex === 0
+                                    }
+                                    onClick={() => void reorderEntry(entry, "up")}
+                                    type="button"
+                                  >
+                                    Move up
+                                  </button>
+                                  <button
+                                    aria-label={`Move ${entryName(entry)} down within ${group.label}`}
+                                    disabled={
+                                      mutationBusy !== null ||
+                                      editor !== null ||
+                                      diary.status === "locked" ||
+                                      !completeDayLoaded ||
+                                      entryIndex === entries.length - 1
+                                    }
+                                    onClick={() => void reorderEntry(entry, "down")}
+                                    type="button"
+                                  >
+                                    Move down
+                                  </button>
+                                  <button
                                     aria-label={`Edit ${entryName(entry)}`}
-                                    disabled={mutationBusy !== null || diary.status === "locked"}
-                                    onClick={() => setEditor(editState(entry, diary))}
+                                    disabled={
+                                      mutationBusy !== null ||
+                                      diary.status === "locked" ||
+                                      session === null
+                                    }
+                                    onClick={() => {
+                                      if (session) {
+                                        setEditor(
+                                          editState(entry, diary, session.profile.timeZone),
+                                        );
+                                      }
+                                    }}
                                     type="button"
                                   >
                                     Edit

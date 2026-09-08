@@ -1666,7 +1666,7 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
       expect(goalProgress).toMatchObject({
         diaryRevision: "48",
         localDate: diaryLocalDate,
-        timeZone: "Asia/Tokyo",
+        timeZone: "America/Chicago",
       });
       expect(goalProgress.energy).toMatchObject({
         amountInterpretation: "lower_bound",

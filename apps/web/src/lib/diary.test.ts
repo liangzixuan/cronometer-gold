@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   defaultDiaryGroups,
+  diaryCorrectionMatchesRequest,
+  diaryDayOrderDigest,
   diaryEditErrorMessage,
   diaryEditorOperationKey,
   diaryEditorOrigin,
@@ -9,6 +11,7 @@ import {
   diaryEntryNoteCharacterCount,
   diaryGroupLabel,
   diaryPagePath,
+  diaryRepeatOperationKey,
   entryEnergyDisplay,
   isDiaryPageStaleProblem,
   isLocalDate,
@@ -16,12 +19,16 @@ import {
   mergeDiaryPages,
   moveDiaryGroup,
   nutrientDisplay,
+  parseDiaryCorrectionMutation,
   parseDiaryDay,
+  parseDiaryDayReorder,
   parseDiaryGroups,
   parseDiaryMutation,
   parseDiaryPage,
   parseProfileResponse,
   parseSession,
+  prepareDiaryDayReorder,
+  prepareDiaryDayReorderOperation,
   prepareDiaryEntryNote,
   prepareDiaryEntryNotePatch,
   prepareDiaryGroups,
@@ -50,6 +57,8 @@ const nutrient = {
     withheld: 0,
   },
 } as const;
+
+const arbitraryDayOrderDigest = "a".repeat(64);
 
 const entry = {
   id: "96aac405-c107-4776-923e-a40ca5014975",
@@ -162,6 +171,7 @@ function diaryPageFixture(
       timeZone: "America/Chicago",
       status: "open",
       revision: "8",
+      orderDigest: "d33348ee457d853020d5d62579569a8a8a592675d9505c51b1f7e588a0a124e8",
       entries,
       totals: [nutrient],
       updatedAt: "2026-08-15T13:31:00.000Z",
@@ -288,6 +298,7 @@ describe("web diary contract", () => {
         timeZone: "America/Chicago",
         status: "open",
         revision: "4",
+        orderDigest: arbitraryDayOrderDigest,
         entries: [entry],
         totals: [nutrient],
         updatedAt: "2026-08-15T13:31:00.000Z",
@@ -307,6 +318,7 @@ describe("web diary contract", () => {
         timeZone: "America/Chicago",
         status: "open",
         revision: "5",
+        orderDigest: arbitraryDayOrderDigest,
         entries: [entry, recipeEntry],
         totals: [nutrient],
         updatedAt: "2026-08-15T13:31:00.000Z",
@@ -327,6 +339,7 @@ describe("web diary contract", () => {
         timeZone: "America/Chicago",
         status: "open",
         revision: "5",
+        orderDigest: arbitraryDayOrderDigest,
         entries: [{ ...entry, note }],
         totals: [nutrient],
         updatedAt: "2026-08-15T13:31:00.000Z",
@@ -343,6 +356,7 @@ describe("web diary contract", () => {
           timeZone: "America/Chicago",
           status: "open",
           revision: "5",
+          orderDigest: arbitraryDayOrderDigest,
           entries: [entryWithoutNote],
           totals: [nutrient],
           updatedAt: "2026-08-15T13:31:00.000Z",
@@ -374,6 +388,7 @@ describe("web diary contract", () => {
         timeZone: "America/Chicago",
         status: "open",
         revision: "4",
+        orderDigest: arbitraryDayOrderDigest,
         entries: [{ ...entry, nutrients: [{ ...nutrient, knownAmount }] }],
         totals: [{ ...nutrient, knownAmount }],
         updatedAt: "2026-08-15T13:31:00.000Z",
@@ -392,6 +407,7 @@ describe("web diary contract", () => {
         timeZone: "America/Chicago",
         status: "open",
         revision: "5",
+        orderDigest: arbitraryDayOrderDigest,
         entries: [
           {
             ...recipeEntry,
@@ -419,6 +435,7 @@ describe("web diary contract", () => {
           timeZone: "America/Chicago",
           status: "open",
           revision: "4",
+          orderDigest: arbitraryDayOrderDigest,
           entries: [{ ...entry, portion: portionWithoutLabel }],
           totals: [nutrient],
           updatedAt: "2026-08-15T13:31:00.000Z",
@@ -436,6 +453,7 @@ describe("web diary contract", () => {
           timeZone: "America/Chicago",
           status: "open",
           revision: "51",
+          orderDigest: arbitraryDayOrderDigest,
           entries: Array.from({ length: 51 }, () => entry),
           totals: [nutrient],
           updatedAt: "2026-08-15T13:31:00.000Z",
@@ -453,6 +471,7 @@ describe("web diary contract", () => {
           timeZone: "UTC",
           status: "open",
           revision: "0",
+          orderDigest: arbitraryDayOrderDigest,
           entries: [],
           totals: [{ ...nutrient, contributorCount: 9 }],
           updatedAt: null,
@@ -467,6 +486,7 @@ describe("web diary contract", () => {
           timeZone: "UTC",
           status: "open",
           revision: "0",
+          orderDigest: arbitraryDayOrderDigest,
           entries: [],
           totals: [{ ...nutrient, completeness: "complete", isExact: true }],
           updatedAt: null,
@@ -533,28 +553,47 @@ describe("web diary contract", () => {
 });
 
 describe("web diary editor snapshot binding", () => {
-  it("binds edits to the original entry and day revisions, date, and zone", () => {
+  it("binds edits to entry/day revisions and the separate current profile zone", () => {
     const day = parseDiaryPage(diaryPageFixture([entry], null, 1)).data;
     const parsedEntry = day.entries[0];
     if (!parsedEntry) throw new Error("Expected a diary entry fixture.");
-    const origin = diaryEditorOrigin(day, parsedEntry);
+    const origin = diaryEditorOrigin(day, parsedEntry, "America/Denver");
 
     expect(origin).toEqual({
       entryId: entry.id,
       originEntryRevision: "3",
       originLocalDate: "2026-08-15",
-      originTimeZone: "America/Chicago",
+      originTimeZone: "America/Denver",
       originDayRevision: "8",
     });
-    expect(diaryEditorOriginMatches(origin, day, parsedEntry)).toBe(true);
-    expect(diaryEditorOriginMatches(origin, { ...day, revision: "9" }, parsedEntry)).toBe(false);
-    expect(diaryEditorOriginMatches(origin, { ...day, localDate: "2026-08-16" }, parsedEntry)).toBe(
-      false,
-    );
-    expect(diaryEditorOriginMatches(origin, { ...day, timeZone: "UTC" }, parsedEntry)).toBe(false);
-    expect(diaryEditorOriginMatches(origin, day, { ...parsedEntry, revision: "4" })).toBe(false);
+    expect(diaryEditorOriginMatches(origin, day, parsedEntry, "America/Denver")).toBe(true);
+    expect(
+      diaryEditorOriginMatches(origin, { ...day, revision: "9" }, parsedEntry, "America/Denver"),
+    ).toBe(false);
+    expect(
+      diaryEditorOriginMatches(
+        origin,
+        { ...day, localDate: "2026-08-16" },
+        parsedEntry,
+        "America/Denver",
+      ),
+    ).toBe(false);
+    expect(
+      diaryEditorOriginMatches(origin, { ...day, timeZone: "UTC" }, parsedEntry, "America/Denver"),
+    ).toBe(true);
+    expect(diaryEditorOriginMatches(origin, day, parsedEntry, "UTC")).toBe(false);
+    expect(
+      diaryEditorOriginMatches(origin, day, { ...parsedEntry, revision: "4" }, "America/Denver"),
+    ).toBe(false);
     expect(diaryEditorOperationKey(origin, { mealSlot: "lunch" })).toBe(
       `edit:${entry.id}:3:8:{"mealSlot":"lunch"}`,
+    );
+    const repeatBody = { occurredAt: "2026-08-15T18:00:00.000Z", mealSlot: "lunch" };
+    const chicagoRepeat = diaryRepeatOperationKey(entry.id, "3", "America/Chicago", repeatBody);
+    const newYorkRepeat = diaryRepeatOperationKey(entry.id, "3", "America/New_York", repeatBody);
+    expect(chicagoRepeat).not.toBe(newYorkRepeat);
+    expect(chicagoRepeat).toBe(
+      `repeat:${entry.id}:3:America/Chicago:{"occurredAt":"2026-08-15T18:00:00.000Z","mealSlot":"lunch"}`,
     );
   });
 });
@@ -612,6 +651,384 @@ describe("web diary pagination", () => {
         parseDiaryPage(diaryPageFixture(numberedEntries(21, 20), null, 40, { revision: "9" })),
       ),
     ).toThrow(TypeError);
+  });
+});
+
+describe("atomic diary entry ordering", () => {
+  const completeDay = () =>
+    parseDiaryPage(
+      diaryPageFixture(
+        [
+          ...numberedEntries(1, 3),
+          ...numberedEntries(4, 2).map((item) => ({ ...item, mealSlot: "lunch" })),
+        ],
+        null,
+        5,
+      ),
+    );
+
+  const requiredEntryId = (page: ReturnType<typeof completeDay>, index: number): string => {
+    const entry = page.data.entries[index];
+    if (!entry) throw new Error(`Missing test diary entry at index ${index}.`);
+    return entry.id;
+  };
+
+  it("encodes a complete within-meal move as compact baseline indices", () => {
+    const page = completeDay();
+    const moved = prepareDiaryDayReorder(page, requiredEntryId(page, 1), "up");
+    expect(moved).toEqual({
+      expectedDayRevision: "8",
+      dayTimeZone: "America/Chicago",
+      body: {
+        groups: {
+          breakfast: [1, 0, 2],
+          lunch: [0, 1],
+          dinner: [],
+          snacks: [],
+        },
+      },
+    });
+  });
+
+  it("binds compact reorder intent to exact pre- and post-operation digests", async () => {
+    const page = completeDay();
+    const moved = await prepareDiaryDayReorderOperation(
+      page,
+      "America/Denver",
+      requiredEntryId(page, 1),
+      "up",
+    );
+    expect(moved.expectedProfileTimeZone).toBe("America/Denver");
+    expect(moved.dayTimeZone).toBe("America/Chicago");
+    expect(moved.expectedOrderDigest).toMatch(/^[0-9a-f]{64}$/u);
+    expect(moved.expectedResultOrderDigest).toMatch(/^[0-9a-f]{64}$/u);
+    expect(moved.expectedOrderDigest).toBe(
+      "d33348ee457d853020d5d62579569a8a8a592675d9505c51b1f7e588a0a124e8",
+    );
+    expect(moved.expectedResultOrderDigest).toBe(
+      "6a2d01106e01280585fce93967841c4e3629f8d9fc07ce7f76268565c22b107b",
+    );
+    expect(moved.expectedResultOrderDigest).not.toBe(moved.expectedOrderDigest);
+
+    const resultGroups = [
+      {
+        mealSlot: "breakfast" as const,
+        entries: [
+          { entryId: requiredEntryId(page, 1), entryRevision: "4", position: 0 },
+          { entryId: requiredEntryId(page, 0), entryRevision: "3", position: 1 },
+          { entryId: requiredEntryId(page, 2), entryRevision: "4", position: 2 },
+        ],
+      },
+      {
+        mealSlot: "lunch" as const,
+        entries: [
+          { entryId: requiredEntryId(page, 3), entryRevision: "4", position: 0 },
+          { entryId: requiredEntryId(page, 4), entryRevision: "4", position: 1 },
+        ],
+      },
+      { mealSlot: "dinner" as const, entries: [] },
+      { mealSlot: "snacks" as const, entries: [] },
+    ] as const;
+    expect(await diaryDayOrderDigest(page.data.localDate, page.data.timeZone, resultGroups)).toBe(
+      moved.expectedResultOrderDigest,
+    );
+  });
+
+  it("refuses partial pages, locked days, missing entries, and meal boundaries", () => {
+    const partial = parseDiaryPage(diaryPageFixture(numberedEntries(1, 2), "d1.next", 3));
+    expect(() => prepareDiaryDayReorder(partial, requiredEntryId(partial, 0), "down")).toThrow(
+      "complete diary day",
+    );
+    const complete = completeDay();
+    expect(() =>
+      prepareDiaryDayReorder(
+        { ...complete, data: { ...complete.data, status: "locked" } },
+        requiredEntryId(complete, 0),
+        "down",
+      ),
+    ).toThrow("Locked diary days");
+    expect(() =>
+      prepareDiaryDayReorder(complete, "ffffffff-ffff-4fff-8fff-ffffffffffff", "down"),
+    ).toThrow("not in the loaded day");
+    expect(() => prepareDiaryDayReorder(complete, requiredEntryId(complete, 0), "up")).toThrow(
+      "cannot move up",
+    );
+  });
+});
+
+describe("durable diary correction and reorder receipts", () => {
+  const affectedDays = [{ localDate: "2026-08-15", revision: "9" }] as const;
+  const operationId = "61eec75e-fe16-47e4-9f7b-efb6914ad9dc"; // gitleaks:allow -- fixture UUID
+
+  it("retains an exact strong update receipt and rejects a mismatched result subject", () => {
+    const response = {
+      data: {
+        replayed: false,
+        entry: { ...entry, revision: "4" },
+        affectedDays,
+        receipt: {
+          protocol: "v1",
+          operationId,
+          kind: "update",
+          expectedSubjects: [{ entryId: entry.id, revision: "3" }],
+          resultSubjects: [{ entryId: entry.id, revision: "4", state: "active" }],
+          affectedDays,
+        },
+      },
+    };
+    const mutation = parseDiaryCorrectionMutation(response);
+    expect(mutation.receipt).toMatchObject({
+      operationId,
+      kind: "update",
+      expectedSubjects: [{ entryId: entry.id, revision: "3" }],
+      resultSubjects: [{ entryId: entry.id, revision: "4", state: "active" }],
+    });
+    expect(
+      diaryCorrectionMatchesRequest(mutation, {
+        body: {
+          portion: { kind: "serving", servingId: "303", amount: "1.0" },
+          mealSlot: "breakfast",
+          occurredAt: "2026-08-15T13:30:00.000Z",
+          position: 0,
+          note: null,
+        },
+        entryId: entry.id,
+        entryRevision: "3",
+        expectedTimeZone: "America/Chicago",
+        kind: "update",
+        operationId,
+        sourceLocalDate: "2026-08-15",
+      }),
+    ).toBe(true);
+    for (const requestMismatch of [
+      { portion: { kind: "serving", servingId: "303", amount: "2" } },
+      { mealSlot: "lunch" },
+      { occurredAt: "2026-08-15T14:30:00.000Z" },
+      { position: 1 },
+      { note: "different note" },
+    ] as const) {
+      expect(
+        diaryCorrectionMatchesRequest(mutation, {
+          body: requestMismatch,
+          entryId: entry.id,
+          entryRevision: "3",
+          expectedTimeZone: "occurredAt" in requestMismatch ? "America/Chicago" : null,
+          kind: "update",
+          operationId,
+          sourceLocalDate: "2026-08-15",
+        }),
+      ).toBe(false);
+    }
+    const skippedRevision = parseDiaryCorrectionMutation({
+      ...response,
+      data: {
+        ...response.data,
+        entry: { ...response.data.entry, revision: "5" },
+        receipt: {
+          ...response.data.receipt,
+          resultSubjects: [{ entryId: entry.id, revision: "5", state: "active" }],
+        },
+      },
+    });
+    expect(
+      diaryCorrectionMatchesRequest(skippedRevision, {
+        body: { note: null },
+        entryId: entry.id,
+        entryRevision: "3",
+        expectedTimeZone: null,
+        kind: "update",
+        operationId,
+        sourceLocalDate: "2026-08-15",
+      }),
+    ).toBe(false);
+    expect(() =>
+      parseDiaryCorrectionMutation({
+        ...response,
+        data: {
+          ...response.data,
+          receipt: {
+            ...response.data.receipt,
+            resultSubjects: [{ entryId: entry.id, revision: "5", state: "active" }],
+          },
+        },
+      }),
+    ).toThrow("did not match");
+  });
+
+  it("binds delete and repeat results to the exact requested revision, fields, day, and zone", () => {
+    const deletion = parseDiaryCorrectionMutation({
+      data: {
+        replayed: false,
+        entry: null,
+        affectedDays,
+        receipt: {
+          protocol: "v1",
+          operationId,
+          kind: "delete",
+          expectedSubjects: [{ entryId: entry.id, revision: "3" }],
+          resultSubjects: [{ entryId: entry.id, revision: "4", state: "deleted" }],
+          affectedDays,
+        },
+      },
+    });
+    expect(
+      diaryCorrectionMatchesRequest(deletion, {
+        body: null,
+        entryId: entry.id,
+        entryRevision: "3",
+        expectedTimeZone: null,
+        kind: "delete",
+        operationId,
+        sourceLocalDate: "2026-08-15",
+      }),
+    ).toBe(true);
+    expect(
+      diaryCorrectionMatchesRequest(
+        parseDiaryCorrectionMutation({
+          data: {
+            replayed: false,
+            entry: null,
+            affectedDays,
+            receipt: {
+              ...deletion.receipt,
+              resultSubjects: [{ entryId: entry.id, revision: "5", state: "deleted" }],
+            },
+          },
+        }),
+        {
+          body: null,
+          entryId: entry.id,
+          entryRevision: "3",
+          expectedTimeZone: null,
+          kind: "delete",
+          operationId,
+          sourceLocalDate: "2026-08-15",
+        },
+      ),
+    ).toBe(false);
+
+    const repeatedEntryId = "018f6f58-4e2c-7b62-8f0b-3d75491713b5";
+    const repeatedAt = "2026-08-16T13:30:00.000Z";
+    const repeatedAffectedDays = [{ localDate: "2026-08-16", revision: "1" }] as const;
+    const repeatResponse = {
+      data: {
+        replayed: false,
+        entry: {
+          ...entry,
+          id: repeatedEntryId,
+          revision: "1",
+          mealSlot: "lunch",
+          occurredAt: repeatedAt,
+          localDate: "2026-08-16",
+        },
+        affectedDays: repeatedAffectedDays,
+        receipt: {
+          protocol: "v1",
+          operationId,
+          kind: "repeat",
+          expectedSubjects: [{ entryId: entry.id, revision: "3" }],
+          resultSubjects: [{ entryId: repeatedEntryId, revision: "1", state: "active" }],
+          affectedDays: repeatedAffectedDays,
+        },
+      },
+    } as const;
+    const repeat = parseDiaryCorrectionMutation(repeatResponse);
+    const repeatEvidence = {
+      body: { occurredAt: repeatedAt, mealSlot: "lunch" },
+      entryId: entry.id,
+      entryRevision: "3",
+      expectedTimeZone: "America/Chicago",
+      kind: "repeat",
+      operationId,
+      sourceLocalDate: "2026-08-15",
+    } as const;
+    expect(diaryCorrectionMatchesRequest(repeat, repeatEvidence)).toBe(true);
+    for (const entryPatch of [
+      { mealSlot: "dinner" },
+      { occurredAt: "2026-08-16T14:30:00.000Z" },
+      { localDate: "2026-08-15" },
+      { timeZone: "America/Denver" },
+    ] as const) {
+      expect(
+        diaryCorrectionMatchesRequest(
+          parseDiaryCorrectionMutation({
+            ...repeatResponse,
+            data: {
+              ...repeatResponse.data,
+              entry: { ...repeatResponse.data.entry, ...entryPatch },
+            },
+          }),
+          repeatEvidence,
+        ),
+      ).toBe(false);
+    }
+    for (const identityPatch of [
+      { id: entry.id, revision: "1" },
+      { id: repeatedEntryId, revision: "2" },
+    ] as const) {
+      expect(
+        diaryCorrectionMatchesRequest(
+          parseDiaryCorrectionMutation({
+            ...repeatResponse,
+            data: {
+              ...repeatResponse.data,
+              entry: { ...repeatResponse.data.entry, ...identityPatch },
+              receipt: {
+                ...repeatResponse.data.receipt,
+                resultSubjects: [
+                  {
+                    entryId: identityPatch.id,
+                    revision: identityPatch.revision,
+                    state: "active",
+                  },
+                ],
+              },
+            },
+          }),
+          repeatEvidence,
+        ),
+      ).toBe(false);
+    }
+  });
+
+  it("requires canonical complete groups and contiguous positions in a reorder receipt", () => {
+    const groups = [
+      {
+        mealSlot: "breakfast",
+        entries: [{ entryId: entry.id, entryRevision: "4", position: 0 }],
+      },
+      { mealSlot: "lunch", entries: [] },
+      { mealSlot: "dinner", entries: [] },
+      { mealSlot: "snacks", entries: [] },
+    ];
+    const response = {
+      data: {
+        replayed: false,
+        receipt: {
+          operationId,
+          localDate: "2026-08-15",
+          timeZone: "America/Chicago",
+          expectedDayRevision: "8",
+          resultingDayRevision: "9",
+          previousOrderDigest: "a".repeat(64),
+          orderDigest: "b".repeat(64),
+          groups,
+        },
+      },
+    };
+    expect(parseDiaryDayReorder(response).receipt.groups[0]?.entries[0]?.entryId).toBe(entry.id);
+    expect(() =>
+      parseDiaryDayReorder({
+        ...response,
+        data: {
+          ...response.data,
+          receipt: {
+            ...response.data.receipt,
+            groups: [groups[1], groups[0], groups[2], groups[3]],
+          },
+        },
+      }),
+    ).toThrow("group");
   });
 });
 

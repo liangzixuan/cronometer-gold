@@ -14,9 +14,9 @@ import {
   isLocalDate,
   localDateInTimeZone,
   type MealSlot,
-  parseDiaryDay,
   parseDiaryMutation,
   parseSession,
+  type SessionSummary,
 } from "../../lib/diary";
 import {
   buildSearchRequestPath,
@@ -138,6 +138,69 @@ function responseMessage(value: unknown, fallback: string): string {
   return typeof candidate === "string" && candidate.length <= 500 ? candidate : fallback;
 }
 
+export class RecipeOwnerFenceError extends Error {
+  constructor() {
+    super("The signed-in account changed while private recipe data was loading.");
+    this.name = "RecipeOwnerFenceError";
+  }
+}
+
+/**
+ * Keeps the private response and its state transition on one side of the owner check.
+ * The install callback is deliberately unreachable until a second server-authenticated
+ * session read confirms the same user that initiated the request.
+ */
+export async function installRecipePrivateDataForOwner<T>(input: {
+  readonly expectedOwnerUserId: string;
+  readonly loadPrivateData: () => Promise<T>;
+  readonly revalidateSession: () => Promise<SessionSummary>;
+  readonly install: (data: T, session: SessionSummary) => void;
+  readonly signal?: AbortSignal;
+}): Promise<void> {
+  const data = await input.loadPrivateData();
+  input.signal?.throwIfAborted();
+  const session = await input.revalidateSession();
+  input.signal?.throwIfAborted();
+  if (session.user.id !== input.expectedOwnerUserId) throw new RecipeOwnerFenceError();
+  input.install(data, session);
+}
+
+/** A typed time-zone conflict proves no write occurred, so its stale retry must not survive. */
+export function fenceRecipeLogForTimeZoneChange(
+  pending: Map<string, StableMutation<RecipeLogBody>>,
+  operation: StableMutation<RecipeLogBody>,
+  status: number,
+  body: unknown,
+): boolean {
+  const changed =
+    status === 409 &&
+    typeof body === "object" &&
+    body !== null &&
+    !Array.isArray(body) &&
+    "code" in body &&
+    body.code === "DIARY_TIME_ZONE_CHANGED";
+  if (!changed) return false;
+  if (pending.get(operation.intentKey) === operation) pending.delete(operation.intentKey);
+  return true;
+}
+
+export function recipeLogTimeZoneReviewMessage(
+  localDate: string,
+  currentTimeZone: string | null,
+): string {
+  return currentTimeZone
+    ? `Your profile time zone changed to ${currentTimeZone}. This recipe was not logged. Review ${localDate} as a local day in that zone, then confirm the day before logging again.`
+    : "Your profile time zone changed. This recipe was not logged, and its stale retry was cleared. Current account settings could not be reloaded; refresh this page, then review the local diary day before logging again.";
+}
+
+export function recipeProfileRefreshBelongsToOwner(
+  initiatingUserId: string,
+  activeUserId: string | null,
+  refreshedUserId: string,
+): boolean {
+  return activeUserId === initiatingUserId && refreshedUserId === initiatingUserId;
+}
+
 function ingredientRequest(ingredient: RecipeIngredientDraft, position: number) {
   if (ingredient.kind === "recipe") {
     return {
@@ -220,6 +283,7 @@ export function RecipesClient() {
     requestedDate && isLocalDate(requestedDate) ? requestedDate : "",
   );
   const [timeZone, setTimeZone] = useState<string | null>(null);
+  const [dateReviewRequired, setDateReviewRequired] = useState(false);
   const [recipes, setRecipes] = useState<readonly RecipeSummaryView[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [selected, setSelected] = useState<RecipeView | null>(null);
@@ -238,48 +302,150 @@ export function RecipesClient() {
     new Map<string, StableMutation<ReturnType<typeof recipeBodyFromBuilder>>>(),
   );
   const pendingLogs = useRef(new Map<string, StableMutation<RecipeLogBody>>());
+  const privateReadControllers = useRef(new Set<AbortController>());
+  const profileRefreshController = useRef<AbortController | null>(null);
+  const ownerUserId = useRef<string | null>(null);
+  const privateUiClosed = useRef(false);
 
   const recipeBody = useCallback(() => recipeBodyFromBuilder(builder), [builder]);
 
   const signInAgain = useCallback(() => {
+    privateUiClosed.current = true;
+    for (const controller of privateReadControllers.current) controller.abort();
+    privateReadControllers.current.clear();
+    profileRefreshController.current?.abort();
+    ownerUserId.current = null;
+    pendingSaves.current.clear();
+    pendingLogs.current.clear();
+    setDate("");
+    setTimeZone(null);
+    setDateReviewRequired(false);
+    setRecipes([]);
+    setNextCursor(null);
+    setSelected(null);
+    setBuilder(emptyBuilder());
+    setState("loading");
+    setMessage("Closing your private recipe workspace…");
+    setBusy(null);
+    setQuery("");
+    setFoodResults([]);
+    setSearchState("idle");
+    setMealSlot(defaultMealForTime());
+    setDiaryGroups(defaultDiaryGroups);
+    setLogKind("serving");
+    setLogAmount("1");
     router.replace("/login");
     router.refresh();
   }, [router]);
 
+  const revalidateRecipeSession = useCallback(async (signal: AbortSignal) => {
+    try {
+      const response = await fetch("/api/auth/me", {
+        headers: { accept: "application/json" },
+        cache: "no-store",
+        signal,
+      });
+      if (!response.ok) throw new RecipeOwnerFenceError();
+      return parseSession(await responseJson(response));
+    } catch (error) {
+      if (signal.aborted) throw error;
+      if (error instanceof RecipeOwnerFenceError) throw error;
+      throw new RecipeOwnerFenceError();
+    }
+  }, []);
+
   const loadRecipes = useCallback(
     async (cursor: string | null = null) => {
+      if (privateUiClosed.current) return;
+      const initiatingOwnerUserId = ownerUserId.current;
+      if (initiatingOwnerUserId === null) return;
+      const controller = new AbortController();
+      privateReadControllers.current.add(controller);
       setState("loading");
       try {
         const requestPath =
           cursor === null
             ? "/api/recipes?limit=50"
             : `/api/recipes?limit=50&cursor=${encodeURIComponent(cursor)}`;
-        const response = await fetch(requestPath, {
-          headers: { accept: "application/json" },
-          cache: "no-store",
+        await installRecipePrivateDataForOwner({
+          expectedOwnerUserId: initiatingOwnerUserId,
+          signal: controller.signal,
+          loadPrivateData: async () => {
+            const response = await fetch(requestPath, {
+              headers: { accept: "application/json" },
+              cache: "no-store",
+              signal: controller.signal,
+            });
+            if (response.status === 401) throw new RecipeOwnerFenceError();
+            const body = await responseJson(response);
+            if (!response.ok)
+              throw new Error(responseMessage(body, "Recipes could not be loaded."));
+            return parseRecipeCollection(body);
+          },
+          revalidateSession: () => revalidateRecipeSession(controller.signal),
+          install: (page) => {
+            if (privateUiClosed.current || ownerUserId.current !== initiatingOwnerUserId) {
+              throw new RecipeOwnerFenceError();
+            }
+            setRecipes((current) => {
+              const merged = mergeRecipePage(current, page.data, cursor !== null);
+              setMessage(
+                merged.length === 0
+                  ? "No recipes yet."
+                  : `${merged.length} recipes loaded${page.nextCursor ? "; more available" : ""}.`,
+              );
+              return merged;
+            });
+            setNextCursor(page.nextCursor);
+            setState("ready");
+          },
         });
-        if (response.status === 401) return signInAgain();
-        const body = await responseJson(response);
-        if (!response.ok) throw new Error(responseMessage(body, "Recipes could not be loaded."));
-        const page = parseRecipeCollection(body);
-        setRecipes((current) => {
-          const merged = mergeRecipePage(current, page.data, cursor !== null);
-          setMessage(
-            merged.length === 0
-              ? "No recipes yet."
-              : `${merged.length} recipes loaded${page.nextCursor ? "; more available" : ""}.`,
-          );
-          return merged;
-        });
-        setNextCursor(page.nextCursor);
-        setState("ready");
       } catch (caught) {
+        if (controller.signal.aborted) return;
+        if (caught instanceof RecipeOwnerFenceError) return signInAgain();
         setState("error");
         setMessage(caught instanceof Error ? caught.message : "Recipes could not be loaded.");
+      } finally {
+        privateReadControllers.current.delete(controller);
       }
     },
-    [signInAgain],
+    [revalidateRecipeSession, signInAgain],
   );
+
+  async function refreshRecipeProfileAfterTimeZoneChange(
+    initiatingUserId: string,
+  ): Promise<string | null> {
+    profileRefreshController.current?.abort();
+    const controller = new AbortController();
+    profileRefreshController.current = controller;
+    try {
+      const response = await fetch("/api/auth/me", {
+        headers: { accept: "application/json" },
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (response.status === 401) {
+        signInAgain();
+        return null;
+      }
+      if (!response.ok) return null;
+      const session = parseSession(await responseJson(response));
+      if (controller.signal.aborted || privateUiClosed.current) return null;
+      if (
+        !recipeProfileRefreshBelongsToOwner(initiatingUserId, ownerUserId.current, session.user.id)
+      ) {
+        signInAgain();
+        return null;
+      }
+      setTimeZone(session.profile.timeZone);
+      setDiaryGroups(session.profile.diaryGroups);
+      return session.profile.timeZone;
+    } catch {
+      return null;
+    } finally {
+      if (profileRefreshController.current === controller) profileRefreshController.current = null;
+    }
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -296,22 +462,15 @@ export function RecipesClient() {
           requestedDate && isLocalDate(requestedDate)
             ? requestedDate
             : localDateInTimeZone(new Date(), session.profile.timeZone);
-        let authoritativeZone = session.profile.timeZone;
-        try {
-          const diaryResponse = await fetch(`/api/diary?date=${encodeURIComponent(localDate)}`, {
-            headers: { accept: "application/json" },
-            cache: "no-store",
-            signal: controller.signal,
-          });
-          if (diaryResponse.ok)
-            authoritativeZone = parseDiaryDay(await responseJson(diaryResponse)).timeZone;
-        } catch {
-          // The authenticated profile zone remains authoritative when no diary exists yet.
-        }
-        if (!controller.signal.aborted) {
+        if (!controller.signal.aborted && !privateUiClosed.current) {
+          if (ownerUserId.current !== null && ownerUserId.current !== session.user.id) {
+            signInAgain();
+            return;
+          }
+          ownerUserId.current = session.user.id;
           setDiaryGroups(session.profile.diaryGroups);
           setDate(localDate);
-          setTimeZone(authoritativeZone);
+          setTimeZone(session.profile.timeZone);
           void loadRecipes();
         }
       } catch {
@@ -321,48 +480,97 @@ export function RecipesClient() {
         }
       }
     })();
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      for (const privateController of privateReadControllers.current) privateController.abort();
+      privateReadControllers.current.clear();
+      profileRefreshController.current?.abort();
+    };
   }, [loadRecipes, requestedDate, signInAgain]);
 
   async function openRecipe(recipeId: string) {
+    const initiatingOwnerUserId = ownerUserId.current;
+    if (initiatingOwnerUserId === null || privateUiClosed.current) return;
+    const controller = new AbortController();
+    privateReadControllers.current.add(controller);
     setBusy(`open:${recipeId}`);
     setMessage("Loading the immutable recipe revision…");
     try {
-      const response = await fetch(`/api/recipes/${encodeURIComponent(recipeId)}`, {
-        headers: { accept: "application/json" },
-        cache: "no-store",
+      await installRecipePrivateDataForOwner({
+        expectedOwnerUserId: initiatingOwnerUserId,
+        signal: controller.signal,
+        loadPrivateData: async () => {
+          const response = await fetch(`/api/recipes/${encodeURIComponent(recipeId)}`, {
+            headers: { accept: "application/json" },
+            cache: "no-store",
+            signal: controller.signal,
+          });
+          if (response.status === 401) throw new RecipeOwnerFenceError();
+          const body = await responseJson(response);
+          if (!response.ok)
+            throw new Error(responseMessage(body, "The recipe could not be loaded."));
+          return parseRecipeResponse(body);
+        },
+        revalidateSession: () => revalidateRecipeSession(controller.signal),
+        install: (recipe) => {
+          if (privateUiClosed.current || ownerUserId.current !== initiatingOwnerUserId) {
+            throw new RecipeOwnerFenceError();
+          }
+          setSelected(recipe);
+          setBuilder(draftFromRecipe(recipe));
+          setLogKind(recipeLogKindFor(recipe));
+          setLogAmount("1");
+          setMessage(`Version ${recipe.versionNumber} loaded.`);
+        },
       });
-      if (response.status === 401) return signInAgain();
-      const body = await responseJson(response);
-      if (!response.ok) throw new Error(responseMessage(body, "The recipe could not be loaded."));
-      const recipe = parseRecipeResponse(body);
-      setSelected(recipe);
-      setBuilder(draftFromRecipe(recipe));
-      setLogKind(recipeLogKindFor(recipe));
-      setLogAmount("1");
-      setMessage(`Version ${recipe.versionNumber} loaded.`);
     } catch (caught) {
+      if (controller.signal.aborted) return;
+      if (caught instanceof RecipeOwnerFenceError) return signInAgain();
       setMessage(caught instanceof Error ? caught.message : "The recipe could not be loaded.");
     } finally {
-      setBusy(null);
+      privateReadControllers.current.delete(controller);
+      if (!privateUiClosed.current) setBusy(null);
     }
   }
 
   async function searchFoods() {
+    const initiatingOwnerUserId = ownerUserId.current;
+    if (initiatingOwnerUserId === null || privateUiClosed.current) return;
+    const controller = new AbortController();
+    privateReadControllers.current.add(controller);
     setSearchState("loading");
     try {
-      const response = await fetch(buildSearchRequestPath({ query, intent: "all" }), {
-        headers: { accept: "application/json" },
+      await installRecipePrivateDataForOwner({
+        expectedOwnerUserId: initiatingOwnerUserId,
+        signal: controller.signal,
+        loadPrivateData: async () => {
+          const response = await fetch(buildSearchRequestPath({ query, intent: "all" }), {
+            headers: { accept: "application/json" },
+            cache: "no-store",
+            signal: controller.signal,
+          });
+          if (response.status === 401) throw new RecipeOwnerFenceError();
+          const body = await responseJson(response);
+          if (!response.ok) throw new Error(responseMessage(body, "Food search is unavailable."));
+          return parseFoodSearchPage(body);
+        },
+        revalidateSession: () => revalidateRecipeSession(controller.signal),
+        install: (page) => {
+          if (privateUiClosed.current || ownerUserId.current !== initiatingOwnerUserId) {
+            throw new RecipeOwnerFenceError();
+          }
+          setFoodResults(page.data);
+          setSearchState("ready");
+        },
       });
-      const body = await responseJson(response);
-      if (!response.ok) throw new Error(responseMessage(body, "Food search is unavailable."));
-      const page = parseFoodSearchPage(body);
-      setFoodResults(page.data);
-      setSearchState("ready");
     } catch (caught) {
+      if (controller.signal.aborted) return;
+      if (caught instanceof RecipeOwnerFenceError) return signInAgain();
       setFoodResults([]);
       setSearchState("error");
       setMessage(caught instanceof Error ? caught.message : "Food search is unavailable.");
+    } finally {
+      privateReadControllers.current.delete(controller);
     }
   }
 
@@ -503,11 +711,21 @@ export function RecipesClient() {
   }
 
   async function logRecipe() {
+    if (dateReviewRequired) {
+      setMessage("Review and confirm the local diary day before logging this recipe again.");
+      return;
+    }
     if (!isLocalDate(date)) {
       setMessage("Diary date must use YYYY-MM-DD and be a real local calendar day.");
       return;
     }
-    if (!selected || !timeZone || !isRecipePositiveDecimal(logAmount)) {
+    const initiatingOwnerUserId = ownerUserId.current;
+    if (
+      !selected ||
+      !timeZone ||
+      initiatingOwnerUserId === null ||
+      !isRecipePositiveDecimal(logAmount)
+    ) {
       setMessage("Choose a positive recipe amount before logging.");
       return;
     }
@@ -533,19 +751,36 @@ export function RecipesClient() {
         createOperationId,
       );
       pendingLogs.current.set(operation.intentKey, operation);
-      const response = await fetch(`/api/recipes/${encodeURIComponent(selected.id)}/log`, {
-        method: "POST",
-        headers: {
-          accept: "application/json",
-          "content-type": "application/json",
-          "idempotency-key": operation.operationId,
+      const response = await fetch(
+        `/api/recipes/${encodeURIComponent(selected.id)}/log?profileTimeZonePrecondition=v1`,
+        {
+          method: "POST",
+          headers: {
+            accept: "application/json",
+            "content-type": "application/json",
+            "idempotency-key": operation.operationId,
+            "x-expected-profile-time-zone": timeZone,
+          },
+          body: JSON.stringify(operation.body),
+          cache: "no-store",
         },
-        body: JSON.stringify(operation.body),
-        cache: "no-store",
-      });
+      );
       if (response.status === 401) return signInAgain();
       const body = await responseJson(response);
-      if (!response.ok) throw new Error(responseMessage(body, "The recipe could not be logged."));
+      if (!response.ok) {
+        if (
+          fenceRecipeLogForTimeZoneChange(pendingLogs.current, operation, response.status, body)
+        ) {
+          setDateReviewRequired(true);
+          setTimeZone(null);
+          const currentTimeZone =
+            await refreshRecipeProfileAfterTimeZoneChange(initiatingOwnerUserId);
+          if (privateUiClosed.current) return;
+          setMessage(recipeLogTimeZoneReviewMessage(date, currentTimeZone));
+          return;
+        }
+        throw new Error(responseMessage(body, "The recipe could not be logged."));
+      }
       const mutation = parseDiaryMutation(body);
       pendingLogs.current.delete(operation.intentKey);
       const loggedDate = mutation.entry?.localDate ?? date;
@@ -562,6 +797,17 @@ export function RecipesClient() {
     } finally {
       setBusy(null);
     }
+  }
+
+  function confirmRecipeDateReview() {
+    if (!timeZone) {
+      setMessage(
+        "Current account settings are unavailable. Refresh this page before confirming a local diary day.",
+      );
+      return;
+    }
+    setDateReviewRequired(false);
+    setMessage(`${date} is confirmed as a local diary day in ${timeZone}. Choose Log when ready.`);
   }
 
   const recipeAttribution = useMemo(
@@ -1021,9 +1267,19 @@ export function RecipesClient() {
                     Interpreted in {timeZone ?? "your verified profile zone"}. The diary snapshot
                     pins recipe version {selected.versionNumber}.
                   </p>
+                  {dateReviewRequired ? (
+                    <button
+                      className="buttonSecondary"
+                      disabled={!timeZone || busy === "log"}
+                      onClick={confirmRecipeDateReview}
+                      type="button"
+                    >
+                      Confirm {date} as local day
+                    </button>
+                  ) : null}{" "}
                   <button
                     className="buttonPrimary"
-                    disabled={busy === "log"}
+                    disabled={busy === "log" || dateReviewRequired || !timeZone}
                     onClick={() => void logRecipe()}
                     type="button"
                   >

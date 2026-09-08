@@ -1,4 +1,4 @@
-import { parseDiaryMutation } from "../../../lib/diary";
+import { isSupportedTimeZone, parseDiaryMutation } from "../../../lib/diary";
 import {
   authenticatedFetch,
   isTrustedMutationRequest,
@@ -50,6 +50,7 @@ interface RouteSpec {
   readonly upstreamPath: string;
   readonly parser: Parser;
   readonly mutation: boolean;
+  readonly requiresProfileTimeZone?: boolean;
   readonly requiresIfMatch?: boolean;
   readonly requiresRecentAuth?: boolean;
   readonly maximumBytes?: number;
@@ -273,7 +274,19 @@ function routeSpec(request: Request, segments: readonly string[]): RouteSpec | n
       };
     }
     if (segments[2] === "log" && method === "POST") {
-      return { upstreamPath: `/v1/${path}`, parser: parseDiaryMutation, mutation: true };
+      const query = exactQuery(
+        request,
+        { profileTimeZonePrecondition: (value) => value === "v1" },
+        ["profileTimeZonePrecondition"],
+      );
+      return query === null
+        ? null
+        : {
+            upstreamPath: `/v1/${path}${query}`,
+            parser: parseDiaryMutation,
+            mutation: true,
+            requiresProfileTimeZone: true,
+          };
     }
   }
   if (path === "biometrics/definitions" && method === "GET") {
@@ -642,6 +655,15 @@ export async function proxyRetentionRequest(
   if (spec.requiresIfMatch && !ifMatch) {
     return privateJsonError(400, "The account request is missing its revision precondition.");
   }
+  const expectedProfileTimeZone = spec.requiresProfileTimeZone
+    ? request.headers.get("x-expected-profile-time-zone")
+    : null;
+  if (
+    spec.requiresProfileTimeZone &&
+    (!expectedProfileTimeZone || !isSupportedTimeZone(expectedProfileTimeZone))
+  ) {
+    return privateJsonError(400, "The account request has an invalid time-zone precondition.");
+  }
   const recentAuth = request.headers.get("x-reauthentication-token");
   if (spec.requiresRecentAuth && (!recentAuth || !RECENT_AUTH.test(recentAuth))) {
     return privateJsonError(
@@ -675,6 +697,9 @@ export async function proxyRetentionRequest(
       ...(body === undefined ? {} : { "content-type": "application/json" }),
       "idempotency-key": idempotencyKey,
       ...(ifMatch ? { "if-match": ifMatch } : {}),
+      ...(spec.requiresProfileTimeZone && expectedProfileTimeZone
+        ? { "x-expected-profile-time-zone": expectedProfileTimeZone }
+        : {}),
       ...(spec.requiresRecentAuth && recentAuth ? { "x-reauthentication-token": recentAuth } : {}),
     },
     ...(body === undefined ? {} : { body }),

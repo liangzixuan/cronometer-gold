@@ -7,16 +7,28 @@ import {
   createDiaryEntryHeadersSchema,
   createDiaryEntryQuerySchema,
   createDiaryEntryRequestSchema,
+  type DiaryCorrectionMutationResponse,
   type DiaryDay,
   type DiaryDayResponse,
   type DiaryEntry,
   type DiaryMutationResponse,
   type DiaryNutrientAggregate,
+  diaryCorrectionMutationResponseSchema,
+  diaryDayOrderDigestPayload,
   diaryDayResponseSchema,
   diaryMutationResponseSchema,
   MAX_DIARY_NOTE_INPUT_CODE_POINTS,
   MAX_NUTRIENT_AGGREGATE_OUTPUT_LENGTH,
+  type ProfileTimeZonePreconditionHeaders,
   problemDetailsSchema,
+  type ReorderDiaryDayHeaders,
+  type ReorderDiaryDayRequest,
+  type ReorderDiaryDayResponse,
+  type RepeatDiaryEntryRequest,
+  reorderDiaryDayHeadersSchema,
+  reorderDiaryDayRequestSchema,
+  reorderDiaryDayResponseSchema,
+  repeatDiaryEntryRequestSchema,
   type UpdateDiaryEntryRequest,
   updateDiaryEntryRequestSchema,
 } from "@nutrition-tracker/contracts";
@@ -65,6 +77,16 @@ export interface DiaryService {
     readonly patch: UpdateDiaryEntryRequest;
     readonly signal?: AbortSignal;
   }): Promise<DiaryMutationResponse>;
+  updateEntryCorrection?(input: {
+    readonly userId: string;
+    readonly entryId: string;
+    readonly expectedRevision: string;
+    readonly clientOperationId: string;
+    readonly requestDigest: string;
+    readonly expectedProfileTimeZone?: string;
+    readonly patch: UpdateDiaryEntryRequest;
+    readonly signal?: AbortSignal;
+  }): Promise<DiaryCorrectionMutationResponse>;
   deleteEntry(input: {
     readonly userId: string;
     readonly entryId: string;
@@ -73,6 +95,35 @@ export interface DiaryService {
     readonly requestDigest: string;
     readonly signal?: AbortSignal;
   }): Promise<DiaryMutationResponse>;
+  deleteEntryCorrection?(input: {
+    readonly userId: string;
+    readonly entryId: string;
+    readonly expectedRevision: string;
+    readonly clientOperationId: string;
+    readonly requestDigest: string;
+    readonly signal?: AbortSignal;
+  }): Promise<DiaryCorrectionMutationResponse>;
+  repeatEntryCorrection?(input: {
+    readonly userId: string;
+    readonly sourceEntryId: string;
+    readonly expectedSourceRevision: string;
+    readonly clientOperationId: string;
+    readonly requestDigest: string;
+    readonly expectedProfileTimeZone: string;
+    readonly request: RepeatDiaryEntryRequest;
+    readonly signal?: AbortSignal;
+  }): Promise<DiaryCorrectionMutationResponse>;
+  reorderDay?(input: {
+    readonly userId: string;
+    readonly localDate: string;
+    readonly expectedDayRevision: string;
+    readonly expectedOrderDigest: string;
+    readonly expectedProfileTimeZone: string;
+    readonly clientOperationId: string;
+    readonly requestDigest: string;
+    readonly groups: ReorderDiaryDayRequest["groups"];
+    readonly signal?: AbortSignal;
+  }): Promise<ReorderDiaryDayResponse>;
 }
 
 export interface DiaryRoutesOptions {
@@ -146,6 +197,19 @@ interface EntryParams {
   entryId: string;
 }
 
+interface DiaryCorrectionQuery {
+  diaryCorrectionProtocol?: "v1";
+  profileTimeZonePrecondition?: "v1";
+}
+
+interface RequiredProfileTimeZoneQuery {
+  profileTimeZonePrecondition: "v1";
+}
+
+interface DayParams {
+  localDate: string;
+}
+
 const dateQuerySchema = {
   type: "object",
   additionalProperties: false,
@@ -176,6 +240,77 @@ const entryParamsSchema = {
       type: "string",
       pattern:
         "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89aAbB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+    },
+  },
+} as const;
+
+const diaryCorrectionQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    diaryCorrectionProtocol: { type: "string", const: "v1" },
+    profileTimeZonePrecondition: { type: "string", const: "v1" },
+  },
+} as const;
+
+const requiredProfileTimeZoneQuerySchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["profileTimeZonePrecondition"],
+  properties: {
+    profileTimeZonePrecondition: { type: "string", const: "v1" },
+  },
+} as const;
+
+const dayParamsSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["localDate"],
+  properties: {
+    localDate: {
+      type: "string",
+      format: "date",
+      pattern: "^(?!0000)[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+    },
+  },
+} as const;
+
+const diaryMutationOrCorrectionResponseSchema = {
+  ...diaryCorrectionMutationResponseSchema,
+  $id: "DiaryMutationOrCorrectionResponse",
+  properties: {
+    data: {
+      ...diaryCorrectionMutationResponseSchema.properties.data,
+      required: ["replayed", "entry", "affectedDays"],
+    },
+  },
+} as const;
+
+// Fastify's response serializer cannot compile the contract's allOf/contains
+// membership assertions; assertReorderResponse enforces the same canonical
+// four-group invariant before this serializer runs.
+const reorderReceiptSchema = reorderDiaryDayResponseSchema.properties.data.properties.receipt;
+const reorderDiaryDayApiResponseSchema = {
+  ...reorderDiaryDayResponseSchema,
+  $id: "ReorderDiaryDayApiResponse",
+  properties: {
+    data: {
+      ...reorderDiaryDayResponseSchema.properties.data,
+      properties: {
+        ...reorderDiaryDayResponseSchema.properties.data.properties,
+        receipt: {
+          ...reorderReceiptSchema,
+          properties: {
+            ...reorderReceiptSchema.properties,
+            groups: {
+              type: "array",
+              minItems: 4,
+              maxItems: 4,
+              items: reorderReceiptSchema.properties.groups.items,
+            },
+          },
+        },
+      },
     },
   },
 } as const;
@@ -214,6 +349,79 @@ async function rejectInvalidDiaryNote(request: FastifyRequest): Promise<void> {
     title: "Bad Request",
     detail: "One or more request fields are invalid.",
     issues: [{ path: "/note", code: "invalid", message: "Invalid value." }],
+    expose: true,
+  });
+}
+
+function invalidCorrectionProtocol(): never {
+  throw new HttpProblem({
+    statusCode: 400,
+    code: "VALIDATION_ERROR",
+    title: "Bad Request",
+    detail: "One or more request fields are invalid.",
+    expose: true,
+  });
+}
+
+async function rejectDiaryCorrectionPreconditions(request: FastifyRequest): Promise<void> {
+  const query = request.query as Readonly<Record<string, unknown>>;
+  const protocol = query.diaryCorrectionProtocol;
+  const timeZoneMarker = query.profileTimeZonePrecondition;
+  const timeZoneHeader = request.headers["x-expected-profile-time-zone"];
+  const body = request.body;
+  const movesAcrossLocalDate =
+    typeof body === "object" &&
+    body !== null &&
+    !Array.isArray(body) &&
+    Object.hasOwn(body, "occurredAt");
+  if (protocol === undefined && timeZoneMarker === undefined && timeZoneHeader === undefined)
+    return;
+  if (protocol !== "v1") invalidCorrectionProtocol();
+  if (
+    movesAcrossLocalDate
+      ? timeZoneMarker === "v1" && typeof timeZoneHeader === "string"
+      : timeZoneMarker === undefined && timeZoneHeader === undefined
+  ) {
+    return;
+  }
+  invalidCorrectionProtocol();
+}
+
+async function rejectDeleteCorrectionPreconditions(request: FastifyRequest): Promise<void> {
+  const query = request.query as Readonly<Record<string, unknown>>;
+  const protocol = query.diaryCorrectionProtocol;
+  const hasTimeZoneSignal =
+    query.profileTimeZonePrecondition !== undefined ||
+    request.headers["x-expected-profile-time-zone"] !== undefined;
+  if (!hasTimeZoneSignal && (protocol === undefined || protocol === "v1")) return;
+  invalidCorrectionProtocol();
+}
+
+async function requireProfileTimeZonePreconditionV1(request: FastifyRequest): Promise<void> {
+  await rejectUnpairedProfileTimeZonePrecondition(request);
+  const query = request.query as Readonly<Record<string, unknown>>;
+  if (
+    query.profileTimeZonePrecondition !== "v1" ||
+    expectedProfileTimeZone(request.headers["x-expected-profile-time-zone"]) === undefined
+  ) {
+    invalidCorrectionProtocol();
+  }
+}
+
+function requireOrderDigest(value: string | string[] | undefined): string {
+  if (typeof value === "string" && /^[0-9a-f]{64}$/u.test(value)) return value;
+  throw new HttpProblem({
+    statusCode: 400,
+    code: "VALIDATION_ERROR",
+    title: "Bad Request",
+    detail: "A lowercase SHA-256 diary order digest header is required.",
+    issues: [
+      {
+        path: "/headers/x-expected-diary-order-digest",
+        code: "invalid",
+        message: "Invalid value.",
+      },
+    ],
     expose: true,
   });
 }
@@ -456,6 +664,146 @@ function assertMutation(result: DiaryMutationResponse): void {
   assertDiaryEntry(result.data.entry);
 }
 
+function invalidPersistenceReceipt(detail: string): never {
+  throw new HttpProblem({
+    statusCode: 500,
+    code: "INTERNAL_ERROR",
+    title: "Invalid diary mutation receipt",
+    detail,
+  });
+}
+
+function isNextRevision(candidate: string, expected: string): boolean {
+  return (
+    /^[1-9][0-9]*$/u.test(candidate) &&
+    /^[1-9][0-9]*$/u.test(expected) &&
+    BigInt(candidate) === BigInt(expected) + 1n
+  );
+}
+
+function assertCorrectionMutation(
+  result: DiaryCorrectionMutationResponse,
+  expected: Readonly<{
+    operationId: string;
+    kind: "delete" | "repeat" | "update";
+    entryId: string;
+    revision: string;
+  }>,
+): void {
+  assertMutation(result);
+  const { receipt } = result.data;
+  if (receipt.expectedSubjects.length !== 1 || receipt.resultSubjects.length !== 1) {
+    invalidPersistenceReceipt("Diary correction receipt subject count is inconsistent.");
+  }
+  const expectedSubject = receipt.expectedSubjects[0];
+  const resultSubject = receipt.resultSubjects[0];
+  if (
+    receipt.protocol !== "v1" ||
+    receipt.operationId !== expected.operationId ||
+    receipt.kind !== expected.kind ||
+    expectedSubject.entryId !== expected.entryId ||
+    expectedSubject.revision !== expected.revision ||
+    canonicalJson(receipt.affectedDays) !== canonicalJson(result.data.affectedDays)
+  ) {
+    invalidPersistenceReceipt("Diary correction receipt identity is inconsistent.");
+  }
+  const affectedDays = result.data.affectedDays;
+  if (
+    affectedDays.length < 1 ||
+    affectedDays.length > (expected.kind === "update" ? 2 : 1) ||
+    new Set(affectedDays.map((day) => day.localDate)).size !== affectedDays.length
+  ) {
+    invalidPersistenceReceipt("Diary correction affected days are inconsistent.");
+  }
+  if (expected.kind === "delete") {
+    if (
+      result.data.entry !== null ||
+      resultSubject.entryId !== expected.entryId ||
+      resultSubject.state !== "deleted" ||
+      !isNextRevision(resultSubject.revision, expected.revision)
+    ) {
+      invalidPersistenceReceipt("Diary delete receipt result is inconsistent.");
+    }
+    return;
+  }
+  const entry = result.data.entry;
+  if (
+    entry === null ||
+    resultSubject.state !== "active" ||
+    resultSubject.entryId !== entry.id ||
+    resultSubject.revision !== entry.revision ||
+    !affectedDays.some((day) => day.localDate === entry.localDate) ||
+    (expected.kind === "repeat" &&
+      (entry.id.toLowerCase() === expected.entryId || entry.revision !== "1")) ||
+    (expected.kind === "update" &&
+      (entry.id !== expected.entryId || !isNextRevision(entry.revision, expected.revision)))
+  ) {
+    invalidPersistenceReceipt("Diary correction receipt result is inconsistent.");
+  }
+}
+
+function assertReorderResponse(
+  result: ReorderDiaryDayResponse,
+  expected: Readonly<{
+    operationId: string;
+    localDate: string;
+    dayRevision: string;
+    orderDigest: string;
+  }>,
+): void {
+  const { receipt } = result.data;
+  const mealSlots = ["breakfast", "lunch", "dinner", "snacks"] as const;
+  if (
+    !Array.isArray(receipt.groups) ||
+    receipt.groups.length !== mealSlots.length ||
+    receipt.groups.some(
+      (group, index) =>
+        typeof group !== "object" ||
+        group === null ||
+        group.mealSlot !== mealSlots[index] ||
+        !Array.isArray(group.entries) ||
+        group.entries.some(
+          (entry) =>
+            typeof entry !== "object" ||
+            entry === null ||
+            typeof entry.entryId !== "string" ||
+            typeof entry.entryRevision !== "string" ||
+            !Number.isSafeInteger(entry.position),
+        ),
+    )
+  ) {
+    invalidPersistenceReceipt("Diary day reorder receipt group shape is inconsistent.");
+  }
+  const entries = receipt.groups.flatMap((group) => group.entries);
+  let computedOrderDigest: string;
+  try {
+    computedOrderDigest = createHash("sha256")
+      .update(
+        diaryDayOrderDigestPayload(receipt.localDate, receipt.timeZone, receipt.groups),
+        "utf8",
+      )
+      .digest("hex");
+  } catch {
+    invalidPersistenceReceipt("Diary day reorder receipt group shape is inconsistent.");
+  }
+  if (
+    receipt.operationId !== expected.operationId ||
+    receipt.localDate !== expected.localDate ||
+    receipt.expectedDayRevision !== expected.dayRevision ||
+    !isNextRevision(receipt.resultingDayRevision, expected.dayRevision) ||
+    receipt.previousOrderDigest !== expected.orderDigest ||
+    receipt.orderDigest !== computedOrderDigest ||
+    entries.length < 1 ||
+    entries.length > 50 ||
+    new Set(entries.map((entry) => entry.entryId.toLowerCase())).size !== entries.length ||
+    receipt.groups.some((group) =>
+      group.entries.some((entry, position) => entry.position !== position),
+    )
+  ) {
+    invalidPersistenceReceipt("Diary day reorder receipt is inconsistent.");
+  }
+}
+
 async function withRequestSignal<T>(
   request: FastifyRequest,
   operation: (signal: AbortSignal) => Promise<T>,
@@ -605,20 +953,28 @@ export const diaryRoutes: FastifyPluginAsync<DiaryRoutesOptions> = async (app, o
     },
   );
 
-  app.patch<{ Params: EntryParams; Body: UpdateDiaryEntryRequest }>(
+  app.patch<{
+    Params: EntryParams;
+    Body: UpdateDiaryEntryRequest;
+    Headers: ProfileTimeZonePreconditionHeaders;
+    Querystring: DiaryCorrectionQuery;
+  }>(
     "/entries/:entryId",
     {
       preHandler: requireAuth,
       preValidation: [
-        rejectUnexpectedQueryKeys([]),
+        rejectUnexpectedQueryKeys(["diaryCorrectionProtocol", "profileTimeZonePrecondition"]),
         rejectUnexpectedBodyKeys(["portion", "mealSlot", "occurredAt", "position", "note"]),
         rejectInvalidDiaryNote,
+        rejectDiaryCorrectionPreconditions,
       ],
       schema: {
+        headers: createDiaryEntryHeadersSchema,
         params: entryParamsSchema,
+        querystring: diaryCorrectionQuerySchema,
         body: updateDiaryEntryRequestSchema,
         response: {
-          200: diaryMutationResponseSchema,
+          200: diaryMutationOrCorrectionResponseSchema,
           400: problemDetailsSchema,
           401: problemDetailsSchema,
           404: problemDetailsSchema,
@@ -629,12 +985,54 @@ export const diaryRoutes: FastifyPluginAsync<DiaryRoutesOptions> = async (app, o
         },
       },
     },
-    async (request, reply): Promise<DiaryMutationResponse> => {
+    async (request, reply): Promise<DiaryMutationResponse | DiaryCorrectionMutationResponse> => {
       if (!options.diaryService) throw unavailable();
       const principal = authenticatedPrincipal(request);
       const clientOperationId = requireIdempotencyKey(request.headers["idempotency-key"]);
       const expectedRevision = requireRevision(request.headers["if-match"]);
       try {
+        if (request.query.diaryCorrectionProtocol === "v1") {
+          const diaryService = options.diaryService;
+          if (!diaryService.updateEntryCorrection) throw unavailable();
+          const entryId = request.params.entryId.toLowerCase();
+          const expectedTimeZone =
+            request.body.occurredAt === undefined
+              ? undefined
+              : expectedProfileTimeZone(request.headers["x-expected-profile-time-zone"]);
+          const digest = requestDigest("update-diary-entry-correction-v1", {
+            entryId,
+            expectedRevision,
+            ...(expectedTimeZone === undefined
+              ? {}
+              : { expectedProfileTimeZone: expectedTimeZone }),
+            patch: request.body,
+          });
+          const result = await withRequestSignal(
+            request,
+            (signal) =>
+              diaryService.updateEntryCorrection?.({
+                userId: principal.userId,
+                entryId,
+                expectedRevision,
+                clientOperationId,
+                requestDigest: digest,
+                ...(expectedTimeZone === undefined
+                  ? {}
+                  : { expectedProfileTimeZone: expectedTimeZone }),
+                patch: request.body,
+                signal,
+              }) ?? Promise.reject(unavailable()),
+          );
+          assertCorrectionMutation(result, {
+            operationId: clientOperationId,
+            kind: "update",
+            entryId,
+            revision: expectedRevision,
+          });
+          reply.header("cache-control", "no-store");
+          if (result.data.entry) reply.header("etag", revisionEtag(result.data.entry.revision));
+          return result;
+        }
         const digest = requestDigest("update-diary-entry", {
           entryId: request.params.entryId,
           expectedRevision,
@@ -663,15 +1061,28 @@ export const diaryRoutes: FastifyPluginAsync<DiaryRoutesOptions> = async (app, o
     },
   );
 
-  app.delete<{ Params: EntryParams }>(
-    "/entries/:entryId",
+  app.post<{
+    Params: EntryParams;
+    Body: RepeatDiaryEntryRequest;
+    Headers: ProfileTimeZonePreconditionHeaders;
+    Querystring: RequiredProfileTimeZoneQuery;
+  }>(
+    "/corrections/entries/:entryId/repeat",
     {
       preHandler: requireAuth,
-      preValidation: rejectUnexpectedQueryKeys([]),
+      preValidation: [
+        rejectUnexpectedQueryKeys(["profileTimeZonePrecondition"]),
+        rejectUnexpectedBodyKeys(["occurredAt", "mealSlot", "position"]),
+        requireProfileTimeZonePreconditionV1,
+      ],
       schema: {
+        headers: createDiaryEntryHeadersSchema,
         params: entryParamsSchema,
+        querystring: requiredProfileTimeZoneQuerySchema,
+        body: repeatDiaryEntryRequestSchema,
         response: {
-          200: diaryMutationResponseSchema,
+          200: diaryCorrectionMutationResponseSchema,
+          201: diaryCorrectionMutationResponseSchema,
           400: problemDetailsSchema,
           401: problemDetailsSchema,
           404: problemDetailsSchema,
@@ -682,12 +1093,194 @@ export const diaryRoutes: FastifyPluginAsync<DiaryRoutesOptions> = async (app, o
         },
       },
     },
-    async (request, reply): Promise<DiaryMutationResponse> => {
+    async (request, reply): Promise<DiaryCorrectionMutationResponse> => {
+      const diaryService = options.diaryService;
+      if (!diaryService?.repeatEntryCorrection) throw unavailable();
+      const principal = authenticatedPrincipal(request);
+      const clientOperationId = requireIdempotencyKey(request.headers["idempotency-key"]);
+      const expectedSourceRevision = requireRevision(request.headers["if-match"]);
+      try {
+        const sourceEntryId = request.params.entryId.toLowerCase();
+        const expectedTimeZone = expectedProfileTimeZone(
+          request.headers["x-expected-profile-time-zone"],
+        );
+        if (expectedTimeZone === undefined) invalidCorrectionProtocol();
+        const digest = requestDigest("repeat-diary-entry-correction-v1", {
+          sourceEntryId,
+          expectedSourceRevision,
+          expectedProfileTimeZone: expectedTimeZone,
+          request: request.body,
+        });
+        const result = await withRequestSignal(
+          request,
+          (signal) =>
+            diaryService.repeatEntryCorrection?.({
+              userId: principal.userId,
+              sourceEntryId,
+              expectedSourceRevision,
+              clientOperationId,
+              requestDigest: digest,
+              expectedProfileTimeZone: expectedTimeZone,
+              request: request.body,
+              signal,
+            }) ?? Promise.reject(unavailable()),
+        );
+        assertCorrectionMutation(result, {
+          operationId: clientOperationId,
+          kind: "repeat",
+          entryId: sourceEntryId,
+          revision: expectedSourceRevision,
+        });
+        reply.header("cache-control", "no-store").status(result.data.replayed ? 200 : 201);
+        if (result.data.entry) reply.header("etag", revisionEtag(result.data.entry.revision));
+        return result;
+      } catch (error) {
+        throw mapDiaryError(error);
+      }
+    },
+  );
+
+  app.put<{
+    Params: DayParams;
+    Body: ReorderDiaryDayRequest;
+    Headers: ReorderDiaryDayHeaders;
+    Querystring: RequiredProfileTimeZoneQuery;
+  }>(
+    "/days/:localDate/order",
+    {
+      preHandler: requireAuth,
+      preValidation: [
+        rejectUnexpectedQueryKeys(["profileTimeZonePrecondition"]),
+        rejectUnexpectedBodyKeys(["groups"]),
+        requireProfileTimeZonePreconditionV1,
+      ],
+      schema: {
+        headers: reorderDiaryDayHeadersSchema,
+        params: dayParamsSchema,
+        querystring: requiredProfileTimeZoneQuerySchema,
+        body: reorderDiaryDayRequestSchema,
+        response: {
+          200: reorderDiaryDayApiResponseSchema,
+          400: problemDetailsSchema,
+          401: problemDetailsSchema,
+          404: problemDetailsSchema,
+          409: problemDetailsSchema,
+          412: problemDetailsSchema,
+          428: problemDetailsSchema,
+          503: problemDetailsSchema,
+        },
+      },
+    },
+    async (request, reply): Promise<ReorderDiaryDayResponse> => {
+      const diaryService = options.diaryService;
+      if (!diaryService?.reorderDay) throw unavailable();
+      const principal = authenticatedPrincipal(request);
+      const clientOperationId = requireIdempotencyKey(request.headers["idempotency-key"]);
+      const expectedDayRevision = requireRevision(request.headers["if-match"]);
+      const expectedOrderDigest = requireOrderDigest(
+        request.headers["x-expected-diary-order-digest"],
+      );
+      try {
+        const expectedTimeZone = expectedProfileTimeZone(
+          request.headers["x-expected-profile-time-zone"],
+        );
+        if (expectedTimeZone === undefined) invalidCorrectionProtocol();
+        const digest = requestDigest("reorder-diary-day-v1", {
+          localDate: request.params.localDate,
+          expectedDayRevision,
+          expectedOrderDigest,
+          expectedProfileTimeZone: expectedTimeZone,
+          groups: request.body.groups,
+        });
+        const result = await withRequestSignal(
+          request,
+          (signal) =>
+            diaryService.reorderDay?.({
+              userId: principal.userId,
+              localDate: request.params.localDate,
+              expectedDayRevision,
+              expectedOrderDigest,
+              expectedProfileTimeZone: expectedTimeZone,
+              clientOperationId,
+              requestDigest: digest,
+              groups: request.body.groups,
+              signal,
+            }) ?? Promise.reject(unavailable()),
+        );
+        assertReorderResponse(result, {
+          operationId: clientOperationId,
+          localDate: request.params.localDate,
+          dayRevision: expectedDayRevision,
+          orderDigest: expectedOrderDigest,
+        });
+        reply
+          .header("cache-control", "no-store")
+          .header("etag", revisionEtag(result.data.receipt.resultingDayRevision));
+        return result;
+      } catch (error) {
+        throw mapDiaryError(error);
+      }
+    },
+  );
+
+  app.delete<{ Params: EntryParams; Querystring: DiaryCorrectionQuery }>(
+    "/entries/:entryId",
+    {
+      preHandler: requireAuth,
+      preValidation: [
+        rejectUnexpectedQueryKeys(["diaryCorrectionProtocol", "profileTimeZonePrecondition"]),
+        rejectDeleteCorrectionPreconditions,
+      ],
+      schema: {
+        params: entryParamsSchema,
+        querystring: diaryCorrectionQuerySchema,
+        response: {
+          200: diaryMutationOrCorrectionResponseSchema,
+          400: problemDetailsSchema,
+          401: problemDetailsSchema,
+          404: problemDetailsSchema,
+          409: problemDetailsSchema,
+          412: problemDetailsSchema,
+          428: problemDetailsSchema,
+          503: problemDetailsSchema,
+        },
+      },
+    },
+    async (request, reply): Promise<DiaryMutationResponse | DiaryCorrectionMutationResponse> => {
       if (!options.diaryService) throw unavailable();
       const principal = authenticatedPrincipal(request);
       const clientOperationId = requireIdempotencyKey(request.headers["idempotency-key"]);
       const expectedRevision = requireRevision(request.headers["if-match"]);
       try {
+        if (request.query.diaryCorrectionProtocol === "v1") {
+          const diaryService = options.diaryService;
+          if (!diaryService.deleteEntryCorrection) throw unavailable();
+          const entryId = request.params.entryId.toLowerCase();
+          const digest = requestDigest("delete-diary-entry-correction-v1", {
+            entryId,
+            expectedRevision,
+          });
+          const result = await withRequestSignal(
+            request,
+            (signal) =>
+              diaryService.deleteEntryCorrection?.({
+                userId: principal.userId,
+                entryId,
+                expectedRevision,
+                clientOperationId,
+                requestDigest: digest,
+                signal,
+              }) ?? Promise.reject(unavailable()),
+          );
+          assertCorrectionMutation(result, {
+            operationId: clientOperationId,
+            kind: "delete",
+            entryId,
+            revision: expectedRevision,
+          });
+          reply.header("cache-control", "no-store");
+          return result;
+        }
         const digest = requestDigest("delete-diary-entry", {
           entryId: request.params.entryId,
           expectedRevision,

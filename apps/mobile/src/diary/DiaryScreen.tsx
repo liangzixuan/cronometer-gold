@@ -1,3 +1,4 @@
+import { CryptoDigestAlgorithm, digestStringAsync } from "expo-crypto";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AccessibilityInfo,
@@ -13,18 +14,18 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 
 import { apiUrl, authenticatedHeaders, jsonBody, responseError } from "../api/private-api";
-import { newOperationId } from "../auth/operation-id";
 import { palette } from "../theme";
 import {
+  bindDiaryReorderDigestEvidence,
+  buildDiaryReorderPlan,
   createDiaryUnauthorizedSingleFlight,
   DIARY_PAGE_SIZE,
   type DiaryEditorOrigin,
   type DiaryEntry,
   type DiaryGroup,
-  type DiaryMutationResult,
+  DiaryOrderBaselineMismatchError,
   type DiaryPage,
   type DiaryUnauthorizedSingleFlight,
-  diaryEditorOperationKey,
   diaryEditorOrigin,
   diaryEditorOriginMatches,
   diaryGroupLabel,
@@ -38,6 +39,7 @@ import {
   isProfileOwnerChangedProblem,
   localDateInTimeZone,
   localDateTimeToInstant,
+  localTimeInTimeZone,
   MAX_DIARY_NOTE_LENGTH,
   type MealSlot,
   mergeDiaryPages,
@@ -45,7 +47,6 @@ import {
   normalizeDiaryGroups,
   nutrientDisplay,
   type ProfileSummary,
-  parseDiaryMutation,
   parseDiaryPage,
   parseProfileResponse,
   profileRequestIdentityMatches,
@@ -54,9 +55,16 @@ import {
   shiftLocalDate,
 } from "./diary";
 import type {
+  DiaryEntryUpdateRequestBody,
   QuickAddOutboxController,
   QuickAddOutboxControllerState,
   QuickAddReceipt,
+} from "./quick-add-outbox";
+import {
+  DiaryOutboxCapacityError,
+  DiaryOutboxDependencyError,
+  MAX_QUICK_ADD_OUTBOX_ITEMS,
+  QuickAddEnqueueAmbiguousError,
 } from "./quick-add-outbox";
 
 type LoadState = "loading" | "ready" | "error";
@@ -101,14 +109,20 @@ interface DiaryScreenProps {
   readonly subscribeQuickAddReceipts: (listener: (receipt: QuickAddReceipt) => void) => () => void;
 }
 
-function editorFor(entry: DiaryEntry, day: DiaryPage["data"]): Editor {
-  const localTime = entry.localTime.slice(0, 5);
+function editorFor(
+  entry: DiaryEntry,
+  day: DiaryPage["data"],
+  currentProfileTimeZone: string,
+): Editor {
+  const instant = new Date(entry.occurredAt);
+  const localDate = localDateInTimeZone(instant, currentProfileTimeZone);
+  const localTime = localTimeInTimeZone(instant, currentProfileTimeZone);
   return {
-    ...diaryEditorOrigin(day, entry),
-    originalEntryLocalDate: entry.localDate,
+    ...diaryEditorOrigin(day, entry, currentProfileTimeZone),
+    originalEntryLocalDate: localDate,
     quantity: entry.portion.kind === "serving" ? entry.portion.amount : entry.portion.grams,
     mealSlot: entry.mealSlot,
-    localDate: entry.localDate,
+    localDate,
     localTime,
     originalLocalTime: localTime,
     note: entry.note ?? "",
@@ -117,6 +131,12 @@ function editorFor(entry: DiaryEntry, day: DiaryPage["data"]): Editor {
 
 function entryName(entry: DiaryEntry): string {
   return entry.entryKind === "food" ? entry.food.name : entry.recipe.name;
+}
+
+function entryPortionLabel(entry: DiaryEntry): string {
+  return entry.portion.kind === "grams"
+    ? `${entry.portion.grams} g`
+    : `${entry.portion.amount} ${entry.portion.servingLabel}`;
 }
 
 function loadedMessage(page: DiaryPage): string {
@@ -128,28 +148,32 @@ function loadedMessage(page: DiaryPage): string {
 
 function queuedQuickAddMessage(state: QuickAddOutboxControllerState): string | null {
   const queued =
-    state.pendingCount === 1 ? "1 queued diary log" : `${state.pendingCount} queued diary logs`;
+    state.pendingCount === 1
+      ? "1 queued diary change"
+      : `${state.pendingCount} queued diary changes`;
   switch (state.status) {
     case "idle":
       return null;
     case "pending":
       return `${queued} ${state.pendingCount === 1 ? "is" : "are"} not yet included in diary totals.`;
     case "draining":
-      return `Sending ${queued}. ${state.pendingCount === 1 ? "It is" : "They are"} not included in diary totals until the server confirms each log.`;
+      return `Sending ${queued}. ${state.pendingCount === 1 ? "It is" : "They are"} not reflected in the diary until the server confirms each change.`;
     case "blocked":
       return state.blockedReason === "time_zone_changed"
-        ? `${queued} stopped because your diary time zone changed. ${state.foodName} (${state.servingLabel}) for ${state.localDate} is still queued and is not included in diary totals.`
-        : `${queued} stopped at ${state.foodName} (${state.servingLabel}) for ${state.localDate} after the server returned HTTP ${state.httpStatus}. The exact request is retained and is not included in diary totals.`;
+        ? `${queued} stopped because your diary time zone changed. Discard the stale ${state.foodName} change, reload the diary, and authorize it again in the current time zone.`
+        : state.httpStatus === 412
+          ? `${queued} stopped because ${state.foodName} changed elsewhere. Discard this stale change, reload the diary, and authorize it again from the fresh revision.`
+          : `${queued} stopped at ${state.foodName} (${state.servingLabel}) for ${state.localDate} after HTTP ${state.httpStatus}. The exact request is retained and no optimistic result was applied.`;
     case "unavailable":
       if (state.reason === "storage") {
-        return "Queued diary delivery is unavailable because secure storage could not be read. Do not assume a queued log is included in diary totals.";
+        return "Queued diary delivery is unavailable because secure storage could not be read. Do not assume a queued change was applied.";
       }
       if (state.reason === "credential") {
         return `${queued} ${state.pendingCount === 1 ? "is" : "are"} paused until authentication is restored and ${state.pendingCount === 1 ? "is" : "are"} not included in diary totals.`;
       }
       return `${queued} ${state.pendingCount === 1 ? "is" : "are"} retained after a ${state.reason === "network" ? "network" : "server response"} interruption and ${state.pendingCount === 1 ? "is" : "are"} not included in diary totals.`;
     case "owner_mismatch":
-      return "Queued diary delivery was fenced because its private owner could not be verified. Private-device cleanup is required, and no queued log is included in diary totals.";
+      return "Queued diary delivery was fenced because its private owner could not be verified. Private-device cleanup is required, and no queued change is treated as applied.";
     case "closed":
       return state.pendingCount > 0
         ? `Diary delivery is closed with ${queued}; ${state.pendingCount === 1 ? "it is" : "they are"} not included in diary totals.`
@@ -197,8 +221,14 @@ export function DiaryScreen({
   );
   const [groupBusy, setGroupBusy] = useState(false);
   const [outboxAction, setOutboxAction] = useState<"retry" | "discard" | null>(null);
+  const [pendingCorrectionEntries, setPendingCorrectionEntries] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [pendingReorderDates, setPendingReorderDates] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const [pendingDiaryDates, setPendingDiaryDates] = useState<ReadonlySet<string>>(() => new Set());
   const [routeReloadGeneration, setRouteReloadGeneration] = useState(0);
-  const operationIds = useRef(new Map<string, string>());
   const loadController = useRef<AbortController | null>(null);
   const profileController = useRef<AbortController | null>(null);
   const expectedOwnerUserIdRef = useRef(expectedOwnerUserId);
@@ -230,7 +260,6 @@ export function DiaryScreen({
       loadController.current?.abort();
       profileController.current?.abort();
       pageRequestBusy.current = false;
-      operationIds.current.clear();
       dateRef.current = "";
       setDiaryPage(null);
       setEditor(null);
@@ -349,6 +378,28 @@ export function DiaryScreen({
   );
 
   useEffect(() => {
+    void quickAddOutboxState;
+    let active = true;
+    void quickAddOutboxController
+      .pendingDependencies()
+      .then((dependencies) => {
+        if (!active || privateUiClosed.current) return;
+        setPendingCorrectionEntries(new Set(dependencies.correctedEntryIds));
+        setPendingReorderDates(new Set(dependencies.reorderedLocalDates));
+        setPendingDiaryDates(new Set(dependencies.pendingLocalDates));
+      })
+      .catch(() => {
+        if (!active) return;
+        setPendingCorrectionEntries(new Set());
+        setPendingReorderDates(new Set());
+        setPendingDiaryDates(new Set());
+      });
+    return () => {
+      active = false;
+    };
+  }, [quickAddOutboxController, quickAddOutboxState]);
+
+  useEffect(() => {
     void routeReloadGeneration;
     if (isLocalDate(date)) void load(date);
     return () => {
@@ -393,14 +444,6 @@ export function DiaryScreen({
     [],
   );
 
-  function operationId(key: string): string {
-    const existing = operationIds.current.get(key);
-    if (existing) return existing;
-    const created = newOperationId();
-    operationIds.current.set(key, created);
-    return created;
-  }
-
   function beginMutation(sourceDate: string, busyKey: string): MutationOwner {
     const token = mutationSequence.current + 1;
     mutationSequence.current = token;
@@ -409,34 +452,10 @@ export function DiaryScreen({
     return { sourceDate, token, viewEpoch: viewEpoch.current };
   }
 
-  function mutationIsCurrent(owner: MutationOwner): boolean {
-    return (
-      activeMutation.current === owner.token &&
-      viewEpoch.current === owner.viewEpoch &&
-      dateRef.current === owner.sourceDate
-    );
-  }
-
   function finishMutation(owner: MutationOwner): void {
     if (activeMutation.current !== owner.token) return;
     activeMutation.current = null;
     setBusyEntry(null);
-  }
-
-  async function reportMutationReceipt(
-    owner: MutationOwner,
-    mutation: DiaryMutationResult,
-    successMessage: string,
-    reloadFailureMessage: string,
-  ): Promise<void> {
-    if (!mutationIsCurrent(owner)) return;
-    if (!mutation.affectedDays.some((day) => day.localDate === owner.sourceDate)) {
-      setMessage(successMessage);
-      return;
-    }
-    const reloaded = await load(owner.sourceDate);
-    if (!mutationIsCurrent(owner)) return;
-    setMessage(reloaded ? successMessage : reloadFailureMessage);
   }
 
   function selectDate(next: string) {
@@ -529,7 +548,7 @@ export function DiaryScreen({
       setMessage("That entry is no longer present. Fresh diary data is required.");
       return;
     }
-    if (!diaryEditorOriginMatches(editor, diary, entry)) {
+    if (!diaryEditorOriginMatches(editor, diary, entry, profileTimeZone)) {
       setEditor(null);
       setMessage(
         "The diary changed after editing began. Review the fresh entry before editing again.",
@@ -561,7 +580,7 @@ export function DiaryScreen({
         return;
       }
     }
-    const body = {
+    const body: DiaryEntryUpdateRequestBody = {
       portion:
         entry.portion.kind === "serving"
           ? entry.entryKind === "food"
@@ -572,54 +591,42 @@ export function DiaryScreen({
       ...(occurredAt ? { occurredAt } : {}),
       ...(note !== undefined ? { note } : {}),
     };
-    const key = diaryEditorOperationKey(editor, body);
     const owner = beginMutation(editor.originLocalDate, editor.entryId);
-    setMessage("Saving the diary entry…");
+    setMessage("Securing this diary edit on your device before sending…");
     try {
-      const response = await fetch(apiUrl(apiBase, `/v1/diary/entries/${entry.id}`).toString(), {
-        method: "PATCH",
-        headers: authenticatedHeaders(accessToken, {
-          "content-type": "application/json",
-          "idempotency-key": operationId(key),
-          "if-match": `"${editor.originEntryRevision}"`,
-        }),
-        body: JSON.stringify(body),
+      const item = await quickAddOutboxController.enqueueOperation({
+        operationKind: "update",
+        entryId: entry.id,
+        expectedEntryRevision: editor.originEntryRevision,
+        entryName: entryName(entry),
+        portionLabel: entryPortionLabel(entry),
+        localDate: editor.originLocalDate,
+        mealSlot: entry.mealSlot,
+        body,
       });
-      if (response.status === 401) {
-        await closeForUnauthorized();
-        return;
-      }
-      const responseBody = await jsonBody(response);
-      if (response.status === 412) {
-        operationIds.current.delete(key);
-        if (!mutationIsCurrent(owner)) return;
-        setEditor(null);
-        const reloaded = await load(owner.sourceDate);
-        if (mutationIsCurrent(owner)) {
-          setMessage(
-            reloaded
-              ? "The diary changed elsewhere. Fresh values were loaded; review the edit again."
-              : "The diary changed elsewhere, but fresh data could not be confirmed. Press Retry.",
-          );
-        }
-        return;
-      }
-      if (!response.ok)
-        throw new Error(responseError(responseBody, "The entry could not be saved."));
-      const mutation = parseDiaryMutation(responseBody);
-      operationIds.current.delete(key);
-      if (!mutationIsCurrent(owner)) return;
       setEditor(null);
-      await reportMutationReceipt(
-        owner,
-        mutation,
-        "Diary entry saved with fresh totals.",
-        "The entry was saved, but fresh diary data could not be confirmed. Press Retry.",
+      setMessage(
+        `${entryName(entry)} changes are queued securely. The visible entry and totals stay unchanged until the server confirms the exact edit.`,
       );
+      void quickAddOutboxController.requestDrain(item.operationId);
     } catch (caught) {
-      if (mutationIsCurrent(owner)) {
+      if (caught instanceof QuickAddEnqueueAmbiguousError) {
+        setEditor(null);
+        void quickAddOutboxController.requestDrain(caught.operationId);
         setMessage(
-          `${caught instanceof Error ? caught.message : "The entry could not be saved."} Press Save again to retry safely.`,
+          "Secure storage could not confirm whether this edit was queued. Do not save it again until the queue status recovers.",
+        );
+      } else if (caught instanceof DiaryOutboxCapacityError) {
+        setMessage(
+          "This private note makes the protected diary envelope larger than the reviewed 1,600-byte slot. Shorten the note; it was not truncated or sent online.",
+        );
+      } else if (caught instanceof DiaryOutboxDependencyError) {
+        setMessage(`${caught.message} Wait for it to finish or resolve the blocked queue head.`);
+      } else {
+        setMessage(
+          caught instanceof Error
+            ? caught.message
+            : "The edit was not queued. Refresh this diary and try again.",
         );
       }
     } finally {
@@ -629,48 +636,35 @@ export function DiaryScreen({
 
   async function remove(entry: DiaryEntry) {
     if (privateUiClosed.current || !diary) return;
-    const key = `delete:${entry.id}:${entry.revision}`;
     const owner = beginMutation(diary.localDate, entry.id);
-    setMessage("Deleting the diary entry…");
+    setMessage("Securing this deletion on your device before sending…");
     try {
-      const response = await fetch(apiUrl(apiBase, `/v1/diary/entries/${entry.id}`).toString(), {
-        method: "DELETE",
-        headers: authenticatedHeaders(accessToken, {
-          "idempotency-key": operationId(key),
-          "if-match": `"${entry.revision}"`,
-        }),
+      const item = await quickAddOutboxController.enqueueOperation({
+        operationKind: "delete",
+        entryId: entry.id,
+        expectedEntryRevision: entry.revision,
+        entryName: entryName(entry),
+        portionLabel: entryPortionLabel(entry),
+        localDate: diary.localDate,
+        mealSlot: entry.mealSlot,
       });
-      if (response.status === 401) {
-        await closeForUnauthorized();
-        return;
-      }
-      const body = await jsonBody(response);
-      if (response.status === 412) {
-        operationIds.current.delete(key);
-        if (!mutationIsCurrent(owner)) return;
-        const reloaded = await load(owner.sourceDate);
-        if (mutationIsCurrent(owner)) {
-          setMessage(
-            reloaded
-              ? "The diary changed elsewhere. Fresh values were loaded; delete again if needed."
-              : "The diary changed elsewhere, but fresh data could not be confirmed. Press Retry.",
-          );
-        }
-        return;
-      }
-      if (!response.ok) throw new Error(responseError(body, "The entry could not be deleted."));
-      const mutation = parseDiaryMutation(body);
-      operationIds.current.delete(key);
-      await reportMutationReceipt(
-        owner,
-        mutation,
-        "Diary entry deleted and totals refreshed.",
-        "The entry was deleted, but fresh diary data could not be confirmed. Press Retry.",
+      setMessage(
+        `${entryName(entry)} is queued for deletion. It remains visible and counted until the server confirms the exact revision.`,
       );
+      void quickAddOutboxController.requestDrain(item.operationId);
     } catch (caught) {
-      if (mutationIsCurrent(owner)) {
+      if (caught instanceof QuickAddEnqueueAmbiguousError) {
+        void quickAddOutboxController.requestDrain(caught.operationId);
         setMessage(
-          `${caught instanceof Error ? caught.message : "The entry could not be deleted."} Choose Delete again to retry safely.`,
+          "Secure storage could not confirm whether the deletion was queued. Do not delete again until queue status recovers.",
+        );
+      } else if (caught instanceof DiaryOutboxDependencyError) {
+        setMessage(`${caught.message} Wait for it to finish or resolve the blocked queue head.`);
+      } else {
+        setMessage(
+          caught instanceof Error
+            ? caught.message
+            : "The deletion was not queued. Refresh this diary and try again.",
         );
       }
     } finally {
@@ -682,61 +676,108 @@ export function DiaryScreen({
     if (privateUiClosed.current || !diary) return;
     const now = new Date();
     const targetDate = localDateInTimeZone(now, profileTimeZone);
-    const body = {
-      occurredAt: quickAddOccurredAt(targetDate, profileTimeZone, now),
-      mealSlot: entry.mealSlot,
-    };
-    const key = `repeat:${entry.id}:${entry.revision}:${JSON.stringify(body)}`;
+    const occurredAt = quickAddOccurredAt(targetDate, profileTimeZone, now);
     const owner = beginMutation(diary.localDate, entry.id);
-    setMessage(`Repeating the pinned ${entryName(entry)} version…`);
+    setMessage(`Securing a repeat of the pinned ${entryName(entry)} version…`);
     try {
-      const response = await fetch(
-        apiUrl(apiBase, `/v1/diary/entries/${entry.id}/repeat`).toString(),
-        {
-          method: "POST",
-          headers: authenticatedHeaders(accessToken, {
-            "content-type": "application/json",
-            "idempotency-key": operationId(key),
-            "if-match": `"${entry.revision}"`,
-          }),
-          body: JSON.stringify(body),
-        },
+      const item = await quickAddOutboxController.enqueueOperation({
+        operationKind: "repeat",
+        entryId: entry.id,
+        expectedEntryRevision: entry.revision,
+        entryName: entryName(entry),
+        portionLabel: entryPortionLabel(entry),
+        localDate: targetDate,
+        sourceLocalDate: diary.localDate,
+        mealSlot: entry.mealSlot,
+        occurredAt,
+        targetMealSlot: entry.mealSlot,
+      });
+      setMessage(
+        `${entryName(entry)} is queued securely for ${targetDate}. It is not counted until the server confirms the pinned source revision.`,
       );
-      if (response.status === 401) {
-        await closeForUnauthorized();
-        return;
-      }
-      const responseBody = await jsonBody(response);
-      if (response.status === 412) {
-        operationIds.current.delete(key);
-        if (!mutationIsCurrent(owner)) return;
-        const reloaded = await load(owner.sourceDate);
-        if (mutationIsCurrent(owner)) {
-          setMessage(
-            reloaded
-              ? "The source entry changed. Fresh details were loaded; review before repeating."
-              : "The source entry changed, but fresh data could not be confirmed. Press Retry.",
-          );
-        }
-        return;
-      }
-      if (!response.ok)
-        throw new Error(responseError(responseBody, "The entry could not be repeated."));
-      const mutation = parseDiaryMutation(responseBody);
-      operationIds.current.delete(key);
-      const repeatedDate = mutation.entry?.localDate ?? targetDate;
-      await reportMutationReceipt(
-        owner,
-        mutation,
-        repeatedDate === owner.sourceDate
-          ? "Pinned entry version repeated with fresh authoritative totals."
-          : `Pinned entry version repeated for ${repeatedDate}.`,
-        "The entry was repeated, but fresh diary data could not be confirmed. Press Retry.",
-      );
+      void quickAddOutboxController.requestDrain(item.operationId);
     } catch (caught) {
-      if (mutationIsCurrent(owner)) {
+      if (caught instanceof QuickAddEnqueueAmbiguousError) {
+        void quickAddOutboxController.requestDrain(caught.operationId);
         setMessage(
-          `${caught instanceof Error ? caught.message : "The entry could not be repeated."} Choose Repeat again to retry the same operation safely.`,
+          "Secure storage could not confirm whether the repeat was queued. Do not repeat it again until queue status recovers.",
+        );
+      } else if (caught instanceof DiaryOutboxDependencyError) {
+        setMessage(`${caught.message} Wait for it to finish or resolve the blocked queue head.`);
+      } else {
+        setMessage(
+          caught instanceof Error
+            ? caught.message
+            : "The repeat was not queued. Refresh this diary and try again.",
+        );
+      }
+    } finally {
+      finishMutation(owner);
+    }
+  }
+
+  async function reorder(entry: DiaryEntry, direction: "up" | "down") {
+    if (
+      privateUiClosed.current ||
+      !diary ||
+      !diaryPage ||
+      diaryPage.page.nextCursor !== null ||
+      diary.entries.length !== diaryPage.page.totalEntries
+    ) {
+      setMessage("Load the complete diary day before changing entry order.");
+      return;
+    }
+    const originDay = diary;
+    const plan = buildDiaryReorderPlan(originDay, entry.id, direction);
+    if (!plan) return;
+    const owner = beginMutation(originDay.localDate, `order:${entry.id}`);
+    setMessage("Securing the complete meal order on your device before sending…");
+    try {
+      const digestEvidence = await bindDiaryReorderDigestEvidence(originDay, plan, (payload) =>
+        digestStringAsync(CryptoDigestAlgorithm.SHA256, payload),
+      );
+      if (
+        privateUiClosed.current ||
+        viewEpoch.current !== owner.viewEpoch ||
+        diaryPage.data.revision !== originDay.revision ||
+        diaryPage.data.orderDigest !== originDay.orderDigest ||
+        dateRef.current !== originDay.localDate
+      ) {
+        setMessage(
+          "The diary changed while preparing the order. Reload and choose the move again.",
+        );
+        return;
+      }
+      const item = await quickAddOutboxController.enqueueOperation({
+        operationKind: "reorder",
+        localDate: originDay.localDate,
+        expectedDayRevision: originDay.revision,
+        dayTimeZone: originDay.timeZone,
+        expectedOrderDigest: digestEvidence.expectedOrderDigest,
+        expectedResultOrderDigest: digestEvidence.expectedResultOrderDigest,
+        groups: plan.groups,
+      });
+      setMessage(
+        "The complete meal order is queued securely. Entries stay in their confirmed order until the server accepts the atomic move.",
+      );
+      void quickAddOutboxController.requestDrain(item.operationId);
+    } catch (caught) {
+      if (caught instanceof DiaryOrderBaselineMismatchError) {
+        setMessage(
+          "The complete loaded day did not match its authoritative order proof. Nothing was queued; reload the diary before choosing the move again.",
+        );
+      } else if (caught instanceof QuickAddEnqueueAmbiguousError) {
+        void quickAddOutboxController.requestDrain(caught.operationId);
+        setMessage(
+          "Secure storage could not confirm whether the order was queued. Do not reorder again until queue status recovers.",
+        );
+      } else if (caught instanceof DiaryOutboxDependencyError) {
+        setMessage(`${caught.message} Wait for it to finish or resolve the blocked queue head.`);
+      } else {
+        setMessage(
+          caught instanceof Error
+            ? caught.message
+            : "The meal order was not queued. Reload this diary and try again.",
         );
       }
     } finally {
@@ -910,7 +951,7 @@ export function DiaryScreen({
     if (outboxAction !== null) return;
     const current = quickAddOutboxController.getState();
     setOutboxAction("retry");
-    setMessage("Retrying the exact oldest queued diary log…");
+    setMessage("Retrying the exact oldest queued diary change…");
     try {
       if (current.status === "blocked") {
         await quickAddOutboxController.retryBlockedHead(current.operationId);
@@ -918,12 +959,15 @@ export function DiaryScreen({
         await quickAddOutboxController.requestDrain();
       }
       const after = quickAddOutboxController.getState();
-      if (after.status === "idle") setMessage("All queued diary logs were confirmed or removed.");
+      if (after.status === "idle")
+        setMessage("All queued diary changes were confirmed or removed.");
       else if (after.status === "blocked")
-        setMessage("The oldest diary log is still blocked. Review it before retrying again.");
-      else setMessage("The retry finished; retained diary logs remain shown below.");
+        setMessage("The oldest diary change is still blocked. Review it before retrying again.");
+      else setMessage("The retry finished; retained diary changes remain shown below.");
     } catch {
-      setMessage("The exact retry could not be completed. The queued diary log remains retained.");
+      setMessage(
+        "The exact retry could not be completed. The queued diary change remains retained.",
+      );
     } finally {
       setOutboxAction(null);
     }
@@ -932,12 +976,12 @@ export function DiaryScreen({
   async function discardBlockedDiaryLog(operationId: string, itemName: string) {
     if (outboxAction !== null) return;
     setOutboxAction("discard");
-    setMessage(`Discarding only the blocked ${itemName} log…`);
+    setMessage(`Discarding only the blocked ${itemName} change…`);
     try {
       await quickAddOutboxController.discardBlockedHead(operationId);
-      setMessage(`The blocked ${itemName} log was discarded. It was not added to the diary.`);
+      setMessage(`The blocked ${itemName} change was discarded. No server result was applied.`);
     } catch {
-      setMessage("Discard could not be confirmed. The exact queued log remains retained.");
+      setMessage("Discard could not be confirmed. The exact queued change remains retained.");
     } finally {
       setOutboxAction(null);
     }
@@ -946,13 +990,17 @@ export function DiaryScreen({
   function confirmDiscardBlockedDiaryLog(
     blocked: Extract<QuickAddOutboxControllerState, { status: "blocked" }>,
   ) {
+    const target =
+      blocked.operationKind === "reorder"
+        ? `the whole-day order on ${blocked.localDate}`
+        : `the ${diaryGroupLabel(diaryGroups, blocked.mealSlot)} change on ${blocked.localDate}`;
     Alert.alert(
-      "Discard blocked diary log?",
-      `This permanently removes only ${blocked.foodName} (${blocked.servingLabel}) for ${diaryGroupLabel(diaryGroups, blocked.mealSlot)} on ${blocked.localDate}. It has not been added. Later queued logs stay in order.`,
+      "Discard blocked diary change?",
+      `This permanently removes only the queued ${blocked.foodName} ${target}. Reload and authorize it again if still needed. Later queued changes stay in order.`,
       [
         { text: "Cancel", style: "cancel" },
         {
-          text: "Discard queued log",
+          text: "Discard queued change",
           style: "destructive",
           onPress: () => void discardBlockedDiaryLog(blocked.operationId, blocked.foodName),
         },
@@ -960,7 +1008,19 @@ export function DiaryScreen({
     );
   }
 
-  const activeTimeZone = diary?.timeZone ?? profileTimeZone;
+  const activeTimeZone = profileTimeZone;
+  const completeDayLoaded =
+    diary !== null &&
+    diaryPage !== null &&
+    diaryPage.page.nextCursor === null &&
+    diary.entries.length === diaryPage.page.totalEntries;
+  const durableQueueUnavailable =
+    quickAddOutboxState.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS ||
+    quickAddOutboxState.status === "closed" ||
+    quickAddOutboxState.status === "owner_mismatch" ||
+    (quickAddOutboxState.status === "unavailable" &&
+      (quickAddOutboxState.reason === "storage" || quickAddOutboxState.reason === "credential"));
+  const repeatTargetDate = localDateInTimeZone(new Date(), profileTimeZone);
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
@@ -1134,20 +1194,23 @@ export function DiaryScreen({
             </Text>
             {quickAddOutboxState.status === "blocked" ? (
               <View style={styles.queueActions}>
+                {quickAddOutboxState.httpStatus !== 412 &&
+                quickAddOutboxState.blockedReason !== "time_zone_changed" ? (
+                  <Pressable
+                    accessibilityLabel={`Retry queued ${quickAddOutboxState.foodName} change exactly`}
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: outboxAction !== null }}
+                    disabled={outboxAction !== null}
+                    onPress={() => void retryQueuedDiaryLogs()}
+                    style={[styles.queueAction, outboxAction !== null && styles.disabled]}
+                  >
+                    <Text style={styles.secondaryText}>
+                      {outboxAction === "retry" ? "Retrying…" : "Retry exact change"}
+                    </Text>
+                  </Pressable>
+                ) : null}
                 <Pressable
-                  accessibilityLabel={`Retry queued ${quickAddOutboxState.foodName} log exactly`}
-                  accessibilityRole="button"
-                  accessibilityState={{ disabled: outboxAction !== null }}
-                  disabled={outboxAction !== null}
-                  onPress={() => void retryQueuedDiaryLogs()}
-                  style={[styles.queueAction, outboxAction !== null && styles.disabled]}
-                >
-                  <Text style={styles.secondaryText}>
-                    {outboxAction === "retry" ? "Retrying…" : "Retry exact log"}
-                  </Text>
-                </Pressable>
-                <Pressable
-                  accessibilityLabel={`Discard only queued ${quickAddOutboxState.foodName} log`}
+                  accessibilityLabel={`Discard only queued ${quickAddOutboxState.foodName} change`}
                   accessibilityRole="button"
                   accessibilityState={{ disabled: outboxAction !== null }}
                   disabled={outboxAction !== null}
@@ -1159,7 +1222,7 @@ export function DiaryScreen({
                   ]}
                 >
                   <Text style={styles.queueDangerText}>
-                    {outboxAction === "discard" ? "Discarding…" : "Discard only this log"}
+                    {outboxAction === "discard" ? "Discarding…" : "Discard only this change"}
                   </Text>
                 </Pressable>
               </View>
@@ -1177,7 +1240,7 @@ export function DiaryScreen({
                 style={[styles.queueAction, outboxAction !== null && styles.disabled]}
               >
                 <Text style={styles.secondaryText}>
-                  {outboxAction === "retry" ? "Retrying…" : "Retry queued logs"}
+                  {outboxAction === "retry" ? "Retrying…" : "Retry queued changes"}
                 </Text>
               </Pressable>
             ) : null}
@@ -1214,7 +1277,7 @@ export function DiaryScreen({
             <Pressable
               accessibilityRole="button"
               onPress={() =>
-                onSearch(date, diaryGroups[0]?.mealSlot ?? "breakfast", diary.timeZone)
+                onSearch(date, diaryGroups[0]?.mealSlot ?? "breakfast", profileTimeZone)
               }
               style={styles.primaryButton}
             >
@@ -1234,7 +1297,7 @@ export function DiaryScreen({
                     </Text>
                     <Pressable
                       accessibilityRole="button"
-                      onPress={() => onSearch(date, meal, diary.timeZone)}
+                      onPress={() => onSearch(date, meal, profileTimeZone)}
                     >
                       <Text style={styles.addLink}>Add food</Text>
                     </Pressable>
@@ -1246,7 +1309,7 @@ export function DiaryScreen({
                         : "No entries"}
                     </Text>
                   ) : (
-                    entries.map((entry) => (
+                    entries.map((entry, entryIndex) => (
                       <View key={entry.id} style={styles.entryCard}>
                         <Text style={styles.entryTitle}>{entryName(entry)}</Text>
                         {entry.entryKind === "food" && entry.food.brandName ? (
@@ -1294,7 +1357,7 @@ export function DiaryScreen({
                             ))}
                           </View>
                         )}
-                        {entry.timeZone !== diary.timeZone ? (
+                        {entry.timeZone !== profileTimeZone ? (
                           <Text style={styles.entrySource}>Logged in {entry.timeZone}</Text>
                         ) : null}
                         {entry.note !== null ? (
@@ -1400,7 +1463,13 @@ export function DiaryScreen({
                               <Pressable
                                 accessibilityLabel={`Save changes to ${entryName(entry)}`}
                                 accessibilityRole="button"
-                                disabled={busyEntry !== null || diary.status === "locked"}
+                                disabled={
+                                  busyEntry !== null ||
+                                  diary.status === "locked" ||
+                                  durableQueueUnavailable ||
+                                  pendingCorrectionEntries.has(entry.id) ||
+                                  pendingReorderDates.has(diary.localDate)
+                                }
                                 onPress={() => void save()}
                                 style={styles.primarySmall}
                               >
@@ -1423,9 +1492,73 @@ export function DiaryScreen({
                         ) : (
                           <View style={styles.actionRow}>
                             <Pressable
+                              accessibilityLabel={`Move ${entryName(entry)} up within ${label}`}
+                              accessibilityRole="button"
+                              accessibilityState={{
+                                disabled:
+                                  !completeDayLoaded ||
+                                  entryIndex === 0 ||
+                                  busyEntry !== null ||
+                                  diary.status === "locked" ||
+                                  durableQueueUnavailable ||
+                                  pendingDiaryDates.has(diary.localDate),
+                              }}
+                              disabled={
+                                !completeDayLoaded ||
+                                entryIndex === 0 ||
+                                busyEntry !== null ||
+                                diary.status === "locked" ||
+                                durableQueueUnavailable ||
+                                pendingDiaryDates.has(diary.localDate)
+                              }
+                              onPress={() => void reorder(entry, "up")}
+                              style={styles.secondarySmall}
+                            >
+                              <Text style={styles.secondaryText}>Move up</Text>
+                            </Pressable>
+                            <Pressable
+                              accessibilityLabel={`Move ${entryName(entry)} down within ${label}`}
+                              accessibilityRole="button"
+                              accessibilityState={{
+                                disabled:
+                                  !completeDayLoaded ||
+                                  entryIndex === entries.length - 1 ||
+                                  busyEntry !== null ||
+                                  diary.status === "locked" ||
+                                  durableQueueUnavailable ||
+                                  pendingDiaryDates.has(diary.localDate),
+                              }}
+                              disabled={
+                                !completeDayLoaded ||
+                                entryIndex === entries.length - 1 ||
+                                busyEntry !== null ||
+                                diary.status === "locked" ||
+                                durableQueueUnavailable ||
+                                pendingDiaryDates.has(diary.localDate)
+                              }
+                              onPress={() => void reorder(entry, "down")}
+                              style={styles.secondarySmall}
+                            >
+                              <Text style={styles.secondaryText}>Move down</Text>
+                            </Pressable>
+                            <Pressable
                               accessibilityLabel={`Repeat the pinned ${entryName(entry)} version today`}
                               accessibilityRole="button"
-                              disabled={busyEntry !== null}
+                              accessibilityState={{
+                                disabled:
+                                  busyEntry !== null ||
+                                  durableQueueUnavailable ||
+                                  pendingCorrectionEntries.has(entry.id) ||
+                                  pendingReorderDates.has(diary.localDate) ||
+                                  pendingReorderDates.has(repeatTargetDate),
+                              }}
+                              disabled={
+                                busyEntry !== null ||
+                                durableQueueUnavailable ||
+                                pendingCorrectionEntries.has(entry.id) ||
+                                pendingReorderDates.has(diary.localDate) ||
+                                pendingReorderDates.has(repeatTargetDate)
+                              }
                               onPress={() => void repeat(entry)}
                               style={styles.secondarySmall}
                             >
@@ -1434,8 +1567,14 @@ export function DiaryScreen({
                             <Pressable
                               accessibilityLabel={`Edit ${entryName(entry)} entry and private note`}
                               accessibilityRole="button"
-                              disabled={busyEntry !== null || diary.status === "locked"}
-                              onPress={() => setEditor(editorFor(entry, diary))}
+                              disabled={
+                                busyEntry !== null ||
+                                diary.status === "locked" ||
+                                durableQueueUnavailable ||
+                                pendingCorrectionEntries.has(entry.id) ||
+                                pendingReorderDates.has(diary.localDate)
+                              }
+                              onPress={() => setEditor(editorFor(entry, diary, profileTimeZone))}
                               style={styles.secondarySmall}
                             >
                               <Text style={styles.secondaryText}>Edit</Text>
@@ -1443,7 +1582,13 @@ export function DiaryScreen({
                             <Pressable
                               accessibilityLabel={`Delete ${entryName(entry)}`}
                               accessibilityRole="button"
-                              disabled={busyEntry !== null || diary.status === "locked"}
+                              disabled={
+                                busyEntry !== null ||
+                                diary.status === "locked" ||
+                                durableQueueUnavailable ||
+                                pendingCorrectionEntries.has(entry.id) ||
+                                pendingReorderDates.has(diary.localDate)
+                              }
                               onPress={() => confirmRemove(entry)}
                               style={styles.deleteSmall}
                             >

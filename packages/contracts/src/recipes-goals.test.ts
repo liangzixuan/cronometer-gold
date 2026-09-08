@@ -590,6 +590,7 @@ describe("food and recipe diary entry union", () => {
       timeZone: "America/Chicago",
       status: "open",
       revision: "21",
+      orderDigest: "d33348ee457d853020d5d62579569a8a8a592675d9505c51b1f7e588a0a124e8",
       entries: Array.from({ length: 21 }, () => food),
       totals: [aggregate],
       updatedAt: "2026-08-16T12:00:00.000Z",

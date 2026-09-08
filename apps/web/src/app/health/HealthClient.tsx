@@ -99,6 +99,75 @@ function responseError(value: unknown, fallback: string): string {
   return typeof error === "string" && error.length <= 500 ? error : fallback;
 }
 
+class PrivateRequestFailure extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly body: unknown,
+  ) {
+    super(message);
+  }
+}
+
+export class HealthOwnerFenceError extends Error {
+  constructor() {
+    super("The signed-in account changed while private health data was loading.");
+    this.name = "HealthOwnerFenceError";
+  }
+}
+
+/** Install private health data only after the current server session confirms its initiator. */
+export async function installHealthPrivateDataForOwner<T>(input: {
+  readonly expectedOwnerUserId: string;
+  readonly loadPrivateData: () => Promise<T>;
+  readonly revalidateSession: () => Promise<SessionSummary>;
+  readonly install: (data: T, session: SessionSummary) => void;
+  readonly signal?: AbortSignal;
+}): Promise<void> {
+  const data = await input.loadPrivateData();
+  input.signal?.throwIfAborted();
+  const session = await input.revalidateSession();
+  input.signal?.throwIfAborted();
+  if (session.user.id !== input.expectedOwnerUserId) throw new HealthOwnerFenceError();
+  input.install(data, session);
+}
+
+/** A typed time-zone conflict proves no write occurred, so its stale retry must not survive. */
+export function fenceCustomFoodLogForTimeZoneChange(
+  pending: Map<string, string>,
+  intentKey: string,
+  operationId: string,
+  status: number,
+  body: unknown,
+): boolean {
+  const changed =
+    status === 409 &&
+    typeof body === "object" &&
+    body !== null &&
+    !Array.isArray(body) &&
+    "code" in body &&
+    body.code === "DIARY_TIME_ZONE_CHANGED";
+  if (!changed) return false;
+  if (pending.get(intentKey) === operationId) pending.delete(intentKey);
+  return true;
+}
+
+export function customFoodLogTimeZoneReviewMessage(
+  localDate: string,
+  currentTimeZone: string | null,
+): string {
+  return currentTimeZone
+    ? `Your profile time zone changed to ${currentTimeZone}. This private food was not logged. Review ${localDate} as a local day in that zone, then confirm the day before logging again.`
+    : "Your profile time zone changed. This private food was not logged, and its stale retry was cleared. Current account settings could not be reloaded; refresh this page, then review the local diary day before logging again.";
+}
+
+export function customFoodProfileRefreshBelongsToOwner(
+  initiatingUserId: string,
+  refreshedUserId: string,
+): boolean {
+  return initiatingUserId === refreshedUserId;
+}
+
 function blankCustom(nutrientId: string): CustomDraft {
   return {
     id: null,
@@ -179,6 +248,7 @@ export function HealthClient() {
   const [integrations, setIntegrations] = useState<readonly PlatformIntegration[]>([]);
   const [custom, setCustom] = useState<CustomDraft>(() => blankCustom(""));
   const [customLog, setCustomLog] = useState<CustomLogDraft | null>(null);
+  const [customLogDateReviewRequired, setCustomLogDateReviewRequired] = useState(false);
   const [definitionName, setDefinitionName] = useState("Weight");
   const [definitionDimension, setDefinitionDimension] = useState<
     "mass" | "length" | "temperature" | "duration" | "count" | "other"
@@ -204,12 +274,75 @@ export function HealthClient() {
   const operations = useRef(new Map<string, string>());
   const loadController = useRef<AbortController | null>(null);
   const trendController = useRef<AbortController | null>(null);
+  const privateReadControllers = useRef(new Set<AbortController>());
+  const profileRefreshController = useRef<AbortController | null>(null);
+  const ownerUserId = useRef<string | null>(null);
+  const privateUiClosed = useRef(false);
   const diaryGroups = session?.profile.diaryGroups ?? defaultDiaryGroups;
 
   const signInAgain = useCallback(() => {
+    privateUiClosed.current = true;
+    loadController.current?.abort();
+    trendController.current?.abort();
+    for (const controller of privateReadControllers.current) controller.abort();
+    privateReadControllers.current.clear();
+    profileRefreshController.current?.abort();
+    ownerUserId.current = null;
+    operations.current.clear();
+    setSession(null);
+    setNutrients([]);
+    setCustomFoods([]);
+    setCustomFoodCursor(null);
+    setDefinitions([]);
+    setEvents([]);
+    setEventCursor(null);
+    setEventWindow(null);
+    setReminders([]);
+    setIntegrations([]);
+    setCustom(blankCustom(""));
+    setCustomLog(null);
+    setCustomLogDateReviewRequired(false);
+    setDefinitionName("Weight");
+    setDefinitionDimension("mass");
+    setDefinitionUnit("kg");
+    setEditingDefinition(null);
+    setSelectedDefinition("");
+    setEventValue("");
+    setEventDate("");
+    setEventTime("");
+    setEditingEvent(null);
+    setReminder(reminderDraft());
+    setFrom("");
+    setTo("");
+    setSelectedNutrient("");
+    setNutrientTrend(null);
+    setBiometricTrend(null);
+    setExportJob(null);
+    setErasureJob(null);
+    setPassword("");
+    setConfirmConsequences(false);
+    setBusy(null);
+    setState("loading");
+    setMessage("Closing your private health workspace…");
     router.replace("/login");
     router.refresh();
   }, [router]);
+
+  const revalidateHealthSession = useCallback(async (signal: AbortSignal) => {
+    try {
+      const response = await fetch("/api/auth/me", {
+        headers: { accept: "application/json" },
+        cache: "no-store",
+        signal,
+      });
+      if (!response.ok) throw new HealthOwnerFenceError();
+      return parseSession(await json(response));
+    } catch (error) {
+      if (signal.aborted) throw error;
+      if (error instanceof HealthOwnerFenceError) throw error;
+      throw new HealthOwnerFenceError();
+    }
+  }, []);
 
   const operation = useCallback((key: string) => {
     const existing = operations.current.get(key);
@@ -228,6 +361,8 @@ export function HealthClient() {
         readonly key?: string;
         readonly revision?: string;
         readonly recentAuth?: string;
+        readonly expectedTimeZone?: string;
+        readonly signal?: AbortSignal;
       } = {},
     ) => {
       const headers: Record<string, string> = { accept: "application/json" };
@@ -235,195 +370,347 @@ export function HealthClient() {
       if (input.key) headers["idempotency-key"] = operation(input.key);
       if (input.revision) headers["if-match"] = quoteRevision(input.revision);
       if (input.recentAuth) headers["x-reauthentication-token"] = input.recentAuth;
+      if (input.expectedTimeZone) headers["x-expected-profile-time-zone"] = input.expectedTimeZone;
       const response = await fetch(`/api/retention/${path}`, {
         method: input.method ?? "GET",
         headers,
         ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }),
         cache: "no-store",
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
       });
       if (response.status === 401) {
         signInAgain();
         throw new Error("Sign in to continue.");
       }
       const body = await json(response);
-      if (!response.ok) throw new Error(responseError(body, "The private health request failed."));
+      if (!response.ok)
+        throw new PrivateRequestFailure(
+          responseError(body, "The private health request failed."),
+          response.status,
+          body,
+        );
       return body;
     },
     [operation, signInAgain],
   );
 
   const loadAll = useCallback(async () => {
+    if (privateUiClosed.current) return;
     loadController.current?.abort();
     const controller = new AbortController();
     loadController.current = controller;
     setState("loading");
     try {
       const sessionResponse = await fetch("/api/auth/me", {
+        headers: { accept: "application/json" },
         cache: "no-store",
         signal: controller.signal,
       });
-      if (sessionResponse.status === 401) return signInAgain();
+      if (!sessionResponse.ok) throw new HealthOwnerFenceError();
       const nextSession = parseSession(await json(sessionResponse));
+      if (ownerUserId.current !== null && ownerUserId.current !== nextSession.user.id) {
+        throw new HealthOwnerFenceError();
+      }
       const now = new Date();
-      const localToday = localDateInTimeZone(now, nextSession.profile.timeZone);
       const rangeStart = new Date(now.getTime() - 120 * 24 * 60 * 60 * 1_000).toISOString();
       const rangeEnd = new Date(now.getTime() + 24 * 60 * 60 * 1_000).toISOString();
-      const responses = await Promise.all([
-        fetch("/api/nutrients/targetable", { cache: "no-store", signal: controller.signal }),
-        fetch("/api/retention/custom-foods?limit=50", {
-          cache: "no-store",
-          signal: controller.signal,
-        }),
-        fetch("/api/retention/biometrics/definitions", {
-          cache: "no-store",
-          signal: controller.signal,
-        }),
-        fetch(
-          `/api/retention/biometrics/events?from=${encodeURIComponent(rangeStart)}&to=${encodeURIComponent(rangeEnd)}&limit=100`,
-          { cache: "no-store", signal: controller.signal },
-        ),
-        fetch("/api/retention/reminders", { cache: "no-store", signal: controller.signal }),
-        fetch("/api/retention/integrations/health", {
-          cache: "no-store",
-          signal: controller.signal,
-        }),
-      ]);
-      if (responses.some((response) => response.status === 401)) return signInAgain();
-      for (const response of responses) {
-        if (!response.ok)
-          throw new Error(
-            responseError(await json(response), "Private health data could not be loaded."),
+      await installHealthPrivateDataForOwner({
+        expectedOwnerUserId: nextSession.user.id,
+        signal: controller.signal,
+        loadPrivateData: async () => {
+          const responses = await Promise.all([
+            fetch("/api/nutrients/targetable", {
+              cache: "no-store",
+              signal: controller.signal,
+            }),
+            fetch("/api/retention/custom-foods?limit=50", {
+              cache: "no-store",
+              signal: controller.signal,
+            }),
+            fetch("/api/retention/biometrics/definitions", {
+              cache: "no-store",
+              signal: controller.signal,
+            }),
+            fetch(
+              `/api/retention/biometrics/events?from=${encodeURIComponent(rangeStart)}&to=${encodeURIComponent(rangeEnd)}&limit=100`,
+              { cache: "no-store", signal: controller.signal },
+            ),
+            fetch("/api/retention/reminders", {
+              cache: "no-store",
+              signal: controller.signal,
+            }),
+            fetch("/api/retention/integrations/health", {
+              cache: "no-store",
+              signal: controller.signal,
+            }),
+          ]);
+          if (responses.some((response) => response.status === 401)) {
+            throw new HealthOwnerFenceError();
+          }
+          for (const response of responses) {
+            if (!response.ok)
+              throw new Error(
+                responseError(await json(response), "Private health data could not be loaded."),
+              );
+          }
+          const [
+            nutrientBody,
+            customBody,
+            definitionBody,
+            eventBody,
+            reminderBody,
+            integrationBody,
+          ] = await Promise.all(responses.map(json));
+          return {
+            nutrients: parseTargetableNutrients(nutrientBody),
+            customPage: parseCustomFoodList(customBody),
+            definitions: parseBiometricDefinitions(definitionBody),
+            eventPage: parseBiometricEvents(eventBody),
+            reminders: parseReminders(reminderBody),
+            integrations: parseIntegrations(integrationBody),
+          };
+        },
+        revalidateSession: () => revalidateHealthSession(controller.signal),
+        install: (data, currentSession) => {
+          if (
+            privateUiClosed.current ||
+            (ownerUserId.current !== null && ownerUserId.current !== nextSession.user.id)
+          ) {
+            throw new HealthOwnerFenceError();
+          }
+          ownerUserId.current = nextSession.user.id;
+          const localToday = localDateInTimeZone(now, currentSession.profile.timeZone);
+          setSession(currentSession);
+          setNutrients(data.nutrients);
+          setCustomFoods(data.customPage.items);
+          setCustomFoodCursor(data.customPage.nextCursor);
+          setDefinitions(data.definitions);
+          setEvents(data.eventPage.items);
+          setEventCursor(data.eventPage.nextCursor);
+          setEventWindow({ from: rangeStart, to: rangeEnd });
+          setReminders(data.reminders);
+          setIntegrations(data.integrations);
+          setFrom((value) => value || shiftLocalDate(localToday, -13));
+          setTo((value) => value || localToday);
+          setEventDate((value) => value || localToday);
+          setEventTime(
+            (value) =>
+              value || localTimeInTimeZone(now, currentSession.profile.timeZone).slice(0, 5),
           );
-      }
-      const [nutrientBody, customBody, definitionBody, eventBody, reminderBody, integrationBody] =
-        await Promise.all(responses.map(json));
-      if (controller.signal.aborted) return;
-      const nextNutrients = parseTargetableNutrients(nutrientBody);
-      const nextDefinitions = parseBiometricDefinitions(definitionBody);
-      setSession(nextSession);
-      setNutrients(nextNutrients);
-      const customPage = parseCustomFoodList(customBody);
-      const eventPage = parseBiometricEvents(eventBody);
-      setCustomFoods(customPage.items);
-      setCustomFoodCursor(customPage.nextCursor);
-      setDefinitions(nextDefinitions);
-      setEvents(eventPage.items);
-      setEventCursor(eventPage.nextCursor);
-      setEventWindow({ from: rangeStart, to: rangeEnd });
-      setReminders(parseReminders(reminderBody));
-      setIntegrations(parseIntegrations(integrationBody));
-      setFrom((value) => value || shiftLocalDate(localToday, -13));
-      setTo((value) => value || localToday);
-      setEventDate((value) => value || localToday);
-      setEventTime(
-        (value) => value || localTimeInTimeZone(now, nextSession.profile.timeZone).slice(0, 5),
-      );
-      setSelectedNutrient((value) => value || nextNutrients[0]?.nutrientId || "");
-      setSelectedDefinition(
-        (value) => value || nextDefinitions.find((item) => item.status === "active")?.id || "",
-      );
-      setCustom((value) =>
-        value.nutrients.length === 0 ? blankCustom(nextNutrients[0]?.nutrientId ?? "") : value,
-      );
-      setState("ready");
-      setMessage("Private health workspace is current.");
+          setSelectedNutrient((value) => value || data.nutrients[0]?.nutrientId || "");
+          setSelectedDefinition(
+            (value) => value || data.definitions.find((item) => item.status === "active")?.id || "",
+          );
+          setCustom((value) =>
+            value.nutrients.length === 0 ? blankCustom(data.nutrients[0]?.nutrientId ?? "") : value,
+          );
+          setState("ready");
+          setMessage("Private health workspace is current.");
+        },
+      });
     } catch (error) {
       if (controller.signal.aborted) return;
+      if (error instanceof HealthOwnerFenceError) return signInAgain();
       setState("error");
       setMessage(
         error instanceof Error ? error.message : "Private health data could not be loaded.",
       );
+    } finally {
+      if (loadController.current === controller) loadController.current = null;
     }
-  }, [signInAgain]);
+  }, [revalidateHealthSession, signInAgain]);
 
   async function loadMoreCustomFoods() {
     if (!customFoodCursor) return;
+    const initiatingOwnerUserId = ownerUserId.current;
+    if (initiatingOwnerUserId === null || privateUiClosed.current) return;
+    const controller = new AbortController();
+    privateReadControllers.current.add(controller);
     setBusy("custom-more");
     try {
-      const page = parseCustomFoodList(
-        await request(`custom-foods?limit=50&cursor=${encodeURIComponent(customFoodCursor)}`),
-      );
-      setCustomFoods((items) => [
-        ...items,
-        ...page.items.filter((food) => !items.some((existing) => existing.id === food.id)),
-      ]);
-      setCustomFoodCursor(page.nextCursor);
+      await installHealthPrivateDataForOwner({
+        expectedOwnerUserId: initiatingOwnerUserId,
+        signal: controller.signal,
+        loadPrivateData: async () =>
+          parseCustomFoodList(
+            await request(`custom-foods?limit=50&cursor=${encodeURIComponent(customFoodCursor)}`, {
+              signal: controller.signal,
+            }),
+          ),
+        revalidateSession: () => revalidateHealthSession(controller.signal),
+        install: (page) => {
+          if (privateUiClosed.current || ownerUserId.current !== initiatingOwnerUserId) {
+            throw new HealthOwnerFenceError();
+          }
+          setCustomFoods((items) => [
+            ...items,
+            ...page.items.filter((food) => !items.some((existing) => existing.id === food.id)),
+          ]);
+          setCustomFoodCursor(page.nextCursor);
+        },
+      });
     } catch (error) {
+      if (controller.signal.aborted) return;
+      if (error instanceof HealthOwnerFenceError) return signInAgain();
       setMessage(error instanceof Error ? error.message : "More custom foods could not be loaded.");
     } finally {
-      setBusy(null);
+      privateReadControllers.current.delete(controller);
+      if (!privateUiClosed.current) setBusy(null);
     }
   }
 
   async function loadMoreEvents() {
     if (!eventCursor || !eventWindow) return;
+    const initiatingOwnerUserId = ownerUserId.current;
+    if (initiatingOwnerUserId === null || privateUiClosed.current) return;
+    const controller = new AbortController();
+    privateReadControllers.current.add(controller);
     setBusy("event-more");
     try {
-      const page = parseBiometricEvents(
-        await request(
-          `biometrics/events?from=${encodeURIComponent(eventWindow.from)}&to=${encodeURIComponent(eventWindow.to)}&limit=100&cursor=${encodeURIComponent(eventCursor)}`,
-        ),
-      );
-      setEvents((items) => [
-        ...items,
-        ...page.items.filter((event) => !items.some((existing) => existing.id === event.id)),
-      ]);
-      setEventCursor(page.nextCursor);
+      await installHealthPrivateDataForOwner({
+        expectedOwnerUserId: initiatingOwnerUserId,
+        signal: controller.signal,
+        loadPrivateData: async () =>
+          parseBiometricEvents(
+            await request(
+              `biometrics/events?from=${encodeURIComponent(eventWindow.from)}&to=${encodeURIComponent(eventWindow.to)}&limit=100&cursor=${encodeURIComponent(eventCursor)}`,
+              { signal: controller.signal },
+            ),
+          ),
+        revalidateSession: () => revalidateHealthSession(controller.signal),
+        install: (page) => {
+          if (privateUiClosed.current || ownerUserId.current !== initiatingOwnerUserId) {
+            throw new HealthOwnerFenceError();
+          }
+          setEvents((items) => [
+            ...items,
+            ...page.items.filter((event) => !items.some((existing) => existing.id === event.id)),
+          ]);
+          setEventCursor(page.nextCursor);
+        },
+      });
     } catch (error) {
+      if (controller.signal.aborted) return;
+      if (error instanceof HealthOwnerFenceError) return signInAgain();
       setMessage(
         error instanceof Error ? error.message : "More biometric events could not be loaded.",
       );
     } finally {
-      setBusy(null);
+      privateReadControllers.current.delete(controller);
+      if (!privateUiClosed.current) setBusy(null);
     }
   }
 
   useEffect(() => {
     void loadAll();
-    return () => loadController.current?.abort();
+    return () => {
+      loadController.current?.abort();
+      for (const controller of privateReadControllers.current) controller.abort();
+      privateReadControllers.current.clear();
+      profileRefreshController.current?.abort();
+    };
   }, [loadAll]);
+
+  async function refreshCustomLogProfileAfterTimeZoneChange(
+    initiatingUserId: string,
+  ): Promise<string | null> {
+    profileRefreshController.current?.abort();
+    const controller = new AbortController();
+    profileRefreshController.current = controller;
+    try {
+      const response = await fetch("/api/auth/me", {
+        headers: { accept: "application/json" },
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (response.status === 401) {
+        signInAgain();
+        return null;
+      }
+      if (!response.ok) return null;
+      const nextSession = parseSession(await json(response));
+      if (controller.signal.aborted || privateUiClosed.current) return null;
+      if (
+        ownerUserId.current !== initiatingUserId ||
+        !customFoodProfileRefreshBelongsToOwner(initiatingUserId, nextSession.user.id)
+      ) {
+        signInAgain();
+        return null;
+      }
+      setSession(nextSession);
+      return nextSession.profile.timeZone;
+    } catch {
+      return null;
+    } finally {
+      if (profileRefreshController.current === controller) profileRefreshController.current = null;
+    }
+  }
 
   useEffect(() => {
     if (!from || !to || !isLocalDate(from) || !isLocalDate(to) || from > to) return;
+    const initiatingOwnerUserId = ownerUserId.current;
+    if (initiatingOwnerUserId === null || privateUiClosed.current) return;
     trendController.current?.abort();
     const controller = new AbortController();
     trendController.current = controller;
     void (async () => {
       try {
-        const requests: Promise<Response>[] = [];
-        if (selectedNutrient)
-          requests.push(
-            fetch(
-              `/api/retention/trends/nutrients?nutrientId=${encodeURIComponent(selectedNutrient)}&from=${from}&to=${to}`,
-              { cache: "no-store", signal: controller.signal },
-            ),
-          );
-        if (selectedDefinition)
-          requests.push(
-            fetch(
-              `/api/retention/trends/biometrics?definitionId=${encodeURIComponent(selectedDefinition)}&from=${from}&to=${to}`,
-              { cache: "no-store", signal: controller.signal },
-            ),
-          );
-        const responses = await Promise.all(requests);
-        for (const response of responses)
-          if (!response.ok)
-            throw new Error(responseError(await json(response), "Trends could not be loaded."));
-        if (controller.signal.aborted) return;
-        let index = 0;
-        setNutrientTrend(
-          selectedNutrient ? parseNutrientTrend(await json(responses[index++] as Response)) : null,
-        );
-        setBiometricTrend(
-          selectedDefinition ? parseBiometricTrend(await json(responses[index] as Response)) : null,
-        );
+        await installHealthPrivateDataForOwner({
+          expectedOwnerUserId: initiatingOwnerUserId,
+          signal: controller.signal,
+          loadPrivateData: async () => {
+            const requests: Promise<Response>[] = [];
+            if (selectedNutrient)
+              requests.push(
+                fetch(
+                  `/api/retention/trends/nutrients?nutrientId=${encodeURIComponent(selectedNutrient)}&from=${from}&to=${to}`,
+                  { cache: "no-store", signal: controller.signal },
+                ),
+              );
+            if (selectedDefinition)
+              requests.push(
+                fetch(
+                  `/api/retention/trends/biometrics?definitionId=${encodeURIComponent(selectedDefinition)}&from=${from}&to=${to}`,
+                  { cache: "no-store", signal: controller.signal },
+                ),
+              );
+            const responses = await Promise.all(requests);
+            if (responses.some((response) => response.status === 401)) {
+              throw new HealthOwnerFenceError();
+            }
+            for (const response of responses)
+              if (!response.ok)
+                throw new Error(responseError(await json(response), "Trends could not be loaded."));
+            let index = 0;
+            return {
+              nutrient: selectedNutrient
+                ? parseNutrientTrend(await json(responses[index++] as Response))
+                : null,
+              biometric: selectedDefinition
+                ? parseBiometricTrend(await json(responses[index] as Response))
+                : null,
+            };
+          },
+          revalidateSession: () => revalidateHealthSession(controller.signal),
+          install: (trends) => {
+            if (privateUiClosed.current || ownerUserId.current !== initiatingOwnerUserId) {
+              throw new HealthOwnerFenceError();
+            }
+            setNutrientTrend(trends.nutrient);
+            setBiometricTrend(trends.biometric);
+          },
+        });
       } catch (error) {
-        if (!controller.signal.aborted)
-          setMessage(error instanceof Error ? error.message : "Trends could not be loaded.");
+        if (controller.signal.aborted) return;
+        if (error instanceof HealthOwnerFenceError) {
+          signInAgain();
+          return;
+        }
+        setMessage(error instanceof Error ? error.message : "Trends could not be loaded.");
       }
     })();
     return () => controller.abort();
-  }, [from, selectedDefinition, selectedNutrient, to]);
+  }, [from, revalidateHealthSession, selectedDefinition, selectedNutrient, signInAgain, to]);
 
   const selectedDefinitionRecord = useMemo(
     () => definitions.find((definition) => definition.id === selectedDefinition) ?? null,
@@ -580,9 +867,13 @@ export function HealthClient() {
   }
 
   async function logCustomFood() {
+    if (customLogDateReviewRequired) {
+      return setMessage("Review and confirm the local diary day before logging again.");
+    }
     if (!session || !customLog || !isPositiveInputDecimal(customLog.quantity)) {
       return setMessage("Choose a private food and enter a positive canonical quantity.");
     }
+    const initiatingOwnerUserId = session.user.id;
     const serving = customLog.food.currentVersion.serving;
     if (customLog.kind === "serving" && !serving)
       return setMessage("This food has no serving definition.");
@@ -599,11 +890,17 @@ export function HealthClient() {
         session.profile.timeZone,
       ),
     };
-    const key = `custom-log:${customLog.food.id}:${customLog.food.currentVersion.id}:${JSON.stringify(body)}`;
+    const key = `custom-log:${customLog.food.id}:${customLog.food.currentVersion.id}:${session.profile.timeZone}:${JSON.stringify(body)}`;
+    const exactOperationId = operation(key);
     setBusy("custom-log");
     try {
       const mutation = parseDiaryMutation(
-        await request(`custom-foods/${customLog.food.id}/log`, { method: "POST", body, key }),
+        await request(`custom-foods/${customLog.food.id}/log?profileTimeZonePrecondition=v1`, {
+          method: "POST",
+          body,
+          key,
+          expectedTimeZone: session.profile.timeZone,
+        }),
       );
       operations.current.delete(key);
       setCustomLog(null);
@@ -611,12 +908,43 @@ export function HealthClient() {
         `Pinned private food version logged to ${diaryGroupLabel(diaryGroups, customLog.mealSlot)} on ${mutation.entry?.localDate ?? customLog.localDate}.`,
       );
     } catch (error) {
+      if (
+        error instanceof PrivateRequestFailure &&
+        fenceCustomFoodLogForTimeZoneChange(
+          operations.current,
+          key,
+          exactOperationId,
+          error.status,
+          error.body,
+        )
+      ) {
+        setCustomLogDateReviewRequired(true);
+        setSession(null);
+        const currentTimeZone =
+          await refreshCustomLogProfileAfterTimeZoneChange(initiatingOwnerUserId);
+        if (privateUiClosed.current) return;
+        setMessage(customFoodLogTimeZoneReviewMessage(customLog.localDate, currentTimeZone));
+        return;
+      }
       setMessage(
         `${error instanceof Error ? error.message : "Private food could not be logged."} Submit again to retry the exact version safely.`,
       );
     } finally {
       setBusy(null);
     }
+  }
+
+  function confirmCustomFoodLogDateReview() {
+    if (!session || !customLog) {
+      setMessage(
+        "Current account settings are unavailable. Refresh this page before confirming a local diary day.",
+      );
+      return;
+    }
+    setCustomLogDateReviewRequired(false);
+    setMessage(
+      `${customLog.localDate} is confirmed as a local diary day in ${session.profile.timeZone}. Submit when ready.`,
+    );
   }
 
   async function saveEvent() {
@@ -1264,21 +1592,23 @@ export function HealthClient() {
                       {food.status === "active" ? (
                         <>
                           <button
+                            disabled={!session}
                             onClick={() => {
+                              if (!session) {
+                                setMessage("Refresh current account settings before logging.");
+                                return;
+                              }
                               const now = new Date();
                               setCustomLog({
                                 food,
                                 kind: food.currentVersion.serving ? "serving" : "grams",
                                 quantity: "1",
                                 mealSlot: "snacks",
-                                localDate: localDateInTimeZone(
-                                  now,
-                                  session?.profile.timeZone ?? "UTC",
+                                localDate: localDateInTimeZone(now, session.profile.timeZone),
+                                localTime: localTimeInTimeZone(now, session.profile.timeZone).slice(
+                                  0,
+                                  5,
                                 ),
-                                localTime: localTimeInTimeZone(
-                                  now,
-                                  session?.profile.timeZone ?? "UTC",
-                                ).slice(0, 5),
                               });
                             }}
                             type="button"
@@ -1387,10 +1717,23 @@ export function HealthClient() {
                     </label>
                   </div>
                   <small>
-                    The immutable custom-food version ID is included in the stable retry body.
+                    Interpreted in {session?.profile.timeZone ?? "your verified profile zone"}. The
+                    immutable custom-food version ID is included in the stable retry body.
                   </small>
                   <div className="entryActions">
-                    <button disabled={busy === "custom-log"} type="submit">
+                    {customLogDateReviewRequired ? (
+                      <button
+                        disabled={!session || busy === "custom-log"}
+                        onClick={confirmCustomFoodLogDateReview}
+                        type="button"
+                      >
+                        Confirm {customLog.localDate} as local day
+                      </button>
+                    ) : null}
+                    <button
+                      disabled={busy === "custom-log" || customLogDateReviewRequired || !session}
+                      type="submit"
+                    >
                       Log exact version
                     </button>
                     <button onClick={() => setCustomLog(null)} type="button">

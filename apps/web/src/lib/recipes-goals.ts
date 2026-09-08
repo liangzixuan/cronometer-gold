@@ -1316,6 +1316,7 @@ export function prepareRecipeLogOperation(
     input.portion,
     input.mealSlot,
     input.localDate,
+    input.timeZone,
   ]);
   return prepareStableMutation(
     pending,

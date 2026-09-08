@@ -1,5 +1,6 @@
 import {
   type AuthenticatedAccount,
+  type DiaryCorrectionMutationResponse,
   type DiaryDay,
   type DiaryDayResponse,
   type DiaryEntry,
@@ -22,6 +23,7 @@ import {
   type RecipeSummary,
   type RecipeWarningCode,
   type ReferenceTargetSetListResponse,
+  type ReorderDiaryDayResponse,
   type TargetableNutrient,
   type TargetableNutrientListResponse,
   type UserProfile,
@@ -45,7 +47,10 @@ import {
   PasswordCredentialStaleError as DatabasePasswordCredentialStaleError,
   PasswordRecoveryTokenExpiredError as DatabasePasswordRecoveryTokenExpiredError,
   PasswordRecoveryTokenInvalidError as DatabasePasswordRecoveryTokenInvalidError,
+  type DiaryCorrectionMutationResult,
   type DiaryDayRecord,
+  type DiaryDayReorderResult,
+  DiaryDayRevisionConflictError,
   type DiaryEntryRecord,
   DiaryEntryRevisionConflictError,
   type DiaryFoodEntryRecord,
@@ -113,6 +118,8 @@ import {
   RecipeValidationError,
   type RecipeWarningRecord,
   registerPasswordAccount,
+  reorderDiaryDay,
+  repeatDiaryEntry,
   reviseNutritionGoal,
   reviseRecipe,
   revokeSession,
@@ -663,6 +670,7 @@ function day(record: DiaryDayRecord): DiaryDay {
     entries: record.entries.map(mapDiaryEntryRecord),
     localDate: record.localDate,
     revision: record.revision,
+    orderDigest: record.orderDigest,
     status: record.status,
     timeZone: record.timeZone,
     totals: record.totals.map(mapDiaryNutrientAggregate),
@@ -680,9 +688,34 @@ function mutation(result: DiaryMutationResult, deleted: boolean): DiaryMutationR
   };
 }
 
+function correctionMutation(
+  result: DiaryCorrectionMutationResult,
+  deleted: boolean,
+): DiaryCorrectionMutationResponse {
+  const legacy = mutation(result, deleted);
+  return {
+    data: {
+      ...legacy.data,
+      receipt: result.receipt,
+    },
+  };
+}
+
+function dayReorder(result: DiaryDayReorderResult): ReorderDiaryDayResponse {
+  return {
+    data: {
+      replayed: result.replayed,
+      receipt: result.receipt,
+    },
+  };
+}
+
 function mapDiaryPersistenceError(error: unknown): never {
   if (error instanceof DiaryNotFoundError) throw new DiaryNotFoundServiceError();
   if (error instanceof DiaryEntryRevisionConflictError) {
+    throw new DiaryRevisionConflictServiceError();
+  }
+  if (error instanceof DiaryDayRevisionConflictError) {
     throw new DiaryRevisionConflictServiceError();
   }
   if (error instanceof DiaryIdempotencyConflictError) {
@@ -809,6 +842,33 @@ export class DatabaseDiaryService implements DiaryService {
     }
   }
 
+  async updateEntryCorrection(
+    input: Parameters<NonNullable<DiaryService["updateEntryCorrection"]>>[0],
+  ): Promise<DiaryCorrectionMutationResponse> {
+    input.signal?.throwIfAborted();
+    try {
+      const result = await updateDiaryEntry(this.#database, {
+        clientOperationId: input.clientOperationId,
+        entryId: input.entryId,
+        expectedEntryRevision: input.expectedRevision,
+        ...(input.expectedProfileTimeZone === undefined
+          ? {}
+          : { expectedProfileTimeZone: input.expectedProfileTimeZone }),
+        ...(input.patch.mealSlot === undefined ? {} : { mealSlot: input.patch.mealSlot }),
+        ...(input.patch.occurredAt === undefined ? {} : { occurredAt: input.patch.occurredAt }),
+        ...(input.patch.portion === undefined ? {} : { portion: input.patch.portion }),
+        ...(input.patch.position === undefined ? {} : { position: input.patch.position }),
+        ...(input.patch.note === undefined ? {} : { note: input.patch.note }),
+        requestDigest: input.requestDigest,
+        userId: input.userId,
+      });
+      input.signal?.throwIfAborted();
+      return correctionMutation(result, false);
+    } catch (error) {
+      mapDiaryPersistenceError(error);
+    }
+  }
+
   async deleteEntry(
     input: Parameters<DiaryService["deleteEntry"]>[0],
   ): Promise<DiaryMutationResponse> {
@@ -823,6 +883,70 @@ export class DatabaseDiaryService implements DiaryService {
       });
       input.signal?.throwIfAborted();
       return mutation(result, true);
+    } catch (error) {
+      mapDiaryPersistenceError(error);
+    }
+  }
+
+  async deleteEntryCorrection(
+    input: Parameters<NonNullable<DiaryService["deleteEntryCorrection"]>>[0],
+  ): Promise<DiaryCorrectionMutationResponse> {
+    input.signal?.throwIfAborted();
+    try {
+      const result = await deleteDiaryEntry(this.#database, {
+        clientOperationId: input.clientOperationId,
+        entryId: input.entryId,
+        expectedEntryRevision: input.expectedRevision,
+        requestDigest: input.requestDigest,
+        userId: input.userId,
+      });
+      input.signal?.throwIfAborted();
+      return correctionMutation(result, true);
+    } catch (error) {
+      mapDiaryPersistenceError(error);
+    }
+  }
+
+  async repeatEntryCorrection(
+    input: Parameters<NonNullable<DiaryService["repeatEntryCorrection"]>>[0],
+  ): Promise<DiaryCorrectionMutationResponse> {
+    input.signal?.throwIfAborted();
+    try {
+      const result = await repeatDiaryEntry(this.#database, {
+        clientOperationId: input.clientOperationId,
+        expectedProfileTimeZone: input.expectedProfileTimeZone,
+        sourceEntryId: input.sourceEntryId,
+        sourceRevision: input.expectedSourceRevision,
+        occurredAt: input.request.occurredAt,
+        ...(input.request.mealSlot === undefined ? {} : { mealSlot: input.request.mealSlot }),
+        ...(input.request.position === undefined ? {} : { position: input.request.position }),
+        requestDigest: input.requestDigest,
+        userId: input.userId,
+      });
+      input.signal?.throwIfAborted();
+      return correctionMutation(result, false);
+    } catch (error) {
+      mapDiaryPersistenceError(error);
+    }
+  }
+
+  async reorderDay(
+    input: Parameters<NonNullable<DiaryService["reorderDay"]>>[0],
+  ): Promise<ReorderDiaryDayResponse> {
+    input.signal?.throwIfAborted();
+    try {
+      const result = await reorderDiaryDay(this.#database, {
+        clientOperationId: input.clientOperationId,
+        expectedDayRevision: input.expectedDayRevision,
+        expectedOrderDigest: input.expectedOrderDigest,
+        expectedProfileTimeZone: input.expectedProfileTimeZone,
+        groups: input.groups,
+        localDate: input.localDate,
+        requestDigest: input.requestDigest,
+        userId: input.userId,
+      });
+      input.signal?.throwIfAborted();
+      return dayReorder(result);
     } catch (error) {
       mapDiaryPersistenceError(error);
     }

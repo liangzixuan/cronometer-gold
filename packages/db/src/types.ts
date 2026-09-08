@@ -732,7 +732,7 @@ export interface DiaryOperationTable {
   user_id: string;
   client_operation_id: string;
   request_digest: string;
-  operation: "create" | "delete" | "update";
+  operation: "create" | "delete" | "reorder" | "update";
   diary_entry_id: string;
   result_payload: ImmutableJson;
   created_at: CreatedTimestamp;

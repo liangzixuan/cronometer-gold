@@ -159,12 +159,59 @@ export interface DiaryMutationResult {
   readonly affectedDays: readonly { readonly localDate: string; readonly revision: string }[];
 }
 
+export type DiaryCorrectionKind = "delete" | "repeat" | "update";
+
+export interface DiaryRevisionSubject {
+  readonly entryId: string;
+  readonly revision: string;
+}
+
+export interface DiaryCorrectionReceipt {
+  readonly protocol: "v1";
+  readonly operationId: string;
+  readonly kind: DiaryCorrectionKind;
+  readonly expectedSubjects: readonly [DiaryRevisionSubject];
+  readonly resultSubjects: readonly [
+    DiaryRevisionSubject & { readonly state: "active" | "deleted" },
+  ];
+  readonly affectedDays: DiaryMutationResult["affectedDays"];
+}
+
+export interface DiaryCorrectionMutationResult extends DiaryMutationResult {
+  readonly receipt: DiaryCorrectionReceipt;
+}
+
+interface DiaryCorrectionRequestCommon {
+  readonly entryId: string;
+  readonly entryRevision: string;
+  readonly operationId: string;
+  readonly sourceLocalDate: string;
+}
+
+export type DiaryCorrectionRequestEvidence =
+  | (DiaryCorrectionRequestCommon & {
+      readonly kind: "delete";
+      readonly body: null;
+      readonly expectedTimeZone: null;
+    })
+  | (DiaryCorrectionRequestCommon & {
+      readonly kind: "repeat";
+      readonly body: unknown;
+      readonly expectedTimeZone: string;
+    })
+  | (DiaryCorrectionRequestCommon & {
+      readonly kind: "update";
+      readonly body: unknown;
+      readonly expectedTimeZone: string | null;
+    });
+
 export interface DiaryDay {
   readonly id: string | null;
   readonly localDate: string;
   readonly timeZone: string;
   readonly status: "open" | "locked";
   readonly revision: string;
+  readonly orderDigest: string;
   readonly entries: readonly DiaryEntry[];
   readonly totals: readonly DiaryNutrient[];
   readonly updatedAt: string | null;
@@ -180,6 +227,59 @@ export interface DiaryPage {
   readonly page: DiaryPageMetadata;
   /** True only when an older full-day `{ data }` response was normalized locally. */
   readonly legacy: boolean;
+}
+
+export interface DiaryDayOrderGroups {
+  readonly breakfast: readonly number[];
+  readonly lunch: readonly number[];
+  readonly dinner: readonly number[];
+  readonly snacks: readonly number[];
+}
+
+export interface DiaryDayReorderPlan {
+  readonly expectedDayRevision: string;
+  readonly dayTimeZone: string;
+  readonly body: { readonly groups: DiaryDayOrderGroups };
+}
+
+export interface DiaryDayOrderResultEntry {
+  readonly entryId: string;
+  readonly entryRevision: string;
+  readonly position: number;
+}
+
+export interface DiaryDayOrderResultGroup {
+  readonly mealSlot: MealSlot;
+  readonly entries: readonly DiaryDayOrderResultEntry[];
+}
+
+export type DiaryDayOrderResultGroups = readonly [
+  DiaryDayOrderResultGroup,
+  DiaryDayOrderResultGroup,
+  DiaryDayOrderResultGroup,
+  DiaryDayOrderResultGroup,
+];
+
+export interface DiaryDayReorderReceipt {
+  readonly operationId: string;
+  readonly localDate: string;
+  readonly timeZone: string;
+  readonly expectedDayRevision: string;
+  readonly resultingDayRevision: string;
+  readonly previousOrderDigest: string;
+  readonly orderDigest: string;
+  readonly groups: DiaryDayOrderResultGroups;
+}
+
+export interface DiaryDayReorderResult {
+  readonly replayed: boolean;
+  readonly receipt: DiaryDayReorderReceipt;
+}
+
+export interface DiaryDayReorderOperation extends DiaryDayReorderPlan {
+  readonly expectedProfileTimeZone: string;
+  readonly expectedOrderDigest: string;
+  readonly expectedResultOrderDigest: string;
 }
 
 export interface DiaryEditorOrigin {
@@ -826,6 +926,8 @@ export function parseDiaryDay(value: unknown): DiaryDay {
       (typeof value.data.revision === "string" && /^\d+$/u.test(value.data.revision)) ||
       (typeof value.data.revision === "number" && Number.isSafeInteger(value.data.revision))
     ) ||
+    typeof value.data.orderDigest !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(value.data.orderDigest) ||
     !Array.isArray(value.data.entries) ||
     value.data.entries.length > DIARY_DAY_MAX_ENTRIES ||
     !Array.isArray(value.data.totals) ||
@@ -840,6 +942,7 @@ export function parseDiaryDay(value: unknown): DiaryDay {
     timeZone: value.data.timeZone,
     status: value.data.status,
     revision: String(value.data.revision),
+    orderDigest: value.data.orderDigest,
     entries: value.data.entries.map(parseEntry),
     totals: value.data.totals.map(parseDiaryNutrient),
     updatedAt: value.data.updatedAt,
@@ -930,6 +1033,7 @@ export function mergeDiaryPages(current: DiaryPage | null, incoming: DiaryPage):
     current.data.timeZone !== incoming.data.timeZone ||
     current.data.status !== incoming.data.status ||
     current.data.revision !== incoming.data.revision ||
+    current.data.orderDigest !== incoming.data.orderDigest ||
     current.data.updatedAt !== incoming.data.updatedAt ||
     current.page.totalEntries !== incoming.page.totalEntries ||
     !sameTotals(current.data.totals, incoming.data.totals) ||
@@ -950,6 +1054,142 @@ export function mergeDiaryPages(current: DiaryPage | null, incoming: DiaryPage):
   return merged;
 }
 
+/** Build a compact, complete-day permutation against the exact loaded revision. */
+export function prepareDiaryDayReorder(
+  page: DiaryPage,
+  entryId: string,
+  direction: "down" | "up",
+): DiaryDayReorderPlan {
+  if (!completePageShape(page) || page.page.nextCursor !== null) {
+    throw new RangeError("Load the complete diary day before changing entry order.");
+  }
+  if (page.data.status !== "open") {
+    throw new RangeError("Locked diary days cannot be reordered.");
+  }
+  const selected = page.data.entries.find((entry) => entry.id === entryId);
+  if (!selected) throw new RangeError("The diary entry is not in the loaded day.");
+
+  const groups = Object.fromEntries(
+    mealSlots.map((slot) => {
+      const baseline = page.data.entries.filter((entry) => entry.mealSlot === slot);
+      const permutation = baseline.map((_, index) => index);
+      if (slot === selected.mealSlot) {
+        const current = baseline.findIndex((entry) => entry.id === entryId);
+        const target = direction === "up" ? current - 1 : current + 1;
+        if (current < 0 || target < 0 || target >= permutation.length) {
+          throw new RangeError(`The diary entry cannot move ${direction} in this meal.`);
+        }
+        const currentIndex = permutation[current];
+        const targetIndex = permutation[target];
+        if (currentIndex === undefined || targetIndex === undefined) {
+          throw new RangeError("The diary entry order was incomplete.");
+        }
+        permutation[current] = targetIndex;
+        permutation[target] = currentIndex;
+      }
+      return [slot, permutation] as const;
+    }),
+  ) as unknown as DiaryDayOrderGroups;
+
+  return {
+    expectedDayRevision: page.data.revision,
+    dayTimeZone: page.data.timeZone,
+    body: { groups },
+  };
+}
+
+function incrementDiaryEntryRevision(revision: string): string {
+  if (!/^[1-9]\d*$/u.test(revision)) {
+    throw new TypeError("A diary entry revision was invalid.");
+  }
+  return String(BigInt(revision) + 1n);
+}
+
+function diaryDayOrderEvidence(
+  page: DiaryPage,
+  groups: DiaryDayOrderGroups | null,
+): DiaryDayOrderResultGroups {
+  return mealSlots.map((mealSlot) => {
+    const baseline = page.data.entries.filter((entry) => entry.mealSlot === mealSlot);
+    const indexes = groups?.[mealSlot] ?? baseline.map((_, index) => index);
+    if (
+      indexes.length !== baseline.length ||
+      new Set(indexes).size !== baseline.length ||
+      indexes.some((index) => !Number.isSafeInteger(index) || index < 0 || index >= baseline.length)
+    ) {
+      throw new TypeError("The diary day order was not a complete meal permutation.");
+    }
+    return {
+      mealSlot,
+      entries: indexes.map((baselineIndex, position) => {
+        const entry = baseline[baselineIndex];
+        if (!entry) throw new TypeError("The diary day order referenced a missing entry.");
+        return {
+          entryId: entry.id,
+          entryRevision:
+            groups !== null && entry.position !== position
+              ? incrementDiaryEntryRevision(entry.revision)
+              : entry.revision,
+          position: groups === null ? entry.position : position,
+        };
+      }),
+    };
+  }) as unknown as DiaryDayOrderResultGroups;
+}
+
+/** Hash the exact canonical entry order used by the atomic day-order protocol. */
+export async function diaryDayOrderDigest(
+  localDate: string,
+  timeZone: string,
+  groups: DiaryDayOrderResultGroups,
+): Promise<string> {
+  if (!isLocalDate(localDate) || !isSupportedTimeZone(timeZone)) {
+    throw new TypeError("The diary day order context was invalid.");
+  }
+  const canonicalGroups = groups.map((group, index) => {
+    if (group.mealSlot !== mealSlots[index]) {
+      throw new TypeError("The diary day order groups were not canonical.");
+    }
+    return [
+      group.mealSlot,
+      group.entries.map((entry) => [entry.entryId, entry.entryRevision, entry.position]),
+    ];
+  });
+  const bytes = new TextEncoder().encode(
+    JSON.stringify(["diary-day-order-v1", localDate, timeZone, canonicalGroups]),
+  );
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/** Build the compact permutation plus exact pre- and post-operation digest evidence. */
+export async function prepareDiaryDayReorderOperation(
+  page: DiaryPage,
+  expectedProfileTimeZone: string,
+  entryId: string,
+  direction: "down" | "up",
+): Promise<DiaryDayReorderOperation> {
+  if (!isSupportedTimeZone(expectedProfileTimeZone)) {
+    throw new TypeError("The current profile time zone was invalid.");
+  }
+  const plan = prepareDiaryDayReorder(page, entryId, direction);
+  const baseline = diaryDayOrderEvidence(page, null);
+  const result = diaryDayOrderEvidence(page, plan.body.groups);
+  const [computedExpectedOrderDigest, expectedResultOrderDigest] = await Promise.all([
+    diaryDayOrderDigest(page.data.localDate, page.data.timeZone, baseline),
+    diaryDayOrderDigest(page.data.localDate, page.data.timeZone, result),
+  ]);
+  if (computedExpectedOrderDigest !== page.data.orderDigest) {
+    throw new TypeError("The diary order digest did not match the loaded day.");
+  }
+  return {
+    ...plan,
+    expectedProfileTimeZone,
+    expectedOrderDigest: page.data.orderDigest,
+    expectedResultOrderDigest,
+  };
+}
+
 export function diaryPagePath(localDate: string, nextCursor?: string | null): string {
   if (!isLocalDate(localDate) || (nextCursor != null && !cursor(nextCursor))) {
     throw new TypeError("The diary page request was invalid.");
@@ -963,12 +1203,19 @@ export function isDiaryPageStaleProblem(status: number, value: unknown): boolean
   return status === 409 && record(value) && value.code === "DIARY_PAGE_STALE";
 }
 
-export function diaryEditorOrigin(day: DiaryDay, entry: DiaryEntry): DiaryEditorOrigin {
+export function diaryEditorOrigin(
+  day: DiaryDay,
+  entry: DiaryEntry,
+  currentProfileTimeZone: string,
+): DiaryEditorOrigin {
+  if (!isSupportedTimeZone(currentProfileTimeZone)) {
+    throw new TypeError("The current profile time zone was invalid.");
+  }
   return {
     entryId: entry.id,
     originEntryRevision: entry.revision,
     originLocalDate: day.localDate,
-    originTimeZone: day.timeZone,
+    originTimeZone: currentProfileTimeZone,
     originDayRevision: day.revision,
   };
 }
@@ -977,18 +1224,28 @@ export function diaryEditorOriginMatches(
   origin: DiaryEditorOrigin,
   day: DiaryDay,
   entry: DiaryEntry,
+  currentProfileTimeZone: string | null,
 ): boolean {
   return (
     origin.entryId === entry.id &&
     origin.originEntryRevision === entry.revision &&
     origin.originLocalDate === day.localDate &&
-    origin.originTimeZone === day.timeZone &&
+    origin.originTimeZone === currentProfileTimeZone &&
     origin.originDayRevision === day.revision
   );
 }
 
 export function diaryEditorOperationKey(origin: DiaryEditorOrigin, body: object): string {
   return `edit:${origin.entryId}:${origin.originEntryRevision}:${origin.originDayRevision}:${JSON.stringify(body)}`;
+}
+
+export function diaryRepeatOperationKey(
+  entryId: string,
+  entryRevision: string,
+  currentProfileTimeZone: string,
+  body: object,
+): string {
+  return `repeat:${entryId}:${entryRevision}:${currentProfileTimeZone}:${JSON.stringify(body)}`;
 }
 
 export function isLocalDate(value: unknown): value is string {
@@ -1318,6 +1575,383 @@ export function parseDiaryMutation(value: unknown): DiaryMutationResult {
     replayed: value.data.replayed,
     entry: value.data.entry === null ? null : parseEntry(value.data.entry),
     affectedDays,
+  };
+}
+
+function parseDiaryRevisionSubject(value: unknown): DiaryRevisionSubject {
+  if (
+    !record(value) ||
+    !exactEntryKeys(value, ["entryId", "revision"]) ||
+    !UUID.test(String(value.entryId)) ||
+    !(typeof value.revision === "string" && /^[1-9]\d*$/u.test(value.revision))
+  ) {
+    throw new TypeError("A diary correction subject was invalid.");
+  }
+  return { entryId: String(value.entryId), revision: value.revision };
+}
+
+/** Parse the stronger durable-correction receipt without accepting a legacy response. */
+export function parseDiaryCorrectionMutation(value: unknown): DiaryCorrectionMutationResult {
+  const mutation = parseDiaryMutation(value);
+  if (
+    !record(value) ||
+    !record(value.data) ||
+    !exactEntryKeys(value.data, ["replayed", "entry", "affectedDays", "receipt"]) ||
+    !record(value.data.receipt) ||
+    !exactEntryKeys(value.data.receipt, [
+      "protocol",
+      "operationId",
+      "kind",
+      "expectedSubjects",
+      "resultSubjects",
+      "affectedDays",
+    ]) ||
+    value.data.receipt.protocol !== "v1" ||
+    !UUID.test(String(value.data.receipt.operationId)) ||
+    !["delete", "repeat", "update"].includes(String(value.data.receipt.kind)) ||
+    !Array.isArray(value.data.receipt.expectedSubjects) ||
+    value.data.receipt.expectedSubjects.length !== 1 ||
+    !Array.isArray(value.data.receipt.resultSubjects) ||
+    value.data.receipt.resultSubjects.length !== 1 ||
+    !Array.isArray(value.data.receipt.affectedDays)
+  ) {
+    throw new TypeError("The diary correction receipt was invalid.");
+  }
+  const expected = parseDiaryRevisionSubject(value.data.receipt.expectedSubjects[0]);
+  const rawResult = value.data.receipt.resultSubjects[0];
+  if (!record(rawResult) || !exactEntryKeys(rawResult, ["entryId", "revision", "state"])) {
+    throw new TypeError("The diary correction result subject was invalid.");
+  }
+  const result = parseDiaryRevisionSubject({
+    entryId: rawResult.entryId,
+    revision: rawResult.revision,
+  });
+  if (rawResult.state !== "active" && rawResult.state !== "deleted") {
+    throw new TypeError("The diary correction result state was invalid.");
+  }
+  const kind = value.data.receipt.kind as DiaryCorrectionKind;
+  if (
+    JSON.stringify(value.data.receipt.affectedDays) !== JSON.stringify(mutation.affectedDays) ||
+    (kind === "delete" &&
+      (mutation.entry !== null ||
+        rawResult.state !== "deleted" ||
+        result.entryId !== expected.entryId)) ||
+    (kind === "update" &&
+      (mutation.entry === null ||
+        rawResult.state !== "active" ||
+        result.entryId !== expected.entryId ||
+        mutation.entry.id !== result.entryId ||
+        mutation.entry.revision !== result.revision)) ||
+    (kind === "repeat" &&
+      (mutation.entry === null ||
+        rawResult.state !== "active" ||
+        mutation.entry.id !== result.entryId ||
+        mutation.entry.revision !== result.revision))
+  ) {
+    throw new TypeError("The diary correction receipt did not match its mutation.");
+  }
+  return {
+    ...mutation,
+    receipt: {
+      protocol: "v1",
+      operationId: String(value.data.receipt.operationId),
+      kind,
+      expectedSubjects: [expected],
+      resultSubjects: [{ ...result, state: rawResult.state }],
+      affectedDays: mutation.affectedDays,
+    },
+  };
+}
+
+function isNextDiaryEntryRevision(candidate: string, expected: string): boolean {
+  return (
+    /^[1-9]\d*$/u.test(candidate) &&
+    /^[1-9]\d*$/u.test(expected) &&
+    BigInt(candidate) === BigInt(expected) + 1n
+  );
+}
+
+function hasOnlyCorrectionKeys(
+  value: Record<string, unknown>,
+  allowed: readonly string[],
+): boolean {
+  return Object.keys(value).every((key) => allowed.includes(key));
+}
+
+function sameDiaryPortionRequest(expected: unknown, actual: DiaryEntry["portion"]): boolean {
+  if (!record(expected) || expected.kind !== actual.kind) return false;
+  try {
+    if (
+      expected.kind === "grams" &&
+      exactEntryKeys(expected, ["kind", "grams"]) &&
+      typeof expected.grams === "string" &&
+      actual.kind === "grams"
+    ) {
+      return (
+        canonicalPositiveDiaryDecimal(expected.grams) ===
+        canonicalPositiveDiaryDecimal(actual.grams)
+      );
+    }
+    if (
+      expected.kind !== "serving" ||
+      actual.kind !== "serving" ||
+      typeof expected.amount !== "string" ||
+      !(
+        exactEntryKeys(expected, ["kind", "amount"]) ||
+        (exactEntryKeys(expected, ["kind", "servingId", "amount"]) &&
+          typeof expected.servingId === "string" &&
+          /^[1-9]\d{0,19}$/u.test(expected.servingId))
+      ) ||
+      canonicalPositiveDiaryDecimal(expected.amount) !==
+        canonicalPositiveDiaryDecimal(actual.amount)
+    ) {
+      return false;
+    }
+    return (
+      !Object.hasOwn(expected, "servingId") ||
+      ("servingId" in actual && actual.servingId === expected.servingId)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function correctionTargetLocalDate(occurredAt: unknown, timeZone: string): string | null {
+  if (typeof occurredAt !== "string") return null;
+  const instant = new Date(occurredAt);
+  if (!Number.isFinite(instant.getTime())) return null;
+  try {
+    return localDateInTimeZone(instant, timeZone);
+  } catch {
+    return null;
+  }
+}
+
+function sameAffectedLocalDates(
+  mutation: DiaryCorrectionMutationResult,
+  expected: readonly string[],
+): boolean {
+  return (
+    mutation.affectedDays.length === expected.length &&
+    mutation.affectedDays.every((day, index) => day.localDate === expected[index])
+  );
+}
+
+/** Bind an internally valid durable-correction result to the exact submitted request. */
+export function diaryCorrectionMatchesRequest(
+  mutation: DiaryCorrectionMutationResult,
+  expected: DiaryCorrectionRequestEvidence,
+): boolean {
+  if (
+    !UUID.test(expected.entryId) ||
+    !UUID.test(expected.operationId) ||
+    !/^[1-9]\d*$/u.test(expected.entryRevision) ||
+    !isLocalDate(expected.sourceLocalDate)
+  ) {
+    return false;
+  }
+  const expectedSubject = mutation.receipt.expectedSubjects[0];
+  const resultSubject = mutation.receipt.resultSubjects[0];
+  if (
+    mutation.receipt.operationId !== expected.operationId ||
+    mutation.receipt.kind !== expected.kind ||
+    expectedSubject.entryId !== expected.entryId ||
+    expectedSubject.revision !== expected.entryRevision
+  ) {
+    return false;
+  }
+
+  if (expected.kind === "delete") {
+    return (
+      expected.body === null &&
+      expected.expectedTimeZone === null &&
+      mutation.entry === null &&
+      resultSubject.entryId === expected.entryId &&
+      resultSubject.state === "deleted" &&
+      isNextDiaryEntryRevision(resultSubject.revision, expected.entryRevision) &&
+      sameAffectedLocalDates(mutation, [expected.sourceLocalDate])
+    );
+  }
+
+  if (mutation.entry === null || resultSubject.state !== "active") return false;
+  const entry = mutation.entry;
+  if (expected.kind === "repeat") {
+    if (
+      !isSupportedTimeZone(expected.expectedTimeZone) ||
+      !record(expected.body) ||
+      !hasOnlyCorrectionKeys(expected.body, ["occurredAt", "mealSlot", "position"]) ||
+      !Object.hasOwn(expected.body, "occurredAt") ||
+      (Object.hasOwn(expected.body, "mealSlot") && !isMealSlot(expected.body.mealSlot)) ||
+      (Object.hasOwn(expected.body, "position") &&
+        (!Number.isSafeInteger(expected.body.position) ||
+          Number(expected.body.position) < 0 ||
+          Number(expected.body.position) > 1_000_000))
+    ) {
+      return false;
+    }
+    const targetLocalDate = correctionTargetLocalDate(
+      expected.body.occurredAt,
+      expected.expectedTimeZone,
+    );
+    return (
+      targetLocalDate !== null &&
+      resultSubject.entryId === entry.id &&
+      resultSubject.entryId.toLowerCase() !== expected.entryId.toLowerCase() &&
+      resultSubject.revision === "1" &&
+      entry.revision === "1" &&
+      entry.occurredAt === expected.body.occurredAt &&
+      entry.localDate === targetLocalDate &&
+      entry.timeZone === expected.expectedTimeZone &&
+      (!Object.hasOwn(expected.body, "mealSlot") || entry.mealSlot === expected.body.mealSlot) &&
+      (!Object.hasOwn(expected.body, "position") || entry.position === expected.body.position) &&
+      sameAffectedLocalDates(mutation, [targetLocalDate])
+    );
+  }
+
+  if (
+    !record(expected.body) ||
+    Object.keys(expected.body).length === 0 ||
+    !hasOnlyCorrectionKeys(expected.body, [
+      "portion",
+      "mealSlot",
+      "occurredAt",
+      "position",
+      "note",
+    ]) ||
+    (Object.hasOwn(expected.body, "mealSlot") && !isMealSlot(expected.body.mealSlot)) ||
+    (Object.hasOwn(expected.body, "position") &&
+      (!Number.isSafeInteger(expected.body.position) ||
+        Number(expected.body.position) < 0 ||
+        Number(expected.body.position) > 1_000_000)) ||
+    (Object.hasOwn(expected.body, "note") &&
+      !(expected.body.note === null || typeof expected.body.note === "string")) ||
+    Object.hasOwn(expected.body, "occurredAt") !== (expected.expectedTimeZone !== null) ||
+    (expected.expectedTimeZone !== null && !isSupportedTimeZone(expected.expectedTimeZone))
+  ) {
+    return false;
+  }
+  const targetLocalDate = Object.hasOwn(expected.body, "occurredAt")
+    ? correctionTargetLocalDate(expected.body.occurredAt, expected.expectedTimeZone ?? "")
+    : expected.sourceLocalDate;
+  const affectedLocalDates =
+    targetLocalDate === expected.sourceLocalDate
+      ? [expected.sourceLocalDate]
+      : [expected.sourceLocalDate, targetLocalDate];
+  return (
+    targetLocalDate !== null &&
+    resultSubject.entryId === expected.entryId &&
+    resultSubject.revision === entry.revision &&
+    isNextDiaryEntryRevision(resultSubject.revision, expected.entryRevision) &&
+    entry.id === expected.entryId &&
+    entry.localDate === targetLocalDate &&
+    (!Object.hasOwn(expected.body, "portion") ||
+      sameDiaryPortionRequest(expected.body.portion, entry.portion)) &&
+    (!Object.hasOwn(expected.body, "mealSlot") || entry.mealSlot === expected.body.mealSlot) &&
+    (!Object.hasOwn(expected.body, "occurredAt") ||
+      (entry.occurredAt === expected.body.occurredAt &&
+        entry.timeZone === expected.expectedTimeZone)) &&
+    (!Object.hasOwn(expected.body, "position") || entry.position === expected.body.position) &&
+    (!Object.hasOwn(expected.body, "note") || entry.note === expected.body.note) &&
+    sameAffectedLocalDates(
+      mutation,
+      affectedLocalDates.filter((date): date is string => date !== null),
+    )
+  );
+}
+
+/** Parse the complete canonical receipt for one atomic full-day reorder. */
+export function parseDiaryDayReorder(value: unknown): DiaryDayReorderResult {
+  if (
+    !record(value) ||
+    !record(value.data) ||
+    !exactEntryKeys(value.data, ["replayed", "receipt"]) ||
+    typeof value.data.replayed !== "boolean" ||
+    !record(value.data.receipt) ||
+    !exactEntryKeys(value.data.receipt, [
+      "operationId",
+      "localDate",
+      "timeZone",
+      "expectedDayRevision",
+      "resultingDayRevision",
+      "previousOrderDigest",
+      "orderDigest",
+      "groups",
+    ]) ||
+    !UUID.test(String(value.data.receipt.operationId)) ||
+    !isLocalDate(value.data.receipt.localDate) ||
+    typeof value.data.receipt.timeZone !== "string" ||
+    !isSupportedTimeZone(value.data.receipt.timeZone) ||
+    !(
+      typeof value.data.receipt.expectedDayRevision === "string" &&
+      /^\d+$/u.test(value.data.receipt.expectedDayRevision)
+    ) ||
+    !(
+      typeof value.data.receipt.resultingDayRevision === "string" &&
+      /^[1-9]\d*$/u.test(value.data.receipt.resultingDayRevision)
+    ) ||
+    !(
+      typeof value.data.receipt.previousOrderDigest === "string" &&
+      /^[0-9a-f]{64}$/u.test(value.data.receipt.previousOrderDigest)
+    ) ||
+    !(
+      typeof value.data.receipt.orderDigest === "string" &&
+      /^[0-9a-f]{64}$/u.test(value.data.receipt.orderDigest)
+    ) ||
+    !Array.isArray(value.data.receipt.groups) ||
+    value.data.receipt.groups.length !== mealSlots.length
+  ) {
+    throw new TypeError("The diary day reorder receipt was invalid.");
+  }
+  const entryIds = new Set<string>();
+  let totalEntries = 0;
+  const groups = value.data.receipt.groups.map((candidate, groupIndex) => {
+    if (
+      !record(candidate) ||
+      !exactEntryKeys(candidate, ["mealSlot", "entries"]) ||
+      candidate.mealSlot !== mealSlots[groupIndex] ||
+      !Array.isArray(candidate.entries) ||
+      candidate.entries.length > DIARY_DAY_MAX_ENTRIES
+    ) {
+      throw new TypeError("A diary day reorder group was invalid.");
+    }
+    const entries = candidate.entries.map((rawEntry, position) => {
+      if (
+        !record(rawEntry) ||
+        !exactEntryKeys(rawEntry, ["entryId", "entryRevision", "position"]) ||
+        !UUID.test(String(rawEntry.entryId)) ||
+        !(
+          typeof rawEntry.entryRevision === "string" && /^[1-9]\d*$/u.test(rawEntry.entryRevision)
+        ) ||
+        rawEntry.position !== position ||
+        entryIds.has(String(rawEntry.entryId))
+      ) {
+        throw new TypeError("A diary day reorder entry was invalid.");
+      }
+      entryIds.add(String(rawEntry.entryId));
+      totalEntries += 1;
+      return {
+        entryId: String(rawEntry.entryId),
+        entryRevision: rawEntry.entryRevision,
+        position,
+      };
+    });
+    return { mealSlot: candidate.mealSlot as MealSlot, entries };
+  }) as unknown as DiaryDayOrderResultGroups;
+  if (totalEntries > DIARY_DAY_MAX_ENTRIES) {
+    throw new TypeError("The diary day reorder receipt exceeded the day limit.");
+  }
+  return {
+    replayed: value.data.replayed,
+    receipt: {
+      operationId: String(value.data.receipt.operationId),
+      localDate: value.data.receipt.localDate,
+      timeZone: value.data.receipt.timeZone,
+      expectedDayRevision: value.data.receipt.expectedDayRevision,
+      resultingDayRevision: value.data.receipt.resultingDayRevision,
+      previousOrderDigest: value.data.receipt.previousOrderDigest,
+      orderDigest: value.data.receipt.orderDigest,
+      groups,
+    },
   };
 }
 

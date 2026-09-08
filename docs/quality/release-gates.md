@@ -269,12 +269,16 @@ acceptance.
   custom-food logging remain legacy online-only, have no paired profile-time-zone
   precondition, and are outside this gate. Source evidence does not substitute for
   signed iOS/Android lifecycle, keystore, OS-kill, or accessibility acceptance.
-- M1C-B general offline correction and ordering acceptance still covers durable
-  repeat, edits, deletes, note bounds and dependencies, plus one day-revision-
-  bound atomic manual reorder protocol and cross-client convergence. M1C-A does
-  not provide an offline catalogue, readable offline diary cache, web
-  persistence, browser recipe/custom-food time-zone convergence, background delivery,
-  or that broader correction/reorder gate.
+- M1C-B source acceptance proves native journal-version-3 repeat, edit, delete,
+  and complete-day within-meal reorder operations with lossless legacy replay,
+  persist-before-send behavior, typed note-capacity refusal, exact dependency
+  guards, current-profile-zone preconditions, authoritative persisted-day order
+  digests, and subject/revision/state/day-bound receipts. Web uses the same strong
+  correction and reorder protocols; browser recipe and custom-food creates now
+  use the paired profile-time-zone guard. Ordered local source evidence does not
+  clear signed iOS/Android lifecycle, protected-storage, OS-kill, accessibility,
+  hosted, browser-persistence, background-delivery, or controlled-beta gates,
+  and it does not provide an offline catalogue or readable offline diary cache.
 - Email verification proves digest-only token storage, current-email binding,
   prior-link preservation on pre-acceptance delivery failure, concurrent resend
   ordering, acceptance-to-commit confirmation fencing, expiry, atomic one-time

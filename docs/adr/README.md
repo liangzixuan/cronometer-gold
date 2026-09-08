@@ -29,6 +29,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0021](./0021-source-verified-adult-dri-reference-targets.md) | Source-verified adult U.S.–Canada DRI reference-target candidate | Accepted for local source implementation; clinical, legal/privacy, copyright, and commercial-enablement reviews blocked |
 | [0022](./0022-bounded-multi-day-nutrition-reports.md) | Bounded owner-private multi-day nutrition reports | Accepted for local implementation; hosted, signed-device, cross-client, and accessibility evidence blocked |
 | [0023](./0023-general-native-diary-operation-outbox.md) | Generalized native diary logging outbox | Accepted for local implementation; signed-device and general offline-sync evidence blocked |
+| [0024](./0024-durable-diary-corrections-and-atomic-ordering.md) | Durable diary corrections and atomic within-meal day ordering | Accepted for local implementation; signed-device and general offline-sync evidence blocked |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

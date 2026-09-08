@@ -1,4 +1,4 @@
-import { isUuid, parseDiaryMutation } from "../../../lib/diary";
+import { isSupportedTimeZone, isUuid, parseDiaryMutation } from "../../../lib/diary";
 import {
   authenticatedFetch,
   isTrustedMutationRequest,
@@ -90,6 +90,19 @@ async function mutationInput(
   }
 }
 
+function guardedRecipeLogTimeZone(request: Request): string | null {
+  const query = new URL(request.url).searchParams;
+  const markers = query.getAll("profileTimeZonePrecondition");
+  const expectedTimeZone = request.headers.get("x-expected-profile-time-zone");
+  return [...query.keys()].every((key) => key === "profileTimeZonePrecondition") &&
+    markers.length === 1 &&
+    markers[0] === "v1" &&
+    expectedTimeZone !== null &&
+    isSupportedTimeZone(expectedTimeZone)
+    ? expectedTimeZone
+    : null;
+}
+
 export async function proxyRecipeCreate(request: Request): Promise<Response> {
   const input = await mutationInput(request);
   if (input instanceof Response) return input;
@@ -121,13 +134,25 @@ export async function proxyRecipeRevision(request: Request, recipeId: string): P
 
 export async function proxyRecipeLog(request: Request, recipeId: string): Promise<Response> {
   if (!isUuid(recipeId)) return privateJsonError(400, "The recipe identifier is invalid.");
+  const expectedTimeZone = guardedRecipeLogTimeZone(request);
+  if (!expectedTimeZone) {
+    return privateJsonError(400, "The recipe log time-zone precondition is invalid.");
+  }
   const input = await mutationInput(request);
   if (input instanceof Response) return input;
-  const upstream = await authenticatedFetch(request, `/v1/recipes/${recipeId}/log`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "idempotency-key": input.operationId },
-    body: input.body,
-  });
+  const upstream = await authenticatedFetch(
+    request,
+    `/v1/recipes/${recipeId}/log?profileTimeZonePrecondition=v1`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "idempotency-key": input.operationId,
+        "x-expected-profile-time-zone": expectedTimeZone,
+      },
+      body: input.body,
+    },
+  );
   if (!upstream.ok) return safeUpstreamProblem(upstream, "The recipe could not be logged.");
   try {
     const raw: unknown = await upstream.json();

@@ -294,6 +294,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
       expect(revised.food.currentVersion.id).not.toBe(created.food.currentVersion.id);
       const repeated = await repeatDiaryEntry(fixture.database, {
         clientOperationId: randomUUID(),
+        expectedProfileTimeZone: "America/Chicago",
         occurredAt: "2026-01-02T02:00:00Z",
         requestDigest: digest("5"),
         sourceEntryId: firstLog.entry.id,

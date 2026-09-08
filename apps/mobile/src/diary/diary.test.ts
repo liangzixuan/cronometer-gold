@@ -2,14 +2,18 @@ import { describe, expect, it } from "vitest";
 
 import {
   acceptProfileSessionUpdate,
+  bindDiaryReorderDigestEvidence,
+  buildDiaryReorderPlan,
   createDiaryUnauthorizedSingleFlight,
   createOperationId,
+  DiaryOrderBaselineMismatchError,
   defaultDiaryGroups,
   diaryEditorOperationKey,
   diaryEditorOrigin,
   diaryEditorOriginMatches,
   diaryGroupLabel,
   diaryNoteFromDraft,
+  diaryOrderDigestPayload,
   diaryPagePath,
   diaryRouteTransitionGeneration,
   entryEnergyDisplay,
@@ -159,6 +163,7 @@ function diaryPageFixture(
       timeZone: "America/Chicago",
       status: "open",
       revision: "8",
+      orderDigest: "a".repeat(64),
       entries,
       totals: [nutrient],
       updatedAt: "2026-08-15T13:30:01.000Z",
@@ -169,6 +174,125 @@ function diaryPageFixture(
 }
 
 describe("mobile diary contract", () => {
+  it("builds a complete four-group baseline permutation and deterministic result digest input", () => {
+    const day = parseDiaryPage(diaryPageFixture(numberedEntries(1, 2), null, 2)).data;
+    const second = day.entries[1];
+    if (!second) throw new TypeError("Expected the second diary entry.");
+    const plan = buildDiaryReorderPlan(day, second.id, "up");
+
+    expect(plan?.groups).toEqual({ breakfast: [1, 0], lunch: [], dinner: [], snacks: [] });
+    expect(plan?.baselineCanonicalGroups).toEqual([
+      [
+        "breakfast",
+        [
+          [day.entries[0]?.id, "3", 1],
+          [second.id, "3", 2],
+        ],
+      ],
+      ["lunch", []],
+      ["dinner", []],
+      ["snacks", []],
+    ]);
+    expect(plan?.resultCanonicalGroups).toEqual([
+      [
+        "breakfast",
+        [
+          [second.id, "4", 0],
+          [day.entries[0]?.id, "3", 1],
+        ],
+      ],
+      ["lunch", []],
+      ["dinner", []],
+      ["snacks", []],
+    ]);
+    expect(
+      diaryOrderDigestPayload(day.localDate, day.timeZone, plan?.resultCanonicalGroups ?? []),
+    ).toBe(
+      JSON.stringify([
+        "diary-day-order-v1",
+        "2026-08-15",
+        "America/Chicago",
+        plan?.resultCanonicalGroups,
+      ]),
+    );
+    expect(buildDiaryReorderPlan(day, second.id, "down")).toBeNull();
+  });
+
+  it("orders tied positions by occurrence instant before UUID", () => {
+    const lowerUuidLater = {
+      ...entry,
+      id: "00000000-0000-4000-8000-000000000001",
+      position: 7,
+      occurredAt: "2026-08-15T14:00:00.000Z",
+    };
+    const higherUuidEarlier = {
+      ...entry,
+      id: "00000000-0000-4000-8000-000000000002",
+      position: 7,
+      occurredAt: "2026-08-15T13:00:00.000Z",
+    };
+    const trailing = {
+      ...entry,
+      id: "00000000-0000-4000-8000-000000000003",
+      position: 8,
+      occurredAt: "2026-08-15T15:00:00.000Z",
+    };
+    const day = parseDiaryPage(
+      diaryPageFixture([lowerUuidLater, trailing, higherUuidEarlier], null, 3),
+    ).data;
+    const plan = buildDiaryReorderPlan(day, lowerUuidLater.id, "up");
+
+    expect(plan?.baselineCanonicalGroups[0]?.[1].map(([entryId]) => entryId)).toEqual([
+      higherUuidEarlier.id,
+      lowerUuidLater.id,
+      trailing.id,
+    ]);
+    expect(plan?.groups.breakfast).toEqual([1, 0, 2]);
+  });
+
+  it("matches the portable baseline and result order digest fixtures", async () => {
+    const entryId = (suffix: number) =>
+      `00000000-0000-4000-8000-${suffix.toString().padStart(12, "0")}`;
+    const expectedOrderDigest = "d33348ee457d853020d5d62579569a8a8a592675d9505c51b1f7e588a0a124e8";
+    const entries = [
+      ...numberedEntries(1, 3),
+      ...numberedEntries(4, 2).map((candidate) => ({
+        ...candidate,
+        mealSlot: "lunch" as const,
+      })),
+    ];
+    const day = parseDiaryPage(
+      diaryPageFixture(entries, null, entries.length, { orderDigest: expectedOrderDigest }),
+    ).data;
+    const plan = buildDiaryReorderPlan(day, entryId(2), "up");
+    if (!plan) throw new TypeError("Expected a complete portable reorder plan.");
+    const hash = async (payload: string): Promise<string> => {
+      const digest = await globalThis.crypto.subtle.digest(
+        "SHA-256",
+        new TextEncoder().encode(payload),
+      );
+      return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    };
+    const evidence = await bindDiaryReorderDigestEvidence(day, plan, hash);
+
+    expect(evidence.expectedOrderDigest).toBe(expectedOrderDigest);
+    expect(evidence.expectedResultOrderDigest).toBe(
+      "6a2d01106e01280585fce93967841c4e3629f8d9fc07ce7f76268565c22b107b",
+    );
+
+    const inconsistentDay = {
+      ...day,
+      entries: day.entries.map((candidate) =>
+        candidate.id === entryId(3) ? { ...candidate, revision: "4" } : candidate,
+      ),
+    };
+    const inconsistentPlan = buildDiaryReorderPlan(inconsistentDay, entryId(2), "up");
+    if (!inconsistentPlan) throw new TypeError("Expected an inconsistent reorder plan.");
+    await expect(
+      bindDiaryReorderDigestEvidence(inconsistentDay, inconsistentPlan, hash),
+    ).rejects.toBeInstanceOf(DiaryOrderBaselineMismatchError);
+  });
+
   it("requires normalized, uniquely named canonical diary groups in the chosen order", () => {
     const groups = normalizeDiaryGroups([
       { mealSlot: "snacks", label: "  Evening Ｓnack  " },
@@ -339,6 +463,7 @@ describe("mobile diary contract", () => {
         timeZone: "America/Chicago",
         status: "open",
         revision: "4",
+        orderDigest: "a".repeat(64),
         entries: [entry],
         totals: [nutrient],
         updatedAt: "2026-08-15T13:30:01.000Z",
@@ -369,6 +494,7 @@ describe("mobile diary contract", () => {
         timeZone: "America/Chicago",
         status: "open",
         revision: "5",
+        orderDigest: "a".repeat(64),
         entries: [entry, recipeWithExactNote],
         totals: [nutrient],
         updatedAt: "2026-08-15T13:30:01.000Z",
@@ -387,6 +513,7 @@ describe("mobile diary contract", () => {
         timeZone: "America/Chicago",
         status: "open",
         revision: "4",
+        orderDigest: "a".repeat(64),
         entries: [candidate],
         totals: [nutrient],
         updatedAt: "2026-08-15T13:30:01.000Z",
@@ -446,6 +573,7 @@ describe("mobile diary contract", () => {
         timeZone: "America/Chicago",
         status: "open",
         revision: "4",
+        orderDigest: "a".repeat(64),
         entries: [{ ...entry, nutrients: [{ ...nutrient, knownAmount }] }],
         totals: [{ ...nutrient, knownAmount }],
         updatedAt: "2026-08-15T13:30:01.000Z",
@@ -464,6 +592,7 @@ describe("mobile diary contract", () => {
         timeZone: "America/Chicago",
         status: "open",
         revision: "5",
+        orderDigest: "a".repeat(64),
         entries: [
           {
             ...recipeEntry,
@@ -587,18 +716,50 @@ describe("mobile diary contract", () => {
 
 describe("mobile diary screen guards", () => {
   it("binds edits to the original entry and day snapshot", () => {
-    const day = parseDiaryPage(diaryPageFixture([entry], null, 1)).data;
+    const day = {
+      ...parseDiaryPage(diaryPageFixture([entry], null, 1)).data,
+      timeZone: "America/New_York",
+    };
     const parsedEntry = day.entries[0];
     if (!parsedEntry) throw new Error("Expected a diary entry fixture.");
-    const origin = diaryEditorOrigin(day, parsedEntry);
+    const currentProfileTimeZone = "America/Los_Angeles";
+    const origin = diaryEditorOrigin(day, parsedEntry, currentProfileTimeZone);
 
-    expect(diaryEditorOriginMatches(origin, day, parsedEntry)).toBe(true);
-    expect(diaryEditorOriginMatches(origin, { ...day, revision: "9" }, parsedEntry)).toBe(false);
-    expect(diaryEditorOriginMatches(origin, { ...day, localDate: "2026-08-16" }, parsedEntry)).toBe(
-      false,
-    );
-    expect(diaryEditorOriginMatches(origin, { ...day, timeZone: "UTC" }, parsedEntry)).toBe(false);
-    expect(diaryEditorOriginMatches(origin, day, { ...parsedEntry, revision: "4" })).toBe(false);
+    expect(origin.originTimeZone).toBe(currentProfileTimeZone);
+    expect(diaryEditorOriginMatches(origin, day, parsedEntry, currentProfileTimeZone)).toBe(true);
+    expect(
+      diaryEditorOriginMatches(
+        origin,
+        { ...day, revision: "9" },
+        parsedEntry,
+        currentProfileTimeZone,
+      ),
+    ).toBe(false);
+    expect(
+      diaryEditorOriginMatches(
+        origin,
+        { ...day, localDate: "2026-08-16" },
+        parsedEntry,
+        currentProfileTimeZone,
+      ),
+    ).toBe(false);
+    expect(
+      diaryEditorOriginMatches(
+        origin,
+        { ...day, timeZone: "UTC" },
+        { ...parsedEntry, timeZone: "UTC" },
+        currentProfileTimeZone,
+      ),
+    ).toBe(true);
+    expect(diaryEditorOriginMatches(origin, day, parsedEntry, "UTC")).toBe(false);
+    expect(
+      diaryEditorOriginMatches(
+        origin,
+        day,
+        { ...parsedEntry, revision: "4" },
+        currentProfileTimeZone,
+      ),
+    ).toBe(false);
     expect(diaryEditorOperationKey(origin, { mealSlot: "lunch" })).toBe(
       `edit:${entry.id}:3:8:{"mealSlot":"lunch"}`,
     );

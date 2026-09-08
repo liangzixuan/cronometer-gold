@@ -7,6 +7,10 @@ import {
   createDiaryEntryQuerySchema,
   createDiaryEntryRequestSchema,
   defaultDiaryGroups,
+  diaryCorrectionMutationResponseSchema,
+  diaryCorrectionReceiptSchema,
+  diaryDayOrderDigestPayload,
+  diaryDayReorderReceiptSchema,
   diaryDayResponseSchema,
   diaryEntrySchema,
   diaryFoodEntrySchema,
@@ -27,6 +31,9 @@ import {
   profileTimeZonePreconditionQuerySchema,
   publicFoodKinds,
   registerAccountRequestSchema,
+  reorderDiaryDayHeadersSchema,
+  reorderDiaryDayRequestSchema,
+  reorderDiaryDayResponseSchema,
   updateDiaryEntryRequestSchema,
   updateUserProfileRequestSchema,
   userProfileSchema,
@@ -197,5 +204,66 @@ describe("public contracts", () => {
     ]);
     expect(diaryFoodEntrySchema.properties.source.anyOf[1].type).toBe("null");
     expect(diaryMutationResponseSchema.properties.data.properties.affectedDays.maxItems).toBe(2);
+  });
+
+  it("publishes revision-proven correction receipts and compact atomic reorder contracts", () => {
+    const ajv = new Ajv({ allErrors: true, strict: true });
+    addFormats(ajv);
+    for (const schema of [
+      diaryCorrectionReceiptSchema,
+      diaryCorrectionMutationResponseSchema,
+      reorderDiaryDayRequestSchema,
+      reorderDiaryDayHeadersSchema,
+      diaryDayReorderReceiptSchema,
+      reorderDiaryDayResponseSchema,
+    ]) {
+      expect(() => ajv.compile(schema)).not.toThrow();
+    }
+
+    const validateRequest = ajv.compile(reorderDiaryDayRequestSchema);
+    expect(
+      validateRequest({
+        groups: { breakfast: [1, 0], lunch: [], dinner: [], snacks: [] },
+      }),
+    ).toBe(true);
+    expect(
+      validateRequest({
+        groups: [{ mealSlot: "breakfast", baselineIndexes: [1, 0] }],
+      }),
+    ).toBe(false);
+    expect(
+      validateRequest({
+        groups: { breakfast: [0, 0], lunch: [], dinner: [], snacks: [] },
+      }),
+    ).toBe(false);
+
+    const validateHeaders = ajv.compile(reorderDiaryDayHeadersSchema);
+    expect(
+      validateHeaders({
+        "x-expected-profile-time-zone": "America/Chicago",
+        "x-expected-diary-order-digest": "a".repeat(64),
+      }),
+    ).toBe(true);
+    expect(validateHeaders({ "x-expected-diary-order-digest": "a".repeat(64) })).toBe(false);
+    expect(validateHeaders({ "x-expected-profile-time-zone": "America/Chicago" })).toBe(false);
+
+    const groups = [
+      {
+        mealSlot: "breakfast" as const,
+        entries: [
+          {
+            entryId: "10000000-0000-4000-8000-000000000001",
+            entryRevision: "2",
+            position: 0,
+          },
+        ],
+      },
+      { mealSlot: "lunch" as const, entries: [] },
+      { mealSlot: "dinner" as const, entries: [] },
+      { mealSlot: "snacks" as const, entries: [] },
+    ];
+    expect(diaryDayOrderDigestPayload("2026-09-08", "America/Chicago", groups)).toBe(
+      '["diary-day-order-v1","2026-09-08","America/Chicago",[["breakfast",[["10000000-0000-4000-8000-000000000001","2",0]]],["lunch",[]],["dinner",[]],["snacks",[]]]]',
+    );
   });
 });

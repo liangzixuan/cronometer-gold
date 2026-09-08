@@ -81,6 +81,9 @@ production edge rate limits remain a separate deployment requirement.
 | `GET` | `/v1/diary?date=YYYY-MM-DD[&limit=1..20][&cursor=...]` | Returns the authenticated profile-local day; pagination is opt-in and a cursor requires the same explicit limit |
 | `POST` | `/v1/diary/entries` | Logs a serving or gram portion with UUID idempotency |
 | `PATCH/DELETE` | `/v1/diary/entries/:entryId` | Mutates the owned entry using UUID idempotency and a strong `If-Match` entry revision |
+| `PATCH/DELETE` | `/v1/diary/entries/:entryId?diaryCorrectionProtocol=v1` | Uses the durable-correction protocol and returns a subject-, revision-, state-, and affected-day-bound receipt; a PATCH that changes `occurredAt` also requires the paired current-profile-time-zone guard |
+| `POST` | `/v1/diary/corrections/entries/:entryId/repeat?profileTimeZonePrecondition=v1` | Repeats one exact immutable source revision at a new instant with UUID idempotency, a current-profile-time-zone guard, and a strong correction receipt |
+| `PUT` | `/v1/diary/days/:localDate/order?profileTimeZonePrecondition=v1` | Atomically replaces one complete open day's within-meal ordering using a strong day `If-Match`, current-profile-time-zone guard, baseline order digest, and exact resulting-order receipt |
 | `GET` | `/v1/hydration?date=YYYY-MM-DD` | Returns the owned bounded day, exact milliliter total, day synchronization revision, and strong exact-response ETag |
 | `POST` | `/v1/hydration/entries` | Creates an exact-milliliter entry with UUID idempotency and the optional paired profile-time-zone guard |
 | `PATCH/DELETE` | `/v1/hydration/entries/:entryId` | Revises or logically deletes the owned entry using UUID idempotency and a strong `If-Match` entry revision |
@@ -152,3 +155,12 @@ Continuation tokens are confidential, owner/date/limit-bound, and invalidated
 by a day revision or profile-time-zone change (`DIARY_PAGE_STALE`). Pagination
 reduces response/UI payloads, but the 50-entry day and 256-nutrient bounds remain
 until separate scale evidence justifies raising them.
+
+The durable correction protocol preserves the legacy mutation routes while adding
+strict replay evidence for native and browser clients. Repeat, update, and delete
+receipts bind the operation, expected entry revision, exact result revision/state,
+and all affected day revisions. Atomic ordering accepts all four canonical meal
+groups as complete baseline-index permutations, never moves an entry between
+groups, and increments the day revision exactly once. Its order digest uses the
+persisted diary-day time zone; the request's profile-time-zone header guards the
+owner's current zone. Those values can legitimately differ for a historical day.

@@ -63,6 +63,14 @@ reviewer, or production-release acceptance.
    not claim clinical interpretation, signed-device acceptance, hosted
    availability, printable/PDF output, scheduled delivery, or full premium
    parity.
+8. **Durable diary corrections and ordering (implemented; release-gated):** the
+   native protected FIFO now covers repeat, edit, delete, and one complete-day
+   within-meal reorder in addition to food, recipe, and custom-food logging.
+   Web uses the same strong correction and ordering receipts, and browser recipe
+   and custom-food logging now has the paired profile-time-zone guard. This
+   closes M1C's local source slices, not signed-device lifecycle, protected-
+   storage, OS-kill, accessibility, hosted, browser-persistence, background-
+   delivery, or controlled-beta acceptance.
 
 ## Forward milestones
 
@@ -88,10 +96,11 @@ cross-client, and accessibility acceptance still gate release. It must not be
 described as clinically reviewed, government-endorsed, or commercially
 available while those gates are open. M3A's bounded multi-day nutrition report
 and charts are source-complete and have passed the ordered local validation
-runbook. M1C is split into M1C-A durable logging and M1C-B durable corrections
-plus atomic entry ordering. M1C-A is the current safe user-visible source
-priority while external M0/M2 work remains separately gated; M1C does not close
-until both slices pass. Production-service gaps follow. Arbitrary add/delete/hide group identities remain a future migration
+runbook. M1C-A durable logging and M1C-B durable corrections plus atomic entry
+ordering are source-complete and have passed the ordered local validation
+runbook. M1C remains release-gated on signed-device and controlled-beta evidence.
+M1D's activity/exercise policy and tracking slice is the next safe user-visible
+source milestone while external M0/M2 work remains separately gated. Arbitrary add/delete/hide group identities remain a future migration
 milestone rather than part of M1B-G. M0's authenticated acquisition, review,
 and activation lane proceeds in parallel when its separately approved external
 work is available. M2 still requires both M0 and M1 acceptance.
@@ -264,9 +273,13 @@ Each retains its separate explicit-approval gate.
    evidence remain open. The private API already supports explicit `occurredAt`
    changes without claiming a client time editor.
 
-   Activity/exercise remains deferred until the product and scientific review
-   settles PAL and ordinary-exercise double-counting policy. Hydration work does
-   not imply an exercise-energy adjustment.
+   M1D activity/exercise is the next safe user-visible source milestone. Its
+   first acceptance gate must settle PAL and ordinary-exercise double-counting
+   policy. The intended initial slice is owner-private manual activity logging,
+   correction, deletion, and history without automatically changing nutrition
+   goals or energy balance; any exercise-energy adjustment requires separate
+   product and scientific approval. Hydration work does not imply an exercise-
+   energy adjustment.
 
    Private notes attached to food and recipe entries are implemented locally.
    Repeat preserves a note. Clearing hides it from the current display, while
@@ -300,14 +313,16 @@ Each retains its separate explicit-approval gate.
    different local day. Sign-out, unauthorized-session, accepted-erasure,
    owner-mismatch, and corruption paths keep the same retryable private-device
    cleanup ledger. Web and mobile public-food search also accept a positive
-   default-serving amount or grams. Web recipe and custom-food logging remain legacy
-   online-only flows: they have neither durable browser storage nor the paired
-   profile-time-zone precondition, retain a concurrent profile-time-zone race, and
-   are excluded from M1C-A cross-client convergence. Signed iOS/Android crash-boundary,
-   lifecycle, and accessibility evidence remains open, as do offline catalogue
-   and diary reads, web persistence, background delivery, and M1C-B's durable
-   repeat/edit/delete plus atomic manual reorder. Rollout remains API-first as
-   specified by ADR 0023; ADR 0013 remains the historical first slice.
+   default-serving amount or grams. At the M1C-A boundary, web recipe and custom-
+   food logging remained unguarded legacy online-only flows; M1C-B adds their
+   paired profile-time-zone guard while intentionally leaving browser persistence
+   open. M1C-B also extends the native FIFO to durable repeat, edit, delete, and
+   complete-day within-meal reorder, with strong subject/revision and order
+   receipts shared by web and API. Signed iOS/Android crash-boundary, lifecycle,
+   protected-storage, OS-kill, and accessibility evidence remains open, as do
+   offline catalogue and diary reads, web persistence, and background delivery.
+   Rollout remains API-first as specified by ADRs 0023 and 0024; ADR 0013 remains
+   the historical first slice.
 
    Additive email verification is implemented locally across PostgreSQL, an
    authenticated request route, a public confirmation route, web, and mobile.
@@ -373,14 +388,16 @@ Each retains its separate explicit-approval gate.
    concurrent profile-time-zone change; it is explicitly outside M1C-A. M1C-A does
    not claim an offline catalogue or a readable offline diary after cold restart.
 
-   M1C-B follows with durable repeat, edit, and delete plus a new day-revision-
-   bound atomic entry-ordering protocol. It must define correction dependencies,
-   stronger subject/revision receipts, note storage bounds, all-or-nothing meal
-   ordering, stale-day behavior, and cross-client convergence. A series of
-   scalar `position` patches is not accepted as atomic reorder evidence. M1C
-   remains open until M1C-B and signed-device acceptance pass. Neither slice
-   authorizes background delivery, phone exposure, signed builds, or controlled
-   beta.
+   M1C-B implements durable repeat, edit, and delete plus a day-revision-bound
+   atomic entry-ordering protocol. Its source evidence covers correction
+   dependencies, stronger subject/revision receipts, typed lossless note-capacity
+   refusal, all-or-nothing within-meal ordering, stale-day behavior, replay after
+   restart, and web/mobile convergence. A series of scalar `position` patches is
+   not accepted as atomic reorder evidence. M1C's local source implementation is
+   complete; M1 remains open until signed-device lifecycle, protected-storage,
+   OS-kill, accessibility, hosted, and controlled-beta acceptance pass. Neither
+   slice authorizes background delivery, phone exposure, signed builds, or
+   controlled beta.
 3. **M2 — controlled beta:** source-only hosting and signed-build preparation may
    proceed in parallel, but real execution still requires reviewed hosting and
    digest-pinned seven-image
@@ -618,13 +635,15 @@ distinct through the clients.
 The checked-in food-release candidates are still deliberately non-promotable,
 so diary integration evidence uses a synthetic promoted catalogue fixture rather
 than claiming a live USDA or CNF release. Production password-recovery
-acceptance, M1C-B cross-restart correction/reorder support, and signed-device
-preview testing remain controlled-beta gates rather than hidden claims of this
-milestone. M1C-A's bounded native diary-log path is the sole durable exception:
-it stores a closed public-food/recipe/custom-food create union, never a bearer
-token, search query, private note, arbitrary request, or response body. It
-preserves exact mixed-kind FIFO replay across restarts but does not claim an
-offline catalogue, an offline diary cache, or general offline synchronization.
+acceptance and signed-device preview testing remain controlled-beta gates rather
+than hidden claims of this milestone. M1C's bounded native diary-operation path
+stores a closed food/recipe/custom-food create and repeat/edit/delete/reorder
+union, never a bearer token, search query, arbitrary request, or response body.
+Private notes are stored only inside a typed update envelope, are never
+truncated, and fail before sending when the reviewed 1,600-byte protected slot
+cannot hold them. It preserves exact mixed-operation FIFO replay across restarts
+but does not claim an offline catalogue, an offline diary cache, browser
+persistence, background delivery, or general offline synchronization.
 Account
 export and deletion are implemented and locally drilled under the retention and
 privacy milestone; they are not production evidence. Diary screens now opt into

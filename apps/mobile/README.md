@@ -55,38 +55,52 @@ supported-format, duplicate-detection, no-microphone, scan-to-add, and
 VoiceOver/TalkBack behavior; existing P0 v2 food-search evidence cannot be
 reinterpreted to cover the camera.
 
-## Durable public-food quick add
+## Durable foreground diary operations
 
-The native search screen has one deliberately bounded durable outbox for
-promoted public-food quick adds. It accepts only the reviewed gram-resolved
-default serving with amount exactly one. Before any network byte, it writes the
-closed request envelope and operation ID to device-only SecureStore. It then
-registers that exact ID with the receipt UI before releasing it to the runner
-and delivers at most one FIFO request at a time while the app is foregrounded.
-An already-running lifecycle drain cannot send a new enqueue before that
-registration.
+The native app has one deliberately bounded, owner-bound FIFO for public-food,
+recipe, and custom-food logging plus confirmed-entry repeat, edit, delete, and
+whole-day reorder. Before any network byte, it writes a closed request envelope
+and operation ID to device-only SecureStore. It then registers that exact ID
+with the receipt UI before releasing it to the runner and delivers at most one
+request at a time while the app is foregrounded. An already-running lifecycle
+drain cannot send a new enqueue before that registration.
 
-The screen says **queued** until an exact server receipt is verified; queued
-items are not included in diary totals. Network, response, or process
+The UI says **queued** until an exact server receipt is verified; queued changes
+are not included in diary entries or totals. Network, response, or process
 interruptions retain the exact request. A definitive client response blocks the
-head and offers exact retry or a separately confirmed head-only discard. A
-time-zone conflict routes the person back to the stored date and meal for
-review. The queue holds at most 50 items, never evicts or expires an item, does
-not run a background task, and cannot skip or reorder a blocked head.
+head and offers a separately confirmed head-only discard. Revision or time-zone
+staleness tells the person to discard the stale operation, reload the diary, and
+authorize the change again. The queue holds at most 50 items, never evicts or
+expires an item, does not run a background task, and cannot skip or reorder a
+blocked head.
+
+Edit and delete are serialized per confirmed entry. A day reorder cannot share
+the queue with any other operation affecting that day, and no later same-day
+operation can sit behind it. Notes are persisted losslessly only while the
+entire UTF-8 JSON envelope fits the reviewed 1,600-byte slot; larger note patches
+receive a deterministic capacity error and are never truncated or silently sent
+outside the queue.
+
+Reorder is available only after the complete day is loaded. Accessible move-up
+and move-down controls stay within a canonical meal group and enqueue one
+complete four-group baseline-index permutation rather than scalar patches. The
+stored proof keeps the current profile time zone as the request precondition,
+the historical diary-day time zone separately for canonical order hashing, and
+both the baseline and expected-result SHA-256 digests. The item is acknowledged
+only when the strong server receipt matches its operation, day revisions,
+historical time zone, digests, and bounded canonical result groups.
 
 Sign-out, terminal unauthorized cleanup, accepted erasure, owner mismatch,
 orphaned credentials, and unrecoverable journal corruption clear every fixed
-slot through the retryable private-device cleanup path. The stored envelope
-contains no bearer or reauthentication token, search text or cursor, barcode,
-private note, arbitrary URL or header, response body, recipe, or custom-food
-request.
+slot through the retryable private-device cleanup path. Stored envelopes contain
+display metadata and immutable operations only—never a token, credential,
+arbitrary URL, query, or header. Replays derive fixed API requests.
 
-This is not a general offline-sync claim. Edits, deletes, repeats, recipes,
-custom foods, arbitrary quantities, web persistence, background work, manual
-reorder, and cross-client convergence remain open. Signed iOS and Android
-process-kill, lock/unlock, storage, accessibility, and lifecycle evidence also
-remain controlled-beta gates. See
-[ADR 0013](../../docs/adr/0013-durable-native-public-food-quick-add-outbox.md).
+This remains a foreground durability boundary, not a general offline-sync
+claim. Web persistence, background work, and signed iOS/Android process-kill,
+lock/unlock, storage, accessibility, and lifecycle evidence remain separate
+gates. See [ADR 0013](../../docs/adr/0013-durable-native-public-food-quick-add-outbox.md)
+and [ADR 0023](../../docs/adr/0023-general-native-diary-operation-outbox.md).
 
 ## Configurable diary presentation groups
 

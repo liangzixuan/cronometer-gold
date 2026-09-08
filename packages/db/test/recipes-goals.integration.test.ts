@@ -191,6 +191,7 @@ describeDatabase("versioned recipes, recipe diary entries, and nutrition goals",
         ] as const) {
           const repeated = await repeatDiaryEntry(fixture.database, {
             clientOperationId: randomUUID(),
+            expectedProfileTimeZone: "America/Chicago",
             occurredAt: source.occurredAt,
             requestDigest: randomBytes(32).toString("hex"),
             sourceEntryId: testCase.entryId,

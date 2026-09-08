@@ -9,6 +9,7 @@ import type {
   NativeStackScreenProps,
 } from "@react-navigation/native-stack";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import { CryptoDigestAlgorithm, digestStringAsync } from "expo-crypto";
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -47,6 +48,7 @@ import {
 } from "./src/diary/diary";
 import {
   createQuickAddOutboxController,
+  diaryOutboxDisplayMealSlot,
   diaryOutboxOperationKind,
   type FatalQuickAddOutboxStoreReason,
   type QuickAddOutboxController,
@@ -160,7 +162,7 @@ function quickAddOutboxState(snapshot: QuickAddOutboxSnapshot): QuickAddOutboxCo
     foodName: head.display.foodName,
     servingLabel: head.display.servingLabel,
     localDate: head.localDate,
-    mealSlot: head.body.mealSlot,
+    mealSlot: diaryOutboxDisplayMealSlot(head),
   };
 }
 
@@ -813,6 +815,7 @@ export default function App() {
       accessToken: () => accessToken,
       isForeground: () => AppState.currentState === "active",
       operationId: newOperationId,
+      sha256Hex: (payload) => digestStringAsync(CryptoDigestAlgorithm.SHA256, payload),
       onUnauthorized: handleUnauthorized,
       onFatalStoreError: handleFatalQuickAddOutbox,
       onReceipt(receipt) {

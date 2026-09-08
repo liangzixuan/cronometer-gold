@@ -1,4 +1,5 @@
 import {
+  assertDiaryOutboxAppendDependencies,
   MAX_QUICK_ADD_OUTBOX_ITEMS,
   parseQuickAddOutboxItem,
   type QuickAddOutboxBlockedState,
@@ -325,6 +326,13 @@ async function loadItems(
       );
     }
     operationIds.add(item.operationId);
+    try {
+      assertDiaryOutboxAppendDependencies(items, item);
+    } catch {
+      throw new QuickAddOutboxCorruptError(
+        "The quick-add outbox contained an invalid durable operation dependency.",
+      );
+    }
     items.push(item);
   }
   return items;
@@ -506,6 +514,7 @@ export function createQuickAddOutboxStore(overrides?: {
           sequence: manifest.nextSequence,
           blocked: null,
         });
+        assertDiaryOutboxAppendDependencies(current.snapshot.items, item);
         const slotKey = quickAddOutboxSlotKey(manifest.nextSequence % MAX_QUICK_ADD_OUTBOX_ITEMS);
         assertGuard(guard);
         const appending: QuickAddOutboxAppendManifest = {

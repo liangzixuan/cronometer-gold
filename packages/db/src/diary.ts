@@ -33,6 +33,7 @@ import {
 import type { Database, JsonArray, JsonObject } from "./types.js";
 
 export type DiaryPersistenceErrorCode =
+  | "DIARY_DAY_REVISION_CONFLICT"
   | "DIARY_ENTRY_REVISION_CONFLICT"
   | "DIARY_IDEMPOTENCY_CONFLICT"
   | "DIARY_LOCKED"
@@ -60,6 +61,12 @@ export class DiaryNotFoundError extends DiaryPersistenceError {
 export class DiaryEntryRevisionConflictError extends DiaryPersistenceError {
   constructor() {
     super("DIARY_ENTRY_REVISION_CONFLICT", "Diary entry revision does not match");
+  }
+}
+
+export class DiaryDayRevisionConflictError extends DiaryPersistenceError {
+  constructor() {
+    super("DIARY_DAY_REVISION_CONFLICT", "Diary day revision or order baseline does not match");
   }
 }
 
@@ -214,6 +221,74 @@ export interface DiaryMutationResult {
   readonly days: readonly DiaryDayRevisionRecord[];
 }
 
+export type DiaryCorrectionKind = "delete" | "repeat" | "update";
+
+export interface DiaryRevisionSubjectRecord {
+  readonly entryId: string;
+  readonly revision: string;
+}
+
+export interface DiaryCorrectionResultSubjectRecord extends DiaryRevisionSubjectRecord {
+  readonly state: "active" | "deleted";
+}
+
+export interface DiaryCorrectionReceiptRecord {
+  readonly protocol: "v1";
+  readonly operationId: string;
+  readonly kind: DiaryCorrectionKind;
+  readonly expectedSubjects: readonly [DiaryRevisionSubjectRecord];
+  readonly resultSubjects: readonly [DiaryCorrectionResultSubjectRecord];
+  readonly affectedDays: readonly DiaryDayRevisionRecord[];
+}
+
+export interface DiaryCorrectionMutationResult extends DiaryMutationResult {
+  readonly receipt: DiaryCorrectionReceiptRecord;
+}
+
+export interface DiaryFoodCorrectionMutationResult
+  extends Omit<DiaryCorrectionMutationResult, "entry"> {
+  readonly entry: DiaryFoodEntryRecord;
+}
+
+export interface DiaryRecipeCorrectionMutationResult
+  extends Omit<DiaryCorrectionMutationResult, "entry"> {
+  readonly entry: DiaryRecipeEntryRecord;
+}
+
+export type DiaryDayOrderPermutationsRecord = Readonly<Record<DiaryMealSlot, readonly number[]>>;
+
+export interface DiaryDayOrderEntryRecord {
+  readonly entryId: string;
+  readonly entryRevision: string;
+  readonly position: number;
+}
+
+export interface DiaryDayOrderGroupRecord {
+  readonly mealSlot: DiaryMealSlot;
+  readonly entries: readonly DiaryDayOrderEntryRecord[];
+}
+
+export interface DiaryDayReorderReceiptRecord {
+  readonly operationId: string;
+  readonly localDate: string;
+  readonly timeZone: string;
+  readonly expectedDayRevision: string;
+  readonly resultingDayRevision: string;
+  readonly previousOrderDigest: string;
+  readonly orderDigest: string;
+  readonly groups: readonly [
+    DiaryDayOrderGroupRecord,
+    DiaryDayOrderGroupRecord,
+    DiaryDayOrderGroupRecord,
+    DiaryDayOrderGroupRecord,
+  ];
+}
+
+export interface DiaryDayReorderResult {
+  readonly replayed: boolean;
+  readonly receipt: DiaryDayReorderReceiptRecord;
+}
+
 export interface DiaryFoodMutationResult extends Omit<DiaryMutationResult, "entry"> {
   readonly entry: DiaryFoodEntryRecord;
 }
@@ -228,6 +303,7 @@ export interface DiaryDayRecord {
   readonly timeZone: string;
   readonly status: "locked" | "open";
   readonly revision: string;
+  readonly orderDigest: string;
   readonly entries: readonly DiaryEntryRecord[];
   readonly totals: readonly DiaryNutrientAggregateRecord[];
   readonly totalEntries: number;
@@ -275,6 +351,7 @@ export interface RepeatDiaryEntryInput {
   readonly sourceRevision: bigint | number | string;
   readonly clientOperationId: string;
   readonly requestDigest: string;
+  readonly expectedProfileTimeZone: string;
   readonly occurredAt: string;
   readonly mealSlot?: DiaryMealSlot;
   readonly position?: number;
@@ -287,6 +364,7 @@ export interface UpdateFoodDiaryEntryInput {
   readonly clientOperationId: string;
   readonly requestDigest: string;
   readonly expectedEntryRevision: bigint | number | string;
+  readonly expectedProfileTimeZone?: string;
   readonly occurredAt?: string;
   readonly portion?: DiaryPortionInput;
   readonly mealSlot?: DiaryMealSlot;
@@ -316,6 +394,7 @@ export interface UpdateRecipeDiaryEntryInput {
   readonly clientOperationId: string;
   readonly requestDigest: string;
   readonly expectedEntryRevision: bigint | number | string;
+  readonly expectedProfileTimeZone?: string;
   readonly occurredAt?: string;
   readonly portion?: CreateRecipeDiaryEntryInput["portion"];
   readonly mealSlot?: DiaryMealSlot;
@@ -329,6 +408,7 @@ export interface UpdateDiaryEntryInput {
   readonly clientOperationId: string;
   readonly requestDigest: string;
   readonly expectedEntryRevision: bigint | number | string;
+  readonly expectedProfileTimeZone?: string;
   readonly occurredAt?: string;
   readonly portion?: DiaryPortionInput | { readonly kind: "serving"; readonly amount: string };
   readonly mealSlot?: DiaryMealSlot;
@@ -342,6 +422,17 @@ export interface DeleteDiaryEntryInput {
   readonly clientOperationId: string;
   readonly requestDigest: string;
   readonly expectedEntryRevision: bigint | number | string;
+}
+
+export interface ReorderDiaryDayInput {
+  readonly userId: string;
+  readonly clientOperationId: string;
+  readonly requestDigest: string;
+  readonly expectedProfileTimeZone: string;
+  readonly localDate: string;
+  readonly expectedDayRevision: bigint | number | string;
+  readonly expectedOrderDigest: string;
+  readonly groups: DiaryDayOrderPermutationsRecord;
 }
 
 const SNAPSHOT_ENGINE_VERSION = NUTRITION_ENGINE_VERSION;
@@ -556,9 +647,10 @@ export async function createRecipeDiaryEntry(
 export async function repeatDiaryEntry(
   database: Kysely<Database>,
   input: RepeatDiaryEntryInput,
-): Promise<DiaryMutationResult> {
+): Promise<DiaryCorrectionMutationResult> {
   validateOperationIdentity(input.clientOperationId, input.requestDigest);
   const sourceRevision = canonicalRevision(input.sourceRevision);
+  const expectedProfileTimeZone = requiredExpectedProfileTimeZone(input.expectedProfileTimeZone);
   if (input.mealSlot !== undefined) validateMealSlot(input.mealSlot);
   if (input.note !== undefined) validateMutableDiaryNote(input.note);
   return database
@@ -566,7 +658,7 @@ export async function repeatDiaryEntry(
     .setIsolationLevel("read committed")
     .execute(async (transaction) => {
       await lockUserDiary(transaction, input.userId);
-      const profile = await requireWritableProfile(transaction, input.userId);
+      await lockActiveDiaryUser(transaction, input.userId);
       const replay = await readOperationReplay(
         transaction,
         input.userId,
@@ -574,7 +666,16 @@ export async function repeatDiaryEntry(
         input.requestDigest,
         "create",
       );
-      if (replay) return replay;
+      if (replay) {
+        return withCorrectionReceipt(replay, input, "repeat", {
+          entryId: input.sourceEntryId,
+          revision: sourceRevision,
+        });
+      }
+      const profile = await requireLockedProfile(transaction, input.userId);
+      if (profile.timeZone !== expectedProfileTimeZone) {
+        throw new DiaryTimeZoneChangedError();
+      }
       const source = await transaction
         .selectFrom("diary_entry_revision")
         .select("id")
@@ -726,11 +827,16 @@ export async function repeatDiaryEntry(
       }
       const dayRevision = await incrementDay(transaction, day.id, input.userId);
       const entry = await loadEntryByRevision(transaction, input.userId, revisionId);
-      const result: DiaryMutationResult = {
-        days: [{ localDate: coordinates.localDate, revision: dayRevision }],
-        entry,
-        replayed: false,
-      };
+      const result = withCorrectionReceipt(
+        {
+          days: [{ localDate: coordinates.localDate, revision: dayRevision }],
+          entry,
+          replayed: false,
+        },
+        input,
+        "repeat",
+        { entryId: input.sourceEntryId, revision: sourceRevision },
+      );
       await recordOperation(transaction, input, "create", entryId, result);
       return result;
     });
@@ -739,7 +845,7 @@ export async function repeatDiaryEntry(
 export async function updateFoodDiaryEntry(
   database: Kysely<Database>,
   input: UpdateFoodDiaryEntryInput,
-): Promise<DiaryFoodMutationResult> {
+): Promise<DiaryFoodCorrectionMutationResult> {
   const result = await runDiaryEntryUpdate(database, input, "food");
   if (result.entry.kind !== "food") throw new DiaryValidationError("Food diary result is invalid");
   return { ...result, entry: result.entry };
@@ -748,7 +854,7 @@ export async function updateFoodDiaryEntry(
 export async function updateRecipeDiaryEntry(
   database: Kysely<Database>,
   input: UpdateRecipeDiaryEntryInput,
-): Promise<DiaryRecipeMutationResult> {
+): Promise<DiaryRecipeCorrectionMutationResult> {
   const result = await runDiaryEntryUpdate(database, input, "recipe");
   if (result.entry.kind !== "recipe")
     throw new DiaryValidationError("Recipe diary result is invalid");
@@ -759,7 +865,7 @@ export async function updateRecipeDiaryEntry(
 export async function updateDiaryEntry(
   database: Kysely<Database>,
   input: UpdateDiaryEntryInput,
-): Promise<DiaryMutationResult> {
+): Promise<DiaryCorrectionMutationResult> {
   return runDiaryEntryUpdate(database, input);
 }
 
@@ -767,8 +873,9 @@ async function runDiaryEntryUpdate(
   database: Kysely<Database>,
   input: UpdateDiaryEntryInput,
   expectedKind?: "food" | "recipe",
-): Promise<DiaryMutationResult> {
+): Promise<DiaryCorrectionMutationResult> {
   validateOperationIdentity(input.clientOperationId, input.requestDigest);
+  const expectedProfileTimeZone = optionalExpectedProfileTimeZone(input.expectedProfileTimeZone);
   if (input.mealSlot !== undefined) validateMealSlot(input.mealSlot);
   if (input.note !== undefined) validateMutableDiaryNote(input.note);
   return database
@@ -776,7 +883,7 @@ async function runDiaryEntryUpdate(
     .setIsolationLevel("read committed")
     .execute(async (transaction) => {
       await lockUserDiary(transaction, input.userId);
-      const profile = await requireWritableProfile(transaction, input.userId);
+      await lockActiveDiaryUser(transaction, input.userId);
       const replay = await readOperationReplay(
         transaction,
         input.userId,
@@ -784,7 +891,16 @@ async function runDiaryEntryUpdate(
         input.requestDigest,
         "update",
       );
-      if (replay) return replay;
+      if (replay) {
+        return withCorrectionReceipt(replay, input, "update", {
+          entryId: input.entryId,
+          revision: canonicalRevision(input.expectedEntryRevision),
+        });
+      }
+      const profile = await requireLockedProfile(transaction, input.userId);
+      if (expectedProfileTimeZone !== undefined && profile.timeZone !== expectedProfileTimeZone) {
+        throw new DiaryTimeZoneChangedError();
+      }
       const head = await loadOwnedHeadForUpdate(transaction, input.userId, input.entryId);
       if (!head || head.operation === "delete") throw new DiaryNotFoundError();
       if (expectedKind !== undefined && head.kind !== expectedKind) throw new DiaryNotFoundError();
@@ -849,6 +965,7 @@ async function runDiaryEntryUpdate(
         note: input.note === undefined ? head.note : input.note,
         operation: moved ? ("move" as const) : ("update" as const),
         position: canonicalPosition(input.position ?? head.position),
+        repeatedFromRevisionId: head.repeatedFromRevisionId,
         revisionId,
         revisionNumber,
         userId: input.userId,
@@ -878,7 +995,10 @@ async function runDiaryEntryUpdate(
         days.push({ localDate: coordinates.localDate, revision: targetRevision });
       }
       const entry = await loadEntryByRevision(transaction, input.userId, revisionId);
-      const result: DiaryMutationResult = { days, entry, replayed: false };
+      const result = withCorrectionReceipt({ days, entry, replayed: false }, input, "update", {
+        entryId: input.entryId,
+        revision: expectedRevision,
+      });
       await recordOperation(transaction, input, "update", input.entryId, result);
       return result;
     });
@@ -887,7 +1007,7 @@ async function runDiaryEntryUpdate(
 export async function deleteDiaryEntry(
   database: Kysely<Database>,
   input: DeleteDiaryEntryInput,
-): Promise<DiaryMutationResult> {
+): Promise<DiaryCorrectionMutationResult> {
   validateOperationIdentity(input.clientOperationId, input.requestDigest);
   return database
     .transaction()
@@ -902,7 +1022,12 @@ export async function deleteDiaryEntry(
         input.requestDigest,
         "delete",
       );
-      if (replay) return replay;
+      if (replay) {
+        return withCorrectionReceipt(replay, input, "delete", {
+          entryId: input.entryId,
+          revision: canonicalRevision(input.expectedEntryRevision),
+        });
+      }
       const head = await loadOwnedHeadForUpdate(transaction, input.userId, input.entryId);
       if (!head || head.operation === "delete") throw new DiaryNotFoundError();
       if (head.revisionNumber !== canonicalRevision(input.expectedEntryRevision)) {
@@ -928,6 +1053,7 @@ export async function deleteDiaryEntry(
           note: head.note,
           operation: "delete",
           position: head.position,
+          repeatedFromRevisionId: head.repeatedFromRevisionId,
           revisionId,
           revisionNumber,
           userId: input.userId,
@@ -948,6 +1074,7 @@ export async function deleteDiaryEntry(
           note: head.note,
           operation: "delete",
           position: head.position,
+          repeatedFromRevisionId: head.repeatedFromRevisionId,
           revisionId,
           revisionNumber,
           userId: input.userId,
@@ -961,12 +1088,167 @@ export async function deleteDiaryEntry(
         .executeTakeFirstOrThrow();
       const dayRevision = await incrementDay(transaction, head.diaryId, input.userId);
       const entry = await loadEntryByRevision(transaction, input.userId, revisionId);
-      const result: DiaryMutationResult = {
-        days: [{ localDate: head.localDate, revision: dayRevision }],
-        entry,
-        replayed: false,
-      };
+      const result = withCorrectionReceipt(
+        {
+          days: [{ localDate: head.localDate, revision: dayRevision }],
+          entry,
+          replayed: false,
+        },
+        input,
+        "delete",
+        { entryId: input.entryId, revision: canonicalRevision(input.expectedEntryRevision) },
+      );
       await recordOperation(transaction, input, "delete", input.entryId, result);
+      return result;
+    });
+}
+
+/**
+ * Atomically replace one complete day's within-meal order. Indexes are resolved
+ * only against the exact revision-bound canonical baseline; entries cannot move
+ * between meal groups in this protocol version.
+ */
+export async function reorderDiaryDay(
+  database: Kysely<Database>,
+  input: ReorderDiaryDayInput,
+): Promise<DiaryDayReorderResult> {
+  validateOperationIdentity(input.clientOperationId, input.requestDigest);
+  validateLocalDate(input.localDate);
+  const expectedDayRevision = canonicalRevision(input.expectedDayRevision);
+  const expectedProfileTimeZone = requiredExpectedProfileTimeZone(input.expectedProfileTimeZone);
+  if (!/^[0-9a-f]{64}$/u.test(input.expectedOrderDigest)) {
+    throw new DiaryValidationError("expectedOrderDigest must be a lowercase SHA-256 hex");
+  }
+  validateOrderPermutations(input.groups);
+
+  return database
+    .transaction()
+    .setIsolationLevel("read committed")
+    .execute(async (transaction) => {
+      await lockUserDiary(transaction, input.userId);
+      await lockActiveDiaryUser(transaction, input.userId);
+      const replay = await readReorderOperationReplay(transaction, input);
+      if (replay) return replay;
+
+      const profile = await requireLockedProfile(transaction, input.userId);
+      if (profile.timeZone !== expectedProfileTimeZone) {
+        throw new DiaryTimeZoneChangedError();
+      }
+      const day = await transaction
+        .selectFrom("diary")
+        .select(["id", "revision", "status", "time_zone"])
+        .where("user_id", "=", input.userId)
+        .where("local_date", "=", input.localDate)
+        .forUpdate()
+        .executeTakeFirst();
+      if (!day) throw new DiaryNotFoundError();
+      if (day.revision !== expectedDayRevision) throw new DiaryDayRevisionConflictError();
+      if (day.status === "locked") throw new DiaryLockedError();
+
+      const baselineRows = await transaction
+        .selectFrom("diary_entry as entry")
+        .innerJoin("diary_entry_revision as revision", "revision.id", "entry.current_revision_id")
+        .select([
+          "entry.id as entry_id",
+          "revision.revision_number as entry_revision",
+          "revision.meal_slot",
+          "revision.position",
+          "revision.occurred_at",
+        ])
+        .where("entry.user_id", "=", input.userId)
+        .where("entry.diary_id", "=", day.id)
+        .where("revision.operation", "!=", "delete")
+        .orderBy(
+          sql<number>`case revision.meal_slot when 'breakfast' then 0 when 'lunch' then 1 when 'dinner' then 2 when 'snacks' then 3 end`,
+        )
+        .orderBy("revision.position")
+        .orderBy("revision.occurred_at")
+        .orderBy("entry.id")
+        .forUpdate("entry")
+        .limit(MAX_DAY_ENTRIES + 1)
+        .execute();
+      if (baselineRows.length < 1 || baselineRows.length > MAX_DAY_ENTRIES) {
+        throw new DiaryValidationError("Diary reorder requires between 1 and 50 active entries");
+      }
+
+      const baselineGroups = orderMealSlots().map((mealSlot) => ({
+        entries: baselineRows
+          .filter((row) => row.meal_slot === mealSlot)
+          .map((row) => ({
+            entryId: row.entry_id,
+            entryRevision: row.entry_revision,
+            position: row.position,
+          })),
+        mealSlot,
+      })) as unknown as DiaryDayReorderReceiptRecord["groups"];
+      const previousOrderDigest = diaryDayOrderDigest(
+        input.localDate,
+        day.time_zone,
+        baselineGroups,
+      );
+      if (previousOrderDigest !== input.expectedOrderDigest) {
+        throw new DiaryDayRevisionConflictError();
+      }
+
+      const resultGroups: DiaryDayOrderGroupRecord[] = [];
+      for (const baselineGroup of baselineGroups) {
+        const requested = input.groups[baselineGroup.mealSlot];
+        assertExactBaselinePermutation(requested, baselineGroup.entries.length);
+        const entries: DiaryDayOrderEntryRecord[] = [];
+        for (let position = 0; position < requested.length; position += 1) {
+          const baselineIndex = requested[position];
+          if (baselineIndex === undefined) {
+            throw new DiaryValidationError("Diary reorder index is invalid");
+          }
+          const baselineEntry = baselineGroup.entries[baselineIndex];
+          if (!baselineEntry) throw new DiaryValidationError("Diary reorder index is invalid");
+          let entryRevision = baselineEntry.entryRevision;
+          if (baselineEntry.position !== position) {
+            const head = await loadOwnedHeadForUpdate(
+              transaction,
+              input.userId,
+              baselineEntry.entryId,
+            );
+            if (
+              !head ||
+              head.operation === "delete" ||
+              head.diaryId !== day.id ||
+              head.mealSlot !== baselineGroup.mealSlot ||
+              head.revisionNumber !== baselineEntry.entryRevision
+            ) {
+              throw new DiaryDayRevisionConflictError();
+            }
+            entryRevision = await appendPositionRevision(
+              transaction,
+              input.userId,
+              baselineEntry.entryId,
+              head,
+              position,
+            );
+          }
+          entries.push({ entryId: baselineEntry.entryId, entryRevision, position });
+        }
+        resultGroups.push({ entries, mealSlot: baselineGroup.mealSlot });
+      }
+
+      const groups = resultGroups as unknown as DiaryDayReorderReceiptRecord["groups"];
+      const resultingDayRevision = await incrementDay(transaction, day.id, input.userId);
+      const result: DiaryDayReorderResult = {
+        replayed: false,
+        receipt: {
+          expectedDayRevision,
+          groups,
+          localDate: input.localDate,
+          operationId: input.clientOperationId,
+          orderDigest: diaryDayOrderDigest(input.localDate, day.time_zone, groups),
+          previousOrderDigest,
+          resultingDayRevision,
+          timeZone: day.time_zone,
+        },
+      };
+      const anchorEntryId = baselineRows.map((row) => row.entry_id).sort()[0];
+      if (!anchorEntryId) throw new DiaryValidationError("Diary reorder anchor is unavailable");
+      await recordReorderOperation(transaction, input, anchorEntryId, result);
       return result;
     });
 }
@@ -1087,6 +1369,11 @@ async function loadDiaryDaySnapshot(
         id: null,
         localDate: input.localDate,
         revision: "0",
+        orderDigest: diaryDayOrderDigest(
+          input.localDate,
+          profile.timeZone,
+          diaryDayOrderGroups([]),
+        ),
         status: "open",
         timeZone: profile.timeZone,
         totalEntries: 0,
@@ -1139,8 +1426,13 @@ async function loadDiaryDaySnapshot(
       id: day.id,
       localDate: input.localDate,
       revision: day.revision,
+      orderDigest: diaryDayOrderDigest(
+        input.localDate,
+        day.time_zone,
+        diaryDayOrderGroups(entries),
+      ),
       status: day.status,
-      timeZone: profile.timeZone,
+      timeZone: day.time_zone,
       totalEntries: entries.length,
       totals: aggregateDayTotals(entries),
       updatedAt: day.updated_at.toISOString(),
@@ -1240,6 +1532,7 @@ interface FoodHeadRecord {
   readonly attributionText: string | null;
   readonly customFoodId: string | null;
   readonly customFoodVersionNumber: number | null;
+  readonly repeatedFromRevisionId: string | null;
 }
 
 interface RecipeHeadRecord {
@@ -1271,6 +1564,7 @@ interface RecipeHeadRecord {
   readonly retentionPolicyVersion: string;
   readonly calculationAssumptions: JsonObject;
   readonly warnings: readonly RecipeWarningRecord[];
+  readonly repeatedFromRevisionId: string | null;
 }
 
 type HeadRecord = FoodHeadRecord | RecipeHeadRecord;
@@ -2248,10 +2542,15 @@ async function loadOwnedHeadForUpdate(
       "revision.note",
     ]);
   const query = (await hasRetentionDiaryColumns(transaction))
-    ? baseQuery.select(["revision.custom_food_id", "revision.custom_food_version_number"])
+    ? baseQuery.select([
+        "revision.custom_food_id",
+        "revision.custom_food_version_number",
+        "revision.repeated_from_revision_id",
+      ])
     : baseQuery.select([
         sql<string | null>`null`.as("custom_food_id"),
         sql<number | null>`null`.as("custom_food_version_number"),
+        sql<string | null>`null`.as("repeated_from_revision_id"),
       ]);
   const row = await query
     .where("entry.id", "=", entryId)
@@ -2293,6 +2592,7 @@ async function loadOwnedHeadForUpdate(
       recipeName: row.recipe_name,
       recipeVersionId: row.recipe_version_id,
       recipeVersionNumber: row.recipe_version_number,
+      repeatedFromRevisionId: row.repeated_from_revision_id,
       resolvedGrams: canonicalPositiveDecimal(row.resolved_quantity, "snapshot resolved grams"),
       retentionPolicyCode: row.recipe_retention_policy_code,
       retentionPolicyVersion: row.recipe_retention_policy_version,
@@ -2345,6 +2645,7 @@ async function loadOwnedHeadForUpdate(
     operation: row.operation,
     position: row.position,
     resolvedGrams: canonicalPositiveDecimal(row.resolved_quantity, "snapshot resolved grams"),
+    repeatedFromRevisionId: row.repeated_from_revision_id,
     revisionId: row.revision_id,
     revisionNumber: row.revision_number,
     servingId: row.food_serving_id,
@@ -2703,6 +3004,207 @@ async function recordOperation(
     .execute();
 }
 
+async function readReorderOperationReplay(
+  transaction: Transaction<Database>,
+  input: Pick<ReorderDiaryDayInput, "clientOperationId" | "requestDigest" | "userId">,
+): Promise<DiaryDayReorderResult | null> {
+  const existing = await transaction
+    .selectFrom("diary_operation")
+    .select(["request_digest", "operation", "result_payload"])
+    .where("user_id", "=", input.userId)
+    .where("client_operation_id", "=", input.clientOperationId)
+    .executeTakeFirst();
+  if (!existing) {
+    const legacyReservation = await transaction
+      .selectFrom("diary_entry")
+      .select("id")
+      .where("user_id", "=", input.userId)
+      .where("client_operation_id", "=", input.clientOperationId)
+      .executeTakeFirst();
+    if (legacyReservation) throw new DiaryIdempotencyConflictError();
+    return null;
+  }
+  if (existing.request_digest !== input.requestDigest || existing.operation !== "reorder") {
+    throw new DiaryIdempotencyConflictError();
+  }
+  return { ...(existing.result_payload as unknown as DiaryDayReorderResult), replayed: true };
+}
+
+async function recordReorderOperation(
+  transaction: Transaction<Database>,
+  input: Pick<ReorderDiaryDayInput, "clientOperationId" | "requestDigest" | "userId">,
+  anchorEntryId: string,
+  result: DiaryDayReorderResult,
+): Promise<void> {
+  await transaction
+    .insertInto("diary_operation")
+    .values({
+      client_operation_id: input.clientOperationId,
+      diary_entry_id: anchorEntryId,
+      operation: "reorder",
+      request_digest: input.requestDigest,
+      result_payload: JSON.parse(JSON.stringify(result)) as JsonObject,
+      user_id: input.userId,
+    })
+    .execute();
+}
+
+function withCorrectionReceipt(
+  result: DiaryMutationResult,
+  input: { readonly clientOperationId: string },
+  kind: DiaryCorrectionKind,
+  expectedSubject: DiaryRevisionSubjectRecord,
+): DiaryCorrectionMutationResult {
+  const persistedReceipt = (result as Partial<DiaryCorrectionMutationResult>).receipt;
+  if (persistedReceipt) return { ...result, receipt: persistedReceipt };
+  return {
+    ...result,
+    receipt: {
+      affectedDays: result.days,
+      expectedSubjects: [expectedSubject],
+      kind,
+      operationId: input.clientOperationId,
+      protocol: "v1",
+      resultSubjects: [
+        {
+          entryId: result.entry.id,
+          revision: result.entry.currentRevision,
+          state: kind === "delete" ? "deleted" : "active",
+        },
+      ],
+    },
+  };
+}
+
+async function appendPositionRevision(
+  transaction: Transaction<Database>,
+  userId: string,
+  entryId: string,
+  head: HeadRecord,
+  position: number,
+): Promise<string> {
+  const revisionId = randomUUID();
+  const revisionNumber = (BigInt(head.revisionNumber) + 1n).toString();
+  const common = {
+    coordinates: {
+      localDate: head.localDate,
+      localTime: head.localTime,
+      occurredAt: head.occurredAt,
+      timeZone: head.timeZone,
+    },
+    dayId: head.diaryId,
+    entryId,
+    mealSlot: head.mealSlot,
+    note: head.note,
+    operation: "update" as const,
+    position,
+    repeatedFromRevisionId: head.repeatedFromRevisionId,
+    revisionId,
+    revisionNumber,
+    userId,
+  };
+  if (head.kind === "food") {
+    await insertRevision(transaction, {
+      ...common,
+      facts: await loadPinnedFacts(transaction, head),
+    });
+  } else {
+    await insertRecipeDiaryRevision(transaction, {
+      ...common,
+      facts: await loadPinnedRecipeFacts(transaction, head),
+    });
+  }
+  await transaction
+    .updateTable("diary_entry")
+    .set({ current_revision_id: revisionId, current_revision_number: revisionNumber })
+    .where("id", "=", entryId)
+    .where("user_id", "=", userId)
+    .executeTakeFirstOrThrow();
+  return revisionNumber;
+}
+
+function orderMealSlots(): readonly DiaryMealSlot[] {
+  return ["breakfast", "lunch", "dinner", "snacks"];
+}
+
+function diaryDayOrderGroups(
+  entries: readonly DiaryEntryRecord[],
+): DiaryDayReorderReceiptRecord["groups"] {
+  return orderMealSlots().map((mealSlot) => ({
+    entries: entries
+      .filter((entry) => entry.mealSlot === mealSlot)
+      .map((entry) => ({
+        entryId: entry.id,
+        entryRevision: entry.currentRevision,
+        position: entry.position,
+      })),
+    mealSlot,
+  })) as unknown as DiaryDayReorderReceiptRecord["groups"];
+}
+
+function validateOrderPermutations(groups: DiaryDayOrderPermutationsRecord): void {
+  if (!groups || typeof groups !== "object" || Array.isArray(groups)) {
+    throw new DiaryValidationError("Diary reorder groups are invalid");
+  }
+  const keys = Object.keys(groups);
+  if (keys.length !== 4 || keys.some((key) => !orderMealSlots().includes(key as DiaryMealSlot))) {
+    throw new DiaryValidationError("Diary reorder must contain each meal group exactly once");
+  }
+  let total = 0;
+  for (const mealSlot of orderMealSlots()) {
+    const indexes = groups[mealSlot];
+    if (
+      !Array.isArray(indexes) ||
+      indexes.length > MAX_DAY_ENTRIES ||
+      indexes.some(
+        (index) => !Number.isSafeInteger(index) || index < 0 || index >= MAX_DAY_ENTRIES,
+      ) ||
+      new Set(indexes).size !== indexes.length
+    ) {
+      throw new DiaryValidationError("Diary reorder indexes are invalid");
+    }
+    total += indexes.length;
+  }
+  if (total < 1 || total > MAX_DAY_ENTRIES) {
+    throw new DiaryValidationError("Diary reorder requires between 1 and 50 active entries");
+  }
+}
+
+function assertExactBaselinePermutation(indexes: readonly number[], size: number): void {
+  const sorted = [...indexes].sort((left, right) => left - right);
+  if (indexes.length !== size || sorted.some((index, position) => index !== position)) {
+    throw new DiaryDayRevisionConflictError();
+  }
+}
+
+export function diaryDayOrderDigestPayload(
+  localDate: string,
+  timeZone: string,
+  groups: readonly DiaryDayOrderGroupRecord[],
+): string {
+  const ordered = orderMealSlots().map((mealSlot) => {
+    const matches = groups.filter((group) => group.mealSlot === mealSlot);
+    if (matches.length !== 1) throw new DiaryValidationError("Diary order groups are invalid");
+    const [group] = matches;
+    if (!group) throw new DiaryValidationError("Diary order group is unavailable");
+    return [
+      mealSlot,
+      group.entries.map((entry) => [entry.entryId, entry.entryRevision, entry.position]),
+    ];
+  });
+  return JSON.stringify(["diary-day-order-v1", localDate, timeZone, ordered]);
+}
+
+export function diaryDayOrderDigest(
+  localDate: string,
+  timeZone: string,
+  groups: readonly DiaryDayOrderGroupRecord[],
+): string {
+  return createHash("sha256")
+    .update(diaryDayOrderDigestPayload(localDate, timeZone, groups))
+    .digest("hex");
+}
+
 function normalizeQuality(value: string): "calculated" | "estimated" | "label" | "measured" {
   return value === "calculated" ||
     value === "estimated" ||
@@ -2760,6 +3262,14 @@ function optionalExpectedProfileTimeZone(value: string | undefined): string | un
       "expectedProfileTimeZone must be a supported IANA time-zone identifier",
     );
   }
+}
+
+function requiredExpectedProfileTimeZone(value: string | undefined): string {
+  const timeZone = optionalExpectedProfileTimeZone(value);
+  if (timeZone === undefined) {
+    throw new DiaryValidationError("expectedProfileTimeZone is required");
+  }
+  return timeZone;
 }
 
 function validateMealSlot(value: string): asserts value is DiaryMealSlot {

@@ -49,6 +49,7 @@ import {
   getCustomFood,
   getNutrientTrend,
   getPrivacyExportJob,
+  getUserProfile,
   listBiometricDefinitions,
   listBiometricEvents,
   listCustomFoods,
@@ -79,7 +80,10 @@ import {
   revokeReminderSchedule,
   type TrendNutrientRecord,
 } from "@nutrition-tracker/db";
-import { DiaryTimeZoneChangedServiceError } from "./modules/diary/diary.routes.js";
+import {
+  DiaryLockedServiceError,
+  DiaryTimeZoneChangedServiceError,
+} from "./modules/diary/diary.routes.js";
 import { verifyP256DerSignature } from "./modules/retention/device-signatures.js";
 import {
   RetentionConsentRequiredServiceError,
@@ -377,10 +381,10 @@ function mapPersistenceError(error: unknown): never {
     throw new RetentionConsentRequiredServiceError();
   if (error instanceof RetentionExportNotReadyError)
     throw new RetentionExportNotReadyServiceError();
+  if (error instanceof DiaryLockedError) throw new DiaryLockedServiceError();
   if (
     error instanceof RetentionValidationError ||
     error instanceof DiaryValidationError ||
-    error instanceof DiaryLockedError ||
     error instanceof RangeError
   )
     throw new RetentionValidationServiceError();
@@ -482,8 +486,11 @@ export class DatabaseRetentionService implements RetentionService {
     input: Parameters<RetentionService["repeatEntry"]>[0],
   ): Promise<DiaryMutationResponse> {
     try {
+      const profile = await getUserProfile(this.#database, input.userId);
+      if (!profile) throw new DiaryNotFoundError();
       const result = await repeatDiaryEntry(this.#database, {
         ...operation(input),
+        expectedProfileTimeZone: profile.timeZone,
         sourceEntryId: input.sourceEntryId,
         sourceRevision: input.expectedSourceRevision,
         occurredAt: input.request.occurredAt,

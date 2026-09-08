@@ -103,6 +103,7 @@ export const diaryDay: DiaryDay = {
   timeZone: "America/Chicago",
   status: "open",
   revision: "4",
+  orderDigest: "a".repeat(64),
   entries: [diaryEntry],
   totals: [nutrient],
   updatedAt: "2026-08-15T13:30:01.000Z",

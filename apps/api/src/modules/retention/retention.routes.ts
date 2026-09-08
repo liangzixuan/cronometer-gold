@@ -120,7 +120,10 @@ import {
 import { rejectUnexpectedQueryKeys } from "../../http/request-validation.js";
 import type { AuthService } from "../auth/auth-service.js";
 import { BoundedAuthRateLimiter } from "../auth/rate-limiter.js";
-import { DiaryTimeZoneChangedServiceError } from "../diary/diary.routes.js";
+import {
+  DiaryLockedServiceError,
+  DiaryTimeZoneChangedServiceError,
+} from "../diary/diary.routes.js";
 import { verifyDeviceRegistration } from "./device-signatures.js";
 
 type Signal = { readonly signal?: AbortSignal };
@@ -476,6 +479,15 @@ function mapError(error: unknown): HttpProblem {
       title: "Conflict",
       detail:
         "The profile time zone changed before the diary entry was saved. Review the date and try again.",
+      expose: true,
+    });
+  }
+  if (error instanceof DiaryLockedServiceError) {
+    return new HttpProblem({
+      statusCode: 409,
+      code: "CONFLICT",
+      title: "Conflict",
+      detail: "The diary day is locked and cannot be changed.",
       expose: true,
     });
   }

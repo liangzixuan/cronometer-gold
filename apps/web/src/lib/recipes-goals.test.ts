@@ -10,6 +10,7 @@ import {
   parseGoalProgress,
   prepareRecipeLogOperation,
   prepareStableMutation,
+  type RecipeLogBody,
   recipeIngredientAccessibilityLabel,
   recipeLogInstant,
   recipeLogKindFor,
@@ -89,6 +90,50 @@ describe("recipe mutation safety", () => {
     expect(() => recipeLogInstant("2026-03-08", "02:30", "America/Chicago")).toThrow(
       "does not exist",
     );
+  });
+
+  it("does not reuse another-zone recipe retry when multiple intents are pending", () => {
+    const pending = new Map<string, StableMutation<RecipeLogBody>>();
+    let operation = 0;
+    const operationId = () => {
+      operation += 1;
+      return `00000000-0000-4000-8000-${String(operation).padStart(12, "0")}`;
+    };
+    const input = {
+      recipeId: "ce126b7f-dfe5-4ee4-a75c-6b0f50c1963e",
+      recipeVersionId: "db2ed69e-29d1-4330-a210-0a804f9ff2b3",
+      portion: { kind: "serving", amount: "1" } as const,
+      mealSlot: "breakfast" as const,
+      localDate: "2026-02-01",
+      timeZone: "America/Chicago",
+    };
+    const oldZone = prepareRecipeLogOperation(
+      pending,
+      input,
+      new Date("2026-01-10T18:00:00.000Z"),
+      operationId,
+    );
+    pending.set(oldZone.intentKey, oldZone);
+    const other = prepareRecipeLogOperation(
+      pending,
+      { ...input, recipeId: "5e4a7acc-13b0-4f64-958b-42a9d99f73c0" },
+      new Date("2026-01-10T18:00:00.000Z"),
+      operationId,
+    );
+    pending.set(other.intentKey, other);
+
+    const currentZone = prepareRecipeLogOperation(
+      pending,
+      { ...input, timeZone: "America/New_York" },
+      new Date("2026-01-10T18:00:00.000Z"),
+      operationId,
+    );
+
+    expect(pending.size).toBe(2);
+    expect(currentZone.intentKey).not.toBe(oldZone.intentKey);
+    expect(currentZone.operationId).not.toBe(oldZone.operationId);
+    expect(oldZone.body.occurredAt).toBe("2026-02-01T18:00:00.000Z");
+    expect(currentZone.body.occurredAt).toBe("2026-02-01T17:00:00.000Z");
   });
 });
 

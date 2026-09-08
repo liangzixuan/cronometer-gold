@@ -4,8 +4,10 @@ import {
   proxyDiaryChange,
   proxyDiaryCreate,
   proxyDiaryGet,
+  proxyDiaryReorder,
   proxyDiaryRepeat,
 } from "../app/api/diary/proxy";
+import { diaryDayOrderDigest } from "./diary";
 import { SESSION_COOKIE, validatedDiaryDate, validatedDiaryReadQuery } from "./private-api";
 
 const entry = {
@@ -85,6 +87,7 @@ describe("web diary read query and proxy", () => {
               timeZone: "America/Chicago",
               status: "open",
               revision: "8",
+              orderDigest: "a".repeat(64),
               entries: [entry],
               totals: [],
               updatedAt: "2026-08-15T13:30:01.000Z",
@@ -120,6 +123,7 @@ describe("web diary read query and proxy", () => {
             timeZone: "America/Chicago",
             status: "open",
             revision: "8",
+            orderDigest: "a".repeat(64),
             entries: [entry],
             totals: [],
             updatedAt: "2026-08-15T13:30:01.000Z",
@@ -152,6 +156,7 @@ describe("web diary read query and proxy", () => {
             timeZone: "America/Chicago",
             status: "open",
             revision: "0",
+            orderDigest: "a".repeat(64),
             entries: [],
             totals: [],
             updatedAt: null,
@@ -172,6 +177,7 @@ describe("web diary read query and proxy", () => {
         timeZone: "America/Chicago",
         status: "open",
         revision: "0",
+        orderDigest: "a".repeat(64),
         entries: [],
         totals: [],
         updatedAt: null,
@@ -336,6 +342,14 @@ describe("web diary mutation proxy", () => {
             replayed: false,
             entry,
             affectedDays: [{ localDate: "2026-08-15", revision: "5" }],
+            receipt: {
+              protocol: "v1",
+              operationId: "61eec75e-fe16-47e4-9f7b-efb6914ad9dc",
+              kind: "update",
+              expectedSubjects: [{ entryId: entry.id, revision: "3" }],
+              resultSubjects: [{ entryId: entry.id, revision: "4", state: "active" }],
+              affectedDays: [{ localDate: "2026-08-15", revision: "5" }],
+            },
           },
         });
       }),
@@ -348,7 +362,7 @@ describe("web diary mutation proxy", () => {
     };
     const response = await proxyDiaryChange(
       new Request(
-        "https://app.example.test/api/diary/entries/75d7fa63-4e26-42de-a1f8-0683ce268f62?date=2026-08-15",
+        "https://app.example.test/api/diary/entries/75d7fa63-4e26-42de-a1f8-0683ce268f62?date=2026-08-15&profileTimeZonePrecondition=v1",
         {
           method: "PATCH",
           headers: {
@@ -358,6 +372,7 @@ describe("web diary mutation proxy", () => {
             "if-match": '"3"',
             origin: "https://app.example.test",
             "sec-fetch-site": "same-origin",
+            "x-expected-profile-time-zone": "America/Chicago",
           },
           body: JSON.stringify(body),
         },
@@ -367,12 +382,13 @@ describe("web diary mutation proxy", () => {
     );
     expect(response.status).toBe(200);
     expect(calls[0]?.url).toBe(
-      "http://127.0.0.1:4000/v1/diary/entries/75d7fa63-4e26-42de-a1f8-0683ce268f62",
+      "http://127.0.0.1:4000/v1/diary/entries/75d7fa63-4e26-42de-a1f8-0683ce268f62?diaryCorrectionProtocol=v1&profileTimeZonePrecondition=v1",
     );
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual(body);
     const headers = new Headers(calls[0]?.init?.headers);
     expect(headers.get("if-match")).toBe('"3"');
     expect(headers.get("idempotency-key")).toBe("61eec75e-fe16-47e4-9f7b-efb6914ad9dc");
+    expect(headers.get("x-expected-profile-time-zone")).toBe("America/Chicago");
     expect(response.headers.get("cache-control")).toContain("no-store");
   });
 
@@ -385,33 +401,282 @@ describe("web diary mutation proxy", () => {
         return Response.json({
           data: {
             replayed: false,
-            entry: { ...entry, id: "018f6f58-4e2c-7b62-8f0b-3d75491713b5", revision: "1" },
+            entry: {
+              ...entry,
+              id: "018f6f58-4e2c-7b62-8f0b-3d75491713b5",
+              revision: "1",
+              occurredAt: "2026-08-16T13:30:00.000Z",
+              localDate: "2026-08-16",
+            },
             affectedDays: [{ localDate: "2026-08-16", revision: "1" }],
+            receipt: {
+              protocol: "v1",
+              operationId: "61eec75e-fe16-47e4-9f7b-efb6914ad9dc",
+              kind: "repeat",
+              expectedSubjects: [{ entryId: entry.id, revision: "4" }],
+              resultSubjects: [
+                {
+                  entryId: "018f6f58-4e2c-7b62-8f0b-3d75491713b5",
+                  revision: "1",
+                  state: "active",
+                },
+              ],
+              affectedDays: [{ localDate: "2026-08-16", revision: "1" }],
+            },
           },
         });
       }),
     );
     const body = { occurredAt: "2026-08-16T13:30:00.000Z", mealSlot: "breakfast" };
     const response = await proxyDiaryRepeat(
-      new Request(`https://app.example.test/api/diary/entries/${entry.id}/repeat`, {
-        method: "POST",
-        headers: {
-          cookie: `${SESSION_COOKIE}=${"t".repeat(43)}`,
-          "content-type": "application/json",
-          "idempotency-key": "61eec75e-fe16-47e4-9f7b-efb6914ad9dc", // gitleaks:allow -- deterministic UUID fixture
-          "if-match": '"4"',
-          origin: "https://app.example.test",
-          "sec-fetch-site": "same-origin",
+      new Request(
+        `https://app.example.test/api/diary/entries/${entry.id}/repeat?date=2026-08-15&profileTimeZonePrecondition=v1`,
+        {
+          method: "POST",
+          headers: {
+            cookie: `${SESSION_COOKIE}=${"t".repeat(43)}`,
+            "content-type": "application/json",
+            "idempotency-key": "61eec75e-fe16-47e4-9f7b-efb6914ad9dc", // gitleaks:allow -- deterministic UUID fixture
+            "if-match": '"4"',
+            origin: "https://app.example.test",
+            "sec-fetch-site": "same-origin",
+            "x-expected-profile-time-zone": "America/Chicago",
+          },
+          body: JSON.stringify(body),
         },
-        body: JSON.stringify(body),
-      }),
+      ),
       entry.id,
     );
     expect(response.status).toBe(200);
-    expect(calls[0]?.url).toBe(`http://127.0.0.1:4000/v1/diary/entries/${entry.id}/repeat`);
+    expect(calls[0]?.url).toBe(
+      `http://127.0.0.1:4000/v1/diary/corrections/entries/${entry.id}/repeat?profileTimeZonePrecondition=v1`,
+    );
     expect(JSON.parse(String(calls[0]?.init?.body))).toEqual(body);
     const headers = new Headers(calls[0]?.init?.headers);
     expect(headers.get("if-match")).toBe('"4"');
     expect(headers.get("idempotency-key")).toBe("61eec75e-fe16-47e4-9f7b-efb6914ad9dc");
+    expect(headers.get("x-expected-profile-time-zone")).toBe("America/Chicago");
+  });
+
+  it("deletes through the durable correction protocol and verifies the exact subject", async () => {
+    const calls: Array<{ readonly url: string; readonly init?: RequestInit }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL, init?: RequestInit) => {
+        calls.push({ url: url.href, ...(init ? { init } : {}) });
+        return Response.json({
+          data: {
+            replayed: false,
+            entry: null,
+            affectedDays: [{ localDate: "2026-08-15", revision: "6" }],
+            receipt: {
+              protocol: "v1",
+              operationId: "61eec75e-fe16-47e4-9f7b-efb6914ad9dc",
+              kind: "delete",
+              expectedSubjects: [{ entryId: entry.id, revision: "4" }],
+              resultSubjects: [{ entryId: entry.id, revision: "5", state: "deleted" }],
+              affectedDays: [{ localDate: "2026-08-15", revision: "6" }],
+            },
+          },
+        });
+      }),
+    );
+    const response = await proxyDiaryChange(
+      new Request(`https://app.example.test/api/diary/entries/${entry.id}?date=2026-08-15`, {
+        method: "DELETE",
+        headers: {
+          cookie: `${SESSION_COOKIE}=${"t".repeat(43)}`,
+          "idempotency-key": "61eec75e-fe16-47e4-9f7b-efb6914ad9dc", // gitleaks:allow -- fixture UUID
+          "if-match": '"4"',
+          origin: "https://app.example.test",
+          "sec-fetch-site": "same-origin",
+        },
+      }),
+      entry.id,
+      "DELETE",
+    );
+    expect(response.status).toBe(200);
+    expect(calls[0]?.url).toBe(
+      `http://127.0.0.1:4000/v1/diary/entries/${entry.id}?diaryCorrectionProtocol=v1`,
+    );
+  });
+
+  it("fails closed on internally coherent correction results that do not match the request", async () => {
+    const operationId = "61eec75e-fe16-47e4-9f7b-efb6914ad9dc"; // gitleaks:allow -- fixture UUID
+    let upstreamBody: unknown = {
+      data: {
+        replayed: false,
+        entry,
+        affectedDays: [{ localDate: "2026-08-15", revision: "5" }],
+        receipt: {
+          protocol: "v1",
+          operationId,
+          kind: "update",
+          expectedSubjects: [{ entryId: entry.id, revision: "3" }],
+          resultSubjects: [{ entryId: entry.id, revision: "4", state: "active" }],
+          affectedDays: [{ localDate: "2026-08-15", revision: "5" }],
+        },
+      },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(upstreamBody)),
+    );
+    const trustedHeaders = {
+      cookie: `${SESSION_COOKIE}=${"t".repeat(43)}`,
+      "idempotency-key": operationId,
+      origin: "https://app.example.test",
+      "sec-fetch-site": "same-origin",
+    };
+
+    const wrongUpdate = await proxyDiaryChange(
+      new Request(`https://app.example.test/api/diary/entries/${entry.id}?date=2026-08-15`, {
+        method: "PATCH",
+        headers: {
+          ...trustedHeaders,
+          "content-type": "application/json",
+          "if-match": '"3"',
+        },
+        body: JSON.stringify({
+          portion: { kind: "serving", servingId: "303", amount: "1" },
+        }),
+      }),
+      entry.id,
+      "PATCH",
+    );
+    expect(wrongUpdate.status).toBe(502);
+
+    upstreamBody = {
+      data: {
+        replayed: false,
+        entry: {
+          ...entry,
+          revision: "1",
+          occurredAt: "2026-08-16T13:30:00.000Z",
+          localDate: "2026-08-16",
+        },
+        affectedDays: [{ localDate: "2026-08-16", revision: "1" }],
+        receipt: {
+          protocol: "v1",
+          operationId,
+          kind: "repeat",
+          expectedSubjects: [{ entryId: entry.id, revision: "4" }],
+          resultSubjects: [{ entryId: entry.id, revision: "1", state: "active" }],
+          affectedDays: [{ localDate: "2026-08-16", revision: "1" }],
+        },
+      },
+    };
+    const wrongRepeat = await proxyDiaryRepeat(
+      new Request(
+        `https://app.example.test/api/diary/entries/${entry.id}/repeat?date=2026-08-15&profileTimeZonePrecondition=v1`,
+        {
+          method: "POST",
+          headers: {
+            ...trustedHeaders,
+            "content-type": "application/json",
+            "if-match": '"4"',
+            "x-expected-profile-time-zone": "America/Chicago",
+          },
+          body: JSON.stringify({
+            occurredAt: "2026-08-16T13:30:00.000Z",
+            mealSlot: "breakfast",
+          }),
+        },
+      ),
+      entry.id,
+    );
+    expect(wrongRepeat.status).toBe(502);
+
+    upstreamBody = {
+      data: {
+        replayed: false,
+        entry: null,
+        affectedDays: [{ localDate: "2026-08-15", revision: "6" }],
+        receipt: {
+          protocol: "v1",
+          operationId,
+          kind: "delete",
+          expectedSubjects: [{ entryId: entry.id, revision: "4" }],
+          resultSubjects: [{ entryId: entry.id, revision: "6", state: "deleted" }],
+          affectedDays: [{ localDate: "2026-08-15", revision: "6" }],
+        },
+      },
+    };
+    const wrongDelete = await proxyDiaryChange(
+      new Request(`https://app.example.test/api/diary/entries/${entry.id}?date=2026-08-15`, {
+        method: "DELETE",
+        headers: { ...trustedHeaders, "if-match": '"4"' },
+      }),
+      entry.id,
+      "DELETE",
+    );
+    expect(wrongDelete.status).toBe(502);
+  });
+
+  it("forwards one complete atomic reorder and verifies its canonical strong receipt", async () => {
+    const resultGroups = [
+      {
+        mealSlot: "breakfast" as const,
+        entries: [{ entryId: entry.id, entryRevision: "5", position: 0 }],
+      },
+      { mealSlot: "lunch" as const, entries: [] },
+      { mealSlot: "dinner" as const, entries: [] },
+      { mealSlot: "snacks" as const, entries: [] },
+    ] as const;
+    const orderDigest = await diaryDayOrderDigest("2026-08-15", "America/Chicago", resultGroups);
+    const calls: Array<{ readonly url: string; readonly init?: RequestInit }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL, init?: RequestInit) => {
+        calls.push({ url: url.href, ...(init ? { init } : {}) });
+        return Response.json({
+          data: {
+            replayed: false,
+            receipt: {
+              operationId: "61eec75e-fe16-47e4-9f7b-efb6914ad9dc",
+              localDate: "2026-08-15",
+              timeZone: "America/Chicago",
+              expectedDayRevision: "8",
+              resultingDayRevision: "9",
+              previousOrderDigest: "a".repeat(64),
+              orderDigest,
+              groups: resultGroups,
+            },
+          },
+        });
+      }),
+    );
+    const body = {
+      groups: { breakfast: [0], lunch: [], dinner: [], snacks: [] },
+    };
+    const response = await proxyDiaryReorder(
+      new Request(
+        "https://app.example.test/api/diary/days/2026-08-15/order?profileTimeZonePrecondition=v1",
+        {
+          method: "PUT",
+          headers: {
+            cookie: `${SESSION_COOKIE}=${"t".repeat(43)}`,
+            "content-type": "application/json",
+            "idempotency-key": "61eec75e-fe16-47e4-9f7b-efb6914ad9dc", // gitleaks:allow -- fixture UUID
+            "if-match": '"8"',
+            origin: "https://app.example.test",
+            "sec-fetch-site": "same-origin",
+            "x-expected-diary-order-digest": "a".repeat(64),
+            "x-expected-profile-time-zone": "America/Denver",
+          },
+          body: JSON.stringify(body),
+        },
+      ),
+      "2026-08-15",
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get("etag")).toBe('"9"');
+    expect(calls[0]?.url).toBe(
+      "http://127.0.0.1:4000/v1/diary/days/2026-08-15/order?profileTimeZonePrecondition=v1",
+    );
+    expect(JSON.parse(String(calls[0]?.init?.body))).toEqual(body);
+    const headers = new Headers(calls[0]?.init?.headers);
+    expect(headers.get("x-expected-diary-order-digest")).toBe("a".repeat(64));
+    expect(headers.get("x-expected-profile-time-zone")).toBe("America/Denver");
   });
 });

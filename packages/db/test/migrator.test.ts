@@ -862,4 +862,19 @@ describe("forward migration discovery", () => {
       expect(migrationSql).toContain(identity);
     }
   });
+
+  it("adds owner-bound full-day reorder idempotency without bypassing privacy cascades", async () => {
+    const migrationSql = await readFile(
+      resolve(import.meta.dirname, "../migrations/0024_diary_atomic_reorder.sql"),
+      "utf8",
+    );
+
+    expect(migrationSql).not.toMatch(/\bdrop\s+(table|column|type|role)\b/iu);
+    expect(migrationSql).not.toMatch(/\btruncate\b/iu);
+    expect(migrationSql).toContain("operation in ('create', 'update', 'delete', 'reorder')");
+    expect(migrationSql).toContain("foreign key (diary_entry_id, user_id)");
+    expect(migrationSql).toContain("references diary_entry(id, user_id)");
+    expect(migrationSql).toContain("on delete cascade");
+    expect(migrationSql).toContain("lexicographically first participating entry");
+  });
 });

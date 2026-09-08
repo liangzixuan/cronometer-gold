@@ -162,6 +162,8 @@ export interface DiaryDay {
   readonly status: "open" | "locked";
   /** Day synchronization token, not an entry write precondition. */
   readonly revision: string;
+  /** SHA-256 of the exact canonical within-meal order for this day revision. */
+  readonly orderDigest: string;
   readonly entries: readonly DiaryEntry[];
   readonly totals: readonly DiaryNutrientAggregate[];
   readonly updatedAt: string | null;
@@ -220,6 +222,112 @@ export interface DiaryMutationResponse {
     readonly replayed: boolean;
     readonly entry: DiaryEntry | null;
     readonly affectedDays: readonly { readonly localDate: string; readonly revision: string }[];
+  };
+}
+
+export type DiaryCorrectionKind = "delete" | "repeat" | "update";
+
+export interface DiaryRevisionSubject {
+  readonly entryId: string;
+  readonly revision: string;
+}
+
+export interface DiaryCorrectionResultSubject extends DiaryRevisionSubject {
+  readonly state: "active" | "deleted";
+}
+
+/**
+ * A durable v1 correction receipt. The operation id and both subject revisions let
+ * an offline client prove that a replay is the exact mutation it originally sent.
+ */
+export interface DiaryCorrectionReceipt {
+  readonly protocol: "v1";
+  readonly operationId: string;
+  readonly kind: DiaryCorrectionKind;
+  readonly expectedSubjects: readonly [DiaryRevisionSubject];
+  readonly resultSubjects: readonly [DiaryCorrectionResultSubject];
+  readonly affectedDays: readonly { readonly localDate: string; readonly revision: string }[];
+}
+
+export interface DiaryCorrectionMutationResponse {
+  readonly data: {
+    readonly replayed: boolean;
+    readonly entry: DiaryEntry | null;
+    readonly affectedDays: readonly { readonly localDate: string; readonly revision: string }[];
+    readonly receipt: DiaryCorrectionReceipt;
+  };
+}
+
+export type DiaryDayOrderPermutations = Readonly<Record<DiaryMealSlot, readonly number[]>>;
+
+export interface ReorderDiaryDayRequest {
+  /** All four meal groups, including empty groups; cross-meal movement is intentionally excluded. */
+  readonly groups: DiaryDayOrderPermutations;
+}
+
+export interface ReorderDiaryDayHeaders extends ProfileTimeZonePreconditionHeaders {
+  /** Current profile-zone guard required by the v1 reorder protocol. */
+  readonly "x-expected-profile-time-zone": string;
+  /** SHA-256 of the exact canonical baseline loaded for the If-Match day revision. */
+  readonly "x-expected-diary-order-digest": string;
+}
+
+export interface DiaryDayOrderResultEntry {
+  readonly entryId: string;
+  readonly entryRevision: string;
+  readonly position: number;
+}
+
+export interface DiaryDayOrderResultGroup {
+  readonly mealSlot: DiaryMealSlot;
+  readonly entries: readonly DiaryDayOrderResultEntry[];
+}
+
+/**
+ * Canonical order digests are lowercase SHA-256 over the UTF-8 JSON encoding of
+ * ["diary-day-order-v1", localDate, timeZone, groups], where groups are in
+ * diaryMealSlots order and each entry is [entryId, revision, position].
+ */
+export interface DiaryDayReorderReceipt {
+  readonly operationId: string;
+  readonly localDate: string;
+  readonly timeZone: string;
+  readonly expectedDayRevision: string;
+  readonly resultingDayRevision: string;
+  readonly previousOrderDigest: string;
+  readonly orderDigest: string;
+  readonly groups: readonly [
+    DiaryDayOrderResultGroup,
+    DiaryDayOrderResultGroup,
+    DiaryDayOrderResultGroup,
+    DiaryDayOrderResultGroup,
+  ];
+}
+
+/** Browser-safe canonical bytes for SHA-256 order digests. */
+export function diaryDayOrderDigestPayload(
+  localDate: string,
+  timeZone: string,
+  groups: readonly DiaryDayOrderResultGroup[],
+): string {
+  const ordered = diaryMealSlots.map((mealSlot) => {
+    const matches = groups.filter((group) => group.mealSlot === mealSlot);
+    if (matches.length !== 1)
+      throw new Error("Diary order must contain each meal group exactly once");
+    const [group] = matches;
+    if (!group) throw new Error("Diary order group is unavailable");
+    return [
+      mealSlot,
+      group.entries.map((entry) => [entry.entryId, entry.entryRevision, entry.position]),
+    ];
+  });
+  return JSON.stringify(["diary-day-order-v1", localDate, timeZone, ordered]);
+}
+
+export interface ReorderDiaryDayResponse {
+  readonly data: {
+    readonly replayed: boolean;
+    readonly receipt: DiaryDayReorderReceipt;
   };
 }
 
@@ -610,13 +718,24 @@ export const diaryDaySchema = {
   $id: "DiaryDay",
   type: "object",
   additionalProperties: false,
-  required: ["id", "localDate", "timeZone", "status", "revision", "entries", "totals", "updatedAt"],
+  required: [
+    "id",
+    "localDate",
+    "timeZone",
+    "status",
+    "revision",
+    "orderDigest",
+    "entries",
+    "totals",
+    "updatedAt",
+  ],
   properties: {
     id: { anyOf: [uuidSchema, { type: "null" }] },
     localDate: localDateSchema,
     timeZone: { type: "string", minLength: 1, maxLength: 100 },
     status: { type: "string", enum: ["open", "locked"] },
     revision: { type: "string", pattern: "^(?:0|[1-9][0-9]*)$" },
+    orderDigest: { type: "string", pattern: "^[0-9a-f]{64}$" },
     entries: { type: "array", maxItems: 50, items: diaryEntrySchema },
     totals: { type: "array", maxItems: 256, items: diaryNutrientAggregateSchema },
     updatedAt: { anyOf: [{ type: "string", format: "date-time" }, { type: "null" }] },
@@ -779,6 +898,202 @@ export const diaryMutationResponseSchema = {
             properties: { localDate: localDateSchema, revision: revisionSchema },
           },
         },
+      },
+    },
+  },
+} as const;
+
+const diaryRevisionSubjectSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["entryId", "revision"],
+  properties: { entryId: uuidSchema, revision: revisionSchema },
+} as const;
+
+const affectedDiaryDaysSchema = {
+  type: "array",
+  minItems: 1,
+  maxItems: 2,
+  items: {
+    type: "object",
+    additionalProperties: false,
+    required: ["localDate", "revision"],
+    properties: { localDate: localDateSchema, revision: revisionSchema },
+  },
+} as const;
+
+export const diaryCorrectionReceiptSchema = {
+  $id: "DiaryCorrectionReceipt",
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "protocol",
+    "operationId",
+    "kind",
+    "expectedSubjects",
+    "resultSubjects",
+    "affectedDays",
+  ],
+  properties: {
+    protocol: { type: "string", const: "v1" },
+    operationId: uuidSchema,
+    kind: { type: "string", enum: ["delete", "repeat", "update"] },
+    expectedSubjects: {
+      type: "array",
+      minItems: 1,
+      maxItems: 1,
+      items: diaryRevisionSubjectSchema,
+    },
+    resultSubjects: {
+      type: "array",
+      minItems: 1,
+      maxItems: 1,
+      items: {
+        ...diaryRevisionSubjectSchema,
+        required: ["entryId", "revision", "state"],
+        properties: {
+          ...diaryRevisionSubjectSchema.properties,
+          state: { type: "string", enum: ["active", "deleted"] },
+        },
+      },
+    },
+    affectedDays: affectedDiaryDaysSchema,
+  },
+} as const;
+
+export const diaryCorrectionMutationResponseSchema = {
+  $id: "DiaryCorrectionMutationResponse",
+  type: "object",
+  additionalProperties: false,
+  required: ["data"],
+  properties: {
+    data: {
+      type: "object",
+      additionalProperties: false,
+      required: ["replayed", "entry", "affectedDays", "receipt"],
+      properties: {
+        replayed: { type: "boolean" },
+        entry: { anyOf: [diaryEntrySchema, { type: "null" }] },
+        affectedDays: affectedDiaryDaysSchema,
+        receipt: diaryCorrectionReceiptSchema,
+      },
+    },
+  },
+} as const;
+
+const baselineIndexSchema = { type: "integer", minimum: 0, maximum: 49 } as const;
+const diaryDayOrderPermutationSchema = {
+  type: "array",
+  maxItems: 50,
+  uniqueItems: true,
+  items: baselineIndexSchema,
+} as const;
+
+export const reorderDiaryDayRequestSchema = {
+  $id: "ReorderDiaryDayRequest",
+  type: "object",
+  additionalProperties: false,
+  required: ["groups"],
+  properties: {
+    groups: {
+      type: "object",
+      additionalProperties: false,
+      required: diaryMealSlots,
+      properties: {
+        breakfast: diaryDayOrderPermutationSchema,
+        lunch: diaryDayOrderPermutationSchema,
+        dinner: diaryDayOrderPermutationSchema,
+        snacks: diaryDayOrderPermutationSchema,
+      },
+    },
+  },
+} as const;
+
+export const reorderDiaryDayHeadersSchema = {
+  $id: "ReorderDiaryDayHeaders",
+  type: "object",
+  additionalProperties: true,
+  required: ["x-expected-profile-time-zone", "x-expected-diary-order-digest"],
+  properties: {
+    ...profileTimeZonePreconditionHeadersSchema.properties,
+    "x-expected-diary-order-digest": { type: "string", pattern: "^[0-9a-f]{64}$" },
+  },
+} as const;
+
+const diaryDayOrderResultGroupSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["mealSlot", "entries"],
+  properties: {
+    mealSlot: { type: "string", enum: diaryMealSlots },
+    entries: {
+      type: "array",
+      maxItems: 50,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["entryId", "entryRevision", "position"],
+        properties: {
+          entryId: uuidSchema,
+          entryRevision: revisionSchema,
+          position: { type: "integer", minimum: 0, maximum: 49 },
+        },
+      },
+    },
+  },
+} as const;
+
+export const diaryDayReorderReceiptSchema = {
+  $id: "DiaryDayReorderReceipt",
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "operationId",
+    "localDate",
+    "timeZone",
+    "expectedDayRevision",
+    "resultingDayRevision",
+    "previousOrderDigest",
+    "orderDigest",
+    "groups",
+  ],
+  properties: {
+    operationId: uuidSchema,
+    localDate: localDateSchema,
+    timeZone: { type: "string", minLength: 1, maxLength: 100 },
+    expectedDayRevision: revisionSchema,
+    resultingDayRevision: revisionSchema,
+    previousOrderDigest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    orderDigest: { type: "string", pattern: "^[0-9a-f]{64}$" },
+    groups: {
+      type: "array",
+      minItems: 4,
+      maxItems: 4,
+      items: diaryDayOrderResultGroupSchema,
+      allOf: diaryMealSlots.map((mealSlot) => ({
+        contains: {
+          type: "object",
+          required: ["mealSlot"],
+          properties: { mealSlot: { type: "string", const: mealSlot } },
+        },
+      })),
+    },
+  },
+} as const;
+
+export const reorderDiaryDayResponseSchema = {
+  $id: "ReorderDiaryDayResponse",
+  type: "object",
+  additionalProperties: false,
+  required: ["data"],
+  properties: {
+    data: {
+      type: "object",
+      additionalProperties: false,
+      required: ["replayed", "receipt"],
+      properties: {
+        replayed: { type: "boolean" },
+        receipt: diaryDayReorderReceiptSchema,
       },
     },
   },

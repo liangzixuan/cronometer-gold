@@ -199,6 +199,7 @@ export interface DiaryDay {
   readonly timeZone: string;
   readonly status: "open" | "locked";
   readonly revision: string;
+  readonly orderDigest: string;
   readonly entries: readonly DiaryEntry[];
   readonly totals: readonly DiaryNutrient[];
   readonly updatedAt: string | null;
@@ -231,6 +232,29 @@ export interface DiaryMutationResult {
   readonly replayed: boolean;
   readonly entry: DiaryEntry | null;
   readonly affectedDays: readonly { readonly localDate: string; readonly revision: string }[];
+}
+
+export type DiaryOrderCanonicalGroups = readonly (readonly [
+  MealSlot,
+  readonly (readonly [string, string, number])[],
+])[];
+
+export interface DiaryReorderPlan {
+  readonly groups: Readonly<Record<MealSlot, readonly number[]>>;
+  readonly baselineCanonicalGroups: DiaryOrderCanonicalGroups;
+  readonly resultCanonicalGroups: DiaryOrderCanonicalGroups;
+}
+
+export interface DiaryReorderDigestEvidence {
+  readonly expectedOrderDigest: string;
+  readonly expectedResultOrderDigest: string;
+}
+
+export class DiaryOrderBaselineMismatchError extends TypeError {
+  constructor() {
+    super("The diary order digest did not match the complete loaded day.");
+    this.name = "DiaryOrderBaselineMismatchError";
+  }
 }
 
 const DATE = /^(\d{4})-(\d{2})-(\d{2})$/u;
@@ -1028,6 +1052,8 @@ export function parseDiaryDay(value: unknown): DiaryDay {
     !text(value.data.timeZone, 63) ||
     !["open", "locked"].includes(String(value.data.status)) ||
     !/^\d+$/u.test(String(value.data.revision)) ||
+    typeof value.data.orderDigest !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(value.data.orderDigest) ||
     !Array.isArray(value.data.entries) ||
     value.data.entries.length > DIARY_DAY_MAX_ENTRIES ||
     !Array.isArray(value.data.totals) ||
@@ -1041,6 +1067,7 @@ export function parseDiaryDay(value: unknown): DiaryDay {
     timeZone: value.data.timeZone,
     status: value.data.status as "open" | "locked",
     revision: String(value.data.revision),
+    orderDigest: value.data.orderDigest,
     entries: value.data.entries.map(parseEntry),
     totals: value.data.totals.map(parseDiaryNutrient),
     updatedAt: value.data.updatedAt,
@@ -1129,6 +1156,7 @@ export function mergeDiaryPages(current: DiaryPage | null, incoming: DiaryPage):
     current.data.timeZone !== incoming.data.timeZone ||
     current.data.status !== incoming.data.status ||
     current.data.revision !== incoming.data.revision ||
+    current.data.orderDigest !== incoming.data.orderDigest ||
     current.data.updatedAt !== incoming.data.updatedAt ||
     current.page.totalEntries !== incoming.page.totalEntries ||
     !sameTotals(current.data.totals, incoming.data.totals) ||
@@ -1158,6 +1186,133 @@ export function diaryPagePath(localDate: string, nextCursor?: string | null): st
   return `/v1/diary?${query.toString()}`;
 }
 
+function incrementDecimalRevision(value: string): string {
+  if (!/^[1-9]\d*$/u.test(value)) throw new TypeError("The diary entry revision was invalid.");
+  const digits = value.split("");
+  let carry = 1;
+  for (let index = digits.length - 1; index >= 0 && carry === 1; index -= 1) {
+    const next = Number(digits[index]) + carry;
+    digits[index] = String(next % 10);
+    carry = next >= 10 ? 1 : 0;
+  }
+  if (carry === 1) digits.unshift("1");
+  return digits.join("");
+}
+
+function canonicalMealEntries(day: DiaryDay, mealSlot: MealSlot): readonly DiaryEntry[] {
+  return day.entries
+    .filter((entry) => entry.mealSlot === mealSlot)
+    .sort((left, right) => {
+      const leftOccurredAt = Date.parse(left.occurredAt);
+      const rightOccurredAt = Date.parse(right.occurredAt);
+      if (!Number.isFinite(leftOccurredAt) || !Number.isFinite(rightOccurredAt)) {
+        throw new TypeError("A diary entry occurrence instant was invalid.");
+      }
+      return (
+        left.position - right.position ||
+        leftOccurredAt - rightOccurredAt ||
+        left.id.localeCompare(right.id)
+      );
+    });
+}
+
+export function buildDiaryReorderPlan(
+  day: DiaryDay,
+  entryId: string,
+  direction: "up" | "down",
+): DiaryReorderPlan | null {
+  const selected = day.entries.find((entry) => entry.id === entryId);
+  if (!selected) return null;
+  const baselineBySlot = Object.fromEntries(
+    mealSlots.map((slot) => [slot, canonicalMealEntries(day, slot)]),
+  ) as Record<MealSlot, readonly DiaryEntry[]>;
+  const baseline = baselineBySlot[selected.mealSlot];
+  const from = baseline.findIndex((entry) => entry.id === entryId);
+  const to = direction === "up" ? from - 1 : from + 1;
+  if (from < 0 || to < 0 || to >= baseline.length) return null;
+  const desiredBySlot: Record<MealSlot, readonly DiaryEntry[]> = { ...baselineBySlot };
+  const desired = [...baseline];
+  const fromEntry = desired[from];
+  const toEntry = desired[to];
+  if (!fromEntry || !toEntry) return null;
+  desired[from] = toEntry;
+  desired[to] = fromEntry;
+  desiredBySlot[selected.mealSlot] = desired;
+  const permutation = (slot: MealSlot): readonly number[] => {
+    const baselineIndex = new Map(
+      baselineBySlot[slot].map((entry, index) => [entry.id, index] as const),
+    );
+    return desiredBySlot[slot].map((entry) => {
+      const index = baselineIndex.get(entry.id);
+      if (index === undefined) throw new TypeError("The diary reorder baseline was inconsistent.");
+      return index;
+    });
+  };
+  const groups: Readonly<Record<MealSlot, readonly number[]>> = {
+    breakfast: permutation("breakfast"),
+    lunch: permutation("lunch"),
+    dinner: permutation("dinner"),
+    snacks: permutation("snacks"),
+  };
+  const baselineCanonicalGroups = mealSlots.map(
+    (slot) =>
+      [
+        slot,
+        baselineBySlot[slot].map((entry) => [entry.id, entry.revision, entry.position] as const),
+      ] as const,
+  );
+  const resultCanonicalGroups = mealSlots.map(
+    (slot) =>
+      [
+        slot,
+        desiredBySlot[slot].map(
+          (entry, position) =>
+            [
+              entry.id,
+              entry.position === position
+                ? entry.revision
+                : incrementDecimalRevision(entry.revision),
+              position,
+            ] as const,
+        ),
+      ] as const,
+  );
+  return { groups, baselineCanonicalGroups, resultCanonicalGroups };
+}
+
+export function diaryOrderDigestPayload(
+  localDate: string,
+  timeZone: string,
+  canonicalGroups: DiaryOrderCanonicalGroups,
+): string {
+  if (!isLocalDate(localDate) || !isSupportedTimeZone(timeZone)) {
+    throw new TypeError("The diary order digest coordinates were invalid.");
+  }
+  return JSON.stringify(["diary-day-order-v1", localDate, timeZone, canonicalGroups]);
+}
+
+/** Bind a compact move to both sides of the authoritative full-day order transition. */
+export async function bindDiaryReorderDigestEvidence(
+  day: DiaryDay,
+  plan: DiaryReorderPlan,
+  digest: (payload: string) => Promise<string>,
+): Promise<DiaryReorderDigestEvidence> {
+  const [computedExpectedOrderDigest, expectedResultOrderDigest] = await Promise.all([
+    digest(diaryOrderDigestPayload(day.localDate, day.timeZone, plan.baselineCanonicalGroups)),
+    digest(diaryOrderDigestPayload(day.localDate, day.timeZone, plan.resultCanonicalGroups)),
+  ]);
+  if (
+    !/^[0-9a-f]{64}$/u.test(computedExpectedOrderDigest) ||
+    !/^[0-9a-f]{64}$/u.test(expectedResultOrderDigest)
+  ) {
+    throw new TypeError("The diary order digest function returned an invalid digest.");
+  }
+  if (computedExpectedOrderDigest !== day.orderDigest) {
+    throw new DiaryOrderBaselineMismatchError();
+  }
+  return { expectedOrderDigest: day.orderDigest, expectedResultOrderDigest };
+}
+
 export function isDiaryPageStaleProblem(status: number, value: unknown): boolean {
   return status === 409 && record(value) && value.code === "DIARY_PAGE_STALE";
 }
@@ -1166,12 +1321,19 @@ export function isProfileOwnerChangedProblem(status: number, value: unknown): bo
   return status === 409 && record(value) && value.code === "PROFILE_OWNER_CHANGED";
 }
 
-export function diaryEditorOrigin(day: DiaryDay, entry: DiaryEntry): DiaryEditorOrigin {
+export function diaryEditorOrigin(
+  day: DiaryDay,
+  entry: DiaryEntry,
+  currentProfileTimeZone: string,
+): DiaryEditorOrigin {
+  if (!isSupportedTimeZone(currentProfileTimeZone)) {
+    throw new TypeError("The current profile time zone was invalid.");
+  }
   return {
     entryId: entry.id,
     originEntryRevision: entry.revision,
     originLocalDate: day.localDate,
-    originTimeZone: day.timeZone,
+    originTimeZone: currentProfileTimeZone,
     originDayRevision: day.revision,
   };
 }
@@ -1180,12 +1342,13 @@ export function diaryEditorOriginMatches(
   origin: DiaryEditorOrigin,
   day: DiaryDay,
   entry: DiaryEntry,
+  currentProfileTimeZone: string,
 ): boolean {
   return (
     origin.entryId === entry.id &&
     origin.originEntryRevision === entry.revision &&
     origin.originLocalDate === day.localDate &&
-    origin.originTimeZone === day.timeZone &&
+    origin.originTimeZone === currentProfileTimeZone &&
     origin.originDayRevision === day.revision
   );
 }

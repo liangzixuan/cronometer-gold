@@ -11,6 +11,7 @@ import {
   createFoodDiaryEntry,
   createSession,
   type Database,
+  DiaryDayRevisionConflictError,
   DiaryEntryRevisionConflictError,
   DiaryIdempotencyConflictError,
   DiaryLockedError,
@@ -19,6 +20,7 @@ import {
   DiaryTimeZoneChangedError,
   DiaryValidationError,
   deleteDiaryEntry,
+  diaryDayOrderDigest,
   findActiveSessionByTokenHash,
   findPasswordCredentialByEmail,
   getDiaryDay,
@@ -27,6 +29,8 @@ import {
   ProfileRevisionConflictError,
   registerPasswordAccount,
   registerSourceNutrientMappings,
+  reorderDiaryDay,
+  repeatDiaryEntry,
   revokeSession,
   runMigrations,
   sha256CanonicalJson,
@@ -564,7 +568,7 @@ describeDatabase("account and append-only diary persistence", () => {
         localDate: "2026-08-15",
         userId: owner.userId,
       });
-      expect(sameDateAfterZoneChange.timeZone).toBe("Asia/Tokyo");
+      expect(sameDateAfterZoneChange.timeZone).toBe("America/Chicago");
       expect(
         sameDateAfterZoneChange.entries.find((entry) => entry.id === created.entry.id)?.timeZone,
       ).toBe("America/Chicago");
@@ -1337,6 +1341,273 @@ describeDatabase("account and append-only diary persistence", () => {
           continuation: beforeDayDeletion.page.next,
         }),
       ).rejects.toBeInstanceOf(DiaryPageStaleError);
+    } finally {
+      await database.destroy();
+      await sql`drop schema ${sql.id(schemaName)} cascade`.execute(bootstrap);
+      await bootstrap.destroy();
+    }
+  }, 30_000);
+
+  it("persists strong correction receipts and reorders a complete day atomically", async () => {
+    if (!databaseUrl) throw new Error("TEST_DATABASE_URL is required");
+    const bootstrap = createDatabase({ connectionString: databaseUrl, maxConnections: 1 });
+    const schemaName = `diary_atomic_order_${randomBytes(6).toString("hex")}`;
+    await sql`create schema ${sql.id(schemaName)}`.execute(bootstrap);
+    const scopedUrl = new URL(databaseUrl);
+    scopedUrl.searchParams.set("options", `-csearch_path=${schemaName},public`);
+    const database = createDatabase({ connectionString: scopedUrl.toString(), maxConnections: 4 });
+    try {
+      await runMigrations(database);
+      const catalogue = await seedCatalogue(database);
+      const owner = await registerPasswordAccount(database, {
+        email: `atomic-order-${randomUUID()}@example.invalid`,
+        passwordHash: "$argon2id$atomic-order-fixture-hash",
+        passwordParameters: { algorithm: "argon2id" },
+        passwordSalt: "atomic-order-fixture-salt",
+        timeZone: "America/Chicago",
+      });
+      const createEntry = async (
+        occurredAt: string,
+        mealSlot: "breakfast" | "lunch",
+        position: number,
+      ) =>
+        createFoodDiaryEntry(database, {
+          clientOperationId: randomUUID(),
+          expectedProfileTimeZone: "America/Chicago",
+          foodVersionId: catalogue.currentVersionId,
+          mealSlot,
+          occurredAt,
+          portion: { grams: "100", kind: "grams" },
+          position,
+          requestDigest: randomBytes(32).toString("hex"),
+          userId: owner.userId,
+        });
+      const first = await createEntry("2026-09-08T12:00:00Z", "breakfast", 10);
+      const second = await createEntry("2026-09-08T13:00:00Z", "breakfast", 20);
+      const lunch = await createEntry("2026-09-08T14:00:00Z", "lunch", 0);
+      const mealSlots = ["breakfast", "lunch", "dinner", "snacks"] as const;
+      const orderGroups = (day: Awaited<ReturnType<typeof getDiaryDay>>) =>
+        mealSlots.map((mealSlot) => ({
+          entries: day.entries
+            .filter((entry) => entry.mealSlot === mealSlot)
+            .map((entry) => ({
+              entryId: entry.id,
+              entryRevision: entry.currentRevision,
+              position: entry.position,
+            })),
+          mealSlot,
+        }));
+
+      const baseline = await getDiaryDay(database, {
+        localDate: "2026-09-08",
+        userId: owner.userId,
+      });
+      expect(baseline.revision).toBe("3");
+      const reorderInput = {
+        clientOperationId: randomUUID(),
+        expectedDayRevision: baseline.revision,
+        expectedOrderDigest: diaryDayOrderDigest(
+          baseline.localDate,
+          baseline.timeZone,
+          orderGroups(baseline),
+        ),
+        expectedProfileTimeZone: "America/Chicago",
+        groups: { breakfast: [1, 0], lunch: [0], dinner: [], snacks: [] },
+        localDate: baseline.localDate,
+        requestDigest: randomBytes(32).toString("hex"),
+        userId: owner.userId,
+      } as const;
+      const reordered = await reorderDiaryDay(database, reorderInput);
+      expect(reordered).toMatchObject({
+        replayed: false,
+        receipt: {
+          expectedDayRevision: "3",
+          localDate: "2026-09-08",
+          operationId: reorderInput.clientOperationId,
+          previousOrderDigest: reorderInput.expectedOrderDigest,
+          resultingDayRevision: "4",
+          timeZone: "America/Chicago",
+        },
+      });
+      expect(reordered.receipt.groups).toEqual([
+        {
+          entries: [
+            { entryId: second.entry.id, entryRevision: "2", position: 0 },
+            { entryId: first.entry.id, entryRevision: "2", position: 1 },
+          ],
+          mealSlot: "breakfast",
+        },
+        {
+          entries: [{ entryId: lunch.entry.id, entryRevision: "1", position: 0 }],
+          mealSlot: "lunch",
+        },
+        { entries: [], mealSlot: "dinner" },
+        { entries: [], mealSlot: "snacks" },
+      ]);
+      expect(reordered.receipt.orderDigest).toBe(
+        diaryDayOrderDigest(
+          reordered.receipt.localDate,
+          reordered.receipt.timeZone,
+          reordered.receipt.groups,
+        ),
+      );
+
+      await expect(reorderDiaryDay(database, reorderInput)).resolves.toEqual({
+        ...reordered,
+        replayed: true,
+      });
+      await expect(
+        reorderDiaryDay(database, { ...reorderInput, requestDigest: "f".repeat(64) }),
+      ).rejects.toBeInstanceOf(DiaryIdempotencyConflictError);
+      await expect(
+        reorderDiaryDay(database, {
+          ...reorderInput,
+          clientOperationId: randomUUID(),
+          requestDigest: randomBytes(32).toString("hex"),
+        }),
+      ).rejects.toBeInstanceOf(DiaryDayRevisionConflictError);
+
+      const normalizedDay = await getDiaryDay(database, {
+        localDate: "2026-09-08",
+        userId: owner.userId,
+      });
+      await updateUserProfile(database, {
+        expectedRevision: "0",
+        patch: { timeZone: "America/Denver" },
+        userId: owner.userId,
+      });
+      const historicalDay = await getDiaryDay(database, {
+        localDate: "2026-09-08",
+        userId: owner.userId,
+      });
+      expect(historicalDay.timeZone).toBe("America/Chicago");
+      const beforeNoOpRevisions = normalizedDay.entries.map((entry) => [
+        entry.id,
+        entry.currentRevision,
+      ]);
+      const noOpInput = {
+        clientOperationId: randomUUID(),
+        expectedDayRevision: normalizedDay.revision,
+        expectedOrderDigest: diaryDayOrderDigest(
+          normalizedDay.localDate,
+          normalizedDay.timeZone,
+          orderGroups(normalizedDay),
+        ),
+        expectedProfileTimeZone: "America/Denver",
+        groups: { breakfast: [0, 1], lunch: [0], dinner: [], snacks: [] },
+        localDate: normalizedDay.localDate,
+        requestDigest: randomBytes(32).toString("hex"),
+        userId: owner.userId,
+      } as const;
+      await expect(
+        reorderDiaryDay(database, {
+          ...noOpInput,
+          clientOperationId: randomUUID(),
+          expectedProfileTimeZone: "America/Chicago",
+          requestDigest: randomBytes(32).toString("hex"),
+        }),
+      ).rejects.toBeInstanceOf(DiaryTimeZoneChangedError);
+      expect(
+        (
+          await getDiaryDay(database, {
+            localDate: "2026-09-08",
+            userId: owner.userId,
+          })
+        ).revision,
+      ).toBe(normalizedDay.revision);
+      const noOp = await reorderDiaryDay(database, noOpInput);
+      expect(noOp.receipt.resultingDayRevision).toBe("5");
+      expect(noOp.receipt.orderDigest).toBe(noOp.receipt.previousOrderDigest);
+      expect(noOp.receipt.timeZone).toBe("America/Chicago");
+      expect(
+        (
+          await getDiaryDay(database, {
+            localDate: "2026-09-08",
+            userId: owner.userId,
+          })
+        ).entries.map((entry) => [entry.id, entry.currentRevision]),
+      ).toEqual(beforeNoOpRevisions);
+      await updateUserProfile(database, {
+        expectedRevision: "1",
+        patch: { timeZone: "America/Chicago" },
+        userId: owner.userId,
+      });
+
+      const updateInput = {
+        clientOperationId: randomUUID(),
+        entryId: second.entry.id,
+        expectedEntryRevision: "2",
+        expectedProfileTimeZone: "America/Chicago",
+        note: "Durable correction",
+        requestDigest: randomBytes(32).toString("hex"),
+        userId: owner.userId,
+      } as const;
+      const updated = await updateFoodDiaryEntry(database, updateInput);
+      expect(updated.receipt).toEqual({
+        affectedDays: updated.days,
+        expectedSubjects: [{ entryId: second.entry.id, revision: "2" }],
+        kind: "update",
+        operationId: updateInput.clientOperationId,
+        protocol: "v1",
+        resultSubjects: [{ entryId: second.entry.id, revision: "3", state: "active" }],
+      });
+
+      const repeatInput = {
+        clientOperationId: randomUUID(),
+        expectedProfileTimeZone: "America/Chicago",
+        occurredAt: "2026-09-08T15:00:00Z",
+        requestDigest: randomBytes(32).toString("hex"),
+        sourceEntryId: updated.entry.id,
+        sourceRevision: updated.entry.currentRevision,
+        userId: owner.userId,
+      } as const;
+      const repeated = await repeatDiaryEntry(database, repeatInput);
+      expect(repeated.receipt).toMatchObject({
+        expectedSubjects: [{ entryId: updated.entry.id, revision: "3" }],
+        kind: "repeat",
+        operationId: repeatInput.clientOperationId,
+        resultSubjects: [{ entryId: repeated.entry.id, revision: "1", state: "active" }],
+      });
+      const deleted = await deleteDiaryEntry(database, {
+        clientOperationId: randomUUID(),
+        entryId: repeated.entry.id,
+        expectedEntryRevision: "1",
+        requestDigest: randomBytes(32).toString("hex"),
+        userId: owner.userId,
+      });
+      expect(deleted.receipt).toMatchObject({
+        expectedSubjects: [{ entryId: repeated.entry.id, revision: "1" }],
+        kind: "delete",
+        resultSubjects: [{ entryId: repeated.entry.id, revision: "2", state: "deleted" }],
+      });
+
+      expect(
+        await database
+          .selectFrom("diary_operation")
+          .select(["diary_entry_id", "operation"])
+          .where("client_operation_id", "=", reorderInput.clientOperationId)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({
+        diary_entry_id: [first.entry.id, second.entry.id, lunch.entry.id].sort()[0],
+        operation: "reorder",
+      });
+
+      await updateUserProfile(database, {
+        expectedRevision: "2",
+        patch: { timeZone: "Asia/Tokyo" },
+        userId: owner.userId,
+      });
+      await expect(updateFoodDiaryEntry(database, updateInput)).resolves.toMatchObject({
+        receipt: updated.receipt,
+        replayed: true,
+      });
+      await expect(
+        repeatDiaryEntry(database, {
+          ...repeatInput,
+          clientOperationId: randomUUID(),
+          requestDigest: randomBytes(32).toString("hex"),
+        }),
+      ).rejects.toBeInstanceOf(DiaryTimeZoneChangedError);
     } finally {
       await database.destroy();
       await sql`drop schema ${sql.id(schemaName)} cascade`.execute(bootstrap);
