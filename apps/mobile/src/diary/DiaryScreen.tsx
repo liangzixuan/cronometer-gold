@@ -595,6 +595,7 @@ export function DiaryScreen({
   }, [date, load, routeReloadGeneration]);
 
   useEffect(() => {
+    void routeReloadGeneration;
     void supportingSummaryRefreshKey;
     void supportingSummaryIdentityKey;
     if (!privateUiClosed.current && isLocalDate(date)) {
@@ -608,7 +609,13 @@ export function DiaryScreen({
         supportingSummaryControllers.current[kind] = null;
       }
     };
-  }, [date, loadSupportingSummary, supportingSummaryIdentityKey, supportingSummaryRefreshKey]);
+  }, [
+    date,
+    loadSupportingSummary,
+    routeReloadGeneration,
+    supportingSummaryIdentityKey,
+    supportingSummaryRefreshKey,
+  ]);
 
   useEffect(() => {
     if (!groupEditorOpen && !groupBusy) {

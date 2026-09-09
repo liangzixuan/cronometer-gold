@@ -89,6 +89,44 @@ release-authority defect—or work required by the next beta exit gate—interru
 that order. This is scheduling, not a waiver: every M0 and M2 acceptance gate
 remains fail-closed.
 
+### Execution queue
+
+Current checkpoint (2026-09-09): recovered M1E and its mobile summary-reload and
+web group-draft corrections pass the complete applicable local validation,
+including canonical `pnpm check`, build, database/API integration, isolated
+restore, search, email, privacy, and exact loopback API readiness after the
+approved Windows Docker recovery. M1E awaits exact-commit automatic evidence
+before acceptance under the full implemented definition. The next source slice
+is M1F hydration time corrections.
+
+Use [the development workflow](../quality/development-workflow.md) for continuation,
+validation, evidence, and agent ownership. Keep one product acceptance card active;
+the detailed milestone boundaries below remain authoritative.
+
+| Order | Deliverable | Concrete exit |
+| --- | --- | --- |
+| Now | Finish and stabilize M1E Today overview | Selected date survives both detail round trips; diary receipts reload summary cards; a background profile refresh cannot overwrite another client's meal-group edits; focused regressions and final applicable local gates pass, review findings are resolved, and applicable exact-commit automatic checks reach terminal success |
+| Next | Complete the daily hydration correction flow | Web and mobile let a person correct when water was logged through the existing `occurredAt` API, explain profile-local time and ambiguous/invalid times, and refresh the affected day after a move; retain retry/revision/privacy rules and prove the food/water/activity/report journey with synthetic local data |
+| Then | Choose the next premium product slice | Select one bounded M3/M4 capability with an observable user benefit, a reviewed data/claims boundary, and a finite acceptance card; avoid several partially implemented features |
+
+The next hydration slice adds client time editing, not water targets, intake advice,
+non-water fluids, reminders, offline writes, or device ingestion. Confirm the current
+API and timezone contracts before implementation. Browser interaction and accessible
+state tests accompany it; synthetic local tests do not replace the physical-device,
+cross-client, assistive-technology, or hosted acceptance required by M1/M2.
+
+Prepare the external decisions alongside product work, without executing them:
+
+| Lane | Decision/evidence owner | Next reviewable package | Exit gate |
+| --- | --- | --- | --- |
+| M0 live catalogue | User selects acquisition/storage operators and named source/rights reviewers | Exact source, independent acquisition plan, immutable storage/retention plan, costs, measurable catalogue thresholds, and remaining database caller-cutover work | Approved identities, rights, scale/reconciliation/search evidence and separate activation decision |
+| M2 usable beta | User selects host, budget and device operators; independent security/device reviewers accept evidence | One deployment/access/backup-restore proposal plus Windows phone trust plan and signed-build/identifier-history requirements | Reviewed hosted restore/access and signed physical-client acceptance |
+| Optional reference targets | Named scientific, legal/privacy and copyright reviewers | ADR 0021's existing bounded policy and default-off implementation | All required approvals before enablement; manual goals remain usable |
+
+Unassigned owners are unresolved decisions, not implied approvals. No elapsed time,
+source-test result, or synthetic reviewer substitutes for external evidence. Advance
+an external lane only when its action-specific authorization and prerequisites exist.
+
 M1A camera barcode capture is implemented at source level and awaits signed-device
 acceptance. M1B-G's bounded configuration of the four existing diary labels and
 their display order is implemented in source and has passed the ordered local
