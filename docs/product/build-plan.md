@@ -95,13 +95,19 @@ Current checkpoint (2026-09-09): recovered M1E and its mobile summary-reload and
 web group-draft corrections pass the complete applicable local validation,
 including canonical `pnpm check`, build, database/API integration, isolated
 restore, search, email, privacy, and exact loopback API readiness after the
-approved Windows Docker recovery. M1E checkpoint `f4ebca8` has successful CI;
-its container supply-chain run is pending at the latest 2026-09-09 observation.
+approved Windows Docker recovery. M1E checkpoint `f4ebca8` has successful CI
+and container supply-chain evidence (runs `34390646294` and `34390646269`).
 M1F hydration time corrections are source/local complete: final canonical checks,
 builds, 358 database tests, 351 API tests, isolated restore with restored-API tests,
 search, email, privacy, synthetic browser daily-loop, and exact Windows/WSL readiness
-passed. Its exact-commit automatic evidence remains pending; release acceptance is
-still separate. Local services were stopped normally with volumes retained.
+passed. M1F checkpoint `cb22cf0` has successful CI (run `34397666336`); its
+container supply-chain run `34397666277` remains pending at the latest read-only
+observation. Release acceptance is still separate. M3B printable-report source
+implementation, canonical checks/build and six synthetic Letter/A4 PDFs pass
+under ADR 0028. The real web/BFF fixture proves session failures, profile-change
+closure and date-draft invalidation. Native Chrome preview confirmation,
+cancellation and direct-print browser acceptance remain pending; M3B is not yet
+a delivered checkpoint. Docker was unnecessary for this web presentation proof.
 
 Use [the development workflow](../quality/development-workflow.md) for continuation,
 validation, evidence, and agent ownership. Keep one product acceptance card active;
@@ -109,9 +115,9 @@ the detailed milestone boundaries below remain authoritative.
 
 | Order | Deliverable | Concrete exit |
 | --- | --- | --- |
-| Automatic evidence | Finish and stabilize M1E Today overview | Selected date survives both detail round trips; diary receipts reload summary cards; a background profile refresh cannot overwrite another client's meal-group edits; focused regressions and final applicable local gates pass, review findings are resolved, and applicable exact-commit automatic checks reach terminal success |
-| Now | M1F: complete the daily hydration correction flow | Web and mobile let a person correct when water was logged through the existing `occurredAt` API, explain profile-local time and ambiguous/invalid times, and refresh the affected day after a move; retain retry/revision/privacy rules and prove the food/water/activity/report journey with synthetic local data |
-| Next, queued | M3B: print the current nutrition report on web | Print the already loaded coherent report as readable Letter/A4 output, preserving exact evidence and missingness; session closure or invalidation prevents stale private output |
+| Independent review | Finish and stabilize M1E Today overview | Selected date survives both detail round trips; diary receipts reload summary cards; a background profile refresh cannot overwrite another client's meal-group edits; focused regressions and final applicable local gates pass, review findings are resolved, and applicable exact-commit automatic checks reach terminal success |
+| Automatic evidence | M1F: complete the daily hydration correction flow | Web and mobile let a person correct when water was logged through the existing `occurredAt` API, explain profile-local time and ambiguous/invalid times, and refresh the affected day after a move; retain retry/revision/privacy rules and prove the food/water/activity/report journey with synthetic local data |
+| Now | M3B: print the current nutrition report on web | Print the already loaded coherent report as readable Letter/A4 output, preserving exact evidence and missingness; session closure or invalidation prevents stale private output |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -131,8 +137,8 @@ reminders, offline writes and device ingestion stay outside this slice. Syntheti
 browser and accessible-state tests do not replace the physical-device, cross-client,
 assistive-technology or hosted acceptance required by M1/M2.
 
-The next queued M3B acceptance card is **Print current nutrition report** (browser
-Save as PDF). Reuse the current 1–31-day snapshot and selected nutrient; preserve
+The active M3B acceptance card is **Print current nutrition report** (browser
+Save as PDF), defined by [ADR 0028](../adr/0028-print-current-nutrition-report.md). Reuse the current 1–31-day snapshot and selected nutrient; preserve
 exact amounts, quantified zero, trace, partial/unknown/missing days, saved-target
 periods and expiry notices, timezone, capture time, profile revision and watermark.
 Letter/A4 output must keep complete tables and repeated column headers, hide app
@@ -144,7 +150,7 @@ with no new API, retained entity, external dependency or storage. Scheduled
 delivery, automated sharing, scores/advice, all-nutrient booklets, mobile OS print
 and hosted enablement remain excluded. This uses the existing M3A evidence before
 adding scheduling infrastructure or M4 imported-content interpretation. It is
-queued; M1F's automatic evidence and independent review still need their own closure.
+active; M1F's remaining automatic evidence and independent review need their own closure.
 
 Prepare the external decisions alongside product work, without executing them:
 

@@ -393,6 +393,18 @@ acceptance.
   logs, and every response is no-store. Browser, signed iOS/Android,
   cross-client, keyboard/screen-reader, hosted-load, and controlled-beta evidence
   remain required before release.
+- M3B web print acceptance under ADR 0028 reuses the loaded report and selected
+  nutrient after private session verification. Exact values, missingness, saved
+  thresholds, target periods/expiry, source diary coordinates and capture metadata
+  reconcile to the snapshot for all 15 nutrients. Synchronous invalidation fences
+  close stale async/retained handlers and direct browser printing defaults to
+  neutral guidance. Cancellation, ignored/thrown printing, effect replay and
+  repeated attempts leave no authorized hidden snapshot. Inspect complete 1-, 7-
+  and 31-day Letter/A4 PDFs for readable monochrome tables, repeated headers and
+  no clipped evidence or app controls. Browser-owned previews and saved output
+  cannot be revoked after handoff; afterprint does not prove a save. Synthetic
+  browser/PDF proof does not replace independent, hosted or assistive-technology
+  acceptance. No API, retained entity, storage or delivery channel is added.
 - The optional M1B-R reference-template candidate remains disabled for
   controlled-beta and commercial users until a named registered dietitian or
   qualified clinical-science owner approves its exact values, canonical units,

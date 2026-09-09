@@ -45,9 +45,15 @@ action. Do not duplicate the evidence into multiple rolling roadmap overlays.
 | Local services | Required migration, API, restore, scoped search and privacy runbook steps | Executed integration counts and exact readiness/loopback evidence are recorded |
 | Delivery | Review final diff, staged contents, modes, secrets, approved commit/push; inspect automatic checks | Local/tracking/live-remote relationship and each workflow's observed state are recorded |
 
-`pnpm check` includes Compose policy tests: prove `docker compose version` and the
-existing WSL integration first. A stopped Desktop or unavailable Compose is an
-environment failure, not a reason to skip or weaken the tests.
+`pnpm check` includes Compose policy tests: prove the genuine Docker and Compose
+CLI versions first. These tests parse configuration without contacting a daemon;
+a stopped engine alone does not require a disruptive restart. If WSL integration
+is unavailable, an already installed, integrity-verified Linux CLI may be staged
+in an ignored owner-private directory with per-command PATH/plugin configuration
+and a nonexistent local daemon socket. Record provenance and versions, use the
+unchanged tests, and leave system/user configuration alone. Do not simulate CLI
+output, skip assertions or treat this as working service integration. Service
+checks still require the actual local engine and their guarded lifecycle.
 
 Use existing guarded lifecycle, restore, scoped-key and privacy commands. Run
 tests sharing a database, index, or fixture serially. Keep the root test graph's
@@ -59,6 +65,13 @@ checked-in definitions, even when its private food quantifies only one nutrient.
 An incomplete registry must keep reports unavailable; do not relax report integrity
 or replace missing nutrient amounts with zero. Record local fixture initialization
 separately from application changes and live catalogue acquisition.
+
+For a web presentation slice, an isolated loopback synthetic upstream can exercise
+the actual web client and BFF when the engine is unavailable. Keep normal auth,
+origin, parser and session-cookie guards; label every fixture route and failure
+mode in the evidence. This proves that bounded browser flow only. It cannot
+replace a required real API/database, cross-owner, restore or privacy integration
+run, nor make earlier backend evidence fresh.
 
 During development, rerun the affected checks after a fix. At the final checkpoint,
 run the required applicable ladder once after integration and review. A later edit

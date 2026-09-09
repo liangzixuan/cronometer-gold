@@ -1,0 +1,197 @@
+.report {
+  display: none;
+}
+
+@media print {
+  .report {
+    display: block;
+    width: auto;
+    max-width: none;
+    margin: 0;
+    padding: 0;
+    color: #111;
+    background: #fff;
+    font:
+      9pt / 1.4 Arial,
+      Helvetica,
+      sans-serif;
+    overflow: visible;
+    overflow-wrap: anywhere;
+  }
+
+  .report * {
+    box-sizing: border-box;
+    text-shadow: none;
+  }
+
+  .report h1,
+  .report h2,
+  .report h3 {
+    color: #111;
+    break-after: avoid;
+    page-break-after: avoid;
+    line-height: 1.2;
+  }
+
+  .report h1 {
+    margin: 0 0 2mm;
+    font-size: 23pt;
+  }
+  .report h2 {
+    margin: 7mm 0 2mm;
+    font-size: 13pt;
+  }
+  .report h3 {
+    margin: 5mm 0 2mm;
+    font-size: 10pt;
+  }
+  .report p {
+    margin: 1.5mm 0;
+    orphans: 3;
+    widows: 3;
+  }
+
+  .header {
+    border-bottom: 1pt solid #111;
+    padding-bottom: 3mm;
+  }
+
+  .eyebrow {
+    font-size: 8pt;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+  }
+
+  .subtitle {
+    font-size: 12pt;
+    font-weight: 700;
+  }
+
+  .summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3mm 6mm;
+    margin: 2mm 0;
+  }
+
+  .summary div {
+    break-inside: avoid;
+  }
+  .summary dt {
+    font-size: 8pt;
+  }
+  .summary dd {
+    margin: 0;
+    font-size: 14pt;
+    font-weight: 700;
+  }
+
+  .report table {
+    width: 100%;
+    max-width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    margin: 3mm 0;
+    font-size: 8pt;
+    overflow: visible;
+  }
+
+  .report thead {
+    display: table-header-group;
+  }
+  .report tbody {
+    display: table-row-group;
+  }
+  .report tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .report th,
+  .report td {
+    padding: 2mm;
+    border: 0.5pt solid #999;
+    vertical-align: top;
+    text-align: left;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .report thead th {
+    border-bottom: 1.5pt solid #111;
+    font-weight: 700;
+  }
+  .report td p:first-child {
+    margin-top: 0;
+  }
+  .report td p:last-child {
+    margin-bottom: 0;
+  }
+
+  .dayColumn {
+    width: 16%;
+  }
+  .amountColumn {
+    width: 21%;
+  }
+  .coverageColumn {
+    width: 39%;
+  }
+  .comparisonColumn {
+    width: 24%;
+  }
+  .sourceDayColumn {
+    width: 16%;
+  }
+  .sourceBoundaryColumn {
+    width: 37%;
+  }
+  .sourceDiaryColumn {
+    width: 47%;
+  }
+  .detail {
+    display: block;
+    margin-top: 1.5mm;
+    font-size: 7.5pt;
+    font-weight: 400;
+  }
+
+  .barTrack {
+    display: block;
+    width: 100%;
+    margin-top: 2mm;
+    border-bottom: 0.5pt solid #aaa;
+  }
+  .bar {
+    display: block;
+    border-top: 3pt solid #555;
+  }
+
+  .evidence {
+    margin: 2mm 0;
+  }
+  .evidence div {
+    margin: 1.5mm 0;
+  }
+  .evidence dt {
+    display: inline;
+    font-weight: 700;
+  }
+  .evidence dt::after {
+    content: ": ";
+  }
+  .evidence dd {
+    display: inline;
+    margin: 0;
+  }
+  .preserveLines {
+    white-space: pre-wrap;
+  }
+  .goalEvidence {
+    break-inside: auto;
+  }
+  .footer {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    margin-top: 6mm;
+    border-top: 1pt solid #111;
+  }
+}

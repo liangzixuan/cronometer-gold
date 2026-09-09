@@ -21,8 +21,24 @@ import {
   targetSnapshotForPoint,
 } from "../../lib/nutrition-reports";
 import { confirmBrowserLogout } from "../../lib/private-api";
+import { PrintableNutritionReport } from "./PrintableNutritionReport";
+import printStyles from "./report-print-shell.module.css";
 
 type LoadState = "loading" | "ready" | "error";
+
+interface PrintCapture {
+  readonly report: NutritionReport;
+  readonly nutrientId: string;
+  readonly sessionGeneration: number;
+  readonly reportGeneration: number;
+  readonly printGeneration: number;
+}
+
+interface PrintView {
+  readonly report: NutritionReport;
+  readonly nutrientId: string;
+  readonly session: SessionSummary;
+}
 
 interface ReportsClientProps {
   readonly initialFrom?: string;
@@ -93,6 +109,7 @@ function targetText(
 export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   const router = useRouter();
   const [session, setSession] = useState<SessionSummary | null>(null);
+  const [sessionVerifying, setSessionVerifying] = useState(true);
   const [range, setRange] = useState<NutritionReportRange | null>(null);
   const [draftFrom, setDraftFrom] = useState("");
   const [draftTo, setDraftTo] = useState("");
@@ -103,12 +120,21 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   const [rangeError, setRangeError] = useState("");
   const [logoutBusy, setLogoutBusy] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [printBusy, setPrintBusy] = useState(false);
+  const [printMessage, setPrintMessage] = useState("");
+  const [printCapture, setPrintCapture] = useState<PrintCapture | null>(null);
 
   const privateUiClosed = useRef(false);
   const sessionExplicitlyClosed = useRef(false);
   const sessionGeneration = useRef(0);
   const reportGeneration = useRef(0);
   const reportController = useRef<AbortController | null>(null);
+  const printGeneration = useRef(0);
+  const printController = useRef<AbortController | null>(null);
+  const printView = useRef<PrintView | null>(null);
+  const armedPrint = useRef<PrintCapture | null>(null);
+  const lastInvokedPrint = useRef<number | null>(null);
+  const printOutput = useRef<HTMLDivElement | null>(null);
   const sessionRef = useRef(session);
   sessionRef.current = session;
   const rangeRef = useRef(range);
@@ -116,7 +142,43 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   const refreshRef = useRef(refreshKey);
   refreshRef.current = refreshKey;
 
+  const closePrintGate = useCallback(() => {
+    armedPrint.current = null;
+    printOutput.current?.setAttribute("data-print-authorized", "false");
+  }, []);
+
+  const invalidatePrint = useCallback(
+    (invalidateView = true) => {
+      printGeneration.current += 1;
+      printController.current?.abort();
+      printController.current = null;
+      closePrintGate();
+      if (invalidateView) printView.current = null;
+      setPrintCapture(null);
+      setPrintBusy(false);
+      setPrintMessage("");
+    },
+    [closePrintGate],
+  );
+
+  const isCurrentPrint = useCallback((capture: PrintCapture) => {
+    const view = printView.current;
+    return (
+      !privateUiClosed.current &&
+      printGeneration.current === capture.printGeneration &&
+      sessionGeneration.current === capture.sessionGeneration &&
+      reportGeneration.current === capture.reportGeneration &&
+      view?.report === capture.report &&
+      view.nutrientId === capture.nutrientId &&
+      view.session.user.id === capture.report.ownerUserId &&
+      view.session.profile.revision === capture.report.profileRevision &&
+      view.session.profile.timeZone === capture.report.timeZone &&
+      rangeKey(rangeRef.current) === `${capture.report.from}/${capture.report.to}`
+    );
+  }, []);
+
   const signInAgain = useCallback(() => {
+    invalidatePrint();
     sessionExplicitlyClosed.current = true;
     privateUiClosed.current = true;
     sessionGeneration.current += 1;
@@ -130,9 +192,11 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
     setMessage("Closing your private report…");
     router.replace("/login");
     router.refresh();
-  }, [router]);
+  }, [invalidatePrint, router]);
 
   useEffect(() => {
+    invalidatePrint();
+    setSessionVerifying(true);
     const controller = new AbortController();
     const generation = sessionGeneration.current + 1;
     sessionGeneration.current = generation;
@@ -167,6 +231,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
         ) {
           return;
         }
+        setSessionVerifying(false);
         setSession(nextSession);
         setRange(nextRange);
         setDraftFrom(nextRange.from);
@@ -186,7 +251,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
       }
     })();
     return () => controller.abort();
-  }, [initialFrom, initialTo, signInAgain]);
+  }, [initialFrom, initialTo, invalidatePrint, signInAgain]);
 
   useEffect(() => {
     if (!session || !range) return;
@@ -207,6 +272,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
       refreshRef.current === requestedRefreshKey &&
       sessionRef.current?.user.id === requestedOwner;
 
+    invalidatePrint();
     setState("loading");
     setReport(null);
     setMessage(`Loading ${requestedRange.from} through ${requestedRange.to}…`);
@@ -276,7 +342,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
       }
     })();
     return () => controller.abort();
-  }, [range, refreshKey, session, signInAgain]);
+  }, [invalidatePrint, range, refreshKey, session, signInAgain]);
 
   useEffect(() => {
     // StrictMode replays mount effects. Reopen only the lifecycle gate;
@@ -284,11 +350,16 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
     privateUiClosed.current = sessionExplicitlyClosed.current;
     return () => {
       privateUiClosed.current = true;
+      printGeneration.current += 1;
+      printController.current?.abort();
+      printController.current = null;
+      printView.current = null;
+      closePrintGate();
       sessionGeneration.current += 1;
       reportGeneration.current += 1;
       reportController.current?.abort();
     };
-  }, []);
+  }, [closePrintGate]);
 
   const selectedSeries = useMemo(
     () =>
@@ -298,7 +369,139 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
     [report, selectedNutrientId],
   );
 
+  const printable =
+    !sessionVerifying &&
+    state === "ready" &&
+    !logoutBusy &&
+    !privateUiClosed.current &&
+    report !== null &&
+    session !== null &&
+    selectedSeries !== null &&
+    range !== null &&
+    report.ownerUserId === session.user.id &&
+    report.profileRevision === session.profile.revision &&
+    report.timeZone === session.profile.timeZone &&
+    report.from === range.from &&
+    report.to === range.to &&
+    draftFrom === range.from &&
+    draftTo === range.to;
+  printView.current = printable
+    ? { report, nutrientId: selectedSeries.nutrient.id, session }
+    : null;
+
+  useEffect(() => {
+    const beforePrint = () => {
+      const capture = armedPrint.current;
+      printOutput.current?.setAttribute(
+        "data-print-authorized",
+        capture && isCurrentPrint(capture) ? "true" : "false",
+      );
+    };
+    const afterPrint = () => {
+      invalidatePrint(false);
+    };
+    window.addEventListener("beforeprint", beforePrint);
+    window.addEventListener("afterprint", afterPrint);
+    return () => {
+      window.removeEventListener("beforeprint", beforePrint);
+      window.removeEventListener("afterprint", afterPrint);
+      closePrintGate();
+    };
+  }, [closePrintGate, invalidatePrint, isCurrentPrint]);
+
+  useEffect(() => {
+    if (
+      !printCapture ||
+      !isCurrentPrint(printCapture) ||
+      lastInvokedPrint.current === printCapture.printGeneration
+    )
+      return;
+    lastInvokedPrint.current = printCapture.printGeneration;
+    armedPrint.current = printCapture;
+    try {
+      // This effect runs after the verified snapshot has committed to the DOM.
+      // beforeprint opens its synchronous gate; afterprint removes the capture.
+      window.print();
+    } catch {
+      invalidatePrint(false);
+      setPrintMessage("The print dialog could not open. Try Print current report again.");
+    } finally {
+      // Browsers may ignore print() or return without afterprint. Never retain
+      // an armed ticket after the native call returns; a handed-off browser
+      // snapshot is outside this component's session controls.
+      if (armedPrint.current === printCapture) invalidatePrint(false);
+    }
+  }, [invalidatePrint, isCurrentPrint, printCapture]);
+
+  async function printCurrentReport() {
+    const view = printView.current;
+    if (
+      !view ||
+      view.report !== report ||
+      view.nutrientId !== selectedSeries?.nutrient.id ||
+      privateUiClosed.current ||
+      printController.current ||
+      armedPrint.current
+    )
+      return;
+    invalidatePrint(false);
+    const capture: PrintCapture = {
+      report: view.report,
+      nutrientId: view.nutrientId,
+      sessionGeneration: sessionGeneration.current,
+      reportGeneration: reportGeneration.current,
+      printGeneration: printGeneration.current,
+    };
+    const controller = new AbortController();
+    printController.current = controller;
+    const isCurrent = () =>
+      !controller.signal.aborted &&
+      printController.current === controller &&
+      isCurrentPrint(capture);
+    setPrintBusy(true);
+    setPrintMessage("Verifying your session before opening the print dialog…");
+    try {
+      const response = await fetch("/api/auth/me", {
+        headers: { accept: "application/json" },
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (!isCurrent()) return;
+      if (response.status === 401) return signInAgain();
+      const body = await responseJson(response);
+      if (!isCurrent()) return;
+      if (!response.ok) {
+        throw new Error(
+          responseError(body, "Your print session could not be verified. Retry now."),
+        );
+      }
+      const freshSession = parseSession(body);
+      if (freshSession.user.id !== capture.report.ownerUserId) return signInAgain();
+      if (
+        freshSession.profile.revision !== capture.report.profileRevision ||
+        freshSession.profile.timeZone !== capture.report.timeZone
+      ) {
+        invalidatePrint();
+        setReport(null);
+        setState("error");
+        setMessage("Your profile changed. Retry the report before printing its new snapshot.");
+        return;
+      }
+      if (!isCurrent()) return;
+      printController.current = null;
+      setPrintCapture(capture);
+      setPrintMessage("Use your browser’s print dialog to print or save this snapshot as PDF.");
+    } catch (error) {
+      if (!isCurrent()) return;
+      invalidatePrint(false);
+      setPrintMessage(
+        error instanceof Error ? error.message : "Your print session could not be verified.",
+      );
+    }
+  }
+
   function commitRange(next: NutritionReportRange, rewriteUrl = true) {
+    invalidatePrint();
     nutritionReportDates(next.from, next.to);
     setRangeError("");
     setDraftFrom(next.from);
@@ -335,6 +538,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   }
 
   async function signOut() {
+    invalidatePrint();
     setLogoutBusy(true);
     const confirmed = await confirmBrowserLogout(
       () => fetch("/api/auth/logout", { method: "POST", cache: "no-store" }),
@@ -352,7 +556,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
 
   return (
     <>
-      <aside className="sidebar">
+      <aside className={`sidebar ${printStyles.screen}`}>
         <Link className="brand brandDark" href="/">
           nutrition<span>/ledger</span>
         </Link>
@@ -387,7 +591,10 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
         <p className="wellnessNote">General wellness information—not medical advice.</p>
       </aside>
 
-      <section className="dashboard reportDashboard" aria-busy={state === "loading"}>
+      <section
+        className={`dashboard reportDashboard ${printStyles.screen}`}
+        aria-busy={state === "loading"}
+      >
         <header className="dashboardHeader foodPageHeader">
           <div>
             <p className="kicker">Bounded nutrition history</p>
@@ -419,7 +626,10 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
               <span>From</span>
               <input
                 disabled={!session || state === "loading"}
-                onChange={(event) => setDraftFrom(event.target.value)}
+                onChange={(event) => {
+                  invalidatePrint();
+                  setDraftFrom(event.target.value);
+                }}
                 required
                 type="date"
                 value={draftFrom}
@@ -429,7 +639,10 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
               <span>To</span>
               <input
                 disabled={!session || state === "loading"}
-                onChange={(event) => setDraftTo(event.target.value)}
+                onChange={(event) => {
+                  invalidatePrint();
+                  setDraftTo(event.target.value);
+                }}
                 required
                 type="date"
                 value={draftTo}
@@ -454,12 +667,33 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
         {state === "error" && session && range ? (
           <button
             className="buttonSecondary"
-            onClick={() => setRefreshKey((value) => value + 1)}
+            onClick={() => {
+              invalidatePrint();
+              setRefreshKey((value) => value + 1);
+            }}
             type="button"
           >
             Retry report
           </button>
         ) : null}
+
+        <div className="reportPrintControls">
+          <button
+            className="buttonSecondary"
+            disabled={!printable || printBusy}
+            onClick={() => void printCurrentReport()}
+            type="button"
+          >
+            {printBusy ? "Preparing print…" : "Print current report"}
+          </button>
+          <p>
+            Print the loaded range and selected nutrient, or save them as PDF in your browser.
+            Printed copies and saved files remain outside this app’s session controls.
+          </p>
+          <p role="status" aria-live="polite">
+            {printMessage}
+          </p>
+        </div>
 
         {report && selectedSeries ? (
           <div className="reportWorkspace">
@@ -503,7 +737,10 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
                 <label className="reportNutrientSelect">
                   <span>Nutrient</span>
                   <select
-                    onChange={(event) => setSelectedNutrientId(event.target.value)}
+                    onChange={(event) => {
+                      invalidatePrint();
+                      setSelectedNutrientId(event.target.value);
+                    }}
                     value={selectedSeries.nutrient.id}
                   >
                     {report.series.map((series) => (
@@ -655,6 +892,20 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
           </div>
         ) : null}
       </section>
+      <div className={printStyles.shell}>
+        <p className={printStyles.notice}>
+          No private report was prepared for printing. Return to Reports, load a current report,
+          then choose Print current report.
+        </p>
+        <div className={printStyles.output} data-print-authorized="false" ref={printOutput}>
+          {printCapture && isCurrentPrint(printCapture) ? (
+            <PrintableNutritionReport
+              report={printCapture.report}
+              nutrientId={printCapture.nutrientId}
+            />
+          ) : null}
+        </div>
+      </div>
     </>
   );
 }
