@@ -3,6 +3,7 @@ import { isLocalDate } from "./diary";
 export const HYDRATION_ENTRY_MAX_MILLILITERS = 20_000;
 export const HYDRATION_DAY_MAX_ENTRIES = 64;
 export const HYDRATION_DAY_MAX_MILLILITERS = 100_000;
+export const HYDRATION_OWNER_CHANGED_CODE = "HYDRATION_OWNER_CHANGED";
 
 export interface HydrationEntry {
   readonly id: string;

@@ -15,6 +15,7 @@ import {
   shiftLocalDate,
 } from "../../lib/diary";
 import {
+  HYDRATION_OWNER_CHANGED_CODE,
   type HydrationDay,
   type HydrationEntry,
   hydrationAmountFromDraft,
@@ -47,6 +48,23 @@ function responseError(value: unknown, fallback: string): string {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return fallback;
   const candidate = (value as Record<string, unknown>).error;
   return typeof candidate === "string" && candidate.length <= 500 ? candidate : fallback;
+}
+
+function responseCode(value: unknown): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const candidate = (value as Record<string, unknown>).code;
+  return typeof candidate === "string" && candidate.length <= 100 ? candidate : null;
+}
+
+export function hydrationReadHeaders(expectedOwnerUserId: string): Record<string, string> {
+  return {
+    accept: "application/json",
+    "x-expected-owner-user-id": expectedOwnerUserId,
+  };
+}
+
+export function hydrationReadClosesPrivateUi(status: number, body: unknown): boolean {
+  return status === 401 || (status === 409 && responseCode(body) === HYDRATION_OWNER_CHANGED_CODE);
 }
 
 function retainedDefaultOccurredAt(
@@ -134,6 +152,8 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
 
   const loadDay = useCallback(
     async (requestedDate: string, successMessage?: string) => {
+      const expectedOwnerUserId = session?.user.id;
+      if (!expectedOwnerUserId) return false;
       loadController.current?.abort();
       const controller = new AbortController();
       loadController.current = controller;
@@ -145,16 +165,20 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
       try {
         const response = await fetch(`/api/hydration?date=${encodeURIComponent(requestedDate)}`, {
           cache: "no-store",
-          headers: { accept: "application/json" },
+          headers: hydrationReadHeaders(expectedOwnerUserId),
           signal: controller.signal,
         });
         if (controller.signal.aborted || loadGeneration.current !== generation) return false;
-        if (response.status === 401) {
+        if (hydrationReadClosesPrivateUi(response.status, null)) {
           signInAgain();
           return false;
         }
         const body = await json(response);
         if (controller.signal.aborted || loadGeneration.current !== generation) return false;
+        if (hydrationReadClosesPrivateUi(response.status, body)) {
+          signInAgain();
+          return false;
+        }
         if (!response.ok) {
           throw new Error(responseError(body, "Hydration entries could not be loaded."));
         }
@@ -184,7 +208,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
         return false;
       }
     },
-    [signInAgain],
+    [session?.user.id, signInAgain],
   );
 
   useEffect(() => {

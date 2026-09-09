@@ -13,7 +13,9 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { parseActivityDay } from "../activity/activity";
 import { apiUrl, authenticatedHeaders, jsonBody, responseError } from "../api/private-api";
+import { parseHydrationDay } from "../hydration/hydration";
 import { palette } from "../theme";
 import {
   bindDiaryReorderDigestEvidence,
@@ -66,6 +68,21 @@ import {
   MAX_QUICK_ADD_OUTBOX_ITEMS,
   QuickAddEnqueueAmbiguousError,
 } from "./quick-add-outbox";
+import {
+  acceptTodaySupportingSummary,
+  activityTodaySummary,
+  beginTodaySupportingSummaryLoad,
+  hydrationTodaySummary,
+  isTodayActivityOwnerChangedProblem,
+  loadingTodaySupportingSummaries,
+  type TodaySummaryKind,
+  type TodaySummaryReplacement,
+  type TodaySummaryRequestFence,
+  todaySummaryCardForRender,
+  todaySummaryError,
+  todaySummaryRequestMatches,
+  todaySupportingSummaryPath,
+} from "./today-summary";
 
 type LoadState = "loading" | "ready" | "error";
 type PageLoadState = "idle" | "loading" | "error";
@@ -96,12 +113,13 @@ interface DiaryScreenProps {
   readonly sessionEpoch: number;
   readonly requestedDate?: string;
   readonly refreshKey?: string;
+  readonly supportingSummaryRefreshKey: number;
   readonly onSearch: (date: string, meal: MealSlot, timeZone: string) => void;
   readonly onRecipes: () => void;
   readonly onGoals: () => void;
   readonly onReports: () => void;
-  readonly onHydration: () => void;
-  readonly onActivity: () => void;
+  readonly onHydration: (date: string) => void;
+  readonly onActivity: (date: string) => void;
   readonly onHealth: () => void;
   readonly onProfileUpdated: (profile: ProfileSummary) => void;
   readonly onUnauthorized: () => Promise<void>;
@@ -192,6 +210,7 @@ export function DiaryScreen({
   sessionEpoch,
   requestedDate,
   refreshKey,
+  supportingSummaryRefreshKey,
   onSearch,
   onRecipes,
   onGoals,
@@ -231,12 +250,27 @@ export function DiaryScreen({
   );
   const [pendingDiaryDates, setPendingDiaryDates] = useState<ReadonlySet<string>>(() => new Set());
   const [routeReloadGeneration, setRouteReloadGeneration] = useState(0);
+  const [supportingSummaries, setSupportingSummaries] = useState(loadingTodaySupportingSummaries);
   const loadController = useRef<AbortController | null>(null);
   const profileController = useRef<AbortController | null>(null);
+  const supportingSummaryControllers = useRef<Record<TodaySummaryKind, AbortController | null>>({
+    hydration: null,
+    activity: null,
+  });
+  const supportingSummaryGenerations = useRef<Record<TodaySummaryKind, number>>({
+    hydration: 0,
+    activity: 0,
+  });
   const expectedOwnerUserIdRef = useRef(expectedOwnerUserId);
   expectedOwnerUserIdRef.current = expectedOwnerUserId;
   const sessionEpochRef = useRef(sessionEpoch);
   sessionEpochRef.current = sessionEpoch;
+  const profileRevisionRef = useRef(profileRevision);
+  profileRevisionRef.current = profileRevision;
+  const profileTimeZoneRef = useRef(profileTimeZone);
+  profileTimeZoneRef.current = profileTimeZone;
+  const supportingSummaryRefreshKeyRef = useRef(supportingSummaryRefreshKey);
+  supportingSummaryRefreshKeyRef.current = supportingSummaryRefreshKey;
   const previousProfileIdentity = useRef({ expectedOwnerUserId, sessionEpoch });
   const pageRequestBusy = useRef(false);
   const requestGeneration = useRef(0);
@@ -248,6 +282,12 @@ export function DiaryScreen({
   const appliedRouteGeneration = useRef(diaryRouteTransitionGeneration(requestedDate, refreshKey));
   const dateRef = useRef(date);
   dateRef.current = date;
+  const supportingSummaryIdentityKey = JSON.stringify([
+    expectedOwnerUserId,
+    sessionEpoch,
+    profileRevision,
+    profileTimeZone,
+  ]);
   const diary = diaryPage?.data.localDate === date ? diaryPage.data : null;
   const queuedMessage = queuedQuickAddMessage(quickAddOutboxState);
 
@@ -261,6 +301,11 @@ export function DiaryScreen({
       requestGeneration.current += 1;
       loadController.current?.abort();
       profileController.current?.abort();
+      for (const kind of ["hydration", "activity"] as const) {
+        supportingSummaryGenerations.current[kind] += 1;
+        supportingSummaryControllers.current[kind]?.abort();
+        supportingSummaryControllers.current[kind] = null;
+      }
       pageRequestBusy.current = false;
       dateRef.current = "";
       setDiaryPage(null);
@@ -270,6 +315,7 @@ export function DiaryScreen({
       setBusyEntry(null);
       setPageState("idle");
       setState("loading");
+      setSupportingSummaries(loadingTodaySupportingSummaries());
       setMessage("Closing your private diary…");
       setDateDraft("");
       setDate("");
@@ -332,6 +378,137 @@ export function DiaryScreen({
     [accessToken, apiBase, closeForUnauthorized],
   );
 
+  const loadSupportingSummary = useCallback(
+    async (kind: TodaySummaryKind, requested: string) => {
+      if (privateUiClosed.current || dateRef.current !== requested) return;
+      supportingSummaryControllers.current[kind]?.abort();
+      const controller = new AbortController();
+      supportingSummaryControllers.current[kind] = controller;
+      const generation = supportingSummaryGenerations.current[kind] + 1;
+      supportingSummaryGenerations.current[kind] = generation;
+      const fence: TodaySummaryRequestFence = {
+        generation,
+        kind,
+        ownerUserId: expectedOwnerUserIdRef.current,
+        sessionEpoch: sessionEpochRef.current,
+        profileRevision: profileRevisionRef.current,
+        profileTimeZone: profileTimeZoneRef.current,
+        localDate: requested,
+        refreshKey: supportingSummaryRefreshKeyRef.current,
+      };
+      const isCurrent = () =>
+        supportingSummaryControllers.current[kind] === controller &&
+        !controller.signal.aborted &&
+        !privateUiClosed.current &&
+        todaySummaryRequestMatches(
+          fence,
+          {
+            kind,
+            ownerUserId: expectedOwnerUserIdRef.current,
+            sessionEpoch: sessionEpochRef.current,
+            profileRevision: profileRevisionRef.current,
+            profileTimeZone: profileTimeZoneRef.current,
+            localDate: dateRef.current,
+            refreshKey: supportingSummaryRefreshKeyRef.current,
+          },
+          supportingSummaryGenerations.current[kind],
+        );
+      const accept = (replacement: TodaySummaryReplacement) => {
+        setSupportingSummaries((current) =>
+          acceptTodaySupportingSummary(
+            current,
+            fence,
+            {
+              kind,
+              ownerUserId: expectedOwnerUserIdRef.current,
+              sessionEpoch: sessionEpochRef.current,
+              profileRevision: profileRevisionRef.current,
+              profileTimeZone: profileTimeZoneRef.current,
+              localDate: dateRef.current,
+              refreshKey: supportingSummaryRefreshKeyRef.current,
+            },
+            supportingSummaryGenerations.current[kind],
+            replacement,
+          ),
+        );
+      };
+
+      setSupportingSummaries((current) => beginTodaySupportingSummaryLoad(current, fence));
+
+      try {
+        const response = await fetch(
+          apiUrl(apiBase, todaySupportingSummaryPath(kind, requested)).toString(),
+          {
+            headers:
+              kind === "activity"
+                ? {
+                    ...authenticatedHeaders(accessToken),
+                    "x-expected-owner-user-id": fence.ownerUserId,
+                  }
+                : authenticatedHeaders(accessToken),
+            cache: "no-store",
+            signal: controller.signal,
+          },
+        );
+        if (!isCurrent()) return;
+        if (response.status === 401) {
+          await closeForUnauthorized();
+          return;
+        }
+        const body = await jsonBody(response);
+        if (!isCurrent()) return;
+        if (kind === "activity" && isTodayActivityOwnerChangedProblem(response.status, body)) {
+          await closeForUnauthorized();
+          return;
+        }
+        if (!response.ok) {
+          throw new Error(
+            responseError(
+              body,
+              kind === "hydration"
+                ? "The water summary could not be loaded."
+                : "The activity summary could not be loaded.",
+            ),
+          );
+        }
+
+        if (kind === "hydration") {
+          const day = parseHydrationDay(body);
+          if (day.localDate !== fence.localDate || day.timeZone !== fence.profileTimeZone) {
+            throw new TypeError("The water summary returned another profile-local day.");
+          }
+          if (!isCurrent()) return;
+          accept({ kind: "hydration", card: hydrationTodaySummary(day) });
+        } else {
+          const day = parseActivityDay(body);
+          if (day.localDate !== fence.localDate || day.timeZone !== fence.profileTimeZone) {
+            throw new TypeError("The activity summary returned another profile-local day.");
+          }
+          if (!isCurrent()) return;
+          accept({ kind: "activity", card: activityTodaySummary(day) });
+        }
+      } catch (caught) {
+        if (!isCurrent()) return;
+        const message =
+          caught instanceof Error
+            ? caught.message
+            : kind === "hydration"
+              ? "The water summary could not be loaded."
+              : "The activity summary could not be loaded.";
+        if (kind === "hydration") {
+          accept({ kind: "hydration", card: todaySummaryError(message) });
+        } else {
+          accept({ kind: "activity", card: todaySummaryError(message) });
+        }
+      } finally {
+        if (supportingSummaryControllers.current[kind] === controller) {
+          supportingSummaryControllers.current[kind] = null;
+        }
+      }
+    },
+    [accessToken, apiBase, closeForUnauthorized],
+  );
+
   const transitionCommittedDate = useCallback((next: string, forceReload = false) => {
     if (privateUiClosed.current || !isLocalDate(next)) return;
     setDateDraft(next);
@@ -341,12 +518,18 @@ export function DiaryScreen({
     activeMutation.current = null;
     requestGeneration.current += 1;
     loadController.current?.abort();
+    for (const kind of ["hydration", "activity"] as const) {
+      supportingSummaryGenerations.current[kind] += 1;
+      supportingSummaryControllers.current[kind]?.abort();
+      supportingSummaryControllers.current[kind] = null;
+    }
     pageRequestBusy.current = false;
     setBusyEntry(null);
     setEditor(null);
     setDiaryPage(null);
     setPageState("idle");
     setState("loading");
+    setSupportingSummaries(loadingTodaySupportingSummaries());
     setMessage(`Loading ${next}…`);
     if (dateChanged) setDate(next);
     else setRouteReloadGeneration((generation) => generation + 1);
@@ -412,6 +595,22 @@ export function DiaryScreen({
   }, [date, load, routeReloadGeneration]);
 
   useEffect(() => {
+    void supportingSummaryRefreshKey;
+    void supportingSummaryIdentityKey;
+    if (!privateUiClosed.current && isLocalDate(date)) {
+      void loadSupportingSummary("hydration", date);
+      void loadSupportingSummary("activity", date);
+    }
+    return () => {
+      for (const kind of ["hydration", "activity"] as const) {
+        supportingSummaryGenerations.current[kind] += 1;
+        supportingSummaryControllers.current[kind]?.abort();
+        supportingSummaryControllers.current[kind] = null;
+      }
+    };
+  }, [date, loadSupportingSummary, supportingSummaryIdentityKey, supportingSummaryRefreshKey]);
+
+  useEffect(() => {
     if (!groupEditorOpen && !groupBusy) {
       setGroupDraft(diaryGroups.map((group) => ({ ...group })));
     }
@@ -442,6 +641,11 @@ export function DiaryScreen({
       requestGeneration.current += 1;
       loadController.current?.abort();
       profileController.current?.abort();
+      for (const kind of ["hydration", "activity"] as const) {
+        supportingSummaryGenerations.current[kind] += 1;
+        supportingSummaryControllers.current[kind]?.abort();
+        supportingSummaryControllers.current[kind] = null;
+      }
     },
     [],
   );
@@ -1011,6 +1215,32 @@ export function DiaryScreen({
   }
 
   const activeTimeZone = profileTimeZone;
+  const hydrationSummaryCard = todaySummaryCardForRender(
+    supportingSummaries.hydration,
+    {
+      kind: "hydration",
+      ownerUserId: expectedOwnerUserId,
+      sessionEpoch,
+      profileRevision,
+      profileTimeZone,
+      localDate: date,
+      refreshKey: supportingSummaryRefreshKey,
+    },
+    supportingSummaryGenerations.current.hydration,
+  );
+  const activitySummaryCard = todaySummaryCardForRender(
+    supportingSummaries.activity,
+    {
+      kind: "activity",
+      ownerUserId: expectedOwnerUserId,
+      sessionEpoch,
+      profileRevision,
+      profileTimeZone,
+      localDate: date,
+      refreshKey: supportingSummaryRefreshKey,
+    },
+    supportingSummaryGenerations.current.activity,
+  );
   const completeDayLoaded =
     diary !== null &&
     diaryPage !== null &&
@@ -1041,10 +1271,10 @@ export function DiaryScreen({
           <Pressable accessibilityRole="button" onPress={onReports}>
             <Text style={styles.workspaceLink}>Reports</Text>
           </Pressable>
-          <Pressable accessibilityRole="button" onPress={onHydration}>
+          <Pressable accessibilityRole="button" onPress={() => onHydration(date)}>
             <Text style={styles.workspaceLink}>Hydration</Text>
           </Pressable>
-          <Pressable accessibilityRole="button" onPress={onActivity}>
+          <Pressable accessibilityRole="button" onPress={() => onActivity(date)}>
             <Text style={styles.workspaceLink}>Activity</Text>
           </Pressable>
           <Pressable accessibilityRole="button" onPress={onHealth}>
@@ -1099,6 +1329,115 @@ export function DiaryScreen({
         >
           <Text style={styles.todayText}>Jump to today</Text>
         </Pressable>
+
+        {isLocalDate(date) ? (
+          <View accessibilityLabel={`Daily overview for ${date}`} style={styles.supportingOverview}>
+            <Text style={styles.kicker}>COORDINATED DAILY OVERVIEW</Text>
+            <Text accessibilityRole="header" style={styles.supportingOverviewTitle}>
+              Water and activity
+            </Text>
+            <Text style={styles.supportingOverviewIntro}>
+              Each private summary loads independently for this same profile-local date.
+            </Text>
+            <View style={styles.supportingGrid}>
+              <View style={styles.supportingCard}>
+                <Text accessibilityRole="header" style={styles.supportingCardTitle}>
+                  Plain water
+                </Text>
+                {hydrationSummaryCard.status === "loading" ? (
+                  <View style={styles.supportingStatusRow}>
+                    <ActivityIndicator
+                      accessibilityLabel={`Loading plain-water summary for ${date}`}
+                      color={palette.forest}
+                    />
+                    <Text style={styles.supportingStatus}>Loading water logged…</Text>
+                  </View>
+                ) : hydrationSummaryCard.status === "error" ? (
+                  <>
+                    <Text accessibilityRole="alert" style={[styles.supportingStatus, styles.error]}>
+                      {hydrationSummaryCard.message}
+                    </Text>
+                    <Pressable
+                      accessibilityLabel={`Retry plain-water summary for ${date}`}
+                      accessibilityRole="button"
+                      onPress={() => void loadSupportingSummary("hydration", date)}
+                      style={styles.supportingRetry}
+                    >
+                      <Text style={styles.secondaryText}>Retry water summary</Text>
+                    </Pressable>
+                  </>
+                ) : (
+                  <>
+                    <Text accessibilityLiveRegion="polite" style={styles.supportingAmount}>
+                      {hydrationSummaryCard.summary.totalMilliliters.toLocaleString("en-US")} mL
+                    </Text>
+                    <Text style={styles.supportingStatus}>
+                      {hydrationSummaryCard.status === "empty"
+                        ? "No plain-water entries on this date."
+                        : `${hydrationSummaryCard.summary.entryCount} ${hydrationSummaryCard.summary.entryCount === 1 ? "entry" : "entries"} on this date.`}
+                    </Text>
+                  </>
+                )}
+                <Pressable
+                  accessibilityLabel={`View or log plain water for ${date}`}
+                  accessibilityRole="button"
+                  onPress={() => onHydration(date)}
+                  style={styles.supportingAction}
+                >
+                  <Text style={styles.primaryText}>View or log water</Text>
+                </Pressable>
+              </View>
+
+              <View style={styles.supportingCard}>
+                <Text accessibilityRole="header" style={styles.supportingCardTitle}>
+                  Activity
+                </Text>
+                {activitySummaryCard.status === "loading" ? (
+                  <View style={styles.supportingStatusRow}>
+                    <ActivityIndicator
+                      accessibilityLabel={`Loading activity summary for ${date}`}
+                      color={palette.forest}
+                    />
+                    <Text style={styles.supportingStatus}>Loading recorded duration…</Text>
+                  </View>
+                ) : activitySummaryCard.status === "error" ? (
+                  <>
+                    <Text accessibilityRole="alert" style={[styles.supportingStatus, styles.error]}>
+                      {activitySummaryCard.message}
+                    </Text>
+                    <Pressable
+                      accessibilityLabel={`Retry activity summary for ${date}`}
+                      accessibilityRole="button"
+                      onPress={() => void loadSupportingSummary("activity", date)}
+                      style={styles.supportingRetry}
+                    >
+                      <Text style={styles.secondaryText}>Retry activity summary</Text>
+                    </Pressable>
+                  </>
+                ) : (
+                  <>
+                    <Text accessibilityLiveRegion="polite" style={styles.supportingAmount}>
+                      {activitySummaryCard.summary.totalDurationMinutes.toLocaleString("en-US")} min
+                    </Text>
+                    <Text style={styles.supportingStatus}>
+                      {activitySummaryCard.status === "empty"
+                        ? "No activities recorded on this local start date."
+                        : `${activitySummaryCard.summary.entryCount} ${activitySummaryCard.summary.entryCount === 1 ? "activity" : "activities"} on this local start date.`}
+                    </Text>
+                  </>
+                )}
+                <Pressable
+                  accessibilityLabel={`View or log activity for ${date}`}
+                  accessibilityRole="button"
+                  onPress={() => onActivity(date)}
+                  style={styles.supportingAction}
+                >
+                  <Text style={styles.primaryText}>View or log activity</Text>
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        ) : null}
 
         <Pressable
           accessibilityRole="button"
@@ -1891,6 +2230,52 @@ const styles = StyleSheet.create({
   },
   squareText: { color: palette.white, fontSize: 20, fontWeight: "700" },
   status: { color: palette.muted, fontSize: 14, lineHeight: 20, marginVertical: 22 },
+  supportingAction: {
+    alignSelf: "flex-start",
+    backgroundColor: palette.forest,
+    borderRadius: 999,
+    marginTop: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  supportingAmount: {
+    color: palette.forest,
+    fontSize: 26,
+    fontWeight: "800",
+    letterSpacing: -0.5,
+    marginTop: 10,
+  },
+  supportingCard: {
+    backgroundColor: palette.white,
+    borderColor: palette.line,
+    borderRadius: 16,
+    borderWidth: 1,
+    flex: 1,
+    minWidth: 230,
+    padding: 16,
+  },
+  supportingCardTitle: { color: palette.ink, fontSize: 19, fontWeight: "800" },
+  supportingGrid: { flexDirection: "row", flexWrap: "wrap", gap: 12, marginTop: 14 },
+  supportingOverview: { marginTop: 28 },
+  supportingOverviewIntro: { color: palette.muted, fontSize: 13, lineHeight: 19, marginTop: 6 },
+  supportingOverviewTitle: {
+    color: palette.ink,
+    fontSize: 25,
+    fontWeight: "700",
+    letterSpacing: -0.6,
+    marginTop: 6,
+  },
+  supportingRetry: {
+    alignSelf: "flex-start",
+    borderColor: palette.forest,
+    borderRadius: 999,
+    borderWidth: 1,
+    marginTop: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  supportingStatus: { color: palette.muted, fontSize: 13, lineHeight: 19, marginTop: 6 },
+  supportingStatusRow: { alignItems: "center", flexDirection: "row", gap: 8, marginTop: 10 },
   summary: {
     backgroundColor: palette.white,
     borderColor: palette.line,

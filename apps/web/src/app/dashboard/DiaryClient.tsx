@@ -4,6 +4,20 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { type ActivityDay, parseActivityDay } from "../../lib/activity";
+import {
+  activityDailyOverviewCard,
+  type DailyOverviewRequestIdentity,
+  type DailyOverviewScopedCardState,
+  dailyOverviewCardForIdentity,
+  dailyOverviewFence,
+  dailyOverviewRequestMatches,
+  dailyOverviewRequiresPrivateUiClosure,
+  failedDailyOverviewCard,
+  hydrationDailyOverviewCard,
+  loadingDailyOverviewCard,
+  scopedDailyOverviewCard,
+} from "../../lib/daily-overview";
 import {
   createOperationId,
   DIARY_PAGE_SIZE,
@@ -48,7 +62,9 @@ import {
   type SessionSummary,
   shiftLocalDate,
 } from "../../lib/diary";
+import { type HydrationDay, parseHydrationDay } from "../../lib/hydration";
 import { confirmBrowserLogout } from "../../lib/private-api";
+import { TodayOverviewCards } from "./TodayOverviewCards";
 
 type LoadState = "loading" | "ready" | "error";
 type PageLoadState = "idle" | "loading" | "error";
@@ -67,6 +83,23 @@ interface MutationOwner {
   readonly sourceDate: string;
   readonly token: number;
   readonly viewEpoch: number;
+}
+
+function dailyOverviewIdentity(
+  session: SessionSummary | null,
+  localDate: string,
+  sessionGeneration: number,
+  requestGeneration: number,
+): DailyOverviewRequestIdentity | null {
+  if (!session || !isLocalDate(localDate)) return null;
+  return {
+    ownerUserId: session.user.id,
+    profileRevision: session.profile.revision,
+    profileTimeZone: session.profile.timeZone,
+    localDate,
+    sessionGeneration,
+    requestGeneration,
+  };
 }
 
 async function json(response: Response): Promise<unknown> {
@@ -131,12 +164,22 @@ export function DiaryClient() {
   const [diaryGroupDraft, setDiaryGroupDraft] = useState<readonly DiaryGroup[]>(defaultDiaryGroups);
   const [diaryGroupSettingsOpen, setDiaryGroupSettingsOpen] = useState(false);
   const [profileBusy, setProfileBusy] = useState(false);
+  const [hydrationOverview, setHydrationOverview] = useState<DailyOverviewScopedCardState>(() =>
+    scopedDailyOverviewCard(null, loadingDailyOverviewCard()),
+  );
+  const [activityOverview, setActivityOverview] = useState<DailyOverviewScopedCardState>(() =>
+    scopedDailyOverviewCard(null, loadingDailyOverviewCard()),
+  );
   const operationIds = useRef(new Map<string, string>());
   const loadController = useRef<AbortController | null>(null);
+  const hydrationOverviewController = useRef<AbortController | null>(null);
+  const activityOverviewController = useRef<AbortController | null>(null);
   const profileController = useRef<AbortController | null>(null);
   const timeZoneRefreshController = useRef<AbortController | null>(null);
   const pageRequestBusy = useRef(false);
   const requestGeneration = useRef(0);
+  const hydrationOverviewGeneration = useRef(0);
+  const activityOverviewGeneration = useRef(0);
   const statusRef = useRef<HTMLParagraphElement | null>(null);
   const viewEpoch = useRef(0);
   const mutationSequence = useRef(0);
@@ -160,6 +203,12 @@ export function DiaryClient() {
     mutationSequence.current += 1;
     activeMutation.current = null;
     loadController.current?.abort();
+    hydrationOverviewGeneration.current += 1;
+    activityOverviewGeneration.current += 1;
+    hydrationOverviewController.current?.abort();
+    hydrationOverviewController.current = null;
+    activityOverviewController.current?.abort();
+    activityOverviewController.current = null;
     profileController.current?.abort();
     profileController.current = null;
     timeZoneRefreshController.current?.abort();
@@ -171,6 +220,8 @@ export function DiaryClient() {
     setSession(null);
     setMutationBusy(null);
     setProfileBusy(false);
+    setHydrationOverview(scopedDailyOverviewCard(null, loadingDailyOverviewCard()));
+    setActivityOverview(scopedDailyOverviewCard(null, loadingDailyOverviewCard()));
     setDiaryGroupSettingsOpen(false);
     setDiaryGroupDraft(defaultDiaryGroups);
     setPageState("idle");
@@ -194,10 +245,18 @@ export function DiaryClient() {
       activeMutation.current = null;
       requestGeneration.current += 1;
       loadController.current?.abort();
+      hydrationOverviewGeneration.current += 1;
+      activityOverviewGeneration.current += 1;
+      hydrationOverviewController.current?.abort();
+      hydrationOverviewController.current = null;
+      activityOverviewController.current?.abort();
+      activityOverviewController.current = null;
       pageRequestBusy.current = false;
       setMutationBusy(null);
       setEditor(null);
       setDiaryPage(null);
+      setHydrationOverview(scopedDailyOverviewCard(null, loadingDailyOverviewCard()));
+      setActivityOverview(scopedDailyOverviewCard(null, loadingDailyOverviewCard()));
       setPageState("idle");
       setDate(next);
       if (rewriteUrl) {
@@ -271,6 +330,155 @@ export function DiaryClient() {
     [signInAgain],
   );
 
+  const loadOverviewCard = useCallback(
+    async (kind: "hydration" | "activity", requestedDate: string) => {
+      const initiatingSession = sessionRef.current;
+      if (
+        privateUiClosed.current ||
+        !initiatingSession ||
+        !isLocalDate(requestedDate) ||
+        dateRef.current !== requestedDate
+      ) {
+        return false;
+      }
+
+      const generationRef =
+        kind === "hydration" ? hydrationOverviewGeneration : activityOverviewGeneration;
+      const controllerRef =
+        kind === "hydration" ? hydrationOverviewController : activityOverviewController;
+      const setCard = kind === "hydration" ? setHydrationOverview : setActivityOverview;
+      const generation = generationRef.current + 1;
+      generationRef.current = generation;
+      controllerRef.current?.abort();
+      const controller = new AbortController();
+      controllerRef.current = controller;
+      const expected = dailyOverviewIdentity(
+        initiatingSession,
+        requestedDate,
+        privateUiGeneration.current,
+        generation,
+      );
+      if (!expected) return false;
+      const currentIdentity = () =>
+        dailyOverviewIdentity(
+          sessionRef.current,
+          dateRef.current,
+          privateUiGeneration.current,
+          generationRef.current,
+        );
+      const isLocallyCurrent = () =>
+        controllerRef.current === controller &&
+        !controller.signal.aborted &&
+        !privateUiClosed.current &&
+        dailyOverviewRequestMatches(expected, currentIdentity());
+
+      setCard(scopedDailyOverviewCard(expected, loadingDailyOverviewCard()));
+      try {
+        const endpoint =
+          kind === "hydration"
+            ? `/api/hydration?date=${encodeURIComponent(requestedDate)}`
+            : `/api/activities?date=${encodeURIComponent(requestedDate)}`;
+        const response = await fetch(endpoint, {
+          cache: "no-store",
+          headers: {
+            accept: "application/json",
+            "x-expected-owner-user-id": expected.ownerUserId,
+          },
+          signal: controller.signal,
+        });
+        if (!isLocallyCurrent()) return false;
+        if (dailyOverviewRequiresPrivateUiClosure(kind, response.status, null)) {
+          return signInAgain();
+        }
+        const body = await json(response);
+        if (!isLocallyCurrent()) return false;
+        if (dailyOverviewRequiresPrivateUiClosure(kind, response.status, responseCode(body))) {
+          return signInAgain();
+        }
+        if (!response.ok) {
+          throw new Error(
+            responseError(
+              body,
+              kind === "hydration"
+                ? "The plain-water summary could not be loaded."
+                : "The manual-activity summary could not be loaded.",
+            ),
+          );
+        }
+
+        const day: HydrationDay | ActivityDay =
+          kind === "hydration" ? parseHydrationDay(body) : parseActivityDay(body);
+        if (!isLocallyCurrent()) return false;
+
+        const sessionResponse = await fetch("/api/auth/me", {
+          cache: "no-store",
+          headers: { accept: "application/json" },
+          signal: controller.signal,
+        });
+        if (!isLocallyCurrent()) return false;
+        if (sessionResponse.status === 401) return signInAgain();
+        const sessionBody = await json(sessionResponse);
+        if (!isLocallyCurrent()) return false;
+        if (!sessionResponse.ok) {
+          throw new Error(
+            responseError(sessionBody, "Your session could not be revalidated safely."),
+          );
+        }
+        const revalidatedSession = parseSession(sessionBody);
+        const fence = dailyOverviewFence({
+          expected,
+          current: currentIdentity(),
+          revalidatedSession,
+          response: day,
+        });
+        if (fence === "owner-changed") return signInAgain();
+        if (fence === "profile-changed") {
+          if (dailyOverviewRequestMatches(expected, currentIdentity())) {
+            setSession((current) =>
+              current?.user.id === expected.ownerUserId ? revalidatedSession : current,
+            );
+          }
+          return false;
+        }
+        if (fence === "response-mismatch") {
+          throw new TypeError(
+            kind === "hydration"
+              ? "The hydration service returned another local day or time zone."
+              : "The activity service returned another local day or time zone.",
+          );
+        }
+        if (fence !== "current" || !isLocallyCurrent()) return false;
+        setCard(
+          scopedDailyOverviewCard(
+            expected,
+            kind === "hydration"
+              ? hydrationDailyOverviewCard(day as HydrationDay)
+              : activityDailyOverviewCard(day as ActivityDay),
+          ),
+        );
+        return true;
+      } catch (error) {
+        if (!isLocallyCurrent()) return false;
+        setCard(
+          scopedDailyOverviewCard(
+            expected,
+            failedDailyOverviewCard(
+              error instanceof Error
+                ? error.message
+                : kind === "hydration"
+                  ? "The plain-water summary could not be loaded."
+                  : "The manual-activity summary could not be loaded.",
+            ),
+          ),
+        );
+        return false;
+      } finally {
+        if (controllerRef.current === controller) controllerRef.current = null;
+      }
+    },
+    [signInAgain],
+  );
+
   useEffect(() => {
     const controller = new AbortController();
     const generation = privateUiGeneration.current;
@@ -324,12 +532,33 @@ export function DiaryClient() {
     };
   }, [date, loadDiary]);
 
+  useEffect(() => {
+    if (session && isLocalDate(date)) {
+      void loadOverviewCard("hydration", date);
+      void loadOverviewCard("activity", date);
+    }
+    return () => {
+      hydrationOverviewGeneration.current += 1;
+      activityOverviewGeneration.current += 1;
+      hydrationOverviewController.current?.abort();
+      hydrationOverviewController.current = null;
+      activityOverviewController.current?.abort();
+      activityOverviewController.current = null;
+    };
+  }, [date, loadOverviewCard, session]);
+
   useEffect(
     () => () => {
       viewEpoch.current += 1;
       activeMutation.current = null;
       requestGeneration.current += 1;
       loadController.current?.abort();
+      hydrationOverviewGeneration.current += 1;
+      activityOverviewGeneration.current += 1;
+      hydrationOverviewController.current?.abort();
+      hydrationOverviewController.current = null;
+      activityOverviewController.current?.abort();
+      activityOverviewController.current = null;
       privateUiGeneration.current += 1;
       profileController.current?.abort();
       profileController.current = null;
@@ -1022,6 +1251,24 @@ export function DiaryClient() {
     diaryPage.data.localDate === date &&
     diaryPage.page.nextCursor === null &&
     diaryPage.data.entries.length === diaryPage.page.totalEntries;
+  const hydrationOverviewForCurrentIdentity = dailyOverviewCardForIdentity(
+    hydrationOverview,
+    dailyOverviewIdentity(
+      session,
+      date,
+      privateUiGeneration.current,
+      hydrationOverviewGeneration.current,
+    ),
+  );
+  const activityOverviewForCurrentIdentity = dailyOverviewCardForIdentity(
+    activityOverview,
+    dailyOverviewIdentity(
+      session,
+      date,
+      privateUiGeneration.current,
+      activityOverviewGeneration.current,
+    ),
+  );
 
   return (
     <>
@@ -1262,6 +1509,16 @@ export function DiaryClient() {
           >
             Retry
           </button>
+        ) : null}
+
+        {session && hasCommittedDate ? (
+          <TodayOverviewCards
+            activity={activityOverviewForCurrentIdentity}
+            date={date}
+            hydration={hydrationOverviewForCurrentIdentity}
+            onRetryActivity={() => void loadOverviewCard("activity", date)}
+            onRetryHydration={() => void loadOverviewCard("hydration", date)}
+          />
         ) : null}
 
         {diary && diaryPage && state === "ready" ? (

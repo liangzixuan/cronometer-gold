@@ -71,6 +71,12 @@ reviewer, or production-release acceptance.
    closes M1C's local source slices, not signed-device lifecycle, protected-
    storage, OS-kill, accessibility, hosted, browser-persistence, background-
    delivery, or controlled-beta acceptance.
+9. **Coordinated Today overview (source-complete; local gates passed):** one selected
+   profile-local date coordinates the diary with independently loaded hydration
+   and activity summaries on web and mobile. The bounded cards expose exact
+   water amount/count and recorded activity duration/count without combining
+   revisions or changing nutrition and energy math. ADR 0026 keeps hosted,
+   signed-device, physical cross-client, and assistive-technology acceptance open.
 
 ## Forward milestones
 
@@ -104,9 +110,13 @@ passed the ordered local validation runbook. It remains online-only and
 release-gated; it adds no earned-calorie adjustment, diary-outbox operation,
 platform-health import, wearable integration, reminder, phone exposure, hosted
 acceptance, or signed-device acceptance. M1 remains open for cross-client,
-accessibility, controlled-beta, and other documented acceptance evidence. No
-successor source milestone is selected by this plan; scope the next remaining M1
-slice explicitly rather than inferring M1D-B or exercise-energy behavior.
+accessibility, controlled-beta, and other documented acceptance evidence. M1E's
+web and mobile source slice is complete and has passed the ordered local
+validation runbook. ADR 0026 coordinates the existing diary, hydration, and
+activity day views around one profile-local selected date without creating
+cross-domain energy arithmetic or claiming an atomic snapshot. Hosted,
+signed-device, physical cross-client, and assistive-technology acceptance remain
+open.
 External M0/M2 work remains separately gated. Arbitrary add/delete/hide group identities remain a future migration
 milestone rather than part of M1B-G. M0's authenticated acquisition, review,
 and activation lane proceeds in parallel when its separately approved external
@@ -293,6 +303,21 @@ Each retains its separate explicit-approval gate.
    requires a separate product/scientific decision and versioned calculation
    policy. M1D-A remains online-only and adds no diary-outbox operation, platform
    health permission/import, wearable integration, reminder, or phone exposure.
+
+   M1E is the bounded coordinated Today-overview slice accepted by ADR 0026.
+   One selected profile-local date drives the diary and independently loaded
+   hydration and activity summaries across web and mobile. The overview exposes
+   exact plain-water milliliters and entry count plus the exact additive sum of
+   recorded activity minutes and entry count, and preserves that date when navigating to either
+   detail screen. The shared date key does not re-bucket immutable historical
+   entries after a profile-zone change. Empty, loading, and failure remain
+   distinct per domain with targeted retry. It is a presentation overview, not one transactionally
+   coherent cross-domain snapshot. It adds no database migration or backend
+   `/v1` contract; the internal web hydration BFF now requires a same-token
+   expected-owner preflight. It never aggregates activity calories and changes no nutrition, goal, progress,
+   remaining-calorie, energy-balance, PAL, report, or `exercise_budget_kcal`
+   calculation. Hosted, signed-device, physical cross-client, and accessibility
+   evidence remain open.
 
    Private notes attached to food and recipe entries are implemented locally.
    Repeat preserves a note. Clearing hides it from the current display, while

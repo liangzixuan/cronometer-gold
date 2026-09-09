@@ -63,6 +63,7 @@ import {
   QuickAddOutboxHeadConflictError,
   QuickAddOutboxOwnerMismatchError,
 } from "./src/diary/quick-add-outbox-store";
+import { todayDetailRouteParams } from "./src/diary/today-summary";
 import { HydrationScreen } from "./src/hydration/HydrationScreen";
 import { authenticatedRoutes } from "./src/navigation/routes";
 import { GoalsScreen } from "./src/recipes/GoalsScreen";
@@ -114,8 +115,8 @@ type RootStackParamList = {
   Recipes: undefined;
   Goals: undefined;
   Reports: undefined;
-  Hydration: undefined;
-  Activity: undefined;
+  Hydration: { readonly date: string };
+  Activity: { readonly date: string };
   Health: undefined;
   VerifyEmail: undefined;
 };
@@ -171,8 +172,10 @@ function quickAddOutboxState(snapshot: QuickAddOutboxSnapshot): QuickAddOutboxCo
 function TodayRoute(props: AuthenticatedAppProps) {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute<NativeStackScreenProps<RootStackParamList, "Today">["route"]>();
+  const [supportingSummaryRefreshKey, setSupportingSummaryRefreshKey] = useState(0);
   useFocusEffect(
     useCallback(() => {
+      setSupportingSummaryRefreshKey((current) => current + 1);
       const controller = new AbortController();
       const initiatingSessionEpoch = props.sessionEpoch;
       const initiatingUserId = props.session.user.id;
@@ -221,8 +224,12 @@ function TodayRoute(props: AuthenticatedAppProps) {
       onRecipes={() => navigation.navigate(authenticatedRoutes.recipes)}
       onGoals={() => navigation.navigate(authenticatedRoutes.goals)}
       onReports={() => navigation.navigate(authenticatedRoutes.reports)}
-      onHydration={() => navigation.navigate(authenticatedRoutes.hydration)}
-      onActivity={() => navigation.navigate(authenticatedRoutes.activity)}
+      onHydration={(date) =>
+        navigation.navigate(authenticatedRoutes.hydration, todayDetailRouteParams(date))
+      }
+      onActivity={(date) =>
+        navigation.navigate(authenticatedRoutes.activity, todayDetailRouteParams(date))
+      }
       onHealth={() => navigation.navigate(authenticatedRoutes.health)}
       onProfileUpdated={(profile) =>
         props.onProfileUpdated({
@@ -238,6 +245,7 @@ function TodayRoute(props: AuthenticatedAppProps) {
       quickAddOutboxState={props.quickAddOutboxState}
       quickAddOutboxController={props.quickAddOutboxController}
       sessionEpoch={props.sessionEpoch}
+      supportingSummaryRefreshKey={supportingSummaryRefreshKey}
       subscribeQuickAddReceipts={props.subscribeQuickAddReceipts}
       {...(route.params?.refreshKey ? { refreshKey: route.params.refreshKey } : {})}
       {...(route.params?.date ? { requestedDate: route.params.date } : {})}
@@ -246,24 +254,30 @@ function TodayRoute(props: AuthenticatedAppProps) {
 }
 
 function HydrationRoute(props: AuthenticatedAppProps) {
+  const route = useRoute<NativeStackScreenProps<RootStackParamList, "Hydration">["route"]>();
   return (
     <HydrationScreen
+      key={`${props.sessionEpoch}:${props.session.user.id}:${props.session.profile.revision}:${props.session.profile.timeZone}:${route.params.date}`}
       accessToken={props.accessToken}
       apiBase={props.apiBase}
       onUnauthorized={props.onUnauthorized}
       profileTimeZone={props.session.profile.timeZone}
+      requestedDate={route.params.date}
     />
   );
 }
 
 function ActivityRoute(props: AuthenticatedAppProps) {
+  const route = useRoute<NativeStackScreenProps<RootStackParamList, "Activity">["route"]>();
   return (
     <ActivityScreen
+      key={`${props.sessionEpoch}:${props.session.user.id}:${props.session.profile.revision}:${props.session.profile.timeZone}:${route.params.date}`}
       accessToken={props.accessToken}
       apiBase={props.apiBase}
       expectedOwnerUserId={props.session.user.id}
       onUnauthorized={props.onUnauthorized}
       profileTimeZone={props.session.profile.timeZone}
+      requestedDate={route.params.date}
     />
   );
 }

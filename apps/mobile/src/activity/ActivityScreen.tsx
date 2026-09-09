@@ -20,6 +20,7 @@ import {
   localTimeInTimeZone,
   shiftLocalDate,
 } from "../diary/diary";
+import { todayDetailDate } from "../diary/today-summary";
 import { palette } from "../theme";
 import {
   ACTIVITY_DAY_MAX_ENTRIES,
@@ -43,6 +44,7 @@ interface ActivityScreenProps {
   readonly accessToken: string;
   readonly expectedOwnerUserId: string;
   readonly profileTimeZone: string;
+  readonly requestedDate?: string;
   readonly onUnauthorized: () => Promise<void>;
 }
 
@@ -77,12 +79,13 @@ export function ActivityScreen({
   accessToken,
   expectedOwnerUserId,
   profileTimeZone,
+  requestedDate,
   onUnauthorized,
 }: ActivityScreenProps) {
   const initialNow = useRef(new Date()).current;
-  const today = localDateInTimeZone(initialNow, profileTimeZone);
-  const [date, setDate] = useState(today);
-  const [dateDraft, setDateDraft] = useState(today);
+  const initialDate = todayDetailDate(requestedDate, profileTimeZone, initialNow);
+  const [date, setDate] = useState(initialDate);
+  const [dateDraft, setDateDraft] = useState(initialDate);
   const [day, setDay] = useState<ReturnType<typeof parseActivityDay> | null>(null);
   const [state, setState] = useState<LoadState>("loading");
   const [message, setMessage] = useState("Opening your private activity history…");

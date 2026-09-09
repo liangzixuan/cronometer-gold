@@ -5,9 +5,12 @@ import {
   proxyHydrationCreate,
   proxyHydrationGet,
 } from "../app/api/hydration/proxy";
+import { HYDRATION_OWNER_CHANGED_CODE } from "./hydration";
 import { SESSION_COOKIE } from "./private-api";
 
 const token = "t".repeat(43);
+const ownerUserId = "70eedafb-9d6e-4adc-b924-8e55e87ff5d0";
+const otherOwnerUserId = "5f5536b9-0f35-44e8-9a77-c26679d7b21b";
 const hydrationDayEtag = `"h-${"a".repeat(43)}"`;
 const changedTimeZoneHydrationDayEtag = `"h-${"b".repeat(43)}"`;
 const hydrationOperationId = globalThis.crypto.randomUUID();
@@ -31,6 +34,31 @@ function privateHeaders(extra: Record<string, string> = {}): Record<string, stri
   return { cookie: `${SESSION_COOKIE}=${token}`, ...extra };
 }
 
+function hydrationReadHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return privateHeaders({ "x-expected-owner-user-id": ownerUserId, ...extra });
+}
+
+function currentSession(owner = ownerUserId): Response {
+  return Response.json({
+    data: {
+      user: { id: owner, email: "owner@example.test", emailVerified: true },
+      profile: {
+        displayName: "Owner",
+        birthDate: null,
+        sexAtBirth: "not_specified",
+        heightCm: null,
+        baselineWeightKg: null,
+        activityLevelCode: null,
+        locale: "en-US",
+        timeZone: "America/Chicago",
+        unitSystem: "metric",
+        onboardingCompletedAt: null,
+        revision: "1",
+      },
+    },
+  });
+}
+
 describe("web hydration read proxy", () => {
   it("forwards one validated local date with bearer auth and returns exact no-store data", async () => {
     const calls: Array<{ readonly url: string; readonly init?: RequestInit }> = [];
@@ -38,6 +66,7 @@ describe("web hydration read proxy", () => {
       "fetch",
       vi.fn(async (url: URL, init?: RequestInit) => {
         calls.push({ url: url.href, ...(init ? { init } : {}) });
+        if (url.pathname === "/v1/auth/me") return currentSession();
         return Response.json(
           {
             data: {
@@ -57,34 +86,76 @@ describe("web hydration read proxy", () => {
     );
     const response = await proxyHydrationGet(
       new Request("https://app.example.test/api/hydration?date=2026-08-15", {
-        headers: privateHeaders(),
+        headers: hydrationReadHeaders(),
       }),
     );
-    expect(calls[0]?.url).toBe("http://127.0.0.1:4000/v1/hydration?date=2026-08-15");
+    expect(calls.map((call) => call.url)).toEqual([
+      "http://127.0.0.1:4000/v1/auth/me",
+      "http://127.0.0.1:4000/v1/hydration?date=2026-08-15",
+    ]);
     expect(new Headers(calls[0]?.init?.headers).get("authorization")).toBe(`Bearer ${token}`);
+    expect(new Headers(calls[1]?.init?.headers).get("authorization")).toBe(`Bearer ${token}`);
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toContain("no-store");
     expect(response.headers.get("etag")).toBe(hydrationDayEtag);
     expect(await response.json()).toMatchObject({ data: { totalMilliliters: 375 } });
   });
 
-  it("rejects extra query keys and mismatched upstream local dates", async () => {
-    const fetcher = vi.fn(async () =>
-      Response.json({
-        data: {
-          localDate: "2026-08-16",
-          timeZone: "America/Chicago",
-          revision: "0",
-          entries: [],
-          totalMilliliters: 0,
-          updatedAt: null,
-        },
+  it("requires a valid initiating owner and stops an owner mismatch before hydration is read", async () => {
+    const fetcher = vi.fn(async (url: URL) => {
+      if (url.pathname !== "/v1/auth/me")
+        throw new Error("Hydration must not be read for another owner");
+      return currentSession(otherOwnerUserId);
+    });
+    vi.stubGlobal("fetch", fetcher);
+
+    const missing = await proxyHydrationGet(
+      new Request("https://app.example.test/api/hydration?date=2026-08-15", {
+        headers: privateHeaders(),
       }),
+    );
+    const malformed = await proxyHydrationGet(
+      new Request("https://app.example.test/api/hydration?date=2026-08-15", {
+        headers: privateHeaders({ "x-expected-owner-user-id": "not-an-owner" }),
+      }),
+    );
+    expect(missing.status).toBe(400);
+    expect(malformed.status).toBe(400);
+    expect(fetcher).not.toHaveBeenCalled();
+
+    const changed = await proxyHydrationGet(
+      new Request("https://app.example.test/api/hydration?date=2026-08-15", {
+        headers: hydrationReadHeaders(),
+      }),
+    );
+    expect(changed.status).toBe(409);
+    expect(changed.headers.get("cache-control")).toContain("no-store");
+    expect(await changed.json()).toEqual({
+      error: "The signed-in account changed while hydration was loading.",
+      code: HYDRATION_OWNER_CHANGED_CODE,
+    });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it("rejects extra query keys and mismatched upstream local dates", async () => {
+    const fetcher = vi.fn(async (url: URL) =>
+      url.pathname === "/v1/auth/me"
+        ? currentSession()
+        : Response.json({
+            data: {
+              localDate: "2026-08-16",
+              timeZone: "America/Chicago",
+              revision: "0",
+              entries: [],
+              totalMilliliters: 0,
+              updatedAt: null,
+            },
+          }),
     );
     vi.stubGlobal("fetch", fetcher);
     const invalid = await proxyHydrationGet(
       new Request("https://app.example.test/api/hydration?date=2026-08-15&target=2000", {
-        headers: privateHeaders(),
+        headers: hydrationReadHeaders(),
       }),
     );
     expect(invalid.status).toBe(400);
@@ -92,7 +163,7 @@ describe("web hydration read proxy", () => {
 
     const mismatched = await proxyHydrationGet(
       new Request("https://app.example.test/api/hydration?date=2026-08-15", {
-        headers: privateHeaders(),
+        headers: hydrationReadHeaders(),
       }),
     );
     expect(mismatched.status).toBe(502);
@@ -107,7 +178,8 @@ describe("web hydration read proxy", () => {
     let call = 0;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => {
+      vi.fn(async (url: URL) => {
+        if (url.pathname === "/v1/auth/me") return currentSession();
         const variant = variants[call];
         call += 1;
         if (!variant) throw new Error("Unexpected hydration fetch");
@@ -130,7 +202,7 @@ describe("web hydration read proxy", () => {
     const read = () =>
       proxyHydrationGet(
         new Request("https://app.example.test/api/hydration?date=2026-08-15", {
-          headers: privateHeaders(),
+          headers: hydrationReadHeaders(),
         }),
       );
     const first = await read();
@@ -154,25 +226,27 @@ describe("web hydration read proxy", () => {
   ] as const)("rejects a %s hydration day ETag", async (_case, etag) => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () =>
-        Response.json(
-          {
-            data: {
-              localDate: "2026-08-15",
-              timeZone: "America/Chicago",
-              revision: "0",
-              entries: [],
-              totalMilliliters: 0,
-              updatedAt: null,
-            },
-          },
-          { headers: etag === null ? {} : { etag } },
-        ),
+      vi.fn(async (url: URL) =>
+        url.pathname === "/v1/auth/me"
+          ? currentSession()
+          : Response.json(
+              {
+                data: {
+                  localDate: "2026-08-15",
+                  timeZone: "America/Chicago",
+                  revision: "0",
+                  entries: [],
+                  totalMilliliters: 0,
+                  updatedAt: null,
+                },
+              },
+              { headers: etag === null ? {} : { etag } },
+            ),
       ),
     );
     const response = await proxyHydrationGet(
       new Request("https://app.example.test/api/hydration?date=2026-08-15", {
-        headers: privateHeaders(),
+        headers: hydrationReadHeaders(),
       }),
     );
     expect(response.status).toBe(502);

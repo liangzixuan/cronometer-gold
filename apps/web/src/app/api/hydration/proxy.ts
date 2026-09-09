@@ -1,5 +1,6 @@
-import { isLocalDate } from "../../../lib/diary";
+import { isLocalDate, isUuid, parseSession } from "../../../lib/diary";
 import {
+  HYDRATION_OWNER_CHANGED_CODE,
   parseHydrationCreateBody,
   parseHydrationDay,
   parseHydrationMutation,
@@ -29,6 +30,38 @@ function hydrationDate(request: Request): string | null {
 
 function hasNoQuery(request: Request): boolean {
   return [...new URL(request.url).searchParams.keys()].length === 0;
+}
+
+function expectedOwnerUserId(request: Request): string | null {
+  const value = request.headers.get("x-expected-owner-user-id");
+  return value && isUuid(value) ? value.toLowerCase() : null;
+}
+
+async function hydrationReadOwnerFailure(
+  request: Request,
+  expectedOwnerUserId: string,
+): Promise<Response | null> {
+  const upstream = await authenticatedFetch(request, "/v1/auth/me");
+  if (!upstream.ok) return safeUpstreamProblem(upstream, "The session could not be verified.");
+  if (upstream.status !== 200) {
+    if (upstream.body) void upstream.body.cancel().catch(() => undefined);
+    return privateJsonError(502, "The account service returned an invalid response.");
+  }
+  try {
+    const session = parseSession(await upstream.json());
+    if (!isUuid(session.user.id)) {
+      throw new TypeError("The account service returned an invalid owner.");
+    }
+    return session.user.id.toLowerCase() === expectedOwnerUserId
+      ? null
+      : privateJsonError(
+          409,
+          "The signed-in account changed while hydration was loading.",
+          HYDRATION_OWNER_CHANGED_CODE,
+        );
+  } catch {
+    return privateJsonError(502, "The account service returned an invalid response.");
+  }
 }
 
 function guardedCreateTimeZone(request: Request): string | null {
@@ -69,7 +102,12 @@ function mutationResponseHeaders(revision?: string): Record<string, string> {
 
 export async function proxyHydrationGet(request: Request): Promise<Response> {
   const date = hydrationDate(request);
-  if (!date) return privateJsonError(400, "Choose a valid hydration local date.");
+  const expectedOwner = expectedOwnerUserId(request);
+  if (!date || !expectedOwner) {
+    return privateJsonError(400, "Choose a valid hydration local date and account.");
+  }
+  const ownerFailure = await hydrationReadOwnerFailure(request, expectedOwner);
+  if (ownerFailure) return ownerFailure;
   const upstream = await authenticatedFetch(
     request,
     `/v1/hydration?date=${encodeURIComponent(date)}`,

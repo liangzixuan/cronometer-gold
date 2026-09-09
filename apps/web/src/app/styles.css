@@ -1033,6 +1033,98 @@ a {
   margin: 20px 0;
 }
 
+.todayOverview {
+  margin: 30px 0 12px;
+}
+
+.todayOverviewHeading p,
+.todayOverviewHeading h2 {
+  margin: 0;
+}
+
+.todayOverviewHeading h2 {
+  font-size: clamp(1.8rem, 3vw, 2.5rem);
+  letter-spacing: -0.045em;
+}
+
+.todayOverviewGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.todayOverviewCard {
+  min-width: 0;
+  padding: 22px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+}
+
+.todayOverviewCard[data-state="error"] {
+  border-color: rgba(138, 51, 43, 0.45);
+}
+
+.todayOverviewCard header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.todayOverviewCard h3,
+.todayOverviewCard p {
+  margin: 0;
+}
+
+.todayOverviewCard h3 {
+  font-size: 1.12rem;
+  letter-spacing: -0.025em;
+}
+
+.todayOverviewCard a {
+  flex: 0 0 auto;
+  color: var(--forest);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-underline-offset: 3px;
+}
+
+.todayOverviewBody {
+  min-height: 82px;
+  margin-top: 20px;
+  color: var(--ink-muted);
+  font-size: 0.84rem;
+}
+
+.todayOverviewMetric {
+  color: var(--ink);
+}
+
+.todayOverviewMetric strong {
+  font-size: 2rem;
+  letter-spacing: -0.045em;
+}
+
+.todayOverviewBody > p + p {
+  margin-top: 6px;
+}
+
+.todayOverviewError p {
+  color: #8a332b;
+}
+
+.todayOverviewError button {
+  margin-top: 12px;
+}
+
+.todayOverviewCard a:focus-visible,
+.todayOverviewCard button:focus-visible {
+  outline: 3px solid #4c8c65;
+  outline-offset: 3px;
+}
+
 .diaryPageCount {
   margin: -10px 0 14px;
   color: var(--ink-muted);
@@ -2357,6 +2449,10 @@ button:disabled {
   }
 
   .diaryGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .todayOverviewGrid {
     grid-template-columns: 1fr;
   }
 

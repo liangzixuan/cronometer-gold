@@ -19,6 +19,7 @@ import {
   localTimeInTimeZone,
   shiftLocalDate,
 } from "../diary/diary";
+import { todayDetailDate } from "../diary/today-summary";
 import { palette } from "../theme";
 import {
   type HydrationDay,
@@ -36,6 +37,7 @@ interface HydrationScreenProps {
   readonly apiBase: URL;
   readonly accessToken: string;
   readonly profileTimeZone: string;
+  readonly requestedDate?: string;
   readonly onUnauthorized: () => Promise<void>;
 }
 
@@ -53,18 +55,20 @@ export function HydrationScreen({
   apiBase,
   accessToken,
   profileTimeZone,
+  requestedDate,
   onUnauthorized,
 }: HydrationScreenProps) {
-  const today = localDateInTimeZone(new Date(), profileTimeZone);
-  const [date, setDate] = useState(today);
-  const [dateDraft, setDateDraft] = useState(today);
+  const initialNow = useRef(new Date()).current;
+  const initialDate = todayDetailDate(requestedDate, profileTimeZone, initialNow);
+  const [date, setDate] = useState(initialDate);
+  const [dateDraft, setDateDraft] = useState(initialDate);
   const [day, setDay] = useState<HydrationDay | null>(null);
   const [state, setState] = useState<LoadState>("loading");
   const [message, setMessage] = useState("Opening your private hydration log…");
   const [messageIsError, setMessageIsError] = useState(false);
   const [amount, setAmount] = useState("");
   const [localTime, setLocalTime] = useState(
-    localTimeInTimeZone(new Date(), profileTimeZone).slice(0, 5),
+    localTimeInTimeZone(initialNow, profileTimeZone).slice(0, 5),
   );
   const [edit, setEdit] = useState<HydrationEdit | null>(null);
   const [busy, setBusy] = useState<string | null>(null);

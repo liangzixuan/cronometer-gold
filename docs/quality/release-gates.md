@@ -344,6 +344,28 @@ acceptance.
   platform/wearable ingestion, offline/background mutation, hosted acceptance,
   signed-device and cross-client behavior, and accessibility evidence remain
   deferred under ADR 0025.
+- Coordinated Today-overview source acceptance proves that one selected
+  profile-local date drives the diary and the existing hydration and activity
+  day reads on web and mobile, including date-preserving navigation into and
+  back from both detail screens. It shows exact plain-water milliliters and
+  entry count plus the exact additive sum of recorded activity minutes and entry
+  count; overlaps remain additive and a cross-midnight activity belongs wholly
+  to its stored start date. Each domain
+  retains its existing immutable historical entry coordinates; the overview
+  never re-buckets entries after a profile-zone change. Each domain distinguishes
+  loading, confirmed empty, and error; a failed card has its own
+  retry and cannot erase successfully loaded domains. Delayed responses are
+  fenced by owner, session generation, profile time zone, selected date, and
+  request generation, while `401` closes all private overview state. Tests cover
+  local-date and daylight-saving boundaries, stale response rejection, partial
+  failure, accessible labels, and the absence of cross-domain calorie
+  arithmetic. This is an independently revisioned presentation overview, not a
+  coherent cross-domain snapshot; it adds no backend aggregate, database
+  migration, or `/v1` response change. The internal web hydration BFF requires
+  a same-token expected-owner preflight before requesting the day. The slice
+  adds no activity calorie total, target, advice, reminder, outbox, wearable, or
+  phone-exposure behavior. Hosted, signed-device, physical cross-client, and
+  accessibility evidence remain open under ADR 0026.
 - Goal progress proves lower-bound semantics with incomplete nutrient panels and
   never labels an unknown contribution as measured zero or exact completion.
 - Multi-day nutrition-report acceptance proves a closed, owner-scoped 1–31-day

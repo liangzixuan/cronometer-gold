@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { hydrationUpdateBody, prepareHydrationCreate } from "./HydrationClient";
+import { HYDRATION_OWNER_CHANGED_CODE } from "../../lib/hydration";
+import {
+  hydrationReadClosesPrivateUi,
+  hydrationReadHeaders,
+  hydrationUpdateBody,
+  prepareHydrationCreate,
+} from "./HydrationClient";
 
 describe("web hydration client request semantics", () => {
   it("uses the loaded day's current zone even when the initial session zone is stale", () => {
@@ -46,5 +52,16 @@ describe("web hydration client request semantics", () => {
     expect(hydrationUpdateBody("500")).toEqual({ amountMilliliters: 500 });
     expect(hydrationUpdateBody("500")).not.toHaveProperty("targetMilliliters");
     expect(hydrationUpdateBody("500")).not.toHaveProperty("nutrients");
+  });
+
+  it("binds reads to the initiating owner and closes private UI on owner drift", () => {
+    const owner = "5e041a5d-00e7-4260-832a-90e34a04e60a";
+    expect(hydrationReadHeaders(owner)).toEqual({
+      accept: "application/json",
+      "x-expected-owner-user-id": owner,
+    });
+    expect(hydrationReadClosesPrivateUi(401, null)).toBe(true);
+    expect(hydrationReadClosesPrivateUi(409, { code: HYDRATION_OWNER_CHANGED_CODE })).toBe(true);
+    expect(hydrationReadClosesPrivateUi(409, { code: "CONFLICT" })).toBe(false);
   });
 });
