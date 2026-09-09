@@ -129,7 +129,7 @@ the detailed milestone boundaries below remain authoritative.
 | Independent review | Finish and stabilize M1E Today overview | Selected date survives both detail round trips; diary receipts reload summary cards; a background profile refresh cannot overwrite another client's meal-group edits; focused regressions and final applicable local gates pass, review findings are resolved, and applicable exact-commit automatic checks reach terminal success |
 | Build repair / automatic evidence | M1F: complete the daily hydration correction flow | Web and mobile let a person correct when water was logged through the existing `occurredAt` API, explain profile-local time and ambiguous/invalid times, and refresh the affected day after a move; retain retry/revision/privacy rules and prove the food/water/activity/report journey with synthetic local data |
 | Acceptance follow-up | M3B: print the current nutrition report on web | Print the already loaded coherent report as readable Letter/A4 output, preserving exact evidence and missingness; session closure or invalidation prevents stale private output; repeat-print/direct-Ctrl+P manual checks and exact-commit automatic evidence remain open |
-| Now | M4A: review a pasted ingredient list on web | Resolve each retained ingredient line explicitly to an existing food version and exact quantity, confirm transfer into a new recipe draft, and preserve yield, provenance and session cleanup |
+| Now — source delivery | M4A: review a pasted ingredient list on web | Local checks and the synthetic browser flow passed at checkpoint `88930fe`; finish reviewed branch delivery and record exact-commit CI/container evidence while preserving independent and release acceptance |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -165,7 +165,7 @@ adding scheduling infrastructure or M4 imported-content interpretation. Its manu
 checks, replacement container evidence and independent review need their own
 closure while the user-directed next source slice advances.
 
-The active implementation is **M4A: review a pasted ingredient list on web**, under
+The active delivery is **M4A: review a pasted ingredient list on web**, under
 [ADR 0029](../adr/0029-pasted-ingredient-review.md), within the existing recipe-text
 import milestone. Existing recipe editors already accept
 descriptions/instructions and version-pinned ingredients. The bounded slice accepts
@@ -176,9 +176,16 @@ builder; unresolved quantities cannot become saved ingredients. Preserve existin
 drafts, required yield, exact decimal arithmetic and session cleanup. Raw pasted
 text stays in memory. URL fetching, automatic food creation, inferred nutrition,
 AI services, new retained data, automated sharing and mobile UI are excluded.
-The user's next-step request advances this one implementation; it does not waive
-M3B or any existing release acceptance. Stop at reviewed source with passing
-applicable local gates and accurately recorded exact-commit automatic status.
+Local checkpoint `88930fe` passed canonical checks (437 web tests, 157 root policy
+tests), production build, applicable license policy and synthetic Next/BFF browser
+review, including cancellation, failed-search retry, exact transfer and session
+closure. Component tests cover the final save payload and retry semantics; the
+browser fixture does not establish recipe POST or real API/database acceptance.
+Finish this delivery before opening a successor implementation. Independent
+Claude Code review and exact-commit automatic evidence remain open; M3B and every
+existing release gate remain separate. The next safe source candidate is the same
+explicit ingredient-review flow in the mobile new-recipe builder, with a fresh
+bounded acceptance card and signed-device acceptance still separate.
 
 Prepare the external decisions alongside product work, without executing them:
 

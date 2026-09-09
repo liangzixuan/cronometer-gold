@@ -1,6 +1,6 @@
 # ADR 0029: Review a pasted ingredient list on web
 
-- Status: Accepted for bounded source implementation; validation and release evidence pending
+- Status: Accepted; local validation passed; automatic and release evidence pending
 - Date: 2026-09-09
 - Scope: M4A new-recipe ingredient review using existing recipe contracts
 
@@ -65,6 +65,23 @@ that the server did not write; existing idempotency remains required.
 - Review the actual browser flow with synthetic data, including narrow layout,
   keyboard use, a failed search, retry and final draft transfer. Source checks,
   build and applicable exact-commit automatic evidence remain required.
+
+## Local validation checkpoint
+
+Implementation checkpoint `88930fe` preserves the final reviewed ingredient flow.
+Canonical checks passed with 437 web tests and 157 root policy tests; the package
+test graph completed 17/17 tasks (16 cached), and the production build completed
+11/11 tasks (10 cached). Applicable license policy passed. Synthetic production
+Next/BFF browser evidence covers exact original lines, explicit quantities,
+cancel, search failure/retry, narrow layout, keyboard confirmation, final draft
+transfer and session-expiry cleanup. It does not establish real API/database or
+hosted acceptance. Final save payload/replay behavior is covered by component
+tests; the synthetic browser fixture intentionally does not implement recipe POST.
+
+The application bytes are pinned by the local final-validation manifest. This
+status update changes explanatory prose only. Exact-commit automatic checks and
+independent Claude Code/release review remain pending; do not call the feature
+implemented under the build plan's definition before those applicable checks pass.
 
 ## Boundaries and consequences
 
