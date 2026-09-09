@@ -896,11 +896,11 @@ jobs:
               package("kysely"; "0.29.5") and
               package("pg"; "8.23.0")
             elif $component == "web" then
-              package("next"; "16.3.1") and
+              package("next"; "16.3.3") and
               package("react"; "19.2.3") and
               package("react-dom"; "19.2.3") and
-              package("sharp"; "0.35.3") and
-              package("@img/sharp-linux-arm64"; "0.35.3")
+              package("sharp"; "0.35.4") and
+              package("@img/sharp-linux-arm64"; "0.35.4")
             else false
             end)
           ' "${INVENTORY_FILE}" >/dev/null
