@@ -172,6 +172,7 @@ function assertCiToolchain(source) {
 function assertApplicationImageToolchain(source, scope, relativePath) {
   const lines = source.split("\n");
   const installLine = `    pnpm install --frozen-lockfile --strict-peer-dependencies --filter ${scope}... && \\`;
+  const buildLine = `    pnpm --filter ${scope}... build && \\`;
 
   assert.deepEqual(
     dockerInstructionTexts(source, "ARG").filter((line) => /\bNODE_BUILD_IMAGE=/iu.test(line)),
@@ -217,6 +218,11 @@ function assertApplicationImageToolchain(source, scope, relativePath) {
     source.split(`${pnpmUseVersionLine}\n${installLine}`).length - 1,
     1,
     `${relativePath} must verify exact pnpm immediately before its sole install`,
+  );
+  assert.equal(
+    source.split(`${installLine}\n${buildLine}`).length - 1,
+    1,
+    `${relativePath} must build the installed workspace dependency closure in dependency order`,
   );
 }
 
@@ -558,6 +564,35 @@ test("rejects application-image toolchain and install drift", () => {
       { name: "AssertionError" },
       `must reject ${label}`,
     );
+  }
+});
+
+test("rejects application builds that omit or bypass workspace dependencies", () => {
+  for (const [relativePath, scope] of applicationImageToolchains) {
+    const source = readSource(relativePath);
+    const installLine = `    pnpm install --frozen-lockfile --strict-peer-dependencies --filter ${scope}... && \\`;
+    const buildLine = `    pnpm --filter ${scope}... build && \\`;
+    const mutations = [
+      ["omitted dependency selection", source.replace(buildLine, buildLine.replace("...", ""))],
+      ["an omitted build", source.replace(`${buildLine}\n`, "")],
+      [
+        "a build before dependency installation",
+        source.replace(`${installLine}\n${buildLine}`, `${buildLine}\n${installLine}`),
+      ],
+      [
+        "unordered parallel builds",
+        source.replace(buildLine, buildLine.replace("pnpm --filter", "pnpm --parallel --filter")),
+      ],
+    ];
+
+    for (const [label, mutated] of mutations) {
+      assert.notEqual(mutated, source, `${relativePath} must exercise ${label}`);
+      assert.throws(
+        () => assertApplicationImageToolchain(mutated, scope, relativePath),
+        { name: "AssertionError" },
+        `${relativePath} must reject ${label}`,
+      );
+    }
   }
 });
 

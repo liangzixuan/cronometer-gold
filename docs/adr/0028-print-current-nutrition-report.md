@@ -106,3 +106,18 @@ activation remain outside M3B. These require their own bounded acceptance cards.
 - [Window.print](https://developer.mozilla.org/en-US/docs/Web/API/Window/print)
 - [Beforeprint](https://developer.mozilla.org/en-US/docs/Web/API/Window/beforeprint_event)
 - [Print media and paged CSS](https://developer.mozilla.org/en-US/docs/Web/CSS/Guides/Media_queries/Printing)
+
+## Evidence update — 2026-09-09
+
+Checkpoint `514e2c1` preserves the reviewed print implementation. Canonical source
+checks/build and six synthetic 1-, 7- and 31-day Letter/A4 PDFs passed. Production
+Next/BFF with a loopback synthetic upstream verified the bounded session and
+invalidation paths; this is not fresh API/database evidence. The user confirmed
+native Chrome preview and Cancel, and subsequent browser inspection found the
+print action enabled, authorization cleared and no mounted private print snapshot.
+
+Repeat printing and direct Ctrl+P remain unconfirmed manual checks. Proceeding
+with source checkpoint delivery does not close these checks or establish full
+local acceptance. Applicable exact-commit CI/container evidence, independent Claude
+Code review and the existing release gates remain required. The decision above
+and its acceptance criteria are unchanged.

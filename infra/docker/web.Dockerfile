@@ -37,7 +37,7 @@ COPY . .
 RUN --mount=type=cache,id=nutrition-pnpm-web-v1,target=/pnpm/store,sharing=locked \
     test "$(pnpm --version)" = 11.19.0 && \
     pnpm install --frozen-lockfile --strict-peer-dependencies --filter @nutrition-tracker/web... && \
-    pnpm --filter @nutrition-tracker/web build && \
+    pnpm --filter @nutrition-tracker/web... build && \
     find apps/web/.next/standalone apps/web/.next/static -exec touch -h -d @0 {} +
 
 FROM ${NODE_RUNTIME_IMAGE} AS runtime

@@ -55,6 +55,16 @@ unchanged tests, and leave system/user configuration alone. Do not simulate CLI
 output, skip assertions or treat this as working service integration. Service
 checks still require the actual local engine and their guarded lifecycle.
 
+Application image builds must compile the selected workspace's dependency closure
+in dependency order after the strict frozen install. A root Turbo build can mask
+a missing dependency build through existing `dist` output. When changing workspace
+runtime dependencies or image build commands, verify the affected build from a
+tracked-source-only export with no generated output. Place that temporary export
+outside the active checkout: Next may infer a parent workspace and change standalone
+paths for a nested export. Verify the expected standalone server location as well
+as the exit status. This source proof does not replace image scans, provenance,
+digest evidence or the automatic supply-chain gate.
+
 Use existing guarded lifecycle, restore, scoped-key and privacy commands. Run
 tests sharing a database, index, or fixture serially. Keep the root test graph's
 reviewed concurrency of two. Do not run another root check/build while client

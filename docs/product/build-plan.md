@@ -101,13 +101,21 @@ M1F hydration time corrections are source/local complete: final canonical checks
 builds, 358 database tests, 351 API tests, isolated restore with restored-API tests,
 search, email, privacy, synthetic browser daily-loop, and exact Windows/WSL readiness
 passed. M1F checkpoint `cb22cf0` has successful CI (run `34397666336`); its
-container supply-chain run `34397666277` remains pending at the latest read-only
-observation. Release acceptance is still separate. M3B printable-report source
-implementation, canonical checks/build and six synthetic Letter/A4 PDFs pass
-under ADR 0028. The real web/BFF fixture proves session failures, profile-change
-closure and date-draft invalidation. Native Chrome preview confirmation,
-cancellation and direct-print browser acceptance remain pending; M3B is not yet
-a delivered checkpoint. Docker was unnecessary for this web presentation proof.
+container supply-chain run `34397666277` failed in the web image build. Clean-source
+reproduction confirmed that its web-only build omitted the newly required contracts
+output. The corrected command builds the workspace dependency closure first;
+regression checks and an isolated clean-source build pass. This repairs the source
+defect; replacement exact-commit container evidence is still required.
+
+M3B printable-report checkpoint `514e2c1`, canonical checks/build and six synthetic
+Letter/A4 PDFs pass under ADR 0028. The real web/BFF fixture proves session
+failures, profile-change closure and date-draft invalidation. The user confirmed
+native Chrome preview and Cancel; subsequent browser inspection verified cleanup.
+Repeat printing and direct Ctrl+P remain unconfirmed manual checks. Continue with
+a reviewed source checkpoint while keeping those checks open; neither full local
+acceptance nor the roadmap's implemented status is claimed. Docker was unnecessary
+for this bounded web presentation proof. Independent review and release acceptance
+remain separate.
 
 Use [the development workflow](../quality/development-workflow.md) for continuation,
 validation, evidence, and agent ownership. Keep one product acceptance card active;
@@ -116,8 +124,9 @@ the detailed milestone boundaries below remain authoritative.
 | Order | Deliverable | Concrete exit |
 | --- | --- | --- |
 | Independent review | Finish and stabilize M1E Today overview | Selected date survives both detail round trips; diary receipts reload summary cards; a background profile refresh cannot overwrite another client's meal-group edits; focused regressions and final applicable local gates pass, review findings are resolved, and applicable exact-commit automatic checks reach terminal success |
-| Automatic evidence | M1F: complete the daily hydration correction flow | Web and mobile let a person correct when water was logged through the existing `occurredAt` API, explain profile-local time and ambiguous/invalid times, and refresh the affected day after a move; retain retry/revision/privacy rules and prove the food/water/activity/report journey with synthetic local data |
-| Now | M3B: print the current nutrition report on web | Print the already loaded coherent report as readable Letter/A4 output, preserving exact evidence and missingness; session closure or invalidation prevents stale private output |
+| Build repair / automatic evidence | M1F: complete the daily hydration correction flow | Web and mobile let a person correct when water was logged through the existing `occurredAt` API, explain profile-local time and ambiguous/invalid times, and refresh the affected day after a move; retain retry/revision/privacy rules and prove the food/water/activity/report journey with synthetic local data |
+| Now | M3B: print the current nutrition report on web | Print the already loaded coherent report as readable Letter/A4 output, preserving exact evidence and missingness; session closure or invalidation prevents stale private output; repeat-print/direct-Ctrl+P manual checks and exact-commit automatic evidence remain open |
+| Next candidate (planning only) | M4A: review a pasted ingredient list on web | Resolve each retained ingredient line explicitly to an existing food version and exact quantity, confirm transfer into a new recipe draft, and preserve yield, provenance and session cleanup |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -150,7 +159,19 @@ with no new API, retained entity, external dependency or storage. Scheduled
 delivery, automated sharing, scores/advice, all-nutrient booklets, mobile OS print
 and hosted enablement remain excluded. This uses the existing M3A evidence before
 adding scheduling infrastructure or M4 imported-content interpretation. It is
-active; M1F's remaining automatic evidence and independent review need their own closure.
+active; M1F's failed container evidence and independent review need their own closure.
+
+The next candidate is **M4A: review a pasted ingredient list on web**, within the
+existing recipe-text import milestone. Existing recipe editors already accept
+descriptions/instructions and version-pinned ingredients. The proposed slice accepts
+up to 50 ingredient lines in a new-recipe draft, retains each original line, and
+lets the user explicitly resolve food/version and exact quantity through existing
+search and gram-resolved portions. Require confirmation before transfer to the
+builder; unresolved quantities cannot become saved ingredients. Preserve existing
+drafts, required yield, exact decimal arithmetic and session cleanup. Raw pasted
+text stays in memory. URL fetching, automatic food creation, inferred nutrition,
+AI services, new retained data, automated sharing and mobile UI are excluded.
+This is a planning card, not a second active implementation or an acceptance waiver.
 
 Prepare the external decisions alongside product work, without executing them:
 
