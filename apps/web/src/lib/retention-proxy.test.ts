@@ -10,6 +10,34 @@ const customFoodId = "118f6f58-4e2c-7b62-8f0b-3d75491713b5";
 const erasureId = "318f6f58-4e2c-7b62-8f0b-3d75491713b5";
 const erasureToken = "s".repeat(43);
 
+function customFood(versionId = "9007199254740993") {
+  const instant = "2026-08-16T08:00:00.000Z";
+  return {
+    id: customFoodId,
+    status: "active",
+    revision: "1",
+    currentVersion: {
+      id: versionId,
+      versionNumber: 1,
+      name: "Synthetic protein fixture",
+      brandName: null,
+      notes: null,
+      serving: { id: "31", label: "100 g fixture", grams: "100" },
+      nutrients: [
+        {
+          nutrient: { id: "2", code: "protein", name: "Protein", unit: "g" },
+          state: "quantified",
+          amountPer100Grams: "10",
+        },
+      ],
+      provenance: { kind: "user_entered", statement: "Entered by account owner." },
+      createdAt: instant,
+    },
+    createdAt: instant,
+    updatedAt: instant,
+  };
+}
+
 function erasure(status: "queued" | "completed" = "queued") {
   const instant = "2026-08-16T08:00:00.000Z";
   return {
@@ -49,30 +77,7 @@ describe("retention same-origin adapter", () => {
       vi.fn(async () =>
         Response.json({
           data: {
-            customFood: {
-              id: customFoodId,
-              status: "active",
-              revision: "1",
-              currentVersion: {
-                id: "218f6f58-4e2c-7b62-8f0b-3d75491713b5",
-                versionNumber: 1,
-                name: "Private oats",
-                brandName: null,
-                notes: null,
-                serving: { id: "31", label: "1 bowl", grams: "40" },
-                nutrients: [
-                  {
-                    nutrient: { id: "1", code: "energy", name: "Energy", unit: "kcal" },
-                    state: "quantified",
-                    amountPer100Grams: "375",
-                  },
-                ],
-                provenance: { kind: "user_entered", statement: "Entered by account owner." },
-                createdAt: "2026-08-16T08:00:00.000Z",
-              },
-              createdAt: "2026-08-16T08:00:00.000Z",
-              updatedAt: "2026-08-16T08:00:00.000Z",
-            },
+            customFood: customFood(),
           },
         }),
       ),
@@ -84,7 +89,62 @@ describe("retention same-origin adapter", () => {
       ["custom-foods", customFoodId],
     );
     expect(response.status).toBe(200);
-    expect(await response.json()).toMatchObject({ data: { customFood: { id: customFoodId } } });
+    expect(await response.json()).toEqual({ data: { customFood: customFood() } });
+  });
+
+  it.each([
+    { replayed: false, status: 201 },
+    { replayed: true, status: 200 },
+  ])(
+    "accepts a committed custom-food mutation with replayed=$replayed",
+    async ({ replayed, status }) => {
+      const envelope = { data: { replayed, customFood: customFood() } };
+      const fetchMock = vi.fn(async () => Response.json(envelope, { status }));
+      vi.stubGlobal("fetch", fetchMock);
+      const response = await proxyRetentionRequest(
+        mutationRequest("custom-foods", {
+          name: "Synthetic protein fixture",
+          brandName: null,
+          notes: null,
+          serving: { label: "100 g fixture", grams: "100" },
+          nutrients: [{ nutrientId: "2", state: "quantified", amountPer100Grams: "10" }],
+        }),
+        ["custom-foods"],
+      );
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(response.status).toBe(status);
+      expect(await response.json()).toEqual(envelope);
+    },
+  );
+
+  it("loads the saved custom-food list with exact decimal version identifiers", async () => {
+    const envelope = { data: [customFood("99999999999999999999")], page: { nextCursor: null } };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json(envelope)),
+    );
+    const response = await proxyRetentionRequest(
+      new Request("https://app.example.test/api/retention/custom-foods", {
+        headers: { cookie: `${SESSION_COOKIE}=${"t".repeat(43)}` },
+      }),
+      ["custom-foods"],
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(envelope);
+  });
+
+  it("rejects an upstream UUID in place of a decimal custom-food version identifier", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json({ data: { customFood: customFood(customFoodId) } })),
+    );
+    const response = await proxyRetentionRequest(
+      new Request(`https://app.example.test/api/retention/custom-foods/${customFoodId}`, {
+        headers: { cookie: `${SESSION_COOKIE}=${"t".repeat(43)}` },
+      }),
+      ["custom-foods", customFoodId],
+    );
+    expect(response.status).toBe(502);
   });
 
   it("rejects unreviewed queries before an upstream request", async () => {

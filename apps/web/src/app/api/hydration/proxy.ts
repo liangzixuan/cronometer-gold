@@ -128,6 +128,14 @@ export async function proxyHydrationGet(request: Request): Promise<Response> {
   }
 }
 
+async function mutationOwnerFailure(request: Request): Promise<Response | null> {
+  if (!request.headers.has("x-expected-owner-user-id")) return null;
+  const expectedOwner = expectedOwnerUserId(request);
+  return expectedOwner
+    ? hydrationReadOwnerFailure(request, expectedOwner)
+    : privateJsonError(400, "The hydration request has an invalid initiating account.");
+}
+
 async function hydrationMutationResponse(upstream: Response): Promise<Response> {
   if (!upstream.ok) {
     return safeUpstreamProblem(upstream, "The hydration entry could not be changed.");
@@ -161,6 +169,8 @@ export async function proxyHydrationCreate(request: Request): Promise<Response> 
   } catch {
     return privateJsonError(400, "Enter a valid hydration amount and time.");
   }
+  const ownerFailure = await mutationOwnerFailure(request);
+  if (ownerFailure) return ownerFailure;
   const upstream = await authenticatedFetch(
     request,
     "/v1/hydration/entries?profileTimeZonePrecondition=v1",
@@ -190,23 +200,36 @@ export async function proxyHydrationChange(
   }
   const operationId = validatedIdempotencyKey(request);
   const ifMatch = validatedIfMatch(request);
-  if (!operationId || !ifMatch || !hasNoQuery(request)) {
+  if (!operationId || !ifMatch || !isUuid(entryId)) {
     return privateJsonError(400, "The hydration request is missing its revision or operation key.");
+  }
+  const hasGuard = !hasNoQuery(request) || request.headers.has("x-expected-profile-time-zone");
+  const expectedTimeZone = hasGuard ? guardedCreateTimeZone(request) : null;
+  if (hasGuard && (method !== "PATCH" || !expectedTimeZone)) {
+    return privateJsonError(400, "The hydration time correction guard is invalid.");
   }
   let body: string | undefined;
   if (method === "PATCH") {
     try {
-      body = JSON.stringify(parseHydrationUpdateBody(await readBoundedJson(request, 2_048)));
+      const parsed = parseHydrationUpdateBody(await readBoundedJson(request, 2_048));
+      if (hasGuard && parsed.occurredAt === undefined) {
+        return privateJsonError(400, "A hydration amount-only update cannot include a time guard.");
+      }
+      body = JSON.stringify(parsed);
     } catch {
       return privateJsonError(400, "Enter a valid hydration update.");
     }
   }
-  const upstream = await authenticatedFetch(request, `/v1/hydration/entries/${entryId}`, {
+  const ownerFailure = await mutationOwnerFailure(request);
+  if (ownerFailure) return ownerFailure;
+  const path = `/v1/hydration/entries/${entryId}${expectedTimeZone ? "?profileTimeZonePrecondition=v1" : ""}`;
+  const upstream = await authenticatedFetch(request, path, {
     method,
     headers: {
       ...(method === "PATCH" ? { "content-type": "application/json" } : {}),
       "idempotency-key": operationId,
       "if-match": ifMatch,
+      ...(expectedTimeZone ? { "x-expected-profile-time-zone": expectedTimeZone } : {}),
     },
     ...(body === undefined ? {} : { body }),
   });

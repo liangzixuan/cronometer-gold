@@ -95,6 +95,15 @@ ceilings are operational bounds rather than intake guidance. An amount-only
 PATCH preserves stored temporal coordinates; only an explicit `occurredAt`
 change rederives them using the current profile time zone.
 
+[ADR 0027](../../docs/adr/0027-hydration-time-corrections.md) adds an optional
+paired guard to timestamp PATCH: `profileTimeZonePrecondition=v1` together with
+`X-Expected-Profile-Time-Zone`. Both are required together and only when the body
+includes `occurredAt`; malformed or amount-only guards fail validation. The
+canonical expected zone is bound into the operation digest. After exact accepted
+replay lookup, a changed locked profile zone returns `409 HYDRATION_TIME_ZONE_CHANGED`
+without writing. Legacy unguarded PATCH digests are unchanged. Deploy the API
+before clients using the guard; older APIs reject the query marker.
+
 Private responses use `Cache-Control: no-store`. Raw passwords and session tokens
 never reach PostgreSQL: fixed-parameter scrypt material and SHA-256 session-token
 digests are persisted. Scrypt concurrency, pending work, and process-local login

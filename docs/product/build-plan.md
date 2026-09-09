@@ -95,9 +95,13 @@ Current checkpoint (2026-09-09): recovered M1E and its mobile summary-reload and
 web group-draft corrections pass the complete applicable local validation,
 including canonical `pnpm check`, build, database/API integration, isolated
 restore, search, email, privacy, and exact loopback API readiness after the
-approved Windows Docker recovery. M1E awaits exact-commit automatic evidence
-before acceptance under the full implemented definition. The next source slice
-is M1F hydration time corrections.
+approved Windows Docker recovery. M1E checkpoint `f4ebca8` has successful CI;
+its container supply-chain run is pending at the latest 2026-09-09 observation.
+M1F hydration time corrections are source/local complete: final canonical checks,
+builds, 358 database tests, 351 API tests, isolated restore with restored-API tests,
+search, email, privacy, synthetic browser daily-loop, and exact Windows/WSL readiness
+passed. Its exact-commit automatic evidence remains pending; release acceptance is
+still separate. Local services were stopped normally with volumes retained.
 
 Use [the development workflow](../quality/development-workflow.md) for continuation,
 validation, evidence, and agent ownership. Keep one product acceptance card active;
@@ -105,15 +109,42 @@ the detailed milestone boundaries below remain authoritative.
 
 | Order | Deliverable | Concrete exit |
 | --- | --- | --- |
-| Now | Finish and stabilize M1E Today overview | Selected date survives both detail round trips; diary receipts reload summary cards; a background profile refresh cannot overwrite another client's meal-group edits; focused regressions and final applicable local gates pass, review findings are resolved, and applicable exact-commit automatic checks reach terminal success |
-| Next | Complete the daily hydration correction flow | Web and mobile let a person correct when water was logged through the existing `occurredAt` API, explain profile-local time and ambiguous/invalid times, and refresh the affected day after a move; retain retry/revision/privacy rules and prove the food/water/activity/report journey with synthetic local data |
-| Then | Choose the next premium product slice | Select one bounded M3/M4 capability with an observable user benefit, a reviewed data/claims boundary, and a finite acceptance card; avoid several partially implemented features |
+| Automatic evidence | Finish and stabilize M1E Today overview | Selected date survives both detail round trips; diary receipts reload summary cards; a background profile refresh cannot overwrite another client's meal-group edits; focused regressions and final applicable local gates pass, review findings are resolved, and applicable exact-commit automatic checks reach terminal success |
+| Now | M1F: complete the daily hydration correction flow | Web and mobile let a person correct when water was logged through the existing `occurredAt` API, explain profile-local time and ambiguous/invalid times, and refresh the affected day after a move; retain retry/revision/privacy rules and prove the food/water/activity/report journey with synthetic local data |
+| Next, queued | M3B: print the current nutrition report on web | Print the already loaded coherent report as readable Letter/A4 output, preserving exact evidence and missingness; session closure or invalidation prevents stale private output |
 
-The next hydration slice adds client time editing, not water targets, intake advice,
-non-water fluids, reminders, offline writes, or device ingestion. Confirm the current
-API and timezone contracts before implementation. Browser interaction and accessible
-state tests accompany it; synthetic local tests do not replace the physical-device,
-cross-client, assistive-technology, or hosted acceptance required by M1/M2.
+M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
+time editing, a paired profile-zone guard, exact legacy replay, and amount-only
+precision preservation. Its acceptance card covers same-day and cross-day changes,
+nonexistent/repeated local minutes, transport retry, stale owner/session/zone/revision,
+accepted-write/read-failure recovery, and a synthetic browser daily-loop journey.
+The browser journey exposed two pre-existing blockers within that acceptance path:
+custom-food readers rejected the API's decimal version IDs as non-UUIDs, and the
+web report's Strict Mode effect replay left its private UI permanently closed.
+Their bounded parser/lifecycle corrections accompany M1F, with realistic response
+fixtures and component effect tests. The browser also identified an incomplete
+local core nutrient registry; synthetic setup uses checked-in definitions while
+preserving the report's completeness invariant. The stop condition is reviewed
+source, passing applicable local gates and recorded exact-commit automatic evidence.
+Water targets, intake advice, non-water fluids,
+reminders, offline writes and device ingestion stay outside this slice. Synthetic
+browser and accessible-state tests do not replace the physical-device, cross-client,
+assistive-technology or hosted acceptance required by M1/M2.
+
+The next queued M3B acceptance card is **Print current nutrition report** (browser
+Save as PDF). Reuse the current 1–31-day snapshot and selected nutrient; preserve
+exact amounts, quantified zero, trace, partial/unknown/missing days, saved-target
+periods and expiry notices, timezone, capture time, profile revision and watermark.
+Letter/A4 output must keep complete tables and repeated column headers, hide app
+controls, and avoid clipped content. Printing is unavailable while loading,
+invalidated or unauthorized; a session change must not expose stale private data.
+Verify representative 1-, 7- and 31-day browser-generated PDFs and all nutrient
+selections. Scope is web report presentation and focused lifecycle/visual checks,
+with no new API, retained entity, external dependency or storage. Scheduled
+delivery, automated sharing, scores/advice, all-nutrient booklets, mobile OS print
+and hosted enablement remain excluded. This uses the existing M3A evidence before
+adding scheduling infrastructure or M4 imported-content interpretation. It is
+queued; M1F's automatic evidence and independent review still need their own closure.
 
 Prepare the external decisions alongside product work, without executing them:
 
@@ -327,6 +358,16 @@ Each retains its separate explicit-approval gate.
    device/platform ingestion, and signed-device, cross-client, and accessibility
    evidence remain open. The private API already supports explicit `occurredAt`
    changes without claiming a client time editor.
+
+   M1F is the explicit hydration time-correction slice under ADR 0027, currently
+   in implementation. Amount-only edits preserve the exact original instant and
+   historical coordinates. A deliberate time change resolves the current profile's
+   local minute with explicit repeated-hour choice and rejects nonexistent times.
+   The additive paired profile-zone precondition prevents a concurrent zone change
+   from silently moving the entry; legacy PATCH and accepted replay stay compatible.
+   The clients retain exact retries, reconcile conflicts, and refresh the source
+   day while making a cross-day destination visible. No new retained entity,
+   migration, intake recommendation or nutrition calculation is introduced.
 
    M1D-A is the owner-private online manual-activity slice accepted by ADR 0025.
    Its source implementation and ordered local validation are complete. An entry

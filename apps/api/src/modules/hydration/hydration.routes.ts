@@ -18,7 +18,11 @@ import {
   MAX_HYDRATION_DAY_TOTAL_MILLILITERS,
   MAX_HYDRATION_ENTRIES_PER_DAY,
   problemDetailsSchema,
+  type UpdateHydrationEntryHeaders,
+  type UpdateHydrationEntryQuery,
   type UpdateHydrationEntryRequest,
+  updateHydrationEntryHeadersSchema,
+  updateHydrationEntryQuerySchema,
   updateHydrationEntryRequestSchema,
 } from "@nutrition-tracker/contracts";
 import { canonicalIanaTimeZone, deriveDiaryLocalCoordinates } from "@nutrition-tracker/domain";
@@ -54,6 +58,7 @@ export interface HydrationService {
     readonly expectedRevision: string;
     readonly clientOperationId: string;
     readonly requestDigest: string;
+    readonly expectedProfileTimeZone?: string;
     readonly patch: UpdateHydrationEntryRequest;
     readonly signal?: AbortSignal;
   }): Promise<HydrationMutationResponse>;
@@ -241,6 +246,20 @@ async function rejectUnpairedProfileTimeZonePrecondition(request: FastifyRequest
     code: "VALIDATION_ERROR",
     title: "Bad Request",
     detail: "One or more request fields are invalid.",
+    expose: true,
+  });
+}
+
+async function rejectInvalidUpdateTimeZonePrecondition(request: FastifyRequest): Promise<void> {
+  await rejectUnpairedProfileTimeZonePrecondition(request);
+  if (request.headers["x-expected-profile-time-zone"] === undefined) return;
+  const body = request.body;
+  if (typeof body === "object" && body !== null && Object.hasOwn(body, "occurredAt")) return;
+  throw new HttpProblem({
+    statusCode: 400,
+    code: "VALIDATION_ERROR",
+    title: "Bad Request",
+    detail: "The profile time-zone precondition requires an occurredAt update.",
     expose: true,
   });
 }
@@ -471,16 +490,24 @@ export const hydrationRoutes: FastifyPluginAsync<HydrationRoutesOptions> = async
     },
   );
 
-  app.patch<{ Params: HydrationEntryParams; Body: UpdateHydrationEntryRequest }>(
+  app.patch<{
+    Params: HydrationEntryParams;
+    Body: UpdateHydrationEntryRequest;
+    Headers: UpdateHydrationEntryHeaders;
+    Querystring: UpdateHydrationEntryQuery;
+  }>(
     "/entries/:entryId",
     {
       preHandler: requireAuth,
       preValidation: [
-        rejectUnexpectedQueryKeys([]),
+        rejectUnexpectedQueryKeys(["profileTimeZonePrecondition"]),
         rejectUnexpectedBodyKeys(["amountMilliliters", "occurredAt"]),
+        rejectInvalidUpdateTimeZonePrecondition,
       ],
       schema: {
         params: hydrationEntryParamsSchema,
+        headers: updateHydrationEntryHeadersSchema,
+        querystring: updateHydrationEntryQuerySchema,
         body: updateHydrationEntryRequestSchema,
         response: {
           200: hydrationMutationResponseSchema,
@@ -501,11 +528,22 @@ export const hydrationRoutes: FastifyPluginAsync<HydrationRoutesOptions> = async
       const clientOperationId = requireIdempotencyKey(request.headers["idempotency-key"]);
       const expectedRevision = requireRevision(request.headers["if-match"]);
       try {
-        const digest = requestDigest("update-hydration-entry", {
-          entryId: request.params.entryId,
-          expectedRevision,
-          patch: request.body,
-        });
+        const expectedTimeZone = expectedProfileTimeZone(
+          request.headers["x-expected-profile-time-zone"],
+        );
+        const digest = requestDigest(
+          expectedTimeZone === undefined
+            ? "update-hydration-entry"
+            : "update-hydration-entry-with-expected-profile-time-zone-v1",
+          {
+            entryId: request.params.entryId,
+            expectedRevision,
+            patch: request.body,
+            ...(expectedTimeZone === undefined
+              ? {}
+              : { expectedProfileTimeZone: expectedTimeZone }),
+          },
+        );
         const result = await withRequestSignal(
           request,
           (signal) =>
@@ -515,6 +553,9 @@ export const hydrationRoutes: FastifyPluginAsync<HydrationRoutesOptions> = async
               expectedRevision,
               clientOperationId,
               requestDigest: digest,
+              ...(expectedTimeZone === undefined
+                ? {}
+                : { expectedProfileTimeZone: expectedTimeZone }),
               patch: request.body,
               signal,
             }) ?? Promise.reject(unavailable()),

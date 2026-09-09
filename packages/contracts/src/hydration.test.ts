@@ -11,6 +11,8 @@ import {
   MAX_HYDRATION_AMOUNT_MILLILITERS,
   MAX_HYDRATION_DAY_TOTAL_MILLILITERS,
   MAX_HYDRATION_ENTRIES_PER_DAY,
+  updateHydrationEntryHeadersSchema,
+  updateHydrationEntryQuerySchema,
   updateHydrationEntryRequestSchema,
 } from "./index.js";
 
@@ -91,6 +93,18 @@ describe("hydration transport contracts", () => {
       "x-expected-profile-time-zone",
     );
     expect(createHydrationEntryQuerySchema.properties.profileTimeZonePrecondition.const).toBe("v1");
+  });
+
+  it("adds optional timestamp-update guard schemas without changing legacy bodies", () => {
+    const headers = validator(updateHydrationEntryHeadersSchema);
+    const query = validator(updateHydrationEntryQuerySchema);
+    expect(headers({})).toBe(true);
+    expect(headers({ "x-expected-profile-time-zone": "America/Chicago" })).toBe(true);
+    expect(query({})).toBe(true);
+    expect(query({ profileTimeZonePrecondition: "v1" })).toBe(true);
+    expect(query({ profileTimeZonePrecondition: "v2" })).toBe(false);
+    expect(query({ profileTimeZonePrecondition: ["v1", "v1"] })).toBe(false);
+    expect(query({ unexpected: "v1" })).toBe(false);
   });
 
   it("accepts replay-safe create and delete mutation results", () => {

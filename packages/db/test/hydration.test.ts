@@ -70,6 +70,30 @@ describe("hydration persistence boundary validation", () => {
     },
   );
 
+  it("rejects unsupported or amount-only update guards before querying", async () => {
+    const base = {
+      clientOperationId: "10000000-0000-4000-8000-000000000001",
+      entryId: "10000000-0000-4000-8000-000000000002",
+      expectedEntryRevision: "1",
+      requestDigest: "a".repeat(64),
+      userId: "user",
+    };
+    await expect(
+      updateHydrationEntry(unreachableDatabase, {
+        ...base,
+        occurredAt: "2026-08-15T00:00:00Z",
+        expectedProfileTimeZone: "Not/A_Zone",
+      }),
+    ).rejects.toBeInstanceOf(HydrationValidationError);
+    await expect(
+      updateHydrationEntry(unreachableDatabase, {
+        ...base,
+        amountMilliliters: 500,
+        expectedProfileTimeZone: "America/Chicago",
+      }),
+    ).rejects.toBeInstanceOf(HydrationValidationError);
+  });
+
   it("publishes stable typed persistence errors", () => {
     expect(new HydrationNotFoundError().code).toBe("HYDRATION_NOT_FOUND");
     expect(new HydrationEntryRevisionConflictError().code).toBe(

@@ -33,5 +33,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0025](./0025-manual-activity-ledger-boundary.md) | Private manual-activity ledger boundary | Accepted for local implementation; automatic energy adjustment, offline mutation, platform import, and device evidence blocked |
 | [0026](./0026-coordinated-today-overview.md) | Coordinated profile-local Today overview | Accepted for local implementation; hosted, signed-device, physical cross-client, and assistive-technology evidence blocked |
 
+| [0027](./0027-hydration-time-corrections.md) | Explicit profile-local hydration time corrections | Accepted for local implementation; hosted and physical-client acceptance pending |
+
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

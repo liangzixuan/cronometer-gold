@@ -7,6 +7,7 @@ export * from "./foods.js";
 export * from "./goals.js";
 export * from "./health.js";
 export * from "./hydration.js";
+export * from "./hydration-local-time.js";
 export * from "./profile.js";
 export * from "./recipes.js";
 export * from "./reports.js";

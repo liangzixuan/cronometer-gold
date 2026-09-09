@@ -366,6 +366,19 @@ acceptance.
   adds no activity calorie total, target, advice, reminder, outbox, wearable, or
   phone-exposure behavior. Hosted, signed-device, physical cross-client, and
   accessibility evidence remain open under ADR 0026.
+- Hydration time-correction source acceptance under ADR 0027 proves explicit
+  current-profile local-minute editing on web/mobile; gap rejection and an explicit
+  occurrence choice for repeated minutes; amount-only preservation of historical
+  coordinates and seconds/milliseconds; and the optional paired timestamp-update
+  guard. Legacy unguarded request digests remain unchanged, while guarded requests
+  fail closed on an older API or profile-zone drift. Database tests prove no-write
+  zone conflicts and exact accepted replay after drift. Clients bind retries to
+  one immutable operation, reconcile stale revisions/zones, validate affected days,
+  retain the selected source date, and distinguish accepted writes from failed
+  refreshes. Session/owner/zone changes close stale private state. Synthetic browser
+  daily-loop evidence and accessible-state regressions accompany the source gates;
+  signed native, hosted, physical cross-client and assistive-technology acceptance
+  remain open. No water advice, target, outbox expansion or calorie change is added.
 - Goal progress proves lower-bound semantics with incomplete nutrient panels and
   never labels an unknown contribution as measured zero or exact completion.
 - Multi-day nutrition-report acceptance proves a closed, owner-scoped 1–31-day

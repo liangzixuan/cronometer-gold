@@ -193,11 +193,36 @@ describeDatabase("owner-scoped immutable hydration ledger", { timeout: 30_000 },
         clientOperationId: randomUUID(),
         entryId: created.entry?.id ?? "missing",
         expectedEntryRevision: "2",
+        expectedProfileTimeZone: "Asia/Tokyo",
         occurredAt: "2026-08-15T01:30:00Z",
         requestDigest: digest(),
         userId: owner.userId,
       };
       const watermarkBeforeMove = await ownerWatermark();
+      const sourceBeforeRejectedMove = await getHydrationDay(database, {
+        localDate: "2026-08-14",
+        userId: owner.userId,
+      });
+      await expect(
+        updateHydrationEntry(database, {
+          ...moveInput,
+          expectedProfileTimeZone: "America/Chicago",
+          clientOperationId: randomUUID(),
+          requestDigest: digest(),
+        }),
+      ).rejects.toBeInstanceOf(HydrationTimeZoneChangedError);
+      expect(await ownerWatermark()).toBe(watermarkBeforeMove);
+      expect(
+        await getHydrationDay(database, { localDate: "2026-08-14", userId: owner.userId }),
+      ).toEqual(sourceBeforeRejectedMove);
+      expect(
+        await database
+          .selectFrom("hydration_day")
+          .select("id")
+          .where("user_id", "=", owner.userId)
+          .where("local_date", "=", "2026-08-15")
+          .execute(),
+      ).toEqual([]);
       const moved = await updateHydrationEntry(database, moveInput);
       expect(moved).toMatchObject({
         days: [
@@ -216,6 +241,22 @@ describeDatabase("owner-scoped immutable hydration ledger", { timeout: 30_000 },
       expect(watermarkAfterMove).toBe(watermarkBeforeMove + 1n);
       expect(await updateHydrationEntry(database, moveInput)).toMatchObject({ replayed: true });
       expect(await ownerWatermark()).toBe(watermarkAfterMove);
+      await updateUserProfile(database, {
+        expectedRevision: "1",
+        patch: { timeZone: "America/Chicago" },
+        userId: owner.userId,
+      });
+      const watermarkAfterZoneDrift = await ownerWatermark();
+      expect(await updateHydrationEntry(database, moveInput)).toEqual({
+        ...moved,
+        replayed: true,
+      });
+      expect(await ownerWatermark()).toBe(watermarkAfterZoneDrift);
+      await updateUserProfile(database, {
+        expectedRevision: "2",
+        patch: { timeZone: "Asia/Tokyo" },
+        userId: owner.userId,
+      });
       expect(
         await getHydrationDay(database, { localDate: "2026-08-15", userId: owner.userId }),
       ).toMatchObject({ revision: "1", timeZone: "Asia/Tokyo", totalMilliliters: 750 });

@@ -1,8 +1,9 @@
 "use client";
 
+import { resolveHydrationLocalMinute } from "@nutrition-tracker/contracts";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   isLocalDate,
@@ -10,18 +11,26 @@ import {
   localDateTimeToInstant,
   localTimeInTimeZone,
   parseSession,
-  quoteRevision,
   type SessionSummary,
   shiftLocalDate,
 } from "../../lib/diary";
 import {
+  assertHydrationMutationMatches,
+  changeHydrationTimeDraft,
   HYDRATION_OWNER_CHANGED_CODE,
   type HydrationDay,
   type HydrationEntry,
+  type HydrationTimeDraft,
+  type HydrationWriteOperation,
   hydrationAmountFromDraft,
   hydrationEntryAccessibilityLabel,
+  hydrationTimeDraft,
+  hydrationWriteBelongsToView,
+  hydrationWriteOperation,
+  hydrationWriteRequest,
   parseHydrationDay,
   parseHydrationMutation,
+  prepareHydrationUpdate,
 } from "../../lib/hydration";
 import { confirmBrowserLogout } from "../../lib/private-api";
 
@@ -34,6 +43,7 @@ interface HydrationClientProps {
 interface HydrationEdit {
   readonly entry: HydrationEntry;
   readonly amount: string;
+  readonly time: HydrationTimeDraft;
 }
 
 async function json(response: Response): Promise<unknown> {
@@ -136,29 +146,78 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
   const [localTime, setLocalTime] = useState("");
   const [edit, setEdit] = useState<HydrationEdit | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const operations = useRef(new Map<string, string>());
+  const [pending, setPending] = useState<HydrationWriteOperation | null>(null);
+  const [reconcile, setReconcile] = useState(false);
+  const [movedToDate, setMovedToDate] = useState<string | null>(null);
+  const pendingRef = useRef<HydrationWriteOperation | null>(null);
+  const acceptedRead = useRef<{ readonly message: string; readonly sourceDate: string } | null>(
+    null,
+  );
+  const ownerRef = useRef<string | null>(null);
+  const dateRef = useRef("");
+  const mounted = useRef(false);
+  const viewGeneration = useRef(0);
+  const writeGeneration = useRef(0);
+  const inFlight = useRef(false);
+  const mutationController = useRef<AbortController | null>(null);
   const loadController = useRef<AbortController | null>(null);
   const loadGeneration = useRef(0);
   const loadedTimeZone = useRef<string | null>(null);
   const untouchedDefaultOccurredAt = useRef<string | null>(null);
+  const timeResolution = useMemo(
+    () =>
+      edit?.time.enabled
+        ? resolveHydrationLocalMinute(edit.time.localDate, edit.time.localTime, edit.time.timeZone)
+        : null,
+    [edit?.time.enabled, edit?.time.localDate, edit?.time.localTime, edit?.time.timeZone],
+  );
 
   const signInAgain = useCallback(() => {
+    ownerRef.current = null;
+    viewGeneration.current += 1;
+    writeGeneration.current += 1;
+    loadGeneration.current += 1;
     loadController.current?.abort();
+    mutationController.current?.abort();
+    pendingRef.current = null;
+    acceptedRead.current = null;
+    inFlight.current = false;
+    setPending(null);
+    setEdit(null);
+    setBusy(null);
     setSession(null);
     setDay(null);
+    setAmount("");
+    setLocalTime("");
+    setDate("");
+    dateRef.current = "";
+    loadedTimeZone.current = null;
+    untouchedDefaultOccurredAt.current = null;
+    setMovedToDate(null);
+    setReconcile(false);
+    setMessage("Sign in again to open your private hydration log.");
+    setMessageIsError(false);
     router.replace("/login");
     router.refresh();
   }, [router]);
 
   const loadDay = useCallback(
     async (requestedDate: string, successMessage?: string) => {
-      const expectedOwnerUserId = session?.user.id;
-      if (!expectedOwnerUserId) return false;
+      const expectedOwnerUserId = ownerRef.current;
+      if (!expectedOwnerUserId || requestedDate !== dateRef.current) return false;
       loadController.current?.abort();
       const controller = new AbortController();
       loadController.current = controller;
-      const generation = loadGeneration.current + 1;
-      loadGeneration.current = generation;
+      const generation = ++loadGeneration.current;
+      const view = viewGeneration.current;
+      const current = () =>
+        mounted.current &&
+        !controller.signal.aborted &&
+        loadGeneration.current === generation &&
+        viewGeneration.current === view &&
+        ownerRef.current === expectedOwnerUserId &&
+        dateRef.current === requestedDate;
+      setDay(null);
       setState("loading");
       setMessageIsError(false);
       setMessage(`Loading hydration entries for ${requestedDate}…`);
@@ -168,29 +227,28 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
           headers: hydrationReadHeaders(expectedOwnerUserId),
           signal: controller.signal,
         });
-        if (controller.signal.aborted || loadGeneration.current !== generation) return false;
-        if (hydrationReadClosesPrivateUi(response.status, null)) {
+        if (!current()) return false;
+        if (response.status === 401) {
           signInAgain();
           return false;
         }
         const body = await json(response);
-        if (controller.signal.aborted || loadGeneration.current !== generation) return false;
+        if (!current()) return false;
         if (hydrationReadClosesPrivateUi(response.status, body)) {
           signInAgain();
           return false;
         }
-        if (!response.ok) {
+        if (!response.ok)
           throw new Error(responseError(body, "Hydration entries could not be loaded."));
-        }
         const next = parseHydrationDay(body);
-        if (next.localDate !== requestedDate) {
+        if (next.localDate !== requestedDate)
           throw new TypeError("The hydration service returned another local day.");
-        }
         if (loadedTimeZone.current !== next.timeZone) {
           const capturedNow = new Date();
-          setLocalTime(localTimeInTimeZone(capturedNow, next.timeZone).slice(0, 5));
+          setLocalTime(localTimeInTimeZone(capturedNow, next.timeZone));
           untouchedDefaultOccurredAt.current = capturedNow.toISOString();
           loadedTimeZone.current = next.timeZone;
+          setEdit(null);
         }
         setDay(next);
         setState("ready");
@@ -198,7 +256,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
         setMessage(successMessage ?? dayMessage(next));
         return true;
       } catch (error) {
-        if (controller.signal.aborted || loadGeneration.current !== generation) return false;
+        if (!current()) return false;
         setDay(null);
         setState("error");
         setMessageIsError(true);
@@ -208,11 +266,30 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
         return false;
       }
     },
-    [session?.user.id, signInAgain],
+    [signInAgain],
   );
 
   useEffect(() => {
+    mounted.current = true;
     const controller = new AbortController();
+    const view = ++viewGeneration.current;
+    ownerRef.current = null;
+    pendingRef.current = null;
+    acceptedRead.current = null;
+    setSession(null);
+    setDay(null);
+    setEdit(null);
+    setPending(null);
+    setBusy(null);
+    setReconcile(false);
+    setMovedToDate(null);
+    setAmount("");
+    setLocalTime("");
+    loadedTimeZone.current = null;
+    untouchedDefaultOccurredAt.current = null;
+    setMessage("Opening your private hydration log…");
+    setMessageIsError(false);
+    setState("loading");
     void (async () => {
       try {
         const response = await fetch("/api/auth/me", {
@@ -220,24 +297,34 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
           headers: { accept: "application/json" },
           signal: controller.signal,
         });
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || viewGeneration.current !== view) return;
         if (response.status === 401) return signInAgain();
         if (!response.ok) throw new Error("Your session could not be verified.");
         const nextSession = parseSession(await json(response));
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || viewGeneration.current !== view) return;
         const today = localDateInTimeZone(new Date(), nextSession.profile.timeZone);
         const nextDate = initialDate && isLocalDate(initialDate) ? initialDate : today;
+        ownerRef.current = nextSession.user.id;
+        dateRef.current = nextDate;
         setSession(nextSession);
         setDate(nextDate);
-        setLocalTime(localTimeInTimeZone(new Date(), nextSession.profile.timeZone).slice(0, 5));
+        setLocalTime(localTimeInTimeZone(new Date(), nextSession.profile.timeZone));
       } catch (error) {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || viewGeneration.current !== view) return;
         setState("error");
         setMessageIsError(true);
         setMessage(error instanceof Error ? error.message : "Your session could not be verified.");
       }
     })();
-    return () => controller.abort();
+    return () => {
+      mounted.current = false;
+      viewGeneration.current += 1;
+      writeGeneration.current += 1;
+      controller.abort();
+      loadController.current?.abort();
+      mutationController.current?.abort();
+      inFlight.current = false;
+    };
   }, [initialDate, signInAgain]);
 
   useEffect(() => {
@@ -245,80 +332,173 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
     return () => loadController.current?.abort();
   }, [date, loadDay, session]);
 
-  function operationId(key: string): string {
-    const existing = operations.current.get(key);
-    if (existing) return existing;
-    const created = crypto.randomUUID();
-    operations.current.set(key, created);
-    return created;
+  function selectDate(nextDate: string) {
+    if (
+      inFlight.current ||
+      pendingRef.current ||
+      !isLocalDate(nextDate) ||
+      nextDate === dateRef.current
+    )
+      return;
+    viewGeneration.current += 1;
+    loadGeneration.current += 1;
+    loadController.current?.abort();
+    dateRef.current = nextDate;
+    acceptedRead.current = null;
+    setEdit(null);
+    setDay(null);
+    setAmount("");
+    setReconcile(false);
+    setMovedToDate(null);
+    setState("loading");
+    setDate(nextDate);
   }
 
-  async function mutate(input: {
-    readonly intentKey: string;
-    readonly path: string;
-    readonly method: "DELETE" | "PATCH" | "POST";
-    readonly body?: unknown;
-    readonly revision?: string;
-    readonly expectedTimeZone?: string;
-    readonly successMessage: string;
-  }): Promise<boolean> {
-    setBusy(input.intentKey);
+  async function retryDayView() {
+    if (inFlight.current || pendingRef.current) return;
+    setEdit(null);
+    setReconcile(false);
+    const accepted = acceptedRead.current;
+    const owner = ownerRef.current;
+    const view = viewGeneration.current;
+    const refreshed = await loadDay(dateRef.current, accepted?.message);
+    if (!mounted.current || ownerRef.current !== owner || viewGeneration.current !== view) return;
+    if (refreshed) acceptedRead.current = null;
+    else if (
+      accepted &&
+      mounted.current &&
+      accepted.sourceDate === dateRef.current &&
+      ownerRef.current
+    ) {
+      setMessage(
+        "The entry change was accepted. Retry the day view to refresh the exact total; the change will not be submitted again.",
+      );
+      setMessageIsError(true);
+    }
+  }
+
+  async function mutate(operation: HydrationWriteOperation): Promise<void> {
+    if (
+      inFlight.current ||
+      !hydrationWriteBelongsToView(operation, ownerRef.current, dateRef.current) ||
+      (pendingRef.current && pendingRef.current !== operation)
+    )
+      return;
+    inFlight.current = true;
+    pendingRef.current = operation;
+    setPending(operation);
+    const controller = new AbortController();
+    mutationController.current = controller;
+    const view = viewGeneration.current;
+    const generation = ++writeGeneration.current;
+    const current = () =>
+      mounted.current &&
+      !controller.signal.aborted &&
+      viewGeneration.current === view &&
+      writeGeneration.current === generation &&
+      hydrationWriteBelongsToView(operation, ownerRef.current, dateRef.current);
+    setBusy(`${operation.method}:${operation.operationId}`);
     setMessageIsError(false);
     setMessage("Saving the hydration entry…");
     try {
-      const headers: Record<string, string> = {
-        accept: "application/json",
-        "idempotency-key": operationId(input.intentKey),
-      };
-      if (input.body !== undefined) headers["content-type"] = "application/json";
-      if (input.revision) headers["if-match"] = quoteRevision(input.revision);
-      if (input.expectedTimeZone) {
-        headers["x-expected-profile-time-zone"] = input.expectedTimeZone;
-      }
-      const response = await fetch(input.path, {
-        method: input.method,
-        headers,
-        ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }),
-        cache: "no-store",
+      const response = await fetch(operation.path, {
+        ...hydrationWriteRequest(operation),
+        signal: controller.signal,
       });
-      if (response.status === 401) {
-        signInAgain();
-        return false;
-      }
+      if (!current()) return;
+      if (response.status === 401) return signInAgain();
       const body = await json(response);
+      if (!current()) return;
+      if (hydrationReadClosesPrivateUi(response.status, body)) return signInAgain();
       if (!response.ok) {
+        // A timeout or rate limit does not establish that an earlier attempt
+        // was rejected. Preserve its exact operation for accepted replay.
+        if (response.status < 500 && response.status !== 408 && response.status !== 429) {
+          pendingRef.current = null;
+          setPending(null);
+          setEdit(null);
+          setDay(null);
+          setReconcile(true);
+          setState("error");
+          setMessageIsError(true);
+          setMessage(
+            `${responseError(body, "The hydration entry or profile changed.")} Reload and review the current entry before confirming another correction.`,
+          );
+          return;
+        }
         throw new Error(responseError(body, "The hydration entry could not be changed."));
       }
-      parseHydrationMutation(body);
-      operations.current.delete(input.intentKey);
-      const refreshed = await loadDay(date, input.successMessage);
-      if (!refreshed) {
+      assertHydrationMutationMatches(parseHydrationMutation(body), operation);
+      pendingRef.current = null;
+      setPending(null);
+      setEdit(null);
+      if (operation.method === "POST") setAmount("");
+      const moved = operation.destinationDate !== operation.sourceDate;
+      const successMessage = moved
+        ? `Hydration entry moved to ${operation.destinationDate}. The selected source day ${operation.sourceDate} was refreshed.`
+        : operation.successMessage;
+      setMovedToDate(moved ? operation.destinationDate : null);
+      acceptedRead.current = { message: successMessage, sourceDate: operation.sourceDate };
+      const refreshed = await loadDay(operation.sourceDate, successMessage);
+      if (!current()) return;
+      if (refreshed) acceptedRead.current = null;
+      else {
         setState("error");
         setMessageIsError(true);
         setMessage(
-          "The entry change was accepted, but the exact local-day view could not be refreshed. Retry the day view; do not submit the change again.",
+          `The entry change was accepted${moved ? ` and moved to ${operation.destinationDate}` : ""}, but the exact local-day view could not be refreshed. Retry the day view; the change will not be submitted again.`,
         );
       }
-      return true;
     } catch (error) {
+      if (!current()) return;
+      setDay(null);
       setState("error");
       setMessageIsError(true);
       setMessage(
-        `${error instanceof Error ? error.message : "The hydration entry could not be changed."} Retry to safely reuse the same operation.`,
+        `${error instanceof Error ? error.message : "The hydration entry could not be changed."} Retry the saved change to reuse its exact values, revision and operation key.`,
       );
-      return false;
     } finally {
-      setBusy(null);
+      if (current()) {
+        inFlight.current = false;
+        setBusy(null);
+      }
     }
   }
 
-  async function createEntry() {
-    if (!day || day.localDate !== date || state !== "ready") {
-      setMessageIsError(true);
-      setMessage("Load the selected hydration day before adding an entry.");
-      return;
+  function newOperation(
+    input: Pick<
+      Parameters<typeof hydrationWriteOperation>[0],
+      | "method"
+      | "body"
+      | "originalEntry"
+      | "expectedTimeZone"
+      | "destinationDate"
+      | "successMessage"
+    >,
+  ): HydrationWriteOperation {
+    if (
+      !day ||
+      day.localDate !== dateRef.current ||
+      state !== "ready" ||
+      !ownerRef.current ||
+      session?.user.id !== ownerRef.current ||
+      pendingRef.current ||
+      inFlight.current ||
+      reconcile
+    ) {
+      throw new TypeError("Load the selected hydration day before changing an entry.");
     }
+    return hydrationWriteOperation({
+      ...input,
+      day,
+      ownerUserId: ownerRef.current,
+      operationId: crypto.randomUUID(),
+    });
+  }
+
+  async function createEntry() {
     try {
+      if (!day) throw new TypeError("Load the selected hydration day before adding an entry.");
       const prepared = prepareHydrationCreate(
         amount,
         date,
@@ -326,19 +506,15 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
         day,
         untouchedDefaultOccurredAt.current ?? undefined,
       );
-      const intentKey = `create:${prepared.body.occurredAt}:${prepared.expectedTimeZone}:${prepared.body.amountMilliliters}`;
-      if (
-        await mutate({
-          intentKey,
-          path: "/api/hydration/entries?profileTimeZonePrecondition=v1",
+      await mutate(
+        newOperation({
           method: "POST",
           body: prepared.body,
           expectedTimeZone: prepared.expectedTimeZone,
+          destinationDate: date,
           successMessage: `${prepared.body.amountMilliliters.toLocaleString("en-US")} milliliters added and the exact total refreshed.`,
-        })
-      ) {
-        setAmount("");
-      }
+        }),
+      );
     } catch (error) {
       setMessageIsError(true);
       setMessage(error instanceof Error ? error.message : "Enter a valid hydration entry.");
@@ -348,40 +524,38 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
   async function updateEntry() {
     if (!edit) return;
     try {
-      const body = hydrationUpdateBody(edit.amount);
-      const intentKey = `update:${edit.entry.id}:${edit.entry.revision}:${body.amountMilliliters}`;
-      if (
-        await mutate({
-          intentKey,
-          path: `/api/hydration/entries/${encodeURIComponent(edit.entry.id)}`,
+      const prepared = prepareHydrationUpdate(edit.amount, edit.entry, edit.time);
+      await mutate(
+        newOperation({
           method: "PATCH",
-          body,
-          revision: edit.entry.revision,
-          successMessage: "Hydration amount updated and the exact total refreshed.",
-        })
-      ) {
-        setEdit(null);
-      }
+          ...prepared,
+          originalEntry: edit.entry,
+          successMessage: edit.time.enabled
+            ? "Hydration time corrected and the exact total refreshed."
+            : "Hydration amount updated and the exact total refreshed.",
+        }),
+      );
     } catch (error) {
       setMessageIsError(true);
-      setMessage(error instanceof Error ? error.message : "Enter a valid hydration amount.");
+      setMessage(error instanceof Error ? error.message : "Enter a valid hydration correction.");
     }
   }
 
   async function deleteEntry(entry: HydrationEntry) {
     if (!window.confirm(`Delete the ${entry.amountMilliliters} milliliter hydration entry?`))
       return;
-    const intentKey = `delete:${entry.id}:${entry.revision}`;
-    if (
-      await mutate({
-        intentKey,
-        path: `/api/hydration/entries/${encodeURIComponent(entry.id)}`,
-        method: "DELETE",
-        revision: entry.revision,
-        successMessage: "Hydration entry deleted and the exact total refreshed.",
-      })
-    ) {
-      setEdit((current) => (current?.entry.id === entry.id ? null : current));
+    try {
+      await mutate(
+        newOperation({
+          method: "DELETE",
+          originalEntry: entry,
+          destinationDate: entry.localDate,
+          successMessage: "Hydration entry deleted and the exact total refreshed.",
+        }),
+      );
+    } catch (error) {
+      setMessageIsError(true);
+      setMessage(error instanceof Error ? error.message : "Reload the hydration entry.");
     }
   }
 
@@ -391,7 +565,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
       () => fetch("/api/auth/logout", { method: "POST", cache: "no-store" }),
       signInAgain,
     );
-    if (!confirmed) {
+    if (!confirmed && mounted.current) {
       setMessage("Sign out could not be confirmed. Your hydration log remains open; retry.");
       setState("error");
       setMessageIsError(true);
@@ -400,7 +574,8 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
   }
 
   const dateQuery = date ? `?date=${encodeURIComponent(date)}` : "";
-  const controlsDisabled = busy !== null || !session || state === "loading";
+  const controlsDisabled =
+    busy !== null || pending !== null || reconcile || !session || state === "loading";
   const createDisabled =
     controlsDisabled || state !== "ready" || day === null || day.localDate !== date;
 
@@ -449,7 +624,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
           <button
             aria-label="Previous day"
             disabled={!date || controlsDisabled}
-            onClick={() => setDate(shiftLocalDate(date, -1))}
+            onClick={() => selectDate(shiftLocalDate(date, -1))}
             type="button"
           >
             ←
@@ -460,8 +635,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
             id="hydration-date"
             onChange={(event) => {
               if (isLocalDate(event.target.value)) {
-                setDate(event.target.value);
-                setEdit(null);
+                selectDate(event.target.value);
               }
             }}
             type="date"
@@ -470,7 +644,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
           <button
             aria-label="Next day"
             disabled={!date || controlsDisabled}
-            onClick={() => setDate(shiftLocalDate(date, 1))}
+            onClick={() => selectDate(shiftLocalDate(date, 1))}
             type="button"
           >
             →
@@ -479,7 +653,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
             disabled={controlsDisabled}
             onClick={() => {
               const timeZone = day?.timeZone ?? session?.profile.timeZone;
-              if (timeZone) setDate(localDateInTimeZone(new Date(), timeZone));
+              if (timeZone) selectDate(localDateInTimeZone(new Date(), timeZone));
             }}
             type="button"
           >
@@ -494,16 +668,38 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
         >
           {message}
         </p>
-        {state === "error" && session && date ? (
+        {state === "error" && session && date && !pending ? (
           <button
             className="buttonQuiet hydrationRetry"
             disabled={busy !== null}
-            onClick={() => void loadDay(date)}
+            onClick={() => void retryDayView()}
             type="button"
           >
-            Retry day view
+            {reconcile ? "Reload and review entries" : "Retry day view"}
           </button>
         ) : null}
+
+        {pending ? (
+          <button
+            className="buttonPrimary"
+            disabled={busy !== null}
+            onClick={() => void mutate(pending)}
+            type="button"
+          >
+            Retry saved change
+          </button>
+        ) : null}
+        {movedToDate ? (
+          <button
+            className="buttonQuiet"
+            disabled={controlsDisabled}
+            onClick={() => selectDate(movedToDate)}
+            type="button"
+          >
+            View destination day {movedToDate}
+          </button>
+        ) : null}
+        <Link href={`/dashboard${dateQuery}`}>Return to Today overview</Link>
 
         <div className="hydrationGrid">
           <section className="retentionSection" aria-labelledby="hydration-total-heading">
@@ -560,7 +756,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
                 />
               </label>
               <button className="buttonPrimary" disabled={createDisabled} type="submit">
-                {busy?.startsWith("create:") ? "Adding…" : "Add entry"}
+                {busy?.startsWith("POST:") ? "Adding…" : "Add entry"}
               </button>
             </form>
           </section>
@@ -604,9 +800,126 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
                           value={edit.amount}
                         />
                       </label>
+                      <p className="finePrint">
+                        Originally logged: {edit.entry.localDate} {edit.entry.localTime} ·{" "}
+                        {edit.entry.timeZone}. Changing only milliliters preserves that exact time.
+                      </p>
+                      <label className="formField">
+                        <span>
+                          <input
+                            checked={edit.time.enabled}
+                            disabled={controlsDisabled}
+                            onChange={(event) =>
+                              setEdit((current) =>
+                                current
+                                  ? {
+                                      ...current,
+                                      time: changeHydrationTimeDraft(current.time, {
+                                        enabled: event.target.checked,
+                                      }),
+                                    }
+                                  : current,
+                              )
+                            }
+                            type="checkbox"
+                          />{" "}
+                          Correct date or time
+                        </span>
+                      </label>
+                      {edit.time.enabled ? (
+                        <fieldset disabled={controlsDisabled}>
+                          <legend>Corrected time in {edit.time.timeZone}</legend>
+                          <label className="formField">
+                            <span>Corrected local date</span>
+                            <input
+                              onChange={(event) =>
+                                setEdit((current) =>
+                                  current
+                                    ? {
+                                        ...current,
+                                        time: changeHydrationTimeDraft(current.time, {
+                                          localDate: event.target.value,
+                                        }),
+                                      }
+                                    : current,
+                                )
+                              }
+                              required
+                              type="date"
+                              value={edit.time.localDate}
+                            />
+                          </label>
+                          <label className="formField">
+                            <span>Corrected local time</span>
+                            <input
+                              onChange={(event) =>
+                                setEdit((current) =>
+                                  current
+                                    ? {
+                                        ...current,
+                                        time: changeHydrationTimeDraft(current.time, {
+                                          localTime: event.target.value,
+                                        }),
+                                      }
+                                    : current,
+                                )
+                              }
+                              required
+                              type="time"
+                              value={edit.time.localTime}
+                            />
+                          </label>
+                          {timeResolution?.kind === "gap" ? (
+                            <p role="alert">
+                              This local time does not exist in {edit.time.timeZone}. Choose another
+                              time.
+                            </p>
+                          ) : timeResolution?.kind === "invalid" ? (
+                            <p role="alert">Enter a valid local date and time.</p>
+                          ) : timeResolution?.kind === "ambiguous" ? (
+                            <fieldset>
+                              <legend>
+                                This local time occurs more than once. Choose an occurrence.
+                              </legend>
+                              {timeResolution.candidates.map((candidate, index) => (
+                                <label className="formField" key={candidate.occurredAt}>
+                                  <span>
+                                    <input
+                                      checked={edit.time.occurrence === candidate.occurredAt}
+                                      name="hydration-time-occurrence"
+                                      onChange={() =>
+                                        setEdit((current) =>
+                                          current
+                                            ? {
+                                                ...current,
+                                                time: {
+                                                  ...current.time,
+                                                  occurrence: candidate.occurredAt,
+                                                },
+                                              }
+                                            : current,
+                                        )
+                                      }
+                                      required
+                                      type="radio"
+                                      value={candidate.occurredAt}
+                                    />{" "}
+                                    {index === 0
+                                      ? "Earlier"
+                                      : index === timeResolution.candidates.length - 1
+                                        ? "Later"
+                                        : `Occurrence ${index + 1}`}{" "}
+                                    occurrence · {candidate.utcOffsetLabel}
+                                  </span>
+                                </label>
+                              ))}
+                            </fieldset>
+                          ) : null}
+                        </fieldset>
+                      ) : null}
                       <div className="entryActions">
                         <button className="buttonPrimary" disabled={controlsDisabled} type="submit">
-                          Save amount
+                          {edit.time.enabled ? "Save correction" : "Save amount"}
                         </button>
                         <button
                           className="buttonQuiet"
@@ -632,11 +945,15 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
                           className="buttonQuiet"
                           disabled={controlsDisabled}
                           onClick={() =>
-                            setEdit({ entry, amount: String(entry.amountMilliliters) })
+                            setEdit({
+                              entry,
+                              amount: String(entry.amountMilliliters),
+                              time: hydrationTimeDraft(entry, day.timeZone),
+                            })
                           }
                           type="button"
                         >
-                          Edit amount
+                          Edit entry
                         </button>
                         <button
                           className="buttonDanger"

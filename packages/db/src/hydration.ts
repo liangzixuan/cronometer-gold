@@ -54,7 +54,7 @@ export class HydrationTimeZoneChangedError extends HydrationPersistenceError {
   constructor() {
     super(
       "HYDRATION_TIME_ZONE_CHANGED",
-      "Profile time zone changed before hydration entry creation",
+      "Profile time zone changed before the hydration entry mutation",
     );
   }
 }
@@ -112,6 +112,7 @@ export interface UpdateHydrationEntryInput {
   readonly clientOperationId: string;
   readonly requestDigest: string;
   readonly expectedEntryRevision: bigint | number | string;
+  readonly expectedProfileTimeZone?: string;
   readonly amountMilliliters?: number;
   readonly occurredAt?: string;
 }
@@ -229,8 +230,14 @@ export async function updateHydrationEntry(
 ): Promise<HydrationMutationResult> {
   validateOperationIdentity(input.clientOperationId, input.requestDigest);
   const expectedRevision = canonicalRevision(input.expectedEntryRevision);
+  const expectedProfileTimeZone = optionalExpectedProfileTimeZone(input.expectedProfileTimeZone);
   if (input.amountMilliliters === undefined && input.occurredAt === undefined) {
     throw new HydrationValidationError("At least one hydration field must be updated");
+  }
+  if (expectedProfileTimeZone !== undefined && input.occurredAt === undefined) {
+    throw new HydrationValidationError(
+      "expectedProfileTimeZone is only valid when occurredAt is updated",
+    );
   }
   const requestedAmount =
     input.amountMilliliters === undefined
@@ -253,6 +260,9 @@ export async function updateHydrationEntry(
       if (replay) return replay;
 
       const profile = await requireLockedProfile(transaction, input.userId);
+      if (expectedProfileTimeZone !== undefined && profile.timeZone !== expectedProfileTimeZone) {
+        throw new HydrationTimeZoneChangedError();
+      }
       const head = await loadOwnedHydrationHeadForUpdate(transaction, input.userId, input.entryId);
       if (!head) throw new HydrationNotFoundError();
       if (head.revisionNumber !== expectedRevision) {

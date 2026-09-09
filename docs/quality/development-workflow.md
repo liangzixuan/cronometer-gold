@@ -54,6 +54,12 @@ tests sharing a database, index, or fixture serially. Keep the root test graph's
 reviewed concurrency of two. Do not run another root check/build while client
 agents are still changing the tree or building overlapping outputs.
 
+A synthetic browser journey needs a complete local core nutrient registry from
+checked-in definitions, even when its private food quantifies only one nutrient.
+An incomplete registry must keep reports unavailable; do not relax report integrity
+or replace missing nutrient amounts with zero. Record local fixture initialization
+separately from application changes and live catalogue acquisition.
+
 During development, rerun the affected checks after a fix. At the final checkpoint,
 run the required applicable ladder once after integration and review. A later edit
 invalidates evidence for its dependencies; repeat those checks and any required

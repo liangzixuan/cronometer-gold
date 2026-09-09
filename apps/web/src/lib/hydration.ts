@@ -1,4 +1,6 @@
-import { isLocalDate } from "./diary";
+import { resolveHydrationLocalMinute } from "@nutrition-tracker/contracts";
+
+import { isLocalDate, localDateInTimeZone, localTimeInTimeZone } from "./diary";
 
 export const HYDRATION_ENTRY_MAX_MILLILITERS = 20_000;
 export const HYDRATION_DAY_MAX_ENTRIES = 64;
@@ -251,4 +253,238 @@ export function parseHydrationUpdateBody(value: unknown): HydrationUpdateBody {
 
 export function hydrationEntryAccessibilityLabel(entry: HydrationEntry): string {
   return `${entry.amountMilliliters.toLocaleString("en-US")} milliliters at ${entry.localTime.slice(0, 5)}.`;
+}
+
+export interface HydrationTimeDraft {
+  readonly enabled: boolean;
+  readonly localDate: string;
+  readonly localTime: string;
+  readonly timeZone: string;
+  readonly occurrence: string | null;
+}
+
+export function hydrationTimeDraft(
+  entry: HydrationEntry,
+  currentTimeZone: string,
+): HydrationTimeDraft {
+  const instant = new Date(entry.occurredAt);
+  return {
+    enabled: false,
+    localDate: localDateInTimeZone(instant, currentTimeZone),
+    localTime: localTimeInTimeZone(instant, currentTimeZone),
+    timeZone: currentTimeZone,
+    occurrence: null,
+  };
+}
+
+export function changeHydrationTimeDraft(
+  draft: HydrationTimeDraft,
+  change: Partial<Pick<HydrationTimeDraft, "enabled" | "localDate" | "localTime" | "timeZone">>,
+): HydrationTimeDraft {
+  return { ...draft, ...change, occurrence: null };
+}
+
+export function prepareHydrationUpdate(
+  amountDraft: string,
+  original: HydrationEntry,
+  draft: HydrationTimeDraft,
+): {
+  readonly body: HydrationUpdateBody;
+  readonly destinationDate: string;
+  readonly expectedTimeZone?: string;
+} {
+  const amountMilliliters = hydrationAmountFromDraft(amountDraft);
+  if (!draft.enabled) return { body: { amountMilliliters }, destinationDate: original.localDate };
+  const resolution = resolveHydrationLocalMinute(draft.localDate, draft.localTime, draft.timeZone);
+  if (resolution.kind === "invalid")
+    throw new RangeError("Enter a valid local date, time and time zone.");
+  if (resolution.kind === "gap")
+    throw new RangeError("That local time does not exist in this time zone. Choose another time.");
+  const candidate =
+    resolution.kind === "unique"
+      ? resolution.candidates[0]
+      : resolution.candidates.find((item) => item.occurredAt === draft.occurrence);
+  if (!candidate)
+    throw new RangeError("Choose the earlier or later occurrence of this repeated local time.");
+  return {
+    body: { amountMilliliters, occurredAt: candidate.occurredAt },
+    destinationDate: draft.localDate,
+    expectedTimeZone: draft.timeZone,
+  };
+}
+
+export interface HydrationWriteOperation {
+  readonly operationId: string;
+  readonly ownerUserId: string;
+  readonly sourceDate: string;
+  readonly sourceTimeZone: string;
+  readonly method: "POST" | "PATCH" | "DELETE";
+  readonly path: string;
+  readonly serializedBody?: string;
+  readonly originalEntry?: HydrationEntry;
+  readonly expectedTimeZone?: string;
+  readonly destinationDate: string;
+  readonly successMessage: string;
+}
+
+export function hydrationWriteOperation(input: {
+  readonly operationId: string;
+  readonly ownerUserId: string;
+  readonly day: Pick<HydrationDay, "localDate" | "timeZone">;
+  readonly method: "POST" | "PATCH" | "DELETE";
+  readonly body?: HydrationCreateBody | HydrationUpdateBody;
+  readonly originalEntry?: HydrationEntry;
+  readonly expectedTimeZone?: string;
+  readonly destinationDate: string;
+  readonly successMessage: string;
+}): HydrationWriteOperation {
+  if (
+    !UUID.test(input.operationId) ||
+    !UUID.test(input.ownerUserId) ||
+    !isLocalDate(input.destinationDate) ||
+    !isLocalDate(input.day.localDate) ||
+    !timeZone(input.day.timeZone)
+  ) {
+    throw new TypeError("Reload the hydration day before changing an entry.");
+  }
+  if (
+    input.method !== "POST" &&
+    (!input.originalEntry || input.originalEntry.localDate !== input.day.localDate)
+  ) {
+    throw new TypeError("Reload the original hydration entry before changing it.");
+  }
+  if (input.expectedTimeZone !== undefined && input.expectedTimeZone !== input.day.timeZone) {
+    throw new TypeError("The profile time zone changed. Reload and confirm the correction again.");
+  }
+  const body =
+    input.method === "POST"
+      ? parseHydrationCreateBody(input.body)
+      : input.method === "PATCH"
+        ? parseHydrationUpdateBody(input.body)
+        : undefined;
+  if (
+    Boolean(body && "occurredAt" in body) !== (input.expectedTimeZone !== undefined) ||
+    (input.method === "DELETE" && input.body !== undefined)
+  ) {
+    throw new TypeError("A time correction requires the current profile time zone.");
+  }
+  const path = `/api/hydration/entries${input.method === "POST" ? "" : `/${encodeURIComponent(input.originalEntry?.id ?? "")}`}${input.expectedTimeZone ? "?profileTimeZonePrecondition=v1" : ""}`;
+  return Object.freeze({
+    operationId: input.operationId,
+    ownerUserId: input.ownerUserId,
+    sourceDate: input.day.localDate,
+    sourceTimeZone: input.day.timeZone,
+    method: input.method,
+    path,
+    ...(body === undefined ? {} : { serializedBody: JSON.stringify(body) }),
+    ...(input.originalEntry === undefined
+      ? {}
+      : { originalEntry: Object.freeze({ ...input.originalEntry }) }),
+    ...(input.expectedTimeZone === undefined ? {} : { expectedTimeZone: input.expectedTimeZone }),
+    destinationDate: input.destinationDate,
+    successMessage: input.successMessage,
+  });
+}
+
+export function hydrationWriteRequest(operation: HydrationWriteOperation): RequestInit {
+  return {
+    method: operation.method,
+    cache: "no-store",
+    headers: {
+      accept: "application/json",
+      "idempotency-key": operation.operationId,
+      "x-expected-owner-user-id": operation.ownerUserId,
+      ...(operation.serializedBody === undefined ? {} : { "content-type": "application/json" }),
+      ...(operation.originalEntry ? { "if-match": `"${operation.originalEntry.revision}"` } : {}),
+      ...(operation.expectedTimeZone
+        ? { "x-expected-profile-time-zone": operation.expectedTimeZone }
+        : {}),
+    },
+    ...(operation.serializedBody === undefined ? {} : { body: operation.serializedBody }),
+  };
+}
+
+export function hydrationWriteBelongsToView(
+  operation: HydrationWriteOperation,
+  ownerUserId: string | null,
+  localDate: string,
+): boolean {
+  return operation.ownerUserId === ownerUserId && operation.sourceDate === localDate;
+}
+
+function hydrationCoordinates(
+  instant: string,
+  zone: string,
+): { localDate: string; localTime: string } {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    calendar: "iso8601",
+    numberingSystem: "latn",
+    timeZone: zone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    fractionalSecondDigits: 3,
+    hourCycle: "h23",
+  }).formatToParts(new Date(instant));
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return {
+    localDate: `${get("year").padStart(4, "0")}-${get("month")}-${get("day")}`,
+    localTime: `${get("hour")}:${get("minute")}:${get("second")}.${get("fractionalSecond")}`,
+  };
+}
+
+export function assertHydrationMutationMatches(
+  mutation: HydrationMutation,
+  operation: HydrationWriteOperation,
+): void {
+  const expectedDates = [...new Set([operation.sourceDate, operation.destinationDate])].sort();
+  const actualDates = mutation.affectedDays.map((item) => item.localDate).sort();
+  if (
+    expectedDates.length !== actualDates.length ||
+    expectedDates.some((date, index) => date !== actualDates[index])
+  ) {
+    throw new TypeError("The hydration receipt did not identify the source and destination days.");
+  }
+  if (operation.method === "DELETE") {
+    if (mutation.entry !== null)
+      throw new TypeError("The hydration deletion receipt was inconsistent.");
+    return;
+  }
+  const body = JSON.parse(operation.serializedBody ?? "null") as HydrationUpdateBody;
+  const entry = mutation.entry;
+  const original = operation.originalEntry;
+  if (
+    !entry ||
+    entry.amountMilliliters !== (body.amountMilliliters ?? original?.amountMilliliters) ||
+    (original &&
+      (entry.id !== original.id ||
+        BigInt(entry.revision) !== BigInt(original.revision) + 1n ||
+        entry.createdAt !== original.createdAt))
+  ) {
+    throw new TypeError("The hydration receipt did not match the submitted entry and amount.");
+  }
+  if (body.occurredAt !== undefined) {
+    const coordinates = hydrationCoordinates(body.occurredAt, operation.expectedTimeZone ?? "");
+    if (
+      Date.parse(entry.occurredAt) !== Date.parse(body.occurredAt) ||
+      entry.timeZone !== operation.expectedTimeZone ||
+      entry.localDate !== operation.destinationDate ||
+      entry.localDate !== coordinates.localDate ||
+      entry.localTime.replace(/(?:\.0{1,3})?$/u, "") !==
+        coordinates.localTime.replace(/\.000$/u, "")
+    ) {
+      throw new TypeError("The hydration receipt did not match the submitted time and time zone.");
+    }
+  } else if (
+    !original ||
+    entry.occurredAt !== original.occurredAt ||
+    entry.timeZone !== original.timeZone ||
+    entry.localDate !== original.localDate ||
+    entry.localTime !== original.localTime
+  ) {
+    throw new TypeError("The amount correction changed the original hydration time.");
+  }
 }

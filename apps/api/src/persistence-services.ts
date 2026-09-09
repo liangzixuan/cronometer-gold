@@ -1229,6 +1229,9 @@ export class DatabaseHydrationService implements HydrationService {
         expectedEntryRevision: input.expectedRevision,
         clientOperationId: input.clientOperationId,
         requestDigest: input.requestDigest,
+        ...(input.expectedProfileTimeZone === undefined
+          ? {}
+          : { expectedProfileTimeZone: input.expectedProfileTimeZone }),
         ...(input.patch.amountMilliliters === undefined
           ? {}
           : { amountMilliliters: input.patch.amountMilliliters }),

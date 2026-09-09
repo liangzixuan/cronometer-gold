@@ -443,3 +443,162 @@ describe("web hydration mutation proxy", () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 });
+
+describe("web hydration timestamp PATCH guard", () => {
+  function request(
+    query = "",
+    zone?: string,
+    body: unknown = { occurredAt: "2026-08-16T13:05:00.000Z" },
+    method: "PATCH" | "DELETE" = "PATCH",
+    owner?: string,
+  ) {
+    return new Request(`https://app.example.test/api/hydration/entries/${entry.id}${query}`, {
+      method,
+      headers: privateHeaders({
+        "content-type": "application/json",
+        "idempotency-key": hydrationOperationId,
+        "if-match": '"2"',
+        origin: "https://app.example.test",
+        "sec-fetch-site": "same-origin",
+        ...(zone === undefined ? {} : { "x-expected-profile-time-zone": zone }),
+        ...(owner === undefined ? {} : { "x-expected-owner-user-id": owner }),
+      }),
+      ...(method === "DELETE" ? {} : { body: JSON.stringify(body) }),
+    });
+  }
+
+  it("forwards the paired guarded correction and initiating-owner check without changing revision or bytes", async () => {
+    const calls: Array<{ url: URL; init?: RequestInit }> = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: URL, init?: RequestInit) => {
+        calls.push({ url, ...(init ? { init } : {}) });
+        if (url.pathname === "/v1/auth/me") return currentSession();
+        return Response.json({
+          data: {
+            replayed: true,
+            entry: { ...entry, revision: "3" },
+            affectedDays: [{ localDate: entry.localDate, revision: "4" }],
+          },
+        });
+      }),
+    );
+    const response = await proxyHydrationChange(
+      request(
+        "?profileTimeZonePrecondition=v1",
+        "America/Chicago",
+        { amountMilliliters: 500, occurredAt: "2026-08-16T13:05:00.000Z" },
+        "PATCH",
+        ownerUserId,
+      ),
+      entry.id,
+      "PATCH",
+    );
+    expect(response.status).toBe(200);
+    expect(calls.map((call) => call.url.pathname)).toEqual([
+      "/v1/auth/me",
+      `/v1/hydration/entries/${entry.id}`,
+    ]);
+    expect(calls[1]?.url.search).toBe("?profileTimeZonePrecondition=v1");
+    expect(calls[1]?.init?.body).toBe(
+      '{"amountMilliliters":500,"occurredAt":"2026-08-16T13:05:00.000Z"}',
+    );
+    const headers = new Headers(calls[1]?.init?.headers);
+    expect(headers.get("if-match")).toBe('"2"');
+    expect(headers.get("idempotency-key")).toBe(hydrationOperationId);
+    expect(headers.get("x-expected-profile-time-zone")).toBe("America/Chicago");
+    expect(headers.has("x-expected-owner-user-id")).toBe(false);
+  });
+
+  it.each([
+    ["", "America/Chicago"],
+    ["?profileTimeZonePrecondition=v1", undefined],
+    ["?profileTimeZonePrecondition=v2", "America/Chicago"],
+    ["?profileTimeZonePrecondition=v1&profileTimeZonePrecondition=v1", "America/Chicago"],
+    ["?profileTimeZonePrecondition=v1&extra=yes", "America/Chicago"],
+    ["?profileTimeZonePrecondition=v1", "Not/A-Zone"],
+    ["?profileTimeZonePrecondition=v1", "America/Chicago, America/Chicago"],
+  ])(
+    "rejects malformed guard query %s / header %s without upstream access",
+    async (query, zone) => {
+      const fetcher = vi.fn();
+      vi.stubGlobal("fetch", fetcher);
+      expect(
+        (await proxyHydrationChange(request(query ?? "", zone), entry.id, "PATCH")).status,
+      ).toBe(400);
+      expect(fetcher).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects amount-only and DELETE guards, while retaining headerless legacy timestamp PATCH", async () => {
+    const fetcher = vi.fn(async () =>
+      Response.json({
+        data: {
+          replayed: false,
+          entry,
+          affectedDays: [{ localDate: entry.localDate, revision: "3" }],
+        },
+      }),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    expect(
+      (
+        await proxyHydrationChange(
+          request("?profileTimeZonePrecondition=v1", "America/Chicago", { amountMilliliters: 500 }),
+          entry.id,
+          "PATCH",
+        )
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await proxyHydrationChange(
+          request("?profileTimeZonePrecondition=v1", "America/Chicago", undefined, "DELETE"),
+          entry.id,
+          "DELETE",
+        )
+      ).status,
+    ).toBe(400);
+    expect(fetcher).not.toHaveBeenCalled();
+    expect((await proxyHydrationChange(request(), entry.id, "PATCH")).status).toBe(200);
+    expect(fetcher).toHaveBeenCalledOnce();
+    const args = fetcher.mock.calls[0] as unknown as [URL, RequestInit];
+    expect(args[0].search).toBe("");
+    expect(new Headers(args[1].headers).has("x-expected-profile-time-zone")).toBe(false);
+  });
+
+  it("closes a changed initiating owner before attempting a write and preserves typed no-write conflicts", async () => {
+    const fetcher = vi.fn(async () => currentSession(otherOwnerUserId));
+    vi.stubGlobal("fetch", fetcher);
+    const changed = await proxyHydrationChange(
+      request(
+        "?profileTimeZonePrecondition=v1",
+        "America/Chicago",
+        { occurredAt: "2026-08-16T13:05:00.000Z" },
+        "PATCH",
+        ownerUserId,
+      ),
+      entry.id,
+      "PATCH",
+    );
+    expect(changed.status).toBe(409);
+    expect(await changed.json()).toMatchObject({ code: HYDRATION_OWNER_CHANGED_CODE });
+    expect(fetcher).toHaveBeenCalledOnce();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          { error: "Profile time zone changed.", code: "HYDRATION_TIME_ZONE_CHANGED" },
+          { status: 409 },
+        ),
+      ),
+    );
+    const drift = await proxyHydrationChange(
+      request("?profileTimeZonePrecondition=v1", "America/Chicago"),
+      entry.id,
+      "PATCH",
+    );
+    expect(drift.status).toBe(409);
+    expect(await drift.json()).toMatchObject({ code: "HYDRATION_TIME_ZONE_CHANGED" });
+  });
+});

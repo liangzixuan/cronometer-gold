@@ -1,3 +1,5 @@
+import { resolveHydrationLocalMinute } from "@nutrition-tracker/contracts";
+
 import {
   isLocalDate,
   localDateInTimeZone,
@@ -155,6 +157,109 @@ export function prepareHydrationCreate(
 
 export function hydrationUpdateBody(amountDraft: string): { readonly amountMilliliters: number } {
   return { amountMilliliters: hydrationAmountFromDraft(amountDraft) };
+}
+
+export interface HydrationTimeEdit {
+  readonly localDate: string;
+  readonly localTime: string;
+  readonly timeZone: string;
+  readonly selectedOccurredAt: string | null;
+}
+
+export interface HydrationUpdate {
+  readonly body: { readonly amountMilliliters: number; readonly occurredAt?: string };
+  readonly expectedTimeZone?: string;
+  readonly destinationLocalDate: string;
+}
+
+export function hydrationTimeEdit(
+  entry: HydrationEntry,
+  currentTimeZone: string,
+): HydrationTimeEdit {
+  const instant = new Date(entry.occurredAt);
+  return {
+    localDate: localDateInTimeZone(instant, currentTimeZone),
+    localTime: localTimeInTimeZone(instant, currentTimeZone).slice(0, 5),
+    timeZone: currentTimeZone,
+    selectedOccurredAt: null,
+  };
+}
+
+export function prepareHydrationUpdate(
+  entry: HydrationEntry,
+  amountDraft: string,
+  timeEdit?: HydrationTimeEdit,
+): HydrationUpdate {
+  const amountMilliliters = hydrationAmountFromDraft(amountDraft);
+  if (!timeEdit) {
+    return { body: { amountMilliliters }, destinationLocalDate: entry.localDate };
+  }
+  const resolution = resolveHydrationLocalMinute(
+    timeEdit.localDate,
+    timeEdit.localTime,
+    timeEdit.timeZone,
+  );
+  if (resolution.kind === "invalid") {
+    throw new RangeError("Enter a valid date, 24-hour time, and profile time zone.");
+  }
+  if (resolution.kind === "gap") {
+    throw new RangeError("That local time does not exist in this time zone. Choose another time.");
+  }
+  const candidate =
+    resolution.kind === "unique"
+      ? resolution.candidates[0]
+      : resolution.candidates.find((item) => item.occurredAt === timeEdit.selectedOccurredAt);
+  if (!candidate) {
+    throw new RangeError(
+      "This time occurs more than once. Choose the earlier or later occurrence.",
+    );
+  }
+  return {
+    body: { amountMilliliters, occurredAt: candidate.occurredAt },
+    expectedTimeZone: resolution.timeZone,
+    destinationLocalDate: timeEdit.localDate,
+  };
+}
+
+export function assertHydrationUpdateReceipt(
+  mutation: HydrationMutation,
+  original: HydrationEntry,
+  update: HydrationUpdate,
+): void {
+  const entry = mutation.entry;
+  const expectedDays = new Set([original.localDate, update.destinationLocalDate]);
+  if (
+    !entry ||
+    entry.id !== original.id ||
+    BigInt(entry.revision) !== BigInt(original.revision) + 1n ||
+    entry.amountMilliliters !== update.body.amountMilliliters ||
+    entry.createdAt !== original.createdAt ||
+    entry.localDate !== update.destinationLocalDate ||
+    mutation.affectedDays.length !== expectedDays.size ||
+    mutation.affectedDays.some((day) => !expectedDays.has(day.localDate))
+  ) {
+    throw new TypeError("The hydration receipt does not match this correction.");
+  }
+  if (update.body.occurredAt) {
+    const instant = new Date(update.body.occurredAt);
+    if (
+      Date.parse(entry.occurredAt) !== instant.getTime() ||
+      entry.timeZone !== update.expectedTimeZone ||
+      localDateInTimeZone(instant, entry.timeZone) !== entry.localDate ||
+      !new RegExp(`^${localTimeInTimeZone(instant, entry.timeZone)}:00(?:\\.0{1,3})?$`, "u").test(
+        entry.localTime,
+      )
+    ) {
+      throw new TypeError("The hydration receipt does not match the selected time and zone.");
+    }
+  } else if (
+    entry.occurredAt !== original.occurredAt ||
+    entry.timeZone !== original.timeZone ||
+    entry.localDate !== original.localDate ||
+    entry.localTime !== original.localTime
+  ) {
+    throw new TypeError("An amount-only receipt changed the original hydration time.");
+  }
 }
 
 export function parseHydrationEntry(value: unknown): HydrationEntry {

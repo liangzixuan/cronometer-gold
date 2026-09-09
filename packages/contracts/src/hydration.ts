@@ -50,6 +50,10 @@ export interface UpdateHydrationEntryRequest {
   readonly occurredAt?: string;
 }
 
+/** Optional paired guard for a timestamp update; an amount-only patch has no guard. */
+export type UpdateHydrationEntryHeaders = CreateHydrationEntryHeaders;
+export type UpdateHydrationEntryQuery = CreateHydrationEntryQuery;
+
 export interface HydrationMutationResponse {
   readonly data: {
     readonly replayed: boolean;
@@ -185,6 +189,16 @@ export const updateHydrationEntryRequestSchema = {
     amountMilliliters: amountMillilitersSchema,
     occurredAt: occurredAtSchema,
   },
+} as const;
+
+export const updateHydrationEntryHeadersSchema = {
+  ...createHydrationEntryHeadersSchema,
+  $id: "UpdateHydrationEntryHeaders",
+} as const;
+
+export const updateHydrationEntryQuerySchema = {
+  ...createHydrationEntryQuerySchema,
+  $id: "UpdateHydrationEntryQuery",
 } as const;
 
 export const hydrationMutationResponseSchema = {

@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  assertHydrationUpdateReceipt,
   hydrationAmountFromDraft,
   hydrationEntryAccessibilityLabel,
+  hydrationTimeEdit,
   hydrationUpdateBody,
   parseHydrationDay,
   parseHydrationMutation,
   prepareHydrationCreate,
+  prepareHydrationUpdate,
 } from "./hydration";
 
 const entry = {
@@ -157,5 +160,142 @@ describe("mobile hydration input and presentation semantics", () => {
     const label = hydrationEntryAccessibilityLabel(entry);
     expect(label).toBe("375 milliliters at 08:05.");
     expect(label).not.toMatch(/target|goal|progress|calorie|nutrient/iu);
+  });
+});
+
+describe("mobile hydration time corrections", () => {
+  const original = {
+    ...entry,
+    occurredAt: "2026-11-01T07:30:45.250Z",
+    localDate: "2026-11-01",
+    localTime: "01:30:45.250",
+    timeZone: "America/Chicago",
+  };
+
+  it("keeps amount-only precision and historical coordinates even after profile-zone changes", () => {
+    expect(hydrationTimeEdit(original, "America/New_York")).toEqual({
+      localDate: "2026-11-01",
+      localTime: "02:30",
+      timeZone: "America/New_York",
+      selectedOccurredAt: null,
+    });
+    const prepared = prepareHydrationUpdate(original, "500");
+    expect(prepared).toEqual({
+      body: { amountMilliliters: 500 },
+      destinationLocalDate: original.localDate,
+    });
+    const receipt = {
+      replayed: true,
+      entry: { ...original, revision: "3", amountMilliliters: 500 },
+      affectedDays: [{ localDate: original.localDate, revision: "5" }],
+    };
+    expect(() => assertHydrationUpdateReceipt(receipt, original, prepared)).not.toThrow();
+    for (const altered of [
+      { occurredAt: "2026-11-01T07:30:00.000Z" },
+      { occurredAt: "2026-11-01T06:30:45.250Z" },
+      { timeZone: "America/New_York" },
+      { localTime: "01:30:45.249" },
+    ]) {
+      expect(() =>
+        assertHydrationUpdateReceipt(
+          { ...receipt, entry: { ...receipt.entry, ...altered } },
+          original,
+          prepared,
+        ),
+      ).toThrow();
+    }
+  });
+
+  it("requires an explicit repeated-minute choice and rejects gaps or a choice from another minute", () => {
+    const time = hydrationTimeEdit(original, "America/Chicago");
+    expect(() => prepareHydrationUpdate(original, "375", time)).toThrow("earlier or later");
+    expect(
+      prepareHydrationUpdate(original, "375", {
+        ...time,
+        selectedOccurredAt: "2026-11-01T07:30:00.000Z",
+      }),
+    ).toEqual({
+      body: { amountMilliliters: 375, occurredAt: "2026-11-01T07:30:00.000Z" },
+      expectedTimeZone: "America/Chicago",
+      destinationLocalDate: "2026-11-01",
+    });
+    expect(() =>
+      prepareHydrationUpdate(original, "375", {
+        ...time,
+        localTime: "01:31",
+        selectedOccurredAt: "2026-11-01T07:30:00.000Z",
+      }),
+    ).toThrow("earlier or later");
+    expect(() =>
+      prepareHydrationUpdate(original, "375", {
+        ...time,
+        localDate: "2026-03-08",
+        localTime: "02:30",
+      }),
+    ).toThrow("does not exist");
+    expect(() =>
+      prepareHydrationUpdate(original, "375", { ...time, localDate: "2026-02-30" }),
+    ).toThrow("valid date");
+  });
+
+  it("requires the exact correction subject, revision, values, zone, and both moved days", () => {
+    const prepared = prepareHydrationUpdate(original, "500", {
+      ...hydrationTimeEdit(original, "America/Chicago"),
+      localDate: "2026-11-02",
+    });
+    const receipt = {
+      replayed: false,
+      entry: {
+        ...original,
+        revision: "3",
+        amountMilliliters: 500,
+        occurredAt: "2026-11-02T07:30:00.000Z",
+        localDate: "2026-11-02",
+        localTime: "01:30:00",
+      },
+      affectedDays: [
+        { localDate: "2026-11-01", revision: "4" },
+        { localDate: "2026-11-02", revision: "1" },
+      ],
+    };
+    expect(() => assertHydrationUpdateReceipt(receipt, original, prepared)).not.toThrow();
+    for (const altered of [
+      { id: "5eff67ee-721a-411e-b935-7699065c8d2a" },
+      { revision: "2" },
+      { revision: "4" },
+      { amountMilliliters: 499 },
+      { timeZone: "America/New_York" },
+      { localTime: "01:30:01" },
+      { createdAt: "2026-01-01T00:00:00.000Z" },
+      { occurredAt: "2026-11-02T07:30:00.250Z" },
+    ]) {
+      expect(() =>
+        assertHydrationUpdateReceipt(
+          { ...receipt, entry: { ...receipt.entry, ...altered } },
+          original,
+          prepared,
+        ),
+      ).toThrow();
+    }
+    expect(() =>
+      assertHydrationUpdateReceipt(
+        { ...receipt, affectedDays: receipt.affectedDays.slice(1) },
+        original,
+        prepared,
+      ),
+    ).toThrow();
+    expect(() =>
+      assertHydrationUpdateReceipt(
+        {
+          ...receipt,
+          affectedDays: [
+            { localDate: "2026-11-01", revision: "4" },
+            { localDate: "2026-11-03", revision: "1" },
+          ],
+        },
+        original,
+        prepared,
+      ),
+    ).toThrow();
   });
 });

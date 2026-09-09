@@ -381,7 +381,8 @@ function parseCustomFood(value: unknown): CustomFood {
       "provenance",
       "createdAt",
     ]) ||
-    !uuid(value.currentVersion.id) ||
+    typeof value.currentVersion.id !== "string" ||
+    !POSITIVE_ID.test(value.currentVersion.id) ||
     !Number.isSafeInteger(value.currentVersion.versionNumber) ||
     Number(value.currentVersion.versionNumber) < 1 ||
     !text(value.currentVersion.name, 500) ||

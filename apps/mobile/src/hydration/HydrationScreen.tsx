@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { resolveHydrationLocalMinute } from "@nutrition-tracker/contracts";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -22,13 +23,17 @@ import {
 import { todayDetailDate } from "../diary/today-summary";
 import { palette } from "../theme";
 import {
+  assertHydrationUpdateReceipt,
   type HydrationDay,
   type HydrationEntry,
+  type HydrationMutation,
+  type HydrationTimeEdit,
   hydrationEntryAccessibilityLabel,
-  hydrationUpdateBody,
+  hydrationTimeEdit,
   parseHydrationDay,
   parseHydrationMutation,
   prepareHydrationCreate,
+  prepareHydrationUpdate,
 } from "./hydration";
 
 type LoadState = "loading" | "ready" | "error";
@@ -44,6 +49,26 @@ interface HydrationScreenProps {
 interface HydrationEdit {
   readonly entry: HydrationEntry;
   readonly amount: string;
+  readonly time?: HydrationTimeEdit;
+}
+
+interface MutationInput {
+  readonly intentKey: string;
+  readonly path: string;
+  readonly method: "DELETE" | "PATCH" | "POST";
+  readonly body?: unknown;
+  readonly revision?: string;
+  readonly expectedTimeZone?: string;
+  readonly successMessage: string;
+  readonly destinationDate?: string;
+  readonly validate: (receipt: HydrationMutation) => void;
+}
+
+interface PendingMutation {
+  readonly input: MutationInput;
+  readonly operationId: string;
+  readonly serializedBody: string | undefined;
+  readonly sourceDate: string;
 }
 
 function dayMessage(day: HydrationDay): string {
@@ -72,7 +97,17 @@ export function HydrationScreen({
   );
   const [edit, setEdit] = useState<HydrationEdit | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const operations = useRef(new Map<string, string>());
+  const [pending, setPending] = useState<PendingMutation | null>(null);
+  const pendingRef = useRef<PendingMutation | null>(null);
+  const [requiresReload, setRequiresReload] = useState(false);
+  const [destinationDate, setDestinationDate] = useState<string | null>(null);
+  const mutationController = useRef<AbortController | null>(null);
+  const mutationGeneration = useRef(0);
+  const mounted = useRef(true);
+  const selectedDate = useRef(date);
+  selectedDate.current = date;
+  const context = useRef({ accessToken, base: apiBase.href, profileTimeZone });
+  context.current = { accessToken, base: apiBase.href, profileTimeZone };
   const loadController = useRef<AbortController | null>(null);
   const loadGeneration = useRef(0);
   const loadedTimeZone = useRef<string | null>(null);
@@ -85,7 +120,14 @@ export function HydrationScreen({
       loadController.current = controller;
       const generation = loadGeneration.current + 1;
       loadGeneration.current = generation;
+      const isCurrent = () =>
+        !controller.signal.aborted &&
+        loadGeneration.current === generation &&
+        context.current.accessToken === accessToken &&
+        context.current.base === apiBase.href &&
+        context.current.profileTimeZone === profileTimeZone;
       setState("loading");
+      setDay(null);
       setMessageIsError(false);
       setMessage(`Loading hydration entries for ${requestedDate}…`);
       try {
@@ -97,13 +139,13 @@ export function HydrationScreen({
             signal: controller.signal,
           },
         );
-        if (controller.signal.aborted || loadGeneration.current !== generation) return false;
+        if (!isCurrent()) return false;
         if (response.status === 401) {
           await onUnauthorized();
           return false;
         }
         const body = await jsonBody(response);
-        if (controller.signal.aborted || loadGeneration.current !== generation) return false;
+        if (!isCurrent()) return false;
         if (!response.ok) {
           throw new Error(responseError(body, "Hydration entries could not be loaded."));
         }
@@ -112,6 +154,7 @@ export function HydrationScreen({
           throw new TypeError("The hydration service returned another local day.");
         }
         if (loadedTimeZone.current !== next.timeZone) {
+          setEdit(null);
           const capturedNow = new Date();
           setLocalTime(localTimeInTimeZone(capturedNow, next.timeZone).slice(0, 5));
           untouchedDefaultOccurredAt.current = capturedNow.toISOString();
@@ -123,7 +166,7 @@ export function HydrationScreen({
         setMessage(successMessage ?? dayMessage(next));
         return true;
       } catch (error) {
-        if (controller.signal.aborted || loadGeneration.current !== generation) return false;
+        if (!isCurrent()) return false;
         setDay(null);
         setState("error");
         setMessageIsError(true);
@@ -133,99 +176,176 @@ export function HydrationScreen({
         return false;
       }
     },
-    [accessToken, apiBase, onUnauthorized],
+    [accessToken, apiBase, onUnauthorized, profileTimeZone],
   );
 
   useEffect(() => {
+    mounted.current = true;
+    setBusy(null);
+    setPending(null);
+    pendingRef.current = null;
+    setEdit(null);
+    setRequiresReload(false);
+    setDestinationDate(null);
     void loadDay(date);
-    return () => loadController.current?.abort();
+    return () => {
+      mounted.current = false;
+      loadController.current?.abort();
+      mutationGeneration.current += 1;
+      mutationController.current?.abort();
+      mutationController.current = null;
+      pendingRef.current = null;
+    };
   }, [date, loadDay]);
 
   function chooseDate(value: string) {
+    if (pendingRef.current || busy) return;
     if (!isLocalDate(value)) {
       setMessageIsError(true);
       setMessage("Enter a valid local date in YYYY-MM-DD form.");
       setDateDraft(date);
       return;
     }
+    if (value === date) {
+      setDateDraft(value);
+      return;
+    }
     setEdit(null);
+    setDay(null);
+    setDestinationDate(null);
+    setRequiresReload(false);
     setDateDraft(value);
     setDate(value);
   }
 
-  function operationId(key: string): string {
-    const existing = operations.current.get(key);
-    if (existing) return existing;
-    const created = newOperationId();
-    operations.current.set(key, created);
-    return created;
+  function clearPending() {
+    pendingRef.current = null;
+    setPending(null);
   }
 
-  async function mutate(input: {
-    readonly intentKey: string;
-    readonly path: string;
-    readonly method: "DELETE" | "PATCH" | "POST";
-    readonly body?: unknown;
-    readonly revision?: string;
-    readonly expectedTimeZone?: string;
-    readonly successMessage: string;
-  }): Promise<boolean> {
+  async function submitMutation(operation: PendingMutation): Promise<void> {
+    if (mutationController.current || pendingRef.current !== operation) return;
+    const input = operation.input;
+    const controller = new AbortController();
+    mutationController.current = controller;
+    const generation = ++mutationGeneration.current;
+    const activeContext = context.current;
+    const isCurrent = () =>
+      !controller.signal.aborted &&
+      generation === mutationGeneration.current &&
+      context.current.accessToken === activeContext.accessToken &&
+      context.current.base === activeContext.base &&
+      context.current.profileTimeZone === activeContext.profileTimeZone;
     setBusy(input.intentKey);
     setMessageIsError(false);
     setMessage("Saving the hydration entry…");
     try {
       const headers: Record<string, string> = {
         ...authenticatedHeaders(accessToken),
-        "idempotency-key": operationId(input.intentKey),
+        "idempotency-key": operation.operationId,
       };
-      if (input.body !== undefined) headers["content-type"] = "application/json";
+      if (operation.serializedBody !== undefined) headers["content-type"] = "application/json";
       if (input.revision) headers["if-match"] = `"${input.revision}"`;
-      if (input.expectedTimeZone) {
-        headers["x-expected-profile-time-zone"] = input.expectedTimeZone;
-      }
+      if (input.expectedTimeZone) headers["x-expected-profile-time-zone"] = input.expectedTimeZone;
       const response = await fetch(apiUrl(apiBase, input.path).toString(), {
         method: input.method,
         headers,
-        ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }),
+        ...(operation.serializedBody === undefined ? {} : { body: operation.serializedBody }),
         cache: "no-store",
+        signal: controller.signal,
       });
+      if (!isCurrent()) return;
       if (response.status === 401) {
+        clearPending();
+        setDay(null);
+        setEdit(null);
         await onUnauthorized();
-        return false;
+        return;
       }
       const body = await jsonBody(response);
+      if (!isCurrent()) return;
       if (!response.ok) {
+        if (response.status === 409 || response.status === 412) {
+          clearPending();
+          setRequiresReload(true);
+          setMessageIsError(true);
+          setMessage(
+            `${responseError(body, "The entry or profile time zone changed.")} Reload the current day, then review and confirm your correction again.`,
+          );
+          return;
+        }
+        if (
+          response.status >= 400 &&
+          response.status < 500 &&
+          response.status !== 408 &&
+          response.status !== 429
+        ) {
+          clearPending();
+          setMessageIsError(true);
+          setMessage(responseError(body, "The hydration change was rejected. Review your entry."));
+          return;
+        }
         throw new Error(responseError(body, "The hydration entry could not be changed."));
       }
-      parseHydrationMutation(body);
-      operations.current.delete(input.intentKey);
-      const refreshed = await loadDay(date, input.successMessage);
+      const receipt = parseHydrationMutation(body);
+      input.validate(receipt);
+      clearPending();
+      setEdit(null);
+      if (input.method === "POST") setAmount("");
+      setDestinationDate(input.destinationDate ?? null);
+      const refreshed = await loadDay(operation.sourceDate, input.successMessage);
+      if (!isCurrent()) return;
       if (!refreshed) {
         setState("error");
         setMessageIsError(true);
         setMessage(
-          "The entry change was accepted, but the exact local-day view could not be refreshed. Retry the day view; do not submit the change again.",
+          `The entry change was accepted${input.destinationDate ? ` and moved to ${input.destinationDate}` : ""}, but the exact local-day view could not be refreshed. Retry the day view; do not submit the change again.`,
         );
       }
-      return true;
     } catch (error) {
-      setState("error");
+      if (!isCurrent()) return;
       setMessageIsError(true);
       setMessage(
-        `${error instanceof Error ? error.message : "The hydration entry could not be changed."} Retry to safely reuse the same operation.`,
+        `${error instanceof Error ? error.message : "The hydration entry could not be changed."} Acceptance is unconfirmed. Retry the saved change to safely reuse its exact request.`,
       );
-      return false;
     } finally {
-      setBusy(null);
+      if (mutationController.current === controller) mutationController.current = null;
+      if (isCurrent()) setBusy(null);
     }
   }
 
-  async function createEntry() {
-    if (!day || day.localDate !== date || state !== "ready") {
-      setMessageIsError(true);
-      setMessage("Load the selected hydration day before adding an entry.");
+  function beginMutation(input: MutationInput) {
+    if (
+      !mounted.current ||
+      selectedDate.current !== date ||
+      context.current.accessToken !== accessToken ||
+      context.current.base !== apiBase.href ||
+      context.current.profileTimeZone !== profileTimeZone
+    )
       return;
-    }
+    if (
+      pendingRef.current ||
+      busy ||
+      requiresReload ||
+      state !== "ready" ||
+      !day ||
+      day.localDate !== date
+    )
+      return;
+    const operation: PendingMutation = {
+      input,
+      operationId: newOperationId(),
+      serializedBody: input.body === undefined ? undefined : JSON.stringify(input.body),
+      sourceDate: date,
+    };
+    pendingRef.current = operation;
+    setPending(operation);
+    setDestinationDate(null);
+    void submitMutation(operation);
+  }
+
+  function createEntry() {
+    if (!day || day.localDate !== date || state !== "ready") return;
     try {
       const prepared = prepareHydrationCreate(
         amount,
@@ -234,77 +354,117 @@ export function HydrationScreen({
         day,
         untouchedDefaultOccurredAt.current ?? undefined,
       );
-      const intentKey = `create:${prepared.body.occurredAt}:${prepared.expectedTimeZone}:${prepared.body.amountMilliliters}`;
-      if (
-        await mutate({
-          intentKey,
-          path: "/v1/hydration/entries?profileTimeZonePrecondition=v1",
-          method: "POST",
-          body: prepared.body,
-          expectedTimeZone: prepared.expectedTimeZone,
-          successMessage: `${prepared.body.amountMilliliters.toLocaleString("en-US")} milliliters added and the exact total refreshed.`,
-        })
-      ) {
-        setAmount("");
-      }
+      beginMutation({
+        intentKey: `create:${prepared.body.occurredAt}:${prepared.expectedTimeZone}:${prepared.body.amountMilliliters}`,
+        path: "/v1/hydration/entries?profileTimeZonePrecondition=v1",
+        method: "POST",
+        body: prepared.body,
+        expectedTimeZone: prepared.expectedTimeZone,
+        successMessage: `${prepared.body.amountMilliliters.toLocaleString("en-US")} milliliters added and the exact total refreshed.`,
+        validate: (receipt) => {
+          if (
+            !receipt.entry ||
+            receipt.entry.amountMilliliters !== prepared.body.amountMilliliters ||
+            Date.parse(receipt.entry.occurredAt) !== Date.parse(prepared.body.occurredAt) ||
+            receipt.entry.timeZone !== prepared.expectedTimeZone ||
+            receipt.entry.localDate !== date ||
+            receipt.affectedDays.length !== 1 ||
+            receipt.affectedDays[0]?.localDate !== date
+          ) {
+            throw new TypeError("The hydration receipt does not match the submitted entry.");
+          }
+        },
+      });
     } catch (error) {
       setMessageIsError(true);
       setMessage(error instanceof Error ? error.message : "Enter a valid hydration entry.");
     }
   }
 
-  async function updateEntry() {
-    if (!edit) return;
+  function updateEntry() {
+    if (!edit || !day) return;
     try {
-      const body = hydrationUpdateBody(edit.amount);
-      const intentKey = `update:${edit.entry.id}:${edit.entry.revision}:${body.amountMilliliters}`;
-      if (
-        await mutate({
-          intentKey,
-          path: `/v1/hydration/entries/${encodeURIComponent(edit.entry.id)}`,
-          method: "PATCH",
-          body,
-          revision: edit.entry.revision,
-          successMessage: "Hydration amount updated and the exact total refreshed.",
-        })
-      ) {
-        setEdit(null);
+      if (edit.time && edit.time.timeZone !== day.timeZone) {
+        throw new Error("The profile time zone changed. Reload and confirm the correction again.");
       }
+      const prepared = prepareHydrationUpdate(edit.entry, edit.amount, edit.time);
+      const moved = prepared.destinationLocalDate !== edit.entry.localDate;
+      beginMutation({
+        intentKey: `update:${edit.entry.id}:${edit.entry.revision}:${JSON.stringify(prepared.body)}:${prepared.expectedTimeZone ?? ""}`,
+        path: `/v1/hydration/entries/${encodeURIComponent(edit.entry.id)}${prepared.expectedTimeZone ? "?profileTimeZonePrecondition=v1" : ""}`,
+        method: "PATCH",
+        body: prepared.body,
+        revision: edit.entry.revision,
+        ...(prepared.expectedTimeZone ? { expectedTimeZone: prepared.expectedTimeZone } : {}),
+        ...(moved ? { destinationDate: prepared.destinationLocalDate } : {}),
+        successMessage: moved
+          ? `Hydration entry moved to ${prepared.destinationLocalDate}. The total for ${date} was refreshed.`
+          : "Hydration entry updated and the exact total refreshed.",
+        validate: (receipt) => assertHydrationUpdateReceipt(receipt, edit.entry, prepared),
+      });
     } catch (error) {
       setMessageIsError(true);
-      setMessage(error instanceof Error ? error.message : "Enter a valid hydration amount.");
+      setMessage(error instanceof Error ? error.message : "Enter a valid hydration correction.");
     }
   }
 
-  async function deleteEntry(entry: HydrationEntry) {
-    const intentKey = `delete:${entry.id}:${entry.revision}`;
-    if (
-      await mutate({
-        intentKey,
-        path: `/v1/hydration/entries/${encodeURIComponent(entry.id)}`,
-        method: "DELETE",
-        revision: entry.revision,
-        successMessage: "Hydration entry deleted and the exact total refreshed.",
-      })
-    ) {
-      setEdit((current) => (current?.entry.id === entry.id ? null : current));
-    }
+  function deleteEntry(entry: HydrationEntry) {
+    beginMutation({
+      intentKey: `delete:${entry.id}:${entry.revision}`,
+      path: `/v1/hydration/entries/${encodeURIComponent(entry.id)}`,
+      method: "DELETE",
+      revision: entry.revision,
+      successMessage: "Hydration entry deleted and the exact total refreshed.",
+      validate: (receipt) => {
+        if (
+          receipt.entry !== null ||
+          receipt.affectedDays.length !== 1 ||
+          receipt.affectedDays[0]?.localDate !== entry.localDate
+        ) {
+          throw new TypeError("The hydration receipt does not match the deleted entry's day.");
+        }
+      },
+    });
+  }
+
+  function reloadForCorrection() {
+    if (busy || pendingRef.current) return;
+    setEdit(null);
+    setRequiresReload(false);
+    void loadDay(date);
   }
 
   function confirmDelete(entry: HydrationEntry) {
+    const generation = loadGeneration.current;
     Alert.alert(
       "Delete hydration entry?",
       `${entry.amountMilliliters.toLocaleString("en-US")} milliliters will be removed from ${entry.localDate}.`,
       [
         { text: "Cancel", style: "cancel" },
-        { text: "Delete", style: "destructive", onPress: () => void deleteEntry(entry) },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => {
+            if (mounted.current && generation === loadGeneration.current) deleteEntry(entry);
+          },
+        },
       ],
     );
   }
 
-  const controlsDisabled = busy !== null || state === "loading";
-  const createDisabled =
-    controlsDisabled || state !== "ready" || day === null || day.localDate !== date;
+  const editLocalDate = edit?.time?.localDate;
+  const editLocalTime = edit?.time?.localTime;
+  const editTimeZone = edit?.time?.timeZone;
+  const timeResolution = useMemo(
+    () =>
+      editLocalDate !== undefined && editLocalTime !== undefined && editTimeZone !== undefined
+        ? resolveHydrationLocalMinute(editLocalDate, editLocalTime, editTimeZone)
+        : null,
+    [editLocalDate, editLocalTime, editTimeZone],
+  );
+  const controlsDisabled = busy !== null || pending !== null || state === "loading";
+  const editDisabled = controlsDisabled || requiresReload || state !== "ready";
+  const createDisabled = editDisabled || day === null || day.localDate !== date;
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
@@ -390,6 +550,38 @@ export function HydrationScreen({
           </Pressable>
         ) : null}
 
+        {pending && !busy ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => void submitMutation(pending)}
+            style={styles.retryButton}
+          >
+            <Text style={styles.secondaryText}>Retry saved change</Text>
+          </Pressable>
+        ) : null}
+        {requiresReload ? (
+          <Pressable
+            accessibilityRole="button"
+            disabled={controlsDisabled}
+            accessibilityState={{ disabled: controlsDisabled }}
+            onPress={reloadForCorrection}
+            style={styles.retryButton}
+          >
+            <Text style={styles.secondaryText}>Reload before correcting</Text>
+          </Pressable>
+        ) : null}
+        {destinationDate ? (
+          <Pressable
+            accessibilityRole="button"
+            disabled={controlsDisabled}
+            accessibilityState={{ disabled: controlsDisabled }}
+            onPress={() => chooseDate(destinationDate)}
+            style={styles.retryButton}
+          >
+            <Text style={styles.secondaryText}>View destination day {destinationDate}</Text>
+          </Pressable>
+        ) : null}
+
         <View
           accessibilityLabel="Exact local-day hydration total"
           accessible
@@ -461,10 +653,14 @@ export function HydrationScreen({
             <View key={entry.id} style={styles.entryCard}>
               {edit?.entry.id === entry.id ? (
                 <>
-                  <Text style={styles.label}>MILLILITERS AT {entry.localTime.slice(0, 5)}</Text>
+                  <Text style={styles.entryMeta}>
+                    Originally {edit.entry.localDate} at {edit.entry.localTime} ·{" "}
+                    {edit.entry.timeZone}
+                  </Text>
+                  <Text style={styles.label}>MILLILITERS</Text>
                   <TextInput
                     accessibilityLabel={`Edit milliliters at ${entry.localTime.slice(0, 5)}`}
-                    editable={!controlsDisabled}
+                    editable={!editDisabled}
                     keyboardType="number-pad"
                     maxLength={5}
                     onChangeText={(value) =>
@@ -473,20 +669,159 @@ export function HydrationScreen({
                     style={styles.input}
                     value={edit.amount}
                   />
+                  {edit.time ? (
+                    <>
+                      <Text style={styles.entryMeta}>
+                        Change time in {edit.time.timeZone}. Choosing a time records the start of
+                        that minute.
+                      </Text>
+                      <Text style={styles.label}>LOCAL DATE</Text>
+                      <TextInput
+                        accessibilityLabel="Correction date YYYY-MM-DD"
+                        autoCapitalize="none"
+                        editable={!editDisabled}
+                        maxLength={10}
+                        style={styles.input}
+                        value={edit.time.localDate}
+                        onChangeText={(value) =>
+                          setEdit((current) =>
+                            current?.time
+                              ? {
+                                  ...current,
+                                  time: {
+                                    ...current.time,
+                                    localDate: value,
+                                    selectedOccurredAt: null,
+                                  },
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                      <Text style={styles.label}>LOCAL TIME</Text>
+                      <TextInput
+                        accessibilityLabel="Correction local time HH:MM"
+                        accessibilityHint="24-hour time in the displayed profile time zone"
+                        autoCapitalize="none"
+                        editable={!editDisabled}
+                        maxLength={5}
+                        style={styles.input}
+                        value={edit.time.localTime}
+                        onChangeText={(value) =>
+                          setEdit((current) =>
+                            current?.time
+                              ? {
+                                  ...current,
+                                  time: {
+                                    ...current.time,
+                                    localTime: value,
+                                    selectedOccurredAt: null,
+                                  },
+                                }
+                              : current,
+                          )
+                        }
+                      />
+                      {timeResolution?.kind === "gap" ? (
+                        <Text accessibilityRole="alert" style={styles.error}>
+                          This local time does not exist. Choose another time.
+                        </Text>
+                      ) : null}
+                      {timeResolution?.kind === "invalid" ? (
+                        <Text accessibilityRole="alert" style={styles.error}>
+                          Enter a valid date and 24-hour time.
+                        </Text>
+                      ) : null}
+                      {timeResolution?.kind === "ambiguous" ? (
+                        <View
+                          accessibilityRole="radiogroup"
+                          accessibilityLabel="Choose the repeated-time occurrence"
+                        >
+                          <Text style={styles.entryMeta}>
+                            This time occurs more than once. Choose an occurrence.
+                          </Text>
+                          {timeResolution.candidates.map((candidate, index) => (
+                            <Pressable
+                              key={candidate.occurredAt}
+                              accessibilityRole="radio"
+                              accessibilityState={{
+                                checked: edit.time?.selectedOccurredAt === candidate.occurredAt,
+                                disabled: editDisabled,
+                              }}
+                              disabled={editDisabled}
+                              style={styles.secondarySmall}
+                              onPress={() =>
+                                setEdit((current) =>
+                                  current?.time
+                                    ? {
+                                        ...current,
+                                        time: {
+                                          ...current.time,
+                                          selectedOccurredAt: candidate.occurredAt,
+                                        },
+                                      }
+                                    : current,
+                                )
+                              }
+                            >
+                              <Text style={styles.secondaryText}>
+                                {index === 0 ? "Earlier" : "Later"} occurrence ·{" "}
+                                {candidate.utcOffsetLabel}
+                                {edit.time?.selectedOccurredAt === candidate.occurredAt
+                                  ? " · Selected"
+                                  : ""}
+                              </Text>
+                            </Pressable>
+                          ))}
+                        </View>
+                      ) : null}
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={editDisabled}
+                        accessibilityState={{ disabled: editDisabled }}
+                        style={styles.secondarySmall}
+                        onPress={() =>
+                          setEdit((current) =>
+                            current ? { entry: current.entry, amount: current.amount } : current,
+                          )
+                        }
+                      >
+                        <Text style={styles.secondaryText}>Keep original time</Text>
+                      </Pressable>
+                    </>
+                  ) : (
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={editDisabled}
+                      accessibilityState={{ disabled: editDisabled }}
+                      style={styles.secondarySmall}
+                      onPress={() =>
+                        setEdit((current) =>
+                          current && day
+                            ? { ...current, time: hydrationTimeEdit(current.entry, day.timeZone) }
+                            : current,
+                        )
+                      }
+                    >
+                      <Text style={styles.secondaryText}>Change time</Text>
+                    </Pressable>
+                  )}
                   <View style={styles.actionRow}>
                     <Pressable
                       accessibilityRole="button"
-                      accessibilityState={{ disabled: controlsDisabled }}
-                      disabled={controlsDisabled}
+                      accessibilityState={{ disabled: editDisabled }}
+                      disabled={editDisabled}
                       onPress={() => void updateEntry()}
                       style={styles.primarySmall}
                     >
-                      <Text style={styles.primaryText}>Save amount</Text>
+                      <Text style={styles.primaryText}>
+                        {edit.time ? "Save correction" : "Save amount"}
+                      </Text>
                     </Pressable>
                     <Pressable
                       accessibilityRole="button"
-                      accessibilityState={{ disabled: controlsDisabled }}
-                      disabled={controlsDisabled}
+                      accessibilityState={{ disabled: editDisabled }}
+                      disabled={editDisabled}
                       onPress={() => setEdit(null)}
                       style={styles.secondarySmall}
                     >
@@ -508,8 +843,8 @@ export function HydrationScreen({
                   <View style={styles.actionRow}>
                     <Pressable
                       accessibilityRole="button"
-                      accessibilityState={{ disabled: controlsDisabled }}
-                      disabled={controlsDisabled}
+                      accessibilityState={{ disabled: editDisabled }}
+                      disabled={editDisabled}
                       onPress={() => setEdit({ entry, amount: String(entry.amountMilliliters) })}
                       style={styles.secondarySmall}
                     >
@@ -517,8 +852,8 @@ export function HydrationScreen({
                     </Pressable>
                     <Pressable
                       accessibilityRole="button"
-                      accessibilityState={{ disabled: controlsDisabled }}
-                      disabled={controlsDisabled}
+                      accessibilityState={{ disabled: editDisabled }}
+                      disabled={editDisabled}
                       onPress={() => confirmDelete(entry)}
                       style={styles.deleteSmall}
                     >

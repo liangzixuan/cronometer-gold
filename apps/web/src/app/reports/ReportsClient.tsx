@@ -105,6 +105,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   const [refreshKey, setRefreshKey] = useState(0);
 
   const privateUiClosed = useRef(false);
+  const sessionExplicitlyClosed = useRef(false);
   const sessionGeneration = useRef(0);
   const reportGeneration = useRef(0);
   const reportController = useRef<AbortController | null>(null);
@@ -116,6 +117,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   refreshRef.current = refreshKey;
 
   const signInAgain = useCallback(() => {
+    sessionExplicitlyClosed.current = true;
     privateUiClosed.current = true;
     sessionGeneration.current += 1;
     reportGeneration.current += 1;
@@ -141,6 +143,12 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
           cache: "no-store",
           signal: controller.signal,
         });
+        if (
+          controller.signal.aborted ||
+          privateUiClosed.current ||
+          sessionGeneration.current !== generation
+        )
+          return;
         if (response.status === 401) return signInAgain();
         const body = await responseJson(response);
         if (!response.ok) {
@@ -231,6 +239,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
           if (!isCurrent()) return;
           if (freshResponse.status === 401) return signInAgain();
           const freshBody = await responseJson(freshResponse);
+          if (!isCurrent()) return;
           if (!freshResponse.ok) {
             throw new Error(
               responseError(freshBody, "Your profile changed while the report was loading."),
@@ -269,15 +278,17 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
     return () => controller.abort();
   }, [range, refreshKey, session, signInAgain]);
 
-  useEffect(
-    () => () => {
+  useEffect(() => {
+    // StrictMode replays mount effects. Reopen only the lifecycle gate;
+    // an explicit session closure remains closed across effect replays.
+    privateUiClosed.current = sessionExplicitlyClosed.current;
+    return () => {
       privateUiClosed.current = true;
       sessionGeneration.current += 1;
       reportGeneration.current += 1;
       reportController.current?.abort();
-    },
-    [],
-  );
+    };
+  }, []);
 
   const selectedSeries = useMemo(
     () =>

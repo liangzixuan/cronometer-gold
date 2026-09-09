@@ -497,6 +497,142 @@ describe("hydration routes", () => {
     },
   );
 
+  it("preserves legacy timestamp-update digests and binds guarded updates to a canonical zone", async () => {
+    const service = hydrationStub();
+    const app = createTestApp(service);
+    const patch = { occurredAt: "2026-11-01T06:30:00.000Z" };
+    const headers = {
+      ...authHeaders,
+      "idempotency-key": operationId,
+      "if-match": '"3"',
+    };
+    const legacy = await app.inject({
+      method: "PATCH",
+      url: `/v1/hydration/entries/${entryId}`,
+      headers,
+      payload: patch,
+    });
+    const guarded = await app.inject({
+      method: "PATCH",
+      url: `/v1/hydration/entries/${entryId}?profileTimeZonePrecondition=v1`,
+      headers: { ...headers, "x-expected-profile-time-zone": "US/Central" },
+      payload: patch,
+    });
+    expect(legacy.statusCode, legacy.body).toBe(200);
+    expect(guarded.statusCode, guarded.body).toBe(200);
+    const calls = vi.mocked(service.updateEntry).mock.calls;
+    const legacyDigest = createHash("sha256")
+      .update(
+        canonicalJson({
+          operation: "update-hydration-entry",
+          value: { entryId, expectedRevision: "3", patch },
+        }),
+        "utf8",
+      )
+      .digest("hex");
+    expect(calls[0]?.[0].requestDigest).toBe(legacyDigest);
+    expect(calls[0]?.[0]).not.toHaveProperty("expectedProfileTimeZone");
+    expect(calls[1]?.[0]).toMatchObject({
+      userId,
+      entryId,
+      expectedRevision: "3",
+      patch,
+      expectedProfileTimeZone: "America/Chicago",
+      requestDigest: createHash("sha256")
+        .update(
+          canonicalJson({
+            operation: "update-hydration-entry-with-expected-profile-time-zone-v1",
+            value: {
+              entryId,
+              expectedRevision: "3",
+              patch,
+              expectedProfileTimeZone: "America/Chicago",
+            },
+          }),
+          "utf8",
+        )
+        .digest("hex"),
+    });
+    expect(calls[1]?.[0].requestDigest).not.toBe(legacyDigest);
+  });
+
+  it("rejects malformed timestamp guard pairs and guards on amount-only patches", async () => {
+    const service = hydrationStub();
+    const app = createTestApp(service);
+    const path = `/v1/hydration/entries/${entryId}`;
+    const baseHeaders = {
+      ...authHeaders,
+      "idempotency-key": operationId,
+      "if-match": '"3"',
+    };
+    const guardedHeaders = {
+      ...baseHeaders,
+      "x-expected-profile-time-zone": "America/Chicago",
+    };
+    const payload = { occurredAt: "2026-11-01T06:30:00.000Z" };
+    const requests = [
+      { url: path, headers: guardedHeaders, payload },
+      { url: `${path}?profileTimeZonePrecondition=v1`, headers: baseHeaders, payload },
+      { url: `${path}?profileTimeZonePrecondition=v2`, headers: guardedHeaders, payload },
+      {
+        url: `${path}?profileTimeZonePrecondition=v1&profileTimeZonePrecondition=v1`,
+        headers: guardedHeaders,
+        payload,
+      },
+      {
+        url: `${path}?profileTimeZonePrecondition=v1&unexpected=v1`,
+        headers: guardedHeaders,
+        payload,
+      },
+      {
+        url: `${path}?profileTimeZonePrecondition=v1`,
+        headers: { ...baseHeaders, "x-expected-profile-time-zone": "Not/A_Zone" },
+        payload,
+      },
+      {
+        url: `${path}?profileTimeZonePrecondition=v1`,
+        headers: {
+          ...baseHeaders,
+          "x-expected-profile-time-zone": "America/Chicago, America/Chicago",
+        },
+        payload,
+      },
+      {
+        url: `${path}?profileTimeZonePrecondition=v1`,
+        headers: guardedHeaders,
+        payload: { amountMilliliters: 500 },
+      },
+    ];
+    for (const request of requests) {
+      const response = await app.inject({ method: "PATCH", ...request });
+      expect(response.statusCode, response.body).toBe(400);
+      expect(response.json()).toMatchObject({ code: "VALIDATION_ERROR" });
+    }
+    expect(service.updateEntry).not.toHaveBeenCalled();
+  });
+
+  it("reports a typed timestamp-update zone conflict without exposing private details", async () => {
+    const service = hydrationStub({
+      updateEntry: vi.fn(async () => {
+        throw new HydrationTimeZoneChangedServiceError();
+      }),
+    });
+    const response = await createTestApp(service).inject({
+      method: "PATCH",
+      url: `/v1/hydration/entries/${entryId}?profileTimeZonePrecondition=v1`,
+      headers: {
+        ...authHeaders,
+        "idempotency-key": operationId,
+        "if-match": '"3"',
+        "x-expected-profile-time-zone": "America/Chicago",
+      },
+      payload: { occurredAt: "2026-11-01T06:30:00.000Z" },
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.json()).toMatchObject({ code: "HYDRATION_TIME_ZONE_CHANGED" });
+  });
+
   it("passes only the authenticated owner to delete and fails cross-owner misses closed", async () => {
     const privateOwner = "private-owner-id-must-not-leak";
     const service = hydrationStub({

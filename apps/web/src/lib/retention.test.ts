@@ -6,6 +6,9 @@ import {
   isSignedExactDecimal,
   operationId,
   parseBiometricTrend,
+  parseCustomFoodList,
+  parseCustomFoodMutation,
+  parseCustomFoodResponse,
   parseExportJob,
   parseIntegrationMutation,
   parseIntegrations,
@@ -36,6 +39,88 @@ const nutrient = {
     withheld: 0,
   },
 };
+
+function customFood(versionId: unknown = "9007199254740993") {
+  return {
+    id: uuid,
+    status: "active",
+    revision: "1",
+    currentVersion: {
+      id: versionId,
+      versionNumber: 1,
+      name: "Synthetic protein fixture",
+      brandName: null,
+      notes: null,
+      serving: { id: "31", label: "100 g fixture", grams: "100" },
+      nutrients: [
+        {
+          nutrient: { id: "2", code: "protein", name: "Protein", unit: "g" },
+          state: "quantified",
+          amountPer100Grams: "10",
+        },
+      ],
+      provenance: { kind: "user_entered", statement: "Entered by account owner." },
+      createdAt: instant,
+    },
+    createdAt: instant,
+    updatedAt: instant,
+  };
+}
+
+describe("custom-food version identifiers", () => {
+  it.each(["1", "9007199254740993", "99999999999999999999"])(
+    "preserves the canonical decimal string %s in detail, list, create and replay responses",
+    (versionId) => {
+      const food = customFood(versionId);
+      expect(parseCustomFoodResponse({ data: { customFood: food } }).currentVersion.id).toBe(
+        versionId,
+      );
+      expect(
+        parseCustomFoodList({ data: [food], page: { nextCursor: null } }).items[0]?.currentVersion
+          .id,
+      ).toBe(versionId);
+      for (const replayed of [false, true]) {
+        expect(
+          parseCustomFoodMutation({ data: { replayed, customFood: food } }).currentVersion.id,
+        ).toBe(versionId);
+      }
+    },
+  );
+
+  it.each([
+    uuid,
+    123,
+    123n,
+    null,
+    "",
+    "0",
+    "01",
+    "1.0",
+    "1e3",
+    "+1",
+    "-1",
+    " 1",
+    "1 ",
+    "1".repeat(21),
+  ])("rejects a noncanonical version identifier %s", (versionId) => {
+    const food = customFood(versionId);
+    expect(() => parseCustomFoodResponse({ data: { customFood: food } })).toThrow(/custom food/u);
+    expect(() => parseCustomFoodList({ data: [food], page: { nextCursor: null } })).toThrow(
+      /custom food/u,
+    );
+    for (const replayed of [false, true]) {
+      expect(() => parseCustomFoodMutation({ data: { replayed, customFood: food } })).toThrow(
+        /custom food/u,
+      );
+    }
+  });
+
+  it("still requires the custom-food identifier itself to be a UUID", () => {
+    expect(() =>
+      parseCustomFoodResponse({ data: { customFood: { ...customFood(), id: "31" } } }),
+    ).toThrow(/custom food/u);
+  });
+});
 
 describe("retention response boundaries", () => {
   it("does not rewrite seconds or milliseconds on a value-only biometric edit", () => {
