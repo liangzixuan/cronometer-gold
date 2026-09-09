@@ -1,0 +1,22 @@
+.lines {
+  list-style: none;
+  padding: 0;
+}
+
+.item {
+  overflow-wrap: anywhere;
+}
+
+.item > div {
+  min-width: 0;
+}
+
+@media (max-width: 40rem) {
+  .item.item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .item > button {
+    justify-self: start;
+  }
+}

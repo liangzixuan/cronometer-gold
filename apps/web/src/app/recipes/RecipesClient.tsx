@@ -40,6 +40,8 @@ import {
   type StableMutation,
 } from "../../lib/recipes-goals";
 
+import { PastedIngredientReview } from "./PastedIngredientReview";
+
 type LoadState = "loading" | "ready" | "error";
 
 interface BuilderState {
@@ -287,10 +289,10 @@ export function RecipesClient() {
   const [recipes, setRecipes] = useState<readonly RecipeSummaryView[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [selected, setSelected] = useState<RecipeView | null>(null);
-  const [builder, setBuilder] = useState<BuilderState>(emptyBuilder);
-  const [state, setState] = useState<LoadState>("loading");
+  const [builder, setBuilderState] = useState<BuilderState>(emptyBuilder);
+  const [state, setLoadState] = useState<LoadState>("loading");
   const [message, setMessage] = useState("Loading your private recipes…");
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusyState] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [foodResults, setFoodResults] = useState<readonly FoodSearchHit[]>([]);
   const [searchState, setSearchState] = useState<"idle" | LoadState>("idle");
@@ -307,10 +309,93 @@ export function RecipesClient() {
   const ownerUserId = useRef<string | null>(null);
   const privateUiClosed = useRef(false);
 
-  const recipeBody = useCallback(() => recipeBodyFromBuilder(builder), [builder]);
+  const mounted = useRef(false);
+  const builderRef = useRef(builder);
+  const builderGeneration = useRef(0);
+  const reviewGeneration = useRef(0);
+  const builderRequest = useRef<AbortController | null>(null);
+  const busyRef = useRef<string | null>(null);
+  const stateRef = useRef<LoadState>("loading");
+
+  const replaceBuilder = useCallback((next: BuilderState) => {
+    builderRef.current = next;
+    builderGeneration.current += 1;
+    setBuilderState(next);
+  }, []);
+  const setBuilder = useCallback(
+    (next: BuilderState) => {
+      if (!mounted.current || privateUiClosed.current || ownerUserId.current === null) return;
+      replaceBuilder(next);
+    },
+    [replaceBuilder],
+  );
+  const setBusy = useCallback((next: string | null) => {
+    busyRef.current = next;
+    setBusyState(next);
+  }, []);
+  const setState = useCallback((next: LoadState) => {
+    stateRef.current = next;
+    setLoadState(next);
+  }, []);
+  const reviewOwner = ownerUserId.current;
+  const reviewContext = reviewGeneration.current;
+
+  function confirmReviewedIngredients(ingredients: readonly RecipeIngredientDraft[]): boolean {
+    const current = builderRef.current;
+    if (
+      !mounted.current ||
+      privateUiClosed.current ||
+      !reviewOwner ||
+      ownerUserId.current !== reviewOwner ||
+      reviewGeneration.current !== reviewContext ||
+      stateRef.current !== "ready" ||
+      busyRef.current !== null ||
+      current.recipeId !== null ||
+      ingredients.length === 0 ||
+      current.ingredients.length + ingredients.length > 50
+    )
+      return false;
+    const keys = new Set(current.ingredients.map((ingredient) => ingredient.clientKey));
+    for (const ingredient of ingredients) {
+      if (ingredient.kind !== "food" || ingredient.note !== null || keys.has(ingredient.clientKey))
+        return false;
+      const quantity =
+        ingredient.portion.kind === "grams" ? ingredient.portion.grams : ingredient.portion.amount;
+      if (!isRecipePositiveDecimal(quantity)) return false;
+      keys.add(ingredient.clientKey);
+    }
+    reviewGeneration.current += 1;
+    setBuilder({ ...current, ingredients: [...current.ingredients, ...ingredients] });
+    setMessage(
+      `${ingredients.length} reviewed ingredients added. Review the final yield before creating the recipe.`,
+    );
+    return true;
+  }
+
+  function startNewRecipe() {
+    if (
+      !mounted.current ||
+      privateUiClosed.current ||
+      !ownerUserId.current ||
+      busyRef.current === "log"
+    )
+      return;
+    builderRequest.current?.abort();
+    builderRequest.current = null;
+    reviewGeneration.current += 1;
+    setBusy(null);
+    setSelected(null);
+    setBuilder(emptyBuilder());
+    setLogKind("grams");
+    setLogAmount("1");
+    setMessage("New recipe builder opened.");
+  }
 
   const signInAgain = useCallback(() => {
+    if (!mounted.current) return;
     privateUiClosed.current = true;
+    reviewGeneration.current += 1;
+    builderRequest.current = null;
     for (const controller of privateReadControllers.current) controller.abort();
     privateReadControllers.current.clear();
     profileRefreshController.current?.abort();
@@ -323,7 +408,7 @@ export function RecipesClient() {
     setRecipes([]);
     setNextCursor(null);
     setSelected(null);
-    setBuilder(emptyBuilder());
+    replaceBuilder(emptyBuilder());
     setState("loading");
     setMessage("Closing your private recipe workspace…");
     setBusy(null);
@@ -336,22 +421,20 @@ export function RecipesClient() {
     setLogAmount("1");
     router.replace("/login");
     router.refresh();
-  }, [router]);
+  }, [router, replaceBuilder, setBusy, setState]);
 
   const revalidateRecipeSession = useCallback(async (signal: AbortSignal) => {
-    try {
-      const response = await fetch("/api/auth/me", {
-        headers: { accept: "application/json" },
-        cache: "no-store",
-        signal,
-      });
-      if (!response.ok) throw new RecipeOwnerFenceError();
-      return parseSession(await responseJson(response));
-    } catch (error) {
-      if (signal.aborted) throw error;
-      if (error instanceof RecipeOwnerFenceError) throw error;
-      throw new RecipeOwnerFenceError();
-    }
+    const response = await fetch("/api/auth/me", {
+      headers: { accept: "application/json" },
+      cache: "no-store",
+      signal,
+    });
+    signal.throwIfAborted();
+    if (response.status === 401) throw new RecipeOwnerFenceError();
+    if (!response.ok) throw new Error("Your recipe session could not be checked. Try again.");
+    const body = await responseJson(response);
+    signal.throwIfAborted();
+    return parseSession(body);
   }, []);
 
   const loadRecipes = useCallback(
@@ -409,7 +492,7 @@ export function RecipesClient() {
         privateReadControllers.current.delete(controller);
       }
     },
-    [revalidateRecipeSession, signInAgain],
+    [revalidateRecipeSession, signInAgain, setState],
   );
 
   async function refreshRecipeProfileAfterTimeZoneChange(
@@ -424,6 +507,7 @@ export function RecipesClient() {
         cache: "no-store",
         signal: controller.signal,
       });
+      if (controller.signal.aborted || !mounted.current || privateUiClosed.current) return null;
       if (response.status === 401) {
         signInAgain();
         return null;
@@ -448,6 +532,7 @@ export function RecipesClient() {
   }
 
   useEffect(() => {
+    mounted.current = true;
     const controller = new AbortController();
     void (async () => {
       try {
@@ -456,7 +541,9 @@ export function RecipesClient() {
           cache: "no-store",
           signal: controller.signal,
         });
+        if (controller.signal.aborted || !mounted.current || privateUiClosed.current) return;
         if (response.status === 401) return signInAgain();
+        if (!response.ok) throw new Error("Session verification failed.");
         const session = parseSession(await responseJson(response));
         const localDate =
           requestedDate && isLocalDate(requestedDate)
@@ -481,17 +568,31 @@ export function RecipesClient() {
       }
     })();
     return () => {
+      mounted.current = false;
+      builderGeneration.current += 1;
+      reviewGeneration.current += 1;
+      builderRequest.current = null;
       controller.abort();
       for (const privateController of privateReadControllers.current) privateController.abort();
       privateReadControllers.current.clear();
       profileRefreshController.current?.abort();
     };
-  }, [loadRecipes, requestedDate, signInAgain]);
+  }, [loadRecipes, requestedDate, signInAgain, setState]);
 
-  async function openRecipe(recipeId: string) {
+  async function openRecipe(recipeId: string, successMessage?: string) {
     const initiatingOwnerUserId = ownerUserId.current;
-    if (initiatingOwnerUserId === null || privateUiClosed.current) return;
+    if (initiatingOwnerUserId === null || privateUiClosed.current || !mounted.current) return;
+    builderRequest.current?.abort();
     const controller = new AbortController();
+    builderRequest.current = controller;
+    const generation = builderGeneration.current;
+    const isCurrent = () =>
+      mounted.current &&
+      !privateUiClosed.current &&
+      !controller.signal.aborted &&
+      builderRequest.current === controller &&
+      ownerUserId.current === initiatingOwnerUserId &&
+      builderGeneration.current === generation;
     privateReadControllers.current.add(controller);
     setBusy(`open:${recipeId}`);
     setMessage("Loading the immutable recipe revision…");
@@ -513,23 +614,25 @@ export function RecipesClient() {
         },
         revalidateSession: () => revalidateRecipeSession(controller.signal),
         install: (recipe) => {
-          if (privateUiClosed.current || ownerUserId.current !== initiatingOwnerUserId) {
-            throw new RecipeOwnerFenceError();
-          }
+          if (!isCurrent()) return;
+          reviewGeneration.current += 1;
           setSelected(recipe);
           setBuilder(draftFromRecipe(recipe));
           setLogKind(recipeLogKindFor(recipe));
           setLogAmount("1");
-          setMessage(`Version ${recipe.versionNumber} loaded.`);
+          setMessage(successMessage ?? `Version ${recipe.versionNumber} loaded.`);
         },
       });
     } catch (caught) {
-      if (controller.signal.aborted) return;
+      if (!isCurrent()) return;
       if (caught instanceof RecipeOwnerFenceError) return signInAgain();
       setMessage(caught instanceof Error ? caught.message : "The recipe could not be loaded.");
     } finally {
       privateReadControllers.current.delete(controller);
-      if (!privateUiClosed.current) setBusy(null);
+      if (builderRequest.current === controller) {
+        builderRequest.current = null;
+        if (mounted.current && !privateUiClosed.current) setBusy(null);
+      }
     }
   }
 
@@ -645,14 +748,34 @@ export function RecipesClient() {
 
   async function saveRecipe(event: FormEvent) {
     event.preventDefault();
+    const initiatingOwnerUserId = ownerUserId.current;
+    if (
+      !mounted.current ||
+      privateUiClosed.current ||
+      !initiatingOwnerUserId ||
+      busyRef.current !== null
+    )
+      return;
+    const savingBuilder = builderRef.current;
     let body: ReturnType<typeof recipeBodyFromBuilder>;
     try {
-      body = recipeBody();
+      body = recipeBodyFromBuilder(savingBuilder);
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Review the recipe fields.");
       return;
     }
-    const intentKey = `${builder.recipeId ?? "create"}:${builder.revision ?? "new"}:${JSON.stringify(body)}`;
+    const generation = builderGeneration.current;
+    const controller = new AbortController();
+    builderRequest.current = controller;
+    privateReadControllers.current.add(controller);
+    const isCurrent = () =>
+      mounted.current &&
+      !privateUiClosed.current &&
+      !controller.signal.aborted &&
+      builderRequest.current === controller &&
+      ownerUserId.current === initiatingOwnerUserId &&
+      builderGeneration.current === generation;
+    const intentKey = `${savingBuilder.recipeId ?? "create"}:${savingBuilder.revision ?? "new"}:${JSON.stringify(body)}`;
     const operation = prepareStableMutation(
       pendingSaves.current,
       intentKey,
@@ -661,10 +784,15 @@ export function RecipesClient() {
     );
     pendingSaves.current.set(intentKey, operation);
     setBusy("save");
-    setMessage(builder.recipeId ? "Publishing a new immutable revision…" : "Creating recipe…");
+    setMessage(
+      savingBuilder.recipeId ? "Publishing a new immutable revision…" : "Creating recipe…",
+    );
     try {
-      const path = builder.recipeId
-        ? `/api/recipes/${encodeURIComponent(builder.recipeId)}/revisions`
+      const beforeSession = await revalidateRecipeSession(controller.signal);
+      if (!isCurrent()) return;
+      if (beforeSession.user.id !== initiatingOwnerUserId) throw new RecipeOwnerFenceError();
+      const path = savingBuilder.recipeId
+        ? `/api/recipes/${encodeURIComponent(savingBuilder.recipeId)}/revisions`
         : "/api/recipes";
       const response = await fetch(path, {
         method: "POST",
@@ -672,41 +800,65 @@ export function RecipesClient() {
           accept: "application/json",
           "content-type": "application/json",
           "idempotency-key": operation.operationId,
-          ...(builder.revision ? { "if-match": `"${builder.revision}"` } : {}),
+          ...(savingBuilder.revision ? { "if-match": `"${savingBuilder.revision}"` } : {}),
         },
         body: JSON.stringify(operation.body),
         cache: "no-store",
+        signal: controller.signal,
       });
+      if (!isCurrent()) return;
       if (response.status === 401) return signInAgain();
       const responseBody = await responseJson(response);
+      if (!isCurrent()) return;
       if (response.status === 412) {
         pendingSaves.current.delete(intentKey);
-        if (builder.recipeId) await openRecipe(builder.recipeId);
-        setMessage(
-          "This recipe changed elsewhere. Fresh values were loaded; review before saving again.",
-        );
+        if (savingBuilder.recipeId)
+          await openRecipe(
+            savingBuilder.recipeId,
+            "This recipe changed elsewhere. Fresh values were loaded; review before saving again.",
+          );
         return;
       }
       if (!response.ok)
         throw new Error(responseMessage(responseBody, "The recipe could not be saved."));
       const mutation = parseRecipeMutation(responseBody);
+      const afterSession = await revalidateRecipeSession(controller.signal);
+      if (!isCurrent()) return;
+      if (afterSession.user.id !== initiatingOwnerUserId) throw new RecipeOwnerFenceError();
       pendingSaves.current.delete(intentKey);
+      reviewGeneration.current += 1;
       setSelected(mutation.recipe);
       setBuilder(draftFromRecipe(mutation.recipe));
       setLogKind(recipeLogKindFor(mutation.recipe));
       setLogAmount("1");
+      // The receipt is installed. Do not let the later list refresh replace a newer draft's status.
+      const installedGeneration = builderGeneration.current;
       await loadRecipes();
+      if (
+        !mounted.current ||
+        privateUiClosed.current ||
+        controller.signal.aborted ||
+        ownerUserId.current !== initiatingOwnerUserId ||
+        builderGeneration.current !== installedGeneration
+      )
+        return;
       setMessage(
         mutation.replayed
           ? "The earlier save was confirmed safely."
           : `Recipe version ${mutation.recipe.versionNumber} published.`,
       );
     } catch (caught) {
+      if (!isCurrent()) return;
+      if (caught instanceof RecipeOwnerFenceError) return signInAgain();
       setMessage(
         `${caught instanceof Error ? caught.message : "The recipe could not be saved."} Choose Save again to retry safely.`,
       );
     } finally {
-      setBusy(null);
+      privateReadControllers.current.delete(controller);
+      if (builderRequest.current === controller) {
+        builderRequest.current = null;
+        if (mounted.current && !privateUiClosed.current) setBusy(null);
+      }
     }
   }
 
@@ -851,13 +1003,8 @@ export function RecipesClient() {
           <aside className="recipeRail" aria-label="Your recipes">
             <button
               className="buttonPrimary"
-              onClick={() => {
-                setSelected(null);
-                setBuilder(emptyBuilder());
-                setLogKind("grams");
-                setLogAmount("1");
-                setMessage("New recipe builder opened.");
-              }}
+              disabled={busy === "log" || state !== "ready"}
+              onClick={startNewRecipe}
               type="button"
             >
               New recipe
@@ -909,247 +1056,266 @@ export function RecipesClient() {
               </div>
               {selected ? <span className="statusPill">v{selected.versionNumber}</span> : null}
             </div>
+            {builder.recipeId === null && reviewOwner && !privateUiClosed.current ? (
+              <PastedIngredientReview
+                key={reviewContext}
+                ownerUserId={reviewOwner}
+                disabled={busy !== null || state !== "ready"}
+                remainingCapacity={50 - builder.ingredients.length}
+                onConfirm={confirmReviewedIngredients}
+                onSessionClosed={signInAgain}
+              />
+            ) : null}
             <form className="workspaceForm" onSubmit={(event) => void saveRecipe(event)}>
-              <div className="formGrid">
-                <label className="formField">
-                  <span>Name</span>
-                  <input
-                    maxLength={200}
-                    onChange={(event) => setBuilder({ ...builder, name: event.target.value })}
-                    required
-                    value={builder.name}
-                  />
-                </label>
-                <label className="formField">
-                  <span>Final yield grams</span>
-                  <input
-                    inputMode="decimal"
-                    maxLength={19}
-                    onChange={(event) => setBuilder({ ...builder, yieldGrams: event.target.value })}
-                    required
-                    value={builder.yieldGrams}
-                  />
-                </label>
-                <label className="formField">
-                  <span>Yield source</span>
-                  <select
-                    onChange={(event) =>
-                      setBuilder({
-                        ...builder,
-                        yieldSource: event.target.value as "measured" | "estimated",
-                      })
-                    }
-                    value={builder.yieldSource}
-                  >
-                    <option value="measured">Measured after preparation</option>
-                    <option value="estimated">Estimated</option>
-                  </select>
-                </label>
-                <label className="formField">
-                  <span>Serving count (optional)</span>
-                  <input
-                    inputMode="decimal"
-                    maxLength={19}
-                    onChange={(event) =>
-                      setBuilder({ ...builder, servingCount: event.target.value })
-                    }
-                    value={builder.servingCount}
-                  />
-                </label>
-                <label className="formField">
-                  <span>Serving label</span>
-                  <input
-                    disabled={!builder.servingCount}
-                    maxLength={100}
-                    onChange={(event) =>
-                      setBuilder({ ...builder, servingLabel: event.target.value })
-                    }
-                    value={builder.servingLabel}
-                  />
-                </label>
-                <label className="formField formField--wide">
-                  <span>Description</span>
-                  <textarea
-                    maxLength={2_000}
-                    onChange={(event) =>
-                      setBuilder({ ...builder, description: event.target.value })
-                    }
-                    value={builder.description}
-                  />
-                </label>
-                <label className="formField formField--wide">
-                  <span>Instructions (optional)</span>
-                  <textarea
-                    maxLength={10_000}
-                    onChange={(event) =>
-                      setBuilder({ ...builder, instructions: event.target.value })
-                    }
-                    value={builder.instructions}
-                  />
-                </label>
-              </div>
-              <section className="workspaceSection" aria-labelledby="ingredient-heading">
-                <h3 id="ingredient-heading">Ingredients ({builder.ingredients.length}/50)</h3>
-                <ul className="ingredientList">
-                  {builder.ingredients.map((ingredient, index) => {
-                    const quantity =
-                      ingredient.kind === "recipe"
-                        ? ingredient.grams
-                        : ingredient.portion.kind === "serving"
-                          ? ingredient.portion.amount
-                          : ingredient.portion.grams;
-                    const unit =
-                      ingredient.kind === "recipe" || ingredient.portion.kind === "grams"
-                        ? "grams"
-                        : ingredient.portion.servingLabel;
-                    return (
-                      <li className="ingredientRow" key={ingredient.clientKey}>
-                        <div>
-                          <strong>{ingredient.name}</strong>
-                          <p className="sourceLine">
-                            {ingredient.kind === "recipe"
-                              ? `Pinned recipe revision ${ingredient.recipeVersionId}`
-                              : foodIngredientAttribution(ingredient)}
-                          </p>
-                          <label className="formField">
-                            <span className="srOnly">{ingredient.name} note</span>
-                            <input
-                              aria-label={`${ingredient.name} note`}
-                              maxLength={500}
-                              onChange={(event) => updateIngredientNote(index, event.target.value)}
-                              placeholder="Ingredient note (optional)"
-                              value={ingredient.note ?? ""}
-                            />
-                          </label>
-                        </div>
-                        <label className="formField">
-                          <span className="srOnly">
-                            {ingredient.name} quantity in {unit}
-                          </span>
-                          <input
-                            aria-label={`${ingredient.name} quantity in ${unit}`}
-                            inputMode="decimal"
-                            maxLength={19}
-                            onChange={(event) => updateIngredient(index, event.target.value)}
-                            value={quantity}
-                          />
-                        </label>
-                        <button
-                          className="buttonDanger"
-                          onClick={() =>
-                            setBuilder({
-                              ...builder,
-                              ingredients: builder.ingredients.filter(
-                                (_, candidate) => candidate !== index,
-                              ),
-                            })
-                          }
-                          type="button"
-                        >
-                          Remove
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-                <div className="workspaceForm">
+              <fieldset
+                disabled={busy !== null || state !== "ready"}
+                style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}
+              >
+                <div className="formGrid">
                   <label className="formField">
-                    <span>Find a reviewed food</span>
-                    <div className="searchInputRow">
-                      <input
-                        maxLength={128}
-                        onChange={(event) => setQuery(event.target.value)}
-                        placeholder="e.g. rolled oats"
-                        value={query}
-                      />
-                      <button
-                        className="buttonSecondary"
-                        disabled={searchState === "loading"}
-                        onClick={() => void searchFoods()}
-                        type="button"
-                      >
-                        {searchState === "loading" ? "Searching…" : "Search"}
-                      </button>
-                    </div>
+                    <span>Name</span>
+                    <input
+                      maxLength={200}
+                      onChange={(event) => setBuilder({ ...builder, name: event.target.value })}
+                      required
+                      value={builder.name}
+                    />
+                  </label>
+                  <label className="formField">
+                    <span>Final yield grams</span>
+                    <input
+                      inputMode="decimal"
+                      maxLength={19}
+                      onChange={(event) =>
+                        setBuilder({ ...builder, yieldGrams: event.target.value })
+                      }
+                      required
+                      value={builder.yieldGrams}
+                    />
+                  </label>
+                  <label className="formField">
+                    <span>Yield source</span>
+                    <select
+                      onChange={(event) =>
+                        setBuilder({
+                          ...builder,
+                          yieldSource: event.target.value as "measured" | "estimated",
+                        })
+                      }
+                      value={builder.yieldSource}
+                    >
+                      <option value="measured">Measured after preparation</option>
+                      <option value="estimated">Estimated</option>
+                    </select>
+                  </label>
+                  <label className="formField">
+                    <span>Serving count (optional)</span>
+                    <input
+                      inputMode="decimal"
+                      maxLength={19}
+                      onChange={(event) =>
+                        setBuilder({ ...builder, servingCount: event.target.value })
+                      }
+                      value={builder.servingCount}
+                    />
+                  </label>
+                  <label className="formField">
+                    <span>Serving label</span>
+                    <input
+                      disabled={!builder.servingCount}
+                      maxLength={100}
+                      onChange={(event) =>
+                        setBuilder({ ...builder, servingLabel: event.target.value })
+                      }
+                      value={builder.servingLabel}
+                    />
+                  </label>
+                  <label className="formField formField--wide">
+                    <span>Description</span>
+                    <textarea
+                      maxLength={2_000}
+                      onChange={(event) =>
+                        setBuilder({ ...builder, description: event.target.value })
+                      }
+                      value={builder.description}
+                    />
+                  </label>
+                  <label className="formField formField--wide">
+                    <span>Instructions (optional)</span>
+                    <textarea
+                      maxLength={10_000}
+                      onChange={(event) =>
+                        setBuilder({ ...builder, instructions: event.target.value })
+                      }
+                      value={builder.instructions}
+                    />
                   </label>
                 </div>
-                {foodResults.length ? (
-                  <div className="ingredientSearchResults">
-                    {foodResults.map((food) => (
-                      <article className="ingredientResult" key={food.foodVersionId}>
-                        <div>
-                          <strong>{food.name}</strong>
-                          <p className="sourceLine">
-                            {food.defaultServing?.gramWeight
-                              ? `${food.defaultServing.label} · ${food.defaultServing.gramWeight} g`
-                              : "No reviewed gram-resolved serving; explicit grams are available"}
-                          </p>
-                          <p className="sourceLine">
-                            {food.source.attributionText} · {food.source.licenseExpression}
-                          </p>
-                        </div>
-                        <div>
+                <section className="workspaceSection" aria-labelledby="ingredient-heading">
+                  <h3 id="ingredient-heading">Ingredients ({builder.ingredients.length}/50)</h3>
+                  <ul className="ingredientList">
+                    {builder.ingredients.map((ingredient, index) => {
+                      const quantity =
+                        ingredient.kind === "recipe"
+                          ? ingredient.grams
+                          : ingredient.portion.kind === "serving"
+                            ? ingredient.portion.amount
+                            : ingredient.portion.grams;
+                      const unit =
+                        ingredient.kind === "recipe" || ingredient.portion.kind === "grams"
+                          ? "grams"
+                          : ingredient.portion.servingLabel;
+                      return (
+                        <li className="ingredientRow" key={ingredient.clientKey}>
+                          <div>
+                            <strong>{ingredient.name}</strong>
+                            <p className="sourceLine">
+                              {ingredient.kind === "recipe"
+                                ? `Pinned recipe revision ${ingredient.recipeVersionId}`
+                                : foodIngredientAttribution(ingredient)}
+                            </p>
+                            <label className="formField">
+                              <span className="srOnly">{ingredient.name} note</span>
+                              <input
+                                aria-label={`${ingredient.name} note`}
+                                maxLength={500}
+                                onChange={(event) =>
+                                  updateIngredientNote(index, event.target.value)
+                                }
+                                placeholder="Ingredient note (optional)"
+                                value={ingredient.note ?? ""}
+                              />
+                            </label>
+                          </div>
+                          <label className="formField">
+                            <span className="srOnly">
+                              {ingredient.name} quantity in {unit}
+                            </span>
+                            <input
+                              aria-label={`${ingredient.name} quantity in ${unit}`}
+                              inputMode="decimal"
+                              maxLength={19}
+                              onChange={(event) => updateIngredient(index, event.target.value)}
+                              value={quantity}
+                            />
+                          </label>
                           <button
-                            className="buttonQuiet"
-                            disabled={
-                              !food.defaultServing?.gramWeight || builder.ingredients.length >= 50
+                            className="buttonDanger"
+                            onClick={() =>
+                              setBuilder({
+                                ...builder,
+                                ingredients: builder.ingredients.filter(
+                                  (_, candidate) => candidate !== index,
+                                ),
+                              })
                             }
-                            onClick={() => addFood(food, "serving")}
                             type="button"
                           >
-                            Add serving
-                          </button>{" "}
-                          <button
-                            className="buttonQuiet"
-                            disabled={builder.ingredients.length >= 50}
-                            onClick={() => addFood(food, "grams")}
-                            type="button"
-                          >
-                            Add 100 g
+                            Remove
                           </button>
-                        </div>
-                      </article>
-                    ))}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                  <div className="workspaceForm">
+                    <label className="formField">
+                      <span>Find a reviewed food</span>
+                      <div className="searchInputRow">
+                        <input
+                          maxLength={128}
+                          onChange={(event) => setQuery(event.target.value)}
+                          placeholder="e.g. rolled oats"
+                          value={query}
+                        />
+                        <button
+                          className="buttonSecondary"
+                          disabled={searchState === "loading"}
+                          onClick={() => void searchFoods()}
+                          type="button"
+                        >
+                          {searchState === "loading" ? "Searching…" : "Search"}
+                        </button>
+                      </div>
+                    </label>
                   </div>
-                ) : null}
-                {recipes.some((recipe) => recipe.id !== builder.recipeId) ? (
-                  <div className="workspaceSection">
-                    <h3>Or pin a nested recipe revision</h3>
+                  {foodResults.length ? (
                     <div className="ingredientSearchResults">
-                      {recipes
-                        .filter((recipe) => recipe.id !== builder.recipeId)
-                        .map((recipe) => (
-                          <article className="ingredientResult" key={recipe.id}>
-                            <div>
-                              <strong>{recipe.name}</strong>
-                              <p className="sourceLine">
-                                Version {recipe.versionNumber} · {recipe.finalYieldGrams} g yield
-                              </p>
-                            </div>
+                      {foodResults.map((food) => (
+                        <article className="ingredientResult" key={food.foodVersionId}>
+                          <div>
+                            <strong>{food.name}</strong>
+                            <p className="sourceLine">
+                              {food.defaultServing?.gramWeight
+                                ? `${food.defaultServing.label} · ${food.defaultServing.gramWeight} g`
+                                : "No reviewed gram-resolved serving; explicit grams are available"}
+                            </p>
+                            <p className="sourceLine">
+                              {food.source.attributionText} · {food.source.licenseExpression}
+                            </p>
+                          </div>
+                          <div>
                             <button
                               className="buttonQuiet"
-                              onClick={() => addNested(recipe)}
+                              disabled={
+                                !food.defaultServing?.gramWeight || builder.ingredients.length >= 50
+                              }
+                              onClick={() => addFood(food, "serving")}
+                              type="button"
+                            >
+                              Add serving
+                            </button>{" "}
+                            <button
+                              className="buttonQuiet"
+                              disabled={builder.ingredients.length >= 50}
+                              onClick={() => addFood(food, "grams")}
                               type="button"
                             >
                               Add 100 g
                             </button>
-                          </article>
-                        ))}
+                          </div>
+                        </article>
+                      ))}
                     </div>
-                  </div>
-                ) : null}
-              </section>
-              <button
-                className="buttonPrimary"
-                disabled={busy === "save" || builder.ingredients.length === 0}
-                type="submit"
-              >
-                {busy === "save"
-                  ? "Saving…"
-                  : builder.recipeId
-                    ? "Publish new revision"
-                    : "Create recipe"}
-              </button>
+                  ) : null}
+                  {recipes.some((recipe) => recipe.id !== builder.recipeId) ? (
+                    <div className="workspaceSection">
+                      <h3>Or pin a nested recipe revision</h3>
+                      <div className="ingredientSearchResults">
+                        {recipes
+                          .filter((recipe) => recipe.id !== builder.recipeId)
+                          .map((recipe) => (
+                            <article className="ingredientResult" key={recipe.id}>
+                              <div>
+                                <strong>{recipe.name}</strong>
+                                <p className="sourceLine">
+                                  Version {recipe.versionNumber} · {recipe.finalYieldGrams} g yield
+                                </p>
+                              </div>
+                              <button
+                                className="buttonQuiet"
+                                onClick={() => addNested(recipe)}
+                                type="button"
+                              >
+                                Add 100 g
+                              </button>
+                            </article>
+                          ))}
+                      </div>
+                    </div>
+                  ) : null}
+                </section>
+                <button
+                  className="buttonPrimary"
+                  disabled={busy === "save" || builder.ingredients.length === 0}
+                  type="submit"
+                >
+                  {busy === "save"
+                    ? "Saving…"
+                    : builder.recipeId
+                      ? "Publish new revision"
+                      : "Create recipe"}
+                </button>
+              </fieldset>
             </form>
             {selected ? (
               <>

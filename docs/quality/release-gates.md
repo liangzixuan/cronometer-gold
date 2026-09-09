@@ -405,6 +405,16 @@ acceptance.
   cannot be revoked after handoff; afterprint does not prove a save. Synthetic
   browser/PDF proof does not replace independent, hosted or assistive-technology
   acceptance. No API, retained entity, storage or delivery channel is added.
+- M4A pasted-ingredient review under ADR 0029 preserves each original line in memory
+  and requires explicit food/version and positive exact portion confirmation.
+  Reopened or changed choices cannot retain an old confirmation. Transfer appends
+  once to the current new-recipe draft without losing its fields or exceeding
+  50 ingredients; cancel preserves that draft. Raw paste never enters notes,
+  storage, telemetry or save payloads automatically. Owner/request/generation
+  fences cover search, JSON parsing, transfer and parent open/save receipts, with
+  session closure, disabled state, unmount and effect replay exercised. Browser
+  review covers keyboard use, narrow layouts, failure/retry and final transfer.
+  Existing yield, provenance, idempotency and release gates remain required.
 - The optional M1B-R reference-template candidate remains disabled for
   controlled-beta and commercial users until a named registered dietitian or
   qualified clinical-science owner approves its exact values, canonical units,

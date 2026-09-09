@@ -105,7 +105,10 @@ container supply-chain run `34397666277` failed in the web image build. Clean-so
 reproduction confirmed that its web-only build omitted the newly required contracts
 output. The corrected command builds the workspace dependency closure first;
 regression checks and an isolated clean-source build pass. This repairs the source
-defect; replacement exact-commit container evidence is still required.
+defect; replacement exact-commit container evidence is still required. Both print
+and build-repair commits were delivered as `87356d2`; CI `34415057674` passed,
+while container supply-chain run `34415057669` is still in progress at the latest
+read-only observation.
 
 M3B printable-report checkpoint `514e2c1`, canonical checks/build and six synthetic
 Letter/A4 PDFs pass under ADR 0028. The real web/BFF fixture proves session
@@ -125,8 +128,8 @@ the detailed milestone boundaries below remain authoritative.
 | --- | --- | --- |
 | Independent review | Finish and stabilize M1E Today overview | Selected date survives both detail round trips; diary receipts reload summary cards; a background profile refresh cannot overwrite another client's meal-group edits; focused regressions and final applicable local gates pass, review findings are resolved, and applicable exact-commit automatic checks reach terminal success |
 | Build repair / automatic evidence | M1F: complete the daily hydration correction flow | Web and mobile let a person correct when water was logged through the existing `occurredAt` API, explain profile-local time and ambiguous/invalid times, and refresh the affected day after a move; retain retry/revision/privacy rules and prove the food/water/activity/report journey with synthetic local data |
-| Now | M3B: print the current nutrition report on web | Print the already loaded coherent report as readable Letter/A4 output, preserving exact evidence and missingness; session closure or invalidation prevents stale private output; repeat-print/direct-Ctrl+P manual checks and exact-commit automatic evidence remain open |
-| Next candidate (planning only) | M4A: review a pasted ingredient list on web | Resolve each retained ingredient line explicitly to an existing food version and exact quantity, confirm transfer into a new recipe draft, and preserve yield, provenance and session cleanup |
+| Acceptance follow-up | M3B: print the current nutrition report on web | Print the already loaded coherent report as readable Letter/A4 output, preserving exact evidence and missingness; session closure or invalidation prevents stale private output; repeat-print/direct-Ctrl+P manual checks and exact-commit automatic evidence remain open |
+| Now | M4A: review a pasted ingredient list on web | Resolve each retained ingredient line explicitly to an existing food version and exact quantity, confirm transfer into a new recipe draft, and preserve yield, provenance and session cleanup |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -146,7 +149,7 @@ reminders, offline writes and device ingestion stay outside this slice. Syntheti
 browser and accessible-state tests do not replace the physical-device, cross-client,
 assistive-technology or hosted acceptance required by M1/M2.
 
-The active M3B acceptance card is **Print current nutrition report** (browser
+The M3B acceptance follow-up is **Print current nutrition report** (browser
 Save as PDF), defined by [ADR 0028](../adr/0028-print-current-nutrition-report.md). Reuse the current 1–31-day snapshot and selected nutrient; preserve
 exact amounts, quantified zero, trace, partial/unknown/missing days, saved-target
 periods and expiry notices, timezone, capture time, profile revision and watermark.
@@ -158,12 +161,14 @@ selections. Scope is web report presentation and focused lifecycle/visual checks
 with no new API, retained entity, external dependency or storage. Scheduled
 delivery, automated sharing, scores/advice, all-nutrient booklets, mobile OS print
 and hosted enablement remain excluded. This uses the existing M3A evidence before
-adding scheduling infrastructure or M4 imported-content interpretation. It is
-active; M1F's failed container evidence and independent review need their own closure.
+adding scheduling infrastructure or M4 imported-content interpretation. Its manual
+checks, replacement container evidence and independent review need their own
+closure while the user-directed next source slice advances.
 
-The next candidate is **M4A: review a pasted ingredient list on web**, within the
-existing recipe-text import milestone. Existing recipe editors already accept
-descriptions/instructions and version-pinned ingredients. The proposed slice accepts
+The active implementation is **M4A: review a pasted ingredient list on web**, under
+[ADR 0029](../adr/0029-pasted-ingredient-review.md), within the existing recipe-text
+import milestone. Existing recipe editors already accept
+descriptions/instructions and version-pinned ingredients. The bounded slice accepts
 up to 50 ingredient lines in a new-recipe draft, retains each original line, and
 lets the user explicitly resolve food/version and exact quantity through existing
 search and gram-resolved portions. Require confirmation before transfer to the
@@ -171,7 +176,9 @@ builder; unresolved quantities cannot become saved ingredients. Preserve existin
 drafts, required yield, exact decimal arithmetic and session cleanup. Raw pasted
 text stays in memory. URL fetching, automatic food creation, inferred nutrition,
 AI services, new retained data, automated sharing and mobile UI are excluded.
-This is a planning card, not a second active implementation or an acceptance waiver.
+The user's next-step request advances this one implementation; it does not waive
+M3B or any existing release acceptance. Stop at reviewed source with passing
+applicable local gates and accurately recorded exact-commit automatic status.
 
 Prepare the external decisions alongside product work, without executing them:
 
