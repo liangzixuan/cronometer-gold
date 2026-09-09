@@ -1,7 +1,7 @@
 # Privacy export and account erasure
 
 This runbook covers the production execution and evidence boundary for complete
-account exports and erasure. Nutrition, hydration, and biometric values never
+account exports and erasure. Nutrition, activity, hydration, and biometric values never
 belong in a ticket, log, metric, email, or operator screenshot.
 
 ## Local all-entity drill
@@ -13,7 +13,7 @@ named bounded polls: seed export, one-artifact expiry, measured export, and
 erasure. Its static contract rejects an additional hidden poll.
 
 The fixture populates and independently enumerates the compile-pinned set of all
-61 retained export entity families. Every family must have a nonzero source
+65 retained export entity families. Every family must have a nonzero source
 count and exact IDs/counts must reconcile across the source snapshot, JSON, and
 decompressed CSV. Forbidden field-name assertions and independent sentinels
 verify redaction in every exported audit row; artifact lifecycle rows must omit
@@ -30,6 +30,15 @@ the authenticated HTTP contract. `hydration_day`, `hydration_entry`,
 `hydration_entry_revision`, and `hydration_operation` must reconcile exactly in
 both artifacts, then reconcile to zero for the erased owner; an independently
 queried cross-owner hydration entry and its owner session must survive.
+
+Manual activity is route-first in this drill: create, update, and logical delete
+use the authenticated HTTP contract. `activity_day`, `activity_entry`,
+`activity_entry_revision`, and `activity_operation` must reconcile exactly in
+both artifacts, including immutable self-reported-energy history, then reconcile
+to zero for the erased owner; an independently queried cross-owner activity entry
+and its owner session must survive. Activity duration and optional self-reported
+energy remain historical observations only and never alter a nutrition goal,
+energy balance, or profile activity-level/PAL setting.
 
 This is local synthetic evidence, not permission to inspect a person's artifact,
 expose a listener, use production data, or operate a cloud deployment. It does
@@ -76,7 +85,8 @@ ciphertext does not satisfy expiry or erasure.
    revokes sessions, device keys, integration consent, reminder schedules,
    download access, and queued delivery/import work.
 3. Delete user-owned data in the repository's reviewed dependency order. This
-   includes diary and hydration history, biometrics, custom foods, recipes, goals,
+   includes diary, hydration, and manual activity history, biometrics, custom foods,
+   recipes, goals,
    imports, devices, reminders, exports/artifacts, sessions, credentials,
    profile, and account identifiers. Do not bypass immutable guards from an
    application role;

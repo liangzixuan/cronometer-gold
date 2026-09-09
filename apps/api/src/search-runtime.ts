@@ -6,6 +6,7 @@ import {
 } from "@nutrition-tracker/search";
 
 import type { ApiDependencyConfig } from "./config.js";
+import type { ActivityService } from "./modules/activity/activity.routes.js";
 import { type AuthService, SecureAuthService } from "./modules/auth/auth-service.js";
 import { LocalMailpitEmailDelivery } from "./modules/auth/email-delivery.js";
 import type { DiaryService } from "./modules/diary/diary.routes.js";
@@ -18,6 +19,7 @@ import type { NutritionReportService } from "./modules/reports/nutrition-report.
 import type { RetentionService } from "./modules/retention/retention.routes.js";
 import { DatabaseNutritionReportService } from "./nutrition-report-persistence-service.js";
 import {
+  DatabaseActivityService,
   DatabaseAuthRepository,
   DatabaseDiaryService,
   DatabaseGoalService,
@@ -29,6 +31,7 @@ import { createApiRetentionArtifactRuntime } from "./retention-artifact-runtime.
 import { DatabaseRetentionService } from "./retention-persistence-service.js";
 
 export interface ApiSearchRuntime {
+  readonly activityService: ActivityService;
   readonly authService: AuthService;
   readonly diaryService: DiaryService;
   readonly foodSearchService: DatabaseBackedFoodSearchService;
@@ -111,6 +114,7 @@ export async function createApiSearchRuntime(
         : undefined;
 
     return {
+      activityService: new DatabaseActivityService(database),
       authService,
       diaryService: new DatabaseDiaryService(database, { cursorSecret: config.cursorSecret }),
       foodSearchService: new DatabaseBackedFoodSearchService({

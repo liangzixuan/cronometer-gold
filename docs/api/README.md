@@ -207,6 +207,51 @@ is 404, idempotency or guarded-time-zone conflict is 409, a stale revision is
 412, and an entry/day operational-bound violation is 422. Authentication and
 service-readiness errors retain the shared 401 and 503 contracts.
 
+## Manual activities
+
+The manual-activity surface is authenticated, owner-scoped, private, and
+informational. Every response sends `Cache-Control: no-store`. It has no write or
+calculation path into nutrition goals, remaining calories, progress, dietary
+reports, PAL, or energy balance.
+
+Every activity request carries `X-Expected-Owner-User-Id`. The server compares that initiating
+owner with the authenticated principal before reading or writing; an account switch fails closed
+with `409 ACTIVITY_OWNER_CHANGED`.
+
+`GET /v1/activities?date=YYYY-MM-DD` returns
+`200 {"data": ActivityDay}` with ordered current entries, the exact
+`totalDurationMinutes`, current profile zone, day synchronization revision, and
+a strong `"a-<43-character-SHA-256-base64url>"` ETag over the canonical
+response. An absent day returns an empty revision-zero day. The total is the sum
+of recorded durations; overlaps are not removed. Each immutable entry retains
+the zone that derived its start-local date and time.
+
+`POST /v1/activities/entries?profileTimeZonePrecondition=v1` requires the owner header, a UUID
+`Idempotency-Key`, the paired `X-Expected-Profile-Time-Zone`, and exactly
+`{"name": string, "durationMinutes": integer,
+"selfReportedEnergyKilocalories": string|null, "occurredAt": RFC3339}`. First
+application returns 201 and exact replay returns 200. The expected canonical zone
+participates in the request digest, replay precedes zone comparison, and new work
+after drift fails with `409 ACTIVITY_TIME_ZONE_CHANGED` without a write.
+
+`PATCH /v1/activities/entries/:entryId` requires the owner header, a UUID key, the current strong
+entry revision in `If-Match`, and a nonempty closed subset of the authored
+fields. Supplying `occurredAt` additionally requires the paired time-zone guard.
+It may move an entry between local days; a correction without the instant
+preserves historical coordinates and zone. Explicit `null` clears self-reported
+energy. `DELETE` requires the same owner, identity, and revision headers, accepts no
+body, appends an immutable tombstone, and returns `entry: null` without an ETag.
+Every mutation returns exact replay state and one or two affected-day revisions.
+
+Names are canonical NFC text without controls or malformed Unicode, at most 120
+Unicode code points and 480 UTF-8 bytes. Duration is 1–1,440 whole minutes,
+self-reported energy is null or a canonical positive decimal no greater than
+20,000 with at most three fractional digits, and one start-local day permits at
+most 64 active entries. These are operational bounds, not exercise guidance.
+The server never estimates calories, and the day contract intentionally has no
+calorie total. The clients are online-only; no diary outbox, health-platform
+permission/import, wearable, background, or phone-listener boundary is added.
+
 ## Recipes and goals
 
 The authenticated recipe surface is `GET|POST /v1/recipes`,

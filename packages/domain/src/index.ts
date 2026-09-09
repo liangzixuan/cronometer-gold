@@ -1,3 +1,4 @@
+export * from "./activity.js";
 export * from "./decimal.js";
 export * from "./diary.js";
 export * from "./errors.js";

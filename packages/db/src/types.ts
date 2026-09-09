@@ -78,6 +78,7 @@ export type DiaryStatus = "locked" | "open";
 export type DiaryEntryKind = "food" | "note" | "quick_add" | "recipe";
 export type SnapshotStatus = "complete" | "partial" | "pending";
 export type DiaryRevisionOperation = "create" | "delete" | "move" | "update";
+export type ActivityRevisionOperation = "create" | "delete" | "update";
 export type HydrationRevisionOperation = "create" | "delete" | "update";
 export type GoalStatus = "active" | "archived" | "draft";
 export type GoalEnergyMode = "derived" | "fixed";
@@ -745,6 +746,59 @@ export interface DiaryEntryNutrientSnapshotTable {
   unit: string;
   calculation_version: string;
   provenance: ImmutableJson;
+  created_at: CreatedTimestamp;
+}
+
+export interface ActivityDayTable {
+  id: UuidId;
+  user_id: string;
+  local_date: DateOnly;
+  revision: DefaultInt8;
+  created_at: CreatedTimestamp;
+  updated_at: UpdatedTimestamp;
+}
+
+export interface ActivityEntryTable {
+  id: UuidId;
+  activity_day_id: string;
+  user_id: string;
+  current_revision_id: string;
+  current_revision_number: Int8;
+  name: string;
+  duration_minutes: number;
+  self_reported_energy_kilocalories: NullableNumeric;
+  occurred_at: Timestamp;
+  local_time: string;
+  created_at: CreatedTimestamp;
+  updated_at: UpdatedTimestamp;
+  deleted_at: NullableTimestamp;
+}
+
+export interface ActivityEntryRevisionTable {
+  id: UuidId;
+  activity_entry_id: string;
+  activity_day_id: string;
+  user_id: string;
+  revision_number: Int8;
+  supersedes_revision_id: string | null;
+  operation: ActivityRevisionOperation;
+  name: string;
+  duration_minutes: number;
+  self_reported_energy_kilocalories: NullableNumeric;
+  occurred_at: Timestamp;
+  local_date: DateOnly;
+  local_time: string;
+  time_zone: string;
+  created_at: CreatedTimestamp;
+}
+
+export interface ActivityOperationTable {
+  user_id: string;
+  client_operation_id: string;
+  request_digest: string;
+  operation: ActivityRevisionOperation;
+  activity_entry_id: string;
+  result_payload: ImmutableJson;
   created_at: CreatedTimestamp;
 }
 
@@ -1467,6 +1521,10 @@ export interface RetentionDeadLetterEventTable {
 export interface Database {
   account_erasure_job: AccountErasureJobTable;
   account_erasure_receipt: AccountErasureReceiptTable;
+  activity_day: ActivityDayTable;
+  activity_entry: ActivityEntryTable;
+  activity_entry_revision: ActivityEntryRevisionTable;
+  activity_operation: ActivityOperationTable;
   app_user: AppUserTable;
   auth_action_token: AuthActionTokenTable;
   audit_log: AuditLogTable;

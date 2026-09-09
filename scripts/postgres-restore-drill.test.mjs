@@ -370,14 +370,14 @@ test("rejects an incomplete public ledger despite a complete owner-schema shadow
   assert.doesNotMatch(calls[0].at(-1) ?? "", /from app_schema_migration/);
 });
 
-test("tracks migration 0024 in the exact restore ledger", () => {
+test("tracks migration 0025 in the exact restore ledger", () => {
   const migrationLedger = JSON.parse(TRACKED_MIGRATION_LEDGER_JSON);
 
-  assert.equal(migrationLedger.length, 24);
-  assert.equal(migrationLedger.at(-1)?.name, "0024_diary_atomic_reorder.sql");
+  assert.equal(migrationLedger.length, 25);
+  assert.equal(migrationLedger.at(-1)?.name, "0025_manual_activity_ledger.sql");
   assert.equal(
     migrationLedger.at(-1)?.checksum,
-    "23bc1b2436b4871b348210e5a74fd4d3212bc4bb0d74ab0d6593fb58eecf5567",
+    "86619894aeb5951b39d667a7bb2c7ff0133a09c59d94bcbaa0a58221d022b40f",
   );
 });
 

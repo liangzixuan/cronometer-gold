@@ -177,7 +177,7 @@ runs exactly four named bounded polls. They use the
 same combined search/retention worker runtime used by the worker entrypoint:
 seed export, one-artifact expiry, measured export, and erasure. A static
 contract rejects a hidden additional poll. The drill populates and independently
-enumerates the compile-pinned set of all 61 retained export entity families,
+enumerates the compile-pinned set of all 65 retained export entity families,
 requires nonzero source counts and exact ID/count reconciliation across the
 source snapshot, JSON, and decompressed CSV, and proves cross-owner account/
 session survival. Forbidden field-name assertions
@@ -332,9 +332,18 @@ acceptance.
 - Derived energy targets reproduce the reviewed Mifflin–St Jeor and PAL golden
   cases, fail closed outside the supported adult/profile boundary, identify
   every input and source, and never add ordinary exercise twice.
-  Activity/exercise ingestion remains deferred until a reviewed PAL and
-  ordinary-exercise double-counting policy defines whether and how it may affect
-  energy accounting.
+- Manual-activity acceptance proves owner-private, bounded, retry-safe add,
+  correction, logical deletion, local-day history, immutable export, and erasure
+  across the database, private API, web, and mobile. Duration is exact whole
+  minutes; absent self-reported calories remain null; names and activity values
+  stay out of logs; and every response is private and no-store. A regression
+  proves activity mutations do not change nutrition goals, remaining calories,
+  PAL, explicit adjustments, goal progress, dietary totals, reports, or
+  `exercise_budget_kcal`.
+- Automatic activity-energy estimation, earned-calorie or net-energy behavior,
+  platform/wearable ingestion, offline/background mutation, hosted acceptance,
+  signed-device and cross-client behavior, and accessibility evidence remain
+  deferred under ADR 0025.
 - Goal progress proves lower-bound semantics with incomplete nutrient panels and
   never labels an unknown contribution as measured zero or exact completion.
 - Multi-day nutrition-report acceptance proves a closed, owner-scoped 1–31-day

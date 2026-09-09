@@ -10,6 +10,10 @@ import { type CanonicalJsonValue, canonicalJson } from "@nutrition-tracker/contr
 
 export const PRIVACY_EXPORT_ENTITIES = [
   "account",
+  "activity_day",
+  "activity_entry",
+  "activity_entry_revision",
+  "activity_operation",
   "audit_event",
   "biometric_definition",
   "biometric_definition_operation",

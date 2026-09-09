@@ -262,6 +262,80 @@ describe("forward migration discovery", () => {
     expect(migrationSql).toContain("on delete cascade");
   });
 
+  it("adds an owner-scoped bounded manual activity ledger with immutable history", async () => {
+    const migrationSql = await readFile(
+      resolve(import.meta.dirname, "../migrations/0025_manual_activity_ledger.sql"),
+      "utf8",
+    );
+    const activityFunctionSignatures = [
+      "is_canonical_activity_name_v1(text)",
+      "is_bounded_activity_energy_v1(numeric)",
+      "validate_activity_revision_insert()",
+      "guard_activity_entry_revision_delete()",
+      "validate_activity_entry_head()",
+      "validate_activity_revision_becomes_head()",
+      "guard_activity_entry_update()",
+      "guard_activity_entry_delete()",
+      "enforce_activity_day_bounds()",
+      "guard_activity_day_update()",
+      "guard_activity_day_delete()",
+      "guard_activity_operation_delete()",
+    ];
+
+    expect(createHash("sha256").update(migrationSql).digest("hex")).toBe(
+      "86619894aeb5951b39d667a7bb2c7ff0133a09c59d94bcbaa0a58221d022b40f",
+    );
+    expect(migrationSql).not.toMatch(/\bdrop\s+(table|column)\b/iu);
+    for (const table of [
+      "activity_day",
+      "activity_entry",
+      "activity_entry_revision",
+      "activity_operation",
+    ]) {
+      expect(migrationSql).toContain(`create table ${table}`);
+    }
+    for (const constraint of [
+      "activity_day_user_fk",
+      "activity_entry_user_fk",
+      "activity_entry_day_owner_fk",
+      "activity_entry_revision_user_fk",
+      "activity_entry_revision_entry_owner_fk",
+      "activity_entry_revision_day_owner_fk",
+      "activity_entry_current_revision_fk",
+      "activity_entry_revision_supersedes_fk",
+      "activity_operation_user_fk",
+      "activity_operation_entry_owner_fk",
+    ]) {
+      expect(migrationSql).toContain(`constraint ${constraint}`);
+    }
+    expect(migrationSql).toContain("char_length(value) between 1 and 120");
+    expect(migrationSql).toContain("octet_length(value) <= 480");
+    expect(migrationSql).toContain("duration_minutes between 1 and 1440");
+    expect(migrationSql).toContain("value > 0 and value <= 20000");
+    expect(migrationSql).toContain("scale(value) <= 3");
+    expect(migrationSql).toContain("value::text = trim_scale(value)::text");
+    expect(migrationSql).toContain("activity day exceeds 64 active entries");
+    expect(migrationSql).toContain("activity revisions must form a contiguous append-only chain");
+    expect(migrationSql).toContain("latest activity revision must become the logical entry head");
+    expect(migrationSql).toContain("activity revision local date does not match its day bucket");
+    expect(migrationSql).toContain("execute function validate_iana_time_zone()");
+    expect(migrationSql).toContain("deleted_at is null or isfinite(deleted_at)");
+    expect(migrationSql).toContain("on delete cascade");
+    expect(migrationSql).toContain("target_schema name := pg_catalog.current_schema()");
+    expect(migrationSql.match(/\bcreate\s+function\b/giu)).toHaveLength(
+      activityFunctionSignatures.length,
+    );
+    expect(migrationSql.match(/set search_path = pg_catalog, %I, pg_temp/gu)).toHaveLength(
+      activityFunctionSignatures.length,
+    );
+    for (const functionSignature of activityFunctionSignatures) {
+      expect(migrationSql).toContain(
+        `alter function %I.${functionSignature} set search_path = pg_catalog, %I, pg_temp`,
+      );
+    }
+    expect(migrationSql).not.toMatch(/nutrition_goal|energy_adjustment/iu);
+  });
+
   it("binds new catalogue attempts and releases to immutable acquisition evidence", async () => {
     const migrationSql = await readFile(
       resolve(import.meta.dirname, "../migrations/0011_food_import_evidence_binding.sql"),

@@ -30,6 +30,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0022](./0022-bounded-multi-day-nutrition-reports.md) | Bounded owner-private multi-day nutrition reports | Accepted for local implementation; hosted, signed-device, cross-client, and accessibility evidence blocked |
 | [0023](./0023-general-native-diary-operation-outbox.md) | Generalized native diary logging outbox | Accepted for local implementation; signed-device and general offline-sync evidence blocked |
 | [0024](./0024-durable-diary-corrections-and-atomic-ordering.md) | Durable diary corrections and atomic within-meal day ordering | Accepted for local implementation; signed-device and general offline-sync evidence blocked |
+| [0025](./0025-manual-activity-ledger-boundary.md) | Private manual-activity ledger boundary | Accepted for local implementation; automatic energy adjustment, offline mutation, platform import, and device evidence blocked |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

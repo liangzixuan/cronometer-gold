@@ -13,6 +13,8 @@ import {
   type AccountErasureMutationResponse,
   type AccountErasureResponse,
   type AccountExportResponse,
+  type ActivityDayResponse,
+  type ActivityMutationResponse,
   type CurrentAccountResponse,
   type CustomFoodMutationResponse,
   canonicalJson,
@@ -59,6 +61,10 @@ const TMPFS_MAGIC = 0x0102_1994;
 
 const EXPECTED_PRIVACY_EXPORT_ENTITY_SET: Readonly<Record<PrivacyExportEntity, true>> = {
   account: true,
+  activity_day: true,
+  activity_entry: true,
+  activity_entry_revision: true,
+  activity_operation: true,
   audit_event: true,
   biometric_definition: true,
   biometric_definition_operation: true,
@@ -237,6 +243,11 @@ function sha256(value: string | Uint8Array): string {
 function hydrationDayEtag(response: HydrationDayResponse): string {
   const digest = createHash("sha256").update(canonicalJson(response), "utf8").digest("base64url");
   return `"h-${digest}"`;
+}
+
+function activityDayEtag(response: ActivityDayResponse): string {
+  const digest = createHash("sha256").update(canonicalJson(response), "utf8").digest("base64url");
+  return `"a-${digest}"`;
 }
 
 function storedZipEntries(bytes: Buffer): ReadonlyMap<string, Buffer> {
@@ -1630,6 +1641,185 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         timeZone: "America/Chicago",
       });
 
+      const activityLocalDate = "2026-01-02";
+      const emptyActivityResponse = await app.inject({
+        method: "GET",
+        url: `/v1/activities?date=${activityLocalDate}`,
+        headers: { authorization, "x-expected-owner-user-id": userId },
+      });
+      expect(emptyActivityResponse.statusCode, emptyActivityResponse.body).toBe(200);
+      expect(emptyActivityResponse.headers["cache-control"]).toBe("no-store");
+      const emptyActivityBody = emptyActivityResponse.json<ActivityDayResponse>();
+      expect(emptyActivityResponse.headers.etag).toBe(activityDayEtag(emptyActivityBody));
+      expect(emptyActivityBody.data).toEqual({
+        entries: [],
+        localDate: activityLocalDate,
+        revision: "0",
+        timeZone: "Asia/Tokyo",
+        totalDurationMinutes: 0,
+        updatedAt: null,
+      });
+
+      const firstActivityPayload = {
+        durationMinutes: 45,
+        name: "Morning walk",
+        occurredAt: "2026-01-02T03:04:05.123Z",
+        selfReportedEnergyKilocalories: "123.125",
+      };
+      const firstActivityOperationId = randomUUID();
+      const firstActivityResponse = await app.inject({
+        method: "POST",
+        url: "/v1/activities/entries?profileTimeZonePrecondition=v1",
+        headers: {
+          authorization,
+          "idempotency-key": firstActivityOperationId,
+          "x-expected-owner-user-id": userId,
+          "x-expected-profile-time-zone": "Asia/Tokyo",
+        },
+        payload: firstActivityPayload,
+      });
+      expect(firstActivityResponse.statusCode, firstActivityResponse.body).toBe(201);
+      expect(firstActivityResponse.headers["cache-control"]).toBe("no-store");
+      expect(firstActivityResponse.headers.etag).toBe('"1"');
+      const firstActivityEntry = firstActivityResponse.json<ActivityMutationResponse>().data.entry;
+      if (!firstActivityEntry) throw new Error("Expected the first activity entry");
+      expect(firstActivityEntry).toMatchObject({
+        durationMinutes: 45,
+        localDate: activityLocalDate,
+        name: "Morning walk",
+        revision: "1",
+        selfReportedEnergyKilocalories: "123.125",
+        timeZone: "Asia/Tokyo",
+      });
+
+      const replayedActivityResponse = await app.inject({
+        method: "POST",
+        url: "/v1/activities/entries?profileTimeZonePrecondition=v1",
+        headers: {
+          authorization,
+          "idempotency-key": firstActivityOperationId,
+          "x-expected-owner-user-id": userId,
+          "x-expected-profile-time-zone": "Asia/Tokyo",
+        },
+        payload: firstActivityPayload,
+      });
+      expect(replayedActivityResponse.statusCode, replayedActivityResponse.body).toBe(200);
+      expect(replayedActivityResponse.headers.etag).toBe('"1"');
+      expect(replayedActivityResponse.json<ActivityMutationResponse>().data).toMatchObject({
+        entry: { id: firstActivityEntry.id },
+        replayed: true,
+      });
+
+      const secondActivityResponse = await app.inject({
+        method: "POST",
+        url: "/v1/activities/entries?profileTimeZonePrecondition=v1",
+        headers: {
+          authorization,
+          "idempotency-key": randomUUID(),
+          "x-expected-owner-user-id": userId,
+          "x-expected-profile-time-zone": "Asia/Tokyo",
+        },
+        payload: {
+          durationMinutes: 30,
+          name: "Yoga",
+          occurredAt: "2026-01-02T04:05:06.000Z",
+          selfReportedEnergyKilocalories: null,
+        },
+      });
+      expect(secondActivityResponse.statusCode, secondActivityResponse.body).toBe(201);
+      const secondActivityEntry =
+        secondActivityResponse.json<ActivityMutationResponse>().data.entry;
+      if (!secondActivityEntry) throw new Error("Expected the second activity entry");
+
+      const updatedActivityResponse = await app.inject({
+        method: "PATCH",
+        url: `/v1/activities/entries/${firstActivityEntry.id}`,
+        headers: {
+          authorization,
+          "idempotency-key": randomUUID(),
+          "if-match": '"1"',
+          "x-expected-owner-user-id": userId,
+        },
+        payload: {
+          durationMinutes: 50,
+          selfReportedEnergyKilocalories: null,
+        },
+      });
+      expect(updatedActivityResponse.statusCode, updatedActivityResponse.body).toBe(200);
+      expect(updatedActivityResponse.headers.etag).toBe('"2"');
+      expect(updatedActivityResponse.json<ActivityMutationResponse>().data.entry).toMatchObject({
+        durationMinutes: 50,
+        id: firstActivityEntry.id,
+        revision: "2",
+        selfReportedEnergyKilocalories: null,
+      });
+
+      const deletedActivityResponse = await app.inject({
+        method: "DELETE",
+        url: `/v1/activities/entries/${secondActivityEntry.id}`,
+        headers: {
+          authorization,
+          "idempotency-key": randomUUID(),
+          "if-match": '"1"',
+          "x-expected-owner-user-id": userId,
+        },
+      });
+      expect(deletedActivityResponse.statusCode, deletedActivityResponse.body).toBe(200);
+      expect(deletedActivityResponse.headers["cache-control"]).toBe("no-store");
+      expect(deletedActivityResponse.headers.etag).toBeUndefined();
+      expect(deletedActivityResponse.json<ActivityMutationResponse>().data.entry).toBeNull();
+
+      const currentActivityResponse = await app.inject({
+        method: "GET",
+        url: `/v1/activities?date=${activityLocalDate}`,
+        headers: { authorization, "x-expected-owner-user-id": userId },
+      });
+      expect(currentActivityResponse.statusCode, currentActivityResponse.body).toBe(200);
+      expect(currentActivityResponse.headers["cache-control"]).toBe("no-store");
+      const currentActivityBody = currentActivityResponse.json<ActivityDayResponse>();
+      expect(currentActivityResponse.headers.etag).toBe(activityDayEtag(currentActivityBody));
+      expect(currentActivityBody.data).toMatchObject({
+        entries: [
+          {
+            durationMinutes: 50,
+            id: firstActivityEntry.id,
+            revision: "2",
+            timeZone: "Asia/Tokyo",
+          },
+        ],
+        localDate: activityLocalDate,
+        revision: "4",
+        timeZone: "Asia/Tokyo",
+        totalDurationMinutes: 50,
+      });
+      expect(currentActivityBody.data).not.toHaveProperty("totalEnergyKilocalories");
+
+      const crossOwnerActivityResponse = await app.inject({
+        method: "POST",
+        url: "/v1/activities/entries?profileTimeZonePrecondition=v1",
+        headers: {
+          authorization: crossOwnerAuthorization,
+          "idempotency-key": randomUUID(),
+          "x-expected-owner-user-id": crossOwnerUserId,
+          "x-expected-profile-time-zone": "America/Chicago",
+        },
+        payload: {
+          durationMinutes: 20,
+          name: "Cross-owner walk",
+          occurredAt: "2026-01-02T18:05:00.000Z",
+          selfReportedEnergyKilocalories: "80",
+        },
+      });
+      expect(crossOwnerActivityResponse.statusCode, crossOwnerActivityResponse.body).toBe(201);
+      const crossOwnerActivityEntry =
+        crossOwnerActivityResponse.json<ActivityMutationResponse>().data.entry;
+      if (!crossOwnerActivityEntry) throw new Error("Expected cross-owner activity entry");
+      expect(crossOwnerActivityEntry).toMatchObject({
+        durationMinutes: 20,
+        localDate: activityLocalDate,
+        timeZone: "America/Chicago",
+      });
+
       const goalResponse = await app.inject({
         method: "POST",
         url: "/v1/goals",
@@ -2199,6 +2389,10 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         ),
       ).toBe(true);
       for (const [entity, count] of [
+        ["activity_day", 1],
+        ["activity_entry", 2],
+        ["activity_entry_revision", 4],
+        ["activity_operation", 4],
         ["diary_day", 1],
         ["diary_entry", 46],
         ["diary_entry_legacy_nutrient", 1],
@@ -2519,6 +2713,28 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         user_watermark: [userId],
       };
       const directBoundaryQueries = {
+        activity_day: await database
+          .selectFrom("activity_day")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        activity_entry: await database
+          .selectFrom("activity_entry")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        activity_entry_revision: await database
+          .selectFrom("activity_entry_revision")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        activity_operation: (
+          await database
+            .selectFrom("activity_operation")
+            .select(["client_operation_id", "operation"])
+            .where("user_id", "=", userId)
+            .execute()
+        ).map((row) => ({ id: `${row.client_operation_id}:${row.operation}` })),
         biometric_definition: await database
           .selectFrom("biometric_definition")
           .select("id")
@@ -2867,6 +3083,7 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
             `${canonicalJson(measuredJson as unknown as Parameters<typeof canonicalJson>[0])}\n`,
           );
           expect(rawJson).not.toContain(crossOwnerUserId);
+          expect(rawJson).not.toContain(crossOwnerActivityEntry.id);
           expect(rawJson).not.toContain(crossOwnerHydrationEntry.id);
           expect(sha256(canonicalJson(measuredJson.manifest))).toBe(measuredExport.manifestSha256);
         } else {
@@ -2884,6 +3101,7 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         .map((bytes) => bytes.toString("utf8"))
         .join("\n");
       expect(measuredCsvText).not.toContain(crossOwnerUserId);
+      expect(measuredCsvText).not.toContain(crossOwnerActivityEntry.id);
       expect(measuredCsvText).not.toContain(crossOwnerHydrationEntry.id);
       expect(Object.keys(measuredJson.entities).sort()).toEqual(
         [...EXPECTED_PRIVACY_EXPORT_ENTITIES].sort(),
@@ -3069,6 +3287,31 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         timeZone: "America/Chicago",
         totalMilliliters: 375,
       });
+      const crossOwnerActivityAfterErasure = await app.inject({
+        method: "GET",
+        url: `/v1/activities?date=${activityLocalDate}`,
+        headers: {
+          authorization: crossOwnerAuthorization,
+          "x-expected-owner-user-id": crossOwnerUserId,
+        },
+      });
+      expect(crossOwnerActivityAfterErasure.statusCode, crossOwnerActivityAfterErasure.body).toBe(
+        200,
+      );
+      expect(crossOwnerActivityAfterErasure.headers["cache-control"]).toBe("no-store");
+      expect(crossOwnerActivityAfterErasure.json<ActivityDayResponse>().data).toMatchObject({
+        entries: [
+          {
+            durationMinutes: 20,
+            id: crossOwnerActivityEntry.id,
+            timeZone: "America/Chicago",
+          },
+        ],
+        localDate: activityLocalDate,
+        revision: "1",
+        timeZone: "America/Chicago",
+        totalDurationMinutes: 20,
+      });
 
       expect(
         (
@@ -3121,6 +3364,10 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
       const reconciliation = await reconcileErasedAccountRows(database, { userId });
       expect(reconciliation.reconciled).toBe(true);
       expect(reconciliation.remainingRows).toMatchObject({
+        activity_day: "0",
+        activity_entry: "0",
+        activity_entry_revision: "0",
+        activity_operation: "0",
         biometric_definition: "0",
         biometric_definition_version: "0",
         biometric_event: "0",

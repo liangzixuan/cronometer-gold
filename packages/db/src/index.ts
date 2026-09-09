@@ -35,6 +35,27 @@ export {
   updateUserProfile,
 } from "./accounts.js";
 export {
+  type ActivityDayRecord,
+  type ActivityDayRevisionRecord,
+  type ActivityEntryRecord,
+  ActivityEntryRevisionConflictError,
+  ActivityIdempotencyConflictError,
+  type ActivityMutationResult,
+  ActivityNotFoundError,
+  ActivityPersistenceError,
+  type ActivityPersistenceErrorCode,
+  ActivityTimeZoneChangedError,
+  ActivityValidationError,
+  type CreateActivityEntryInput,
+  createActivityEntry,
+  type DeleteActivityEntryInput,
+  deleteActivityEntry,
+  type GetActivityDayInput,
+  getActivityDay,
+  type UpdateActivityEntryInput,
+  updateActivityEntry,
+} from "./activity.js";
+export {
   assertCatalogueAuthorityCanaryEvidence,
   assertCatalogueAuthorityDeploymentEvidence,
   CATALOGUE_ACTIVATION_AUTHORITY_CONSTRAINT_DEFINITION,

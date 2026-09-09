@@ -394,6 +394,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
           <Link aria-current="page" href={`/hydration${dateQuery}`}>
             Hydration
           </Link>
+          <Link href={`/activities${dateQuery}`}>Activity</Link>
           <Link href={date ? `/reports?to=${encodeURIComponent(date)}` : "/reports"}>Reports</Link>
           <Link href="/health">Health & privacy</Link>
         </nav>

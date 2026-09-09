@@ -744,6 +744,10 @@ export interface PrivacyExportRecord {
 }
 export type PrivacyExportEntity =
   | "account"
+  | "activity_day"
+  | "activity_entry"
+  | "activity_entry_revision"
+  | "activity_operation"
   | "audit_event"
   | "biometric_definition"
   | "biometric_definition_operation"
@@ -4695,7 +4699,7 @@ async function lockAllUserWriters(
   transaction: Transaction<Database>,
   userId: string,
 ): Promise<void> {
-  for (const scope of ["diary", "goal", "hydration", "recipe", "retention"]) {
+  for (const scope of ["activity", "diary", "goal", "hydration", "recipe", "retention"]) {
     await sql`select pg_advisory_xact_lock(hashtextextended(${`nutrition-tracker:${scope}:${userId}`},0))`.execute(
       transaction,
     );
@@ -6598,6 +6602,42 @@ const EXPORT_ENTITY_SPECS: readonly PrivacyExportEntitySpec[] = [
     ["auth_subject"],
   ),
   exportSpec(
+    "activity_day",
+    "activity_day",
+    "activity_day t",
+    "t.user_id",
+    "t.id::text",
+    "t.revision::text",
+    "false",
+  ),
+  exportSpec(
+    "activity_entry",
+    "activity_entry",
+    "activity_entry t",
+    "t.user_id",
+    "t.id::text",
+    "t.current_revision_number::text",
+    "t.deleted_at is not null",
+  ),
+  exportSpec(
+    "activity_entry_revision",
+    "activity_entry_revision",
+    "activity_entry_revision t",
+    "t.user_id",
+    "t.id::text",
+    "t.revision_number::text",
+    "t.operation = 'delete'",
+  ),
+  exportSpec(
+    "activity_operation",
+    "activity_operation",
+    "activity_operation t",
+    "t.user_id",
+    "concat_ws(':',t.client_operation_id::text,t.operation)",
+    "null",
+    "false",
+  ),
+  exportSpec(
     "profile",
     "user_profile",
     "user_profile t",
@@ -7163,6 +7203,10 @@ const EXPORT_ENTITY_SPECS: readonly PrivacyExportEntitySpec[] = [
 // schema change therefore fails export before a row is materialized until it is reviewed here.
 const EXPORT_TABLE_SCHEMA_SHA256: Readonly<Record<string, string>> = {
   app_user: "2289e77b06addc3a6edffbac67395ea570347b4d02bf5371cba92e245e88af67",
+  activity_day: "82db5d391d43d860456b55fb2afb9d77d875169703c9ea86c0cd43e3a476b317",
+  activity_entry: "e3ab04fee93142d5a059d82ad1c7c7fd430c64ac7eac6f759ab69d70b07a3dbf",
+  activity_entry_revision: "233fb81e4059a0dd1653a97e773fe761ad0952b441d210fd6e097f4d9aefa5b4",
+  activity_operation: "6d671faa6a003871956c10ea21482a0d5e89727ffbd4a581565f703a137c04c4",
   audit_log: "b0f3e21291cb254ff5e1030da753753807b74a9287c029b3a44430f7cdf0a863",
   biometric_definition: "8c9270ac3ef872064ea2cf0faf8a6f98fead61cf47f0a62ef0c7b0579674f467",
   biometric_definition_operation:
@@ -7334,6 +7378,14 @@ const ERASURE_TABLE_SPECS: readonly ErasureTableSpec[] = [
     strategy: "empty",
     table: "food_import_record",
   },
+  eraseByCascade("activity_day", "app_user", "activity_day_user_fk"),
+  eraseByCascade("activity_entry", "activity_day", "activity_entry_day_owner_fk"),
+  eraseByCascade(
+    "activity_entry_revision",
+    "activity_entry",
+    "activity_entry_revision_entry_owner_fk",
+  ),
+  eraseByCascade("activity_operation", "activity_entry", "activity_operation_entry_owner_fk"),
   eraseByCascade(
     "biometric_definition_operation",
     "biometric_definition",

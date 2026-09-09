@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { authenticatedRouteNames, authenticatedRoutes } from "./routes";
 
 describe("authenticated mobile navigation", () => {
-  it("exposes diary, food search, recipes, goals, reports, hydration, health, and email status as first-class routes", () => {
+  it("exposes diary, food search, recipes, goals, reports, hydration, activity, health, and email status as first-class routes", () => {
     expect(authenticatedRouteNames).toEqual([
       "Today",
       "Search",
@@ -11,6 +11,7 @@ describe("authenticated mobile navigation", () => {
       "Goals",
       "Reports",
       "Hydration",
+      "Activity",
       "Health",
       "VerifyEmail",
     ]);
@@ -21,6 +22,7 @@ describe("authenticated mobile navigation", () => {
       goals: "Goals",
       reports: "Reports",
       hydration: "Hydration",
+      activity: "Activity",
       health: "Health",
       verifyEmail: "VerifyEmail",
     });

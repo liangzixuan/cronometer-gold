@@ -144,19 +144,25 @@ async function buildFixture(root: string) {
       email: "owner@example.invalid",
       status: "active",
     }),
-    row("biometric_event", 2, {
+    row("activity_entry_revision", 2, {
+      duration_minutes: 45,
+      name: "Morning walk",
+      operation: "update",
+      self_reported_energy_kilocalories: "123.125",
+    }),
+    row("biometric_event", 3, {
       provenance: { kind: "manual" },
       unit: "kg",
       value: "72.125000",
     }),
-    row("custom_food_nutrient", 3, {
+    row("custom_food_nutrient", 4, {
       amountPer100Grams: null,
       reason: "not_analyzed",
       state: "unknown",
     }),
     row(
       "diary_entry_revision",
-      4,
+      5,
       {
         foodProvenance: {
           customFoodId: "10000000-0000-4000-8000-000000000001",
@@ -264,6 +270,10 @@ describe("privacy export formatting", () => {
           entries.get(file.path)?.byteLength === file.byteLength,
       ),
     ).toBe(true);
+    const activityCsv =
+      entries.get("entities/activity_entry_revision/part-000001.csv")?.toString("utf8") ?? "";
+    expect(activityCsv).toContain('""name"":""Morning walk""');
+    expect(activityCsv).toContain('""self_reported_energy_kilocalories"":""123.125""');
     const biometricCsv =
       entries.get("entities/biometric_event/part-000001.csv")?.toString("utf8") ?? "";
     expect(biometricCsv).toContain('""value"":""72.125000""');

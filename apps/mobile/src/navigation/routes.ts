@@ -5,6 +5,7 @@ export const authenticatedRoutes = {
   goals: "Goals",
   reports: "Reports",
   hydration: "Hydration",
+  activity: "Activity",
   health: "Health",
   verifyEmail: "VerifyEmail",
 } as const;
@@ -16,6 +17,7 @@ export const authenticatedRouteNames = [
   authenticatedRoutes.goals,
   authenticatedRoutes.reports,
   authenticatedRoutes.hydration,
+  authenticatedRoutes.activity,
   authenticatedRoutes.health,
   authenticatedRoutes.verifyEmail,
 ] as const;

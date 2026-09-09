@@ -23,6 +23,7 @@ import {
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 
+import { ActivityScreen } from "./src/activity/ActivityScreen";
 import { apiUrl, authenticatedHeaders, jsonBody } from "./src/api/private-api";
 import { type AuthResult, AuthScreen } from "./src/auth/AuthScreen";
 import { sessionBootstrapDecision } from "./src/auth/bootstrap";
@@ -114,6 +115,7 @@ type RootStackParamList = {
   Goals: undefined;
   Reports: undefined;
   Hydration: undefined;
+  Activity: undefined;
   Health: undefined;
   VerifyEmail: undefined;
 };
@@ -220,6 +222,7 @@ function TodayRoute(props: AuthenticatedAppProps) {
       onGoals={() => navigation.navigate(authenticatedRoutes.goals)}
       onReports={() => navigation.navigate(authenticatedRoutes.reports)}
       onHydration={() => navigation.navigate(authenticatedRoutes.hydration)}
+      onActivity={() => navigation.navigate(authenticatedRoutes.activity)}
       onHealth={() => navigation.navigate(authenticatedRoutes.health)}
       onProfileUpdated={(profile) =>
         props.onProfileUpdated({
@@ -247,6 +250,18 @@ function HydrationRoute(props: AuthenticatedAppProps) {
     <HydrationScreen
       accessToken={props.accessToken}
       apiBase={props.apiBase}
+      onUnauthorized={props.onUnauthorized}
+      profileTimeZone={props.session.profile.timeZone}
+    />
+  );
+}
+
+function ActivityRoute(props: AuthenticatedAppProps) {
+  return (
+    <ActivityScreen
+      accessToken={props.accessToken}
+      apiBase={props.apiBase}
+      expectedOwnerUserId={props.session.user.id}
       onUnauthorized={props.onUnauthorized}
       profileTimeZone={props.session.profile.timeZone}
     />
@@ -486,6 +501,9 @@ function AuthenticatedApp(
         </Stack.Screen>
         <Stack.Screen name={authenticatedRoutes.hydration} options={{ title: "Hydration" }}>
           {() => <HydrationRoute {...props} />}
+        </Stack.Screen>
+        <Stack.Screen name={authenticatedRoutes.activity} options={{ title: "Activity" }}>
+          {() => <ActivityRoute {...props} />}
         </Stack.Screen>
         <Stack.Screen name={authenticatedRoutes.health} options={{ title: "Health & privacy" }}>
           {() => <HealthRoute {...props} />}

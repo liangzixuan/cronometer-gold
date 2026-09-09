@@ -1,4 +1,7 @@
 import {
+  type ActivityDay,
+  type ActivityEntry,
+  type ActivityMutationResponse,
   type AuthenticatedAccount,
   type DiaryCorrectionMutationResponse,
   type DiaryDay,
@@ -32,8 +35,17 @@ import {
 import {
   AccountConflictError,
   AccountNotFoundError,
+  type ActivityDayRecord,
+  type ActivityEntryRecord,
+  ActivityEntryRevisionConflictError,
+  ActivityIdempotencyConflictError,
+  type ActivityMutationResult,
+  ActivityNotFoundError,
+  ActivityTimeZoneChangedError,
+  ActivityValidationError,
   confirmEmailVerificationToken,
   confirmPasswordRecoveryToken,
+  createActivityEntry,
   type createDatabaseFromEnvironment,
   createFoodDiaryEntry,
   createHydrationEntry,
@@ -64,12 +76,14 @@ import {
   type DiaryRecipeEntryRecord,
   DiaryTimeZoneChangedError,
   DiaryValidationError,
+  deleteActivityEntry,
   deleteDiaryEntry,
   deleteHydrationEntry,
   findActiveSessionByTokenHash,
   findPasswordCredentialByEmail,
   findPendingErasureRecoverySessionByTokenHash,
   type GoalNutrientDefinitionRecord,
+  getActivityDay,
   getCurrentNutritionGoal,
   getDiaryDay,
   getDiaryDayPage,
@@ -124,6 +138,7 @@ import {
   reviseRecipe,
   revokeSession,
   type UserProfileRecord,
+  updateActivityEntry,
   updateDiaryEntry,
   updateHydrationEntry,
   updateUserProfile,
@@ -138,6 +153,14 @@ import {
   PRODUCT_PAL_POLICY,
   validatePalSelection,
 } from "@nutrition-tracker/domain";
+import {
+  ActivityIdempotencyConflictServiceError,
+  ActivityNotFoundServiceError,
+  ActivityRevisionConflictServiceError,
+  type ActivityService,
+  ActivityTimeZoneChangedServiceError,
+  ActivityValidationServiceError,
+} from "./modules/activity/activity.routes.js";
 import {
   AccountAlreadyExistsError,
   type AuthRepository,
@@ -949,6 +972,154 @@ export class DatabaseDiaryService implements DiaryService {
       return dayReorder(result);
     } catch (error) {
       mapDiaryPersistenceError(error);
+    }
+  }
+}
+
+export function mapActivityEntryRecord(record: ActivityEntryRecord): ActivityEntry {
+  return {
+    id: record.id,
+    revision: record.revision,
+    name: record.name,
+    durationMinutes: record.durationMinutes,
+    selfReportedEnergyKilocalories: record.selfReportedEnergyKilocalories,
+    occurredAt: record.occurredAt,
+    localDate: record.localDate,
+    localTime: record.localTime,
+    timeZone: record.timeZone,
+    createdAt: record.createdAt,
+  };
+}
+
+export function mapActivityDayRecord(record: ActivityDayRecord): ActivityDay {
+  return {
+    localDate: record.localDate,
+    timeZone: record.timeZone,
+    revision: record.revision,
+    entries: record.entries.map(mapActivityEntryRecord),
+    totalDurationMinutes: record.totalDurationMinutes,
+    updatedAt: record.updatedAt,
+  };
+}
+
+function activityMutation(result: ActivityMutationResult): ActivityMutationResponse {
+  return {
+    data: {
+      replayed: result.replayed,
+      entry: result.entry === null ? null : mapActivityEntryRecord(result.entry),
+      affectedDays: result.days,
+    },
+  };
+}
+
+export function mapActivityPersistenceError(error: unknown): never {
+  if (error instanceof ActivityNotFoundError) throw new ActivityNotFoundServiceError();
+  if (error instanceof ActivityEntryRevisionConflictError) {
+    throw new ActivityRevisionConflictServiceError();
+  }
+  if (error instanceof ActivityIdempotencyConflictError) {
+    throw new ActivityIdempotencyConflictServiceError();
+  }
+  if (error instanceof ActivityTimeZoneChangedError) {
+    throw new ActivityTimeZoneChangedServiceError();
+  }
+  if (error instanceof ActivityValidationError || error instanceof RangeError) {
+    throw new ActivityValidationServiceError();
+  }
+  throw error;
+}
+
+export class DatabaseActivityService implements ActivityService {
+  readonly #database: AppDatabase;
+
+  constructor(database: AppDatabase) {
+    this.#database = database;
+  }
+
+  async getDay(input: Parameters<ActivityService["getDay"]>[0]): Promise<ActivityDay> {
+    input.signal?.throwIfAborted();
+    try {
+      const result = await getActivityDay(this.#database, {
+        userId: input.userId,
+        localDate: input.localDate,
+      });
+      input.signal?.throwIfAborted();
+      return mapActivityDayRecord(result);
+    } catch (error) {
+      mapActivityPersistenceError(error);
+    }
+  }
+
+  async createEntry(
+    input: Parameters<ActivityService["createEntry"]>[0],
+  ): Promise<ActivityMutationResponse> {
+    input.signal?.throwIfAborted();
+    try {
+      const result = await createActivityEntry(this.#database, {
+        userId: input.userId,
+        clientOperationId: input.clientOperationId,
+        requestDigest: input.requestDigest,
+        expectedProfileTimeZone: input.expectedProfileTimeZone,
+        name: input.entry.name,
+        durationMinutes: input.entry.durationMinutes,
+        selfReportedEnergyKilocalories: input.entry.selfReportedEnergyKilocalories,
+        occurredAt: input.entry.occurredAt,
+      });
+      input.signal?.throwIfAborted();
+      return activityMutation(result);
+    } catch (error) {
+      mapActivityPersistenceError(error);
+    }
+  }
+
+  async updateEntry(
+    input: Parameters<ActivityService["updateEntry"]>[0],
+  ): Promise<ActivityMutationResponse> {
+    input.signal?.throwIfAborted();
+    try {
+      const result = await updateActivityEntry(this.#database, {
+        userId: input.userId,
+        entryId: input.entryId,
+        expectedEntryRevision: input.expectedRevision,
+        clientOperationId: input.clientOperationId,
+        requestDigest: input.requestDigest,
+        ...(input.expectedProfileTimeZone === undefined
+          ? {}
+          : { expectedProfileTimeZone: input.expectedProfileTimeZone }),
+        ...(input.patch.name === undefined ? {} : { name: input.patch.name }),
+        ...(input.patch.durationMinutes === undefined
+          ? {}
+          : { durationMinutes: input.patch.durationMinutes }),
+        ...(input.patch.selfReportedEnergyKilocalories === undefined
+          ? {}
+          : {
+              selfReportedEnergyKilocalories: input.patch.selfReportedEnergyKilocalories,
+            }),
+        ...(input.patch.occurredAt === undefined ? {} : { occurredAt: input.patch.occurredAt }),
+      });
+      input.signal?.throwIfAborted();
+      return activityMutation(result);
+    } catch (error) {
+      mapActivityPersistenceError(error);
+    }
+  }
+
+  async deleteEntry(
+    input: Parameters<ActivityService["deleteEntry"]>[0],
+  ): Promise<ActivityMutationResponse> {
+    input.signal?.throwIfAborted();
+    try {
+      const result = await deleteActivityEntry(this.#database, {
+        userId: input.userId,
+        entryId: input.entryId,
+        expectedEntryRevision: input.expectedRevision,
+        clientOperationId: input.clientOperationId,
+        requestDigest: input.requestDigest,
+      });
+      input.signal?.throwIfAborted();
+      return activityMutation(result);
+    } catch (error) {
+      mapActivityPersistenceError(error);
     }
   }
 }

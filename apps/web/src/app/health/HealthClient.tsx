@@ -1227,6 +1227,8 @@ export function HealthClient() {
           <Link href="/foods">Foods</Link>
           <Link href="/recipes">Recipes</Link>
           <Link href="/goals">Goals</Link>
+          <Link href="/hydration">Hydration</Link>
+          <Link href="/activities">Activity</Link>
           <Link href="/reports">Reports</Link>
           <Link aria-current="page" href="/health">
             Health & privacy

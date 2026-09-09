@@ -25,6 +25,7 @@ function environment(): NodeJS.ProcessEnv {
 
 function dependencies(close = vi.fn().mockResolvedValue(undefined)) {
   return {
+    activityService: {},
     authService: {},
     close,
     diaryService: {},
@@ -98,6 +99,7 @@ describe("API application runtime factory", () => {
     );
     expect(mocks.buildApp).toHaveBeenCalledWith(
       expect.objectContaining({
+        activityService: runtimeDependencies.activityService,
         authService: runtimeDependencies.authService,
         hydrationService: runtimeDependencies.hydrationService,
         logger: false,

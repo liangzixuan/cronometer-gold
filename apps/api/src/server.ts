@@ -73,6 +73,7 @@ export async function createApiApplicationRuntime(
   let app: FastifyInstance | undefined;
   try {
     app = buildApp({
+      activityService: dependencies.activityService,
       authService: dependencies.authService,
       config,
       diaryService: dependencies.diaryService,

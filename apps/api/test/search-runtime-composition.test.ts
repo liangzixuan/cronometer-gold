@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   assertDatabaseReady: vi.fn(),
+  databaseActivityService: vi.fn(),
   coreFoodSearchService: vi.fn(),
   createApiRetentionArtifactRuntime: vi.fn(),
   createDatabaseFromEnvironment: vi.fn(),
@@ -68,6 +69,11 @@ vi.mock("../src/modules/foods/search-service.js", () => ({
 }));
 
 vi.mock("../src/persistence-services.js", () => ({
+  DatabaseActivityService: class {
+    constructor(database: unknown) {
+      mocks.databaseActivityService(database);
+    }
+  },
   DatabaseAuthRepository: class {
     constructor(database: unknown) {
       mocks.databaseAuthRepository(database);

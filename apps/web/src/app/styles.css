@@ -1775,32 +1775,38 @@ button:disabled {
   color: #8b1f1f;
 }
 
-.hydrationDashboard {
+.hydrationDashboard,
+.activityDashboard {
   width: min(1120px, 100%);
 }
 
-.hydrationStatus {
+.hydrationStatus,
+.activityStatus {
   min-height: 22px;
   margin: 20px 0;
   color: var(--ink-muted);
   font-size: 0.84rem;
 }
 
-.hydrationStatus--error {
+.hydrationStatus--error,
+.activityStatus--error {
   color: #8a332b;
 }
 
-.hydrationRetry {
+.hydrationRetry,
+.activityRetry {
   margin: -8px 0 20px;
 }
 
-.hydrationGrid {
+.hydrationGrid,
+.activityGrid {
   display: grid;
   grid-template-columns: minmax(0, 0.75fr) minmax(320px, 1.25fr);
   gap: 24px;
 }
 
-.hydrationTotal {
+.hydrationTotal,
+.activityTotal {
   margin: 12px 0 0;
   color: var(--forest);
   font-size: clamp(3rem, 7vw, 5rem);
@@ -1808,28 +1814,35 @@ button:disabled {
   line-height: 1;
 }
 
-.hydrationForm {
+.hydrationForm,
+.activityForm {
   margin-top: 20px;
 }
 
-.hydrationForm .buttonPrimary {
+.hydrationForm .buttonPrimary,
+.activityForm .buttonPrimary {
   justify-self: start;
 }
 
-.hydrationEntries {
+.hydrationEntries,
+.activityEntries {
   margin-top: 24px;
 }
 
-.hydrationEntries .recordList {
+.hydrationEntries .recordList,
+.activityEntries .recordList {
   margin-top: 20px;
 }
 
 .hydrationEntries .recordList li > div:first-child strong,
-.hydrationEntries .recordList li > div:first-child small {
+.hydrationEntries .recordList li > div:first-child small,
+.activityEntries .recordList li > div:first-child strong,
+.activityEntries .recordList li > div:first-child small {
   display: block;
 }
 
-.hydrationEntries .recordList li > div:first-child strong {
+.hydrationEntries .recordList li > div:first-child strong,
+.activityEntries .recordList li > div:first-child strong {
   font-size: 1.1rem;
 }
 
@@ -1852,7 +1865,31 @@ button:disabled {
   font: inherit;
 }
 
-.hydrationEmpty {
+.activityEditor {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(140px, 1fr));
+  align-items: end;
+  gap: 16px;
+}
+
+.activityEditor input {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 11px;
+  color: var(--ink);
+  background: var(--white);
+  border: 1px solid rgba(23, 33, 29, 0.3);
+  border-radius: 9px;
+  font: inherit;
+}
+
+.activityEditor .entryActions {
+  grid-column: 1 / -1;
+}
+
+.hydrationEmpty,
+.activityEmpty {
   margin: 20px 0 0;
   color: var(--ink-muted);
 }
@@ -1860,7 +1897,11 @@ button:disabled {
 .hydrationForm input:focus-visible,
 .hydrationForm button:focus-visible,
 .hydrationEntries input:focus-visible,
-.hydrationEntries button:focus-visible {
+.hydrationEntries button:focus-visible,
+.activityForm input:focus-visible,
+.activityForm button:focus-visible,
+.activityEntries input:focus-visible,
+.activityEntries button:focus-visible {
   outline: 3px solid #4c8c65;
   outline-offset: 3px;
 }
@@ -2269,6 +2310,7 @@ button:disabled {
   .recipeWorkspace,
   .goalWorkspace,
   .hydrationGrid,
+  .activityGrid,
   .retentionColumns,
   .trendTables,
   .privacyGrid,
@@ -2385,11 +2427,13 @@ button:disabled {
     grid-template-columns: 1fr;
   }
 
-  .hydrationEditor {
+  .hydrationEditor,
+  .activityEditor {
     grid-template-columns: 1fr;
   }
 
-  .hydrationEntries .recordList li {
+  .hydrationEntries .recordList li,
+  .activityEntries .recordList li {
     align-items: stretch;
     flex-direction: column;
   }

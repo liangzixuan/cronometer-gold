@@ -11,6 +11,7 @@ interface FoodsPageProps {
 
 export default async function FoodsPage({ searchParams }: FoodsPageProps) {
   const { date } = await searchParams;
+  const dateQuery = typeof date === "string" && isLocalDate(date) ? `?date=${date}` : "";
   const reportHref =
     typeof date === "string" && isLocalDate(date)
       ? `/reports?to=${encodeURIComponent(date)}`
@@ -22,12 +23,14 @@ export default async function FoodsPage({ searchParams }: FoodsPageProps) {
           nutrition<span>/ledger</span>
         </Link>
         <nav aria-label="Application navigation">
-          <Link href="/dashboard">Today</Link>
-          <Link aria-current="page" href="/foods">
+          <Link href={`/dashboard${dateQuery}`}>Today</Link>
+          <Link aria-current="page" href={`/foods${dateQuery}`}>
             Foods
           </Link>
-          <Link href="/recipes">Recipes</Link>
-          <Link href="/goals">Goals</Link>
+          <Link href={`/recipes${dateQuery}`}>Recipes</Link>
+          <Link href={`/goals${dateQuery}`}>Goals</Link>
+          <Link href={`/hydration${dateQuery}`}>Hydration</Link>
+          <Link href={`/activities${dateQuery}`}>Activity</Link>
           <Link href={reportHref}>Reports</Link>
           <Link href="/health">Health & privacy</Link>
         </nav>

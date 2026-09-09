@@ -351,6 +351,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
           <Link href={`/recipes${dateQuery}`}>Recipes</Link>
           <Link href={`/goals${dateQuery}`}>Goals</Link>
           <Link href={`/hydration${dateQuery}`}>Hydration</Link>
+          <Link href={`/activities${dateQuery}`}>Activity</Link>
           <Link
             aria-current="page"
             href={

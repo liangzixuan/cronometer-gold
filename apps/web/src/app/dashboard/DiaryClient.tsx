@@ -1037,6 +1037,7 @@ export function DiaryClient() {
           <Link href={`/recipes${dateQuery}`}>Recipes</Link>
           <Link href={`/goals${dateQuery}`}>Goals</Link>
           <Link href={`/hydration${dateQuery}`}>Hydration</Link>
+          <Link href={`/activities${dateQuery}`}>Activity</Link>
           <Link href={hasCommittedDate ? `/reports?to=${encodeURIComponent(date)}` : "/reports"}>
             Reports
           </Link>

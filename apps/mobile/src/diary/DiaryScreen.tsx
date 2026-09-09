@@ -101,6 +101,7 @@ interface DiaryScreenProps {
   readonly onGoals: () => void;
   readonly onReports: () => void;
   readonly onHydration: () => void;
+  readonly onActivity: () => void;
   readonly onHealth: () => void;
   readonly onProfileUpdated: (profile: ProfileSummary) => void;
   readonly onUnauthorized: () => Promise<void>;
@@ -196,6 +197,7 @@ export function DiaryScreen({
   onGoals,
   onReports,
   onHydration,
+  onActivity,
   onHealth,
   onProfileUpdated,
   onUnauthorized,
@@ -1041,6 +1043,9 @@ export function DiaryScreen({
           </Pressable>
           <Pressable accessibilityRole="button" onPress={onHydration}>
             <Text style={styles.workspaceLink}>Hydration</Text>
+          </Pressable>
+          <Pressable accessibilityRole="button" onPress={onActivity}>
+            <Text style={styles.workspaceLink}>Activity</Text>
           </Pressable>
           <Pressable accessibilityRole="button" onPress={onHealth}>
             <Text style={styles.workspaceLink}>Health & privacy</Text>

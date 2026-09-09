@@ -42,7 +42,7 @@ reviewer, or production-release acceptance.
    coherent JSON/CSV export, erasure/recovery, and read-only HealthKit/Health
    Connect weight adapters are wired across database, API/worker, web, and mobile
    with package and integration evidence. The real API/worker privacy drill now
-   populates and independently enumerates all 61 retained export entity families.
+   populates and independently enumerates all 65 retained export entity families.
    It requires
    exact source-ID/count reconciliation in JSON and decompressed CSV; proves
    cross-owner survival; verifies audit and artifact-lifecycle redaction; expires
@@ -99,8 +99,15 @@ and charts are source-complete and have passed the ordered local validation
 runbook. M1C-A durable logging and M1C-B durable corrections plus atomic entry
 ordering are source-complete and have passed the ordered local validation
 runbook. M1C remains release-gated on signed-device and controlled-beta evidence.
-M1D's activity/exercise policy and tracking slice is the next safe user-visible
-source milestone while external M0/M2 work remains separately gated. Arbitrary add/delete/hide group identities remain a future migration
+M1D-A's owner-private online manual-activity slice is source-complete and has
+passed the ordered local validation runbook. It remains online-only and
+release-gated; it adds no earned-calorie adjustment, diary-outbox operation,
+platform-health import, wearable integration, reminder, phone exposure, hosted
+acceptance, or signed-device acceptance. M1 remains open for cross-client,
+accessibility, controlled-beta, and other documented acceptance evidence. No
+successor source milestone is selected by this plan; scope the next remaining M1
+slice explicitly rather than inferring M1D-B or exercise-energy behavior.
+External M0/M2 work remains separately gated. Arbitrary add/delete/hide group identities remain a future migration
 milestone rather than part of M1B-G. M0's authenticated acquisition, review,
 and activation lane proceeds in parallel when its separately approved external
 work is available. M2 still requires both M0 and M1 acceptance.
@@ -266,20 +273,26 @@ Each retains its separate explicit-approval gate.
    keep create, amount correction, and delete replay-safe and timezone-explainable.
    Its 1–20,000 mL per-entry, 64-active-entry, and 100,000 mL daily limits are
    operational abuse and overflow bounds, not intake guidance. Its four private
-   entity families are route-first in the 61-family export/erasure drill. This
+   entity families are route-first in the 65-family export/erasure drill. This
    closes only the online hydration CRUD source slice. Client time editing,
    targets, reminders, non-water fluids, offline/background mutation,
    device/platform ingestion, and signed-device, cross-client, and accessibility
    evidence remain open. The private API already supports explicit `occurredAt`
    changes without claiming a client time editor.
 
-   M1D activity/exercise is the next safe user-visible source milestone. Its
-   first acceptance gate must settle PAL and ordinary-exercise double-counting
-   policy. The intended initial slice is owner-private manual activity logging,
-   correction, deletion, and history without automatically changing nutrition
-   goals or energy balance; any exercise-energy adjustment requires separate
-   product and scientific approval. Hydration work does not imply an exercise-
-   energy adjustment.
+   M1D-A is the owner-private online manual-activity slice accepted by ADR 0025.
+   Its source implementation and ordered local validation are complete. An entry
+   records a bounded canonical name, whole-minute duration, start
+   instant, and optional explicitly self-reported calories. Profile-local day
+   navigation exposes current entries and the exact sum of recorded durations;
+   immutable revisions remain in private account history. Missing calories stay
+   null and no day calorie aggregate is published. Activity never changes a
+   nutrition goal, remaining calories, progress, energy balance, PAL, explicit
+   adjustment, dietary report, or `exercise_budget_kcal`; PAL already includes
+   ordinary habitual activity. Any earned-calorie or exercise-energy adjustment
+   requires a separate product/scientific decision and versioned calculation
+   policy. M1D-A remains online-only and adds no diary-outbox operation, platform
+   health permission/import, wearable integration, reminder, or phone exposure.
 
    Private notes attached to food and recipe entries are implemented locally.
    Repeat preserves a note. Clearing hides it from the current display, while
@@ -402,7 +415,7 @@ Each retains its separate explicit-approval gate.
    proceed in parallel, but real execution still requires reviewed hosting and
    digest-pinned seven-image
    deployment; HTTPS, access-control, and off-host restore evidence; controlled-
-   beta review of the locally complete 61-family API/worker export-erasure flow;
+   beta review of the locally complete 65-family API/worker export-erasure flow;
    a reviewed Windows-host/WSL private-phone boundary; a signed iOS/Android device
    matrix; and independent security, browser/device, accessibility, scientific,
    and legal review. Cloud, DNS, Terraform, Tailscale, firewall, and EAS actions
@@ -760,7 +773,7 @@ footprint/runtime, thresholds, staging, reconciliation, search, rights,
 approvals, and activation all remain open.
 
 The real API/worker privacy drill now populates and independently enumerates all
-61 retained export entity families. Exact IDs and counts reconcile across the
+65 retained export entity families. Exact IDs and counts reconcile across the
 source snapshot, JSON, and decompressed CSV; forbidden field-name checks and
 independent sentinels prove audit-field redaction; artifact lifecycle rows omit
 object locators, encryption identifiers, and ciphertext-byte metadata; the

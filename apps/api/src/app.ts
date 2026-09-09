@@ -11,6 +11,7 @@ import { type AppConfig, ConfigValidationError, loadConfig } from "./config.js";
 import { registerAuthContext } from "./http/authentication.js";
 import { registerErrorHandling } from "./http/error-handler.js";
 import { createLoggerOptions } from "./logging.js";
+import type { ActivityService } from "./modules/activity/activity.routes.js";
 import type { AuthService } from "./modules/auth/auth-service.js";
 import type { DiaryService } from "./modules/diary/diary.routes.js";
 import type { FoodSearchService } from "./modules/foods/food.routes.js";
@@ -29,6 +30,7 @@ export interface BuildAppOptions {
   readinessCheck?: ReadinessCheck;
   foodSearchService?: FoodSearchService;
   authService?: AuthService;
+  activityService?: ActivityService;
   profileService?: ProfileService;
   diaryService?: DiaryService;
   hydrationService?: HydrationService;
@@ -102,6 +104,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
   });
   void app.register(v1Routes, {
     prefix: "/v1",
+    ...(options.activityService ? { activityService: options.activityService } : {}),
     ...(options.foodSearchService ? { foodSearchService: options.foodSearchService } : {}),
     ...(options.authService ? { authService: options.authService } : {}),
     ...(options.profileService ? { profileService: options.profileService } : {}),

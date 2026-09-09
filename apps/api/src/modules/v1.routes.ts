@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 
+import { type ActivityRoutesOptions, activityRoutes } from "./activity/activity.routes.js";
 import { type AuthRoutesOptions, authRoutes } from "./auth/auth.routes.js";
 import { type DiaryRoutesOptions, diaryRoutes } from "./diary/diary.routes.js";
 import { type FoodRoutesOptions, foodRoutes } from "./foods/food.routes.js";
@@ -18,7 +19,8 @@ import {
 import { type RetentionRoutesOptions, retentionRoutes } from "./retention/retention.routes.js";
 
 export interface V1RoutesOptions
-  extends FoodRoutesOptions,
+  extends ActivityRoutesOptions,
+    FoodRoutesOptions,
     AuthRoutesOptions,
     ProfileRoutesOptions,
     DiaryRoutesOptions,
@@ -59,6 +61,11 @@ export const v1Routes: FastifyPluginAsync<V1RoutesOptions> = async (app, options
     async () => ({ data: { apiVersion: "v1" as const } }),
   );
 
+  void app.register(activityRoutes, {
+    prefix: "/activities",
+    ...(options.authService ? { authService: options.authService } : {}),
+    ...(options.activityService ? { activityService: options.activityService } : {}),
+  });
   void app.register(foodRoutes, {
     prefix: "/foods",
     ...(options.foodSearchService ? { foodSearchService: options.foodSearchService } : {}),
