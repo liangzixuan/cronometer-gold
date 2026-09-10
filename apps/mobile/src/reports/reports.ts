@@ -177,6 +177,17 @@ export function nutritionReportRangeEndingAt(
   return { from, to };
 }
 
+export function nutritionReportDiaryDates(
+  day: Pick<NutritionReportDay, "entryCount" | "localDate" | "sourceDiaries">,
+): readonly string[] {
+  const dates =
+    day.entryCount === 0 && day.sourceDiaries.length === 0
+      ? [day.localDate]
+      : day.sourceDiaries.map((source) => source.localDate);
+  if (dates.some((date) => !isLocalDate(date))) throw new RangeError("Invalid source diary date.");
+  return [...new Set(dates)].sort();
+}
+
 export function nutritionReportAdjacentRange(
   from: string,
   to: string,

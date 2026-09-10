@@ -1,7 +1,11 @@
+import { readFileSync } from "node:fs";
+import { createContext, Script } from "node:vm";
 import { NUTRITION_REPORT_NOTICE } from "@nutrition-tracker/contracts";
 import * as React from "react";
 import { AppState } from "react-native";
+import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { authenticatedRoutes } from "../src/navigation/routes";
 import { ReportsScreen } from "../src/reports/ReportsScreen";
 import { nutritionReportLocalDates } from "../src/reports/reports";
 
@@ -277,6 +281,8 @@ function setup(handler = () => undefined) {
     profileRevision: "4",
     profileTimeZone: "UTC",
     sessionEpoch: 1,
+    isFocused: true,
+    onDiary: vi.fn(),
     onUnauthorized: vi.fn(async () => {}),
   };
   const requests = [];
@@ -601,5 +607,295 @@ describe("mobile adjacent report periods actual screen", () => {
     expect(rangeValues(tree)).toEqual(range);
     tree = await click(harness, "Next period");
     expect(rangeValues(tree)).not.toEqual(range);
+  });
+});
+
+function sourceFixture(from, to, props, sourceDates, mode = "complete") {
+  const body = fixture(from, to, props);
+  const day = body.data.days[0];
+  day.entryCount = sourceDates.length;
+  day.sourceDiaries = sourceDates.map((localDate, index) => ({
+    id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+    localDate,
+    revision: "3",
+  }));
+  day.sourceTimeZones = ["America/Los_Angeles", "Pacific/Kiritimati"];
+  for (const series of body.data.series) {
+    const unknownCount = mode === "unknown" ? day.entryCount : mode === "partial" ? 1 : 0;
+    const traceCount = mode === "trace" ? 1 : 0;
+    const completeness = mode === "trace" ? "complete" : mode;
+    series.points[0].aggregate = {
+      nutrientId: series.nutrient.id,
+      code: series.nutrient.code,
+      name: series.nutrient.name,
+      unit: series.nutrient.unit,
+      knownAmount: "0",
+      completeness,
+      isExact: unknownCount === 0 && traceCount === 0,
+      contributorCount: day.entryCount,
+      quantifiedCount: day.entryCount - unknownCount - traceCount,
+      traceCount,
+      unknownCount,
+      unknownReasonCounts: {
+        not_reported: unknownCount,
+        not_analyzed: 0,
+        not_applicable: 0,
+        withheld: 0,
+      },
+    };
+    series.points[0].knownPercentOfScale = "0";
+    series.summary = {
+      ...series.summary,
+      diaryDays: 1,
+      missingDays: body.data.days.length - 1,
+      completeDays: completeness === "complete" ? 1 : 0,
+      exactDays: mode === "complete" ? 1 : 0,
+      partialDays: mode === "partial" ? 1 : 0,
+      unknownDays: mode === "unknown" ? 1 : 0,
+      traceDays: mode === "trace" ? 1 : 0,
+    };
+  }
+  return body;
+}
+const diaryButtons = (tree) =>
+  nodes(
+    tree,
+    (node) =>
+      node.type === "Pressable" && node.props.accessibilityLabel?.startsWith("Open diary for "),
+  );
+const diaryButton = (tree, date) => {
+  const buttons = diaryButtons(tree).filter(
+    (button) => button.props.accessibilityLabel === `Open diary for ${date}`,
+  );
+  expect(buttons).toHaveLength(1);
+  return buttons[0];
+};
+
+describe("mobile report source diary navigation", () => {
+  for (const mode of ["complete", "unknown", "partial", "trace"]) {
+    it(`uses sorted unique provenance dates for ${mode} evidence and preserves the report date`, async () => {
+      const { harness, requests, props } = setup((request, current) =>
+        response(
+          sourceFixture(
+            request.url.searchParams.get("from"),
+            request.url.searchParams.get("to"),
+            current,
+            ["2026-09-03", "2026-09-01", "2026-09-03"],
+            mode,
+          ),
+        ),
+      );
+      let tree = await applyRange(harness, "2026-09-02", "2026-09-02");
+      expect(diaryButtons(tree).map((button) => button.props.accessibilityLabel)).toEqual([
+        "Open diary for 2026-09-01",
+        "Open diary for 2026-09-03",
+      ]);
+      expect(screenText(tree)).toContain("2026-09-02");
+      expect(screenText(tree)).toContain("Report days are grouped in UTC");
+      expect(screenText(tree)).toContain("Source diary dates may differ");
+      expect(screenText(tree)).toContain("it may have changed since this snapshot");
+      expect(screenText(tree)).toContain(
+        mode === "unknown" ? "Unknown" : mode === "complete" ? "0 kcal" : "≥ 0 kcal",
+      );
+      const before = requests.length;
+      const first = diaryButton(tree, "2026-09-01").props.onPress;
+      const second = diaryButton(tree, "2026-09-03").props.onPress;
+      first();
+      first();
+      second();
+      tree = await harness.settle();
+      expect(props.onDiary).toHaveBeenCalledExactlyOnceWith("2026-09-01");
+      expect(requests).toHaveLength(before);
+      expect(screenText(tree)).not.toContain("Snapshot captured");
+    });
+  }
+  it("opens the report date for a missing day without converting missingness to zero", async () => {
+    const { harness, props, requests } = setup();
+    const tree = await applyRange(harness, "2026-09-02", "2026-09-02");
+    expect(screenText(tree)).toContain("No diary entries");
+    const before = requests.length;
+    diaryButton(tree, "2026-09-02").props.onPress();
+    await harness.settle();
+    expect(props.onDiary).toHaveBeenCalledExactlyOnceWith("2026-09-02");
+    expect(requests).toHaveLength(before);
+  });
+  for (const [reportDate, sourceDate] of [
+    ["0002-01-01", "0001-12-31"],
+    ["9998-12-31", "9999-01-01"],
+  ]) {
+    it(`opens valid source date ${sourceDate} beyond the report bounds`, async () => {
+      const { harness, props } = setup((request, current) =>
+        response(
+          sourceFixture(
+            request.url.searchParams.get("from"),
+            request.url.searchParams.get("to"),
+            current,
+            [sourceDate],
+          ),
+        ),
+      );
+      const tree = await applyRange(harness, reportDate, reportDate);
+      diaryButton(tree, sourceDate).props.onPress();
+      await harness.settle();
+      expect(props.onDiary).toHaveBeenCalledExactlyOnceWith(sourceDate);
+    });
+  }
+  it("disables dirty-date actions and rejects an earlier callback after editing then restoring dates", async () => {
+    const { harness, props } = setup();
+    let tree = await applyRange(harness, "2026-09-02", "2026-09-02");
+    const old = diaryButton(tree, "2026-09-02").props.onPress;
+    startInput(tree).props.onChangeText("invalid");
+    tree = await harness.settle();
+    expect(diaryButton(tree, "2026-09-02").props.disabled).toBe(true);
+    expect(screenText(tree)).toContain(
+      "Choose Update report to apply these dates before opening a diary",
+    );
+    old();
+    startInput(tree).props.onChangeText("2026-09-02");
+    old();
+    tree = await harness.settle();
+    expect(props.onDiary).not.toHaveBeenCalled();
+    expect(diaryButton(tree, "2026-09-02").props.disabled).toBe(false);
+    diaryButton(tree, "2026-09-02").props.onPress();
+    expect(props.onDiary).toHaveBeenCalledExactlyOnceWith("2026-09-02");
+  });
+  it("reloads the applied range on actual focus return and rejects old departure controls", async () => {
+    const { harness, props, requests, updateProps } = setup();
+    let tree = await applyRange(harness, "2026-09-02", "2026-09-02");
+    tree = await click(harness, "Protein");
+    const old = diaryButton(tree, "2026-09-02").props.onPress;
+    old();
+    tree = await harness.settle();
+    const before = requests.length;
+    harness.replayEffects();
+    tree = await harness.settle();
+    expect(requests).toHaveLength(before);
+    updateProps({ isFocused: false });
+    tree = await harness.settle();
+    old();
+    expect(props.onDiary).toHaveBeenCalledTimes(1);
+    updateProps({ isFocused: true });
+    tree = await harness.settle();
+    expect(requests).toHaveLength(before + 1);
+    expect(rangeValues(tree)).toEqual(["2026-09-02", "2026-09-02"]);
+    expect(pressable(tree, "Protein").props.accessibilityState.selected).toBe(true);
+    old();
+    expect(props.onDiary).toHaveBeenCalledTimes(1);
+    diaryButton(tree, "2026-09-02").props.onPress();
+    expect(props.onDiary).toHaveBeenCalledTimes(2);
+  });
+  for (const boundary of ["range", "error", "closed", "background", "unmount", "replay"]) {
+    it(`rejects a retained diary action after ${boundary}`, async () => {
+      let status = 200;
+      const { harness, props } = setup(() => (status === 200 ? undefined : response({}, status)));
+      let tree = await applyRange(harness, "2026-09-02", "2026-09-02");
+      const old = diaryButton(tree, "2026-09-02").props.onPress;
+      if (boundary === "range") tree = await click(harness, "Next period");
+      else if (boundary === "error" || boundary === "closed") {
+        status = boundary === "error" ? 503 : 401;
+        tree = await click(harness, "Next period");
+      } else if (boundary === "background") {
+        background();
+        tree = await harness.settle();
+      } else if (boundary === "unmount") harness.unmount();
+      else {
+        harness.replayEffects();
+        tree = await harness.settle();
+      }
+      old();
+      expect(props.onDiary).not.toHaveBeenCalled();
+      expect(harness.writesAfterUnmount).toBe(0);
+      if (boundary === "error") {
+        status = 200;
+        tree = await click(harness, "Retry this range");
+        old();
+        expect(props.onDiary).not.toHaveBeenCalled();
+        diaryButton(tree, "2026-09-03").props.onPress();
+        expect(props.onDiary).toHaveBeenCalledExactlyOnceWith("2026-09-03");
+      }
+    });
+  }
+  for (const change of ["owner", "token", "destination", "profile", "zone", "epoch", "focus"]) {
+    it(`rejects diary navigation on ${change} replacement before effects`, async () => {
+      const { harness, props, updateProps } = setup();
+      let tree = await applyRange(harness, "2026-09-02", "2026-09-02");
+      const old = diaryButton(tree, "2026-09-02").props.onPress;
+      updateProps(
+        change === "owner"
+          ? { expectedOwnerUserId: "049eb964-1327-49a1-ab4f-5c7c41a6b68a" }
+          : change === "token"
+            ? { accessToken: "next-token" }
+            : change === "destination"
+              ? { apiBase: new URL("http://127.0.0.1:4001") }
+              : change === "profile"
+                ? { profileRevision: "5" }
+                : change === "zone"
+                  ? { profileTimeZone: "Europe/London" }
+                  : change === "epoch"
+                    ? { sessionEpoch: 2 }
+                    : { isFocused: false },
+      );
+      tree = harness.renderWithoutEffects();
+      expect(diaryButtons(tree)).toHaveLength(0);
+      old();
+      expect(props.onDiary).not.toHaveBeenCalled();
+      harness.unmount();
+      expect(harness.writesAfterUnmount).toBe(0);
+    });
+  }
+});
+
+describe("native ReportsRoute diary wiring", () => {
+  it("executes the actual route function and forwards focus plus Today date and refresh key", () => {
+    const source = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
+    const parsed = ts.createSourceFile(
+      "App.tsx",
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX,
+    );
+    const route = parsed.statements.find(
+      (node) => ts.isFunctionDeclaration(node) && node.name?.text === "ReportsRoute",
+    );
+    expect(route).toBeDefined();
+    const compiled = ts.transpileModule(
+      `${route.getText(parsed)}\nglobalThis.renderRoute = ReportsRoute;`,
+      {
+        compilerOptions: {
+          jsx: ts.JsxEmit.React,
+          target: ts.ScriptTarget.ES2022,
+          module: ts.ModuleKind.CommonJS,
+        },
+      },
+    );
+    const navigation = { navigate: vi.fn() };
+    const context = createContext({
+      React,
+      ReportsScreen,
+      Date,
+      useNavigation: () => navigation,
+      useIsFocused: () => false,
+      authenticatedRoutes,
+    });
+    new Script(compiled.outputText, { filename: "App.ReportsRoute.js" }).runInContext(context);
+    const element = context.renderRoute({
+      accessToken: "route-token",
+      apiBase: new URL("http://127.0.0.1:4000"),
+      sessionEpoch: 8,
+      session: { user: { id: owner }, profile: { revision: "4", timeZone: "UTC" } },
+      onUnauthorized: vi.fn(),
+    });
+    expect(element.type).toBe(ReportsScreen);
+    expect(element.props.isFocused).toBe(false);
+    expect(element.props.expectedOwnerUserId).toBe(owner);
+    const before = Date.now();
+    element.props.onDiary("0001-12-31");
+    expect(navigation.navigate).toHaveBeenCalledTimes(1);
+    const [destination, params] = navigation.navigate.mock.calls[0];
+    expect(destination).toBe(authenticatedRoutes.today);
+    expect(params.date).toBe("0001-12-31");
+    expect(Number(params.refreshKey)).toBeGreaterThanOrEqual(before);
+    expect(Number(params.refreshKey)).toBeLessThanOrEqual(Date.now());
   });
 });

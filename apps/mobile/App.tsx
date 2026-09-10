@@ -1,6 +1,7 @@
 import {
   NavigationContainer,
   useFocusEffect,
+  useIsFocused,
   useNavigation,
   useRoute,
 } from "@react-navigation/native";
@@ -370,12 +371,18 @@ function GoalsRoute(props: AuthenticatedAppProps) {
 }
 
 function ReportsRoute(props: AuthenticatedAppProps) {
+  const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const isFocused = useIsFocused();
   return (
     <ReportsScreen
       key={`${props.sessionEpoch}:${props.session.user.id}:${props.session.profile.revision}:${props.session.profile.timeZone}`}
       accessToken={props.accessToken}
       apiBase={props.apiBase}
       expectedOwnerUserId={props.session.user.id}
+      isFocused={isFocused}
+      onDiary={(date) =>
+        navigation.navigate(authenticatedRoutes.today, { date, refreshKey: String(Date.now()) })
+      }
       onUnauthorized={props.onUnauthorized}
       profileRevision={props.session.profile.revision}
       profileTimeZone={props.session.profile.timeZone}

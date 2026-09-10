@@ -536,3 +536,18 @@ acceptance.
   readers. Old visible/print evidence is invalidated immediately; failed-read
   retry stays on the chosen range. Missingness, exact amounts, goal/timezone/
   owner evidence and independent/device/release gates remain unchanged.
+
+## Report source diary navigation (ADR 0035)
+
+- Daily report actions use deduplicated contributing source diary dates, keeping
+  the report date and timezone semantics visible. Missing days open the report
+  date without becoming measured zero. Explain that the current diary may differ
+  from the captured report snapshot.
+- Only current loaded/applied report evidence can navigate. Dirty dates and
+  stale, duplicate, loading, closed, owner/session/profile/range or native
+  lifecycle actions cannot navigate or reopen private output.
+- Use existing diary routes with the explicit date and native refresh behavior.
+  Navigation invalidates web print preparation; printable evidence/layout remains
+  unchanged. No domain writes or added report/diary contracts are introduced.
+  Synthetic/component proof does not replace real persistence, physical native,
+  accessibility, independent reviewer or release acceptance.

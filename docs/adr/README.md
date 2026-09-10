@@ -36,14 +36,11 @@ ADR with a new ADR instead of rewriting its decision.
 | [0028](./0028-print-current-nutrition-report.md) | Print the current coherent nutrition report on web | Source checkpoint; preview/Cancel verified; repeat/direct print, automatic evidence and independent review pending |
 | [0029](./0029-pasted-ingredient-review.md) | Explicit review of pasted ingredient lines in the web new-recipe builder | Accepted; local validation passed; automatic and release evidence pending |
 | [0030](./0030-mobile-pasted-ingredient-review.md) | Explicit native review of pasted ingredient lines using shared parsing and existing recipe contracts | Accepted for bounded source implementation; validation and release evidence pending |
-
 | [0031](./0031-recipe-nutrition-basis-and-coverage.md) | Explicit saved-recipe nutrition basis and coverage on web and mobile | Source complete; local validation passed; automatic and release evidence pending |
-
 | [0032](./0032-copy-saved-recipe-to-new-draft.md) | Copy an exact saved recipe into an independent new private draft | Source complete; local validation and synthetic Chrome QA passed; automatic, independent and release acceptance pending |
-
 | [0033](./0033-reorder-recipe-draft-ingredients.md) | Reorder exact ingredients locally before explicit recipe create/revision | Source complete; local validation and synthetic Chrome QA passed; automatic, independent and release acceptance pending |
-
 | [0034](./0034-adjacent-nutrition-report-periods.md) | Navigate adjacent equal-length report periods through existing snapshot readers | Source complete; local validation and synthetic Chrome QA passed; automatic, independent and release acceptance pending |
+| [0035](./0035-report-source-diary-navigation.md) | Open contributing source diary dates from report evidence | Source complete; local validation and synthetic Chrome QA passed; automatic, independent and release acceptance pending |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

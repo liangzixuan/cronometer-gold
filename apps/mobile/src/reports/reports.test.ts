@@ -8,6 +8,7 @@ import {
   nutritionReportAdjacentRange,
   nutritionReportBoundarySummary,
   nutritionReportCoverageSummary,
+  nutritionReportDiaryDates,
   nutritionReportLocalDates,
   nutritionReportPath,
   nutritionReportPointDisplay,
@@ -443,5 +444,62 @@ describe("mobile adjacent report calendar periods", () => {
     ["9998-12-31", "9999-01-01"],
   ])("rejects unsupported input %s through %s", (from, to) => {
     expect(() => nutritionReportAdjacentRange(from, to, "next")).toThrow(RangeError);
+  });
+});
+
+describe("mobile report source diary dates", () => {
+  const source = (localDate: string, id = sourceDiaryId) => ({ id, localDate, revision: "3" });
+  it("sorts and deduplicates source dates without substituting the report date", () => {
+    expect(
+      nutritionReportDiaryDates({
+        localDate: "2026-09-02",
+        entryCount: 3,
+        sourceDiaries: [
+          source("2026-09-03"),
+          source("2026-09-01", goalId),
+          source("2026-09-03", goalVersionId),
+        ],
+      }),
+    ).toEqual(["2026-09-01", "2026-09-03"]);
+    expect(
+      nutritionReportDiaryDates({
+        localDate: "2026-09-02",
+        entryCount: 1,
+        sourceDiaries: [source("2026-09-02")],
+      }),
+    ).toEqual(["2026-09-02"]);
+  });
+  it("uses the report date only for a day with no entries and no sources", () => {
+    expect(
+      nutritionReportDiaryDates({ localDate: "2026-09-02", entryCount: 0, sourceDiaries: [] }),
+    ).toEqual(["2026-09-02"]);
+    expect(
+      nutritionReportDiaryDates({ localDate: "2026-09-02", entryCount: 1, sourceDiaries: [] }),
+    ).toEqual([]);
+  });
+  it("accepts valid diary dates outside the report range bounds", () => {
+    expect(
+      nutritionReportDiaryDates({
+        localDate: "0002-01-01",
+        entryCount: 1,
+        sourceDiaries: [source("0001-12-31")],
+      }),
+    ).toEqual(["0001-12-31"]);
+    expect(
+      nutritionReportDiaryDates({
+        localDate: "9998-12-31",
+        entryCount: 1,
+        sourceDiaries: [source("9999-01-01")],
+      }),
+    ).toEqual(["9999-01-01"]);
+  });
+  it("rejects invalid source dates rather than inventing a destination", () => {
+    expect(() =>
+      nutritionReportDiaryDates({
+        localDate: "2026-09-02",
+        entryCount: 1,
+        sourceDiaries: [source("2026-02-30")],
+      }),
+    ).toThrow("Invalid source diary date");
   });
 });

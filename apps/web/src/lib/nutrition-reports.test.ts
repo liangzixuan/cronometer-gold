@@ -13,6 +13,7 @@ import {
   reportComparisonText,
   reportPointAccessibilityLabel,
   reportPointCoverageText,
+  reportSourceDiaryDates,
   resolveInitialNutritionReportRange,
 } from "./nutrition-reports";
 
@@ -575,4 +576,77 @@ describe("adjacent web nutrition report periods", () => {
     expect(() => adjacentNutritionReportRange({ from, to }, "previous")).toThrow(RangeError);
     expect(() => adjacentNutritionReportRange({ from, to }, "next")).toThrow(RangeError);
   });
+});
+
+describe("report source diary destinations", () => {
+  const emptyDay = () => {
+    const day = parseNutritionReport(emptyNutritionReportFixture()).days[0];
+    if (!day) throw new Error("Missing parsed fixture day.");
+    return day;
+  };
+
+  it("uses sorted unique source dates without modifying recorded provenance or substituting the report day", () => {
+    const day = {
+      ...emptyDay(),
+      entryCount: 3,
+      sourceDiaries: [
+        { id: "source-a", localDate: "2026-09-02", revision: "9" },
+        { id: "source-b", localDate: "2026-08-31", revision: "4" },
+        { id: "source-c", localDate: "2026-09-02", revision: "2" },
+      ],
+    };
+    const before = JSON.stringify(day);
+    expect(reportSourceDiaryDates(day)).toEqual(["2026-08-31", "2026-09-02"]);
+    expect(JSON.stringify(day)).toBe(before);
+  });
+
+  it("uses the report date only for a zero-entry day with no contributing diaries", () => {
+    expect(reportSourceDiaryDates(emptyDay())).toEqual(["2026-09-01"]);
+    expect(
+      reportSourceDiaryDates({
+        ...emptyDay(),
+        entryCount: 1,
+        sourceDiaries: [{ id: "source", localDate: "2026-09-01", revision: "1" }],
+      }),
+    ).toEqual(["2026-09-01"]);
+    expect(() => reportSourceDiaryDates({ ...emptyDay(), entryCount: 1 })).toThrow(TypeError);
+    expect(() =>
+      reportSourceDiaryDates({
+        ...emptyDay(),
+        sourceDiaries: [{ id: "source", localDate: "2026-08-31", revision: "1" }],
+      }),
+    ).toThrow(TypeError);
+  });
+
+  it.each([
+    ["0002-01-01", "0001-12-31"],
+    ["9998-12-31", "9999-01-01"],
+    ["2026-03-08", "2026-03-07"],
+    ["2026-11-01", "2026-11-02"],
+  ])(
+    "preserves source diary date %s → %s without report bounds or timezone conversion",
+    (localDate, sourceDate) => {
+      expect(
+        reportSourceDiaryDates({
+          ...emptyDay(),
+          localDate,
+          entryCount: 1,
+          sourceDiaries: [{ id: "source", localDate: sourceDate, revision: "1" }],
+        }),
+      ).toEqual([sourceDate]);
+    },
+  );
+
+  it.each(["0000-12-31", "10000-01-01", "2026-02-30", "not-a-date"])(
+    "rejects an invalid source date %s",
+    (localDate) => {
+      expect(() =>
+        reportSourceDiaryDates({
+          ...emptyDay(),
+          entryCount: 1,
+          sourceDiaries: [{ id: "source", localDate, revision: "1" }],
+        }),
+      ).toThrow(TypeError);
+    },
+  );
 });

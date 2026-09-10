@@ -8,6 +8,7 @@ import { isLocalDate, parseSession, type SessionSummary } from "../../lib/diary"
 import {
   adjacentNutritionReportRange,
   type NutritionReport,
+  type NutritionReportDay,
   type NutritionReportRange,
   type NutritionReportSeriesPoint,
   nutritionReportDates,
@@ -18,6 +19,7 @@ import {
   reportComparisonText,
   reportPointAccessibilityLabel,
   reportPointCoverageText,
+  reportSourceDiaryDates,
   resolveInitialNutritionReportRange,
   targetSnapshotForPoint,
 } from "../../lib/nutrition-reports";
@@ -126,6 +128,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   const [printCapture, setPrintCapture] = useState<PrintCapture | null>(null);
 
   const privateUiClosed = useRef(false);
+  const diaryNavigationPending = useRef(false);
   const sessionExplicitlyClosed = useRef(false);
   const sessionGeneration = useRef(0);
   const reportGeneration = useRef(0);
@@ -238,6 +241,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
       rangeKey(rangeRef.current) === ownedCommit.rangeKey
     )
       return;
+    diaryNavigationPending.current = false;
     controlGeneration.current += 1;
     reportGeneration.current += 1;
     completedReportRequest.current = null;
@@ -439,6 +443,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   );
 
   const printable =
+    !diaryNavigationPending.current &&
     routeReadyRef.current &&
     !sessionVerifying &&
     state === "ready" &&
@@ -478,6 +483,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   function canUseRangeControls() {
     return (
       !privateUiClosed.current &&
+      !diaryNavigationPending.current &&
       routeReadyRef.current &&
       routeRef.current === routeContext &&
       !sessionVerifying &&
@@ -513,6 +519,28 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
     )
       return;
     commitRange(adjacentRanges[direction]);
+  }
+
+  function openSourceDiary(day: NutritionReportDay, localDate: string) {
+    const view = printView.current;
+    if (
+      !canUseRangeControls() ||
+      !printable ||
+      !view ||
+      view.report !== report ||
+      !report.days.includes(day) ||
+      !reportSourceDiaryDates(day).includes(localDate)
+    )
+      return;
+    diaryNavigationPending.current = true;
+    controlGeneration.current += 1;
+    invalidatePrint();
+    try {
+      router.push(`/dashboard?date=${encodeURIComponent(localDate)}`);
+    } catch {
+      diaryNavigationPending.current = false;
+      setMessage("Diary navigation could not start. Try Open diary again.");
+    }
   }
 
   useEffect(() => {
@@ -1057,11 +1085,21 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
                 “At least” is a lower bound. A missing day has no diary entries and is never
                 displayed as measured zero.
               </p>
+              <p className="coverageCopy">
+                Report days are grouped in {report.timeZone}. Source diary dates may differ. These
+                actions open the current diary; its entries and revisions may have changed since
+                this snapshot.
+              </p>
+              {dirtyRange ? (
+                <p className="coverageCopy" aria-live="polite">
+                  Choose Update report to apply your dates before opening a diary.
+                </p>
+              ) : null}
               <div className="reportTableScroller">
                 <table className="reportTable">
                   <thead>
                     <tr>
-                      <th scope="col">Day</th>
+                      <th scope="col">Report day</th>
                       <th scope="col">Entries</th>
                       <th scope="col">Logged amount</th>
                       <th scope="col">Coverage</th>
@@ -1075,7 +1113,24 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
                       const day = report.days[index];
                       return (
                         <tr key={point.localDate}>
-                          <th scope="row">{point.localDate}</th>
+                          <th scope="row">
+                            <time dateTime={point.localDate}>{point.localDate}</time>
+                            {day ? (
+                              <div style={{ display: "grid", gap: 8, marginTop: 8, maxWidth: 220 }}>
+                                {reportSourceDiaryDates(day).map((localDate) => (
+                                  <button
+                                    className="buttonQuiet"
+                                    disabled={!printable}
+                                    key={localDate}
+                                    onClick={() => openSourceDiary(day, localDate)}
+                                    type="button"
+                                  >
+                                    Open diary for {localDate}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : null}
+                          </th>
                           <td>{day?.entryCount ?? 0}</td>
                           <td>{reportAmountText(point, selectedSeries.nutrient.unit)}</td>
                           <td>{reportPointCoverageText(point)}</td>

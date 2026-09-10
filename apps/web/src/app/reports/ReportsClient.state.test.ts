@@ -130,7 +130,7 @@ const hooks = vi.hoisted(() => {
   };
 });
 
-const router = vi.hoisted(() => ({ replace: vi.fn(), refresh: vi.fn() }));
+const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), refresh: vi.fn() }));
 vi.mock("react", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   useState: hooks.useState,
@@ -141,7 +141,7 @@ vi.mock("react", async (importOriginal) => ({
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
-import { nutritionReportDates } from "../../lib/nutrition-reports";
+import { nutritionReportDates, parseNutritionReport } from "../../lib/nutrition-reports";
 import { emptyNutritionReportFixture } from "../../test/nutrition-report-fixture";
 import { ReportsClient } from "./ReportsClient";
 
@@ -413,7 +413,7 @@ describe("actual current-report print lifecycle", () => {
     expect(printGate()).toBe("false");
   });
 
-  it.each(["date", "nutrient", "preset", "period", "logout", "unmount"] as const)(
+  it.each(["date", "nutrient", "preset", "period", "diary", "logout", "unmount"] as const)(
     "revokes a pending verification immediately on %s and ignores its late JSON",
     async (change) => {
       let finishJson: ((value: unknown) => void) | undefined;
@@ -439,6 +439,7 @@ describe("actual current-report print lifecycle", () => {
       if (change === "nutrient") nutrient("2");
       if (change === "preset") (button("7 days").props.onClick as () => void)();
       if (change === "period") (button("Next period").props.onClick as () => void)();
+      if (change === "diary") (button("Open diary for 2026-09-01").props.onClick as () => void)();
       if (change === "logout") (button("Sign out").props.onClick as () => void)();
       if (change === "unmount") hooks.unmount();
       // Even a retained handler before React rerenders cannot start another verification.
@@ -1066,5 +1067,336 @@ describe("actual adjacent report periods", () => {
     expect(nativePrint).toHaveBeenCalledTimes(1);
     expect(currentDates()).toEqual(["2026-09-08", "2026-09-14"]);
     expect(printedComponent()).toBeUndefined();
+  });
+});
+
+type SourceCoverage = "zero" | "partial" | "trace" | "unknown";
+function sourceDiaryFixture(
+  reportDate = "2026-09-01",
+  sourceDates = ["2026-09-02", "2026-08-31", "2026-09-02"],
+  coverage: SourceCoverage = "unknown",
+) {
+  const base = emptyNutritionReportFixture(reportDate);
+  const nextDate = new Date(`${reportDate}T00:00:00.000Z`);
+  nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+  const count = sourceDates.length;
+  const complete = coverage === "zero" || coverage === "trace";
+  const unknownCount = coverage === "unknown" ? count : coverage === "partial" ? count - 1 : 0;
+  return {
+    data: {
+      ...base.data,
+      timeZone: "UTC",
+      days: base.data.days.map((day) => ({
+        ...day,
+        startsAt: `${reportDate}T00:00:00.000Z`,
+        endsAt: nextDate.toISOString(),
+        entryCount: count,
+        sourceDiaries: sourceDates.map((localDate, index) => ({
+          id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+          localDate,
+          revision: String(index + 1),
+        })),
+        sourceTimeZones: ["Pacific/Kiritimati", "Pacific/Pago_Pago"],
+      })),
+      series: base.data.series.map((series) => ({
+        ...series,
+        summary: {
+          diaryDays: 1,
+          completeDays: complete ? 1 : 0,
+          exactDays: coverage === "zero" ? 1 : 0,
+          partialDays: coverage === "partial" ? 1 : 0,
+          unknownDays: coverage === "unknown" ? 1 : 0,
+          traceDays: coverage === "trace" ? 1 : 0,
+          missingDays: 0,
+        },
+        points: series.points.map((point) => ({
+          ...point,
+          aggregate: {
+            nutrientId: series.nutrient.id,
+            code: series.nutrient.code,
+            name: series.nutrient.name,
+            unit: series.nutrient.unit,
+            knownAmount: coverage === "partial" ? "0.123456789" : "0",
+            completeness: complete ? "complete" : coverage,
+            isExact: coverage === "zero",
+            contributorCount: count,
+            quantifiedCount: coverage === "zero" ? count : coverage === "partial" ? 1 : 0,
+            traceCount: coverage === "trace" ? count : 0,
+            unknownCount,
+            unknownReasonCounts: {
+              not_reported: unknownCount,
+              not_analyzed: 0,
+              not_applicable: 0,
+              withheld: 0,
+            },
+          },
+          knownPercentOfScale: coverage === "partial" ? "12.346" : "0",
+        })),
+      })),
+    },
+  };
+}
+function sourceDiaryFetcher(
+  reportDate = "2026-09-01",
+  sourceDates?: string[],
+  coverage?: SourceCoverage,
+) {
+  const fixture = sourceDiaryFixture(reportDate, sourceDates, coverage);
+  const fetcher = vi.fn(async (url: string, _init?: RequestInit) =>
+    url === "/api/auth/me"
+      ? session(owner, "4", "UTC")
+      : url.includes(`from=${reportDate}&to=${reportDate}`)
+        ? Response.json(fixture)
+        : utcReportResponse(url),
+  );
+  vi.stubGlobal("fetch", fetcher);
+  return { fetcher, fixture };
+}
+function diaryButtons() {
+  return elements().filter(
+    (node) => node.type === "button" && text(node).startsWith("Open diary for "),
+  );
+}
+async function mountSourceDay(reportDate = "2026-09-01") {
+  hooks.mount(() => ReportsClient({ initialFrom: reportDate, initialTo: reportDate }));
+  await hooks.settle();
+}
+
+describe("actual report source diary navigation", () => {
+  it.each(["2026-08-31", "2026-09-02"])(
+    "opens the selected contributing date %s with no prior reads, deduplicating other source IDs",
+    async (date) => {
+      const { fetcher, fixture } = sourceDiaryFetcher();
+      const before = JSON.stringify(fixture);
+      expect(parseNutritionReport(fixture).days[0]?.sourceDiaries).toHaveLength(3);
+      await mountSourceDay();
+      expect(diaryButtons().map((node) => text(node))).toEqual([
+        "Open diary for 2026-08-31",
+        "Open diary for 2026-09-02",
+      ]);
+      expect(
+        elements().some((node) => node.type === "time" && node.props.dateTime === "2026-09-01"),
+      ).toBe(true);
+      expect(text()).toContain("Report days are grouped in UTC. Source diary dates may differ.");
+      expect(text()).toContain(
+        "These actions open the current diary; its entries and revisions may have changed since this snapshot.",
+      );
+      expect(fetcher.mock.calls).toHaveLength(2);
+      expect(router.push).not.toHaveBeenCalled();
+      expect(
+        diaryButtons().every(
+          (node) => node.props.type === "button" && node.props.href === undefined,
+        ),
+      ).toBe(true);
+      await click(`Open diary for ${date}`);
+      expect(router.push).toHaveBeenCalledExactlyOnceWith(`/dashboard?date=${date}`);
+      expect(fetcher.mock.calls).toHaveLength(2);
+      expect(fetcher.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(
+        true,
+      );
+      expect(JSON.stringify(fixture)).toBe(before);
+    },
+  );
+
+  it("opens the report date for a missing day without changing Missing evidence", async () => {
+    const fetcher = readyFetcher();
+    await mountSourceDay();
+    expect(diaryButtons().map((node) => text(node))).toEqual(["Open diary for 2026-09-01"]);
+    expect(text()).toContain("Missing");
+    await click("Open diary for 2026-09-01");
+    expect(router.push).toHaveBeenCalledExactlyOnceWith("/dashboard?date=2026-09-01");
+    expect(fetcher.mock.calls).toHaveLength(2);
+  });
+
+  it.each([
+    ["zero", "0 kcal"],
+    ["partial", "At least 0.123456789 kcal"],
+    ["trace", "At least 0 kcal"],
+    ["unknown", "Unknown"],
+  ] as const)(
+    "retains %s nutrient evidence while deriving destinations solely from source diaries",
+    async (coverage, expectedAmount) => {
+      sourceDiaryFetcher("2026-09-01", ["2026-08-31", "2026-08-31"], coverage);
+      await mountSourceDay();
+      expect(diaryButtons().map((node) => text(node))).toEqual(["Open diary for 2026-08-31"]);
+      const table = required(elements().find((node) => node.props.className === "reportTable"));
+      expect(
+        elements(table).some((node) => node.type === "td" && text(node) === expectedAmount),
+      ).toBe(true);
+      nutrient("15");
+      await hooks.settle();
+      expect(diaryButtons().map((node) => text(node))).toEqual(["Open diary for 2026-08-31"]);
+    },
+  );
+
+  it.each([
+    ["0002-01-01", "0001-12-31"],
+    ["9998-12-31", "9999-01-01"],
+  ] as const)(
+    "keeps the source diary domain beyond report bound %s",
+    async (reportDate, sourceDate) => {
+      sourceDiaryFetcher(reportDate, [sourceDate]);
+      await mountSourceDay(reportDate);
+      await click(`Open diary for ${sourceDate}`);
+      expect(router.push).toHaveBeenCalledExactlyOnceWith(`/dashboard?date=${sourceDate}`);
+    },
+  );
+
+  it("disables actions for dirty dates and rejects the old action after restoring those dates", async () => {
+    const { fetcher } = sourceDiaryFetcher();
+    await mountSourceDay();
+    const retained = button("Open diary for 2026-08-31");
+    inputDate(0, "");
+    invoke(retained);
+    await hooks.settle();
+    expect(diaryButtons().every((node) => node.props.disabled === true)).toBe(true);
+    expect(text()).toContain("Choose Update report to apply your dates before opening a diary.");
+    inputDate(0, "2026-09-01");
+    await hooks.settle();
+    invoke(retained);
+    await hooks.settle();
+    expect(router.push).not.toHaveBeenCalled();
+    expect(fetcher.mock.calls).toHaveLength(2);
+    await click("Open diary for 2026-08-31");
+    expect(router.push).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks duplicate and alternate destinations before paint and while departure is pending", async () => {
+    const { fetcher } = sourceDiaryFetcher();
+    await mountSourceDay();
+    const first = button("Open diary for 2026-08-31");
+    const second = button("Open diary for 2026-09-02");
+    invoke(first);
+    invoke(first);
+    invoke(second);
+    hooks.render();
+    await hooks.settle();
+    expect(diaryButtons().every((node) => node.props.disabled === true)).toBe(true);
+    invoke(button("Open diary for 2026-09-02"));
+    await hooks.settle();
+    expect(router.push).toHaveBeenCalledExactlyOnceWith("/dashboard?date=2026-08-31");
+    expect(fetcher.mock.calls).toHaveLength(2);
+    expect(printGate()).toBe("false");
+  });
+
+  it("offers a fresh retry if routing throws without reusing the retained action", async () => {
+    sourceDiaryFetcher();
+    await mountSourceDay();
+    const retained = button("Open diary for 2026-08-31");
+    router.push.mockImplementationOnce(() => {
+      throw new Error("Router unavailable");
+    });
+    invoke(retained);
+    await hooks.settle();
+    expect(text()).toContain("Diary navigation could not start. Try Open diary again.");
+    invoke(retained);
+    await hooks.settle();
+    expect(router.push).toHaveBeenCalledTimes(1);
+    await click("Open diary for 2026-08-31");
+    expect(router.push).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    "period",
+    "route",
+    "owner",
+    "profile",
+    "expired",
+    "logout",
+    "unmounted",
+    "effect-replay",
+  ] as const)("rejects a retained diary action after %s", async (transition) => {
+    const { fetcher } = sourceDiaryFetcher();
+    let props = { initialFrom: "2026-09-01", initialTo: "2026-09-01" };
+    hooks.mount(() => ReportsClient(props));
+    await hooks.settle();
+    const retained = button("Open diary for 2026-08-31");
+    if (transition === "period") await click("Next period");
+    if (transition === "route") {
+      props = { initialFrom: "2026-09-03", initialTo: "2026-09-03" };
+      hooks.renderWithoutEffects();
+    }
+    if (["owner", "profile", "expired"].includes(transition)) {
+      const original = required(fetcher.getMockImplementation());
+      fetcher.mockImplementation(async (url, init) =>
+        url !== "/api/auth/me"
+          ? original(url, init)
+          : transition === "expired"
+            ? Response.json({ error: "Expired" }, { status: 401 })
+            : session(
+                transition === "owner" ? anotherOwner : owner,
+                transition === "profile" ? "5" : "4",
+                "UTC",
+              ),
+      );
+      startPrint();
+      await hooks.settle();
+    }
+    if (transition === "logout") {
+      const original = required(fetcher.getMockImplementation());
+      fetcher.mockImplementation(async (url, init) =>
+        url === "/api/auth/logout" ? new Response(null, { status: 204 }) : original(url, init),
+      );
+      await click("Sign out");
+    }
+    if (transition === "unmounted") hooks.unmount();
+    if (transition === "effect-replay") {
+      hooks.replayEffects();
+      await hooks.settle();
+    }
+    const requests = fetcher.mock.calls.length;
+    const updates = hooks.afterClose();
+    invoke(retained);
+    await hooks.settle();
+    expect(router.push).not.toHaveBeenCalled();
+    expect(fetcher.mock.calls).toHaveLength(requests);
+    expect(hooks.afterClose()).toBe(updates);
+    if (transition === "route") {
+      hooks.render();
+      await hooks.settle();
+      expect(currentDates()).toEqual(["2026-09-03", "2026-09-03"]);
+    }
+  });
+
+  it("has no available diary actions while loading or after a report failure, and rejects the old source callback", async () => {
+    const pending = deferred<Response>();
+    const { fetcher } = sourceDiaryFetcher();
+    const original = required(fetcher.getMockImplementation());
+    hooks.mount(() => ReportsClient({ initialFrom: "2026-09-01", initialTo: "2026-09-01" }));
+    expect(diaryButtons()).toHaveLength(0);
+    await hooks.settle();
+    const retained = button("Open diary for 2026-08-31");
+    fetcher.mockImplementation(async (url, init) =>
+      url.includes("from=2026-09-02") ? pending.promise : original(url, init),
+    );
+    await click("Next period");
+    expect(diaryButtons()).toHaveLength(0);
+    invoke(retained);
+    pending.resolve(Response.json({ error: "Unavailable" }, { status: 503 }));
+    await hooks.settle();
+    expect(diaryButtons()).toHaveLength(0);
+    invoke(retained);
+    await hooks.settle();
+    expect(router.push).not.toHaveBeenCalled();
+  });
+
+  it("revokes an active print gate before router navigation and retains exact printable evidence", async () => {
+    const { fixture } = sourceDiaryFetcher();
+    await mountSourceDay();
+    nativePrint.mockImplementation(() => {
+      expect(printedComponent()?.props.report).toEqual(fixture.data);
+      printEvents.dispatchEvent(new Event("beforeprint"));
+      expect(printGate()).toBe("true");
+      router.push.mockImplementationOnce(() => {
+        expect(printGate()).toBe("false");
+      });
+      invoke(button("Open diary for 2026-08-31"));
+    });
+    startPrint();
+    await hooks.settle();
+    expect(nativePrint).toHaveBeenCalledTimes(1);
+    expect(router.push).toHaveBeenCalledExactlyOnceWith("/dashboard?date=2026-08-31");
+    expect(printedComponent()).toBeUndefined();
+    expect(printGate()).toBe("false");
   });
 });

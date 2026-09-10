@@ -119,6 +119,20 @@ export interface NutritionReportDay {
   readonly sourceTimeZones: readonly string[];
 }
 
+export function reportSourceDiaryDates(day: NutritionReportDay): readonly string[] {
+  if (
+    !isLocalDate(day.localDate) ||
+    !Number.isSafeInteger(day.entryCount) ||
+    day.entryCount < 0 ||
+    day.sourceDiaries.some((diary) => !isLocalDate(diary.localDate)) ||
+    (day.entryCount === 0) !== (day.sourceDiaries.length === 0)
+  )
+    throw new TypeError("Report diary destinations require a valid parsed day.");
+  return day.entryCount === 0
+    ? [day.localDate]
+    : [...new Set(day.sourceDiaries.map((diary) => diary.localDate))].sort();
+}
+
 export interface NutritionReport {
   readonly ownerUserId: string;
   readonly profileRevision: string;

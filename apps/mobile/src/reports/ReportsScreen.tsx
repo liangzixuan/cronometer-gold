@@ -1,4 +1,5 @@
 import type {
+  NutritionReportDay,
   NutritionReportResponse,
   NutritionReportSeriesPoint,
 } from "@nutrition-tracker/contracts";
@@ -23,6 +24,7 @@ import {
   nutritionReportAdjacentRange,
   nutritionReportBoundarySummary,
   nutritionReportCoverageSummary,
+  nutritionReportDiaryDates,
   nutritionReportLocalDates,
   nutritionReportPath,
   nutritionReportPointDisplay,
@@ -42,6 +44,8 @@ interface ReportsScreenProps {
   readonly profileRevision: string;
   readonly profileTimeZone: string;
   readonly sessionEpoch: number;
+  readonly isFocused: boolean;
+  readonly onDiary: (date: string) => void;
   readonly onUnauthorized: () => Promise<void>;
 }
 
@@ -85,6 +89,8 @@ export function ReportsScreen({
   profileRevision,
   profileTimeZone,
   sessionEpoch,
+  isFocused,
+  onDiary,
   onUnauthorized,
 }: ReportsScreenProps) {
   const initialRange = nutritionReportRangeEndingAt(
@@ -138,6 +144,12 @@ export function ReportsScreen({
   const scope = scopeRef.current;
   const installedScope = useRef<typeof scope | null>(null);
   const closedScope = useRef<typeof scope | null>(null);
+  const departingScope = useRef<typeof scope | null>(null);
+  const focusedRef = useRef(isFocused);
+  const previousFocus = useRef(isFocused);
+  focusedRef.current = isFocused;
+  const onDiaryRef = useRef(onDiary);
+  onDiaryRef.current = onDiary;
   const reportScope = useRef<typeof scope | null>(null);
   const onUnauthorizedRef = useRef(onUnauthorized);
   onUnauthorizedRef.current = onUnauthorized;
@@ -146,6 +158,8 @@ export function ReportsScreen({
     () =>
       mounted.current &&
       active.current &&
+      focusedRef.current &&
+      departingScope.current !== scope &&
       !closed.current &&
       scopeRef.current === scope &&
       installedScope.current === scope,
@@ -276,6 +290,23 @@ export function ReportsScreen({
     };
   }, [clearSnapshot, scope, setLoadState]);
   useEffect(() => {
+    if (previousFocus.current === isFocused) return;
+    previousFocus.current = isFocused;
+    lifecycleRef.current += 1;
+    generationRef.current += 1;
+    draftGeneration.current += 1;
+    controllerRef.current?.abort();
+    clearSnapshot();
+    if (closed.current) return;
+    setLoadState("loading");
+    if (isFocused) {
+      departingScope.current = null;
+      const refreshed = { ...queryRef.current, refresh: queryRef.current.refresh + 1 };
+      queryRef.current = refreshed;
+      setQuery(refreshed);
+    }
+  }, [clearSnapshot, isFocused, setLoadState]);
+  useEffect(() => {
     void load(query);
     return () => {
       generationRef.current += 1;
@@ -386,6 +417,28 @@ export function ReportsScreen({
       return;
     const next = nutritionReportAdjacentRange(report.from, report.to, direction);
     if (next) commitRange(next.from, next.to);
+  }
+
+  function openDiary(day: NutritionReportDay, date: string) {
+    if (
+      !currentDraftAction() ||
+      stateRef.current !== "ready" ||
+      !report ||
+      reportRef.current !== report ||
+      draftRef.current.from !== query.from ||
+      draftRef.current.to !== query.to ||
+      !report.days.includes(day) ||
+      !nutritionReportDiaryDates(day).includes(date)
+    )
+      return;
+    departingScope.current = scope;
+    lifecycleRef.current += 1;
+    generationRef.current += 1;
+    controllerRef.current?.abort();
+    clearSnapshot();
+    setLoadState("loading");
+    setMessage(`Opening the current diary for ${date}…`);
+    onDiaryRef.current(date);
   }
 
   const selectedSeries =
@@ -651,9 +704,21 @@ export function ReportsScreen({
               <Text accessibilityRole="header" style={styles.sectionTitle}>
                 Exact daily list
               </Text>
+              <Text style={styles.summaryText}>
+                Report days are grouped in {report.timeZone}. Source diary dates may differ. Open
+                the current diary to inspect entries; it may have changed since this snapshot.
+              </Text>
+              {datesDirty ? (
+                <Text style={styles.caution}>
+                  Choose Update report to apply these dates before opening a diary.
+                </Text>
+              ) : null}
               {selectedSeries.points.map((point, index) => {
                 const display = nutritionReportPointDisplay(point, selectedSeries.nutrient.unit);
                 const boundary = goalBoundaryLabel(report, point, selectedSeries.points[index - 1]);
+                const day = report.days.find(
+                  (candidate) => candidate.localDate === point.localDate,
+                );
                 return (
                   <View key={point.localDate} style={styles.dayCard}>
                     <View style={styles.dayHeading}>
@@ -663,6 +728,21 @@ export function ReportsScreen({
                     {boundary ? <Text style={styles.boundary}>{boundary}</Text> : null}
                     <Text style={styles.coverage}>{display.coverage}</Text>
                     <Text style={styles.comparison}>{display.comparison}</Text>
+                    {day
+                      ? nutritionReportDiaryDates(day).map((date) => (
+                          <Pressable
+                            key={date}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Open diary for ${date}`}
+                            accessibilityState={{ disabled: datesDirty }}
+                            disabled={datesDirty}
+                            onPress={() => openDiary(day, date)}
+                            style={[styles.secondaryButton, datesDirty && styles.disabled]}
+                          >
+                            <Text style={styles.secondaryText}>Open diary for {date}</Text>
+                          </Pressable>
+                        ))
+                      : null}
                   </View>
                 );
               })}
