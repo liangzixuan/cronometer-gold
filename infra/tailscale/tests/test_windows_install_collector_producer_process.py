@@ -3,6 +3,8 @@ from __future__ import annotations
 import contextlib
 import io
 import subprocess
+import sys
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -126,9 +128,9 @@ class WindowsInstallCollectorProducerProcessTests(unittest.TestCase):
                     env=ENVIRONMENT,
                 )
 
-    def test_version_discovery_keeps_five_second_budget_and_own_stage(self) -> None:
+    def test_version_discovery_keeps_twenty_second_budget_and_own_stage(self) -> None:
         for reason, failure in (
-            ("timeout", subprocess.TimeoutExpired(ARGV, 5)),
+            ("timeout", subprocess.TimeoutExpired(ARGV, 20)),
             ("launch-error", OSError(13, PRIVATE_SENTINEL)),
         ):
             with self.subTest(reason=reason), resolved_runtime() as executable:
@@ -139,9 +141,36 @@ class WindowsInstallCollectorProducerProcessTests(unittest.TestCase):
                         PRODUCER._resolve_powershell(ENVIRONMENT)
                 run.assert_called_once()
                 self.assertEqual(run.call_args.args, ([executable, "--version"],))
-                self.assertEqual(run.call_args.kwargs["timeout"], 5)
+                self.assertEqual(run.call_args.kwargs["timeout"], 20)
                 self.assertIsNone(run.call_args.kwargs["input"])
                 self.assertEqual(run.call_args.kwargs["stdin"], subprocess.DEVNULL)
+
+    def test_version_stage_adapter_accepts_process_past_former_five_second_budget(self) -> None:
+        # Real process-adapter timing evidence, not a PowerShell collector proof.
+        argv = [
+            sys.executable,
+            "-I",
+            "-c",
+            "import sys, time; time.sleep(6); "
+            "sys.stdout.buffer.write(b'delayed-process-adapter-fixture')",
+        ]
+        started = time.monotonic()
+        with patch.object(PRODUCER.subprocess, "run", wraps=subprocess.run) as run:
+            result = PRODUCER._run_process(
+                argv,
+                stage="powershell-version",
+                input_bytes=None,
+                environment=PRODUCER._sanitized_environment(),
+                timeout_seconds=PRODUCER.VERSION_DISCOVERY_TIMEOUT_SECONDS,
+            )
+        elapsed = time.monotonic() - started
+        run.assert_called_once()
+        self.assertEqual(run.call_args.kwargs["timeout"], 20)
+        self.assertEqual(result.args, argv)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, b"delayed-process-adapter-fixture")
+        self.assertEqual(result.stderr, b"")
+        self.assertGreaterEqual(elapsed, 6)
 
     def test_bridge_discovery_keeps_five_second_budget_and_own_stage(self) -> None:
         for reason, failure in (
@@ -158,6 +187,7 @@ class WindowsInstallCollectorProducerProcessTests(unittest.TestCase):
                     ):
                         PRODUCER._resolve_powershell({"WSL_DISTRO_NAME": "Synthetic-Ubuntu"})
                 self.assertEqual(run.call_count, 2)
+                self.assertEqual(run.call_args_list[0].kwargs["timeout"], 20)
                 self.assertEqual(
                     run.call_args.args,
                     (["wslpath", "-w", str(PRODUCER.STATIC.COLLECTOR)],),

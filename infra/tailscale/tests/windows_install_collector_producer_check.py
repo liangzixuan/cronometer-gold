@@ -19,6 +19,7 @@ PHASES = ("preinstall", "postinstall")
 POWERSHELL_VERSION = re.compile(
     r"\APowerShell (?P<major>[0-9]+)\.(?P<minor>[0-9]+)\.(?P<patch>[0-9]+)\Z"
 )
+VERSION_DISCOVERY_TIMEOUT_SECONDS = 20
 PROCESS_TIMEOUT_SECONDS = 20
 PROCESS_STAGES = frozenset(
     (
@@ -140,7 +141,7 @@ def _resolve_powershell(
         stage="powershell-version",
         input_bytes=None,
         environment=environment,
-        timeout_seconds=5,
+        timeout_seconds=VERSION_DISCOVERY_TIMEOUT_SECONDS,
     )
     if version_result.returncode != 0 or version_result.stderr:
         _fail("powershell-version")

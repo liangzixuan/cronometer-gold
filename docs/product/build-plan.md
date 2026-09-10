@@ -140,6 +140,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Reuse activity details in a new draft | ADR 0037 source, independent in-task review, canonical local gates and synthetic Chrome exact-field/create/retry/narrow/keyboard QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
 | Automatic evidence / independent review | Hydration amount presets in the Add form | ADR 0038 source, independent in-task review, canonical local gates and synthetic Chrome preset/custom/create/retry/narrow/keyboard QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
 | Automatic evidence / independent review | Filter the loaded saved-recipe list by name | ADR 0039 source, independent in-task review, canonical local gates and synthetic Chrome no-request/paging/draft/keyboard/narrow/expiry QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
+| Automatic evidence / independent review | Bound PowerShell startup discovery in the synthetic collector proof | Reviewed version-only timing repair and full local producer/Tailscale/canonical gates passed; record replacement exact-commit CI/container results without transferring earlier results |
 | Automatic evidence / independent review | Named nutrient rows for native custom foods | ADR 0040 source, independent in-task review, focused native/helper tests, canonical local gates and fresh native exports passed; record exact-commit automatic results and preserve device/independent/release acceptance |
 | Next bounded source candidate | Inspect saved custom-food nutrients without editing | Review explicit Show/Hide of already loaded saved nutrient snapshots on web/native, preserving exact states, version identity, current drafts and pending operations; no new request, registry lookup or calculation |
 
@@ -458,6 +459,74 @@ Base `0b6d50c36550c4c06269dc78c88159f8cb331ff1` CI `34462121394` succeeded
 (updated September 10, 2026 09:48:13 UTC); container `34462121401` remained
 in progress at the 10:04:12 UTC read-only observation. This base evidence does
 not transfer automatic acceptance to this source checkpoint.
+
+### Source/local recovery: synthetic collector runtime startup
+
+September 10, 2026 read-only observation of exact source
+`f160f57f7ee14487b5546f68e9308e564081a728` found CI `34465804010`
+failed (updated 10:29:37 UTC); container `34465804063` succeeded (updated
+11:49:41 UTC). The quality job failed before pnpm setup at the synthetic Windows
+collector producer check. Its fixed diagnostic was
+`powershell-version-timeout`: the version subprocess exceeded five seconds before
+any collector phase ran. Database and secret-scan jobs succeeded. This is a runtime
+discovery timing failure, not evidence of a nutrient-composer or collector-output
+defect. The unchanged producer passed locally with native Linux PowerShell 7.6.5;
+that local result does not reproduce the hosted timing or erase the failed gate.
+
+Acceptance card (before implementation):
+
+- User task/result: restore reliable bounded prerequisite discovery so the full
+  synthetic collector proof can run on a slower-starting hosted runtime. Allocate
+  one explicit 20-second version-discovery deadline, matching the existing
+  collector-process budget; retain the five-second WSL path bridge and 20-second
+  collector deadlines. The version probe remains a single invocation without
+  retry, shell, warm-up subprocess, environment injection or unbounded waiting.
+- Evidence acceptance: retain strict supported-version parsing, empty stderr,
+  executable hash/recheck, sanitized environment, phase repetition and exact
+  golden output, all three negative cases, zero-stdout and leak rejection. Keep
+  the collector source/security-surface/normalized-identity hashes and v3 snapshot
+  validation unchanged. Update only the runtime-discovery prose in the existing
+  snapshot contract. Only the reviewed producer-runner digest changes with its source.
+- Required evidence: a bounded process-adapter regression completes after the
+  former five-second limit, and version-discovery dispatch is asserted to use the
+  new 20-second bound. This does not simulate slow genuine PowerShell startup.
+  Timeout and launch failures still emit only fixed redacted stage diagnostics; bridge/collector
+  budgets and single invocation remain asserted. Run the focused process/static
+  tests, complete Tailscale Python suite, real synthetic producer, independent
+  review and frozen canonical check/build/licenses. Record fresh versus cached
+  results, source hashes and exact command times.
+- Scope: producer runner, its process regression tests, its existing pinned-hash
+  static tests, the existing snapshot-contract runtime prose and this roadmap.
+  No collector, workflow, application, dependency, schema, security policy, private
+  credential, tailnet or deployment change.
+- Stop: reviewed source/local validation, normal commit/non-force push and exact
+  automatic observations recorded. A new automatic success remains required;
+  the repair cannot turn the earlier failed run green. No manual workflow
+  dispatch/rerun/cancel is authorized or needed. Saved nutrient Show/Hide remains
+  the next product candidate and has no implementation in this recovery.
+
+Independent in-task review and focused process/static regressions passed. The
+six-second isolated Python child verifies the bounded process adapter beyond the
+former five-second allowance; it is not a reproduction of slow genuine PowerShell.
+The unchanged base and repaired producer each passed locally using native Linux
+PowerShell 7.6.5. All collector source identities, golden snapshots and manifest
+hashes match; two executions per phase and all three negative cases still pass.
+
+Frozen final validation passed between 2026-09-10T16:29:48Z and
+2026-09-10T16:30:27Z: complete Tailscale suite 73 tests,
+real synthetic producer and canonical `pnpm check`, `pnpm build`,
+`pnpm licenses:check`. Root policy ran 157 tests; unchanged web
+637, native 982 plus 10 runner results
+and application builds came from cache. This recovery has no fresh application
+or device validation claim. License policy passed 535 production
+packages with 14 reviewed exceptions. All five candidate
+hashes stayed fixed during gates; only this roadmap's completion prose changed
+afterward. Exact logs, versions, hashes and limitations are in Windows readiness.
+
+Source/local recovery is complete. Replacement exact-commit automatic results,
+external review, Windows-host policy, production collector and release acceptance
+remain separate. No manual workflow control, dependency install, private corpus,
+tailnet, cloud, application or deployment action was performed.
 
 The next bounded source candidate is **Inspect saved custom-food nutrients without
 editing** on web/native. Current saved cards show name/version/status but already
