@@ -15,6 +15,10 @@ vi.mock("react", async (importOriginal) => ({
 }));
 vi.mock("expo-crypto", () => ({ CryptoDigestAlgorithm: {}, digestStringAsync: vi.fn() }));
 vi.mock("react-native", () => ({
+  AppState: {
+    currentState: "active",
+    addEventListener: () => ({ remove: vi.fn() }),
+  },
   AccessibilityInfo: { announceForAccessibility: vi.fn() },
   ActivityIndicator: "ActivityIndicator",
   Alert: { alert: vi.fn() },

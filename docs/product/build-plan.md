@@ -136,7 +136,8 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Reorder recipe ingredients in the draft | ADR 0033 source, independent in-task review, canonical local gates and synthetic Chrome create/revision/retry QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
 | Automatic evidence / independent review | Previous/next nutrition report period | ADR 0034 source, independent in-task review, canonical local gates and synthetic Chrome period/dirty-date/retry QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
 | Automatic evidence / independent review | Open source diary days from report evidence | ADR 0035 source, independent in-task review, canonical local gates and synthetic Chrome source-date/missing-day/navigation QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
-| Next candidate: read-only assessed | Collapse diary meal groups | Write a bounded card before implementation; default-expanded in-memory controls use stable meal identities, keep headings/Add food visible and preserve active edits, totals, pagination and private scope |
+| Automatic evidence / independent review | Collapse diary meal groups | ADR 0036 source, independent in-task review, canonical local gates and synthetic Chrome keyboard/narrow/paging/editor/date QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
+| Next candidate: read-only assessed | Reuse activity details in a new draft | Write a bounded card before implementation; copy exact name/duration/optional self-reported calories into the existing Add form with explicit submission, dirty-draft protection, fresh-intent retry identity and private/date guards |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -333,16 +334,37 @@ closure. Exact automatic results belong in the delivery handoff. Cached tasks,
 opt-in service skips, source exports and synthetic QA do not replace real
 persistence, physical native, accessibility, Claude Code or release acceptance.
 
-After revalidating automatic results, the next read-only assessed candidate is
-**Collapse diary meal groups** on web/mobile. Current views always show every
-loaded entry in each meal group. Existing stable `mealSlot` identities and user
-labels can support default-expanded, in-memory toggles within the current
-owner/date. Keep headings and Add food visible; preserve exact whole-day totals,
-pagination and the difference between empty and not-yet-loaded entries. Keep an
-actively edited or pending-mutation group open, or disable collapse while busy,
-so unsaved work cannot disappear. Reset presentation state on date/session change.
-This successor is not implemented; write its bounded card and ADR 0036 before
-editing. No API/schema/storage/outbox or nutrition calculation change is implied.
+**Collapse diary meal groups** is source/local complete under
+[ADR 0036](../adr/0036-collapsible-diary-meal-groups.md). Default-expanded,
+in-memory controls use stable meal slots within the current owner/session/date.
+Headings, Add food, whole-day totals/counts and page controls remain available;
+empty and not-yet-loaded meals retain their meaning. Active edits and pending
+operations stay visible. Coherent same-day refresh/paging retains choices;
+date/private-scope changes reset them. No API/schema/storage/outbox/math change
+was added. Independent in-task review and canonical local gates passed with
+569 fresh web tests, 781 mobile plus 10 runner tests, and 157 root policy tests.
+Type/test graphs passed 17/17 with 15 cached; build passed 11/11 with nine cached
+and fresh web/iOS/Android outputs. Dependency/config/license gates passed.
+
+Synthetic production Next/BFF Chrome QA passed independent toggles, keyboard and
+390 px long-label controls, unchanged exact whole-day evidence, failed next-page
+retry and 20-to-24-entry merge, preserved editor draft/Cancel, short/empty-day
+resets and expiry closure. No domain writes occurred. All owned QA processes,
+listeners, viewport overrides and tabs were cleaned up. Exact-commit automatic
+results belong in the delivery handoff; cached service tasks, synthetic pages and
+exports do not replace real persistence, physical native, assistive technology,
+independent Claude Code or release acceptance. Base `feb50682450f7782597763a030f0b34426a282ab`
+CI `34449289735` succeeded (updated 07:24:14 UTC); container `34449289773` was
+still in progress at the September 10, 2026 07:33:20 UTC read-only follow-up.
+
+The next read-only assessed candidate is **Reuse activity details in a new draft**
+on web/mobile. Existing history offers Edit/Delete, while the existing Add form
+can accept an entry's exact name, whole-minute duration and nullable self-reported
+calories. Retain the selected day/start time and require explicit Add. Before
+editing, write ADR 0037 and a bounded card covering dirty-draft replacement,
+new-intent versus unchanged-retry identity, stale/private/date/profile/busy guards,
+and no reuse of original entry identity/revision/time. No successor source is
+implemented; no API/outbox/calorie estimation or food-budget change is implied.
 
 Prepare the external decisions alongside product work, without executing them:
 

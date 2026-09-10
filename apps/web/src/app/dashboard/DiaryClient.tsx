@@ -162,7 +162,11 @@ export function DiaryClient() {
   const [state, setState] = useState<LoadState>("loading");
   const [pageState, setPageState] = useState<PageLoadState>("idle");
   const [message, setMessage] = useState("Opening your private diary…");
-  const [editor, setEditor] = useState<EntryEditor | null>(null);
+  const [editor, setEditorState] = useState<EntryEditor | null>(null);
+  const [mealVisibility, setMealVisibility] = useState<{
+    readonly scope: string;
+    readonly collapsed: ReadonlySet<MealSlot>;
+  }>(() => ({ scope: "", collapsed: new Set() }));
   const [mutationBusy, setMutationBusy] = useState<string | null>(null);
   const [diaryGroupDraft, setDiaryGroupDraft] = useState(emptyDiaryGroupDraft);
   const [diaryGroupSettingsOpen, setDiaryGroupSettingsOpen] = useState(false);
@@ -173,6 +177,11 @@ export function DiaryClient() {
   const [activityOverview, setActivityOverview] = useState<DailyOverviewScopedCardState>(() =>
     scopedDailyOverviewCard(null, loadingDailyOverviewCard()),
   );
+  const editorRef = useRef(editor);
+  editorRef.current = editor;
+  const mealVisibilityGeneration = useRef(0);
+  const explicitDateRef = useRef(explicitDate);
+  explicitDateRef.current = explicitDate;
   const operationIds = useRef(new Map<string, string>());
   const loadController = useRef<AbortController | null>(null);
   const hydrationOverviewController = useRef<AbortController | null>(null);
@@ -197,6 +206,65 @@ export function DiaryClient() {
   diaryPageRef.current = diaryPage;
   const diary = diaryPage?.data.localDate === date ? diaryPage.data : null;
   const diaryGroups = session?.profile.diaryGroups ?? defaultDiaryGroups;
+  const mealViewEpoch = viewEpoch.current;
+  const mealRequestGeneration = requestGeneration.current;
+  const mealPrivateGeneration = privateUiGeneration.current;
+  const renderedMealVisibilityGeneration = mealVisibilityGeneration.current;
+  const mealViewScope = JSON.stringify([
+    session?.user.id ?? null,
+    date,
+    mealViewEpoch,
+    mealPrivateGeneration,
+  ]);
+  const collapsedMeals =
+    mealVisibility.scope === mealViewScope ? mealVisibility.collapsed : new Set<MealSlot>();
+
+  const setEditor = useCallback((next: EntryEditor | null) => {
+    editorRef.current = next;
+    setEditorState(next);
+  }, []);
+
+  function canUseMealControls() {
+    return (
+      !privateUiClosed.current &&
+      privateUiGeneration.current === mealPrivateGeneration &&
+      viewEpoch.current === mealViewEpoch &&
+      mealVisibilityGeneration.current === renderedMealVisibilityGeneration &&
+      requestGeneration.current === mealRequestGeneration &&
+      !pageRequestBusy.current &&
+      explicitDateRef.current === explicitDate &&
+      resolveDiaryRouteDate(explicitDate, session?.profile.timeZone ?? null) === date &&
+      dateRef.current === date &&
+      session !== null &&
+      sessionRef.current?.user.id === session.user.id &&
+      diaryPage !== null &&
+      diaryPageRef.current === diaryPage &&
+      state === "ready" &&
+      activeMutation.current === null &&
+      profileController.current === null &&
+      !profileBusy
+    );
+  }
+
+  function toggleMeal(mealSlot: MealSlot) {
+    if (!canUseMealControls()) return;
+    if (
+      diaryPageRef.current?.data.entries.some(
+        (entry) => entry.mealSlot === mealSlot && entry.id === editorRef.current?.entryId,
+      )
+    )
+      return;
+    const collapsed = new Set(collapsedMeals);
+    if (collapsed.has(mealSlot)) collapsed.delete(mealSlot);
+    else collapsed.add(mealSlot);
+    mealVisibilityGeneration.current += 1;
+    setMealVisibility({ scope: mealViewScope, collapsed });
+  }
+
+  function beginEntryEdit(entry: DiaryEntry) {
+    if (!canUseMealControls() || !session || !diary?.entries.includes(entry)) return;
+    setEditor(editState(entry, diary, session.profile.timeZone));
+  }
 
   const signInAgain = useCallback(() => {
     privateUiClosed.current = true;
@@ -233,7 +301,7 @@ export function DiaryClient() {
     setDate("");
     router.replace("/login");
     router.refresh();
-  }, [router]);
+  }, [router, setEditor]);
 
   const transitionCommittedDate = useCallback(
     (next: string, rewriteUrl: boolean) => {
@@ -266,7 +334,7 @@ export function DiaryClient() {
         router.replace(`/dashboard?date=${encodeURIComponent(next)}`, { scroll: false });
       }
     },
-    [router],
+    [router, setEditor],
   );
 
   const loadDiary = useCallback(
@@ -330,7 +398,7 @@ export function DiaryClient() {
         return false;
       }
     },
-    [signInAgain],
+    [signInAgain, setEditor],
   );
 
   const loadOverviewCard = useCallback(
@@ -1572,252 +1640,279 @@ export function DiaryClient() {
             >
               {diaryGroups.map((group) => {
                 const entries = diary.entries.filter((entry) => entry.mealSlot === group.mealSlot);
+                const containsEditor = entries.some((entry) => entry.id === editor?.entryId);
+                const collapsed =
+                  collapsedMeals.has(group.mealSlot) && !containsEditor && !controlsBusy;
                 return (
                   <section
                     className="mealSection"
                     key={group.mealSlot}
                     aria-labelledby={`meal-${group.mealSlot}`}
                   >
-                    <div className="mealHeading">
+                    <div className="mealHeading" style={{ flexWrap: "wrap" }}>
                       <h2 id={`meal-${group.mealSlot}`}>{group.label}</h2>
-                      <Link href={`/foods?date=${date}&meal=${group.mealSlot}`}>Add food</Link>
+                      <div
+                        style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 16 }}
+                      >
+                        <button
+                          aria-controls={`meal-entries-${group.mealSlot}`}
+                          aria-expanded={!collapsed}
+                          aria-label={`${collapsed ? "Expand" : "Collapse"} ${group.label}`}
+                          className="buttonQuiet"
+                          disabled={
+                            controlsBusy ||
+                            state !== "ready" ||
+                            pageState === "loading" ||
+                            !session ||
+                            containsEditor
+                          }
+                          onClick={() => toggleMeal(group.mealSlot)}
+                          type="button"
+                        >
+                          {collapsed ? "Expand" : "Collapse"}
+                        </button>
+                        <Link href={`/foods?date=${date}&meal=${group.mealSlot}`}>Add food</Link>
+                      </div>
                     </div>
-                    {entries.length === 0 ? (
-                      <p className="emptyMeal">
-                        {diaryPage?.page.nextCursor
-                          ? "No entries loaded for this meal yet"
-                          : "No entries"}
-                      </p>
-                    ) : (
-                      <ul>
-                        {entries.map((entry, entryIndex) => (
-                          <li key={entry.id}>
-                            {editor?.entryId === entry.id ? (
-                              <div className="entryEditor">
-                                <label>
-                                  Quantity
-                                  <input
-                                    inputMode="decimal"
-                                    maxLength={18}
-                                    onChange={(event) =>
-                                      setEditor({ ...editor, quantity: event.target.value })
-                                    }
-                                    value={editor.quantity}
-                                  />
-                                </label>
-                                <label>
-                                  Meal
-                                  <select
-                                    onChange={(event) =>
-                                      setEditor({
-                                        ...editor,
-                                        mealSlot: event.target.value as MealSlot,
-                                      })
-                                    }
-                                    value={editor.mealSlot}
-                                  >
-                                    {diaryGroups.map((groupOption) => (
-                                      <option
-                                        key={groupOption.mealSlot}
-                                        value={groupOption.mealSlot}
-                                      >
-                                        {groupOption.label}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </label>
-                                <label>
-                                  Local date
-                                  <input
-                                    onChange={(event) =>
-                                      setEditor({ ...editor, localDate: event.target.value })
-                                    }
-                                    type="date"
-                                    value={editor.localDate}
-                                  />
-                                </label>
-                                <label>
-                                  Local time
-                                  <input
-                                    onChange={(event) =>
-                                      setEditor({ ...editor, localTime: event.target.value })
-                                    }
-                                    type="time"
-                                    value={editor.localTime}
-                                  />
-                                </label>
-                                <label
-                                  className="entryNoteField"
-                                  htmlFor={`entry-note-${entry.id}`}
-                                >
-                                  Private note
-                                  <textarea
-                                    aria-describedby={`entry-note-help-${entry.id}`}
-                                    id={`entry-note-${entry.id}`}
-                                    maxLength={4_000}
-                                    onChange={(event) =>
-                                      setEditor({ ...editor, note: event.target.value })
-                                    }
-                                    rows={4}
-                                    value={editor.note}
-                                  />
-                                </label>
-                                <small className="entryNoteHint" id={`entry-note-help-${entry.id}`}>
-                                  Clear the field and save to remove this note from the current
-                                  display only. Immutable prior revisions remain in your private
-                                  account export until whole-account erasure. Character count:{" "}
-                                  {diaryEntryNoteCharacterCount(editor.note)}
-                                  of 2,000.
-                                </small>
-                                <small className="entryTimeHint">
-                                  Changed date and time are interpreted in {editor.originTimeZone}.
-                                </small>
-                                <div className="entryActions">
-                                  <button
-                                    aria-label={`Clear note field for ${entryName(entry)}`}
-                                    disabled={mutationBusy !== null || editor.note.length === 0}
-                                    onClick={() => setEditor({ ...editor, note: "" })}
-                                    type="button"
-                                  >
-                                    Clear field
-                                  </button>
-                                  <button
-                                    aria-label={`Save changes to ${entryName(entry)}`}
-                                    disabled={mutationBusy !== null || diary.status === "locked"}
-                                    onClick={() => void saveEntry()}
-                                    type="button"
-                                  >
-                                    {mutationBusy === entry.id ? "Saving…" : "Save"}
-                                  </button>
-                                  <button
-                                    aria-label={`Cancel editing ${entryName(entry)}`}
-                                    disabled={mutationBusy !== null}
-                                    onClick={() => setEditor(null)}
-                                    type="button"
-                                  >
-                                    Cancel
-                                  </button>
-                                </div>
-                              </div>
-                            ) : (
-                              <article className="diaryEntry">
-                                <div>
-                                  <h3>{entryName(entry)}</h3>
-                                  {entry.entryKind === "food" && entry.food.brandName ? (
-                                    <p>{entry.food.brandName}</p>
-                                  ) : null}
-                                  {entry.entryKind === "recipe" ? (
-                                    <p>Recipe version {entry.recipe.versionNumber}</p>
-                                  ) : null}
-                                  {entry.note !== null ? (
-                                    <div className="entryNote">
-                                      <small>Private note</small>
-                                      <p>{entry.note}</p>
-                                    </div>
-                                  ) : null}
-                                  <small>
-                                    {entry.portion.kind === "serving"
-                                      ? `${entry.portion.amount} ${entry.portion.servingLabel}`
-                                      : `${entry.portion.grams} g`}{" "}
-                                    · {entry.localTime.slice(0, 5)} · {entryEnergyDisplay(entry)}
-                                  </small>
-                                  {entry.timeZone !== diary.timeZone ? (
-                                    <small>Logged in {entry.timeZone}</small>
-                                  ) : null}
-                                  {entry.entryKind === "food" ? (
-                                    <small>
-                                      {entry.foodProvenance.kind === "private_custom"
-                                        ? `Owner-entered private food · pinned version ${entry.foodProvenance.customFoodVersionNumber}`
-                                        : `${entry.foodProvenance.source.attributionRequired ? entry.foodProvenance.source.attributionText : entry.foodProvenance.source.displayName} · ${entry.foodProvenance.source.licenseExpression}`}
-                                    </small>
-                                  ) : (
-                                    <div className="entryProvenance">
-                                      <small>{entry.recipe.retentionPolicy.assumption}</small>
-                                      {entry.recipe.warnings.map((warning) => (
-                                        <small key={warning.code}>{warning.message}</small>
-                                      ))}
-                                      {entry.sources.map((source) => (
-                                        <small key={`${source.code}:${source.releaseId}`}>
-                                          {source.attributionRequired
-                                            ? source.attributionText
-                                            : source.displayName}{" "}
-                                          · {source.licenseExpression}
-                                        </small>
-                                      ))}
-                                    </div>
-                                  )}
-                                </div>
-                                <div className="entryActions">
-                                  <button
-                                    aria-label={`Move ${entryName(entry)} up within ${group.label}`}
-                                    disabled={
-                                      mutationBusy !== null ||
-                                      editor !== null ||
-                                      diary.status === "locked" ||
-                                      !completeDayLoaded ||
-                                      entryIndex === 0
-                                    }
-                                    onClick={() => void reorderEntry(entry, "up")}
-                                    type="button"
-                                  >
-                                    Move up
-                                  </button>
-                                  <button
-                                    aria-label={`Move ${entryName(entry)} down within ${group.label}`}
-                                    disabled={
-                                      mutationBusy !== null ||
-                                      editor !== null ||
-                                      diary.status === "locked" ||
-                                      !completeDayLoaded ||
-                                      entryIndex === entries.length - 1
-                                    }
-                                    onClick={() => void reorderEntry(entry, "down")}
-                                    type="button"
-                                  >
-                                    Move down
-                                  </button>
-                                  <button
-                                    aria-label={`Edit ${entryName(entry)}`}
-                                    disabled={
-                                      mutationBusy !== null ||
-                                      diary.status === "locked" ||
-                                      session === null
-                                    }
-                                    onClick={() => {
-                                      if (session) {
-                                        setEditor(
-                                          editState(entry, diary, session.profile.timeZone),
-                                        );
+                    {collapsed && entries.length > 0 ? (
+                      <p className="fieldHelp">Loaded entries hidden.</p>
+                    ) : null}
+                    <div id={`meal-entries-${group.mealSlot}`}>
+                      {entries.length === 0 ? (
+                        <p className="emptyMeal">
+                          {diaryPage?.page.nextCursor
+                            ? "No entries loaded for this meal yet"
+                            : "No entries"}
+                        </p>
+                      ) : collapsed ? null : (
+                        <ul>
+                          {entries.map((entry, entryIndex) => (
+                            <li key={entry.id}>
+                              {editor?.entryId === entry.id ? (
+                                <div className="entryEditor">
+                                  <label>
+                                    Quantity
+                                    <input
+                                      inputMode="decimal"
+                                      maxLength={18}
+                                      onChange={(event) =>
+                                        setEditor({ ...editor, quantity: event.target.value })
                                       }
-                                    }}
-                                    type="button"
+                                      value={editor.quantity}
+                                    />
+                                  </label>
+                                  <label>
+                                    Meal
+                                    <select
+                                      onChange={(event) =>
+                                        setEditor({
+                                          ...editor,
+                                          mealSlot: event.target.value as MealSlot,
+                                        })
+                                      }
+                                      value={editor.mealSlot}
+                                    >
+                                      {diaryGroups.map((groupOption) => (
+                                        <option
+                                          key={groupOption.mealSlot}
+                                          value={groupOption.mealSlot}
+                                        >
+                                          {groupOption.label}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                  <label>
+                                    Local date
+                                    <input
+                                      onChange={(event) =>
+                                        setEditor({ ...editor, localDate: event.target.value })
+                                      }
+                                      type="date"
+                                      value={editor.localDate}
+                                    />
+                                  </label>
+                                  <label>
+                                    Local time
+                                    <input
+                                      onChange={(event) =>
+                                        setEditor({ ...editor, localTime: event.target.value })
+                                      }
+                                      type="time"
+                                      value={editor.localTime}
+                                    />
+                                  </label>
+                                  <label
+                                    className="entryNoteField"
+                                    htmlFor={`entry-note-${entry.id}`}
                                   >
-                                    Edit
-                                  </button>
-                                  <button
-                                    aria-label={`Repeat ${entryName(entry)} today`}
-                                    disabled={mutationBusy !== null}
-                                    onClick={() => void repeatEntry(entry)}
-                                    type="button"
+                                    Private note
+                                    <textarea
+                                      aria-describedby={`entry-note-help-${entry.id}`}
+                                      id={`entry-note-${entry.id}`}
+                                      maxLength={4_000}
+                                      onChange={(event) =>
+                                        setEditor({ ...editor, note: event.target.value })
+                                      }
+                                      rows={4}
+                                      value={editor.note}
+                                    />
+                                  </label>
+                                  <small
+                                    className="entryNoteHint"
+                                    id={`entry-note-help-${entry.id}`}
                                   >
-                                    {mutationBusy === entry.id ? "Working…" : "Repeat today"}
-                                  </button>
-                                  <button
-                                    aria-label={`Delete ${entryName(entry)}`}
-                                    className="dangerAction"
-                                    disabled={mutationBusy !== null || diary.status === "locked"}
-                                    onClick={() => void deleteEntry(entry)}
-                                    type="button"
-                                  >
-                                    {mutationBusy === entry.id ? "Working…" : "Delete"}
-                                  </button>
+                                    Clear the field and save to remove this note from the current
+                                    display only. Immutable prior revisions remain in your private
+                                    account export until whole-account erasure. Character count:{" "}
+                                    {diaryEntryNoteCharacterCount(editor.note)}
+                                    of 2,000.
+                                  </small>
+                                  <small className="entryTimeHint">
+                                    Changed date and time are interpreted in {editor.originTimeZone}
+                                    .
+                                  </small>
+                                  <div className="entryActions">
+                                    <button
+                                      aria-label={`Clear note field for ${entryName(entry)}`}
+                                      disabled={mutationBusy !== null || editor.note.length === 0}
+                                      onClick={() => setEditor({ ...editor, note: "" })}
+                                      type="button"
+                                    >
+                                      Clear field
+                                    </button>
+                                    <button
+                                      aria-label={`Save changes to ${entryName(entry)}`}
+                                      disabled={mutationBusy !== null || diary.status === "locked"}
+                                      onClick={() => void saveEntry()}
+                                      type="button"
+                                    >
+                                      {mutationBusy === entry.id ? "Saving…" : "Save"}
+                                    </button>
+                                    <button
+                                      aria-label={`Cancel editing ${entryName(entry)}`}
+                                      disabled={mutationBusy !== null}
+                                      onClick={() => setEditor(null)}
+                                      type="button"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
                                 </div>
-                              </article>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
+                              ) : (
+                                <article className="diaryEntry">
+                                  <div>
+                                    <h3>{entryName(entry)}</h3>
+                                    {entry.entryKind === "food" && entry.food.brandName ? (
+                                      <p>{entry.food.brandName}</p>
+                                    ) : null}
+                                    {entry.entryKind === "recipe" ? (
+                                      <p>Recipe version {entry.recipe.versionNumber}</p>
+                                    ) : null}
+                                    {entry.note !== null ? (
+                                      <div className="entryNote">
+                                        <small>Private note</small>
+                                        <p>{entry.note}</p>
+                                      </div>
+                                    ) : null}
+                                    <small>
+                                      {entry.portion.kind === "serving"
+                                        ? `${entry.portion.amount} ${entry.portion.servingLabel}`
+                                        : `${entry.portion.grams} g`}{" "}
+                                      · {entry.localTime.slice(0, 5)} · {entryEnergyDisplay(entry)}
+                                    </small>
+                                    {entry.timeZone !== diary.timeZone ? (
+                                      <small>Logged in {entry.timeZone}</small>
+                                    ) : null}
+                                    {entry.entryKind === "food" ? (
+                                      <small>
+                                        {entry.foodProvenance.kind === "private_custom"
+                                          ? `Owner-entered private food · pinned version ${entry.foodProvenance.customFoodVersionNumber}`
+                                          : `${entry.foodProvenance.source.attributionRequired ? entry.foodProvenance.source.attributionText : entry.foodProvenance.source.displayName} · ${entry.foodProvenance.source.licenseExpression}`}
+                                      </small>
+                                    ) : (
+                                      <div className="entryProvenance">
+                                        <small>{entry.recipe.retentionPolicy.assumption}</small>
+                                        {entry.recipe.warnings.map((warning) => (
+                                          <small key={warning.code}>{warning.message}</small>
+                                        ))}
+                                        {entry.sources.map((source) => (
+                                          <small key={`${source.code}:${source.releaseId}`}>
+                                            {source.attributionRequired
+                                              ? source.attributionText
+                                              : source.displayName}{" "}
+                                            · {source.licenseExpression}
+                                          </small>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="entryActions">
+                                    <button
+                                      aria-label={`Move ${entryName(entry)} up within ${group.label}`}
+                                      disabled={
+                                        mutationBusy !== null ||
+                                        editor !== null ||
+                                        diary.status === "locked" ||
+                                        !completeDayLoaded ||
+                                        entryIndex === 0
+                                      }
+                                      onClick={() => void reorderEntry(entry, "up")}
+                                      type="button"
+                                    >
+                                      Move up
+                                    </button>
+                                    <button
+                                      aria-label={`Move ${entryName(entry)} down within ${group.label}`}
+                                      disabled={
+                                        mutationBusy !== null ||
+                                        editor !== null ||
+                                        diary.status === "locked" ||
+                                        !completeDayLoaded ||
+                                        entryIndex === entries.length - 1
+                                      }
+                                      onClick={() => void reorderEntry(entry, "down")}
+                                      type="button"
+                                    >
+                                      Move down
+                                    </button>
+                                    <button
+                                      aria-label={`Edit ${entryName(entry)}`}
+                                      disabled={
+                                        mutationBusy !== null ||
+                                        diary.status === "locked" ||
+                                        session === null
+                                      }
+                                      onClick={() => beginEntryEdit(entry)}
+                                      type="button"
+                                    >
+                                      Edit
+                                    </button>
+                                    <button
+                                      aria-label={`Repeat ${entryName(entry)} today`}
+                                      disabled={mutationBusy !== null}
+                                      onClick={() => void repeatEntry(entry)}
+                                      type="button"
+                                    >
+                                      {mutationBusy === entry.id ? "Working…" : "Repeat today"}
+                                    </button>
+                                    <button
+                                      aria-label={`Delete ${entryName(entry)}`}
+                                      className="dangerAction"
+                                      disabled={mutationBusy !== null || diary.status === "locked"}
+                                      onClick={() => void deleteEntry(entry)}
+                                      type="button"
+                                    >
+                                      {mutationBusy === entry.id ? "Working…" : "Delete"}
+                                    </button>
+                                  </div>
+                                </article>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
                   </section>
                 );
               })}

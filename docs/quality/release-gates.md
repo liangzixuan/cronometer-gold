@@ -551,3 +551,20 @@ acceptance.
   unchanged. No domain writes or added report/diary contracts are introduced.
   Synthetic/component proof does not replace real persistence, physical native,
   accessibility, independent reviewer or release acceptance.
+
+## Collapsible diary meal groups (ADR 0036)
+
+- Default-expanded controls use stable meal identities within the selected
+  private day; labels/order do not remap choices, and date/session changes reset
+  them. Same-day coherent page loading preserves presentation choices.
+- Headings, Add food, whole-day totals/counts, pagination/retry and queue status
+  stay reachable. Hidden entries remain in the authoritative view model. Empty
+  and not-yet-loaded meals retain their existing meaning; no inferred meal count
+  or new subtotal is introduced.
+- Active editors and pending operations stay visible. Retained stale controls
+  cannot change another date/session or bypass busy/private/lifecycle guards.
+  Collapse adds no requests, writes, persistence, outbox or nutrition calculation.
+- Actual-component web/native tests, independent in-task review, canonical local
+  gates and exports, and synthetic Chrome keyboard/narrow/paging/editor/date QA
+  establish only their bounded source behavior. Physical native, assistive
+  technology, real persistence, independent Claude Code and release gates remain.

@@ -4,6 +4,7 @@ import {
   AccessibilityInfo,
   ActivityIndicator,
   Alert,
+  AppState,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -235,6 +236,30 @@ export function DiaryScreen({
   const [pageState, setPageState] = useState<PageLoadState>("idle");
   const [message, setMessage] = useState("Opening your private diary…");
   const [editor, setEditor] = useState<Editor | null>(null);
+  const editorRef = useRef(editor);
+  editorRef.current = editor;
+  const [, refreshMealPresentation] = useState(0);
+  const mealScopeKey = JSON.stringify([
+    expectedOwnerUserId,
+    sessionEpoch,
+    accessToken,
+    apiBase.toString(),
+    date,
+    profileTimeZone,
+  ]);
+  const mealPresentation = useRef({
+    scope: mealScopeKey,
+    collapsed: new Set<MealSlot>(),
+    generation: 0,
+    mounted: false,
+    active: AppState.currentState !== "background" && AppState.currentState !== "inactive",
+  });
+  if (mealPresentation.current.scope !== mealScopeKey) {
+    mealPresentation.current.scope = mealScopeKey;
+    mealPresentation.current.collapsed = new Set();
+    mealPresentation.current.generation += 1;
+  }
+  const mealSnapshotScope = useRef<string | null>(null);
   const [busyEntry, setBusyEntry] = useState<string | null>(null);
   const [groupEditorOpen, setGroupEditorOpen] = useState(false);
   const [groupDraft, setGroupDraft] = useState<readonly DiaryGroup[]>(() =>
@@ -279,6 +304,9 @@ export function DiaryScreen({
   const activeMutation = useRef<number | null>(null);
   const privateUiClosed = useRef(false);
   const unauthorizedFlight = useRef<DiaryUnauthorizedSingleFlight | null>(null);
+  const requestedMealRoute = diaryRouteTransitionGeneration(requestedDate, refreshKey);
+  const currentMealRoute = useRef(requestedMealRoute);
+  currentMealRoute.current = requestedMealRoute;
   const appliedRouteGeneration = useRef(diaryRouteTransitionGeneration(requestedDate, refreshKey));
   const dateRef = useRef(date);
   dateRef.current = date;
@@ -326,6 +354,7 @@ export function DiaryScreen({
   const load = useCallback(
     async (requested: string, refreshedAfterStalePage = false) => {
       if (privateUiClosed.current || dateRef.current !== requested) return false;
+      const loadedMealScope = mealPresentation.current.scope;
       const generation = requestGeneration.current + 1;
       requestGeneration.current = generation;
       loadController.current?.abort();
@@ -359,6 +388,7 @@ export function DiaryScreen({
         if (!response.ok) throw new Error(responseError(body, "The diary could not be loaded."));
         const next = mergeDiaryPages(null, parseDiaryPage(body));
         if (!isCurrent()) return false;
+        mealSnapshotScope.current = loadedMealScope;
         setDiaryPage(next);
         setState("ready");
         const nextMessage = refreshedAfterStalePage
@@ -656,6 +686,23 @@ export function DiaryScreen({
     },
     [],
   );
+
+  useEffect(() => {
+    const presentation = mealPresentation.current;
+    presentation.mounted = true;
+    const subscription = AppState.addEventListener("change", (next) => {
+      const nextActive = next !== "background" && next !== "inactive";
+      if (presentation.active === nextActive) return;
+      presentation.active = nextActive;
+      presentation.generation += 1;
+      refreshMealPresentation((value) => value + 1);
+    });
+    return () => {
+      presentation.mounted = false;
+      presentation.generation += 1;
+      subscription.remove();
+    };
+  }, []);
 
   function beginMutation(sourceDate: string, busyKey: string): MutationOwner {
     const token = mutationSequence.current + 1;
@@ -1260,6 +1307,62 @@ export function DiaryScreen({
     (quickAddOutboxState.status === "unavailable" &&
       (quickAddOutboxState.reason === "storage" || quickAddOutboxState.reason === "credential"));
   const repeatTargetDate = localDateInTimeZone(new Date(), profileTimeZone);
+  // Keep work visible even after enqueue finishes and the protected queue owns it.
+  const holdMealGroupsOpen =
+    editor !== null ||
+    busyEntry !== null ||
+    activeMutation.current !== null ||
+    pendingCorrectionEntries.size > 0 ||
+    pendingReorderDates.has(date) ||
+    pendingDiaryDates.has(date) ||
+    quickAddOutboxState.status !== "idle" ||
+    quickAddOutboxState.pendingCount > 0;
+  const mealGuard = useRef({ diaryPage, hold: holdMealGroupsOpen });
+  if (mealGuard.current.hold !== holdMealGroupsOpen) mealPresentation.current.generation += 1;
+  mealGuard.current = { diaryPage, hold: holdMealGroupsOpen };
+  const mealGeneration = mealPresentation.current.generation;
+  const mealViewEpoch = viewEpoch.current;
+  const mealRequestGeneration = requestGeneration.current;
+  const mealToggleUnavailable =
+    holdMealGroupsOpen ||
+    state !== "ready" ||
+    pageState === "loading" ||
+    !mealPresentation.current.active ||
+    privateUiClosed.current ||
+    mealSnapshotScope.current !== mealScopeKey ||
+    requestedMealRoute !== appliedRouteGeneration.current;
+
+  function toggleMeal(meal: MealSlot) {
+    const presentation = mealPresentation.current;
+    if (
+      !presentation.mounted ||
+      !presentation.active ||
+      privateUiClosed.current ||
+      presentation.scope !== mealScopeKey ||
+      currentMealRoute.current !== requestedMealRoute ||
+      currentMealRoute.current !== appliedRouteGeneration.current ||
+      presentation.generation !== mealGeneration ||
+      mealSnapshotScope.current !== mealScopeKey ||
+      viewEpoch.current !== mealViewEpoch ||
+      requestGeneration.current !== mealRequestGeneration ||
+      pageRequestBusy.current ||
+      mealGuard.current.diaryPage !== diaryPage ||
+      mealGuard.current.hold ||
+      editorRef.current !== null ||
+      activeMutation.current !== null ||
+      mealToggleUnavailable ||
+      !diary?.entries.some((entry) => entry.mealSlot === meal)
+    )
+      return;
+    const queue = quickAddOutboxController.getState();
+    if (queue.status !== "idle" || queue.pendingCount > 0) return;
+    const collapsed = new Set(presentation.collapsed);
+    if (collapsed.has(meal)) collapsed.delete(meal);
+    else collapsed.add(meal);
+    presentation.collapsed = collapsed;
+    presentation.generation += 1;
+    refreshMealPresentation((value) => value + 1);
+  }
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
@@ -1640,18 +1743,37 @@ export function DiaryScreen({
         {diary && diary.entries.length > 0
           ? diaryGroups.map(({ mealSlot: meal, label }) => {
               const entries = diary.entries.filter((entry) => entry.mealSlot === meal);
+              const collapsed =
+                entries.length > 0 &&
+                !holdMealGroupsOpen &&
+                mealPresentation.current.collapsed.has(meal);
+              const toggleDisabled = mealToggleUnavailable || entries.length === 0;
               return (
                 <View key={meal} style={styles.mealSection}>
                   <View style={styles.mealHeading}>
                     <Text accessibilityRole="header" style={styles.mealTitle}>
                       {label}
                     </Text>
-                    <Pressable
-                      accessibilityRole="button"
-                      onPress={() => onSearch(date, meal, profileTimeZone)}
-                    >
-                      <Text style={styles.addLink}>Add food</Text>
-                    </Pressable>
+                    <View style={styles.mealControls}>
+                      <Pressable
+                        accessibilityLabel={`${collapsed ? "Expand" : "Collapse"} ${label} entries`}
+                        accessibilityRole="button"
+                        accessibilityState={{ expanded: !collapsed, disabled: toggleDisabled }}
+                        disabled={toggleDisabled}
+                        onPress={() => toggleMeal(meal)}
+                      >
+                        <Text style={[styles.addLink, toggleDisabled && styles.disabledMealToggle]}>
+                          {collapsed ? "Expand" : "Collapse"}
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        accessibilityLabel={`Add food to ${label}`}
+                        accessibilityRole="button"
+                        onPress={() => onSearch(date, meal, profileTimeZone)}
+                      >
+                        <Text style={styles.addLink}>Add food</Text>
+                      </Pressable>
+                    </View>
                   </View>
                   {entries.length === 0 ? (
                     <Text style={styles.emptyMeal}>
@@ -1659,6 +1781,8 @@ export function DiaryScreen({
                         ? "No entries loaded for this meal yet"
                         : "No entries"}
                     </Text>
+                  ) : collapsed ? (
+                    <Text style={styles.emptyMeal}>Loaded entries are hidden.</Text>
                   ) : (
                     entries.map((entry, entryIndex) => (
                       <View key={entry.id} style={styles.entryCard}>
@@ -1925,7 +2049,11 @@ export function DiaryScreen({
                                 pendingCorrectionEntries.has(entry.id) ||
                                 pendingReorderDates.has(diary.localDate)
                               }
-                              onPress={() => setEditor(editorFor(entry, diary, profileTimeZone))}
+                              onPress={() => {
+                                const nextEditor = editorFor(entry, diary, profileTimeZone);
+                                editorRef.current = nextEditor;
+                                setEditor(nextEditor);
+                              }}
                               style={styles.secondarySmall}
                             >
                               <Text style={styles.secondaryText}>Edit</Text>
@@ -2166,7 +2294,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 11,
   },
-  mealHeading: { alignItems: "center", flexDirection: "row", justifyContent: "space-between" },
+  disabledMealToggle: { opacity: 0.45 },
+  mealControls: { flexDirection: "row", flexWrap: "wrap", gap: 18, paddingVertical: 8 },
+  mealHeading: { alignItems: "stretch", gap: 4 },
   mealSection: { marginTop: 32 },
   mealTitle: { color: palette.ink, fontSize: 26, fontWeight: "700", letterSpacing: -0.8 },
   note: { color: palette.muted, fontSize: 12, lineHeight: 18, marginTop: 18 },
