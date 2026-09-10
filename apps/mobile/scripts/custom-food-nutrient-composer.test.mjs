@@ -2478,3 +2478,497 @@ describe("native full loaded trend nutrient selection", () => {
     expect(props.onUnauthorized).not.toHaveBeenCalled();
   });
 });
+
+const savedFoodFilterLabel = "Filter loaded custom foods by name";
+const clearSavedFoodFilterLabel = "Clear custom food filter";
+function savedFoodCards(tree) {
+  return nodes(
+    tree,
+    (node) =>
+      node.type === "Pressable" && node.props.accessibilityLabel?.includes(" nutrients for "),
+  );
+}
+function nonFilterSnapshot(tree) {
+  const snapshot = editorSnapshot(tree);
+  return {
+    ...snapshot,
+    inputs: snapshot.inputs.filter(([label]) => label !== savedFoodFilterLabel),
+    messages: snapshot.messages.filter((value) => !value.includes("loaded custom foods.")),
+    trends: trendHeaders(tree),
+  };
+}
+
+describe("native loaded saved custom-food name filter", () => {
+  it("matches trimmed literal names, preserves duplicate IDs/order and bounds raw input at 200 characters", async () => {
+    const foods = [
+      sourceFood,
+      {
+        ...archivedFood,
+        currentVersion: { ...archivedFood.currentVersion, name: sourceFood.currentVersion.name },
+      },
+      {
+        ...sourceFood,
+        id: "6bcfa2bf-4950-43f7-9f24-b983ac803012",
+        currentVersion: { ...sourceFood.currentVersion, id: "125", name: "Literal [.*] food" },
+      },
+    ];
+    const { harness, requests } = setup((request) =>
+      request.url.pathname === "/v1/custom-foods"
+        ? response({ data: foods, page: { nextCursor: null } })
+        : undefined,
+    );
+    try {
+      let tree = await harness.settle();
+      const before = requests.length;
+      expect(savedFoodCards(tree)).toHaveLength(3);
+      tree = await type(harness, savedFoodFilterLabel, "  SAVED pRIVATE  ");
+      expect(input(tree, savedFoodFilterLabel).props.value).toBe("  SAVED pRIVATE  ");
+      const matches = savedFoodCards(tree);
+      expect(matches).toHaveLength(2);
+      matches[0].props.onPress();
+      tree = await harness.settle();
+      expect(savedDetails(tree, foods[0])).toHaveLength(1);
+      expect(savedDetails(tree, foods[1])).toHaveLength(0);
+      savedFoodCards(tree)[1].props.onPress();
+      tree = await harness.settle();
+      expect(savedDetails(tree, foods[1])).toHaveLength(1);
+      expect(text(tree)).toContain("2 matching · 3 loaded custom foods.");
+      tree = await type(harness, savedFoodFilterLabel, "[.*]");
+      expect(savedFoodCards(tree).map((node) => node.props.accessibilityLabel)).toEqual([
+        "Show nutrients for Literal [.*] food, version 1",
+      ]);
+      tree = await type(harness, savedFoodFilterLabel, "x".repeat(201));
+      expect(input(tree, savedFoodFilterLabel).props.maxLength).toBe(200);
+      expect(input(tree, savedFoodFilterLabel).props.value).toBe("x".repeat(200));
+      expect(text(tree)).toContain("0 matching · 3 loaded custom foods.");
+      expect(text(tree)).toContain("No loaded custom foods match this filter.");
+      tree = await type(harness, savedFoodFilterLabel, "  ");
+      expect(savedFoodCards(tree)).toHaveLength(3);
+      tree = await click(harness, clearSavedFoodFilterLabel);
+      expect(savedDetails(tree, foods[0])).toHaveLength(1);
+      expect(savedDetails(tree, foods[1])).toHaveLength(1);
+      expect(requests).toHaveLength(before);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("rejects retained field/Clear callbacks and keeps same-value edits and empty Clear usable no-ops", async () => {
+    const { harness, requests } = setup();
+    try {
+      let tree = await harness.settle();
+      const originalField = input(tree, savedFoodFilterLabel).props.onChangeText;
+      const originalClear = button(tree, clearSavedFoodFilterLabel).props.onPress;
+      originalField("");
+      originalClear();
+      originalField("saved");
+      tree = await harness.settle();
+      const currentField = input(tree, savedFoodFilterLabel).props.onChangeText;
+      const currentClear = button(tree, clearSavedFoodFilterLabel).props.onPress;
+      currentField("saved");
+      currentField("PRIVATE");
+      originalClear();
+      originalField("obsolete");
+      tree = await harness.settle();
+      expect(input(tree, savedFoodFilterLabel).props.value).toBe("PRIVATE");
+      await click(harness, clearSavedFoodFilterLabel);
+      currentClear();
+      currentField("old");
+      tree = await harness.settle();
+      expect(input(tree, savedFoodFilterLabel).props.value).toBe("");
+      expect(requests).toHaveLength(6);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("keeps zero-match paging/retry reachable and preserves overlap, open rows and terminal accumulated counts", async () => {
+    let page = 0;
+    const held = deferred();
+    const { harness, requests } = setup((request) => {
+      if (request.url.pathname !== "/v1/custom-foods") return undefined;
+      if (!request.url.searchParams.has("cursor"))
+        return response({ data: [sourceFood], page: { nextCursor: "page-one" } });
+      page += 1;
+      return page === 1
+        ? response({}, 503)
+        : page === 2
+          ? held.promise
+          : response({ data: [], page: { nextCursor: null } });
+    });
+    try {
+      await toggleSaved(harness);
+      let tree = await type(harness, savedFoodFilterLabel, "archived");
+      expect(savedFoodCards(tree)).toHaveLength(0);
+      expect(text(tree)).toContain("More records may remain; load more to include them.");
+      tree = await click(harness, "Load more custom foods");
+      expect(text(tree)).toContain("More custom foods could not be loaded.");
+      expect(input(tree, savedFoodFilterLabel).props.value).toBe("archived");
+      tree = await click(harness, "Load more custom foods");
+      tree = await type(harness, savedFoodFilterLabel, "  ARCHIVED  ");
+      held.resolve(
+        response({ data: [sourceFood, archivedFood], page: { nextCursor: "page-two" } }),
+      );
+      tree = await harness.settle();
+      expect(savedFoodCards(tree)).toHaveLength(1);
+      expect(text(tree)).toContain("1 matching · 2 loaded custom foods.");
+      tree = await click(harness, "Load more custom foods");
+      expect(text(tree)).toContain("1 matching · 2 loaded custom foods.");
+      expect(text(tree)).toContain("No more records remain in this listing.");
+      expect(
+        nodes(tree, (node) => node.type === "Pressable" && text(node) === "Load more custom foods"),
+      ).toHaveLength(0);
+      tree = await click(harness, clearSavedFoodFilterLabel);
+      expect(savedFoodCards(tree).map((node) => node.props.accessibilityLabel)).toEqual([
+        "Hide nutrients for Saved private food, version 1",
+        "Show nutrients for Archived private food, version 1",
+      ]);
+      expect(savedDetails(tree)).toHaveLength(1);
+      expect(requests).toHaveLength(9);
+      expect(writes(requests)).toHaveLength(0);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  for (const cursor of [null, "first-empty-page"])
+    it(`distinguishes a verified empty first page with cursor ${cursor}`, async () => {
+      const { harness } = setup((request) =>
+        request.url.pathname === "/v1/custom-foods"
+          ? response({ data: [], page: { nextCursor: cursor } })
+          : undefined,
+      );
+      try {
+        const tree = await harness.settle();
+        expect(text(tree)).toContain("0 matching · 0 loaded custom foods.");
+        expect(text(tree)).toContain(
+          cursor ? "No custom foods loaded yet." : "No custom foods were found in this listing.",
+        );
+        expect(text(tree)).toContain(
+          cursor ? "More records may remain" : "No more records remain in this listing.",
+        );
+        if (cursor) expect(button(tree, "Load more custom foods").props.disabled).toBe(false);
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  it("does not verify a failed initial list from a manual save, and recovers verification only from Refresh", async () => {
+    const held = deferred();
+    let first = true;
+    const { harness } = setup((request) =>
+      first && request.method === "GET" && request.url.pathname === "/v1/custom-foods"
+        ? held.promise
+        : undefined,
+    );
+    try {
+      let tree = await harness.settle();
+      expect(text(tree)).toContain("Loading the saved custom-food list…");
+      tree = await type(harness, savedFoodFilterLabel, "Owner");
+      held.resolve(response({}, 503));
+      tree = await harness.settle();
+      expect(text(tree)).toContain("The saved custom-food list has not been verified.");
+      expect(text(tree)).not.toContain("No more records remain in this listing.");
+      await fillManual(harness);
+      tree = await click(harness, "Create private food");
+      expect(text(tree)).toContain("1 matching · 1 loaded custom foods.");
+      expect(text(tree)).toContain("The saved custom-food list has not been verified.");
+      expect(text(tree)).not.toContain("No custom foods were found in this listing.");
+      expect(input(tree, savedFoodFilterLabel).props.value).toBe("Owner");
+      first = false;
+      tree = await click(harness, "Refresh private data");
+      expect(input(tree, savedFoodFilterLabel).props.value).toBe("Owner");
+      expect(text(tree)).toContain("0 matching · 1 loaded custom foods.");
+      expect(text(tree)).toContain("No more records remain in this listing.");
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  for (const outcome of ["success", "failure"])
+    it(`retains the query and allows filtering through same-scope refresh ${outcome}`, async () => {
+      const held = deferred();
+      let refresh = false;
+      const { harness } = setup((request) =>
+        refresh && request.url.pathname === "/v1/custom-foods" ? held.promise : undefined,
+      );
+      try {
+        await toggleSaved(harness);
+        await fillManual(harness, "9.0001");
+        await type(harness, savedFoodFilterLabel, "saved");
+        refresh = true;
+        await click(harness, "Refresh private data");
+        let tree = await type(harness, savedFoodFilterLabel, "PRIVATE");
+        expect(savedDetails(tree)).toHaveLength(0);
+        expect(canonical(tree)).toBe("208=9.0001");
+        held.resolve(
+          outcome === "failure"
+            ? response({}, 503)
+            : response({ data: [sourceFood], page: { nextCursor: null } }),
+        );
+        tree = await harness.settle();
+        expect(input(tree, savedFoodFilterLabel).props.value).toBe("PRIVATE");
+        expect(savedFoodCards(tree)).toHaveLength(1);
+        expect(disclosure(tree).props.disabled).toBe(outcome === "failure");
+        expect(text(tree)).toContain(
+          outcome === "failure"
+            ? "The saved custom-food list has not been verified."
+            : "No more records remain in this listing.",
+        );
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  for (const draft of ["create", "revise"])
+    it(`preserves ${draft} composer/log/trend fields and open details when hiding the saved card`, async () => {
+      const { harness, requests, props } = setupTrends();
+      props.quickAddOutboxController.enqueueOperation.mockResolvedValue({
+        operationId: "filtered-log",
+      });
+      try {
+        await setTrendDates(harness);
+        await click(harness, "Load local-day trends");
+        if (draft === "revise") {
+          const cards = nodes(
+            await harness.settle(),
+            (node) =>
+              node.type === "View" &&
+              React.Children.toArray(node.props.children).some(
+                (child) => child.type === "Text" && text(child) === sourceFood.currentVersion.name,
+              ),
+          );
+          expect(cards).toHaveLength(1);
+          button(cards[0], "Revise").props.onPress();
+          await harness.settle();
+        } else await fillManual(harness, "4.00100");
+        await type(harness, "Notes", "Unsaved note");
+        await click(harness, "Log exact version");
+        await type(harness, "Quantity", "1.000001");
+        input(logEditor(await harness.settle()), "Local date").props.onChangeText("2026-09-08");
+        input(logEditor(await harness.settle()), "Local time").props.onChangeText("12:34");
+        await type(harness, "Find an available nutrient by name", "sod");
+        await click(harness, "Sodium (mg)");
+        await click(harness, "Unknown");
+        await click(harness, "Withheld");
+        let tree = await toggleSaved(harness);
+        const add = button(tree, "Add nutrient row to draft").props.onPress;
+        const log = button(tree, "Secure & log pinned version").props.onPress;
+        const before = nonFilterSnapshot(tree);
+        const count = requests.length;
+        tree = await type(harness, savedFoodFilterLabel, "no saved match");
+        expect(savedFoodCards(tree)).toHaveLength(0);
+        expect(savedDetails(tree)).toHaveLength(0);
+        expect(nonFilterSnapshot(tree)).toEqual(before);
+        tree = await click(harness, clearSavedFoodFilterLabel);
+        expect(savedDetails(tree)).toHaveLength(1);
+        expect(nonFilterSnapshot(tree)).toEqual(before);
+        expect(requests).toHaveLength(count);
+        add();
+        tree = await harness.settle();
+        expect(canonical(tree)).toContain("307=unknown:withheld");
+        log();
+        await harness.settle();
+        expect(props.quickAddOutboxController.enqueueOperation).toHaveBeenCalledExactlyOnceWith({
+          operationKind: "custom_food",
+          customFoodName: sourceFood.currentVersion.name,
+          customFoodId: foodId,
+          customFoodVersionId: "123",
+          customFoodVersionNumber: 1,
+          portion: { kind: "serving", servingId: "456", amount: "1.000001", servingLabel: "scoop" },
+          mealSlot: "breakfast",
+          localDate: "2026-09-08",
+          occurredAt: "2026-09-08T17:34:00.000Z",
+        });
+        expect(writes(requests)).toHaveLength(0);
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  it("preserves pending custom-save ownership, exact ambiguous retry and accepted cleanup while filtering", async () => {
+    const held = deferred();
+    let count = 0;
+    const { harness, requests } = setup((request) =>
+      request.method === "POST" && ++count === 1 ? held.promise : undefined,
+    );
+    try {
+      await fillManual(harness, "1.00000100");
+      await toggleSaved(harness);
+      await click(harness, "Create private food");
+      let tree = await harness.settle();
+      const pending = nonFilterSnapshot(tree);
+      tree = await type(harness, savedFoodFilterLabel, "Owner");
+      expect(nonFilterSnapshot(tree)).toEqual(pending);
+      held.resolve(response({ data: { malformed: true } }));
+      tree = await harness.settle();
+      const failed = nonFilterSnapshot(tree);
+      const retry = button(tree, "Create private food").props.onPress;
+      tree = await click(harness, clearSavedFoodFilterLabel);
+      expect(nonFilterSnapshot(tree)).toEqual(failed);
+      await type(harness, savedFoodFilterLabel, "Owner");
+      retry();
+      tree = await harness.settle();
+      const sent = writes(requests);
+      expect(sent).toHaveLength(2);
+      expect(sent[1].body).toBe(sent[0].body);
+      expect(sent[1].headers["idempotency-key"]).toBe(sent[0].headers["idempotency-key"]);
+      expect(input(tree, "Name").props.value).toBe("");
+      expect(input(tree, savedFoodFilterLabel).props.value).toBe("Owner");
+      expect(savedFoodCards(tree)).toHaveLength(1);
+      expect(text(tree)).toContain("1 matching · 2 loaded custom foods.");
+      tree = await click(harness, clearSavedFoodFilterLabel);
+      expect(savedDetails(tree)).toHaveLength(1);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("does not invalidate a current pending trend read while filtering saved foods", async () => {
+    const held = deferred();
+    let captured;
+    const { harness, requests } = setupTrends((request) => {
+      if (request.url.pathname === "/v1/trends/nutrients") {
+        captured = request;
+        return held.promise;
+      }
+      return undefined;
+    });
+    try {
+      await setTrendDates(harness);
+      await click(harness, "Load local-day trends");
+      const count = requests.length;
+      await type(harness, savedFoodFilterLabel, "no match");
+      await click(harness, clearSavedFoodFilterLabel);
+      expect(requests).toHaveLength(count);
+      expect(captured.signal.aborted).toBe(false);
+      held.resolve(response(nutrientTrendResponse(captured)));
+      const tree = await harness.settle();
+      expect(trendHeaders(tree)).toHaveLength(2);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  for (const boundary of ["owner", "session", "token", "API", "zone", "groups"])
+    it(`hides old query/cards before ${boundary} replacement effects and rejects retained filter controls`, async () => {
+      const { harness } = setup();
+      try {
+        let tree = await type(harness, savedFoodFilterLabel, "Saved");
+        const oldField = input(tree, savedFoodFilterLabel).props.onChangeText;
+        const oldClear = button(tree, clearSavedFoodFilterLabel).props.onPress;
+        harness.updateProps(
+          boundary === "owner"
+            ? { ownerUserId: otherOwner }
+            : boundary === "session"
+              ? { sessionEpoch: 2 }
+              : boundary === "token"
+                ? { accessToken: "replacement" }
+                : boundary === "API"
+                  ? { apiBase: new URL("http://127.0.0.1:4001") }
+                  : boundary === "zone"
+                    ? { profileTimeZone: "UTC" }
+                    : {
+                        diaryGroups: [
+                          { mealSlot: "breakfast", label: "Changed meal", sortOrder: 0 },
+                        ],
+                      },
+        );
+        tree = harness.renderWithoutEffects();
+        expect(input(tree, savedFoodFilterLabel).props.value).toBe("");
+        expect(savedFoodCards(tree)).toHaveLength(0);
+        oldField("old");
+        oldClear();
+        input(tree, savedFoodFilterLabel).props.onChangeText("before installation");
+        harness.flushEffects();
+        tree = await harness.settle();
+        expect(input(tree, savedFoodFilterLabel).props.value).toBe("");
+        await type(harness, savedFoodFilterLabel, "new query");
+        oldField("obsolete");
+        oldClear();
+        tree = await harness.settle();
+        expect(input(tree, savedFoodFilterLabel).props.value).toBe("new query");
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  it("retains the query when equivalent same-private props are installed", async () => {
+    const { harness } = setup();
+    try {
+      await type(harness, savedFoodFilterLabel, "Saved");
+      harness.updateProps({ apiBase: new URL("http://127.0.0.1:4000"), diaryGroups: [] });
+      const tree = await harness.settle();
+      expect(input(tree, savedFoodFilterLabel).props.value).toBe("Saved");
+      expect(savedFoodCards(tree)).toHaveLength(1);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  for (const boundary of ["background", "inactive", "unknown", null, "replay"])
+    it(`hides/invalidate controls across ${boundary} and restores the query in the same foreground scope`, async () => {
+      const { harness } = setup();
+      try {
+        let tree = await type(harness, savedFoodFilterLabel, "Saved");
+        const oldField = input(tree, savedFoodFilterLabel).props.onChangeText;
+        const oldClear = button(tree, clearSavedFoodFilterLabel).props.onPress;
+        if (boundary === "replay") harness.replayEffects();
+        else state(boundary);
+        tree = await harness.settle();
+        if (boundary !== "replay") {
+          expect(input(tree, savedFoodFilterLabel).props.value).toBe("");
+          expect(savedFoodCards(tree)).toHaveLength(0);
+          expect(input(tree, savedFoodFilterLabel).props.editable).toBe(false);
+        }
+        oldField("background");
+        oldClear();
+        if (boundary !== "replay") state("active");
+        tree = await harness.settle();
+        oldField("obsolete after return");
+        oldClear();
+        tree = await harness.settle();
+        expect(input(tree, savedFoodFilterLabel).props.value).toBe("Saved");
+        expect(savedFoodCards(tree)).toHaveLength(1);
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  it("resets and hides the query after current closure and rejects old callbacks across replay", async () => {
+    let closed = false;
+    const { harness, props } = setup((request) =>
+      closed && request.url.pathname === "/v1/custom-foods" ? response({}, 401) : undefined,
+    );
+    try {
+      let tree = await type(harness, savedFoodFilterLabel, "private name");
+      const oldField = input(tree, savedFoodFilterLabel).props.onChangeText;
+      const oldClear = button(tree, clearSavedFoodFilterLabel).props.onPress;
+      closed = true;
+      await click(harness, "Refresh private data");
+      oldField("old");
+      oldClear();
+      harness.replayEffects();
+      tree = await harness.settle();
+      expect(input(tree, savedFoodFilterLabel).props.value).toBe("");
+      expect(input(tree, savedFoodFilterLabel).props.editable).toBe(false);
+      expect(savedFoodCards(tree)).toHaveLength(0);
+      expect(props.onUnauthorized).toHaveBeenCalledTimes(1);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("rejects retained filter and Clear after unmount without requests or state writes", async () => {
+    const { harness, requests } = setup();
+    const tree = await type(harness, savedFoodFilterLabel, "Saved");
+    const oldField = input(tree, savedFoodFilterLabel).props.onChangeText;
+    const oldClear = button(tree, clearSavedFoodFilterLabel).props.onPress;
+    const count = requests.length;
+    harness.unmount();
+    oldField("unmounted");
+    oldClear();
+    expect(requests).toHaveLength(count);
+    expect(harness.writesAfterUnmount).toBe(0);
+  });
+});

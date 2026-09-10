@@ -314,6 +314,7 @@ function workspace(
   const state = {
     items: initial,
     picker: [] as readonly unknown[],
+    trend: null as null | ((url: string) => Response),
     auth: null as null | (() => Response | Promise<Response>),
     cursor: null as string | null,
     owner,
@@ -338,7 +339,9 @@ function workspace(
     }
     if (url === "/api/nutrients/targetable") return Response.json({ data: state.picker });
     if (url.startsWith("/api/retention/trends/"))
-      return Response.json({ error: "No trend fixture" }, { status: 503 });
+      return state.trend
+        ? state.trend(url)
+        : Response.json({ error: "No trend fixture" }, { status: 503 });
     if (url.startsWith("/api/retention/biometrics/events?"))
       return Response.json({ data: [], page: { nextCursor: null } });
     if (
@@ -636,12 +639,12 @@ describe("actual saved custom-food nutrient disclosures", () => {
     view.document.visibilityState = "hidden";
     invoke(oldShow, "onClick");
     hooks.renderWithoutEffects();
-    expect(details(first).props.hidden).toBe(true);
+    expect(savedCards()).toHaveLength(0);
     await view.set("visible");
     await toggle(first);
     const oldHide = disclosure(first);
     await view.set("hidden");
-    expect(details(first).props.hidden).toBe(true);
+    expect(savedCards()).toHaveLength(0);
     await view.set("visible");
     invoke(oldShow, "onClick");
     invoke(oldHide, "onClick");
@@ -827,8 +830,7 @@ describe("actual saved custom-food nutrient disclosures", () => {
     await submit("Log exact version");
     invoke(oldHide, "onClick");
     await hooks.settle();
-    expect(details(first).props.hidden).toBe(true);
-    expect(disclosure(first).props.disabled).toBe(true);
+    expect(savedCards()).toHaveLength(0);
     pending.resolve(session(owner, "America/New_York"));
     await hooks.settle();
     expect(field("Exact quantity").props.value).toBe("2");
@@ -896,5 +898,440 @@ describe("actual saved custom-food nutrient disclosures", () => {
     expect(
       elements().some((node) => node.type === "button" && text(node) === "Refresh private data"),
     ).toBe(false);
+  });
+});
+
+const savedFilterLabel = "Filter loaded saved foods by name";
+const clearFilterLabel = "Clear saved-food filter";
+function savedCards() {
+  return elements().filter(
+    (node) =>
+      node.type === "li" &&
+      elements(node).some(
+        (child) =>
+          typeof child.props.id === "string" && child.props.id.startsWith("saved-food-nutrients-"),
+      ),
+  );
+}
+function savedNames() {
+  return savedCards().map((node) => text(elements(node).find((child) => child.type === "strong")));
+}
+function filterStatus() {
+  return text(elements().find((node) => node.props.id === "saved-food-filter-status"));
+}
+function otherFields() {
+  return elements()
+    .filter(
+      (node) =>
+        ["input", "select", "textarea"].includes(String(node.type)) &&
+        node.props.id !== "saved-food-filter",
+    )
+    .map((node) => ({ type: node.type, value: node.props.value, checked: node.props.checked }));
+}
+function namedFood(index: number, name: string) {
+  const item = food(index);
+  return { ...item, currentVersion: { ...item.currentVersion, name } };
+}
+
+describe("actual loaded saved-food name filter", () => {
+  it("matches only literal trimmed case-insensitive saved names and preserves duplicates/order", async () => {
+    const foods = [
+      namedFood(1, "Soup [.*] café"),
+      namedFood(2, "SOUP [.*] café"),
+      namedFood(3, "Other soup"),
+      namedFood(4, "Cafe bowl"),
+    ] as const;
+    const { fetcher } = workspace(foods);
+    await mount();
+    const requests = fetcher.mock.calls.length;
+    expect(field(savedFilterLabel).props.type).toBe("search");
+    expect(field(savedFilterLabel).props.maxLength).toBe(200);
+    expect(field(savedFilterLabel).props["aria-describedby"]).toBe("saved-food-filter-status");
+    expect(filterStatus()).toContain("4 of 4 loaded saved foods match.");
+    for (const [query, expected] of [
+      ["  soUP [.*]  ", [foods[0], foods[1]]],
+      ["cafe", [foods[3]]],
+      [" café ", [foods[0], foods[1]]],
+      ["  ", foods],
+    ] as const) {
+      await change(savedFilterLabel, query);
+      expect(field(savedFilterLabel).props.value).toBe(query);
+      expect(savedNames()).toEqual(expected.map((item) => item.currentVersion.name));
+    }
+    expect(savedCards()[0]).not.toBe(savedCards()[1]);
+    await click(clearFilterLabel);
+    expect(savedNames()).toEqual(foods.map((item) => item.currentVersion.name));
+    expect(fetcher).toHaveBeenCalledTimes(requests);
+  });
+
+  it("bounds raw text and rejects old edit/Clear cycles while same-value actions stay usable", async () => {
+    workspace([namedFood(1, "alpha")]);
+    await mount();
+    const emptyClear = button(clearFilterLabel);
+    const initial = field(savedFilterLabel);
+    invoke(emptyClear, "onClick");
+    invoke(initial, "onChange", { target: { value: "alpha" } });
+    await hooks.settle();
+    const alphaField = field(savedFilterLabel);
+    const alphaClear = button(clearFilterLabel);
+    invoke(alphaField, "onChange", { target: { value: "alpha" } });
+    invoke(alphaClear, "onClick");
+    await hooks.settle();
+    expect(field(savedFilterLabel).props.value).toBe("");
+    await change(savedFilterLabel, "alpha");
+    invoke(alphaField, "onChange", { target: { value: "stale" } });
+    invoke(alphaClear, "onClick");
+    await hooks.settle();
+    expect(field(savedFilterLabel).props.value).toBe("alpha");
+    await change(savedFilterLabel, "x".repeat(201));
+    expect(field(savedFilterLabel).props.value).toBe("x".repeat(200));
+    expect(filterStatus()).toContain("0 of 1 loaded saved foods match.");
+    expect(filterStatus()).toContain("No loaded saved foods match this name.");
+    await click(clearFilterLabel);
+    expect(savedNames()).toEqual(["alpha"]);
+  });
+
+  it("distinguishes initial unverified/loading/error from a verified empty terminal listing", async () => {
+    const { state } = workspace([]);
+    const pending = deferred<Response>();
+    state.read = () => pending.promise;
+    await mount();
+    expect(field(savedFilterLabel).props.disabled).toBe(true);
+    expect(filterStatus()).toBe("Saved-food listing is loading.");
+    expect(filterStatus()).not.toContain("0 of 0");
+    pending.resolve(Response.json({ error: "Unavailable" }, { status: 503 }));
+    await hooks.settle();
+    expect(filterStatus()).toBe("Saved-food listing is unavailable.");
+    expect(filterStatus()).not.toContain("No more");
+    state.read = () => page([]);
+    await click("Retry private data");
+    expect(field(savedFilterLabel).props.disabled).toBe(false);
+    expect(filterStatus()).toContain("0 of 0 loaded saved foods match.");
+    expect(filterStatus()).toContain("No saved foods were returned in this listing.");
+    expect(filterStatus()).toContain("No more records in this listing.");
+  });
+
+  it("uses loaded-only empty wording when an empty page has a continuation", async () => {
+    const { state } = workspace([]);
+    state.cursor = "next";
+    await mount();
+    expect(filterStatus()).toContain("No saved foods are loaded yet.");
+    expect(filterStatus()).toContain("More records may be available.");
+    expect(filterStatus()).not.toContain("No saved foods were returned in this listing.");
+    await change(savedFilterLabel, "soup");
+    expect(button("Load more private foods").props.disabled).not.toBe(true);
+    state.continuation = () => page([namedFood(1, "Soup")]);
+    await click("Load more private foods");
+    expect(savedNames()).toEqual(["Soup"]);
+    expect(filterStatus()).toContain("1 of 1 loaded saved foods match.");
+  });
+
+  it("keeps zero-match pagination, query and accumulated counts through failure, overlap and empty terminal page", async () => {
+    const first = namedFood(1, "Alpha");
+    const second = namedFood(2, "Beta");
+    const third = namedFood(3, "Quinoa");
+    const { state, fetcher } = workspace([first, second]);
+    state.cursor = "next";
+    await mount();
+    await toggle(first);
+    await change(savedFilterLabel, "QUINOA");
+    expect(savedCards()).toHaveLength(0);
+    const pending = deferred<Response>();
+    state.continuation = () => pending.promise;
+    await click("Load more private foods");
+    await change(savedFilterLabel, " quinoa ");
+    expect(filterStatus()).toContain("0 of 2 loaded saved foods match.");
+    pending.resolve(Response.json({ error: "Next page unavailable" }, { status: 503 }));
+    await hooks.settle();
+    expect(field(savedFilterLabel).props.value).toBe(" quinoa ");
+    expect(status()).toBe("Next page unavailable");
+    state.continuation = () => page([first, third], "end");
+    await click("Load more private foods");
+    expect(filterStatus()).toContain("1 of 3 loaded saved foods match.");
+    expect(savedNames()).toEqual(["Quinoa"]);
+    state.continuation = () => page([]);
+    await click("Load more private foods");
+    expect(filterStatus()).toContain("1 of 3 loaded saved foods match.");
+    expect(filterStatus()).toContain("No more records in this listing.");
+    await click(clearFilterLabel);
+    expect(savedNames()).toEqual(["Alpha", "Beta", "Quinoa"]);
+    expect(details(first).props.hidden).toBe(false);
+    expect(
+      fetcher.mock.calls.filter(([url]) => url.includes("cursor=")).map(([url]) => url),
+    ).toEqual([
+      "/api/retention/custom-foods?limit=50&cursor=next",
+      "/api/retention/custom-foods?limit=50&cursor=next",
+      "/api/retention/custom-foods?limit=50&cursor=end",
+    ]);
+  });
+
+  it("preserves open disclosures, independent dirty editor/log fields and shared feedback when cards are hidden", async () => {
+    const first = namedFood(1, "Saved alpha");
+    const second = namedFood(2, "Saved beta");
+    const { fetcher } = workspace([first, second]);
+    await mount();
+    await toggle(first);
+    await toggle(second);
+    await click("Revise", card(first));
+    await change("Name", "Draft name that must not be searched");
+    await change("Notes (optional)", " Draft notes ");
+    await click("Log pinned v1", card(second));
+    await change("Exact quantity", "2.375");
+    await change("Local date", "2026-09-09");
+    await change("Local time", "13:14");
+    const before = otherFields();
+    const message = status();
+    const requests = fetcher.mock.calls.length;
+    await change(savedFilterLabel, "Draft name");
+    expect(savedCards()).toHaveLength(0);
+    expect(otherFields()).toEqual(before);
+    await change(savedFilterLabel, "beta");
+    expect(savedNames()).toEqual(["Saved beta"]);
+    expect(details(second).props.hidden).toBe(false);
+    await click(clearFilterLabel);
+    expect(details(first).props.hidden).toBe(false);
+    expect(details(second).props.hidden).toBe(false);
+    expect(otherFields()).toEqual(before);
+    expect(status()).toBe(message);
+    expect(fetcher).toHaveBeenCalledTimes(requests);
+  });
+
+  it("does not change a parsed trend or start reads while filtering", async () => {
+    const { state, fetcher } = workspace([food()]);
+    state.picker = [
+      { id: "2", code: "protein", name: "Protein", unit: "g", category: "macronutrient" },
+    ];
+    state.trend = (path) => {
+      const params = new URL(path, "http://127.0.0.1").searchParams;
+      const from = params.get("from");
+      const to = params.get("to");
+      return Response.json({
+        data: {
+          nutrient: { id: "2", code: "protein", name: "Response protein", unit: "g" },
+          from,
+          to,
+          timeZone: "America/Chicago",
+          bucket: "day",
+          watermarkRevision: "1",
+          points: [
+            {
+              localDate: from,
+              startsAt: `${from}T05:00:00.000Z`,
+              endsAt: `${from}T23:00:00.000Z`,
+              aggregate: {
+                nutrientId: "2",
+                code: "protein",
+                name: "Response protein",
+                unit: "g",
+                knownAmount: "12.345",
+                completeness: "complete",
+                isExact: true,
+                contributorCount: 1,
+                quantifiedCount: 1,
+                traceCount: 0,
+                unknownCount: 0,
+                unknownReasonCounts: {
+                  not_reported: 0,
+                  not_analyzed: 0,
+                  not_applicable: 0,
+                  withheld: 0,
+                },
+              },
+            },
+          ],
+        },
+      });
+    };
+    await mount();
+    const before = otherFields();
+    const trendText = () => text(elements().find((node) => node.props.className === "trendTables"));
+    const beforeTrend = trendText();
+    expect(beforeTrend).toContain("12.345");
+    const requests = fetcher.mock.calls.length;
+    await change(savedFilterLabel, "absent");
+    await click(clearFilterLabel);
+    expect(trendText()).toBe(beforeTrend);
+    expect(otherFields()).toEqual(before);
+    expect(fetcher).toHaveBeenCalledTimes(requests);
+  });
+
+  it.each(["create", "revision", "log"] as const)(
+    "preserves the exact unresolved %s operation through pending and failed filter changes",
+    async (kind) => {
+      const first = food();
+      const { state, fetcher, writes } = workspace([first]);
+      if (kind === "create")
+        state.picker = [
+          { id: "2", code: "protein", name: "Protein", unit: "g", category: "macronutrient" },
+        ];
+      await mount();
+      if (kind === "revision") await click("Revise", card(first));
+      if (kind === "log") {
+        await click("Log pinned v1", card(first));
+        await change("Exact quantity", "1.375");
+      } else await change("Name", "Pending draft");
+      const label =
+        kind === "create"
+          ? "Create private food"
+          : kind === "revision"
+            ? "Save new version"
+            : "Log exact version";
+      const pending = deferred<Response>();
+      state.write = () => pending.promise;
+      await submit(label);
+      const requests = fetcher.mock.calls.length;
+      const before = otherFields();
+      const beforeMessage = status();
+      await change(savedFilterLabel, "absent");
+      expect(savedCards()).toHaveLength(0);
+      expect(otherFields()).toEqual(before);
+      expect(status()).toBe(beforeMessage);
+      await click(clearFilterLabel);
+      expect(fetcher).toHaveBeenCalledTimes(requests);
+      pending.resolve(Response.json({ error: "Receipt unavailable" }, { status: 503 }));
+      await hooks.settle();
+      const failedMessage = status();
+      await change(savedFilterLabel, "saved");
+      expect(status()).toBe(failedMessage);
+      state.write = () => Response.json({ error: "Still unavailable" }, { status: 503 });
+      await submit(label);
+      expect(writes()).toHaveLength(2);
+      expect(writes()[1]?.[0]).toBe(writes()[0]?.[0]);
+      expect(writes()[1]?.[1]?.body).toBe(writes()[0]?.[1]?.body);
+      expect(new Headers(writes()[1]?.[1]?.headers).get("idempotency-key")).toBe(
+        new Headers(writes()[0]?.[1]?.headers).get("idempotency-key"),
+      );
+      expect(new Headers(writes()[1]?.[1]?.headers).get("if-match")).toBe(
+        new Headers(writes()[0]?.[1]?.headers).get("if-match"),
+      );
+    },
+  );
+
+  it("retains query across same-owner refresh and Retry without treating old counts as verified", async () => {
+    const first = food();
+    const { state } = workspace([first]);
+    await mount();
+    await change(savedFilterLabel, "  SAVED  ");
+    const oldField = field(savedFilterLabel);
+    const oldClear = button(clearFilterLabel);
+    const pending = deferred<Response>();
+    state.read = () => pending.promise;
+    hooks.replayEffects();
+    await hooks.settle();
+    expect(field(savedFilterLabel).props.value).toBe("  SAVED  ");
+    expect(savedCards()).toHaveLength(1);
+    expect(filterStatus()).toBe("Saved-food listing is loading.");
+    await change(savedFilterLabel, "saved food");
+    pending.resolve(Response.json({ error: "Refresh failed" }, { status: 503 }));
+    await hooks.settle();
+    expect(filterStatus()).toBe("Saved-food listing is unavailable.");
+    expect(filterStatus()).not.toContain("No more");
+    state.read = () => page([first]);
+    await click("Retry private data");
+    expect(field(savedFilterLabel).props.value).toBe("saved food");
+    expect(filterStatus()).toContain("1 of 1 loaded saved foods match.");
+    invoke(oldField, "onChange", { target: { value: "stale" } });
+    invoke(oldClear, "onClick");
+    await hooks.settle();
+    expect(field(savedFilterLabel).props.value).toBe("saved food");
+  });
+
+  it("hides background query/cards before effects and restores only current same-scope controls", async () => {
+    const view = visibility();
+    const { fetcher } = workspace([food()]);
+    await mount();
+    await change(savedFilterLabel, " SAVED ");
+    const oldField = field(savedFilterLabel);
+    const oldClear = button(clearFilterLabel);
+    const requests = fetcher.mock.calls.length;
+    view.document.visibilityState = "hidden";
+    invoke(oldField, "onChange", { target: { value: "stale" } });
+    hooks.renderWithoutEffects();
+    expect(field(savedFilterLabel).props.value).toBe("");
+    expect(savedCards()).toHaveLength(0);
+    await view.set("hidden");
+    await view.set("visible");
+    expect(field(savedFilterLabel).props.value).toBe(" SAVED ");
+    expect(savedCards()).toHaveLength(1);
+    invoke(oldField, "onChange", { target: { value: "stale" } });
+    invoke(oldClear, "onClick");
+    await hooks.settle();
+    expect(field(savedFilterLabel).props.value).toBe(" SAVED ");
+    await click(clearFilterLabel);
+    expect(fetcher).toHaveBeenCalledTimes(requests);
+  });
+
+  it.each(["America/Chicago", "America/New_York"])(
+    "handles verified profile refresh to %s without touching the pinned log",
+    async (zone) => {
+      const first = food();
+      const { state } = workspace([first]);
+      await mount();
+      await click("Log pinned v1", card(first));
+      await change("Exact quantity", "2.375");
+      await change(savedFilterLabel, " saved ");
+      const oldField = field(savedFilterLabel);
+      const oldClear = button(clearFilterLabel);
+      const pending = deferred<Response>();
+      state.auth = () => pending.promise;
+      state.write = () =>
+        Response.json({ error: "Zone changed", code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 });
+      await submit("Log exact version");
+      expect(field(savedFilterLabel).props.value).toBe("");
+      expect(savedCards()).toHaveLength(0);
+      pending.resolve(session(owner, zone));
+      await hooks.settle();
+      expect(field(savedFilterLabel).props.value).toBe(zone === "America/Chicago" ? " saved " : "");
+      expect(field("Exact quantity").props.value).toBe("2.375");
+      invoke(oldField, "onChange", { target: { value: "stale" } });
+      invoke(oldClear, "onClick");
+      await hooks.settle();
+      expect(field(savedFilterLabel).props.value).toBe(zone === "America/Chicago" ? " saved " : "");
+      expect(filterStatus()).toContain("1 of 1 loaded saved foods match.");
+    },
+  );
+
+  it("clears private query on owner closure and rejects retained filter controls after unmount", async () => {
+    const { state, fetcher } = workspace([food()]);
+    state.cursor = "next";
+    await mount();
+    await change(savedFilterLabel, " private name ");
+    const oldField = field(savedFilterLabel);
+    const oldClear = button(clearFilterLabel);
+    state.continuation = () => {
+      state.owner = otherOwner;
+      return page([]);
+    };
+    await click("Load more private foods");
+    expect(router.replace).toHaveBeenCalledWith("/login");
+    expect(field(savedFilterLabel).props.value).toBe("");
+    expect(savedCards()).toHaveLength(0);
+    invoke(oldField, "onChange", { target: { value: "leak" } });
+    invoke(oldClear, "onClick");
+    await hooks.settle();
+    expect(field(savedFilterLabel).props.value).toBe("");
+    const requests = fetcher.mock.calls.length;
+    hooks.unmount();
+    const updates = hooks.afterClose();
+    invoke(oldField, "onChange", { target: { value: "late" } });
+    invoke(oldClear, "onClick");
+    expect(hooks.afterClose()).toBe(updates);
+    expect(fetcher).toHaveBeenCalledTimes(requests);
+  });
+
+  it("keeps locally archived cards searchable without implying archived-library coverage", async () => {
+    const first = food();
+    const { state } = workspace([first]);
+    await mount();
+    vi.stubGlobal("window", { confirm: () => true });
+    await change(savedFilterLabel, "SAVED");
+    const archived = { ...first, status: "archived" as const, revision: "2" };
+    state.write = () => receipt(archived);
+    await click("Archive", card(first));
+    expect(field(savedFilterLabel).props.value).toBe("SAVED");
+    expect(savedCards()).toHaveLength(1);
+    expect(text(card(archived))).toContain("archived");
+    expect(filterStatus()).toContain("1 of 1 loaded saved foods match.");
+    expect(filterStatus()).not.toContain("All saved");
   });
 });

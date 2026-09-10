@@ -243,6 +243,8 @@ export function HealthClient() {
   const [session, setSessionState] = useState<SessionSummary | null>(null);
   const [nutrients, setNutrients] = useState<readonly TargetableNutrient[]>([]);
   const [customFoods, setCustomFoods] = useState<readonly CustomFood[]>([]);
+  const [savedFoodFilter, setSavedFoodFilter] = useState("");
+  const [verifiedFoodListOwner, setVerifiedFoodListOwner] = useState<string | null>(null);
   const [expandedFoods, setExpandedFoods] = useState<ReadonlySet<CustomFood>>(new Set());
   const [customFoodCursor, setCustomFoodCursor] = useState<string | null>(null);
   const [definitions, setDefinitions] = useState<readonly BiometricDefinition[]>([]);
@@ -290,6 +292,10 @@ export function HealthClient() {
   const mounted = useRef(false);
   const visible = useRef(true);
   const installedSession = useRef<SessionSummary | null>(null);
+  const savedFoodFilterGeneration = useRef(0);
+  const savedFoodFilterScope = useRef<string | null>(null);
+  const savedFoodFilterRef = useRef("");
+  const renderedFilterGeneration = savedFoodFilterGeneration.current;
   const installedFoods = useRef<readonly CustomFood[]>([]);
   const foodListGeneration = useRef(0);
   const foodDetailsReady = useRef(false);
@@ -307,13 +313,27 @@ export function HealthClient() {
     setExpandedFoods(expandedFoodsRef.current);
   }, []);
 
+  const resetSavedFoodFilter = useCallback(() => {
+    savedFoodFilterGeneration.current += 1;
+    savedFoodFilterRef.current = "";
+    setSavedFoodFilter("");
+  }, []);
+
   const setSession = useCallback(
     (next: SessionSummary | null) => {
-      if (installedSession.current !== next) closeFoodDetails();
+      if (installedSession.current !== next) {
+        closeFoodDetails();
+        savedFoodFilterGeneration.current += 1;
+      }
+      if (next !== null) {
+        const nextScope = JSON.stringify([next.user.id, next.profile]);
+        if (savedFoodFilterScope.current !== nextScope) resetSavedFoodFilter();
+        savedFoodFilterScope.current = nextScope;
+      }
       installedSession.current = next;
       setSessionState(next);
     },
-    [closeFoodDetails],
+    [closeFoodDetails, resetSavedFoodFilter],
   );
 
   const installCustomFoods = useCallback(
@@ -374,6 +394,9 @@ export function HealthClient() {
 
   const signInAgain = useCallback(() => {
     privateUiClosed.current = true;
+    resetSavedFoodFilter();
+    savedFoodFilterScope.current = null;
+    setVerifiedFoodListOwner(null);
     foodListGeneration.current += 1;
     foodDetailsReady.current = false;
     installedFoods.current = [];
@@ -422,7 +445,7 @@ export function HealthClient() {
     setMessage("Closing your private health workspace…");
     router.replace("/login");
     router.refresh();
-  }, [closeFoodDetails, router, setSession]);
+  }, [closeFoodDetails, resetSavedFoodFilter, router, setSession]);
 
   const revalidateHealthSession = useCallback(async (signal: AbortSignal) => {
     try {
@@ -498,6 +521,7 @@ export function HealthClient() {
     )
       return;
     const generation = ++foodListGeneration.current;
+    setVerifiedFoodListOwner(null);
     foodDetailsReady.current = false;
     closeFoodDetails();
     loadController.current?.abort();
@@ -588,6 +612,7 @@ export function HealthClient() {
           setNutrients(data.nutrients);
           if (!installCustomFoods(data.customPage.items, generation, nextSession.user.id)) return;
           foodDetailsReady.current = true;
+          setVerifiedFoodListOwner(nextSession.user.id);
           setCustomFoodCursor(data.customPage.nextCursor);
           setDefinitions(data.definitions);
           setEvents(data.eventPage.items);
@@ -729,6 +754,7 @@ export function HealthClient() {
     visible.current = typeof document === "undefined" || document.visibilityState !== "hidden";
     const visibilityChanged = () => {
       visible.current = document.visibilityState !== "hidden";
+      savedFoodFilterGeneration.current += 1;
       closeFoodDetails();
     };
     if (typeof document !== "undefined")
@@ -736,6 +762,7 @@ export function HealthClient() {
     void loadAll();
     return () => {
       mounted.current = false;
+      savedFoodFilterGeneration.current += 1;
       foodListGeneration.current += 1;
       foodDetailsReady.current = false;
       disclosureGeneration.current += 1;
@@ -1351,6 +1378,44 @@ export function HealthClient() {
     }
   }
 
+  const savedFilterScopeReady =
+    mounted.current &&
+    visible.current &&
+    (typeof document === "undefined" || document.visibilityState !== "hidden") &&
+    !privateUiClosed.current &&
+    session !== null &&
+    installedSession.current === session &&
+    ownerUserId.current === session.user.id &&
+    savedFoodFilterScope.current === JSON.stringify([session.user.id, session.profile]);
+  const foodListVerified = savedFilterScopeReady && verifiedFoodListOwner === session?.user.id;
+  const savedFilterValue = savedFilterScopeReady ? savedFoodFilter : "";
+  const normalizedSavedFilter = savedFilterValue.trim().toLowerCase();
+  const visibleSavedFoods = savedFilterScopeReady
+    ? customFoods.filter((food) =>
+        food.currentVersion.name.toLowerCase().includes(normalizedSavedFilter),
+      )
+    : [];
+
+  function changeSavedFoodFilter(value: string) {
+    if (
+      !savedFilterScopeReady ||
+      !mounted.current ||
+      !visible.current ||
+      (typeof document !== "undefined" && document.visibilityState === "hidden") ||
+      privateUiClosed.current ||
+      installedSession.current !== session ||
+      ownerUserId.current !== session?.user.id ||
+      savedFoodFilterGeneration.current !== renderedFilterGeneration ||
+      savedFoodFilterRef.current !== savedFoodFilter
+    )
+      return;
+    const bounded = value.slice(0, 200);
+    if (bounded === savedFoodFilterRef.current) return;
+    savedFoodFilterGeneration.current += 1;
+    savedFoodFilterRef.current = bounded;
+    setSavedFoodFilter(bounded);
+  }
+
   async function signOut() {
     setBusy("logout");
     const confirmed = await confirmBrowserLogout(
@@ -1724,8 +1789,48 @@ export function HealthClient() {
               </div>
             </form>
             <div>
+              <label className="formField" htmlFor="saved-food-filter">
+                <span>Filter loaded saved foods by name</span>
+                <input
+                  id="saved-food-filter"
+                  type="search"
+                  maxLength={200}
+                  disabled={!savedFilterScopeReady}
+                  aria-describedby="saved-food-filter-status"
+                  value={savedFilterValue}
+                  onChange={(event) => changeSavedFoodFilter(event.target.value)}
+                />
+              </label>
+              <button
+                type="button"
+                disabled={!savedFilterScopeReady || savedFilterValue === ""}
+                onClick={() => changeSavedFoodFilter("")}
+              >
+                Clear saved-food filter
+              </button>
+              <p className="fieldHelp" id="saved-food-filter-status" aria-live="polite">
+                {foodListVerified ? (
+                  <>
+                    {visibleSavedFoods.length} of {customFoods.length} loaded saved foods match.
+                    {customFoods.length === 0
+                      ? customFoodCursor
+                        ? " No saved foods are loaded yet."
+                        : " No saved foods were returned in this listing."
+                      : normalizedSavedFilter && visibleSavedFoods.length === 0
+                        ? " No loaded saved foods match this name."
+                        : ""}
+                    {customFoodCursor
+                      ? " More records may be available. Load more to include them."
+                      : " No more records in this listing."}
+                  </>
+                ) : state === "loading" ? (
+                  "Saved-food listing is loading."
+                ) : (
+                  "Saved-food listing is unavailable."
+                )}
+              </p>
               <ul className="recordList">
-                {customFoods.map((food) => {
+                {visibleSavedFoods.map((food) => {
                   const disclosureVersion = disclosureVersions.current.get(food) ?? 0;
                   const canInspect = canInspectFood(food, disclosureVersion);
                   const expanded = canInspect && expandedFoods.has(food);
@@ -1830,7 +1935,7 @@ export function HealthClient() {
                   );
                 })}
               </ul>
-              {customFoodCursor ? (
+              {savedFilterScopeReady && customFoodCursor ? (
                 <button
                   disabled={busy === "custom-more"}
                   onClick={() => void loadMoreCustomFoods()}

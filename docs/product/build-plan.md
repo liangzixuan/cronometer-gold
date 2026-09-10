@@ -144,6 +144,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Named nutrient rows for native custom foods | ADR 0040 source, independent in-task review, focused native/helper tests, canonical local gates and fresh native exports passed; record exact-commit automatic results and preserve device/independent/release acceptance |
 | Automatic evidence / independent review | Inspect saved custom-food nutrients without editing | ADR 0041 source, independent in-task review, canonical local gates and synthetic Chrome exact-state/no-request/paging/draft/keyboard/narrow/Retry/expiry proof passed; record exact-commit automatic results and preserve device/independent/release acceptance |
 | Automatic evidence / independent review | Select every loaded nutrient for native Health trends | ADR 0042 source, independent in-task review, focused native behavior/types, canonical local gates and fresh exports passed; record exact-commit automatic results and preserve device/independent/release acceptance |
+| Automatic evidence / independent review | Filter loaded saved custom foods by name | ADR 0043 source, independent in-task review, canonical local gates and synthetic Chrome no-request/details/draft/paging/keyboard/narrow/expiry proof passed; record exact-commit automatic results and preserve device/independent/release acceptance |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1314,14 +1315,36 @@ succeeded (updated September 10, 2026 17:26:44 UTC); container `34507669423`
 remained in progress at the 17:31:40 UTC preflight observation. Those historical
 base results do not transfer automatic acceptance to this new slice.
 
-### Next bounded candidate after ADR 0042
+### Loaded saved custom-food filtering: source/local complete
 
-Prepare one card for local name filtering over the current loaded saved custom-food
-records on web/native, following ADR 0039's bounded loaded-recipe filter behavior.
-Both saved-food views currently render their backing arrays directly. Preserve
-order and distinct IDs, open disclosures, draft/log context and pending body/key;
-Filter/Clear issue no request, and honest matched/loaded counts keep Load more
-reachable even at zero matches. Current API pages read active foods only; archived
-records may remain in local client state. Do not imply archived-library browsing
-or remote search. No new endpoint, archive semantics, refresh control, storage,
-dependency or math change is proposed. No successor implementation has started.
+[ADR 0043](../adr/0043-loaded-saved-custom-food-filter.md) adds local name
+filtering and Clear to web/native saved-food cards. Loaded order, distinct IDs,
+explicit paging, open nutrient disclosures, drafts and pending operation identity
+are preserved. Separate first-list verification prevents initial failures or
+manual saved records from implying a complete listing. Current API pages read
+active records only; retained archived client rows do not imply archive browsing.
+
+Focused actual-component checks, independent in-task review, canonical local
+gates, fresh client outputs and production Next/BFF synthetic dedicated-Chrome
+no-request/details/draft/paging/keyboard/narrow/expiry proof passed. Real service,
+physical native, assistive technology, concurrent React, external Claude Code,
+hosted and release acceptance remain separate. Exact delivery and automatic state
+are recorded in Windows readiness outside Git.
+
+Historical base `064616a2f692b94a39fb85bc6bac1fd52a08c2b5` CI `34512970603`
+succeeded; container `34512970717` remained in progress at the September 10,
+2026 19:03:10 UTC preflight. Base automatic results do not transfer to this slice.
+
+### Next bounded candidate after ADR 0043
+
+Prepare one card to copy a loaded saved custom food into a new local draft.
+Both clients currently offer Revise, whose draft retains the saved food identity;
+there is no separate Copy action. Reuse exact saved name/brand/serving/notes and
+nutrient states/decimal strings under a fresh create identity, preserving the
+source record and explicit Create. Protect existing dirty drafts, pending writes
+and current private scope. A new copy intent must be distinguishable from an
+unresolved same-body Create retry without changing retry identity within an
+existing intent. Bind any draft replacement to the exact source version and
+current draft; keep filter/disclosures and pinned logging independent. No new
+endpoint or automatic write is proposed.
+No successor implementation has started.

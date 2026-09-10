@@ -338,6 +338,13 @@ export function RetentionScreen({
     [setFoodDetails],
   );
   const [foodCursor, setFoodCursor] = useState<string | null>(null);
+  const [savedFoodFilter, setSavedFoodFilter] = useState({ value: "" });
+  const savedFoodFilterRef = useRef(savedFoodFilter);
+  const resetSavedFoodFilter = useCallback(() => {
+    const next = { value: "" };
+    savedFoodFilterRef.current = next;
+    setSavedFoodFilter(next);
+  }, []);
   const [definitions, setDefinitionsState] = useState<readonly BiometricDefinition[]>([]);
   const definitionsRef = useRef(definitions);
   const setDefinitions = useCallback((items: readonly BiometricDefinition[]) => {
@@ -366,6 +373,27 @@ export function RetentionScreen({
   )
     customScopeRef.current = { ownerUserId, sessionEpoch, accessToken, base: apiBase.href };
   const customScope = customScopeRef.current;
+  const [verifiedFoodListScope, setVerifiedFoodListScope] = useState<typeof customScope | null>(
+    null,
+  );
+  const foodFilterProfileKey = JSON.stringify([profileTimeZone, diaryGroups]);
+  const foodFilterScopeRef = useRef({
+    privateScope: customScope,
+    profileKey: foodFilterProfileKey,
+  });
+  if (
+    foodFilterScopeRef.current.privateScope !== customScope ||
+    foodFilterScopeRef.current.profileKey !== foodFilterProfileKey
+  )
+    foodFilterScopeRef.current = { privateScope: customScope, profileKey: foodFilterProfileKey };
+  const foodFilterScope = foodFilterScopeRef.current;
+  const installedFoodFilterScope = useRef<typeof foodFilterScope | null>(null);
+  useEffect(() => {
+    if (installedFoodFilterScope.current !== foodFilterScope) {
+      installedFoodFilterScope.current = foodFilterScope;
+      resetSavedFoodFilter();
+    }
+  }, [foodFilterScope, resetSavedFoodFilter]);
   const customInstalled = useRef<typeof customScope | null>(null);
   const customClosed = useRef<typeof customScope | null>(null);
   const customMounted = useRef(false);
@@ -409,6 +437,8 @@ export function RetentionScreen({
   const closeCustom = useCallback(() => {
     if (!currentCustomScope(customEpoch.current)) return;
     customClosed.current = customScope;
+    resetSavedFoodFilter();
+    setVerifiedFoodListScope(null);
     abortTrendRead();
     foodDetailsReady.current = false;
     resetFoodDetails();
@@ -422,13 +452,22 @@ export function RetentionScreen({
     customOperations.current.clear();
     installCustom(blankCustom(), true);
     if (busyRef.current === "custom" || busyRef.current === "food-more") setBusy(null);
-  }, [abortTrendRead, currentCustomScope, customScope, installCustom, resetFoodDetails, setBusy]);
+  }, [
+    abortTrendRead,
+    currentCustomScope,
+    customScope,
+    installCustom,
+    resetFoodDetails,
+    resetSavedFoodFilter,
+    setBusy,
+  ]);
   useEffect(() => {
     customMounted.current = true;
     resetFoodDetails();
     customEpoch.current += 1;
     if (customInstalled.current !== customScope) {
       customInstalled.current = customScope;
+      setVerifiedFoodListScope(null);
       foodDetailsReady.current = false;
       registry.current = null;
       customFoodsScope.current = null;
@@ -660,6 +699,7 @@ export function RetentionScreen({
   const loadAll = useCallback(async () => {
     const epoch = customEpoch.current;
     if (!currentCustomScope(epoch)) return;
+    setVerifiedFoodListScope(null);
     abortTrendRead();
     setNutrientTrend(null);
     setBiometricTrend(null);
@@ -715,6 +755,7 @@ export function RetentionScreen({
       if (currentCustomScope(epoch)) {
         setFoods(foodPage.items);
         customFoodsScope.current = customScope;
+        setVerifiedFoodListScope(customScope);
         foodDetailsReady.current = true;
         setFoodCursor(foodPage.nextCursor);
       }
@@ -796,6 +837,29 @@ export function RetentionScreen({
   }, [reconcileReminders, request]);
 
   const renderedCustomEpoch = customEpoch.current;
+  const savedFoodFilterVisible =
+    currentCustomScope(renderedCustomEpoch) &&
+    foodFilterScopeRef.current === foodFilterScope &&
+    installedFoodFilterScope.current === foodFilterScope;
+  const loadedSavedFoods =
+    savedFoodFilterVisible && customFoodsScope.current === customScope ? foods : [];
+  const matchingSavedFoods = loadedSavedFoods.filter((food) =>
+    food.currentVersion.name.toLowerCase().includes(savedFoodFilter.value.trim().toLowerCase()),
+  );
+  function changeSavedFoodFilter(value: string) {
+    if (
+      !currentCustomScope(renderedCustomEpoch) ||
+      foodFilterScopeRef.current !== foodFilterScope ||
+      installedFoodFilterScope.current !== foodFilterScope ||
+      savedFoodFilterRef.current !== savedFoodFilter
+    )
+      return;
+    const bounded = value.slice(0, 200);
+    if (bounded === savedFoodFilter.value) return;
+    const next = { value: bounded };
+    savedFoodFilterRef.current = next;
+    setSavedFoodFilter(next);
+  }
   const renderedFoodDetailsReady = foodDetailsReady.current && !loading;
   const trendScopeCurrent = () =>
     currentCustomScope(renderedCustomEpoch) &&
@@ -2330,7 +2394,47 @@ export function RetentionScreen({
               Choose Refresh private data to load saved nutrient details.
             </Text>
           ) : null}
-          {(customVisible && customFoodsScope.current === customScope ? foods : []).map((food) => (
+          <LabeledInput
+            label="Filter loaded custom foods by name"
+            value={savedFoodFilterVisible ? savedFoodFilter.value : ""}
+            disabled={!savedFoodFilterVisible}
+            onChangeText={changeSavedFoodFilter}
+            maxLength={200}
+          />
+          <Button
+            label="Clear custom food filter"
+            disabled={!savedFoodFilterVisible}
+            onPress={() => changeSavedFoodFilter("")}
+            secondary
+          />
+          {savedFoodFilterVisible ? (
+            <Text accessibilityLiveRegion="polite" style={styles.help}>
+              {`${matchingSavedFoods.length} matching · ${loadedSavedFoods.length} loaded custom foods. ${
+                loading
+                  ? "Loading the saved custom-food list…"
+                  : verifiedFoodListScope !== customScope
+                    ? "The saved custom-food list has not been verified. Choose Refresh private data to load it."
+                    : loadedSavedFoods.length === 0
+                      ? foodCursor
+                        ? "No custom foods loaded yet."
+                        : "No custom foods were found in this listing."
+                      : matchingSavedFoods.length === 0
+                        ? "No loaded custom foods match this filter."
+                        : ""
+              } ${
+                verifiedFoodListScope === customScope
+                  ? foodCursor
+                    ? "More records may remain; load more to include them."
+                    : "No more records remain in this listing."
+                  : ""
+              }`}
+            </Text>
+          ) : null}
+          <Text style={styles.help}>
+            Only loaded food names are filtered. Pages load active foods; recently archived foods
+            may remain in this list.
+          </Text>
+          {matchingSavedFoods.map((food) => (
             <View key={food.id} style={styles.card}>
               <Text style={styles.cardTitle}>{food.currentVersion.name}</Text>
               <Text style={styles.meta}>
@@ -2489,7 +2593,7 @@ export function RetentionScreen({
               </View>
             </View>
           ) : null}
-          {foodCursor ? (
+          {savedFoodFilterVisible && customFoodsScope.current === customScope && foodCursor ? (
             <Button
               disabled={busy === "food-more"}
               label="Load more custom foods"

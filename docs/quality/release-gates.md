@@ -674,3 +674,23 @@ acceptance.
   review, canonical check/build/licenses and fresh native exports. Mocks/exports
   are not concurrent React, physical device, assistive technology, real service,
   external Claude Code, hosted or release acceptance.
+
+
+## ADR 0043 loaded saved custom-food filtering
+
+- Web/native local name Filter/Clear issue no request or mutation, preserve raw
+  bounded text and source order/distinct IDs, and retain independent drafts,
+  selected logging/version context, disclosure state and pending operation keys.
+- Matched/loaded feedback distinguishes unverified/loading/unavailable, verified
+  empty and no matches. Keep explicit paging/retry at zero matches; preserve
+  dedup/accumulated rows on overlap/terminal pages. Active-only API listing is
+  not archived-library browsing or remote search.
+- Independent filter callbacks obey current private/profile/lifecycle scope and
+  their own value generation; old callbacks cannot overwrite later queries.
+  Same-private refresh/paging/accepted writes retain query without changing
+  existing disclosure reset or mutation acceptance/recovery rules.
+- Require focused actual-component/types/format and independent review, frozen
+  canonical check/build/licenses, fresh client outputs and synthetic dedicated-
+  Chrome production Next/BFF no-request/details/draft/paging/keyboard/narrow/
+  expiry proof. Keep real service, physical native, concurrent React, assistive
+  technology, external reviewer, hosted and release acceptance separate.
