@@ -24,10 +24,11 @@ const hooks = vi.hoisted(() => {
     b !== undefined &&
     a.length === b.length &&
     a.every((item, index) => Object.is(item, b[index]));
-  const render = () => {
+  const render = (runEffects = true) => {
     cursor = 0;
     dirty = false;
     tree = component();
+    if (!runEffects) return;
     const pending = effects;
     effects = [];
     for (const effect of pending) effect();
@@ -90,6 +91,7 @@ const hooks = vi.hoisted(() => {
       render();
     },
     render,
+    renderWithoutEffects: () => render(false),
     async settle() {
       for (let pass = 0; pass < 8; pass += 1) {
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -121,7 +123,7 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(navigation.query),
 }));
 
-import { type DiaryNutrient, localDateInTimeZone } from "../../lib/diary";
+import { type DiaryNutrient, defaultDiaryGroups, localDateInTimeZone } from "../../lib/diary";
 import type { FoodSearchHit } from "../../lib/food-search";
 import { parseRecipeResponse, type RecipeIngredientDraft } from "../../lib/recipes-goals";
 import { PastedIngredientReview } from "./PastedIngredientReview";
@@ -1936,4 +1938,485 @@ describe("actual recipe draft ingredient ordering", () => {
       expect(hooks.afterClose()).toBe(updates);
     },
   );
+});
+
+const savedFilterLabel = "Filter loaded saved recipes by name";
+function savedRecipeRows() {
+  const list = required(elements().find((node) => node.props.className === "recipeList"));
+  return elements(list).filter((node) => node.type === "button");
+}
+function savedRecipeNames() {
+  return savedRecipeRows().map((row) =>
+    text(required(elements(row).find((node) => node.type === "strong"))),
+  );
+}
+function savedFilterStatus() {
+  return text(required(elements().find((node) => node.props.id === "saved-recipe-filter-status")));
+}
+async function filterCollection(
+  values: readonly ReturnType<typeof nutritionRecipe>[],
+  nextCursor: string | null = null,
+) {
+  const payload = await nutritionCollection(values).json();
+  return Response.json({ ...payload, page: { nextCursor } });
+}
+const secondRecipeId = "359c280c-5662-40b4-8a10-b70bb0c7a9d0";
+const thirdRecipeId = "491a5573-0ae6-4c17-98b9-fbd28b84fcbe";
+
+describe("actual loaded saved-recipe name filtering", () => {
+  it("matches literal trimmed lowercase names, preserves duplicate IDs/order, and makes no search request", async () => {
+    const recipes = [
+      nutritionRecipe({ name: "Chili [HOT]" }),
+      nutritionRecipe({ id: secondRecipeId, name: "Café Soup" }),
+      nutritionRecipe({ id: thirdRecipeId, name: "Chili [HOT]" }),
+    ];
+    const fetcher = nutritionFetcher(recipes);
+    await mountReady();
+    const reads = fetcher.mock.calls.length;
+    expect(savedRecipeNames()).toEqual(["Chili [HOT]", "Café Soup", "Chili [HOT]"]);
+    expect(savedFilterStatus()).toContain("3 of 3 loaded recipes match.");
+    await change(savedFilterLabel, "  cHiLi  ");
+    expect(field(savedFilterLabel).props.value).toBe("  cHiLi  ");
+    expect(savedRecipeNames()).toEqual(["Chili [HOT]", "Chili [HOT]"]);
+    expect(savedFilterStatus()).toContain("2 of 3 loaded recipes match.");
+    await change(savedFilterLabel, "[hOt]");
+    expect(savedRecipeNames()).toEqual(["Chili [HOT]", "Chili [HOT]"]);
+    await change(savedFilterLabel, ".*");
+    expect(savedRecipeNames()).toEqual([]);
+    await change(savedFilterLabel, "cafe");
+    expect(savedRecipeNames()).toEqual([]);
+    await change(savedFilterLabel, "CAFÉ");
+    expect(savedRecipeNames()).toEqual(["Café Soup"]);
+    await change(savedFilterLabel, " \t ");
+    expect(savedRecipeNames()).toEqual(recipes.map((recipe) => recipe.currentVersion.name));
+    await click("Clear filter");
+    expect(field(savedFilterLabel).props.value).toBe("");
+    expect(button("Clear filter").props.type).toBe("button");
+    expect(fetcher.mock.calls).toHaveLength(reads);
+    invoke(required(savedRecipeRows()[2]), "onClick");
+    await hooks.settle();
+    expect(fetcher.mock.calls.some(([url]) => url === `/api/recipes/${thirdRecipeId}`)).toBe(true);
+    expect(savedFilterStatus()).toContain("3 of 3 loaded recipes match.");
+    expect(text()).toContain("Version 1 loaded.");
+  });
+
+  it("bounds raw input and rejects stale field/Clear callbacks without stranding same-value actions", async () => {
+    const fetcher = nutritionFetcher();
+    await mountReady();
+    const calls = fetcher.mock.calls.length;
+    expect(field(savedFilterLabel).props.maxLength).toBe(200);
+    await change(savedFilterLabel, "x".repeat(230));
+    expect(field(savedFilterLabel).props.value).toBe("x".repeat(200));
+    await change(savedFilterLabel, "Saved");
+    const staleField = field(savedFilterLabel),
+      staleClear = button("Clear filter");
+    invoke(staleField, "onChange", { target: { value: "No match" } });
+    invoke(staleClear, "onClick");
+    invoke(staleField, "onChange", { target: { value: "Older input" } });
+    await hooks.settle();
+    expect(field(savedFilterLabel).props.value).toBe("No match");
+    await click("Clear filter");
+    const empty = button("Clear filter");
+    invoke(empty, "onClick");
+    invoke(empty, "onClick");
+    await change(savedFilterLabel, "Saved");
+    invoke(staleClear, "onClick");
+    await hooks.settle();
+    expect(field(savedFilterLabel).props.value).toBe("Saved");
+    const sameField = field(savedFilterLabel),
+      currentClear = button("Clear filter");
+    invoke(sameField, "onChange", { target: { value: "Saved" } });
+    invoke(sameField, "onChange", { target: { value: "Saved" } });
+    invoke(currentClear, "onClick");
+    await hooks.settle();
+    expect(field(savedFilterLabel).props.value).toBe("");
+    expect(savedRecipeNames()).toEqual(["Saved recipe"]);
+    expect(fetcher.mock.calls).toHaveLength(calls);
+  });
+
+  it.each(["session", "list"] as const)(
+    "does not claim an empty complete library before an initial %s failure",
+    async (failure) => {
+      const response = deferred<Response>();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => {
+          if (url === "/api/auth/me") return failure === "session" ? response.promise : session();
+          return response.promise;
+        }),
+      );
+      hooks.mount(RecipesClient);
+      await hooks.settle();
+      expect(savedRecipeNames()).toEqual([]);
+      expect(savedFilterStatus()).toBe("Saved recipes have not been loaded yet.");
+      expect(savedFilterStatus()).not.toContain("All saved recipes");
+      response.resolve(Response.json({ error: "Unavailable." }, { status: 503 }));
+      await hooks.settle();
+      expect(savedFilterStatus()).toBe("Saved recipes have not been loaded yet.");
+      expect(hasButton("Load more recipes")).toBe(false);
+      expect(hasButton("Retry recipes")).toBe(true);
+    },
+  );
+
+  it.each([null, "next-page"])(
+    "distinguishes a verified empty first page with cursor %s",
+    async (cursor) => {
+      const fetcher = readyFetcher();
+      const original = required(fetcher.getMockImplementation());
+      fetcher.mockImplementation((url, init) =>
+        url.startsWith("/api/recipes?") ? filterCollection([], cursor) : original(url, init),
+      );
+      await mountReady();
+      expect(savedFilterStatus()).toContain("0 of 0 loaded recipes match.");
+      expect(savedFilterStatus()).toContain(
+        cursor ? "More recipes may be available." : "All saved recipes are loaded.",
+      );
+      expect(hasButton("Load more recipes")).toBe(cursor !== null);
+      if (cursor) {
+        expect(text()).not.toContain("No recipes yet.");
+        expect(text()).toContain("0 recipes loaded; more available.");
+      } else expect(text()).toContain("No recipes yet.");
+      await change(savedFilterLabel, "Soup");
+      expect(savedFilterStatus()).toContain("No loaded recipes match this name.");
+    },
+  );
+
+  it("keeps zero-match paging/recovery available, merges overlap in order and retains accumulated counts at the empty terminal page", async () => {
+    const first = nutritionRecipe({ name: "First" });
+    const updated = nutritionRecipe({ name: "First updated", version: 2 });
+    const next = nutritionRecipe({ id: secondRecipeId, name: "Later soup" });
+    const pendingPage = deferred<Response>();
+    let secondCalls = 0;
+    const requests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        requests.push(url);
+        if (url === "/api/auth/me") return session();
+        if (url.includes("cursor=page-two")) {
+          secondCalls += 1;
+          return secondCalls === 1
+            ? pendingPage.promise
+            : filterCollection([updated, next], "page-three");
+        }
+        if (url.includes("cursor=page-three")) return filterCollection([]);
+        return filterCollection([first], "page-two");
+      }),
+    );
+    await mountReady();
+    await change(savedFilterLabel, "soup");
+    expect(savedRecipeNames()).toEqual([]);
+    expect(savedFilterStatus()).toContain("0 of 1 loaded recipes match.");
+    await click("Load more recipes");
+    expect(button("Loading…").props.disabled).toBe(true);
+    const requestCount = requests.length;
+    await change(savedFilterLabel, "  SOUP ");
+    expect(requests).toHaveLength(requestCount);
+    pendingPage.resolve(Response.json({ error: "Page unavailable." }, { status: 503 }));
+    await hooks.settle();
+    expect(savedFilterStatus()).toContain("More recipes may be available.");
+    expect(hasButton("Retry recipes")).toBe(true);
+    expect(button("Load more recipes").props.disabled).toBe(false);
+    await click("Load more recipes");
+    expect(field(savedFilterLabel).props.value).toBe("  SOUP ");
+    expect(savedRecipeNames()).toEqual(["Later soup"]);
+    expect(savedFilterStatus()).toContain("1 of 2 loaded recipes match.");
+    await click("Load more recipes");
+    expect(savedRecipeNames()).toEqual(["Later soup"]);
+    expect(savedFilterStatus()).toContain("1 of 2 loaded recipes match.");
+    expect(savedFilterStatus()).toContain("All saved recipes are loaded.");
+    expect(text()).not.toContain("No recipes yet.");
+    expect(hasButton("Load more recipes")).toBe(false);
+    await click("Clear filter");
+    expect(savedRecipeNames()).toEqual(["First updated", "Later soup"]);
+    expect(requests.filter((url) => url.includes("cursor=page-two"))).toHaveLength(2);
+  });
+
+  it("preserves the selected editor, copy decision, nutrition/log fields and nested choices when filtering out the selection", async () => {
+    const { fetcher } = copyFetcher();
+    const other = nutritionRecipe({ id: secondRecipeId, name: "Other nested choice" });
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation((url, init) =>
+      url.startsWith("/api/recipes?")
+        ? filterCollection([nutritionRecipe(), other])
+        : original(url, init),
+    );
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await change("Name", " Unsaved draft ");
+    await change("Description", "Keep my draft description.");
+    await change("Final yield grams", "777.000001");
+    await change("Private sauce note", "Keep this note.");
+    await change("Find a reviewed food", "independent food search");
+    await change("Portion", "grams");
+    await change("Amount", "12.000001");
+    await change("Local diary date", "2026-09-08");
+    await change("Meal", "dinner");
+    await click("Per 100 g");
+    await click("Copy to new draft");
+    const retainedDecision = button("Keep editing");
+    const snapshot = editorValues(),
+      nutrition = nutritionRows();
+    const log = ["Portion", "Amount", "Local diary date", "Meal"].map(
+      (label) => field(label).props.value,
+    );
+    const nested = elements()
+      .filter((node) => node.props.className === "ingredientResult")
+      .map((node) => text(node));
+    const message = text(
+      required(elements().find((node) => node.props.className === "workspaceStatus")),
+    );
+    const requests = fetcher.mock.calls.length;
+    await change(savedFilterLabel, "no matching saved name");
+    expect(savedRecipeNames()).toEqual([]);
+    expect(editorValues()).toEqual(snapshot);
+    expect(nutritionRows()).toEqual(nutrition);
+    expect(button("Per 100 g").props["aria-pressed"]).toBe(true);
+    expect(
+      ["Portion", "Amount", "Local diary date", "Meal"].map((label) => field(label).props.value),
+    ).toEqual(log);
+    expect(
+      elements()
+        .filter((node) => node.props.className === "ingredientResult")
+        .map((node) => text(node)),
+    ).toEqual(nested);
+    expect(nested.some((name) => name.includes("Other nested choice"))).toBe(true);
+    expect(hasButton(confirmCopyLabel)).toBe(true);
+    expect(
+      text(required(elements().find((node) => node.props.className === "workspaceStatus"))),
+    ).toBe(message);
+    await click("Clear filter");
+    expect(savedRecipeRows()[0]?.props["aria-current"]).toBe(true);
+    invoke(retainedDecision, "onClick");
+    await hooks.settle();
+    expect(hasButton(confirmCopyLabel)).toBe(false);
+    expect(editorValues()).toEqual(snapshot);
+    expect(fetcher.mock.calls).toHaveLength(requests);
+  });
+
+  it("preserves the pasted-review child identity and retained confirmation while filtering a new draft", async () => {
+    const fetcher = nutritionFetcher();
+    await mountReady();
+    await change("Name", "Reviewed draft");
+    await change("Final yield grams", "250.000001");
+    const child = required(
+      elements().find((node) => node.type === PastedIngredientReview),
+    ) as ElementNode & { key: unknown };
+    const retained = review();
+    const requests = fetcher.mock.calls.length;
+    await change(savedFilterLabel, "not loaded");
+    const currentChild = required(
+      elements().find((node) => node.type === PastedIngredientReview),
+    ) as ElementNode & { key: unknown };
+    expect(currentChild.key).toBe(child.key);
+    expect(review().ownerUserId).toBe(retained.ownerUserId);
+    expect(review().remainingCapacity).toBe(retained.remainingCapacity);
+    expect(retained.onConfirm([ingredient("review-before-filter", "0.000001")])).toBe(true);
+    await hooks.settle();
+    expect(field("Name").props.value).toBe("Reviewed draft");
+    expect(field("Final yield grams").props.value).toBe("250.000001");
+    expect(ingredientValues()[0]?.quantity).toBe("0.000001");
+    expect(field(savedFilterLabel).props.value).toBe("not loaded");
+    expect(fetcher.mock.calls).toHaveLength(requests);
+    await click("New recipe");
+    expect(field(savedFilterLabel).props.value).toBe("not loaded");
+  });
+
+  it.each(["save", "log"] as const)(
+    "keeps exact %s retry identity through filtering during the request and after failure",
+    async (action) => {
+      const fetcher = nutritionFetcher();
+      const original = required(fetcher.getMockImplementation());
+      const pending = deferred<Response>();
+      let posts = 0;
+      fetcher.mockImplementation(async (url, init) => {
+        if (init?.method === "POST") {
+          posts += 1;
+          if (posts === 1) return pending.promise;
+          return action === "save"
+            ? Response.json({ data: { replayed: true, recipe: nutritionRecipe({ version: 2 }) } })
+            : Response.json({ error: "Temporary outage" }, { status: 503 });
+        }
+        return original(url, init);
+      });
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      if (action === "save") await change("Name", "Revised recipe");
+      else {
+        await change("Amount", "2.000001");
+        await change("Meal", "lunch");
+      }
+      if (action === "save") {
+        save();
+        await hooks.settle();
+      } else await click("Log recipe");
+      const count = fetcher.mock.calls.length;
+      await change(savedFilterLabel, "No match");
+      await click("Clear filter");
+      expect(fetcher.mock.calls).toHaveLength(count);
+      pending.resolve(Response.json({ error: "Confirmation lost." }, { status: 503 }));
+      await hooks.settle();
+      await change(savedFilterLabel, "sAvEd");
+      if (action === "save") {
+        save();
+        await hooks.settle();
+      } else await click("Log recipe");
+      const writes = fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+      expect(writes).toHaveLength(2);
+      expect(writes[1]?.[0]).toBe(writes[0]?.[0]);
+      expect(writes[1]?.[1]?.body).toBe(writes[0]?.[1]?.body);
+      expect(writes[1]?.[1]?.headers).toEqual(writes[0]?.[1]?.headers);
+      expect(field(savedFilterLabel).props.value).toBe("sAvEd");
+      if (action === "save") expect(text()).toContain("The earlier save was confirmed safely.");
+    },
+  );
+
+  it.each(["same", "time zone", "meal groups"] as const)(
+    "refreshes a typed log conflict with %s profile without losing verified loaded evidence",
+    async (profileChange) => {
+      const changed = profileChange !== "same";
+      const fetcher = nutritionFetcher();
+      const original = required(fetcher.getMockImplementation());
+      const refreshed = deferred<Response>();
+      let posted = false,
+        profileReads = 0,
+        listReads = 0;
+      fetcher.mockImplementation(async (url, init) => {
+        if (init?.method === "POST") {
+          posted = true;
+          return Response.json({ code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 });
+        }
+        if (url === "/api/auth/me" && posted) {
+          profileReads += 1;
+          return refreshed.promise;
+        }
+        if (url.startsWith("/api/recipes?")) listReads += 1;
+        return original(url, init);
+      });
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      await change("Name", "Keep this unsaved name");
+      await change("Amount", "2.000001");
+      await click("Per 100 g");
+      await change(savedFilterLabel, "Saved");
+      const oldField = field(savedFilterLabel),
+        oldClear = button("Clear filter");
+      const draft = editorValues(),
+        nutrition = nutritionRows();
+      await click("Log recipe");
+      const profile = await session().json();
+      if (profileChange === "time zone") profile.data.profile.timeZone = "UTC";
+      if (profileChange === "meal groups") {
+        profile.data.profile.diaryGroups = defaultDiaryGroups.map((group) => ({
+          ...group,
+          label: group.mealSlot === "dinner" ? "Late dinner" : group.label,
+        }));
+      }
+      refreshed.resolve(Response.json(profile));
+      await hooks.settle();
+      expect(profileReads).toBe(1);
+      expect(listReads).toBe(1);
+      expect(field(savedFilterLabel).props.value).toBe(changed ? "" : "Saved");
+      expect(field(savedFilterLabel).props.disabled).toBe(false);
+      expect(savedRecipeNames()).toEqual(["Saved recipe"]);
+      expect(savedFilterStatus()).toContain("1 of 1 loaded recipes match.");
+      if (changed) {
+        invoke(oldField, "onChange", { target: { value: "Old private query" } });
+        invoke(oldClear, "onClick");
+        await hooks.settle();
+        expect(field(savedFilterLabel).props.value).toBe("");
+      }
+      await change(savedFilterLabel, "No match");
+      expect(editorValues()).toEqual(draft);
+      expect(nutritionRows()).toEqual(nutrition);
+      expect(field("Amount").props.value).toBe("2.000001");
+      expect(field("Local diary date").props.value).toBe("2026-09-09");
+      expect(text()).toContain("This recipe was not logged.");
+      expect(profileReads).toBe(1);
+      expect(listReads).toBe(1);
+    },
+  );
+
+  it.each(["unmount", "effect replay", "owner closure"] as const)(
+    "clears or hides private filtering and rejects retained callbacks after %s",
+    async (transition) => {
+      const fetcher = nutritionFetcher();
+      await mountReady();
+      await change(savedFilterLabel, "Saved");
+      const oldField = field(savedFilterLabel),
+        oldClear = button("Clear filter");
+      if (transition === "unmount") hooks.unmount();
+      else if (transition === "effect replay") {
+        hooks.replayEffects();
+        await hooks.settle();
+      } else {
+        const original = required(fetcher.getMockImplementation());
+        fetcher.mockImplementation((url, init) =>
+          url === "/api/auth/me" ? Promise.resolve(session(secondRecipeId)) : original(url, init),
+        );
+        openSaved();
+        await hooks.settle();
+        expect(router.replace).toHaveBeenCalledWith("/login");
+        expect(savedRecipeNames()).toEqual([]);
+      }
+      const calls = fetcher.mock.calls.length;
+      invoke(oldField, "onChange", { target: { value: "Old private query" } });
+      invoke(oldClear, "onClick");
+      await hooks.settle();
+      expect(fetcher.mock.calls).toHaveLength(calls);
+      expect(hooks.afterClose()).toBe(0);
+      if (transition !== "unmount") expect(field(savedFilterLabel).props.value).toBe("");
+    },
+  );
+
+  it("hides a prior route's query and list before effects and rejects its delayed continuation", async () => {
+    const oldPage = deferred<Response>(),
+      newAuth = deferred<Response>();
+    let authCalls = 0;
+    const initial = nutritionRecipe();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url === "/api/auth/me") {
+          authCalls += 1;
+          return authCalls === 3 ? newAuth.promise : session();
+        }
+        if (url.includes("cursor=old-page")) return oldPage.promise;
+        return filterCollection([initial], "old-page");
+      }),
+    );
+    await mountReady();
+    await change(savedFilterLabel, "Saved");
+    const oldField = field(savedFilterLabel),
+      oldClear = button("Clear filter");
+    await click("Load more recipes");
+    navigation.query = "date=2026-09-10";
+    hooks.renderWithoutEffects();
+    expect(field(savedFilterLabel).props.value).toBe("");
+    expect(field(savedFilterLabel).props.disabled).toBe(true);
+    expect(savedRecipeNames()).toEqual([]);
+    expect(hasButton("Load more recipes")).toBe(false);
+    expect(savedFilterStatus()).toBe("Saved recipes have not been loaded yet.");
+    invoke(oldField, "onChange", { target: { value: "Stale private query" } });
+    invoke(oldClear, "onClick");
+    oldPage.resolve(new Response(null, { status: 401 }));
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(router.replace).not.toHaveBeenCalled();
+    hooks.render();
+    await hooks.settle();
+    expect(field(savedFilterLabel).props.value).toBe("");
+    expect(savedRecipeNames()).toEqual([]);
+    newAuth.resolve(session());
+    await hooks.settle();
+    await change(savedFilterLabel, "Saved");
+    invoke(oldClear, "onClick");
+    await hooks.settle();
+    expect(field(savedFilterLabel).props.value).toBe("Saved");
+    expect(savedRecipeNames()).toEqual(["Saved recipe"]);
+  });
 });

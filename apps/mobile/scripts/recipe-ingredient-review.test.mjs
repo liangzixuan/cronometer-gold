@@ -127,6 +127,11 @@ function screenHarness(props) {
       tree = RecipesScreen(props);
       return tree;
     },
+    flushEffects() {
+      const pendingEffects = effects;
+      effects = [];
+      for (const effect of pendingEffects) effect();
+    },
     replayEffects() {
       for (const slot of slots) slot.cleanup?.();
       for (const slot of slots) if (slot.effect) slot.cleanup = slot.effect();
@@ -874,7 +879,13 @@ describe("reviewed mobile recipe draft and outbox regressions", () => {
             : { apiBase: new URL("http://127.0.0.1:4001") },
       );
       const during = harness.renderWithoutEffects();
-      expect(nodes(during, (node) => node.type === "TextInput")).toHaveLength(0);
+      const visibleInputs = nodes(during, (node) => node.type === "TextInput");
+      expect(visibleInputs).toHaveLength(1);
+      expect(visibleInputs[0].props).toMatchObject({
+        accessibilityLabel: "Filter loaded saved recipes by name",
+        value: "",
+        editable: false,
+      });
       expect(nodes(during, (node) => node.type === "PastedIngredientReview")).toHaveLength(0);
       expect(screenText(during)).not.toContain("Private retained name");
       expect(transfer([ingredient()])).toBe(false);
@@ -1026,7 +1037,7 @@ function nutritionRecipe({
   };
   return recipe;
 }
-function nutritionCollection(recipes) {
+function nutritionCollection(recipes, nextCursor = null) {
   return response({
     data: recipes.map((recipe) => {
       const version = recipe.currentVersion;
@@ -1046,7 +1057,7 @@ function nutritionCollection(recipes) {
         },
       };
     }),
-    page: { nextCursor: null },
+    page: { nextCursor },
   });
 }
 async function openNutritionRecipe(harness, name = "Saved recipe") {
@@ -2088,4 +2099,400 @@ describe("mobile draft ingredient ordering", () => {
       expect(posts[3].headers["idempotency-key"]).toBe(posts[0].headers["idempotency-key"]);
     });
   }
+});
+
+const savedFilterLabel = "Filter loaded saved recipes by name";
+const filterInput = (tree) => input(tree, savedFilterLabel);
+const savedCards = (tree) =>
+  nodes(
+    tree,
+    (node) => node.type === "Pressable" && node.props.accessibilityState?.selected !== undefined,
+  );
+const savedCardNames = (tree) => savedCards(tree).map((node) => screenText(node.props.children[0]));
+const workInputs = (tree) => draftInputs(tree).filter(([label]) => label !== savedFilterLabel);
+async function filterSaved(harness, value) {
+  const tree = await harness.settle();
+  expect(filterInput(tree).props.editable).toBe(true);
+  filterInput(tree).props.onChangeText(value);
+  return harness.settle();
+}
+function namedRecipes(names) {
+  return names.map((name, index) =>
+    nutritionRecipe({
+      name,
+      id: `35f4c0db-4621-460b-893e-${String(index + 1).padStart(12, "0")}`,
+      savedVersionId: `c4053fd2-e902-40ce-b8fb-${String(index + 1).padStart(12, "0")}`,
+    }),
+  );
+}
+
+describe("native loaded saved-recipe name filter", () => {
+  it("matches literal trimmed lowercase text, keeps duplicate IDs and loaded order, and never requests", async () => {
+    const recipes = namedRecipes(["Zesty soup", "Café soup", "SOUP", "SOUP", "[rice]."]);
+    const original = JSON.stringify(recipes);
+    const { harness, requests } = setup((request) =>
+      request.url.pathname === "/v1/recipes" ? nutritionCollection(recipes) : undefined,
+    );
+    try {
+      let tree = await harness.settle();
+      const before = requests.length;
+      expect(savedCardNames(tree)).toEqual(recipes.map((recipe) => recipe.currentVersion.name));
+      tree = await filterSaved(harness, "  sOuP  ");
+      expect(filterInput(tree).props.value).toBe("  sOuP  ");
+      expect(savedCardNames(tree)).toEqual(["Zesty soup", "Café soup", "SOUP", "SOUP"]);
+      expect(new Set(savedCards(tree).map((card) => card.key)).size).toBe(4);
+      expect(screenText(tree)).toContain("4 matching · 5 loaded recipes.");
+      tree = await filterSaved(harness, "cafe");
+      expect(savedCards(tree)).toHaveLength(0);
+      tree = await filterSaved(harness, "[rice].");
+      expect(savedCardNames(tree)).toEqual(["[rice]."]);
+      tree = await filterSaved(harness, " \t ");
+      expect(savedCards(tree)).toHaveLength(5);
+      tree = await filterSaved(harness, "x".repeat(201));
+      expect(filterInput(tree).props.maxLength).toBe(200);
+      expect(filterInput(tree).props.value).toHaveLength(200);
+      tree = await click(harness, "Clear filter");
+      expect(savedCards(tree)).toHaveLength(5);
+      expect(requests).toHaveLength(before);
+      expect(JSON.stringify(recipes)).toBe(original);
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("rejects stale field/Clear callbacks while same-value and already-clear actions stay usable", async () => {
+    const { harness, requests } = nutritionSetup();
+    try {
+      let tree = await harness.settle();
+      const oldField = filterInput(tree).props.onChangeText;
+      const oldClear = pressable(tree, "Clear filter").props.onPress;
+      const before = requests.length;
+      oldField("first");
+      oldField("stale before paint");
+      oldClear();
+      tree = await harness.settle();
+      expect(filterInput(tree).props.value).toBe("first");
+      oldField("stale after paint");
+      oldClear();
+      filterInput(tree).props.onChangeText("first");
+      filterInput(tree).props.onChangeText("second");
+      tree = await harness.settle();
+      expect(filterInput(tree).props.value).toBe("second");
+      tree = await click(harness, "Clear filter");
+      pressable(tree, "Clear filter").props.onPress();
+      filterInput(tree).props.onChangeText("Saved");
+      tree = await harness.settle();
+      expect(filterInput(tree).props.value).toBe("Saved");
+      expect(requests).toHaveLength(before);
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("distinguishes initial loading/error from an owner-verified empty library and preserves the query", async () => {
+    const held = deferred();
+    let attempt = 0;
+    const { harness } = setup((request) =>
+      request.url.pathname === "/v1/recipes"
+        ? ++attempt === 1
+          ? held.promise
+          : collection()
+        : undefined,
+    );
+    try {
+      let tree = await filterSaved(harness, "private query");
+      expect(screenText(tree)).toContain("has not been verified yet");
+      expect(screenText(tree)).not.toContain("All saved recipes are loaded");
+      held.resolve(response({}, 503));
+      tree = await harness.settle();
+      expect(screenText(tree)).toContain("has not been verified yet");
+      tree = await click(harness, "Refresh");
+      expect(filterInput(tree).props.value).toBe("private query");
+      expect(screenText(tree)).toContain("0 matching · 0 loaded recipes.");
+      expect(screenText(tree)).toContain("All saved recipes are loaded.");
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("keeps zero-match paging and failed continuation available, merges overlap, and reports an empty terminal append truthfully", async () => {
+    const recipes = namedRecipes(["Soup", "Salad", "Café bowl"]);
+    let pageAttempts = 0;
+    const { harness, requests } = setup((request) => {
+      if (request.url.pathname !== "/v1/recipes") return undefined;
+      const cursor = request.url.searchParams.get("cursor");
+      if (!cursor) return nutritionCollection(recipes.slice(0, 2), "next-page");
+      if (cursor === "last-page") return nutritionCollection([]);
+      return ++pageAttempts === 1
+        ? response({}, 503)
+        : nutritionCollection(recipes.slice(1), "last-page");
+    });
+    try {
+      let tree = await filterSaved(harness, "CAFÉ");
+      expect(savedCards(tree)).toHaveLength(0);
+      expect(screenText(tree)).toContain("0 matching · 2 loaded recipes.");
+      expect(screenText(tree)).toContain("More recipes may remain");
+      tree = await click(harness, "Load more recipes");
+      expect(filterInput(tree).props.value).toBe("CAFÉ");
+      expect(screenText(tree)).toContain("0 matching · 2 loaded recipes.");
+      tree = await click(harness, "Load more recipes");
+      expect(savedCardNames(tree)).toEqual(["Café bowl"]);
+      expect(screenText(tree)).toContain("1 matching · 3 loaded recipes.");
+      tree = await click(harness, "Load more recipes");
+      expect(screenText(tree)).toContain("1 matching · 3 loaded recipes.");
+      expect(screenText(tree)).toContain("All saved recipes are loaded.");
+      expect(screenText(tree)).not.toContain("No recipes yet");
+      tree = await click(harness, "Clear filter");
+      expect(savedCardNames(tree)).toEqual(["Soup", "Salad", "Café bowl"]);
+      expect(
+        requests.filter((request) => request.url.searchParams.get("cursor") === "next-page"),
+      ).toHaveLength(2);
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("keeps selected details, exact draft, copy choice, nutrition, log fields and full nested choices when the saved card disappears", async () => {
+    const recipe = copyFixture();
+    const other = namedRecipes(["Other recipe"])[0];
+    const { harness, requests, props } = nutritionSetup(recipe, (request) =>
+      request.url.pathname === "/v1/recipes" ? nutritionCollection([recipe, other]) : undefined,
+    );
+    try {
+      let tree = await openNutritionRecipe(harness);
+      input(tree, "Recipe name").props.onChangeText("Unsaved exact name ");
+      input(tree, "Amount").props.onChangeText("1.250001");
+      input(tree, "Local date").props.onChangeText("2026-09-07");
+      tree = await click(harness, "Per 100 g");
+      tree = await click(harness, "Copy to new draft");
+      const confirm = pressable(tree, discardCopyLabel).props.onPress;
+      const before = requests.length;
+      const fields = workInputs(tree);
+      const nutrition = nutrientRow(tree, "Quantified nutrient");
+      tree = await filterSaved(harness, "no matching recipe");
+      expect(savedCards(tree)).toHaveLength(0);
+      expect(workInputs(tree)).toEqual(fields);
+      expect(nutrientRow(tree, "Quantified nutrient")).toBe(nutrition);
+      expect(pressable(tree, "Per 100 g").props.accessibilityState.checked).toBe(true);
+      expect(screenText(tree)).toContain("Copy saved Saved recipe · v 1");
+      expect(pressable(tree, discardCopyLabel)).toBeDefined();
+      expect(pressable(tree, "Pin 100 g nested revision")).toBeDefined();
+      expect(requests).toHaveLength(before);
+      expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+      confirm();
+      tree = await harness.settle();
+      expect(filterInput(tree).props.value).toBe("no matching recipe");
+      expect(input(tree, "Recipe name").props.value).toBe("Saved recipe");
+      expect(pressable(tree, "Create recipe")).toBeDefined();
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("keeps the import child key, reviewed draft, food query and pending confirmation callback independent", async () => {
+    const { harness, requests } = nutritionSetup();
+    try {
+      let tree = await fill(harness);
+      input(tree, "Search foods").props.onChangeText("ingredient query");
+      tree = await harness.settle();
+      const fields = workInputs(tree);
+      const priorReview = review(tree);
+      const before = requests.length;
+      tree = await filterSaved(harness, "no match");
+      expect(workInputs(tree)).toEqual(fields);
+      // The child is a host stub here; check its retained identity separately from raw-text behavior.
+      expect(review(tree).key).toBe(priorReview.key);
+      expect(review(tree).props.remainingCapacity).toBe(priorReview.props.remainingCapacity);
+      expect(priorReview.props.onConfirm([ingredient()])).toBe(true);
+      tree = await harness.settle();
+      expect(review(tree).props.remainingCapacity).toBe(48);
+      expect(filterInput(tree).props.value).toBe("no match");
+      expect(requests).toHaveLength(before);
+      tree = await click(harness, "New recipe");
+      expect(filterInput(tree).props.value).toBe("no match");
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("retains the query through same-scope refresh failure, recovery and a successful save", async () => {
+    const held = deferred();
+    const recipe = nutritionRecipe();
+    let reads = 0;
+    const { harness, requests } = nutritionSetup(recipe, (request) => {
+      if (request.method === "POST") return response({ data: { replayed: false, recipe } });
+      if (request.url.pathname === "/v1/recipes" && ++reads === 2) return held.promise;
+    });
+    try {
+      await openNutritionRecipe(harness);
+      let tree = await filterSaved(harness, "Saved");
+      tree = await click(harness, "Refresh");
+      const before = requests.length;
+      tree = await filterSaved(harness, "recipe");
+      expect(requests).toHaveLength(before);
+      expect(screenText(tree)).toContain("1 matching · 1 loaded recipes.");
+      held.resolve(response({}, 503));
+      tree = await harness.settle();
+      expect(filterInput(tree).props.value).toBe("recipe");
+      expect(screenText(tree)).toContain("Recipes could not be loaded");
+      tree = await click(harness, "Refresh");
+      expect(filterInput(tree).props.value).toBe("recipe");
+      tree = await click(harness, "Publish revision");
+      expect(filterInput(tree).props.value).toBe("recipe");
+      expect(screenText(tree)).toContain("Recipe version 1 published.");
+      const beforeClear = requests.length;
+      tree = await click(harness, "Clear filter");
+      expect(screenText(tree)).toContain("Recipe version 1 published.");
+      expect(requests).toHaveLength(beforeClear);
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("leaves an active save and its ambiguous retry body/key intact while filtering", async () => {
+    const held = deferred();
+    let attempt = 0;
+    const { harness, requests } = nutritionSetup(undefined, (request) =>
+      request.method === "POST" ? (++attempt === 1 ? held.promise : response({}, 503)) : undefined,
+    );
+    try {
+      await openNutritionRecipe(harness);
+      let tree = await click(harness, "Publish revision");
+      expect(postRequests(requests)).toHaveLength(1);
+      const first = postRequests(requests)[0];
+      const before = requests.length;
+      tree = await filterSaved(harness, "while saving");
+      expect(first.signal.aborted).toBe(false);
+      expect(requests).toHaveLength(before);
+      held.resolve(response({}, 503));
+      tree = await harness.settle();
+      expect(screenText(tree)).toContain("retry safely");
+      tree = await click(harness, "Clear filter");
+      await click(harness, "Publish revision");
+      expect(postRequests(requests)).toHaveLength(2);
+      expect(postRequests(requests)[1].body).toBe(first.body);
+      expect(postRequests(requests)[1].headers).toEqual(first.headers);
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("preserves the exact selected log and active queue registration through filtering", async () => {
+    const held = deferred();
+    const { harness, requests, props } = nutritionSetup(undefined, () => undefined, {
+      diaryGroups: [{ mealSlot: "lunch", label: "Lunch" }],
+    });
+    props.quickAddOutboxController.enqueueOperation.mockReturnValue(held.promise);
+    try {
+      let tree = await openNutritionRecipe(harness);
+      input(tree, "Amount").props.onChangeText("2.123456");
+      input(tree, "Local date").props.onChangeText("2026-09-07");
+      tree = await click(harness, "Lunch");
+      const log = pressable(tree, "Secure & log recipe").props.onPress;
+      const before = requests.length;
+      tree = await filterSaved(harness, "hide selected");
+      expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+      log();
+      tree = await harness.settle();
+      const operation = props.quickAddOutboxController.enqueueOperation.mock.calls[0][0];
+      expect(operation).toMatchObject({
+        recipeId,
+        recipeVersionId: versionId,
+        localDate: "2026-09-07",
+        mealSlot: "lunch",
+        portion: { kind: "serving", amount: "2.123456", servingLabel: "bowl" },
+      });
+      const bytes = JSON.stringify(operation);
+      tree = await click(harness, "Clear filter");
+      expect(JSON.stringify(operation)).toBe(bytes);
+      expect(props.quickAddOutboxController.enqueueOperation).toHaveBeenCalledTimes(1);
+      expect(requests).toHaveLength(before);
+      held.resolve({ operationId: "filtered-log" });
+      await harness.settle();
+      expect(props.quickAddOutboxController.requestDrain).toHaveBeenCalledExactlyOnceWith(
+        "filtered-log",
+      );
+    } finally {
+      harness.unmount();
+    }
+  });
+  for (const boundary of ["owner", "token", "API", "zone", "groups"]) {
+    it(`hides private filter/rows before ${boundary} effects and rejects both retained and uninstalled controls`, async () => {
+      let currentOwner = owner;
+      const { harness } = nutritionSetup(undefined, (request) =>
+        request.url.pathname === "/v1/auth/me" ? session(currentOwner) : undefined,
+      );
+      try {
+        let tree = await filterSaved(harness, "private saved name");
+        const oldField = filterInput(tree).props.onChangeText;
+        const oldClear = pressable(tree, "Clear filter").props.onPress;
+        currentOwner = boundary === "owner" ? "049eb964-1327-49a1-ab4f-5c7c41a6b68a" : owner;
+        harness.updateProps(
+          boundary === "owner"
+            ? { ownerUserId: currentOwner }
+            : boundary === "token"
+              ? { accessToken: "replacement-token" }
+              : boundary === "API"
+                ? { apiBase: new URL("http://127.0.0.1:4001") }
+                : boundary === "zone"
+                  ? { profileTimeZone: "UTC" }
+                  : { diaryGroups: [{ mealSlot: "lunch", label: "Midday" }] },
+        );
+        tree = harness.renderWithoutEffects();
+        expect(filterInput(tree).props.value).toBe("");
+        expect(filterInput(tree).props.editable).toBe(false);
+        expect(savedCards(tree)).toHaveLength(0);
+        oldField("old private query");
+        oldClear();
+        filterInput(tree).props.onChangeText("uninstalled query");
+        harness.flushEffects();
+        tree = await harness.settle();
+        expect(filterInput(tree).props.value).toBe("");
+        tree = await filterSaved(harness, "current query");
+        oldClear();
+        oldField("stale");
+        tree = await harness.settle();
+        expect(filterInput(tree).props.value).toBe("current query");
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+  it("hides the query in background, preserves it on foreground refresh, and rejects retained/unmounted controls", async () => {
+    const { harness } = nutritionSetup();
+    let tree = await filterSaved(harness, "Saved");
+    const oldField = filterInput(tree).props.onChangeText;
+    const oldClear = pressable(tree, "Clear filter").props.onPress;
+    background();
+    oldField("background");
+    oldClear();
+    tree = await harness.settle();
+    expect(filterInput(tree).props.value).toBe("");
+    expect(savedCards(tree)).toHaveLength(0);
+    foreground();
+    tree = await harness.settle();
+    expect(filterInput(tree).props.value).toBe("Saved");
+    oldClear();
+    oldField("retained");
+    tree = await harness.settle();
+    expect(filterInput(tree).props.value).toBe("Saved");
+    const current = filterInput(tree).props.onChangeText;
+    harness.unmount();
+    current("after unmount");
+    expect(harness.writesAfterUnmount).toBe(0);
+  });
+  it("clears and closes the filter on expiry including effect setup replay", async () => {
+    let expired = false;
+    const { harness, props } = nutritionSetup(undefined, () =>
+      expired ? response({}, 401) : undefined,
+    );
+    try {
+      let tree = await filterSaved(harness, "private saved name");
+      const old = filterInput(tree).props.onChangeText;
+      expired = true;
+      tree = await click(harness, "Refresh");
+      expect(props.onUnauthorized).toHaveBeenCalledTimes(1);
+      expect(filterInput(tree).props.value).toBe("");
+      expect(filterInput(tree).props.editable).toBe(false);
+      harness.replayEffects();
+      old("reopened");
+      tree = await harness.settle();
+      expect(filterInput(tree).props.value).toBe("");
+      expect(filterInput(tree).props.editable).toBe(false);
+    } finally {
+      harness.unmount();
+    }
+  });
 });

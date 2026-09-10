@@ -604,3 +604,22 @@ acceptance.
   expiry proof establish bounded source behavior only. Physical native, real
   persistence, assistive technology, independent Claude Code and release gates
   remain separate.
+
+
+## Loaded saved-recipe name filter (ADR 0039)
+
+- Derive only top-level saved rows using trimmed case-insensitive literal name
+  matching. Preserve backing order, distinct IDs and nested-recipe choices.
+  Matched/loaded counts and Load more remain visible at zero matches. Unverified
+  initial state, page failure, empty terminal pages and complete empty libraries
+  retain truthful meanings; no implied search over unloaded records.
+- Filter/Clear are independent local actions: no request, write, selection,
+  builder/copy/import/nutrition/log mutation or operation identity change. Preserve
+  same-scope paging/retry/action context, and selected details outside the matches.
+- Own synchronous filter guards reject stale value/Clear/private/route/lifecycle
+  callbacks without advancing unrelated generations. Hide/clear replaced private
+  state; same-value edits remain usable and pending operation recovery stays intact.
+- Actual-component tests, independent in-task review, canonical local gates and
+  exports, and synthetic Chrome paging/draft/keyboard/narrow/privacy proof cover
+  bounded source behavior only. Real persistence, physical native, assistive
+  technology, independent Claude Code and release gates remain separate.

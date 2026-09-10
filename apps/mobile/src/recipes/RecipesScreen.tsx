@@ -247,6 +247,9 @@ export function RecipesScreen({
   subscribeQuickAddReceipts,
 }: Props) {
   const [recipes, setRecipes] = useState<readonly RecipeSummaryView[]>([]);
+  const [listVerified, setListVerified] = useState(false);
+  const [savedFilter, setSavedFilter] = useState({ value: "" });
+  const savedFilterRef = useRef(savedFilter);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [selected, setSelected] = useState<RecipeView | null>(null);
   const [nutritionBasis, setNutritionBasis] = useState<"100g" | "serving">("100g");
@@ -275,6 +278,13 @@ export function RecipesScreen({
   )
     scopeRef.current = { ownerUserId, accessToken, apiBase: apiBase.toString() };
   const scope = scopeRef.current;
+  const profileKey = JSON.stringify([profileTimeZone, diaryGroups]);
+  const filterScopeRef = useRef({ scope, profileKey });
+  if (filterScopeRef.current.scope !== scope || filterScopeRef.current.profileKey !== profileKey)
+    filterScopeRef.current = { scope, profileKey };
+  const filterScope = filterScopeRef.current;
+  const installedFilterScope = useRef<typeof filterScope | null>(null);
+  const closedFilterScope = useRef<typeof scope | null>(null);
   const installedScope = useRef<typeof scope | null>(null);
   const mounted = useRef(false);
   const privateClosed = useRef(false);
@@ -297,6 +307,18 @@ export function RecipesScreen({
   const onUnauthorizedRef = useRef(onUnauthorized);
   onLoggedRef.current = onLogged;
   onUnauthorizedRef.current = onUnauthorized;
+
+  const resetSavedFilter = useCallback(() => {
+    const next = { value: "" };
+    savedFilterRef.current = next;
+    setSavedFilter(next);
+  }, []);
+  useEffect(() => {
+    if (installedFilterScope.current !== filterScope) {
+      installedFilterScope.current = filterScope;
+      resetSavedFilter();
+    }
+  }, [filterScope, resetSavedFilter]);
 
   const setBusy = useCallback((value: string | null) => {
     busyRef.current = value;
@@ -360,6 +382,8 @@ export function RecipesScreen({
   const closeSession = useCallback(() => {
     if (!mounted.current || privateClosed.current || scopeRef.current !== scope) return;
     privateClosed.current = true;
+    closedFilterScope.current = scope;
+    resetSavedFilter();
     lifecycle.current += 1;
     abortRequests();
     invalidateReview();
@@ -367,6 +391,7 @@ export function RecipesScreen({
     ownedRecipeLogOperations.current.clear();
     replaceBuilder(emptyBuilder());
     setRecipes([]);
+    setListVerified(false);
     replaceSelected(null);
     setNextCursor(null);
     setQuery("");
@@ -377,7 +402,16 @@ export function RecipesScreen({
     setLoading(false);
     setMessage("Closing your private recipe workspace…");
     void onUnauthorizedRef.current();
-  }, [abortRequests, invalidateReview, replaceBuilder, replaceSelected, scope, setBusy, setReady]);
+  }, [
+    abortRequests,
+    invalidateReview,
+    replaceBuilder,
+    replaceSelected,
+    resetSavedFilter,
+    scope,
+    setBusy,
+    setReady,
+  ]);
 
   const verifyOwner = useCallback(
     async (controller: AbortController, current: () => boolean) => {
@@ -414,6 +448,7 @@ export function RecipesScreen({
     ownedRecipeLogOperations.current.clear();
     replaceBuilder(emptyBuilder());
     setRecipes([]);
+    setListVerified(false);
     replaceSelected(null);
     setNextCursor(null);
     setQuery("");
@@ -465,11 +500,8 @@ export function RecipesScreen({
         setRecipes((existing) => mergeRecipePage(existing, page.data, cursor !== null));
         setNextCursor(page.nextCursor);
         setReady(true);
-        setMessage(
-          page.data.length
-            ? `Recipes loaded${page.nextCursor ? "; more available" : ""}.`
-            : "No recipes yet.",
-        );
+        setListVerified(true);
+        setMessage(`Recipe list loaded${page.nextCursor ? "; more available" : ""}.`);
       } catch (caught) {
         if (current())
           setMessage(caught instanceof Error ? caught.message : "Recipes could not be loaded.");
@@ -532,6 +564,21 @@ export function RecipesScreen({
   const renderEpoch = lifecycle.current;
   const renderReview = reviewGeneration.current;
   const renderIngredientOrder = ingredientOrderGeneration.current;
+  function changeSavedFilter(value: string) {
+    if (
+      !scopeIsCurrent(renderEpoch) ||
+      filterScopeRef.current !== filterScope ||
+      installedFilterScope.current !== filterScope ||
+      closedFilterScope.current === scope ||
+      savedFilterRef.current !== savedFilter
+    )
+      return;
+    const nextValue = value.slice(0, 200);
+    if (nextValue === savedFilter.value) return;
+    const next = { value: nextValue };
+    savedFilterRef.current = next;
+    setSavedFilter(next);
+  }
   function canEdit(expectedReview = renderReview) {
     return (
       scopeIsCurrent(renderEpoch) &&
@@ -998,6 +1045,16 @@ export function RecipesScreen({
   }
 
   const scopeVisible = installedScope.current === scope && !closed;
+  const filterVisible =
+    scopeVisible &&
+    active.current &&
+    installedFilterScope.current === filterScope &&
+    closedFilterScope.current !== scope;
+  const filterDisabled = !filterVisible || !scopeIsCurrent(renderEpoch);
+  const normalizedSavedFilter = savedFilter.value.trim().toLowerCase();
+  const visibleRecipes = recipes.filter((recipe) =>
+    recipe.name.toLowerCase().includes(normalizedSavedFilter),
+  );
   const builderDisabled = busy !== null || !ready || !scopeVisible;
   const recipeLogUnavailable =
     builderDisabled ||
@@ -1045,8 +1102,36 @@ export function RecipesScreen({
             <Text style={styles.secondaryText}>Refresh</Text>
           </Pressable>
         </View>
-        {scopeVisible
-          ? recipes.map((recipe) => (
+        <Field
+          label="Filter loaded saved recipes by name"
+          value={filterVisible ? savedFilter.value : ""}
+          maxLength={200}
+          disabled={filterDisabled}
+          onChange={changeSavedFilter}
+        />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Clear saved recipe filter"
+          accessibilityState={{ disabled: filterDisabled }}
+          disabled={filterDisabled}
+          onPress={() => changeSavedFilter("")}
+          style={styles.secondary}
+        >
+          <Text style={styles.secondaryText}>Clear filter</Text>
+        </Pressable>
+        {filterVisible ? (
+          <Text accessibilityLiveRegion="polite" style={styles.help}>
+            {listVerified
+              ? `${visibleRecipes.length} matching · ${recipes.length} loaded recipes. ${
+                  nextCursor
+                    ? "More recipes may remain; load more to include them."
+                    : "All saved recipes are loaded."
+                }${visibleRecipes.length === 0 ? " No loaded recipes match this filter." : ""}`
+              : "The saved recipe list has not been verified yet."}
+          </Text>
+        ) : null}
+        {filterVisible
+          ? visibleRecipes.map((recipe) => (
               <Pressable
                 accessibilityRole="button"
                 accessibilityState={{ selected: selected?.id === recipe.id }}

@@ -296,6 +296,15 @@ export function RecipesClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const requestedDate = searchParams.get("date");
+  const filterScopeRef = useRef({ requestedDate });
+  if (filterScopeRef.current.requestedDate !== requestedDate) {
+    filterScopeRef.current = { requestedDate };
+  }
+  const filterScope = filterScopeRef.current;
+  const [savedFilter, setSavedFilter] = useState({ scope: filterScope, value: "" });
+  const savedFilterRef = useRef(savedFilter);
+  const [filterVerifiedScope, setFilterVerifiedScope] = useState<typeof filterScope | null>(null);
+  const [loadedRecipesScope, setLoadedRecipesScope] = useState<typeof filterScope | null>(null);
   const [date, setDate] = useState(
     requestedDate && isLocalDate(requestedDate) ? requestedDate : "",
   );
@@ -336,6 +345,14 @@ export function RecipesClient() {
   const builderRequest = useRef<AbortController | null>(null);
   const busyRef = useRef<string | null>(null);
   const stateRef = useRef<LoadState>("loading");
+
+  const resetSavedFilter = useCallback(() => {
+    const next = { scope: filterScopeRef.current, value: "" };
+    savedFilterRef.current = next;
+    setSavedFilter(next);
+    setFilterVerifiedScope(null);
+    setLoadedRecipesScope(null);
+  }, []);
 
   const clearCopyConfirmation = useCallback(() => {
     copyConfirmationRef.current = null;
@@ -527,6 +544,7 @@ export function RecipesClient() {
   const signInAgain = useCallback(() => {
     if (!mounted.current) return;
     privateUiClosed.current = true;
+    resetSavedFilter();
     reviewGeneration.current += 1;
     builderRequest.current = null;
     for (const controller of privateReadControllers.current) controller.abort();
@@ -554,7 +572,7 @@ export function RecipesClient() {
     setLogAmount("1");
     router.replace("/login");
     router.refresh();
-  }, [router, replaceBuilder, setBusy, setState, setSelected]);
+  }, [router, replaceBuilder, resetSavedFilter, setBusy, setState, setSelected]);
 
   const revalidateRecipeSession = useCallback(async (signal: AbortSignal) => {
     const response = await fetch("/api/auth/me", {
@@ -575,6 +593,7 @@ export function RecipesClient() {
       if (privateUiClosed.current) return;
       const initiatingOwnerUserId = ownerUserId.current;
       if (initiatingOwnerUserId === null) return;
+      const requestScope = filterScopeRef.current;
       const controller = new AbortController();
       privateReadControllers.current.add(controller);
       setState("loading");
@@ -600,24 +619,26 @@ export function RecipesClient() {
           },
           revalidateSession: () => revalidateRecipeSession(controller.signal),
           install: (page) => {
+            if (filterScopeRef.current !== requestScope) return;
             if (privateUiClosed.current || ownerUserId.current !== initiatingOwnerUserId) {
               throw new RecipeOwnerFenceError();
             }
             setRecipes((current) => {
               const merged = mergeRecipePage(current, page.data, cursor !== null);
               setMessage(
-                merged.length === 0
+                merged.length === 0 && page.nextCursor === null
                   ? "No recipes yet."
                   : `${merged.length} recipes loaded${page.nextCursor ? "; more available" : ""}.`,
               );
               return merged;
             });
             setNextCursor(page.nextCursor);
+            setLoadedRecipesScope(requestScope);
             setState("ready");
           },
         });
       } catch (caught) {
-        if (controller.signal.aborted) return;
+        if (controller.signal.aborted || filterScopeRef.current !== requestScope) return;
         if (caught instanceof RecipeOwnerFenceError) return signInAgain();
         setState("error");
         setMessage(caught instanceof Error ? caught.message : "Recipes could not be loaded.");
@@ -634,25 +655,45 @@ export function RecipesClient() {
     profileRefreshController.current?.abort();
     const controller = new AbortController();
     profileRefreshController.current = controller;
+    const requestScope = filterScopeRef.current;
     try {
       const response = await fetch("/api/auth/me", {
         headers: { accept: "application/json" },
         cache: "no-store",
         signal: controller.signal,
       });
-      if (controller.signal.aborted || !mounted.current || privateUiClosed.current) return null;
+      if (
+        controller.signal.aborted ||
+        !mounted.current ||
+        privateUiClosed.current ||
+        filterScopeRef.current !== requestScope
+      )
+        return null;
       if (response.status === 401) {
         signInAgain();
         return null;
       }
       if (!response.ok) return null;
       const session = parseSession(await responseJson(response));
-      if (controller.signal.aborted || privateUiClosed.current) return null;
+      if (
+        controller.signal.aborted ||
+        privateUiClosed.current ||
+        filterScopeRef.current !== requestScope
+      )
+        return null;
       if (
         !recipeProfileRefreshBelongsToOwner(initiatingUserId, ownerUserId.current, session.user.id)
       ) {
         signInAgain();
         return null;
+      }
+      if (
+        session.profile.timeZone !== timeZone ||
+        JSON.stringify(session.profile.diaryGroups) !== JSON.stringify(diaryGroups)
+      ) {
+        const next = { scope: requestScope, value: "" };
+        savedFilterRef.current = next;
+        setSavedFilter(next);
       }
       setTimeZone(session.profile.timeZone);
       setDiaryGroups(session.profile.diaryGroups);
@@ -666,6 +707,8 @@ export function RecipesClient() {
 
   useEffect(() => {
     mounted.current = true;
+    resetSavedFilter();
+    const requestScope = filterScopeRef.current;
     const controller = new AbortController();
     void (async () => {
       try {
@@ -674,7 +717,13 @@ export function RecipesClient() {
           cache: "no-store",
           signal: controller.signal,
         });
-        if (controller.signal.aborted || !mounted.current || privateUiClosed.current) return;
+        if (
+          controller.signal.aborted ||
+          !mounted.current ||
+          privateUiClosed.current ||
+          filterScopeRef.current !== requestScope
+        )
+          return;
         if (response.status === 401) return signInAgain();
         if (!response.ok) throw new Error("Session verification failed.");
         const session = parseSession(await responseJson(response));
@@ -682,19 +731,24 @@ export function RecipesClient() {
           requestedDate && isLocalDate(requestedDate)
             ? requestedDate
             : localDateInTimeZone(new Date(), session.profile.timeZone);
-        if (!controller.signal.aborted && !privateUiClosed.current) {
+        if (
+          !controller.signal.aborted &&
+          !privateUiClosed.current &&
+          filterScopeRef.current === requestScope
+        ) {
           if (ownerUserId.current !== null && ownerUserId.current !== session.user.id) {
             signInAgain();
             return;
           }
           ownerUserId.current = session.user.id;
+          setFilterVerifiedScope(requestScope);
           setDiaryGroups(session.profile.diaryGroups);
           setDate(localDate);
           setTimeZone(session.profile.timeZone);
           void loadRecipes();
         }
       } catch {
-        if (!controller.signal.aborted) {
+        if (!controller.signal.aborted && filterScopeRef.current === requestScope) {
           setState("error");
           setMessage("Your private recipe session could not be verified.");
         }
@@ -702,6 +756,7 @@ export function RecipesClient() {
     })();
     return () => {
       mounted.current = false;
+      filterScopeRef.current = { requestedDate: filterScopeRef.current.requestedDate };
       copyConfirmationRef.current = null;
       selectionGeneration.current += 1;
       builderGeneration.current += 1;
@@ -712,7 +767,7 @@ export function RecipesClient() {
       privateReadControllers.current.clear();
       profileRefreshController.current?.abort();
     };
-  }, [loadRecipes, requestedDate, signInAgain, setState]);
+  }, [loadRecipes, requestedDate, resetSavedFilter, signInAgain, setState]);
 
   async function openRecipe(recipeId: string, successMessage?: string) {
     const initiatingOwnerUserId = ownerUserId.current;
@@ -1182,6 +1237,37 @@ export function RecipesClient() {
     setMessage(`${date} is confirmed as a local diary day in ${timeZone}. Choose Log when ready.`);
   }
 
+  const filterOwner = ownerUserId.current;
+  const filterScopeReady =
+    mounted.current &&
+    !privateUiClosed.current &&
+    filterOwner !== null &&
+    filterVerifiedScope === filterScope &&
+    savedFilter.scope === filterScope;
+  const loadedListVerified = filterScopeReady && loadedRecipesScope === filterScope;
+  const savedFilterValue = filterScopeReady ? savedFilter.value : "";
+  const normalizedSavedFilter = savedFilterValue.trim().toLowerCase();
+  const visibleRecipes = loadedListVerified
+    ? recipes.filter((recipe) => recipe.name.toLowerCase().includes(normalizedSavedFilter))
+    : [];
+
+  function changeSavedFilter(value: string) {
+    if (
+      !filterScopeReady ||
+      !mounted.current ||
+      privateUiClosed.current ||
+      ownerUserId.current !== filterOwner ||
+      filterScopeRef.current !== filterScope ||
+      savedFilterRef.current !== savedFilter
+    )
+      return;
+    const bounded = value.slice(0, 200);
+    if (bounded === savedFilter.value) return;
+    const next = { scope: filterScope, value: bounded };
+    savedFilterRef.current = next;
+    setSavedFilter(next);
+  }
+
   const recipeAttribution = useMemo(
     () => (selected ? recipeSourceLines(selected) : []),
     [selected],
@@ -1237,8 +1323,43 @@ export function RecipesClient() {
                 Retry recipes
               </button>
             ) : null}
+            <label className="formField" htmlFor="saved-recipe-filter">
+              <span>Filter loaded saved recipes by name</span>
+              <input
+                id="saved-recipe-filter"
+                type="search"
+                maxLength={200}
+                disabled={!filterScopeReady}
+                aria-describedby="saved-recipe-filter-status"
+                value={savedFilterValue}
+                onChange={(event) => changeSavedFilter(event.target.value)}
+              />
+            </label>
+            <button
+              className="buttonQuiet"
+              type="button"
+              disabled={!filterScopeReady || savedFilterValue === ""}
+              onClick={() => changeSavedFilter("")}
+            >
+              Clear filter
+            </button>
+            <p className="fieldHelp" id="saved-recipe-filter-status" aria-live="polite">
+              {loadedListVerified ? (
+                <>
+                  {visibleRecipes.length} of {recipes.length} loaded recipes match.
+                  {normalizedSavedFilter && visibleRecipes.length === 0
+                    ? " No loaded recipes match this name."
+                    : ""}
+                  {nextCursor
+                    ? " More recipes may be available. Load more to include them."
+                    : " All saved recipes are loaded."}
+                </>
+              ) : (
+                "Saved recipes have not been loaded yet."
+              )}
+            </p>
             <ul className="recipeList">
-              {recipes.map((recipe) => (
+              {visibleRecipes.map((recipe) => (
                 <li key={recipe.id}>
                   <button
                     aria-current={selected?.id === recipe.id}
@@ -1255,7 +1376,7 @@ export function RecipesClient() {
                 </li>
               ))}
             </ul>
-            {nextCursor ? (
+            {loadedListVerified && nextCursor ? (
               <button
                 className="buttonSecondary"
                 disabled={state === "loading"}

@@ -139,7 +139,8 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Collapse diary meal groups | ADR 0036 source, independent in-task review, canonical local gates and synthetic Chrome keyboard/narrow/paging/editor/date QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
 | Automatic evidence / independent review | Reuse activity details in a new draft | ADR 0037 source, independent in-task review, canonical local gates and synthetic Chrome exact-field/create/retry/narrow/keyboard QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
 | Automatic evidence / independent review | Hydration amount presets in the Add form | ADR 0038 source, independent in-task review, canonical local gates and synthetic Chrome preset/custom/create/retry/narrow/keyboard QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
-| Next bounded source candidate | Filter the loaded saved-recipe list by name | Review local case-insensitive name filtering on web/mobile, preserve paging and selected recipe/builder/log state, and distinguish no loaded match from an incomplete list; no request, endpoint, storage or mutation change |
+| Automatic evidence / independent review | Filter the loaded saved-recipe list by name | ADR 0039 source, independent in-task review, canonical local gates and synthetic Chrome no-request/paging/draft/keyboard/narrow/expiry QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
+| Next bounded source candidate | Named nutrient rows for native custom foods | Review a named nutrient/state/amount composer using the existing picker, while preserving a lossless manual/existing-row path, exact values and explicit Create/Save; no new endpoint, math, storage or automatic save |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -408,15 +409,46 @@ Base `c10c676aa9eb81244bc94371a8f1bacc699e35b3` CI `34455317539` succeeded
 in progress at the 08:41:10 UTC read-only follow-up. Automatic and release
 acceptance remain separate.
 
-The next bounded source candidate is **Filter the loaded saved-recipe list by
-name** on web/mobile. Existing lists load 50 records at a time and expose Load more;
-their food-search fields do not filter saved recipe names. Review independent
-in-memory trimmed, case-insensitive name matching over only the loaded list,
-preserving original order/identity. Keep loaded counts and Load more visible even
-with no matches, and state when additional records may remain. Keep selection,
-builder/copy/import drafts, nutrition basis, log date/time/meal and nested-recipe
-choices unchanged. Typing or clearing must make no request. No endpoint, retained
-preference or mutation change is planned; this candidate is not implemented.
+The source checkpoint **Filter loaded saved recipes by name** follows
+[ADR 0039](../adr/0039-loaded-saved-recipe-filter.md). Independent in-memory text
+narrows only loaded saved names using trimmed, case-insensitive literal substring
+matching, preserving order/identity and duplicate-name IDs. Loaded/matched counts
+and explicit Load more remain available with no matches; initial verification,
+failed continuation and empty terminal pages retain truthful meaning. Filter/Clear
+make no requests and preserve selected detail, builder/copy/import/review state,
+nutrition/log context, nested choices and frozen operations. Existing private,
+profile, route and lifecycle fences clear/hide replaced query state.
+No API, storage, dependency or mutation contract change is included.
+
+Independent in-task review, 130 web/164 native focused tests, affected types and
+format checks, canonical check/build/licenses and source-validated production
+Next/BFF Chrome QA passed. Fresh web 637 and native 861
+tests plus 10 native runner and 157 root policy
+tests passed; licenses covered 535 packages and
+14 reviewed exceptions. Chrome proved no-request filtering,
+selected/dirty draft preservation, zero-match paging, failure/retry, overlap/dedup,
+empty terminal count, Clear/keyboard/390-pixel controls and expiry. Owned QA
+cleanup completed. Cache reuse/service skips are explicit in readiness;
+physical native, real persistence, assistive technology, independent Claude Code
+and release acceptance remain separate.
+
+Base `bf28347520b213b6e4e0f4c09e725174a5021c1a` CI `34458946024` succeeded
+(updated September 10, 2026 09:14:11 UTC); container `34458946044` remained
+in progress at the 09:24:49 UTC read-only observation. This base evidence does
+not transfer automatic acceptance to the new source checkpoint.
+
+The next bounded source candidate is **Named nutrient rows for native custom
+foods**. Native currently asks for numeric-ID canonical lines; web already offers
+named nutrient/state/amount/reason controls. Review a native composer using the
+existing names/units registry, preserving exact decimal strings, quantified zero,
+trace, explicit unknown reasons, order, duplicate rejection and 1–256 row bounds.
+The existing targetable registry excludes energy and is not the complete nutrient
+registry: retain a lossless manual/existing-row path for energy and non-targetable
+IDs instead of replacing the canonical editor or guessing a nutrient ID. Preserve
+saved versions, stable body/key retries and all other retention/log/privacy work.
+Require explicit Create/Save; do not default a new measured amount to zero.
+Prepare its acceptance card before implementation. No new endpoint, nutrition
+math, dependency, storage, automatic save or device/release claim is planned.
 
 Prepare the external decisions alongside product work, without executing them:
 

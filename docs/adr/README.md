@@ -44,6 +44,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0036](./0036-collapsible-diary-meal-groups.md) | Collapse diary meal content with private in-memory presentation state | Source complete; local validation and synthetic Chrome QA passed; automatic, independent and release acceptance pending |
 | [0037](./0037-reuse-activity-details.md) | Reuse exact saved activity details in a new reviewed Add draft | Source complete; local validation and synthetic Chrome QA passed; automatic, independent and release acceptance pending |
 | [0038](./0038-hydration-amount-presets.md) | Choose an exact amount in the existing hydration Add draft | Source complete; local validation and synthetic Chrome QA passed; automatic, independent and release acceptance pending |
+| [0039](./0039-loaded-saved-recipe-filter.md) | Filter only loaded saved-recipe names while preserving workspace state | Source complete; local validation and synthetic Chrome QA passed; automatic, independent and release acceptance pending |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.
