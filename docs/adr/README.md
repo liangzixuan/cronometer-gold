@@ -51,6 +51,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0043](./0043-loaded-saved-custom-food-filter.md) | Filter loaded saved custom foods by name | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
 | [0044](./0044-copy-saved-custom-food-to-new-draft.md) | Copy a saved custom food to a new draft | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
 | [0045](./0045-native-biometric-reading-units.md) | Show native biometric reading units and preserve edit metric identity | Source/local complete; automatic and release acceptance separate |
+| [0046](./0046-native-goals-nutrient-picker.md) | Find and add every loaded native Goals nutrient with units | Source/local complete; automatic and release acceptance separate |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

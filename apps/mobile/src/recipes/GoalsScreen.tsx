@@ -710,27 +710,56 @@ export function GoalsScreen({
     });
   }
 
+  const pickerDisabled = loading || saving || profileSaving || historicalGoal || referenceLocked;
+  const renderedPickerGeneration = generation.current;
+  function canUseNutrientPicker() {
+    return (
+      !pickerDisabled &&
+      !loadController.current &&
+      !writeController.current &&
+      !profileController.current &&
+      generation.current === renderedPickerGeneration &&
+      dateRef.current === date &&
+      effectiveDateRef.current === builder.effectiveFrom &&
+      profileRevisionRef.current === profileRevision &&
+      profileRequestIdentityMatches(
+        ownerRef.current,
+        epochRef.current,
+        expectedOwnerUserId,
+        sessionEpoch,
+      )
+    );
+  }
+
+  function changeNutrientQuery(value: string) {
+    if (canUseNutrientPicker()) setNutrientQuery(value.slice(0, 100));
+  }
+
   function addTarget(definition: TargetableNutrient) {
-    if (referenceLocked) return;
-    if (
-      builder.targets.some((target) => target.definition.nutrientId === definition.nutrientId) ||
-      builder.targets.length >= 256
-    )
-      return;
-    setBuilder({
-      ...builder,
-      targets: [
-        ...builder.targets,
-        {
-          definition,
-          minimumAmount: "",
-          targetAmount: "",
-          maximumAmount: "",
-          sourceLabel: "",
-          sourceVersion: "",
-          rationale: "",
-        },
-      ],
+    if (!canUseNutrientPicker() || !definitions.includes(definition)) return;
+    setBuilder((current) => {
+      if (
+        current !== builder ||
+        current.reference !== null ||
+        current.targets.some((target) => target.definition.nutrientId === definition.nutrientId) ||
+        current.targets.length >= 256
+      )
+        return current;
+      return {
+        ...current,
+        targets: [
+          ...current.targets,
+          {
+            definition,
+            minimumAmount: "",
+            targetAmount: "",
+            maximumAmount: "",
+            sourceLabel: "",
+            sourceVersion: "",
+            rationale: "",
+          },
+        ],
+      };
     });
   }
 
@@ -864,15 +893,15 @@ export function GoalsScreen({
     setMessage("New goal draft started. Choose its effective date and explicit targets.");
   }
 
-  const available = definitions
-    .filter(
-      (definition) =>
-        !builder.targets.some((target) => target.definition.nutrientId === definition.nutrientId) &&
-        `${definition.name} ${definition.code}`
-          .toLowerCase()
-          .includes(nutrientQuery.trim().toLowerCase()),
-    )
-    .slice(0, 20);
+  const available = definitions.filter(
+    (definition) =>
+      !builder.targets.some((target) => target.definition.nutrientId === definition.nutrientId),
+  );
+  const matchingNutrients = available.filter((definition) =>
+    `${definition.name} ${definition.code}`
+      .toLowerCase()
+      .includes(nutrientQuery.trim().toLowerCase()),
+  );
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
@@ -1310,22 +1339,48 @@ export function GoalsScreen({
           ) : (
             <>
               <Field
-                editable={!historicalGoal}
+                editable={!pickerDisabled}
                 label="Find a nutrient"
                 value={nutrientQuery}
                 maxLength={100}
-                onChange={setNutrientQuery}
+                onChange={changeNutrientQuery}
               />
-              {available.map((definition) => (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: pickerDisabled }}
+                disabled={pickerDisabled}
+                onPress={() => changeNutrientQuery("")}
+                style={styles.refresh}
+              >
+                <Text style={styles.link}>Clear nutrient search</Text>
+              </Pressable>
+              <Text accessibilityLiveRegion="polite" style={styles.help}>
+                {loading
+                  ? "Loading nutrients…"
+                  : `${matchingNutrients.length} matching · ${available.length} available · ${definitions.length} loaded`}
+              </Text>
+              {!loading && definitions.length === 0 ? (
+                <Text style={styles.help}>
+                  No nutrients are loaded. Refresh goals and progress to try again.
+                </Text>
+              ) : !loading && available.length === 0 ? (
+                <Text style={styles.help}>All loaded nutrients are already in this draft.</Text>
+              ) : !loading && matchingNutrients.length === 0 ? (
+                <Text style={styles.help}>No available nutrients match this search.</Text>
+              ) : null}
+              {matchingNutrients.map((definition) => (
                 <Pressable
-                  accessibilityLabel={`Add ${definition.name} target`}
+                  accessibilityLabel={`Add ${definition.name} (${definition.unit}) target`}
                   accessibilityRole="button"
-                  disabled={historicalGoal}
+                  accessibilityState={{ disabled: pickerDisabled || builder.targets.length >= 256 }}
+                  disabled={pickerDisabled || builder.targets.length >= 256}
                   key={definition.nutrientId}
                   onPress={() => addTarget(definition)}
                   style={styles.addRow}
                 >
-                  <Text style={styles.addName}>{definition.name}</Text>
+                  <Text style={styles.addName}>
+                    {definition.name} ({definition.unit})
+                  </Text>
                   <Text style={styles.link}>Add</Text>
                 </Pressable>
               ))}

@@ -733,3 +733,16 @@ acceptance.
   Mocked native/source evidence does not close physical-device, assistive
   technology, concurrent React, real persistence, external reviewer or release
   acceptance.
+
+
+## ADR 0046 native Goals nutrient picker
+
+- Expose all eligible loaded name/code matches within the existing 256 bound,
+  keyed by nutrient ID, with exact name/unit and truthful loaded-only counts.
+  Clear/filter remain local and preserve raw drafts and save identity.
+- Explicit Add/removal retains identity, duplicate/cap protection, historical
+  and reference locks. Retained Add actions cannot replace a later builder.
+- Require focused component/helper behavior, types/format, independent review
+  and frozen canonical gates with fresh native exports. Cached web evidence,
+  device/assistive technology/concurrent React/real persistence, external
+  reviewer, hosted and release acceptance remain separate.

@@ -148,6 +148,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Filter loaded saved custom foods by name | ADR 0043 source, independent in-task review, canonical local gates and synthetic Chrome no-request/details/draft/paging/keyboard/narrow/expiry proof passed; record exact-commit automatic results and preserve device/independent/release acceptance |
 | Automatic evidence / independent review | Copy a saved custom food to a new draft | ADR 0044 source, independent in-task review, canonical local gates and synthetic Chrome copy/draft/Create/retry/keyboard/narrow/expiry proof passed; record exact-commit automatic results and preserve device/independent/release acceptance |
 | Automatic evidence / independent review | Native biometric reading units and identity | ADR 0045 source, independent in-task review, focused native identity/value/body/retry checks, canonical local gates and fresh native exports passed; preserve exact-commit automatic, external reviewer, device and release acceptance |
+| Automatic evidence / independent review | Native Goals nutrient picker | ADR 0046 all-match/unit/count/Clear source, focused component/helper checks, independent in-task review, canonical local gates and fresh native exports passed; automatic, device, external reviewer and release acceptance remain separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1379,12 +1380,30 @@ At the September 10, 2026 20:29:06 UTC read-only observation, delivered base
 20:21:02 UTC); container `34525236213` remained in progress. These base results
 do not transfer to this slice.
 
+### Native Goals nutrient picker: source/local complete
+
+[ADR 0046](../adr/0046-native-goals-nutrient-picker.md) exposes every eligible
+loaded match with name/unit, matching/available/loaded counts and Clear. Search
+retains existing name/code semantics. Explicit Add, raw drafts, historical and
+reference locks and save identity remain intact. No new API or nutrition logic.
+
+Focused component/helper checks, types/format, independent in-task review and
+frozen canonical gates with fresh native exports passed. Unchanged web results
+were cached. Physical native, assistive technology, concurrent React, real
+persistence, external Claude Code, hosted and release acceptance remain separate.
+Exact delivery and automatic observations belong in Windows readiness.
+
+At the September 10, 2026 20:53:05 UTC read-only observation, delivered base
+`b3f83348ed7aff37a789b6ef6a8a69cc431d2ea7` CI `34528132653` succeeded (updated
+20:50:12 UTC); container `34528132698` remained in progress. Base results do not
+transfer to this slice.
+
 ### Next bounded candidate
 
-Prepare one card for native Goals nutrient picker completeness and clarity.
-The existing query searches every eligible loaded definition but silently shows
-only the first 20 matches, without units or shown/total feedback. Web exposes
-every eligible loaded definition with name/unit. Preserve existing name/code
-matching, explicit Add, manual goal drafts, reference locks and save identity;
-do not imply that searching beyond the first 20 is currently impossible.
-No successor implementation has started.
+Prepare a separate Activity Add duration-preset card for web/native: 15, 30 and
+60 minutes through the existing duration edit path, with custom entry retained.
+Both clients currently require typing; the existing contract allows 1–1,440
+whole minutes. Preserve the chosen time, name, optional self-reported calories,
+explicit Add and stable retry identity. Reuse existing actual-component suites;
+no calorie inference, recommendation or automatic logging. No successor
+implementation has started.
