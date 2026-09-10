@@ -165,6 +165,14 @@ identifies the resolved absolute PowerShell executable by SHA-256 and
 classifies its runtime. The executable is rehashed after the proof processes
 before that identity is emitted.
 
+Subprocess failures emit only a fixed caller-stage label and `timeout` or
+`launch-error`; exception text, paths, arguments, input, environment and captured
+output never enter the diagnostic. Discovery and WSL path probes retain their
+five-second bounds, and each synthetic collector process retains its twenty-second
+bound. There is no retry or skipped assertion. A failure must be diagnosed from
+its exact stage; a generic failure or slow runner alone does not authorize changing
+these bounds or any collector acceptance condition.
+
 Run the proof only with PowerShell 7.4 or newer and a policy that accepts the
 exact reviewed script. Never use an execution-policy bypass; if signature
 policy rejects the source, stop and use a signed source or a separately

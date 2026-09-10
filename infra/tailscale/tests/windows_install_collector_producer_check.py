@@ -20,6 +20,17 @@ POWERSHELL_VERSION = re.compile(
     r"\APowerShell (?P<major>[0-9]+)\.(?P<minor>[0-9]+)\.(?P<patch>[0-9]+)\Z"
 )
 PROCESS_TIMEOUT_SECONDS = 20
+PROCESS_STAGES = frozenset(
+    (
+        "powershell-version",
+        "powershell-path",
+        "preinstall-process",
+        "postinstall-process",
+        "negative-invalid-challenge-process",
+        "negative-array-shaped-corpus-kind-process",
+        "negative-oversize-input-process",
+    )
+)
 MAX_FAILURE_STDERR_BYTES = 16384
 GENERIC_FAILURE_MARKER = b"Windows install evidence collection failed closed."
 POWERSHELL_INJECTION_VARIABLES = frozenset(
@@ -53,10 +64,14 @@ def _fail(stage: str) -> NoReturn:
 def _run_process(
     argv: list[str],
     *,
+    stage: str,
     input_bytes: bytes | None,
     environment: dict[str, str],
     timeout_seconds: int,
 ) -> subprocess.CompletedProcess[bytes]:
+    # Only fixed public labels may reach the CLI diagnostic, never process data.
+    if stage not in PROCESS_STAGES:
+        _fail("process-stage")
     try:
         return subprocess.run(
             argv,
@@ -68,8 +83,10 @@ def _run_process(
             timeout=timeout_seconds,
             env=environment,
         )
-    except (OSError, subprocess.TimeoutExpired):
-        _fail("process-boundary")
+    except subprocess.TimeoutExpired:
+        _fail(f"{stage}-timeout")
+    except OSError:
+        _fail(f"{stage}-launch-error")
 
 
 def _sha256_file(path: Path) -> str:
@@ -120,6 +137,7 @@ def _resolve_powershell(
 
     version_result = _run_process(
         [executable, "--version"],
+        stage="powershell-version",
         input_bytes=None,
         environment=environment,
         timeout_seconds=5,
@@ -148,6 +166,7 @@ def _resolve_powershell(
             _fail("powershell-path")
         bridge_result = _run_process(
             ["wslpath", "-w", collector_argument],
+            stage="powershell-path",
             input_bytes=None,
             environment=environment,
             timeout_seconds=5,
@@ -265,6 +284,7 @@ def _run_phase(
             phase,
             "-SyntheticFixture",
         ],
+        stage=f"{phase}-process",
         input_bytes=fixture_input,
         environment=environment,
         timeout_seconds=PROCESS_TIMEOUT_SECONDS,
@@ -306,6 +326,7 @@ def _run_negative_case(
             "preinstall",
             "-SyntheticFixture",
         ],
+        stage=f"negative-{case_name}-process",
         input_bytes=fixture_input,
         environment=environment,
         timeout_seconds=PROCESS_TIMEOUT_SECONDS,

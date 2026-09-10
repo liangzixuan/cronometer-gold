@@ -130,7 +130,7 @@ the detailed milestone boundaries below remain authoritative.
 | Build repair / automatic evidence | M1F: complete the daily hydration correction flow | Web and mobile let a person correct when water was logged through the existing `occurredAt` API, explain profile-local time and ambiguous/invalid times, and refresh the affected day after a move; retain retry/revision/privacy rules and prove the food/water/activity/report journey with synthetic local data |
 | Acceptance follow-up | M3B: print the current nutrition report on web | Print the already loaded coherent report as readable Letter/A4 output, preserving exact evidence and missingness; session closure or invalidation prevents stale private output; repeat-print/direct-Ctrl+P manual checks and exact-commit automatic evidence remain open |
 | Automatic evidence / independent review | M4A: review a pasted ingredient list on web | Local checks and synthetic browser flow passed; `88930fe` and status update `58abb4c` were delivered. Record exact-commit CI/container evidence and preserve independent/release acceptance |
-| Delivery / automatic evidence | M4B: review a pasted ingredient list on mobile | Source and local gates passed; deliver the reviewed checkpoint, record exact-commit automatic results and retain native/reviewer/release acceptance |
+| Now: automatic-check recovery | M4B: review a pasted ingredient list on mobile | Source/local gates passed and checkpoint delivered; diagnose the failed synthetic collector prerequisite, preserve its boundaries and obtain replacement exact-commit automatic evidence |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -202,8 +202,14 @@ Final canonical checks passed: 157 root policy, 75 contracts, 428 web and 635 mo
 (including 10 runner) tests. Type/test graphs passed 17/17 tasks with 11/12 cached;
 build passed 11/11 with 7 cached and fresh iOS/Android exports. Dependency/config
 and license gates passed. Independent in-task findings are fixed; source harnesses
-remain narrower than native device evidence. M4B delivery and its automatic checks
-are pending; no next implementation slice is active before that checkpoint.
+remain narrower than native device evidence. M4B `74bd59e` and standing Git delivery
+instructions `6f5c68d` were pushed. Exact-head CI `34422227933` failed in the synthetic
+Windows collector prerequisite before application checks; database and secret jobs
+passed. The hosted five-second `process-boundary` failure is not reproduced by the
+unchanged local proof. Recovery adds fixed redacted stage/error labels while keeping
+all timeout, identity, canonicalization and negative-case assertions unchanged.
+Replacement automatic evidence is required; container `34422227928` is still in
+progress at discovery. No successor implementation is active during this recovery.
 
 Prepare the external decisions alongside product work, without executing them:
 
