@@ -1,6 +1,6 @@
 import { MAX_PASTED_INGREDIENTS, type PastedIngredientLine } from "@nutrition-tracker/contracts";
 
-import { type FoodSearchHit, isFoodSearchHit } from "./food-search";
+import { type FoodSearchHit, parseBarcodeResult } from "../search/food-search";
 import { isRecipePositiveDecimal, type RecipeIngredientDraft } from "./recipes-goals";
 
 export {
@@ -29,7 +29,7 @@ export function reviewedFoodIngredient(
   quantity: string,
   clientKey: string,
 ): ReviewedFoodIngredient {
-  if (!isFoodSearchHit(food)) throw new TypeError("Select a valid food-search result.");
+  parseBarcodeResult({ data: food });
   if (!isRecipePositiveDecimal(quantity)) {
     throw new RangeError("Enter a positive decimal quantity with at most six decimal places.");
   }

@@ -9,6 +9,7 @@ export * from "./health.js";
 export * from "./hydration.js";
 export * from "./hydration-local-time.js";
 export * from "./profile.js";
+export * from "./recipe-ingredient-lines.js";
 export * from "./recipes.js";
 export * from "./reports.js";
 export * from "./retention.js";

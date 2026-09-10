@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { type FoodSearchHit, parseFoodSearchPage } from "./food-search";
+import { type FoodSearchHit, parseSearchPage } from "../search/food-search";
 import {
   collectReviewedIngredients,
   hasReviewedGramServing,
@@ -8,7 +8,7 @@ import {
 } from "./recipe-ingredient-review";
 
 // Same exact-decimal public source/serving contract exercised by food-search.test.ts.
-const food: FoodSearchHit = parseFoodSearchPage({
+const food: FoodSearchHit = parseSearchPage({
   data: [
     {
       foodId: "101",

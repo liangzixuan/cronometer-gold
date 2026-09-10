@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  AppState,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -19,6 +20,7 @@ import {
   isLocalDate,
   localDateInTimeZone,
   type MealSlot,
+  parseSession,
   quickAddOccurredAt,
 } from "../diary/diary";
 import {
@@ -30,6 +32,7 @@ import {
 } from "../diary/quick-add-outbox";
 import { buildSearchUrl, type FoodSearchHit, parseSearchPage } from "../search/food-search";
 import { palette } from "../theme";
+import { PastedIngredientReview } from "./PastedIngredientReview";
 import {
   isRecipePositiveDecimal,
   mergeRecipePage,
@@ -49,6 +52,7 @@ import {
 interface Props {
   readonly apiBase: URL;
   readonly accessToken: string;
+  readonly ownerUserId: string;
   readonly profileTimeZone: string;
   readonly diaryGroups: readonly DiaryGroup[];
   readonly onUnauthorized: () => Promise<void>;
@@ -205,6 +209,7 @@ function foodIngredientAttribution(
 export function RecipesScreen({
   apiBase,
   accessToken,
+  ownerUserId,
   profileTimeZone,
   diaryGroups,
   onUnauthorized,
@@ -217,146 +222,424 @@ export function RecipesScreen({
   const [recipes, setRecipes] = useState<readonly RecipeSummaryView[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [selected, setSelected] = useState<RecipeView | null>(null);
-  const [builder, setBuilder] = useState<Builder>(emptyBuilder);
+  const [builder, setBuilderState] = useState<Builder>(emptyBuilder);
   const [message, setMessage] = useState("Loading your private recipes…");
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusyState] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [foods, setFoods] = useState<readonly FoodSearchHit[]>([]);
   const [date, setDate] = useState(() => localDateInTimeZone(new Date(), profileTimeZone));
   const [meal, setMeal] = useState<MealSlot>(() => defaultMealForTime());
   const [logKind, setLogKind] = useState<"grams" | "serving">("serving");
   const [logAmount, setLogAmount] = useState("1");
+  const [ready, setReadyState] = useState(false);
+  const [closed, setClosed] = useState(false);
+  const [reviewKey, setReviewKey] = useState(0);
+  const scopeRef = useRef({ ownerUserId, accessToken, apiBase: apiBase.toString() });
+  if (
+    scopeRef.current.ownerUserId !== ownerUserId ||
+    scopeRef.current.accessToken !== accessToken ||
+    scopeRef.current.apiBase !== apiBase.toString()
+  )
+    scopeRef.current = { ownerUserId, accessToken, apiBase: apiBase.toString() };
+  const scope = scopeRef.current;
+  const installedScope = useRef<typeof scope | null>(null);
+  const mounted = useRef(false);
+  const privateClosed = useRef(false);
+  const active = useRef(
+    AppState.currentState !== "background" && AppState.currentState !== "inactive",
+  );
+  const lifecycle = useRef(0);
+  const builderRef = useRef(builder);
+  const builderGeneration = useRef(0);
+  const reviewGeneration = useRef(0);
+  const busyRef = useRef<string | null>(null);
+  const readyRef = useRef(false);
+  const builderRequest = useRef<AbortController | null>(null);
+  const listRequest = useRef<AbortController | null>(null);
   const pending = useRef(new Map<string, StableMutation<ReturnType<typeof requestBody>>>());
   const recipeLogEnqueueInFlight = useRef(false);
   const ownedRecipeLogOperations = useRef(new Set<string>());
   const onLoggedRef = useRef(onLogged);
+  const onUnauthorizedRef = useRef(onUnauthorized);
   onLoggedRef.current = onLogged;
+  onUnauthorizedRef.current = onUnauthorized;
 
-  useEffect(
-    () =>
-      subscribeQuickAddReceipts((receipt) => {
-        if (!ownedRecipeLogOperations.current.delete(receipt.operationId)) return;
-        const entry = receipt.mutation.entry;
-        if (entry?.entryKind !== "recipe") {
-          setMessage(
-            "The queued recipe was accepted, but its diary day could not be read. Refresh the diary before logging it again.",
-          );
-          return;
-        }
-        const loggedDate = entry.localDate;
-        const loggedGroup = diaryGroupLabel(diaryGroups, entry.mealSlot);
-        setMessage(
-          receipt.mutation.replayed
-            ? `The earlier queued ${loggedGroup} recipe log on ${loggedDate} was confirmed safely.`
-            : `The queued recipe was confirmed in ${loggedGroup} on ${loggedDate}.`,
-        );
-        onLoggedRef.current(loggedDate);
-      }),
-    [diaryGroups, subscribeQuickAddReceipts],
+  const setBusy = useCallback((value: string | null) => {
+    busyRef.current = value;
+    setBusyState(value);
+  }, []);
+  const setReady = useCallback((value: boolean) => {
+    readyRef.current = value;
+    setReadyState(value);
+  }, []);
+  const replaceBuilder = useCallback((value: Builder) => {
+    builderRef.current = value;
+    builderGeneration.current += 1;
+    setBuilderState(value);
+  }, []);
+  const invalidateReview = useCallback(() => {
+    reviewGeneration.current += 1;
+    setReviewKey(reviewGeneration.current);
+  }, []);
+  const abortRequests = useCallback(() => {
+    builderRequest.current?.abort();
+    listRequest.current?.abort();
+    builderRequest.current = null;
+    listRequest.current = null;
+  }, []);
+  const scopeIsCurrent = useCallback(
+    (epoch: number) =>
+      mounted.current &&
+      !privateClosed.current &&
+      active.current &&
+      scopeRef.current === scope &&
+      installedScope.current === scope &&
+      lifecycle.current === epoch,
+    [scope],
   );
+  const closeSession = useCallback(() => {
+    if (!mounted.current || privateClosed.current || scopeRef.current !== scope) return;
+    privateClosed.current = true;
+    lifecycle.current += 1;
+    abortRequests();
+    invalidateReview();
+    pending.current.clear();
+    ownedRecipeLogOperations.current.clear();
+    replaceBuilder(emptyBuilder());
+    setRecipes([]);
+    setSelected(null);
+    setNextCursor(null);
+    setQuery("");
+    setFoods([]);
+    setReady(false);
+    setClosed(true);
+    setBusy(null);
+    setLoading(false);
+    setMessage("Closing your private recipe workspace…");
+    void onUnauthorizedRef.current();
+  }, [abortRequests, invalidateReview, replaceBuilder, scope, setBusy, setReady]);
+
+  const verifyOwner = useCallback(
+    async (controller: AbortController, current: () => boolean) => {
+      const response = await fetch(apiUrl(new URL(scope.apiBase), "/v1/auth/me").toString(), {
+        headers: authenticatedHeaders(scope.accessToken),
+        signal: controller.signal,
+      });
+      if (!current()) return false;
+      if (response.status === 401) {
+        closeSession();
+        return false;
+      }
+      if (!response.ok) throw new Error("Your recipe session could not be checked. Try again.");
+      const body = await jsonBody(response);
+      if (!current()) return false;
+      if (parseSession(body).user.id !== scope.ownerUserId) {
+        closeSession();
+        return false;
+      }
+      return true;
+    },
+    [closeSession, scope],
+  );
+
+  useEffect(() => {
+    installedScope.current = scope;
+    mounted.current = true;
+    privateClosed.current = false;
+    lifecycle.current += 1;
+    active.current = AppState.currentState !== "background" && AppState.currentState !== "inactive";
+    abortRequests();
+    invalidateReview();
+    pending.current.clear();
+    ownedRecipeLogOperations.current.clear();
+    replaceBuilder(emptyBuilder());
+    setRecipes([]);
+    setSelected(null);
+    setNextCursor(null);
+    setQuery("");
+    setFoods([]);
+    setBusy(null);
+    setReady(false);
+    setClosed(false);
+    return () => {
+      mounted.current = false;
+      installedScope.current = null;
+      lifecycle.current += 1;
+      abortRequests();
+      reviewGeneration.current += 1;
+      builderRef.current = emptyBuilder();
+      pending.current.clear();
+      ownedRecipeLogOperations.current.clear();
+    };
+  }, [abortRequests, invalidateReview, replaceBuilder, scope, setBusy, setReady]);
 
   const loadRecipes = useCallback(
     async (cursor: string | null = null) => {
+      const epoch = lifecycle.current;
+      if (!scopeIsCurrent(epoch)) return;
+      listRequest.current?.abort();
+      const controller = new AbortController();
+      listRequest.current = controller;
+      const current = () =>
+        scopeIsCurrent(epoch) && !controller.signal.aborted && listRequest.current === controller;
       setLoading(true);
+      setReady(false);
       try {
-        const url = apiUrl(apiBase, "/v1/recipes");
+        const url = apiUrl(new URL(scope.apiBase), "/v1/recipes");
         url.searchParams.set("limit", "50");
         if (cursor !== null) url.searchParams.set("cursor", cursor);
         const response = await fetch(url.toString(), {
-          headers: authenticatedHeaders(accessToken),
+          headers: authenticatedHeaders(scope.accessToken),
+          signal: controller.signal,
         });
-        if (response.status === 401) return onUnauthorized();
+        if (!current()) return;
+        if (response.status === 401) {
+          closeSession();
+          return;
+        }
         const body = await jsonBody(response);
+        if (!current()) return;
         if (!response.ok) throw new Error(responseError(body, "Recipes could not be loaded."));
         const page = parseRecipeCollection(body);
-        setRecipes((current) => {
-          const merged = mergeRecipePage(current, page.data, cursor !== null);
-          setMessage(
-            merged.length
-              ? `${merged.length} recipes loaded${page.nextCursor ? "; more available" : ""}.`
-              : "No recipes yet.",
-          );
-          return merged;
-        });
+        if (!(await verifyOwner(controller, current)) || !current()) return;
+        setRecipes((existing) => mergeRecipePage(existing, page.data, cursor !== null));
         setNextCursor(page.nextCursor);
+        setReady(true);
+        setMessage(
+          page.data.length
+            ? `Recipes loaded${page.nextCursor ? "; more available" : ""}.`
+            : "No recipes yet.",
+        );
       } catch (caught) {
-        setMessage(caught instanceof Error ? caught.message : "Recipes could not be loaded.");
+        if (current())
+          setMessage(caught instanceof Error ? caught.message : "Recipes could not be loaded.");
       } finally {
-        setLoading(false);
+        if (current()) {
+          setLoading(false);
+          listRequest.current = null;
+        }
       }
     },
-    [accessToken, apiBase, onUnauthorized],
+    [closeSession, scope, scopeIsCurrent, setReady, verifyOwner],
   );
 
   useEffect(() => {
     void loadRecipes();
   }, [loadRecipes]);
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (!mounted.current || privateClosed.current || scopeRef.current !== scope) return;
+      if (state !== "active") {
+        active.current = false;
+        lifecycle.current += 1;
+        abortRequests();
+        invalidateReview();
+        setBusy(null);
+        setReady(false);
+        setLoading(false);
+      } else if (!active.current) {
+        active.current = true;
+        void loadRecipes();
+      }
+    });
+    return () => subscription.remove();
+  }, [abortRequests, invalidateReview, loadRecipes, scope, setBusy, setReady]);
+  useEffect(() => {
+    return subscribeQuickAddReceipts((receipt) => {
+      if (
+        !scopeIsCurrent(lifecycle.current) ||
+        !ownedRecipeLogOperations.current.delete(receipt.operationId)
+      )
+        return;
+      const entry = receipt.mutation.entry;
+      if (entry?.entryKind !== "recipe") {
+        setMessage(
+          "The queued recipe was accepted, but its diary day could not be read. Refresh the diary before logging it again.",
+        );
+        return;
+      }
+      const loggedDate = entry.localDate;
+      const loggedGroup = diaryGroupLabel(diaryGroups, entry.mealSlot);
+      setMessage(
+        receipt.mutation.replayed
+          ? `The earlier queued ${loggedGroup} recipe log on ${loggedDate} was confirmed safely.`
+          : `The queued recipe was confirmed in ${loggedGroup} on ${loggedDate}.`,
+      );
+      onLoggedRef.current(loggedDate);
+    });
+  }, [diaryGroups, scopeIsCurrent, subscribeQuickAddReceipts]);
 
-  async function open(recipeId: string) {
-    setBusy(`open:${recipeId}`);
+  const renderEpoch = lifecycle.current;
+  const renderReview = reviewGeneration.current;
+  function canEdit(expectedReview = renderReview) {
+    return (
+      scopeIsCurrent(renderEpoch) &&
+      reviewGeneration.current === expectedReview &&
+      readyRef.current &&
+      busyRef.current === null
+    );
+  }
+  function updateBuilder(change: (current: Builder) => Builder) {
+    if (canEdit()) replaceBuilder(change(builderRef.current));
+  }
+  function confirmReviewedIngredients(ingredients: readonly RecipeIngredientDraft[]): boolean {
+    const current = builderRef.current;
+    if (
+      !canEdit() ||
+      renderReview !== reviewGeneration.current ||
+      current.recipeId !== null ||
+      ingredients.length === 0 ||
+      current.ingredients.length + ingredients.length > 50
+    )
+      return false;
+    const keys = new Set(current.ingredients.map((ingredient) => ingredient.clientKey));
+    for (const ingredient of ingredients) {
+      if (
+        ingredient.kind !== "food" ||
+        ingredient.note !== null ||
+        ingredient.foodProvenance.kind !== "public" ||
+        keys.has(ingredient.clientKey)
+      )
+        return false;
+      const quantity =
+        ingredient.portion.kind === "grams" ? ingredient.portion.grams : ingredient.portion.amount;
+      if (!isRecipePositiveDecimal(quantity)) return false;
+      keys.add(ingredient.clientKey);
+    }
+    invalidateReview();
+    replaceBuilder({ ...current, ingredients: [...current.ingredients, ...ingredients] });
+    setMessage(
+      `${ingredients.length} reviewed ingredients added. Review the final yield before creating the recipe.`,
+    );
+    return true;
+  }
+  function startNewRecipe() {
+    if (
+      !scopeIsCurrent(renderEpoch) ||
+      reviewGeneration.current !== renderReview ||
+      !readyRef.current ||
+      busyRef.current === "log"
+    )
+      return;
+    builderRequest.current?.abort();
+    builderRequest.current = null;
+    invalidateReview();
+    replaceBuilder(emptyBuilder());
+    setSelected(null);
+    setFoods([]);
+    setQuery("");
+    setBusy(null);
+    setLogKind("grams");
+    setLogAmount("1");
+    setMessage("New recipe builder opened.");
+  }
+  function beginBuilderRequest(label: string, expectedReview = renderReview) {
+    if (!canEdit(expectedReview)) return null;
+    const controller = new AbortController();
+    builderRequest.current = controller;
+    const generation = builderGeneration.current;
+    const current = () =>
+      scopeIsCurrent(renderEpoch) &&
+      builderGeneration.current === generation &&
+      !controller.signal.aborted &&
+      builderRequest.current === controller;
+    setBusy(label);
+    return { controller, current };
+  }
+  async function open(recipeId: string, successMessage?: string, expectedReview = renderReview) {
+    const request = beginBuilderRequest(`open:${recipeId}`, expectedReview);
+    if (!request) return;
+    const { controller, current } = request;
+    invalidateReview();
     try {
       const response = await fetch(apiUrl(apiBase, `/v1/recipes/${recipeId}`).toString(), {
         headers: authenticatedHeaders(accessToken),
+        signal: controller.signal,
       });
-      if (response.status === 401) return onUnauthorized();
+      if (!current()) return;
+      if (response.status === 401) {
+        closeSession();
+        return;
+      }
       const body = await jsonBody(response);
+      if (!current()) return;
       if (!response.ok) throw new Error(responseError(body, "The recipe could not be loaded."));
       const recipe = parseRecipeResponse(body);
+      if (!(await verifyOwner(controller, current)) || !current()) return;
       setSelected(recipe);
-      setBuilder(mobileBuilderFromRecipe(recipe));
       setLogKind(recipeLogKindFor(recipe));
-      setMessage(`Recipe version ${recipe.versionNumber} loaded.`);
-    } catch (caught) {
-      setMessage(caught instanceof Error ? caught.message : "The recipe could not be loaded.");
-    } finally {
+      setMessage(successMessage ?? `Recipe version ${recipe.versionNumber} loaded.`);
       setBusy(null);
+      builderRequest.current = null;
+      replaceBuilder(mobileBuilderFromRecipe(recipe));
+    } catch (caught) {
+      if (current())
+        setMessage(caught instanceof Error ? caught.message : "The recipe could not be loaded.");
+    } finally {
+      if (current()) {
+        setBusy(null);
+        builderRequest.current = null;
+      }
     }
   }
-
   async function search() {
-    setBusy("search");
+    const request = beginBuilderRequest("search");
+    if (!request) return;
+    const { controller, current } = request;
     try {
       const response = await fetch(buildSearchUrl(apiBase, query, "all").toString(), {
         headers: { accept: "application/json" },
+        signal: controller.signal,
       });
+      if (!current()) return;
       const body = await jsonBody(response);
+      if (!current()) return;
       if (!response.ok) throw new Error("Food search is unavailable.");
-      setFoods(parseSearchPage(body).data);
+      const page = parseSearchPage(body);
+      if (!(await verifyOwner(controller, current)) || !current()) return;
+      setFoods(page.data);
     } catch (caught) {
-      setFoods([]);
-      setMessage(caught instanceof Error ? caught.message : "Food search is unavailable.");
+      if (current()) {
+        setFoods([]);
+        setMessage(caught instanceof Error ? caught.message : "Food search is unavailable.");
+      }
     } finally {
-      setBusy(null);
+      if (current()) {
+        setBusy(null);
+        builderRequest.current = null;
+      }
     }
   }
-
   function addFood(food: FoodSearchHit, mode: "grams" | "serving") {
-    if (builder.ingredients.length >= 50) {
+    if (!canEdit()) return;
+    const current = builderRef.current;
+    if (current.ingredients.length >= 50) {
       setMessage("A recipe supports at most 50 ingredients.");
       return;
     }
     try {
-      setBuilder({
-        ...builder,
-        ingredients: [...builder.ingredients, mobileFoodIngredient(food, mode)],
+      replaceBuilder({
+        ...current,
+        ingredients: [...current.ingredients, mobileFoodIngredient(food, mode)],
       });
       setMessage(`${food.name} added.`);
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "The food could not be added.");
     }
   }
-
   function addNested(recipe: RecipeSummaryView) {
-    if (recipe.id === builder.recipeId) {
+    if (!canEdit()) return;
+    const current = builderRef.current;
+    if (recipe.id === current.recipeId) {
       setMessage("A recipe cannot contain itself.");
       return;
     }
-    if (builder.ingredients.length >= 50) return;
-    setBuilder({
-      ...builder,
+    if (current.ingredients.length >= 50) return;
+    replaceBuilder({
+      ...current,
       ingredients: [
-        ...builder.ingredients,
+        ...current.ingredients,
         {
           kind: "recipe",
           clientKey: newOperationId(),
@@ -369,12 +652,11 @@ export function RecipesScreen({
       ],
     });
   }
-
-  function updateQuantity(index: number, quantity: string) {
-    setBuilder({
-      ...builder,
-      ingredients: builder.ingredients.map((ingredient, candidate) =>
-        candidate !== index
+  function updateQuantity(clientKey: string, quantity: string) {
+    updateBuilder((current) => ({
+      ...current,
+      ingredients: current.ingredients.map((ingredient) =>
+        ingredient.clientKey !== clientKey
           ? ingredient
           : ingredient.kind === "recipe"
             ? { ...ingredient, grams: quantity }
@@ -386,73 +668,105 @@ export function RecipesScreen({
                     : { ...ingredient.portion, grams: quantity },
               },
       ),
-    });
+    }));
   }
-
-  function updateNote(index: number, note: string) {
-    setBuilder({
-      ...builder,
-      ingredients: builder.ingredients.map((ingredient, candidate) =>
-        candidate === index ? { ...ingredient, note: note || null } : ingredient,
+  function updateNote(clientKey: string, note: string) {
+    updateBuilder((current) => ({
+      ...current,
+      ingredients: current.ingredients.map((ingredient) =>
+        ingredient.clientKey === clientKey ? { ...ingredient, note: note || null } : ingredient,
       ),
-    });
+    }));
   }
-
   async function save() {
+    if (!canEdit()) return;
+    const snapshot = builderRef.current;
     let body: ReturnType<typeof requestBody>;
     try {
-      body = requestBody(builder);
+      body = requestBody(snapshot);
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "Review the recipe.");
       return;
     }
-    const key = `${builder.recipeId ?? "create"}:${builder.revision ?? "new"}:${JSON.stringify(body)}`;
+    const key = `${snapshot.recipeId ?? "create"}:${snapshot.revision ?? "new"}:${JSON.stringify(body)}`;
     const operation = prepareStableMutation(pending.current, key, () => body, newOperationId);
     pending.current.set(key, operation);
-    setBusy("save");
+    const request = beginBuilderRequest("save");
+    if (!request) return;
+    const { controller, current } = request;
+    invalidateReview();
     try {
-      const path = builder.recipeId ? `/v1/recipes/${builder.recipeId}/revisions` : "/v1/recipes";
+      if (!(await verifyOwner(controller, current)) || !current()) return;
+      const path = snapshot.recipeId ? `/v1/recipes/${snapshot.recipeId}/revisions` : "/v1/recipes";
       const response = await fetch(apiUrl(apiBase, path).toString(), {
         method: "POST",
+        signal: controller.signal,
         headers: authenticatedHeaders(accessToken, {
           "content-type": "application/json",
           "idempotency-key": operation.operationId,
-          ...(builder.revision ? { "if-match": `"${builder.revision}"` } : {}),
+          ...(snapshot.revision ? { "if-match": `"${snapshot.revision}"` } : {}),
         }),
         body: JSON.stringify(operation.body),
       });
-      if (response.status === 401) return onUnauthorized();
+      if (!current()) return;
+      if (response.status === 401) {
+        closeSession();
+        return;
+      }
       const responseBody = await jsonBody(response);
+      if (!current()) return;
       if (response.status === 412) {
         pending.current.delete(key);
-        if (builder.recipeId) await open(builder.recipeId);
-        setMessage("The recipe changed elsewhere. Fresh values were loaded.");
+        setBusy(null);
+        builderRequest.current = null;
+        if (snapshot.recipeId)
+          await open(
+            snapshot.recipeId,
+            "The recipe changed elsewhere. Fresh values were loaded.",
+            reviewGeneration.current,
+          );
         return;
       }
       if (!response.ok)
         throw new Error(responseError(responseBody, "The recipe could not be saved."));
       const mutation = parseRecipeMutation(responseBody);
+      if (!(await verifyOwner(controller, current)) || !current()) return;
       pending.current.delete(key);
       setSelected(mutation.recipe);
-      setBuilder(mobileBuilderFromRecipe(mutation.recipe));
       setLogKind(recipeLogKindFor(mutation.recipe));
       setLogAmount("1");
-      await loadRecipes();
-      setMessage(
-        mutation.replayed
-          ? "The earlier save was confirmed safely."
-          : `Recipe version ${mutation.recipe.versionNumber} published.`,
-      );
-    } catch (caught) {
-      setMessage(
-        `${caught instanceof Error ? caught.message : "The recipe could not be saved."} Press Save again to retry safely.`,
-      );
-    } finally {
       setBusy(null);
+      builderRequest.current = null;
+      replaceBuilder(mobileBuilderFromRecipe(mutation.recipe));
+      const installedGeneration = builderGeneration.current;
+      await loadRecipes();
+      if (scopeIsCurrent(renderEpoch) && builderGeneration.current === installedGeneration)
+        setMessage(
+          mutation.replayed
+            ? "The earlier save was confirmed safely."
+            : `Recipe version ${mutation.recipe.versionNumber} published.`,
+        );
+    } catch (caught) {
+      if (current())
+        setMessage(
+          `${caught instanceof Error ? caught.message : "The recipe could not be saved."} Press Save again to retry safely.`,
+        );
+    } finally {
+      if (current()) {
+        setBusy(null);
+        builderRequest.current = null;
+      }
     }
   }
 
   async function log() {
+    if (!canEdit()) return;
+    const epoch = lifecycle.current;
+    const canRegisterReceipt = () =>
+      mounted.current &&
+      !privateClosed.current &&
+      scopeRef.current === scope &&
+      installedScope.current === scope;
     if (!selected || !isLocalDate(date) || !isRecipePositiveDecimal(logAmount)) {
       setMessage("Choose a real local date and positive amount.");
       return;
@@ -505,31 +819,39 @@ export function RecipesScreen({
         localDate: date,
         occurredAt,
       });
-      ownedRecipeLogOperations.current.add(item.operationId);
-      setMessage(
-        `${selected.name} is queued securely for ${diaryGroupLabel(diaryGroups, meal)} on ${date}. It is not included in diary totals until the server confirms it.`,
-      );
+      if (canRegisterReceipt()) ownedRecipeLogOperations.current.add(item.operationId);
+      if (scopeIsCurrent(epoch)) {
+        setMessage(
+          `${selected.name} is queued securely for ${diaryGroupLabel(diaryGroups, meal)} on ${date}. It is not included in diary totals until the server confirms it.`,
+        );
+      }
+      // Release this operation's registration hold even when its screen has closed.
+      // The captured controller owns foreground, credential and owner drain fences.
       void quickAddOutboxController.requestDrain(item.operationId);
     } catch (caught) {
       if (caught instanceof QuickAddEnqueueAmbiguousError) {
-        ownedRecipeLogOperations.current.add(caught.operationId);
+        if (canRegisterReceipt()) ownedRecipeLogOperations.current.add(caught.operationId);
+        if (scopeIsCurrent(epoch)) {
+          setMessage(
+            "Secure storage could not confirm whether the recipe was queued. Do not press Log again until the queue status recovers.",
+          );
+        }
         void quickAddOutboxController.requestDrain(caught.operationId);
-        setMessage(
-          "Secure storage could not confirm whether the recipe was queued. Do not press Log again until the queue status recovers.",
-        );
-      } else {
+      } else if (scopeIsCurrent(epoch)) {
         setMessage(
           "The recipe was not queued. Refresh this screen and try again after the diary session is current.",
         );
       }
     } finally {
       recipeLogEnqueueInFlight.current = false;
-      setBusy(null);
+      if (scopeIsCurrent(epoch)) setBusy(null);
     }
   }
 
+  const scopeVisible = installedScope.current === scope && !closed;
+  const builderDisabled = busy !== null || !ready || !scopeVisible;
   const recipeLogUnavailable =
-    busy !== null ||
+    builderDisabled ||
     quickAddOutboxState.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS ||
     quickAddOutboxState.status === "closed" ||
     quickAddOutboxState.status === "owner_mismatch" ||
@@ -553,45 +875,46 @@ export function RecipesScreen({
           Recipes
         </Text>
         <Text accessibilityLiveRegion="polite" style={styles.status}>
-          {message}
+          {scopeVisible ? message : "Loading your private recipes…"}
         </Text>
         {loading ? <ActivityIndicator color={palette.forest} /> : null}
         <View style={styles.row}>
           <Pressable
             accessibilityRole="button"
-            onPress={() => {
-              setSelected(null);
-              setBuilder(emptyBuilder());
-              setLogKind("grams");
-              setLogAmount("1");
-            }}
+            disabled={!ready || !scopeVisible || busy === "log"}
+            onPress={startNewRecipe}
             style={styles.primary}
           >
             <Text style={styles.primaryText}>New recipe</Text>
           </Pressable>
           <Pressable
             accessibilityRole="button"
+            disabled={loading || !scopeVisible}
             onPress={() => void loadRecipes()}
             style={styles.secondary}
           >
             <Text style={styles.secondaryText}>Refresh</Text>
           </Pressable>
         </View>
-        {recipes.map((recipe) => (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityState={{ selected: selected?.id === recipe.id }}
-            key={recipe.id}
-            onPress={() => void open(recipe.id)}
-            style={styles.recipeCard}
-          >
-            <Text style={styles.cardTitle}>{recipe.name}</Text>
-            <Text style={styles.meta}>
-              v{recipe.versionNumber} · {recipe.finalYieldGrams} g · {recipe.warningCount} warnings
-            </Text>
-          </Pressable>
-        ))}
-        {nextCursor ? (
+        {scopeVisible
+          ? recipes.map((recipe) => (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ selected: selected?.id === recipe.id }}
+                key={recipe.id}
+                disabled={builderDisabled}
+                onPress={() => void open(recipe.id)}
+                style={styles.recipeCard}
+              >
+                <Text style={styles.cardTitle}>{recipe.name}</Text>
+                <Text style={styles.meta}>
+                  v{recipe.versionNumber} · {recipe.finalYieldGrams} g · {recipe.warningCount}{" "}
+                  warnings
+                </Text>
+              </Pressable>
+            ))
+          : null}
+        {scopeVisible && nextCursor ? (
           <Pressable
             accessibilityRole="button"
             disabled={loading}
@@ -601,181 +924,234 @@ export function RecipesScreen({
             <Text style={styles.secondaryText}>{loading ? "Loading…" : "Load more recipes"}</Text>
           </Pressable>
         ) : null}
-        <View style={styles.panel}>
-          <Text accessibilityRole="header" style={styles.sectionTitle}>
-            {builder.recipeId ? `Revise ${builder.name}` : "Recipe builder"}
-          </Text>
-          <Field
-            label="Recipe name"
-            maxLength={200}
-            value={builder.name}
-            onChange={(name) => setBuilder({ ...builder, name })}
-          />
-          <Field
-            label="Final yield grams"
-            maxLength={19}
-            value={builder.yieldGrams}
-            onChange={(yieldGrams) => setBuilder({ ...builder, yieldGrams })}
-            numeric
-          />
-          <View style={styles.row}>
-            <Chip
-              active={builder.yieldSource === "measured"}
-              label="Measured yield"
-              onPress={() => setBuilder({ ...builder, yieldSource: "measured" })}
-            />
-            <Chip
-              active={builder.yieldSource === "estimated"}
-              label="Estimated yield"
-              onPress={() => setBuilder({ ...builder, yieldSource: "estimated" })}
-            />
-          </View>
-          <Field
-            label="Serving count (optional)"
-            maxLength={19}
-            value={builder.servingCount}
-            onChange={(servingCount) => setBuilder({ ...builder, servingCount })}
-            numeric
-          />
-          <Field
-            label="Serving label"
-            maxLength={100}
-            value={builder.servingLabel}
-            onChange={(servingLabel) => setBuilder({ ...builder, servingLabel })}
-          />
-          <Field
-            label="Description"
-            maxLength={2_000}
-            value={builder.description}
-            onChange={(description) => setBuilder({ ...builder, description })}
-            multiline
-          />
-          <Field
-            label="Instructions"
-            maxLength={10_000}
-            value={builder.instructions}
-            onChange={(instructions) => setBuilder({ ...builder, instructions })}
-            multiline
-          />
-          <Text style={styles.sectionTitle}>Ingredients ({builder.ingredients.length}/50)</Text>
-          {builder.ingredients.map((ingredient, index) => {
-            const quantity =
-              ingredient.kind === "recipe"
-                ? ingredient.grams
-                : ingredient.portion.kind === "serving"
-                  ? ingredient.portion.amount
-                  : ingredient.portion.grams;
-            const unit =
-              ingredient.kind === "recipe" || ingredient.portion.kind === "grams"
-                ? "grams"
-                : ingredient.portion.servingLabel;
-            return (
-              <View key={ingredient.clientKey} style={styles.ingredient}>
-                <Text
-                  accessibilityLabel={`${ingredient.name}, ${quantity} ${unit}. ${ingredient.kind === "recipe" ? `Pinned recipe revision ${ingredient.recipeVersionId}` : foodIngredientAttribution(ingredient)}.`}
-                  style={styles.cardTitle}
-                >
-                  {ingredient.name}
-                </Text>
-                <Text style={styles.meta}>
-                  {ingredient.kind === "recipe"
-                    ? `Pinned revision ${ingredient.recipeVersionId}`
-                    : foodIngredientAttribution(ingredient)}
-                </Text>
-                <Field
-                  label={`Quantity in ${unit}`}
-                  maxLength={19}
-                  value={quantity}
-                  onChange={(value) => updateQuantity(index, value)}
-                  numeric
-                />
-                <Field
-                  label={`${ingredient.name} note (optional)`}
-                  maxLength={500}
-                  value={ingredient.note ?? ""}
-                  onChange={(value) => updateNote(index, value)}
-                />
-                <Pressable
-                  accessibilityLabel={`Remove ${ingredient.name}`}
-                  accessibilityRole="button"
-                  onPress={() =>
-                    setBuilder({
-                      ...builder,
-                      ingredients: builder.ingredients.filter(
-                        (_, candidate) => candidate !== index,
-                      ),
-                    })
-                  }
-                >
-                  <Text style={styles.danger}>Remove</Text>
-                </Pressable>
-              </View>
-            );
-          })}
-          <Field label="Search foods" maxLength={128} value={query} onChange={setQuery} />
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => void search()}
-            style={styles.secondary}
-          >
-            <Text style={styles.secondaryText}>
-              {busy === "search" ? "Searching…" : "Search foods"}
+        {scopeVisible ? (
+          <View style={styles.panel}>
+            <Text accessibilityRole="header" style={styles.sectionTitle}>
+              {builder.recipeId ? `Revise ${builder.name}` : "Recipe builder"}
             </Text>
-          </Pressable>
-          {foods.map((food) => (
-            <View key={food.foodVersionId} style={styles.ingredient}>
-              <Text style={styles.cardTitle}>{food.name}</Text>
-              <Text style={styles.meta}>
-                {food.source.attributionText} · {food.source.licenseExpression}
+            <Field
+              disabled={builderDisabled}
+              label="Recipe name"
+              maxLength={200}
+              value={builder.name}
+              onChange={(name) => updateBuilder((current) => ({ ...current, name }))}
+            />
+            <Field
+              disabled={builderDisabled}
+              label="Final yield grams"
+              maxLength={19}
+              value={builder.yieldGrams}
+              onChange={(yieldGrams) => updateBuilder((current) => ({ ...current, yieldGrams }))}
+              numeric
+            />
+            <View style={styles.row}>
+              <Chip
+                disabled={builderDisabled}
+                active={builder.yieldSource === "measured"}
+                label="Measured yield"
+                onPress={() =>
+                  updateBuilder((current) => ({ ...current, yieldSource: "measured" }))
+                }
+              />
+              <Chip
+                disabled={builderDisabled}
+                active={builder.yieldSource === "estimated"}
+                label="Estimated yield"
+                onPress={() =>
+                  updateBuilder((current) => ({ ...current, yieldSource: "estimated" }))
+                }
+              />
+            </View>
+            <Field
+              disabled={builderDisabled}
+              label="Serving count (optional)"
+              maxLength={19}
+              value={builder.servingCount}
+              onChange={(servingCount) =>
+                updateBuilder((current) => ({ ...current, servingCount }))
+              }
+              numeric
+            />
+            <Field
+              disabled={builderDisabled}
+              label="Serving label"
+              maxLength={100}
+              value={builder.servingLabel}
+              onChange={(servingLabel) =>
+                updateBuilder((current) => ({ ...current, servingLabel }))
+              }
+            />
+            <Field
+              disabled={builderDisabled}
+              label="Description"
+              maxLength={2_000}
+              value={builder.description}
+              onChange={(description) => updateBuilder((current) => ({ ...current, description }))}
+              multiline
+            />
+            <Field
+              disabled={builderDisabled}
+              label="Instructions"
+              maxLength={10_000}
+              value={builder.instructions}
+              onChange={(instructions) =>
+                updateBuilder((current) => ({ ...current, instructions }))
+              }
+              multiline
+            />
+            <Text style={styles.sectionTitle}>Ingredients ({builder.ingredients.length}/50)</Text>
+            {builder.ingredients.map((ingredient) => {
+              const quantity =
+                ingredient.kind === "recipe"
+                  ? ingredient.grams
+                  : ingredient.portion.kind === "serving"
+                    ? ingredient.portion.amount
+                    : ingredient.portion.grams;
+              const unit =
+                ingredient.kind === "recipe" || ingredient.portion.kind === "grams"
+                  ? "grams"
+                  : ingredient.portion.servingLabel;
+              return (
+                <View key={ingredient.clientKey} style={styles.ingredient}>
+                  <Text
+                    accessibilityLabel={`${ingredient.name}, ${quantity} ${unit}. ${ingredient.kind === "recipe" ? `Pinned recipe revision ${ingredient.recipeVersionId}` : foodIngredientAttribution(ingredient)}.`}
+                    style={styles.cardTitle}
+                  >
+                    {ingredient.name}
+                  </Text>
+                  <Text style={styles.meta}>
+                    {ingredient.kind === "recipe"
+                      ? `Pinned revision ${ingredient.recipeVersionId}`
+                      : foodIngredientAttribution(ingredient)}
+                  </Text>
+                  <Field
+                    disabled={builderDisabled}
+                    label={`Quantity in ${unit}`}
+                    maxLength={19}
+                    value={quantity}
+                    onChange={(value) => updateQuantity(ingredient.clientKey, value)}
+                    numeric
+                  />
+                  <Field
+                    disabled={builderDisabled}
+                    label={`${ingredient.name} note (optional)`}
+                    maxLength={500}
+                    value={ingredient.note ?? ""}
+                    onChange={(value) => updateNote(ingredient.clientKey, value)}
+                  />
+                  <Pressable
+                    disabled={builderDisabled}
+                    accessibilityLabel={`Remove ${ingredient.name}`}
+                    accessibilityRole="button"
+                    onPress={() =>
+                      updateBuilder((current) => ({
+                        ...current,
+                        ingredients: current.ingredients.filter(
+                          (candidate) => candidate.clientKey !== ingredient.clientKey,
+                        ),
+                      }))
+                    }
+                  >
+                    <Text style={styles.danger}>Remove</Text>
+                  </Pressable>
+                </View>
+              );
+            })}
+            {builder.recipeId === null && !closed ? (
+              <PastedIngredientReview
+                key={reviewKey}
+                apiBase={apiBase}
+                accessToken={accessToken}
+                ownerUserId={ownerUserId}
+                disabled={builderDisabled}
+                remainingCapacity={50 - builder.ingredients.length}
+                onConfirm={confirmReviewedIngredients}
+                onSessionClosed={() => {
+                  if (scopeIsCurrent(renderEpoch) && reviewGeneration.current === renderReview)
+                    closeSession();
+                }}
+              />
+            ) : null}
+            <Field
+              label="Search foods"
+              disabled={builderDisabled}
+              maxLength={128}
+              value={query}
+              onChange={(value) => {
+                if (canEdit()) setQuery(value);
+              }}
+            />
+            <Pressable
+              accessibilityRole="button"
+              disabled={builderDisabled}
+              onPress={() => void search()}
+              style={styles.secondary}
+            >
+              <Text style={styles.secondaryText}>
+                {busy === "search" ? "Searching…" : "Search foods"}
               </Text>
-              <View style={styles.row}>
-                {food.defaultServing?.gramWeight ? (
+            </Pressable>
+            {foods.map((food) => (
+              <View key={food.foodVersionId} style={styles.ingredient}>
+                <Text style={styles.cardTitle}>{food.name}</Text>
+                <Text style={styles.meta}>
+                  {food.source.attributionText} · {food.source.licenseExpression}
+                </Text>
+                <View style={styles.row}>
+                  {food.defaultServing?.gramWeight ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={builderDisabled}
+                      onPress={() => addFood(food, "serving")}
+                      style={styles.secondary}
+                    >
+                      <Text style={styles.secondaryText}>Add {food.defaultServing.label}</Text>
+                    </Pressable>
+                  ) : null}
                   <Pressable
                     accessibilityRole="button"
-                    onPress={() => addFood(food, "serving")}
+                    disabled={builderDisabled}
+                    onPress={() => addFood(food, "grams")}
                     style={styles.secondary}
                   >
-                    <Text style={styles.secondaryText}>Add {food.defaultServing.label}</Text>
+                    <Text style={styles.secondaryText}>Add 100 g</Text>
                   </Pressable>
-                ) : null}
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => addFood(food, "grams")}
-                  style={styles.secondary}
-                >
-                  <Text style={styles.secondaryText}>Add 100 g</Text>
-                </Pressable>
-              </View>
-            </View>
-          ))}
-          {recipes
-            .filter((recipe) => recipe.id !== builder.recipeId)
-            .map((recipe) => (
-              <View key={`nested:${recipe.id}`} style={styles.ingredient}>
-                <Text style={styles.cardTitle}>
-                  {recipe.name} v{recipe.versionNumber}
-                </Text>
-                <Pressable accessibilityRole="button" onPress={() => addNested(recipe)}>
-                  <Text style={styles.link}>Pin 100 g nested revision</Text>
-                </Pressable>
+                </View>
               </View>
             ))}
-          <Pressable
-            accessibilityRole="button"
-            disabled={busy === "save"}
-            onPress={() => void save()}
-            style={styles.primary}
-          >
-            <Text style={styles.primaryText}>
-              {busy === "save"
-                ? "Saving…"
-                : builder.recipeId
-                  ? "Publish revision"
-                  : "Create recipe"}
-            </Text>
-          </Pressable>
-        </View>
-        {selected ? (
+            {recipes
+              .filter((recipe) => recipe.id !== builder.recipeId)
+              .map((recipe) => (
+                <View key={`nested:${recipe.id}`} style={styles.ingredient}>
+                  <Text style={styles.cardTitle}>
+                    {recipe.name} v{recipe.versionNumber}
+                  </Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={builderDisabled}
+                    onPress={() => addNested(recipe)}
+                  >
+                    <Text style={styles.link}>Pin 100 g nested revision</Text>
+                  </Pressable>
+                </View>
+              ))}
+            <Pressable
+              accessibilityRole="button"
+              disabled={builderDisabled}
+              onPress={() => void save()}
+              style={styles.primary}
+            >
+              <Text style={styles.primaryText}>
+                {busy === "save"
+                  ? "Saving…"
+                  : builder.recipeId
+                    ? "Publish revision"
+                    : "Create recipe"}
+              </Text>
+            </Pressable>
+          </View>
+        ) : null}
+        {scopeVisible && selected ? (
           <View style={styles.panel}>
             <Text accessibilityRole="header" style={styles.sectionTitle}>
               Assumptions & warnings
@@ -809,12 +1185,14 @@ export function RecipesScreen({
             <Text style={styles.sectionTitle}>Log exact v{selected.versionNumber}</Text>
             <View style={styles.row}>
               <Chip
+                disabled={builderDisabled}
                 active={logKind === "grams"}
                 label="Grams"
                 onPress={() => setLogKind("grams")}
               />
               {selected.servingCount ? (
                 <Chip
+                  disabled={builderDisabled}
                   active={logKind === "serving"}
                   label={selected.servingLabel ?? "Serving"}
                   onPress={() => setLogKind("serving")}
@@ -822,16 +1200,24 @@ export function RecipesScreen({
               ) : null}
             </View>
             <Field
+              disabled={builderDisabled}
               label="Amount"
               maxLength={19}
               value={logAmount}
               onChange={setLogAmount}
               numeric
             />
-            <Field label="Local date" maxLength={10} value={date} onChange={setDate} />
+            <Field
+              disabled={builderDisabled}
+              label="Local date"
+              maxLength={10}
+              value={date}
+              onChange={setDate}
+            />
             <View style={styles.row}>
               {diaryGroups.map(({ mealSlot: slot, label }) => (
                 <Chip
+                  disabled={builderDisabled}
                   active={meal === slot}
                   key={slot}
                   label={label}
@@ -879,6 +1265,7 @@ function Field({
   numeric = false,
   multiline = false,
   maxLength,
+  disabled = false,
 }: {
   readonly label: string;
   readonly value: string;
@@ -886,12 +1273,14 @@ function Field({
   readonly numeric?: boolean;
   readonly multiline?: boolean;
   readonly maxLength: number;
+  readonly disabled?: boolean;
 }) {
   return (
     <View>
       <Text style={styles.label}>{label}</Text>
       <TextInput
         accessibilityLabel={label}
+        editable={!disabled}
         keyboardType={numeric ? "decimal-pad" : "default"}
         maxLength={maxLength}
         multiline={multiline}
@@ -907,15 +1296,18 @@ function Chip({
   active,
   label,
   onPress,
+  disabled = false,
 }: {
   readonly active: boolean;
   readonly label: string;
   readonly onPress: () => void;
+  readonly disabled?: boolean;
 }) {
   return (
     <Pressable
       accessibilityRole="radio"
-      accessibilityState={{ checked: active }}
+      accessibilityState={{ checked: active, disabled }}
+      disabled={disabled}
       onPress={onPress}
       style={[styles.chip, active && styles.chipActive]}
     >

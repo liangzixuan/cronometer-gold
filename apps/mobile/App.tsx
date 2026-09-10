@@ -311,6 +311,7 @@ function RecipesRoute(props: AuthenticatedAppProps) {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   return (
     <RecipesScreen
+      ownerUserId={props.session.user.id}
       accessToken={props.accessToken}
       apiBase={props.apiBase}
       onGoals={() => navigation.navigate(authenticatedRoutes.goals)}

@@ -415,6 +415,13 @@ acceptance.
   session closure, disabled state, unmount and effect replay exercised. Browser
   review covers keyboard use, narrow layouts, failure/retry and final transfer.
   Existing yield, provenance, idempotency and release gates remain required.
+- M4B native pasted-ingredient review under ADR 0030 preserves M4A's shared parser
+  bounds and explicit quantity/confirmation semantics. Mobile owner, credential,
+  API destination, request and builder generation fences reject stale async work;
+  raw review clears on background/inactive, cancel, transfer, closure and unmount.
+  Retryable authorization/receipt failures preserve the stable recipe save body/key.
+  Source harnesses and Expo exports do not replace native keyboard/screen-reader,
+  signed-device, hosted or independent release acceptance.
 - The optional M1B-R reference-template candidate remains disabled for
   controlled-beta and commercial users until a named registered dietitian or
   qualified clinical-science owner approves its exact values, canonical units,
