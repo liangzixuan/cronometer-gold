@@ -655,3 +655,22 @@ acceptance.
   outputs and canonical gates, plus synthetic web/BFF Chrome keyboard/390-pixel/
   exact-state/paging/draft/expiry proof. Keep real persistence, physical native,
   assistive technology, external Claude Code, hosted and release gates separate.
+
+
+## ADR 0042 native Health trend nutrient selection
+
+- Every installed targetable ID up to 256 is reachable by local name filtering;
+  retain source order, names/units, selected identity and truthful availability.
+  Filter/Clear are no-request and independent of selection, dates and results.
+- Different selections cannot relabel prior results. Bind explicit paired trend
+  reads and response IDs/units/range/time zone to current private scope, installed
+  metadata, input generation and foreground lifecycle; obsolete callbacks, reads,
+  JSON, unauthorized responses and finally blocks cannot affect later work.
+- Preserve exact existing nutrition/missingness labels, unrelated drafts,
+  saved-food disclosures, operations/body/key and shared mutation protocols.
+  Empty verified nutrients retain valid biometric-only loading; failed/replaced
+  metadata cannot masquerade as current choices.
+- Require actual native component regressions, affected types/format, independent
+  review, canonical check/build/licenses and fresh native exports. Mocks/exports
+  are not concurrent React, physical device, assistive technology, real service,
+  external Claude Code, hosted or release acceptance.

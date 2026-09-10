@@ -143,6 +143,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Bound PowerShell startup discovery in the synthetic collector proof | Reviewed version-only timing repair and full local producer/Tailscale/canonical gates passed; record replacement exact-commit CI/container results without transferring earlier results |
 | Automatic evidence / independent review | Named nutrient rows for native custom foods | ADR 0040 source, independent in-task review, focused native/helper tests, canonical local gates and fresh native exports passed; record exact-commit automatic results and preserve device/independent/release acceptance |
 | Automatic evidence / independent review | Inspect saved custom-food nutrients without editing | ADR 0041 source, independent in-task review, canonical local gates and synthetic Chrome exact-state/no-request/paging/draft/keyboard/narrow/Retry/expiry proof passed; record exact-commit automatic results and preserve device/independent/release acceptance |
+| Automatic evidence / independent review | Select every loaded nutrient for native Health trends | ADR 0042 source, independent in-task review, focused native behavior/types, canonical local gates and fresh exports passed; record exact-commit automatic results and preserve device/independent/release acceptance |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1291,15 +1292,36 @@ operation rows. This completes the local all-retained-entity source gate, but no
 M2: production notification, signed-device, independent-reviewer, physical-phone,
 hosted access/restore, and public-release acceptance remain fail-closed.
 
-### Next bounded candidate after ADR 0041
+### Native Health trend nutrient selection: source/local complete
 
-Make all loaded targetable nutrients selectable for native Health trends. Source
-inspection found `nutrients.slice(0, 24)` despite the existing parser accepting up
-to 256 unique items; web already lists all loaded names and units. This is a
-code/contract gap, not evidence of current live catalogue breadth. Prepare a
-reviewed acceptance card for a local name filter over the full current list,
-name/unit labels and explicit existing trend loading. Preserve selected-result
-identity, dates, biometric choices, custom/log drafts, disclosures and private/
-lifecycle guards. No new endpoint, advice, math, storage or web work is proposed.
-The successor has not started; ADR 0041 automatic and external acceptance remain
-separate from this scheduling candidate.
+[ADR 0042](../adr/0042-native-trend-nutrient-picker.md) removes the native
+24-choice truncation. Local name filtering exposes all loaded targetable entries
+up to the existing 256-item bound, with source order, distinct identities, names/
+units and selected context. Filter-only edits preserve current reads/results;
+explicit loading and participating inputs are bound to current private scope,
+metadata and result identity. Mismatched and obsolete reads cannot relabel or
+replace later work. Unrelated custom/log drafts, disclosures and shared mutation
+protocols remain intact. No new endpoint, math, advice, storage or web change.
+
+Independent in-task review, native actual-component checks, affected types/format,
+canonical check/build/licenses and fresh native exports passed. Native mocks and
+exports are not rendered-device, assistive technology, concurrent React, real
+persistence, external Claude Code, hosted or release acceptance. Raw evidence and
+exact delivery/automatic state are recorded in Windows readiness outside Git.
+
+Delivered base `8b94c330b3ed41fd099130e23da017adf9427bb3` CI `34507669521`
+succeeded (updated September 10, 2026 17:26:44 UTC); container `34507669423`
+remained in progress at the 17:31:40 UTC preflight observation. Those historical
+base results do not transfer automatic acceptance to this new slice.
+
+### Next bounded candidate after ADR 0042
+
+Prepare one card for local name filtering over the current loaded saved custom-food
+records on web/native, following ADR 0039's bounded loaded-recipe filter behavior.
+Both saved-food views currently render their backing arrays directly. Preserve
+order and distinct IDs, open disclosures, draft/log context and pending body/key;
+Filter/Clear issue no request, and honest matched/loaded counts keep Load more
+reachable even at zero matches. Current API pages read active foods only; archived
+records may remain in local client state. Do not imply archived-library browsing
+or remote search. No new endpoint, archive semantics, refresh control, storage,
+dependency or math change is proposed. No successor implementation has started.

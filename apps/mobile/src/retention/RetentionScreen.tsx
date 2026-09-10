@@ -294,7 +294,7 @@ export function RetentionScreen({
     () => new Intl.DateTimeFormat("en-CA", { timeZone: profileTimeZone }).format(new Date()),
     [profileTimeZone],
   );
-  const [loading, setLoadingState] = useState(true);
+  const [loading, setLoadingState] = useState(AppState.currentState === "active");
   const loadingRef = useRef(loading);
   const setLoading = useCallback((value: boolean) => {
     loadingRef.current = value;
@@ -306,6 +306,16 @@ export function RetentionScreen({
     busyRef.current = value;
     setBusyState(value);
   }, []);
+  const trendController = useRef<AbortController | null>(null);
+  const [trendPending, setTrendPending] = useState(false);
+  const abortTrendRead = useCallback(() => {
+    const controller = trendController.current;
+    if (!controller) return;
+    trendController.current = null;
+    controller.abort();
+    setTrendPending(false);
+    if (busyRef.current === "trends") setBusy(null);
+  }, [setBusy]);
   const [message, setMessage] = useState("Opening private health data…");
   const [nutrients, setNutrients] = useState<readonly TargetableNutrient[]>([]);
   const [foodDetails, setFoodDetailsState] = useState<ReadonlySet<CustomFood>>(() => new Set());
@@ -328,7 +338,12 @@ export function RetentionScreen({
     [setFoodDetails],
   );
   const [foodCursor, setFoodCursor] = useState<string | null>(null);
-  const [definitions, setDefinitions] = useState<readonly BiometricDefinition[]>([]);
+  const [definitions, setDefinitionsState] = useState<readonly BiometricDefinition[]>([]);
+  const definitionsRef = useRef(definitions);
+  const setDefinitions = useCallback((items: readonly BiometricDefinition[]) => {
+    definitionsRef.current = items;
+    setDefinitionsState(items);
+  }, []);
   const [events, setEvents] = useState<readonly BiometricEvent[]>([]);
   const [eventCursor, setEventCursor] = useState<string | null>(null);
   const [eventRange, setEventRange] = useState<{
@@ -394,6 +409,7 @@ export function RetentionScreen({
   const closeCustom = useCallback(() => {
     if (!currentCustomScope(customEpoch.current)) return;
     customClosed.current = customScope;
+    abortTrendRead();
     foodDetailsReady.current = false;
     resetFoodDetails();
     customEpoch.current += 1;
@@ -406,7 +422,7 @@ export function RetentionScreen({
     customOperations.current.clear();
     installCustom(blankCustom(), true);
     if (busyRef.current === "custom" || busyRef.current === "food-more") setBusy(null);
-  }, [currentCustomScope, customScope, installCustom, resetFoodDetails, setBusy]);
+  }, [abortTrendRead, currentCustomScope, customScope, installCustom, resetFoodDetails, setBusy]);
   useEffect(() => {
     customMounted.current = true;
     resetFoodDetails();
@@ -466,10 +482,35 @@ export function RetentionScreen({
   const [editingDefinition, setEditingDefinition] = useState<BiometricDefinition | null>(null);
   const [eventDraft, setEventDraft] = useState(() => initialEvent(profileTimeZone));
   const [reminderDraft, setReminderDraft] = useState<ReminderDraft>(initialReminder);
-  const [from, setFrom] = useState(() => shiftLocalDate(today, -13));
-  const [to, setTo] = useState(today);
-  const [selectedNutrient, setSelectedNutrient] = useState("");
-  const [selectedDefinition, setSelectedDefinition] = useState("");
+  const [trendInputs, setTrendInputsState] = useState(() => ({
+    from: shiftLocalDate(today, -13),
+    to: today,
+    nutrientId: "",
+    definitionId: "",
+  }));
+  const trendInputsRef = useRef(trendInputs);
+  const installTrendInputs = useCallback((value: typeof trendInputs) => {
+    trendInputsRef.current = value;
+    setTrendInputsState(value);
+  }, []);
+  const { from, to, nutrientId: selectedNutrient, definitionId: selectedDefinition } = trendInputs;
+  const [trendFilter, setTrendFilterState] = useState({ value: "" });
+  const trendFilterRef = useRef(trendFilter);
+  const installTrendFilter = useCallback((value: string) => {
+    const next = { value };
+    trendFilterRef.current = next;
+    setTrendFilterState(next);
+  }, []);
+  const trendScopeRef = useRef({ privateScope: customScope, profileTimeZone });
+  if (
+    trendScopeRef.current.privateScope !== customScope ||
+    trendScopeRef.current.profileTimeZone !== profileTimeZone
+  )
+    trendScopeRef.current = { privateScope: customScope, profileTimeZone };
+  const trendScope = trendScopeRef.current;
+  const trendInstalled = useRef<typeof trendScope | null>(null);
+  const trendChoicesInstalled = useRef<typeof customScope | null>(null);
+  const trendDefinitions = useRef<readonly BiometricDefinition[] | null>(null);
   const [nutrientTrend, setNutrientTrend] = useState<ReturnType<typeof parseNutrientTrend> | null>(
     null,
   );
@@ -482,7 +523,42 @@ export function RetentionScreen({
   const [healthState, setHealthState] = useState("Not checked on this signed build.");
   const operations = useRef(new Map<string, StableOperation>());
   const loadController = useRef<AbortController | null>(null);
-  const trendController = useRef<AbortController | null>(null);
+  useEffect(() => {
+    const replacedOwner = trendChoicesInstalled.current !== customScope;
+    trendInstalled.current = trendScope;
+    abortTrendRead();
+    setTrendPending(false);
+    if (busyRef.current === "trends") setBusy(null);
+    installTrendFilter("");
+    installTrendInputs({
+      ...trendInputsRef.current,
+      ...(replacedOwner ? { nutrientId: "", definitionId: "" } : {}),
+    });
+    setNutrientTrend(null);
+    setBiometricTrend(null);
+    let active = AppState.currentState === "active";
+    const subscription = AppState.addEventListener("change", (next) => {
+      if (
+        !customMounted.current ||
+        trendScopeRef.current !== trendScope ||
+        active === (next === "active")
+      )
+        return;
+      active = next === "active";
+      abortTrendRead();
+      installTrendFilter("");
+      installTrendInputs({ ...trendInputsRef.current });
+      setNutrientTrend(null);
+      setBiometricTrend(null);
+    });
+    return () => {
+      subscription.remove();
+      const controller = trendController.current;
+      trendController.current = null;
+      controller?.abort();
+      trendInstalled.current = null;
+    };
+  }, [abortTrendRead, customScope, installTrendFilter, installTrendInputs, setBusy, trendScope]);
   const customLogEnqueueInFlight = useRef(false);
   const ownedCustomLogOperations = useRef(new Set<string>());
 
@@ -583,10 +659,12 @@ export function RetentionScreen({
 
   const loadAll = useCallback(async () => {
     const epoch = customEpoch.current;
-    if (currentCustomScope(epoch)) {
-      foodDetailsReady.current = false;
-      resetFoodDetails();
-    }
+    if (!currentCustomScope(epoch)) return;
+    abortTrendRead();
+    setNutrientTrend(null);
+    setBiometricTrend(null);
+    foodDetailsReady.current = false;
+    resetFoodDetails();
     registry.current = null;
     loadController.current?.abort();
     const controller = new AbortController();
@@ -646,10 +724,25 @@ export function RetentionScreen({
       setEventRange({ from: rangeFrom, to: rangeTo });
       setReminders(nextReminders);
       setIntegrations(parseIntegrations(values[5]));
-      setSelectedNutrient((value) => value || nextNutrients[0]?.nutrientId || "");
-      setSelectedDefinition(
-        (value) => value || nextDefinitions.find((item) => item.status === "active")?.id || "",
-      );
+      if (currentCustomScope(epoch)) {
+        trendDefinitions.current = nextDefinitions;
+        const firstInstall = trendChoicesInstalled.current !== customScope;
+        trendChoicesInstalled.current = customScope;
+        const previous = trendInputsRef.current;
+        installTrendInputs({
+          ...previous,
+          nutrientId: firstInstall
+            ? (nextNutrients[0]?.nutrientId ?? "")
+            : nextNutrients.some((item) => item.nutrientId === previous.nutrientId)
+              ? previous.nutrientId
+              : "",
+          definitionId: firstInstall
+            ? (nextDefinitions.find((item) => item.status === "active")?.id ?? "")
+            : nextDefinitions.some((item) => item.id === previous.definitionId)
+              ? previous.definitionId
+              : "",
+        });
+      }
       setEventDraft((value) => ({
         ...value,
         definitionId:
@@ -667,13 +760,16 @@ export function RetentionScreen({
       if (!controller.signal.aborted) setLoading(false);
     }
   }, [
+    abortTrendRead,
     accessToken,
     apiBase,
     closeCustom,
     currentCustomScope,
     customScope,
+    installTrendInputs,
     reconcileReminders,
     resetFoodDetails,
+    setDefinitions,
     setFoods,
     setLoading,
   ]);
@@ -699,44 +795,159 @@ export function RetentionScreen({
     return () => subscription.remove();
   }, [reconcileReminders, request]);
 
+  const renderedCustomEpoch = customEpoch.current;
+  const renderedFoodDetailsReady = foodDetailsReady.current && !loading;
+  const trendScopeCurrent = () =>
+    currentCustomScope(renderedCustomEpoch) &&
+    trendScopeRef.current === trendScope &&
+    trendInstalled.current === trendScope;
+  const trendMetadataCurrent = () =>
+    trendScopeCurrent() &&
+    !loadingRef.current &&
+    registry.current?.scope === customScope &&
+    registry.current.values === nutrients &&
+    trendDefinitions.current === definitions;
+  const trendReady = trendMetadataCurrent();
+  const chosenTrendNutrient = trendReady
+    ? nutrients.find((item) => item.nutrientId === selectedNutrient)
+    : undefined;
+  const chosenTrendDefinition = trendReady
+    ? definitions.find((item) => item.id === selectedDefinition)
+    : undefined;
+  const filteredTrendNutrients = trendReady
+    ? nutrients.filter((item) =>
+        item.name.toLowerCase().includes(trendFilter.value.trim().toLowerCase()),
+      )
+    : [];
+  function changeTrendFilter(value: string) {
+    if (
+      !trendReady ||
+      !trendMetadataCurrent() ||
+      trendFilterRef.current !== trendFilter ||
+      value.length > 200 ||
+      value === trendFilter.value
+    )
+      return;
+    installTrendFilter(value);
+  }
+  function changeTrendInput(field: keyof typeof trendInputs, value: string) {
+    if (
+      !trendReady ||
+      !trendMetadataCurrent() ||
+      trendInputsRef.current !== trendInputs ||
+      trendInputs[field] === value
+    )
+      return;
+    if (field === "nutrientId" && trendFilterRef.current !== trendFilter) return;
+    if (field === "nutrientId" && !nutrients.some((item) => item.nutrientId === value)) return;
+    if (field === "definitionId" && !definitions.some((item) => item.id === value)) return;
+    abortTrendRead();
+    installTrendInputs({ ...trendInputs, [field]: value });
+    if (field !== "definitionId") setNutrientTrend(null);
+    if (field !== "nutrientId") setBiometricTrend(null);
+  }
   async function loadTrends() {
+    if (
+      !trendReady ||
+      !trendMetadataCurrent() ||
+      trendInputsRef.current !== trendInputs ||
+      busyRef.current !== null ||
+      trendController.current ||
+      (!chosenTrendNutrient && !chosenTrendDefinition)
+    )
+      return;
     if (!isLocalDate(from) || !isLocalDate(to) || from > to) {
       setMessage("Trend dates must be a valid ordered local-date range.");
       return;
     }
-    trendController.current?.abort();
     const controller = new AbortController();
     trendController.current = controller;
+    setTrendPending(true);
+    const current = () =>
+      trendMetadataCurrent() &&
+      trendInputsRef.current === trendInputs &&
+      trendController.current === controller &&
+      !controller.signal.aborted;
+    const read = async (path: string) => {
+      const response = await fetch(apiUrl(apiBase, path).toString(), {
+        headers: authenticatedHeaders(accessToken),
+        signal: controller.signal,
+      });
+      if (!current()) return null;
+      if (response.status === 401) {
+        closeCustom();
+        await unauthorizedRef.current();
+        return null;
+      }
+      const value = await jsonBody(response);
+      if (!current()) return null;
+      if (!response.ok) throw new Error(responseError(value, "The private health request failed."));
+      return value;
+    };
     setBusy("trends");
     try {
       const [nutrientValue, biometricValue] = await Promise.all([
-        selectedNutrient
-          ? request(
-              `/v1/trends/nutrients?nutrientId=${encodeURIComponent(selectedNutrient)}&from=${from}&to=${to}`,
-              { signal: controller.signal },
+        chosenTrendNutrient
+          ? read(
+              `/v1/trends/nutrients?nutrientId=${encodeURIComponent(chosenTrendNutrient.nutrientId)}&from=${from}&to=${to}`,
             )
           : null,
-        selectedDefinition
-          ? request(
-              `/v1/trends/biometrics?definitionId=${encodeURIComponent(selectedDefinition)}&from=${from}&to=${to}`,
-              { signal: controller.signal },
+        chosenTrendDefinition
+          ? read(
+              `/v1/trends/biometrics?definitionId=${encodeURIComponent(chosenTrendDefinition.id)}&from=${from}&to=${to}`,
             )
           : null,
       ]);
-      if (controller.signal.aborted) return;
-      setNutrientTrend(nutrientValue ? parseNutrientTrend(nutrientValue) : null);
-      setBiometricTrend(biometricValue ? parseBiometricTrend(biometricValue) : null);
+      if (!current()) return;
+      const nextNutrient = nutrientValue ? parseNutrientTrend(nutrientValue) : null;
+      const nextBiometric = biometricValue ? parseBiometricTrend(biometricValue) : null;
+      if (
+        chosenTrendNutrient &&
+        (!nextNutrient ||
+          nextNutrient.nutrient.id !== chosenTrendNutrient.nutrientId ||
+          nextNutrient.nutrient.unit !== chosenTrendNutrient.unit ||
+          nextNutrient.from !== from ||
+          nextNutrient.to !== to ||
+          nextNutrient.timeZone !== profileTimeZone ||
+          nextNutrient.points.some(
+            (point) =>
+              point.aggregate !== null &&
+              (point.aggregate.nutrientId !== nextNutrient.nutrient.id ||
+                point.aggregate.unit !== nextNutrient.nutrient.unit),
+          ))
+      )
+        throw new TypeError(
+          "The nutrient trend does not match the selected nutrient, range or time zone. Load it again.",
+        );
+      if (
+        chosenTrendDefinition &&
+        (!nextBiometric ||
+          nextBiometric.definition.id !== chosenTrendDefinition.id ||
+          nextBiometric.from !== from ||
+          nextBiometric.to !== to ||
+          nextBiometric.timeZone !== profileTimeZone)
+      )
+        throw new TypeError(
+          "The biometric trend does not match the selected metric, range or time zone. Load it again.",
+        );
+      setNutrientTrend(nextNutrient);
+      setBiometricTrend(nextBiometric);
       setMessage(`Trends use local-day boundaries in ${profileTimeZone}.`);
     } catch (error) {
-      if (!controller.signal.aborted)
-        setMessage(error instanceof Error ? error.message : "Trends failed.");
+      if (current()) setMessage(error instanceof Error ? error.message : "Trends failed.");
     } finally {
-      if (!controller.signal.aborted) setBusy(null);
+      if (trendController.current === controller) {
+        const canPublish = current();
+        trendController.current = null;
+        controller.abort();
+        if (canPublish) {
+          setTrendPending(false);
+          if (busyRef.current === "trends") setBusy(null);
+        }
+      }
     }
   }
 
-  const renderedCustomEpoch = customEpoch.current;
-  const renderedFoodDetailsReady = foodDetailsReady.current && !loading;
   function toggleFoodDetails(food: CustomFood) {
     if (
       !currentCustomScope(renderedCustomEpoch) ||
@@ -1094,6 +1305,30 @@ export function RetentionScreen({
     }
   }
 
+  function installDefinitionReceipt(saved: BiometricDefinition, archived = false): boolean {
+    if (
+      !customMounted.current ||
+      customScopeRef.current !== customScope ||
+      customInstalled.current !== customScope ||
+      customClosed.current === customScope ||
+      !ownerUserId ||
+      !accessToken ||
+      !Number.isSafeInteger(sessionEpoch) ||
+      sessionEpoch < 0
+    )
+      return false;
+    const latest = definitionsRef.current;
+    const next = archived
+      ? latest.map((item) => (item.id === saved.id ? saved : item))
+      : [saved, ...latest.filter((item) => item.id !== saved.id)];
+    if (registry.current?.scope === customScope && trendDefinitions.current === latest) {
+      abortTrendRead();
+      trendDefinitions.current = next;
+    }
+    setDefinitions(next);
+    return true;
+  }
+
   async function saveDefinition() {
     if (!definitionName.trim() || !definitionUnit.trim())
       return setMessage("Metric name and unit are required.");
@@ -1119,7 +1354,7 @@ export function RetentionScreen({
           ...(editingDefinition ? { revision: editingDefinition.revision } : {}),
         }),
       );
-      setDefinitions((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
+      if (!installDefinitionReceipt(saved)) return;
       setEditingDefinition(null);
       setDefinitionName("Weight");
       setDefinitionDimension("mass");
@@ -1144,7 +1379,7 @@ export function RetentionScreen({
           revision: definition.revision,
         }),
       );
-      setDefinitions((items) => items.map((item) => (item.id === saved.id ? saved : item)));
+      if (!installDefinitionReceipt(saved, true)) return;
       setMessage("Metric archived; historical events and trends remain available.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Metric could not be archived.");
@@ -1828,41 +2063,97 @@ export function RetentionScreen({
         >
           <LabeledInput
             label="From (YYYY-MM-DD)"
-            value={from}
-            onChangeText={setFrom}
+            value={trendScopeCurrent() ? from : ""}
+            disabled={!trendReady}
+            onChangeText={(value) => changeTrendInput("from", value)}
             maxLength={10}
           />
-          <LabeledInput label="To (YYYY-MM-DD)" value={to} onChangeText={setTo} maxLength={10} />
+          <LabeledInput
+            label="To (YYYY-MM-DD)"
+            value={trendScopeCurrent() ? to : ""}
+            disabled={!trendReady}
+            onChangeText={(value) => changeTrendInput("to", value)}
+            maxLength={10}
+          />
           <Text style={styles.label}>Nutrient</Text>
+          <LabeledInput
+            label="Find a trend nutrient by name"
+            value={trendScopeCurrent() ? trendFilter.value : ""}
+            disabled={!trendReady}
+            onChangeText={changeTrendFilter}
+            maxLength={200}
+          />
+          <Button
+            label="Clear trend nutrient filter"
+            disabled={!trendReady}
+            onPress={() => changeTrendFilter("")}
+            secondary
+          />
+          <Text style={styles.help}>
+            {trendReady
+              ? nutrients.length === 0
+                ? "No trend nutrients are available in the loaded list."
+                : `${filteredTrendNutrients.length} matching of ${nutrients.length} loaded trend nutrients.`
+              : loading && trendScopeCurrent()
+                ? "Loading the trend nutrient list…"
+                : "The trend nutrient list is unavailable. Choose Refresh private data to try again."}
+          </Text>
+          {trendReady && nutrients.length > 0 && filteredTrendNutrients.length === 0 ? (
+            <Text style={styles.help}>No loaded nutrients match this name.</Text>
+          ) : null}
+          <Text style={styles.help}>
+            {chosenTrendNutrient
+              ? `Selected nutrient: ${chosenTrendNutrient.name} · ${chosenTrendNutrient.unit}`
+              : "No trend nutrient selected."}
+          </Text>
           <ChipRow
-            items={nutrients
-              .slice(0, 24)
-              .map((item) => ({ key: item.nutrientId, label: item.name }))}
-            selected={selectedNutrient}
-            onSelect={setSelectedNutrient}
+            items={filteredTrendNutrients.map((item) => ({
+              key: item.nutrientId,
+              label: `${item.name} · ${item.unit}`,
+            }))}
+            selected={trendReady ? selectedNutrient : ""}
+            disabled={!trendReady}
+            wrapLabels
+            onSelect={(value) => changeTrendInput("nutrientId", value)}
           />
           <Text style={styles.label}>Biometric</Text>
           <ChipRow
-            items={definitions.map((item) => ({
+            items={(trendReady ? definitions : []).map((item) => ({
               key: item.id,
               label: `${item.name}${item.status === "archived" ? " (archived)" : ""}`,
             }))}
-            selected={selectedDefinition}
-            onSelect={setSelectedDefinition}
+            selected={trendReady ? selectedDefinition : ""}
+            disabled={!trendReady}
+            onSelect={(value) => changeTrendInput("definitionId", value)}
           />
           <Button
-            disabled={busy === "trends"}
-            label={busy === "trends" ? "Loading…" : "Load local-day trends"}
+            disabled={
+              !trendReady ||
+              trendPending ||
+              busy !== null ||
+              (!chosenTrendNutrient && !chosenTrendDefinition)
+            }
+            label={trendPending ? "Loading…" : "Load local-day trends"}
             onPress={() => void loadTrends()}
           />
-          {nutrientTrend?.points.map((point) => (
+          {trendReady && nutrientTrend ? (
+            <Text accessibilityRole="header" style={styles.cardTitle}>
+              {`${nutrientTrend.nutrient.name} (${nutrientTrend.nutrient.unit}) · ${nutrientTrend.from} to ${nutrientTrend.to} · ${nutrientTrend.timeZone}`}
+            </Text>
+          ) : null}
+          {(trendReady ? nutrientTrend?.points : [])?.map((point) => (
             <Text key={point.localDate} style={styles.rowText}>
               {point.localDate}: {nutrientTrendLabel(point.aggregate)}
             </Text>
           ))}
-          {biometricTrend?.points.map((point) => (
+          {trendReady && biometricTrend ? (
+            <Text accessibilityRole="header" style={styles.cardTitle}>
+              {`${biometricTrend.definition.name} (${biometricTrend.definition.canonicalUnit}) · ${biometricTrend.from} to ${biometricTrend.to} · ${biometricTrend.timeZone}`}
+            </Text>
+          ) : null}
+          {(trendReady ? biometricTrend?.points : [])?.map((point) => (
             <Text key={point.localDate} style={styles.rowText}>
-              {point.localDate}: {point.last} {biometricTrend.definition.canonicalUnit} ·{" "}
+              {point.localDate}: {point.last} {biometricTrend?.definition.canonicalUnit} ·{" "}
               {point.count} reading{point.count === 1 ? "" : "s"}
             </Text>
           ))}
@@ -2279,7 +2570,7 @@ export function RetentionScreen({
                 <Button
                   label="Use"
                   onPress={() => {
-                    setSelectedDefinition(definition.id);
+                    changeTrendInput("definitionId", definition.id);
                     setEventDraft({ ...eventDraft, definitionId: definition.id });
                   }}
                   secondary
@@ -2671,6 +2962,7 @@ function ChipRow(props: {
   readonly selected: string | readonly string[];
   readonly onSelect: (key: string) => void;
   readonly multiple?: boolean;
+  readonly wrapLabels?: boolean;
 }) {
   const selected = Array.isArray(props.selected) ? props.selected : [props.selected];
   return (
@@ -2688,7 +2980,11 @@ function ChipRow(props: {
             disabled={props.disabled}
             key={item.key}
             onPress={() => props.onSelect(item.key)}
-            style={[styles.chip, active && styles.chipActive]}
+            style={[
+              styles.chip,
+              props.wrapLabels && styles.wrappingChip,
+              active && styles.chipActive,
+            ]}
           >
             <Text style={[styles.chipText, active && styles.chipTextActive]}>{item.label}</Text>
           </Pressable>
@@ -2770,6 +3066,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 7,
   },
+  wrappingChip: { maxWidth: "100%", minWidth: 0, flexShrink: 1 },
   chipActive: { backgroundColor: palette.forest, borderColor: palette.forest },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: 8 },
   chipText: { color: palette.muted, fontSize: 12, fontWeight: "700" },
