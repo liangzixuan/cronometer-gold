@@ -1714,3 +1714,378 @@ describe("mobile copy saved recipe to new draft", () => {
     expect(input(tree, "Amount").props.value).toBe("1");
   });
 });
+
+function ingredientRows(tree) {
+  return nodes(
+    tree,
+    (node) =>
+      node.type === "View" &&
+      Array.isArray(node.props.children) &&
+      node.props.children[0]?.type === "Text" &&
+      typeof node.props.children[0]?.props.accessibilityLabel === "string",
+  );
+}
+function rowAction(tree, index, label) {
+  const row = ingredientRows(tree)[index];
+  expect(row).toBeDefined();
+  const matches = nodes(row, (node) => node.type === "Pressable" && screenText(node) === label);
+  expect(matches).toHaveLength(1);
+  return matches[0];
+}
+function rowFields(tree, index) {
+  return nodes(ingredientRows(tree)[index], (node) => node.type === "TextInput");
+}
+function ingredientSnapshot(tree) {
+  return ingredientRows(tree).map((row) => ({
+    key: row.key,
+    name: screenText(row.props.children[0]),
+    attribution: screenText(row.props.children[1]),
+    fields: nodes(row, (node) => node.type === "TextInput").map((node) => node.props.value),
+  }));
+}
+async function moveRow(harness, index, direction) {
+  const tree = await harness.settle();
+  const button = rowAction(tree, index, direction === "up" ? "Move up" : "Move down");
+  expect(button.props.disabled).toBe(false);
+  button.props.onPress();
+  return harness.settle();
+}
+function retainedRowActions(tree, index = 0) {
+  return () => {
+    rowAction(tree, index, "Move down").props.onPress();
+    rowFields(tree, index)[0].props.onChangeText("999");
+    rowFields(tree, index)[1].props.onChangeText("Stale note");
+    rowAction(tree, index, "Remove").props.onPress();
+  };
+}
+
+describe("mobile draft ingredient ordering", () => {
+  it("handles empty and single-row drafts and rejects boundary callbacks without requests", async () => {
+    const { harness, requests } = setup();
+    let tree = await harness.settle();
+    expect(ingredientRows(tree)).toHaveLength(0);
+    expect(review(tree).props.onConfirm([ingredient()])).toBe(true);
+    tree = await harness.settle();
+    const before = ingredientSnapshot(tree);
+    const beforeRequests = requests.length;
+    for (const label of ["Move up", "Move down"]) {
+      const button = rowAction(tree, 0, label);
+      expect(button.props.disabled).toBe(true);
+      expect(button.props.accessibilityState.disabled).toBe(true);
+      expect(button.props.accessibilityLabel).toBe(
+        `Move Rolled oats ${label === "Move up" ? "up" : "down"}, ingredient 1 of 1`,
+      );
+      button.props.onPress();
+    }
+    tree = await harness.settle();
+    expect(ingredientSnapshot(tree)).toEqual(before);
+    expect(requests).toHaveLength(beforeRequests);
+    rowAction(tree, 0, "Remove").props.onPress();
+    tree = await harness.settle();
+    expect(ingredientRows(tree)).toHaveLength(0);
+  });
+  for (const mode of ["create", "revision"]) {
+    it(`preserves exact mixed ingredient fields and sends contiguous reordered positions on ${mode}`, async () => {
+      const original = copyFixture();
+      const originalBytes = JSON.stringify(original);
+      const { harness, requests } = nutritionSetup(original, (request) =>
+        request.method === "POST" ? response({}, 503) : undefined,
+      );
+      let tree = await openNutritionRecipe(harness);
+      if (mode === "create") tree = await click(harness, "Copy to new draft");
+      const before = ingredientSnapshot(tree);
+      const beforeRequests = requests.length;
+      tree = await moveRow(harness, 2, "up");
+      tree = await moveRow(harness, 1, "up");
+      expect(ingredientSnapshot(tree)).toEqual([before[2], before[0], before[1]]);
+      expect(rowAction(tree, 0, "Move up").props.disabled).toBe(true);
+      expect(rowAction(tree, 2, "Move down").props.disabled).toBe(true);
+      expect(rowAction(tree, 0, "Move down").props.accessibilityLabel).toBe(
+        "Move Pinned sauce down, ingredient 1 of 3",
+      );
+      expect(requests).toHaveLength(beforeRequests);
+      expect(JSON.stringify(original)).toBe(originalBytes);
+      const recipeFields = [
+        "Recipe name",
+        "Description",
+        "Instructions",
+        "Final yield grams",
+        "Serving count (optional)",
+        "Serving label",
+      ].map((label) => input(tree, label).props.value);
+      expect(recipeFields).toEqual([
+        "Saved recipe",
+        "Saved description",
+        "Save these instructions exactly.",
+        "120.000001",
+        "2.000001",
+        "small bowl",
+      ]);
+      await click(harness, mode === "create" ? "Create recipe" : "Publish revision");
+      const post = postRequests(requests)[0];
+      expect(post.url.pathname).toBe(
+        mode === "create" ? "/v1/recipes" : `/v1/recipes/${recipeId}/revisions`,
+      );
+      expect(post.headers["if-match"]).toBe(mode === "create" ? undefined : '"1"');
+      expect(JSON.parse(post.body)).toEqual({
+        name: "Saved recipe",
+        description: "Saved description",
+        instructions: "Save these instructions exactly.",
+        finalYield: { grams: "120.000001", source: "estimated" },
+        servingCount: "2.000001",
+        servingLabel: "small bowl",
+        ingredients: [
+          {
+            kind: "recipe",
+            recipeVersionId: "e5302e9d-9651-4784-baf4-a00e9f41c079",
+            grams: "12.345678",
+            position: 0,
+            note: "Keep nested note",
+          },
+          {
+            kind: "food",
+            foodVersionId: "202",
+            portion: { kind: "serving", servingId: "303", amount: "1.250001" },
+            position: 1,
+            note: "Toast gently",
+          },
+          {
+            kind: "food",
+            foodVersionId: "404",
+            portion: { kind: "grams", grams: "0.123456" },
+            position: 2,
+            note: "Keep private note",
+          },
+        ],
+      });
+    });
+  }
+  it("keeps repeated food versions distinct and edits the selected occurrence after moving", async () => {
+    const recipe = nutritionRecipe();
+    const first = recipe.currentVersion.ingredients[0];
+    recipe.currentVersion.ingredients = ["First", "Second", "Third"].map((note, position) => ({
+      ...first,
+      position,
+      note,
+      portion: { kind: "grams", grams: `${position + 1}.000001` },
+      resolvedGrams: `${position + 1}.000001`,
+    }));
+    const { harness, requests } = nutritionSetup(recipe, (request) =>
+      request.method === "POST" ? response({}, 503) : undefined,
+    );
+    let tree = await openNutritionRecipe(harness);
+    const before = ingredientSnapshot(tree);
+    expect(new Set(before.map((row) => row.key)).size).toBe(3);
+    tree = await moveRow(harness, 1, "up");
+    expect(ingredientSnapshot(tree)).toEqual([before[1], before[0], before[2]]);
+    rowFields(tree, 0)[0].props.onChangeText("4.000001");
+    rowFields(tree, 0)[1].props.onChangeText("Updated second occurrence");
+    await click(harness, "Publish revision");
+    expect(
+      JSON.parse(postRequests(requests)[0].body).ingredients.map((row) => ({
+        grams: row.portion.grams,
+        note: row.note,
+        position: row.position,
+      })),
+    ).toEqual([
+      { grams: "4.000001", note: "Updated second occurrence", position: 0 },
+      { grams: "1.000001", note: "First", position: 1 },
+      { grams: "3.000001", note: "Third", position: 2 },
+    ]);
+  });
+  it("rejects retained move, quantity, note and remove callbacks after a move and move-back", async () => {
+    const { harness, requests } = nutritionSetup(copyFixture());
+    let tree = await openNutritionRecipe(harness);
+    const original = ingredientSnapshot(tree);
+    const stale = retainedRowActions(tree);
+    tree = await moveRow(harness, 1, "up");
+    const moved = ingredientSnapshot(tree);
+    const before = requests.length;
+    stale();
+    tree = await harness.settle();
+    expect(ingredientSnapshot(tree)).toEqual(moved);
+    tree = await moveRow(harness, 0, "down");
+    expect(ingredientSnapshot(tree)).toEqual(original);
+    stale();
+    tree = await harness.settle();
+    expect(ingredientSnapshot(tree)).toEqual(original);
+    rowFields(tree, 0)[0].props.onChangeText("2.000001");
+    rowFields(tree, 0)[1].props.onChangeText("Current note");
+    tree = await harness.settle();
+    expect(ingredientSnapshot(tree)[0].fields).toEqual(["2.000001", "Current note"]);
+    expect(requests).toHaveLength(before);
+  });
+  it("rechecks membership after removal and keeps retained row controls from changing the replacement row", async () => {
+    const { harness } = nutritionSetup(copyFixture());
+    let tree = await openNutritionRecipe(harness);
+    const stale = retainedRowActions(tree);
+    rowAction(tree, 0, "Remove").props.onPress();
+    tree = await harness.settle();
+    const after = ingredientSnapshot(tree);
+    stale();
+    tree = await harness.settle();
+    expect(ingredientSnapshot(tree)).toEqual(after);
+    expect(after.map((row) => row.name)).toEqual(["Private spice", "Pinned sauce"]);
+  });
+  it("marks moved order dirty, invalidates a copy choice and becomes clean when the saved order is restored", async () => {
+    const { harness } = nutritionSetup(copyFixture());
+    let tree = await openNutritionRecipe(harness);
+    tree = await moveRow(harness, 2, "up");
+    tree = await click(harness, "Copy to new draft");
+    const staleDiscard = pressable(tree, discardCopyLabel).props.onPress;
+    tree = await moveRow(harness, 1, "up");
+    expect(
+      nodes(tree, (node) => node.type === "Pressable" && screenText(node) === discardCopyLabel),
+    ).toHaveLength(0);
+    staleDiscard();
+    tree = await harness.settle();
+    expect(pressable(tree, "Publish revision")).toBeDefined();
+    tree = await moveRow(harness, 0, "down");
+    tree = await moveRow(harness, 1, "down");
+    tree = await click(harness, "Copy to new draft");
+    expect(pressable(tree, "Create recipe")).toBeDefined();
+    expect(
+      nodes(tree, (node) => node.type === "Pressable" && screenText(node) === discardCopyLabel),
+    ).toHaveLength(0);
+  });
+  it("keeps saved nutrition and the exact diary version independent of unsaved ingredient order", async () => {
+    const { harness, props, requests } = nutritionSetup(copyFixture());
+    props.quickAddOutboxController.enqueueOperation.mockResolvedValue({
+      operationId: "saved-version-log",
+    });
+    let tree = await openNutritionRecipe(harness);
+    const before = nutrientRow(tree, "Quantified nutrient");
+    const beforeRequests = requests.length;
+    tree = await moveRow(harness, 0, "down");
+    expect(nutrientRow(tree, "Quantified nutrient")).toBe(before);
+    expect(requests).toHaveLength(beforeRequests);
+    await click(harness, "Secure & log recipe");
+    expect(props.quickAddOutboxController.enqueueOperation).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        recipeId,
+        recipeVersionId: versionId,
+        portion: { kind: "serving", amount: "1", servingLabel: "small bowl" },
+      }),
+    );
+    expect(postRequests(requests)).toHaveLength(0);
+  });
+  for (const boundary of [
+    "New",
+    "copy",
+    "open",
+    "save",
+    "owner",
+    "token",
+    "destination",
+    "background",
+    "unmount",
+  ]) {
+    it(`fences retained row controls after ${boundary}`, async () => {
+      const { harness, requests } = nutritionSetup(copyFixture());
+      let tree = await openNutritionRecipe(harness);
+      const stale = retainedRowActions(tree);
+      if (boundary === "New") tree = await click(harness, "New recipe");
+      else if (boundary === "copy") tree = await click(harness, "Copy to new draft");
+      else if (boundary === "open") tree = await openNutritionRecipe(harness);
+      else if (boundary === "save") tree = await click(harness, "Publish revision");
+      else if (boundary === "background") {
+        background();
+        tree = await harness.settle();
+      } else if (boundary === "unmount") harness.unmount();
+      else {
+        harness.updateProps(
+          boundary === "owner"
+            ? { ownerUserId: "049eb964-1327-49a1-ab4f-5c7c41a6b68a" }
+            : boundary === "token"
+              ? { accessToken: "next-order-token" }
+              : { apiBase: new URL("http://127.0.0.1:4001") },
+        );
+        tree = await harness.settle();
+      }
+      const before = ingredientSnapshot(tree);
+      const beforeRequests = requests.length;
+      stale();
+      if (boundary !== "unmount") {
+        tree = await harness.settle();
+        expect(ingredientSnapshot(tree)).toEqual(before);
+      }
+      expect(requests).toHaveLength(beforeRequests);
+      expect(harness.writesAfterUnmount).toBe(0);
+      if (boundary === "background") {
+        foreground();
+        tree = await harness.settle();
+        stale();
+        tree = await harness.settle();
+        expect(ingredientSnapshot(tree)).toEqual(before);
+      }
+    });
+  }
+  for (const action of ["save", "search", "log"]) {
+    it(`disables moves and rejects retained row edits during active ${action}`, async () => {
+      const delayed = deferred();
+      const { harness, props } = nutritionSetup(copyFixture(), (request) =>
+        (action === "save" && request.method === "POST") ||
+        (action === "search" && request.url.pathname === "/v1/foods/search")
+          ? delayed.promise
+          : undefined,
+      );
+      props.quickAddOutboxController.enqueueOperation.mockReturnValue(delayed.promise);
+      let tree = await openNutritionRecipe(harness);
+      const before = ingredientSnapshot(tree);
+      const stale = retainedRowActions(tree);
+      if (action === "search") {
+        input(tree, "Search foods").props.onChangeText("oats");
+        tree = await harness.settle();
+      }
+      tree = await click(
+        harness,
+        action === "save"
+          ? "Publish revision"
+          : action === "search"
+            ? "Search foods"
+            : "Secure & log recipe",
+      );
+      for (let index = 0; index < 3; index += 1) {
+        expect(rowAction(tree, index, "Move up").props.disabled).toBe(true);
+        expect(rowAction(tree, index, "Move down").props.disabled).toBe(true);
+      }
+      stale();
+      tree = await harness.settle();
+      expect(ingredientSnapshot(tree)).toEqual(before);
+      harness.unmount();
+      delayed.resolve(
+        action === "save"
+          ? mutation()
+          : action === "search"
+            ? searchResponse()
+            : { operationId: "old-order-log" },
+      );
+      for (let turn = 0; turn < 30; turn += 1) await Promise.resolve();
+      expect(harness.writesAfterUnmount).toBe(0);
+    });
+  }
+  for (const mode of ["create", "revision"]) {
+    it(`keeps retry identity stable within each ${mode} order and distinct between changed orders`, async () => {
+      const { harness, requests } = nutritionSetup(copyFixture(), (request) =>
+        request.method === "POST" ? response({}, 503) : undefined,
+      );
+      await openNutritionRecipe(harness);
+      if (mode === "create") await click(harness, "Copy to new draft");
+      const label = mode === "create" ? "Create recipe" : "Publish revision";
+      await click(harness, label);
+      await moveRow(harness, 0, "down");
+      await click(harness, label);
+      await click(harness, label);
+      await moveRow(harness, 1, "up");
+      await click(harness, label);
+      const posts = postRequests(requests);
+      expect(posts).toHaveLength(4);
+      expect(posts[0].body).not.toBe(posts[1].body);
+      expect(posts[0].headers["idempotency-key"]).not.toBe(posts[1].headers["idempotency-key"]);
+      expect(posts[1].body).toBe(posts[2].body);
+      expect(posts[1].headers["idempotency-key"]).toBe(posts[2].headers["idempotency-key"]);
+      expect(posts[3].body).toBe(posts[0].body);
+      expect(posts[3].headers["idempotency-key"]).toBe(posts[0].headers["idempotency-key"]);
+    });
+  }
+});

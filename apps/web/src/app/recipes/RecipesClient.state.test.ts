@@ -1557,3 +1557,383 @@ describe("actual saved recipe copy to a new draft", () => {
     expect(text()).not.toContain("Late original revision");
   });
 });
+
+function ingredientRows() {
+  return elements().filter((node) => node.props.className === "ingredientRow");
+}
+function ingredientControl(index: number, action: "quantity" | "note" | "remove" | "up" | "down") {
+  const row = required(ingredientRows()[index]);
+  return required(
+    elements(row).find((node) => {
+      const label = String(node.props["aria-label"] ?? "");
+      if (action === "quantity") return node.type === "input" && label.includes("quantity in");
+      if (action === "note") return node.type === "input" && label.endsWith(" note");
+      return (
+        node.type === "button" && text(node) === (action === "remove" ? "Remove" : `Move ${action}`)
+      );
+    }),
+  );
+}
+function ingredientValues() {
+  return ingredientRows().map((row, index) => ({
+    name: text(required(elements(row).find((node) => node.type === "strong"))),
+    quantity: ingredientControl(index, "quantity").props.value,
+    note: ingredientControl(index, "note").props.value,
+  }));
+}
+async function moveRow(index: number, direction: "up" | "down") {
+  const control = ingredientControl(index, direction);
+  expect(control.props.disabled).toBe(false);
+  invoke(control, "onClick");
+  await hooks.settle();
+}
+async function changeIngredient(index: number, field: "quantity" | "note", value: string) {
+  invoke(ingredientControl(index, field), "onChange", { target: { value } });
+  await hooks.settle();
+}
+
+describe("actual recipe draft ingredient ordering", () => {
+  it("has no moves for an empty draft and disables both boundaries for a single ingredient", async () => {
+    const fetcher = nutritionFetcher();
+    await mountReady();
+    expect(ingredientRows()).toHaveLength(0);
+    review().onConfirm([ingredient("only", "0.000001")]);
+    await hooks.settle();
+    const before = ingredientValues();
+    const requests = fetcher.mock.calls.length;
+    expect(ingredientControl(0, "up").props.disabled).toBe(true);
+    expect(ingredientControl(0, "down").props.disabled).toBe(true);
+    expect(ingredientControl(0, "up").props["aria-label"]).toBe(
+      "Move Rolled oats up from position 1 of 1",
+    );
+    invoke(ingredientControl(0, "up"), "onClick");
+    invoke(ingredientControl(0, "down"), "onClick");
+    await hooks.settle();
+    expect(ingredientValues()).toEqual(before);
+    expect(fetcher.mock.calls).toHaveLength(requests);
+  });
+
+  it("moves locally while preserving exact public/private/nested data, saved nutrition and all recipe fields", async () => {
+    const { fetcher, source } = copyFetcher();
+    const immutableSource = JSON.stringify(source);
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    const before = ingredientValues();
+    const nutrition = nutritionRows();
+    const requests = fetcher.mock.calls.length;
+    expect(ingredientControl(0, "up").props.disabled).toBe(true);
+    expect(ingredientControl(2, "down").props.disabled).toBe(true);
+    invoke(ingredientControl(0, "up"), "onClick");
+    invoke(ingredientControl(2, "down"), "onClick");
+    await hooks.settle();
+    expect(ingredientValues()).toEqual(before);
+    await moveRow(1, "up");
+    expect(ingredientValues()).toEqual([before[1], before[0], before[2]]);
+    expect(nutritionRows()).toEqual(nutrition);
+    expect(field("Name").props.value).toBe("Saved recipe");
+    expect(field("Description").props.value).toBe("Saved description.");
+    expect(field("Instructions (optional)").props.value).toBe("Keep the saved instructions.");
+    expect(field("Final yield grams").props.value).toBe("321.000001");
+    expect(field("Yield source").props.value).toBe("estimated");
+    expect(field("Serving count (optional)").props.value).toBe("2.000001");
+    expect(field("Serving label").props.value).toBe("small bowl");
+    expect(field("Portion").props.value).toBe("serving");
+    expect(field("Amount").props.value).toBe("1");
+    expect(text(ingredientRows()[0])).toContain(
+      "Owner-entered private custom food · pinned version 7",
+    );
+    expect(text(ingredientRows()[1])).toContain("Data source: USDA FoodData Central · CC0-1.0");
+    expect(text(ingredientRows()[2])).toContain("b23dfba7-218d-449d-bafe-6955e03836b6");
+    expect(ingredientControl(0, "down").props["aria-label"]).toBe(
+      "Move Private sauce down from position 1 of 3",
+    );
+    expect(fetcher.mock.calls).toHaveLength(requests);
+    expect(JSON.stringify(source)).toBe(immutableSource);
+  });
+
+  it.each(["create", "revision"] as const)(
+    "sends final contiguous positions with exact pins and quantities on explicit %s",
+    async (kind) => {
+      const { fetcher } = copyFetcher();
+      const original = required(fetcher.getMockImplementation());
+      fetcher.mockImplementation(async (url, init) =>
+        init?.method === "POST"
+          ? Response.json({ error: "Inspect failed save" }, { status: 503 })
+          : original(url, init),
+      );
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      if (kind === "create") await click("Copy to new draft");
+      const requests = fetcher.mock.calls.length;
+      await moveRow(2, "up");
+      await moveRow(1, "up");
+      expect(fetcher.mock.calls).toHaveLength(requests);
+      save();
+      await hooks.settle();
+      const [url, init] = required(
+        fetcher.mock.calls.find(([, candidate]) => candidate?.method === "POST"),
+      );
+      expect(url).toBe(kind === "create" ? "/api/recipes" : `/api/recipes/${recipeId}/revisions`);
+      expect(new Headers(init?.headers).get("if-match")).toBe(kind === "create" ? null : '"1"');
+      expect(JSON.parse(String(init?.body))).toEqual({
+        name: "Saved recipe",
+        description: "Saved description.",
+        instructions: "Keep the saved instructions.",
+        ingredients: [
+          {
+            kind: "recipe",
+            recipeVersionId: "b23dfba7-218d-449d-bafe-6955e03836b6",
+            grams: "10.000001",
+            position: 0,
+            note: "Nested recipe note.",
+          },
+          {
+            kind: "food",
+            foodVersionId: "202",
+            portion: { kind: "serving", servingId: "303", amount: "1.000001" },
+            position: 1,
+            note: "Public food note.",
+          },
+          {
+            kind: "food",
+            foodVersionId: "404",
+            portion: { kind: "grams", grams: "0.000001" },
+            position: 2,
+            note: "Private food note.",
+          },
+        ],
+        finalYield: { grams: "321.000001", source: "estimated" },
+        servingCount: "2.000001",
+        servingLabel: "small bowl",
+      });
+    },
+  );
+
+  it("keeps duplicate food/version rows distinct through movement, editing and removal", async () => {
+    nutritionFetcher();
+    await mountReady();
+    review().onConfirm([
+      ingredient("duplicate-a", "1.000001"),
+      ingredient("duplicate-b", "2.000001"),
+      ingredient("duplicate-c", "3.000001"),
+    ]);
+    await hooks.settle();
+    await changeIngredient(0, "note", "First exact pin");
+    await changeIngredient(1, "note", "Second exact pin");
+    await changeIngredient(2, "note", "Third exact pin");
+    await moveRow(1, "up");
+    expect(ingredientValues().map((row) => [row.quantity, row.note])).toEqual([
+      ["2.000001", "Second exact pin"],
+      ["1.000001", "First exact pin"],
+      ["3.000001", "Third exact pin"],
+    ]);
+    await changeIngredient(1, "quantity", "9.000001");
+    await changeIngredient(1, "note", "Edited first exact pin");
+    invoke(ingredientControl(0, "remove"), "onClick");
+    await hooks.settle();
+    expect(ingredientValues().map((row) => [row.quantity, row.note])).toEqual([
+      ["9.000001", "Edited first exact pin"],
+      ["3.000001", "Third exact pin"],
+    ]);
+  });
+
+  it("rejects prior-order move, quantity, note, remove and general field callbacks even after restoring the original order", async () => {
+    copyFetcher();
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    const oldMove = ingredientControl(0, "down");
+    const oldQuantity = ingredientControl(0, "quantity");
+    const oldNote = ingredientControl(0, "note");
+    const oldRemove = ingredientControl(0, "remove");
+    const oldName = field("Name");
+    const invokeOld = () => {
+      invoke(oldMove, "onClick");
+      invoke(oldQuantity, "onChange", { target: { value: "999" } });
+      invoke(oldNote, "onChange", { target: { value: "Stale note" } });
+      invoke(oldRemove, "onClick");
+      invoke(oldName, "onChange", { target: { value: "Stale name" } });
+    };
+    await moveRow(0, "down");
+    const moved = ingredientValues();
+    invokeOld();
+    await hooks.settle();
+    expect(ingredientValues()).toEqual(moved);
+    expect(field("Name").props.value).toBe("Saved recipe");
+    await moveRow(1, "up");
+    const restored = ingredientValues();
+    invokeOld();
+    await hooks.settle();
+    expect(ingredientValues()).toEqual(restored);
+    expect(field("Name").props.value).toBe("Saved recipe");
+  });
+
+  it("rejects a retained move after a later quantity edit without losing that edit", async () => {
+    copyFetcher();
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    const retained = ingredientControl(0, "down");
+    await changeIngredient(0, "quantity", "7.000001");
+    invoke(retained, "onClick");
+    await hooks.settle();
+    expect(ingredientValues()[0]).toEqual({
+      name: "Rolled oats",
+      quantity: "7.000001",
+      note: "Public food note.",
+    });
+  });
+
+  it("marks reordered recipes dirty, invalidates an earlier discard choice, and is clean when the original order is restored", async () => {
+    copyFetcher();
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await moveRow(0, "down");
+    await click("Copy to new draft");
+    expect(hasButton(confirmCopyLabel)).toBe(true);
+    const retained = button(confirmCopyLabel);
+    await moveRow(1, "up");
+    invoke(retained, "onClick");
+    await hooks.settle();
+    expect(hasButton(confirmCopyLabel)).toBe(false);
+    expect(hasButton("Publish new revision")).toBe(true);
+    await click("Copy to new draft");
+    expect(hasButton(confirmCopyLabel)).toBe(false);
+    expect(hasButton("Create recipe")).toBe(true);
+    expect(ingredientValues().map((row) => row.name)).toEqual([
+      "Rolled oats",
+      "Private sauce",
+      "Nested base",
+    ]);
+  });
+
+  it.each(["create", "revision"] as const)(
+    "uses a new intent for changed %s order and retains exact body/key retries of that order",
+    async (kind) => {
+      const { fetcher } = copyFetcher();
+      const original = required(fetcher.getMockImplementation());
+      fetcher.mockImplementation(async (url, init) =>
+        init?.method === "POST"
+          ? Response.json({ error: "Retryable save failure" }, { status: 503 })
+          : original(url, init),
+      );
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      if (kind === "create") await click("Copy to new draft");
+      await moveRow(0, "down");
+      save();
+      await hooks.settle();
+      await moveRow(2, "up");
+      save();
+      await hooks.settle();
+      save();
+      await hooks.settle();
+      const posts = fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+      expect(posts).toHaveLength(3);
+      const first = required(posts[0]);
+      const changed = required(posts[1]);
+      const retry = required(posts[2]);
+      expect(first[1]?.body).not.toBe(changed[1]?.body);
+      expect(changed[1]?.body).toBe(retry[1]?.body);
+      const changedKey = new Headers(changed[1]?.headers).get("idempotency-key");
+      expect(new Headers(first[1]?.headers).get("idempotency-key")).not.toBe(changedKey);
+      expect(new Headers(retry[1]?.headers).get("idempotency-key")).toBe(changedKey);
+      expect(new Headers(retry[1]?.headers).get("if-match")).toBe(kind === "create" ? null : '"1"');
+      expect(
+        JSON.parse(String(retry[1]?.body)).ingredients.map(
+          (row: { position: number }) => row.position,
+        ),
+      ).toEqual([0, 1, 2]);
+      expect(ingredientValues().map((row) => row.name)).toEqual([
+        "Private sauce",
+        "Nested base",
+        "Rolled oats",
+      ]);
+    },
+  );
+
+  it.each(["save", "log"] as const)(
+    "disables and rejects retained ingredient actions during active %s",
+    async (action) => {
+      const pending = deferred<Response>();
+      const { fetcher } = copyFetcher();
+      const original = required(fetcher.getMockImplementation());
+      fetcher.mockImplementation(async (url, init) =>
+        init?.method === "POST" ? pending.promise : original(url, init),
+      );
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      const retainedMove = ingredientControl(0, "down");
+      const retainedQuantity = ingredientControl(0, "quantity");
+      const retainedNote = ingredientControl(0, "note");
+      const retainedRemove = ingredientControl(0, "remove");
+      const before = ingredientValues();
+      if (action === "save") save();
+      else invoke(button("Log recipe"), "onClick");
+      await hooks.settle();
+      expect(ingredientControl(0, "down").props.disabled).toBe(true);
+      expect(ingredientControl(0, "remove").props.disabled).toBe(true);
+      invoke(retainedMove, "onClick");
+      invoke(retainedQuantity, "onChange", { target: { value: "888" } });
+      invoke(retainedNote, "onChange", { target: { value: "Busy note" } });
+      invoke(retainedRemove, "onClick");
+      await hooks.settle();
+      expect(ingredientValues()).toEqual(before);
+      pending.resolve(Response.json({ error: "Retryable failure" }, { status: 503 }));
+      await hooks.settle();
+      expect(ingredientControl(0, "down").props.disabled).toBe(false);
+    },
+  );
+
+  it.each(["new", "open", "copy", "owner-change", "unmounted", "effect-replay"] as const)(
+    "rejects retained ingredient actions after %s",
+    async (transition) => {
+      const { fetcher } = copyFetcher();
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      const retainedMove = ingredientControl(0, "down");
+      const retainedQuantity = ingredientControl(0, "quantity");
+      const retainedNote = ingredientControl(0, "note");
+      const retainedRemove = ingredientControl(0, "remove");
+      if (transition === "new") await click("New recipe");
+      if (transition === "copy") await click("Copy to new draft");
+      if (transition === "open") {
+        openSaved();
+        await hooks.settle();
+      }
+      if (transition === "owner-change") {
+        const original = required(fetcher.getMockImplementation());
+        fetcher.mockImplementation(async (url, init) =>
+          url === "/api/auth/me"
+            ? session("a3fd8855-90c8-42df-8f21-2f5a4060fa08")
+            : original(url, init),
+        );
+        openSaved();
+        await hooks.settle();
+        expect(router.replace).toHaveBeenCalledWith("/login");
+      }
+      if (transition === "unmounted") hooks.unmount();
+      if (transition === "effect-replay") {
+        hooks.replayEffects();
+        await hooks.settle();
+      }
+      const before = ingredientValues();
+      const requests = fetcher.mock.calls.length;
+      const updates = hooks.afterClose();
+      invoke(retainedMove, "onClick");
+      invoke(retainedQuantity, "onChange", { target: { value: "999" } });
+      invoke(retainedNote, "onChange", { target: { value: "Stale note" } });
+      invoke(retainedRemove, "onClick");
+      await hooks.settle();
+      expect(ingredientValues()).toEqual(before);
+      expect(fetcher.mock.calls).toHaveLength(requests);
+      expect(hooks.afterClose()).toBe(updates);
+    },
+  );
+});

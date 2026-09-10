@@ -133,7 +133,8 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | M4B: review a pasted ingredient list on mobile | Source/local gates passed; collector diagnostic recovery delivered as `2df4493` with successful CI `34423562282`; container `34423562294` remains pending at the latest observation |
 | Automatic evidence / independent review | Saved recipe nutrition basis and coverage | Delivered `7274ddc`; CI `34425778573` passed; container `34425778640` remains pending at current observation; independent/device/release acceptance stays separate |
 | Automatic evidence / independent review | Copy saved recipe to a new draft | ADR 0032 source, independent in-task review, canonical local gates and synthetic Chrome copy/create/retry QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
-| Next candidate: read-only assessed | Reorder recipe ingredients in the draft | Write a bounded acceptance card before implementation; move existing ingredient identities up/down without changing pins, portions or notes; persist order only through explicit Create/Publish |
+| Automatic evidence / independent review | Reorder recipe ingredients in the draft | ADR 0033 source, independent in-task review, canonical local gates and synthetic Chrome create/revision/retry QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
+| Next candidate: read-only assessed | Previous/next nutrition report period | Write a bounded card before implementation; shift the same inclusive 1–31-day window through existing range validation and snapshot loading, preserving the selected nutrient and all privacy/print guards |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -255,14 +256,37 @@ confirmation layout and expiry closure. Exact-commit automatic evidence remains
 to be recorded in the delivery handoff. Physical native, assistive-technology,
 independent Claude Code, real persistence and release gates stay separate.
 
+Copy checkpoint `ae05bdc` has successful CI `34428567984`, completed
+2026-09-10 02:19:00 UTC. Container `34428567975` remains in progress at the
+2026-09-10 02:29:25 UTC read-only observation.
+
+**Reorder recipe ingredients in the draft** is source/local complete under
+[ADR 0033](../adr/0033-reorder-recipe-draft-ingredients.md). Web/mobile adjacent
+move buttons preserve ingredient identities, version pins, exact portions, notes
+and attribution; existing adapters persist contiguous positions only through
+explicit Create/Publish. Boundary and stale controls are guarded. Moves invalidate
+pending copy-discard choices and leave saved nutrition/logging independent.
+No API/schema/dependency/calculation or external release change was added.
+
+Independent in-task review and canonical local gates passed September 10, 2026
+UTC: 473 fresh web tests, 680 mobile plus 10 runner tests, 157 root policy tests,
+dependency/config/license checks and fresh web/iOS/Android builds. Type/test
+graphs each passed 17/17 with 15 cached; build passed 11/11 with 9 cached.
+Synthetic production Next/BFF Chrome QA passed keyboard/boundary moves, exact
+row-field preservation, long-label wrapping at 390 px, no write before explicit
+save, reordered create and revision readback, exact-body/key lost-receipt retry
+with one new revision, dirty/copy-choice invalidation and expiry closure.
+Exact-commit automatic results belong in the delivery handoff. Real persistence,
+physical native, accessibility, independent Claude Code and release gates remain.
+
 After revalidating automatic results, the next read-only assessed candidate is
-**Reorder recipe ingredients in the draft** on web/mobile. Existing request
-adapters already assign ingredient positions from array order. A bounded card
-should preserve ingredient identity, version pins, exact portions and notes;
-disable boundary moves; reject stale handlers; invalidate pending copy-discard
-choices; and keep saved nutrition/logging unchanged until explicit Create or
-Publish. This successor is not implemented. Write its card and ADR 0033 before
-editing and retain existing lifecycle, retry and release gates.
+**Previous/next nutrition report period** on web/mobile. Existing range validators
+and snapshot loaders can shift an inclusive 1–31-day range by its own length while
+preserving the selected nutrient. A bounded card should cover calendar-day
+arithmetic across leap/month/year/DST boundaries, date-draft handling, stale and
+owner/request fences, one fresh range load, missingness and web print invalidation.
+This successor is not implemented; write its acceptance card and ADR 0034 before
+editing. No report API, calculation, automatic advice or release change is implied.
 
 Prepare the external decisions alongside product work, without executing them:
 

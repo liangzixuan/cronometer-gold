@@ -363,18 +363,20 @@ export function RecipesClient() {
     [clearCopyConfirmation],
   );
   const builderScope = reviewGeneration.current;
+  const renderedBuilderGeneration = builderGeneration.current;
   const setBuilder = useCallback(
     (next: BuilderState) => {
       if (
         !mounted.current ||
         privateUiClosed.current ||
         ownerUserId.current === null ||
-        reviewGeneration.current !== builderScope
+        reviewGeneration.current !== builderScope ||
+        builderGeneration.current !== renderedBuilderGeneration
       )
         return;
       replaceBuilder(next);
     },
-    [replaceBuilder, builderScope],
+    [replaceBuilder, builderScope, renderedBuilderGeneration],
   );
   const setBusy = useCallback((next: string | null) => {
     busyRef.current = next;
@@ -872,11 +874,30 @@ export function RecipesClient() {
     setMessage(`${recipe.name} version ${recipe.versionNumber} pinned as a nested ingredient.`);
   }
 
-  function updateIngredient(index: number, quantity: string) {
+  function editableIngredientBuilder(clientKey: string): BuilderState | null {
+    const current = builderRef.current;
+    if (
+      !mounted.current ||
+      privateUiClosed.current ||
+      !reviewOwner ||
+      ownerUserId.current !== reviewOwner ||
+      reviewGeneration.current !== reviewContext ||
+      builderGeneration.current !== builderContext ||
+      stateRef.current !== "ready" ||
+      busyRef.current !== null ||
+      !current.ingredients.some((ingredient) => ingredient.clientKey === clientKey)
+    )
+      return null;
+    return current;
+  }
+
+  function updateIngredient(clientKey: string, quantity: string) {
+    const current = editableIngredientBuilder(clientKey);
+    if (!current) return;
     setBuilder({
-      ...builder,
-      ingredients: builder.ingredients.map((ingredient, candidate) => {
-        if (candidate !== index) return ingredient;
+      ...current,
+      ingredients: current.ingredients.map((ingredient) => {
+        if (ingredient.clientKey !== clientKey) return ingredient;
         if (ingredient.kind === "recipe") return { ...ingredient, grams: quantity };
         return {
           ...ingredient,
@@ -889,13 +910,42 @@ export function RecipesClient() {
     });
   }
 
-  function updateIngredientNote(index: number, note: string) {
+  function updateIngredientNote(clientKey: string, note: string) {
+    const current = editableIngredientBuilder(clientKey);
+    if (!current) return;
     setBuilder({
-      ...builder,
-      ingredients: builder.ingredients.map((ingredient, candidate) =>
-        candidate === index ? { ...ingredient, note: note || null } : ingredient,
+      ...current,
+      ingredients: current.ingredients.map((ingredient) =>
+        ingredient.clientKey === clientKey ? { ...ingredient, note: note || null } : ingredient,
       ),
     });
+  }
+
+  function removeIngredient(clientKey: string) {
+    const current = editableIngredientBuilder(clientKey);
+    if (!current) return;
+    setBuilder({
+      ...current,
+      ingredients: current.ingredients.filter((ingredient) => ingredient.clientKey !== clientKey),
+    });
+  }
+
+  function moveIngredient(clientKey: string, direction: -1 | 1) {
+    const current = editableIngredientBuilder(clientKey);
+    if (!current) return;
+    const index = current.ingredients.findIndex((ingredient) => ingredient.clientKey === clientKey);
+    const target = index + direction;
+    const moving = current.ingredients[index];
+    const adjacent = current.ingredients[target];
+    if (index < 0 || target < 0 || target >= current.ingredients.length || !moving || !adjacent)
+      return;
+    const ingredients = [...current.ingredients];
+    ingredients[index] = adjacent;
+    ingredients[target] = moving;
+    setBuilder({ ...current, ingredients });
+    setMessage(
+      `${moving.name} moved to ingredient ${target + 1} of ${ingredients.length}. Save to keep this order.`,
+    );
   }
 
   async function saveRecipe(event: FormEvent) {
@@ -1392,7 +1442,7 @@ export function RecipesClient() {
                                 aria-label={`${ingredient.name} note`}
                                 maxLength={500}
                                 onChange={(event) =>
-                                  updateIngredientNote(index, event.target.value)
+                                  updateIngredientNote(ingredient.clientKey, event.target.value)
                                 }
                                 placeholder="Ingredient note (optional)"
                                 value={ingredient.note ?? ""}
@@ -1407,24 +1457,45 @@ export function RecipesClient() {
                               aria-label={`${ingredient.name} quantity in ${unit}`}
                               inputMode="decimal"
                               maxLength={19}
-                              onChange={(event) => updateIngredient(index, event.target.value)}
+                              onChange={(event) =>
+                                updateIngredient(ingredient.clientKey, event.target.value)
+                              }
                               value={quantity}
                             />
                           </label>
-                          <button
-                            className="buttonDanger"
-                            onClick={() =>
-                              setBuilder({
-                                ...builder,
-                                ingredients: builder.ingredients.filter(
-                                  (_, candidate) => candidate !== index,
-                                ),
-                              })
-                            }
-                            type="button"
-                          >
-                            Remove
-                          </button>
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, maxWidth: 240 }}>
+                            <button
+                              aria-label={`Move ${ingredient.name} up from position ${index + 1} of ${builder.ingredients.length}`}
+                              className="buttonQuiet"
+                              disabled={busy !== null || state !== "ready" || index === 0}
+                              onClick={() => moveIngredient(ingredient.clientKey, -1)}
+                              type="button"
+                            >
+                              Move up
+                            </button>
+                            <button
+                              aria-label={`Move ${ingredient.name} down from position ${index + 1} of ${builder.ingredients.length}`}
+                              className="buttonQuiet"
+                              disabled={
+                                busy !== null ||
+                                state !== "ready" ||
+                                index === builder.ingredients.length - 1
+                              }
+                              onClick={() => moveIngredient(ingredient.clientKey, 1)}
+                              type="button"
+                            >
+                              Move down
+                            </button>
+                            <button
+                              aria-label={`Remove ${ingredient.name} at position ${index + 1} of ${builder.ingredients.length}`}
+                              className="buttonDanger"
+                              disabled={busy !== null || state !== "ready"}
+                              onClick={() => removeIngredient(ingredient.clientKey)}
+                              type="button"
+                            >
+                              Remove
+                            </button>
+                          </div>
                         </li>
                       );
                     })}

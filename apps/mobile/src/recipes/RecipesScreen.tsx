@@ -284,6 +284,7 @@ export function RecipesScreen({
   const lifecycle = useRef(0);
   const builderRef = useRef(builder);
   const builderGeneration = useRef(0);
+  const ingredientOrderGeneration = useRef(0);
   const reviewGeneration = useRef(0);
   const busyRef = useRef<string | null>(null);
   const readyRef = useRef(false);
@@ -321,6 +322,14 @@ export function RecipesScreen({
   const replaceBuilder = useCallback(
     (value: Builder) => {
       clearCopyChoice();
+      const previous = builderRef.current.ingredients;
+      if (
+        previous.length !== value.ingredients.length ||
+        previous.some(
+          (ingredient, index) => ingredient.clientKey !== value.ingredients[index]?.clientKey,
+        )
+      )
+        ingredientOrderGeneration.current += 1;
       builderRef.current = value;
       builderGeneration.current += 1;
       setBuilderState(value);
@@ -522,6 +531,7 @@ export function RecipesScreen({
 
   const renderEpoch = lifecycle.current;
   const renderReview = reviewGeneration.current;
+  const renderIngredientOrder = ingredientOrderGeneration.current;
   function canEdit(expectedReview = renderReview) {
     return (
       scopeIsCurrent(renderEpoch) &&
@@ -757,7 +767,39 @@ export function RecipesScreen({
       ],
     });
   }
+  function canEditIngredient(clientKey: string) {
+    return (
+      canEdit() &&
+      ingredientOrderGeneration.current === renderIngredientOrder &&
+      builderRef.current.ingredients.some((ingredient) => ingredient.clientKey === clientKey)
+    );
+  }
+  function moveIngredient(clientKey: string, direction: -1 | 1) {
+    if (!canEditIngredient(clientKey)) return;
+    const current = builderRef.current;
+    const index = current.ingredients.findIndex((ingredient) => ingredient.clientKey === clientKey);
+    const destination = index + direction;
+    if (index < 0 || destination < 0 || destination >= current.ingredients.length) return;
+    const ingredients = [...current.ingredients];
+    const ingredient = ingredients[index];
+    const adjacent = ingredients[destination];
+    if (!ingredient || !adjacent) return;
+    ingredients[index] = adjacent;
+    ingredients[destination] = ingredient;
+    replaceBuilder({ ...current, ingredients });
+    setMessage(
+      `${ingredient.name} moved to position ${destination + 1} of ${ingredients.length} in this draft.`,
+    );
+  }
+  function removeIngredient(clientKey: string) {
+    if (!canEditIngredient(clientKey)) return;
+    updateBuilder((current) => ({
+      ...current,
+      ingredients: current.ingredients.filter((ingredient) => ingredient.clientKey !== clientKey),
+    }));
+  }
   function updateQuantity(clientKey: string, quantity: string) {
+    if (!canEditIngredient(clientKey)) return;
     updateBuilder((current) => ({
       ...current,
       ingredients: current.ingredients.map((ingredient) =>
@@ -776,6 +818,7 @@ export function RecipesScreen({
     }));
   }
   function updateNote(clientKey: string, note: string) {
+    if (!canEditIngredient(clientKey)) return;
     updateBuilder((current) => ({
       ...current,
       ingredients: current.ingredients.map((ingredient) =>
@@ -1106,7 +1149,7 @@ export function RecipesScreen({
               multiline
             />
             <Text style={styles.sectionTitle}>Ingredients ({builder.ingredients.length}/50)</Text>
-            {builder.ingredients.map((ingredient) => {
+            {builder.ingredients.map((ingredient, index) => {
               const quantity =
                 ingredient.kind === "recipe"
                   ? ingredient.grams
@@ -1145,18 +1188,42 @@ export function RecipesScreen({
                     value={ingredient.note ?? ""}
                     onChange={(value) => updateNote(ingredient.clientKey, value)}
                   />
+                  <View style={styles.row}>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Move ${ingredient.name} up, ingredient ${index + 1} of ${builder.ingredients.length}`}
+                      accessibilityState={{ disabled: builderDisabled || index === 0 }}
+                      disabled={builderDisabled || index === 0}
+                      onPress={() => moveIngredient(ingredient.clientKey, -1)}
+                      style={[
+                        styles.secondary,
+                        (builderDisabled || index === 0) && styles.disabled,
+                      ]}
+                    >
+                      <Text style={styles.secondaryText}>Move up</Text>
+                    </Pressable>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`Move ${ingredient.name} down, ingredient ${index + 1} of ${builder.ingredients.length}`}
+                      accessibilityState={{
+                        disabled: builderDisabled || index === builder.ingredients.length - 1,
+                      }}
+                      disabled={builderDisabled || index === builder.ingredients.length - 1}
+                      onPress={() => moveIngredient(ingredient.clientKey, 1)}
+                      style={[
+                        styles.secondary,
+                        (builderDisabled || index === builder.ingredients.length - 1) &&
+                          styles.disabled,
+                      ]}
+                    >
+                      <Text style={styles.secondaryText}>Move down</Text>
+                    </Pressable>
+                  </View>
                   <Pressable
                     disabled={builderDisabled}
                     accessibilityLabel={`Remove ${ingredient.name}`}
                     accessibilityRole="button"
-                    onPress={() =>
-                      updateBuilder((current) => ({
-                        ...current,
-                        ingredients: current.ingredients.filter(
-                          (candidate) => candidate.clientKey !== ingredient.clientKey,
-                        ),
-                      }))
-                    }
+                    onPress={() => removeIngredient(ingredient.clientKey)}
                   >
                     <Text style={styles.danger}>Remove</Text>
                   </Pressable>

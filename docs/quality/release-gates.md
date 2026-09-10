@@ -511,3 +511,15 @@ acceptance.
   P0 flow.
 - A dietitian/scientific reviewer signs the equation, DRI, unit, and claims set;
   counsel signs the selected food-data and privacy model.
+
+## Recipe draft ingredient ordering (ADR 0033)
+
+- Adjacent moves preserve each ingredient identity, immutable public/private food
+  or nested-recipe pin, exact portion, note and attribution, including duplicates.
+- Boundary moves are disabled; retained controls cannot edit another draft/order
+  or cross owner/session/lifecycle/busy boundaries. Reordering invalidates pending
+  copy-discard choices and participates in dirty detection.
+- Moves make no write. Only explicit Create/Publish persists contiguous positions
+  using existing revision and retry guards; saved nutrition/logging/history stay
+  independent. Synthetic browser or component proof cannot replace real
+  persistence, physical device, accessibility, independent or release acceptance.
