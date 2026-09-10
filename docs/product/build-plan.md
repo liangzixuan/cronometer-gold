@@ -145,6 +145,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Inspect saved custom-food nutrients without editing | ADR 0041 source, independent in-task review, canonical local gates and synthetic Chrome exact-state/no-request/paging/draft/keyboard/narrow/Retry/expiry proof passed; record exact-commit automatic results and preserve device/independent/release acceptance |
 | Automatic evidence / independent review | Select every loaded nutrient for native Health trends | ADR 0042 source, independent in-task review, focused native behavior/types, canonical local gates and fresh exports passed; record exact-commit automatic results and preserve device/independent/release acceptance |
 | Automatic evidence / independent review | Filter loaded saved custom foods by name | ADR 0043 source, independent in-task review, canonical local gates and synthetic Chrome no-request/details/draft/paging/keyboard/narrow/expiry proof passed; record exact-commit automatic results and preserve device/independent/release acceptance |
+| Automatic evidence / independent review | Copy a saved custom food to a new draft | ADR 0044 source, independent in-task review, canonical local gates and synthetic Chrome copy/draft/Create/retry/keyboard/narrow/expiry proof passed; record exact-commit automatic results and preserve device/independent/release acceptance |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1335,16 +1336,30 @@ Historical base `064616a2f692b94a39fb85bc6bac1fd52a08c2b5` CI `34512970603`
 succeeded; container `34512970717` remained in progress at the September 10,
 2026 19:03:10 UTC preflight. Base automatic results do not transfer to this slice.
 
-### Next bounded candidate after ADR 0043
+### Copy a saved custom food: source/local complete
 
-Prepare one card to copy a loaded saved custom food into a new local draft.
-Both clients currently offer Revise, whose draft retains the saved food identity;
-there is no separate Copy action. Reuse exact saved name/brand/serving/notes and
-nutrient states/decimal strings under a fresh create identity, preserving the
-source record and explicit Create. Protect existing dirty drafts, pending writes
-and current private scope. A new copy intent must be distinguishable from an
-unresolved same-body Create retry without changing retry identity within an
-existing intent. Bind any draft replacement to the exact source version and
-current draft; keep filter/disclosures and pinned logging independent. No new
-endpoint or automatic write is proposed.
-No successor implementation has started.
+[ADR 0044](../adr/0044-copy-saved-custom-food-to-new-draft.md) adds local Copy
+to new draft on web/native. Exact saved fields, nutrient IDs and decimal strings
+are preserved, including unavailable picker entries. Raw unsaved draft and native
+composer replacement needs a current source-bound choice. Explicit Create uses a
+fresh copy intent with stable same-intent retries; pending writes and late list
+responses cannot overwrite later work or remove an accepted save. Filtering,
+disclosures and pinned logging remain independent.
+
+Focused actual-component checks, independent in-task review, canonical local
+gates, fresh client outputs and production Next/BFF synthetic dedicated-Chrome
+copy/draft/Create/lost-receipt/retry/keyboard/narrow/expiry proof passed. Real
+persistence, physical native, assistive technology, concurrent React, external
+Claude Code, hosted and release acceptance remain separate. Exact delivery and
+automatic state are recorded in Windows readiness outside Git.
+
+At the September 10, 2026 19:35:59 UTC preflight, base
+`71b7fff605404a13de27f495c39eda64b2541c10` had CI `34521109804` and container
+`34521109674` in progress. Base results do not transfer to this slice.
+
+### Next continuation
+
+Reconcile exact-commit automatic results and independent-review findings first.
+Then select one bounded user-visible acceptance card from current source gaps,
+keeping live catalogue, device, hosted and release gates explicit. No successor
+implementation has started.

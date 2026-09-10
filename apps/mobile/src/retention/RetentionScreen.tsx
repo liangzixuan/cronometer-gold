@@ -15,6 +15,7 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
+  type LayoutChangeEvent,
   Platform,
   Pressable,
   ScrollView,
@@ -135,6 +136,14 @@ interface NutrientComposer {
   readonly amount: string;
   readonly reason: "" | "not_reported" | "not_analyzed" | "not_applicable" | "withheld";
 }
+interface CustomCopyChoice {
+  readonly food: CustomFood;
+  readonly draft: CustomDraft;
+  readonly composer: NutrientComposer;
+  readonly profileScope: object;
+  readonly epoch: number;
+}
+
 function blankComposer(): NutrientComposer {
   return { query: "", nutrientId: "", state: "quantified", amount: "", reason: "" };
 }
@@ -361,6 +370,17 @@ export function RetentionScreen({
   const [integrations, setIntegrations] = useState<readonly PlatformIntegration[]>([]);
   const [custom, setCustomState] = useState<CustomDraft>(blankCustom);
   const customRef = useRef(custom);
+  const customBaseline = useRef<CustomDraft>(blankCustom());
+  const customCreationIntent = useRef(0);
+  const [customCopyChoice, setCustomCopyChoice] = useState<CustomCopyChoice | null>(null);
+  const customCopyChoiceRef = useRef(customCopyChoice);
+  const [customCopyStatus, setCustomCopyStatus] = useState("");
+  const clearCustomCopyChoice = useCallback(() => {
+    customCopyChoiceRef.current = null;
+    setCustomCopyChoice(null);
+  }, []);
+  const workspaceScroll = useRef<ScrollView | null>(null);
+  const customEditorOffset = useRef(0);
   const [composer, setComposerState] = useState<NutrientComposer>(blankComposer);
   const composerRef = useRef(composer);
   const [composerStatus, setComposerStatus] = useState("");
@@ -392,8 +412,9 @@ export function RetentionScreen({
     if (installedFoodFilterScope.current !== foodFilterScope) {
       installedFoodFilterScope.current = foodFilterScope;
       resetSavedFoodFilter();
+      clearCustomCopyChoice();
     }
-  }, [foodFilterScope, resetSavedFoodFilter]);
+  }, [clearCustomCopyChoice, foodFilterScope, resetSavedFoodFilter]);
   const customInstalled = useRef<typeof customScope | null>(null);
   const customClosed = useRef<typeof customScope | null>(null);
   const customMounted = useRef(false);
@@ -410,16 +431,22 @@ export function RetentionScreen({
   const customPageRequest = useRef<AbortController | null>(null);
   const unauthorizedRef = useRef(onUnauthorized);
   unauthorizedRef.current = onUnauthorized;
-  const installCustom = useCallback((value: CustomDraft, resetComposer = false) => {
-    customRef.current = value;
-    setCustomState(value);
-    if (resetComposer) {
-      const next = blankComposer();
-      composerRef.current = next;
-      setComposerState(next);
-      setComposerStatus("");
-    }
-  }, []);
+  const installCustom = useCallback(
+    (value: CustomDraft, resetComposer = false) => {
+      clearCustomCopyChoice();
+      customRef.current = value;
+      setCustomState(value);
+      if (resetComposer) {
+        customBaseline.current = value.id === null ? blankCustom() : value;
+        setCustomCopyStatus("");
+        const next = blankComposer();
+        composerRef.current = next;
+        setComposerState(next);
+        setComposerStatus("");
+      }
+    },
+    [clearCustomCopyChoice],
+  );
   const currentCustomScope = useCallback(
     (epoch: number) =>
       customMounted.current &&
@@ -463,6 +490,7 @@ export function RetentionScreen({
   ]);
   useEffect(() => {
     customMounted.current = true;
+    clearCustomCopyChoice();
     resetFoodDetails();
     customEpoch.current += 1;
     if (customInstalled.current !== customScope) {
@@ -483,6 +511,7 @@ export function RetentionScreen({
       setBusy(null);
     return () => {
       customMounted.current = false;
+      customCopyChoiceRef.current = null;
       foodDetailsRef.current = new Set();
       customEpoch.current += 1;
       customWrite.current?.abort();
@@ -490,7 +519,7 @@ export function RetentionScreen({
       customPageRequest.current?.abort();
       customPageRequest.current = null;
     };
-  }, [customScope, installCustom, resetFoodDetails, setBusy, setFoods]);
+  }, [clearCustomCopyChoice, customScope, installCustom, resetFoodDetails, setBusy, setFoods]);
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (next) => {
       const active = next === "active";
@@ -501,6 +530,7 @@ export function RetentionScreen({
       )
         return;
       customActive.current = active;
+      clearCustomCopyChoice();
       resetFoodDetails();
       customEpoch.current += 1;
       customWrite.current?.abort();
@@ -511,7 +541,7 @@ export function RetentionScreen({
       setCustomEpoch(customEpoch.current);
     });
     return () => subscription.remove();
-  }, [customScope, resetFoodDetails, setBusy]);
+  }, [clearCustomCopyChoice, customScope, resetFoodDetails, setBusy]);
   const [customLog, setCustomLog] = useState<CustomLogDraft | null>(null);
   const [definitionName, setDefinitionName] = useState("Weight");
   const [definitionDimension, setDefinitionDimension] =
@@ -562,6 +592,11 @@ export function RetentionScreen({
   const [healthState, setHealthState] = useState("Not checked on this signed build.");
   const operations = useRef(new Map<string, StableOperation>());
   const loadController = useRef<AbortController | null>(null);
+  const customLoadReceipts = useRef<{
+    readonly controller: AbortController;
+    readonly scope: typeof customScope;
+    readonly foods: readonly CustomFood[];
+  } | null>(null);
   useEffect(() => {
     const replacedOwner = trendChoicesInstalled.current !== customScope;
     trendInstalled.current = trendScope;
@@ -699,6 +734,7 @@ export function RetentionScreen({
   const loadAll = useCallback(async () => {
     const epoch = customEpoch.current;
     if (!currentCustomScope(epoch)) return;
+    clearCustomCopyChoice();
     setVerifiedFoodListScope(null);
     abortTrendRead();
     setNutrientTrend(null);
@@ -709,6 +745,7 @@ export function RetentionScreen({
     loadController.current?.abort();
     const controller = new AbortController();
     loadController.current = controller;
+    customLoadReceipts.current = { controller, scope: customScope, foods: [] };
     setLoading(true);
     try {
       const rangeFrom = new Date(Date.now() - 120 * 86_400_000).toISOString();
@@ -753,7 +790,18 @@ export function RetentionScreen({
       if (currentCustomScope(epoch))
         registry.current = { scope: customScope, values: nextNutrients };
       if (currentCustomScope(epoch)) {
-        setFoods(foodPage.items);
+        const accepted = customLoadReceipts.current;
+        const retained =
+          accepted?.controller === controller && accepted.scope === customScope
+            ? accepted.foods
+            : [];
+        setFoods([
+          ...retained.map((saved) => {
+            const listed = foodPage.items.find((item) => item.id === saved.id);
+            return listed && BigInt(listed.revision) > BigInt(saved.revision) ? listed : saved;
+          }),
+          ...foodPage.items.filter((item) => !retained.some((saved) => saved.id === item.id)),
+        ]);
         customFoodsScope.current = customScope;
         setVerifiedFoodListScope(customScope);
         foodDetailsReady.current = true;
@@ -798,12 +846,14 @@ export function RetentionScreen({
         );
       }
     } finally {
+      if (customLoadReceipts.current?.controller === controller) customLoadReceipts.current = null;
       if (!controller.signal.aborted) setLoading(false);
     }
   }, [
     abortTrendRead,
     accessToken,
     apiBase,
+    clearCustomCopyChoice,
     closeCustom,
     currentCustomScope,
     customScope,
@@ -1058,6 +1108,7 @@ export function RetentionScreen({
       )
     )
       return;
+    clearCustomCopyChoice();
     composerRef.current = next;
     setComposerState(next);
     setComposerStatus("");
@@ -1104,6 +1155,59 @@ export function RetentionScreen({
       );
     }
   }
+  function copySourceIsCurrent(food: CustomFood): boolean {
+    return (
+      canEditCustom() &&
+      foodFilterScopeRef.current === foodFilterScope &&
+      installedFoodFilterScope.current === foodFilterScope &&
+      customFoodsScope.current === customScope &&
+      foodsRef.current.includes(food)
+    );
+  }
+  function installCopiedCustom(food: CustomFood) {
+    customCreationIntent.current += 1;
+    installCustom({ ...customDraft(food), id: null, revision: null }, true);
+    setCustomCopyStatus(
+      `Copied saved ${food.currentVersion.name}, version ${food.currentVersion.versionNumber}, to a new draft. Choose Create private food to save it.`,
+    );
+    workspaceScroll.current?.scrollTo({ y: customEditorOffset.current, animated: true });
+  }
+  function copySavedCustom(food: CustomFood) {
+    if (!copySourceIsCurrent(food) || customCopyChoiceRef.current !== customCopyChoice) return;
+    if (
+      JSON.stringify(custom) !== JSON.stringify(customBaseline.current) ||
+      JSON.stringify(composer) !== JSON.stringify(blankComposer())
+    ) {
+      const choice = {
+        food,
+        draft: custom,
+        composer,
+        profileScope: foodFilterScope,
+        epoch: renderedCustomEpoch,
+      };
+      customCopyChoiceRef.current = choice;
+      setCustomCopyChoice(choice);
+      workspaceScroll.current?.scrollTo({ y: customEditorOffset.current, animated: true });
+      return;
+    }
+    installCopiedCustom(food);
+  }
+  function customCopyChoiceIsCurrent(choice: CustomCopyChoice): boolean {
+    return (
+      customCopyChoiceRef.current === choice &&
+      choice.draft === customRef.current &&
+      choice.composer === composerRef.current &&
+      choice.profileScope === foodFilterScopeRef.current &&
+      choice.epoch === customEpoch.current &&
+      copySourceIsCurrent(choice.food)
+    );
+  }
+  function confirmCustomCopy(choice: CustomCopyChoice) {
+    if (customCopyChoiceIsCurrent(choice)) installCopiedCustom(choice.food);
+  }
+  function keepEditingCustom(choice: CustomCopyChoice) {
+    if (customCopyChoiceIsCurrent(choice)) clearCustomCopyChoice();
+  }
   function reviseCustom(food: CustomFood) {
     if (
       !canEditCustom() ||
@@ -1121,6 +1225,7 @@ export function RetentionScreen({
 
   async function saveCustomFood() {
     if (!canEditCustom()) return;
+    clearCustomCopyChoice();
     if (!custom.name.trim()) return setMessage("A custom food name is required.");
     let nutrientRows: readonly CustomFoodNutrientDraft[];
     try {
@@ -1144,7 +1249,7 @@ export function RetentionScreen({
       notes: custom.notes.trim() || null,
     };
     const path = custom.id ? `/v1/custom-foods/${custom.id}/revisions` : "/v1/custom-foods";
-    const key = `custom:${custom.id ?? "new"}:${custom.revision ?? "0"}:${JSON.stringify(body)}`;
+    const key = `custom:${custom.id ?? `new:${customCreationIntent.current}`}:${custom.revision ?? "0"}:${JSON.stringify(body)}`;
     let operation = customOperations.current.get(key);
     if (!operation) {
       operation = { id: newOperationId(), serializedBody: JSON.stringify(body) };
@@ -1185,9 +1290,27 @@ export function RetentionScreen({
         throw new TypeError("The custom-food receipt belongs to another food.");
       if (customOperations.current.get(key) === capturedOperation)
         customOperations.current.delete(key);
+      const currentSaved =
+        customFoodsScope.current === customScope
+          ? foodsRef.current.find((item) => item.id === saved.id)
+          : undefined;
+      const retainedSaved =
+        currentSaved && BigInt(currentSaved.revision) > BigInt(saved.revision)
+          ? currentSaved
+          : saved;
+      const pendingList = customLoadReceipts.current;
+      if (
+        pendingList?.scope === customScope &&
+        pendingList.controller === loadController.current &&
+        !pendingList.controller.signal.aborted
+      )
+        customLoadReceipts.current = {
+          ...pendingList,
+          foods: [retainedSaved, ...pendingList.foods.filter((item) => item.id !== saved.id)],
+        };
       setFoods(
         customFoodsScope.current === customScope
-          ? [saved, ...foodsRef.current.filter((item) => item.id !== saved.id)]
+          ? [retainedSaved, ...foodsRef.current.filter((item) => item.id !== saved.id)]
           : [saved],
       );
       customFoodsScope.current = customScope;
@@ -2103,6 +2226,7 @@ export function RetentionScreen({
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
       <ScrollView
+        ref={workspaceScroll}
         automaticallyAdjustKeyboardInsets
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
@@ -2226,7 +2350,35 @@ export function RetentionScreen({
         <Section
           title="Private custom foods"
           subtitle="Owner-entered foods are private and every diary log pins an immutable version."
+          onLayout={(event) => {
+            customEditorOffset.current = event.nativeEvent.layout.y;
+          }}
         >
+          {savedFoodFilterVisible && customCopyStatus ? (
+            <Text accessibilityLiveRegion="polite" style={styles.help}>
+              {customCopyStatus}
+            </Text>
+          ) : null}
+          {customCopyChoice && customCopyChoiceIsCurrent(customCopyChoice) ? (
+            <View style={styles.editor}>
+              <Text style={styles.cardTitle}>Replace unsaved custom-food work?</Text>
+              <Text style={styles.help}>
+                Keep editing, or discard this draft and any nutrient inputs not yet added to it,
+                then copy saved {customCopyChoice.food.currentVersion.name}, version{" "}
+                {customCopyChoice.food.currentVersion.versionNumber}.
+              </Text>
+              <Button
+                label="Keep editing"
+                onPress={() => keepEditingCustom(customCopyChoice)}
+                secondary
+              />
+              <Button
+                label="Discard draft and copy saved version"
+                onPress={() => confirmCustomCopy(customCopyChoice)}
+                secondary
+              />
+            </View>
+          ) : null}
           <LabeledInput
             label="Name"
             value={customVisible ? custom.name : ""}
@@ -2492,6 +2644,18 @@ export function RetentionScreen({
                 </View>
               ) : null}
               <View style={styles.actions}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={`Copy saved ${food.currentVersion.name}, version ${food.currentVersion.versionNumber}, to a new draft`}
+                  accessibilityState={{ disabled: customDisabled }}
+                  disabled={customDisabled}
+                  onPress={() => copySavedCustom(food)}
+                  style={[styles.button, styles.buttonSecondary, customDisabled && styles.disabled]}
+                >
+                  <Text style={[styles.buttonText, styles.buttonSecondaryText]}>
+                    Copy to new draft
+                  </Text>
+                </Pressable>
                 <Button
                   label="Revise"
                   disabled={customDisabled}
@@ -3012,13 +3176,15 @@ function Section({
   title,
   subtitle,
   children,
+  onLayout,
 }: {
   readonly title: string;
   readonly subtitle: string;
   readonly children: React.ReactNode;
+  readonly onLayout?: (event: LayoutChangeEvent) => void;
 }) {
   return (
-    <View style={styles.section}>
+    <View style={styles.section} onLayout={onLayout}>
       <Text accessibilityRole="header" style={styles.heading}>
         {title}
       </Text>

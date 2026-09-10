@@ -49,6 +49,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0041](./0041-saved-custom-food-nutrient-details.md) | Inspect loaded saved custom-food nutrient snapshots without editing | Source/local complete; automatic and release acceptance separate |
 | [0042](./0042-native-trend-nutrient-picker.md) | Select every loaded targetable nutrient for native Health trends | Source/local complete; automatic and release acceptance separate |
 | [0043](./0043-loaded-saved-custom-food-filter.md) | Filter loaded saved custom foods by name | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
+| [0044](./0044-copy-saved-custom-food-to-new-draft.md) | Copy a saved custom food to a new draft | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

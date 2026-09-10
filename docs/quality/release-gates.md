@@ -694,3 +694,25 @@ acceptance.
   Chrome production Next/BFF no-request/details/draft/paging/keyboard/narrow/
   expiry proof. Keep real service, physical native, concurrent React, assistive
   technology, external reviewer, hosted and release acceptance separate.
+
+
+## ADR 0044 saved custom-food copying
+
+- Copy is local and source/version identified; exact fields, IDs, all nutrient
+  states and decimal strings survive into a new draft with no saved ID/revision.
+  Preserve source records/history and require explicit Create.
+- Raw unsaved drafts and native composer scratch require an exact source/draft/
+  scope-bound inline replacement choice. Keep editing is lossless; stale choice
+  or field callbacks cannot modify a later draft or copy another source.
+- Accepted Copy has a distinct creation intent. Preserve exact retry identity
+  within each intent and keep cancelled choices/local UI actions from rotating
+  it. Live custom-write ownership prevents overlapping copy/save even when shared
+  busy changes; stale receipt/JSON/401/finally cannot affect newer work. Preserve
+  valid accepted-write handling independently of full-list/read freshness.
+- Keep loaded list/filter/disclosures, pinned logging and unrelated workflows
+  independent. No endpoint/schema/storage/outbox or nutrition calculation changes.
+- Require actual-component/types/format and independent review, frozen canonical
+  gates/fresh client outputs and synthetic Chrome Next/BFF exact copy/Create/
+  lost-receipt/retry/original-unchanged/keyboard/narrow/expiry proof. Keep real
+  persistence, physical native, concurrent React, assistive technology, external
+  reviewer, hosted and release acceptance separate.

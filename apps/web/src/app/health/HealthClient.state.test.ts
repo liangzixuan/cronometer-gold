@@ -1335,3 +1335,520 @@ describe("actual loaded saved-food name filter", () => {
     expect(filterStatus()).not.toContain("All saved");
   });
 });
+
+const discardCustomCopy = "Discard draft and copy saved version";
+function copyButton(item: CustomFood) {
+  return button(
+    `Copy ${item.currentVersion.name} v${item.currentVersion.versionNumber} to new draft`,
+    card(item),
+  );
+}
+async function copyFood(item: CustomFood) {
+  const node = copyButton(item);
+  expect(node.props.disabled).toBe(false);
+  invoke(node, "onClick");
+  await hooks.settle();
+}
+function customForm() {
+  const found = elements().find(
+    (node) =>
+      node.type === "form" &&
+      elements(node).some(
+        (child) => child.props.value === field("Name").props.value && child.props.maxLength === 500,
+      ),
+  );
+  if (!found) throw new Error("Missing custom form");
+  return found;
+}
+function newSaved(source: CustomFood, index = 20): CustomFood {
+  return {
+    ...source,
+    id: food(index).id,
+    revision: "1",
+    currentVersion: {
+      ...source.currentVersion,
+      id: food(index).currentVersion.id,
+      versionNumber: 1,
+    },
+  };
+}
+function savedRequest(source: CustomFood) {
+  return {
+    name: source.currentVersion.name,
+    brandName: source.currentVersion.brandName,
+    serving: source.currentVersion.serving
+      ? { label: source.currentVersion.serving.label, grams: source.currentVersion.serving.grams }
+      : null,
+    nutrients: source.currentVersion.nutrients.map((row) => ({
+      nutrientId: row.nutrient.id,
+      state: row.state,
+      amountPer100Grams: row.amountPer100Grams,
+      ...(row.state === "unknown" ? { reason: row.reason } : {}),
+    })),
+    notes: source.currentVersion.notes,
+  };
+}
+
+describe("actual saved custom-food Copy to new draft", () => {
+  it("copies exact saved states and unavailable snapshot options without requests, then creates a separate food", async () => {
+    const base = allStates();
+    const first = {
+      ...base,
+      currentVersion: {
+        ...base.currentVersion,
+        name: "Exact copy",
+        brandName: "Brand",
+        nutrients: base.currentVersion.nutrients.map((row, index) =>
+          index === 1 ? { ...row, amountPer100Grams: "0.0000" } : row,
+        ),
+      },
+    } as CustomFood;
+    const original = JSON.stringify(first);
+    const { state, fetcher, writes } = workspace([first]);
+    await mount();
+    await toggle(first);
+    const focus = vi.fn();
+    (field("Name").props.ref as { current: unknown }).current = { focus };
+    const requests = fetcher.mock.calls.length;
+    const beforeStatus = status();
+    await copyFood(first);
+    expect(fetcher).toHaveBeenCalledTimes(requests);
+    expect(focus).toHaveBeenCalledOnce();
+    expect(status()).toBe(beforeStatus);
+    expect(details(first).props.hidden).toBe(false);
+    expect(text(customForm())).toContain("New draft copied from saved Exact copy v1");
+    expect(field("Name").props.value).toBe("Exact copy");
+    expect(field("Brand (optional)").props.value).toBe("Brand");
+    expect(field("Serving grams").props.value).toBe("125.25");
+    expect(field("Amount per 100 grams 1").props.value).toBe(longAmount);
+    expect(field("Amount per 100 grams 2").props.value).toBe("0.0000");
+    for (const [index, row] of first.currentVersion.nutrients.entries()) {
+      expect(field(`Nutrient ${index + 1}`).props.value).toBe(row.nutrient.id);
+      expect(text(field(`Nutrient ${index + 1}`))).toContain(
+        `${row.nutrient.name} (${row.nutrient.unit})`,
+      );
+    }
+    state.write = () => receipt(newSaved(first));
+    await submit("Create private food");
+    expect(writes()).toHaveLength(1);
+    const attempt = writes()[0];
+    if (!attempt) throw new Error("Missing create");
+    const [url, init] = attempt;
+    expect(url).toBe("/api/retention/custom-foods");
+    expect(new Headers(init?.headers).has("if-match")).toBe(false);
+    expect(JSON.parse(String(init?.body))).toEqual(savedRequest(first));
+    expect(savedNames()).toEqual(["Exact copy", "Exact copy"]);
+    expect(JSON.stringify(first)).toBe(original);
+    expect(field("Name").props.value).toBe("");
+  });
+
+  it("preserves all 256 nutrient rows and optional serving absence on an archived source", async () => {
+    const first = {
+      ...food(),
+      status: "archived" as const,
+      currentVersion: {
+        ...food().currentVersion,
+        serving: null,
+        nutrients: Array.from({ length: 256 }, (_, index) => ({
+          nutrient: {
+            id: String(index + 1),
+            code: `code${index}`,
+            name: `Nutrient ${index}`,
+            unit: "g",
+          },
+          state: "quantified" as const,
+          amountPer100Grams: index ? "0" : longAmount,
+        })),
+      },
+    };
+    const { state, writes } = workspace([first]);
+    await mount();
+    await copyFood(first);
+    expect(field("Serving label").props.value).toBe("");
+    expect(field("Serving grams").props.value).toBe("");
+    expect(field("Nutrient 256").props.value).toBe("256");
+    state.write = () => receipt(newSaved(first));
+    await submit("Create private food");
+    expect(JSON.parse(String(writes()[0]?.[1]?.body))).toEqual(savedRequest(first));
+  });
+
+  it("protects populated new drafts and copied drafts, while Keep editing preserves raw work", async () => {
+    const first = food();
+    const { fetcher } = workspace([first]);
+    await mount();
+    await change("Name", "  unfinished  ");
+    await change("Notes (optional)", "  notes\n ");
+    const before = formValues();
+    const requests = fetcher.mock.calls.length;
+    await copyFood(first);
+    expect(text(customForm())).toContain("unsaved draft");
+    await click("Keep editing");
+    expect(formValues()).toEqual(before);
+    await copyFood(first);
+    await click(discardCustomCopy);
+    expect(field("Name").props.value).toBe(first.currentVersion.name);
+    await copyFood(first);
+    expect(text(customForm())).toContain("unsaved draft");
+    await click("Keep editing");
+    expect(fetcher).toHaveBeenCalledTimes(requests);
+  });
+
+  it("copies unchanged revisions directly but treats raw whitespace edits as dirty", async () => {
+    const first = food();
+    workspace([first]);
+    await mount();
+    await click("Revise", card(first));
+    await change("Name", `${first.currentVersion.name} `);
+    await copyFood(first);
+    expect(button(discardCustomCopy)).toBeDefined();
+    await click("Keep editing");
+    await change("Name", first.currentVersion.name);
+    await copyFood(first);
+    expect(elements().some((node) => text(node) === discardCustomCopy)).toBe(false);
+    expect(button("Create private food")).toBeDefined();
+  });
+
+  it("rejects old choices after edit/restore and cannot cancel a newer choice", async () => {
+    const first = food();
+    workspace([first]);
+    await mount();
+    await change("Name", "Draft");
+    await copyFood(first);
+    const discard = button(discardCustomCopy);
+    const keep = button("Keep editing");
+    await change("Name", "Other");
+    await change("Name", "Draft");
+    await copyFood(first);
+    invoke(discard, "onClick");
+    invoke(keep, "onClick");
+    await hooks.settle();
+    expect(field("Name").props.value).toBe("Draft");
+    expect(button(discardCustomCopy)).toBeDefined();
+    await click(discardCustomCopy);
+    expect(field("Name").props.value).toBe(first.currentVersion.name);
+  });
+
+  it("leaves filter, disclosures, pinned log and other fields intact, even when the choice source is filtered out", async () => {
+    const first = food();
+    const second = food(2);
+    const { fetcher } = workspace([first, second]);
+    await mount();
+    await toggle(first);
+    await click("Log pinned v1", card(second));
+    await change("Exact quantity", "2.375");
+    await change("Name", "Dirty draft");
+    await copyFood(first);
+    const logBefore = ["Exact quantity", "Local date", "Local time"].map(
+      (label) => field(label).props.value,
+    );
+    const messageBefore = status();
+    const requests = fetcher.mock.calls.length;
+    await change(savedFilterLabel, "absent");
+    await click(discardCustomCopy);
+    expect(field(savedFilterLabel).props.value).toBe("absent");
+    expect(
+      ["Exact quantity", "Local date", "Local time"].map((label) => field(label).props.value),
+    ).toEqual(logBefore);
+    expect(status()).toBe(messageBefore);
+    await click(clearFilterLabel);
+    expect(details(first).props.hidden).toBe(false);
+    expect(fetcher).toHaveBeenCalledTimes(requests);
+  });
+
+  it("rejects retained original field, row, Revise, Cancel and submit controls after Copy", async () => {
+    const first = food();
+    const { fetcher, writes } = workspace([first]);
+    await mount();
+    await click("Revise", card(first));
+    const originalFields = elements(customForm()).filter(
+      (node) => typeof node.props.onChange === "function",
+    );
+    const oldRemove = button("Remove nutrient 1");
+    const oldAdd = button("Add nutrient");
+    const oldRevise = button("Revise", card(first));
+    const oldCancel = button("Cancel edit");
+    const oldForm = customForm();
+    await copyFood(first);
+    const before = formValues();
+    const requests = fetcher.mock.calls.length;
+    for (const node of originalFields) invoke(node, "onChange", { target: { value: "stale" } });
+    for (const node of [oldRemove, oldAdd, oldRevise, oldCancel]) invoke(node, "onClick");
+    invoke(oldForm, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    expect(formValues()).toEqual(before);
+    expect(fetcher).toHaveBeenCalledTimes(requests);
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("keeps same-value controls usable and fences duplicate Copy before paint", async () => {
+    const first = food();
+    workspace([first]);
+    await mount();
+    const originalCopy = copyButton(first);
+    invoke(field("Name"), "onChange", { target: { value: "" } });
+    invoke(originalCopy, "onClick");
+    invoke(originalCopy, "onClick");
+    await hooks.settle();
+    expect(field("Name").props.value).toBe(first.currentVersion.name);
+    expect(elements().some((node) => text(node) === discardCustomCopy)).toBe(false);
+  });
+
+  it("retains A-to-B-to-A and malformed receipt retries, but accepted identical Copy has a new intent", async () => {
+    const first = food();
+    const { state, writes } = workspace([first]);
+    await mount();
+    await copyFood(first);
+    state.write = () => Response.json({ data: "malformed" });
+    await submit("Create private food");
+    await submit("Create private food");
+    await change("Name", "Body B");
+    await submit("Create private food");
+    await change("Name", first.currentVersion.name);
+    await submit("Create private food");
+    const attempts = writes();
+    expect(attempts).toHaveLength(4);
+    expect(attempts[0]?.[1]?.body).toBe(attempts[3]?.[1]?.body);
+    const keys = attempts.map(([, init]) => new Headers(init?.headers).get("idempotency-key"));
+    expect(keys[0]).toBe(keys[1]);
+    expect(keys[0]).toBe(keys[3]);
+    expect(keys[0]).not.toBe(keys[2]);
+    await copyFood(first);
+    await click("Keep editing");
+    await submit("Create private food");
+    expect(new Headers(writes()[4]?.[1]?.headers).get("idempotency-key")).toBe(keys[0]);
+    await copyFood(first);
+    await click(discardCustomCopy);
+    await submit("Create private food");
+    expect(writes()[5]?.[1]?.body).toBe(attempts[0]?.[1]?.body);
+    expect(new Headers(writes()[5]?.[1]?.headers).get("idempotency-key")).not.toBe(keys[0]);
+  });
+
+  it("blocks Copy and duplicate saves through its own pending write after unrelated work completes", async () => {
+    const first = food();
+    const { state, writes } = workspace([first]);
+    state.cursor = "next";
+    await mount();
+    await copyFood(first);
+    const oldCopy = copyButton(first);
+    const oldSubmit = customForm();
+    const pending = deferred<Response>();
+    state.write = () => pending.promise;
+    invoke(oldSubmit, "onSubmit", { preventDefault() {} });
+    invoke(oldCopy, "onClick");
+    invoke(oldSubmit, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    state.continuation = () => page([food(2)]);
+    await click("Load more private foods");
+    expect(copyButton(first).props.disabled).toBe(true);
+    expect(button("Saving…").props.disabled).toBe(true);
+    expect(writes()).toHaveLength(1);
+    pending.resolve(receipt(newSaved(first)));
+    await hooks.settle();
+    expect(field("Name").props.value).toBe("");
+    expect(button("Create private food").props.disabled).toBe(false);
+  });
+
+  it("checks current draft before unauthorized or JSON effects and preserves later edits", async () => {
+    const first = food();
+    const { state } = workspace([first]);
+    await mount();
+    await copyFood(first);
+    const pending = deferred<Response>();
+    state.write = () => pending.promise;
+    await submit("Create private food");
+    await change("Name", "Newer raw draft");
+    const old = Response.json({ error: "expired" }, { status: 401 });
+    const parse = vi.spyOn(old, "json");
+    pending.resolve(old);
+    await hooks.settle();
+    expect(parse).not.toHaveBeenCalled();
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(field("Name").props.value).toBe("Newer raw draft");
+    expect(button("Create private food").props.disabled).toBe(false);
+  });
+
+  it("checks identity again after deferred JSON and never clears a replacement draft", async () => {
+    const first = food();
+    const { state } = workspace([first]);
+    await mount();
+    await copyFood(first);
+    const parsed = deferred<unknown>();
+    const response = receipt(newSaved(first));
+    vi.spyOn(response, "json").mockImplementation(() => parsed.promise);
+    state.write = () => response;
+    await submit("Create private food");
+    await change("Name", "Later draft");
+    parsed.resolve({ data: { replayed: false, customFood: newSaved(first) } });
+    await hooks.settle();
+    expect(field("Name").props.value).toBe("Later draft");
+    expect(savedCards()).toHaveLength(1);
+  });
+
+  it.each([
+    ["receipt first", false],
+    ["list first", false],
+    ["receipt first", true],
+    ["list first", true],
+  ] as const)(
+    "preserves an accepted save across existing Retry full refresh: %s, newer page %s",
+    async (order, newerPage) => {
+      const first = food();
+      const { state, writes } = workspace([first]);
+      await mount();
+      await copyFood(first);
+      state.read = () => Response.json({ error: "Full read unavailable" }, { status: 503 });
+      hooks.replayEffects();
+      await hooks.settle();
+      expect(button("Retry private data")).toBeDefined();
+      const retry = button("Retry private data");
+      const pendingSave = deferred<Response>();
+      const pendingList = deferred<Response>();
+      state.write = () => pendingSave.promise;
+      state.read = () => pendingList.promise;
+      await submit("Create private food");
+      invoke(retry, "onClick");
+      await hooks.settle();
+      const saved = newSaved(first);
+      const later = {
+        ...saved,
+        revision: "3",
+        currentVersion: {
+          ...saved.currentVersion,
+          id: "9999999999999999",
+          versionNumber: 3,
+          name: "Newer authoritative version",
+        },
+      };
+      const loaded = newerPage ? [first, later] : [first];
+      if (order === "receipt first") {
+        pendingSave.resolve(receipt(saved));
+        await hooks.settle();
+        expect(field("Name").props.value).toBe("");
+        expect(savedCards()).toHaveLength(2);
+        pendingList.resolve(page(loaded));
+      } else {
+        pendingList.resolve(page(loaded));
+        await hooks.settle();
+        expect(field("Name").props.value).toBe(first.currentVersion.name);
+        pendingSave.resolve(receipt(saved));
+      }
+      await hooks.settle();
+      expect(savedCards()).toHaveLength(2);
+      expect(card(newerPage ? later : saved)).toBeDefined();
+      if (newerPage) expect(savedNames()).toContain("Newer authoritative version");
+      expect(field("Name").props.value).toBe("");
+      expect(writes()).toHaveLength(1);
+      expect(button("Create private food").props.disabled).toBe(false);
+      expect(filterStatus()).toContain("2 of 2 loaded saved foods match.");
+    },
+  );
+
+  it("retains an already-loaded v3 through accepted v2 retry and an older pending full list", async () => {
+    const first = food();
+    const second = {
+      ...first,
+      revision: "2",
+      currentVersion: { ...first.currentVersion, id: "9999999999999998", versionNumber: 2 },
+    };
+    const third = {
+      ...first,
+      revision: "3",
+      currentVersion: {
+        ...first.currentVersion,
+        id: "9999999999999999",
+        versionNumber: 3,
+        name: "Newest saved version",
+      },
+    };
+    const { state, writes } = workspace([first]);
+    await mount();
+    await click("Revise", card(first));
+    state.write = () => Response.json({ error: "Receipt unavailable" }, { status: 503 });
+    await submit("Save new version");
+    const original = writes()[0]?.[1];
+    state.read = () => page([third]);
+    hooks.replayEffects();
+    await hooks.settle();
+    expect(card(third)).toBeDefined();
+    expect(field("Name").props.value).toBe(first.currentVersion.name);
+    state.read = () => Response.json({ error: "Read unavailable" }, { status: 503 });
+    hooks.replayEffects();
+    await hooks.settle();
+    const retry = button("Retry private data");
+    const pendingWrite = deferred<Response>();
+    const pendingList = deferred<Response>();
+    state.write = () => pendingWrite.promise;
+    state.read = () => pendingList.promise;
+    await submit("Save new version");
+    invoke(retry, "onClick");
+    await hooks.settle();
+    pendingWrite.resolve(receipt(second));
+    await hooks.settle();
+    expect(card(third)).toBeDefined();
+    expect(field("Name").props.value).toBe("");
+    expect(writes()[1]?.[1]?.body).toBe(original?.body);
+    expect(new Headers(writes()[1]?.[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(original?.headers).get("idempotency-key"),
+    );
+    pendingList.resolve(page([first]));
+    await hooks.settle();
+    expect(savedNames()).toEqual(["Newest saved version"]);
+    expect(card(third)).toBeDefined();
+    expect(field("Name").props.value).toBe("");
+    expect(filterStatus()).toContain("1 of 1 loaded saved foods match.");
+  });
+
+  it("ignores an old unauthorized receipt after background and a newer accepted Copy", async () => {
+    const view = visibility();
+    const first = food();
+    const { state, writes } = workspace([first]);
+    await mount();
+    await copyFood(first);
+    const pending = deferred<Response>();
+    state.write = () => pending.promise;
+    await submit("Create private food");
+    await view.set("hidden");
+    await view.set("visible");
+    await copyFood(first);
+    await click(discardCustomCopy);
+    await change("Name", "Replacement copied draft");
+    const old = Response.json({ error: "Old unauthorized response" }, { status: 401 });
+    const parse = vi.spyOn(old, "json");
+    pending.resolve(old);
+    await hooks.settle();
+    expect(parse).not.toHaveBeenCalled();
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(field("Name").props.value).toBe("Replacement copied draft");
+    expect(button("Create private food").props.disabled).toBe(false);
+    expect(writes()).toHaveLength(1);
+  });
+
+  it("closes choice on full refresh, background and unmount without reusing old controls", async () => {
+    const view = visibility();
+    const first = food();
+    const { fetcher } = workspace([first]);
+    await mount();
+    await change("Name", "Draft");
+    await copyFood(first);
+    const oldDiscard = button(discardCustomCopy);
+    const oldCopy = copyButton(first);
+    await view.set("hidden");
+    invoke(oldDiscard, "onClick");
+    await view.set("visible");
+    invoke(oldCopy, "onClick");
+    await hooks.settle();
+    expect(field("Name").props.value).toBe("Draft");
+    expect(elements().some((node) => text(node) === discardCustomCopy)).toBe(false);
+    await copyFood(first);
+    hooks.replayEffects();
+    await hooks.settle();
+    expect(elements().some((node) => text(node) === discardCustomCopy)).toBe(false);
+    const before = fetcher.mock.calls.length;
+    hooks.unmount();
+    const updates = hooks.afterClose();
+    invoke(oldDiscard, "onClick");
+    invoke(oldCopy, "onClick");
+    expect(hooks.afterClose()).toBe(updates);
+    expect(fetcher).toHaveBeenCalledTimes(before);
+  });
+});

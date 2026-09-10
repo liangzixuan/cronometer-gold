@@ -65,6 +65,12 @@ interface CustomDraft {
   readonly nutrients: readonly CustomFoodNutrient[];
 }
 
+interface CustomCopyChoice {
+  readonly food: CustomFood;
+  readonly draft: CustomDraft;
+  readonly generation: number;
+}
+
 interface ReminderDraft {
   readonly id: string | null;
   readonly revision: string | null;
@@ -216,6 +222,15 @@ function customDraft(food: CustomFood): CustomDraft {
   };
 }
 
+function mergeAcceptedCustomFood(
+  items: readonly CustomFood[],
+  saved: CustomFood,
+): readonly CustomFood[] {
+  const current = items.find((item) => item.id === saved.id);
+  if (current && BigInt(current.revision) > BigInt(saved.revision)) return items;
+  return [saved, ...items.filter((item) => item.id !== saved.id)];
+}
+
 function reminderDraft(reminder?: Reminder): ReminderDraft {
   return reminder
     ? {
@@ -256,7 +271,10 @@ export function HealthClient() {
   } | null>(null);
   const [reminders, setReminders] = useState<readonly Reminder[]>([]);
   const [integrations, setIntegrations] = useState<readonly PlatformIntegration[]>([]);
-  const [custom, setCustom] = useState<CustomDraft>(() => blankCustom(""));
+  const [custom, setCustomState] = useState<CustomDraft>(() => blankCustom(""));
+  const [customSource, setCustomSource] = useState<CustomFood | null>(null);
+  const [customCopyChoice, setCustomCopyChoice] = useState<CustomCopyChoice | null>(null);
+  const [customSaving, setCustomSaving] = useState(false);
   const [customLog, setCustomLog] = useState<CustomLogDraft | null>(null);
   const [customLogDateReviewRequired, setCustomLogDateReviewRequired] = useState(false);
   const [definitionName, setDefinitionName] = useState("Weight");
@@ -282,6 +300,22 @@ export function HealthClient() {
   const [confirmConsequences, setConfirmConsequences] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const operations = useRef(new Map<string, string>());
+  const customRef = useRef(custom);
+  const customBaseline = useRef<CustomDraft | null>(custom);
+  const customGeneration = useRef(0);
+  const customControlGeneration = useRef(0);
+  const customLifecycle = useRef(0);
+  const customCreateIntent = useRef(0);
+  const customWrite = useRef<object | null>(null);
+  const customLoadReceipts = useRef<{
+    readonly controller: AbortController;
+    readonly generation: number;
+    readonly owner: string | null;
+    readonly foods: Map<string, CustomFood>;
+  } | null>(null);
+  const customCopyChoiceRef = useRef<CustomCopyChoice | null>(null);
+  const customNameInput = useRef<HTMLInputElement | null>(null);
+  const customKeepButton = useRef<HTMLButtonElement | null>(null);
   const loadController = useRef<AbortController | null>(null);
   const trendController = useRef<AbortController | null>(null);
   const privateReadControllers = useRef(new Set<AbortController>());
@@ -306,6 +340,105 @@ export function HealthClient() {
   const renderedDisclosureGeneration = disclosureGeneration.current;
   const diaryGroups = session?.profile.diaryGroups ?? defaultDiaryGroups;
 
+  const renderedCustomGeneration = customGeneration.current;
+  const renderedCustomControl = customControlGeneration.current;
+  const customScope = session ? JSON.stringify([session.user.id, session.profile]) : null;
+
+  const clearCustomCopyChoice = useCallback(() => {
+    customCopyChoiceRef.current = null;
+    setCustomCopyChoice(null);
+  }, []);
+  const invalidateCustomControls = useCallback(() => {
+    customControlGeneration.current += 1;
+    clearCustomCopyChoice();
+  }, [clearCustomCopyChoice]);
+  const replaceCustom = useCallback(
+    (next: CustomDraft, source: CustomFood | null = null, clean = true) => {
+      customRef.current = next;
+      customGeneration.current += 1;
+      customBaseline.current = clean ? next : null;
+      clearCustomCopyChoice();
+      setCustomState(next);
+      setCustomSource(source);
+    },
+    [clearCustomCopyChoice],
+  );
+  function canUseCustomControls() {
+    const currentSession = installedSession.current;
+    return (
+      mounted.current &&
+      visible.current &&
+      (typeof document === "undefined" || document.visibilityState !== "hidden") &&
+      !privateUiClosed.current &&
+      customControlGeneration.current === renderedCustomControl &&
+      customGeneration.current === renderedCustomGeneration &&
+      customRef.current === custom &&
+      (currentSession ? JSON.stringify([currentSession.user.id, currentSession.profile]) : null) ===
+        customScope &&
+      (currentSession === null || ownerUserId.current === currentSession.user.id)
+    );
+  }
+  function setCustom(next: CustomDraft) {
+    if (!canUseCustomControls() || JSON.stringify(next) === JSON.stringify(customRef.current))
+      return;
+    customRef.current = next;
+    customGeneration.current += 1;
+    clearCustomCopyChoice();
+    setCustomState(next);
+  }
+  function canCopyCustomFood(food: CustomFood) {
+    return (
+      canUseCustomControls() &&
+      session !== null &&
+      foodDetailsReady.current &&
+      foodListGeneration.current === renderedListGeneration &&
+      installedFoods.current.includes(food) &&
+      customWrite.current === null
+    );
+  }
+  function copyCustomFood(food: CustomFood) {
+    if (!canCopyCustomFood(food)) return;
+    customCreateIntent.current += 1;
+    replaceCustom({ ...customDraft(food), id: null, revision: null }, food, false);
+    customNameInput.current?.focus();
+  }
+  function requestCustomCopy(food: CustomFood) {
+    if (!canCopyCustomFood(food)) return;
+    if (
+      customBaseline.current &&
+      JSON.stringify(customRef.current) === JSON.stringify(customBaseline.current)
+    ) {
+      copyCustomFood(food);
+      return;
+    }
+    const choice = { food, draft: customRef.current, generation: customGeneration.current };
+    customCopyChoiceRef.current = choice;
+    setCustomCopyChoice(choice);
+  }
+  function resolveCustomCopy(discard: boolean) {
+    if (
+      !customCopyChoice ||
+      customCopyChoiceRef.current !== customCopyChoice ||
+      customCopyChoice.draft !== customRef.current ||
+      customCopyChoice.generation !== customGeneration.current ||
+      !canCopyCustomFood(customCopyChoice.food)
+    )
+      return;
+    if (discard) copyCustomFood(customCopyChoice.food);
+    else clearCustomCopyChoice();
+  }
+  function reviseCustomFood(food: CustomFood) {
+    if (!canCopyCustomFood(food)) return;
+    replaceCustom(customDraft(food), food);
+  }
+  function cancelCustomEdit() {
+    if (!canUseCustomControls() || customWrite.current !== null) return;
+    replaceCustom(blankCustom(nutrients[0]?.nutrientId ?? ""));
+  }
+  useEffect(() => {
+    if (customCopyChoice) customKeepButton.current?.focus();
+  }, [customCopyChoice]);
+
   const closeFoodDetails = useCallback(() => {
     disclosureGeneration.current += 1;
     disclosureVersions.current.clear();
@@ -323,6 +456,7 @@ export function HealthClient() {
     (next: SessionSummary | null) => {
       if (installedSession.current !== next) {
         closeFoodDetails();
+        invalidateCustomControls();
         savedFoodFilterGeneration.current += 1;
       }
       if (next !== null) {
@@ -333,7 +467,7 @@ export function HealthClient() {
       installedSession.current = next;
       setSessionState(next);
     },
-    [closeFoodDetails, resetSavedFoodFilter],
+    [closeFoodDetails, invalidateCustomControls, resetSavedFoodFilter],
   );
 
   const installCustomFoods = useCallback(
@@ -394,6 +528,10 @@ export function HealthClient() {
 
   const signInAgain = useCallback(() => {
     privateUiClosed.current = true;
+    customLifecycle.current += 1;
+    customWrite.current = null;
+    setCustomSaving(false);
+    invalidateCustomControls();
     resetSavedFoodFilter();
     savedFoodFilterScope.current = null;
     setVerifiedFoodListOwner(null);
@@ -418,7 +556,7 @@ export function HealthClient() {
     setEventWindow(null);
     setReminders([]);
     setIntegrations([]);
-    setCustom(blankCustom(""));
+    replaceCustom(blankCustom(""));
     setCustomLog(null);
     setCustomLogDateReviewRequired(false);
     setDefinitionName("Weight");
@@ -445,7 +583,14 @@ export function HealthClient() {
     setMessage("Closing your private health workspace…");
     router.replace("/login");
     router.refresh();
-  }, [closeFoodDetails, resetSavedFoodFilter, router, setSession]);
+  }, [
+    closeFoodDetails,
+    invalidateCustomControls,
+    replaceCustom,
+    resetSavedFoodFilter,
+    router,
+    setSession,
+  ]);
 
   const revalidateHealthSession = useCallback(async (signal: AbortSignal) => {
     try {
@@ -521,12 +666,20 @@ export function HealthClient() {
     )
       return;
     const generation = ++foodListGeneration.current;
+    invalidateCustomControls();
     setVerifiedFoodListOwner(null);
     foodDetailsReady.current = false;
     closeFoodDetails();
     loadController.current?.abort();
     const controller = new AbortController();
     loadController.current = controller;
+    const receiptOverlay = {
+      controller,
+      generation,
+      owner: ownerUserId.current,
+      foods: new Map<string, CustomFood>(),
+    };
+    customLoadReceipts.current = receiptOverlay;
     setState("loading");
     try {
       const sessionResponse = await fetch("/api/auth/me", {
@@ -610,7 +763,18 @@ export function HealthClient() {
           const localToday = localDateInTimeZone(now, currentSession.profile.timeZone);
           setSession(currentSession);
           setNutrients(data.nutrients);
-          if (!installCustomFoods(data.customPage.items, generation, nextSession.user.id)) return;
+          const accepted =
+            customLoadReceipts.current === receiptOverlay &&
+            receiptOverlay.owner === nextSession.user.id &&
+            !controller.signal.aborted
+              ? [...receiptOverlay.foods.values()]
+              : [];
+          const customItems = accepted.reduce<readonly CustomFood[]>(
+            mergeAcceptedCustomFood,
+            data.customPage.items,
+          );
+          if (!installCustomFoods(customItems, generation, nextSession.user.id)) return;
+          if (customLoadReceipts.current === receiptOverlay) customLoadReceipts.current = null;
           foodDetailsReady.current = true;
           setVerifiedFoodListOwner(nextSession.user.id);
           setCustomFoodCursor(data.customPage.nextCursor);
@@ -633,7 +797,8 @@ export function HealthClient() {
           );
           if (!customInitialized.current) {
             customInitialized.current = true;
-            setCustom((value) =>
+            const value = customRef.current;
+            if (
               value.id === null &&
               value.nutrients.length === 0 &&
               !value.name &&
@@ -641,9 +806,8 @@ export function HealthClient() {
               !value.servingLabel &&
               !value.servingGrams &&
               !value.notes
-                ? blankCustom(data.nutrients[0]?.nutrientId ?? "")
-                : value,
-            );
+            )
+              replaceCustom(blankCustom(data.nutrients[0]?.nutrientId ?? ""));
           }
           setState("ready");
           setMessage("Private health workspace is current.");
@@ -658,8 +822,17 @@ export function HealthClient() {
       );
     } finally {
       if (loadController.current === controller) loadController.current = null;
+      if (customLoadReceipts.current === receiptOverlay) customLoadReceipts.current = null;
     }
-  }, [closeFoodDetails, installCustomFoods, revalidateHealthSession, setSession, signInAgain]);
+  }, [
+    closeFoodDetails,
+    installCustomFoods,
+    invalidateCustomControls,
+    replaceCustom,
+    revalidateHealthSession,
+    setSession,
+    signInAgain,
+  ]);
 
   async function loadMoreCustomFoods() {
     if (!customFoodCursor) return;
@@ -751,9 +924,14 @@ export function HealthClient() {
 
   useEffect(() => {
     mounted.current = true;
+    setCustomSaving(false);
     visible.current = typeof document === "undefined" || document.visibilityState !== "hidden";
     const visibilityChanged = () => {
       visible.current = document.visibilityState !== "hidden";
+      customLifecycle.current += 1;
+      customWrite.current = null;
+      setCustomSaving(false);
+      invalidateCustomControls();
       savedFoodFilterGeneration.current += 1;
       closeFoodDetails();
     };
@@ -762,6 +940,10 @@ export function HealthClient() {
     void loadAll();
     return () => {
       mounted.current = false;
+      customLifecycle.current += 1;
+      customControlGeneration.current += 1;
+      customCopyChoiceRef.current = null;
+      customWrite.current = null;
       savedFoodFilterGeneration.current += 1;
       foodListGeneration.current += 1;
       foodDetailsReady.current = false;
@@ -775,7 +957,7 @@ export function HealthClient() {
       privateReadControllers.current.clear();
       profileRefreshController.current?.abort();
     };
-  }, [closeFoodDetails, loadAll]);
+  }, [closeFoodDetails, invalidateCustomControls, loadAll]);
 
   async function refreshCustomLogProfileAfterTimeZoneChange(
     initiatingUserId: string,
@@ -884,6 +1066,8 @@ export function HealthClient() {
   );
 
   async function saveCustomFood() {
+    if (!canUseCustomControls() || !session || customWrite.current !== null) return;
+    clearCustomCopyChoice();
     if (!custom.name.trim() || custom.nutrients.length < 1)
       return setMessage("Name and at least one nutrient are required.");
     if (
@@ -901,8 +1085,8 @@ export function HealthClient() {
     for (const nutrient of custom.nutrients) {
       if (
         nutrient.state === "quantified" &&
-        !isPositiveInputDecimal(nutrient.amountPer100Grams) &&
-        nutrient.amountPer100Grams !== "0"
+        (nutrient.amountPer100Grams.length > 200 ||
+          !/^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/.test(nutrient.amountPer100Grams))
       ) {
         return setMessage("Quantified nutrients require canonical non-negative values per 100 g.");
       }
@@ -917,31 +1101,79 @@ export function HealthClient() {
       notes: custom.notes.trim() || null,
     };
     const path = custom.id ? `custom-foods/${custom.id}/revisions` : "custom-foods";
-    const key = `custom:${custom.id ?? "new"}:${custom.revision ?? "0"}:${JSON.stringify(body)}`;
-    setBusy("custom");
+    const key = `custom:${custom.id ?? `new:${customCreateIntent.current}`}:${custom.revision ?? "0"}:${JSON.stringify(body)}`;
+    const token = {};
+    const initiatingScope = customScope;
+    const lifecycle = customLifecycle.current;
+    const generation = customGeneration.current;
+    const initiatingOwner = session.user.id;
+    customWrite.current = token;
+    setCustomSaving(true);
+    const ownsWrite = () =>
+      mounted.current &&
+      !privateUiClosed.current &&
+      customWrite.current === token &&
+      customLifecycle.current === lifecycle &&
+      ownerUserId.current === initiatingOwner &&
+      installedSession.current !== null &&
+      JSON.stringify([installedSession.current.user.id, installedSession.current.profile]) ===
+        initiatingScope;
+    const isCurrent = () =>
+      ownsWrite() &&
+      visible.current &&
+      (typeof document === "undefined" || document.visibilityState !== "hidden") &&
+      customGeneration.current === generation &&
+      customRef.current === custom;
     try {
-      const saved = parseCustomFoodMutation(
-        await request(path, {
-          method: "POST",
-          body,
-          key,
-          ...(custom.revision ? { revision: custom.revision } : {}),
-        }),
-      );
+      const response = await fetch(`/api/retention/${path}`, {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "idempotency-key": operation(key),
+          ...(custom.revision ? { "if-match": quoteRevision(custom.revision) } : {}),
+        },
+        body: JSON.stringify(body),
+        cache: "no-store",
+      });
+      if (!isCurrent()) return;
+      if (response.status === 401) return signInAgain();
+      const value = await json(response);
+      if (!isCurrent()) return;
+      if (!response.ok) throw new Error(responseError(value, "The private health request failed."));
+      const saved = parseCustomFoodMutation(value);
       operations.current.delete(key);
+      const overlay = customLoadReceipts.current;
+      if (
+        overlay &&
+        overlay.controller === loadController.current &&
+        !overlay.controller.signal.aborted &&
+        overlay.generation === foodListGeneration.current &&
+        overlay.owner === initiatingOwner
+      ) {
+        const current = installedFoods.current.find((item) => item.id === saved.id);
+        const retained =
+          current && BigInt(current.revision) > BigInt(saved.revision) ? current : saved;
+        overlay.foods.delete(saved.id);
+        overlay.foods.set(saved.id, retained);
+      }
       installCustomFoods(
-        (items) => [saved, ...items.filter((item) => item.id !== saved.id)],
-        renderedListGeneration,
-        session?.user.id ?? null,
+        (items) => mergeAcceptedCustomFood(items, saved),
+        foodListGeneration.current,
+        initiatingOwner,
       );
-      setCustom(blankCustom(nutrients[0]?.nutrientId ?? ""));
+      replaceCustom(blankCustom(nutrients[0]?.nutrientId ?? ""));
       setMessage(`Saved private custom food version ${saved.currentVersion.versionNumber}.`);
     } catch (error) {
+      if (!isCurrent()) return;
       setMessage(
         `${error instanceof Error ? error.message : "Custom food could not be saved."} Submit again to retry safely.`,
       );
     } finally {
-      setBusy(null);
+      if (customWrite.current === token) {
+        customWrite.current = null;
+        if (mounted.current && !privateUiClosed.current) setCustomSaving(false);
+      }
     }
   }
 
@@ -1584,10 +1816,39 @@ export function HealthClient() {
                 void saveCustomFood();
               }}
             >
+              {customSource && !custom.id && canUseCustomControls() ? (
+                <p className="fieldHelp" aria-live="polite">
+                  New draft copied from saved {customSource.currentVersion.name} v
+                  {customSource.currentVersion.versionNumber}. Create to save a separate private
+                  food.
+                </p>
+              ) : null}
+              {customCopyChoice &&
+              customCopyChoiceRef.current === customCopyChoice &&
+              canCopyCustomFood(customCopyChoice.food) ? (
+                <fieldset aria-labelledby="custom-copy-choice">
+                  <p id="custom-copy-choice" aria-live="polite">
+                    This editor has an unsaved draft. Keep editing, or discard it and copy saved{" "}
+                    {customCopyChoice.food.currentVersion.name} v
+                    {customCopyChoice.food.currentVersion.versionNumber}.
+                  </p>
+                  <button
+                    ref={customKeepButton}
+                    onClick={() => resolveCustomCopy(false)}
+                    type="button"
+                  >
+                    Keep editing
+                  </button>
+                  <button onClick={() => resolveCustomCopy(true)} type="button">
+                    Discard draft and copy saved version
+                  </button>
+                </fieldset>
+              ) : null}
               <label>
                 Name
                 <input
                   maxLength={500}
+                  ref={customNameInput}
                   value={custom.name}
                   onChange={(event) => setCustom({ ...custom, name: event.target.value })}
                 />
@@ -1641,6 +1902,18 @@ export function HealthClient() {
                         })
                       }
                     >
+                      {!nutrients.some((item) => item.nutrientId === row.nutrientId) ? (
+                        <option value={row.nutrientId}>
+                          {(() => {
+                            const saved = customSource?.currentVersion.nutrients.find(
+                              (item) => item.nutrient.id === row.nutrientId,
+                            )?.nutrient;
+                            return saved
+                              ? `${saved.name} (${saved.unit}) · saved nutrient`
+                              : `Nutrient ${row.nutrientId}`;
+                          })()}
+                        </option>
+                      ) : null}
                       {nutrients.map((item) => (
                         <option key={item.nutrientId} value={item.nutrientId}>
                           {item.name} ({item.unit})
@@ -1771,8 +2044,11 @@ export function HealthClient() {
                 />
               </label>
               <div className="entryActions">
-                <button disabled={busy === "custom"} type="submit">
-                  {busy === "custom"
+                <button
+                  disabled={customSaving || !canUseCustomControls() || !session}
+                  type="submit"
+                >
+                  {customSaving
                     ? "Saving…"
                     : custom.id
                       ? "Save new version"
@@ -1780,7 +2056,8 @@ export function HealthClient() {
                 </button>
                 {custom.id ? (
                   <button
-                    onClick={() => setCustom(blankCustom(nutrients[0]?.nutrientId ?? ""))}
+                    disabled={customSaving || !canUseCustomControls()}
+                    onClick={cancelCustomEdit}
                     type="button"
                   >
                     Cancel edit
@@ -1858,8 +2135,20 @@ export function HealthClient() {
                         >
                           {expanded ? "Hide nutrients" : "Show nutrients"}
                         </button>
-                        <button onClick={() => setCustom(customDraft(food))} type="button">
+                        <button
+                          disabled={!canCopyCustomFood(food)}
+                          onClick={() => reviseCustomFood(food)}
+                          type="button"
+                        >
                           Revise
+                        </button>
+                        <button
+                          disabled={!canCopyCustomFood(food)}
+                          onClick={() => requestCustomCopy(food)}
+                          aria-label={`Copy ${food.currentVersion.name} v${food.currentVersion.versionNumber} to new draft`}
+                          type="button"
+                        >
+                          Copy to new draft
                         </button>
                         {food.status === "active" ? (
                           <>
