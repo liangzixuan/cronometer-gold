@@ -5,6 +5,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import {
+  nutritionReportAdjacentRange,
   nutritionReportBoundarySummary,
   nutritionReportCoverageSummary,
   nutritionReportLocalDates,
@@ -379,5 +380,68 @@ describe("mobile nutrition reports", () => {
     ]) {
       expect(nutritionReportRequestIdentityMatches(changed, fence)).toBe(false);
     }
+  });
+});
+
+describe("mobile adjacent report calendar periods", () => {
+  it.each([
+    ["2026-09-01", "2026-09-07", "previous", "2026-08-25", "2026-08-31"],
+    ["2026-09-01", "2026-09-07", "next", "2026-09-08", "2026-09-14"],
+    ["2024-02-28", "2024-02-29", "next", "2024-03-01", "2024-03-02"],
+    ["2024-03-01", "2024-03-02", "previous", "2024-02-28", "2024-02-29"],
+    ["2026-12-29", "2026-12-31", "next", "2027-01-01", "2027-01-03"],
+    ["2026-03-07", "2026-03-09", "next", "2026-03-10", "2026-03-12"],
+    ["2026-10-31", "2026-11-02", "previous", "2026-10-28", "2026-10-30"],
+    ["0002-01-01", "0002-01-01", "next", "0002-01-02", "0002-01-02"],
+    ["0099-12-31", "0099-12-31", "next", "0100-01-01", "0100-01-01"],
+    ["0099-12-30", "0099-12-31", "next", "0100-01-01", "0100-01-02"],
+  ] as const)(
+    "shifts %s through %s %s without local-hour or early-year remapping",
+    (from, to, direction, nextFrom, nextTo) => {
+      expect(nutritionReportAdjacentRange(from, to, direction)).toEqual({
+        from: nextFrom,
+        to: nextTo,
+      });
+    },
+  );
+  it.each([1, 7, 14, 30, 31])(
+    "preserves an inclusive %i-day period and reverses exactly",
+    (days) => {
+      const from = "2026-03-01";
+      const to = `2026-03-${String(days).padStart(2, "0")}`;
+      const next = nutritionReportAdjacentRange(from, to, "next");
+      if (!next) throw new Error("Expected a supported next period.");
+      expect(nutritionReportLocalDates(next.from, next.to)).toHaveLength(days);
+      expect(nutritionReportAdjacentRange(next.from, next.to, "previous")).toEqual({ from, to });
+    },
+  );
+  it("disables only a direction that would cross service bounds", () => {
+    expect(nutritionReportAdjacentRange("0002-01-01", "0002-01-07", "previous")).toBeNull();
+    expect(nutritionReportAdjacentRange("0002-01-01", "0002-01-07", "next")).toEqual({
+      from: "0002-01-08",
+      to: "0002-01-14",
+    });
+    expect(nutritionReportAdjacentRange("9998-12-25", "9998-12-31", "next")).toBeNull();
+    expect(nutritionReportAdjacentRange("9998-12-25", "9998-12-31", "previous")).toEqual({
+      from: "9998-12-18",
+      to: "9998-12-24",
+    });
+    expect(nutritionReportRangeEndingAt("0002-01-14", 14)).toEqual({
+      from: "0002-01-01",
+      to: "0002-01-14",
+    });
+    expect(nutritionReportLocalDates("0099-12-31", "0100-01-01")).toEqual([
+      "0099-12-31",
+      "0100-01-01",
+    ]);
+  });
+  it.each([
+    ["2026-02-30", "2026-03-01"],
+    ["2026-03-02", "2026-03-01"],
+    ["2026-03-01", "2026-04-01"],
+    ["0001-12-31", "0002-01-01"],
+    ["9998-12-31", "9999-01-01"],
+  ])("rejects unsupported input %s through %s", (from, to) => {
+    expect(() => nutritionReportAdjacentRange(from, to, "next")).toThrow(RangeError);
   });
 });

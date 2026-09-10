@@ -134,7 +134,8 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Saved recipe nutrition basis and coverage | Delivered `7274ddc`; CI `34425778573` passed; container `34425778640` remains pending at current observation; independent/device/release acceptance stays separate |
 | Automatic evidence / independent review | Copy saved recipe to a new draft | ADR 0032 source, independent in-task review, canonical local gates and synthetic Chrome copy/create/retry QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
 | Automatic evidence / independent review | Reorder recipe ingredients in the draft | ADR 0033 source, independent in-task review, canonical local gates and synthetic Chrome create/revision/retry QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
-| Next candidate: read-only assessed | Previous/next nutrition report period | Write a bounded card before implementation; shift the same inclusive 1–31-day window through existing range validation and snapshot loading, preserving the selected nutrient and all privacy/print guards |
+| Automatic evidence / independent review | Previous/next nutrition report period | ADR 0034 source, independent in-task review, canonical local gates and synthetic Chrome period/dirty-date/retry QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
+| Next candidate: read-only assessed | Open source diary days from report evidence | Write a bounded card before implementation; use contributing source diary dates with explicit current-diary versus report-snapshot wording, missing-day fallback and existing navigation/privacy guards |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -279,14 +280,40 @@ with one new revision, dirty/copy-choice invalidation and expiry closure.
 Exact-commit automatic results belong in the delivery handoff. Real persistence,
 physical native, accessibility, independent Claude Code and release gates remain.
 
+Ingredient ordering checkpoint `a0b0983` has successful CI `34431074508`,
+completed 2026-09-10 02:57:18 UTC. Container `34431074453` remains in progress
+at the 2026-09-10 03:30:37 UTC read-only observation.
+
+**Previous/next nutrition report period** is source/local complete under
+[ADR 0034](../adr/0034-adjacent-nutrition-report-periods.md). Web/mobile controls
+move a coherent interval by its inclusive 1–31-day length, preserve nutrient
+selection and calendar/service bounds, and clear old visible/print snapshots.
+Unapplied date fields disable movement with Update report guidance. Corrected
+report-scoped UTC arithmetic preserves early years; owned URL echoes and exact
+verified-profile installation avoid duplicate reads without bypassing replacement
+route, stale request, owner/session/profile or native lifecycle guards.
+No report math, API/schema/dependency or release change was added.
+
+Independent in-task review and canonical local gates passed September 10, 2026
+UTC: 513 fresh web tests, 725 mobile plus 10 runner tests, 157 root policy tests,
+dependency/config/license checks and fresh web/iOS/Android builds. Type/test
+graphs each passed 17/17 with 15 cached; build passed 11/11 with 9 cached.
+Synthetic production Next/BFF Chrome QA passed previous/next date and URL changes,
+nutrient retention, keyboard activation, 390 px control/guidance layout, dirty-date
+invalidation/restoration, one read per move, failed-period retry and expiry closure.
+Exact-commit automatic results belong in the delivery handoff. Cached tasks and
+opt-in service skips are not fresh integrations. Physical native, accessibility,
+real persistence, independent Claude Code and release gates remain.
+
 After revalidating automatic results, the next read-only assessed candidate is
-**Previous/next nutrition report period** on web/mobile. Existing range validators
-and snapshot loaders can shift an inclusive 1–31-day range by its own length while
-preserving the selected nutrient. A bounded card should cover calendar-day
-arithmetic across leap/month/year/DST boundaries, date-draft handling, stale and
-owner/request fences, one fresh range load, missingness and web print invalidation.
-This successor is not implemented; write its acceptance card and ADR 0034 before
-editing. No report API, calculation, automatic advice or release change is implied.
+**Open source diary days from report evidence** on web/mobile. A report day uses
+the active profile's timezone; its contributing source diary dates can differ by
+up to two calendar days. Use deduplicated `day.sourceDiaries` local dates, with an
+Open diary for the report date fallback when missing, and explain that navigation
+opens the current diary rather than recreating the report snapshot. Existing web
+date links and native Today date/refresh navigation provide destinations without
+an API change. This successor is not implemented; write its bounded card and
+ADR 0035 before editing, including stale/session, missing-day and timezone tests.
 
 Prepare the external decisions alongside product work, without executing them:
 

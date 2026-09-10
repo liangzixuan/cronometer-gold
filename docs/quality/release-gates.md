@@ -523,3 +523,16 @@ acceptance.
   using existing revision and retry guards; saved nutrition/logging/history stay
   independent. Synthetic browser or component proof cannot replace real
   persistence, physical device, accessibility, independent or release acceptance.
+
+## Adjacent nutrition report periods (ADR 0034)
+
+- Previous/next navigation preserves the loaded period's inclusive 1–31-day
+  count, validates existing service calendar bounds and handles leap/month/year/
+  DST boundaries with date-only arithmetic. It retains the selected nutrient.
+- Unapplied date edits disable navigation without discarding values. Only a
+  coherent loaded snapshot/current session can move; stale, loading, closed and
+  duplicate controls cannot commit another period or revive private output.
+- One move requests one report for its chosen range through existing guarded
+  readers. Old visible/print evidence is invalidated immediately; failed-read
+  retry stays on the chosen range. Missingness, exact amounts, goal/timezone/
+  owner evidence and independent/device/release gates remain unchanged.

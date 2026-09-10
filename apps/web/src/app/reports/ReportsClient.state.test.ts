@@ -24,7 +24,7 @@ const hooks = vi.hoisted(() => {
     b !== undefined &&
     a.length === b.length &&
     a.every((item, index) => Object.is(item, b[index]));
-  const render = () => {
+  const render = (runEffects = true) => {
     cursor = 0;
     dirty = false;
     tree = component();
@@ -50,6 +50,7 @@ const hooks = vi.hoisted(() => {
       attachRefs(props.children);
     };
     attachRefs(tree);
+    if (!runEffects) return;
     const pending = effects;
     effects = [];
     for (const effect of pending) effect();
@@ -112,6 +113,7 @@ const hooks = vi.hoisted(() => {
       render();
     },
     render,
+    renderWithoutEffects: () => render(false),
     async settle() {
       for (let pass = 0; pass < 8; pass += 1) {
         await new Promise((resolve) => setTimeout(resolve, 0));
@@ -139,6 +141,7 @@ vi.mock("react", async (importOriginal) => ({
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
+import { nutritionReportDates } from "../../lib/nutrition-reports";
 import { emptyNutritionReportFixture } from "../../test/nutrition-report-fixture";
 import { ReportsClient } from "./ReportsClient";
 
@@ -410,7 +413,7 @@ describe("actual current-report print lifecycle", () => {
     expect(printGate()).toBe("false");
   });
 
-  it.each(["date", "nutrient", "preset", "logout", "unmount"] as const)(
+  it.each(["date", "nutrient", "preset", "period", "logout", "unmount"] as const)(
     "revokes a pending verification immediately on %s and ignores its late JSON",
     async (change) => {
       let finishJson: ((value: unknown) => void) | undefined;
@@ -435,6 +438,7 @@ describe("actual current-report print lifecycle", () => {
       if (change === "date") inputDate(0, "2026-08-31");
       if (change === "nutrient") nutrient("2");
       if (change === "preset") (button("7 days").props.onClick as () => void)();
+      if (change === "period") (button("Next period").props.onClick as () => void)();
       if (change === "logout") (button("Sign out").props.onClick as () => void)();
       if (change === "unmount") hooks.unmount();
       // Even a retained handler before React rerenders cannot start another verification.
@@ -632,5 +636,435 @@ describe("print handoff boundaries", () => {
     await hooks.settle();
     expect(text()).toContain("2026-09-02 through 2026-09-02");
     expect(button("Print current report").props.disabled).toBe(false);
+  });
+});
+
+function invoke(node: ElementNode, action = "onClick", ...args: unknown[]) {
+  return (node.props[action] as (...values: unknown[]) => unknown)(...args);
+}
+function dateFields() {
+  return elements().filter((node) => node.type === "input" && node.props.type === "date");
+}
+function currentDates() {
+  return dateFields().map((node) => node.props.value);
+}
+async function click(label: string) {
+  const node = button(label);
+  expect(node.props.disabled).not.toBe(true);
+  void invoke(node);
+  await hooks.settle();
+}
+function required<T>(value: T | undefined): T {
+  if (value === undefined) throw new Error("Missing observed test value.");
+  return value;
+}
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+function utcReportResponse(url: string) {
+  const query = new URL(url, "https://app.example.test").searchParams;
+  const from = query.get("from") ?? "2026-09-01";
+  const to = query.get("to") ?? from;
+  const fixture = emptyNutritionReportFixture(from, to);
+  fixture.data.timeZone = "UTC";
+  fixture.data.days = nutritionReportDates(from, to).map((localDate) => {
+    const next = new Date(`${localDate}T00:00:00.000Z`);
+    next.setUTCDate(next.getUTCDate() + 1);
+    return {
+      localDate,
+      startsAt: `${localDate}T00:00:00.000Z`,
+      endsAt: next.toISOString(),
+      entryCount: 0,
+      sourceDiaries: [],
+      sourceTimeZones: [],
+    };
+  });
+  return Response.json(fixture);
+}
+
+describe("actual adjacent report periods", () => {
+  it.each([
+    [1, "2026-09-01", "2026-09-02", "2026-09-02"],
+    [7, "2026-09-07", "2026-09-08", "2026-09-14"],
+    [14, "2026-09-14", "2026-09-15", "2026-09-28"],
+    [30, "2026-09-30", "2026-10-01", "2026-10-30"],
+    [31, "2026-10-01", "2026-10-02", "2026-11-01"],
+  ] as const)(
+    "moves a loaded %i-day interval and preserves selected nutrient",
+    async (_days, to, nextFrom, nextTo) => {
+      const fetcher = vi.fn(async (url: string) =>
+        url === "/api/auth/me" ? session(owner, "4", "UTC") : utcReportResponse(url),
+      );
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(() => ReportsClient({ initialFrom: "2026-09-01", initialTo: to }));
+      expect(button("Previous period").props.disabled).toBe(true);
+      expect(button("Next period").props.disabled).toBe(true);
+      await hooks.settle();
+      nutrient("15");
+      await hooks.settle();
+      await click("Next period");
+      expect(currentDates()).toEqual([nextFrom, nextTo]);
+      expect(elements().find((node) => node.type === "select")?.props.value).toBe("15");
+      expect(router.replace).toHaveBeenLastCalledWith(`/reports?from=${nextFrom}&to=${nextTo}`, {
+        scroll: false,
+      });
+      await click("Previous period");
+      expect(currentDates()).toEqual(["2026-09-01", to]);
+      expect(elements().find((node) => node.type === "select")?.props.value).toBe("15");
+      expect(
+        fetcher.mock.calls.filter(([url]) => url.startsWith("/api/reports/nutrition?")),
+      ).toHaveLength(3);
+    },
+  );
+
+  it("performs one read for a moved target including its owned URL-prop echo, then verifies an unrelated external range", async () => {
+    const fetcher = readyFetcher();
+    let props = { initialFrom: "2026-09-01", initialTo: "2026-09-07" };
+    hooks.mount(() => ReportsClient(props));
+    await hooks.settle();
+    await click("Next period");
+    props = { initialFrom: "2026-09-08", initialTo: "2026-09-14" };
+    hooks.render();
+    await hooks.settle();
+    expect(fetcher.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(1);
+    expect(
+      fetcher.mock.calls.filter(([url]) => url.startsWith("/api/reports/nutrition?")),
+    ).toHaveLength(2);
+    props = { initialFrom: "2026-09-15", initialTo: "2026-09-21" };
+    hooks.render();
+    await hooks.settle();
+    expect(currentDates()).toEqual(["2026-09-15", "2026-09-21"]);
+    expect(fetcher.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(2);
+    expect(
+      fetcher.mock.calls.filter(([url]) => url.startsWith("/api/reports/nutrition?")),
+    ).toHaveLength(3);
+  });
+
+  it("rejects prior-route and new controls during an external route render before its effects", async () => {
+    const fetcher = readyFetcher();
+    let props = { initialFrom: "2026-09-01", initialTo: "2026-09-07" };
+    hooks.mount(() => ReportsClient(props));
+    await hooks.settle();
+    const oldNext = button("Next period");
+    const oldFrom = required(dateFields()[0]);
+    const requests = fetcher.mock.calls.length;
+    props = { initialFrom: "2026-09-15", initialTo: "2026-09-21" };
+    hooks.renderWithoutEffects();
+    invoke(oldNext);
+    invoke(oldFrom, "onChange", { target: { value: "2026-08-01" } });
+    invoke(button("Next period"));
+    expect(button("Next period").props.disabled).toBe(true);
+    printEvents.dispatchEvent(new Event("beforeprint"));
+    expect(printGate()).toBe("false");
+    expect(fetcher.mock.calls).toHaveLength(requests);
+    expect(router.replace).not.toHaveBeenCalled();
+    hooks.render();
+    await hooks.settle();
+    expect(currentDates()).toEqual(["2026-09-15", "2026-09-21"]);
+    expect(fetcher.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(2);
+  });
+
+  it("keeps a pending moved-range response current across its exact owned URL echo", async () => {
+    const pending = deferred<Response>();
+    const fetcher = readyFetcher();
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation(async (url) =>
+      url.includes("from=2026-09-08") ? pending.promise : original(url),
+    );
+    let props = { initialFrom: "2026-09-01", initialTo: "2026-09-07" };
+    hooks.mount(() => ReportsClient(props));
+    await hooks.settle();
+    await click("Next period");
+    props = { initialFrom: "2026-09-08", initialTo: "2026-09-14" };
+    hooks.render();
+    await hooks.settle();
+    pending.resolve(reportResponse("/api/reports/nutrition?from=2026-09-08&to=2026-09-14"));
+    await hooks.settle();
+    expect(text()).toContain("2026-09-08 through 2026-09-14");
+    expect(text()).toContain("Exact daily evidence");
+    expect(fetcher.mock.calls.filter(([url]) => url.includes("from=2026-09-08"))).toHaveLength(1);
+    expect(fetcher.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(1);
+  });
+
+  it.each(["report", "profile"] as const)(
+    "ignores a delayed moved-period %s 401 between external-route render and effects",
+    async (boundary) => {
+      const pending = deferred<Response>();
+      let authCalls = 0;
+      const fetcher = vi.fn(async (url: string) => {
+        if (url === "/api/auth/me") {
+          authCalls += 1;
+          return boundary === "profile" && authCalls === 2 ? pending.promise : session();
+        }
+        if (!url.includes("from=2026-09-08")) return reportResponse(url);
+        if (boundary === "report") return pending.promise;
+        const body = await reportResponse(url).json();
+        body.data.profileRevision = "5";
+        return Response.json(body);
+      });
+      vi.stubGlobal("fetch", fetcher);
+      let props = { initialFrom: "2026-09-01", initialTo: "2026-09-07" };
+      hooks.mount(() => ReportsClient(props));
+      await hooks.settle();
+      await click("Next period");
+      props = { initialFrom: "2026-09-15", initialTo: "2026-09-21" };
+      hooks.renderWithoutEffects();
+      pending.resolve(Response.json({ error: "Expired old route" }, { status: 401 }));
+      await hooks.settle();
+      expect(router.replace.mock.calls.some(([url]) => url === "/login")).toBe(false);
+      hooks.render();
+      await hooks.settle();
+      expect(text()).toContain("2026-09-15 through 2026-09-21");
+      expect(text()).toContain("Exact daily evidence");
+    },
+  );
+
+  it("ignores old initial-auth 401 before replacement route effects start", async () => {
+    const pending = deferred<Response>();
+    let authCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url === "/api/auth/me"
+          ? ++authCalls === 1
+            ? pending.promise
+            : session()
+          : reportResponse(url),
+      ),
+    );
+    let props = { initialFrom: "2026-09-01", initialTo: "2026-09-07" };
+    hooks.mount(() => ReportsClient(props));
+    props = { initialFrom: "2026-09-15", initialTo: "2026-09-21" };
+    hooks.renderWithoutEffects();
+    pending.resolve(Response.json({ error: "Expired old route" }, { status: 401 }));
+    await hooks.settle();
+    expect(router.replace).not.toHaveBeenCalled();
+    hooks.render();
+    await hooks.settle();
+    expect(text()).toContain("2026-09-15 through 2026-09-21");
+  });
+
+  it("revalidates an updated profile without reading the same target twice", async () => {
+    let reportReads = 0;
+    let authReads = 0;
+    const fetcher = vi.fn(async (url: string) => {
+      if (url === "/api/auth/me") return session(owner, ++authReads === 1 ? "4" : "5");
+      reportReads += 1;
+      const response = reportResponse(url);
+      const body = await response.json();
+      if (reportReads > 1) body.data.profileRevision = "5";
+      return Response.json(body);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(() => ReportsClient({ initialFrom: "2026-09-01", initialTo: "2026-09-07" }));
+    await hooks.settle();
+    await click("Next period");
+    expect(currentDates()).toEqual(["2026-09-08", "2026-09-14"]);
+    expect(text()).toContain("Exact daily evidence");
+    expect(reportReads).toBe(2);
+    expect(authReads).toBe(2);
+    expect(button("Next period").props.disabled).toBe(false);
+  });
+
+  it("disables navigation for unapplied or invalid date edits, preserves them, and rejects old controls after edit-restore", async () => {
+    const fetcher = readyFetcher();
+    hooks.mount(() => ReportsClient({ initialFrom: "2026-09-01", initialTo: "2026-09-07" }));
+    await hooks.settle();
+    const retained = button("Next period");
+    const requests = fetcher.mock.calls.length;
+    inputDate(0, "");
+    invoke(retained);
+    await hooks.settle();
+    expect(currentDates()).toEqual(["", "2026-09-07"]);
+    expect(button("Previous period").props.disabled).toBe(true);
+    expect(button("Next period").props.disabled).toBe(true);
+    expect(text()).toContain(
+      "Choose Update report to apply your dates before moving to another period.",
+    );
+    nutrient("15");
+    await hooks.settle();
+    expect(elements().find((node) => node.type === "select")?.props.value).toBe("15");
+    expect(button("Next period").props.disabled).toBe(true);
+    inputDate(0, "2026-09-01");
+    await hooks.settle();
+    expect(button("Next period").props.disabled).toBe(false);
+    invoke(retained);
+    await hooks.settle();
+    expect(fetcher.mock.calls).toHaveLength(requests);
+    expect(currentDates()).toEqual(["2026-09-01", "2026-09-07"]);
+    await click("Next period");
+    expect(currentDates()).toEqual(["2026-09-08", "2026-09-14"]);
+  });
+
+  it("keeps the existing preset anchor on the edited To date", async () => {
+    readyFetcher();
+    hooks.mount(() => ReportsClient({ initialFrom: "2026-09-01", initialTo: "2026-09-07" }));
+    await hooks.settle();
+    inputDate(1, "2026-09-21");
+    await hooks.settle();
+    await click("7 days");
+    expect(currentDates()).toEqual(["2026-09-15", "2026-09-21"]);
+  });
+
+  it("clears old evidence and blocks duplicate, opposite, field, preset, submit and nutrient handlers before paint", async () => {
+    const pending = deferred<Response>();
+    const fetcher = readyFetcher();
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation(async (url) =>
+      url.includes("from=2026-09-08") ? pending.promise : original(url),
+    );
+    hooks.mount(() => ReportsClient({ initialFrom: "2026-09-01", initialTo: "2026-09-07" }));
+    await hooks.settle();
+    nutrient("2");
+    await hooks.settle();
+    const next = button("Next period");
+    const previous = button("Previous period");
+    const from = required(dateFields()[0]);
+    const to = required(dateFields()[1]);
+    const preset = button("30 days");
+    const form = required(elements().find((node) => node.type === "form"));
+    const select = required(elements().find((node) => node.type === "select"));
+    invoke(next);
+    invoke(next);
+    invoke(previous);
+    invoke(from, "onChange", { target: { value: "2026-08-01" } });
+    invoke(to, "onChange", { target: { value: "2026-08-31" } });
+    invoke(preset);
+    invoke(form, "onSubmit", { preventDefault() {} });
+    invoke(select, "onChange", { target: { value: "15" } });
+    printEvents.dispatchEvent(new Event("beforeprint"));
+    expect(printGate()).toBe("false");
+    await hooks.settle();
+    expect(currentDates()).toEqual(["2026-09-08", "2026-09-14"]);
+    expect(text()).not.toContain("Exact daily evidence");
+    expect(button("Next period").props.disabled).toBe(true);
+    expect(fetcher.mock.calls.filter(([url]) => url.includes("from=2026-09-08"))).toHaveLength(1);
+    pending.resolve(reportResponse("/api/reports/nutrition?from=2026-09-08&to=2026-09-14"));
+    await hooks.settle();
+    expect(elements().find((node) => node.type === "select")?.props.value).toBe("2");
+    invoke(next);
+    await hooks.settle();
+    expect(currentDates()).toEqual(["2026-09-08", "2026-09-14"]);
+    expect(router.replace).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a failed target selected and retries it once without restoring the old report", async () => {
+    let targets = 0;
+    const fetcher = readyFetcher();
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation(async (url) =>
+      url.includes("from=2026-09-08") && ++targets === 1
+        ? Response.json({ error: "Target temporarily unavailable" }, { status: 503 })
+        : original(url),
+    );
+    hooks.mount(() => ReportsClient({ initialFrom: "2026-09-01", initialTo: "2026-09-07" }));
+    await hooks.settle();
+    nutrient("9");
+    await hooks.settle();
+    const oldPrevious = button("Previous period");
+    await click("Next period");
+    expect(currentDates()).toEqual(["2026-09-08", "2026-09-14"]);
+    expect(text()).not.toContain("Exact daily evidence");
+    expect(button("Previous period").props.disabled).toBe(true);
+    expect(button("Next period").props.disabled).toBe(true);
+    invoke(oldPrevious);
+    const retry = button("Retry report");
+    invoke(retry);
+    invoke(retry);
+    await hooks.settle();
+    expect(targets).toBe(2);
+    expect(currentDates()).toEqual(["2026-09-08", "2026-09-14"]);
+    expect(elements().find((node) => node.type === "select")?.props.value).toBe("9");
+  });
+
+  it.each(["0002-01-01", "9998-12-31"] as const)(
+    "disables only the unavailable direction for loaded %s",
+    async (date) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) =>
+          url === "/api/auth/me" ? session(owner, "4", "UTC") : utcReportResponse(url),
+        ),
+      );
+      hooks.mount(() => ReportsClient({ initialFrom: date, initialTo: date }));
+      await hooks.settle();
+      expect(text()).toContain("Exact daily evidence");
+      expect(button("Previous period").props.disabled).toBe(date === "0002-01-01");
+      expect(button("Next period").props.disabled).toBe(date === "9998-12-31");
+      await click(date === "0002-01-01" ? "Next period" : "Previous period");
+      expect(currentDates()).toEqual(
+        date === "0002-01-01" ? ["0002-01-02", "0002-01-02"] : ["9998-12-30", "9998-12-30"],
+      );
+    },
+  );
+
+  it.each(["owner", "expired"] as const)(
+    "closes a moved report when the response detects %s and rejects retained controls",
+    async (failure) => {
+      const fetcher = readyFetcher();
+      const original = required(fetcher.getMockImplementation());
+      fetcher.mockImplementation(async (url) => {
+        if (!url.includes("from=2026-09-08")) return original(url);
+        if (failure === "expired") return Response.json({ error: "Expired" }, { status: 401 });
+        const body = await reportResponse(url).json();
+        body.data.ownerUserId = anotherOwner;
+        return Response.json(body);
+      });
+      hooks.mount(() => ReportsClient({ initialFrom: "2026-09-01", initialTo: "2026-09-07" }));
+      await hooks.settle();
+      const retained = button("Next period");
+      await click("Next period");
+      expect(router.replace).toHaveBeenLastCalledWith("/login");
+      expect(text()).not.toContain("Exact daily evidence");
+      expect(button("Next period").props.disabled).toBe(true);
+      const requests = fetcher.mock.calls.length;
+      invoke(retained);
+      await hooks.settle();
+      expect(fetcher.mock.calls).toHaveLength(requests);
+    },
+  );
+
+  it("rejects navigation while initial session is unverified and after unmount", async () => {
+    const auth = deferred<Response>();
+    const fetcher = vi.fn(async (url: string) =>
+      url === "/api/auth/me" ? auth.promise : reportResponse(url),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(() => ReportsClient({ initialFrom: "2026-09-01", initialTo: "2026-09-07" }));
+    const initial = button("Next period");
+    invoke(initial);
+    await hooks.settle();
+    expect(fetcher.mock.calls).toHaveLength(1);
+    auth.resolve(session());
+    await hooks.settle();
+    const ready = button("Next period");
+    hooks.unmount();
+    const requests = fetcher.mock.calls.length;
+    invoke(initial);
+    invoke(ready);
+    await hooks.settle();
+    expect(fetcher.mock.calls).toHaveLength(requests);
+    expect(hooks.afterClose()).toBe(0);
+  });
+
+  it("revokes an active print gate when moving periods during the native print call", async () => {
+    readyFetcher();
+    hooks.mount(() => ReportsClient({ initialFrom: "2026-09-01", initialTo: "2026-09-07" }));
+    await hooks.settle();
+    nativePrint.mockImplementation(() => {
+      printEvents.dispatchEvent(new Event("beforeprint"));
+      expect(printGate()).toBe("true");
+      invoke(button("Next period"));
+      expect(printGate()).toBe("false");
+    });
+    startPrint();
+    await hooks.settle();
+    expect(nativePrint).toHaveBeenCalledTimes(1);
+    expect(currentDates()).toEqual(["2026-09-08", "2026-09-14"]);
+    expect(printedComponent()).toBeUndefined();
   });
 });

@@ -4,7 +4,6 @@ import {
   isSupportedTimeZone,
   localDateInTimeZone,
   parseDiaryNutrient,
-  shiftLocalDate,
 } from "./diary";
 
 export const MAX_NUTRITION_REPORT_DAYS = 31;
@@ -210,13 +209,44 @@ function safeCount(value: unknown, maximum = Number.MAX_SAFE_INTEGER): value is 
   return Number.isSafeInteger(value) && Number(value) >= 0 && Number(value) <= maximum;
 }
 
+function shiftReportDate(localDate: string, days: number): string {
+  if (!isLocalDate(localDate) || !Number.isInteger(days))
+    throw new RangeError("Invalid report date.");
+  const [year = 0, month = 1, day = 1] = localDate.split("-").map(Number);
+  const shifted = new Date(0);
+  shifted.setUTCHours(0, 0, 0, 0);
+  shifted.setUTCFullYear(year, month - 1, day);
+  shifted.setUTCDate(shifted.getUTCDate() + days);
+  return shifted.toISOString().slice(0, 10);
+}
+
+export function adjacentNutritionReportRange(
+  range: NutritionReportRange,
+  direction: "previous" | "next",
+): NutritionReportRange | null {
+  const dates = nutritionReportDates(range.from, range.to);
+  if (
+    range.from < "0002-01-01" ||
+    range.to > "9998-12-31" ||
+    (direction !== "previous" && direction !== "next")
+  )
+    throw new RangeError("Choose a report period within 0002-01-01 through 9998-12-31.");
+  const offset = (direction === "previous" ? -1 : 1) * dates.length;
+  const from = shiftReportDate(range.from, offset);
+  const to = shiftReportDate(range.to, offset);
+  if (!isLocalDate(from) || !isLocalDate(to) || from < "0002-01-01" || to > "9998-12-31")
+    return null;
+  nutritionReportDates(from, to);
+  return { from, to };
+}
+
 export function nutritionReportDates(from: string, to: string): readonly string[] {
   if (!isLocalDate(from) || !isLocalDate(to) || from > to) {
     throw new RangeError("Choose valid report dates with From on or before To.");
   }
   const dates = [from];
   while (dates[dates.length - 1] !== to && dates.length < MAX_NUTRITION_REPORT_DAYS) {
-    const next = shiftLocalDate(dates[dates.length - 1] ?? from, 1);
+    const next = shiftReportDate(dates[dates.length - 1] ?? from, 1);
     if (!isLocalDate(next)) break;
     dates.push(next);
   }
@@ -230,7 +260,7 @@ export function nutritionReportRange(to: string, days = 14): NutritionReportRang
   if (!isLocalDate(to) || !Number.isInteger(days) || days < 1 || days > MAX_NUTRITION_REPORT_DAYS) {
     throw new RangeError("Choose an inclusive range of 1 to 31 local days.");
   }
-  const from = shiftLocalDate(to, 1 - days);
+  const from = shiftReportDate(to, 1 - days);
   nutritionReportDates(from, to);
   return { from, to };
 }
@@ -313,11 +343,11 @@ function parseDay(
     !instant(value.endsAt) ||
     Date.parse(value.startsAt) >= Date.parse(value.endsAt) ||
     localDateInTimeZone(new Date(Date.parse(value.startsAt) - 1), reportTimeZone) !==
-      shiftLocalDate(expectedDate, -1) ||
+      shiftReportDate(expectedDate, -1) ||
     localDateInTimeZone(new Date(value.startsAt), reportTimeZone) !== expectedDate ||
     localDateInTimeZone(new Date(Date.parse(value.endsAt) - 1), reportTimeZone) !== expectedDate ||
     localDateInTimeZone(new Date(value.endsAt), reportTimeZone) !==
-      shiftLocalDate(expectedDate, 1) ||
+      shiftReportDate(expectedDate, 1) ||
     !safeCount(value.entryCount, 2_000) ||
     !Array.isArray(value.sourceDiaries) ||
     value.sourceDiaries.length > MAX_NUTRITION_REPORT_DAYS ||

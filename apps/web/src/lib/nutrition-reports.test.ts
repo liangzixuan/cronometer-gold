@@ -5,6 +5,7 @@ import {
   zeroTargetNutritionReportFixture,
 } from "../test/nutrition-report-fixture";
 import {
+  adjacentNutritionReportRange,
   nutritionReportDates,
   nutritionReportRange,
   parseNutritionReport,
@@ -491,5 +492,87 @@ describe("web nutrition-report presentation", () => {
       "target percentage unavailable because the saved target is zero",
     );
     expect(reportComparisonText(point)).not.toBe("No saved threshold");
+  });
+});
+
+describe("adjacent web nutrition report periods", () => {
+  it.each([
+    [1, "2026-09-01", "2026-08-31", "2026-09-02", "2026-09-02"],
+    [7, "2026-09-07", "2026-08-25", "2026-09-08", "2026-09-14"],
+    [14, "2026-09-14", "2026-08-18", "2026-09-15", "2026-09-28"],
+    [30, "2026-09-30", "2026-08-02", "2026-10-01", "2026-10-30"],
+    [31, "2026-10-01", "2026-08-01", "2026-10-02", "2026-11-01"],
+  ] as const)(
+    "keeps an inclusive %i-day period adjacent in both directions",
+    (days, to, previousFrom, nextFrom, nextTo) => {
+      const range = { from: "2026-09-01", to };
+      const previous = adjacentNutritionReportRange(range, "previous");
+      const next = adjacentNutritionReportRange(range, "next");
+      expect(previous).toEqual({ from: previousFrom, to: "2026-08-31" });
+      expect(next).toEqual({ from: nextFrom, to: nextTo });
+      expect(nutritionReportDates(previousFrom, "2026-08-31")).toHaveLength(days);
+      expect(nutritionReportDates(nextFrom, nextTo)).toHaveLength(days);
+      expect(next && adjacentNutritionReportRange(next, "previous")).toEqual(range);
+    },
+  );
+
+  it.each([
+    ["2024-03-01", "2024-03-07", "2024-02-23", "2024-02-29", "2024-03-08", "2024-03-14"],
+    ["2025-12-29", "2026-01-04", "2025-12-22", "2025-12-28", "2026-01-05", "2026-01-11"],
+    ["2026-03-05", "2026-03-11", "2026-02-26", "2026-03-04", "2026-03-12", "2026-03-18"],
+    ["2026-10-29", "2026-11-04", "2026-10-22", "2026-10-28", "2026-11-05", "2026-11-11"],
+    ["0099-12-25", "0099-12-31", "0099-12-18", "0099-12-24", "0100-01-01", "0100-01-07"],
+  ] as const)(
+    "shifts calendar days across the boundary in %s through %s",
+    (from, to, previousFrom, previousTo, nextFrom, nextTo) => {
+      expect(adjacentNutritionReportRange({ from, to }, "previous")).toEqual({
+        from: previousFrom,
+        to: previousTo,
+      });
+      expect(adjacentNutritionReportRange({ from, to }, "next")).toEqual({
+        from: nextFrom,
+        to: nextTo,
+      });
+    },
+  );
+
+  it("keeps early years exact and disables only directions beyond service bounds", () => {
+    expect(
+      adjacentNutritionReportRange({ from: "0002-01-01", to: "0002-01-01" }, "previous"),
+    ).toBeNull();
+    expect(adjacentNutritionReportRange({ from: "0002-01-01", to: "0002-01-01" }, "next")).toEqual({
+      from: "0002-01-02",
+      to: "0002-01-02",
+    });
+    expect(adjacentNutritionReportRange({ from: "0002-01-01", to: "0002-01-07" }, "next")).toEqual({
+      from: "0002-01-08",
+      to: "0002-01-14",
+    });
+    expect(
+      adjacentNutritionReportRange({ from: "0002-01-02", to: "0002-01-08" }, "previous"),
+    ).toBeNull();
+    expect(
+      adjacentNutritionReportRange({ from: "9998-12-25", to: "9998-12-31" }, "next"),
+    ).toBeNull();
+    expect(
+      adjacentNutritionReportRange({ from: "9998-12-25", to: "9998-12-31" }, "previous"),
+    ).toEqual({ from: "9998-12-18", to: "9998-12-24" });
+    expect(nutritionReportDates("0099-12-31", "0100-01-01")).toEqual(["0099-12-31", "0100-01-01"]);
+    expect(nutritionReportRange("0002-01-07", 7)).toEqual({ from: "0002-01-01", to: "0002-01-07" });
+    // Existing manual helper scope stays wider than adjacent navigation.
+    expect(nutritionReportRange("0001-01-07", 7)).toEqual({ from: "0001-01-01", to: "0001-01-07" });
+    expect(nutritionReportDates("9999-12-31", "9999-12-31")).toEqual(["9999-12-31"]);
+  });
+
+  it.each([
+    ["bad", "2026-09-01"],
+    ["2026-02-30", "2026-03-01"],
+    ["2026-09-02", "2026-09-01"],
+    ["2026-08-01", "2026-09-01"],
+    ["0001-12-31", "0002-01-01"],
+    ["9998-12-31", "9999-01-01"],
+  ] as const)("rejects invalid or unsupported input %s through %s", (from, to) => {
+    expect(() => adjacentNutritionReportRange({ from, to }, "previous")).toThrow(RangeError);
+    expect(() => adjacentNutritionReportRange({ from, to }, "next")).toThrow(RangeError);
   });
 });

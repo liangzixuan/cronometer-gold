@@ -5,6 +5,7 @@ import type {
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  AppState,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -19,6 +20,7 @@ import { localDateInTimeZone } from "../diary/diary";
 import { palette } from "../theme";
 import {
   type NutritionReportRequestFence,
+  nutritionReportAdjacentRange,
   nutritionReportBoundarySummary,
   nutritionReportCoverageSummary,
   nutritionReportLocalDates,
@@ -30,7 +32,7 @@ import {
   parseNutritionReport,
 } from "./reports";
 
-type LoadState = "loading" | "ready" | "error";
+type LoadState = "loading" | "ready" | "error" | "closed";
 type PresetDays = 7 | 14 | 30;
 
 interface ReportsScreenProps {
@@ -92,25 +94,75 @@ export function ReportsScreen({
   const [fromDraft, setFromDraft] = useState(initialRange.from);
   const [toDraft, setToDraft] = useState(initialRange.to);
   const [query, setQuery] = useState<ReportQuery>({ ...initialRange, refresh: 0 });
-  const [report, setReport] = useState<NutritionReportResponse["data"] | null>(null);
+  const [loadedReport, setReport] = useState<NutritionReportResponse["data"] | null>(null);
   const [selectedNutrientCode, setSelectedNutrientCode] = useState("energy");
   const [state, setState] = useState<LoadState>("loading");
   const [message, setMessage] = useState("Opening your private nutrition report…");
   const controllerRef = useRef<AbortController | null>(null);
   const generationRef = useRef(0);
-  const ownerRef = useRef(expectedOwnerUserId);
-  const epochRef = useRef(sessionEpoch);
-  const profileRevisionRef = useRef(profileRevision);
-  const timeZoneRef = useRef(profileTimeZone);
+  const lifecycleRef = useRef(0);
   const queryRef = useRef(query);
-  ownerRef.current = expectedOwnerUserId;
-  epochRef.current = sessionEpoch;
-  profileRevisionRef.current = profileRevision;
-  timeZoneRef.current = profileTimeZone;
-  queryRef.current = query;
+  const draftRef = useRef({ from: fromDraft, to: toDraft });
+  const draftGeneration = useRef(0);
+  const reportRef = useRef<NutritionReportResponse["data"] | null>(null);
+  const stateRef = useRef<LoadState>("loading");
+  const mounted = useRef(false);
+  const active = useRef(
+    AppState.currentState !== "background" && AppState.currentState !== "inactive",
+  );
+  const closed = useRef(false);
+  const scopeRef = useRef({
+    accessToken,
+    apiBase: apiBase.toString(),
+    expectedOwnerUserId,
+    profileRevision,
+    profileTimeZone,
+    sessionEpoch,
+  });
+  if (
+    scopeRef.current.accessToken !== accessToken ||
+    scopeRef.current.apiBase !== apiBase.toString() ||
+    scopeRef.current.expectedOwnerUserId !== expectedOwnerUserId ||
+    scopeRef.current.profileRevision !== profileRevision ||
+    scopeRef.current.profileTimeZone !== profileTimeZone ||
+    scopeRef.current.sessionEpoch !== sessionEpoch
+  )
+    scopeRef.current = {
+      accessToken,
+      apiBase: apiBase.toString(),
+      expectedOwnerUserId,
+      profileRevision,
+      profileTimeZone,
+      sessionEpoch,
+    };
+  const scope = scopeRef.current;
+  const installedScope = useRef<typeof scope | null>(null);
+  const closedScope = useRef<typeof scope | null>(null);
+  const reportScope = useRef<typeof scope | null>(null);
+  const onUnauthorizedRef = useRef(onUnauthorized);
+  onUnauthorizedRef.current = onUnauthorized;
 
+  const scopeIsCurrent = useCallback(
+    () =>
+      mounted.current &&
+      active.current &&
+      !closed.current &&
+      scopeRef.current === scope &&
+      installedScope.current === scope,
+    [scope],
+  );
+  const setLoadState = useCallback((next: LoadState) => {
+    stateRef.current = next;
+    setState(next);
+  }, []);
+  const clearSnapshot = useCallback(() => {
+    reportRef.current = null;
+    reportScope.current = null;
+    setReport(null);
+  }, []);
   const load = useCallback(
     async (requested: ReportQuery) => {
+      if (!scopeIsCurrent() || queryRef.current !== requested) return;
       controllerRef.current?.abort();
       const controller = new AbortController();
       controllerRef.current = controller;
@@ -119,85 +171,110 @@ export function ReportsScreen({
       const initiating: NutritionReportRequestFence = {
         from: requested.from,
         generation,
-        ownerUserId: expectedOwnerUserId,
-        profileRevision,
-        sessionEpoch,
-        timeZone: profileTimeZone,
+        ownerUserId: scope.expectedOwnerUserId,
+        profileRevision: scope.profileRevision,
+        sessionEpoch: scope.sessionEpoch,
+        timeZone: scope.profileTimeZone,
         to: requested.to,
       };
       const requestIsCurrent = () =>
+        scopeIsCurrent() &&
+        queryRef.current === requested &&
         controllerRef.current === controller &&
         !controller.signal.aborted &&
         nutritionReportRequestIdentityMatches(
           {
             from: queryRef.current.from,
             generation: generationRef.current,
-            ownerUserId: ownerRef.current,
-            profileRevision: profileRevisionRef.current,
-            sessionEpoch: epochRef.current,
-            timeZone: timeZoneRef.current,
+            ownerUserId: scopeRef.current.expectedOwnerUserId,
+            profileRevision: scopeRef.current.profileRevision,
+            sessionEpoch: scopeRef.current.sessionEpoch,
+            timeZone: scopeRef.current.profileTimeZone,
             to: queryRef.current.to,
           },
           initiating,
         );
-      setState("loading");
-      setReport(null);
+      setLoadState("loading");
+      clearSnapshot();
       setMessage(`Loading ${requested.from} through ${requested.to}…`);
       try {
         const response = await fetch(
-          apiUrl(apiBase, nutritionReportPath(requested.from, requested.to)).toString(),
+          apiUrl(
+            new URL(scope.apiBase),
+            nutritionReportPath(requested.from, requested.to),
+          ).toString(),
           {
             cache: "no-store",
-            headers: authenticatedHeaders(accessToken),
+            headers: authenticatedHeaders(scope.accessToken),
             signal: controller.signal,
           },
         );
         if (!requestIsCurrent()) return;
         if (response.status === 401) {
-          await onUnauthorized();
+          closed.current = true;
+          closedScope.current = scope;
+          lifecycleRef.current += 1;
+          generationRef.current += 1;
+          controller.abort();
+          clearSnapshot();
+          setLoadState("closed");
+          setMessage("Closing your private nutrition report…");
+          await onUnauthorizedRef.current();
           return;
         }
         const body = await jsonBody(response);
         if (!requestIsCurrent()) return;
-        if (!response.ok) {
+        if (!response.ok)
           throw new Error(responseError(body, "The nutrition report could not be loaded."));
-        }
         const parsed = parseNutritionReport(body, {
           from: requested.from,
-          ownerUserId: expectedOwnerUserId,
-          profileRevision,
-          timeZone: profileTimeZone,
+          ownerUserId: scope.expectedOwnerUserId,
+          profileRevision: scope.profileRevision,
+          timeZone: scope.profileTimeZone,
           to: requested.to,
         });
         if (!requestIsCurrent()) return;
+        reportRef.current = parsed;
+        reportScope.current = scope;
         setReport(parsed);
         setSelectedNutrientCode((current) =>
           parsed.series.some((series) => series.nutrient.code === current)
             ? current
             : (parsed.series[0]?.nutrient.code ?? "energy"),
         );
-        setState("ready");
+        setLoadState("ready");
         setMessage(reportReadyMessage(parsed));
       } catch (caught) {
         if (!requestIsCurrent()) return;
-        setReport(null);
-        setState("error");
+        clearSnapshot();
+        setLoadState("error");
         setMessage(
           caught instanceof Error ? caught.message : "The nutrition report could not be loaded.",
         );
       }
     },
-    [
-      accessToken,
-      apiBase,
-      expectedOwnerUserId,
-      onUnauthorized,
-      profileRevision,
-      profileTimeZone,
-      sessionEpoch,
-    ],
+    [clearSnapshot, scope, scopeIsCurrent, setLoadState],
   );
 
+  useEffect(() => {
+    mounted.current = true;
+    installedScope.current = scope;
+    lifecycleRef.current += 1;
+    closed.current = closedScope.current === scope;
+    active.current = AppState.currentState !== "background" && AppState.currentState !== "inactive";
+    generationRef.current += 1;
+    draftGeneration.current += 1;
+    controllerRef.current?.abort();
+    clearSnapshot();
+    setLoadState(closed.current ? "closed" : "loading");
+    return () => {
+      mounted.current = false;
+      installedScope.current = null;
+      lifecycleRef.current += 1;
+      generationRef.current += 1;
+      controllerRef.current?.abort();
+    };
+  }, [clearSnapshot, scope, setLoadState]);
   useEffect(() => {
     void load(query);
     return () => {
@@ -205,16 +282,70 @@ export function ReportsScreen({
       controllerRef.current?.abort();
     };
   }, [load, query]);
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (next) => {
+      if (!mounted.current || scopeRef.current !== scope || closed.current) return;
+      if (next !== "active") {
+        active.current = false;
+        lifecycleRef.current += 1;
+        generationRef.current += 1;
+        draftGeneration.current += 1;
+        controllerRef.current?.abort();
+        clearSnapshot();
+        setLoadState("loading");
+        setMessage("Return to the app to reload this private report.");
+      } else if (!active.current) {
+        active.current = true;
+        const refreshed = { ...queryRef.current, refresh: queryRef.current.refresh + 1 };
+        queryRef.current = refreshed;
+        setQuery(refreshed);
+      }
+    });
+    return () => subscription.remove();
+  }, [clearSnapshot, scope, setLoadState]);
 
+  const renderLifecycle = lifecycleRef.current;
+  const renderDraftGeneration = draftGeneration.current;
+  function canAct() {
+    return (
+      scopeIsCurrent() && queryRef.current === query && lifecycleRef.current === renderLifecycle
+    );
+  }
+  function currentDraftAction() {
+    return canAct() && draftGeneration.current === renderDraftGeneration;
+  }
+  function setDraftDate(field: "from" | "to", value: string) {
+    if (!canAct()) return;
+    if (draftRef.current[field] === value) return;
+    draftRef.current = { ...draftRef.current, [field]: value };
+    draftGeneration.current += 1;
+    if (field === "from") setFromDraft(value);
+    else setToDraft(value);
+  }
+  function commitRange(from: string, to: string) {
+    generationRef.current += 1;
+    controllerRef.current?.abort();
+    clearSnapshot();
+    draftGeneration.current += 1;
+    draftRef.current = { from, to };
+    setFromDraft(from);
+    setToDraft(to);
+    const next = { from, to, refresh: queryRef.current.refresh + 1 };
+    queryRef.current = next;
+    setLoadState("loading");
+    setMessage(`Loading ${from} through ${to}…`);
+    setQuery(next);
+  }
   function applyRange(from: string, to: string) {
+    if (!currentDraftAction()) return;
     try {
       nutritionReportLocalDates(from, to);
-      setFromDraft(from);
-      setToDraft(to);
-      setQuery((current) => ({ from, refresh: current.refresh + 1, to }));
+      commitRange(from, to);
     } catch (caught) {
-      setReport(null);
-      setState("error");
+      generationRef.current += 1;
+      controllerRef.current?.abort();
+      clearSnapshot();
+      setLoadState("error");
       setMessage(
         caught instanceof Error
           ? caught.message
@@ -222,11 +353,39 @@ export function ReportsScreen({
       );
     }
   }
-
   function applyPreset(days: PresetDays) {
-    const today = localDateInTimeZone(new Date(), profileTimeZone);
+    if (!currentDraftAction()) return;
+    const today = localDateInTimeZone(new Date(), scope.profileTimeZone);
     const range = nutritionReportRangeEndingAt(today, days);
     applyRange(range.from, range.to);
+  }
+  const scopeVisible = scopeIsCurrent();
+  const report =
+    scopeVisible &&
+    state === "ready" &&
+    reportScope.current === scope &&
+    reportRef.current === loadedReport &&
+    loadedReport?.from === query.from &&
+    loadedReport?.to === query.to
+      ? loadedReport
+      : null;
+  const datesDirty = fromDraft !== query.from || toDraft !== query.to;
+  const previousPeriod = report
+    ? nutritionReportAdjacentRange(report.from, report.to, "previous")
+    : null;
+  const nextPeriod = report ? nutritionReportAdjacentRange(report.from, report.to, "next") : null;
+  function movePeriod(direction: "previous" | "next") {
+    if (
+      !currentDraftAction() ||
+      stateRef.current !== "ready" ||
+      !report ||
+      reportRef.current !== report ||
+      draftRef.current.from !== query.from ||
+      draftRef.current.to !== query.to
+    )
+      return;
+    const next = nutritionReportAdjacentRange(report.from, report.to, direction);
+    if (next) commitRange(next.from, next.to);
   }
 
   const selectedSeries =
@@ -255,6 +414,8 @@ export function ReportsScreen({
               accessibilityLabel={`Show the last ${days} profile-local days`}
               accessibilityRole="button"
               key={days}
+              disabled={!scopeVisible}
+              accessibilityState={{ disabled: !scopeVisible }}
               onPress={() => applyPreset(days)}
               style={styles.presetButton}
             >
@@ -270,7 +431,8 @@ export function ReportsScreen({
               accessibilityLabel="Report start date YYYY-MM-DD"
               autoCapitalize="none"
               maxLength={10}
-              onChangeText={setFromDraft}
+              editable={scopeVisible}
+              onChangeText={(value) => setDraftDate("from", value)}
               returnKeyType="done"
               style={styles.dateInput}
               value={fromDraft}
@@ -282,7 +444,8 @@ export function ReportsScreen({
               accessibilityLabel="Report end date YYYY-MM-DD"
               autoCapitalize="none"
               maxLength={10}
-              onChangeText={setToDraft}
+              editable={scopeVisible}
+              onChangeText={(value) => setDraftDate("to", value)}
               returnKeyType="done"
               style={styles.dateInput}
               value={toDraft}
@@ -290,12 +453,40 @@ export function ReportsScreen({
           </View>
           <Pressable
             accessibilityRole="button"
+            disabled={!scopeVisible}
+            accessibilityState={{ disabled: !scopeVisible }}
             onPress={() => applyRange(fromDraft, toDraft)}
             style={styles.updateButton}
           >
             <Text style={styles.updateText}>Update report</Text>
           </Pressable>
         </View>
+
+        <View style={styles.presetRow}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ disabled: !previousPeriod || datesDirty }}
+            disabled={!previousPeriod || datesDirty}
+            onPress={() => movePeriod("previous")}
+            style={[styles.secondaryButton, (!previousPeriod || datesDirty) && styles.disabled]}
+          >
+            <Text style={styles.secondaryText}>Previous period</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ disabled: !nextPeriod || datesDirty }}
+            disabled={!nextPeriod || datesDirty}
+            onPress={() => movePeriod("next")}
+            style={[styles.secondaryButton, (!nextPeriod || datesDirty) && styles.disabled]}
+          >
+            <Text style={styles.secondaryText}>Next period</Text>
+          </Pressable>
+        </View>
+        {scopeVisible && datesDirty ? (
+          <Text style={styles.status}>
+            Choose Update report to apply these dates before moving to another period.
+          </Text>
+        ) : null}
 
         <View
           accessibilityLiveRegion="polite"
@@ -308,12 +499,19 @@ export function ReportsScreen({
               color={palette.forest}
             />
           ) : null}
-          <Text style={[styles.status, state === "error" ? styles.error : null]}>{message}</Text>
+          <Text style={[styles.status, state === "error" ? styles.error : null]}>
+            {scopeVisible || state === "closed"
+              ? message
+              : "Opening your private nutrition report…"}
+          </Text>
         </View>
-        {state === "error" ? (
+        {scopeVisible && state === "error" ? (
           <Pressable
             accessibilityRole="button"
-            onPress={() => setQuery((current) => ({ ...current, refresh: current.refresh + 1 }))}
+            disabled={!scopeVisible}
+            onPress={() => {
+              if (currentDraftAction()) commitRange(query.from, query.to);
+            }}
             style={styles.secondaryButton}
           >
             <Text style={styles.secondaryText}>Retry this range</Text>
@@ -348,7 +546,10 @@ export function ReportsScreen({
                       accessibilityRole="button"
                       accessibilityState={{ selected }}
                       key={series.nutrient.id}
-                      onPress={() => setSelectedNutrientCode(series.nutrient.code)}
+                      onPress={() => {
+                        if (canAct() && reportRef.current === report)
+                          setSelectedNutrientCode(series.nutrient.code);
+                      }}
                       style={[
                         styles.nutrientButton,
                         selected ? styles.nutrientButtonSelected : null,
@@ -475,6 +676,7 @@ export function ReportsScreen({
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: palette.paper },
+  disabled: { opacity: 0.5 },
   content: { padding: 20, paddingBottom: 48, gap: 16 },
   kicker: { color: palette.forest, fontSize: 12, fontWeight: "800", letterSpacing: 1.4 },
   title: { color: palette.ink, fontSize: 32, fontWeight: "800" },

@@ -6,6 +6,7 @@ import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } fro
 
 import { isLocalDate, parseSession, type SessionSummary } from "../../lib/diary";
 import {
+  adjacentNutritionReportRange,
   type NutritionReport,
   type NutritionReportRange,
   type NutritionReportSeriesPoint,
@@ -128,7 +129,18 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   const sessionExplicitlyClosed = useRef(false);
   const sessionGeneration = useRef(0);
   const reportGeneration = useRef(0);
+  const controlGeneration = useRef(0);
+  const ownedRouteCommit = useRef<{
+    readonly rangeKey: string;
+    readonly sessionGeneration: number;
+    readonly ownerUserId: string;
+  } | null>(null);
   const reportController = useRef<AbortController | null>(null);
+  const completedReportRequest = useRef<{
+    readonly range: NutritionReportRange;
+    readonly refreshKey: number;
+    readonly report: NutritionReport;
+  } | null>(null);
   const printGeneration = useRef(0);
   const printController = useRef<AbortController | null>(null);
   const printView = useRef<PrintView | null>(null);
@@ -141,6 +153,20 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   rangeRef.current = range;
   const refreshRef = useRef(refreshKey);
   refreshRef.current = refreshKey;
+  const initialRouteKey = `${initialFrom ?? ""}/${initialTo ?? ""}`;
+  const routeRef = useRef({ key: initialRouteKey });
+  if (routeRef.current.key !== initialRouteKey) routeRef.current = { key: initialRouteKey };
+  const routeContext = routeRef.current;
+  const handledRouteKey = useRef(initialRouteKey);
+  const routeReadyRef = useRef(false);
+  const pendingRoute = ownedRouteCommit.current;
+  routeReadyRef.current =
+    handledRouteKey.current === initialRouteKey ||
+    (pendingRoute !== null &&
+      pendingRoute.rangeKey === initialRouteKey &&
+      rangeKey(rangeRef.current) === initialRouteKey &&
+      pendingRoute.sessionGeneration === sessionGeneration.current &&
+      pendingRoute.ownerUserId === sessionRef.current?.user.id);
 
   const closePrintGate = useCallback(() => {
     armedPrint.current = null;
@@ -165,6 +191,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
     const view = printView.current;
     return (
       !privateUiClosed.current &&
+      routeReadyRef.current &&
       printGeneration.current === capture.printGeneration &&
       sessionGeneration.current === capture.sessionGeneration &&
       reportGeneration.current === capture.reportGeneration &&
@@ -178,6 +205,9 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   }, []);
 
   const signInAgain = useCallback(() => {
+    controlGeneration.current += 1;
+    ownedRouteCommit.current = null;
+    completedReportRequest.current = null;
     invalidatePrint();
     sessionExplicitlyClosed.current = true;
     privateUiClosed.current = true;
@@ -195,7 +225,26 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   }, [invalidatePrint, router]);
 
   useEffect(() => {
+    const ownedCommit = ownedRouteCommit.current;
+    ownedRouteCommit.current = null;
+    handledRouteKey.current = initialRouteKey;
+    routeReadyRef.current = true;
+    if (
+      ownedCommit &&
+      !privateUiClosed.current &&
+      sessionRef.current?.user.id === ownedCommit.ownerUserId &&
+      sessionGeneration.current === ownedCommit.sessionGeneration &&
+      `${initialFrom}/${initialTo}` === ownedCommit.rangeKey &&
+      rangeKey(rangeRef.current) === ownedCommit.rangeKey
+    )
+      return;
+    controlGeneration.current += 1;
+    reportGeneration.current += 1;
+    completedReportRequest.current = null;
+    reportController.current?.abort();
     invalidatePrint();
+    setReport(null);
+    setState("loading");
     setSessionVerifying(true);
     const controller = new AbortController();
     const generation = sessionGeneration.current + 1;
@@ -210,6 +259,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
         if (
           controller.signal.aborted ||
           privateUiClosed.current ||
+          !routeReadyRef.current ||
           sessionGeneration.current !== generation
         )
           return;
@@ -227,12 +277,14 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
         if (
           controller.signal.aborted ||
           privateUiClosed.current ||
+          !routeReadyRef.current ||
           sessionGeneration.current !== generation
         ) {
           return;
         }
         setSessionVerifying(false);
         setSession(nextSession);
+        rangeRef.current = nextRange;
         setRange(nextRange);
         setDraftFrom(nextRange.from);
         setDraftTo(nextRange.to);
@@ -241,6 +293,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
         if (
           !controller.signal.aborted &&
           !privateUiClosed.current &&
+          routeReadyRef.current &&
           sessionGeneration.current === generation
         ) {
           setState("error");
@@ -251,10 +304,21 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
       }
     })();
     return () => controller.abort();
-  }, [initialFrom, initialTo, invalidatePrint, signInAgain]);
+  }, [initialFrom, initialTo, initialRouteKey, invalidatePrint, signInAgain]);
 
   useEffect(() => {
     if (!session || !range) return;
+    const completed = completedReportRequest.current;
+    // Installing the profile verified for this exact response must not refetch it.
+    if (
+      completed?.range === range &&
+      completed.refreshKey === refreshKey &&
+      completed.report.ownerUserId === session.user.id &&
+      completed.report.profileRevision === session.profile.revision &&
+      completed.report.timeZone === session.profile.timeZone
+    )
+      return;
+    completedReportRequest.current = null;
     const requestedOwner = session.user.id;
     const requestedRange = { ...range };
     const requestedRefreshKey = refreshKey;
@@ -266,6 +330,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
     const isCurrent = () =>
       !controller.signal.aborted &&
       !privateUiClosed.current &&
+      routeReadyRef.current &&
       reportGeneration.current === generation &&
       reportController.current === controller &&
       rangeKey(rangeRef.current) === rangeKey(requestedRange) &&
@@ -322,6 +387,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
           setSession(freshSession);
         }
         if (!isCurrent()) return;
+        completedReportRequest.current = { range, refreshKey, report: nextReport };
         setReport(nextReport);
         setSelectedNutrientId((current) =>
           nextReport.series.some((series) => series.nutrient.id === current)
@@ -350,6 +416,9 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
     privateUiClosed.current = sessionExplicitlyClosed.current;
     return () => {
       privateUiClosed.current = true;
+      controlGeneration.current += 1;
+      ownedRouteCommit.current = null;
+      completedReportRequest.current = null;
       printGeneration.current += 1;
       printController.current?.abort();
       printController.current = null;
@@ -370,6 +439,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   );
 
   const printable =
+    routeReadyRef.current &&
     !sessionVerifying &&
     state === "ready" &&
     !logoutBusy &&
@@ -388,6 +458,62 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   printView.current = printable
     ? { report, nutrientId: selectedSeries.nutrient.id, session }
     : null;
+
+  const controlContext = controlGeneration.current;
+  const sessionContext = sessionGeneration.current;
+  const reportContext = reportGeneration.current;
+  const dirtyRange = range !== null && (draftFrom !== range.from || draftTo !== range.to);
+  const adjacentRanges = useMemo(() => {
+    if (!report) return { previous: null, next: null };
+    try {
+      return {
+        previous: adjacentNutritionReportRange(report, "previous"),
+        next: adjacentNutritionReportRange(report, "next"),
+      };
+    } catch {
+      return { previous: null, next: null };
+    }
+  }, [report]);
+
+  function canUseRangeControls() {
+    return (
+      !privateUiClosed.current &&
+      routeReadyRef.current &&
+      routeRef.current === routeContext &&
+      !sessionVerifying &&
+      !logoutBusy &&
+      session !== null &&
+      sessionRef.current === session &&
+      state !== "loading" &&
+      sessionGeneration.current === sessionContext &&
+      reportGeneration.current === reportContext &&
+      controlGeneration.current === controlContext &&
+      rangeKey(rangeRef.current) === rangeKey(range)
+    );
+  }
+
+  function editRangeDate(field: "from" | "to", value: string) {
+    if (!canUseRangeControls()) return;
+    controlGeneration.current += 1;
+    invalidatePrint();
+    setRangeError("");
+    if (field === "from") setDraftFrom(value);
+    else setDraftTo(value);
+  }
+
+  function navigatePeriod(direction: "previous" | "next") {
+    const view = printView.current;
+    if (
+      !canUseRangeControls() ||
+      !printable ||
+      !view ||
+      view.report !== report ||
+      view.nutrientId !== selectedSeries?.nutrient.id ||
+      !adjacentRanges[direction]
+    )
+      return;
+    commitRange(adjacentRanges[direction]);
+  }
 
   useEffect(() => {
     const beforePrint = () => {
@@ -481,6 +607,8 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
         freshSession.profile.revision !== capture.report.profileRevision ||
         freshSession.profile.timeZone !== capture.report.timeZone
       ) {
+        controlGeneration.current += 1;
+        completedReportRequest.current = null;
         invalidatePrint();
         setReport(null);
         setState("error");
@@ -501,13 +629,27 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   }
 
   function commitRange(next: NutritionReportRange, rewriteUrl = true) {
-    invalidatePrint();
+    if (!canUseRangeControls()) return;
     nutritionReportDates(next.from, next.to);
+    controlGeneration.current += 1;
+    reportGeneration.current += 1;
+    completedReportRequest.current = null;
+    reportController.current?.abort();
+    invalidatePrint();
+    rangeRef.current = next;
+    setReport(null);
+    setState("loading");
+    setMessage(`Loading ${next.from} through ${next.to}…`);
     setRangeError("");
     setDraftFrom(next.from);
     setDraftTo(next.to);
     setRange(next);
-    if (rewriteUrl) {
+    if (rewriteUrl && session) {
+      ownedRouteCommit.current = {
+        rangeKey: rangeKey(next),
+        sessionGeneration: sessionGeneration.current,
+        ownerUserId: session.user.id,
+      };
       router.replace(
         `/reports?from=${encodeURIComponent(next.from)}&to=${encodeURIComponent(next.to)}`,
         { scroll: false },
@@ -517,6 +659,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
 
   function submitRange(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canUseRangeControls()) return;
     try {
       nutritionReportDates(draftFrom, draftTo);
       commitRange({ from: draftFrom, to: draftTo });
@@ -528,6 +671,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   }
 
   function choosePreset(days: 7 | 14 | 30) {
+    if (!canUseRangeControls()) return;
     try {
       const anchor = isLocalDate(draftTo) ? draftTo : range?.to;
       if (!anchor) throw new RangeError("Choose a valid To date first.");
@@ -538,6 +682,14 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   }
 
   async function signOut() {
+    if (
+      privateUiClosed.current ||
+      logoutBusy ||
+      controlGeneration.current !== controlContext ||
+      sessionGeneration.current !== sessionContext
+    )
+      return;
+    controlGeneration.current += 1;
     invalidatePrint();
     setLogoutBusy(true);
     const confirmed = await confirmBrowserLogout(
@@ -612,7 +764,13 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
             <legend>Quick ranges ending on the To date</legend>
             {[7, 14, 30].map((days) => (
               <button
-                disabled={!session || state === "loading"}
+                disabled={
+                  !session ||
+                  sessionVerifying ||
+                  logoutBusy ||
+                  state === "loading" ||
+                  privateUiClosed.current
+                }
                 key={days}
                 onClick={() => choosePreset(days as 7 | 14 | 30)}
                 type="button"
@@ -625,10 +783,15 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
             <label>
               <span>From</span>
               <input
-                disabled={!session || state === "loading"}
+                disabled={
+                  !session ||
+                  sessionVerifying ||
+                  logoutBusy ||
+                  state === "loading" ||
+                  privateUiClosed.current
+                }
                 onChange={(event) => {
-                  invalidatePrint();
-                  setDraftFrom(event.target.value);
+                  editRangeDate("from", event.target.value);
                 }}
                 required
                 type="date"
@@ -638,10 +801,15 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
             <label>
               <span>To</span>
               <input
-                disabled={!session || state === "loading"}
+                disabled={
+                  !session ||
+                  sessionVerifying ||
+                  logoutBusy ||
+                  state === "loading" ||
+                  privateUiClosed.current
+                }
                 onChange={(event) => {
-                  invalidatePrint();
-                  setDraftTo(event.target.value);
+                  editRangeDate("to", event.target.value);
                 }}
                 required
                 type="date"
@@ -650,7 +818,13 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
             </label>
             <button
               className="buttonPrimary"
-              disabled={!session || state === "loading"}
+              disabled={
+                !session ||
+                sessionVerifying ||
+                logoutBusy ||
+                state === "loading" ||
+                privateUiClosed.current
+              }
               type="submit"
             >
               Update report
@@ -661,6 +835,29 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
           </p>
         </form>
 
+        <fieldset className="reportPresets">
+          <legend>Adjacent report periods</legend>
+          <button
+            disabled={!printable || adjacentRanges.previous === null}
+            onClick={() => navigatePeriod("previous")}
+            type="button"
+          >
+            Previous period
+          </button>
+          <button
+            disabled={!printable || adjacentRanges.next === null}
+            onClick={() => navigatePeriod("next")}
+            type="button"
+          >
+            Next period
+          </button>
+          {dirtyRange ? (
+            <p aria-live="polite">
+              Choose Update report to apply your dates before moving to another period.
+            </p>
+          ) : null}
+        </fieldset>
+
         <p className="workspaceStatus" data-state={state} role="status" aria-live="polite">
           {message}
         </p>
@@ -668,8 +865,17 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
           <button
             className="buttonSecondary"
             onClick={() => {
+              if (!canUseRangeControls()) return;
+              controlGeneration.current += 1;
+              reportGeneration.current += 1;
+              completedReportRequest.current = null;
+              reportController.current?.abort();
               invalidatePrint();
-              setRefreshKey((value) => value + 1);
+              setReport(null);
+              setState("loading");
+              const nextRefresh = refreshRef.current + 1;
+              refreshRef.current = nextRefresh;
+              setRefreshKey(nextRefresh);
             }}
             type="button"
           >
@@ -738,6 +944,12 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
                   <span>Nutrient</span>
                   <select
                     onChange={(event) => {
+                      if (
+                        !canUseRangeControls() ||
+                        completedReportRequest.current?.report !== report
+                      )
+                        return;
+                      controlGeneration.current += 1;
                       invalidatePrint();
                       setSelectedNutrientId(event.target.value);
                     }}

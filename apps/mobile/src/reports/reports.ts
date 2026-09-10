@@ -13,12 +13,7 @@ import {
   type NutritionReportTargetSnapshot,
 } from "@nutrition-tracker/contracts";
 
-import {
-  isLocalDate,
-  isSupportedTimeZone,
-  localDateInTimeZone,
-  shiftLocalDate,
-} from "../diary/diary";
+import { isLocalDate, isSupportedTimeZone, localDateInTimeZone } from "../diary/diary";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 const REVISION = /^(?:0|[1-9][0-9]{0,19})$/u;
@@ -137,6 +132,16 @@ function timestamp(value: unknown): value is string {
   );
 }
 
+function shiftReportLocalDate(localDate: string, days: number): string {
+  if (!isLocalDate(localDate) || !Number.isInteger(days))
+    throw new RangeError("Invalid report date.");
+  const [year, month, day] = localDate.split("-").map(Number);
+  const shifted = new Date(0);
+  shifted.setUTCHours(0, 0, 0, 0);
+  shifted.setUTCFullYear(year ?? 0, (month ?? 1) - 1, (day ?? 1) + days);
+  return shifted.toISOString().slice(0, 10);
+}
+
 export function nutritionReportLocalDates(from: string, to: string): readonly string[] {
   if (
     !isLocalDate(from) ||
@@ -152,7 +157,7 @@ export function nutritionReportLocalDates(from: string, to: string): readonly st
   while (cursor <= to && dates.length <= MAX_NUTRITION_REPORT_DAYS) {
     dates.push(cursor);
     if (cursor === to) break;
-    cursor = shiftLocalDate(cursor, 1);
+    cursor = shiftReportLocalDate(cursor, 1);
   }
   if (dates.length < 1 || dates.length > MAX_NUTRITION_REPORT_DAYS || dates.at(-1) !== to) {
     throw new RangeError("Choose a valid inclusive report range of 1 to 31 local days.");
@@ -167,9 +172,25 @@ export function nutritionReportRangeEndingAt(
   if (!isLocalDate(to) || to < "0002-01-01" || to > "9998-12-31") {
     throw new RangeError("Choose a valid report end date.");
   }
-  const from = shiftLocalDate(to, -(days - 1));
+  const from = shiftReportLocalDate(to, -(days - 1));
   nutritionReportLocalDates(from, to);
   return { from, to };
+}
+
+export function nutritionReportAdjacentRange(
+  from: string,
+  to: string,
+  direction: "previous" | "next",
+): { readonly from: string; readonly to: string } | null {
+  const days = nutritionReportLocalDates(from, to).length;
+  if (direction !== "previous" && direction !== "next")
+    throw new RangeError("Invalid report direction.");
+  const offset = direction === "previous" ? -days : days;
+  const shiftedFrom = shiftReportLocalDate(from, offset);
+  const shiftedTo = shiftReportLocalDate(to, offset);
+  if (shiftedFrom < "0002-01-01" || shiftedTo > "9998-12-31") return null;
+  nutritionReportLocalDates(shiftedFrom, shiftedTo);
+  return { from: shiftedFrom, to: shiftedTo };
 }
 
 export function nutritionReportPath(from: string, to: string): string {
@@ -375,10 +396,10 @@ function parseDay(
     Date.parse(value.startsAt) >= Date.parse(value.endsAt) ||
     localDateInTimeZone(new Date(value.startsAt), reportTimeZone) !== expectedDate ||
     localDateInTimeZone(new Date(Date.parse(value.startsAt) - 1), reportTimeZone) !==
-      shiftLocalDate(expectedDate, -1) ||
+      shiftReportLocalDate(expectedDate, -1) ||
     localDateInTimeZone(new Date(Date.parse(value.endsAt) - 1), reportTimeZone) !== expectedDate ||
     localDateInTimeZone(new Date(value.endsAt), reportTimeZone) !==
-      shiftLocalDate(expectedDate, 1) ||
+      shiftReportLocalDate(expectedDate, 1) ||
     !count(value.entryCount) ||
     !Array.isArray(value.sourceDiaries) ||
     value.sourceDiaries.length > 31 ||
