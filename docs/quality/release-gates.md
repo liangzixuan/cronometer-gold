@@ -774,3 +774,19 @@ acceptance.
   gates with fresh client outputs, and synthetic Chrome no-request/draft/pin/
   paging/retry/keyboard/narrow/expiry proof. Real persistence, device, assistive,
   concurrent React, external reviewer, hosted and release acceptance stay separate.
+
+
+## ADR 0049 Logged diary entry nutrient details
+
+- Show/Hide on web/native reads the exact installed logged-portion vector with
+  unchanged nutrientDisplay semantics, saved order/name/unit, all 256 rows and
+  explicit empty meaning. Preserve exact zero, trace, lower bounds and coverage.
+- Independent local controls preserve raw edits, whole-day totals, coherent
+  paging, meal state and pending body/key/queue identity. Reject obsolete entry,
+  choice, hidden-meal, date/private/route/lifecycle callbacks. Full reload closes
+  details; valid continuation preserves unchanged entries. No request or new math.
+- Require focused actual-component/types/format checks, independent review,
+  frozen canonical gates with fresh client outputs, and synthetic Chrome exact
+  values/no-request/draft/paging/retry/meal/date/keyboard/narrow/expiry proof.
+  Real persistence, device, assistive technology, concurrent React, external
+  reviewer, hosted and release acceptance remain separate.

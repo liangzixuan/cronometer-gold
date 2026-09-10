@@ -145,6 +145,21 @@ function entryName(entry: DiaryEntry): string {
   return entry.entryKind === "food" ? entry.food.name : entry.recipe.name;
 }
 
+function entryPortionLabel(entry: DiaryEntry): string {
+  return entry.portion.kind === "serving"
+    ? `${entry.portion.amount} ${entry.portion.servingLabel}`
+    : `${entry.portion.grams} g`;
+}
+
+function entryNutrientRows(entry: DiaryEntry) {
+  const occurrences = new Map<string, number>();
+  return entry.nutrients.map((nutrient) => {
+    const occurrence = (occurrences.get(nutrient.nutrientId) ?? 0) + 1;
+    occurrences.set(nutrient.nutrientId, occurrence);
+    return { nutrient, key: `${nutrient.nutrientId}:${occurrence}` };
+  });
+}
+
 function loadedMessage(page: DiaryPage): string {
   const loaded = page.data.entries.length;
   const total = page.page.totalEntries;
@@ -167,6 +182,19 @@ export function DiaryClient() {
     readonly scope: string;
     readonly collapsed: ReadonlySet<MealSlot>;
   }>(() => ({ scope: "", collapsed: new Set() }));
+  const [entryNutrientChoices, setEntryNutrientChoices] = useState<
+    ReadonlyMap<DiaryEntry, { readonly open: boolean }>
+  >(() => new Map());
+  const entryNutrientChoicesRef = useRef(entryNutrientChoices);
+  const entryNutrientEpoch = useRef(0);
+  const entryNutrientActive = useRef(false);
+  const entryNutrientInstalledScope = useRef<{
+    ownerUserId: string | null;
+    timeZone: string | null;
+    closed: boolean;
+  } | null>(null);
+  const mealVisibilityRef = useRef(mealVisibility);
+  mealVisibilityRef.current = mealVisibility;
   const [mutationBusy, setMutationBusy] = useState<string | null>(null);
   const [diaryGroupDraft, setDiaryGroupDraft] = useState(emptyDiaryGroupDraft);
   const [diaryGroupSettingsOpen, setDiaryGroupSettingsOpen] = useState(false);
@@ -219,6 +247,102 @@ export function DiaryClient() {
   const collapsedMeals =
     mealVisibility.scope === mealViewScope ? mealVisibility.collapsed : new Set<MealSlot>();
 
+  const installedNutrientScope = entryNutrientInstalledScope.current;
+  if (session && installedNutrientScope && !installedNutrientScope.closed) {
+    if (installedNutrientScope.ownerUserId === null) {
+      // The initial diary and session reads can finish in either order.
+      installedNutrientScope.ownerUserId = session.user.id;
+      installedNutrientScope.timeZone = session.profile.timeZone;
+    } else if (
+      installedNutrientScope.ownerUserId !== session.user.id ||
+      installedNutrientScope.timeZone !== session.profile.timeZone
+    ) {
+      installedNutrientScope.closed = true;
+      entryNutrientEpoch.current += 1;
+      entryNutrientChoicesRef.current = new Map();
+    }
+  }
+  const renderedNutrientEpoch = entryNutrientEpoch.current;
+  const closeEntryNutrients = useCallback(() => {
+    entryNutrientEpoch.current += 1;
+    const next = new Map<DiaryEntry, { readonly open: boolean }>();
+    entryNutrientChoicesRef.current = next;
+    setEntryNutrientChoices(next);
+  }, []);
+
+  function canInspectEntryNutrients(entry: DiaryEntry) {
+    const currentPage = diaryPageRef.current;
+    const currentMeals = mealVisibilityRef.current;
+    const mealHidden =
+      currentMeals.scope === mealViewScope &&
+      currentMeals.collapsed.has(entry.mealSlot) &&
+      !currentPage?.data.entries.some(
+        (candidate) =>
+          candidate.mealSlot === entry.mealSlot && candidate.id === editorRef.current?.entryId,
+      ) &&
+      activeMutation.current === null &&
+      profileController.current === null;
+    return (
+      entryNutrientActive.current &&
+      (typeof document === "undefined" || document.visibilityState !== "hidden") &&
+      entryNutrientEpoch.current === renderedNutrientEpoch &&
+      entryNutrientInstalledScope.current !== null &&
+      !entryNutrientInstalledScope.current.closed &&
+      entryNutrientInstalledScope.current.ownerUserId === session?.user.id &&
+      entryNutrientInstalledScope.current.timeZone === session?.profile.timeZone &&
+      !privateUiClosed.current &&
+      privateUiGeneration.current === mealPrivateGeneration &&
+      viewEpoch.current === mealViewEpoch &&
+      explicitDateRef.current === explicitDate &&
+      resolveDiaryRouteDate(explicitDate, session?.profile.timeZone ?? null) === date &&
+      dateRef.current === date &&
+      session !== null &&
+      sessionRef.current?.user.id === session.user.id &&
+      sessionRef.current?.profile.timeZone === session.profile.timeZone &&
+      currentPage?.data.localDate === date &&
+      currentPage.data.entries.includes(entry) &&
+      !mealHidden
+    );
+  }
+
+  function toggleEntryNutrients(entry: DiaryEntry) {
+    const renderedChoice = entryNutrientChoices.get(entry);
+    if (
+      !canInspectEntryNutrients(entry) ||
+      mealVisibilityGeneration.current !== renderedMealVisibilityGeneration ||
+      entryNutrientChoicesRef.current.get(entry) !== renderedChoice
+    )
+      return;
+    const next = new Map(entryNutrientChoicesRef.current);
+    next.set(entry, { open: !renderedChoice?.open });
+    entryNutrientChoicesRef.current = next;
+    setEntryNutrientChoices(next);
+  }
+
+  useEffect(() => {
+    entryNutrientActive.current = true;
+    closeEntryNutrients();
+    const visibilityChanged = () => {
+      entryNutrientActive.current = document.visibilityState !== "hidden";
+      closeEntryNutrients();
+    };
+    const pageHidden = () => {
+      entryNutrientActive.current = false;
+      closeEntryNutrients();
+    };
+    document.addEventListener("visibilitychange", visibilityChanged);
+    window.addEventListener("pagehide", pageHidden);
+    window.addEventListener("pageshow", visibilityChanged);
+    return () => {
+      entryNutrientActive.current = false;
+      entryNutrientEpoch.current += 1;
+      entryNutrientChoicesRef.current = new Map();
+      document.removeEventListener("visibilitychange", visibilityChanged);
+      window.removeEventListener("pagehide", pageHidden);
+      window.removeEventListener("pageshow", visibilityChanged);
+    };
+  }, [closeEntryNutrients]);
+
   const setEditor = useCallback((next: EntryEditor | null) => {
     editorRef.current = next;
     setEditorState(next);
@@ -258,7 +382,9 @@ export function DiaryClient() {
     if (collapsed.has(mealSlot)) collapsed.delete(mealSlot);
     else collapsed.add(mealSlot);
     mealVisibilityGeneration.current += 1;
-    setMealVisibility({ scope: mealViewScope, collapsed });
+    const next = { scope: mealViewScope, collapsed };
+    mealVisibilityRef.current = next;
+    setMealVisibility(next);
   }
 
   function beginEntryEdit(entry: DiaryEntry) {
@@ -267,6 +393,7 @@ export function DiaryClient() {
   }
 
   const signInAgain = useCallback(() => {
+    closeEntryNutrients();
     privateUiClosed.current = true;
     privateUiGeneration.current += 1;
     requestGeneration.current += 1;
@@ -301,7 +428,7 @@ export function DiaryClient() {
     setDate("");
     router.replace("/login");
     router.refresh();
-  }, [router, setEditor]);
+  }, [router, setEditor, closeEntryNutrients]);
 
   const transitionCommittedDate = useCallback(
     (next: string, rewriteUrl: boolean) => {
@@ -312,6 +439,7 @@ export function DiaryClient() {
         }
         return;
       }
+      closeEntryNutrients();
       viewEpoch.current += 1;
       activeMutation.current = null;
       requestGeneration.current += 1;
@@ -334,7 +462,7 @@ export function DiaryClient() {
         router.replace(`/dashboard?date=${encodeURIComponent(next)}`, { scroll: false });
       }
     },
-    [router, setEditor],
+    [router, setEditor, closeEntryNutrients],
   );
 
   const loadDiary = useCallback(
@@ -346,6 +474,13 @@ export function DiaryClient() {
       ) {
         return false;
       }
+      closeEntryNutrients();
+      entryNutrientInstalledScope.current = null;
+      const nutrientRequestScope = {
+        ownerUserId: sessionRef.current?.user.id ?? null,
+        timeZone: sessionRef.current?.profile.timeZone ?? null,
+        closed: false,
+      };
       const generation = requestGeneration.current + 1;
       requestGeneration.current = generation;
       loadController.current?.abort();
@@ -378,6 +513,7 @@ export function DiaryClient() {
         if (!response.ok) throw new Error(responseError(body, "The diary could not be loaded."));
         const next = mergeDiaryPages(null, parseDiaryPage(body));
         if (!isCurrent()) return false;
+        entryNutrientInstalledScope.current = nutrientRequestScope;
         setDiaryPage(next);
         setState("ready");
         const nextMessage = refreshedAfterStalePage
@@ -398,7 +534,7 @@ export function DiaryClient() {
         return false;
       }
     },
-    [signInAgain, setEditor],
+    [signInAgain, setEditor, closeEntryNutrients],
   );
 
   const loadOverviewCard = useCallback(
@@ -1908,6 +2044,74 @@ export function DiaryClient() {
                                   </div>
                                 </article>
                               )}
+                              {canInspectEntryNutrients(entry) ? (
+                                <section
+                                  aria-label={`Logged nutrients for ${entryName(entry)}, ${entryPortionLabel(entry)} at ${entry.localTime.slice(0, 5)}`}
+                                  style={{
+                                    minWidth: 0,
+                                    paddingBottom: 16,
+                                    overflowWrap: "anywhere",
+                                  }}
+                                >
+                                  <div className="entryActions">
+                                    <button
+                                      aria-label={`${entryNutrientChoices.get(entry)?.open ? "Hide" : "Show"} nutrients for ${entryName(entry)}, ${entryPortionLabel(entry)} at ${entry.localTime.slice(0, 5)}`}
+                                      aria-expanded={entryNutrientChoices.get(entry)?.open ?? false}
+                                      aria-controls={`entry-nutrients-${entry.id}`}
+                                      onClick={() => toggleEntryNutrients(entry)}
+                                      type="button"
+                                    >
+                                      {entryNutrientChoices.get(entry)?.open
+                                        ? "Hide nutrients"
+                                        : "Show nutrients"}
+                                    </button>
+                                  </div>
+                                  <div id={`entry-nutrients-${entry.id}`}>
+                                    {entryNutrientChoices.get(entry)?.open ? (
+                                      <>
+                                        <p className="fieldHelp">
+                                          Nutrition for this saved logged portion:{" "}
+                                          {entryPortionLabel(entry)}. Entry revision{" "}
+                                          {entry.revision}.
+                                          {editor?.entryId === entry.id
+                                            ? " Unsaved edits are not included."
+                                            : ""}
+                                        </p>
+                                        {entry.nutrients.length === 0 ? (
+                                          <p className="fieldHelp">
+                                            Nutrient details are unavailable for this logged
+                                            portion.
+                                          </p>
+                                        ) : (
+                                          <dl>
+                                            {entryNutrientRows(entry).map(({ nutrient, key }) => {
+                                              const display = nutrientDisplay(nutrient);
+                                              return (
+                                                <div
+                                                  key={key}
+                                                  className={`nutrientTotal nutrientTotal--${nutrient.completeness}`}
+                                                  style={{
+                                                    gridTemplateColumns: "minmax(0, 1fr)",
+                                                    gap: 4,
+                                                  }}
+                                                >
+                                                  <dt>
+                                                    {nutrient.name} ({nutrient.unit})
+                                                  </dt>
+                                                  <dd style={{ textAlign: "left" }}>
+                                                    {display.amount}
+                                                    <small>{display.qualification}</small>
+                                                  </dd>
+                                                </div>
+                                              );
+                                            })}
+                                          </dl>
+                                        )}
+                                      </>
+                                    ) : null}
+                                  </div>
+                                </section>
+                              ) : null}
                             </li>
                           ))}
                         </ul>

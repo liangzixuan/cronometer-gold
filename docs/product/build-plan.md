@@ -151,6 +151,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Native Goals nutrient picker | ADR 0046 all-match/unit/count/Clear source, focused component/helper checks, independent in-task review, canonical local gates and fresh native exports passed; automatic, device, external reviewer and release acceptance remain separate |
 | Automatic evidence / independent review | Activity Add duration presets | ADR 0047 focused component/type/format, independent in-task review, canonical local gates, fresh client outputs and synthetic Chrome preset/manual/create/readback/retry/keyboard/narrow/expiry proof passed; automatic/external/device/release separate |
 | Automatic evidence / independent review | Filter loaded nested-recipe choices | ADR 0048 independent filter/counts/Clear and exact pins, focused review, canonical gates, fresh client outputs and synthetic Chrome draft/paging/retry/keyboard/narrow/expiry proof passed; automatic/external/device/release separate |
+| Automatic evidence / independent review | Inspect logged diary entry nutrients | ADR 0049 exact logged-portion disclosures, focused review, canonical gates, fresh client outputs and synthetic Chrome values/draft/paging/meal/date/keyboard/narrow/expiry proof passed; automatic/external/device/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1436,12 +1437,26 @@ At the September 10, 2026 21:34:06 UTC preflight, base
 `10e3141ebd48ee7f46a137f45401b9b6921f36d1` CI `34532752403` and container
 `34532752391` were in progress. Base results do not transfer to this slice.
 
+### Logged diary entry nutrients: source/local complete
+
+[ADR 0049](../adr/0049-logged-diary-entry-nutrients.md) exposes each loaded entry's
+saved nutrient vector for its logged portion on web/native. Preserve exact values,
+missingness and coverage through existing display helpers. Independent disclosures
+leave edits, paging, meal choices, totals and retry identity unchanged. Current
+entry/private/date/lifecycle guards, focused review, canonical local gates and
+synthetic Chrome evidence passed. No API or nutrition math changes.
+
+Base `490fb98480a43bef8a8c65ecbb4f59c02086f6f3` CI `34536352453` and container
+`34536352396` were in progress at the September 10, 2026 22:19:01 UTC preflight.
+Base results do not transfer to this slice. External review, device, hosted and
+release acceptance remain separate.
+
 ### Next bounded candidate
 
-Revalidate automatic results and independent-review findings. The next bounded
-candidate is a Show/Hide nutrient disclosure for a logged diary entry on web/native,
-using its existing immutable nutrient vector and display helpers. Label values for
-the logged portion and preserve exact zero/trace/partial/unknown meaning without
-new math or requests. Review entry/date/revision, paging and meal-collapse state
-before accepting that card. No successor implementation has started; external
-device, catalogue, hosting and release gates remain separate.
+Revalidate exact automatic results and external-review findings. The next bounded
+candidate is displaying saved reminder weekdays beside existing time, time zone
+and status on web/native. Both clients already receive valid daysOfWeek and have
+day labels; render membership in Monday-to-Sunday order, including paused/revoked
+schedules. Preserve saved values, raw edits and operation identity. No new state,
+request, rescheduling, notification delivery or backend change is proposed.
+No successor implementation has started; device, hosted and release gates remain.

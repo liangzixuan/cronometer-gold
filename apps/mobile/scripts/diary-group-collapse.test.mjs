@@ -844,3 +844,531 @@ describe("native diary meal group collapse", () => {
     expect(toggle(tree, "Breakfast", false).props.disabled).toBe(false);
   });
 });
+
+function diaryEntryCard(tree, id) {
+  const found = nodes(tree, (node) => node.type === "View" && node.key === id);
+  expect(found).toHaveLength(1);
+  return found[0];
+}
+function entryNutrientToggle(tree, id = entry.id) {
+  const found = nodes(
+    diaryEntryCard(tree, id),
+    (node) =>
+      node.type === "Pressable" &&
+      /^(Show|Hide) nutrients for /u.test(node.props.accessibilityLabel ?? ""),
+  );
+  expect(found).toHaveLength(1);
+  return found[0];
+}
+function entryNutrientDetails(tree, id = entry.id) {
+  return nodes(
+    diaryEntryCard(tree, id),
+    (node) =>
+      node.type === "View" && node.props.accessibilityLabel?.startsWith("Saved nutrients for "),
+  );
+}
+async function toggleNutrients(harness, id = entry.id) {
+  const button = entryNutrientToggle(await harness.settle(), id);
+  expect(button.props.disabled).toBe(false);
+  button.props.onPress();
+  return harness.settle();
+}
+function detailedNutrients() {
+  const exact = {
+    ...nutrient,
+    nutrientId: "1",
+    code: "fixture_exact",
+    name: "Exact saved amount",
+    unit: "mg",
+    knownAmount: `0.${"1".repeat(198)}`,
+  };
+  const zero = {
+    ...nutrient,
+    nutrientId: "2",
+    code: "fixture_zero",
+    name: "Quantified zero",
+    unit: "g",
+    knownAmount: "0",
+  };
+  const trace = {
+    ...nutrient,
+    nutrientId: "3",
+    code: "fixture_trace",
+    name: "Trace nutrient",
+    unit: "mg",
+    knownAmount: "0",
+    quantifiedCount: 0,
+    traceCount: 1,
+    isExact: false,
+  };
+  const partial = {
+    ...nutrient,
+    nutrientId: "4",
+    code: "fixture_partial",
+    name: "Partial nutrient",
+    unit: "g",
+    knownAmount: "1.230001",
+    completeness: "partial",
+    isExact: false,
+    contributorCount: 2,
+    unknownCount: 1,
+    unknownReasonCounts: { ...nutrient.unknownReasonCounts, not_reported: 1 },
+  };
+  return [
+    exact,
+    zero,
+    trace,
+    partial,
+    ...Object.keys(nutrient.unknownReasonCounts).map((reason, index) => ({
+      ...nutrient,
+      nutrientId: String(index + 5),
+      code: `fixture_unknown_${index}`,
+      name: `Unknown ${reason}`,
+      unit: "µg",
+      knownAmount: "0",
+      completeness: "unknown",
+      isExact: false,
+      quantifiedCount: 0,
+      unknownCount: 1,
+      unknownReasonCounts: { ...nutrient.unknownReasonCounts, [reason]: 1 },
+    })),
+  ];
+}
+
+describe("native logged diary entry nutrient details", () => {
+  it("starts closed for food, private food and recipe; opens independently without requests, writes or changed totals", async () => {
+    const rows = entries.map((item) => ({ ...item, nutrients: detailedNutrients() }));
+    const { harness, requests, controller } = setup(() => response(page(selectedDate, rows)));
+    let tree = await harness.settle();
+    const before = requests.length;
+    const original = JSON.stringify(rows);
+    for (const item of rows)
+      expect(entryNutrientToggle(tree, item.id).props.accessibilityState.expanded).toBe(false);
+    tree = await toggleNutrients(harness);
+    expect(entryNutrientToggle(tree).props.accessibilityState.expanded).toBe(true);
+    expect(entryNutrientToggle(tree, rows[1].id).props.accessibilityState.expanded).toBe(false);
+    tree = await toggleNutrients(harness, rows[1].id);
+    tree = await toggleNutrients(harness, rows[2].id);
+    expect(entryNutrientDetails(tree)).toHaveLength(1);
+    tree = await toggleNutrients(harness, rows[1].id);
+    expect(entryNutrientDetails(tree, rows[1].id)).toHaveLength(0);
+    expect(entryNutrientDetails(tree, rows[2].id)).toHaveLength(1);
+    expect(screenText(tree)).toContain("3 of 3 entries loaded");
+    expect(screenText(tree)).toContain(
+      "Nutrition Energy 95.25 kcal Complete coverage · quantified",
+    );
+    expect(JSON.stringify(rows)).toBe(original);
+    expect(requests).toHaveLength(before);
+    expect(controller.enqueueOperation).not.toHaveBeenCalled();
+    expect(controller.requestDrain).not.toHaveBeenCalled();
+  });
+
+  it("shows exact saved strings and units for zero, trace, partial and all unknown reasons in source order", async () => {
+    const vector = detailedNutrients();
+    const { harness } = setup(() =>
+      response(page(selectedDate, [{ ...entry, nutrients: vector }])),
+    );
+    const tree = await toggleNutrients(harness);
+    const [details] = entryNutrientDetails(tree);
+    const text = screenText(details);
+    expect(text).toContain("Saved logged portion: 1.5 medium apple · entry revision 3");
+    expect(text).toContain(`${vector[0].knownAmount} mg`);
+    expect(text).toContain("Quantified zero ( g ) 0 g Complete coverage · quantified");
+    expect(text).toContain(
+      "Trace nutrient ( mg ) ≥ 0 mg Complete coverage · includes trace values",
+    );
+    expect(text).toContain("Partial nutrient ( g ) ≥ 1.230001 g Partial · 1/2 quantified");
+    for (const reason of Object.keys(nutrient.unknownReasonCounts))
+      expect(text).toContain(`Unknown ${reason} ( µg ) Unknown 0/1 contributions quantified`);
+    const positions = vector.map((item) => text.indexOf(`${item.name} ( ${item.unit} )`));
+    expect(
+      positions.every(
+        (position, index) => position >= 0 && (index === 0 || position > positions[index - 1]),
+      ),
+    ).toBe(true);
+  });
+
+  it("renders all256 rows including long names and units without slicing or changing exact amounts", async () => {
+    const vector = Array.from({ length: 256 }, (_, index) => ({
+      ...nutrient,
+      nutrientId: String(index + 1),
+      code: `fixture_nutrient_${index + 1}`,
+      name: index === 0 ? "N".repeat(200) : `Saved nutrient ${index + 1}`,
+      unit: index === 0 ? "u".repeat(32) : "mg",
+      knownAmount: index === 0 ? "1".repeat(200) : String(index),
+    }));
+    const { harness } = setup(() =>
+      response(page(selectedDate, [{ ...entry, nutrients: vector }])),
+    );
+    const tree = await toggleNutrients(harness);
+    const [details] = entryNutrientDetails(tree);
+    const rendered = nodes(
+      details,
+      (node) => node.type === "View" && /^\d+:\d+$/u.test(String(node.key)),
+    );
+    expect(rendered).toHaveLength(256);
+    expect(rendered.map((node) => screenText(node.props.children[0]))).toEqual(
+      vector.map((item) => `${item.name} ( ${item.unit} )`),
+    );
+    expect(screenText(rendered[0])).toContain(`${vector[0].knownAmount} ${vector[0].unit}`);
+    expect(screenText(rendered[255])).toContain("255 mg");
+  });
+
+  it("preserves accepted repeated nutrient IDs as distinct source rows", async () => {
+    const repeated = [
+      { ...nutrient, name: "First saved row", knownAmount: "1" },
+      { ...nutrient, name: "Second saved row", knownAmount: "2" },
+    ];
+    const { harness } = setup(() =>
+      response(page(selectedDate, [{ ...entry, nutrients: repeated }])),
+    );
+    const tree = await toggleNutrients(harness);
+    const rendered = nodes(
+      entryNutrientDetails(tree)[0],
+      (node) => node.type === "View" && /^\d+:\d+$/u.test(String(node.key)),
+    );
+    expect(rendered).toHaveLength(2);
+    expect(new Set(rendered.map((node) => node.key)).size).toBe(2);
+    expect(rendered.map(screenText)).toEqual([
+      "First saved row ( kcal ) 1 kcal Complete coverage · quantified",
+      "Second saved row ( kcal ) 2 kcal Complete coverage · quantified",
+    ]);
+  });
+
+  it("explains an empty vector and remains inspectable on a locked saved day", async () => {
+    const body = page(selectedDate, [{ ...entry, nutrients: [] }]);
+    body.data.status = "locked";
+    const { harness } = setup(() => response(body));
+    const tree = await toggleNutrients(harness);
+    expect(screenText(entryNutrientDetails(tree)[0])).toContain(
+      "Nutrient details are unavailable for this logged entry.",
+    );
+    expect(screenText(tree)).toContain("This local day is locked");
+  });
+
+  it("uses exact entry identity for duplicate labels and fences retained Show/Hide choices", async () => {
+    const other = {
+      ...entry,
+      id: "87e77109-fc67-44e6-a81d-85ef310b5a63",
+      position: 1,
+      nutrients: [{ ...nutrient, knownAmount: "7" }],
+    };
+    const { harness } = setup(() => response(page(selectedDate, [entry, other])));
+    let tree = await harness.settle();
+    const oldShow = entryNutrientToggle(tree).props.onPress;
+    oldShow();
+    oldShow();
+    tree = await harness.settle();
+    expect(entryNutrientToggle(tree).props.accessibilityState.expanded).toBe(true);
+    expect(entryNutrientToggle(tree, other.id).props.accessibilityState.expanded).toBe(false);
+    const oldHide = entryNutrientToggle(tree).props.onPress;
+    oldHide();
+    oldShow();
+    oldHide();
+    tree = await harness.settle();
+    expect(entryNutrientDetails(tree)).toHaveLength(0);
+    tree = await toggleNutrients(harness, other.id);
+    expect(screenText(entryNutrientDetails(tree, other.id)[0])).toContain("7 kcal");
+    oldShow();
+    oldHide();
+    tree = await harness.settle();
+    expect(entryNutrientDetails(tree)).toHaveLength(0);
+  });
+
+  it("preserves exact unsaved correction fields and labels the original logged portion", async () => {
+    const { harness, controller } = setup();
+    let tree = await harness.settle();
+    byLabel(tree, "Edit Apple entry and private note").props.onPress();
+    tree = await harness.settle();
+    byLabel(tree, "Quantity", "TextInput").props.onChangeText("2.000001");
+    tree = await harness.settle();
+    byLabel(tree, "Private note for Apple", "TextInput").props.onChangeText("  exact note\nline  ");
+    tree = await harness.settle();
+    byLabel(tree, "Entry local date", "TextInput").props.onChangeText("2026-08-16");
+    tree = await harness.settle();
+    const inputs = () =>
+      nodes(tree, (node) => node.type === "TextInput").map((node) => [
+        node.props.accessibilityLabel,
+        node.props.value,
+      ]);
+    const before = inputs();
+    const save = byLabel(tree, "Save changes to Apple").props.onPress;
+    tree = await toggleNutrients(harness);
+    expect(inputs()).toEqual(before);
+    expect(screenText(entryNutrientDetails(tree)[0])).toContain(
+      "Saved logged portion: 1.5 medium apple · entry revision 3",
+    );
+    expect(screenText(entryNutrientDetails(tree)[0])).not.toContain("2.000001 medium apple");
+    expect(toggle(tree, "Breakfast").props.disabled).toBe(true);
+    tree = await toggleNutrients(harness);
+    expect(inputs()).toEqual(before);
+    expect(controller.enqueueOperation).not.toHaveBeenCalled();
+    save();
+    await harness.settle();
+    expect(controller.enqueueOperation).toHaveBeenCalledTimes(1);
+    expect(controller.enqueueOperation.mock.calls[0][0]).toMatchObject({
+      entryId: entry.id,
+      expectedEntryRevision: "3",
+      body: {
+        portion: { kind: "serving", servingId: "303", amount: "2.000001" },
+        note: "  exact note\nline  ",
+      },
+    });
+  });
+
+  it("leaves a pending protected correction and its exact enqueue/drain untouched", async () => {
+    const { harness, controller, setQueue } = setup();
+    const held = deferred();
+    controller.enqueueOperation.mockReturnValue(held.promise);
+    let tree = await harness.settle();
+    byLabel(tree, "Edit Apple entry and private note").props.onPress();
+    tree = await harness.settle();
+    byLabel(tree, "Quantity", "TextInput").props.onChangeText("2.0001");
+    tree = await harness.settle();
+    byLabel(tree, "Save changes to Apple").props.onPress();
+    tree = await harness.settle();
+    const operation = JSON.stringify(controller.enqueueOperation.mock.calls[0][0]);
+    tree = await toggleNutrients(harness);
+    expect(screenText(entryNutrientDetails(tree)[0])).toContain("1.5 medium apple");
+    setQueue(
+      { status: "pending", pendingCount: 1 },
+      { correctedEntryIds: [entry.id], reorderedLocalDates: [], pendingLocalDates: [selectedDate] },
+    );
+    held.resolve({ operationId: "nutrient-edit" });
+    tree = await harness.settle();
+    expect(entryNutrientDetails(tree)).toHaveLength(1);
+    tree = await toggleNutrients(harness);
+    expect(controller.enqueueOperation).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(controller.enqueueOperation.mock.calls[0][0])).toBe(operation);
+    expect(controller.requestDrain).toHaveBeenCalledExactlyOnceWith("nutrient-edit");
+    expect(toggle(tree, "Breakfast").props.disabled).toBe(true);
+  });
+
+  it("hides with a collapsed meal, rejects hidden callbacks before paint and restores the unchanged choice on reopen", async () => {
+    const { harness, requests } = setup();
+    let tree = await toggleNutrients(harness);
+    const hide = entryNutrientToggle(tree).props.onPress;
+    const before = requests.length;
+    toggle(tree, "Breakfast").props.onPress();
+    hide();
+    tree = await harness.settle();
+    expect(
+      nodes(tree, (node) => node.props.accessibilityLabel === "Saved nutrients for Apple"),
+    ).toHaveLength(0);
+    hide();
+    toggle(tree, "Breakfast", false).props.onPress();
+    hide();
+    tree = await harness.settle();
+    expect(entryNutrientDetails(tree)).toHaveLength(1);
+    expect(entryNutrientToggle(tree).props.accessibilityState.expanded).toBe(true);
+    expect(requests).toHaveLength(before);
+  });
+
+  it("preserves unchanged details through pending/error/coherent paging and starts appended entries closed", async () => {
+    const rows = Array.from({ length: 21 }, (_, index) => ({
+      ...entry,
+      id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      position: index,
+    }));
+    const held = deferred();
+    let attempts = 0;
+    const { harness } = setup((request) =>
+      !request.url.searchParams.has("cursor")
+        ? response(page(selectedDate, rows.slice(0, 20), "d1.next", 21))
+        : ++attempts === 1
+          ? held.promise
+          : response(page(selectedDate, rows.slice(20), null, 21)),
+    );
+    let tree = await toggleNutrients(harness, rows[0].id);
+    const old = entryNutrientToggle(tree, rows[0].id).props.onPress;
+    byLabel(tree, "Load more diary entries").props.onPress();
+    old();
+    tree = await harness.settle();
+    expect(entryNutrientDetails(tree, rows[0].id)).toHaveLength(1);
+    expect(entryNutrientToggle(tree, rows[0].id).props.disabled).toBe(true);
+    held.resolve(response({}, 503));
+    tree = await harness.settle();
+    expect(entryNutrientDetails(tree, rows[0].id)).toHaveLength(1);
+    byLabel(tree, "Retry loading more diary entries").props.onPress();
+    tree = await harness.settle();
+    old();
+    tree = await harness.settle();
+    expect(entryNutrientDetails(tree, rows[0].id)).toHaveLength(1);
+    expect(entryNutrientToggle(tree, rows[20].id).props.accessibilityState.expanded).toBe(false);
+    expect(screenText(tree)).toContain("21 of 21 entries loaded");
+  });
+
+  it("closes immediately on full reload, remains closed through failure and requires fresh Show after recovery", async () => {
+    const held = deferred();
+    let reads = 0;
+    const { harness, receive } = setup(() => (++reads === 2 ? held.promise : undefined));
+    let tree = await toggleNutrients(harness);
+    const old = entryNutrientToggle(tree).props.onPress;
+    receive();
+    old();
+    tree = await harness.settle();
+    expect(
+      nodes(tree, (node) => node.props.accessibilityLabel === "Saved nutrients for Apple"),
+    ).toHaveLength(0);
+    held.resolve(response({}, 503));
+    tree = await harness.settle();
+    old();
+    receive();
+    tree = await harness.settle();
+    expect(entryNutrientDetails(tree)).toHaveLength(0);
+    old();
+    tree = await harness.settle();
+    expect(entryNutrientDetails(tree)).toHaveLength(0);
+    tree = await toggleNutrients(harness);
+    expect(entryNutrientDetails(tree)).toHaveLength(1);
+  });
+
+  it("closes on a stale-page full refresh and never carries an old entry revision into fresh values", async () => {
+    const rows = Array.from({ length: 21 }, (_, index) => ({
+      ...entry,
+      id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      position: index,
+    }));
+    let reads = 0;
+    const changed = { ...rows[0], revision: "4", nutrients: [{ ...nutrient, knownAmount: "88" }] };
+    const { harness } = setup((request) =>
+      request.url.searchParams.has("cursor")
+        ? response({ code: "DIARY_PAGE_STALE" }, 409)
+        : ++reads === 1
+          ? response(page(selectedDate, rows.slice(0, 20), "d1.next", 21))
+          : response(page(selectedDate, [changed])),
+    );
+    let tree = await toggleNutrients(harness, rows[0].id);
+    const old = entryNutrientToggle(tree, rows[0].id).props.onPress;
+    byLabel(tree, "Load more diary entries").props.onPress();
+    tree = await harness.settle();
+    old();
+    tree = await harness.settle();
+    expect(entryNutrientDetails(tree, changed.id)).toHaveLength(0);
+    tree = await toggleNutrients(harness, changed.id);
+    expect(screenText(entryNutrientDetails(tree, changed.id)[0])).toContain("entry revision 4");
+    expect(screenText(entryNutrientDetails(tree, changed.id)[0])).toContain("88 kcal");
+  });
+
+  it("closes on date replacement and keeps prior-date callbacks inert after returning", async () => {
+    const { harness } = setup();
+    let tree = await toggleNutrients(harness);
+    const old = entryNutrientToggle(tree).props.onPress;
+    byLabel(tree, "Next day").props.onPress();
+    old();
+    tree = await harness.settle();
+    expect(entryNutrientDetails(tree)).toHaveLength(0);
+    byLabel(tree, "Previous day").props.onPress();
+    tree = await harness.settle();
+    old();
+    tree = await harness.settle();
+    expect(entryNutrientDetails(tree)).toHaveLength(0);
+  });
+
+  for (const boundary of [
+    "owner",
+    "session",
+    "token",
+    "api",
+    "zone",
+    "route date",
+    "route refresh",
+  ]) {
+    it(`hides private details before ${boundary} effects and rejects retained callbacks`, async () => {
+      const { harness } = setup();
+      let tree = await toggleNutrients(harness);
+      const old = entryNutrientToggle(tree).props.onPress;
+      harness.updateProps(
+        boundary === "owner"
+          ? { expectedOwnerUserId: "replacement-owner" }
+          : boundary === "session"
+            ? { sessionEpoch: 8 }
+            : boundary === "token"
+              ? { accessToken: "replacement-token" }
+              : boundary === "api"
+                ? { apiBase: new URL("http://127.0.0.1:4001") }
+                : boundary === "zone"
+                  ? { profileTimeZone: "UTC" }
+                  : boundary === "route date"
+                    ? { requestedDate: "2026-08-16", refreshKey: "changed-date" }
+                    : { requestedDate: selectedDate, refreshKey: "same-day-new-route" },
+      );
+      tree = harness.renderWithoutEffects();
+      old();
+      expect(
+        nodes(tree, (node) => node.props.accessibilityLabel === "Saved nutrients for Apple"),
+      ).toHaveLength(0);
+      expect(
+        nodes(tree, (node) =>
+          /^(Show|Hide) nutrients for /u.test(node.props.accessibilityLabel ?? ""),
+        ),
+      ).toHaveLength(0);
+      harness.flushEffects();
+      tree = await harness.settle();
+      old();
+      tree = await harness.settle();
+      expect(
+        nodes(tree, (node) => node.props.accessibilityLabel === "Saved nutrients for Apple"),
+      ).toHaveLength(0);
+    });
+  }
+
+  for (const state of ["background", "inactive", "unknown"]) {
+    it(`clears on ${state}, leaves a fresh foreground choice closed and rejects old controls`, async () => {
+      const { harness, requests } = setup();
+      let tree = await toggleNutrients(harness);
+      const old = entryNutrientToggle(tree).props.onPress;
+      const before = requests.length;
+      appState(state);
+      old();
+      tree = await harness.settle();
+      expect(
+        nodes(tree, (node) => node.props.accessibilityLabel === "Saved nutrients for Apple"),
+      ).toHaveLength(0);
+      appState("active");
+      tree = await harness.settle();
+      old();
+      tree = await harness.settle();
+      expect(entryNutrientDetails(tree)).toHaveLength(0);
+      tree = await toggleNutrients(harness);
+      expect(entryNutrientDetails(tree)).toHaveLength(1);
+      expect(requests).toHaveLength(before);
+    });
+  }
+
+  it("rejects removed-entry, closed-session, effect-replay and unmounted callbacks", async () => {
+    let mode = "normal";
+    const { harness, receive, props } = setup(() =>
+      mode === "empty"
+        ? response(page(selectedDate, []))
+        : mode === "expired"
+          ? response({}, 401)
+          : undefined,
+    );
+    let tree = await toggleNutrients(harness);
+    const old = entryNutrientToggle(tree).props.onPress;
+    mode = "empty";
+    receive();
+    tree = await harness.settle();
+    old();
+    expect(
+      nodes(tree, (node) => node.props.accessibilityLabel === "Saved nutrients for Apple"),
+    ).toHaveLength(0);
+    mode = "expired";
+    receive();
+    tree = await harness.settle();
+    old();
+    expect(props.onUnauthorized).toHaveBeenCalledTimes(1);
+    harness.replayEffects();
+    tree = await harness.settle();
+    old();
+    expect(
+      nodes(tree, (node) =>
+        /^(Show|Hide) nutrients for /u.test(node.props.accessibilityLabel ?? ""),
+      ),
+    ).toHaveLength(0);
+    harness.unmount();
+    old();
+    expect(harness.writesAfterUnmount).toBe(0);
+  });
+});

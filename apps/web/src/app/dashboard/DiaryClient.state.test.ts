@@ -90,6 +90,18 @@ const hooks = vi.hoisted(() => {
       component = next;
       render();
     },
+    replaceVerifiedSessionBeforeEffects(next: unknown) {
+      const slot = slots.find(
+        (candidate) =>
+          candidate.value &&
+          typeof candidate.value === "object" &&
+          "user" in candidate.value &&
+          "profile" in candidate.value,
+      );
+      if (!slot) throw new Error("No verified session state to replace.");
+      slot.value = next;
+      render(false);
+    },
     render,
     renderWithoutEffects: () => render(false),
     async settle() {
@@ -127,7 +139,9 @@ import {
   defaultDiaryGroups,
   diaryDayOrderDigest,
   type MealSlot,
+  nutrientDisplay,
   parseDiaryPage,
+  parseSession,
 } from "../../lib/diary";
 import { DiaryClient } from "./DiaryClient";
 
@@ -315,9 +329,30 @@ async function mount(fetch = fetcher()) {
   await hooks.settle();
   return fetch;
 }
+const detailLifecycle = {
+  visibility: "visible",
+  documentListeners: new Map<string, () => void>(),
+  windowListeners: new Map<string, () => void>(),
+};
 beforeEach(() => {
+  detailLifecycle.visibility = "visible";
+  detailLifecycle.documentListeners.clear();
+  detailLifecycle.windowListeners.clear();
+  vi.stubGlobal("document", {
+    get visibilityState() {
+      return detailLifecycle.visibility;
+    },
+    addEventListener: (event: string, callback: () => void) =>
+      detailLifecycle.documentListeners.set(event, callback),
+    removeEventListener: (event: string) => detailLifecycle.documentListeners.delete(event),
+  });
   route.date = "2026-08-15";
-  vi.stubGlobal("window", { confirm: vi.fn(() => true) });
+  vi.stubGlobal("window", {
+    confirm: vi.fn(() => true),
+    addEventListener: (event: string, callback: () => void) =>
+      detailLifecycle.windowListeners.set(event, callback),
+    removeEventListener: (event: string) => detailLifecycle.windowListeners.delete(event),
+  });
   vi.stubGlobal("requestAnimationFrame", (callback: () => void) => {
     callback();
     return 1;
@@ -508,6 +543,9 @@ describe("diary collapse paging and work in progress", () => {
       expect(button("Collapse Breakfast").props.disabled).toBe(true);
       expect(text(group("breakfast"))).toContain("Apple 0");
       expect(writes).toHaveLength(1);
+      await toggleNutrients(0);
+      await toggleNutrients(0);
+      expect(writes).toHaveLength(1);
       pending.resolve(Response.json({ error: "Response unavailable." }, { status: 503 }));
       await hooks.settle();
       expect(button("Expand Breakfast").props["aria-expanded"]).toBe(false);
@@ -547,8 +585,26 @@ describe("diary collapse paging and work in progress", () => {
     expect(button("Collapse Lunch").props.disabled).toBe(true);
     expect(field("Quantity").props.value).toBe("2.125000");
     expect(field("Private note").props.value).toBe("New exact note");
+    await toggleNutrients(0);
+    expect(nutrientDetailText(0)).toContain("1.250000 medium apple");
+    expect(nutrientDetailText(0)).toContain("Unsaved edits are not included.");
+    expect(field("Quantity").props.value).toBe("2.125000");
+    expect(field("Private note").props.value).toBe("New exact note");
+    await toggleNutrients(0);
     pending.resolve(Response.json({ error: "Response unavailable." }, { status: 503 }));
     await hooks.settle();
+    const failureStatus = text(
+      elements().find((node) => node.type === "p" && node.props.tabIndex === -1) ?? null,
+    );
+    const requestsBeforeDetails = fetch.mock.calls.length;
+    await toggleNutrients(0);
+    await toggleNutrients(0);
+    expect(
+      text(elements().find((node) => node.type === "p" && node.props.tabIndex === -1) ?? null),
+    ).toBe(failureStatus);
+    expect(fetch.mock.calls).toHaveLength(requestsBeforeDetails);
+    expect(field("Quantity").props.value).toBe("2.125000");
+    expect(field("Private note").props.value).toBe("New exact note");
     await click("Save changes to Apple 0");
     expect(writes).toHaveLength(2);
     expect(writes[0]?.body).toBe(
@@ -793,6 +849,9 @@ describe("diary collapse snapshot invariants", () => {
     expect(button("Collapse Breakfast").props.disabled).toBe(true);
     expect(text(group("breakfast"))).toContain("Apple 0");
     expect(writes).toHaveLength(1);
+    await toggleNutrients(0);
+    await toggleNutrients(0);
+    expect(writes).toHaveLength(1);
     pending.resolve(Response.json({ error: "Response unavailable." }, { status: 503 }));
     await hooks.settle();
     await click("Expand Breakfast");
@@ -838,5 +897,432 @@ describe("diary collapse snapshot invariants", () => {
     expect(button("Collapse Breakfast").props["aria-expanded"]).toBe(true);
     await click("Collapse Breakfast");
     expect(text(group("breakfast"))).toContain("Loaded entries hidden.");
+  });
+});
+
+function nutrientControl(number: number): ElementNode {
+  const found = elements().find(
+    (node) =>
+      node.type === "button" &&
+      node.props["aria-controls"] === `entry-nutrients-${entry(number).id}`,
+  );
+  if (!found) throw new Error(`Missing nutrient control for entry ${number}`);
+  return found;
+}
+function nutrientDetail(number: number): ElementNode | undefined {
+  return elements().find((node) => node.props.id === `entry-nutrients-${entry(number).id}`);
+}
+function nutrientDetailText(number: number): string {
+  return text(nutrientDetail(number) ?? null);
+}
+async function toggleNutrients(number: number) {
+  invoke(nutrientControl(number));
+  await hooks.settle();
+}
+function detailsRows(number: number) {
+  return elements(nutrientDetail(number))
+    .filter((node) => node.type === "dt" || node.type === "dd")
+    .map((node) => text(node));
+}
+function nutrientVector() {
+  const quantified = {
+    ...nutrient,
+    contributorCount: 1,
+    quantifiedCount: 1,
+    unknownCount: 0,
+    completeness: "complete",
+    isExact: true,
+    unknownReasonCounts: { not_reported: 0, not_analyzed: 0, not_applicable: 0, withheld: 0 },
+  };
+  return [
+    { ...quantified, name: "Energy ".repeat(25).trim(), knownAmount: `1.${"2".repeat(198)}` },
+    { ...quantified, nutrientId: "2", name: "Zero", unit: "g", knownAmount: "0.000000" },
+    {
+      ...quantified,
+      nutrientId: "3",
+      name: "Trace",
+      unit: "mg",
+      knownAmount: "0",
+      quantifiedCount: 0,
+      traceCount: 1,
+      isExact: false,
+    },
+    { ...nutrient, nutrientId: "4", name: "Partial", unit: "g", knownAmount: "0.100000000000" },
+    ...(["not_reported", "not_analyzed", "not_applicable", "withheld"] as const).map(
+      (reason, index) => ({
+        ...quantified,
+        nutrientId: String(index + 5),
+        name: reason,
+        unit: "unknown-unit",
+        knownAmount: "0",
+        completeness: "unknown",
+        quantifiedCount: 0,
+        unknownCount: 1,
+        isExact: false,
+        unknownReasonCounts: { ...quantified.unknownReasonCounts, [reason]: 1 },
+      }),
+    ),
+  ];
+}
+
+describe("logged portion nutrient details", () => {
+  it("discloses every saved value/state/unit in order for food, private food and recipe without requests or total changes", async () => {
+    const publicEntry = { ...entry(0), nutrients: nutrientVector() };
+    const privateEntry = {
+      ...entry(1, "lunch"),
+      source: null,
+      foodProvenance: {
+        kind: "private_custom",
+        customFoodId: "b8a7c76f-3c1d-445c-9160-152e57b29e42",
+        customFoodVersionNumber: 3,
+      },
+      nutrients: nutrientVector(),
+    };
+    const { foodProvenance: _provenance, ...recipeBase } = entry(2, "dinner");
+    const recipeEntry = {
+      ...recipeBase,
+      entryKind: "recipe",
+      foodVersionId: null,
+      recipeVersionId: "de1f6d0a-f7dc-4b25-b7b9-3eef1d44779a",
+      portion: { kind: "serving", amount: "1.250000", servingLabel: "bowl" },
+      food: null,
+      source: null,
+      sources: [source],
+      recipe: {
+        id: "df94a52f-e84a-4cd5-873e-227d1e213d62",
+        name: "Saved stew",
+        versionNumber: 2,
+        yieldGrams: "800",
+        yieldSource: "measured",
+        servingCount: "4",
+        servingLabel: "bowl",
+        calculationVersion: "recipe-v1",
+        retentionPolicy: {
+          code: "identity-retention-default",
+          version: "1",
+          assumption: "No cooking-retention factor was applied.",
+        },
+        warnings: [],
+      },
+      nutrients: nutrientVector(),
+    };
+    const fixture = {
+      ...page(),
+      data: { ...page().data, entries: [publicEntry, privateEntry, recipeEntry] },
+      page: { nextCursor: null, totalEntries: 3 },
+    };
+    const parsed = parseDiaryPage(fixture),
+      original = JSON.stringify(fixture);
+    const base = fetcher();
+    const fetch = vi.fn((url: string, init?: RequestInit) =>
+      url.startsWith("/api/diary?") ? Promise.resolve(Response.json(fixture)) : base(url, init),
+    );
+    await mount(fetch);
+    const requests = fetch.mock.calls.length;
+    const summary = text(elements().find((node) => node.props.className === "nutritionSummary"));
+    const status = text(elements().find((node) => node.type === "p" && node.props.tabIndex === -1));
+    for (const number of [0, 1, 2]) {
+      expect(nutrientControl(number).props["aria-expanded"]).toBe(false);
+      expect(nutrientControl(number).props.type).toBe("button");
+      await toggleNutrients(number);
+      expect(nutrientControl(number).props["aria-expanded"]).toBe(true);
+      expect(nutrientDetailText(number)).toContain("Entry revision 3.");
+      expect(detailsRows(number)).toEqual(
+        parsed.data.entries[number]?.nutrients.flatMap((row) => {
+          const display = nutrientDisplay(row);
+          return [`${row.name} (${row.unit})`, `${display.amount}${display.qualification}`];
+        }),
+      );
+    }
+    expect(nutrientDetailText(2)).toContain("1.250000 bowl");
+    expect(nutrientDetailText(0)).toContain("Unknown0/1 contributions quantified");
+    await toggleNutrients(1);
+    expect(nutrientControl(0).props["aria-expanded"]).toBe(true);
+    expect(nutrientControl(2).props["aria-expanded"]).toBe(true);
+    expect(text(elements().find((node) => node.props.className === "nutritionSummary"))).toBe(
+      summary,
+    );
+    expect(text(elements().find((node) => node.type === "p" && node.props.tabIndex === -1))).toBe(
+      status,
+    );
+    expect(text()).toContain("3 of 3 entries loaded. Nutrition totals include all 3.");
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(JSON.stringify(fixture)).toBe(original);
+  });
+
+  it("keeps duplicate food names independent and every accepted repeated nutrient ID in source order", async () => {
+    const sameName = { name: "Same food", brandName: null };
+    const first = { ...entry(0), food: sameName };
+    const second = {
+      ...entry(1, "lunch"),
+      food: sameName,
+      localTime: "09:45:00",
+      nutrients: [
+        { ...nutrient, name: "First recorded value" },
+        { ...nutrient, name: "Second recorded value", knownAmount: "3.000" },
+      ],
+    };
+    const fixture = page([first, second]);
+    parseDiaryPage(fixture);
+    await mount(fetcher(fixture));
+    expect(nutrientControl(0).props["aria-label"]).toContain(
+      "Same food, 1.250000 medium apple at 08:30",
+    );
+    expect(nutrientControl(1).props["aria-label"]).toContain(
+      "Same food, 1.250000 medium apple at 09:45",
+    );
+    await toggleNutrients(1);
+    expect(nutrientControl(0).props["aria-expanded"]).toBe(false);
+    expect(detailsRows(1)).toEqual([
+      "First recorded value (kcal)",
+      "≥ 125.500000000000 kcalPartial · 1/2 contributions quantified",
+      "Second recorded value (kcal)",
+      "≥ 3.000 kcalPartial · 1/2 contributions quantified",
+    ]);
+    const keys = elements(nutrientDetail(1))
+      .filter((node) => String(node.props.className).startsWith("nutrientTotal"))
+      .map((node) => (node as ElementNode & { key: string }).key);
+    expect(keys).toEqual(["1:1", "1:2"]);
+  });
+
+  it.each([0, 256])("renders the explicit empty or complete %s-row snapshot", async (count) => {
+    const first = entry(0);
+    first.nutrients = Array.from({ length: count }, (_, index) => ({
+      ...nutrient,
+      nutrientId: String(index + 1),
+      name: `Saved nutrient ${index + 1}`,
+    }));
+    await mount(fetcher(page([first])));
+    await toggleNutrients(0);
+    if (count === 0)
+      expect(nutrientDetailText(0)).toContain(
+        "Nutrient details are unavailable for this logged portion.",
+      );
+    else {
+      expect(detailsRows(0)).toHaveLength(512);
+      expect(detailsRows(0)[0]).toBe("Saved nutrient 1 (kcal)");
+      expect(detailsRows(0)[510]).toBe("Saved nutrient 256 (kcal)");
+    }
+  });
+
+  it("fences repeated and restored Show/Hide callbacks and rejects hidden meal actions before paint", async () => {
+    const fetch = await mount();
+    const firstShow = nutrientControl(0),
+      secondShow = nutrientControl(1);
+    invoke(firstShow);
+    invoke(firstShow);
+    invoke(secondShow);
+    await hooks.settle();
+    expect(nutrientControl(0).props["aria-expanded"]).toBe(true);
+    expect(nutrientControl(1).props["aria-expanded"]).toBe(true);
+    const oldHide = nutrientControl(0);
+    await toggleNutrients(0);
+    invoke(firstShow);
+    invoke(oldHide);
+    await hooks.settle();
+    expect(nutrientControl(0).props["aria-expanded"]).toBe(false);
+    await toggleNutrients(0);
+    const hiddenHide = nutrientControl(0);
+    invoke(button("Collapse Breakfast"));
+    invoke(hiddenHide);
+    await hooks.settle();
+    expect(nutrientDetail(0)).toBeUndefined();
+    const requests = fetch.mock.calls.length;
+    await click("Expand Breakfast");
+    expect(nutrientControl(0).props["aria-expanded"]).toBe(true);
+    invoke(hiddenHide);
+    await hooks.settle();
+    expect(nutrientControl(0).props["aria-expanded"]).toBe(true);
+    expect(fetch.mock.calls).toHaveLength(requests);
+  });
+
+  it("preserves a raw editor and saved portion while details change independently", async () => {
+    const fetch = await mount();
+    await click("Edit Apple 0");
+    await change("Quantity", "2.000001");
+    await change("Private note", "  Unsaved exact note  ");
+    await change("Meal", "dinner");
+    const raw = ["Quantity", "Private note", "Meal", "Local date", "Local time"].map(
+      (label) => field(label).props.value,
+    );
+    const requests = fetch.mock.calls.length;
+    await toggleNutrients(0);
+    expect(nutrientDetailText(0)).toContain("1.250000 medium apple");
+    expect(nutrientDetailText(0)).toContain("Unsaved edits are not included.");
+    await toggleNutrients(0);
+    expect(
+      ["Quantity", "Private note", "Meal", "Local date", "Local time"].map(
+        (label) => field(label).props.value,
+      ),
+    ).toEqual(raw);
+    expect(fetch.mock.calls).toHaveLength(requests);
+  });
+
+  it("preserves current choices through coherent append and failed append retry", async () => {
+    const first = page(
+      Array.from({ length: 20 }, (_, index) => entry(index)),
+      "d1.next-page",
+      21,
+    );
+    const pending = deferred<Response>();
+    const base = fetcher(first);
+    let calls = 0;
+    const fetch = vi.fn((url: string, init?: RequestInit) =>
+      url.includes("cursor=")
+        ? ++calls === 1
+          ? pending.promise
+          : Promise.resolve(Response.json(page([entry(20, "lunch")], null, 21)))
+        : base(url, init),
+    );
+    await mount(fetch);
+    await toggleNutrients(0);
+    const oldHide = nutrientControl(0);
+    await click("Load more");
+    expect(nutrientControl(0).props["aria-expanded"]).toBe(true);
+    pending.resolve(Response.json({ error: "Retry page" }, { status: 503 }));
+    await hooks.settle();
+    expect(nutrientControl(0).props["aria-expanded"]).toBe(true);
+    await click("Retry load more");
+    expect(nutrientControl(0).props["aria-expanded"]).toBe(true);
+    expect(nutrientControl(20).props["aria-expanded"]).toBe(false);
+    invoke(oldHide);
+    await hooks.settle();
+    expect(nutrientControl(0).props["aria-expanded"]).toBe(false);
+  });
+
+  it.each(["success", "failure"])(
+    "invalidates details at full-refresh start and stays closed through %s",
+    async (outcome) => {
+      const first = page(
+        Array.from({ length: 20 }, (_, index) => entry(index)),
+        "d1.next-page",
+        21,
+      );
+      const pending = deferred<Response>();
+      let reads = 0;
+      const base = fetcher(first);
+      const fetch = vi.fn((url: string, init?: RequestInit) => {
+        if (url.includes("cursor="))
+          return Promise.resolve(Response.json({ code: "DIARY_PAGE_STALE" }, { status: 409 }));
+        if (url.startsWith("/api/diary?") && ++reads > 1) return pending.promise;
+        return base(url, init);
+      });
+      await mount(fetch);
+      await toggleNutrients(0);
+      const oldHide = nutrientControl(0);
+      await click("Load more");
+      invoke(oldHide);
+      expect(nutrientDetail(0)).toBeUndefined();
+      const replacement = page(
+        [{ ...entry(0), revision: "4", nutrients: [{ ...nutrient, knownAmount: "999.000" }] }],
+        null,
+        1,
+        "2026-08-15",
+        "9",
+      );
+      pending.resolve(
+        outcome === "failure"
+          ? Response.json({ error: "Full refresh failed" }, { status: 503 })
+          : Response.json(replacement),
+      );
+      await hooks.settle();
+      invoke(oldHide);
+      await hooks.settle();
+      if (outcome === "failure") expect(nutrientDetail(0)).toBeUndefined();
+      else {
+        expect(nutrientControl(0).props["aria-expanded"]).toBe(false);
+        await toggleNutrients(0);
+        expect(nutrientDetailText(0)).toContain("Entry revision 4.");
+        expect(nutrientDetailText(0)).toContain("999.000");
+      }
+    },
+  );
+
+  it.each(["owner", "time zone"] as const)(
+    "hides an installed private snapshot before effects when verified %s context changes",
+    async (change) => {
+      const fetch = await mount();
+      await toggleNutrients(0);
+      const oldHide = nutrientControl(0),
+        requests = fetch.mock.calls.length;
+      const replacement = session(change === "owner" ? anotherOwner : owner);
+      if (change === "time zone") replacement.data.profile.timeZone = "UTC";
+      // Model an upstream verified context install before passive effects, not a new auth protocol.
+      hooks.replaceVerifiedSessionBeforeEffects(parseSession(replacement));
+      expect(nutrientDetail(0)).toBeUndefined();
+      invoke(oldHide);
+      expect(nutrientDetail(0)).toBeUndefined();
+      hooks.replaceVerifiedSessionBeforeEffects(parseSession(session()));
+      expect(nutrientDetail(0)).toBeUndefined();
+      expect(fetch.mock.calls).toHaveLength(requests);
+    },
+  );
+
+  it.each([
+    "route",
+    "date-return",
+    "visibility",
+    "pagehide",
+    "unmount",
+    "replay",
+    "logout",
+  ] as const)("closes details and fences retained controls across %s", async (transition) => {
+    const base = fetcher();
+    const fetch = vi.fn((url: string, init?: RequestInit) =>
+      url === "/api/auth/logout"
+        ? Promise.resolve(new Response(null, { status: 204 }))
+        : base(url, init),
+    );
+    await mount(fetch);
+    await toggleNutrients(0);
+    const oldHide = nutrientControl(0);
+    if (transition === "route") {
+      route.date = "2026-08-16";
+      hooks.renderWithoutEffects();
+    }
+    if (transition === "date-return") {
+      invoke(button("Next day"));
+      route.date = "2026-08-16";
+      await hooks.settle();
+      invoke(button("Previous day"));
+      route.date = "2026-08-15";
+      await hooks.settle();
+    }
+    if (transition === "visibility") {
+      detailLifecycle.visibility = "hidden";
+      detailLifecycle.documentListeners.get("visibilitychange")?.();
+      await hooks.settle();
+    }
+    if (transition === "pagehide") {
+      detailLifecycle.windowListeners.get("pagehide")?.();
+      await hooks.settle();
+    }
+    if (transition === "unmount") hooks.unmount();
+    if (transition === "replay") {
+      hooks.replayEffects();
+      await hooks.settle();
+    }
+    if (transition === "logout") await click("Sign out");
+    const requests = fetch.mock.calls.length,
+      before = text();
+    invoke(oldHide);
+    if (transition !== "route") await hooks.settle();
+    expect(text()).toBe(before);
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(hooks.afterClose()).toBe(0);
+    if (transition !== "unmount") expect(nutrientDetailText(0)).toBe("");
+    if (transition === "visibility" || transition === "pagehide") {
+      detailLifecycle.visibility = "visible";
+      if (transition === "visibility")
+        detailLifecycle.documentListeners.get("visibilitychange")?.();
+      else detailLifecycle.windowListeners.get("pageshow")?.();
+      await hooks.settle();
+      expect(nutrientControl(0).props["aria-expanded"]).toBe(false);
+      invoke(oldHide);
+      await hooks.settle();
+      expect(nutrientControl(0).props["aria-expanded"]).toBe(false);
+      await toggleNutrients(0);
+      expect(nutrientControl(0).props["aria-expanded"]).toBe(true);
+    }
   });
 });

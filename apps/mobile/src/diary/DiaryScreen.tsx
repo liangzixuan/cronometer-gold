@@ -260,6 +260,22 @@ export function DiaryScreen({
     mealPresentation.current.generation += 1;
   }
   const mealSnapshotScope = useRef<string | null>(null);
+  const [, refreshEntryNutrients] = useState(0);
+  const entryNutrients = useRef({
+    scope: mealScopeKey,
+    open: new Set<DiaryEntry>(),
+    generation: 0,
+    mounted: false,
+    active: AppState.currentState === "active",
+  });
+  const clearEntryNutrients = useCallback(() => {
+    entryNutrients.current.open = new Set();
+    entryNutrients.current.generation += 1;
+  }, []);
+  if (entryNutrients.current.scope !== mealScopeKey) {
+    entryNutrients.current.scope = mealScopeKey;
+    clearEntryNutrients();
+  }
   const [busyEntry, setBusyEntry] = useState<string | null>(null);
   const [groupEditorOpen, setGroupEditorOpen] = useState(false);
   const [groupDraft, setGroupDraft] = useState<readonly DiaryGroup[]>(() =>
@@ -322,6 +338,7 @@ export function DiaryScreen({
   const closeForUnauthorized = useCallback(() => {
     unauthorizedFlight.current ??= createDiaryUnauthorizedSingleFlight();
     if (!privateUiClosed.current) {
+      clearEntryNutrients();
       privateUiClosed.current = true;
       viewEpoch.current += 1;
       mutationSequence.current += 1;
@@ -349,11 +366,12 @@ export function DiaryScreen({
       setDate("");
     }
     return unauthorizedFlight.current.run(onUnauthorized);
-  }, [onUnauthorized]);
+  }, [clearEntryNutrients, onUnauthorized]);
 
   const load = useCallback(
     async (requested: string, refreshedAfterStalePage = false) => {
       if (privateUiClosed.current || dateRef.current !== requested) return false;
+      clearEntryNutrients();
       const loadedMealScope = mealPresentation.current.scope;
       const generation = requestGeneration.current + 1;
       requestGeneration.current = generation;
@@ -405,7 +423,7 @@ export function DiaryScreen({
         return false;
       }
     },
-    [accessToken, apiBase, closeForUnauthorized],
+    [accessToken, apiBase, clearEntryNutrients, closeForUnauthorized],
   );
 
   const loadSupportingSummary = useCallback(
@@ -539,31 +557,35 @@ export function DiaryScreen({
     [accessToken, apiBase, closeForUnauthorized],
   );
 
-  const transitionCommittedDate = useCallback((next: string, forceReload = false) => {
-    if (privateUiClosed.current || !isLocalDate(next)) return;
-    setDateDraft(next);
-    const dateChanged = next !== dateRef.current;
-    if (!dateChanged && !forceReload) return;
-    viewEpoch.current += 1;
-    activeMutation.current = null;
-    requestGeneration.current += 1;
-    loadController.current?.abort();
-    for (const kind of ["hydration", "activity"] as const) {
-      supportingSummaryGenerations.current[kind] += 1;
-      supportingSummaryControllers.current[kind]?.abort();
-      supportingSummaryControllers.current[kind] = null;
-    }
-    pageRequestBusy.current = false;
-    setBusyEntry(null);
-    setEditor(null);
-    setDiaryPage(null);
-    setPageState("idle");
-    setState("loading");
-    setSupportingSummaries(loadingTodaySupportingSummaries());
-    setMessage(`Loading ${next}…`);
-    if (dateChanged) setDate(next);
-    else setRouteReloadGeneration((generation) => generation + 1);
-  }, []);
+  const transitionCommittedDate = useCallback(
+    (next: string, forceReload = false) => {
+      if (privateUiClosed.current || !isLocalDate(next)) return;
+      setDateDraft(next);
+      const dateChanged = next !== dateRef.current;
+      if (!dateChanged && !forceReload) return;
+      clearEntryNutrients();
+      viewEpoch.current += 1;
+      activeMutation.current = null;
+      requestGeneration.current += 1;
+      loadController.current?.abort();
+      for (const kind of ["hydration", "activity"] as const) {
+        supportingSummaryGenerations.current[kind] += 1;
+        supportingSummaryControllers.current[kind]?.abort();
+        supportingSummaryControllers.current[kind] = null;
+      }
+      pageRequestBusy.current = false;
+      setBusyEntry(null);
+      setEditor(null);
+      setDiaryPage(null);
+      setPageState("idle");
+      setState("loading");
+      setSupportingSummaries(loadingTodaySupportingSummaries());
+      setMessage(`Loading ${next}…`);
+      if (dateChanged) setDate(next);
+      else setRouteReloadGeneration((generation) => generation + 1);
+    },
+    [clearEntryNutrients],
+  );
 
   useEffect(() => {
     const generation = diaryRouteTransitionGeneration(requestedDate, refreshKey);
@@ -703,6 +725,23 @@ export function DiaryScreen({
       subscription.remove();
     };
   }, []);
+
+  useEffect(() => {
+    const presentation = entryNutrients.current;
+    presentation.mounted = true;
+    const subscription = AppState.addEventListener("change", (next) => {
+      const active = next === "active";
+      if (presentation.active === active) return;
+      presentation.active = active;
+      clearEntryNutrients();
+      refreshEntryNutrients((value) => value + 1);
+    });
+    return () => {
+      presentation.mounted = false;
+      clearEntryNutrients();
+      subscription.remove();
+    };
+  }, [clearEntryNutrients]);
 
   function beginMutation(sourceDate: string, busyKey: string): MutationOwner {
     const token = mutationSequence.current + 1;
@@ -1332,6 +1371,65 @@ export function DiaryScreen({
     mealSnapshotScope.current !== mealScopeKey ||
     requestedMealRoute !== appliedRouteGeneration.current;
 
+  const entryNutrientGeneration = entryNutrients.current.generation;
+  const entryNutrientsCurrent =
+    entryNutrients.current.mounted &&
+    entryNutrients.current.active &&
+    entryNutrients.current.scope === mealScopeKey &&
+    !privateUiClosed.current &&
+    state === "ready" &&
+    diary !== null &&
+    mealSnapshotScope.current === mealScopeKey &&
+    requestedMealRoute === appliedRouteGeneration.current;
+  const entryNutrientToggleDisabled = !entryNutrientsCurrent || pageState === "loading";
+
+  function toggleEntryNutrients(entry: DiaryEntry) {
+    const presentation = entryNutrients.current;
+    if (
+      !entryNutrientsCurrent ||
+      !presentation.mounted ||
+      !presentation.active ||
+      privateUiClosed.current ||
+      presentation.scope !== mealScopeKey ||
+      presentation.generation !== entryNutrientGeneration ||
+      currentMealRoute.current !== requestedMealRoute ||
+      currentMealRoute.current !== appliedRouteGeneration.current ||
+      mealSnapshotScope.current !== mealScopeKey ||
+      viewEpoch.current !== mealViewEpoch ||
+      requestGeneration.current !== mealRequestGeneration ||
+      pageRequestBusy.current ||
+      entryNutrientToggleDisabled ||
+      mealPresentation.current.generation !== mealGeneration ||
+      (!mealGuard.current.hold && mealPresentation.current.collapsed.has(entry.mealSlot)) ||
+      !mealGuard.current.diaryPage?.data.entries.includes(entry)
+    )
+      return;
+    const open = new Set(presentation.open);
+    if (open.has(entry)) open.delete(entry);
+    else open.add(entry);
+    presentation.open = open;
+    presentation.generation += 1;
+    refreshEntryNutrients((value) => value + 1);
+  }
+
+  function renderEntryNutrientRows(entry: DiaryEntry) {
+    const occurrences = new Map<string, number>();
+    return entry.nutrients.map((nutrient) => {
+      const occurrence = (occurrences.get(nutrient.nutrientId) ?? 0) + 1;
+      occurrences.set(nutrient.nutrientId, occurrence);
+      const display = nutrientDisplay(nutrient);
+      return (
+        <View key={`${nutrient.nutrientId}:${occurrence}`} style={styles.entryNutrientRow}>
+          <Text style={styles.entryNutrientName}>
+            {nutrient.name} ({nutrient.unit})
+          </Text>
+          <Text style={styles.entryNutrientAmount}>{display.amount}</Text>
+          <Text style={styles.entrySource}>{display.qualification}</Text>
+        </View>
+      );
+    });
+  }
+
   function toggleMeal(meal: MealSlot) {
     const presentation = mealPresentation.current;
     if (
@@ -1846,6 +1944,46 @@ export function DiaryScreen({
                             </Text>
                           </View>
                         ) : null}
+                        {entryNutrientsCurrent ? (
+                          <View style={styles.entryNutrientBlock}>
+                            <Pressable
+                              accessibilityLabel={`${entryNutrients.current.open.has(entry) ? "Hide" : "Show"} nutrients for ${entryName(entry)}, ${entryPortionLabel(entry)} at ${entry.localTime.slice(0, 5)}`}
+                              accessibilityRole="button"
+                              accessibilityState={{
+                                expanded: entryNutrients.current.open.has(entry),
+                                disabled: entryNutrientToggleDisabled,
+                              }}
+                              disabled={entryNutrientToggleDisabled}
+                              onPress={() => toggleEntryNutrients(entry)}
+                              style={styles.entryNutrientToggle}
+                            >
+                              <Text style={styles.addLink}>
+                                {entryNutrients.current.open.has(entry)
+                                  ? "Hide nutrients"
+                                  : "Show nutrients"}
+                              </Text>
+                            </Pressable>
+                            {entryNutrients.current.open.has(entry) ? (
+                              <View accessibilityLabel={`Saved nutrients for ${entryName(entry)}`}>
+                                <Text style={styles.entryNutrientContext}>
+                                  Saved logged portion: {entryPortionLabel(entry)} · entry revision{" "}
+                                  {entry.revision}
+                                </Text>
+                                <Text style={styles.entrySource}>
+                                  These values describe this saved diary entry. Unsaved edits do not
+                                  change them.
+                                </Text>
+                                {entry.nutrients.length === 0 ? (
+                                  <Text style={styles.entryMeta}>
+                                    Nutrient details are unavailable for this logged entry.
+                                  </Text>
+                                ) : (
+                                  renderEntryNutrientRows(entry)
+                                )}
+                              </View>
+                            ) : null}
+                          </View>
+                        ) : null}
                         {editor?.entryId === entry.id ? (
                           <View style={styles.editor}>
                             <Text style={styles.label}>Quantity</Text>
@@ -2223,6 +2361,17 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     textTransform: "uppercase",
   },
+  entryNutrientBlock: { marginTop: 12, minWidth: 0 },
+  entryNutrientToggle: { alignSelf: "flex-start", minHeight: 44, justifyContent: "center" },
+  entryNutrientContext: { color: palette.ink, fontSize: 13, fontWeight: "700" },
+  entryNutrientRow: {
+    borderTopColor: palette.line,
+    borderTopWidth: 1,
+    marginTop: 10,
+    paddingTop: 10,
+  },
+  entryNutrientName: { color: palette.ink, fontSize: 14, fontWeight: "700" },
+  entryNutrientAmount: { color: palette.ink, fontSize: 14, marginTop: 4 },
   entryMeta: { color: palette.muted, fontSize: 13, marginTop: 7 },
   entrySource: { color: palette.muted, fontSize: 11, lineHeight: 16, marginTop: 5 },
   entryTitle: { color: palette.ink, fontSize: 18, fontWeight: "700" },
