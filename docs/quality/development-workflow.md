@@ -43,7 +43,7 @@ action. Do not duplicate the evidence into multiple rolling roadmap overlays.
 | Development | Focused behavioral regressions, affected types and formatting | Each fix has relevant passing evidence, and independent review is integrated |
 | Final source | Canonical `pnpm check`, `pnpm build`, and applicable dependency/license/static checks | Required commands pass on the final source; cache reuse and opt-in skips are explicit |
 | Local services | Required migration, API, restore, scoped search and privacy runbook steps | Executed integration counts and exact readiness/loopback evidence are recorded |
-| Delivery | Review final diff, staged contents, modes, secrets, approved commit/push; inspect automatic checks | Local/tracking/live-remote relationship and each workflow's observed state are recorded |
+| Delivery | Review final diff, staged contents, modes and secrets; commit/push under standing authorization; inspect automatic checks | Local/tracking/live-remote relationship and each workflow's observed state are recorded |
 
 `pnpm check` includes Compose policy tests: prove the genuine Docker and Compose
 CLI versions first. These tests parse configuration without contacting a daemon;
@@ -116,10 +116,17 @@ Record an end time on failure too. Do not log raw environments, secret command
 arguments, private fixture payloads, or credential files. Harness and transport
 failures remain in the record even when a corrected invocation later passes.
 
-Before staging, check the final diff and preserve unrelated changes. Commit only
-explicit paths. Existing approval for normal branch commits/pushes never implies
-force-push, workflow dispatch/rerun/cancel, deployment, cloud spending, DNS,
-firewall/tailnet changes, phone exposure, EAS/signing, or live catalogue actions.
+The user has given standing authorization for normal commits and non-force pushes
+for authorized project work. After applicable review and validation, commit and
+push to the existing project remote and working branch without requesting another
+approval for the diff, individual commit, or push. Before staging, check the final
+diff and preserve unrelated changes; commit only explicit paths. Record the
+local/tracking/live-remote relationship and exact automatic workflow results.
+
+This authorization never implies force-push, destructive history changes, workflow
+dispatch/rerun/cancel, deployment, cloud spending, DNS, firewall/tailnet changes,
+phone exposure, EAS/signing, or live catalogue actions. Their existing separate
+approval requirements and all review, validation and release gates remain in force.
 
 ## Completion vocabulary
 
