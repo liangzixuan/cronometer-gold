@@ -59,6 +59,19 @@ interface BuilderState {
   readonly ingredients: readonly RecipeIngredientDraft[];
 }
 
+interface CopyConfirmation {
+  readonly selectionGeneration: number;
+  readonly builderGeneration: number;
+}
+
+function sameEditableBuilder(left: BuilderState, right: BuilderState): boolean {
+  const editable = (builder: BuilderState) => ({
+    ...builder,
+    ingredients: builder.ingredients.map(ingredientRequest),
+  });
+  return JSON.stringify(editable(left)) === JSON.stringify(editable(right));
+}
+
 function emptyBuilder(): BuilderState {
   return {
     recipeId: null,
@@ -294,6 +307,9 @@ export function RecipesClient() {
   const [nutritionBasis, setNutritionBasis] = useState<NutritionBasis>("per100Grams");
   const selectionGeneration = useRef(0);
   const [builder, setBuilderState] = useState<BuilderState>(emptyBuilder);
+  const [copyConfirmation, setCopyConfirmation] = useState<CopyConfirmation | null>(null);
+  const copyConfirmationRef = useRef<CopyConfirmation | null>(null);
+  const createDraftGeneration = useRef(0);
   const [state, setLoadState] = useState<LoadState>("loading");
   const [message, setMessage] = useState("Loading your private recipes…");
   const [busy, setBusyState] = useState<string | null>(null);
@@ -321,24 +337,44 @@ export function RecipesClient() {
   const busyRef = useRef<string | null>(null);
   const stateRef = useRef<LoadState>("loading");
 
-  const setSelected = useCallback((next: RecipeView | null) => {
-    // Invalidate retained controls even when a previously viewed version is reopened.
-    selectionGeneration.current += 1;
-    setSelectedState(next);
-    setNutritionBasis(next?.nutrientsPerServing != null ? "perServing" : "per100Grams");
+  const clearCopyConfirmation = useCallback(() => {
+    copyConfirmationRef.current = null;
+    setCopyConfirmation(null);
   }, []);
 
-  const replaceBuilder = useCallback((next: BuilderState) => {
-    builderRef.current = next;
-    builderGeneration.current += 1;
-    setBuilderState(next);
-  }, []);
+  const setSelected = useCallback(
+    (next: RecipeView | null) => {
+      // Invalidate retained controls even when a previously viewed version is reopened.
+      selectionGeneration.current += 1;
+      clearCopyConfirmation();
+      setSelectedState(next);
+      setNutritionBasis(next?.nutrientsPerServing != null ? "perServing" : "per100Grams");
+    },
+    [clearCopyConfirmation],
+  );
+
+  const replaceBuilder = useCallback(
+    (next: BuilderState) => {
+      builderRef.current = next;
+      builderGeneration.current += 1;
+      clearCopyConfirmation();
+      setBuilderState(next);
+    },
+    [clearCopyConfirmation],
+  );
+  const builderScope = reviewGeneration.current;
   const setBuilder = useCallback(
     (next: BuilderState) => {
-      if (!mounted.current || privateUiClosed.current || ownerUserId.current === null) return;
+      if (
+        !mounted.current ||
+        privateUiClosed.current ||
+        ownerUserId.current === null ||
+        reviewGeneration.current !== builderScope
+      )
+        return;
       replaceBuilder(next);
     },
-    [replaceBuilder],
+    [replaceBuilder, builderScope],
   );
   const setBusy = useCallback((next: string | null) => {
     busyRef.current = next;
@@ -351,6 +387,67 @@ export function RecipesClient() {
   const reviewOwner = ownerUserId.current;
   const reviewContext = reviewGeneration.current;
   const nutritionContext = selectionGeneration.current;
+  const builderContext = builderGeneration.current;
+
+  function canCopySelected() {
+    return (
+      mounted.current &&
+      !privateUiClosed.current &&
+      reviewOwner !== null &&
+      ownerUserId.current === reviewOwner &&
+      selected !== null &&
+      selectionGeneration.current === nutritionContext &&
+      builderGeneration.current === builderContext &&
+      stateRef.current === "ready" &&
+      busyRef.current === null
+    );
+  }
+
+  function copySelectedToNewDraft() {
+    if (!canCopySelected() || !selected) return;
+    const copied = { ...draftFromRecipe(selected), recipeId: null, revision: null };
+    builderRequest.current?.abort();
+    builderRequest.current = null;
+    createDraftGeneration.current += 1;
+    reviewGeneration.current += 1;
+    setSelected(null);
+    replaceBuilder(copied);
+    setQuery("");
+    setFoodResults([]);
+    setSearchState("idle");
+    setLogKind("grams");
+    setLogAmount("1");
+    setMessage(
+      `Copied ${selected.name} saved version ${selected.versionNumber} to a new draft. Edit and create it when ready; the original recipe is unchanged.`,
+    );
+  }
+
+  function requestCopySelected() {
+    if (!canCopySelected() || !selected) return;
+    if (sameEditableBuilder(builderRef.current, draftFromRecipe(selected))) {
+      copySelectedToNewDraft();
+      return;
+    }
+    const confirmation = {
+      selectionGeneration: nutritionContext,
+      builderGeneration: builderContext,
+    };
+    copyConfirmationRef.current = confirmation;
+    setCopyConfirmation(confirmation);
+  }
+
+  function resolveCopyConfirmation(discard: boolean) {
+    if (
+      !canCopySelected() ||
+      !copyConfirmation ||
+      copyConfirmationRef.current !== copyConfirmation ||
+      copyConfirmation.selectionGeneration !== nutritionContext ||
+      copyConfirmation.builderGeneration !== builderContext
+    )
+      return;
+    if (discard) copySelectedToNewDraft();
+    else clearCopyConfirmation();
+  }
 
   function selectNutritionBasis(next: NutritionBasis) {
     if (
@@ -393,7 +490,7 @@ export function RecipesClient() {
       keys.add(ingredient.clientKey);
     }
     reviewGeneration.current += 1;
-    setBuilder({ ...current, ingredients: [...current.ingredients, ...ingredients] });
+    replaceBuilder({ ...current, ingredients: [...current.ingredients, ...ingredients] });
     setMessage(
       `${ingredients.length} reviewed ingredients added. Review the final yield before creating the recipe.`,
     );
@@ -404,16 +501,22 @@ export function RecipesClient() {
     if (
       !mounted.current ||
       privateUiClosed.current ||
-      !ownerUserId.current ||
+      !reviewOwner ||
+      ownerUserId.current !== reviewOwner ||
+      reviewGeneration.current !== reviewContext ||
       busyRef.current === "log"
     )
       return;
     builderRequest.current?.abort();
     builderRequest.current = null;
     reviewGeneration.current += 1;
+    createDraftGeneration.current += 1;
     setBusy(null);
     setSelected(null);
-    setBuilder(emptyBuilder());
+    replaceBuilder(emptyBuilder());
+    setQuery("");
+    setFoodResults([]);
+    setSearchState("idle");
     setLogKind("grams");
     setLogAmount("1");
     setMessage("New recipe builder opened.");
@@ -597,6 +700,7 @@ export function RecipesClient() {
     })();
     return () => {
       mounted.current = false;
+      copyConfirmationRef.current = null;
       selectionGeneration.current += 1;
       builderGeneration.current += 1;
       reviewGeneration.current += 1;
@@ -610,7 +714,15 @@ export function RecipesClient() {
 
   async function openRecipe(recipeId: string, successMessage?: string) {
     const initiatingOwnerUserId = ownerUserId.current;
-    if (initiatingOwnerUserId === null || privateUiClosed.current || !mounted.current) return;
+    if (
+      initiatingOwnerUserId === null ||
+      privateUiClosed.current ||
+      !mounted.current ||
+      initiatingOwnerUserId !== reviewOwner ||
+      reviewGeneration.current !== reviewContext
+    )
+      return;
+    clearCopyConfirmation();
     builderRequest.current?.abort();
     const controller = new AbortController();
     builderRequest.current = controller;
@@ -646,7 +758,7 @@ export function RecipesClient() {
           if (!isCurrent()) return;
           reviewGeneration.current += 1;
           setSelected(recipe);
-          setBuilder(draftFromRecipe(recipe));
+          replaceBuilder(draftFromRecipe(recipe));
           setLogKind(recipeLogKindFor(recipe));
           setLogAmount("1");
           setMessage(successMessage ?? `Version ${recipe.versionNumber} loaded.`);
@@ -666,8 +778,16 @@ export function RecipesClient() {
   }
 
   async function searchFoods() {
+    const searchContext = reviewGeneration.current;
     const initiatingOwnerUserId = ownerUserId.current;
-    if (initiatingOwnerUserId === null || privateUiClosed.current) return;
+    if (
+      initiatingOwnerUserId === null ||
+      privateUiClosed.current ||
+      !mounted.current ||
+      initiatingOwnerUserId !== reviewOwner ||
+      reviewGeneration.current !== reviewContext
+    )
+      return;
     const controller = new AbortController();
     privateReadControllers.current.add(controller);
     setSearchState("loading");
@@ -691,12 +811,13 @@ export function RecipesClient() {
           if (privateUiClosed.current || ownerUserId.current !== initiatingOwnerUserId) {
             throw new RecipeOwnerFenceError();
           }
+          if (!mounted.current || reviewGeneration.current !== searchContext) return;
           setFoodResults(page.data);
           setSearchState("ready");
         },
       });
     } catch (caught) {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || reviewGeneration.current !== searchContext) return;
       if (caught instanceof RecipeOwnerFenceError) return signInAgain();
       setFoodResults([]);
       setSearchState("error");
@@ -707,6 +828,7 @@ export function RecipesClient() {
   }
 
   function addFood(food: FoodSearchHit, mode: "grams" | "serving") {
+    if (reviewGeneration.current !== reviewContext) return;
     if (builder.ingredients.length >= 50) {
       setMessage("A recipe supports at most 50 ingredients.");
       return;
@@ -723,6 +845,7 @@ export function RecipesClient() {
   }
 
   function addNested(recipe: RecipeSummaryView) {
+    if (reviewGeneration.current !== reviewContext) return;
     if (recipe.id === builder.recipeId) {
       setMessage("A recipe cannot contain itself.");
       return;
@@ -782,9 +905,12 @@ export function RecipesClient() {
       !mounted.current ||
       privateUiClosed.current ||
       !initiatingOwnerUserId ||
+      initiatingOwnerUserId !== reviewOwner ||
+      reviewGeneration.current !== reviewContext ||
       busyRef.current !== null
     )
       return;
+    clearCopyConfirmation();
     const savingBuilder = builderRef.current;
     let body: ReturnType<typeof recipeBodyFromBuilder>;
     try {
@@ -804,7 +930,7 @@ export function RecipesClient() {
       builderRequest.current === controller &&
       ownerUserId.current === initiatingOwnerUserId &&
       builderGeneration.current === generation;
-    const intentKey = `${savingBuilder.recipeId ?? "create"}:${savingBuilder.revision ?? "new"}:${JSON.stringify(body)}`;
+    const intentKey = `${savingBuilder.recipeId ?? `create:${createDraftGeneration.current}`}:${savingBuilder.revision ?? "new"}:${JSON.stringify(body)}`;
     const operation = prepareStableMutation(
       pendingSaves.current,
       intentKey,
@@ -857,7 +983,7 @@ export function RecipesClient() {
       pendingSaves.current.delete(intentKey);
       reviewGeneration.current += 1;
       setSelected(mutation.recipe);
-      setBuilder(draftFromRecipe(mutation.recipe));
+      replaceBuilder(draftFromRecipe(mutation.recipe));
       setLogKind(recipeLogKindFor(mutation.recipe));
       setLogAmount("1");
       // The receipt is installed. Do not let the later list refresh replace a newer draft's status.
@@ -891,7 +1017,21 @@ export function RecipesClient() {
     }
   }
 
+  function canEditLogSelection() {
+    return (
+      mounted.current &&
+      !privateUiClosed.current &&
+      reviewOwner !== null &&
+      ownerUserId.current === reviewOwner &&
+      selected !== null &&
+      selectionGeneration.current === nutritionContext &&
+      stateRef.current === "ready" &&
+      busyRef.current === null
+    );
+  }
+
   async function logRecipe() {
+    if (!canEditLogSelection()) return;
     if (dateReviewRequired) {
       setMessage("Review and confirm the local diary day before logging this recipe again.");
       return;
@@ -981,6 +1121,7 @@ export function RecipesClient() {
   }
 
   function confirmRecipeDateReview() {
+    if (!canEditLogSelection()) return;
     if (!timeZone) {
       setMessage(
         "Current account settings are unavailable. Refresh this page before confirming a local diary day.",
@@ -1085,6 +1226,48 @@ export function RecipesClient() {
               </div>
               {selected ? <span className="statusPill">v{selected.versionNumber}</span> : null}
             </div>
+            {selected ? (
+              <section className="workspaceSection" aria-label="Copy saved recipe">
+                <p className="fieldHelp">
+                  Copy {selected.name} saved version {selected.versionNumber} to make a separate
+                  recipe. The original stays unchanged.
+                </p>
+                <button
+                  className="buttonSecondary"
+                  disabled={busy !== null || state !== "ready"}
+                  onClick={requestCopySelected}
+                  type="button"
+                >
+                  Copy to new draft
+                </button>
+                {copyConfirmation && copyConfirmationRef.current === copyConfirmation ? (
+                  <fieldset
+                    aria-labelledby="copy-recipe-confirmation"
+                    disabled={busy !== null || state !== "ready"}
+                    style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}
+                  >
+                    <p id="copy-recipe-confirmation" className="coverageCopy" aria-live="polite">
+                      This editor has unsaved changes. Keep editing, or discard them and copy{" "}
+                      {selected.name} saved version {selected.versionNumber}.
+                    </p>
+                    <button
+                      className="buttonQuiet"
+                      onClick={() => resolveCopyConfirmation(false)}
+                      type="button"
+                    >
+                      Keep editing
+                    </button>{" "}
+                    <button
+                      className="buttonSecondary"
+                      onClick={() => resolveCopyConfirmation(true)}
+                      type="button"
+                    >
+                      Discard edits and copy saved version
+                    </button>
+                  </fieldset>
+                ) : null}
+              </section>
+            ) : null}
             {builder.recipeId === null && reviewOwner && !privateUiClosed.current ? (
               <PastedIngredientReview
                 key={reviewContext}
@@ -1252,7 +1435,10 @@ export function RecipesClient() {
                       <div className="searchInputRow">
                         <input
                           maxLength={128}
-                          onChange={(event) => setQuery(event.target.value)}
+                          onChange={(event) => {
+                            if (reviewGeneration.current === reviewContext)
+                              setQuery(event.target.value);
+                          }}
                           placeholder="e.g. rolled oats"
                           value={query}
                         />
@@ -1442,7 +1628,11 @@ export function RecipesClient() {
                     <label className="formField">
                       <span>Portion</span>
                       <select
-                        onChange={(event) => setLogKind(event.target.value as "grams" | "serving")}
+                        disabled={busy !== null || state !== "ready"}
+                        onChange={(event) => {
+                          if (canEditLogSelection())
+                            setLogKind(event.target.value as "grams" | "serving");
+                        }}
                         value={logKind}
                       >
                         <option value="grams">Grams</option>
@@ -1456,7 +1646,10 @@ export function RecipesClient() {
                       <input
                         inputMode="decimal"
                         maxLength={19}
-                        onChange={(event) => setLogAmount(event.target.value)}
+                        disabled={busy !== null || state !== "ready"}
+                        onChange={(event) => {
+                          if (canEditLogSelection()) setLogAmount(event.target.value);
+                        }}
                         value={logAmount}
                       />
                     </label>
@@ -1464,14 +1657,20 @@ export function RecipesClient() {
                       <span>Local diary date</span>
                       <input
                         maxLength={10}
-                        onChange={(event) => setDate(event.target.value)}
+                        disabled={busy !== null || state !== "ready"}
+                        onChange={(event) => {
+                          if (canEditLogSelection()) setDate(event.target.value);
+                        }}
                         value={date}
                       />
                     </label>
                     <label className="formField">
                       <span>Meal</span>
                       <select
-                        onChange={(event) => setMealSlot(event.target.value as MealSlot)}
+                        disabled={busy !== null || state !== "ready"}
+                        onChange={(event) => {
+                          if (canEditLogSelection()) setMealSlot(event.target.value as MealSlot);
+                        }}
                         value={mealSlot}
                       >
                         {diaryGroups.map((group) => (
@@ -1489,7 +1688,7 @@ export function RecipesClient() {
                   {dateReviewRequired ? (
                     <button
                       className="buttonSecondary"
-                      disabled={!timeZone || busy === "log"}
+                      disabled={!timeZone || busy !== null || state !== "ready"}
                       onClick={confirmRecipeDateReview}
                       type="button"
                     >
@@ -1498,7 +1697,7 @@ export function RecipesClient() {
                   ) : null}{" "}
                   <button
                     className="buttonPrimary"
-                    disabled={busy === "log" || dateReviewRequired || !timeZone}
+                    disabled={busy !== null || state !== "ready" || dateReviewRequired || !timeZone}
                     onClick={() => void logRecipe()}
                     type="button"
                   >

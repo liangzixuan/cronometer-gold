@@ -430,6 +430,15 @@ acceptance.
   formatter, without new calculations or mutations. Actual-component and
   synthetic browser evidence do not replace native device, assistive-technology,
   independent reviewer or hosted acceptance.
+- Copying a saved recipe under ADR 0032 preserves exact pinned ingredient versions
+  and quantities in an independent new draft. Dirty-editor replacement requires
+  an explicit choice bound to the selected saved version and current draft;
+  later edits, selection and private lifecycle changes invalidate old choices.
+  Copy performs no network write, clears original root identity and saved/log
+  selection, and never reuses an earlier draft's unresolved create intent.
+  Existing create/ownership/provenance/rights and stable retry gates still apply.
+  Source and synthetic browser checks do not establish real database persistence,
+  native device, assistive-technology, hosted or independent release acceptance.
 - The optional M1B-R reference-template candidate remains disabled for
   controlled-beta and commercial users until a named registered dietitian or
   qualified clinical-science owner approves its exact values, canonical units,

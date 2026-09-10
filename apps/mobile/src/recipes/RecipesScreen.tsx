@@ -77,6 +77,32 @@ interface Builder {
   readonly ingredients: readonly RecipeIngredientDraft[];
 }
 
+interface CopyChoice {
+  readonly recipe: RecipeView;
+  readonly builderGeneration: number;
+}
+
+function builderContentKey(builder: Builder): string {
+  return JSON.stringify({
+    ...builder,
+    ingredients: builder.ingredients.map((ingredient) =>
+      ingredient.kind === "recipe"
+        ? {
+            kind: ingredient.kind,
+            recipeVersionId: ingredient.recipeVersionId,
+            grams: ingredient.grams,
+            note: ingredient.note,
+          }
+        : {
+            kind: ingredient.kind,
+            foodVersionId: ingredient.foodVersionId,
+            portion: ingredient.portion,
+            note: ingredient.note,
+          },
+    ),
+  });
+}
+
 function emptyBuilder(): Builder {
   return {
     recipeId: null,
@@ -225,6 +251,9 @@ export function RecipesScreen({
   const [selected, setSelected] = useState<RecipeView | null>(null);
   const [nutritionBasis, setNutritionBasis] = useState<"100g" | "serving">("100g");
   const selectedRef = useRef(selected);
+  const [copyChoice, setCopyChoice] = useState<CopyChoice | null>(null);
+  const copyChoiceRef = useRef<CopyChoice | null>(null);
+  const creationIntent = useRef(0);
   const [builder, setBuilderState] = useState<Builder>(emptyBuilder);
   const [message, setMessage] = useState("Loading your private recipes…");
   const [loading, setLoading] = useState(true);
@@ -276,20 +305,33 @@ export function RecipesScreen({
     readyRef.current = value;
     setReadyState(value);
   }, []);
-  const replaceSelected = useCallback((recipe: RecipeView | null) => {
-    selectedRef.current = recipe;
-    setSelected(recipe);
-    setNutritionBasis(recipe?.nutrientsPerServing ? "serving" : "100g");
+  const clearCopyChoice = useCallback(() => {
+    copyChoiceRef.current = null;
+    setCopyChoice(null);
   }, []);
-  const replaceBuilder = useCallback((value: Builder) => {
-    builderRef.current = value;
-    builderGeneration.current += 1;
-    setBuilderState(value);
-  }, []);
+  const replaceSelected = useCallback(
+    (recipe: RecipeView | null) => {
+      clearCopyChoice();
+      selectedRef.current = recipe;
+      setSelected(recipe);
+      setNutritionBasis(recipe?.nutrientsPerServing ? "serving" : "100g");
+    },
+    [clearCopyChoice],
+  );
+  const replaceBuilder = useCallback(
+    (value: Builder) => {
+      clearCopyChoice();
+      builderRef.current = value;
+      builderGeneration.current += 1;
+      setBuilderState(value);
+    },
+    [clearCopyChoice],
+  );
   const invalidateReview = useCallback(() => {
+    clearCopyChoice();
     reviewGeneration.current += 1;
     setReviewKey(reviewGeneration.current);
-  }, []);
+  }, [clearCopyChoice]);
   const abortRequests = useCallback(() => {
     builderRequest.current?.abort();
     listRequest.current?.abort();
@@ -488,6 +530,9 @@ export function RecipesScreen({
       busyRef.current === null
     );
   }
+  function canUseSelectedRecipe() {
+    return canEdit() && selected !== null && selectedRef.current === selected;
+  }
   function selectNutritionBasis(basis: "100g" | "serving") {
     if (
       !canEdit() ||
@@ -497,6 +542,47 @@ export function RecipesScreen({
     )
       return;
     setNutritionBasis(basis);
+  }
+  function installCopiedDraft(recipe: RecipeView) {
+    const copied = mobileBuilderFromRecipe(recipe);
+    invalidateReview();
+    creationIntent.current += 1;
+    ownedRecipeLogOperations.current.clear();
+    replaceBuilder({ ...copied, recipeId: null, revision: null });
+    replaceSelected(null);
+    setFoods([]);
+    setQuery("");
+    setLogKind("grams");
+    setLogAmount("1");
+    setMessage(
+      `Copied saved ${recipe.name} v${recipe.versionNumber} to a new draft. Review it and choose Create recipe to save it separately.`,
+    );
+  }
+  function copySavedRecipe() {
+    if (!canEdit() || !selected || selectedRef.current !== selected) return;
+    if (
+      builderContentKey(builderRef.current) !== builderContentKey(mobileBuilderFromRecipe(selected))
+    ) {
+      const choice = { recipe: selected, builderGeneration: builderGeneration.current };
+      copyChoiceRef.current = choice;
+      setCopyChoice(choice);
+      return;
+    }
+    installCopiedDraft(selected);
+  }
+  function copyChoiceIsCurrent(choice: CopyChoice) {
+    return (
+      canEdit() &&
+      copyChoiceRef.current === choice &&
+      selectedRef.current === choice.recipe &&
+      builderGeneration.current === choice.builderGeneration
+    );
+  }
+  function confirmCopy(choice: CopyChoice) {
+    if (copyChoiceIsCurrent(choice)) installCopiedDraft(choice.recipe);
+  }
+  function keepEditing(choice: CopyChoice) {
+    if (copyChoiceIsCurrent(choice)) clearCopyChoice();
   }
   function updateBuilder(change: (current: Builder) => Builder) {
     if (canEdit()) replaceBuilder(change(builderRef.current));
@@ -543,6 +629,7 @@ export function RecipesScreen({
     builderRequest.current?.abort();
     builderRequest.current = null;
     invalidateReview();
+    creationIntent.current += 1;
     replaceBuilder(emptyBuilder());
     replaceSelected(null);
     setFoods([]);
@@ -698,6 +785,7 @@ export function RecipesScreen({
   }
   async function save() {
     if (!canEdit()) return;
+    clearCopyChoice();
     const snapshot = builderRef.current;
     let body: ReturnType<typeof requestBody>;
     try {
@@ -706,7 +794,7 @@ export function RecipesScreen({
       setMessage(caught instanceof Error ? caught.message : "Review the recipe.");
       return;
     }
-    const key = `${snapshot.recipeId ?? "create"}:${snapshot.revision ?? "new"}:${JSON.stringify(body)}`;
+    const key = `${snapshot.recipeId ?? `create:${creationIntent.current}`}:${snapshot.revision ?? "new"}:${JSON.stringify(body)}`;
     const operation = prepareStableMutation(pending.current, key, () => body, newOperationId);
     pending.current.set(key, operation);
     const request = beginBuilderRequest("save");
@@ -1172,6 +1260,44 @@ export function RecipesScreen({
         {scopeVisible && selected ? (
           <View style={styles.panel}>
             <Text accessibilityRole="header" style={styles.sectionTitle}>
+              Copy saved {selected.name} · v{selected.versionNumber}
+            </Text>
+            <Text style={styles.help}>
+              Start a separate recipe from this saved version. The original stays unchanged.
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              disabled={builderDisabled}
+              onPress={copySavedRecipe}
+              style={styles.secondary}
+            >
+              <Text style={styles.secondaryText}>Copy to new draft</Text>
+            </Pressable>
+            {copyChoice && copyChoiceRef.current === copyChoice ? (
+              <View style={styles.copyChoice}>
+                <Text accessibilityLiveRegion="polite" style={styles.help}>
+                  You have unsaved edits. Keep editing, or discard those edits and copy saved{" "}
+                  {copyChoice.recipe.name} v{copyChoice.recipe.versionNumber}.
+                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={builderDisabled}
+                  onPress={() => keepEditing(copyChoice)}
+                  style={styles.secondary}
+                >
+                  <Text style={styles.secondaryText}>Keep editing</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={builderDisabled}
+                  onPress={() => confirmCopy(copyChoice)}
+                  style={styles.secondary}
+                >
+                  <Text style={styles.secondaryText}>Discard edits and copy saved version</Text>
+                </Pressable>
+              </View>
+            ) : null}
+            <Text accessibilityRole="header" style={styles.sectionTitle}>
               Assumptions & warnings
             </Text>
             <Text style={styles.warning}>{selected.retentionPolicy.assumption}</Text>
@@ -1232,14 +1358,18 @@ export function RecipesScreen({
                 disabled={builderDisabled}
                 active={logKind === "grams"}
                 label="Grams"
-                onPress={() => setLogKind("grams")}
+                onPress={() => {
+                  if (canUseSelectedRecipe()) setLogKind("grams");
+                }}
               />
               {selected.servingCount ? (
                 <Chip
                   disabled={builderDisabled}
                   active={logKind === "serving"}
                   label={selected.servingLabel ?? "Serving"}
-                  onPress={() => setLogKind("serving")}
+                  onPress={() => {
+                    if (canUseSelectedRecipe()) setLogKind("serving");
+                  }}
                 />
               ) : null}
             </View>
@@ -1248,7 +1378,9 @@ export function RecipesScreen({
               label="Amount"
               maxLength={19}
               value={logAmount}
-              onChange={setLogAmount}
+              onChange={(value) => {
+                if (canUseSelectedRecipe()) setLogAmount(value);
+              }}
               numeric
             />
             <Field
@@ -1256,7 +1388,9 @@ export function RecipesScreen({
               label="Local date"
               maxLength={10}
               value={date}
-              onChange={setDate}
+              onChange={(value) => {
+                if (canUseSelectedRecipe()) setDate(value);
+              }}
             />
             <View style={styles.row}>
               {diaryGroups.map(({ mealSlot: slot, label }) => (
@@ -1265,7 +1399,9 @@ export function RecipesScreen({
                   active={meal === slot}
                   key={slot}
                   label={label}
-                  onPress={() => setMeal(slot)}
+                  onPress={() => {
+                    if (canUseSelectedRecipe()) setMeal(slot);
+                  }}
                 />
               ))}
             </View>
@@ -1373,6 +1509,7 @@ const styles = StyleSheet.create({
   chipText: { color: palette.muted, fontSize: 12, fontWeight: "700" },
   chipTextActive: { color: palette.white },
   content: { padding: 22, paddingBottom: 72 },
+  copyChoice: { gap: 8, marginTop: 12 },
   danger: { color: "#8a3128", fontSize: 13, fontWeight: "800", marginTop: 8 },
   disabled: { opacity: 0.5 },
   help: { color: palette.muted, fontSize: 12, lineHeight: 18, marginVertical: 10 },

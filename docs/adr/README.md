@@ -39,5 +39,7 @@ ADR with a new ADR instead of rewriting its decision.
 
 | [0031](./0031-recipe-nutrition-basis-and-coverage.md) | Explicit saved-recipe nutrition basis and coverage on web and mobile | Source complete; local validation passed; automatic and release evidence pending |
 
+| [0032](./0032-copy-saved-recipe-to-new-draft.md) | Copy an exact saved recipe into an independent new private draft | Source complete; local validation and synthetic Chrome QA passed; automatic, independent and release acceptance pending |
+
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

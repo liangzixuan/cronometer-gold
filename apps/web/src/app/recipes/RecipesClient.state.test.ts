@@ -1076,3 +1076,484 @@ describe("actual saved recipe nutrition inspection", () => {
     },
   );
 });
+
+function copyRecipeFixture() {
+  const recipe = nutritionRecipe();
+  const publicIngredient = required(recipe.currentVersion.ingredients[0]);
+  return {
+    ...recipe,
+    currentVersion: {
+      ...recipe.currentVersion,
+      description: "Saved description.",
+      instructions: "Keep the saved instructions.",
+      finalYield: { grams: "321.000001", source: "estimated", ratioToInputMass: "1" },
+      servingCount: "2.000001",
+      servingLabel: "small bowl",
+      ingredients: [
+        {
+          ...publicIngredient,
+          portion: { kind: "serving", servingId: "303", servingLabel: "scoop", amount: "1.000001" },
+          resolvedGrams: "40.125040125",
+          note: "Public food note.",
+        },
+        {
+          ...publicIngredient,
+          position: 1,
+          foodVersionId: "404",
+          name: "Private sauce",
+          portion: { kind: "grams", grams: "0.000001" },
+          resolvedGrams: "0.000001",
+          note: "Private food note.",
+          source: null,
+          foodProvenance: {
+            kind: "private_custom",
+            customFoodId: "35a0c0cf-e184-40af-811d-ad98ab386f89",
+            customFoodVersionNumber: 7,
+          },
+        },
+        {
+          kind: "recipe",
+          position: 2,
+          recipeId: "5f016b07-23ce-4a7f-92b1-bfbfa1cff5e4",
+          recipeVersionId: "b23dfba7-218d-449d-bafe-6955e03836b6",
+          versionNumber: 3,
+          name: "Nested base",
+          grams: "10.000001",
+          resolvedGrams: "10.000001",
+          note: "Nested recipe note.",
+        },
+      ],
+    },
+  };
+}
+function copyFetcher() {
+  const source = copyRecipeFixture();
+  const fetcher = nutritionFetcher();
+  const original = required(fetcher.getMockImplementation());
+  fetcher.mockImplementation(async (url, init) => {
+    if (url === `/api/recipes/${recipeId}`) return Response.json({ data: { recipe: source } });
+    return original(url, init);
+  });
+  return { fetcher, source };
+}
+function editorValues() {
+  const form = required(elements().find((node) => node.type === "form"));
+  return elements(form)
+    .filter((node) => ["input", "select", "textarea"].includes(String(node.type)))
+    .map((node) => node.props.value);
+}
+function hasButton(label: string) {
+  return elements().some((node) => node.type === "button" && text(node) === label);
+}
+const confirmCopyLabel = "Discard edits and copy saved version";
+
+describe("actual saved recipe copy to a new draft", () => {
+  it("copies clean saved fields and exact public/private/nested pins without a request, then creates a distinct recipe", async () => {
+    const { fetcher, source } = copyFetcher();
+    const immutableSource = JSON.stringify(source);
+    expect(parseRecipeResponse({ data: { recipe: source } }).ingredients).toHaveLength(3);
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    const savedFields = editorValues();
+    const requests = fetcher.mock.calls.length;
+    expect(text()).toContain("Copy Saved recipe saved version 1");
+    await click("Copy to new draft");
+    expect(fetcher.mock.calls).toHaveLength(requests);
+    expect(editorValues()).toEqual(savedFields);
+    expect(hasButton(confirmCopyLabel)).toBe(false);
+    expect(hasButton("Publish new revision")).toBe(false);
+    expect(hasButton("Create recipe")).toBe(true);
+    expect(hasButton("Log recipe")).toBe(false);
+    expect(text()).not.toContain("Saved recipe nutrition");
+    expect(review().ownerUserId).toBe(owner);
+    expect(text()).toContain("Owner-entered private custom food · pinned version 7");
+    await change("Name", "My separate variation");
+    const original = required(fetcher.getMockImplementation());
+    const newId = "edc36aaf-ad1e-449f-98b3-4c47df1a7bd7";
+    fetcher.mockImplementation(async (url, init) =>
+      init?.method === "POST"
+        ? Response.json({
+            data: {
+              replayed: false,
+              recipe: {
+                ...source,
+                id: newId,
+                currentVersion: {
+                  ...source.currentVersion,
+                  name: "My separate variation",
+                  id: "b4d5373d-18e2-42d4-87e6-6939980056c7",
+                },
+              },
+            },
+          })
+        : original(url, init),
+    );
+    save();
+    await hooks.settle();
+    const posts = fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts).toHaveLength(1);
+    const [url, init] = required(posts[0]);
+    expect(url).toBe("/api/recipes");
+    expect(new Headers(init?.headers).has("if-match")).toBe(false);
+    expect(JSON.parse(String(init?.body))).toEqual({
+      name: "My separate variation",
+      description: "Saved description.",
+      instructions: "Keep the saved instructions.",
+      ingredients: [
+        {
+          kind: "food",
+          foodVersionId: "202",
+          portion: { kind: "serving", servingId: "303", amount: "1.000001" },
+          position: 0,
+          note: "Public food note.",
+        },
+        {
+          kind: "food",
+          foodVersionId: "404",
+          portion: { kind: "grams", grams: "0.000001" },
+          position: 1,
+          note: "Private food note.",
+        },
+        {
+          kind: "recipe",
+          recipeVersionId: "b23dfba7-218d-449d-bafe-6955e03836b6",
+          grams: "10.000001",
+          position: 2,
+          note: "Nested recipe note.",
+        },
+      ],
+      finalYield: { grams: "321.000001", source: "estimated" },
+      servingCount: "2.000001",
+      servingLabel: "small bowl",
+    });
+    expect(JSON.stringify(source)).toBe(immutableSource);
+    expect(text()).toContain("My separate variation · Saved version 1.");
+  });
+
+  it("keeps every unsaved field on cancellation and explicitly discards to saved values on confirmation", async () => {
+    const { fetcher } = copyFetcher();
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    const saved = editorValues();
+    await change("Name", " Unsaved name ");
+    await change("Description", "Unsaved description.");
+    await change("Instructions (optional)", "Unsaved instructions.");
+    await change("Final yield grams", "999.000001");
+    await change("Yield source", "measured");
+    await change("Serving count (optional)", "4.000001");
+    await change("Serving label", "plate");
+    await change("Private sauce quantity in grams", "7.000001");
+    await change("Private sauce note", "Unsaved note.");
+    const dirty = editorValues();
+    const requests = fetcher.mock.calls.length;
+    await click("Copy to new draft");
+    expect(hasButton(confirmCopyLabel)).toBe(true);
+    expect(editorValues()).toEqual(dirty);
+    await click("Keep editing");
+    expect(hasButton(confirmCopyLabel)).toBe(false);
+    expect(editorValues()).toEqual(dirty);
+    await click("Copy to new draft");
+    await click(confirmCopyLabel);
+    expect(editorValues()).toEqual(saved);
+    expect(hasButton("Create recipe")).toBe(true);
+    expect(hasButton("Log recipe")).toBe(false);
+    expect(fetcher.mock.calls).toHaveLength(requests);
+  });
+
+  it("copies immediately when re-adding an identical pinned ingredient restores every editable field", async () => {
+    nutritionFetcher();
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await click("Remove");
+    await change("Find a reviewed food", "oats");
+    await click("Search");
+    await click("Add 100 g");
+    await change("Rolled oats quantity in grams", "120");
+    await click("Copy to new draft");
+    expect(hasButton(confirmCopyLabel)).toBe(false);
+    expect(hasButton("Create recipe")).toBe(true);
+    expect(field("Rolled oats quantity in grams").props.value).toBe("120");
+  });
+
+  it("requires the discard choice even for whitespace-only unsaved edits", async () => {
+    nutritionFetcher();
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await change("Name", "Saved recipe ");
+    await click("Copy to new draft");
+    expect(hasButton(confirmCopyLabel)).toBe(true);
+    expect(field("Name").props.value).toBe("Saved recipe ");
+  });
+
+  it("cancels confirmation on further edits and ignores retained confirm and cancel controls for a later prompt", async () => {
+    nutritionFetcher();
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await change("Name", "First edit");
+    await click("Copy to new draft");
+    const oldConfirm = button(confirmCopyLabel);
+    const oldCancel = button("Keep editing");
+    invoke(field("Name"), "onChange", { target: { value: "Later edit" } });
+    invoke(oldConfirm, "onClick");
+    await hooks.settle();
+    expect(field("Name").props.value).toBe("Later edit");
+    expect(hasButton("Publish new revision")).toBe(true);
+    expect(hasButton(confirmCopyLabel)).toBe(false);
+    await click("Copy to new draft");
+    invoke(oldCancel, "onClick");
+    invoke(oldConfirm, "onClick");
+    await hooks.settle();
+    expect(hasButton(confirmCopyLabel)).toBe(true);
+    expect(field("Name").props.value).toBe("Later edit");
+    await click(confirmCopyLabel);
+    expect(field("Name").props.value).toBe("Saved recipe");
+  });
+
+  it("rejects retained original editor, submit, log, copy, New and open controls after copying", async () => {
+    const fetcher = nutritionFetcher();
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    const name = field("Name");
+    const quantity = field("Rolled oats quantity in grams");
+    const form = required(elements().find((node) => node.type === "form"));
+    const log = button("Log recipe");
+    const copy = button("Copy to new draft");
+    const newRecipe = button("New recipe");
+    const open = required(
+      elements().find((node) => node.type === "button" && text(node).startsWith("Saved recipe")),
+    );
+    const remove = button("Remove");
+    const requests = fetcher.mock.calls.length;
+    await click("Copy to new draft");
+    const copied = editorValues();
+    invoke(name, "onChange", { target: { value: "Stale original" } });
+    invoke(quantity, "onChange", { target: { value: "999" } });
+    invoke(remove, "onClick");
+    invoke(form, "onSubmit", { preventDefault() {} });
+    invoke(log, "onClick");
+    invoke(copy, "onClick");
+    invoke(newRecipe, "onClick");
+    invoke(open, "onClick");
+    await hooks.settle();
+    expect(editorValues()).toEqual(copied);
+    expect(hasButton("Create recipe")).toBe(true);
+    expect(hasButton("Log recipe")).toBe(false);
+    expect(fetcher.mock.calls).toHaveLength(requests);
+  });
+
+  it("rejects original logging field callbacks after copying and reopening a saved selection", async () => {
+    const fetcher = nutritionFetcher();
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    const portion = field("Portion");
+    const amount = field("Amount");
+    const date = field("Local diary date");
+    const meal = field("Meal");
+    const originalMeal = meal.props.value;
+    const differentMeal = originalMeal === "meal_1" ? "meal_2" : "meal_1";
+    await click("Copy to new draft");
+    const requests = fetcher.mock.calls.length;
+    const retainedChanges = () => {
+      invoke(portion, "onChange", { target: { value: "grams" } });
+      invoke(amount, "onChange", { target: { value: "999.000001" } });
+      invoke(date, "onChange", { target: { value: "2026-09-01" } });
+      invoke(meal, "onChange", { target: { value: differentMeal } });
+    };
+    retainedChanges();
+    await hooks.settle();
+    expect(fetcher.mock.calls).toHaveLength(requests);
+    openSaved();
+    await hooks.settle();
+    retainedChanges();
+    await hooks.settle();
+    expect(field("Portion").props.value).toBe("serving");
+    expect(field("Amount").props.value).toBe("1");
+    expect(field("Local diary date").props.value).toBe("2026-09-09");
+    expect(field("Meal").props.value).toBe(originalMeal);
+  });
+
+  it("starts a different creation intent for each copied draft while retaining retries within one draft", async () => {
+    const fetcher = nutritionFetcher();
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation(async (url, init) =>
+      init?.method === "POST"
+        ? Response.json({ error: "Ambiguous create outage" }, { status: 503 })
+        : original(url, init),
+    );
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await click("Copy to new draft");
+    save();
+    await hooks.settle();
+    save();
+    await hooks.settle();
+    openSaved();
+    await hooks.settle();
+    await click("Copy to new draft");
+    save();
+    await hooks.settle();
+    const posts = fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts).toHaveLength(3);
+    const first = required(posts[0]);
+    const retry = required(posts[1]);
+    const next = required(posts[2]);
+    expect(first[0]).toBe("/api/recipes");
+    expect(next[0]).toBe("/api/recipes");
+    expect(first[1]?.body).toBe(retry[1]?.body);
+    expect(first[1]?.body).toBe(next[1]?.body);
+    const firstKey = new Headers(first[1]?.headers).get("idempotency-key");
+    expect(new Headers(retry[1]?.headers).get("idempotency-key")).toBe(firstKey);
+    expect(new Headers(next[1]?.headers).get("idempotency-key")).not.toBe(firstKey);
+    expect(new Headers(next[1]?.headers).has("if-match")).toBe(false);
+  });
+
+  it.each(["save", "log"] as const)("blocks copying during an active %s", async (action) => {
+    const pending = deferred<Response>();
+    const fetcher = nutritionFetcher();
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation(async (url, init) =>
+      init?.method === "POST" ? pending.promise : original(url, init),
+    );
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    const retained = button("Copy to new draft");
+    if (action === "save") save();
+    else invoke(button("Log recipe"), "onClick");
+    await hooks.settle();
+    expect(button("Copy to new draft").props.disabled).toBe(true);
+    invoke(retained, "onClick");
+    await hooks.settle();
+    expect(hasButton("Create recipe")).toBe(false);
+    expect(text()).toContain("Saved recipe nutrition");
+    pending.resolve(Response.json({ error: "Retryable failure" }, { status: 503 }));
+    await hooks.settle();
+    expect(button("Copy to new draft").props.disabled).toBe(false);
+  });
+
+  it("invalidates an inline discard confirmation when saving starts, even after a failed save", async () => {
+    const fetcher = nutritionFetcher();
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation(async (url, init) =>
+      init?.method === "POST"
+        ? Response.json({ error: "Outage" }, { status: 503 })
+        : original(url, init),
+    );
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await change("Name", "Unsaved revision");
+    await click("Copy to new draft");
+    const retained = button(confirmCopyLabel);
+    save();
+    invoke(retained, "onClick");
+    await hooks.settle();
+    invoke(retained, "onClick");
+    await hooks.settle();
+    expect(hasButton(confirmCopyLabel)).toBe(false);
+    expect(hasButton("Publish new revision")).toBe(true);
+    expect(field("Name").props.value).toBe("Unsaved revision");
+  });
+
+  it.each(["new", "open", "owner-change", "unmounted"] as const)(
+    "invalidates dirty copy confirmation after %s",
+    async (transition) => {
+      const fetcher = nutritionFetcher();
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      await change("Name", "Unsaved revision");
+      await click("Copy to new draft");
+      const retained = button(confirmCopyLabel);
+      if (transition === "new") await click("New recipe");
+      if (transition === "open") {
+        openSaved();
+        await hooks.settle();
+      }
+      if (transition === "owner-change") {
+        const original = required(fetcher.getMockImplementation());
+        fetcher.mockImplementation(async (url, init) =>
+          url === "/api/auth/me"
+            ? session("a3fd8855-90c8-42df-8f21-2f5a4060fa08")
+            : original(url, init),
+        );
+        openSaved();
+        await hooks.settle();
+        expect(router.replace).toHaveBeenCalledWith("/login");
+      }
+      if (transition === "unmounted") hooks.unmount();
+      const updates = hooks.afterClose();
+      const requests = fetcher.mock.calls.length;
+      const before = editorValues();
+      invoke(retained, "onClick");
+      await hooks.settle();
+      expect(editorValues()).toEqual(before);
+      expect(hooks.afterClose()).toBe(updates);
+      expect(fetcher.mock.calls).toHaveLength(requests);
+      if (transition !== "unmounted") expect(hasButton(confirmCopyLabel)).toBe(false);
+    },
+  );
+
+  it("clears search/review context and ignores an old search response after copying", async () => {
+    const pending = deferred<Response>();
+    const fetcher = nutritionFetcher();
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation(async (url, init) =>
+      url.startsWith("/api/foods/search?") ? pending.promise : original(url, init),
+    );
+    await mountReady();
+    const oldReview = review();
+    openSaved();
+    await hooks.settle();
+    await change("Find a reviewed food", "Original search");
+    invoke(button("Search"), "onClick");
+    await hooks.settle();
+    await click("Copy to new draft");
+    expect(field("Find a reviewed food").props.value).toBe("");
+    expect(review().onConfirm([ingredient("stale-review")])).toBe(true);
+    await hooks.settle();
+    expect(oldReview.onConfirm([ingredient("old-review")])).toBe(false);
+    pending.resolve(searchResponse());
+    await hooks.settle();
+    expect(field("Find a reviewed food").props.value).toBe("");
+    expect(hasButton("Search")).toBe(true);
+    expect(
+      elements()
+        .filter((node) => node.props.className === "ingredientResult")
+        .some((node) => text(node).includes("Rolled oats")),
+    ).toBe(false);
+  });
+
+  it("ignores an original delayed save receipt after New, reopening and copying the saved recipe", async () => {
+    const pending = deferred<Response>();
+    const fetcher = nutritionFetcher();
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation(async (url, init) =>
+      init?.method === "POST" ? pending.promise : original(url, init),
+    );
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await change("Name", "Original pending revision");
+    save();
+    await hooks.settle();
+    await click("New recipe");
+    openSaved();
+    await hooks.settle();
+    await click("Copy to new draft");
+    await change("Name", "Independent copied draft");
+    pending.resolve(mutation("Late original revision"));
+    await hooks.settle();
+    expect(field("Name").props.value).toBe("Independent copied draft");
+    expect(hasButton("Create recipe")).toBe(true);
+    expect(text()).not.toContain("Late original revision");
+  });
+});

@@ -131,7 +131,9 @@ the detailed milestone boundaries below remain authoritative.
 | Acceptance follow-up | M3B: print the current nutrition report on web | Print the already loaded coherent report as readable Letter/A4 output, preserving exact evidence and missingness; session closure or invalidation prevents stale private output; repeat-print/direct-Ctrl+P manual checks and exact-commit automatic evidence remain open |
 | Automatic evidence / independent review | M4A: review a pasted ingredient list on web | Local checks and synthetic browser flow passed; `88930fe` and status update `58abb4c` were delivered. Record exact-commit CI/container evidence and preserve independent/release acceptance |
 | Automatic evidence / independent review | M4B: review a pasted ingredient list on mobile | Source/local gates passed; collector diagnostic recovery delivered as `2df4493` with successful CI `34423562282`; container `34423562294` remains pending at the latest observation |
-| Source/local complete; automatic evidence next | Saved recipe nutrition basis and coverage | Explicit serving/100 g selection and exact coverage labels pass review, canonical gates and synthetic Chrome QA under ADR 0031; record normal delivery and exact automatic results |
+| Automatic evidence / independent review | Saved recipe nutrition basis and coverage | Delivered `7274ddc`; CI `34425778573` passed; container `34425778640` remains pending at current observation; independent/device/release acceptance stays separate |
+| Automatic evidence / independent review | Copy saved recipe to a new draft | ADR 0032 source, independent in-task review, canonical local gates and synthetic Chrome copy/create/retry QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
+| Next candidate: read-only assessed | Reorder recipe ingredients in the draft | Write a bounded acceptance card before implementation; move existing ingredient identities up/down without changing pins, portions or notes; persist order only through explicit Create/Publish |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -229,6 +231,38 @@ no-serving recipes, keyboard selection, 390 px long-label wrapping and expiry
 closure. Physical native, assistive-technology, Claude Code and release acceptance
 remain separate from source and synthetic browser evidence. No API, schema, retained data,
 new dependency, calculation or release enablement is included.
+Delivered checkpoint `7274ddc` has successful CI `34425778573`, completed
+2026-09-10 01:36:45 UTC. Container `34425778640` remains in progress at the
+2026-09-10 01:43:50 UTC read-only observation.
+
+**Copy a saved recipe to a new draft** is complete at source/local-validation
+level under [ADR 0032](../adr/0032-copy-saved-recipe-to-new-draft.md). Both clients
+reuse their saved-to-builder converter and existing create endpoint, preserving
+pinned food/nested versions, exact quantities and editable fields while clearing
+original root identity and saved nutrition/logging selection. Dirty editors use
+an inline, generation-bound keep/discard choice. A copied draft has a distinct
+creation intent; retries within it retain the exact body and operation key.
+No API/schema/dependency/new calculation was added.
+
+Independent in-task review and canonical local gates passed September 10, 2026
+UTC: 455 fresh web tests, 658 mobile tests plus 10 runner tests, 157 root policy
+tests, dependency/config/license checks, and fresh web/iOS/Android builds. Type
+and test graphs each passed 17/17 with 15 cached; build passed 11/11 with 9 cached.
+Synthetic production Next/BFF Chrome QA passed clean/dirty copy, keyboard cancel,
+saved-field preservation, explicit create and exact-body/key recovery from a
+simulated lost receipt with one new recipe and unchanged original, 390 px
+confirmation layout and expiry closure. Exact-commit automatic evidence remains
+to be recorded in the delivery handoff. Physical native, assistive-technology,
+independent Claude Code, real persistence and release gates stay separate.
+
+After revalidating automatic results, the next read-only assessed candidate is
+**Reorder recipe ingredients in the draft** on web/mobile. Existing request
+adapters already assign ingredient positions from array order. A bounded card
+should preserve ingredient identity, version pins, exact portions and notes;
+disable boundary moves; reject stale handlers; invalidate pending copy-discard
+choices; and keep saved nutrition/logging unchanged until explicit Create or
+Publish. This successor is not implemented. Write its card and ADR 0033 before
+editing and retain existing lifecycle, retry and release gates.
 
 Prepare the external decisions alongside product work, without executing them:
 
