@@ -308,15 +308,24 @@ export function RetentionScreen({
   }, []);
   const [message, setMessage] = useState("Opening private health data…");
   const [nutrients, setNutrients] = useState<readonly TargetableNutrient[]>([]);
+  const [foodDetails, setFoodDetailsState] = useState<ReadonlySet<CustomFood>>(() => new Set());
+  const foodDetailsRef = useRef(foodDetails);
+  const foodDetailsReady = useRef(false);
+  const setFoodDetails = useCallback((next: ReadonlySet<CustomFood>) => {
+    foodDetailsRef.current = next;
+    setFoodDetailsState(next);
+  }, []);
+  const resetFoodDetails = useCallback(() => setFoodDetails(new Set()), [setFoodDetails]);
   const [foods, setFoodsState] = useState<readonly CustomFood[]>([]);
   const foodsRef = useRef(foods);
   const setFoods = useCallback(
     (value: readonly CustomFood[] | ((items: readonly CustomFood[]) => readonly CustomFood[])) => {
       const next = typeof value === "function" ? value(foodsRef.current) : value;
       foodsRef.current = next;
+      setFoodDetails(new Set([...foodDetailsRef.current].filter((food) => next.includes(food))));
       setFoodsState(next);
     },
-    [],
+    [setFoodDetails],
   );
   const [foodCursor, setFoodCursor] = useState<string | null>(null);
   const [definitions, setDefinitions] = useState<readonly BiometricDefinition[]>([]);
@@ -385,6 +394,8 @@ export function RetentionScreen({
   const closeCustom = useCallback(() => {
     if (!currentCustomScope(customEpoch.current)) return;
     customClosed.current = customScope;
+    foodDetailsReady.current = false;
+    resetFoodDetails();
     customEpoch.current += 1;
     registry.current = null;
     customFoodsScope.current = null;
@@ -395,12 +406,14 @@ export function RetentionScreen({
     customOperations.current.clear();
     installCustom(blankCustom(), true);
     if (busyRef.current === "custom" || busyRef.current === "food-more") setBusy(null);
-  }, [currentCustomScope, customScope, installCustom, setBusy]);
+  }, [currentCustomScope, customScope, installCustom, resetFoodDetails, setBusy]);
   useEffect(() => {
     customMounted.current = true;
+    resetFoodDetails();
     customEpoch.current += 1;
     if (customInstalled.current !== customScope) {
       customInstalled.current = customScope;
+      foodDetailsReady.current = false;
       registry.current = null;
       customFoodsScope.current = null;
       setFoods([]);
@@ -415,13 +428,14 @@ export function RetentionScreen({
       setBusy(null);
     return () => {
       customMounted.current = false;
+      foodDetailsRef.current = new Set();
       customEpoch.current += 1;
       customWrite.current?.abort();
       customWrite.current = null;
       customPageRequest.current?.abort();
       customPageRequest.current = null;
     };
-  }, [customScope, installCustom, setBusy, setFoods]);
+  }, [customScope, installCustom, resetFoodDetails, setBusy, setFoods]);
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (next) => {
       const active = next === "active";
@@ -432,6 +446,7 @@ export function RetentionScreen({
       )
         return;
       customActive.current = active;
+      resetFoodDetails();
       customEpoch.current += 1;
       customWrite.current?.abort();
       customWrite.current = null;
@@ -441,7 +456,7 @@ export function RetentionScreen({
       setCustomEpoch(customEpoch.current);
     });
     return () => subscription.remove();
-  }, [customScope, setBusy]);
+  }, [customScope, resetFoodDetails, setBusy]);
   const [customLog, setCustomLog] = useState<CustomLogDraft | null>(null);
   const [definitionName, setDefinitionName] = useState("Weight");
   const [definitionDimension, setDefinitionDimension] =
@@ -568,6 +583,10 @@ export function RetentionScreen({
 
   const loadAll = useCallback(async () => {
     const epoch = customEpoch.current;
+    if (currentCustomScope(epoch)) {
+      foodDetailsReady.current = false;
+      resetFoodDetails();
+    }
     registry.current = null;
     loadController.current?.abort();
     const controller = new AbortController();
@@ -615,9 +634,12 @@ export function RetentionScreen({
       setNutrients(nextNutrients);
       if (currentCustomScope(epoch))
         registry.current = { scope: customScope, values: nextNutrients };
-      setFoods(foodPage.items);
-      if (currentCustomScope(epoch)) customFoodsScope.current = customScope;
-      setFoodCursor(foodPage.nextCursor);
+      if (currentCustomScope(epoch)) {
+        setFoods(foodPage.items);
+        customFoodsScope.current = customScope;
+        foodDetailsReady.current = true;
+        setFoodCursor(foodPage.nextCursor);
+      }
       setDefinitions(nextDefinitions);
       setEvents(eventPage.items);
       setEventCursor(eventPage.nextCursor);
@@ -651,6 +673,7 @@ export function RetentionScreen({
     currentCustomScope,
     customScope,
     reconcileReminders,
+    resetFoodDetails,
     setFoods,
     setLoading,
   ]);
@@ -713,6 +736,24 @@ export function RetentionScreen({
   }
 
   const renderedCustomEpoch = customEpoch.current;
+  const renderedFoodDetailsReady = foodDetailsReady.current && !loading;
+  function toggleFoodDetails(food: CustomFood) {
+    if (
+      !currentCustomScope(renderedCustomEpoch) ||
+      !renderedFoodDetailsReady ||
+      !foodDetailsReady.current ||
+      loadingRef.current ||
+      customFoodsScope.current !== customScope ||
+      foodsRef.current !== foods ||
+      !foodsRef.current.includes(food) ||
+      foodDetailsRef.current !== foodDetails
+    )
+      return;
+    const next = new Set(foodDetails);
+    if (next.has(food)) next.delete(food);
+    else next.add(food);
+    setFoodDetails(next);
+  }
   function canEditCustom() {
     return (
       currentCustomScope(renderedCustomEpoch) &&
@@ -1993,12 +2034,68 @@ export function RetentionScreen({
               />
             ) : null}
           </View>
+          {customVisible && !loading && foods.length > 0 && !foodDetailsReady.current ? (
+            <Text style={styles.help}>
+              Choose Refresh private data to load saved nutrient details.
+            </Text>
+          ) : null}
           {(customVisible && customFoodsScope.current === customScope ? foods : []).map((food) => (
             <View key={food.id} style={styles.card}>
               <Text style={styles.cardTitle}>{food.currentVersion.name}</Text>
               <Text style={styles.meta}>
                 Version {food.currentVersion.versionNumber} · {food.status} · owner-entered
               </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`${foodDetails.has(food) ? "Hide" : "Show"} nutrients for ${food.currentVersion.name}, version ${food.currentVersion.versionNumber}`}
+                accessibilityState={{
+                  expanded: foodDetails.has(food),
+                  disabled: !renderedFoodDetailsReady,
+                }}
+                disabled={!renderedFoodDetailsReady}
+                onPress={() => toggleFoodDetails(food)}
+                style={[
+                  styles.button,
+                  styles.buttonSecondary,
+                  !renderedFoodDetailsReady && styles.disabled,
+                ]}
+              >
+                <Text style={[styles.buttonText, styles.buttonSecondaryText]}>
+                  {foodDetails.has(food) ? "Hide nutrients" : "Show nutrients"}
+                </Text>
+              </Pressable>
+              {foodDetails.has(food) ? (
+                <View
+                  nativeID={`saved-nutrients-${food.id}-${food.currentVersion.id}`}
+                  style={styles.savedNutrients}
+                >
+                  <Text accessibilityRole="header" style={styles.cardTitle}>
+                    {food.currentVersion.name} · Version {food.currentVersion.versionNumber}
+                  </Text>
+                  <Text style={styles.meta}>Saved nutrients per 100 g</Text>
+                  {food.currentVersion.nutrients.map((row) => (
+                    <View key={row.nutrient.id} style={styles.savedNutrientRow}>
+                      <Text style={styles.rowText}>
+                        {`${row.nutrient.name} (${row.nutrient.unit})`}
+                      </Text>
+                      <Text style={styles.rowText}>
+                        {row.state === "quantified"
+                          ? row.amountPer100Grams
+                          : row.state === "trace"
+                            ? "Trace"
+                            : `Unknown · ${
+                                {
+                                  not_reported: "Not reported",
+                                  not_analyzed: "Not analyzed",
+                                  not_applicable: "Not applicable",
+                                  withheld: "Withheld",
+                                }[row.reason]
+                              }`}
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
               <View style={styles.actions}>
                 <Button
                   label="Revise"
@@ -2711,6 +2808,8 @@ const styles = StyleSheet.create({
   meta: { color: palette.muted, fontSize: 12, lineHeight: 18, marginTop: 5 },
   multiline: { minHeight: 100, paddingTop: 12, textAlignVertical: "top" },
   rowText: { color: palette.ink, fontSize: 13, lineHeight: 20, marginTop: 7 },
+  savedNutrients: { minWidth: 0, width: "100%", marginTop: 14 },
+  savedNutrientRow: { minWidth: 0, width: "100%", marginTop: 7 },
   screen: { backgroundColor: palette.paper, flex: 1 },
   section: { borderTopColor: palette.line, borderTopWidth: 1, marginTop: 34, paddingTop: 28 },
   status: { color: palette.forest, fontSize: 13, lineHeight: 19, marginVertical: 18 },

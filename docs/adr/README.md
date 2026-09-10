@@ -46,6 +46,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0038](./0038-hydration-amount-presets.md) | Choose an exact amount in the existing hydration Add draft | Source complete; local validation and synthetic Chrome QA passed; automatic, independent and release acceptance pending |
 | [0039](./0039-loaded-saved-recipe-filter.md) | Filter only loaded saved-recipe names while preserving workspace state | Source complete; local validation and synthetic Chrome QA passed; automatic, independent and release acceptance pending |
 | [0040](./0040-native-custom-food-nutrient-composer.md) | Add named nutrient rows to the existing native custom-food draft | Source complete; local native component validation and exports passed; automatic, independent and release acceptance pending |
+| [0041](./0041-saved-custom-food-nutrient-details.md) | Inspect loaded saved custom-food nutrient snapshots without editing | Source/local complete; automatic and release acceptance separate |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

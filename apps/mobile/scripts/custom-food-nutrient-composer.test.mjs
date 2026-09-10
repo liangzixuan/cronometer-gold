@@ -944,3 +944,588 @@ describe("actual HealthRoute custom-editor identity wiring", () => {
     expect(replacement.props.sessionEpoch).toBe(4);
   });
 });
+
+function disclosure(tree, food = sourceFood) {
+  const suffix = ` nutrients for ${food.currentVersion.name}, version ${food.currentVersion.versionNumber}`;
+  const found = nodes(
+    tree,
+    (node) => node.type === "Pressable" && node.props.accessibilityLabel?.endsWith(suffix),
+  );
+  expect(found).toHaveLength(1);
+  return found[0];
+}
+function savedDetails(tree, food = sourceFood) {
+  return nodes(
+    tree,
+    (node) => node.props.nativeID === `saved-nutrients-${food.id}-${food.currentVersion.id}`,
+  );
+}
+async function toggleSaved(harness, food = sourceFood) {
+  const target = disclosure(await harness.settle(), food);
+  expect(target.props.disabled).not.toBe(true);
+  target.props.onPress();
+  return harness.settle();
+}
+function logEditor(tree) {
+  const found = nodes(
+    tree,
+    (node) =>
+      node.type === "View" &&
+      React.Children.toArray(node.props.children).some(
+        (child) => child.type === "Text" && text(child).startsWith("Log Saved private food v"),
+      ),
+  );
+  expect(found).toHaveLength(1);
+  return found[0];
+}
+function editorSnapshot(tree) {
+  return {
+    inputs: nodes(tree, (node) => node.type === "TextInput").map((node) => [
+      node.props.accessibilityLabel,
+      node.props.value,
+      node.props.editable,
+    ]),
+    choices: nodes(tree, (node) => node.props.accessibilityRole === "radio").map((node) => [
+      text(node),
+      node.props.accessibilityState,
+    ]),
+    messages: nodes(tree, (node) => node.props.accessibilityLiveRegion === "polite").map(text),
+  };
+}
+const archivedFood = {
+  ...sourceFood,
+  id: "5bcfa2bf-4950-43f7-9f24-b983ac803012",
+  status: "archived",
+  currentVersion: { ...sourceFood.currentVersion, id: "124", name: "Archived private food" },
+};
+
+describe("native saved custom-food nutrient details", () => {
+  it("starts closed and renders every saved row in order with exact values and all missingness states", async () => {
+    const longAmount = `0.${"1234567890".repeat(19)}12345678`;
+    expect(longAmount).toHaveLength(200);
+    const rows = [
+      sourceFood.currentVersion.nutrients[0],
+      {
+        nutrient: { id: "1001", code: "zero", name: "Same saved name", unit: "mg" },
+        state: "quantified",
+        amountPer100Grams: "0",
+      },
+      {
+        nutrient: { id: "1002", code: "long", name: "Same saved name", unit: "g" },
+        state: "quantified",
+        amountPer100Grams: longAmount,
+      },
+      {
+        nutrient: { id: "1003", code: "trace_only", name: "Trace evidence", unit: "mcg" },
+        state: "trace",
+        amountPer100Grams: null,
+      },
+      ...["not_reported", "not_analyzed", "not_applicable", "withheld"].map((reason, index) => ({
+        nutrient: {
+          id: String(1004 + index),
+          code: `missing_${index}`,
+          name: `Unknown evidence ${index}`,
+          unit: "mg",
+        },
+        state: "unknown",
+        amountPer100Grams: null,
+        reason,
+      })),
+    ];
+    while (rows.length < 256) {
+      const index = rows.length;
+      rows.push({
+        nutrient: {
+          id: String(2000 + index),
+          code: `manual_${index}`,
+          name:
+            index === 255 ? `Last saved nutrient ${"n".repeat(100)}` : `Saved nutrient ${index}`,
+          unit: index === 255 ? "u".repeat(32) : "g",
+        },
+        state: "quantified",
+        amountPer100Grams: "0.00000100",
+      });
+    }
+    const food = {
+      ...sourceFood,
+      currentVersion: { ...sourceFood.currentVersion, nutrients: rows },
+    };
+    const { harness, requests } = setup((request) =>
+      request.url.pathname === "/v1/custom-foods"
+        ? response({ data: [food], page: { nextCursor: null } })
+        : request.url.pathname === "/v1/nutrients/targetable"
+          ? response({ data: [] })
+          : undefined,
+    );
+    try {
+      let tree = await harness.settle();
+      expect(savedDetails(tree, food)).toHaveLength(0);
+      expect(disclosure(tree, food).props.accessibilityState).toEqual({
+        expanded: false,
+        disabled: false,
+      });
+      const before = requests.length;
+      tree = await toggleSaved(harness, food);
+      expect(disclosure(tree, food).props.accessibilityState.expanded).toBe(true);
+      const details = savedDetails(tree, food)[0];
+      expect(text(details)).toContain("Saved private food · Version 1 Saved nutrients per 100 g");
+      const renderedRows = nodes(details, (node) => node.type === "View").slice(1);
+      expect(renderedRows).toHaveLength(256);
+      const reasons = {
+        not_reported: "Not reported",
+        not_analyzed: "Not analyzed",
+        not_applicable: "Not applicable",
+        withheld: "Withheld",
+      };
+      expect(
+        renderedRows.map((row) => nodes(row, (node) => node.type === "Text").map(text)),
+      ).toEqual(
+        rows.map((row) => [
+          `${row.nutrient.name} (${row.nutrient.unit})`,
+          row.state === "quantified"
+            ? row.amountPer100Grams
+            : row.state === "trace"
+              ? "Trace"
+              : `Unknown · ${reasons[row.reason]}`,
+        ]),
+      );
+      tree = await toggleSaved(harness, food);
+      expect(savedDetails(tree, food)).toHaveLength(0);
+      expect(requests).toHaveLength(before);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("opens active and archived cards independently and rejects repeated or retained toggle controls", async () => {
+    const { harness, requests } = setup((request) =>
+      request.url.pathname === "/v1/custom-foods"
+        ? response({ data: [sourceFood, archivedFood], page: { nextCursor: null } })
+        : undefined,
+    );
+    try {
+      let tree = await harness.settle();
+      const oldShow = disclosure(tree).props.onPress;
+      oldShow();
+      oldShow();
+      tree = await harness.settle();
+      expect(savedDetails(tree)).toHaveLength(1);
+      const oldHide = disclosure(tree).props.onPress;
+      tree = await toggleSaved(harness, archivedFood);
+      expect(savedDetails(tree, archivedFood)).toHaveLength(1);
+      expect(savedDetails(tree)).toHaveLength(1);
+      oldHide();
+      tree = await harness.settle();
+      expect(savedDetails(tree)).toHaveLength(1);
+      tree = await toggleSaved(harness);
+      oldShow();
+      oldHide();
+      tree = await harness.settle();
+      expect(savedDetails(tree)).toHaveLength(0);
+      expect(savedDetails(tree, archivedFood)).toHaveLength(1);
+      expect(requests).toHaveLength(6);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  for (const draft of ["create", "revise"])
+    it(`preserves the ${draft} draft, named composer, log fields, status and retained draft actions`, async () => {
+      const { harness, requests, props } = setup();
+      try {
+        if (draft === "revise") await click(harness, "Revise");
+        else await fillManual(harness, "4.00100");
+        await type(harness, "Notes", "Unsaved note");
+        await click(harness, "Log exact version");
+        await type(harness, "Quantity", "1.000001");
+        input(logEditor(await harness.settle()), "Local date").props.onChangeText("2026-09-08");
+        input(logEditor(await harness.settle()), "Local time").props.onChangeText("12:34");
+        await type(harness, "Find an available nutrient by name", "sod");
+        await click(harness, "Sodium (mg)");
+        await click(harness, "Unknown");
+        let tree = await click(harness, "Withheld");
+        const add = button(tree, "Add nutrient row to draft").props.onPress;
+        const before = editorSnapshot(tree);
+        const count = requests.length;
+        tree = await toggleSaved(harness);
+        expect(editorSnapshot(tree)).toEqual(before);
+        expect(text(savedDetails(tree)[0])).toContain("125.5000");
+        tree = await toggleSaved(harness);
+        expect(editorSnapshot(tree)).toEqual(before);
+        expect(requests).toHaveLength(count);
+        expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+        expect(props.quickAddOutboxController.requestDrain).not.toHaveBeenCalled();
+        add();
+        tree = await harness.settle();
+        expect(canonical(tree)).toContain("307=unknown:withheld");
+        expect(input(tree, "Quantity").props.value).toBe("1.000001");
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  it("allows toggles during a pending save and preserves ambiguous body/key retry and accepted cleanup", async () => {
+    const held = deferred();
+    let count = 0;
+    const { harness, requests } = setup((request) =>
+      request.method === "POST" && ++count === 1 ? held.promise : undefined,
+    );
+    try {
+      let tree = await fillManual(harness, "1.00000100");
+      const save = button(tree, "Create private food").props.onPress;
+      await toggleSaved(harness);
+      save();
+      tree = await harness.settle();
+      expect(writes(requests)).toHaveLength(1);
+      const pending = editorSnapshot(tree);
+      tree = await toggleSaved(harness);
+      expect(editorSnapshot(tree)).toEqual(pending);
+      expect(button(tree, "Create private food").props.disabled).toBe(true);
+      held.resolve(response({ data: { malformed: true } }));
+      tree = await harness.settle();
+      const failed = editorSnapshot(tree);
+      const retry = button(tree, "Create private food").props.onPress;
+      tree = await toggleSaved(harness);
+      expect(editorSnapshot(tree)).toEqual(failed);
+      retry();
+      tree = await harness.settle();
+      const sent = writes(requests);
+      expect(sent).toHaveLength(2);
+      expect(sent[1].body).toBe(sent[0].body);
+      expect(sent[1].headers["idempotency-key"]).toBe(sent[0].headers["idempotency-key"]);
+      expect(input(tree, "Name").props.value).toBe("");
+      expect(savedDetails(tree)).toHaveLength(1);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("preserves open unchanged rows, ordering and deduplication through paging and terminal empty pages", async () => {
+    const held = deferred();
+    let page = 0;
+    const { harness, requests } = setup((request) =>
+      request.url.pathname === "/v1/custom-foods"
+        ? request.url.searchParams.has("cursor")
+          ? ++page === 1
+            ? held.promise
+            : response({ data: [], page: { nextCursor: null } })
+          : response({ data: [sourceFood], page: { nextCursor: "page-one" } })
+        : undefined,
+    );
+    try {
+      let tree = await toggleSaved(harness);
+      const oldHide = disclosure(tree).props.onPress;
+      tree = await click(harness, "Load more custom foods");
+      expect(disclosure(tree).props.disabled).toBe(false);
+      expect(savedDetails(tree)).toHaveLength(1);
+      held.resolve(
+        response({ data: [sourceFood, archivedFood], page: { nextCursor: "page-two" } }),
+      );
+      tree = await harness.settle();
+      oldHide();
+      tree = await harness.settle();
+      expect(savedDetails(tree)).toHaveLength(1);
+      expect(savedDetails(tree, archivedFood)).toHaveLength(0);
+      expect(
+        nodes(
+          tree,
+          (node) =>
+            node.type === "Pressable" && node.props.accessibilityLabel?.includes(" nutrients for "),
+        ).map((node) => node.props.accessibilityLabel),
+      ).toEqual([
+        "Hide nutrients for Saved private food, version 1",
+        "Show nutrients for Archived private food, version 1",
+      ]);
+      tree = await toggleSaved(harness, archivedFood);
+      tree = await click(harness, "Load more custom foods");
+      expect(savedDetails(tree)).toHaveLength(1);
+      expect(savedDetails(tree, archivedFood)).toHaveLength(1);
+      expect(
+        nodes(tree, (node) => node.type === "Pressable" && text(node) === "Load more custom foods"),
+      ).toHaveLength(0);
+      expect(requests).toHaveLength(8);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  for (const outcome of ["same version", "replacement version", "removed", "failure"])
+    it(`collapses at full refresh start and fences prior controls through ${outcome}`, async () => {
+      const held = deferred();
+      let refresh = false;
+      const { harness } = setup((request) =>
+        refresh && request.url.pathname === "/v1/custom-foods" ? held.promise : undefined,
+      );
+      try {
+        await fillManual(harness, "5.000");
+        let tree = await harness.settle();
+        const oldShow = disclosure(tree).props.onPress;
+        tree = await toggleSaved(harness);
+        const oldHide = disclosure(tree).props.onPress;
+        refresh = true;
+        button(tree, "Refresh private data").props.onPress();
+        oldHide();
+        oldShow();
+        tree = await harness.settle();
+        expect(savedDetails(tree)).toHaveLength(0);
+        expect(disclosure(tree).props.disabled).toBe(true);
+        const pendingShow = disclosure(tree).props.onPress;
+        pendingShow();
+        const replacement = {
+          ...sourceFood,
+          revision: "2",
+          currentVersion: {
+            ...sourceFood.currentVersion,
+            id: "999",
+            versionNumber: 2,
+            name: "Replacement saved food",
+          },
+        };
+        held.resolve(
+          outcome === "failure"
+            ? response({}, 503)
+            : response({
+                data:
+                  outcome === "removed"
+                    ? []
+                    : [outcome === "replacement version" ? replacement : sourceFood],
+                page: { nextCursor: null },
+              }),
+        );
+        tree = await harness.settle();
+        oldShow();
+        oldHide();
+        pendingShow();
+        tree = await harness.settle();
+        expect(
+          nodes(tree, (node) => node.props.nativeID?.startsWith("saved-nutrients-")),
+        ).toHaveLength(0);
+        expect(canonical(tree)).toBe("208=5.000");
+        if (outcome === "failure") {
+          expect(disclosure(tree).props.disabled).toBe(true);
+          expect(text(tree)).toContain(
+            "Choose Refresh private data to load saved nutrient details.",
+          );
+          disclosure(tree).props.onPress();
+          tree = await harness.settle();
+          expect(savedDetails(tree)).toHaveLength(0);
+          refresh = false;
+          tree = await click(harness, "Refresh private data");
+          expect(canonical(tree)).toBe("208=5.000");
+        }
+        if (outcome !== "removed") {
+          tree = await toggleSaved(
+            harness,
+            outcome === "replacement version" ? replacement : sourceFood,
+          );
+          expect(
+            nodes(tree, (node) => node.props.nativeID?.startsWith("saved-nutrients-")),
+          ).toHaveLength(1);
+        }
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  it("closes the accepted replacement version without changing the exact save operation", async () => {
+    const held = deferred();
+    const { harness, requests } = setup((request) =>
+      request.method === "POST" ? held.promise : undefined,
+    );
+    try {
+      await click(harness, "Revise");
+      await type(harness, "Canonical nutrients per 100 g", "208=222.000001");
+      let tree = await harness.settle();
+      const oldShow = disclosure(tree).props.onPress;
+      tree = await toggleSaved(harness);
+      const oldHide = disclosure(tree).props.onPress;
+      await click(harness, "Save new version");
+      const accepted = await receipt(writes(requests)[0]).json();
+      accepted.data.customFood.currentVersion.id = "888";
+      accepted.data.customFood.currentVersion.versionNumber = 2;
+      accepted.data.customFood.revision = "2";
+      held.resolve(response(accepted));
+      tree = await harness.settle();
+      oldShow();
+      oldHide();
+      tree = await harness.settle();
+      expect(savedDetails(tree)).toHaveLength(0);
+      const revised = accepted.data.customFood;
+      expect(disclosure(tree, revised).props.accessibilityState.expanded).toBe(false);
+      tree = await toggleSaved(harness, revised);
+      expect(text(savedDetails(tree, revised)[0])).toContain("222.000001");
+      expect(text(savedDetails(tree, revised)[0])).not.toContain("125.5000");
+      expect(writes(requests)).toHaveLength(1);
+      expect(writes(requests)[0].headers["if-match"]).toBe('"1"');
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  for (const boundary of ["owner", "session", "token", "API"])
+    it(`hides open saved values before ${boundary} replacement effects and rejects old controls`, async () => {
+      const { harness } = setup();
+      try {
+        let tree = await harness.settle();
+        const oldShow = disclosure(tree).props.onPress;
+        tree = await toggleSaved(harness);
+        const oldHide = disclosure(tree).props.onPress;
+        harness.updateProps(
+          boundary === "owner"
+            ? { ownerUserId: otherOwner }
+            : boundary === "session"
+              ? { sessionEpoch: 2 }
+              : boundary === "token"
+                ? { accessToken: "next-token" }
+                : { apiBase: new URL("http://127.0.0.1:4001") },
+        );
+        tree = harness.renderWithoutEffects();
+        expect(savedDetails(tree)).toHaveLength(0);
+        expect(text(tree)).not.toContain("125.5000");
+        oldShow();
+        oldHide();
+        harness.flushEffects();
+        tree = await harness.settle();
+        expect(savedDetails(tree)).toHaveLength(0);
+        oldShow();
+        oldHide();
+        tree = await harness.settle();
+        expect(savedDetails(tree)).toHaveLength(0);
+        tree = await toggleSaved(harness);
+        expect(savedDetails(tree)).toHaveLength(1);
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  for (const boundary of ["background", "inactive", "unknown", null, "replay"])
+    it(`closes saved details across ${boundary} and requires a fresh foreground action`, async () => {
+      const { harness } = setup();
+      try {
+        let tree = await harness.settle();
+        const oldShow = disclosure(tree).props.onPress;
+        tree = await toggleSaved(harness);
+        const oldHide = disclosure(tree).props.onPress;
+        if (boundary === "replay") harness.replayEffects();
+        else state(boundary);
+        oldShow();
+        oldHide();
+        tree = await harness.settle();
+        expect(savedDetails(tree)).toHaveLength(0);
+        if (boundary !== "replay") state("active");
+        tree = await harness.settle();
+        oldShow();
+        oldHide();
+        tree = await harness.settle();
+        expect(savedDetails(tree)).toHaveLength(0);
+        tree = await toggleSaved(harness);
+        expect(savedDetails(tree)).toHaveLength(1);
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  it("cannot disclose after current session closure or effect replay", async () => {
+    const { harness } = setup((request) =>
+      request.method === "POST" ? response({}, 401) : undefined,
+    );
+    try {
+      await fillManual(harness);
+      let tree = await harness.settle();
+      const oldShow = disclosure(tree).props.onPress;
+      tree = await toggleSaved(harness);
+      const oldHide = disclosure(tree).props.onPress;
+      await click(harness, "Create private food");
+      oldShow();
+      oldHide();
+      harness.replayEffects();
+      tree = await harness.settle();
+      oldShow();
+      oldHide();
+      tree = await harness.settle();
+      expect(savedDetails(tree)).toHaveLength(0);
+      expect(text(tree)).not.toContain("125.5000");
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("keeps the exact pinned log request after opening and closing saved nutrients", async () => {
+    const { harness, props, requests } = setup();
+    props.quickAddOutboxController.enqueueOperation.mockResolvedValue({
+      operationId: "queued-log",
+    });
+    try {
+      await click(harness, "Log exact version");
+      await type(harness, "Quantity", "1.000001");
+      input(logEditor(await harness.settle()), "Local date").props.onChangeText("2026-09-08");
+      input(logEditor(await harness.settle()), "Local time").props.onChangeText("12:34");
+      const log = button(await harness.settle(), "Secure & log pinned version").props.onPress;
+      await toggleSaved(harness);
+      await toggleSaved(harness);
+      expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+      log();
+      await harness.settle();
+      expect(props.quickAddOutboxController.enqueueOperation).toHaveBeenCalledExactlyOnceWith({
+        operationKind: "custom_food",
+        customFoodName: "Saved private food",
+        customFoodId: foodId,
+        customFoodVersionId: "123",
+        customFoodVersionNumber: 1,
+        portion: { kind: "serving", servingId: "456", amount: "1.000001", servingLabel: "scoop" },
+        mealSlot: "breakfast",
+        localDate: "2026-09-08",
+        occurredAt: "2026-09-08T17:34:00.000Z",
+      });
+      expect(props.quickAddOutboxController.requestDrain).toHaveBeenCalledExactlyOnceWith(
+        "queued-log",
+      );
+      expect(writes(requests)).toHaveLength(0);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("never installs an old owner's custom list from a retained private Refresh callback", async () => {
+    const replacement = {
+      ...archivedFood,
+      currentVersion: { ...archivedFood.currentVersion, name: "New owner saved food" },
+    };
+    const { harness } = setup((request) =>
+      request.url.pathname === "/v1/custom-foods" &&
+      request.headers.authorization === "Bearer replacement-token"
+        ? response({ data: [replacement], page: { nextCursor: null } })
+        : undefined,
+    );
+    try {
+      let tree = await harness.settle();
+      const oldRefresh = button(tree, "Refresh private data").props.onPress;
+      const oldShow = disclosure(tree).props.onPress;
+      harness.updateProps({ ownerUserId: otherOwner, accessToken: "replacement-token" });
+      tree = await harness.settle();
+      tree = await toggleSaved(harness, replacement);
+      oldRefresh();
+      tree = await harness.settle();
+      oldShow();
+      tree = await harness.settle();
+      expect(text(tree)).not.toContain("Saved private food");
+      expect(savedDetails(tree, replacement)).toHaveLength(1);
+      expect(disclosure(tree, replacement).props.accessibilityState.expanded).toBe(true);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("rejects retained disclosure callbacks after unmount without any state writes", async () => {
+    const { harness, requests } = setup();
+    let tree = await harness.settle();
+    const oldShow = disclosure(tree).props.onPress;
+    tree = await toggleSaved(harness);
+    const oldHide = disclosure(tree).props.onPress;
+    harness.unmount();
+    oldShow();
+    oldHide();
+    expect(harness.writesAfterUnmount).toBe(0);
+    expect(requests).toHaveLength(6);
+  });
+});

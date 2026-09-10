@@ -83,6 +83,13 @@ interface CustomLogDraft {
   readonly localTime: string;
 }
 
+const unknownNutrientReasons = {
+  not_reported: "Not reported",
+  not_analyzed: "Not analyzed",
+  not_applicable: "Not applicable",
+  withheld: "Withheld",
+} as const;
+
 const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 
 async function json(response: Response): Promise<unknown> {
@@ -233,9 +240,10 @@ export function HealthClient() {
   const router = useRouter();
   const [state, setState] = useState<LoadState>("loading");
   const [message, setMessage] = useState("Opening your private health workspace…");
-  const [session, setSession] = useState<SessionSummary | null>(null);
+  const [session, setSessionState] = useState<SessionSummary | null>(null);
   const [nutrients, setNutrients] = useState<readonly TargetableNutrient[]>([]);
   const [customFoods, setCustomFoods] = useState<readonly CustomFood[]>([]);
+  const [expandedFoods, setExpandedFoods] = useState<ReadonlySet<CustomFood>>(new Set());
   const [customFoodCursor, setCustomFoodCursor] = useState<string | null>(null);
   const [definitions, setDefinitions] = useState<readonly BiometricDefinition[]>([]);
   const [events, setEvents] = useState<readonly BiometricEvent[]>([]);
@@ -278,10 +286,98 @@ export function HealthClient() {
   const profileRefreshController = useRef<AbortController | null>(null);
   const ownerUserId = useRef<string | null>(null);
   const privateUiClosed = useRef(false);
+  const customInitialized = useRef(false);
+  const mounted = useRef(false);
+  const visible = useRef(true);
+  const installedSession = useRef<SessionSummary | null>(null);
+  const installedFoods = useRef<readonly CustomFood[]>([]);
+  const foodListGeneration = useRef(0);
+  const foodDetailsReady = useRef(false);
+  const disclosureGeneration = useRef(0);
+  const disclosureVersions = useRef(new Map<CustomFood, number>());
+  const expandedFoodsRef = useRef<ReadonlySet<CustomFood>>(new Set());
+  const renderedListGeneration = foodListGeneration.current;
+  const renderedDisclosureGeneration = disclosureGeneration.current;
   const diaryGroups = session?.profile.diaryGroups ?? defaultDiaryGroups;
+
+  const closeFoodDetails = useCallback(() => {
+    disclosureGeneration.current += 1;
+    disclosureVersions.current.clear();
+    expandedFoodsRef.current = new Set();
+    setExpandedFoods(expandedFoodsRef.current);
+  }, []);
+
+  const setSession = useCallback(
+    (next: SessionSummary | null) => {
+      if (installedSession.current !== next) closeFoodDetails();
+      installedSession.current = next;
+      setSessionState(next);
+    },
+    [closeFoodDetails],
+  );
+
+  const installCustomFoods = useCallback(
+    (
+      update: readonly CustomFood[] | ((items: readonly CustomFood[]) => readonly CustomFood[]),
+      generation: number,
+      expectedOwner: string | null,
+    ) => {
+      if (
+        !mounted.current ||
+        privateUiClosed.current ||
+        foodListGeneration.current !== generation ||
+        expectedOwner === null ||
+        ownerUserId.current !== expectedOwner ||
+        installedSession.current?.user.id !== expectedOwner
+      )
+        return false;
+      const next = typeof update === "function" ? update(installedFoods.current) : update;
+      installedFoods.current = next;
+      expandedFoodsRef.current = new Set(
+        [...expandedFoodsRef.current].filter((food) => next.includes(food)),
+      );
+      for (const food of disclosureVersions.current.keys()) {
+        if (!next.includes(food)) disclosureVersions.current.delete(food);
+      }
+      setExpandedFoods(expandedFoodsRef.current);
+      setCustomFoods(next);
+      return true;
+    },
+    [],
+  );
+
+  function canInspectFood(food: CustomFood, version: number): boolean {
+    return (
+      mounted.current &&
+      visible.current &&
+      (typeof document === "undefined" || document.visibilityState !== "hidden") &&
+      !privateUiClosed.current &&
+      foodDetailsReady.current &&
+      installedSession.current === session &&
+      session !== null &&
+      ownerUserId.current === session.user.id &&
+      disclosureGeneration.current === renderedDisclosureGeneration &&
+      installedFoods.current.includes(food) &&
+      (disclosureVersions.current.get(food) ?? 0) === version
+    );
+  }
+
+  function toggleFoodDetails(food: CustomFood, version: number) {
+    if (!canInspectFood(food, version)) return;
+    disclosureVersions.current.set(food, version + 1);
+    const next = new Set(expandedFoodsRef.current);
+    if (next.has(food)) next.delete(food);
+    else next.add(food);
+    expandedFoodsRef.current = next;
+    setExpandedFoods(next);
+  }
 
   const signInAgain = useCallback(() => {
     privateUiClosed.current = true;
+    foodListGeneration.current += 1;
+    foodDetailsReady.current = false;
+    installedFoods.current = [];
+    closeFoodDetails();
     loadController.current?.abort();
     trendController.current?.abort();
     for (const controller of privateReadControllers.current) controller.abort();
@@ -326,7 +422,7 @@ export function HealthClient() {
     setMessage("Closing your private health workspace…");
     router.replace("/login");
     router.refresh();
-  }, [router]);
+  }, [closeFoodDetails, router, setSession]);
 
   const revalidateHealthSession = useCallback(async (signal: AbortSignal) => {
     try {
@@ -395,7 +491,15 @@ export function HealthClient() {
   );
 
   const loadAll = useCallback(async () => {
-    if (privateUiClosed.current) return;
+    if (
+      privateUiClosed.current ||
+      !mounted.current ||
+      (loadController.current && !loadController.current.signal.aborted)
+    )
+      return;
+    const generation = ++foodListGeneration.current;
+    foodDetailsReady.current = false;
+    closeFoodDetails();
     loadController.current?.abort();
     const controller = new AbortController();
     loadController.current = controller;
@@ -482,7 +586,8 @@ export function HealthClient() {
           const localToday = localDateInTimeZone(now, currentSession.profile.timeZone);
           setSession(currentSession);
           setNutrients(data.nutrients);
-          setCustomFoods(data.customPage.items);
+          if (!installCustomFoods(data.customPage.items, generation, nextSession.user.id)) return;
+          foodDetailsReady.current = true;
           setCustomFoodCursor(data.customPage.nextCursor);
           setDefinitions(data.definitions);
           setEvents(data.eventPage.items);
@@ -501,9 +606,20 @@ export function HealthClient() {
           setSelectedDefinition(
             (value) => value || data.definitions.find((item) => item.status === "active")?.id || "",
           );
-          setCustom((value) =>
-            value.nutrients.length === 0 ? blankCustom(data.nutrients[0]?.nutrientId ?? "") : value,
-          );
+          if (!customInitialized.current) {
+            customInitialized.current = true;
+            setCustom((value) =>
+              value.id === null &&
+              value.nutrients.length === 0 &&
+              !value.name &&
+              !value.brandName &&
+              !value.servingLabel &&
+              !value.servingGrams &&
+              !value.notes
+                ? blankCustom(data.nutrients[0]?.nutrientId ?? "")
+                : value,
+            );
+          }
           setState("ready");
           setMessage("Private health workspace is current.");
         },
@@ -518,7 +634,7 @@ export function HealthClient() {
     } finally {
       if (loadController.current === controller) loadController.current = null;
     }
-  }, [revalidateHealthSession, signInAgain]);
+  }, [closeFoodDetails, installCustomFoods, revalidateHealthSession, setSession, signInAgain]);
 
   async function loadMoreCustomFoods() {
     if (!customFoodCursor) return;
@@ -542,10 +658,17 @@ export function HealthClient() {
           if (privateUiClosed.current || ownerUserId.current !== initiatingOwnerUserId) {
             throw new HealthOwnerFenceError();
           }
-          setCustomFoods((items) => [
-            ...items,
-            ...page.items.filter((food) => !items.some((existing) => existing.id === food.id)),
-          ]);
+          if (
+            !installCustomFoods(
+              (items) => [
+                ...items,
+                ...page.items.filter((food) => !items.some((existing) => existing.id === food.id)),
+              ],
+              renderedListGeneration,
+              initiatingOwnerUserId,
+            )
+          )
+            return;
           setCustomFoodCursor(page.nextCursor);
         },
       });
@@ -602,14 +725,30 @@ export function HealthClient() {
   }
 
   useEffect(() => {
+    mounted.current = true;
+    visible.current = typeof document === "undefined" || document.visibilityState !== "hidden";
+    const visibilityChanged = () => {
+      visible.current = document.visibilityState !== "hidden";
+      closeFoodDetails();
+    };
+    if (typeof document !== "undefined")
+      document.addEventListener("visibilitychange", visibilityChanged);
     void loadAll();
     return () => {
+      mounted.current = false;
+      foodListGeneration.current += 1;
+      foodDetailsReady.current = false;
+      disclosureGeneration.current += 1;
+      disclosureVersions.current.clear();
+      expandedFoodsRef.current = new Set();
+      if (typeof document !== "undefined")
+        document.removeEventListener("visibilitychange", visibilityChanged);
       loadController.current?.abort();
       for (const controller of privateReadControllers.current) controller.abort();
       privateReadControllers.current.clear();
       profileRefreshController.current?.abort();
     };
-  }, [loadAll]);
+  }, [closeFoodDetails, loadAll]);
 
   async function refreshCustomLogProfileAfterTimeZoneChange(
     initiatingUserId: string,
@@ -763,7 +902,11 @@ export function HealthClient() {
         }),
       );
       operations.current.delete(key);
-      setCustomFoods((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
+      installCustomFoods(
+        (items) => [saved, ...items.filter((item) => item.id !== saved.id)],
+        renderedListGeneration,
+        session?.user.id ?? null,
+      );
       setCustom(blankCustom(nutrients[0]?.nutrientId ?? ""));
       setMessage(`Saved private custom food version ${saved.currentVersion.versionNumber}.`);
     } catch (error) {
@@ -793,7 +936,11 @@ export function HealthClient() {
         }),
       );
       operations.current.delete(key);
-      setCustomFoods((items) => items.map((item) => (item.id === archived.id ? archived : item)));
+      installCustomFoods(
+        (items) => items.map((item) => (item.id === archived.id ? archived : item)),
+        renderedListGeneration,
+        session?.user.id ?? null,
+      );
       setMessage("Custom food archived; pinned diary history was preserved.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Custom food could not be archived.");
@@ -1578,58 +1725,110 @@ export function HealthClient() {
             </form>
             <div>
               <ul className="recordList">
-                {customFoods.map((food) => (
-                  <li key={food.id}>
-                    <div>
-                      <strong>{food.currentVersion.name}</strong>
-                      <small>
-                        v{food.currentVersion.versionNumber} · {food.status} · private user-entered
-                        data
-                      </small>
-                    </div>
-                    <div className="entryActions">
-                      <button onClick={() => setCustom(customDraft(food))} type="button">
-                        Revise
-                      </button>
-                      {food.status === "active" ? (
-                        <>
-                          <button
-                            disabled={!session}
-                            onClick={() => {
-                              if (!session) {
-                                setMessage("Refresh current account settings before logging.");
-                                return;
-                              }
-                              const now = new Date();
-                              setCustomLog({
-                                food,
-                                kind: food.currentVersion.serving ? "serving" : "grams",
-                                quantity: "1",
-                                mealSlot: "snacks",
-                                localDate: localDateInTimeZone(now, session.profile.timeZone),
-                                localTime: localTimeInTimeZone(now, session.profile.timeZone).slice(
-                                  0,
-                                  5,
-                                ),
-                              });
-                            }}
-                            type="button"
-                          >
-                            Log pinned v{food.currentVersion.versionNumber}
-                          </button>
-                          <button
-                            className="dangerAction"
-                            disabled={busy === `custom:${food.id}`}
-                            onClick={() => void archiveCustomFood(food)}
-                            type="button"
-                          >
-                            Archive
-                          </button>
-                        </>
-                      ) : null}
-                    </div>
-                  </li>
-                ))}
+                {customFoods.map((food) => {
+                  const disclosureVersion = disclosureVersions.current.get(food) ?? 0;
+                  const canInspect = canInspectFood(food, disclosureVersion);
+                  const expanded = canInspect && expandedFoods.has(food);
+                  const detailsId = `saved-food-nutrients-${food.id}-${food.currentVersion.id}`;
+                  return (
+                    <li
+                      key={food.id}
+                      style={{ flexWrap: "wrap", minWidth: 0, overflowWrap: "anywhere" }}
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        <strong>{food.currentVersion.name}</strong>
+                        <small>
+                          v{food.currentVersion.versionNumber} · {food.status} · private
+                          user-entered data
+                        </small>
+                      </div>
+                      <div className="entryActions">
+                        <button
+                          aria-controls={detailsId}
+                          aria-expanded={expanded}
+                          aria-label={`${expanded ? "Hide" : "Show"} nutrients for ${food.currentVersion.name} v${food.currentVersion.versionNumber}`}
+                          disabled={!canInspect}
+                          onClick={() => toggleFoodDetails(food, disclosureVersion)}
+                          type="button"
+                        >
+                          {expanded ? "Hide nutrients" : "Show nutrients"}
+                        </button>
+                        <button onClick={() => setCustom(customDraft(food))} type="button">
+                          Revise
+                        </button>
+                        {food.status === "active" ? (
+                          <>
+                            <button
+                              disabled={!session}
+                              onClick={() => {
+                                if (!session) {
+                                  setMessage("Refresh current account settings before logging.");
+                                  return;
+                                }
+                                const now = new Date();
+                                setCustomLog({
+                                  food,
+                                  kind: food.currentVersion.serving ? "serving" : "grams",
+                                  quantity: "1",
+                                  mealSlot: "snacks",
+                                  localDate: localDateInTimeZone(now, session.profile.timeZone),
+                                  localTime: localTimeInTimeZone(
+                                    now,
+                                    session.profile.timeZone,
+                                  ).slice(0, 5),
+                                });
+                              }}
+                              type="button"
+                            >
+                              Log pinned v{food.currentVersion.versionNumber}
+                            </button>
+                            <button
+                              className="dangerAction"
+                              disabled={busy === `custom:${food.id}`}
+                              onClick={() => void archiveCustomFood(food)}
+                              type="button"
+                            >
+                              Archive
+                            </button>
+                          </>
+                        ) : null}
+                      </div>
+                      <div
+                        id={detailsId}
+                        hidden={!expanded}
+                        style={{ flexBasis: "100%", minWidth: 0 }}
+                      >
+                        {expanded ? (
+                          <>
+                            <p>
+                              Saved {food.currentVersion.name} v{food.currentVersion.versionNumber}{" "}
+                              · Nutrients per 100 g
+                            </p>
+                            <dl style={{ margin: 0 }}>
+                              {food.currentVersion.nutrients.map((snapshot) => (
+                                <div
+                                  key={snapshot.nutrient.id}
+                                  style={{ marginBlock: "12px", overflowWrap: "anywhere" }}
+                                >
+                                  <dt>
+                                    {snapshot.nutrient.name} ({snapshot.nutrient.unit})
+                                  </dt>
+                                  <dd style={{ marginInlineStart: 0 }}>
+                                    {snapshot.state === "quantified"
+                                      ? snapshot.amountPer100Grams
+                                      : snapshot.state === "trace"
+                                        ? "Trace"
+                                        : `Unknown — ${unknownNutrientReasons[snapshot.reason]}`}
+                                  </dd>
+                                </div>
+                              ))}
+                            </dl>
+                          </>
+                        ) : null}
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
               {customFoodCursor ? (
                 <button

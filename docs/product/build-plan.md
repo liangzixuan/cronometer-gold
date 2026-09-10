@@ -142,7 +142,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Filter the loaded saved-recipe list by name | ADR 0039 source, independent in-task review, canonical local gates and synthetic Chrome no-request/paging/draft/keyboard/narrow/expiry QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
 | Automatic evidence / independent review | Bound PowerShell startup discovery in the synthetic collector proof | Reviewed version-only timing repair and full local producer/Tailscale/canonical gates passed; record replacement exact-commit CI/container results without transferring earlier results |
 | Automatic evidence / independent review | Named nutrient rows for native custom foods | ADR 0040 source, independent in-task review, focused native/helper tests, canonical local gates and fresh native exports passed; record exact-commit automatic results and preserve device/independent/release acceptance |
-| Next bounded source candidate | Inspect saved custom-food nutrients without editing | Review explicit Show/Hide of already loaded saved nutrient snapshots on web/native, preserving exact states, version identity, current drafts and pending operations; no new request, registry lookup or calculation |
+| Automatic evidence / independent review | Inspect saved custom-food nutrients without editing | ADR 0041 source, independent in-task review, canonical local gates and synthetic Chrome exact-state/no-request/paging/draft/keyboard/narrow/Retry/expiry proof passed; record exact-commit automatic results and preserve device/independent/release acceptance |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -523,21 +523,26 @@ packages with 14 reviewed exceptions. All five candidate
 hashes stayed fixed during gates; only this roadmap's completion prose changed
 afterward. Exact logs, versions, hashes and limitations are in Windows readiness.
 
-Source/local recovery is complete. Replacement exact-commit automatic results,
-external review, Windows-host policy, production collector and release acceptance
-remain separate. No manual workflow control, dependency install, private corpus,
+Source/local recovery is complete. Exact recovery commit
+`9bb7148e12ef1d5b85336eb62427d6e463b8084d` CI `34502777762` succeeded
+(updated September 10, 2026 16:38:55 UTC); container `34502777764` was still in
+progress at the 16:40:18 UTC read-only observation. External review, Windows-host
+policy, production collector and release acceptance remain separate. No manual workflow control, dependency install, private corpus,
 tailnet, cloud, application or deployment action was performed.
 
-The next bounded source candidate is **Inspect saved custom-food nutrients without
-editing** on web/native. Current saved cards show name/version/status but already
-carry complete nutrient snapshots. Review explicit Show/Hide per saved food/version
-using snapshot names/units and exact per-100-g amounts, quantified zero, trace and
-all unknown reasons in saved order, including energy and non-targetable IDs.
-No targetable lookup, extra request, unit conversion or per-serving calculation
-is needed. Keep current drafts/composer/log/pending work untouched, preserve paging,
-and bind visibility and stale controls to current private scope and exact loaded
-food/version. Prepare a new acceptance card before implementation; device,
-assistive-technology, real-service, independent and release gates remain separate.
+**Inspect saved custom-food nutrients without editing** is source/local complete
+under [ADR 0041](../adr/0041-saved-custom-food-nutrient-details.md). Web/native
+saved cards now show exact ordered snapshot values, zero, trace and explicit
+unknown reasons, including energy and non-targetable IDs. Local disclosures
+preserve drafts and pending operations; current scope/version guards reject stale
+controls. Independent in-task review, actual component checks, frozen canonical
+check/build/licenses and fresh web/native outputs passed. Synthetic Chrome proved
+exact states, no-request toggles, paging, draft/log independence, keyboard,
+390-pixel layout, error Retry and expiry. Same-mount lifecycle refresh and retained
+control behavior remain separately proved by component fixtures. No new ready
+Refresh was introduced. Exact-commit automatic, external Claude Code, physical
+native, real persistence, assistive technology, hosted and release acceptance
+remain separate. Windows readiness keeps raw evidence outside Git.
 
 Prepare the external decisions alongside product work, without executing them:
 
@@ -1285,3 +1290,16 @@ including catalogue/source/import, audit, legacy nutrient/barcode, and legacy
 operation rows. This completes the local all-retained-entity source gate, but not
 M2: production notification, signed-device, independent-reviewer, physical-phone,
 hosted access/restore, and public-release acceptance remain fail-closed.
+
+### Next bounded candidate after ADR 0041
+
+Make all loaded targetable nutrients selectable for native Health trends. Source
+inspection found `nutrients.slice(0, 24)` despite the existing parser accepting up
+to 256 unique items; web already lists all loaded names and units. This is a
+code/contract gap, not evidence of current live catalogue breadth. Prepare a
+reviewed acceptance card for a local name filter over the full current list,
+name/unit labels and explicit existing trend loading. Preserve selected-result
+identity, dates, biometric choices, custom/log drafts, disclosures and private/
+lifecycle guards. No new endpoint, advice, math, storage or web work is proposed.
+The successor has not started; ADR 0041 automatic and external acceptance remain
+separate from this scheduling candidate.

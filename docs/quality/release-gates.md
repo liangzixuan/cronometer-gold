@@ -640,3 +640,18 @@ acceptance.
   layout, assistive technology, real persistence, hosted or signed-device acceptance.
 - No endpoint/schema/dependency/outbox/storage/math or web implementation change;
   existing vulnerability, provenance, reviewer and release-authority gates remain.
+
+
+## ADR 0041 saved custom-food nutrient details
+
+- Read only the loaded saved snapshot, including energy/non-targetable rows;
+  preserve source order, names/units, exact values and zero/trace/unknown reasons.
+  Explicit per-100-g and version context; no picker join, rounding or calculation.
+- Show/Hide issues no request or mutation and preserves editor/composer/log drafts,
+  shared state and unresolved operations. Bind disclosure to current private scope
+  and exact loaded snapshot; preserve unchanged rows on paging and collapse on
+  full refresh, version replacement or private/lifecycle closure.
+- Require actual web/native behavior/type tests and independent review, fresh
+  outputs and canonical gates, plus synthetic web/BFF Chrome keyboard/390-pixel/
+  exact-state/paging/draft/expiry proof. Keep real persistence, physical native,
+  assistive technology, external Claude Code, hosted and release gates separate.
