@@ -149,6 +149,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Copy a saved custom food to a new draft | ADR 0044 source, independent in-task review, canonical local gates and synthetic Chrome copy/draft/Create/retry/keyboard/narrow/expiry proof passed; record exact-commit automatic results and preserve device/independent/release acceptance |
 | Automatic evidence / independent review | Native biometric reading units and identity | ADR 0045 source, independent in-task review, focused native identity/value/body/retry checks, canonical local gates and fresh native exports passed; preserve exact-commit automatic, external reviewer, device and release acceptance |
 | Automatic evidence / independent review | Native Goals nutrient picker | ADR 0046 all-match/unit/count/Clear source, focused component/helper checks, independent in-task review, canonical local gates and fresh native exports passed; automatic, device, external reviewer and release acceptance remain separate |
+| Automatic evidence / independent review | Activity Add duration presets | ADR 0047 focused component/type/format, independent in-task review, canonical local gates, fresh client outputs and synthetic Chrome preset/manual/create/readback/retry/keyboard/narrow/expiry proof passed; automatic/external/device/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1398,12 +1399,26 @@ At the September 10, 2026 20:53:05 UTC read-only observation, delivered base
 20:50:12 UTC); container `34528132698` remained in progress. Base results do not
 transfer to this slice.
 
-### Next bounded candidate
+### Activity Add duration presets: source/local complete
 
-Prepare a separate Activity Add duration-preset card for web/native: 15, 30 and
-60 minutes through the existing duration edit path, with custom entry retained.
-Both clients currently require typing; the existing contract allows 1–1,440
-whole minutes. Preserve the chosen time, name, optional self-reported calories,
-explicit Add and stable retry identity. Reuse existing actual-component suites;
-no calorie inference, recommendation or automatic logging. No successor
-implementation has started.
+[ADR 0047](../adr/0047-activity-duration-presets.md) adds 15-, 30- and 60-minute
+duration shortcuts through the ordinary Add edit path on web/native. Custom
+entry, chosen/default time, optional self-reported calories, explicit Add,
+independent row Edit and existing retry identity remain intact. No advice,
+automatic logging or new contract is introduced.
+
+Focused component/type/format checks, independent in-task review, frozen canonical
+gates with fresh client outputs and bounded production Next/BFF dedicated-Chrome
+synthetic proof passed. Real persistence, native devices, assistive technology,
+concurrent React, external reviewer, hosted and release acceptance remain
+separate. Exact delivery and automatic state are recorded in Windows readiness.
+
+At the September 10, 2026 21:06:04 UTC preflight, delivered base
+`f6e521f9ae9ba1a303b09187846368097adeb71e` CI `34530127670` and container
+`34530127679` were in progress. Base results do not transfer to this slice.
+
+### Next continuation
+
+Revalidate automatic results and independent-review findings, then select the
+next bounded user-visible card from current source. No successor implementation
+has started; live catalogue, device, hosting and release gates remain separate.

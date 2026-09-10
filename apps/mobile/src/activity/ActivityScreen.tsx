@@ -384,6 +384,10 @@ export function ActivityScreen({
   }
   function changeAdd(field: keyof AddFields, value: string) {
     if (!currentAction()) return;
+    if (field === "durationMinutes") {
+      if (draftRef.current.durationMinutes === value) return;
+      actionGeneration.current += 1;
+    }
     clearChoice();
     if (field === "localTime") untouchedDefaultOccurredAt.current = null;
     installFields({ [field]: value });
@@ -909,6 +913,27 @@ export function ActivityScreen({
             value={scopeIsCurrent() ? name : ""}
           />
           <Text style={styles.label}>DURATION · WHOLE MINUTES</Text>
+          <View style={styles.actionRow}>
+            {["15", "30", "60"].map((minutes) => {
+              const selected = scopeIsCurrent() && durationMinutes === minutes;
+              return (
+                <Pressable
+                  accessibilityLabel={`Set activity duration to ${minutes} minutes`}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected, disabled: createDisabled }}
+                  disabled={createDisabled}
+                  key={minutes}
+                  onPress={() => changeAdd("durationMinutes", minutes)}
+                  style={[styles.secondarySmall, selected && styles.durationPresetSelected]}
+                >
+                  <Text style={styles.secondaryText}>{minutes} min</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          <Text style={styles.editorNote}>
+            Set the duration here or type whole minutes below, then choose Add activity to save.
+          </Text>
           <TextInput
             accessibilityHint="Whole minutes from 1 through 1,440"
             accessibilityLabel="Activity duration in whole minutes"
@@ -1145,6 +1170,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   deleteText: { color: "#8a3128", fontSize: 13, fontWeight: "800" },
+  durationPresetSelected: { backgroundColor: "#e7f1df", borderColor: palette.forest },
   editorNote: { color: palette.muted, fontSize: 12, lineHeight: 18, marginTop: 10 },
   empty: { color: palette.muted, fontSize: 14, marginTop: 12 },
   entriesHeading: {

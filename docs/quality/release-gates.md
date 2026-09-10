@@ -746,3 +746,17 @@ acceptance.
   and frozen canonical gates with fresh native exports. Cached web evidence,
   device/assistive technology/concurrent React/real persistence, external
   reviewer, hosted and release acceptance remain separate.
+
+
+## ADR 0047 Activity Add duration presets
+
+- Web/native shortcuts set only Add duration to 15/30/60 minutes through the
+  ordinary guarded edit seam. Preserve custom values, exact chosen/default time,
+  name/calories, explicit Add and the independent row editor.
+- Same-duration selection is a no-op; changed duration invalidates retained
+  participating controls and reuse choice. Preserve existing Activity write-map,
+  body/key replay, active-write/private/date/lifecycle and read-recovery guards.
+- Require focused component/type/format and independent review before frozen
+  canonical gates and fresh client exports; synthetic production Next/BFF Chrome
+  preset/manual/no-request/create/readback/retry/keyboard/narrow/expiry proof.
+  Keep real persistence/device/assistive/concurrent/external/release limits.

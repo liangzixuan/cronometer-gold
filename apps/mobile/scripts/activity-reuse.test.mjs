@@ -788,3 +788,257 @@ describe("ActivityRoute identity boundary", () => {
     expect(context.renderRoute(props).key).not.toBe(original.key);
   });
 });
+
+const presetLabel = (minutes) => `Set activity duration to ${minutes} minutes`;
+const presets = (tree) => [15, 30, 60].map((minutes) => button(tree, presetLabel(minutes)));
+
+describe("native Activity Add duration presets", () => {
+  for (const minutes of [15, 30, 60])
+    it(`replaces only duration with ${minutes} minutes and preserves the exact default fold until explicit Add`, async () => {
+      const energy = minutes === 30 ? "" : "0.001";
+      const { harness, requests, writes } = setup();
+      let tree = await fill(harness, { name: "Owner activity", duration: "9", energy });
+      const count = requests.length;
+      const original = JSON.stringify(source);
+      tree = await press(harness, presetLabel(minutes));
+      expect(input(tree, names.duration).props.value).toBe(String(minutes));
+      expect(input(tree, names.name).props.value).toBe("Owner activity");
+      expect(input(tree, names.energy).props.value).toBe(energy);
+      expect(input(tree, names.date).props.value).toBe(selectedDate);
+      expect(input(tree, names.time).props.value).toBe("01:30");
+      expect(presets(tree).map((choice) => choice.props.accessibilityState.selected)).toEqual(
+        [15, 30, 60].map((value) => value === minutes),
+      );
+      expect(requests).toHaveLength(count);
+      expect(text(tree)).toContain("62 min");
+      expect(JSON.stringify(source)).toBe(original);
+      await press(harness, "Add activity");
+      expect(writes()).toHaveLength(1);
+      expect(JSON.parse(writes()[0].body)).toEqual({
+        name: "Owner activity",
+        durationMinutes: minutes,
+        selfReportedEnergyKilocalories: energy || null,
+        occurredAt: "2026-11-01T07:30:45.123Z",
+      });
+    });
+
+  it("preserves a chosen date/time and exact calorie input", async () => {
+    const { harness, requests, writes } = setup();
+    await press(harness, "Next activity day");
+    await fill(harness, { name: "Selected-day activity", time: "10:15", energy: "12.300" });
+    const before = requests.length;
+    const tree = await press(harness, presetLabel(60));
+    expect(input(tree, names.energy).props.value).toBe("12.300");
+    expect(requests).toHaveLength(before);
+    await press(harness, "Add activity");
+    expect(JSON.parse(writes()[0].body)).toEqual({
+      name: "Selected-day activity",
+      durationMinutes: 60,
+      selfReportedEnergyKilocalories: "12.3",
+      occurredAt: "2026-11-02T16:15:00.000Z",
+    });
+  });
+
+  it("keeps custom whole-minute entry and existing bounds without selecting a shortcut", async () => {
+    const { harness, writes } = setup();
+    await fill(harness, { name: "Custom activity" });
+    await press(harness, presetLabel(15));
+    for (const duration of ["0", "1441"]) {
+      let tree = await fill(harness, { duration });
+      expect(presets(tree).every((choice) => !choice.props.accessibilityState.selected)).toBe(true);
+      tree = await press(harness, "Add activity");
+      expect(writes()).toHaveLength(0);
+      expect(text(tree)).toContain("1");
+    }
+    for (const duration of ["1", "17", "1440"]) {
+      const tree = await fill(harness, { name: "Custom activity", duration });
+      expect(presets(tree).every((choice) => !choice.props.accessibilityState.selected)).toBe(true);
+      await press(harness, "Add activity");
+      expect(JSON.parse(writes().at(-1).body).durationMinutes).toBe(Number(duration));
+    }
+    expect(writes()).toHaveLength(3);
+  });
+
+  it("makes a repeated current preset a no-op so a current Add callback remains usable before paint", async () => {
+    const { harness, requests, writes } = setup();
+    await fill(harness, { name: "Repeat preset" });
+    const tree = await press(harness, presetLabel(30));
+    const same = button(tree, presetLabel(30)).props.onPress;
+    const add = button(tree, "Add activity").props.onPress;
+    const before = requests.length;
+    same();
+    same();
+    expect(requests).toHaveLength(before);
+    add();
+    await harness.settle();
+    expect(writes()).toHaveLength(1);
+    expect(JSON.parse(writes()[0].body).durationMinutes).toBe(30);
+  });
+
+  it("still treats re-entering the same visible start minute as an explicit time edit", async () => {
+    const { harness, writes } = setup();
+    await fill(harness, { name: "Explicit time" });
+    let tree = await press(harness, presetLabel(15));
+    const sameMinute = input(tree, names.time).props.value;
+    tree = await fill(harness, { time: sameMinute });
+    await press(harness, presetLabel(15));
+    await press(harness, "Add activity");
+    expect(JSON.parse(writes()[0].body).occurredAt).toBe("2026-11-01T06:30:00.000Z");
+  });
+
+  it("rejects retained pre-change Add, all Add fields and date actions after a changed preset", async () => {
+    const { harness, requests, writes } = setup();
+    const tree = await fill(harness, {
+      name: "Current name",
+      duration: "9",
+      energy: "0.001",
+      time: "10:15",
+    });
+    const fields = [names.name, names.duration, names.energy, names.time].map(
+      (label) => input(tree, label).props.onChangeText,
+    );
+    const dateField = input(tree, names.date).props;
+    const oldAdd = button(tree, "Add activity").props.onPress;
+    const previous = button(tree, "Previous activity day").props.onPress;
+    const next = button(tree, "Next activity day").props.onPress;
+    const before = requests.length;
+    button(tree, presetLabel(60)).props.onPress();
+    for (const change of fields) change("stale");
+    dateField.onChangeText("2026-11-02");
+    dateField.onEndEditing({ nativeEvent: { text: "2026-11-02" } });
+    previous();
+    next();
+    oldAdd();
+    const current = await harness.settle();
+    expect(input(current, names.name).props.value).toBe("Current name");
+    expect(input(current, names.duration).props.value).toBe("60");
+    expect(input(current, names.energy).props.value).toBe("0.001");
+    expect(input(current, names.time).props.value).toBe("10:15");
+    expect(input(current, names.date).props.value).toBe(selectedDate);
+    expect(requests).toHaveLength(before);
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("preserves a reuse choice on same duration and invalidates it on changed duration", async () => {
+    const { harness, writes } = setup();
+    await fill(harness, { name: "Existing draft", duration: "30" });
+    let tree = await press(harness, `Use details from ${source.name}`);
+    const sameChoice = button(tree, "Replace details").props.onPress;
+    button(tree, presetLabel(30)).props.onPress();
+    sameChoice();
+    tree = await harness.settle();
+    expect(input(tree, names.name).props.value).toBe(source.name);
+    tree = await press(harness, `Use details from ${second.name}`);
+    const staleChoice = button(tree, "Replace details").props.onPress;
+    button(tree, presetLabel(15)).props.onPress();
+    staleChoice();
+    tree = await harness.settle();
+    expect(input(tree, names.name).props.value).toBe(source.name);
+    expect(input(tree, names.duration).props.value).toBe("15");
+    expect(text(tree)).not.toContain("Replace the Add details");
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("changes Add duration while preserving an independent active row editor", async () => {
+    const { harness, writes } = setup();
+    await fill(harness, { name: "New activity", energy: "0.001" });
+    let tree = await press(harness, "Edit activity");
+    input(tree, "Edit activity name").props.onChangeText("Edited original");
+    tree = await harness.settle();
+    expect(button(tree, presetLabel(30)).props.disabled).toBe(false);
+    tree = await press(harness, presetLabel(30));
+    expect(input(tree, "Edit activity name").props.value).toBe("Edited original");
+    expect(input(tree, "Edit activity duration in whole minutes").props.value).toBe("45");
+    expect(input(tree, names.duration).props.value).toBe("30");
+    input(tree, "Edit activity duration in whole minutes").props.onChangeText("18");
+    tree = await harness.settle();
+    expect(input(tree, "Edit activity duration in whole minutes").props.value).toBe("18");
+    expect(input(tree, names.duration).props.value).toBe("30");
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("disables presets during initial load and an active write, preserving accepted-write refresh behavior", async () => {
+    const read = deferred();
+    const write = deferred();
+    let firstRead = true;
+    let submitted;
+    const { harness, writes } = setup((request) => {
+      if (request.method === "POST") {
+        submitted = request;
+        return write.promise;
+      }
+      if (firstRead) {
+        firstRead = false;
+        return read.promise;
+      }
+      return undefined;
+    });
+    let tree = await harness.settle();
+    expect(presets(tree).every((choice) => choice.props.disabled)).toBe(true);
+    button(tree, presetLabel(15)).props.onPress();
+    read.resolve(response(dayBody(selectedDate)));
+    await fill(harness, { name: "Pending activity" });
+    tree = await press(harness, presetLabel(15));
+    const oldPreset = button(tree, presetLabel(60)).props.onPress;
+    button(tree, "Add activity").props.onPress();
+    oldPreset();
+    tree = await harness.settle();
+    expect(presets(tree).every((choice) => choice.props.disabled)).toBe(true);
+    expect(input(tree, names.duration).props.value).toBe("15");
+    write.resolve(receipt(submitted));
+    tree = await harness.settle();
+    expect(writes()).toHaveLength(1);
+    expect(input(tree, names.duration).props.value).toBe("");
+    expect(presets(tree).every((choice) => !choice.props.accessibilityState.selected)).toBe(true);
+  });
+
+  for (const boundary of ["date", "scope", "background", "unmount"])
+    it(`retains existing preset availability and old-control rejection across ${boundary}`, async () => {
+      const { harness, requests, writes } = setup();
+      let tree = await fill(harness, { name: "Private draft", duration: "30" });
+      const oldPreset = button(tree, presetLabel(60)).props.onPress;
+      const before = requests.length;
+      if (boundary === "date") {
+        input(tree, names.date).props.onChangeText("2026-11-02");
+        tree = await harness.settle();
+      } else if (boundary === "scope") {
+        harness.updateProps({ accessToken: "replacement-token" });
+        tree = harness.renderWithoutEffects();
+      } else if (boundary === "background") {
+        appState("background");
+        tree = await harness.settle();
+      } else harness.unmount();
+      if (boundary !== "unmount")
+        expect(presets(tree).every((choice) => choice.props.disabled)).toBe(true);
+      oldPreset();
+      if (boundary !== "scope" && boundary !== "unmount") tree = await harness.settle();
+      expect(requests).toHaveLength(before);
+      expect(writes()).toHaveLength(0);
+      if (boundary === "date") expect(input(tree, names.duration).props.value).toBe("30");
+      if (boundary === "unmount") expect(harness.writesAfterUnmount).toBe(0);
+    });
+
+  it("keeps same-intent A→B→A exact body/key retry semantics after ambiguous saves", async () => {
+    const { harness, writes } = setup((request) =>
+      request.method === "POST" ? response({}, 503) : undefined,
+    );
+    await fill(harness, { name: "Retry activity", energy: "0.001" });
+    await press(harness, presetLabel(15));
+    await press(harness, "Add activity");
+    const tree = await harness.settle();
+    expect(presets(tree).every((choice) => choice.props.disabled)).toBe(true);
+    await press(harness, "Retry day view");
+    await press(harness, presetLabel(30));
+    await press(harness, "Add activity");
+    await press(harness, "Retry day view");
+    await press(harness, presetLabel(15));
+    await press(harness, presetLabel(15));
+    await press(harness, "Add activity");
+    expect(writes()).toHaveLength(3);
+    expect(JSON.parse(writes()[0].body).durationMinutes).toBe(15);
+    expect(JSON.parse(writes()[1].body).durationMinutes).toBe(30);
+    expect(writes()[1].headers["idempotency-key"]).not.toBe(writes()[0].headers["idempotency-key"]);
+    expect(writes()[2].body).toBe(writes()[0].body);
+    expect(writes()[2].headers["idempotency-key"]).toBe(writes()[0].headers["idempotency-key"]);
+  });
+});

@@ -481,6 +481,7 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
   }
   function changeDraft(field: keyof ActivityAddDraft, value: string) {
     if (!canUseDraft()) return;
+    if (field === "duration" && draftRef.current.duration === value) return;
     if (field === "localTime") untouchedDefaultOccurredAt.current = null;
     replaceDraft({ ...draftRef.current, [field]: value });
   }
@@ -1045,6 +1046,28 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
               </label>
               <small className="fieldHelp" id="activity-duration-help">
                 Whole minutes, 1 to 1,440 per entry.
+              </small>
+              <fieldset className="entryActions" style={{ border: 0, padding: 0, margin: 0 }}>
+                <legend className="srOnly">Duration presets</legend>
+                {([15, 30, 60] as const).map((minutes) => (
+                  <button
+                    aria-describedby="activity-duration-preset-help"
+                    aria-pressed={session !== null && duration === String(minutes)}
+                    className="buttonQuiet"
+                    disabled={createDisabled}
+                    key={minutes}
+                    onClick={() => changeDraft("duration", String(minutes))}
+                    type="button"
+                  >
+                    {minutes} min
+                  </button>
+                ))}
+              </fieldset>
+              <small className="fieldHelp" id="activity-duration-preset-help" aria-live="polite">
+                {session && (duration === "15" || duration === "30" || duration === "60")
+                  ? `${duration} minutes selected. `
+                  : ""}
+                Review the duration and time, then choose Add entry.
               </small>
               <label className="formField">
                 <span>Self-reported calories (optional)</span>

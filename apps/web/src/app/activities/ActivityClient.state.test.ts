@@ -639,6 +639,7 @@ describe("activity reuse private and mutation boundaries", () => {
       const replace = button("Replace draft with saved details");
       const oldField = field("Activity name");
       const oldSubmit = addForm();
+      const oldPreset = button("15 min");
       if (transition === "date") await click("Next day");
       else if (transition === "external-route" || transition === "owner-route") {
         ownerChanged = transition === "owner-route";
@@ -658,6 +659,7 @@ describe("activity reuse private and mutation boundaries", () => {
       invoke(replace);
       invoke(oldField, "onChange", { target: { value: "Stale owner data" } });
       invoke(oldSubmit, "onSubmit", { preventDefault() {} });
+      invoke(oldPreset);
       if (transition !== "external-route" && transition !== "owner-route") await hooks.settle();
       expect(text()).toBe(before);
       expect(fetch).toHaveBeenCalledTimes(requests);
@@ -863,5 +865,277 @@ describe("activity reuse pending read ownership", () => {
         .filter(([url]) => url.startsWith("/api/activities?"))
         .map(([, init]) => new Headers(init?.headers).get("x-expected-owner-user-id")),
     ).toEqual([owner, anotherOwner]);
+  });
+});
+
+describe("Activity Add duration presets", () => {
+  it.each([
+    [15, null],
+    [30, "0.001"],
+    [60, "248.5"],
+  ] as const)(
+    "replaces duration with %i minutes, preserves %s calories and only creates after Add",
+    async (minutes, energy) => {
+      const fixture = day();
+      const originalBytes = JSON.stringify(fixture);
+      const base = fetcher(fixture);
+      const writes: RequestInit[] = [];
+      const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          writes.push(init);
+          return Response.json(receipt(JSON.parse(String(init.body))));
+        }
+        return base(url, init);
+      });
+      await mount(fetch);
+      await change("Activity name", "Evening walk");
+      await change("Duration (minutes)", "42");
+      await change("Self-reported calories (optional)", energy ?? "");
+      await change("Local time", "10:15");
+      const requests = fetch.mock.calls.length;
+      await click(`${minutes} min`);
+      expect(fetch).toHaveBeenCalledTimes(requests);
+      expect(field("Duration (minutes)").props.value).toBe(String(minutes));
+      expect(field("Activity name").props.value).toBe("Evening walk");
+      expect(field("Self-reported calories (optional)").props.value).toBe(energy ?? "");
+      expect(field("Local time").props.value).toBe("10:15");
+      expect(text()).toContain(`${minutes} minutes selected.`);
+      expect(text()).toContain("35 min");
+      for (const value of [15, 30, 60]) {
+        expect(button(`${value} min`).props.type).toBe("button");
+        expect(button(`${value} min`).props["aria-pressed"]).toBe(value === minutes);
+        expect(button(`${value} min`).props["aria-describedby"]).toBe(
+          "activity-duration-preset-help",
+        );
+      }
+      await submit();
+      expect(writes).toHaveLength(1);
+      expect(JSON.parse(String(writes[0]?.body))).toEqual({
+        name: "Evening walk",
+        durationMinutes: minutes,
+        selfReportedEnergyKilocalories: energy,
+        occurredAt: "2026-08-15T15:15:00.000Z",
+      });
+      expect(JSON.stringify(fixture)).toBe(originalBytes);
+    },
+  );
+
+  it("allows a custom whole-minute duration after presets with no shortcut selected", async () => {
+    const writes: RequestInit[] = [];
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        writes.push(init);
+        return Response.json(receipt(JSON.parse(String(init.body))));
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    await change("Activity name", "Custom walk");
+    await click("15 min");
+    await click("60 min");
+    await change("Duration (minutes)", "47");
+    for (const minutes of [15, 30, 60])
+      expect(button(`${minutes} min`).props["aria-pressed"]).toBe(false);
+    expect(text()).not.toContain("minutes selected.");
+    await submit();
+    expect(JSON.parse(String(writes[0]?.body)).durationMinutes).toBe(47);
+  });
+
+  it("keeps same-current preset and duration field callbacks usable immediately before Add", async () => {
+    const writes: RequestInit[] = [];
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        writes.push(init);
+        return Response.json(receipt(JSON.parse(String(init.body))));
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    await change("Activity name", "Walk");
+    await click("30 min");
+    const form = addForm();
+    invoke(button("30 min"));
+    invoke(button("30 min"));
+    invoke(field("Duration (minutes)"), "onChange", { target: { value: "30" } });
+    invoke(form, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    expect(writes).toHaveLength(1);
+    expect(JSON.parse(String(writes[0]?.body)).durationMinutes).toBe(30);
+  });
+
+  it("fences pre-preset Add, field, date and preset callbacks before paint", async () => {
+    const fetch = await mount();
+    await change("Activity name", "Current name");
+    await change("Local time", "10:15");
+    const oldForm = addForm();
+    const oldFields = elements(addForm()).filter(
+      (node) => typeof node.props.onChange === "function",
+    );
+    const oldPreset = button("60 min");
+    const oldDate = button("Next day");
+    const requests = fetch.mock.calls.length;
+    invoke(button("15 min"));
+    for (const input of oldFields) invoke(input, "onChange", { target: { value: "stale" } });
+    invoke(oldForm, "onSubmit", { preventDefault() {} });
+    invoke(oldPreset);
+    invoke(oldDate);
+    await hooks.settle();
+    expect(field("Duration (minutes)").props.value).toBe("15");
+    expect(field("Activity name").props.value).toBe("Current name");
+    expect(field("Local time").props.value).toBe("10:15");
+    expect(text()).toContain("2026-08-15");
+    expect(fetch).toHaveBeenCalledTimes(requests);
+  });
+
+  it("preserves a reuse choice on same-current preset and invalidates it on a changed duration", async () => {
+    const fetch = await mount();
+    await change("Activity name", "Keep raw draft");
+    await click("15 min");
+    await click("Reuse details from Café walk");
+    const keep = button("Keep editing");
+    const replace = button("Replace draft with saved details");
+    const requests = fetch.mock.calls.length;
+    await click("15 min");
+    expect(button("Keep editing")).toBe(keep);
+    expect(text()).toContain("Your Add draft contains details.");
+    await click("30 min");
+    expect(text()).not.toContain("Your Add draft contains details.");
+    invoke(keep);
+    invoke(replace);
+    await hooks.settle();
+    expect(field("Activity name").props.value).toBe("Keep raw draft");
+    expect(field("Duration (minutes)").props.value).toBe("30");
+    expect(fetch).toHaveBeenCalledTimes(requests);
+  });
+
+  it.each([false, true])(
+    "preserves default fold unless the same local minute is explicitly edited: %s",
+    async (editTime) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-11-01T07:30:45.123Z"));
+      routeDate = "2026-11-01";
+      const base = fetcher(day([], routeDate));
+      const writes: RequestInit[] = [];
+      const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          writes.push(init);
+          return Response.json(receipt(JSON.parse(String(init.body))));
+        }
+        return base(url, init);
+      });
+      await mount(fetch);
+      expect(field("Local time").props.value).toBe("01:30");
+      await change("Activity name", "Fold walk");
+      await click("15 min");
+      await click("60 min");
+      if (editTime) await change("Local time", "01:30");
+      await submit();
+      expect(writes).toHaveLength(1);
+      expect(JSON.parse(String(writes[0]?.body)).occurredAt).toBe(
+        editTime ? "2026-11-01T06:30:00.000Z" : "2026-11-01T07:30:45.123Z",
+      );
+    },
+  );
+
+  it("preserves independent row Edit values and keeps preset controls confined to Add", async () => {
+    const fetch = await mount();
+    await change("Activity name", "Add draft");
+    await change("Self-reported calories (optional)", "0.001");
+    await click("Edit activity");
+    const editor = () =>
+      elements().find((node) => node.type === "form" && node.props.className === "activityEditor");
+    await change("Duration (minutes)", "49", editor());
+    const before = elements(editor())
+      .filter((node) => node.type === "input")
+      .map((node) => node.props.value);
+    const requests = fetch.mock.calls.length;
+    await click("30 min");
+    expect(
+      elements(editor())
+        .filter((node) => node.type === "input")
+        .map((node) => node.props.value),
+    ).toEqual(before);
+    expect(field("Duration (minutes)").props.value).toBe("30");
+    expect(field("Activity name").props.value).toBe("Add draft");
+    expect(field("Self-reported calories (optional)").props.value).toBe("0.001");
+    expect(
+      elements(editor()).some(
+        (node) => node.props["aria-describedby"] === "activity-duration-preset-help",
+      ),
+    ).toBe(false);
+    expect(fetch).toHaveBeenCalledTimes(requests);
+  });
+
+  it("preserves existing body A-to-B-to-A retry identity and unchanged preset replay", async () => {
+    const writes: RequestInit[] = [];
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        writes.push(init);
+        return Response.json({ error: "Lost response" }, { status: 503 });
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    await change("Activity name", "Retry walk");
+    await change("Local time", "10:15");
+    await click("30 min");
+    await submit();
+    for (const duration of ["30 min", "60 min", "30 min"]) {
+      expect(button(duration).props.disabled).toBe(true);
+      await click("Retry day view");
+      const reads = fetch.mock.calls.length;
+      await click(duration);
+      expect(fetch).toHaveBeenCalledTimes(reads);
+      await submit();
+    }
+    expect(writes).toHaveLength(4);
+    const keys = writes.map((write) => new Headers(write.headers).get("idempotency-key"));
+    expect(writes[1]?.body).toBe(writes[0]?.body);
+    expect(writes[3]?.body).toBe(writes[0]?.body);
+    expect(keys[1]).toBe(keys[0]);
+    expect(keys[3]).toBe(keys[0]);
+    expect(keys[2]).not.toBe(keys[0]);
+  });
+
+  it("blocks presets synchronously during a write and keeps accepted-read recovery intact", async () => {
+    const base = fetcher();
+    const pending = deferred<Response>();
+    let failRead = false;
+    const writes: RequestInit[] = [];
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        writes.push(init);
+        return pending.promise;
+      }
+      if (url.startsWith("/api/activities?") && failRead)
+        return Response.json({ error: "Read unavailable" }, { status: 503 });
+      return base(url, init);
+    });
+    await mount(fetch);
+    await change("Activity name", "Saved walk");
+    await click("15 min");
+    const oldPreset = button("60 min");
+    invoke(addForm(), "onSubmit", { preventDefault() {} });
+    invoke(oldPreset);
+    await hooks.settle();
+    expect(writes).toHaveLength(1);
+    expect(field("Duration (minutes)").props.value).toBe("15");
+    for (const duration of [15, 30, 60])
+      expect(button(`${duration} min`).props.disabled).toBe(true);
+    failRead = true;
+    pending.resolve(Response.json(receipt(JSON.parse(String(writes[0]?.body)))));
+    await hooks.settle();
+    expect(field("Duration (minutes)").props.value).toBe("");
+    expect(button("15 min").props.disabled).toBe(true);
+    invoke(oldPreset);
+    await hooks.settle();
+    expect(field("Duration (minutes)").props.value).toBe("");
+    failRead = false;
+    await click("Retry day view");
+    expect(button("15 min").props.disabled).toBe(false);
+    expect(writes).toHaveLength(1);
   });
 });
