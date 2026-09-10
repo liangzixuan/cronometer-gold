@@ -247,9 +247,12 @@ export function RecipesScreen({
   subscribeQuickAddReceipts,
 }: Props) {
   const [recipes, setRecipes] = useState<readonly RecipeSummaryView[]>([]);
+  const recipesRef = useRef(recipes);
   const [listVerified, setListVerified] = useState(false);
   const [savedFilter, setSavedFilter] = useState({ value: "" });
   const savedFilterRef = useRef(savedFilter);
+  const [nestedFilter, setNestedFilter] = useState({ value: "" });
+  const nestedFilterRef = useRef(nestedFilter);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [selected, setSelected] = useState<RecipeView | null>(null);
   const [nutritionBasis, setNutritionBasis] = useState<"100g" | "serving">("100g");
@@ -313,12 +316,18 @@ export function RecipesScreen({
     savedFilterRef.current = next;
     setSavedFilter(next);
   }, []);
+  const resetNestedFilter = useCallback(() => {
+    const next = { value: "" };
+    nestedFilterRef.current = next;
+    setNestedFilter(next);
+  }, []);
   useEffect(() => {
     if (installedFilterScope.current !== filterScope) {
       installedFilterScope.current = filterScope;
       resetSavedFilter();
+      resetNestedFilter();
     }
-  }, [filterScope, resetSavedFilter]);
+  }, [filterScope, resetNestedFilter, resetSavedFilter]);
 
   const setBusy = useCallback((value: string | null) => {
     busyRef.current = value;
@@ -384,12 +393,14 @@ export function RecipesScreen({
     privateClosed.current = true;
     closedFilterScope.current = scope;
     resetSavedFilter();
+    resetNestedFilter();
     lifecycle.current += 1;
     abortRequests();
     invalidateReview();
     pending.current.clear();
     ownedRecipeLogOperations.current.clear();
     replaceBuilder(emptyBuilder());
+    recipesRef.current = [];
     setRecipes([]);
     setListVerified(false);
     replaceSelected(null);
@@ -407,6 +418,7 @@ export function RecipesScreen({
     invalidateReview,
     replaceBuilder,
     replaceSelected,
+    resetNestedFilter,
     resetSavedFilter,
     scope,
     setBusy,
@@ -447,6 +459,7 @@ export function RecipesScreen({
     pending.current.clear();
     ownedRecipeLogOperations.current.clear();
     replaceBuilder(emptyBuilder());
+    recipesRef.current = [];
     setRecipes([]);
     setListVerified(false);
     replaceSelected(null);
@@ -497,7 +510,9 @@ export function RecipesScreen({
         if (!response.ok) throw new Error(responseError(body, "Recipes could not be loaded."));
         const page = parseRecipeCollection(body);
         if (!(await verifyOwner(controller, current)) || !current()) return;
-        setRecipes((existing) => mergeRecipePage(existing, page.data, cursor !== null));
+        const nextRecipes = mergeRecipePage(recipesRef.current, page.data, cursor !== null);
+        recipesRef.current = nextRecipes;
+        setRecipes(nextRecipes);
         setNextCursor(page.nextCursor);
         setReady(true);
         setListVerified(true);
@@ -586,6 +601,24 @@ export function RecipesScreen({
       readyRef.current &&
       busyRef.current === null
     );
+  }
+  function canUseNestedPicker() {
+    return (
+      canEdit() &&
+      filterScopeRef.current === filterScope &&
+      installedFilterScope.current === filterScope &&
+      closedFilterScope.current !== scope &&
+      nestedFilterRef.current === nestedFilter &&
+      builderRef.current === builder
+    );
+  }
+  function changeNestedFilter(value: string) {
+    if (!canUseNestedPicker()) return;
+    const nextValue = value.slice(0, 200);
+    if (nextValue === nestedFilter.value) return;
+    const next = { value: nextValue };
+    nestedFilterRef.current = next;
+    setNestedFilter(next);
   }
   function canUseSelectedRecipe() {
     return canEdit() && selected !== null && selectedRef.current === selected;
@@ -791,7 +824,7 @@ export function RecipesScreen({
     }
   }
   function addNested(recipe: RecipeSummaryView) {
-    if (!canEdit()) return;
+    if (!canUseNestedPicker() || !recipesRef.current.includes(recipe)) return;
     const current = builderRef.current;
     if (recipe.id === current.recipeId) {
       setMessage("A recipe cannot contain itself.");
@@ -1056,6 +1089,11 @@ export function RecipesScreen({
     recipe.name.toLowerCase().includes(normalizedSavedFilter),
   );
   const builderDisabled = busy !== null || !ready || !scopeVisible;
+  const nestedPickerDisabled = builderDisabled || filterDisabled;
+  const eligibleNestedRecipes = recipes.filter((recipe) => recipe.id !== builder.recipeId);
+  const matchingNestedRecipes = eligibleNestedRecipes.filter((recipe) =>
+    recipe.name.toLowerCase().includes(nestedFilter.value.trim().toLowerCase()),
+  );
   const recipeLogUnavailable =
     builderDisabled ||
     quickAddOutboxState.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS ||
@@ -1377,22 +1415,68 @@ export function RecipesScreen({
                 </View>
               </View>
             ))}
-            {recipes
-              .filter((recipe) => recipe.id !== builder.recipeId)
-              .map((recipe) => (
-                <View key={`nested:${recipe.id}`} style={styles.ingredient}>
-                  <Text style={styles.cardTitle}>
-                    {recipe.name} v{recipe.versionNumber}
-                  </Text>
-                  <Pressable
-                    accessibilityRole="button"
-                    disabled={builderDisabled}
-                    onPress={() => addNested(recipe)}
-                  >
-                    <Text style={styles.link}>Pin 100 g nested revision</Text>
-                  </Pressable>
-                </View>
-              ))}
+            <Text accessibilityRole="header" style={styles.sectionTitle}>
+              Nested recipe ingredients
+            </Text>
+            <Text style={styles.help}>
+              Pin an exact saved version, then adjust its quantity in Ingredients. The recipe you
+              are editing is excluded.
+            </Text>
+            <Field
+              label="Filter loaded nested recipes by name"
+              value={filterVisible ? nestedFilter.value : ""}
+              maxLength={200}
+              disabled={nestedPickerDisabled}
+              onChange={changeNestedFilter}
+            />
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ disabled: nestedPickerDisabled }}
+              disabled={nestedPickerDisabled}
+              onPress={() => changeNestedFilter("")}
+              style={styles.secondary}
+            >
+              <Text style={styles.secondaryText}>Clear nested recipe filter</Text>
+            </Pressable>
+            {filterVisible ? (
+              <Text accessibilityLiveRegion="polite" style={styles.help}>
+                {listVerified
+                  ? `${matchingNestedRecipes.length} matching · ${eligibleNestedRecipes.length} eligible loaded recipes. ${
+                      nextCursor
+                        ? "More recipes may remain; use Load more recipes above to include them."
+                        : "All saved recipes are loaded."
+                    }${
+                      eligibleNestedRecipes.length === 0
+                        ? " No eligible recipes are loaded."
+                        : matchingNestedRecipes.length === 0
+                          ? " No eligible loaded recipes match this filter."
+                          : ""
+                    }`
+                  : loading
+                    ? "Loading recipe choices; the saved recipe list has not been verified yet."
+                    : "The saved recipe list has not been verified yet. Use Refresh to try again."}
+              </Text>
+            ) : null}
+            {filterVisible
+              ? matchingNestedRecipes.map((recipe) => (
+                  <View key={`nested:${recipe.id}`} style={styles.ingredient}>
+                    <Text style={styles.cardTitle}>
+                      {recipe.name} v{recipe.versionNumber}
+                    </Text>
+                    <Pressable
+                      accessibilityLabel={`Pin 100 g of ${recipe.name} version ${recipe.versionNumber}`}
+                      accessibilityRole="button"
+                      accessibilityState={{
+                        disabled: nestedPickerDisabled || builder.ingredients.length >= 50,
+                      }}
+                      disabled={nestedPickerDisabled || builder.ingredients.length >= 50}
+                      onPress={() => addNested(recipe)}
+                    >
+                      <Text style={styles.link}>Pin 100 g nested revision</Text>
+                    </Pressable>
+                  </View>
+                ))
+              : null}
             <Pressable
               accessibilityRole="button"
               disabled={builderDisabled}

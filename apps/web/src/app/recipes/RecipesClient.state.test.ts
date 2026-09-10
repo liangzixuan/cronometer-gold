@@ -1141,7 +1141,11 @@ function copyFetcher() {
 function editorValues() {
   const form = required(elements().find((node) => node.type === "form"));
   return elements(form)
-    .filter((node) => ["input", "select", "textarea"].includes(String(node.type)))
+    .filter(
+      (node) =>
+        ["input", "select", "textarea"].includes(String(node.type)) &&
+        node.props.id !== "nested-recipe-filter",
+    )
     .map((node) => node.props.value);
 }
 function hasButton(label: string) {
@@ -2169,7 +2173,12 @@ describe("actual loaded saved-recipe name filtering", () => {
     );
     const requests = fetcher.mock.calls.length;
     await change(savedFilterLabel, "no matching saved name");
+    await change(nestedFilterLabel, "no matching nested name");
+    expect(nestedRecipeNames()).toEqual([]);
     expect(savedRecipeNames()).toEqual([]);
+    expect(editorValues()).toEqual(snapshot);
+    expect(hasButton(confirmCopyLabel)).toBe(true);
+    await click(clearNestedLabel);
     expect(editorValues()).toEqual(snapshot);
     expect(nutritionRows()).toEqual(nutrition);
     expect(button("Per 100 g").props["aria-pressed"]).toBe(true);
@@ -2206,6 +2215,7 @@ describe("actual loaded saved-recipe name filtering", () => {
     const retained = review();
     const requests = fetcher.mock.calls.length;
     await change(savedFilterLabel, "not loaded");
+    await change(nestedFilterLabel, "separate nested query");
     const currentChild = required(
       elements().find((node) => node.type === PastedIngredientReview),
     ) as ElementNode & { key: unknown };
@@ -2248,17 +2258,25 @@ describe("actual loaded saved-recipe name filtering", () => {
         await change("Amount", "2.000001");
         await change("Meal", "lunch");
       }
+      await change(nestedFilterLabel, "Independent nested query");
+      const oldNestedField = field(nestedFilterLabel);
       if (action === "save") {
         save();
         await hooks.settle();
       } else await click("Log recipe");
       const count = fetcher.mock.calls.length;
+      expect(field(nestedFilterLabel).props.disabled).toBe(true);
+      expect(button(clearNestedLabel).props.disabled).toBe(true);
+      invoke(oldNestedField, "onChange", { target: { value: "Busy replacement" } });
+      expect(field(nestedFilterLabel).props.value).toBe("Independent nested query");
       await change(savedFilterLabel, "No match");
       await click("Clear filter");
       expect(fetcher.mock.calls).toHaveLength(count);
       pending.resolve(Response.json({ error: "Confirmation lost." }, { status: 503 }));
       await hooks.settle();
       await change(savedFilterLabel, "sAvEd");
+      await change(nestedFilterLabel, "Saved");
+      await click(clearNestedLabel);
       if (action === "save") {
         save();
         await hooks.settle();
@@ -2302,6 +2320,9 @@ describe("actual loaded saved-recipe name filtering", () => {
       await change("Amount", "2.000001");
       await click("Per 100 g");
       await change(savedFilterLabel, "Saved");
+      await change(nestedFilterLabel, "Private nested query");
+      const oldNestedField = field(nestedFilterLabel),
+        oldNestedClear = button(clearNestedLabel);
       const oldField = field(savedFilterLabel),
         oldClear = button("Clear filter");
       const draft = editorValues(),
@@ -2320,6 +2341,13 @@ describe("actual loaded saved-recipe name filtering", () => {
       expect(profileReads).toBe(1);
       expect(listReads).toBe(1);
       expect(field(savedFilterLabel).props.value).toBe(changed ? "" : "Saved");
+      expect(field(nestedFilterLabel).props.value).toBe(changed ? "" : "Private nested query");
+      if (changed) {
+        invoke(oldNestedField, "onChange", { target: { value: "Obsolete nested query" } });
+        invoke(oldNestedClear, "onClick");
+        await hooks.settle();
+        expect(field(nestedFilterLabel).props.value).toBe("");
+      }
       expect(field(savedFilterLabel).props.disabled).toBe(false);
       expect(savedRecipeNames()).toEqual(["Saved recipe"]);
       expect(savedFilterStatus()).toContain("1 of 1 loaded recipes match.");
@@ -2419,4 +2447,371 @@ describe("actual loaded saved-recipe name filtering", () => {
     expect(field(savedFilterLabel).props.value).toBe("Saved");
     expect(savedRecipeNames()).toEqual(["Saved recipe"]);
   });
+});
+
+const nestedFilterLabel = "Filter loaded nested recipes by name";
+const clearNestedLabel = "Clear nested recipe filter";
+function nestedRecipeCards() {
+  const section = required(
+    elements().find((node) => node.props["aria-labelledby"] === "nested-recipes-heading"),
+  );
+  return elements(section).filter((node) => node.props.className === "ingredientResult");
+}
+function nestedRecipeNames() {
+  return nestedRecipeCards().map((card) =>
+    text(required(elements(card).find((node) => node.type === "strong"))),
+  );
+}
+function nestedPin(index = 0) {
+  return required(
+    elements(required(nestedRecipeCards()[index])).find((node) => node.type === "button"),
+  );
+}
+function nestedStatus() {
+  return text(required(elements().find((node) => node.props.id === "nested-recipe-filter-status")));
+}
+
+describe("actual loaded nested-recipe filtering", () => {
+  it("matches literal trimmed names with duplicate order, independent saved filtering and no requests", async () => {
+    const values = [
+      nutritionRecipe({ name: "Chili [HOT]" }),
+      nutritionRecipe({ id: secondRecipeId, name: "Café Soup" }),
+      nutritionRecipe({ id: thirdRecipeId, name: "Chili [HOT]" }),
+    ];
+    const fetcher = nutritionFetcher(values);
+    await mountReady();
+    const requests = fetcher.mock.calls.length;
+    expect(nestedRecipeNames()).toEqual(["Chili [HOT]", "Café Soup", "Chili [HOT]"]);
+    expect(nestedStatus()).toContain("3 matching · 3 eligible loaded recipes.");
+    await change(savedFilterLabel, "Café");
+    for (const [query, names] of [
+      ["  cHiLi  ", ["Chili [HOT]", "Chili [HOT]"]],
+      ["[hOt]", ["Chili [HOT]", "Chili [HOT]"]],
+      [".*", []],
+      ["cafe", []],
+      ["CAFÉ", ["Café Soup"]],
+      [" \t ", ["Chili [HOT]", "Café Soup", "Chili [HOT]"]],
+    ] as const) {
+      await change(nestedFilterLabel, query);
+      expect(nestedRecipeNames()).toEqual(names);
+      expect(field(nestedFilterLabel).props.value).toBe(query);
+      expect(savedRecipeNames()).toEqual(["Café Soup"]);
+    }
+    await click(clearNestedLabel);
+    expect(button(clearNestedLabel).props.type).toBe("button");
+    expect(button(clearNestedLabel).props.disabled).toBe(false);
+    const emptyClear = button(clearNestedLabel);
+    const emptyPin = nestedPin();
+    const beforeClear = ingredientValues();
+    const beforeMessage = text(
+      required(elements().find((node) => node.props.className === "workspaceStatus")),
+    );
+    invoke(emptyClear, "onClick");
+    invoke(emptyClear, "onClick");
+    await hooks.settle();
+    expect(button(clearNestedLabel).props.disabled).toBe(false);
+    expect(field(nestedFilterLabel).props.value).toBe("");
+    expect(ingredientValues()).toEqual(beforeClear);
+    expect(
+      text(required(elements().find((node) => node.props.className === "workspaceStatus"))),
+    ).toBe(beforeMessage);
+    expect(nestedRecipeNames()).toEqual(["Chili [HOT]", "Café Soup", "Chili [HOT]"]);
+    expect(field(savedFilterLabel).props.value).toBe("Café");
+    invoke(emptyPin, "onClick");
+    await hooks.settle();
+    expect(ingredientValues()).toEqual([{ name: "Chili [HOT]", quantity: "100", note: "" }]);
+    expect(fetcher.mock.calls).toHaveLength(requests);
+  });
+
+  it("bounds input and fences stale query/Clear/pin before paint, while same-value input keeps pin usable", async () => {
+    const fetcher = nutritionFetcher();
+    await mountReady();
+    expect(field(nestedFilterLabel).props.maxLength).toBe(200);
+    await change(nestedFilterLabel, "x".repeat(220));
+    expect(field(nestedFilterLabel).props.value).toBe("x".repeat(200));
+    await click(clearNestedLabel);
+    const oldField = field(nestedFilterLabel),
+      oldClear = button(clearNestedLabel),
+      oldPin = nestedPin();
+    const requests = fetcher.mock.calls.length;
+    invoke(oldField, "onChange", { target: { value: "Saved" } });
+    invoke(oldClear, "onClick");
+    invoke(oldPin, "onClick");
+    await hooks.settle();
+    expect(field(nestedFilterLabel).props.value).toBe("Saved");
+    expect(ingredientValues()).toEqual([]);
+    await click(clearNestedLabel);
+    invoke(oldPin, "onClick");
+    await hooks.settle();
+    expect(ingredientValues()).toEqual([]);
+    const currentField = field(nestedFilterLabel),
+      currentPin = nestedPin();
+    invoke(currentField, "onChange", { target: { value: "" } });
+    invoke(currentField, "onChange", { target: { value: "" } });
+    invoke(currentPin, "onClick");
+    invoke(currentPin, "onClick");
+    await hooks.settle();
+    expect(ingredientValues()).toEqual([{ name: "Saved recipe", quantity: "100", note: "" }]);
+    expect(fetcher.mock.calls).toHaveLength(requests);
+  });
+
+  it.each(["session", "list"] as const)(
+    "keeps the picker visible but unverified after initial %s failure",
+    async (failure) => {
+      const pending = deferred<Response>();
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) =>
+          url === "/api/auth/me" && failure !== "session" ? session() : pending.promise,
+        ),
+      );
+      hooks.mount(RecipesClient);
+      await hooks.settle();
+      expect(nestedStatus()).toBe("Nested recipe choices have not been loaded yet.");
+      expect(field(nestedFilterLabel).props.disabled).toBe(true);
+      expect(button(clearNestedLabel).props.disabled).toBe(true);
+      pending.resolve(Response.json({ error: "Unavailable" }, { status: 503 }));
+      await hooks.settle();
+      expect(nestedRecipeNames()).toEqual([]);
+      expect(nestedStatus()).not.toContain("All saved recipes");
+      expect(hasButton("Retry recipes")).toBe(true);
+    },
+  );
+
+  it.each([null, "more"])(
+    "keeps verified empty choices and paging meaning for cursor %s",
+    async (cursor) => {
+      const fetcher = nutritionFetcher([]);
+      const original = required(fetcher.getMockImplementation());
+      fetcher.mockImplementation((url, init) =>
+        url.startsWith("/api/recipes?") ? filterCollection([], cursor) : original(url, init),
+      );
+      await mountReady();
+      expect(nestedStatus()).toContain("0 matching · 0 eligible loaded recipes.");
+      expect(nestedStatus()).toContain("No eligible nested recipes are loaded.");
+      expect(nestedStatus()).toContain(
+        cursor ? "More recipes may be available." : "All saved recipes are loaded.",
+      );
+      expect(hasButton("Load more recipes")).toBe(cursor !== null);
+      await change(nestedFilterLabel, "Soup");
+      await click(clearNestedLabel);
+    },
+  );
+
+  it("excludes self, preserves duplicate IDs/exact version pins and sends the existing final body on explicit save", async () => {
+    const source = nutritionRecipe();
+    const second = nutritionRecipe({ id: secondRecipeId, name: "Same name", version: 2 });
+    const third = nutritionRecipe({ id: thirdRecipeId, name: "Same name" });
+    const fetcher = nutritionFetcher([source, second, third]);
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    expect(nestedStatus()).toContain("2 matching · 2 eligible loaded recipes.");
+    expect(nestedStatus()).toContain("The recipe being edited is excluded.");
+    await change(nestedFilterLabel, "Same");
+    const firstPin = nestedPin(0),
+      secondPin = nestedPin(1);
+    expect(firstPin.props["aria-label"]).toBe("Pin 100 g of Same name version 2");
+    invoke(firstPin, "onClick");
+    await hooks.settle();
+    invoke(secondPin, "onClick");
+    await hooks.settle();
+    expect(ingredientValues()).toHaveLength(2);
+    invoke(nestedPin(1), "onClick");
+    await hooks.settle();
+    save();
+    await hooks.settle();
+    const write = required(fetcher.mock.calls.find(([, init]) => init?.method === "POST"));
+    expect(write[0]).toBe(`/api/recipes/${recipeId}/revisions`);
+    expect(new Headers(write[1]?.headers).get("if-match")).toBe('"1"');
+    const body = JSON.parse(String(write[1]?.body));
+    expect(body.ingredients.slice(-2)).toEqual([
+      {
+        kind: "recipe",
+        recipeVersionId: second.currentVersion.id,
+        grams: "100",
+        note: null,
+        position: 1,
+      },
+      {
+        kind: "recipe",
+        recipeVersionId: third.currentVersion.id,
+        grams: "100",
+        note: null,
+        position: 2,
+      },
+    ]);
+  });
+
+  it("retains query through zero-match paging/error/retry and rejects replaced or now-hidden choices", async () => {
+    const old = nutritionRecipe({ name: "Older choice" });
+    const updated = nutritionRecipe({ name: "Fresh choice", version: 2 });
+    const soup = nutritionRecipe({ id: secondRecipeId, name: "Later soup" });
+    const pending = deferred<Response>();
+    let pages = 0;
+    const fetcher = vi.fn(async (url: string) => {
+      if (url === "/api/auth/me") return session();
+      if (url.includes("cursor=two"))
+        return ++pages === 1 ? pending.promise : filterCollection([updated, soup], "three");
+      if (url.includes("cursor=three")) return filterCollection([]);
+      return filterCollection([old], "two");
+    });
+    vi.stubGlobal("fetch", fetcher);
+    await mountReady();
+    const oldPin = nestedPin();
+    await change(nestedFilterLabel, "soup");
+    expect(nestedStatus()).toContain("0 matching · 1 eligible loaded recipes.");
+    await click("Load more recipes");
+    expect(field(nestedFilterLabel).props.disabled).toBe(true);
+    invoke(oldPin, "onClick");
+    pending.resolve(Response.json({ error: "Page unavailable" }, { status: 503 }));
+    await hooks.settle();
+    expect(field(nestedFilterLabel).props.value).toBe("soup");
+    expect(nestedStatus()).toContain("More recipes may be available.");
+    await click("Load more recipes");
+    expect(nestedRecipeNames()).toEqual(["Later soup"]);
+    expect(nestedStatus()).toContain("1 matching · 2 eligible loaded recipes.");
+    await click(clearNestedLabel);
+    invoke(oldPin, "onClick");
+    await hooks.settle();
+    expect(ingredientValues()).toEqual([]);
+    const currentPin = nestedPin();
+    await click("Load more recipes");
+    expect(nestedStatus()).toContain("All saved recipes are loaded.");
+    invoke(currentPin, "onClick");
+    await hooks.settle();
+    expect(ingredientValues()[0]?.name).toBe("Fresh choice");
+  });
+
+  it("rejects a same-query choice replaced by paging and preserves the fresh exact version through new creation", async () => {
+    const first = nutritionRecipe({ name: "Pinned choice" });
+    const next = nutritionRecipe({ name: "Pinned choice", version: 2 });
+    const fetcher = nutritionFetcher([first]);
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation((url, init) =>
+      url.startsWith("/api/recipes?")
+        ? filterCollection(
+            [url.includes("cursor=two") ? next : first],
+            url.includes("cursor=two") ? null : "two",
+          )
+        : original(url, init),
+    );
+    await mountReady();
+    await change("Name", "New nested recipe");
+    await change("Final yield grams", "100.000001");
+    await change(nestedFilterLabel, "Pinned");
+    const oldPin = nestedPin();
+    await click("Load more recipes");
+    const status = text(
+      required(elements().find((node) => node.props.className === "workspaceStatus")),
+    );
+    invoke(oldPin, "onClick");
+    await hooks.settle();
+    expect(ingredientValues()).toEqual([]);
+    expect(
+      text(required(elements().find((node) => node.props.className === "workspaceStatus"))),
+    ).toBe(status);
+    invoke(nestedPin(), "onClick");
+    await hooks.settle();
+    save();
+    await hooks.settle();
+    const write = required(fetcher.mock.calls.find(([, init]) => init?.method === "POST"));
+    expect(write[0]).toBe("/api/recipes");
+    expect(new Headers(write[1]?.headers).has("if-match")).toBe(false);
+    const body = JSON.parse(String(write[1]?.body));
+    expect(body.name).toBe("New nested recipe");
+    expect(body.ingredients).toEqual([
+      {
+        kind: "recipe",
+        recipeVersionId: next.currentVersion.id,
+        grams: "100",
+        note: null,
+        position: 0,
+      },
+    ]);
+    expect(field(nestedFilterLabel).props.value).toBe("Pinned");
+  });
+
+  it("retains self-only empty meaning and the fifty-ingredient cap", async () => {
+    const fetcher = nutritionFetcher();
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    expect(nestedStatus()).toContain("0 matching · 0 eligible loaded recipes.");
+    expect(nestedStatus()).toContain("The recipe being edited is excluded.");
+    await click("New recipe");
+    const oldPin = nestedPin();
+    expect(
+      review().onConfirm(Array.from({ length: 50 }, (_, index) => ingredient(`capacity-${index}`))),
+    ).toBe(true);
+    await hooks.settle();
+    expect(nestedPin().props.disabled).toBe(true);
+    const before = ingredientValues(),
+      requests = fetcher.mock.calls.length;
+    invoke(oldPin, "onClick");
+    invoke(nestedPin(), "onClick");
+    await hooks.settle();
+    expect(ingredientValues()).toEqual(before);
+    expect(fetcher.mock.calls).toHaveLength(requests);
+    await change(nestedFilterLabel, "No match");
+    await click(clearNestedLabel);
+    expect(ingredientValues()).toEqual(before);
+  });
+
+  it.each(["new", "open", "copy", "unmount", "replay", "closure", "route"] as const)(
+    "rejects retained picker callbacks after %s while retaining only the current private query",
+    async (transition) => {
+      const fetcher = nutritionFetcher([
+        nutritionRecipe(),
+        nutritionRecipe({ id: secondRecipeId, name: "Other" }),
+      ]);
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      await change(nestedFilterLabel, "Other");
+      const oldField = field(nestedFilterLabel),
+        oldClear = button(clearNestedLabel),
+        oldPin = nestedPin();
+      if (transition === "new") await click("New recipe");
+      if (transition === "open") {
+        openSaved();
+        await hooks.settle();
+      }
+      if (transition === "copy") await click("Copy to new draft");
+      if (transition === "unmount") hooks.unmount();
+      if (transition === "replay") {
+        hooks.replayEffects();
+        await hooks.settle();
+      }
+      if (transition === "closure") {
+        const original = required(fetcher.getMockImplementation());
+        fetcher.mockImplementation((url, init) =>
+          url === "/api/auth/me" ? Promise.resolve(session(secondRecipeId)) : original(url, init),
+        );
+        openSaved();
+        await hooks.settle();
+      }
+      if (transition === "route") {
+        navigation.query = "date=2026-09-10";
+        hooks.renderWithoutEffects();
+      }
+      const before = ingredientValues(),
+        requests = fetcher.mock.calls.length;
+      invoke(oldField, "onChange", { target: { value: "Obsolete" } });
+      invoke(oldClear, "onClick");
+      invoke(oldPin, "onClick");
+      if (transition !== "route") await hooks.settle();
+      expect(ingredientValues()).toEqual(before);
+      expect(fetcher.mock.calls).toHaveLength(requests);
+      expect(hooks.afterClose()).toBe(0);
+      if (["new", "open", "copy"].includes(transition)) {
+        expect(field(nestedFilterLabel).props.value).toBe("Other");
+        await click(clearNestedLabel);
+        expect(nestedRecipeNames().length).toBeGreaterThan(0);
+      } else if (transition !== "unmount") {
+        expect(field(nestedFilterLabel).props.value).toBe("");
+        if (transition !== "replay") expect(nestedRecipeNames()).toEqual([]);
+      }
+    },
+  );
 });

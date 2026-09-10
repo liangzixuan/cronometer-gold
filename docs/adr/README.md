@@ -53,6 +53,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0045](./0045-native-biometric-reading-units.md) | Show native biometric reading units and preserve edit metric identity | Source/local complete; automatic and release acceptance separate |
 | [0046](./0046-native-goals-nutrient-picker.md) | Find and add every loaded native Goals nutrient with units | Source/local complete; automatic and release acceptance separate |
 | [0047](./0047-activity-duration-presets.md) | Set Activity Add duration with 15/30/60-minute shortcuts | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
+| [0048](./0048-loaded-nested-recipe-filter.md) | Filter loaded nested-recipe ingredient choices by name | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

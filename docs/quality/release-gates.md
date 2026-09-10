@@ -760,3 +760,17 @@ acceptance.
   canonical gates and fresh client exports; synthetic production Next/BFF Chrome
   preset/manual/no-request/create/readback/retry/keyboard/narrow/expiry proof.
   Keep real persistence/device/assistive/concurrent/external/release limits.
+
+
+## ADR 0048 Loaded nested-recipe ingredient filter
+
+- Separate local name filtering/Clear derives only eligible loaded nested choices
+  with truthful matched/loaded, initial/paging/empty meaning. Preserve source order,
+  duplicate IDs, self/cap guards and exact explicit recipe/version pins.
+- Filter edits send no requests and preserve saved filtering, ingredient search,
+  draft/review/copy/nutrition/log state and operation identity. Reject stale query,
+  choice, builder and private/lifecycle controls through existing guarded seams.
+- Require actual-component/types/format and independent review, frozen canonical
+  gates with fresh client outputs, and synthetic Chrome no-request/draft/pin/
+  paging/retry/keyboard/narrow/expiry proof. Real persistence, device, assistive,
+  concurrent React, external reviewer, hosted and release acceptance stay separate.

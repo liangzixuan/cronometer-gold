@@ -721,10 +721,12 @@ describe("mobile recipe review request boundaries", () => {
     const { harness } = setup((request) =>
       request.url.pathname === "/v1/recipes" ? collection(true) : undefined,
     );
-    const tree = await harness.settle();
+    let tree = await harness.settle();
+    expect(review(tree).props.onConfirm(Array.from({ length: 48 }, () => ingredient()))).toBe(true);
+    tree = await harness.settle();
     const transfer = review(tree).props.onConfirm;
     const add = pressable(tree, "Pin 100 g nested revision").props.onPress;
-    for (let count = 0; count < 49; count += 1) add();
+    add();
     expect(transfer([ingredient(), ingredient()])).toBe(false);
     expect(transfer([ingredient()])).toBe(true);
     expect(review(await harness.settle()).props.remainingCapacity).toBe(0);
@@ -2491,6 +2493,567 @@ describe("native loaded saved-recipe name filter", () => {
       tree = await harness.settle();
       expect(filterInput(tree).props.value).toBe("");
       expect(filterInput(tree).props.editable).toBe(false);
+    } finally {
+      harness.unmount();
+    }
+  });
+});
+
+const nestedFilterLabel = "Filter loaded nested recipes by name";
+const nestedClearLabel = "Clear nested recipe filter";
+const nestedInput = (tree) => input(tree, nestedFilterLabel);
+const nestedChoices = (tree) =>
+  nodes(tree, (node) => node.type === "View" && String(node.key).startsWith("nested:"));
+const nestedNames = (tree) => nestedChoices(tree).map((node) => screenText(node.props.children[0]));
+const nestedPin = (tree, index = 0) => {
+  const choice = nestedChoices(tree)[index];
+  expect(choice).toBeDefined();
+  return nodes(choice, (node) => node.type === "Pressable")[0];
+};
+const nonNestedInputs = (tree) =>
+  draftInputs(tree).filter(([label]) => label !== nestedFilterLabel);
+async function filterNested(harness, value) {
+  const tree = await harness.settle();
+  expect(nestedInput(tree).props.editable).toBe(true);
+  nestedInput(tree).props.onChangeText(value);
+  return harness.settle();
+}
+
+describe("native loaded nested-recipe filter", () => {
+  it("matches literal trimmed case-insensitive names with exact source order, duplicate IDs, bounds and no requests", async () => {
+    const recipes = namedRecipes(["Zesty soup", "Café soup", "SOUP", "SOUP", "[rice]."]);
+    const original = JSON.stringify(recipes);
+    const { harness, requests } = setup((request) =>
+      request.url.pathname === "/v1/recipes" ? nutritionCollection(recipes) : undefined,
+    );
+    try {
+      let tree = await harness.settle();
+      const before = requests.length;
+      const saved = savedCardNames(tree);
+      const otherFields = nonNestedInputs(tree);
+      expect(nestedNames(tree)).toEqual([
+        "Zesty soup v 1",
+        "Café soup v 1",
+        "SOUP v 1",
+        "SOUP v 1",
+        "[rice]. v 1",
+      ]);
+      tree = await filterNested(harness, "  sOuP  ");
+      expect(nestedInput(tree).props.value).toBe("  sOuP  ");
+      expect(nestedNames(tree)).toEqual([
+        "Zesty soup v 1",
+        "Café soup v 1",
+        "SOUP v 1",
+        "SOUP v 1",
+      ]);
+      expect(new Set(nestedChoices(tree).map((node) => node.key)).size).toBe(4);
+      expect(screenText(tree)).toContain("4 matching · 5 eligible loaded recipes.");
+      tree = await filterNested(harness, "cafe");
+      expect(nestedChoices(tree)).toHaveLength(0);
+      expect(screenText(tree)).toContain("No eligible loaded recipes match this filter.");
+      tree = await filterNested(harness, "[rice].");
+      expect(nestedNames(tree)).toEqual(["[rice]. v 1"]);
+      tree = await filterNested(harness, " \t ");
+      expect(nestedChoices(tree)).toHaveLength(5);
+      tree = await filterNested(harness, "x".repeat(201));
+      expect(nestedInput(tree).props.maxLength).toBe(200);
+      expect(nestedInput(tree).props.value).toHaveLength(200);
+      tree = await click(harness, nestedClearLabel);
+      expect(nestedChoices(tree)).toHaveLength(5);
+      expect(savedCardNames(tree)).toEqual(saved);
+      expect(nonNestedInputs(tree)).toEqual(otherFields);
+      expect(requests).toHaveLength(before);
+      expect(JSON.stringify(recipes)).toBe(original);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("fences pre-query field, Clear and Pin callbacks synchronously while same-value actions remain usable", async () => {
+    const { harness, requests } = nutritionSetup();
+    try {
+      let tree = await harness.settle();
+      const oldField = nestedInput(tree).props.onChangeText;
+      const oldClear = pressable(tree, nestedClearLabel).props.onPress;
+      const oldPin = nestedPin(tree).props.onPress;
+      const before = requests.length;
+      oldField("Saved");
+      oldField("stale");
+      oldClear();
+      oldPin();
+      tree = await harness.settle();
+      expect(nestedInput(tree).props.value).toBe("Saved");
+      expect(ingredientRows(tree)).toHaveLength(0);
+      oldField("retained");
+      oldClear();
+      oldPin();
+      nestedInput(tree).props.onChangeText("Saved");
+      nestedPin(tree).props.onPress();
+      tree = await harness.settle();
+      expect(ingredientRows(tree)).toHaveLength(1);
+      tree = await click(harness, nestedClearLabel);
+      pressable(tree, nestedClearLabel).props.onPress();
+      nestedPin(tree).props.onPress();
+      tree = await harness.settle();
+      expect(ingredientRows(tree)).toHaveLength(2);
+      expect(requests).toHaveLength(before);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("rejects retained picker actions after a builder edit or pin before paint", async () => {
+    const { harness } = nutritionSetup();
+    try {
+      let tree = await filterNested(harness, "Saved");
+      const oldField = nestedInput(tree).props.onChangeText;
+      const oldClear = pressable(tree, nestedClearLabel).props.onPress;
+      const oldPin = nestedPin(tree).props.onPress;
+      input(tree, "Recipe name").props.onChangeText("Current builder");
+      oldField("stale");
+      oldClear();
+      oldPin();
+      tree = await harness.settle();
+      expect(nestedInput(tree).props.value).toBe("Saved");
+      expect(input(tree, "Recipe name").props.value).toBe("Current builder");
+      expect(ingredientRows(tree)).toHaveLength(0);
+      const pin = nestedPin(tree).props.onPress;
+      pin();
+      pin();
+      tree = await harness.settle();
+      expect(ingredientRows(tree)).toHaveLength(1);
+      const prior = nestedPin(tree).props.onPress;
+      tree = await click(harness, "New recipe");
+      prior();
+      tree = await harness.settle();
+      expect(nestedInput(tree).props.value).toBe("Saved");
+      expect(ingredientRows(tree)).toHaveLength(0);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  for (const mode of ["create", "revision"]) {
+    it(`pins the exact chosen duplicate-name version and 100 grams in the ${mode} body`, async () => {
+      const source = nutritionRecipe();
+      const choices = namedRecipes(["Duplicate", "Duplicate"]);
+      choices[1].currentVersion.versionNumber = 7;
+      choices[1].revision = "9";
+      const original = JSON.stringify(choices);
+      const { harness, requests } = nutritionSetup(source, (request) => {
+        if (request.method === "POST") return response({}, 503);
+        if (request.url.pathname === "/v1/recipes")
+          return nutritionCollection([source, ...choices]);
+      });
+      try {
+        let tree = mode === "revision" ? await openNutritionRecipe(harness) : await fill(harness);
+        tree = await filterNested(harness, "Duplicate");
+        expect(nestedChoices(tree)).toHaveLength(2);
+        expect(nestedPin(tree, 1).props.accessibilityLabel).toBe(
+          "Pin 100 g of Duplicate version 7",
+        );
+        nestedPin(tree, 1).props.onPress();
+        tree = await harness.settle();
+        expect(nestedInput(tree).props.value).toBe("Duplicate");
+        await click(harness, mode === "revision" ? "Publish revision" : "Create recipe");
+        const first = postRequests(requests)[0];
+        const body = JSON.parse(first.body);
+        expect(body.ingredients.at(-1)).toEqual({
+          kind: "recipe",
+          position: 1,
+          recipeVersionId: choices[1].currentVersion.id,
+          grams: "100",
+          note: null,
+        });
+        expect(first.url.pathname).toBe(
+          mode === "revision" ? `/v1/recipes/${recipeId}/revisions` : "/v1/recipes",
+        );
+        expect(first.headers["if-match"]).toBe(mode === "revision" ? '"1"' : undefined);
+        tree = await filterNested(harness, "nothing");
+        await click(harness, nestedClearLabel);
+        await click(harness, mode === "revision" ? "Publish revision" : "Create recipe");
+        expect(postRequests(requests)[1].body).toBe(first.body);
+        expect(postRequests(requests)[1].headers).toEqual(first.headers);
+        expect(JSON.stringify(choices)).toBe(original);
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+
+  it("excludes self by ID, preserves other identical names and enforces the existing 50-row capacity", async () => {
+    const source = nutritionRecipe();
+    const other = namedRecipes(["Saved recipe"])[0];
+    const { harness } = nutritionSetup(source, (request) =>
+      request.url.pathname === "/v1/recipes" ? nutritionCollection([source, other]) : undefined,
+    );
+    try {
+      let tree = await harness.settle();
+      const sourceCard = savedCards(tree).find((node) => node.key === source.id);
+      expect(sourceCard).toBeDefined();
+      sourceCard.props.onPress();
+      tree = await harness.settle();
+      expect(nestedChoices(tree).map((node) => node.key)).toEqual([`nested:${other.id}`]);
+      expect(screenText(tree)).toContain("1 matching · 1 eligible loaded recipes.");
+      tree = await click(harness, "New recipe");
+      expect(nestedChoices(tree)).toHaveLength(2);
+      expect(review(tree).props.onConfirm(Array.from({ length: 50 }, () => ingredient()))).toBe(
+        true,
+      );
+      tree = await harness.settle();
+      expect(nestedChoices(tree)).toHaveLength(2);
+      expect(nestedPin(tree).props.disabled).toBe(true);
+      expect(nestedPin(tree).props.accessibilityState.disabled).toBe(true);
+      nestedPin(tree).props.onPress();
+      tree = await harness.settle();
+      expect(ingredientRows(tree)).toHaveLength(50);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("distinguishes unverified loading/failure and empty terminal data without enabling the initial picker", async () => {
+    const held = deferred();
+    let reads = 0;
+    const { harness } = setup((request) =>
+      request.url.pathname === "/v1/recipes"
+        ? ++reads === 1
+          ? held.promise
+          : collection()
+        : undefined,
+    );
+    try {
+      let tree = await harness.settle();
+      expect(nestedInput(tree).props.editable).toBe(false);
+      nestedInput(tree).props.onChangeText("not loaded");
+      expect(screenText(tree)).toContain(
+        "Loading recipe choices; the saved recipe list has not been verified yet.",
+      );
+      held.resolve(response({}, 503));
+      tree = await harness.settle();
+      expect(nestedInput(tree).props.value).toBe("");
+      expect(screenText(tree)).toContain("Use Refresh to try again.");
+      tree = await click(harness, "Refresh");
+      expect(nestedInput(tree).props.editable).toBe(true);
+      expect(screenText(tree)).toContain("0 matching · 0 eligible loaded recipes.");
+      expect(screenText(tree)).toContain("No eligible recipes are loaded.");
+      expect(screenText(tree)).toContain("All saved recipes are loaded.");
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("keeps an empty nonterminal page honest and the existing Load more reachable", async () => {
+    const { harness } = setup((request) =>
+      request.url.pathname === "/v1/recipes" ? nutritionCollection([], "more") : undefined,
+    );
+    try {
+      const tree = await harness.settle();
+      expect(screenText(tree)).toContain("0 matching · 0 eligible loaded recipes.");
+      expect(screenText(tree)).toContain(
+        "More recipes may remain; use Load more recipes above to include them.",
+      );
+      expect(screenText(tree)).not.toContain("All saved recipes are loaded.");
+      expect(pressable(tree, "Load more recipes").props.disabled).toBe(false);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("retains zero-match query through failed paging, overlap merge and empty terminal append", async () => {
+    const choices = namedRecipes(["Soup", "Salad", "Late quinoa"]);
+    let attempts = 0;
+    const { harness } = setup((request) => {
+      if (request.url.pathname !== "/v1/recipes") return undefined;
+      const cursor = request.url.searchParams.get("cursor");
+      if (!cursor) return nutritionCollection(choices.slice(0, 2), "next");
+      if (cursor === "terminal") return nutritionCollection([]);
+      return ++attempts === 1
+        ? response({}, 503)
+        : nutritionCollection(choices.slice(1), "terminal");
+    });
+    try {
+      let tree = await filterNested(harness, "quinoa");
+      expect(nestedChoices(tree)).toHaveLength(0);
+      tree = await click(harness, "Load more recipes");
+      expect(nestedInput(tree).props.value).toBe("quinoa");
+      expect(nestedInput(tree).props.editable).toBe(false);
+      expect(screenText(tree)).toContain("0 matching · 2 eligible loaded recipes.");
+      tree = await click(harness, "Load more recipes");
+      expect(nestedNames(tree)).toEqual(["Late quinoa v 1"]);
+      expect(screenText(tree)).toContain("1 matching · 3 eligible loaded recipes.");
+      tree = await click(harness, "Load more recipes");
+      expect(nestedNames(tree)).toEqual(["Late quinoa v 1"]);
+      expect(screenText(tree)).toContain("All saved recipes are loaded.");
+      tree = await click(harness, nestedClearLabel);
+      expect(nestedNames(tree)).toEqual(["Soup v 1", "Salad v 1", "Late quinoa v 1"]);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  for (const replacement of ["same version", "new version"]) {
+    it(`rejects a replaced loaded object after Refresh (${replacement}) and keeps the query`, async () => {
+      const source = nutritionRecipe();
+      const next = structuredClone(source);
+      if (replacement === "new version") {
+        next.currentVersion.id = "7c130051-c4b9-40d4-bca9-40f5a09ae11a";
+        next.currentVersion.versionNumber = 2;
+        next.revision = "2";
+      }
+      let reads = 0;
+      const { harness } = setup((request) =>
+        request.url.pathname === "/v1/recipes"
+          ? nutritionCollection([++reads === 1 ? source : next])
+          : undefined,
+      );
+      try {
+        let tree = await filterNested(harness, "Saved");
+        const old = nestedPin(tree).props.onPress;
+        tree = await click(harness, "Refresh");
+        expect(nestedInput(tree).props.value).toBe("Saved");
+        old();
+        tree = await harness.settle();
+        expect(ingredientRows(tree)).toHaveLength(0);
+        nestedPin(tree).props.onPress();
+        tree = await harness.settle();
+        expect(ingredientRows(tree)).toHaveLength(1);
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+
+  it("preserves saved filter, exact draft, selected nutrition/log data and pending copy choice", async () => {
+    const recipe = copyFixture();
+    const other = namedRecipes(["Other recipe"])[0];
+    const { harness, requests, props } = nutritionSetup(recipe, (request) =>
+      request.url.pathname === "/v1/recipes" ? nutritionCollection([recipe, other]) : undefined,
+    );
+    try {
+      let tree = await openNutritionRecipe(harness);
+      input(tree, "Recipe name").props.onChangeText("Unsaved exact name ");
+      input(tree, "Amount").props.onChangeText("1.250001");
+      input(tree, "Local date").props.onChangeText("2026-09-07");
+      tree = await click(harness, "Per 100 g");
+      tree = await filterSaved(harness, "Saved");
+      tree = await click(harness, "Copy to new draft");
+      const confirm = pressable(tree, discardCopyLabel).props.onPress;
+      const fields = nonNestedInputs(tree);
+      const ingredients = ingredientSnapshot(tree);
+      const nutrient = nutrientRow(tree, "Quantified nutrient");
+      const before = requests.length;
+      tree = await filterNested(harness, "no nested match");
+      expect(nonNestedInputs(tree)).toEqual(fields);
+      expect(ingredientSnapshot(tree)).toEqual(ingredients);
+      expect(nutrientRow(tree, "Quantified nutrient")).toBe(nutrient);
+      expect(pressable(tree, "Per 100 g").props.accessibilityState.checked).toBe(true);
+      expect(savedCardNames(tree)).toEqual(["Saved recipe"]);
+      expect(pressable(tree, discardCopyLabel)).toBeDefined();
+      expect(requests).toHaveLength(before);
+      expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+      confirm();
+      tree = await harness.settle();
+      expect(nestedInput(tree).props.value).toBe("no nested match");
+      expect(filterInput(tree).props.value).toBe("Saved");
+      expect(input(tree, "Recipe name").props.value).toBe("Saved recipe");
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("preserves the food search and retained import child through local filtering", async () => {
+    const { harness, requests } = nutritionSetup();
+    try {
+      let tree = await fill(harness);
+      input(tree, "Search foods").props.onChangeText("oats");
+      tree = await click(harness, "Search foods");
+      const fields = nonNestedInputs(tree);
+      const child = review(tree);
+      const before = requests.length;
+      tree = await filterNested(harness, "nothing");
+      expect(nonNestedInputs(tree)).toEqual(fields);
+      expect(screenText(tree)).toContain("Rolled oats");
+      expect(review(tree).key).toBe(child.key);
+      expect(child.props.onConfirm([ingredient()])).toBe(true);
+      tree = await harness.settle();
+      expect(review(tree).props.remainingCapacity).toBe(48);
+      expect(nestedInput(tree).props.value).toBe("nothing");
+      expect(requests).toHaveLength(before);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("blocks retained query callbacks during a save without changing its ambiguous retry body/key", async () => {
+    const held = deferred();
+    let attempts = 0;
+    const { harness, requests } = nutritionSetup(undefined, (request) =>
+      request.method === "POST" ? (++attempts === 1 ? held.promise : response({}, 503)) : undefined,
+    );
+    try {
+      let tree = await openNutritionRecipe(harness);
+      tree = await filterNested(harness, "retained query");
+      const field = nestedInput(tree).props.onChangeText;
+      const clear = pressable(tree, nestedClearLabel).props.onPress;
+      tree = await click(harness, "Publish revision");
+      const first = postRequests(requests)[0];
+      expect(nestedInput(tree).props.editable).toBe(false);
+      field("stale");
+      clear();
+      expect(first.signal.aborted).toBe(false);
+      held.resolve(response({}, 503));
+      tree = await harness.settle();
+      expect(nestedInput(tree).props.value).toBe("retained query");
+      tree = await click(harness, nestedClearLabel);
+      await click(harness, "Publish revision");
+      expect(postRequests(requests)[1].body).toBe(first.body);
+      expect(postRequests(requests)[1].headers).toEqual(first.headers);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("leaves the retained exact log callback and active outbox registration unchanged", async () => {
+    const held = deferred();
+    const { harness, props } = nutritionSetup(undefined, () => undefined, {
+      diaryGroups: [{ mealSlot: "lunch", label: "Lunch" }],
+    });
+    props.quickAddOutboxController.enqueueOperation.mockReturnValue(held.promise);
+    try {
+      let tree = await openNutritionRecipe(harness);
+      input(tree, "Amount").props.onChangeText("2.123456");
+      input(tree, "Local date").props.onChangeText("2026-09-07");
+      tree = await click(harness, "Lunch");
+      const log = pressable(tree, "Secure & log recipe").props.onPress;
+      tree = await filterNested(harness, "no match");
+      expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+      log();
+      tree = await harness.settle();
+      const operation = props.quickAddOutboxController.enqueueOperation.mock.calls[0][0];
+      expect(operation).toMatchObject({
+        recipeId,
+        recipeVersionId: versionId,
+        localDate: "2026-09-07",
+        mealSlot: "lunch",
+        portion: { kind: "serving", amount: "2.123456", servingLabel: "bowl" },
+      });
+      expect(nestedInput(tree).props.editable).toBe(false);
+      held.resolve({ operationId: "nested-filter-log" });
+      tree = await harness.settle();
+      expect(nestedInput(tree).props.value).toBe("no match");
+      expect(props.quickAddOutboxController.requestDrain).toHaveBeenCalledExactlyOnceWith(
+        "nested-filter-log",
+      );
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  for (const boundary of ["owner", "token", "API", "zone", "groups"]) {
+    it(`hides the private query and candidates before ${boundary} effects and rejects retained controls`, async () => {
+      let currentOwner = owner;
+      const { harness } = nutritionSetup(undefined, (request) =>
+        request.url.pathname === "/v1/auth/me" ? session(currentOwner) : undefined,
+      );
+      try {
+        let tree = await filterNested(harness, "Saved");
+        const oldField = nestedInput(tree).props.onChangeText;
+        const oldClear = pressable(tree, nestedClearLabel).props.onPress;
+        const oldPin = nestedPin(tree).props.onPress;
+        currentOwner = boundary === "owner" ? "049eb964-1327-49a1-ab4f-5c7c41a6b68a" : owner;
+        harness.updateProps(
+          boundary === "owner"
+            ? { ownerUserId: currentOwner }
+            : boundary === "token"
+              ? { accessToken: "new-token" }
+              : boundary === "API"
+                ? { apiBase: new URL("http://127.0.0.1:4001") }
+                : boundary === "zone"
+                  ? { profileTimeZone: "UTC" }
+                  : { diaryGroups: [{ mealSlot: "lunch", label: "Midday" }] },
+        );
+        tree = harness.renderWithoutEffects();
+        expect(nestedChoices(tree)).toHaveLength(0);
+        const fields = nodes(
+          tree,
+          (node) =>
+            node.type === "TextInput" && node.props.accessibilityLabel === nestedFilterLabel,
+        );
+        for (const field of fields) {
+          expect(field.props.value).toBe("");
+          expect(field.props.editable).toBe(false);
+          field.props.onChangeText("uninstalled");
+        }
+        oldField("stale");
+        oldClear();
+        oldPin();
+        harness.flushEffects();
+        tree = await harness.settle();
+        expect(nestedInput(tree).props.value).toBe("");
+        expect(ingredientRows(tree)).toHaveLength(0);
+        tree = await filterNested(harness, "current");
+        oldClear();
+        oldPin();
+        tree = await harness.settle();
+        expect(nestedInput(tree).props.value).toBe("current");
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+
+  it("hides the query in background, restores it in the same scope and rejects old or unmounted actions", async () => {
+    const { harness } = nutritionSetup();
+    let tree = await filterNested(harness, "Saved");
+    const field = nestedInput(tree).props.onChangeText;
+    const clear = pressable(tree, nestedClearLabel).props.onPress;
+    const pin = nestedPin(tree).props.onPress;
+    background();
+    field("background");
+    clear();
+    pin();
+    tree = await harness.settle();
+    expect(nestedInput(tree).props.value).toBe("");
+    expect(nestedChoices(tree)).toHaveLength(0);
+    foreground();
+    tree = await harness.settle();
+    expect(nestedInput(tree).props.value).toBe("Saved");
+    field("stale");
+    clear();
+    pin();
+    tree = await harness.settle();
+    expect(ingredientRows(tree)).toHaveLength(0);
+    const current = nestedInput(tree).props.onChangeText;
+    const currentPin = nestedPin(tree).props.onPress;
+    harness.unmount();
+    current("unmounted");
+    currentPin();
+    expect(harness.writesAfterUnmount).toBe(0);
+  });
+
+  it("closes the nested picker on expiry and cannot reopen it through effect replay", async () => {
+    let expired = false;
+    const { harness, props } = nutritionSetup(undefined, () =>
+      expired ? response({}, 401) : undefined,
+    );
+    try {
+      let tree = await filterNested(harness, "Saved");
+      const old = nestedPin(tree).props.onPress;
+      expired = true;
+      tree = await click(harness, "Refresh");
+      expect(props.onUnauthorized).toHaveBeenCalledTimes(1);
+      expect(nestedChoices(tree)).toHaveLength(0);
+      harness.replayEffects();
+      old();
+      tree = await harness.settle();
+      expect(nestedChoices(tree)).toHaveLength(0);
+      expect(
+        nodes(
+          tree,
+          (node) => node.type === "TextInput" && node.props.accessibilityLabel === "Recipe name",
+        ),
+      ).toHaveLength(0);
     } finally {
       harness.unmount();
     }

@@ -303,6 +303,8 @@ export function RecipesClient() {
   const filterScope = filterScopeRef.current;
   const [savedFilter, setSavedFilter] = useState({ scope: filterScope, value: "" });
   const savedFilterRef = useRef(savedFilter);
+  const [nestedFilter, setNestedFilter] = useState({ scope: filterScope, value: "" });
+  const nestedFilterRef = useRef(nestedFilter);
   const [filterVerifiedScope, setFilterVerifiedScope] = useState<typeof filterScope | null>(null);
   const [loadedRecipesScope, setLoadedRecipesScope] = useState<typeof filterScope | null>(null);
   const [date, setDate] = useState(
@@ -311,6 +313,7 @@ export function RecipesClient() {
   const [timeZone, setTimeZone] = useState<string | null>(null);
   const [dateReviewRequired, setDateReviewRequired] = useState(false);
   const [recipes, setRecipes] = useState<readonly RecipeSummaryView[]>([]);
+  const recipesRef = useRef(recipes);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [selected, setSelectedState] = useState<RecipeView | null>(null);
   const [nutritionBasis, setNutritionBasis] = useState<NutritionBasis>("per100Grams");
@@ -350,6 +353,8 @@ export function RecipesClient() {
     const next = { scope: filterScopeRef.current, value: "" };
     savedFilterRef.current = next;
     setSavedFilter(next);
+    nestedFilterRef.current = next;
+    setNestedFilter(next);
     setFilterVerifiedScope(null);
     setLoadedRecipesScope(null);
   }, []);
@@ -556,6 +561,7 @@ export function RecipesClient() {
     setDate("");
     setTimeZone(null);
     setDateReviewRequired(false);
+    recipesRef.current = [];
     setRecipes([]);
     setNextCursor(null);
     setSelected(null);
@@ -623,15 +629,14 @@ export function RecipesClient() {
             if (privateUiClosed.current || ownerUserId.current !== initiatingOwnerUserId) {
               throw new RecipeOwnerFenceError();
             }
-            setRecipes((current) => {
-              const merged = mergeRecipePage(current, page.data, cursor !== null);
-              setMessage(
-                merged.length === 0 && page.nextCursor === null
-                  ? "No recipes yet."
-                  : `${merged.length} recipes loaded${page.nextCursor ? "; more available" : ""}.`,
-              );
-              return merged;
-            });
+            const merged = mergeRecipePage(recipesRef.current, page.data, cursor !== null);
+            recipesRef.current = merged;
+            setRecipes(merged);
+            setMessage(
+              merged.length === 0 && page.nextCursor === null
+                ? "No recipes yet."
+                : `${merged.length} recipes loaded${page.nextCursor ? "; more available" : ""}.`,
+            );
             setNextCursor(page.nextCursor);
             setLoadedRecipesScope(requestScope);
             setState("ready");
@@ -694,6 +699,8 @@ export function RecipesClient() {
         const next = { scope: requestScope, value: "" };
         savedFilterRef.current = next;
         setSavedFilter(next);
+        nestedFilterRef.current = next;
+        setNestedFilter(next);
       }
       setTimeZone(session.profile.timeZone);
       setDiaryGroups(session.profile.diaryGroups);
@@ -902,7 +909,15 @@ export function RecipesClient() {
   }
 
   function addNested(recipe: RecipeSummaryView) {
-    if (reviewGeneration.current !== reviewContext) return;
+    if (
+      !canUseNestedFilter() ||
+      reviewGeneration.current !== reviewContext ||
+      builderGeneration.current !== builderContext ||
+      builderRef.current !== builder ||
+      !recipesRef.current.includes(recipe) ||
+      !recipe.name.toLowerCase().includes(normalizedNestedFilter)
+    )
+      return;
     if (recipe.id === builder.recipeId) {
       setMessage("A recipe cannot contain itself.");
       return;
@@ -1266,6 +1281,41 @@ export function RecipesClient() {
     const next = { scope: filterScope, value: bounded };
     savedFilterRef.current = next;
     setSavedFilter(next);
+  }
+
+  const nestedFilterReady = filterScopeReady && nestedFilter.scope === filterScope;
+  const nestedFilterValue = nestedFilterReady ? nestedFilter.value : "";
+  const normalizedNestedFilter = nestedFilterValue.trim().toLowerCase();
+  const eligibleNestedRecipes = loadedListVerified
+    ? recipes.filter((recipe) => recipe.id !== builder.recipeId)
+    : [];
+  const visibleNestedRecipes = eligibleNestedRecipes.filter((recipe) =>
+    recipe.name.toLowerCase().includes(normalizedNestedFilter),
+  );
+  const nestedFilterDisabled = !nestedFilterReady || state !== "ready" || busy !== null;
+
+  function canUseNestedFilter() {
+    return (
+      nestedFilterReady &&
+      mounted.current &&
+      !privateUiClosed.current &&
+      ownerUserId.current === filterOwner &&
+      filterScopeRef.current === filterScope &&
+      nestedFilterRef.current === nestedFilter &&
+      builderRef.current === builder &&
+      builderGeneration.current === builderContext &&
+      stateRef.current === "ready" &&
+      busyRef.current === null
+    );
+  }
+
+  function changeNestedFilter(value: string) {
+    if (!canUseNestedFilter()) return;
+    const bounded = value.slice(0, 200);
+    if (bounded === nestedFilter.value) return;
+    const next = { scope: filterScope, value: bounded };
+    nestedFilterRef.current = next;
+    setNestedFilter(next);
   }
 
   const recipeAttribution = useMemo(
@@ -1684,32 +1734,69 @@ export function RecipesClient() {
                       ))}
                     </div>
                   ) : null}
-                  {recipes.some((recipe) => recipe.id !== builder.recipeId) ? (
-                    <div className="workspaceSection">
-                      <h3>Or pin a nested recipe revision</h3>
-                      <div className="ingredientSearchResults">
-                        {recipes
-                          .filter((recipe) => recipe.id !== builder.recipeId)
-                          .map((recipe) => (
-                            <article className="ingredientResult" key={recipe.id}>
-                              <div>
-                                <strong>{recipe.name}</strong>
-                                <p className="sourceLine">
-                                  Version {recipe.versionNumber} · {recipe.finalYieldGrams} g yield
-                                </p>
-                              </div>
-                              <button
-                                className="buttonQuiet"
-                                onClick={() => addNested(recipe)}
-                                type="button"
-                              >
-                                Add 100 g
-                              </button>
-                            </article>
-                          ))}
-                      </div>
+                  <section className="workspaceSection" aria-labelledby="nested-recipes-heading">
+                    <h3 id="nested-recipes-heading">Nested recipe ingredients</h3>
+                    <label className="formField" htmlFor="nested-recipe-filter">
+                      <span>Filter loaded nested recipes by name</span>
+                      <input
+                        id="nested-recipe-filter"
+                        type="search"
+                        maxLength={200}
+                        disabled={nestedFilterDisabled}
+                        aria-describedby="nested-recipe-filter-status"
+                        value={nestedFilterValue}
+                        onChange={(event) => changeNestedFilter(event.target.value)}
+                      />
+                    </label>
+                    <button
+                      className="buttonQuiet"
+                      type="button"
+                      disabled={nestedFilterDisabled}
+                      onClick={() => changeNestedFilter("")}
+                    >
+                      Clear nested recipe filter
+                    </button>
+                    <p className="fieldHelp" id="nested-recipe-filter-status" aria-live="polite">
+                      {loadedListVerified ? (
+                        <>
+                          {visibleNestedRecipes.length} matching · {eligibleNestedRecipes.length}{" "}
+                          eligible loaded recipes.
+                          {eligibleNestedRecipes.length === 0
+                            ? " No eligible nested recipes are loaded."
+                            : visibleNestedRecipes.length === 0
+                              ? " No loaded nested recipes match this name."
+                              : ""}
+                          {nextCursor
+                            ? " More recipes may be available. Use Load more recipes in Your recipes to include them."
+                            : " All saved recipes are loaded."}
+                          {builder.recipeId ? " The recipe being edited is excluded." : ""}
+                        </>
+                      ) : (
+                        "Nested recipe choices have not been loaded yet."
+                      )}
+                    </p>
+                    <div className="ingredientSearchResults">
+                      {visibleNestedRecipes.map((recipe) => (
+                        <article className="ingredientResult" key={recipe.id}>
+                          <div>
+                            <strong>{recipe.name}</strong>
+                            <p className="sourceLine">
+                              Version {recipe.versionNumber} · {recipe.finalYieldGrams} g yield
+                            </p>
+                          </div>
+                          <button
+                            className="buttonQuiet"
+                            aria-label={`Pin 100 g of ${recipe.name} version ${recipe.versionNumber}`}
+                            disabled={nestedFilterDisabled || builder.ingredients.length >= 50}
+                            onClick={() => addNested(recipe)}
+                            type="button"
+                          >
+                            Add 100 g
+                          </button>
+                        </article>
+                      ))}
                     </div>
-                  ) : null}
+                  </section>
                 </section>
                 <button
                   className="buttonPrimary"

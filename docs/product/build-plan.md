@@ -150,6 +150,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Native biometric reading units and identity | ADR 0045 source, independent in-task review, focused native identity/value/body/retry checks, canonical local gates and fresh native exports passed; preserve exact-commit automatic, external reviewer, device and release acceptance |
 | Automatic evidence / independent review | Native Goals nutrient picker | ADR 0046 all-match/unit/count/Clear source, focused component/helper checks, independent in-task review, canonical local gates and fresh native exports passed; automatic, device, external reviewer and release acceptance remain separate |
 | Automatic evidence / independent review | Activity Add duration presets | ADR 0047 focused component/type/format, independent in-task review, canonical local gates, fresh client outputs and synthetic Chrome preset/manual/create/readback/retry/keyboard/narrow/expiry proof passed; automatic/external/device/release separate |
+| Automatic evidence / independent review | Filter loaded nested-recipe choices | ADR 0048 independent filter/counts/Clear and exact pins, focused review, canonical gates, fresh client outputs and synthetic Chrome draft/paging/retry/keyboard/narrow/expiry proof passed; automatic/external/device/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1417,8 +1418,30 @@ At the September 10, 2026 21:06:04 UTC preflight, delivered base
 `f6e521f9ae9ba1a303b09187846368097adeb71e` CI `34530127670` and container
 `34530127679` were in progress. Base results do not transfer to this slice.
 
-### Next continuation
+### Loaded nested-recipe ingredient filtering: source/local complete
 
-Revalidate automatic results and independent-review findings, then select the
-next bounded user-visible card from current source. No successor implementation
-has started; live catalogue, device, hosting and release gates remain separate.
+[ADR 0048](../adr/0048-loaded-nested-recipe-filter.md) adds an independent local
+name filter to the web/native nested-recipe picker. Preserve loaded order,
+duplicate identities, self-exclusion, exact version pins, existing explicit paging
+and every other recipe workspace draft. Truthful matched/eligible-loaded counts,
+unverified/no-match/incomplete meaning, small current-query/choice guards and
+keyboard/narrow controls are required. No API or nutrition calculation changes.
+
+Focused component/type/format checks, independent in-task review, frozen canonical
+gates with fresh client outputs and bounded production Next/BFF dedicated-Chrome
+synthetic proof passed. Real persistence, device, assistive technology,
+concurrent React, external reviewer, hosted and release acceptance remain separate.
+
+At the September 10, 2026 21:34:06 UTC preflight, base
+`10e3141ebd48ee7f46a137f45401b9b6921f36d1` CI `34532752403` and container
+`34532752391` were in progress. Base results do not transfer to this slice.
+
+### Next bounded candidate
+
+Revalidate automatic results and independent-review findings. The next bounded
+candidate is a Show/Hide nutrient disclosure for a logged diary entry on web/native,
+using its existing immutable nutrient vector and display helpers. Label values for
+the logged portion and preserve exact zero/trace/partial/unknown meaning without
+new math or requests. Review entry/date/revision, paging and meal-collapse state
+before accepting that card. No successor implementation has started; external
+device, catalogue, hosting and release gates remain separate.
