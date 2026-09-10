@@ -296,6 +296,8 @@ function HealthRoute(
     <RetentionScreen
       accessToken={props.accessToken}
       apiBase={props.apiBase}
+      ownerUserId={props.session.user.id}
+      sessionEpoch={props.sessionEpoch}
       onErasureAccepted={props.onErasureAccepted}
       onErasurePrepared={props.onErasurePrepared}
       onUnauthorized={props.onUnauthorized}

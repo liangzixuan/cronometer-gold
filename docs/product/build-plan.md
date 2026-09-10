@@ -140,7 +140,8 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Reuse activity details in a new draft | ADR 0037 source, independent in-task review, canonical local gates and synthetic Chrome exact-field/create/retry/narrow/keyboard QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
 | Automatic evidence / independent review | Hydration amount presets in the Add form | ADR 0038 source, independent in-task review, canonical local gates and synthetic Chrome preset/custom/create/retry/narrow/keyboard QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
 | Automatic evidence / independent review | Filter the loaded saved-recipe list by name | ADR 0039 source, independent in-task review, canonical local gates and synthetic Chrome no-request/paging/draft/keyboard/narrow/expiry QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
-| Next bounded source candidate | Named nutrient rows for native custom foods | Review a named nutrient/state/amount composer using the existing picker, while preserving a lossless manual/existing-row path, exact values and explicit Create/Save; no new endpoint, math, storage or automatic save |
+| Automatic evidence / independent review | Named nutrient rows for native custom foods | ADR 0040 source, independent in-task review, focused native/helper tests, canonical local gates and fresh native exports passed; record exact-commit automatic results and preserve device/independent/release acceptance |
+| Next bounded source candidate | Inspect saved custom-food nutrients without editing | Review explicit Show/Hide of already loaded saved nutrient snapshots on web/native, preserving exact states, version identity, current drafts and pending operations; no new request, registry lookup or calculation |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -437,18 +438,37 @@ Base `bf28347520b213b6e4e0f4c09e725174a5021c1a` CI `34458946024` succeeded
 in progress at the 09:24:49 UTC read-only observation. This base evidence does
 not transfer automatic acceptance to the new source checkpoint.
 
-The next bounded source candidate is **Named nutrient rows for native custom
-foods**. Native currently asks for numeric-ID canonical lines; web already offers
-named nutrient/state/amount/reason controls. Review a native composer using the
-existing names/units registry, preserving exact decimal strings, quantified zero,
-trace, explicit unknown reasons, order, duplicate rejection and 1–256 row bounds.
-The existing targetable registry excludes energy and is not the complete nutrient
-registry: retain a lossless manual/existing-row path for energy and non-targetable
-IDs instead of replacing the canonical editor or guessing a nutrient ID. Preserve
-saved versions, stable body/key retries and all other retention/log/privacy work.
-Require explicit Create/Save; do not default a new measured amount to zero.
-Prepare its acceptance card before implementation. No new endpoint, nutrition
-math, dependency, storage, automatic save or device/release claim is planned.
+The source checkpoint **Named nutrient rows for native custom foods** follows
+[ADR 0040](../adr/0040-native-custom-food-nutrient-composer.md). The named composer
+appends a validated available nutrient with an explicit per-100-g amount, trace or
+unknown reason. Canonical text remains the lossless manual edit/remove path,
+including energy and other IDs absent from the targetable picker. No implicit save
+or measured zero is added. Custom-only draft/session/lifecycle guards preserve
+stable unresolved body/key retries through malformed success and ordinary edits.
+HealthRoute passes existing owner/session identity without remounting other flows.
+
+Independent in-task review, focused helper/actual native component tests, affected
+types/format, canonical check/build/licenses and fresh iOS/Android exports passed.
+Exact counts, cache status and limits are recorded in ADR 0040 and Windows readiness.
+No web implementation, endpoint, schema, dependency, storage, outbox or math change
+is included. Native mocks/exports do not replace device layout, assistive technology,
+real persistence, external Claude Code, hosted or release acceptance.
+
+Base `0b6d50c36550c4c06269dc78c88159f8cb331ff1` CI `34462121394` succeeded
+(updated September 10, 2026 09:48:13 UTC); container `34462121401` remained
+in progress at the 10:04:12 UTC read-only observation. This base evidence does
+not transfer automatic acceptance to this source checkpoint.
+
+The next bounded source candidate is **Inspect saved custom-food nutrients without
+editing** on web/native. Current saved cards show name/version/status but already
+carry complete nutrient snapshots. Review explicit Show/Hide per saved food/version
+using snapshot names/units and exact per-100-g amounts, quantified zero, trace and
+all unknown reasons in saved order, including energy and non-targetable IDs.
+No targetable lookup, extra request, unit conversion or per-serving calculation
+is needed. Keep current drafts/composer/log/pending work untouched, preserve paging,
+and bind visibility and stale controls to current private scope and exact loaded
+food/version. Prepare a new acceptance card before implementation; device,
+assistive-technology, real-service, independent and release gates remain separate.
 
 Prepare the external decisions alongside product work, without executing them:
 

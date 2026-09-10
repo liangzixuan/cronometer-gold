@@ -46,6 +46,10 @@ import {
 } from "../diary/quick-add-outbox";
 import { parseTargetableNutrients, type TargetableNutrient } from "../recipes/recipes-goals";
 import { palette } from "../theme";
+import { appendCanonicalNutrientInput, parseCanonicalNutrientInput } from "./custom-food-nutrients";
+
+export { parseCanonicalNutrientInput } from "./custom-food-nutrients";
+
 import {
   createHardwareDeviceSigner,
   createRegistrationProof,
@@ -89,6 +93,8 @@ import {
 } from "./retention";
 
 interface Props {
+  readonly ownerUserId: string;
+  readonly sessionEpoch: number;
   readonly apiBase: URL;
   readonly accessToken: string;
   readonly profileTimeZone: string;
@@ -120,6 +126,17 @@ interface CustomDraft {
   readonly servingGrams: string;
   readonly notes: string;
   readonly nutrients: string;
+}
+
+interface NutrientComposer {
+  readonly query: string;
+  readonly nutrientId: string;
+  readonly state: "quantified" | "trace" | "unknown";
+  readonly amount: string;
+  readonly reason: "" | "not_reported" | "not_analyzed" | "not_applicable" | "withheld";
+}
+function blankComposer(): NutrientComposer {
+  return { query: "", nutrientId: "", state: "quantified", amount: "", reason: "" };
 }
 
 interface EventDraft {
@@ -166,7 +183,6 @@ function initialCustomLog(
 
 const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
 const EXACT_DECIMAL = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/u;
-const NON_NEGATIVE_DECIMAL = /^(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/u;
 const API_CURSOR = /^[A-Za-z0-9_.-]{1,512}$/u;
 const MAX_EXPORT_BYTES = 10_737_418_240;
 
@@ -204,42 +220,6 @@ function customDraft(food: CustomFood): CustomDraft {
     notes: food.currentVersion.notes ?? "",
     nutrients: nutrientInput(food),
   };
-}
-
-export function parseCanonicalNutrientInput(value: string): readonly CustomFoodNutrientDraft[] {
-  const rows = value
-    .split(/\r?\n/u)
-    .map((row) => row.trim())
-    .filter(Boolean);
-  if (rows.length < 1 || rows.length > 256) {
-    throw new RangeError("Enter between 1 and 256 canonical nutrient rows.");
-  }
-  const result = rows.map((row): CustomFoodNutrientDraft => {
-    const separator = row.indexOf("=");
-    const nutrientId = row.slice(0, separator);
-    const amount = row.slice(separator + 1);
-    if (separator < 1 || !/^[1-9][0-9]{0,19}$/u.test(nutrientId)) {
-      throw new TypeError("Each nutrient row must start with its numeric nutrient ID.");
-    }
-    if (NON_NEGATIVE_DECIMAL.test(amount) && amount.length <= 200) {
-      return { nutrientId, state: "quantified", amountPer100Grams: amount };
-    }
-    if (amount === "trace") return { nutrientId, state: "trace", amountPer100Grams: null };
-    const unknown = /^unknown:(not_reported|not_analyzed|not_applicable|withheld)$/u.exec(amount);
-    if (unknown?.[1]) {
-      return {
-        nutrientId,
-        state: "unknown",
-        amountPer100Grams: null,
-        reason: unknown[1] as "not_reported" | "not_analyzed" | "not_applicable" | "withheld",
-      };
-    }
-    throw new TypeError("Use an exact amount per 100 g, trace, or unknown:<reason>.");
-  });
-  if (new Set(result.map((row) => row.nutrientId)).size !== result.length) {
-    throw new TypeError("Each nutrient may appear only once.");
-  }
-  return result;
 }
 
 export function nutrientTrendLabel(
@@ -297,6 +277,8 @@ function platformForDevice(): HealthPlatform | null {
 }
 
 export function RetentionScreen({
+  ownerUserId,
+  sessionEpoch,
   apiBase,
   accessToken,
   profileTimeZone,
@@ -312,11 +294,30 @@ export function RetentionScreen({
     () => new Intl.DateTimeFormat("en-CA", { timeZone: profileTimeZone }).format(new Date()),
     [profileTimeZone],
   );
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [loading, setLoadingState] = useState(true);
+  const loadingRef = useRef(loading);
+  const setLoading = useCallback((value: boolean) => {
+    loadingRef.current = value;
+    setLoadingState(value);
+  }, []);
+  const [busy, setBusyState] = useState<string | null>(null);
+  const busyRef = useRef(busy);
+  const setBusy = useCallback((value: string | null) => {
+    busyRef.current = value;
+    setBusyState(value);
+  }, []);
   const [message, setMessage] = useState("Opening private health data…");
   const [nutrients, setNutrients] = useState<readonly TargetableNutrient[]>([]);
-  const [foods, setFoods] = useState<readonly CustomFood[]>([]);
+  const [foods, setFoodsState] = useState<readonly CustomFood[]>([]);
+  const foodsRef = useRef(foods);
+  const setFoods = useCallback(
+    (value: readonly CustomFood[] | ((items: readonly CustomFood[]) => readonly CustomFood[])) => {
+      const next = typeof value === "function" ? value(foodsRef.current) : value;
+      foodsRef.current = next;
+      setFoodsState(next);
+    },
+    [],
+  );
   const [foodCursor, setFoodCursor] = useState<string | null>(null);
   const [definitions, setDefinitions] = useState<readonly BiometricDefinition[]>([]);
   const [events, setEvents] = useState<readonly BiometricEvent[]>([]);
@@ -327,7 +328,120 @@ export function RetentionScreen({
   } | null>(null);
   const [reminders, setReminders] = useState<readonly Reminder[]>([]);
   const [integrations, setIntegrations] = useState<readonly PlatformIntegration[]>([]);
-  const [custom, setCustom] = useState<CustomDraft>(blankCustom);
+  const [custom, setCustomState] = useState<CustomDraft>(blankCustom);
+  const customRef = useRef(custom);
+  const [composer, setComposerState] = useState<NutrientComposer>(blankComposer);
+  const composerRef = useRef(composer);
+  const [composerStatus, setComposerStatus] = useState("");
+  const customScopeRef = useRef({ ownerUserId, sessionEpoch, accessToken, base: apiBase.href });
+  if (
+    customScopeRef.current.ownerUserId !== ownerUserId ||
+    customScopeRef.current.sessionEpoch !== sessionEpoch ||
+    customScopeRef.current.accessToken !== accessToken ||
+    customScopeRef.current.base !== apiBase.href
+  )
+    customScopeRef.current = { ownerUserId, sessionEpoch, accessToken, base: apiBase.href };
+  const customScope = customScopeRef.current;
+  const customInstalled = useRef<typeof customScope | null>(null);
+  const customClosed = useRef<typeof customScope | null>(null);
+  const customMounted = useRef(false);
+  const customActive = useRef(AppState.currentState === "active");
+  const customEpoch = useRef(0);
+  const [, setCustomEpoch] = useState(0);
+  const registry = useRef<{
+    scope: typeof customScope;
+    values: readonly TargetableNutrient[];
+  } | null>(null);
+  const customFoodsScope = useRef<typeof customScope | null>(null);
+  const customOperations = useRef(new Map<string, StableOperation>());
+  const customWrite = useRef<AbortController | null>(null);
+  const customPageRequest = useRef<AbortController | null>(null);
+  const unauthorizedRef = useRef(onUnauthorized);
+  unauthorizedRef.current = onUnauthorized;
+  const installCustom = useCallback((value: CustomDraft, resetComposer = false) => {
+    customRef.current = value;
+    setCustomState(value);
+    if (resetComposer) {
+      const next = blankComposer();
+      composerRef.current = next;
+      setComposerState(next);
+      setComposerStatus("");
+    }
+  }, []);
+  const currentCustomScope = useCallback(
+    (epoch: number) =>
+      customMounted.current &&
+      customActive.current &&
+      customScopeRef.current === customScope &&
+      customInstalled.current === customScope &&
+      customClosed.current !== customScope &&
+      customEpoch.current === epoch &&
+      ownerUserId.length > 0 &&
+      accessToken.length > 0 &&
+      Number.isSafeInteger(sessionEpoch) &&
+      sessionEpoch >= 0,
+    [accessToken, customScope, ownerUserId, sessionEpoch],
+  );
+  const closeCustom = useCallback(() => {
+    if (!currentCustomScope(customEpoch.current)) return;
+    customClosed.current = customScope;
+    customEpoch.current += 1;
+    registry.current = null;
+    customFoodsScope.current = null;
+    customWrite.current?.abort();
+    customWrite.current = null;
+    customPageRequest.current?.abort();
+    customPageRequest.current = null;
+    customOperations.current.clear();
+    installCustom(blankCustom(), true);
+    if (busyRef.current === "custom" || busyRef.current === "food-more") setBusy(null);
+  }, [currentCustomScope, customScope, installCustom, setBusy]);
+  useEffect(() => {
+    customMounted.current = true;
+    customEpoch.current += 1;
+    if (customInstalled.current !== customScope) {
+      customInstalled.current = customScope;
+      registry.current = null;
+      customFoodsScope.current = null;
+      setFoods([]);
+      setFoodCursor(null);
+      customOperations.current.clear();
+      installCustom(blankCustom(), true);
+    }
+    if (
+      (busyRef.current === "custom" && !customWrite.current) ||
+      (busyRef.current === "food-more" && !customPageRequest.current)
+    )
+      setBusy(null);
+    return () => {
+      customMounted.current = false;
+      customEpoch.current += 1;
+      customWrite.current?.abort();
+      customWrite.current = null;
+      customPageRequest.current?.abort();
+      customPageRequest.current = null;
+    };
+  }, [customScope, installCustom, setBusy, setFoods]);
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (next) => {
+      const active = next === "active";
+      if (
+        !customMounted.current ||
+        customScopeRef.current !== customScope ||
+        customActive.current === active
+      )
+        return;
+      customActive.current = active;
+      customEpoch.current += 1;
+      customWrite.current?.abort();
+      customWrite.current = null;
+      customPageRequest.current?.abort();
+      customPageRequest.current = null;
+      if (busyRef.current === "custom" || busyRef.current === "food-more") setBusy(null);
+      setCustomEpoch(customEpoch.current);
+    });
+    return () => subscription.remove();
+  }, [customScope, setBusy]);
   const [customLog, setCustomLog] = useState<CustomLogDraft | null>(null);
   const [definitionName, setDefinitionName] = useState("Weight");
   const [definitionDimension, setDefinitionDimension] =
@@ -453,6 +567,8 @@ export function RetentionScreen({
   }, []);
 
   const loadAll = useCallback(async () => {
+    const epoch = customEpoch.current;
+    registry.current = null;
     loadController.current?.abort();
     const controller = new AbortController();
     loadController.current = controller;
@@ -476,7 +592,14 @@ export function RetentionScreen({
           }),
         ),
       );
-      if (responses.some((response) => response.status === 401)) return onUnauthorized();
+      if (controller.signal.aborted) return;
+      if (responses.some((response) => response.status === 401)) {
+        if (currentCustomScope(epoch)) {
+          closeCustom();
+          await unauthorizedRef.current();
+        }
+        return;
+      }
       const values = await Promise.all(responses.map(jsonBody));
       for (let index = 0; index < responses.length; index += 1) {
         if (!responses[index]?.ok) {
@@ -490,7 +613,10 @@ export function RetentionScreen({
       const eventPage = parseEventList(values[3]);
       const nextReminders = parseReminders(values[4]);
       setNutrients(nextNutrients);
+      if (currentCustomScope(epoch))
+        registry.current = { scope: customScope, values: nextNutrients };
       setFoods(foodPage.items);
+      if (currentCustomScope(epoch)) customFoodsScope.current = customScope;
       setFoodCursor(foodPage.nextCursor);
       setDefinitions(nextDefinitions);
       setEvents(eventPage.items);
@@ -518,7 +644,16 @@ export function RetentionScreen({
     } finally {
       if (!controller.signal.aborted) setLoading(false);
     }
-  }, [accessToken, apiBase, onUnauthorized, reconcileReminders]);
+  }, [
+    accessToken,
+    apiBase,
+    closeCustom,
+    currentCustomScope,
+    customScope,
+    reconcileReminders,
+    setFoods,
+    setLoading,
+  ]);
 
   useEffect(() => {
     void loadAll();
@@ -577,7 +712,99 @@ export function RetentionScreen({
     }
   }
 
+  const renderedCustomEpoch = customEpoch.current;
+  function canEditCustom() {
+    return (
+      currentCustomScope(renderedCustomEpoch) &&
+      customRef.current === custom &&
+      composerRef.current === composer &&
+      !loadingRef.current &&
+      busyRef.current === null &&
+      customWrite.current === null
+    );
+  }
+  function changeCustom(field: keyof Omit<CustomDraft, "id" | "revision">, value: string) {
+    if (!canEditCustom() || custom[field] === value) return;
+    installCustom({ ...custom, [field]: value });
+  }
+  function changeComposer(change: Partial<NutrientComposer>) {
+    if (
+      !canEditCustom() ||
+      composerRef.current !== composer ||
+      registry.current?.scope !== customScope ||
+      registry.current.values !== nutrients
+    )
+      return;
+    const next = { ...composer, ...change };
+    if (
+      Object.keys(change).every(
+        (key) => next[key as keyof NutrientComposer] === composer[key as keyof NutrientComposer],
+      )
+    )
+      return;
+    composerRef.current = next;
+    setComposerState(next);
+    setComposerStatus("");
+  }
+  function addNutrientRow() {
+    if (
+      !canEditCustom() ||
+      composerRef.current !== composer ||
+      registry.current?.scope !== customScope ||
+      registry.current.values !== nutrients
+    )
+      return;
+    try {
+      let candidate: CustomFoodNutrientDraft;
+      if (composer.state === "quantified")
+        candidate = {
+          nutrientId: composer.nutrientId,
+          state: "quantified",
+          amountPer100Grams: composer.amount,
+        };
+      else if (composer.state === "trace")
+        candidate = { nutrientId: composer.nutrientId, state: "trace", amountPer100Grams: null };
+      else {
+        if (!composer.reason)
+          throw new TypeError("Choose an explicit unknown reason before adding this row.");
+        candidate = {
+          nutrientId: composer.nutrientId,
+          state: "unknown",
+          amountPer100Grams: null,
+          reason: composer.reason,
+        };
+      }
+      const nextText = appendCanonicalNutrientInput(custom.nutrients, candidate, nutrients);
+      installCustom({ ...custom, nutrients: nextText });
+      const next = { ...composer, amount: "" };
+      composerRef.current = next;
+      setComposerState(next);
+      setComposerStatus(
+        "Nutrient row added to the draft. Choose Create private food or Save new version to save it.",
+      );
+    } catch (error) {
+      setComposerStatus(
+        error instanceof Error ? error.message : "The nutrient row could not be added.",
+      );
+    }
+  }
+  function reviseCustom(food: CustomFood) {
+    if (
+      !canEditCustom() ||
+      customFoodsScope.current !== customScope ||
+      foodsRef.current !== foods ||
+      !foodsRef.current.includes(food)
+    )
+      return;
+    installCustom(customDraft(food), true);
+  }
+  function cancelCustom() {
+    if (!canEditCustom()) return;
+    installCustom(blankCustom(), true);
+  }
+
   async function saveCustomFood() {
+    if (!canEditCustom()) return;
     if (!custom.name.trim()) return setMessage("A custom food name is required.");
     let nutrientRows: readonly CustomFoodNutrientDraft[];
     try {
@@ -589,9 +816,8 @@ export function RetentionScreen({
     if (
       servingRequested &&
       (!custom.servingLabel.trim() || !isPositiveDecimal(custom.servingGrams))
-    ) {
+    )
       return setMessage("A serving requires a label and positive grams.");
-    }
     const body = {
       name: custom.name.trim(),
       brandName: custom.brandName.trim() || null,
@@ -603,25 +829,64 @@ export function RetentionScreen({
     };
     const path = custom.id ? `/v1/custom-foods/${custom.id}/revisions` : "/v1/custom-foods";
     const key = `custom:${custom.id ?? "new"}:${custom.revision ?? "0"}:${JSON.stringify(body)}`;
+    let operation = customOperations.current.get(key);
+    if (!operation) {
+      operation = { id: newOperationId(), serializedBody: JSON.stringify(body) };
+      customOperations.current.set(key, operation);
+    }
+    const capturedOperation = operation;
+    const controller = new AbortController();
+    customWrite.current = controller;
+    const current = () =>
+      currentCustomScope(renderedCustomEpoch) &&
+      customRef.current === custom &&
+      customWrite.current === controller &&
+      !controller.signal.aborted;
     setBusy("custom");
     try {
-      const saved = parseCustomFoodResponse(
-        await request(path, {
-          method: "POST",
-          body,
-          operationKey: key,
-          ...(custom.revision ? { revision: custom.revision } : {}),
+      const response = await fetch(apiUrl(apiBase, path).toString(), {
+        method: "POST",
+        signal: controller.signal,
+        headers: authenticatedHeaders(accessToken, {
+          "content-type": "application/json",
+          "idempotency-key": capturedOperation.id,
+          ...(custom.revision ? { "if-match": quoteRevision(custom.revision) } : {}),
         }),
+        body: capturedOperation.serializedBody,
+      });
+      if (!current()) return;
+      if (response.status === 401) {
+        closeCustom();
+        await unauthorizedRef.current();
+        return;
+      }
+      const value = await jsonBody(response);
+      if (!current()) return;
+      if (response.status === 412) customOperations.current.delete(key);
+      if (!response.ok) throw new Error(responseError(value, "The private health request failed."));
+      const saved = parseCustomFoodResponse(value);
+      if (custom.id && saved.id !== custom.id)
+        throw new TypeError("The custom-food receipt belongs to another food.");
+      if (customOperations.current.get(key) === capturedOperation)
+        customOperations.current.delete(key);
+      setFoods(
+        customFoodsScope.current === customScope
+          ? [saved, ...foodsRef.current.filter((item) => item.id !== saved.id)]
+          : [saved],
       );
-      setFoods((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
-      setCustom(blankCustom());
+      customFoodsScope.current = customScope;
+      installCustom(blankCustom(), true);
       setMessage(`Saved owner-entered private food version ${saved.currentVersion.versionNumber}.`);
     } catch (error) {
-      setMessage(
-        `${error instanceof Error ? error.message : "Custom food failed."} Submit again for an exact retry.`,
-      );
+      if (current())
+        setMessage(
+          `${error instanceof Error ? error.message : "Custom food failed."} Submit again for an exact retry.`,
+        );
     } finally {
-      setBusy(null);
+      if (customWrite.current === controller) {
+        customWrite.current = null;
+        if (currentCustomScope(renderedCustomEpoch) && busyRef.current === "custom") setBusy(null);
+      }
     }
   }
 
@@ -729,21 +994,62 @@ export function RetentionScreen({
   }
 
   async function loadMoreFoods() {
-    if (!foodCursor || !API_CURSOR.test(foodCursor)) return;
+    if (
+      !currentCustomScope(renderedCustomEpoch) ||
+      loadingRef.current ||
+      busyRef.current !== null ||
+      customFoodsScope.current !== customScope ||
+      foodsRef.current !== foods ||
+      !foodCursor ||
+      !API_CURSOR.test(foodCursor)
+    )
+      return;
+    const controller = new AbortController();
+    customPageRequest.current = controller;
+    const current = () =>
+      currentCustomScope(renderedCustomEpoch) &&
+      customPageRequest.current === controller &&
+      !controller.signal.aborted &&
+      foodsRef.current === foods;
     setBusy("food-more");
     try {
-      const page = parseCustomFoodList(
-        await request(`/v1/custom-foods?limit=50&cursor=${encodeURIComponent(foodCursor)}`),
+      const response = await fetch(
+        apiUrl(
+          apiBase,
+          `/v1/custom-foods?limit=50&cursor=${encodeURIComponent(foodCursor)}`,
+        ).toString(),
+        {
+          headers: authenticatedHeaders(accessToken),
+          signal: controller.signal,
+        },
       );
-      setFoods((items) => [
-        ...items,
-        ...page.items.filter((item) => !items.some((old) => old.id === item.id)),
+      if (!current()) return;
+      if (response.status === 401) {
+        closeCustom();
+        await unauthorizedRef.current();
+        return;
+      }
+      const value = await jsonBody(response);
+      if (!current()) return;
+      if (!response.ok)
+        throw new Error(responseError(value, "More custom foods could not be loaded."));
+      const page = parseCustomFoodList(value);
+      setFoods([
+        ...foods,
+        ...page.items.filter((item) => !foods.some((old) => old.id === item.id)),
       ]);
       setFoodCursor(page.nextCursor);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "More custom foods could not be loaded.");
+      if (current())
+        setMessage(
+          error instanceof Error ? error.message : "More custom foods could not be loaded.",
+        );
     } finally {
-      setBusy(null);
+      if (customPageRequest.current === controller) {
+        customPageRequest.current = null;
+        if (currentCustomScope(renderedCustomEpoch) && busyRef.current === "food-more")
+          setBusy(null);
+      }
     }
   }
 
@@ -1432,6 +1738,20 @@ export function RetentionScreen({
     });
   }
 
+  const customVisible = currentCustomScope(customEpoch.current);
+  const visibleComposer = customVisible ? composer : blankComposer();
+  const customDisabled = !customVisible || loading || busy !== null || customWrite.current !== null;
+  const composerAvailable =
+    customVisible &&
+    registry.current?.scope === customScope &&
+    registry.current.values === nutrients;
+  const composerDisabled = customDisabled || !composerAvailable;
+  const availableNutrients = composerAvailable ? nutrients : [];
+  const matchedNutrients = availableNutrients.filter((item) =>
+    item.name.toLowerCase().includes(composer.query.trim().toLowerCase()),
+  );
+  const chosenNutrient = availableNutrients.find((item) => item.nutrientId === composer.nutrientId);
+
   const customLogUnavailable =
     busy !== null ||
     quickAddOutboxState.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS ||
@@ -1513,33 +1833,135 @@ export function RetentionScreen({
         >
           <LabeledInput
             label="Name"
-            value={custom.name}
-            onChangeText={(name) => setCustom({ ...custom, name })}
+            value={customVisible ? custom.name : ""}
+            disabled={customDisabled}
+            onChangeText={(name) => changeCustom("name", name)}
             maxLength={500}
           />
           <LabeledInput
             label="Brand (optional)"
-            value={custom.brandName}
-            onChangeText={(brandName) => setCustom({ ...custom, brandName })}
+            value={customVisible ? custom.brandName : ""}
+            disabled={customDisabled}
+            onChangeText={(brandName) => changeCustom("brandName", brandName)}
             maxLength={300}
           />
           <LabeledInput
             label="Serving label (optional)"
-            value={custom.servingLabel}
-            onChangeText={(servingLabel) => setCustom({ ...custom, servingLabel })}
+            value={customVisible ? custom.servingLabel : ""}
+            disabled={customDisabled}
+            onChangeText={(servingLabel) => changeCustom("servingLabel", servingLabel)}
             maxLength={200}
           />
           <LabeledInput
             label="Serving grams"
-            value={custom.servingGrams}
-            onChangeText={(servingGrams) => setCustom({ ...custom, servingGrams })}
+            value={customVisible ? custom.servingGrams : ""}
+            disabled={customDisabled}
+            onChangeText={(servingGrams) => changeCustom("servingGrams", servingGrams)}
             maxLength={19}
             keyboardType="decimal-pad"
           />
+          <View style={styles.editor}>
+            <Text accessibilityRole="header" style={styles.subheading}>
+              Add a named nutrient row
+            </Text>
+            <Text style={styles.help}>
+              This picker contains a limited nutrient list. Calories or missing nutrients can still
+              use the manual text field below. Adding a row does not save the food.
+            </Text>
+            <LabeledInput
+              label="Find an available nutrient by name"
+              value={customVisible ? composer.query : ""}
+              maxLength={200}
+              disabled={composerDisabled}
+              onChangeText={(query) => changeComposer({ query })}
+            />
+            <Text style={styles.help}>
+              {composerAvailable
+                ? `${matchedNutrients.length} matching of ${availableNutrients.length} available nutrients.`
+                : "The named nutrient list has not loaded. Choose Refresh private data to try again. Manual text entry remains available."}
+            </Text>
+            <ChipRow
+              disabled={composerDisabled}
+              items={matchedNutrients.map((item) => ({
+                key: item.nutrientId,
+                label: `${item.name} (${item.unit})`,
+              }))}
+              selected={customVisible ? composer.nutrientId : ""}
+              onSelect={(nutrientId) => changeComposer({ nutrientId })}
+            />
+            <Text style={styles.label}>
+              {chosenNutrient
+                ? `${chosenNutrient.name} · ${chosenNutrient.unit} per 100 g`
+                : "Choose an available nutrient"}
+            </Text>
+            <ChipRow
+              disabled={composerDisabled}
+              items={[
+                { key: "quantified", label: "Quantified" },
+                { key: "trace", label: "Trace" },
+                { key: "unknown", label: "Unknown" },
+              ]}
+              selected={visibleComposer.state}
+              onSelect={(state) => {
+                if (state === "quantified" || state === "trace" || state === "unknown")
+                  changeComposer({ state });
+              }}
+            />
+            {visibleComposer.state === "quantified" ? (
+              <LabeledInput
+                label={
+                  chosenNutrient
+                    ? `${chosenNutrient.name} amount (${chosenNutrient.unit} per 100 g)`
+                    : "Exact amount per 100 g"
+                }
+                value={customVisible ? composer.amount : ""}
+                maxLength={200}
+                disabled={composerDisabled}
+                keyboardType="decimal-pad"
+                onChangeText={(amount) => changeComposer({ amount })}
+              />
+            ) : null}
+            {visibleComposer.state === "unknown" ? (
+              <>
+                <Text style={styles.label}>Unknown reason (required)</Text>
+                <ChipRow
+                  disabled={composerDisabled}
+                  items={[
+                    { key: "not_reported", label: "Not reported" },
+                    { key: "not_analyzed", label: "Not analyzed" },
+                    { key: "not_applicable", label: "Not applicable" },
+                    { key: "withheld", label: "Withheld" },
+                  ]}
+                  selected={customVisible ? composer.reason : ""}
+                  onSelect={(reason) => {
+                    if (
+                      reason === "not_reported" ||
+                      reason === "not_analyzed" ||
+                      reason === "not_applicable" ||
+                      reason === "withheld"
+                    )
+                      changeComposer({ reason });
+                  }}
+                />
+              </>
+            ) : null}
+            <Button
+              label="Add nutrient row to draft"
+              disabled={composerDisabled}
+              onPress={addNutrientRow}
+              secondary
+            />
+            {customVisible && composerStatus ? (
+              <Text accessibilityLiveRegion="polite" style={styles.help}>
+                {composerStatus}
+              </Text>
+            ) : null}
+          </View>
           <LabeledInput
             label="Canonical nutrients per 100 g"
-            value={custom.nutrients}
-            onChangeText={(nutrientsValue) => setCustom({ ...custom, nutrients: nutrientsValue })}
+            value={customVisible ? custom.nutrients : ""}
+            disabled={customDisabled}
+            onChangeText={(nutrientsValue) => changeCustom("nutrients", nutrientsValue)}
             multiline
             maxLength={12_000}
             placeholder="1=120\n2=trace\n3=unknown:not_reported"
@@ -1550,29 +1972,40 @@ export function RetentionScreen({
           </Text>
           <LabeledInput
             label="Notes"
-            value={custom.notes}
-            onChangeText={(notes) => setCustom({ ...custom, notes })}
+            value={customVisible ? custom.notes : ""}
+            disabled={customDisabled}
+            onChangeText={(notes) => changeCustom("notes", notes)}
             multiline
             maxLength={2_000}
           />
           <View style={styles.actions}>
             <Button
-              disabled={busy === "custom"}
-              label={custom.id ? "Save new version" : "Create private food"}
+              disabled={customDisabled}
+              label={customVisible && custom.id ? "Save new version" : "Create private food"}
               onPress={() => void saveCustomFood()}
             />
-            {custom.id ? (
-              <Button label="Cancel edit" onPress={() => setCustom(blankCustom())} secondary />
+            {customVisible && custom.id ? (
+              <Button
+                label="Cancel edit"
+                disabled={customDisabled}
+                onPress={cancelCustom}
+                secondary
+              />
             ) : null}
           </View>
-          {foods.map((food) => (
+          {(customVisible && customFoodsScope.current === customScope ? foods : []).map((food) => (
             <View key={food.id} style={styles.card}>
               <Text style={styles.cardTitle}>{food.currentVersion.name}</Text>
               <Text style={styles.meta}>
                 Version {food.currentVersion.versionNumber} · {food.status} · owner-entered
               </Text>
               <View style={styles.actions}>
-                <Button label="Revise" onPress={() => setCustom(customDraft(food))} secondary />
+                <Button
+                  label="Revise"
+                  disabled={customDisabled}
+                  onPress={() => reviseCustom(food)}
+                  secondary
+                />
                 <Button
                   label="Log exact version"
                   onPress={() => setCustomLog(initialCustomLog(food, profileTimeZone))}
@@ -2104,6 +2537,7 @@ function Section({
 }
 
 function LabeledInput(props: {
+  readonly disabled?: boolean;
   readonly label: string;
   readonly value: string;
   readonly onChangeText: (value: string) => void;
@@ -2119,6 +2553,7 @@ function LabeledInput(props: {
       <Text style={styles.label}>{props.label}</Text>
       <TextInput
         accessibilityLabel={props.label}
+        editable={!props.disabled}
         autoCapitalize={props.autoCapitalize ?? "none"}
         keyboardType={props.keyboardType ?? "default"}
         maxLength={props.maxLength}
@@ -2134,6 +2569,7 @@ function LabeledInput(props: {
 }
 
 function ChipRow(props: {
+  readonly disabled?: boolean;
   readonly items: readonly { readonly key: string; readonly label: string }[];
   readonly selected: string | readonly string[];
   readonly onSelect: (key: string) => void;
@@ -2147,7 +2583,12 @@ function ChipRow(props: {
         return (
           <Pressable
             accessibilityRole={props.multiple ? "checkbox" : "radio"}
-            accessibilityState={props.multiple ? { checked: active } : { selected: active }}
+            accessibilityState={
+              props.multiple
+                ? { checked: active, disabled: Boolean(props.disabled) }
+                : { selected: active, disabled: Boolean(props.disabled) }
+            }
+            disabled={props.disabled}
             key={item.key}
             onPress={() => props.onSelect(item.key)}
             style={[styles.chip, active && styles.chipActive]}

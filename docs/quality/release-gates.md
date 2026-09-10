@@ -623,3 +623,20 @@ acceptance.
   exports, and synthetic Chrome paging/draft/keyboard/narrow/privacy proof cover
   bounded source behavior only. Real persistence, physical native, assistive
   technology, independent Claude Code and release gates remain separate.
+
+
+## ADR 0040 native custom-food named nutrient composer
+
+- Keep canonical nutrient text as the lossless manual/existing-row path; targetable
+  picker availability must not discard energy or any non-targetable nutrient ID.
+- Named append preserves exact decimals, zero/trace/unknown semantics, existing
+  bytes/order and parser limits; invalid/duplicate/over-capacity Add is nonmutating.
+  No implicit save, numeric conversion, guessed nutrient identity or measured zero.
+- Prove actual native composer/custom-editor no-request state, explicit create/
+  revision and exact retry body/key, unchanged other retention drafts, current/
+  stale/private/foreground callbacks and late custom-save receipt ownership.
+- Independent review, affected types/format, canonical check/build/licenses and
+  fresh native exports are required. Platform mocks/exports are not rendered-device
+  layout, assistive technology, real persistence, hosted or signed-device acceptance.
+- No endpoint/schema/dependency/outbox/storage/math or web implementation change;
+  existing vulnerability, provenance, reviewer and release-authority gates remain.
