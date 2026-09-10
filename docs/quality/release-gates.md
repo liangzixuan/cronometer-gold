@@ -790,3 +790,16 @@ acceptance.
   values/no-request/draft/paging/retry/meal/date/keyboard/narrow/expiry proof.
   Real persistence, device, assistive technology, concurrent React, external
   reviewer, hosted and release acceptance remain separate.
+
+
+## ADR 0050 Saved reminder weekdays
+
+- Web/native saved cards show weekday membership in Monday-to-Sunday order using
+  existing parsed data and labels, including active/paused/revoked schedules.
+  Preserve exact time/zone/status and raw drafts; make no delivery claim.
+- Keep this presentation-only change free of new state, helpers, requests or
+  scheduling/permission changes. Run existing focused suites, affected types and
+  formatting, independent review and canonical gates with fresh client outputs.
+- Source-validated synthetic Chrome verifies saved membership, edit independence,
+  no added requests, narrow layout and expiry. Device, assistive technology,
+  real persistence, notification delivery, external and release gates remain.

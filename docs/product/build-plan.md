@@ -152,6 +152,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Activity Add duration presets | ADR 0047 focused component/type/format, independent in-task review, canonical local gates, fresh client outputs and synthetic Chrome preset/manual/create/readback/retry/keyboard/narrow/expiry proof passed; automatic/external/device/release separate |
 | Automatic evidence / independent review | Filter loaded nested-recipe choices | ADR 0048 independent filter/counts/Clear and exact pins, focused review, canonical gates, fresh client outputs and synthetic Chrome draft/paging/retry/keyboard/narrow/expiry proof passed; automatic/external/device/release separate |
 | Automatic evidence / independent review | Inspect logged diary entry nutrients | ADR 0049 exact logged-portion disclosures, focused review, canonical gates, fresh client outputs and synthetic Chrome values/draft/paging/meal/date/keyboard/narrow/expiry proof passed; automatic/external/device/release separate |
+| Automatic evidence / independent review | Show saved reminder weekdays | ADR 0050 saved membership, existing focused checks, fresh canonical gates and synthetic Chrome saved-days/draft/narrow/expiry proof passed; automatic/external/device/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1451,12 +1452,24 @@ Base `490fb98480a43bef8a8c65ecbb4f59c02086f6f3` CI `34536352453` and container
 Base results do not transfer to this slice. External review, device, hosted and
 release acceptance remain separate.
 
+### Saved reminder weekdays: source/local complete
+
+[ADR 0050](../adr/0050-saved-reminder-weekdays.md) adds a Saved days label using
+existing weekday membership on web/native. Preserve time, zone, status, drafts
+and all scheduling/session protocols. This is a small rendering change with no
+new state, requests or helpers. Existing focused suites, source review, canonical
+gates and bounded synthetic Chrome proof passed.
+
+Base `f1367235a3f3574b2ba74dc5a88df8de55bd0473` CI `34539555642` succeeded;
+container `34539555627` remained in progress at September 10, 2026 23:31:22 UTC.
+Base results do not transfer to this slice. Device, notification delivery,
+external reviewer, hosted and release acceptance remain separate.
+
 ### Next bounded candidate
 
 Revalidate exact automatic results and external-review findings. The next bounded
-candidate is displaying saved reminder weekdays beside existing time, time zone
-and status on web/native. Both clients already receive valid daysOfWeek and have
-day labels; render membership in Monday-to-Sunday order, including paused/revoked
-schedules. Preserve saved values, raw edits and operation identity. No new state,
-request, rescheduling, notification delivery or backend change is proposed.
-No successor implementation has started; device, hosted and release gates remain.
+candidate is clarifying saved biometric date/time and time zone on web/native.
+Use each reading's saved localDate and timeZone with existing formatting helpers,
+including a zone different from the browser and a date boundary. Preserve source,
+measuredAt, editor values and operation identity. No new state, request, helper or
+backend change is proposed. No successor implementation has started.

@@ -2663,6 +2663,12 @@ export function HealthClient() {
                     <small>
                       {item.localTime} · {item.timeZone} · {item.status}
                     </small>
+                    <small>
+                      Saved days:{" "}
+                      {dayNames
+                        .filter((_, index) => item.daysOfWeek.includes(index + 1))
+                        .join(", ")}
+                    </small>
                     <small>Lock screen: {item.deliveryPolicy.lockScreenText}</small>
                   </div>
                   <div className="entryActions">

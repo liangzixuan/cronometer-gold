@@ -3036,6 +3036,10 @@ export function RetentionScreen({
               <Text style={styles.meta}>
                 {reminder.localTime} · {reminder.status} · {reminder.timeZone}
               </Text>
+              <Text style={styles.meta}>
+                Saved days:{" "}
+                {dayNames.filter((_, index) => reminder.daysOfWeek.includes(index + 1)).join(", ")}
+              </Text>
               <View style={styles.actions}>
                 {reminder.status !== "revoked" ? (
                   <>
