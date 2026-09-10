@@ -422,6 +422,14 @@ acceptance.
   Retryable authorization/receipt failures preserve the stable recipe save body/key.
   Source harnesses and Expo exports do not replace native keyboard/screen-reader,
   signed-device, hosted or independent release acceptance.
+- Saved-recipe nutrition inspection under ADR 0031 identifies the exact saved
+  version and selected per-serving/per-100 g basis. Only existing vectors are
+  shown; unsaved builder edits and diary portions do not alter those values.
+  Recipe/version/session transitions reset or close stale controls. Unknown,
+  partial, trace and measured zero remain distinct through the existing diary
+  formatter, without new calculations or mutations. Actual-component and
+  synthetic browser evidence do not replace native device, assistive-technology,
+  independent reviewer or hosted acceptance.
 - The optional M1B-R reference-template candidate remains disabled for
   controlled-beta and commercial users until a named registered dietitian or
   qualified clinical-science owner approves its exact values, canonical units,

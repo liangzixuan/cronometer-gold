@@ -130,7 +130,8 @@ the detailed milestone boundaries below remain authoritative.
 | Build repair / automatic evidence | M1F: complete the daily hydration correction flow | Web and mobile let a person correct when water was logged through the existing `occurredAt` API, explain profile-local time and ambiguous/invalid times, and refresh the affected day after a move; retain retry/revision/privacy rules and prove the food/water/activity/report journey with synthetic local data |
 | Acceptance follow-up | M3B: print the current nutrition report on web | Print the already loaded coherent report as readable Letter/A4 output, preserving exact evidence and missingness; session closure or invalidation prevents stale private output; repeat-print/direct-Ctrl+P manual checks and exact-commit automatic evidence remain open |
 | Automatic evidence / independent review | M4A: review a pasted ingredient list on web | Local checks and synthetic browser flow passed; `88930fe` and status update `58abb4c` were delivered. Record exact-commit CI/container evidence and preserve independent/release acceptance |
-| Now: automatic-check recovery | M4B: review a pasted ingredient list on mobile | Source/local gates passed and checkpoint delivered; diagnose the failed synthetic collector prerequisite, preserve its boundaries and obtain replacement exact-commit automatic evidence |
+| Automatic evidence / independent review | M4B: review a pasted ingredient list on mobile | Source/local gates passed; collector diagnostic recovery delivered as `2df4493` with successful CI `34423562282`; container `34423562294` remains pending at the latest observation |
+| Source/local complete; automatic evidence next | Saved recipe nutrition basis and coverage | Explicit serving/100 g selection and exact coverage labels pass review, canonical gates and synthetic Chrome QA under ADR 0031; record normal delivery and exact automatic results |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -208,8 +209,26 @@ Windows collector prerequisite before application checks; database and secret jo
 passed. The hosted five-second `process-boundary` failure is not reproduced by the
 unchanged local proof. Recovery adds fixed redacted stage/error labels while keeping
 all timeout, identity, canonicalization and negative-case assertions unchanged.
-Replacement automatic evidence is required; container `34422227928` is still in
-progress at discovery. No successor implementation is active during this recovery.
+Recovery was delivered as `2df4493`; replacement CI `34423562282` passed on
+2026-09-10 at 01:04:56 UTC, including the unchanged native producer limits.
+Container `34423562294` remains in progress at the current read-only observation.
+The recovery preserves its diagnostic limits and is complete; container and
+independent acceptance remain separate follow-ups.
+
+The source/local-complete slice is **Saved recipe nutrition basis and coverage**, under
+[ADR 0031](../adr/0031-recipe-nutrition-basis-and-coverage.md). Both clients expose
+the available saved serving/100 g vectors and exact saved version while keeping
+builder edits and diary portions independent. Existing `nutrientDisplay` semantics
+preserve quantified zero, unknown, partial and trace. Selection/session transition
+regressions and independent in-task review passed. Canonical checks passed with
+438 web/649 mobile (including 10 runner)/157 root policy tests; type/test graphs
+17/17 with 15 cached each, build 11/11 with 9 cached and fresh web/iOS/Android
+outputs, and applicable dependency/config/license gates. Synthetic production
+Next/BFF Chrome checks passed for basis changes, saved/draft/log separation,
+no-serving recipes, keyboard selection, 390 px long-label wrapping and expiry
+closure. Physical native, assistive-technology, Claude Code and release acceptance
+remain separate from source and synthetic browser evidence. No API, schema, retained data,
+new dependency, calculation or release enablement is included.
 
 Prepare the external decisions alongside product work, without executing them:
 

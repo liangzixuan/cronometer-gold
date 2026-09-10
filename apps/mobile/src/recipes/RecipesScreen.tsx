@@ -20,6 +20,7 @@ import {
   isLocalDate,
   localDateInTimeZone,
   type MealSlot,
+  nutrientDisplay,
   parseSession,
   quickAddOccurredAt,
 } from "../diary/diary";
@@ -222,6 +223,8 @@ export function RecipesScreen({
   const [recipes, setRecipes] = useState<readonly RecipeSummaryView[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [selected, setSelected] = useState<RecipeView | null>(null);
+  const [nutritionBasis, setNutritionBasis] = useState<"100g" | "serving">("100g");
+  const selectedRef = useRef(selected);
   const [builder, setBuilderState] = useState<Builder>(emptyBuilder);
   const [message, setMessage] = useState("Loading your private recipes…");
   const [loading, setLoading] = useState(true);
@@ -273,6 +276,11 @@ export function RecipesScreen({
     readyRef.current = value;
     setReadyState(value);
   }, []);
+  const replaceSelected = useCallback((recipe: RecipeView | null) => {
+    selectedRef.current = recipe;
+    setSelected(recipe);
+    setNutritionBasis(recipe?.nutrientsPerServing ? "serving" : "100g");
+  }, []);
   const replaceBuilder = useCallback((value: Builder) => {
     builderRef.current = value;
     builderGeneration.current += 1;
@@ -308,7 +316,7 @@ export function RecipesScreen({
     ownedRecipeLogOperations.current.clear();
     replaceBuilder(emptyBuilder());
     setRecipes([]);
-    setSelected(null);
+    replaceSelected(null);
     setNextCursor(null);
     setQuery("");
     setFoods([]);
@@ -318,7 +326,7 @@ export function RecipesScreen({
     setLoading(false);
     setMessage("Closing your private recipe workspace…");
     void onUnauthorizedRef.current();
-  }, [abortRequests, invalidateReview, replaceBuilder, scope, setBusy, setReady]);
+  }, [abortRequests, invalidateReview, replaceBuilder, replaceSelected, scope, setBusy, setReady]);
 
   const verifyOwner = useCallback(
     async (controller: AbortController, current: () => boolean) => {
@@ -355,7 +363,7 @@ export function RecipesScreen({
     ownedRecipeLogOperations.current.clear();
     replaceBuilder(emptyBuilder());
     setRecipes([]);
-    setSelected(null);
+    replaceSelected(null);
     setNextCursor(null);
     setQuery("");
     setFoods([]);
@@ -372,7 +380,7 @@ export function RecipesScreen({
       pending.current.clear();
       ownedRecipeLogOperations.current.clear();
     };
-  }, [abortRequests, invalidateReview, replaceBuilder, scope, setBusy, setReady]);
+  }, [abortRequests, invalidateReview, replaceBuilder, replaceSelected, scope, setBusy, setReady]);
 
   const loadRecipes = useCallback(
     async (cursor: string | null = null) => {
@@ -480,6 +488,16 @@ export function RecipesScreen({
       busyRef.current === null
     );
   }
+  function selectNutritionBasis(basis: "100g" | "serving") {
+    if (
+      !canEdit() ||
+      !selected ||
+      selectedRef.current !== selected ||
+      (basis === "serving" && selected.nutrientsPerServing === null)
+    )
+      return;
+    setNutritionBasis(basis);
+  }
   function updateBuilder(change: (current: Builder) => Builder) {
     if (canEdit()) replaceBuilder(change(builderRef.current));
   }
@@ -526,7 +544,7 @@ export function RecipesScreen({
     builderRequest.current = null;
     invalidateReview();
     replaceBuilder(emptyBuilder());
-    setSelected(null);
+    replaceSelected(null);
     setFoods([]);
     setQuery("");
     setBusy(null);
@@ -567,7 +585,7 @@ export function RecipesScreen({
       if (!response.ok) throw new Error(responseError(body, "The recipe could not be loaded."));
       const recipe = parseRecipeResponse(body);
       if (!(await verifyOwner(controller, current)) || !current()) return;
-      setSelected(recipe);
+      replaceSelected(recipe);
       setLogKind(recipeLogKindFor(recipe));
       setMessage(successMessage ?? `Recipe version ${recipe.versionNumber} loaded.`);
       setBusy(null);
@@ -732,7 +750,7 @@ export function RecipesScreen({
       const mutation = parseRecipeMutation(responseBody);
       if (!(await verifyOwner(controller, current)) || !current()) return;
       pending.current.delete(key);
-      setSelected(mutation.recipe);
+      replaceSelected(mutation.recipe);
       setLogKind(recipeLogKindFor(mutation.recipe));
       setLogAmount("1");
       setBusy(null);
@@ -1166,16 +1184,42 @@ export function RecipesScreen({
               No cooking-retention adjustment is claimed unless a named reviewed factor set is
               pinned.
             </Text>
-            <Text style={styles.sectionTitle}>Nutrition</Text>
-            {(selected.nutrientsPerServing ?? selected.nutrientsPer100Grams).map((nutrient) => (
-              <View key={nutrient.nutrientId} style={styles.nutrient}>
-                <Text>{nutrient.name}</Text>
-                <Text>
-                  {nutrient.isExact ? "" : "at least "}
-                  {nutrient.knownAmount} {nutrient.unit}
-                </Text>
-              </View>
-            ))}
+            <Text accessibilityRole="header" style={styles.sectionTitle}>
+              Saved nutrition: {selected.name} · v{selected.versionNumber}
+            </Text>
+            <Text style={styles.help}>
+              Values from saved version {selected.versionNumber}. Unsaved edits and diary log
+              quantity do not change these values.
+            </Text>
+            <View accessibilityLabel="Saved nutrition basis" style={styles.nutritionBasis}>
+              <Chip
+                disabled={builderDisabled}
+                active={nutritionBasis === "100g"}
+                label="Per 100 g"
+                onPress={() => selectNutritionBasis("100g")}
+              />
+              {selected.nutrientsPerServing !== null ? (
+                <Chip
+                  disabled={builderDisabled}
+                  active={nutritionBasis === "serving"}
+                  label={`Per serving (${selected.servingLabel ?? "serving"})`}
+                  onPress={() => selectNutritionBasis("serving")}
+                />
+              ) : null}
+            </View>
+            {(nutritionBasis === "serving" && selected.nutrientsPerServing !== null
+              ? selected.nutrientsPerServing
+              : selected.nutrientsPer100Grams
+            ).map((nutrient) => {
+              const display = nutrientDisplay(nutrient);
+              return (
+                <View key={nutrient.nutrientId} style={styles.nutrient}>
+                  <Text style={styles.cardTitle}>{nutrient.name}</Text>
+                  <Text>{display.amount}</Text>
+                  <Text style={styles.meta}>{display.qualification}</Text>
+                </View>
+              );
+            })}
             <Text style={styles.sectionTitle}>Sources</Text>
             {recipeSourceLines(selected).map((line) => (
               <Text key={line} style={styles.meta}>
@@ -1363,11 +1407,10 @@ const styles = StyleSheet.create({
   multiline: { minHeight: 82, paddingTop: 12, textAlignVertical: "top" },
   nav: { alignItems: "flex-end", marginBottom: 16 },
   navText: { color: palette.forest, fontWeight: "800" },
+  nutritionBasis: { gap: 8 },
   nutrient: {
     borderTopColor: palette.line,
     borderTopWidth: 1,
-    flexDirection: "row",
-    justifyContent: "space-between",
     paddingVertical: 10,
   },
   panel: {

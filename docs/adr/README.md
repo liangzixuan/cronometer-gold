@@ -37,5 +37,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0029](./0029-pasted-ingredient-review.md) | Explicit review of pasted ingredient lines in the web new-recipe builder | Accepted; local validation passed; automatic and release evidence pending |
 | [0030](./0030-mobile-pasted-ingredient-review.md) | Explicit native review of pasted ingredient lines using shared parsing and existing recipe contracts | Accepted for bounded source implementation; validation and release evidence pending |
 
+| [0031](./0031-recipe-nutrition-basis-and-coverage.md) | Explicit saved-recipe nutrition basis and coverage on web and mobile | Source complete; local validation passed; automatic and release evidence pending |
+
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

@@ -14,6 +14,7 @@ import {
   isLocalDate,
   localDateInTimeZone,
   type MealSlot,
+  nutrientDisplay,
   parseDiaryMutation,
   parseSession,
   type SessionSummary,
@@ -43,6 +44,7 @@ import {
 import { PastedIngredientReview } from "./PastedIngredientReview";
 
 type LoadState = "loading" | "ready" | "error";
+type NutritionBasis = "per100Grams" | "perServing";
 
 interface BuilderState {
   readonly recipeId: string | null;
@@ -288,7 +290,9 @@ export function RecipesClient() {
   const [dateReviewRequired, setDateReviewRequired] = useState(false);
   const [recipes, setRecipes] = useState<readonly RecipeSummaryView[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [selected, setSelected] = useState<RecipeView | null>(null);
+  const [selected, setSelectedState] = useState<RecipeView | null>(null);
+  const [nutritionBasis, setNutritionBasis] = useState<NutritionBasis>("per100Grams");
+  const selectionGeneration = useRef(0);
   const [builder, setBuilderState] = useState<BuilderState>(emptyBuilder);
   const [state, setLoadState] = useState<LoadState>("loading");
   const [message, setMessage] = useState("Loading your private recipes…");
@@ -317,6 +321,13 @@ export function RecipesClient() {
   const busyRef = useRef<string | null>(null);
   const stateRef = useRef<LoadState>("loading");
 
+  const setSelected = useCallback((next: RecipeView | null) => {
+    // Invalidate retained controls even when a previously viewed version is reopened.
+    selectionGeneration.current += 1;
+    setSelectedState(next);
+    setNutritionBasis(next?.nutrientsPerServing != null ? "perServing" : "per100Grams");
+  }, []);
+
   const replaceBuilder = useCallback((next: BuilderState) => {
     builderRef.current = next;
     builderGeneration.current += 1;
@@ -339,6 +350,23 @@ export function RecipesClient() {
   }, []);
   const reviewOwner = ownerUserId.current;
   const reviewContext = reviewGeneration.current;
+  const nutritionContext = selectionGeneration.current;
+
+  function selectNutritionBasis(next: NutritionBasis) {
+    if (
+      !mounted.current ||
+      privateUiClosed.current ||
+      !reviewOwner ||
+      ownerUserId.current !== reviewOwner ||
+      selectionGeneration.current !== nutritionContext ||
+      stateRef.current !== "ready" ||
+      busyRef.current !== null ||
+      !selected ||
+      (next === "perServing" && selected.nutrientsPerServing === null)
+    )
+      return;
+    setNutritionBasis(next);
+  }
 
   function confirmReviewedIngredients(ingredients: readonly RecipeIngredientDraft[]): boolean {
     const current = builderRef.current;
@@ -421,7 +449,7 @@ export function RecipesClient() {
     setLogAmount("1");
     router.replace("/login");
     router.refresh();
-  }, [router, replaceBuilder, setBusy, setState]);
+  }, [router, replaceBuilder, setBusy, setState, setSelected]);
 
   const revalidateRecipeSession = useCallback(async (signal: AbortSignal) => {
     const response = await fetch("/api/auth/me", {
@@ -569,6 +597,7 @@ export function RecipesClient() {
     })();
     return () => {
       mounted.current = false;
+      selectionGeneration.current += 1;
       builderGeneration.current += 1;
       reviewGeneration.current += 1;
       builderRequest.current = null;
@@ -1341,11 +1370,40 @@ export function RecipesClient() {
                   </p>
                 </section>
                 <section className="workspaceSection" aria-labelledby="nutrition-heading">
-                  <h3 id="nutrition-heading">
-                    Nutrition per{" "}
-                    {selected.servingCount ? (selected.servingLabel ?? "serving") : "100 g"}
-                  </h3>
+                  <h3 id="nutrition-heading">Saved recipe nutrition</h3>
+                  <p className="coverageCopy">
+                    {selected.name} · Saved version {selected.versionNumber}. Unsaved recipe edits
+                    and the diary logging amount do not change these values.
+                  </p>
+                  <fieldset disabled={busy !== null || state !== "ready"}>
+                    <legend>Nutrition basis</legend>
+                    <button
+                      aria-pressed={nutritionBasis === "per100Grams"}
+                      className={nutritionBasis === "per100Grams" ? "buttonPrimary" : "buttonQuiet"}
+                      onClick={() => selectNutritionBasis("per100Grams")}
+                      type="button"
+                    >
+                      Per 100 g
+                    </button>{" "}
+                    {selected.nutrientsPerServing !== null ? (
+                      <button
+                        aria-pressed={nutritionBasis === "perServing"}
+                        className={
+                          nutritionBasis === "perServing" ? "buttonPrimary" : "buttonQuiet"
+                        }
+                        onClick={() => selectNutritionBasis("perServing")}
+                        type="button"
+                      >
+                        Per serving ({selected.servingLabel ?? "serving"})
+                      </button>
+                    ) : null}
+                  </fieldset>
                   <table className="nutritionTable">
+                    <caption>
+                      {nutritionBasis === "perServing"
+                        ? `Per serving (${selected.servingLabel ?? "serving"})`
+                        : "Per 100 g"}
+                    </caption>
                     <thead>
                       <tr>
                         <th>Nutrient</th>
@@ -1354,26 +1412,19 @@ export function RecipesClient() {
                       </tr>
                     </thead>
                     <tbody>
-                      {(selected.nutrientsPerServing ?? selected.nutrientsPer100Grams).map(
-                        (nutrient) => (
+                      {(nutritionBasis === "perServing" && selected.nutrientsPerServing !== null
+                        ? selected.nutrientsPerServing
+                        : selected.nutrientsPer100Grams
+                      ).map((nutrient) => {
+                        const display = nutrientDisplay(nutrient);
+                        return (
                           <tr key={nutrient.nutrientId}>
                             <td>{nutrient.name}</td>
-                            <td>
-                              {nutrient.completeness === "complete" && nutrient.isExact
-                                ? "Complete quantified"
-                                : nutrient.completeness === "unknown"
-                                  ? "Unknown — not zero"
-                                  : "Lower bound"}
-                            </td>
-                            <td>
-                              {nutrient.completeness === "complete" && nutrient.isExact
-                                ? ""
-                                : "at least "}
-                              {nutrient.knownAmount} {nutrient.unit}
-                            </td>
+                            <td>{display.qualification}</td>
+                            <td>{display.amount}</td>
                           </tr>
-                        ),
-                      )}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </section>

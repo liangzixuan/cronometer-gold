@@ -974,3 +974,368 @@ describe("reviewed mobile recipe draft and outbox regressions", () => {
     expect(postRequests(requests)[0].headers["if-match"]).toBe('"1"');
   });
 });
+
+function nutritionRecipe({
+  name = "Saved recipe",
+  serving = true,
+  id = recipeId,
+  savedVersionId = versionId,
+  versionNumber = 1,
+} = {}) {
+  const recipe = recipeWire(name);
+  recipe.id = id;
+  recipe.revision = String(versionNumber);
+  const version = recipe.currentVersion;
+  version.id = savedVersionId;
+  version.versionNumber = versionNumber;
+  version.servingCount = serving ? "2" : null;
+  version.servingLabel = serving ? "bowl" : null;
+  const nutrient = (name, knownAmount, completeness = "complete", traceCount = 0) => {
+    const unknownCount = completeness === "unknown" ? 2 : completeness === "partial" ? 1 : 0;
+    return {
+      nutrientId: name,
+      code: name,
+      name,
+      unit: "g",
+      knownAmount,
+      completeness,
+      isExact: unknownCount === 0 && traceCount === 0,
+      contributorCount: 2,
+      quantifiedCount: 2 - unknownCount - traceCount,
+      traceCount,
+      unknownCount,
+      unknownReasonCounts: {
+        not_reported: unknownCount,
+        not_analyzed: 0,
+        not_applicable: 0,
+        withheld: 0,
+      },
+    };
+  };
+  const vector = (amount) => [
+    nutrient("Quantified nutrient", amount),
+    nutrient("Measured zero", "0"),
+    nutrient("Unknown nutrient", "0", "unknown"),
+    nutrient("Partial nutrient", amount, "partial"),
+    nutrient("Trace nutrient", "0", "complete", 1),
+  ];
+  version.nutrition = {
+    totals: vector("12.0000012"),
+    per100Grams: vector("10.000001"),
+    perServing: serving ? vector("6.0000006") : null,
+  };
+  return recipe;
+}
+function nutritionCollection(recipes) {
+  return response({
+    data: recipes.map((recipe) => {
+      const version = recipe.currentVersion;
+      return {
+        ...recipe,
+        currentVersion: {
+          id: version.id,
+          versionNumber: version.versionNumber,
+          name: version.name,
+          description: version.description,
+          finalYield: { grams: version.finalYield.grams, source: version.finalYield.source },
+          inputMassGrams: version.inputMassGrams,
+          servingCount: version.servingCount,
+          servingLabel: version.servingLabel,
+          warnings: version.warnings,
+          createdAt: version.createdAt,
+        },
+      };
+    }),
+    page: { nextCursor: null },
+  });
+}
+async function openNutritionRecipe(harness, name = "Saved recipe") {
+  const tree = await harness.settle();
+  const cards = nodes(
+    tree,
+    (node) =>
+      node.type === "Pressable" &&
+      node.props.accessibilityRole === "button" &&
+      screenText(node).startsWith(`${name} v`),
+  );
+  expect(cards).toHaveLength(1);
+  cards[0].props.onPress();
+  return harness.settle();
+}
+function nutrientRow(tree, name) {
+  const matches = nodes(
+    tree,
+    (node) =>
+      node.type === "View" &&
+      Array.isArray(node.props.children) &&
+      screenText(node.props.children[0]) === name,
+  );
+  expect(matches).toHaveLength(1);
+  return screenText(matches[0]);
+}
+function nutritionSetup(recipe = nutritionRecipe(), handler = () => undefined, props = {}) {
+  return setup((request, requests) => {
+    const result = handler(request, requests);
+    if (result !== undefined) return result;
+    if (request.url.pathname === "/v1/recipes") return nutritionCollection([recipe]);
+    if (request.url.pathname === `/v1/recipes/${recipe.id}`) return response({ data: { recipe } });
+  }, props);
+}
+
+describe("mobile saved recipe nutrition inspection", () => {
+  it("defaults to the saved serving vector and preserves quantified, unknown, partial and trace values", async () => {
+    const { harness, requests } = nutritionSetup();
+    let tree = await openNutritionRecipe(harness);
+    expect(screenText(tree)).toContain("Saved nutrition: Saved recipe · v 1");
+    expect(screenText(tree)).toContain(
+      "Unsaved edits and diary log quantity do not change these values.",
+    );
+    expect(pressable(tree, "Per serving (bowl)").props.accessibilityState.checked).toBe(true);
+    expect(pressable(tree, "Per 100 g").props.accessibilityState.checked).toBe(false);
+    expect(nutrientRow(tree, "Quantified nutrient")).toBe(
+      "Quantified nutrient 6.0000006 g Complete coverage · quantified",
+    );
+    expect(nutrientRow(tree, "Measured zero")).toBe(
+      "Measured zero 0 g Complete coverage · quantified",
+    );
+    expect(nutrientRow(tree, "Unknown nutrient")).toBe(
+      "Unknown nutrient Unknown 0/2 contributions quantified",
+    );
+    expect(nutrientRow(tree, "Partial nutrient")).toBe(
+      "Partial nutrient ≥ 6.0000006 g Partial · 1/2 quantified",
+    );
+    expect(nutrientRow(tree, "Trace nutrient")).toBe(
+      "Trace nutrient ≥ 0 g Complete coverage · includes trace values",
+    );
+    const before = requests.length;
+    tree = await click(harness, "Per 100 g");
+    expect(pressable(tree, "Per 100 g").props.accessibilityState.checked).toBe(true);
+    expect(nutrientRow(tree, "Quantified nutrient")).toContain("10.000001 g");
+    expect(nutrientRow(tree, "Partial nutrient")).toContain("≥ 10.000001 g");
+    tree = await click(harness, "Per serving (bowl)");
+    expect(nutrientRow(tree, "Quantified nutrient")).toContain("6.0000006 g");
+    expect(requests).toHaveLength(before);
+    expect(screenText(tree)).toContain("No named retention factor set is applied.");
+    expect(screenText(tree)).toContain("Data source: USDA FoodData Central");
+  });
+  it("offers only per 100 g without a saved serving even if the draft defines one", async () => {
+    const { harness, requests } = nutritionSetup(nutritionRecipe({ serving: false }));
+    let tree = await openNutritionRecipe(harness);
+    expect(pressable(tree, "Per 100 g").props.accessibilityState.checked).toBe(true);
+    expect(
+      nodes(
+        tree,
+        (node) => node.type === "Pressable" && screenText(node).startsWith("Per serving"),
+      ),
+    ).toHaveLength(0);
+    input(tree, "Serving count (optional)").props.onChangeText("4");
+    input(tree, "Serving label").props.onChangeText("plate");
+    const before = requests.length;
+    tree = await click(harness, "Per 100 g");
+    expect(nutrientRow(tree, "Quantified nutrient")).toContain("10.000001 g");
+    expect(
+      nodes(
+        tree,
+        (node) => node.type === "Pressable" && screenText(node).startsWith("Per serving"),
+      ),
+    ).toHaveLength(0);
+    expect(requests).toHaveLength(before);
+  });
+  it("keeps saved nutrition independent of draft fields and logs the exact saved serving", async () => {
+    const { harness, props, requests } = nutritionSetup();
+    props.quickAddOutboxController.enqueueOperation.mockResolvedValue({ operationId: "saved-log" });
+    let tree = await openNutritionRecipe(harness);
+    tree = await click(harness, "Per 100 g");
+    input(tree, "Recipe name").props.onChangeText("Unsaved renamed recipe");
+    input(tree, "Final yield grams").props.onChangeText("900");
+    input(tree, "Quantity in grams").props.onChangeText("250");
+    input(tree, "Serving count (optional)").props.onChangeText("5");
+    input(tree, "Serving label").props.onChangeText("plate");
+    input(tree, "Amount").props.onChangeText("2.5");
+    tree = await harness.settle();
+    expect(screenText(tree)).toContain("Saved nutrition: Saved recipe · v 1");
+    expect(nutrientRow(tree, "Quantified nutrient")).toContain("10.000001 g");
+    expect(pressable(tree, "Per 100 g").props.accessibilityState.checked).toBe(true);
+    expect(pressable(tree, "Per serving (bowl)")).toBeDefined();
+    tree = await click(harness, "Secure & log recipe");
+    expect(props.quickAddOutboxController.enqueueOperation).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        operationKind: "recipe",
+        recipeId,
+        recipeVersionId: versionId,
+        recipeName: "Saved recipe",
+        portion: { kind: "serving", amount: "2.5", servingLabel: "bowl" },
+      }),
+    );
+    expect(nutrientRow(tree, "Quantified nutrient")).toContain("10.000001 g");
+    expect(postRequests(requests)).toHaveLength(0);
+  });
+  for (const basis of ["Per 100 g", "Per serving (bowl)"]) {
+    it(`preserves the revision body with ${basis} selected and resets a newly saved version`, async () => {
+      const next = nutritionRecipe({
+        savedVersionId: "e5302e9d-9651-4784-baf4-a00e9f41c079",
+        versionNumber: 2,
+      });
+      const { harness, requests } = nutritionSetup(undefined, (request) =>
+        request.method === "POST"
+          ? response({ data: { replayed: false, recipe: next } })
+          : undefined,
+      );
+      let tree = await openNutritionRecipe(harness);
+      tree = await click(harness, basis);
+      const stale100g = pressable(tree, "Per 100 g").props.onPress;
+      input(tree, "Final yield grams").props.onChangeText("300");
+      input(tree, "Quantity in grams").props.onChangeText("240");
+      tree = await click(harness, "Publish revision");
+      expect(JSON.parse(postRequests(requests)[0].body)).toEqual({
+        name: "Saved recipe",
+        description: null,
+        instructions: "Simmer.",
+        ingredients: [
+          {
+            kind: "food",
+            foodVersionId: food.foodVersionId,
+            portion: { kind: "grams", grams: "240" },
+            position: 0,
+            note: null,
+          },
+        ],
+        finalYield: { grams: "300", source: "measured" },
+        servingCount: "2",
+        servingLabel: "bowl",
+      });
+      expect(postRequests(requests)[0].headers["if-match"]).toBe('"1"');
+      expect(screenText(tree)).toContain("Saved nutrition: Saved recipe · v 2");
+      expect(pressable(tree, "Per serving (bowl)").props.accessibilityState.checked).toBe(true);
+      stale100g();
+      tree = await harness.settle();
+      expect(pressable(tree, "Per serving (bowl)").props.accessibilityState.checked).toBe(true);
+    });
+  }
+  it("resets on another saved recipe and ignores its predecessor's retained basis controls", async () => {
+    const first = nutritionRecipe();
+    const second = nutritionRecipe({
+      name: "Second recipe",
+      id: "148bcfa6-22a6-4794-981a-091a7cfb5b2d",
+      savedVersionId: "e5302e9d-9651-4784-baf4-a00e9f41c079",
+    });
+    const { harness, requests } = nutritionSetup(first, (request) => {
+      if (request.url.pathname === "/v1/recipes") return nutritionCollection([first, second]);
+      if (request.url.pathname === `/v1/recipes/${second.id}`)
+        return response({ data: { recipe: second } });
+    });
+    let tree = await openNutritionRecipe(harness);
+    const stale100g = pressable(tree, "Per 100 g").props.onPress;
+    tree = await click(harness, "Per 100 g");
+    tree = await openNutritionRecipe(harness, "Second recipe");
+    expect(screenText(tree)).toContain("Saved nutrition: Second recipe · v 1");
+    const before = requests.length;
+    stale100g();
+    tree = await harness.settle();
+    expect(pressable(tree, "Per serving (bowl)").props.accessibilityState.checked).toBe(true);
+    expect(requests).toHaveLength(before);
+    const staleServing = pressable(tree, "Per serving (bowl)").props.onPress;
+    tree = await click(harness, "New recipe");
+    staleServing();
+    tree = await harness.settle();
+    expect(screenText(tree)).not.toContain("Saved nutrition:");
+    tree = await openNutritionRecipe(harness, "Second recipe");
+    tree = await click(harness, "Per 100 g");
+    staleServing();
+    tree = await harness.settle();
+    expect(pressable(tree, "Per 100 g").props.accessibilityState.checked).toBe(true);
+  });
+  for (const change of ["owner", "token", "destination"]) {
+    it(`clears saved nutrition and ignores retained controls after ${change} changes`, async () => {
+      let currentOwner = owner;
+      const { harness } = nutritionSetup(undefined, (request) =>
+        request.url.pathname === "/v1/auth/me" ? session(currentOwner) : undefined,
+      );
+      let tree = await openNutritionRecipe(harness);
+      const stale100g = pressable(tree, "Per 100 g").props.onPress;
+      currentOwner = change === "owner" ? "049eb964-1327-49a1-ab4f-5c7c41a6b68a" : owner;
+      harness.updateProps(
+        change === "owner"
+          ? { ownerUserId: currentOwner }
+          : change === "token"
+            ? { accessToken: "new-synthetic-token" }
+            : { apiBase: new URL("http://127.0.0.1:4001") },
+      );
+      tree = await harness.settle();
+      expect(screenText(tree)).not.toContain("Saved nutrition:");
+      tree = await openNutritionRecipe(harness);
+      stale100g();
+      tree = await harness.settle();
+      expect(pressable(tree, "Per serving (bowl)").props.accessibilityState.checked).toBe(true);
+    });
+  }
+  it("defaults to 100 g when a conflict reload removes the saved serving", async () => {
+    const next = nutritionRecipe({
+      serving: false,
+      versionNumber: 2,
+      savedVersionId: "e5302e9d-9651-4784-baf4-a00e9f41c079",
+    });
+    let conflict = false;
+    const { harness } = nutritionSetup(undefined, (request) => {
+      if (request.method === "POST") {
+        conflict = true;
+        return response({}, 412);
+      }
+      if (conflict && request.url.pathname === `/v1/recipes/${recipeId}`)
+        return response({ data: { recipe: next } });
+    });
+    let tree = await openNutritionRecipe(harness);
+    const staleServing = pressable(tree, "Per serving (bowl)").props.onPress;
+    tree = await click(harness, "Publish revision");
+    expect(screenText(tree)).toContain("Saved nutrition: Saved recipe · v 2");
+    staleServing();
+    tree = await harness.settle();
+    expect(pressable(tree, "Per 100 g").props.accessibilityState.checked).toBe(true);
+    expect(
+      nodes(
+        tree,
+        (node) => node.type === "Pressable" && screenText(node).startsWith("Per serving"),
+      ),
+    ).toHaveLength(0);
+    expect(nutrientRow(tree, "Quantified nutrient")).toContain("10.000001 g");
+  });
+  for (const change of ["owner", "token", "destination"]) {
+    it(`hides saved nutrition in the ${change}-change render before effects`, async () => {
+      const { harness } = nutritionSetup();
+      const tree = await openNutritionRecipe(harness);
+      const retained = pressable(tree, "Per 100 g").props.onPress;
+      harness.updateProps(
+        change === "owner"
+          ? { ownerUserId: "049eb964-1327-49a1-ab4f-5c7c41a6b68a" }
+          : change === "token"
+            ? { accessToken: "new-synthetic-token" }
+            : { apiBase: new URL("http://127.0.0.1:4001") },
+      );
+      const during = harness.renderWithoutEffects();
+      expect(screenText(during)).not.toContain("Saved nutrition:");
+      expect(screenText(during)).not.toContain("Quantified nutrient");
+      retained();
+      harness.unmount();
+      expect(harness.writesAfterUnmount).toBe(0);
+    });
+  }
+  it("ignores retained basis controls after background and unmount", async () => {
+    const { harness } = nutritionSetup();
+    let tree = await openNutritionRecipe(harness);
+    const stale100g = pressable(tree, "Per 100 g").props.onPress;
+    background();
+    stale100g();
+    tree = await harness.settle();
+    expect(pressable(tree, "Per serving (bowl)").props.accessibilityState.checked).toBe(true);
+    expect(pressable(tree, "Per 100 g").props.disabled).toBe(true);
+    foreground();
+    tree = await harness.settle();
+    stale100g();
+    tree = await harness.settle();
+    expect(pressable(tree, "Per serving (bowl)").props.accessibilityState.checked).toBe(true);
+    const current100g = pressable(tree, "Per 100 g").props.onPress;
+    harness.unmount();
+    current100g();
+    expect(harness.writesAfterUnmount).toBe(0);
+  });
+});

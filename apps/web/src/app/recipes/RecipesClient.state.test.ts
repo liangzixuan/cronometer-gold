@@ -121,6 +121,7 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(navigation.query),
 }));
 
+import { type DiaryNutrient, localDateInTimeZone } from "../../lib/diary";
 import type { FoodSearchHit } from "../../lib/food-search";
 import { parseRecipeResponse, type RecipeIngredientDraft } from "../../lib/recipes-goals";
 import { PastedIngredientReview } from "./PastedIngredientReview";
@@ -696,4 +697,382 @@ describe("actual recipe builder pasted-review integration", () => {
     expect(field("Name").props.value).toBe("Active owner draft");
     expect(review().ownerUserId).toBe(owner);
   });
+});
+
+function nutritionRecipe({
+  id = recipeId,
+  version = 1,
+  serving = true,
+  name = "Saved recipe",
+} = {}) {
+  const recipe = recipeWire(name);
+  const nutrients = (knownAmount: string): DiaryNutrient[] => {
+    const quantified = {
+      nutrientId: "zero",
+      code: "ZERO",
+      name: "Measured zero",
+      unit: "g",
+      knownAmount: "0",
+      completeness: "complete" as const,
+      isExact: true,
+      contributorCount: 1,
+      quantifiedCount: 1,
+      traceCount: 0,
+      unknownCount: 0,
+      unknownReasonCounts: { not_reported: 0, not_analyzed: 0, not_applicable: 0, withheld: 0 },
+    };
+    return [
+      quantified,
+      {
+        ...quantified,
+        nutrientId: "unknown",
+        code: "UNKNOWN",
+        name: "Unknown nutrient",
+        completeness: "unknown",
+        isExact: false,
+        quantifiedCount: 0,
+        unknownCount: 1,
+        unknownReasonCounts: { ...quantified.unknownReasonCounts, not_reported: 1 },
+      },
+      {
+        ...quantified,
+        nutrientId: "partial",
+        code: "PARTIAL",
+        name: "Partial nutrient",
+        knownAmount,
+        completeness: "partial",
+        isExact: false,
+        contributorCount: 2,
+        unknownCount: 1,
+        unknownReasonCounts: { ...quantified.unknownReasonCounts, not_analyzed: 1 },
+      },
+      {
+        ...quantified,
+        nutrientId: "trace",
+        code: "TRACE",
+        name: "Trace nutrient",
+        isExact: false,
+        quantifiedCount: 0,
+        traceCount: 1,
+      },
+    ];
+  };
+  return {
+    ...recipe,
+    id,
+    revision: String(version),
+    currentVersion: {
+      ...recipe.currentVersion,
+      id: version === 1 ? versionId : "b2a81dce-a424-49d6-865c-3f28545a73ec",
+      versionNumber: version,
+      servingCount: serving ? "2" : null,
+      servingLabel: serving ? "bowl" : null,
+      nutrition: {
+        totals: nutrients("148.1481468"),
+        per100Grams: nutrients("123.456789"),
+        perServing: serving ? nutrients("74.0740734") : null,
+      },
+    },
+  };
+}
+function nutritionCollection(values: readonly ReturnType<typeof nutritionRecipe>[]) {
+  return Response.json({
+    data: values.map((recipe) => ({
+      ...recipe,
+      currentVersion: {
+        id: recipe.currentVersion.id,
+        versionNumber: recipe.currentVersion.versionNumber,
+        name: recipe.currentVersion.name,
+        description: recipe.currentVersion.description,
+        finalYield: { grams: "120", source: "measured" },
+        inputMassGrams: "120",
+        servingCount: recipe.currentVersion.servingCount,
+        servingLabel: recipe.currentVersion.servingLabel,
+        warnings: [],
+        createdAt: timestamp,
+      },
+    })),
+    page: { nextCursor: null },
+  });
+}
+function nutritionFetcher(recipes = [nutritionRecipe()]) {
+  const fetcher = readyFetcher();
+  const original = required(fetcher.getMockImplementation());
+  fetcher.mockImplementation(async (url, init) => {
+    if (url.startsWith("/api/recipes?")) return nutritionCollection(recipes);
+    const selected = recipes.find((recipe) => url === `/api/recipes/${recipe.id}`);
+    if (selected) return Response.json({ data: { recipe: selected } });
+    return original(url, init);
+  });
+  return fetcher;
+}
+function nutritionRows() {
+  const table = required(elements().find((node) => node.props.className === "nutritionTable"));
+  return elements(table)
+    .filter((node) => node.type === "tr")
+    .slice(1)
+    .map((row) =>
+      elements(row)
+        .filter((node) => node.type === "td")
+        .map((cell) => text(cell)),
+    );
+}
+function openNamedRecipe(name: string) {
+  const opener = required(
+    elements().find((node) => node.type === "button" && text(node).startsWith(name)),
+  );
+  void invoke(opener, "onClick");
+}
+
+describe("actual saved recipe nutrition inspection", () => {
+  it("defaults to the saved serving vector and distinguishes measured zero, unknown, partial and trace", async () => {
+    const fetcher = nutritionFetcher();
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    expect(button("Per serving (bowl)").props["aria-pressed"]).toBe(true);
+    expect(button("Per 100 g").props["aria-pressed"]).toBe(false);
+    expect(text()).toContain("Saved recipe · Saved version 1.");
+    expect(text()).toContain(
+      "Unsaved recipe edits and the diary logging amount do not change these values.",
+    );
+    expect(nutritionRows()).toEqual([
+      ["Measured zero", "Complete coverage · quantified", "0 g"],
+      ["Unknown nutrient", "0/1 contributions quantified", "Unknown"],
+      ["Partial nutrient", "Partial · 1/2 contributions quantified", "≥ 74.0740734 g"],
+      ["Trace nutrient", "Complete coverage · includes trace values", "≥ 0 g"],
+    ]);
+    const calls = fetcher.mock.calls.length;
+    await click("Per 100 g");
+    expect(button("Per 100 g").props["aria-pressed"]).toBe(true);
+    expect(button("Per serving (bowl)").props["aria-pressed"]).toBe(false);
+    expect(nutritionRows()[2]).toEqual([
+      "Partial nutrient",
+      "Partial · 1/2 contributions quantified",
+      "≥ 123.456789 g",
+    ]);
+    await click("Per serving (bowl)");
+    expect(nutritionRows()[2]?.[2]).toBe("≥ 74.0740734 g");
+    expect(fetcher.mock.calls).toHaveLength(calls);
+  });
+
+  it("shows only per 100 g when the saved version has no servings, including after draft serving edits", async () => {
+    nutritionFetcher([nutritionRecipe({ serving: false })]);
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    expect(button("Per 100 g").props["aria-pressed"]).toBe(true);
+    expect(
+      elements().some((node) => node.type === "button" && text(node).startsWith("Per serving")),
+    ).toBe(false);
+    expect(nutritionRows()[2]?.[2]).toBe("≥ 123.456789 g");
+    await change("Serving count (optional)", "3");
+    await change("Serving label", "plate");
+    expect(
+      elements().some((node) => node.type === "button" && text(node).startsWith("Per serving")),
+    ).toBe(false);
+    expect(nutritionRows()[2]?.[2]).toBe("≥ 123.456789 g");
+  });
+
+  it("keeps the saved name, amounts and serving definition independent of unsaved edits and diary quantity", async () => {
+    const fetcher = nutritionFetcher();
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    const before = nutritionRows();
+    const calls = fetcher.mock.calls.length;
+    await change("Name", "Unsaved name");
+    await change("Final yield grams", "999.000001");
+    await change("Rolled oats quantity in grams", "234.000001");
+    await change("Serving count (optional)", "");
+    await change("Serving label", "plate");
+    await change("Portion", "grams");
+    await change("Amount", "45.000001");
+    expect(nutritionRows()).toEqual(before);
+    expect(text()).toContain("Saved recipe · Saved version 1.");
+    expect(button("Per serving (bowl)").props["aria-pressed"]).toBe(true);
+    await click("Per 100 g");
+    expect(field("Name").props.value).toBe("Unsaved name");
+    expect(field("Final yield grams").props.value).toBe("999.000001");
+    expect(field("Rolled oats quantity in grams").props.value).toBe("234.000001");
+    expect(field("Serving count (optional)").props.value).toBe("");
+    expect(field("Portion").props.value).toBe("grams");
+    expect(field("Amount").props.value).toBe("45.000001");
+    expect(fetcher.mock.calls).toHaveLength(calls);
+  });
+
+  it("resets on recipe changes and rejects a retained control after returning to the original recipe", async () => {
+    nutritionFetcher([
+      nutritionRecipe(),
+      nutritionRecipe({
+        id: "3373a039-2f65-4876-b932-24cffc6b832f",
+        name: "Second recipe",
+        serving: false,
+      }),
+    ]);
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    const retained = button("Per 100 g");
+    await click("Per 100 g");
+    openNamedRecipe("Second recipe");
+    await hooks.settle();
+    expect(button("Per 100 g").props["aria-pressed"]).toBe(true);
+    expect(
+      elements().some((node) => node.type === "button" && text(node).startsWith("Per serving")),
+    ).toBe(false);
+    openSaved();
+    await hooks.settle();
+    expect(button("Per serving (bowl)").props["aria-pressed"]).toBe(true);
+    invoke(retained, "onClick");
+    await hooks.settle();
+    expect(button("Per serving (bowl)").props["aria-pressed"]).toBe(true);
+  });
+
+  it("resets on a newly opened version and rejects controls retained from its predecessor", async () => {
+    const recipes = [nutritionRecipe()];
+    nutritionFetcher(recipes);
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    const retained = button("Per 100 g");
+    await click("Per 100 g");
+    recipes[0] = nutritionRecipe({ version: 2 });
+    openSaved();
+    await hooks.settle();
+    expect(text()).toContain("Saved recipe · Saved version 2.");
+    expect(button("Per serving (bowl)").props["aria-pressed"]).toBe(true);
+    invoke(retained, "onClick");
+    await hooks.settle();
+    expect(button("Per serving (bowl)").props["aria-pressed"]).toBe(true);
+  });
+
+  it("preserves the exact pending save across basis changes and resets after publishing a version", async () => {
+    const fetcher = nutritionFetcher();
+    const original = required(fetcher.getMockImplementation());
+    let writes = 0;
+    fetcher.mockImplementation(async (url, init) => {
+      if (init?.method === "POST") {
+        writes += 1;
+        return writes === 1
+          ? Response.json({ error: "Temporary outage" }, { status: 503 })
+          : Response.json({ data: { replayed: true, recipe: nutritionRecipe({ version: 2 }) } });
+      }
+      return original(url, init);
+    });
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await change("Name", "Edited recipe");
+    await change("Final yield grams", "100.000001");
+    save();
+    await hooks.settle();
+    await click("Per 100 g");
+    const retained = button("Per 100 g");
+    save();
+    await hooks.settle();
+    const posts = fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts).toHaveLength(2);
+    const first = required(posts[0]);
+    const second = required(posts[1]);
+    expect(first[0]).toBe(`/api/recipes/${recipeId}/revisions`);
+    expect(second[1]?.body).toBe(first[1]?.body);
+    expect(new Headers(second[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(first[1]?.headers).get("idempotency-key"),
+    );
+    expect(new Headers(first[1]?.headers).get("if-match")).toBe('"1"');
+    expect(JSON.parse(String(first[1]?.body))).toMatchObject({
+      name: "Edited recipe",
+      finalYield: { grams: "100.000001", source: "measured" },
+      servingCount: "2",
+      servingLabel: "bowl",
+    });
+    expect(Object.keys(JSON.parse(String(first[1]?.body)))).toEqual([
+      "name",
+      "description",
+      "instructions",
+      "ingredients",
+      "finalYield",
+      "servingCount",
+      "servingLabel",
+    ]);
+    expect(text()).toContain("Saved recipe · Saved version 2.");
+    expect(button("Per serving (bowl)").props["aria-pressed"]).toBe(true);
+    invoke(retained, "onClick");
+    await hooks.settle();
+    expect(button("Per serving (bowl)").props["aria-pressed"]).toBe(true);
+  });
+
+  it("preserves the exact saved-version log payload and retry key across display changes", async () => {
+    const fetcher = nutritionFetcher();
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation(async (url, init) =>
+      init?.method === "POST"
+        ? Response.json({ error: "Temporary outage" }, { status: 503 })
+        : original(url, init),
+    );
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await change("Amount", "2.000001");
+    await click("Per 100 g");
+    await click("Log recipe");
+    await click("Per serving (bowl)");
+    await click("Log recipe");
+    const posts = fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts).toHaveLength(2);
+    const first = required(posts[0]);
+    const second = required(posts[1]);
+    expect(first[0]).toBe(`/api/recipes/${recipeId}/log?profileTimeZonePrecondition=v1`);
+    expect(second[1]?.body).toBe(first[1]?.body);
+    expect(new Headers(second[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(first[1]?.headers).get("idempotency-key"),
+    );
+    expect(new Headers(first[1]?.headers).get("x-expected-profile-time-zone")).toBe(
+      "America/Chicago",
+    );
+    expect(JSON.parse(String(first[1]?.body))).toMatchObject({
+      recipeVersionId: versionId,
+      portion: { kind: "serving", amount: "2.000001" },
+    });
+    const body = JSON.parse(String(first[1]?.body));
+    expect(Object.keys(body)).toEqual(["recipeVersionId", "portion", "mealSlot", "occurredAt"]);
+    expect(localDateInTimeZone(new Date(body.occurredAt), "America/Chicago")).toBe("2026-09-09");
+  });
+
+  it.each(["new", "owner-change", "unmounted"] as const)(
+    "rejects retained nutrition controls after %s",
+    async (transition) => {
+      const fetcher = nutritionFetcher();
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      const retained = button("Per 100 g");
+      if (transition === "new") {
+        await click("New recipe");
+        openSaved();
+        await hooks.settle();
+      } else if (transition === "owner-change") {
+        const original = required(fetcher.getMockImplementation());
+        fetcher.mockImplementation(async (url, init) =>
+          url === "/api/auth/me"
+            ? session("a3fd8855-90c8-42df-8f21-2f5a4060fa08")
+            : original(url, init),
+        );
+        openSaved();
+        await hooks.settle();
+        expect(router.replace).toHaveBeenCalledWith("/login");
+        expect(text()).not.toContain("Saved recipe nutrition");
+        expect(text()).not.toContain("Measured zero");
+      } else hooks.unmount();
+      const updates = hooks.afterClose();
+      const calls = fetcher.mock.calls.length;
+      invoke(retained, "onClick");
+      await hooks.settle();
+      expect(hooks.afterClose()).toBe(updates);
+      expect(fetcher.mock.calls).toHaveLength(calls);
+      if (transition === "new")
+        expect(button("Per serving (bowl)").props["aria-pressed"]).toBe(true);
+    },
+  );
 });
