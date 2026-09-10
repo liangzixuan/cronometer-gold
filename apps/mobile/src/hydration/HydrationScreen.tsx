@@ -1,8 +1,10 @@
 import { resolveHydrationLocalMinute } from "@nutrition-tracker/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Alert,
+  AppState,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -69,6 +71,7 @@ interface PendingMutation {
   readonly operationId: string;
   readonly serializedBody: string | undefined;
   readonly sourceDate: string;
+  readonly scopeKey: string;
 }
 
 function dayMessage(day: HydrationDay): string {
@@ -87,7 +90,7 @@ export function HydrationScreen({
   const initialDate = todayDetailDate(requestedDate, profileTimeZone, initialNow);
   const [date, setDate] = useState(initialDate);
   const [dateDraft, setDateDraft] = useState(initialDate);
-  const [day, setDay] = useState<HydrationDay | null>(null);
+  const [loadedDay, setDay] = useState<HydrationDay | null>(null);
   const [state, setState] = useState<LoadState>("loading");
   const [message, setMessage] = useState("Opening your private hydration log…");
   const [messageIsError, setMessageIsError] = useState(false);
@@ -96,10 +99,31 @@ export function HydrationScreen({
     localTimeInTimeZone(initialNow, profileTimeZone).slice(0, 5),
   );
   const [edit, setEdit] = useState<HydrationEdit | null>(null);
+  const amountRef = useRef(amount);
+  const timeRef = useRef(localTime);
+  const dateDraftRef = useRef(dateDraft);
+  const draftVersion = useRef(0);
+  const [, refreshDraftVersion] = useState(0);
+  const lifecycle = useRef(0);
+  const foreground = useRef(
+    AppState.currentState !== "background" && AppState.currentState !== "inactive",
+  );
+  const scopeKey = JSON.stringify([accessToken, apiBase.href, profileTimeZone, requestedDate]);
+  const scopeKeyRef = useRef(scopeKey);
+  scopeKeyRef.current = scopeKey;
+  const loadedScope = useRef<string | null>(null);
+  const closedScope = useRef<string | null>(null);
+  const installedView = useRef<string | null>(null);
+  const installedScope = useRef(scopeKey);
+  const dayRef = useRef<HydrationDay | null>(null);
+  const onUnauthorizedRef = useRef(onUnauthorized);
+  onUnauthorizedRef.current = onUnauthorized;
   const [busy, setBusy] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingMutation | null>(null);
   const pendingRef = useRef<PendingMutation | null>(null);
   const [requiresReload, setRequiresReload] = useState(false);
+  const requiresReloadRef = useRef(requiresReload);
+  requiresReloadRef.current = requiresReload;
   const [destinationDate, setDestinationDate] = useState<string | null>(null);
   const mutationController = useRef<AbortController | null>(null);
   const mutationGeneration = useRef(0);
@@ -113,21 +137,66 @@ export function HydrationScreen({
   const loadedTimeZone = useRef<string | null>(null);
   const untouchedDefaultOccurredAt = useRef<string | null>(null);
 
+  const privateCurrent = useCallback(
+    () =>
+      mounted.current &&
+      foreground.current &&
+      scopeKeyRef.current === scopeKey &&
+      installedScope.current === scopeKey &&
+      closedScope.current !== scopeKey,
+    [scopeKey],
+  );
+  const clearDay = useCallback(() => {
+    dayRef.current = null;
+    loadedScope.current = null;
+    setDay(null);
+  }, []);
+  const closePrivate = useCallback(async () => {
+    if (!privateCurrent()) return;
+    closedScope.current = scopeKey;
+    lifecycle.current += 1;
+    loadGeneration.current += 1;
+    loadController.current?.abort();
+    mutationGeneration.current += 1;
+    mutationController.current?.abort();
+    mutationController.current = null;
+    pendingRef.current = null;
+    setPending(null);
+    setBusy(null);
+    clearDay();
+    setEdit(null);
+    amountRef.current = "";
+    setAmount("");
+    setState("error");
+    setMessageIsError(true);
+    setMessage("Your hydration session has closed.");
+    await onUnauthorizedRef.current();
+  }, [clearDay, privateCurrent, scopeKey]);
+  const day =
+    privateCurrent() && loadedScope.current === scopeKey && dayRef.current === loadedDay
+      ? loadedDay
+      : null;
+
   const loadDay = useCallback(
     async (requestedDate: string, successMessage?: string) => {
+      if (!privateCurrent() || selectedDate.current !== requestedDate) return false;
       loadController.current?.abort();
       const controller = new AbortController();
       loadController.current = controller;
       const generation = loadGeneration.current + 1;
       loadGeneration.current = generation;
+      const initiatingLifecycle = lifecycle.current;
       const isCurrent = () =>
+        privateCurrent() &&
+        lifecycle.current === initiatingLifecycle &&
+        selectedDate.current === requestedDate &&
         !controller.signal.aborted &&
         loadGeneration.current === generation &&
         context.current.accessToken === accessToken &&
         context.current.base === apiBase.href &&
         context.current.profileTimeZone === profileTimeZone;
       setState("loading");
-      setDay(null);
+      clearDay();
       setMessageIsError(false);
       setMessage(`Loading hydration entries for ${requestedDate}…`);
       try {
@@ -141,7 +210,7 @@ export function HydrationScreen({
         );
         if (!isCurrent()) return false;
         if (response.status === 401) {
-          await onUnauthorized();
+          await closePrivate();
           return false;
         }
         const body = await jsonBody(response);
@@ -156,10 +225,13 @@ export function HydrationScreen({
         if (loadedTimeZone.current !== next.timeZone) {
           setEdit(null);
           const capturedNow = new Date();
-          setLocalTime(localTimeInTimeZone(capturedNow, next.timeZone).slice(0, 5));
+          timeRef.current = localTimeInTimeZone(capturedNow, next.timeZone).slice(0, 5);
+          setLocalTime(timeRef.current);
           untouchedDefaultOccurredAt.current = capturedNow.toISOString();
           loadedTimeZone.current = next.timeZone;
         }
+        dayRef.current = next;
+        loadedScope.current = scopeKey;
         setDay(next);
         setState("ready");
         setMessageIsError(false);
@@ -176,42 +248,164 @@ export function HydrationScreen({
         return false;
       }
     },
-    [accessToken, apiBase, onUnauthorized, profileTimeZone],
+    [accessToken, apiBase, clearDay, closePrivate, privateCurrent, profileTimeZone, scopeKey],
   );
 
   useEffect(() => {
     mounted.current = true;
+    lifecycle.current += 1;
     setBusy(null);
-    setPending(null);
-    pendingRef.current = null;
-    setEdit(null);
-    setRequiresReload(false);
-    setDestinationDate(null);
+    if (installedScope.current !== scopeKey) {
+      installedScope.current = scopeKey;
+      amountRef.current = "";
+      setAmount("");
+      const now = new Date();
+      timeRef.current = localTimeInTimeZone(now, profileTimeZone).slice(0, 5);
+      setLocalTime(timeRef.current);
+      untouchedDefaultOccurredAt.current = null;
+      loadedTimeZone.current = null;
+      draftVersion.current += 1;
+      refreshDraftVersion(draftVersion.current);
+    }
+    const view = JSON.stringify([scopeKey, date]);
+    if (installedView.current !== view) {
+      installedView.current = view;
+      setPending(null);
+      pendingRef.current = null;
+      setEdit(null);
+      setRequiresReload(false);
+      requiresReloadRef.current = false;
+      setDestinationDate(null);
+    }
     void loadDay(date);
     return () => {
       mounted.current = false;
+      lifecycle.current += 1;
       loadController.current?.abort();
       mutationGeneration.current += 1;
       mutationController.current?.abort();
       mutationController.current = null;
-      pendingRef.current = null;
     };
-  }, [date, loadDay]);
+  }, [date, loadDay, profileTimeZone, scopeKey]);
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (next) => {
+      const active = next !== "background" && next !== "inactive";
+      if (!mounted.current || foreground.current === active) return;
+      foreground.current = active;
+      lifecycle.current += 1;
+      loadGeneration.current += 1;
+      loadController.current?.abort();
+      mutationGeneration.current += 1;
+      mutationController.current?.abort();
+      mutationController.current = null;
+      setBusy(null);
+      clearDay();
+      // Background is uncertain acceptance; retain the exact pending request for explicit retry.
+      if (closedScope.current !== scopeKey) setState("loading");
+      if (active) void loadDay(selectedDate.current);
+    });
+    return () => subscription.remove();
+  }, [clearDay, loadDay, scopeKey]);
+
+  const renderedLifecycle = lifecycle.current;
+  const renderedLoad = loadGeneration.current;
+  const renderedDraftVersion = draftVersion.current;
+  function currentControls() {
+    return (
+      privateCurrent() &&
+      selectedDate.current === date &&
+      lifecycle.current === renderedLifecycle &&
+      loadGeneration.current === renderedLoad &&
+      draftVersion.current === renderedDraftVersion
+    );
+  }
+  function canEditAdd() {
+    return (
+      currentControls() &&
+      draftVersion.current === renderedDraftVersion &&
+      !pendingRef.current &&
+      !mutationController.current &&
+      !requiresReloadRef.current &&
+      state === "ready" &&
+      day !== null &&
+      dayRef.current === day &&
+      day.localDate === date &&
+      dateDraftRef.current === date
+    );
+  }
+  function changeAmount(value: string, announce = false) {
+    if (!canEditAdd()) return;
+    if (amountRef.current !== value) {
+      amountRef.current = value;
+      draftVersion.current += 1;
+      setAmount(value);
+      refreshDraftVersion(draftVersion.current);
+    }
+    if (announce)
+      AccessibilityInfo.announceForAccessibility(
+        `${value} milliliters selected. Choose Add entry to save.`,
+      );
+  }
+  function changeTime(value: string) {
+    if (!canEditAdd()) return;
+    if (timeRef.current !== value || untouchedDefaultOccurredAt.current !== null) {
+      timeRef.current = value;
+      untouchedDefaultOccurredAt.current = null;
+      draftVersion.current += 1;
+      setLocalTime(value);
+      refreshDraftVersion(draftVersion.current);
+    }
+  }
+  function changeDateDraft(value: string) {
+    if (
+      !currentControls() ||
+      draftVersion.current !== renderedDraftVersion ||
+      pendingRef.current ||
+      mutationController.current ||
+      state === "loading"
+    )
+      return;
+    if (dateDraftRef.current !== value) {
+      dateDraftRef.current = value;
+      draftVersion.current += 1;
+      refreshDraftVersion(draftVersion.current);
+      setDateDraft(value);
+    }
+  }
 
   function chooseDate(value: string) {
-    if (pendingRef.current || busy) return;
+    if (
+      !currentControls() ||
+      pendingRef.current ||
+      mutationController.current ||
+      busy ||
+      state === "loading"
+    )
+      return;
     if (!isLocalDate(value)) {
       setMessageIsError(true);
       setMessage("Enter a valid local date in YYYY-MM-DD form.");
+      if (dateDraftRef.current !== date) {
+        draftVersion.current += 1;
+        refreshDraftVersion(draftVersion.current);
+      }
+      dateDraftRef.current = date;
       setDateDraft(date);
       return;
     }
     if (value === date) {
+      dateDraftRef.current = value;
       setDateDraft(value);
       return;
     }
+    selectedDate.current = value;
+    dateDraftRef.current = value;
+    lifecycle.current += 1;
+    loadGeneration.current += 1;
+    loadController.current?.abort();
     setEdit(null);
-    setDay(null);
+    clearDay();
     setDestinationDate(null);
     setRequiresReload(false);
     setDateDraft(value);
@@ -224,13 +418,24 @@ export function HydrationScreen({
   }
 
   async function submitMutation(operation: PendingMutation): Promise<void> {
-    if (mutationController.current || pendingRef.current !== operation) return;
+    if (
+      !privateCurrent() ||
+      operation.scopeKey !== scopeKey ||
+      selectedDate.current !== operation.sourceDate ||
+      mutationController.current ||
+      pendingRef.current !== operation
+    )
+      return;
     const input = operation.input;
     const controller = new AbortController();
     mutationController.current = controller;
     const generation = ++mutationGeneration.current;
     const activeContext = context.current;
+    const initiatingLifecycle = lifecycle.current;
     const isCurrent = () =>
+      privateCurrent() &&
+      lifecycle.current === initiatingLifecycle &&
+      selectedDate.current === operation.sourceDate &&
       !controller.signal.aborted &&
       generation === mutationGeneration.current &&
       context.current.accessToken === activeContext.accessToken &&
@@ -256,10 +461,7 @@ export function HydrationScreen({
       });
       if (!isCurrent()) return;
       if (response.status === 401) {
-        clearPending();
-        setDay(null);
-        setEdit(null);
-        await onUnauthorized();
+        await closePrivate();
         return;
       }
       const body = await jsonBody(response);
@@ -267,6 +469,7 @@ export function HydrationScreen({
       if (!response.ok) {
         if (response.status === 409 || response.status === 412) {
           clearPending();
+          requiresReloadRef.current = true;
           setRequiresReload(true);
           setMessageIsError(true);
           setMessage(
@@ -291,7 +494,12 @@ export function HydrationScreen({
       input.validate(receipt);
       clearPending();
       setEdit(null);
-      if (input.method === "POST") setAmount("");
+      if (input.method === "POST") {
+        amountRef.current = "";
+        draftVersion.current += 1;
+        setAmount("");
+        refreshDraftVersion(draftVersion.current);
+      }
       setDestinationDate(input.destinationDate ?? null);
       const refreshed = await loadDay(operation.sourceDate, input.successMessage);
       if (!isCurrent()) return;
@@ -316,7 +524,7 @@ export function HydrationScreen({
 
   function beginMutation(input: MutationInput) {
     if (
-      !mounted.current ||
+      !currentControls() ||
       selectedDate.current !== date ||
       context.current.accessToken !== accessToken ||
       context.current.base !== apiBase.href ||
@@ -337,6 +545,7 @@ export function HydrationScreen({
       operationId: newOperationId(),
       serializedBody: input.body === undefined ? undefined : JSON.stringify(input.body),
       sourceDate: date,
+      scopeKey,
     };
     pendingRef.current = operation;
     setPending(operation);
@@ -345,12 +554,13 @@ export function HydrationScreen({
   }
 
   function createEntry() {
+    if (!canEditAdd() || draftVersion.current !== renderedDraftVersion) return;
     if (!day || day.localDate !== date || state !== "ready") return;
     try {
       const prepared = prepareHydrationCreate(
-        amount,
+        amountRef.current,
         date,
-        localTime,
+        timeRef.current,
         day,
         untouchedDefaultOccurredAt.current ?? undefined,
       );
@@ -428,7 +638,7 @@ export function HydrationScreen({
   }
 
   function reloadForCorrection() {
-    if (busy || pendingRef.current) return;
+    if (!currentControls() || mutationController.current || busy || pendingRef.current) return;
     setEdit(null);
     setRequiresReload(false);
     void loadDay(date);
@@ -462,9 +672,11 @@ export function HydrationScreen({
         : null,
     [editLocalDate, editLocalTime, editTimeZone],
   );
-  const controlsDisabled = busy !== null || pending !== null || state === "loading";
+  const controlsDisabled =
+    busy !== null || pending !== null || state === "loading" || !privateCurrent();
   const editDisabled = controlsDisabled || requiresReload || state !== "ready";
-  const createDisabled = editDisabled || day === null || day.localDate !== date;
+  const createDisabled =
+    editDisabled || day === null || day.localDate !== date || dateDraft !== date;
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
@@ -495,7 +707,7 @@ export function HydrationScreen({
             autoCapitalize="none"
             editable={!controlsDisabled}
             maxLength={10}
-            onChangeText={setDateDraft}
+            onChangeText={changeDateDraft}
             onEndEditing={(event) => chooseDate(event.nativeEvent.text)}
             onSubmitEditing={(event) => chooseDate(event.nativeEvent.text)}
             returnKeyType="done"
@@ -543,7 +755,10 @@ export function HydrationScreen({
             accessibilityRole="button"
             accessibilityState={{ disabled: controlsDisabled }}
             disabled={controlsDisabled}
-            onPress={() => void loadDay(date)}
+            onPress={() => {
+              if (currentControls() && !pendingRef.current && !mutationController.current)
+                void loadDay(date);
+            }}
             style={styles.retryButton}
           >
             <Text style={styles.secondaryText}>Retry day view</Text>
@@ -553,7 +768,11 @@ export function HydrationScreen({
         {pending && !busy ? (
           <Pressable
             accessibilityRole="button"
-            onPress={() => void submitMutation(pending)}
+            disabled={!privateCurrent() || state === "loading"}
+            accessibilityState={{ disabled: !privateCurrent() || state === "loading" }}
+            onPress={() => {
+              if (currentControls() && state !== "loading") void submitMutation(pending);
+            }}
             style={styles.retryButton}
           >
             <Text style={styles.secondaryText}>Retry saved change</Text>
@@ -605,12 +824,30 @@ export function HydrationScreen({
             editable={!createDisabled}
             keyboardType="number-pad"
             maxLength={5}
-            onChangeText={setAmount}
+            onChangeText={(value) => changeAmount(value)}
             placeholder="250"
             placeholderTextColor={palette.muted}
             style={styles.input}
-            value={amount}
+            value={privateCurrent() ? amount : ""}
           />
+          <View style={styles.actionRow}>
+            {["250", "500"].map((value) => (
+              <Pressable
+                key={value}
+                accessibilityRole="button"
+                accessibilityLabel={`Set Add amount to ${value} milliliters`}
+                accessibilityState={{
+                  selected: privateCurrent() && amount === value,
+                  disabled: createDisabled,
+                }}
+                disabled={createDisabled}
+                onPress={() => changeAmount(value, true)}
+                style={styles.secondarySmall}
+              >
+                <Text style={styles.secondaryText}>{value} mL</Text>
+              </Pressable>
+            ))}
+          </View>
           <Text style={styles.label}>LOCAL TIME</Text>
           <TextInput
             accessibilityHint="24-hour time in HH:MM form"
@@ -618,14 +855,11 @@ export function HydrationScreen({
             autoCapitalize="none"
             editable={!createDisabled}
             maxLength={5}
-            onChangeText={(value) => {
-              untouchedDefaultOccurredAt.current = null;
-              setLocalTime(value);
-            }}
+            onChangeText={changeTime}
             placeholder="08:30"
             placeholderTextColor={palette.muted}
             style={styles.input}
-            value={localTime}
+            value={privateCurrent() ? localTime : ""}
           />
           <Pressable
             accessibilityRole="button"
@@ -845,7 +1079,11 @@ export function HydrationScreen({
                       accessibilityRole="button"
                       accessibilityState={{ disabled: editDisabled }}
                       disabled={editDisabled}
-                      onPress={() => setEdit({ entry, amount: String(entry.amountMilliliters) })}
+                      onPress={() => {
+                        if (!currentControls() || pendingRef.current || mutationController.current)
+                          return;
+                        setEdit({ entry, amount: String(entry.amountMilliliters) });
+                      }}
                       style={styles.secondarySmall}
                     >
                       <Text style={styles.secondaryText}>Edit amount</Text>

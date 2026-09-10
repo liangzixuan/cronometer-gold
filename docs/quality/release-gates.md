@@ -585,3 +585,22 @@ acceptance.
   synthetic Chrome create/readback/lost-receipt/replacement/narrow/keyboard proof
   establish only bounded source behavior. Physical native, real persistence,
   assistive technology, independent Claude Code and release gates remain separate.
+
+
+## Hydration amount presets (ADR 0038)
+
+- Presets replace only the existing Add amount draft with exactly 250 or 500 mL.
+  Manual amounts, selected date/time and untouched-default instant/fold remain.
+  Choosing/rechoosing a preset sends no request and changes no ledger total;
+  explicit Add is required. No recommendation or retained preference is implied.
+- New and participating Add/date/retry controls reject stale, busy, pending,
+  reconciliatory, private-scope, route and lifecycle states synchronously. Current
+  same-value choices remain usable; an old receipt cannot clear another draft.
+- Frozen pending body/key, accepted-write/read-failure cleanup, correction/time
+  validation, owner/revision checks and existing native retry behavior remain.
+  Presets do not introduce fresh operation intent or bypass a pending write.
+- Actual-component/correction tests, independent in-task review, canonical local
+  gates/exports and synthetic Chrome keyboard/narrow/create/readback/retry/date/
+  expiry proof establish bounded source behavior only. Physical native, real
+  persistence, assistive technology, independent Claude Code and release gates
+  remain separate.

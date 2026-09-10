@@ -143,6 +143,8 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
   const [message, setMessage] = useState("Opening your private hydration log…");
   const [messageIsError, setMessageIsError] = useState(false);
   const [amount, setAmount] = useState("");
+  const [draftVersion, setDraftVersion] = useState(0);
+  const draftVersionRef = useRef(draftVersion);
   const [localTime, setLocalTime] = useState("");
   const [edit, setEdit] = useState<HydrationEdit | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -153,9 +155,16 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
   const acceptedRead = useRef<{ readonly message: string; readonly sourceDate: string } | null>(
     null,
   );
+  const dayRef = useRef(day);
+  dayRef.current = day;
+  const routeRef = useRef({ initialDate });
+  if (routeRef.current.initialDate !== initialDate) routeRef.current = { initialDate };
+  const routeContext = routeRef.current;
+  const handledRouteRef = useRef<typeof routeContext | null>(null);
   const ownerRef = useRef<string | null>(null);
   const dateRef = useRef("");
   const mounted = useRef(false);
+  const privateClosed = useRef(false);
   const viewGeneration = useRef(0);
   const writeGeneration = useRef(0);
   const inFlight = useRef(false);
@@ -173,6 +182,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
   );
 
   const signInAgain = useCallback(() => {
+    privateClosed.current = true;
     ownerRef.current = null;
     viewGeneration.current += 1;
     writeGeneration.current += 1;
@@ -204,17 +214,25 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
   const loadDay = useCallback(
     async (requestedDate: string, successMessage?: string) => {
       const expectedOwnerUserId = ownerRef.current;
-      if (!expectedOwnerUserId || requestedDate !== dateRef.current) return false;
+      if (
+        !mounted.current ||
+        !expectedOwnerUserId ||
+        requestedDate !== dateRef.current ||
+        handledRouteRef.current !== routeRef.current
+      )
+        return false;
       loadController.current?.abort();
       const controller = new AbortController();
       loadController.current = controller;
       const generation = ++loadGeneration.current;
       const view = viewGeneration.current;
+      const route = routeRef.current;
       const current = () =>
         mounted.current &&
         !controller.signal.aborted &&
         loadGeneration.current === generation &&
         viewGeneration.current === view &&
+        routeRef.current === route &&
         ownerRef.current === expectedOwnerUserId &&
         dateRef.current === requestedDate;
       setDay(null);
@@ -271,8 +289,14 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
 
   useEffect(() => {
     mounted.current = true;
+    if (privateClosed.current)
+      return () => {
+        mounted.current = false;
+      };
     const controller = new AbortController();
     const view = ++viewGeneration.current;
+    const route = routeRef.current;
+    handledRouteRef.current = route;
     ownerRef.current = null;
     pendingRef.current = null;
     acceptedRead.current = null;
@@ -297,11 +321,21 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
           headers: { accept: "application/json" },
           signal: controller.signal,
         });
-        if (controller.signal.aborted || viewGeneration.current !== view) return;
+        if (
+          controller.signal.aborted ||
+          viewGeneration.current !== view ||
+          routeRef.current !== route
+        )
+          return;
         if (response.status === 401) return signInAgain();
         if (!response.ok) throw new Error("Your session could not be verified.");
         const nextSession = parseSession(await json(response));
-        if (controller.signal.aborted || viewGeneration.current !== view) return;
+        if (
+          controller.signal.aborted ||
+          viewGeneration.current !== view ||
+          routeRef.current !== route
+        )
+          return;
         const today = localDateInTimeZone(new Date(), nextSession.profile.timeZone);
         const nextDate = initialDate && isLocalDate(initialDate) ? initialDate : today;
         ownerRef.current = nextSession.user.id;
@@ -310,7 +344,12 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
         setDate(nextDate);
         setLocalTime(localTimeInTimeZone(new Date(), nextSession.profile.timeZone));
       } catch (error) {
-        if (controller.signal.aborted || viewGeneration.current !== view) return;
+        if (
+          controller.signal.aborted ||
+          viewGeneration.current !== view ||
+          routeRef.current !== route
+        )
+          return;
         setState("error");
         setMessageIsError(true);
         setMessage(error instanceof Error ? error.message : "Your session could not be verified.");
@@ -332,9 +371,54 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
     return () => loadController.current?.abort();
   }, [date, loadDay, session]);
 
+  const renderedView = viewGeneration.current;
+  const renderedLoad = loadGeneration.current;
+  function canUseControls() {
+    return (
+      mounted.current &&
+      !privateClosed.current &&
+      routeRef.current === routeContext &&
+      handledRouteRef.current === routeContext &&
+      viewGeneration.current === renderedView &&
+      loadGeneration.current === renderedLoad &&
+      draftVersionRef.current === draftVersion &&
+      session !== null &&
+      ownerRef.current === session.user.id &&
+      dateRef.current === date &&
+      busy === null &&
+      !inFlight.current
+    );
+  }
+  function canEditAddDraft() {
+    return (
+      canUseControls() &&
+      state === "ready" &&
+      day !== null &&
+      dayRef.current === day &&
+      day.localDate === date &&
+      !pendingRef.current &&
+      !reconcile &&
+      !acceptedRead.current
+    );
+  }
+  function changeAddAmount(next: string) {
+    if (!canEditAddDraft() || next === amount) return;
+    const version = ++draftVersionRef.current;
+    setDraftVersion(version);
+    setAmount(next);
+  }
+  function changeAddTime(next: string) {
+    if (!canEditAddDraft() || (next === localTime && untouchedDefaultOccurredAt.current === null))
+      return;
+    untouchedDefaultOccurredAt.current = null;
+    const version = ++draftVersionRef.current;
+    setDraftVersion(version);
+    setLocalTime(next);
+  }
+
   function selectDate(nextDate: string) {
     if (
-      inFlight.current ||
+      !canUseControls() ||
       pendingRef.current ||
       !isLocalDate(nextDate) ||
       nextDate === dateRef.current
@@ -355,14 +439,21 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
   }
 
   async function retryDayView() {
-    if (inFlight.current || pendingRef.current) return;
+    if (!canUseControls() || pendingRef.current) return;
     setEdit(null);
     setReconcile(false);
     const accepted = acceptedRead.current;
     const owner = ownerRef.current;
     const view = viewGeneration.current;
+    const route = routeRef.current;
     const refreshed = await loadDay(dateRef.current, accepted?.message);
-    if (!mounted.current || ownerRef.current !== owner || viewGeneration.current !== view) return;
+    if (
+      !mounted.current ||
+      ownerRef.current !== owner ||
+      viewGeneration.current !== view ||
+      routeRef.current !== route
+    )
+      return;
     if (refreshed) acceptedRead.current = null;
     else if (
       accepted &&
@@ -379,7 +470,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
 
   async function mutate(operation: HydrationWriteOperation): Promise<void> {
     if (
-      inFlight.current ||
+      !canUseControls() ||
       !hydrationWriteBelongsToView(operation, ownerRef.current, dateRef.current) ||
       (pendingRef.current && pendingRef.current !== operation)
     )
@@ -391,11 +482,13 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
     mutationController.current = controller;
     const view = viewGeneration.current;
     const generation = ++writeGeneration.current;
+    const route = routeRef.current;
     const current = () =>
       mounted.current &&
       !controller.signal.aborted &&
       viewGeneration.current === view &&
       writeGeneration.current === generation &&
+      routeRef.current === route &&
       hydrationWriteBelongsToView(operation, ownerRef.current, dateRef.current);
     setBusy(`${operation.method}:${operation.operationId}`);
     setMessageIsError(false);
@@ -477,7 +570,9 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
     >,
   ): HydrationWriteOperation {
     if (
+      !canUseControls() ||
       !day ||
+      dayRef.current !== day ||
       day.localDate !== dateRef.current ||
       state !== "ready" ||
       !ownerRef.current ||
@@ -497,6 +592,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
   }
 
   async function createEntry() {
+    if (!canEditAddDraft()) return;
     try {
       if (!day) throw new TypeError("Load the selected hydration day before adding an entry.");
       const prepared = prepareHydrationCreate(
@@ -560,12 +656,37 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
   }
 
   async function signOut() {
+    if (
+      !mounted.current ||
+      privateClosed.current ||
+      routeRef.current !== routeContext ||
+      handledRouteRef.current !== routeContext ||
+      ownerRef.current !== (session?.user.id ?? null) ||
+      (session !== null && viewGeneration.current !== renderedView) ||
+      busy !== null ||
+      inFlight.current
+    )
+      return;
+    inFlight.current = true;
+    const view = ++viewGeneration.current;
+    loadGeneration.current += 1;
+    loadController.current?.abort();
+    const owner = ownerRef.current;
+    const route = routeRef.current;
+    const current = () =>
+      mounted.current &&
+      ownerRef.current === owner &&
+      viewGeneration.current === view &&
+      routeRef.current === route;
     setBusy("logout");
     const confirmed = await confirmBrowserLogout(
       () => fetch("/api/auth/logout", { method: "POST", cache: "no-store" }),
-      signInAgain,
+      () => {
+        if (current()) signInAgain();
+      },
     );
-    if (!confirmed && mounted.current) {
+    if (!confirmed && current()) {
+      inFlight.current = false;
       setMessage("Sign out could not be confirmed. Your hydration log remains open; retry.");
       setState("error");
       setMessageIsError(true);
@@ -575,9 +696,19 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
 
   const dateQuery = date ? `?date=${encodeURIComponent(date)}` : "";
   const controlsDisabled =
-    busy !== null || pending !== null || reconcile || !session || state === "loading";
+    busy !== null ||
+    pending !== null ||
+    reconcile ||
+    !session ||
+    state === "loading" ||
+    !mounted.current ||
+    handledRouteRef.current !== routeContext;
   const createDisabled =
-    controlsDisabled || state !== "ready" || day === null || day.localDate !== date;
+    controlsDisabled ||
+    state !== "ready" ||
+    day === null ||
+    day.localDate !== date ||
+    acceptedRead.current !== null;
 
   return (
     <>
@@ -600,7 +731,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
         {session ? <p className="accountIdentity">Signed in as {session.user.email}</p> : null}
         <button
           className="signOutButton"
-          disabled={busy !== null}
+          disabled={busy !== null || privateClosed.current}
           onClick={() => void signOut()}
           type="button"
         >
@@ -733,7 +864,7 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
                   disabled={createDisabled}
                   inputMode="numeric"
                   maxLength={5}
-                  onChange={(event) => setAmount(event.target.value)}
+                  onChange={(event) => changeAddAmount(event.target.value)}
                   placeholder="250"
                   required
                   value={amount}
@@ -742,13 +873,32 @@ export function HydrationClient({ initialDate }: HydrationClientProps) {
               <small className="fieldHelp" id="hydration-amount-help">
                 Whole milliliters, 1 to 20,000 per entry.
               </small>
+              <fieldset className="entryActions" style={{ border: 0, padding: 0, margin: 0 }}>
+                <legend className="srOnly">Amount presets</legend>
+                {([250, 500] as const).map((milliliters) => (
+                  <button
+                    aria-describedby="hydration-preset-help"
+                    aria-pressed={amount === String(milliliters)}
+                    className="buttonQuiet"
+                    disabled={createDisabled}
+                    key={milliliters}
+                    onClick={() => changeAddAmount(String(milliliters))}
+                    type="button"
+                  >
+                    {milliliters} mL
+                  </button>
+                ))}
+              </fieldset>
+              <small className="fieldHelp" id="hydration-preset-help" aria-live="polite">
+                {amount === "250" || amount === "500" ? `${amount} mL selected. ` : ""}
+                Review the amount and time, then choose Add entry.
+              </small>
               <label className="formField">
                 <span>Local time</span>
                 <input
                   disabled={createDisabled}
                   onChange={(event) => {
-                    untouchedDefaultOccurredAt.current = null;
-                    setLocalTime(event.target.value);
+                    changeAddTime(event.target.value);
                   }}
                   required
                   type="time"

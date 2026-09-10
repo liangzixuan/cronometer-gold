@@ -1,10 +1,13 @@
+import { readFileSync } from "node:fs";
+import { createContext, Script } from "node:vm";
 import * as React from "react";
-import { Alert } from "react-native";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { AccessibilityInfo, Alert, AppState } from "react-native";
+import ts from "typescript";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { HydrationScreen } from "../src/hydration/HydrationScreen";
 
-const hooks = vi.hoisted(() => ({ current: null }));
+const hooks = vi.hoisted(() => ({ current: null, appListeners: new Set() }));
 
 vi.mock("react", async (importOriginal) => ({
   ...(await importOriginal()),
@@ -16,6 +19,13 @@ vi.mock("react", async (importOriginal) => ({
 }));
 vi.mock("../src/auth/operation-id", () => ({ newOperationId: vi.fn(() => crypto.randomUUID()) }));
 vi.mock("react-native", () => ({
+  AppState: {
+    currentState: "active",
+    addEventListener: (_event, listener) => {
+      hooks.appListeners.add(listener);
+      return { remove: () => hooks.appListeners.delete(listener) };
+    },
+  },
   AccessibilityInfo: { announceForAccessibility: vi.fn() },
   ActivityIndicator: "ActivityIndicator",
   Alert: { alert: vi.fn() },
@@ -36,6 +46,8 @@ function screenHarness(props) {
   let effects = [];
   let dirty = true;
   let tree;
+  let unmounted = false;
+  let writesAfterUnmount = 0;
   const sameDependencies = (left, right) =>
     left !== undefined &&
     right !== undefined &&
@@ -49,6 +61,7 @@ function screenHarness(props) {
       return [
         slot.value,
         (update) => {
+          if (unmounted) writesAfterUnmount += 1;
           const next = typeof update === "function" ? update(slot.value) : update;
           if (!Object.is(next, slot.value)) {
             slot.value = next;
@@ -84,14 +97,14 @@ function screenHarness(props) {
       const index = cursor++;
       const previous = slots[index];
       if (sameDependencies(previous?.dependencies, dependencies)) return;
-      slots[index] = { dependencies, cleanup: previous?.cleanup };
+      slots[index] = { dependencies, effect, cleanup: previous?.cleanup };
       effects.push(() => {
         previous?.cleanup?.();
         slots[index].cleanup = effect();
       });
     },
     async settle() {
-      for (let turn = 0; turn < 30; turn += 1) {
+      for (let turn = 0; turn < 60; turn += 1) {
         if (dirty) {
           dirty = false;
           cursor = 0;
@@ -105,7 +118,28 @@ function screenHarness(props) {
       expect(dirty).toBe(false);
       return tree;
     },
+    renderWithoutEffects() {
+      dirty = false;
+      cursor = 0;
+      effects = [];
+      hooks.current = harness;
+      tree = HydrationScreen(props);
+      return tree;
+    },
+    flushEffects() {
+      for (const effect of effects) effect();
+      effects = [];
+    },
+    replayEffects() {
+      for (const slot of slots) slot.cleanup?.();
+      for (const slot of slots) if (slot.effect) slot.cleanup = slot.effect();
+      dirty = true;
+    },
+    get writesAfterUnmount() {
+      return writesAfterUnmount;
+    },
     unmount() {
+      unmounted = true;
       for (const slot of slots) slot.cleanup?.();
       hooks.current = null;
     },
@@ -122,6 +156,9 @@ function rawScreenText(value) {
 const screenText = (value) => rawScreenText(value).replace(/\s+/gu, " ").trim();
 
 afterEach(() => {
+  hooks.appListeners.clear();
+  AppState.currentState = "active";
+  vi.useRealTimers();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
 });
@@ -542,4 +579,488 @@ describe("mobile hydration retained native confirmation", () => {
       }
     },
   );
+});
+
+function addReceipt(request) {
+  const body = JSON.parse(request.body);
+  const instant = new Date(body.occurredAt);
+  const parts = new Map(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Chicago",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    })
+      .formatToParts(instant)
+      .map((part) => [part.type, part.value]),
+  );
+  const localDate = `${parts.get("year")}-${parts.get("month")}-${parts.get("day")}`;
+  const milliseconds = instant.getUTCMilliseconds();
+  const localTime = `${parts.get("hour")}:${parts.get("minute")}:${parts.get("second")}${milliseconds ? `.${String(milliseconds).padStart(3, "0")}` : ""}`;
+  return response({
+    data: {
+      replayed: false,
+      entry: {
+        ...initialEntry,
+        ...body,
+        id: "4bcfa2bf-4950-43f7-9f24-b983ac803012",
+        revision: "1",
+        localDate,
+        localTime,
+      },
+      affectedDays: [{ localDate, revision: "7" }],
+    },
+  });
+}
+function presetSetup(responder = () => undefined) {
+  return setup(
+    async (request) =>
+      (await responder(request)) ??
+      (request.method === "POST"
+        ? addReceipt(request)
+        : dayResponse(request.url.searchParams.get("date"))),
+  );
+}
+function pendingResponse() {
+  let resolve;
+  const promise = new Promise((accept) => {
+    resolve = accept;
+  });
+  return { promise, resolve };
+}
+const amountInput = (tree) => input(tree, "Hydration amount in milliliters");
+const timeInput = (tree) => input(tree, "Hydration local time");
+const dateInput = (tree) => input(tree, "Hydration date YYYY-MM-DD");
+const writes = (requests) => requests.filter((request) => request.method === "POST");
+async function click(harness, label) {
+  pressable(await harness.settle(), label).props.onPress();
+  return harness.settle();
+}
+function setAppState(next) {
+  AppState.currentState = next;
+  for (const listener of hooks.appListeners) listener(next);
+}
+
+describe("native hydration Add amount presets", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-01T07:30:45.250Z"));
+  });
+  it("replaces only amount, supports manual custom values, and leaves history and requests unchanged", async () => {
+    const { harness, requests } = presetSetup();
+    try {
+      let tree = await harness.settle();
+      const before = requests.length;
+      tree = await click(harness, "250 mL");
+      expect(amountInput(tree).props.value).toBe("250");
+      expect(pressable(tree, "250 mL").props.accessibilityState.selected).toBe(true);
+      expect(pressable(tree, "500 mL").props.accessibilityState.selected).toBe(false);
+      expect(timeInput(tree).props.value).toBe("01:30");
+      expect(dateInput(tree).props.value).toBe(initialEntry.localDate);
+      expect(screenText(tree)).toContain("375 mL");
+      expect(AccessibilityInfo.announceForAccessibility).toHaveBeenLastCalledWith(
+        "250 milliliters selected. Choose Add entry to save.",
+      );
+      tree = await click(harness, "500 mL");
+      expect(amountInput(tree).props.value).toBe("500");
+      amountInput(tree).props.onChangeText("1234");
+      tree = await harness.settle();
+      expect(amountInput(tree).props.value).toBe("1234");
+      expect(pressable(tree, "250 mL").props.accessibilityState.selected).toBe(false);
+      expect(pressable(tree, "500 mL").props.accessibilityState.selected).toBe(false);
+      expect(requests).toHaveLength(before);
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("keeps repeated same-value choices usable and preserves the exact untouched fold until explicit Add", async () => {
+    const { harness, requests } = presetSetup();
+    try {
+      let tree = await harness.settle();
+      const first = pressable(tree, "250 mL").props.onPress;
+      first();
+      first();
+      tree = await harness.settle();
+      const same = pressable(tree, "250 mL").props.onPress;
+      same();
+      same();
+      tree = await harness.settle();
+      const submit = pressable(tree, "Add entry").props.onPress;
+      submit();
+      submit();
+      tree = await harness.settle();
+      expect(writes(requests)).toHaveLength(1);
+      expect(JSON.parse(writes(requests)[0].body)).toEqual({
+        amountMilliliters: 250,
+        occurredAt: initialEntry.occurredAt,
+      });
+      expect(writes(requests)[0].headers["x-expected-profile-time-zone"]).toBe("America/Chicago");
+      expect(writes(requests)[0].headers["if-match"]).toBeUndefined();
+      expect(amountInput(tree).props.value).toBe("");
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("rejects pre-preset Add, amount, time and date callbacks", async () => {
+    const { harness, requests } = presetSetup();
+    try {
+      let tree = await harness.settle();
+      const oldAdd = pressable(tree, "Add entry").props.onPress;
+      const oldAmount = amountInput(tree).props.onChangeText;
+      const oldTime = timeInput(tree).props.onChangeText;
+      const oldDate = dateInput(tree).props.onChangeText;
+      const oldBlur = dateInput(tree).props.onEndEditing;
+      const oldNext = nodes(tree, (node) => node.props.accessibilityLabel === "Next day")[0].props
+        .onPress;
+      const oldPrevious = nodes(tree, (node) => node.props.accessibilityLabel === "Previous day")[0]
+        .props.onPress;
+      const before = requests.length;
+      tree = await click(harness, "250 mL");
+      oldAdd();
+      oldAmount("999");
+      oldTime("10:00");
+      oldDate("2026-11-02");
+      oldNext();
+      oldPrevious();
+      oldBlur({ nativeEvent: { text: "2026-11-03" } });
+      tree = await harness.settle();
+      expect(requests).toHaveLength(before);
+      expect(amountInput(tree).props.value).toBe("250");
+      expect(timeInput(tree).props.value).toBe("01:30");
+      expect(dateInput(tree).props.value).toBe(initialEntry.localDate);
+      expect(writes(requests)).toHaveLength(0);
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("retains selected day and manually entered time across an amount choice", async () => {
+    const { harness, requests } = presetSetup();
+    try {
+      let tree = await harness.settle();
+      timeInput(tree).props.onChangeText("10:15");
+      tree = await harness.settle();
+      nodes(tree, (node) => node.props.accessibilityLabel === "Next day")[0].props.onPress();
+      tree = await harness.settle();
+      tree = await click(harness, "500 mL");
+      expect(timeInput(tree).props.value).toBe("10:15");
+      expect(dateInput(tree).props.value).toBe("2026-11-02");
+      await click(harness, "Add entry");
+      expect(JSON.parse(writes(requests)[0].body).occurredAt).toBe("2026-11-02T16:15:00.000Z");
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("preserves a row correction draft while choosing an Add amount", async () => {
+    const { harness, requests } = presetSetup();
+    try {
+      let tree = await editAmount(harness, "456");
+      const before = requests.length;
+      tree = await click(harness, "500 mL");
+      expect(input(tree, "Edit milliliters at 01:30").props.value).toBe("456");
+      expect(amountInput(tree).props.value).toBe("500");
+      expect(requests).toHaveLength(before);
+    } finally {
+      harness.unmount();
+    }
+  });
+  for (const recovery of ["unchanged", "invalid"])
+    it(`keeps fresh presets usable after ${recovery} date blur`, async () => {
+      const { harness, requests } = presetSetup();
+      try {
+        let tree = await harness.settle();
+        if (recovery === "invalid") {
+          dateInput(tree).props.onChangeText("invalid");
+          tree = await harness.settle();
+          expect(pressable(tree, "250 mL").props.disabled).toBe(true);
+        }
+        dateInput(tree).props.onEndEditing({
+          nativeEvent: { text: recovery === "invalid" ? "invalid" : initialEntry.localDate },
+        });
+        tree = await harness.settle();
+        tree = await click(harness, "250 mL");
+        expect(amountInput(tree).props.value).toBe("250");
+        await click(harness, "Add entry");
+        expect(writes(requests)).toHaveLength(1);
+      } finally {
+        harness.unmount();
+      }
+    });
+  it("fences a preset through date edit and restoration", async () => {
+    const { harness } = presetSetup();
+    try {
+      let tree = await harness.settle();
+      const old = pressable(tree, "500 mL").props.onPress;
+      dateInput(tree).props.onChangeText("invalid");
+      tree = await harness.settle();
+      old();
+      dateInput(tree).props.onChangeText(initialEntry.localDate);
+      tree = await harness.settle();
+      old();
+      tree = await harness.settle();
+      expect(amountInput(tree).props.value).toBe("");
+      tree = await click(harness, "250 mL");
+      expect(amountInput(tree).props.value).toBe("250");
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("freezes a pending request and key through uncertain acceptance and explicit retry", async () => {
+    const held = pendingResponse();
+    let attempt = 0;
+    const { harness, requests } = presetSetup((request) => {
+      if (request.method !== "POST") return undefined;
+      return ++attempt === 1 ? held.promise : addReceipt(request);
+    });
+    try {
+      let tree = await click(harness, "250 mL");
+      const old = pressable(tree, "500 mL").props.onPress;
+      pressable(tree, "Add entry").props.onPress();
+      old();
+      tree = await harness.settle();
+      expect(pressable(tree, "500 mL").props.disabled).toBe(true);
+      held.resolve(response({}, 503));
+      tree = await harness.settle();
+      pressable(tree, "500 mL").props.onPress();
+      amountInput(tree).props.onChangeText("999");
+      tree = await harness.settle();
+      expect(amountInput(tree).props.value).toBe("250");
+      tree = await click(harness, "Retry saved change");
+      expect(writes(requests)).toHaveLength(2);
+      expect(writes(requests)[1].body).toBe(writes(requests)[0].body);
+      expect(writes(requests)[1].headers["idempotency-key"]).toBe(
+        writes(requests)[0].headers["idempotency-key"],
+      );
+      old();
+      tree = await harness.settle();
+      expect(amountInput(tree).props.value).toBe("");
+    } finally {
+      harness.unmount();
+    }
+  });
+  for (const boundary of ["background", "replay"])
+    it(`retains a pending operation across ${boundary} and ignores the aborted receipt before one exact retry`, async () => {
+      const held = pendingResponse();
+      let original;
+      let attempt = 0;
+      const { harness, requests } = presetSetup((request) => {
+        if (request.method !== "POST") return undefined;
+        original ??= request;
+        return ++attempt === 1 ? held.promise : addReceipt(request);
+      });
+      try {
+        await click(harness, "250 mL");
+        await click(harness, "Add entry");
+        if (boundary === "background") {
+          setAppState("background");
+          const tree = await harness.settle();
+          expect(pressable(tree, "250 mL").props.disabled).toBe(true);
+          setAppState("active");
+        } else harness.replayEffects();
+        let tree = await harness.settle();
+        expect(writes(requests)).toHaveLength(1);
+        expect(original.signal.aborted).toBe(true);
+        const before = requests.length;
+        held.resolve(addReceipt(original));
+        tree = await harness.settle();
+        expect(requests).toHaveLength(before);
+        expect(amountInput(tree).props.value).toBe("250");
+        tree = await click(harness, "Retry saved change");
+        expect(writes(requests)).toHaveLength(2);
+        expect(writes(requests)[1].body).toBe(writes(requests)[0].body);
+        expect(writes(requests)[1].headers["idempotency-key"]).toBe(
+          writes(requests)[0].headers["idempotency-key"],
+        );
+        expect(amountInput(tree).props.value).toBe("");
+      } finally {
+        harness.unmount();
+      }
+    });
+  for (const boundary of ["token", "api", "zone", "route"])
+    for (const phase of ["fetch", "json"])
+      it(`fences prior ${phase} receipt and private draft on ${boundary} replacement`, async () => {
+        const held = pendingResponse();
+        let original;
+        const { harness, requests, props } = presetSetup((request) => {
+          if (request.method !== "POST") return undefined;
+          original = request;
+          return phase === "fetch"
+            ? held.promise
+            : { status: 200, ok: true, json: () => held.promise };
+        });
+        try {
+          let tree = await click(harness, "250 mL");
+          const old = pressable(tree, "500 mL").props.onPress;
+          await click(harness, "Add entry");
+          harness.updateProps(
+            boundary === "token"
+              ? { accessToken: "fresh-token" }
+              : boundary === "api"
+                ? { apiBase: new URL("http://127.0.0.1:4001") }
+                : boundary === "zone"
+                  ? { profileTimeZone: "UTC" }
+                  : { requestedDate: "2026-11-02" },
+          );
+          tree = harness.renderWithoutEffects();
+          old();
+          expect(amountInput(tree).props.value).toBe("");
+          expect(timeInput(tree).props.value).toBe("");
+          harness.flushEffects();
+          tree = await harness.settle();
+          expect(amountInput(tree).props.value).toBe("");
+          tree = await click(harness, "500 mL");
+          const before = requests.length;
+          held.resolve(
+            phase === "fetch" ? addReceipt(original) : await addReceipt(original).json(),
+          );
+          tree = await harness.settle();
+          expect(amountInput(tree).props.value).toBe("500");
+          expect(requests).toHaveLength(before);
+          expect(props.onUnauthorized).not.toHaveBeenCalled();
+        } finally {
+          harness.unmount();
+        }
+      });
+  it("clears an accepted amount before failed read recovery and retries only the day", async () => {
+    let rejectedRead = false;
+    const { harness, requests } = presetSetup((request) => {
+      if (request.method === "POST") {
+        rejectedRead = true;
+        return addReceipt(request);
+      }
+      if (rejectedRead) {
+        rejectedRead = false;
+        return response({}, 503);
+      }
+      return undefined;
+    });
+    try {
+      await click(harness, "250 mL");
+      let tree = await click(harness, "Add entry");
+      expect(amountInput(tree).props.value).toBe("");
+      expect(screenText(tree)).toContain("change was accepted");
+      expect(pressable(tree, "500 mL").props.disabled).toBe(true);
+      tree = await click(harness, "Retry day view");
+      expect(writes(requests)).toHaveLength(1);
+      expect(amountInput(tree).props.value).toBe("");
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("keeps presets unavailable until a conflict reload is complete", async () => {
+    const { harness } = presetSetup((request) =>
+      request.method === "POST" ? response({}, 412) : undefined,
+    );
+    try {
+      await click(harness, "250 mL");
+      let tree = await click(harness, "Add entry");
+      expect(pressable(tree, "500 mL").props.disabled).toBe(true);
+      pressable(tree, "500 mL").props.onPress();
+      tree = await harness.settle();
+      expect(amountInput(tree).props.value).toBe("250");
+      tree = await click(harness, "Reload before correcting");
+      tree = await click(harness, "500 mL");
+      expect(amountInput(tree).props.value).toBe("500");
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("keeps explicit401 closure across replay and rejects retained preset actions", async () => {
+    let closed = false;
+    const { harness, props, requests } = presetSetup(() =>
+      closed ? response({}, 401) : undefined,
+    );
+    try {
+      let tree = await click(harness, "250 mL");
+      const old = pressable(tree, "500 mL").props.onPress;
+      closed = true;
+      nodes(tree, (node) => node.props.accessibilityLabel === "Next day")[0].props.onPress();
+      tree = await harness.settle();
+      expect(props.onUnauthorized).toHaveBeenCalledTimes(1);
+      const before = requests.length;
+      harness.replayEffects();
+      tree = await harness.settle();
+      old();
+      expect(requests).toHaveLength(before);
+      expect(amountInput(tree).props.value).toBe("");
+      expect(pressable(tree, "250 mL").props.disabled).toBe(true);
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("ignores a receipt and preset callback after unmount without state writes", async () => {
+    const held = pendingResponse();
+    let original;
+    const { harness } = presetSetup((request) => {
+      if (request.method !== "POST") return undefined;
+      original = request;
+      return held.promise;
+    });
+    const tree = await click(harness, "250 mL");
+    const old = pressable(tree, "500 mL").props.onPress;
+    await click(harness, "Add entry");
+    harness.unmount();
+    old();
+    held.resolve(addReceipt(original));
+    for (let turn = 0; turn < 40; turn += 1) await Promise.resolve();
+    expect(harness.writesAfterUnmount).toBe(0);
+  });
+});
+
+describe("native HydrationRoute identity boundary", () => {
+  it("executes the actual route key that remounts on owner/session/profile/zone/date changes", () => {
+    const source = readFileSync(new URL("../App.tsx", import.meta.url), "utf8");
+    const parsed = ts.createSourceFile(
+      "App.tsx",
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TSX,
+    );
+    const route = parsed.statements.find(
+      (node) => ts.isFunctionDeclaration(node) && node.name?.text === "HydrationRoute",
+    );
+    expect(route).toBeDefined();
+    const compiled = ts.transpileModule(
+      `${route.getText(parsed)}\nglobalThis.renderRoute = HydrationRoute;`,
+      {
+        compilerOptions: {
+          jsx: ts.JsxEmit.React,
+          target: ts.ScriptTarget.ES2022,
+          module: ts.ModuleKind.CommonJS,
+        },
+      },
+    );
+    let date = initialEntry.localDate;
+    const context = createContext({
+      React,
+      HydrationScreen,
+      useRoute: () => ({ params: { date } }),
+    });
+    new Script(compiled.outputText).runInContext(context);
+    const props = {
+      sessionEpoch: 7,
+      session: { user: { id: "owner" }, profile: { revision: "12", timeZone: "America/Chicago" } },
+    };
+    const original = context.renderRoute(props);
+    expect(original.type).toBe(HydrationScreen);
+    for (const changed of [
+      { ...props, sessionEpoch: 8 },
+      { ...props, session: { ...props.session, user: { id: "next" } } },
+      {
+        ...props,
+        session: { ...props.session, profile: { ...props.session.profile, revision: "13" } },
+      },
+      {
+        ...props,
+        session: { ...props.session, profile: { ...props.session.profile, timeZone: "UTC" } },
+      },
+    ])
+      expect(context.renderRoute(changed).key).not.toBe(original.key);
+    date = "2026-11-02";
+    expect(context.renderRoute(props).key).not.toBe(original.key);
+  });
 });

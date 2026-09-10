@@ -138,7 +138,8 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Open source diary days from report evidence | ADR 0035 source, independent in-task review, canonical local gates and synthetic Chrome source-date/missing-day/navigation QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
 | Automatic evidence / independent review | Collapse diary meal groups | ADR 0036 source, independent in-task review, canonical local gates and synthetic Chrome keyboard/narrow/paging/editor/date QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
 | Automatic evidence / independent review | Reuse activity details in a new draft | ADR 0037 source, independent in-task review, canonical local gates and synthetic Chrome exact-field/create/retry/narrow/keyboard QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
-| Next bounded source candidate | Hydration amount presets in the Add form | Review a card for 250 mL and 500 mL draft controls on web and mobile; retain selected date/time and explicit Add, ordinary draft-edit retry identity and stale/busy/private guards; no automatic logging, advice, targets, storage or API change |
+| Automatic evidence / independent review | Hydration amount presets in the Add form | ADR 0038 source, independent in-task review, canonical local gates and synthetic Chrome preset/custom/create/retry/narrow/keyboard QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
+| Next bounded source candidate | Filter the loaded saved-recipe list by name | Review local case-insensitive name filtering on web/mobile, preserve paging and selected recipe/builder/log state, and distinguish no loaded match from an incomplete list; no request, endpoint, storage or mutation change |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -382,14 +383,40 @@ succeeded (updated September 10, 2026 07:57:13 UTC); container `34452053297`
 was still in progress at the 08:05:10 UTC read-only follow-up. Automatic
 results remain separate from this slice and release acceptance.
 
-The next bounded source candidate is **Hydration amount presets in the Add form**.
-Existing web/native forms accept a whole-milliliter amount but expose no preset
-controls. Review a card for 250 mL and 500 mL buttons that change only that draft
-field, retain current date/time/default-instant behavior, announce the selected
-amount and require explicit Add. Treat the choice as an ordinary field edit while
-preserving unchanged ambiguous-retry identity and current private/busy/stale
-controls. This candidate excludes targets, intake advice, automatic logging, unit
-conversion, persistence, API and outbox changes. It has not been implemented.
+The source checkpoint **Hydration amount presets in the Add form** follows
+[ADR 0038](../adr/0038-hydration-amount-presets.md). The 250 mL and 500 mL controls
+replace only the existing amount draft, retain selected date/time/default instant
+and require explicit Add. Custom amounts remain available. Presets share ordinary
+draft-edit guards and preserve exact frozen pending requests, accepted-write
+recovery, active row editors and current private/date/lifecycle state. No advice,
+targets, automatic logging, unit conversion, persistence, API, outbox or math change.
+
+Independent in-task review, focused actual-component/correction suites, canonical
+check/build/license gates and source-validated production Next/BFF Chrome QA passed.
+Fresh web 619 and mobile 845 tests plus
+10 native runner and 157 root policy tests passed;
+type/test graphs 17/17 (15 cached), build 11/11 (9 cached), and
+535 production licenses (14 reviewed exceptions)
+passed. Browser proof covers preset/custom/same-value choices, no write before Add,
+exact create/readback, lost-confirmation retry, accepted-write/read-failure recovery,
+keyboard/390-pixel controls, selected days and expiry. Owned QA cleanup completed.
+Cached/opt-in service evidence does not establish fresh integration. Physical
+native, real persistence, assistive technology, independent Claude Code and release
+acceptance remain separate.
+Base `c10c676aa9eb81244bc94371a8f1bacc699e35b3` CI `34455317539` succeeded
+(updated September 10, 2026 08:33:53 UTC); container `34455317575` remained
+in progress at the 08:41:10 UTC read-only follow-up. Automatic and release
+acceptance remain separate.
+
+The next bounded source candidate is **Filter the loaded saved-recipe list by
+name** on web/mobile. Existing lists load 50 records at a time and expose Load more;
+their food-search fields do not filter saved recipe names. Review independent
+in-memory trimmed, case-insensitive name matching over only the loaded list,
+preserving original order/identity. Keep loaded counts and Load more visible even
+with no matches, and state when additional records may remain. Keep selection,
+builder/copy/import drafts, nutrition basis, log date/time/meal and nested-recipe
+choices unchanged. Typing or clearing must make no request. No endpoint, retained
+preference or mutation change is planned; this candidate is not implemented.
 
 Prepare the external decisions alongside product work, without executing them:
 

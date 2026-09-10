@@ -9,6 +9,7 @@ const hooks = vi.hoisted(() => {
     current?: unknown;
     deps?: readonly unknown[];
     cleanup?: (() => void) | undefined;
+    effect?: (() => undefined | (() => void)) | undefined;
   }
   let slots: Slot[] = [];
   let cursor = 0;
@@ -23,10 +24,11 @@ const hooks = vi.hoisted(() => {
     b !== undefined &&
     a.length === b.length &&
     a.every((item, index) => Object.is(item, b[index]));
-  const render = () => {
+  const render = (runEffects = true) => {
     cursor = 0;
     dirty = false;
     tree = component();
+    if (!runEffects) return;
     const pending = effects;
     effects = [];
     for (const effect of pending) effect();
@@ -68,13 +70,19 @@ const hooks = vi.hoisted(() => {
       const index = cursor++;
       const old = slots[index];
       if (old && same(old.deps, deps)) return;
-      const slot: Slot = { ...(deps ? { deps } : {}) };
+      const slot: Slot = { ...(deps ? { deps } : {}), effect };
       slots[index] = slot;
       effects.push(() => {
         old?.cleanup?.();
         slot.cleanup = effect();
       });
     },
+    replayEffects() {
+      const mountedEffects = slots.filter((slot) => slot.effect);
+      for (const slot of mountedEffects) slot.cleanup?.();
+      for (const slot of mountedEffects) slot.cleanup = slot.effect?.();
+    },
+    renderWithoutEffects: () => render(false),
     mount(next: () => unknown) {
       slots = [];
       effects = [];
@@ -130,7 +138,10 @@ function text(value: unknown = hooks.tree()): string {
   return text((value as ElementNode).props.children ?? null);
 }
 function button(label: string): ElementNode {
-  const found = elements().find((node) => node.type === "button" && text(node) === label);
+  const found = elements().find(
+    (node) =>
+      node.type === "button" && (text(node) === label || node.props["aria-label"] === label),
+  );
   if (!found) throw new Error(`Missing button: ${label}`);
   return found;
 }
@@ -227,9 +238,33 @@ function receipt(entry = { ...original, amountMilliliters: 500, revision: "3" },
     },
   };
 }
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+function addForm(): ElementNode {
+  const form = elements().find((node) => node.type === "form" && text(node).includes("Add entry"));
+  if (!form) throw new Error("Missing Add form.");
+  return form;
+}
+function created(amountMilliliters = 250) {
+  return {
+    ...original,
+    id: "81570203-1cb5-4626-b142-a7a74046a5f3",
+    revision: "1",
+    amountMilliliters,
+    occurredAt: "2026-11-01T15:15:00.000Z",
+    localTime: "10:15:00",
+    timeZone: "America/New_York",
+  };
+}
 afterEach(() => {
   hooks.unmount();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -543,6 +578,593 @@ describe("actual web hydration component state transitions", () => {
       expect(reads).toBe(2);
       expect(text()).toContain("Hydration time corrected and the exact total refreshed.");
       expect(text()).not.toContain("Retry saved change");
+    },
+  );
+});
+
+describe("actual web hydration Add amount presets", () => {
+  it.each([250, 500])(
+    "chooses %s mL locally and explicitly creates only that reviewed amount",
+    async (amountMilliliters) => {
+      const writes: Array<{ url: string; init: RequestInit }> = [];
+      let reads = 0;
+      const saved = created(amountMilliliters);
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session();
+          if (init?.method === "POST") {
+            writes.push({ url, init });
+            return Response.json(receipt(saved));
+          }
+          reads += 1;
+          return day(writes.length ? [original, saved] : [original]);
+        }),
+      );
+      hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+      await hooks.settle();
+      await change("Local time", "10:15");
+      await change("Milliliters", "375");
+      const oldAmount = field("Milliliters");
+      const oldTime = field("Local time");
+      const oldSubmit = addForm();
+      const preset = button(`${amountMilliliters} mL`);
+      expect(preset.props.type).toBe("button");
+      expect(preset.props["aria-pressed"]).toBe(false);
+      invoke(preset, "onClick");
+      invoke(oldAmount, "onChange", { target: { value: "1999" } });
+      invoke(oldTime, "onChange", { target: { value: "09:00" } });
+      invoke(oldSubmit, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(field("Milliliters").props.value).toBe(String(amountMilliliters));
+      expect(field("Local time").props.value).toBe("10:15");
+      expect(field("Local date").props.value).toBe(original.localDate);
+      expect(button(`${amountMilliliters} mL`).props["aria-pressed"]).toBe(true);
+      expect(text()).toContain(`${amountMilliliters} mL selected. Review the amount and time`);
+      expect(text(elements().find((node) => node.props.id === "hydration-total-heading"))).toBe(
+        "375 mL",
+      );
+      expect(writes).toHaveLength(0);
+      expect(reads).toBe(1);
+      const unchanged = button(`${amountMilliliters} mL`);
+      invoke(unchanged, "onClick");
+      invoke(unchanged, "onClick");
+      await submit("Add entry");
+      expect(writes).toHaveLength(1);
+      expect(writes[0]?.url).toBe("/api/hydration/entries?profileTimeZonePrecondition=v1");
+      expect(writes[0]?.init.body).toBe(
+        JSON.stringify({ amountMilliliters, occurredAt: saved.occurredAt }),
+      );
+      const headers = new Headers(writes[0]?.init.headers);
+      expect(headers.get("x-expected-owner-user-id")).toBe(owner);
+      expect(headers.get("x-expected-profile-time-zone")).toBe("America/New_York");
+      expect(headers.get("if-match")).toBeNull();
+      expect(headers.get("idempotency-key")).toMatch(/^[0-9a-f-]{36}$/);
+      expect(field("Milliliters").props.value).toBe("");
+      expect(button(`${amountMilliliters} mL`).props["aria-pressed"]).toBe(false);
+      expect(text(elements().find((node) => node.props.id === "hydration-total-heading"))).toBe(
+        `${375 + amountMilliliters} mL`,
+      );
+      expect(original.amountMilliliters).toBe(375);
+      expect(reads).toBe(2);
+    },
+  );
+
+  it("keeps Add usable after same-value and duplicate choices, and accepts a manual custom amount", async () => {
+    const writes: RequestInit[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "POST") {
+          writes.push(init);
+          return Response.json(receipt(created(375)));
+        }
+        return day(writes.length ? [created(375)] : []);
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+    await hooks.settle();
+    await change("Local time", "10:15");
+    await change("Milliliters", "250");
+    const unchanged = button("250 mL");
+    invoke(unchanged, "onClick");
+    invoke(unchanged, "onClick");
+    await hooks.settle();
+    await click("500 mL");
+    const twice = button("250 mL");
+    invoke(twice, "onClick");
+    invoke(twice, "onClick");
+    await hooks.settle();
+    const sameAgain = button("250 mL");
+    invoke(sameAgain, "onClick");
+    invoke(sameAgain, "onClick");
+    await hooks.settle();
+    expect(button("Add entry").props.disabled).toBe(false);
+    await change("Milliliters", "375");
+    expect(button("250 mL").props["aria-pressed"]).toBe(false);
+    expect(button("500 mL").props["aria-pressed"]).toBe(false);
+    expect(text()).not.toContain("mL selected.");
+    expect(text()).toContain("Whole milliliters, 1 to 20,000 per entry.");
+    expect(writes).toHaveLength(0);
+    await submit("Add entry");
+    expect(writes).toHaveLength(1);
+    expect(JSON.parse(String(writes[0]?.body)).amountMilliliters).toBe(375);
+  });
+
+  it("preserves an active correction draft while presetting only Add", async () => {
+    const fetcher = vi.fn(async (url: string) => (url === "/api/auth/me" ? session() : day()));
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+    await hooks.settle();
+    await click("Edit entry");
+    await change("Milliliters at 01:30", "625");
+    await change("Correct date or time", true);
+    await change("Corrected local time", "11:12");
+    await click("500 mL");
+    expect(field("Milliliters").props.value).toBe("500");
+    expect(field("Milliliters at 01:30").props.value).toBe("625");
+    expect(field("Correct date or time").props.checked).toBe(true);
+    expect(field("Corrected local time").props.value).toBe("11:12");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves the untouched default instant in the second fall-back fold", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-01T07:30:45.123Z"));
+    const writes: RequestInit[] = [];
+    const saved = {
+      ...created(500),
+      occurredAt: "2026-11-01T07:30:45.123Z",
+      localTime: "01:30:45.123",
+      timeZone: "America/Chicago",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session(owner, "America/Chicago");
+        if (init?.method === "POST") {
+          writes.push(init);
+          return Response.json(receipt(saved));
+        }
+        return day(writes.length ? [saved] : [], original.localDate, "America/Chicago");
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+    await hooks.settle();
+    expect(field("Local time").props.value).toBe("01:30");
+    await click("250 mL");
+    await click("500 mL");
+    await click("500 mL");
+    await submit("Add entry");
+    expect(writes).toHaveLength(1);
+    expect(JSON.parse(String(writes[0]?.body))).toEqual({
+      amountMilliliters: 500,
+      occurredAt: saved.occurredAt,
+    });
+    expect(new Headers(writes[0]?.headers).get("x-expected-profile-time-zone")).toBe(
+      "America/Chicago",
+    );
+    expect(text()).toContain("500 milliliters added and the exact total refreshed.");
+  });
+
+  it("freezes an in-flight and ambiguous Add operation, then retries identical bytes and key", async () => {
+    const response = deferred<Response>();
+    const writes: Array<{ url: string; init: RequestInit }> = [];
+    let reads = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "POST") {
+          writes.push({ url, init });
+          if (writes.length === 1) return response.promise;
+          return Response.json(receipt(created(), true));
+        }
+        reads += 1;
+        return day(writes.length === 2 ? [created()] : []);
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+    await hooks.settle();
+    await change("Local time", "10:15");
+    await click("250 mL");
+    const oldPreset = button("500 mL"),
+      oldAmount = field("Milliliters"),
+      oldTime = field("Local time"),
+      oldDate = field("Local date"),
+      oldSubmit = addForm();
+    invoke(oldSubmit, "onSubmit", { preventDefault() {} });
+    invoke(oldPreset, "onClick");
+    invoke(oldAmount, "onChange", { target: { value: "333" } });
+    invoke(oldTime, "onChange", { target: { value: "08:00" } });
+    invoke(oldDate, "onChange", { target: { value: "2026-11-02" } });
+    invoke(oldSubmit, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    for (const label of ["250 mL", "500 mL", "Adding…"])
+      expect(button(label).props.disabled).toBe(true);
+    expect(field("Milliliters").props.value).toBe("250");
+    expect(field("Local time").props.value).toBe("10:15");
+    expect(field("Local date").props.value).toBe(original.localDate);
+    response.resolve(Response.json({ error: "Confirmation was lost." }, { status: 503 }));
+    await hooks.settle();
+    const blockedPreset = button("500 mL");
+    expect(blockedPreset.props.disabled).toBe(true);
+    invoke(blockedPreset, "onClick");
+    invoke(field("Milliliters"), "onChange", { target: { value: "500" } });
+    await hooks.settle();
+    expect(field("Milliliters").props.value).toBe("250");
+    expect(writes).toHaveLength(1);
+    expect(reads).toBe(1);
+    const retry = button("Retry saved change");
+    invoke(retry, "onClick");
+    invoke(retry, "onClick");
+    await hooks.settle();
+    expect(writes).toHaveLength(2);
+    expect(writes[1]?.url).toBe(writes[0]?.url);
+    expect(writes[1]?.init.body).toBe(writes[0]?.init.body);
+    expect(writes[1]?.init.headers).toEqual(writes[0]?.init.headers);
+    expect(reads).toBe(2);
+    expect(field("Milliliters").props.value).toBe("");
+    expect(button("500 mL").props.disabled).toBe(false);
+  });
+
+  it("clears an accepted amount before its delayed read and recovers with only a read", async () => {
+    const refreshed = deferred<Response>();
+    const writes: RequestInit[] = [];
+    let reads = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "POST") {
+          writes.push(init);
+          return Response.json(receipt(created(500)));
+        }
+        reads += 1;
+        if (reads === 2) return refreshed.promise;
+        return day(reads > 2 ? [created(500)] : []);
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+    await hooks.settle();
+    await change("Local time", "10:15");
+    await click("500 mL");
+    const oldPreset = button("250 mL");
+    await submit("Add entry");
+    expect(field("Milliliters").props.value).toBe("");
+    expect(button("250 mL").props.disabled).toBe(true);
+    invoke(oldPreset, "onClick");
+    refreshed.resolve(Response.json({ error: "Read unavailable." }, { status: 503 }));
+    await hooks.settle();
+    expect(text()).toContain("The entry change was accepted");
+    expect(text()).not.toContain("Retry saved change");
+    expect(field("Milliliters").props.value).toBe("");
+    expect(button("500 mL").props.disabled).toBe(true);
+    await click("Retry day view");
+    expect(writes).toHaveLength(1);
+    expect(reads).toBe(3);
+    expect(button("500 mL").props.disabled).toBe(false);
+    await click("250 mL");
+    expect(field("Milliliters").props.value).toBe("250");
+  });
+
+  it.each([409, 412])(
+    "disables presets during %s reconciliation and fences prior profile controls",
+    async (status) => {
+      let writes = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session();
+          if (init?.method === "POST") {
+            writes += 1;
+            return Response.json({ error: "Profile changed." }, { status });
+          }
+          return writes ? day([], original.localDate, "UTC") : day();
+        }),
+      );
+      hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+      await hooks.settle();
+      await change("Local time", "10:15");
+      await click("250 mL");
+      const oldPreset = button("500 mL"),
+        oldTime = field("Local time"),
+        oldSubmit = addForm();
+      await submit("Add entry");
+      expect(button("500 mL").props.disabled).toBe(true);
+      invoke(button("500 mL"), "onClick");
+      expect(field("Milliliters").props.value).toBe("250");
+      await click("Reload and review entries");
+      const refreshedTime = field("Local time").props.value;
+      invoke(oldPreset, "onClick");
+      invoke(oldTime, "onChange", { target: { value: "09:00" } });
+      invoke(oldSubmit, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(field("Milliliters").props.value).toBe("250");
+      expect(field("Local time").props.value).toBe(refreshedTime);
+      expect(writes).toBe(1);
+      await click("500 mL");
+      expect(field("Milliliters").props.value).toBe("500");
+    },
+  );
+
+  it("clears Add on a day change and rejects prior date and route callbacks before effects", async () => {
+    let initialDate = original.localDate;
+    const nextDay = deferred<Response>();
+    const calls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        calls.push(url);
+        if (url === "/api/auth/me") return session();
+        if (url.endsWith("2026-11-02")) return nextDay.promise;
+        return day([], url.endsWith("2026-11-03") ? "2026-11-03" : original.localDate);
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate }));
+    await hooks.settle();
+    await click("250 mL");
+    const oldPreset = button("500 mL"),
+      oldAmount = field("Milliliters"),
+      oldTime = field("Local time"),
+      oldDate = field("Local date"),
+      oldSubmit = addForm();
+    invoke(button("Next day"), "onClick");
+    invoke(oldPreset, "onClick");
+    invoke(oldAmount, "onChange", { target: { value: "1999" } });
+    invoke(oldTime, "onChange", { target: { value: "09:00" } });
+    invoke(oldDate, "onChange", { target: { value: "2026-11-05" } });
+    invoke(oldSubmit, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    expect(field("Milliliters").props.value).toBe("");
+    expect(field("Local date").props.value).toBe("2026-11-02");
+    expect(button("500 mL").props.disabled).toBe(true);
+    nextDay.resolve(day([], "2026-11-02"));
+    await hooks.settle();
+    await click("500 mL");
+    const previousPreset = button("250 mL"),
+      previousSubmit = addForm(),
+      previousDate = field("Local date");
+    const count = calls.length;
+    initialDate = "2026-11-03";
+    hooks.renderWithoutEffects();
+    invoke(previousPreset, "onClick");
+    invoke(previousSubmit, "onSubmit", { preventDefault() {} });
+    invoke(previousDate, "onChange", { target: { value: original.localDate } });
+    expect(calls).toHaveLength(count);
+    hooks.render();
+    await hooks.settle();
+    expect(field("Local date").props.value).toBe("2026-11-03");
+    expect(field("Milliliters").props.value).toBe("");
+    expect(calls.some((url) => url.includes("profileTimeZonePrecondition"))).toBe(false);
+  });
+
+  it.each(["unmount", "effect replay", "private closure"] as const)(
+    "rejects retained Add controls after %s",
+    async (transition) => {
+      let closePrivate = false;
+      const fetcher = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session();
+        if (init?.method === "POST") return new Response(null, { status: 204 });
+        if (closePrivate) return new Response(null, { status: 401 });
+        return day();
+      });
+      vi.stubGlobal("fetch", fetcher);
+      hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+      await hooks.settle();
+      await click("250 mL");
+      const oldPreset = button("500 mL"),
+        oldAmount = field("Milliliters"),
+        oldTime = field("Local time"),
+        oldSubmit = addForm();
+      if (transition === "unmount") hooks.unmount();
+      else if (transition === "effect replay") {
+        hooks.replayEffects();
+        await hooks.settle();
+      } else {
+        closePrivate = true;
+        await click("Next day");
+        expect(router.replace).toHaveBeenCalledWith("/login");
+      }
+      const requests = fetcher.mock.calls.length;
+      invoke(oldPreset, "onClick");
+      invoke(oldAmount, "onChange", { target: { value: "1999" } });
+      invoke(oldTime, "onChange", { target: { value: "09:00" } });
+      invoke(oldSubmit, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(fetcher).toHaveBeenCalledTimes(requests);
+      expect(hooks.afterClose()).toBe(0);
+      if (transition !== "unmount") expect(field("Milliliters").props.value).toBe("");
+      if (transition === "private closure") {
+        hooks.replayEffects();
+        await hooks.settle();
+        expect(fetcher).toHaveBeenCalledTimes(requests);
+      }
+    },
+  );
+
+  it.each([200, 401])(
+    "ignores a delayed old Add %s across an external route and replacement owner",
+    async (status) => {
+      let initialDate = original.localDate,
+        activeOwner = owner;
+      const oldReceipt = deferred<Response>(),
+        newReceipt = deferred<Response>();
+      const writes: RequestInit[] = [];
+      let reads = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string, init?: RequestInit) => {
+          if (url === "/api/auth/me") return session(activeOwner);
+          if (init?.method === "POST") {
+            writes.push(init);
+            return writes.length === 1 ? oldReceipt.promise : newReceipt.promise;
+          }
+          reads += 1;
+          return day([], initialDate);
+        }),
+      );
+      hooks.mount(() => HydrationClient({ initialDate }));
+      await hooks.settle();
+      await change("Local time", "10:15");
+      await click("250 mL");
+      await submit("Add entry");
+      activeOwner = anotherOwner;
+      initialDate = "2026-11-02";
+      hooks.renderWithoutEffects();
+      oldReceipt.resolve(
+        status === 401 ? new Response(null, { status }) : Response.json(receipt(created())),
+      );
+      // Drain the stale receipt without running queued replacement effects.
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(router.replace).not.toHaveBeenCalled();
+      expect(reads).toBe(1);
+      hooks.render();
+      await hooks.settle();
+      await click("500 mL");
+      await change("Local time", "10:15");
+      await submit("Add entry");
+      expect(writes).toHaveLength(2);
+      expect(new Headers(writes[1]?.headers).get("x-expected-owner-user-id")).toBe(anotherOwner);
+      expect(button("250 mL").props.disabled).toBe(true);
+      expect(field("Milliliters").props.value).toBe("500");
+      expect(text()).toContain("other@example.test");
+      newReceipt.resolve(
+        Response.json({ error: "Keep the operation for retry." }, { status: 503 }),
+      );
+      await hooks.settle();
+      expect(text()).toContain("Retry saved change");
+      expect(field("Milliliters").props.value).toBe("500");
+      expect(router.replace).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a replacement owner's Add busy when the old accepted receipt finally arrives", async () => {
+    let initialDate = original.localDate,
+      activeOwner = owner;
+    const oldReceipt = deferred<Response>(),
+      newReceipt = deferred<Response>();
+    const writes: RequestInit[] = [];
+    let reads = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session(activeOwner);
+        if (init?.method === "POST") {
+          writes.push(init);
+          return writes.length === 1 ? oldReceipt.promise : newReceipt.promise;
+        }
+        reads += 1;
+        return day([], initialDate);
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate }));
+    await hooks.settle();
+    await change("Local time", "10:15");
+    await click("250 mL");
+    await submit("Add entry");
+    activeOwner = anotherOwner;
+    initialDate = "2026-11-02";
+    hooks.render();
+    await hooks.settle();
+    await click("500 mL");
+    await change("Local time", "10:15");
+    await submit("Add entry");
+    expect(writes).toHaveLength(2);
+    const readsBefore = reads;
+    oldReceipt.resolve(Response.json(receipt(created())));
+    await hooks.settle();
+    expect(reads).toBe(readsBefore);
+    expect(field("Milliliters").props.value).toBe("500");
+    expect(button("250 mL").props.disabled).toBe(true);
+    expect(button("Sign out").props.disabled).toBe(true);
+    expect(text()).toContain("Saving the hydration entry…");
+    expect(text()).toContain("other@example.test");
+    expect(router.replace).not.toHaveBeenCalled();
+    newReceipt.resolve(Response.json({ error: "Keep this pending operation." }, { status: 503 }));
+    await hooks.settle();
+    expect(button("Retry saved change").props.disabled).toBe(false);
+    expect(field("Milliliters").props.value).toBe("500");
+  });
+
+  it("treats an explicit unchanged visible time as an edit after selecting a preset", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-01T07:30:45.123Z"));
+    const writes: RequestInit[] = [];
+    const saved = {
+      ...created(),
+      occurredAt: "2026-11-01T06:30:00.000Z",
+      localTime: "01:30:00",
+      timeZone: "America/Chicago",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return session(owner, "America/Chicago");
+        if (init?.method === "POST") {
+          writes.push(init);
+          return Response.json(receipt(saved));
+        }
+        return day(writes.length ? [saved] : [], original.localDate, "America/Chicago");
+      }),
+    );
+    hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+    await hooks.settle();
+    await click("250 mL");
+    const oldPreset = button("500 mL");
+    invoke(field("Local time"), "onChange", { target: { value: "01:30" } });
+    invoke(oldPreset, "onClick");
+    await hooks.settle();
+    expect(field("Milliliters").props.value).toBe("250");
+    await submit("Add entry");
+    expect(writes).toHaveLength(1);
+    expect(JSON.parse(String(writes[0]?.body))).toEqual({
+      amountMilliliters: 250,
+      occurredAt: saved.occurredAt,
+    });
+    expect(text()).toContain("250 milliliters added and the exact total refreshed.");
+  });
+
+  it.each(["session", "day"] as const)(
+    "keeps Sign out usable during a deferred %s read and ignores its late receipt",
+    async (pendingRead) => {
+      const delayed = deferred<Response>();
+      let logoutCalls = 0,
+        dayCalls = 0;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) => {
+          if (url === "/api/auth/logout") {
+            logoutCalls += 1;
+            return new Response(null, { status: 204 });
+          }
+          if (url === "/api/auth/me")
+            return pendingRead === "session" ? delayed.promise : session();
+          dayCalls += 1;
+          return dayCalls === 1 ? day() : delayed.promise;
+        }),
+      );
+      hooks.mount(() => HydrationClient({ initialDate: original.localDate }));
+      await hooks.settle();
+      if (pendingRead === "day") await click("Next day");
+      expect(button("Sign out").props.disabled).toBe(false);
+      const retainedLogout = button("Sign out");
+      await click("Sign out");
+      expect(logoutCalls).toBe(1);
+      expect(router.replace).toHaveBeenCalledTimes(1);
+      delayed.resolve(pendingRead === "session" ? session(anotherOwner) : day([], "2026-11-02"));
+      await hooks.settle();
+      invoke(retainedLogout, "onClick");
+      await hooks.settle();
+      expect(logoutCalls).toBe(1);
+      expect(router.replace).toHaveBeenCalledTimes(1);
+      expect(text()).not.toContain("owner@example.test");
+      expect(text()).not.toContain("other@example.test");
+      expect(button("250 mL").props.disabled).toBe(true);
+      expect(dayCalls).toBe(pendingRead === "session" ? 0 : 2);
     },
   );
 });
