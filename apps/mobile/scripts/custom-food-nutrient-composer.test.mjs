@@ -3694,3 +3694,302 @@ describe("native saved custom-food copy to new draft", () => {
     expect(harness.writesAfterUnmount).toBe(0);
   });
 });
+
+const readingEvent = {
+  id: "2bcfa2bf-4950-43f7-9f24-b983ac803012",
+  revision: "9",
+  definitionId: trendDefinition.id,
+  measuredAt: "2026-09-09T12:00:05.123Z",
+  localDate: "2026-09-09",
+  timeZone: "America/Chicago",
+  value: "70.00000100",
+  source: { kind: "manual", deviceId: null, externalId: null, externalRevision: null },
+  createdAt: timestamp,
+  updatedAt: timestamp,
+};
+function setupReadings(handler = () => undefined, { metrics, entries = [readingEvent] } = {}) {
+  return setupTrends(
+    (request, requests) => {
+      const result = handler(request, requests);
+      if (result !== undefined) return result;
+      if (request.url.pathname === "/v1/biometrics/events" && request.method === "GET")
+        return response({ data: entries, page: { nextCursor: null } });
+      return undefined;
+    },
+    { metrics },
+  );
+}
+function biometricSection(tree) {
+  const found = nodes(
+    tree,
+    (node) =>
+      node.type === "View" &&
+      React.Children.toArray(node.props.children).some(
+        (child) => child.type === "Text" && text(child) === "Biometrics",
+      ),
+  );
+  expect(found).toHaveLength(1);
+  return found[0];
+}
+function biometricCard(tree, id) {
+  const found = nodes(biometricSection(tree), (node) => node.type === "View" && node.key === id);
+  expect(found).toHaveLength(1);
+  return found[0];
+}
+async function pressBiometric(harness, label, cardId) {
+  const tree = await harness.settle();
+  const scope = cardId ? biometricCard(tree, cardId) : biometricSection(tree);
+  const target = button(scope, label);
+  expect(target.props.disabled).not.toBe(true);
+  target.props.onPress();
+  return harness.settle();
+}
+const readingValueLabel = (definition = trendDefinition) =>
+  `${definition.name} exact value (${definition.canonicalUnit})`;
+
+// Bounded presentation/selection evidence; transport, persistence and native host rendering
+// remain the existing implementation and are not replaced by these synthetic hooks.
+describe("native biometric reading units and immutable edit identity", () => {
+  it("distinguishes same-name metrics by exact ID/unit without changing value/date/time or requesting data", async () => {
+    const kg = { ...trendDefinition, name: "Weight" };
+    const lb = { ...otherTrendDefinition, name: "Weight", canonicalUnit: "lb" };
+    const { harness, requests } = setupReadings(undefined, { metrics: [kg, lb] });
+    let tree = await harness.settle();
+    expect(text(biometricSection(tree))).toContain("Metric: Weight (kg).");
+    await type(harness, readingValueLabel(kg), "-12.3400");
+    await type(harness, "Local date", "2026-09-08");
+    await type(harness, "Local time", "09:41");
+    tree = await pressBiometric(harness, "Weight (lb)");
+    expect(input(tree, readingValueLabel(lb)).props.value).toBe("-12.3400");
+    expect(button(biometricSection(tree), "Weight (lb)").props.accessibilityState.selected).toBe(
+      true,
+    );
+    expect(text(biometricCard(tree, readingEvent.id))).toContain("70.00000100 kg");
+    tree = await pressBiometric(harness, "Weight (kg)");
+    expect(input(tree, readingValueLabel(kg)).props.value).toBe("-12.3400");
+    expect(input(tree, "Local date").props.value).toBe("2026-09-08");
+    expect(input(tree, "Local time").props.value).toBe("09:41");
+    expect(requests).toHaveLength(6);
+    expect(writes(requests)).toHaveLength(0);
+  });
+
+  for (const value of ["0", "-12.3400", `-0.${"1234567890".repeat(15)}1234567`])
+    it(`renders the exact signed reading string of length ${value.length} with its unit`, async () => {
+      const { harness } = setupReadings(undefined, { entries: [{ ...readingEvent, value }] });
+      const tree = await harness.settle();
+      expect(value.length).toBeLessThanOrEqual(160);
+      expect(rawText(biometricCard(tree, readingEvent.id))).toContain(value);
+      expect(text(biometricCard(tree, readingEvent.id))).toContain(`${value} kg`);
+      expect(text(biometricCard(tree, readingEvent.id))).toContain("2026-09-09");
+      expect(text(biometricCard(tree, readingEvent.id))).toContain("07:00");
+    });
+
+  it("uses retained archived metadata, preserves imported rows, and does not borrow a selected unit for missing metadata", async () => {
+    const archived = { ...trendDefinition, status: "archived" };
+    const missing = {
+      ...readingEvent,
+      id: "3bcfa2bf-4950-43f7-9f24-b983ac803013",
+      definitionId: "9bcfa2bf-4950-43f7-9f24-b983ac803012",
+      value: "-5.000",
+    };
+    const imported = {
+      ...readingEvent,
+      id: "4bcfa2bf-4950-43f7-9f24-b983ac803013",
+      source: {
+        kind: "apple_healthkit",
+        deviceId: "5bcfa2bf-4950-43f7-9f24-b983ac803013",
+        externalId: "synthetic-reading",
+        externalRevision: "1",
+      },
+    };
+    const { harness, requests } = setupReadings(undefined, {
+      metrics: [archived, otherTrendDefinition],
+      entries: [readingEvent, missing, imported],
+    });
+    let tree = await pressBiometric(harness, `${otherTrendDefinition.name} (kg)`);
+    expect(text(biometricCard(tree, readingEvent.id))).toContain("70.00000100 kg");
+    expect(text(biometricCard(tree, missing.id))).toContain("Metric unavailable");
+    expect(text(biometricCard(tree, missing.id))).toContain("-5.000");
+    expect(text(biometricCard(tree, missing.id))).toContain("unit unavailable");
+    expect(text(biometricCard(tree, missing.id))).not.toContain("kg");
+    expect(text(biometricCard(tree, imported.id))).toContain("70.00000100 kg");
+    expect(text(biometricCard(tree, imported.id))).toContain("apple_healthkit");
+    expect(
+      nodes(biometricCard(tree, imported.id), (node) => node.type === "Pressable"),
+    ).toHaveLength(0);
+    tree = await pressBiometric(harness, "Edit", readingEvent.id);
+    const chip = button(biometricSection(tree), `${archived.name} (kg)`);
+    expect(chip.props.disabled).toBe(true);
+    expect(chip.props.accessibilityState.selected).toBe(true);
+    expect(input(tree, readingValueLabel(archived)).props.value).toBe(readingEvent.value);
+    expect(requests).toHaveLength(6);
+  });
+
+  it("uses refreshed current names and complete long labels while preserving units and exact reading values", async () => {
+    let metric = trendDefinition;
+    const { harness, requests } = setupReadings((request) =>
+      request.url.pathname === "/v1/biometrics/definitions"
+        ? response({ data: [metric] })
+        : undefined,
+    );
+    await harness.settle();
+    metric = { ...trendDefinition, revision: "2", name: "Renamed metric" };
+    let tree = await click(harness, "Refresh private data");
+    expect(text(biometricCard(tree, readingEvent.id))).toContain("Renamed metric");
+    expect(text(biometricCard(tree, readingEvent.id))).toContain(`${readingEvent.value} kg`);
+    const long = { ...otherTrendDefinition, name: "M".repeat(120), canonicalUnit: "U".repeat(32) };
+    metric = long;
+    tree = await click(harness, "Refresh private data");
+    const choice = button(biometricSection(tree), `${long.name} (${long.canonicalUnit})`);
+    expect(choice.props.style).toContainEqual(expect.objectContaining({ maxWidth: "100%" }));
+    choice.props.onPress();
+    tree = await harness.settle();
+    expect(input(tree, readingValueLabel(long)).props.maxLength).toBe(160);
+    expect(text(biometricSection(tree))).toContain(`Metric: ${long.name} (${long.canonicalUnit}).`);
+    expect(requests).toHaveLength(18);
+  });
+
+  it("rejects retained pre-Edit selection and Use retargeting, while current Use still chooses its trend", async () => {
+    const { harness, requests } = setupReadings();
+    let tree = await harness.settle();
+    const oldChoice = button(biometricSection(tree), `${otherTrendDefinition.name} (kg)`).props
+      .onPress;
+    const oldUse = button(biometricCard(tree, otherTrendDefinition.id), "Use").props.onPress;
+    button(biometricCard(tree, readingEvent.id), "Edit").props.onPress();
+    oldChoice();
+    oldUse();
+    tree = await harness.settle();
+    expect(input(tree, readingValueLabel()).props.value).toBe(readingEvent.value);
+    expect(text(biometricSection(tree))).toContain("Editing preserves this reading’s metric.");
+    const otherChoice = button(biometricSection(tree), `${otherTrendDefinition.name} (kg)`);
+    expect(otherChoice.props.disabled).toBe(true);
+    expect(otherChoice.props.accessibilityState.disabled).toBe(true);
+    otherChoice.props.onPress();
+    tree = await pressBiometric(harness, "Use", otherTrendDefinition.id);
+    expect(input(tree, readingValueLabel()).props.value).toBe(readingEvent.value);
+    expect(
+      button(trendSection(tree), otherTrendDefinition.name).props.accessibilityState.selected,
+    ).toBe(true);
+    tree = await pressBiometric(harness, "Cancel");
+    expect(button(biometricSection(tree), `${otherTrendDefinition.name} (kg)`).props.disabled).toBe(
+      false,
+    );
+    tree = await pressBiometric(harness, `${otherTrendDefinition.name} (kg)`);
+    expect(input(tree, readingValueLabel(otherTrendDefinition)).props.value).toBe("");
+    expect(requests).toHaveLength(6);
+  });
+
+  it("keeps same-value selection usable and ignores an old choice after another draft field changes", async () => {
+    const { harness, requests } = setupReadings();
+    let tree = await pressBiometric(harness, `${trendDefinition.name} (kg)`);
+    const choice = button(biometricSection(tree), `${trendDefinition.name} (kg)`).props.onPress;
+    const staleOther = button(biometricSection(tree), `${otherTrendDefinition.name} (kg)`).props
+      .onPress;
+    choice();
+    choice();
+    tree = await type(harness, readingValueLabel(), "1.2500");
+    staleOther();
+    tree = await harness.settle();
+    expect(input(tree, readingValueLabel()).props.value).toBe("1.2500");
+    expect(requests).toHaveLength(6);
+  });
+
+  it("creates an explicit reading with unchanged exact body and key on ambiguous retry", async () => {
+    let attempts = 0;
+    const { harness, requests } = setupReadings((request) => {
+      if (request.method !== "POST" || request.url.pathname !== "/v1/biometrics/events")
+        return undefined;
+      attempts += 1;
+      if (attempts === 1) throw new Error("Synthetic missing create confirmation");
+      const body = JSON.parse(request.body);
+      return response({ data: { replayed: true, event: { ...readingEvent, ...body } } });
+    });
+    await pressBiometric(harness, `${otherTrendDefinition.name} (kg)`);
+    await type(harness, readingValueLabel(otherTrendDefinition), "-0.00000100");
+    await type(harness, "Local date", "2026-09-09");
+    await type(harness, "Local time", "07:04");
+    let tree = await pressBiometric(harness, "Log reading");
+    expect(writes(requests)).toHaveLength(1);
+    const first = writes(requests)[0];
+    expect(JSON.parse(first.body)).toEqual({
+      definitionId: otherTrendDefinition.id,
+      measuredAt: "2026-09-09T12:04:00.000Z",
+      value: "-0.00000100",
+    });
+    expect(first.headers["if-match"]).toBeUndefined();
+    expect(input(tree, readingValueLabel(otherTrendDefinition)).props.value).toBe("-0.00000100");
+    await pressBiometric(harness, `${otherTrendDefinition.name} (kg)`);
+    tree = await pressBiometric(harness, "Log reading");
+    const second = writes(requests)[1];
+    expect(second.body).toBe(first.body);
+    expect(second.headers["idempotency-key"]).toBe(first.headers["idempotency-key"]);
+    expect(input(tree, readingValueLabel(otherTrendDefinition)).props.value).toBe("");
+    expect(text(biometricCard(tree, readingEvent.id))).toContain("-0.00000100 kg");
+    expect(requests.filter((request) => request.method === "GET")).toHaveLength(6);
+  });
+
+  for (const metadata of ["loaded", "missing"])
+    it(`edits ${metadata} metric metadata without retargeting, rounding or rewriting the original timestamp and retry identity`, async () => {
+      let attempts = 0;
+      const { harness, requests } = setupReadings(
+        (request) => {
+          if (
+            request.method !== "PATCH" ||
+            !request.url.pathname.startsWith("/v1/biometrics/events/")
+          )
+            return undefined;
+          attempts += 1;
+          if (attempts === 1) throw new Error("Synthetic missing edit confirmation");
+          return response({
+            data: {
+              replayed: true,
+              event: { ...readingEvent, ...JSON.parse(request.body), revision: "10" },
+            },
+          });
+        },
+        { metrics: metadata === "missing" ? [otherTrendDefinition] : undefined },
+      );
+      let tree = await pressBiometric(harness, "Edit", readingEvent.id);
+      const label = metadata === "missing" ? "Exact value (unit unavailable)" : readingValueLabel();
+      expect(input(tree, label).props.value).toBe(readingEvent.value);
+      if (metadata === "missing")
+        expect(text(biometricSection(tree))).toContain("Metric unavailable · unit unavailable.");
+      await type(harness, label, "-6.000000100");
+      await pressBiometric(harness, "Use", otherTrendDefinition.id);
+      tree = await pressBiometric(harness, "Save reading");
+      const first = writes(requests)[0];
+      expect(first.url.pathname).toBe(`/v1/biometrics/events/${readingEvent.id}`);
+      expect(first.headers["if-match"]).toBe(`"${readingEvent.revision}"`);
+      expect(JSON.parse(first.body)).toEqual({ value: "-6.000000100" });
+      expect(input(tree, label).props.value).toBe("-6.000000100");
+      tree = await pressBiometric(harness, "Save reading");
+      const second = writes(requests)[1];
+      expect(second.body).toBe(first.body);
+      expect(second.headers["idempotency-key"]).toBe(first.headers["idempotency-key"]);
+      expect(second.headers["if-match"]).toBe(`"${readingEvent.revision}"`);
+      tree = await pressBiometric(harness, "Edit", readingEvent.id);
+      expect(input(tree, "Local date").props.value).toBe(readingEvent.localDate);
+      expect(input(tree, "Local time").props.value).toBe("07:00");
+      expect(requests.filter((request) => request.method === "GET")).toHaveLength(6);
+    });
+
+  it("keeps an explicit edited time as the only additional PATCH field", async () => {
+    const { harness, requests } = setupReadings((request) =>
+      request.method === "PATCH"
+        ? response({
+            data: {
+              replayed: false,
+              event: { ...readingEvent, ...JSON.parse(request.body), revision: "10" },
+            },
+          })
+        : undefined,
+    );
+    await pressBiometric(harness, "Edit", readingEvent.id);
+    await type(harness, "Local time", "07:01");
+    await pressBiometric(harness, "Save reading");
+    expect(JSON.parse(writes(requests)[0].body)).toEqual({
+      value: readingEvent.value,
+      measuredAt: "2026-09-09T12:01:00.000Z",
+    });
+  });
+});

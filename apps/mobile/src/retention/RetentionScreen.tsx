@@ -2178,6 +2178,17 @@ export function RetentionScreen({
     }
   }
 
+  const readingDefinitionId = eventDraft.event?.definitionId ?? eventDraft.definitionId;
+  const readingDefinition = definitions.find((item) => item.id === readingDefinitionId);
+
+  function selectReadingDefinition(definitionId: string) {
+    setEventDraft((current) =>
+      current !== eventDraft || current.event || current.definitionId === definitionId
+        ? current
+        : { ...current, definitionId },
+    );
+  }
+
   function editEvent(event: BiometricEvent) {
     const localTime = localTimeInTimeZone(new Date(event.measuredAt), event.timeZone).slice(0, 5);
     setEventDraft({
@@ -2839,7 +2850,7 @@ export function RetentionScreen({
                   label="Use"
                   onPress={() => {
                     changeTrendInput("definitionId", definition.id);
-                    setEventDraft({ ...eventDraft, definitionId: definition.id });
+                    selectReadingDefinition(definition.id);
                   }}
                   secondary
                 />
@@ -2868,14 +2879,30 @@ export function RetentionScreen({
             {eventDraft.event ? "Edit reading" : "Log reading"}
           </Text>
           <ChipRow
+            disabled={eventDraft.event !== null}
+            wrapLabels
             items={definitions
-              .filter((item) => item.status === "active" || item.id === eventDraft.definitionId)
-              .map((item) => ({ key: item.id, label: item.name }))}
-            selected={eventDraft.definitionId}
-            onSelect={(definitionId) => setEventDraft({ ...eventDraft, definitionId })}
+              .filter((item) => item.status === "active" || item.id === readingDefinitionId)
+              .map((item) => ({ key: item.id, label: `${item.name} (${item.canonicalUnit})` }))}
+            selected={readingDefinitionId}
+            onSelect={selectReadingDefinition}
           />
+          <Text style={styles.help}>
+            {readingDefinition
+              ? `Metric: ${readingDefinition.name} (${readingDefinition.canonicalUnit}).`
+              : readingDefinitionId
+                ? "Metric unavailable · unit unavailable."
+                : "Choose a metric to see its unit."}
+            {eventDraft.event ? " Editing preserves this reading’s metric." : ""}
+          </Text>
           <LabeledInput
-            label="Exact value"
+            label={
+              readingDefinition
+                ? `${readingDefinition.name} exact value (${readingDefinition.canonicalUnit})`
+                : readingDefinitionId
+                  ? "Exact value (unit unavailable)"
+                  : "Exact value"
+            }
             value={eventDraft.value}
             onChangeText={(value) => setEventDraft({ ...eventDraft, value })}
             maxLength={160}
@@ -2911,28 +2938,30 @@ export function RetentionScreen({
               />
             ) : null}
           </View>
-          {events.map((event) => (
-            <View key={event.id} style={styles.card}>
-              <Text style={styles.cardTitle}>
-                {definitions.find((item) => item.id === event.definitionId)?.name ??
-                  "Historical metric"}
-                : {event.value}
-              </Text>
-              <Text style={styles.meta}>
-                {event.localDate} ·{" "}
-                {localTimeInTimeZone(new Date(event.measuredAt), event.timeZone).slice(0, 5)} ·{" "}
-                {event.source.kind}
-              </Text>
-              <View style={styles.actions}>
-                {event.source.kind === "manual" ? (
-                  <>
-                    <Button label="Edit" onPress={() => editEvent(event)} secondary />
-                    <Button label="Delete" onPress={() => void deleteEvent(event)} danger />
-                  </>
-                ) : null}
+          {events.map((event) => {
+            const definition = definitions.find((item) => item.id === event.definitionId);
+            return (
+              <View key={event.id} style={styles.card}>
+                <Text style={styles.cardTitle}>
+                  {definition?.name ?? "Metric unavailable"}: {event.value}{" "}
+                  {definition?.canonicalUnit ?? "· unit unavailable"}
+                </Text>
+                <Text style={styles.meta}>
+                  {event.localDate} ·{" "}
+                  {localTimeInTimeZone(new Date(event.measuredAt), event.timeZone).slice(0, 5)} ·{" "}
+                  {event.source.kind}
+                </Text>
+                <View style={styles.actions}>
+                  {event.source.kind === "manual" ? (
+                    <>
+                      <Button label="Edit" onPress={() => editEvent(event)} secondary />
+                      <Button label="Delete" onPress={() => void deleteEvent(event)} danger />
+                    </>
+                  ) : null}
+                </View>
               </View>
-            </View>
-          ))}
+            );
+          })}
           {eventCursor ? (
             <Button
               disabled={busy === "event-more"}

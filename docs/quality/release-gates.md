@@ -716,3 +716,20 @@ acceptance.
   lost-receipt/retry/original-unchanged/keyboard/narrow/expiry proof. Keep real
   persistence, physical native, concurrent React, assistive technology, external
   reviewer, hosted and release acceptance separate.
+
+
+## ADR 0045 native biometric reading units
+
+- Show current metric names and exact canonical units by definition ID in native
+  choices, selected input context and saved readings. Preserve raw values,
+  date/source context and imported/manual actions. Missing or omitted archived
+  metadata stays explicitly unavailable; do not infer or convert units.
+- Edit remains bound to the saved event definition ID. Current and retained
+  metric-selection/Use actions cannot retarget it; Use still selects the trend.
+  Existing request bodies, timestamp/revision handling and retry identity remain.
+- Require focused actual-component identity/value/metadata/edit/body/retry
+  regressions, affected types/format and independent review, followed by frozen
+  canonical gates and fresh native exports. Record unchanged web cache reuse.
+  Mocked native/source evidence does not close physical-device, assistive
+  technology, concurrent React, real persistence, external reviewer or release
+  acceptance.

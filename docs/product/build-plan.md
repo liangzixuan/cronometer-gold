@@ -91,7 +91,8 @@ remains fail-closed.
 
 ### Execution queue
 
-Current checkpoint (2026-09-09): recovered M1E and its mobile summary-reload and
+Historical checkpoint (2026-09-09; automatic observations below are dated evidence):
+recovered M1E and its mobile summary-reload and
 web group-draft corrections pass the complete applicable local validation,
 including canonical `pnpm check`, build, database/API integration, isolated
 restore, search, email, privacy, and exact loopback API readiness after the
@@ -146,6 +147,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Select every loaded nutrient for native Health trends | ADR 0042 source, independent in-task review, focused native behavior/types, canonical local gates and fresh exports passed; record exact-commit automatic results and preserve device/independent/release acceptance |
 | Automatic evidence / independent review | Filter loaded saved custom foods by name | ADR 0043 source, independent in-task review, canonical local gates and synthetic Chrome no-request/details/draft/paging/keyboard/narrow/expiry proof passed; record exact-commit automatic results and preserve device/independent/release acceptance |
 | Automatic evidence / independent review | Copy a saved custom food to a new draft | ADR 0044 source, independent in-task review, canonical local gates and synthetic Chrome copy/draft/Create/retry/keyboard/narrow/expiry proof passed; record exact-commit automatic results and preserve device/independent/release acceptance |
+| Automatic evidence / independent review | Native biometric reading units and identity | ADR 0045 source, independent in-task review, focused native identity/value/body/retry checks, canonical local gates and fresh native exports passed; preserve exact-commit automatic, external reviewer, device and release acceptance |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -754,14 +756,14 @@ Each retains its separate explicit-approval gate.
    Its 1–20,000 mL per-entry, 64-active-entry, and 100,000 mL daily limits are
    operational abuse and overflow bounds, not intake guidance. Its four private
    entity families are route-first in the 65-family export/erasure drill. This
-   closes only the online hydration CRUD source slice. Client time editing,
-   targets, reminders, non-water fluids, offline/background mutation,
+   closes only the online hydration CRUD source slice. Client time editing is
+   source/local complete under [ADR 0027](../adr/0027-hydration-time-corrections.md).
+   Targets, reminders, non-water fluids, offline/background mutation,
    device/platform ingestion, and signed-device, cross-client, and accessibility
-   evidence remain open. The private API already supports explicit `occurredAt`
-   changes without claiming a client time editor.
+   evidence remain open.
 
-   M1F is the explicit hydration time-correction slice under ADR 0027, currently
-   in implementation. Amount-only edits preserve the exact original instant and
+   M1F is the explicit hydration time-correction slice under ADR 0027; its source
+   implementation and applicable local validation are complete. Amount-only edits preserve the exact original instant and
    historical coordinates. A deliberate time change resolves the current profile's
    local minute with explicit repeated-hour choice and rejects nonexistent times.
    The additive paired profile-zone precondition prevents a concurrent zone change
@@ -1357,9 +1359,32 @@ At the September 10, 2026 19:35:59 UTC preflight, base
 `71b7fff605404a13de27f495c39eda64b2541c10` had CI `34521109804` and container
 `34521109674` in progress. Base results do not transfer to this slice.
 
-### Next continuation
+### Native biometric reading units: source/local complete
 
-Reconcile exact-commit automatic results and independent-review findings first.
-Then select one bounded user-visible acceptance card from current source gaps,
-keeping live catalogue, device, hosted and release gates explicit. No successor
-implementation has started.
+[ADR 0045](../adr/0045-native-biometric-reading-units.md) gives native metric
+choices, the selected value field and saved readings explicit unit context from
+the current loaded definition. Exact values remain untouched; missing metadata
+stays unavailable. Edit keeps the original event's definition ID, including
+retained selection actions, while definition Use still selects trends.
+No new read, conversion, mutation contract or shared controller is introduced.
+
+Focused actual-component/retention checks, affected types/format, independent
+in-task review, frozen canonical gates and fresh native exports passed. Unchanged
+web results/builds were cached; physical native, assistive technology, concurrent
+React, real persistence, external Claude Code, hosted and release acceptance
+remain separate. Exact delivery and automatic state belong in Windows readiness.
+
+At the September 10, 2026 20:29:06 UTC read-only observation, delivered base
+`df984b20199b50bab5e258c88c74b6a7892b0fd9` CI `34525236235` succeeded (updated
+20:21:02 UTC); container `34525236213` remained in progress. These base results
+do not transfer to this slice.
+
+### Next bounded candidate
+
+Prepare one card for native Goals nutrient picker completeness and clarity.
+The existing query searches every eligible loaded definition but silently shows
+only the first 20 matches, without units or shown/total feedback. Web exposes
+every eligible loaded definition with name/unit. Preserve existing name/code
+matching, explicit Add, manual goal drafts, reference locks and save identity;
+do not imply that searching beyond the first 20 is currently impossible.
+No successor implementation has started.
