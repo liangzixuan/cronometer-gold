@@ -1,8 +1,10 @@
 import type { ActivityEntry } from "@nutrition-tracker/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Alert,
+  AppState,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -38,6 +40,18 @@ import {
 } from "./activity";
 
 type LoadState = "loading" | "ready" | "error";
+type AddFields = {
+  name: string;
+  durationMinutes: string;
+  selfReportedEnergyKilocalories: string;
+  localTime: string;
+};
+type ReuseChoice = {
+  readonly entry: ActivityEntry;
+  readonly day: ReturnType<typeof parseActivityDay>;
+  readonly draftGeneration: number;
+  readonly actionGeneration: number;
+};
 
 interface ActivityScreenProps {
   readonly apiBase: URL;
@@ -83,10 +97,12 @@ export function ActivityScreen({
   onUnauthorized,
 }: ActivityScreenProps) {
   const initialNow = useRef(new Date()).current;
+  const scrollView = useRef<ScrollView | null>(null);
+  const addSectionY = useRef(0);
   const initialDate = todayDetailDate(requestedDate, profileTimeZone, initialNow);
   const [date, setDate] = useState(initialDate);
   const [dateDraft, setDateDraft] = useState(initialDate);
-  const [day, setDay] = useState<ReturnType<typeof parseActivityDay> | null>(null);
+  const [loadedDay, setDay] = useState<ReturnType<typeof parseActivityDay> | null>(null);
   const [state, setState] = useState<LoadState>("loading");
   const [message, setMessage] = useState("Opening your private activity history…");
   const [messageIsError, setMessageIsError] = useState(false);
@@ -96,19 +112,167 @@ export function ActivityScreen({
   const [localTime, setLocalTime] = useState(localTimeInTimeZone(initialNow, profileTimeZone));
   const [edit, setEdit] = useState<ActivityEditDraft | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [reuseChoice, setReuseChoice] = useState<ReuseChoice | null>(null);
+  const choiceRef = useRef<ReuseChoice | null>(null);
+  const draftRef = useRef<AddFields>({
+    name,
+    durationMinutes,
+    selfReportedEnergyKilocalories,
+    localTime,
+  });
+  const draftGeneration = useRef(0);
+  const createIntent = useRef(0);
+  const actionGeneration = useRef(0);
+  const lifecycle = useRef(0);
+  const mounted = useRef(false);
+  const foreground = useRef(
+    AppState.currentState !== "background" && AppState.currentState !== "inactive",
+  );
+  const dateRef = useRef(date);
+  const dateDraftRef = useRef(dateDraft);
+  const editRef = useRef(edit);
+  editRef.current = edit;
+  const busyRef = useRef<string | null>(null);
+  const mutationGeneration = useRef(0);
+  const mutationController = useRef<AbortController | null>(null);
+  const scopeRef = useRef({
+    accessToken,
+    apiBase: apiBase.toString(),
+    expectedOwnerUserId,
+    profileTimeZone,
+    requestedDate,
+  });
+  if (
+    scopeRef.current.accessToken !== accessToken ||
+    scopeRef.current.apiBase !== apiBase.toString() ||
+    scopeRef.current.expectedOwnerUserId !== expectedOwnerUserId ||
+    scopeRef.current.profileTimeZone !== profileTimeZone ||
+    scopeRef.current.requestedDate !== requestedDate
+  ) {
+    scopeRef.current = {
+      accessToken,
+      apiBase: apiBase.toString(),
+      expectedOwnerUserId,
+      profileTimeZone,
+      requestedDate,
+    };
+  }
+  const scope = scopeRef.current;
+  const installedScope = useRef<typeof scope | null>(null);
+  const closedScope = useRef<typeof scope | null>(null);
+  const dayScope = useRef<typeof scope | null>(null);
+  const dayRef = useRef<ReturnType<typeof parseActivityDay> | null>(null);
+  const onUnauthorizedRef = useRef(onUnauthorized);
+  onUnauthorizedRef.current = onUnauthorized;
   const operations = useRef(new Map<string, string>());
   const loadController = useRef<AbortController | null>(null);
   const loadGeneration = useRef(0);
   const loadedTimeZone = useRef<string | null>(null);
   const untouchedDefaultOccurredAt = useRef<string | null>(initialNow.toISOString());
 
+  const scopeIsCurrent = useCallback(
+    () =>
+      mounted.current &&
+      foreground.current &&
+      scopeRef.current === scope &&
+      installedScope.current === scope &&
+      closedScope.current !== scope,
+    [scope],
+  );
+  const clearChoice = useCallback(() => {
+    choiceRef.current = null;
+    setReuseChoice(null);
+  }, []);
+  const clearDay = useCallback(() => {
+    dayRef.current = null;
+    dayScope.current = null;
+    setDay(null);
+  }, []);
+  const installFields = useCallback((fields: Partial<AddFields>) => {
+    draftRef.current = { ...draftRef.current, ...fields };
+    draftGeneration.current += 1;
+    if (fields.name !== undefined) setName(fields.name);
+    if (fields.durationMinutes !== undefined) setDurationMinutes(fields.durationMinutes);
+    if (fields.selfReportedEnergyKilocalories !== undefined)
+      setSelfReportedEnergyKilocalories(fields.selfReportedEnergyKilocalories);
+    if (fields.localTime !== undefined) setLocalTime(fields.localTime);
+  }, []);
+  const closePrivate = useCallback(async () => {
+    if (!scopeIsCurrent()) return;
+    closedScope.current = scope;
+    lifecycle.current += 1;
+    actionGeneration.current += 1;
+    mutationGeneration.current += 1;
+    loadController.current?.abort();
+    mutationController.current?.abort();
+    busyRef.current = null;
+    setBusy(null);
+    clearChoice();
+    clearDay();
+    installFields({ name: "", durationMinutes: "", selfReportedEnergyKilocalories: "" });
+    setState("error");
+    setMessageIsError(true);
+    setMessage("Your activity session has closed.");
+    await onUnauthorizedRef.current();
+  }, [clearChoice, clearDay, installFields, scope, scopeIsCurrent]);
+  useEffect(() => {
+    mounted.current = true;
+    busyRef.current = null;
+    setBusy(null);
+    clearChoice();
+    lifecycle.current += 1;
+    actionGeneration.current += 1;
+    const previous = installedScope.current;
+    installedScope.current = scope;
+    if (previous !== null && previous !== scope) {
+      clearChoice();
+      clearDay();
+      operations.current.clear();
+      installFields({ name: "", durationMinutes: "", selfReportedEnergyKilocalories: "" });
+      editRef.current = null;
+      setEdit(null);
+      busyRef.current = null;
+      setBusy(null);
+      loadedTimeZone.current = null;
+      const nextDate = todayDetailDate(scope.requestedDate, scope.profileTimeZone, new Date());
+      dateRef.current = nextDate;
+      dateDraftRef.current = nextDate;
+      setDate(nextDate);
+      setDateDraft(nextDate);
+    }
+    return () => {
+      mounted.current = false;
+      lifecycle.current += 1;
+      actionGeneration.current += 1;
+      mutationGeneration.current += 1;
+      loadGeneration.current += 1;
+      loadController.current?.abort();
+      mutationController.current?.abort();
+    };
+  }, [clearChoice, clearDay, installFields, scope]);
+  const day =
+    scopeIsCurrent() && dayScope.current === scope && dayRef.current === loadedDay
+      ? loadedDay
+      : null;
+
   const loadDay = useCallback(
     async (requestedDate: string, successMessage?: string) => {
+      if (!scopeIsCurrent() || dateRef.current !== requestedDate) return false;
+      actionGeneration.current += 1;
+      clearChoice();
+      clearDay();
       loadController.current?.abort();
       const controller = new AbortController();
       loadController.current = controller;
       const generation = loadGeneration.current + 1;
       loadGeneration.current = generation;
+      const initiatingLifecycle = lifecycle.current;
+      const current = () =>
+        scopeIsCurrent() &&
+        dateRef.current === requestedDate &&
+        lifecycle.current === initiatingLifecycle &&
+        !controller.signal.aborted &&
+        loadGeneration.current === generation;
       setState("loading");
       setMessageIsError(false);
       setMessage(`Loading activities for ${requestedDate}…`);
@@ -124,13 +288,13 @@ export function ActivityScreen({
             signal: controller.signal,
           },
         );
-        if (controller.signal.aborted || loadGeneration.current !== generation) return false;
+        if (!current()) return false;
         if (response.status === 401) {
-          await onUnauthorized();
+          await closePrivate();
           return false;
         }
         const body = await jsonBody(response);
-        if (controller.signal.aborted || loadGeneration.current !== generation) return false;
+        if (!current()) return false;
         if (!response.ok) {
           throw new Error(responseError(body, "Activity history could not be loaded."));
         }
@@ -140,17 +304,20 @@ export function ActivityScreen({
         }
         if (loadedTimeZone.current !== next.timeZone) {
           const capturedNow = new Date();
-          setLocalTime(localTimeInTimeZone(capturedNow, next.timeZone));
+          installFields({ localTime: localTimeInTimeZone(capturedNow, next.timeZone) });
           untouchedDefaultOccurredAt.current = capturedNow.toISOString();
           loadedTimeZone.current = next.timeZone;
         }
+        if (!current()) return false;
+        dayRef.current = next;
+        dayScope.current = scope;
         setDay(next);
         setState("ready");
         setMessageIsError(false);
         setMessage(successMessage ?? dayMessage(next));
         return true;
       } catch (error) {
-        if (controller.signal.aborted || loadGeneration.current !== generation) return false;
+        if (!current()) return false;
         setDay(null);
         setState("error");
         setMessageIsError(true);
@@ -160,7 +327,17 @@ export function ActivityScreen({
         return false;
       }
     },
-    [accessToken, apiBase, expectedOwnerUserId, onUnauthorized],
+    [
+      accessToken,
+      apiBase,
+      clearChoice,
+      clearDay,
+      closePrivate,
+      expectedOwnerUserId,
+      installFields,
+      scope,
+      scopeIsCurrent,
+    ],
   );
 
   useEffect(() => {
@@ -168,16 +345,144 @@ export function ActivityScreen({
     return () => loadController.current?.abort();
   }, [date, loadDay]);
 
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (next) => {
+      const active = next !== "background" && next !== "inactive";
+      if (!mounted.current || foreground.current === active) return;
+      foreground.current = active;
+      lifecycle.current += 1;
+      actionGeneration.current += 1;
+      mutationGeneration.current += 1;
+      loadGeneration.current += 1;
+      loadController.current?.abort();
+      mutationController.current?.abort();
+      busyRef.current = null;
+      setBusy(null);
+      clearChoice();
+      clearDay();
+      setState("loading");
+      if (active) void loadDay(dateRef.current);
+    });
+    return () => subscription.remove();
+  }, [clearChoice, clearDay, loadDay]);
+
+  const renderedGeneration = actionGeneration.current;
+  function currentAction(requireReady = true) {
+    return (
+      scopeIsCurrent() &&
+      actionGeneration.current === renderedGeneration &&
+      dateRef.current === date &&
+      busyRef.current === null &&
+      state !== "loading" &&
+      (!requireReady ||
+        (state === "ready" &&
+          day !== null &&
+          dayRef.current === day &&
+          day.localDate === date &&
+          dateDraftRef.current === date))
+    );
+  }
+  function changeAdd(field: keyof AddFields, value: string) {
+    if (!currentAction()) return;
+    clearChoice();
+    if (field === "localTime") untouchedDefaultOccurredAt.current = null;
+    installFields({ [field]: value });
+  }
+  function changeEdit(field: keyof Omit<ActivityEditDraft, "entry">, value: string) {
+    if (!currentAction() || !edit || editRef.current?.entry !== edit.entry) return;
+    editRef.current = { ...editRef.current, [field]: value };
+    setEdit(editRef.current);
+  }
+  function showAdd(message: string) {
+    scrollView.current?.scrollTo({ y: addSectionY.current, animated: true });
+    AccessibilityInfo.announceForAccessibility(message);
+  }
+  function beginEdit(entry: ActivityEntry) {
+    if (!currentAction() || !day?.entries.includes(entry)) return;
+    actionGeneration.current += 1;
+    clearChoice();
+    editRef.current = editDraft(entry);
+    setEdit(editRef.current);
+  }
+  function cancelEdit() {
+    if (!currentAction()) return;
+    actionGeneration.current += 1;
+    editRef.current = null;
+    setEdit(null);
+  }
+  function installReuse(entry: ActivityEntry) {
+    createIntent.current += 1;
+    actionGeneration.current += 1;
+    clearChoice();
+    installFields({
+      name: entry.name,
+      durationMinutes: String(entry.durationMinutes),
+      selfReportedEnergyKilocalories: entry.selfReportedEnergyKilocalories ?? "",
+    });
+    showAdd("Activity details copied to Add an activity. Review and choose Add activity to save.");
+    setMessageIsError(false);
+    setMessage(
+      "Activity details are ready in Add an activity. Review the selected day and start time, then choose Add activity to save a new entry.",
+    );
+  }
+  function reuse(entry: ActivityEntry) {
+    if (!currentAction() || editRef.current !== null || !day?.entries.includes(entry)) return;
+    const fields = draftRef.current;
+    if (
+      fields.name !== "" ||
+      fields.durationMinutes !== "" ||
+      fields.selfReportedEnergyKilocalories !== ""
+    ) {
+      const choice = {
+        entry,
+        day,
+        draftGeneration: draftGeneration.current,
+        actionGeneration: actionGeneration.current,
+      };
+      choiceRef.current = choice;
+      setReuseChoice(choice);
+      showAdd("Your Add draft has details. Choose Keep draft or Replace details.");
+    } else installReuse(entry);
+  }
+  function resolveReuse(choice: ReuseChoice, replace: boolean) {
+    if (
+      !currentAction() ||
+      editRef.current !== null ||
+      choiceRef.current !== choice ||
+      choice.day !== dayRef.current ||
+      choice.draftGeneration !== draftGeneration.current ||
+      choice.actionGeneration !== actionGeneration.current
+    )
+      return;
+    if (replace) installReuse(choice.entry);
+    else clearChoice();
+  }
+
   function chooseDate(value: string) {
+    if (!currentAction(false)) return;
     if (!isLocalDate(value)) {
       setMessageIsError(true);
       setMessage("Enter a valid local date in YYYY-MM-DD form.");
+      dateDraftRef.current = date;
       setDateDraft(date);
       return;
     }
+    if (value === date && dateDraftRef.current === value) return;
+    clearChoice();
+    actionGeneration.current += 1;
+    draftGeneration.current += 1;
+    editRef.current = null;
     setEdit(null);
+    dateRef.current = value;
+    dateDraftRef.current = value;
     setDateDraft(value);
-    setDate(value);
+    if (value !== date) {
+      clearDay();
+      setState("loading");
+      loadGeneration.current += 1;
+      loadController.current?.abort();
+      setDate(value);
+    }
   }
 
   function operationId(key: string): string {
@@ -196,8 +501,24 @@ export function ActivityScreen({
     readonly revision?: string;
     readonly expectedTimeZone?: string;
     readonly successMessage: string;
+    readonly onAccepted?: () => void;
     readonly validates: (mutation: ActivityMutation) => boolean;
   }): Promise<ActivityMutation | null> {
+    if (!currentAction() || !day) return null;
+    actionGeneration.current += 1;
+    clearChoice();
+    const initiatingLifecycle = lifecycle.current;
+    const initiatingDate = dateRef.current;
+    const token = ++mutationGeneration.current;
+    const controller = new AbortController();
+    mutationController.current = controller;
+    const current = () =>
+      scopeIsCurrent() &&
+      lifecycle.current === initiatingLifecycle &&
+      dateRef.current === initiatingDate &&
+      mutationGeneration.current === token &&
+      !controller.signal.aborted;
+    busyRef.current = input.intentKey;
     setBusy(input.intentKey);
     setMessageIsError(false);
     setMessage("Saving the activity…");
@@ -215,20 +536,24 @@ export function ActivityScreen({
       const response = await fetch(apiUrl(apiBase, input.path).toString(), {
         method: input.method,
         headers,
+        signal: controller.signal,
         ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }),
         cache: "no-store",
       });
+      if (!current()) return null;
       if (response.status === 401) {
-        await onUnauthorized();
+        await closePrivate();
         return null;
       }
       const body = await jsonBody(response);
+      if (!current()) return null;
       if (!response.ok) {
         if (isActivityTimeZoneChangedProblem(response.status, body)) {
           operations.current.delete(input.intentKey);
           const retainedLocalTime = localTime;
           const refreshed = await loadDay(date);
-          setLocalTime(retainedLocalTime);
+          if (!current()) return null;
+          installFields({ localTime: retainedLocalTime });
           untouchedDefaultOccurredAt.current = null;
           setMessageIsError(true);
           setMessage(
@@ -254,7 +579,9 @@ export function ActivityScreen({
         throw new TypeError("The activity service returned a mismatched confirmation.");
       }
       operations.current.delete(input.intentKey);
+      input.onAccepted?.();
       const refreshed = await loadDay(date, input.successMessage);
+      if (!current()) return null;
       if (!refreshed) {
         setState("error");
         setMessageIsError(true);
@@ -264,6 +591,7 @@ export function ActivityScreen({
       }
       return mutation;
     } catch (error) {
+      if (!current()) return null;
       setState("error");
       setMessageIsError(true);
       setMessage(
@@ -271,11 +599,18 @@ export function ActivityScreen({
       );
       return null;
     } finally {
-      setBusy(null);
+      if (current()) {
+        busyRef.current = null;
+        setBusy(null);
+      }
     }
   }
 
   async function createEntry() {
+    if (!currentAction()) return;
+    const initiatingIntent = createIntent.current;
+    const initiatingDraft = draftGeneration.current;
+    const initiatingLifecycle = lifecycle.current;
     if (!day || day.localDate !== date || state !== "ready") {
       setMessageIsError(true);
       setMessage("Load the selected activity day before adding an entry.");
@@ -283,22 +618,39 @@ export function ActivityScreen({
     }
     try {
       const prepared = prepareActivityCreate(
-        name,
-        durationMinutes,
-        selfReportedEnergyKilocalories,
+        draftRef.current.name,
+        draftRef.current.durationMinutes,
+        draftRef.current.selfReportedEnergyKilocalories,
         date,
-        localTime,
+        draftRef.current.localTime,
         day,
         untouchedDefaultOccurredAt.current ?? undefined,
       );
-      const intentKey = `create:${expectedOwnerUserId}:${prepared.expectedTimeZone}:${JSON.stringify(prepared.body)}`;
-      const mutation = await mutate({
+      const intentKey = `create:${createIntent.current}:${expectedOwnerUserId}:${prepared.expectedTimeZone}:${JSON.stringify(prepared.body)}`;
+      await mutate({
         intentKey,
         path: "/v1/activities/entries?profileTimeZonePrecondition=v1",
         method: "POST",
         body: prepared.body,
         expectedTimeZone: prepared.expectedTimeZone,
         successMessage: `${prepared.body.name} was added to your private activity history.`,
+        onAccepted: () => {
+          if (
+            scopeIsCurrent() &&
+            dateRef.current === date &&
+            lifecycle.current === initiatingLifecycle &&
+            createIntent.current === initiatingIntent &&
+            draftGeneration.current === initiatingDraft
+          ) {
+            createIntent.current += 1;
+            actionGeneration.current += 1;
+            installFields({ name: "", durationMinutes: "", selfReportedEnergyKilocalories: "" });
+            const capturedNow = new Date();
+            const activeZone = day.timeZone;
+            installFields({ localTime: localTimeInTimeZone(capturedNow, activeZone) });
+            untouchedDefaultOccurredAt.current = capturedNow.toISOString();
+          }
+        },
         validates: (result) => {
           const saved = result.entry;
           return (
@@ -313,15 +665,6 @@ export function ActivityScreen({
           );
         },
       });
-      if (mutation) {
-        setName("");
-        setDurationMinutes("");
-        setSelfReportedEnergyKilocalories("");
-        const capturedNow = new Date();
-        const activeZone = day.timeZone;
-        setLocalTime(localTimeInTimeZone(capturedNow, activeZone));
-        untouchedDefaultOccurredAt.current = capturedNow.toISOString();
-      }
     } catch (error) {
       setMessageIsError(true);
       setMessage(error instanceof Error ? error.message : "Enter a valid activity.");
@@ -329,7 +672,7 @@ export function ActivityScreen({
   }
 
   async function updateEntry() {
-    if (!edit || !day) return;
+    if (!currentAction() || !edit || !day) return;
     try {
       const prepared = prepareActivityUpdate(edit, day.timeZone);
       const intentKey = `update:${expectedOwnerUserId}:${edit.entry.id}:${edit.entry.revision}:${prepared.expectedTimeZone ?? ""}:${JSON.stringify(prepared.body)}`;
@@ -382,6 +725,7 @@ export function ActivityScreen({
   }
 
   function confirmDelete(entry: ActivityEntry) {
+    if (!currentAction() || !day?.entries.includes(entry)) return;
     Alert.alert(
       "Delete activity?",
       `${entry.name} will be removed from ${entry.localDate}. Its calories never adjusted your nutrition target or balance.`,
@@ -392,13 +736,19 @@ export function ActivityScreen({
     );
   }
 
-  const controlsDisabled = busy !== null || state === "loading";
+  const controlsDisabled = busy !== null || state === "loading" || !scopeIsCurrent();
   const createDisabled =
-    controlsDisabled || state !== "ready" || day === null || day.localDate !== date;
+    controlsDisabled ||
+    state !== "ready" ||
+    day === null ||
+    day.localDate !== date ||
+    dateDraft !== date;
+  const reuseDisabled = createDisabled || edit !== null;
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
       <ScrollView
+        ref={scrollView}
         automaticallyAdjustKeyboardInsets
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
@@ -425,7 +775,13 @@ export function ActivityScreen({
             autoCapitalize="none"
             editable={!controlsDisabled}
             maxLength={10}
-            onChangeText={setDateDraft}
+            onChangeText={(value) => {
+              if (!currentAction(false)) return;
+              clearChoice();
+              draftGeneration.current += 1;
+              dateDraftRef.current = value;
+              setDateDraft(value);
+            }}
             onEndEditing={(event) => chooseDate(event.nativeEvent.text)}
             onSubmitEditing={(event) => chooseDate(event.nativeEvent.text)}
             returnKeyType="done"
@@ -473,7 +829,9 @@ export function ActivityScreen({
             accessibilityRole="button"
             accessibilityState={{ disabled: controlsDisabled }}
             disabled={controlsDisabled}
-            onPress={() => void loadDay(date)}
+            onPress={() => {
+              if (currentAction(false)) void loadDay(date);
+            }}
             style={styles.retryButton}
           >
             <Text style={styles.secondaryText}>Retry day view</Text>
@@ -501,20 +859,54 @@ export function ActivityScreen({
           <Text style={styles.policyText}>{ACTIVITY_ONLINE_POLICY_COPY}</Text>
         </View>
 
-        <View style={styles.card}>
+        <View
+          accessibilityLabel="Add an activity form"
+          onLayout={(event) => {
+            addSectionY.current = event.nativeEvent.layout.y;
+          }}
+          style={styles.card}
+        >
           <Text accessibilityRole="header" style={styles.sectionTitle}>
             Add an activity
           </Text>
+          {reuseChoice && choiceRef.current === reuseChoice && day === reuseChoice.day ? (
+            <View style={styles.card}>
+              <Text style={styles.policyText}>
+                Replace the Add details with {reuseChoice.entry.name}? Your selected day and start
+                time will stay the same.
+              </Text>
+              <View style={styles.actionRow}>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={reuseDisabled}
+                  accessibilityState={{ disabled: reuseDisabled }}
+                  onPress={() => resolveReuse(reuseChoice, false)}
+                  style={styles.secondarySmall}
+                >
+                  <Text style={styles.secondaryText}>Keep draft</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={reuseDisabled}
+                  accessibilityState={{ disabled: reuseDisabled }}
+                  onPress={() => resolveReuse(reuseChoice, true)}
+                  style={styles.secondarySmall}
+                >
+                  <Text style={styles.secondaryText}>Replace details</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
           <Text style={styles.label}>ACTIVITY NAME</Text>
           <TextInput
             accessibilityLabel="Activity name"
             editable={!createDisabled}
             maxLength={240}
-            onChangeText={setName}
+            onChangeText={(value) => changeAdd("name", value)}
             placeholder="Walk"
             placeholderTextColor={palette.muted}
             style={styles.input}
-            value={name}
+            value={scopeIsCurrent() ? name : ""}
           />
           <Text style={styles.label}>DURATION · WHOLE MINUTES</Text>
           <TextInput
@@ -523,11 +915,11 @@ export function ActivityScreen({
             editable={!createDisabled}
             keyboardType="number-pad"
             maxLength={4}
-            onChangeText={setDurationMinutes}
+            onChangeText={(value) => changeAdd("durationMinutes", value)}
             placeholder="30"
             placeholderTextColor={palette.muted}
             style={styles.input}
-            value={durationMinutes}
+            value={scopeIsCurrent() ? durationMinutes : ""}
           />
           <Text style={styles.label}>SELF-REPORTED CALORIES · OPTIONAL</Text>
           <TextInput
@@ -536,11 +928,11 @@ export function ActivityScreen({
             editable={!createDisabled}
             keyboardType="decimal-pad"
             maxLength={9}
-            onChangeText={setSelfReportedEnergyKilocalories}
+            onChangeText={(value) => changeAdd("selfReportedEnergyKilocalories", value)}
             placeholder="Leave blank"
             placeholderTextColor={palette.muted}
             style={styles.input}
-            value={selfReportedEnergyKilocalories}
+            value={scopeIsCurrent() ? selfReportedEnergyKilocalories : ""}
           />
           <Text style={styles.label}>LOCAL START TIME</Text>
           <TextInput
@@ -549,14 +941,11 @@ export function ActivityScreen({
             autoCapitalize="none"
             editable={!createDisabled}
             maxLength={5}
-            onChangeText={(value) => {
-              untouchedDefaultOccurredAt.current = null;
-              setLocalTime(value);
-            }}
+            onChangeText={(value) => changeAdd("localTime", value)}
             placeholder="08:30"
             placeholderTextColor={palette.muted}
             style={styles.input}
-            value={localTime}
+            value={scopeIsCurrent() ? localTime : ""}
           />
           <Pressable
             accessibilityRole="button"
@@ -591,9 +980,7 @@ export function ActivityScreen({
                     accessibilityLabel="Edit activity name"
                     editable={!controlsDisabled}
                     maxLength={240}
-                    onChangeText={(value) =>
-                      setEdit((current) => (current ? { ...current, name: value } : current))
-                    }
+                    onChangeText={(value) => changeEdit("name", value)}
                     style={styles.input}
                     value={edit.name}
                   />
@@ -603,11 +990,7 @@ export function ActivityScreen({
                     editable={!controlsDisabled}
                     keyboardType="number-pad"
                     maxLength={4}
-                    onChangeText={(value) =>
-                      setEdit((current) =>
-                        current ? { ...current, durationMinutes: value } : current,
-                      )
-                    }
+                    onChangeText={(value) => changeEdit("durationMinutes", value)}
                     style={styles.input}
                     value={edit.durationMinutes}
                   />
@@ -617,11 +1000,7 @@ export function ActivityScreen({
                     editable={!controlsDisabled}
                     keyboardType="decimal-pad"
                     maxLength={9}
-                    onChangeText={(value) =>
-                      setEdit((current) =>
-                        current ? { ...current, selfReportedEnergyKilocalories: value } : current,
-                      )
-                    }
+                    onChangeText={(value) => changeEdit("selfReportedEnergyKilocalories", value)}
                     placeholder="Leave blank"
                     placeholderTextColor={palette.muted}
                     style={styles.input}
@@ -633,9 +1012,7 @@ export function ActivityScreen({
                     autoCapitalize="none"
                     editable={!controlsDisabled}
                     maxLength={10}
-                    onChangeText={(value) =>
-                      setEdit((current) => (current ? { ...current, localDate: value } : current))
-                    }
+                    onChangeText={(value) => changeEdit("localDate", value)}
                     style={styles.input}
                     value={edit.localDate}
                   />
@@ -645,9 +1022,7 @@ export function ActivityScreen({
                     autoCapitalize="none"
                     editable={!controlsDisabled}
                     maxLength={5}
-                    onChangeText={(value) =>
-                      setEdit((current) => (current ? { ...current, localTime: value } : current))
-                    }
+                    onChangeText={(value) => changeEdit("localTime", value)}
                     style={styles.input}
                     value={edit.localTime}
                   />
@@ -669,7 +1044,7 @@ export function ActivityScreen({
                       accessibilityRole="button"
                       accessibilityState={{ disabled: controlsDisabled }}
                       disabled={controlsDisabled}
-                      onPress={() => setEdit(null)}
+                      onPress={cancelEdit}
                       style={styles.secondarySmall}
                     >
                       <Text style={styles.secondaryText}>Cancel</Text>
@@ -697,10 +1072,20 @@ export function ActivityScreen({
                   </Text>
                   <View style={styles.actionRow}>
                     <Pressable
+                      accessibilityLabel={`Use details from ${entry.name}`}
+                      accessibilityRole="button"
+                      accessibilityState={{ disabled: reuseDisabled }}
+                      disabled={reuseDisabled}
+                      onPress={() => reuse(entry)}
+                      style={styles.secondarySmall}
+                    >
+                      <Text style={styles.secondaryText}>Use details</Text>
+                    </Pressable>
+                    <Pressable
                       accessibilityRole="button"
                       accessibilityState={{ disabled: controlsDisabled }}
                       disabled={controlsDisabled}
-                      onPress={() => setEdit(editDraft(entry))}
+                      onPress={() => beginEdit(entry)}
                       style={styles.secondarySmall}
                     >
                       <Text style={styles.secondaryText}>Edit activity</Text>

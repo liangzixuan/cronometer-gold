@@ -568,3 +568,20 @@ acceptance.
   gates and exports, and synthetic Chrome keyboard/narrow/paging/editor/date QA
   establish only their bounded source behavior. Physical native, assistive
   technology, real persistence, independent Claude Code and release gates remain.
+
+## Reuse activity details (ADR 0037)
+
+- Reuse copies only parsed name, whole-minute duration and nullable self-reported
+  energy to the current Add draft. Preserve null and exact positive decimal digits; zero remains invalid. Preserve
+  selected day/time and untouched-default instant semantics; original entry identity,
+  time and history totals remain unchanged until explicit validated Add.
+- Exact dirty-draft replacement choices invalidate on intervening edits, date,
+  source, request, private-scope or lifecycle changes. Busy and row-edit states
+  reject reuse; retained controls cannot bypass synchronous draft/scope fences.
+- Accepted reuse starts fresh create intent; unchanged retries retain body/key.
+  Old receipts cannot clear another draft or scope. Keep accepted-write/read-failure,
+  owner/timezone, update/delete and energy-policy gates intact.
+- Actual-component tests, independent review, canonical local gates/exports and
+  synthetic Chrome create/readback/lost-receipt/replacement/narrow/keyboard proof
+  establish only bounded source behavior. Physical native, real persistence,
+  assistive technology, independent Claude Code and release gates remain separate.

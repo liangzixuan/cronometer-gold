@@ -137,7 +137,8 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Previous/next nutrition report period | ADR 0034 source, independent in-task review, canonical local gates and synthetic Chrome period/dirty-date/retry QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
 | Automatic evidence / independent review | Open source diary days from report evidence | ADR 0035 source, independent in-task review, canonical local gates and synthetic Chrome source-date/missing-day/navigation QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
 | Automatic evidence / independent review | Collapse diary meal groups | ADR 0036 source, independent in-task review, canonical local gates and synthetic Chrome keyboard/narrow/paging/editor/date QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
-| Next candidate: read-only assessed | Reuse activity details in a new draft | Write a bounded card before implementation; copy exact name/duration/optional self-reported calories into the existing Add form with explicit submission, dirty-draft protection, fresh-intent retry identity and private/date guards |
+| Automatic evidence / independent review | Reuse activity details in a new draft | ADR 0037 source, independent in-task review, canonical local gates and synthetic Chrome exact-field/create/retry/narrow/keyboard QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
+| Next bounded source candidate | Hydration amount presets in the Add form | Review a card for 250 mL and 500 mL draft controls on web and mobile; retain selected date/time and explicit Add, ordinary draft-edit retry identity and stale/busy/private guards; no automatic logging, advice, targets, storage or API change |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -357,14 +358,38 @@ independent Claude Code or release acceptance. Base `feb50682450f7782597763a030f
 CI `34449289735` succeeded (updated 07:24:14 UTC); container `34449289773` was
 still in progress at the September 10, 2026 07:33:20 UTC read-only follow-up.
 
-The next read-only assessed candidate is **Reuse activity details in a new draft**
-on web/mobile. Existing history offers Edit/Delete, while the existing Add form
-can accept an entry's exact name, whole-minute duration and nullable self-reported
-calories. Retain the selected day/start time and require explicit Add. Before
-editing, write ADR 0037 and a bounded card covering dirty-draft replacement,
-new-intent versus unchanged-retry identity, stale/private/date/profile/busy guards,
-and no reuse of original entry identity/revision/time. No successor source is
-implemented; no API/outbox/calorie estimation or food-budget change is implied.
+The source checkpoint **Reuse activity details in a new draft** follows
+[ADR 0037](../adr/0037-reuse-activity-details.md). Exact saved name, whole-minute
+duration and nullable self-reported calories populate the existing Add draft;
+selected date/time and explicit Add remain. Dirty choices, active editors,
+private/lifecycle state and late receipts are fenced. Accepted reuse creates fresh
+intent; an unchanged uncertain submission retains its exact body/key. No
+API/schema/outbox/calculation or calorie-estimation change is included.
+
+Independent in-task review, focused actual-component suites and canonical local
+check/build/license gates passed. Fresh web 600 and mobile 821 tests plus 10 native
+runner tests and 157 root policy tests passed; type/test graphs 17/17 (15 cached),
+build 11/11 (9 cached), and 535 production licenses (14 reviewed exceptions) passed.
+Synthetic production Next/BFF Chrome QA proved exact fields, no POST before Add,
+three new entries from four submissions with one exact replay, unchanged originals,
+dirty Keep/Replace, keyboard/390-pixel layout, date/time cancellation and expiry.
+The fixture-only hydration header correction and final successful overview are
+recorded outside Git. Owned Chrome/viewport/process cleanup completed. Cached and
+service-gated evidence does not establish fresh integration, real persistence,
+physical native, assistive technology, independent Claude Code or release acceptance.
+Base `9c4672995ddf716ce5e5d5c887a6d2c8bc4202ae` CI `34452053324`
+succeeded (updated September 10, 2026 07:57:13 UTC); container `34452053297`
+was still in progress at the 08:05:10 UTC read-only follow-up. Automatic
+results remain separate from this slice and release acceptance.
+
+The next bounded source candidate is **Hydration amount presets in the Add form**.
+Existing web/native forms accept a whole-milliliter amount but expose no preset
+controls. Review a card for 250 mL and 500 mL buttons that change only that draft
+field, retain current date/time/default-instant behavior, announce the selected
+amount and require explicit Add. Treat the choice as an ordinary field edit while
+preserving unchanged ambiguous-retry identity and current private/busy/stale
+controls. This candidate excludes targets, intake advice, automatic logging, unit
+conversion, persistence, API and outbox changes. It has not been implemented.
 
 Prepare the external decisions alongside product work, without executing them:
 

@@ -35,6 +35,19 @@ interface ActivityClientProps {
   readonly initialDate?: string;
 }
 
+interface ActivityAddDraft {
+  readonly name: string;
+  readonly duration: string;
+  readonly energy: string;
+  readonly localTime: string;
+}
+
+interface ActivityReuseChoice {
+  readonly entry: ActivityEntry;
+  readonly day: ActivityDay;
+  readonly draft: ActivityAddDraft;
+}
+
 interface ActivityEdit {
   readonly entry: ActivityEntry;
   readonly name: string;
@@ -169,35 +182,126 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
   const [state, setState] = useState<LoadState>("loading");
   const [message, setMessage] = useState("Opening your private activity log…");
   const [messageIsError, setMessageIsError] = useState(false);
-  const [name, setName] = useState("");
-  const [duration, setDuration] = useState("");
-  const [energy, setEnergy] = useState("");
-  const [localTime, setLocalTime] = useState("");
-  const [edit, setEdit] = useState<ActivityEdit | null>(null);
+  const [draft, setDraftState] = useState<ActivityAddDraft>({
+    name: "",
+    duration: "",
+    energy: "",
+    localTime: "",
+  });
+  const { name, duration, energy, localTime } = draft;
+  const [edit, setEditState] = useState<ActivityEdit | null>(null);
+  const [reuseChoice, setReuseChoice] = useState<ActivityReuseChoice | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const mounted = useRef(false);
+  const privateClosed = useRef(false);
+  const ownerRef = useRef<string | null>(null);
+  const draftOwnerRef = useRef<string | null>(null);
+  const dateRef = useRef("");
+  const dayRef = useRef(day);
+  dayRef.current = day;
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const editRef = useRef(edit);
+  editRef.current = edit;
+  const reuseChoiceRef = useRef(reuseChoice);
+  const scopeGeneration = useRef(0);
+  const controlGeneration = useRef(0);
+  const createIntentGeneration = useRef(0);
+  const draftEditGeneration = useRef(0);
+  const mutationGeneration = useRef(0);
+  const inFlight = useRef(false);
+  const mutationController = useRef<AbortController | null>(null);
+  const addNameRef = useRef<HTMLInputElement | null>(null);
+  const reuseKeepRef = useRef<HTMLButtonElement | null>(null);
+  const routeRef = useRef({ initialDate });
+  if (routeRef.current.initialDate !== initialDate) routeRef.current = { initialDate };
+  const routeContext = routeRef.current;
+  const handledRouteRef = useRef<typeof routeContext | null>(null);
   const operations = useRef(new Map<string, string>());
   const loadController = useRef<AbortController | null>(null);
   const loadGeneration = useRef(0);
   const loadedTimeZone = useRef<string | null>(null);
   const untouchedDefaultOccurredAt = useRef<string | null>(null);
 
+  const invalidateReuse = useCallback(() => {
+    controlGeneration.current += 1;
+    reuseChoiceRef.current = null;
+    setReuseChoice(null);
+  }, []);
+  const replaceDraft = useCallback(
+    (next: ActivityAddDraft, source: "interaction" | "clock" = "interaction") => {
+      if (source === "interaction") draftEditGeneration.current += 1;
+      invalidateReuse();
+      draftRef.current = next;
+      setDraftState(next);
+    },
+    [invalidateReuse],
+  );
+  const setEdit = useCallback(
+    (next: ActivityEdit | null | ((current: ActivityEdit | null) => ActivityEdit | null)) => {
+      invalidateReuse();
+      const value = typeof next === "function" ? next(editRef.current) : next;
+      editRef.current = value;
+      setEditState(value);
+    },
+    [invalidateReuse],
+  );
+
   const signInAgain = useCallback(() => {
+    privateClosed.current = true;
+    scopeGeneration.current += 1;
+    mutationGeneration.current += 1;
+    loadGeneration.current += 1;
+    ownerRef.current = null;
+    draftOwnerRef.current = null;
+    dateRef.current = "";
+    dayRef.current = null;
+    inFlight.current = false;
     loadController.current?.abort();
+    mutationController.current?.abort();
+    operations.current.clear();
+    untouchedDefaultOccurredAt.current = null;
+    loadedTimeZone.current = null;
+    replaceDraft({ name: "", duration: "", energy: "", localTime: "" });
+    setEdit(null);
     setSession(null);
     setDay(null);
+    setDate("");
+    setBusy(null);
+    setState("loading");
+    setMessage("Closing your private activity log…");
     router.replace("/login");
     router.refresh();
-  }, [router]);
+  }, [replaceDraft, router, setEdit]);
 
   const loadDay = useCallback(
     async (requestedDate: string, successMessage?: string) => {
-      const expectedOwnerUserId = session?.user.id;
-      if (!expectedOwnerUserId) return false;
+      const expectedOwnerUserId = ownerRef.current;
+      if (
+        !mounted.current ||
+        privateClosed.current ||
+        !expectedOwnerUserId ||
+        requestedDate !== dateRef.current ||
+        handledRouteRef.current !== routeRef.current
+      )
+        return false;
+      const scope = scopeGeneration.current;
+      const route = routeRef.current;
       loadController.current?.abort();
       const controller = new AbortController();
       loadController.current = controller;
       const generation = loadGeneration.current + 1;
       loadGeneration.current = generation;
+      const current = () =>
+        mounted.current &&
+        !privateClosed.current &&
+        !controller.signal.aborted &&
+        loadGeneration.current === generation &&
+        scopeGeneration.current === scope &&
+        routeRef.current === route &&
+        ownerRef.current === expectedOwnerUserId &&
+        dateRef.current === requestedDate;
+      invalidateReuse();
       setState("loading");
       setMessageIsError(false);
       setMessage(`Loading activity entries for ${requestedDate}…`);
@@ -210,17 +314,18 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
           },
           signal: controller.signal,
         });
-        if (controller.signal.aborted || loadGeneration.current !== generation) return false;
+        if (!current()) return false;
         if (response.status === 401) {
           signInAgain();
           return false;
         }
         const body = await json(response);
+        if (!current()) return false;
         if (response.status === 409 && responseCode(body) === "ACTIVITY_OWNER_CHANGED") {
           signInAgain();
           return false;
         }
-        if (controller.signal.aborted || loadGeneration.current !== generation) return false;
+        if (!current()) return false;
         if (!response.ok) {
           throw new Error(responseError(body, "Activity entries could not be loaded."));
         }
@@ -230,17 +335,26 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
         }
         if (loadedTimeZone.current !== next.timeZone) {
           const capturedNow = new Date();
-          setLocalTime(localTimeInTimeZone(capturedNow, next.timeZone).slice(0, 5));
+          replaceDraft(
+            {
+              ...draftRef.current,
+              localTime: localTimeInTimeZone(capturedNow, next.timeZone).slice(0, 5),
+            },
+            "clock",
+          );
+          setEdit(null);
           untouchedDefaultOccurredAt.current = capturedNow.toISOString();
           loadedTimeZone.current = next.timeZone;
         }
+        dayRef.current = next;
         setDay(next);
         setState("ready");
         setMessageIsError(false);
         setMessage(successMessage ?? dayMessage(next));
         return true;
       } catch (error) {
-        if (controller.signal.aborted || loadGeneration.current !== generation) return false;
+        if (!current()) return false;
+        dayRef.current = null;
         setDay(null);
         setState("error");
         setMessageIsError(true);
@@ -250,11 +364,34 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
         return false;
       }
     },
-    [session?.user.id, signInAgain],
+    [invalidateReuse, replaceDraft, setEdit, signInAgain],
   );
 
   useEffect(() => {
+    mounted.current = true;
+    if (privateClosed.current)
+      return () => {
+        mounted.current = false;
+      };
     const controller = new AbortController();
+    const scope = ++scopeGeneration.current;
+    const route = routeRef.current;
+    handledRouteRef.current = route;
+    ownerRef.current = null;
+    dayRef.current = null;
+    inFlight.current = false;
+    invalidateReuse();
+    setSession(null);
+    setDay(null);
+    setEdit(null);
+    setBusy(null);
+    setState("loading");
+    const current = () =>
+      mounted.current &&
+      !privateClosed.current &&
+      !controller.signal.aborted &&
+      scopeGeneration.current === scope &&
+      routeRef.current === route;
     void (async () => {
       try {
         const response = await fetch("/api/auth/me", {
@@ -262,30 +399,155 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
           headers: { accept: "application/json" },
           signal: controller.signal,
         });
-        if (controller.signal.aborted) return;
+        if (!current()) return;
         if (response.status === 401) return signInAgain();
         if (!response.ok) throw new Error("Your session could not be verified.");
         const nextSession = parseSession(await json(response));
-        if (controller.signal.aborted) return;
+        if (!current()) return;
         const today = localDateInTimeZone(new Date(), nextSession.profile.timeZone);
         const nextDate = initialDate && isLocalDate(initialDate) ? initialDate : today;
+        if (draftOwnerRef.current && draftOwnerRef.current !== nextSession.user.id) {
+          operations.current.clear();
+          replaceDraft({ name: "", duration: "", energy: "", localTime: "" });
+          untouchedDefaultOccurredAt.current = null;
+          loadedTimeZone.current = null;
+        }
+        ownerRef.current = nextSession.user.id;
+        draftOwnerRef.current = nextSession.user.id;
+        dateRef.current = nextDate;
         setSession(nextSession);
         setDate(nextDate);
-        setLocalTime(localTimeInTimeZone(new Date(), nextSession.profile.timeZone).slice(0, 5));
+        replaceDraft(
+          {
+            ...draftRef.current,
+            localTime: localTimeInTimeZone(new Date(), nextSession.profile.timeZone).slice(0, 5),
+          },
+          "clock",
+        );
       } catch (error) {
-        if (controller.signal.aborted) return;
+        if (!current()) return;
         setState("error");
         setMessageIsError(true);
         setMessage(error instanceof Error ? error.message : "Your session could not be verified.");
       }
     })();
-    return () => controller.abort();
-  }, [initialDate, signInAgain]);
+    return () => {
+      mounted.current = false;
+      scopeGeneration.current += 1;
+      mutationGeneration.current += 1;
+      loadGeneration.current += 1;
+      controlGeneration.current += 1;
+      reuseChoiceRef.current = null;
+      controller.abort();
+      loadController.current?.abort();
+      mutationController.current?.abort();
+      inFlight.current = false;
+    };
+  }, [initialDate, invalidateReuse, replaceDraft, setEdit, signInAgain]);
 
   useEffect(() => {
     if (session && date) void loadDay(date);
     return () => loadController.current?.abort();
   }, [date, loadDay, session]);
+
+  const renderedScope = scopeGeneration.current;
+  const renderedControl = controlGeneration.current;
+  const renderedLoad = loadGeneration.current;
+  function canUseControls() {
+    return (
+      mounted.current &&
+      !privateClosed.current &&
+      !inFlight.current &&
+      routeRef.current === routeContext &&
+      handledRouteRef.current === routeContext &&
+      scopeGeneration.current === renderedScope &&
+      controlGeneration.current === renderedControl &&
+      loadGeneration.current === renderedLoad &&
+      session !== null &&
+      ownerRef.current === session.user.id &&
+      dateRef.current === date &&
+      state !== "loading"
+    );
+  }
+  function canUseDraft() {
+    return (
+      canUseControls() &&
+      state === "ready" &&
+      day !== null &&
+      dayRef.current === day &&
+      day.localDate === date &&
+      draftRef.current === draft
+    );
+  }
+  function changeDraft(field: keyof ActivityAddDraft, value: string) {
+    if (!canUseDraft()) return;
+    if (field === "localTime") untouchedDefaultOccurredAt.current = null;
+    replaceDraft({ ...draftRef.current, [field]: value });
+  }
+  function selectDate(next: string) {
+    if (!canUseControls() || !isLocalDate(next) || next === dateRef.current) return;
+    scopeGeneration.current += 1;
+    loadGeneration.current += 1;
+    loadController.current?.abort();
+    dateRef.current = next;
+    dayRef.current = null;
+    invalidateReuse();
+    setEdit(null);
+    setDay(null);
+    setState("loading");
+    setDate(next);
+  }
+  function beginEdit(entry: ActivityEntry) {
+    if (!canUseControls() || !day || dayRef.current !== day || !day.entries.includes(entry)) return;
+    setEdit({
+      entry,
+      name: entry.name,
+      duration: String(entry.durationMinutes),
+      energy: entry.selfReportedEnergyKilocalories ?? "",
+      localDate: entry.localDate,
+      localTime: entry.localTime.slice(0, 5),
+    });
+  }
+  function changeEdit(field: keyof Omit<ActivityEdit, "entry">, value: string) {
+    if (!canUseControls() || !edit || editRef.current !== edit) return;
+    setEdit({ ...edit, [field]: value });
+  }
+  function installReuse(entry: ActivityEntry) {
+    createIntentGeneration.current += 1;
+    replaceDraft({
+      ...draftRef.current,
+      name: entry.name,
+      duration: String(entry.durationMinutes),
+      energy: entry.selfReportedEnergyKilocalories ?? "",
+    });
+    setMessageIsError(false);
+    setMessage(
+      `Details from ${entry.name} are ready to review. The selected date and time are unchanged; choose Add entry to save a new activity.`,
+    );
+    addNameRef.current?.focus();
+  }
+  function reuseEntry(entry: ActivityEntry) {
+    if (!canUseDraft() || editRef.current || !day?.entries.includes(entry)) return;
+    if (draft.name.length > 0 || draft.duration.length > 0 || draft.energy.length > 0) {
+      invalidateReuse();
+      const choice = { entry, day, draft };
+      reuseChoiceRef.current = choice;
+      setReuseChoice(choice);
+    } else installReuse(entry);
+  }
+  function resolveReuse(choice: ActivityReuseChoice, replace: boolean) {
+    if (
+      !canUseDraft() ||
+      editRef.current ||
+      reuseChoiceRef.current !== choice ||
+      day !== choice.day ||
+      draftRef.current !== choice.draft ||
+      !day.entries.includes(choice.entry)
+    )
+      return;
+    if (replace) installReuse(choice.entry);
+    else invalidateReuse();
+  }
 
   function operationId(key: string): string {
     const existing = operations.current.get(key);
@@ -306,6 +568,30 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
     readonly expectation: ActivityMutationExpectation;
     readonly successMessage: string;
   }): Promise<boolean> {
+    if (
+      !mounted.current ||
+      privateClosed.current ||
+      inFlight.current ||
+      ownerRef.current !== input.expectedOwnerUserId
+    )
+      return false;
+    inFlight.current = true;
+    const generation = ++mutationGeneration.current;
+    const scope = scopeGeneration.current;
+    const sourceDate = dateRef.current;
+    const route = routeRef.current;
+    const controller = new AbortController();
+    mutationController.current = controller;
+    const current = () =>
+      mounted.current &&
+      !privateClosed.current &&
+      !controller.signal.aborted &&
+      mutationGeneration.current === generation &&
+      scopeGeneration.current === scope &&
+      ownerRef.current === input.expectedOwnerUserId &&
+      dateRef.current === sourceDate &&
+      routeRef.current === route;
+    invalidateReuse();
     setBusy(input.intentKey);
     setMessageIsError(false);
     setMessage("Saving the activity entry…");
@@ -325,12 +611,15 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
         headers,
         ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }),
         cache: "no-store",
+        signal: controller.signal,
       });
+      if (!current()) return false;
       if (response.status === 401) {
         signInAgain();
         return false;
       }
       const body = await json(response);
+      if (!current()) return false;
       if (response.status === 409 && responseCode(body) === "ACTIVITY_OWNER_CHANGED") {
         operations.current.delete(input.intentKey);
         signInAgain();
@@ -338,7 +627,8 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
       }
       if (response.status === 409 && responseCode(body) === "ACTIVITY_TIME_ZONE_CHANGED") {
         operations.current.delete(input.intentKey);
-        const refreshed = await loadDay(date);
+        const refreshed = await loadDay(sourceDate);
+        if (!current()) return false;
         setMessageIsError(true);
         setMessage(
           refreshed
@@ -353,7 +643,8 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
           const staleView = response.status === 404 || response.status === 412;
           if (staleView) {
             setEdit(null);
-            await loadDay(date);
+            await loadDay(sourceDate);
+            if (!current()) return false;
           }
           setMessageIsError(true);
           setMessage(
@@ -368,7 +659,8 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
       const mutation = parseActivityMutation(body);
       assertActivityMutationSemantics(mutation, input.expectation);
       operations.current.delete(input.intentKey);
-      const refreshed = await loadDay(date, input.successMessage);
+      const refreshed = await loadDay(sourceDate, input.successMessage);
+      if (!current()) return false;
       if (!refreshed) {
         setState("error");
         setMessageIsError(true);
@@ -378,6 +670,7 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
       }
       return true;
     } catch (error) {
+      if (!current()) return false;
       setState("error");
       setMessageIsError(true);
       setMessage(
@@ -385,16 +678,19 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
       );
       return false;
     } finally {
-      setBusy(null);
+      if (mutationGeneration.current === generation && mutationController.current === controller) {
+        inFlight.current = false;
+        mutationController.current = null;
+        if (current()) setBusy(null);
+      }
     }
   }
 
   async function createEntry() {
-    if (!session || !day || day.localDate !== date || state !== "ready") {
-      setMessageIsError(true);
-      setMessage("Load the selected activity day before adding an entry.");
-      return;
-    }
+    if (!canUseDraft() || !session || !day) return;
+    const capturedDraftEdit = draftEditGeneration.current;
+    const capturedIntent = createIntentGeneration.current;
+    const scope = scopeGeneration.current;
     try {
       const prepared = prepareActivityCreate(
         name,
@@ -406,7 +702,7 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
         untouchedDefaultOccurredAt.current ?? undefined,
       );
       const initiatingOwnerUserId = session.user.id;
-      const intentKey = `create:${initiatingOwnerUserId}:${prepared.expectedTimeZone}:${JSON.stringify(prepared.body)}`;
+      const intentKey = `create:${capturedIntent}:${initiatingOwnerUserId}:${prepared.expectedTimeZone}:${JSON.stringify(prepared.body)}`;
       if (
         await mutate({
           intentKey,
@@ -419,9 +715,16 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
           successMessage: `${prepared.body.name} added and the activity history refreshed.`,
         })
       ) {
-        setName("");
-        setDuration("");
-        setEnergy("");
+        if (
+          mounted.current &&
+          !privateClosed.current &&
+          routeRef.current === routeContext &&
+          scopeGeneration.current === scope &&
+          draftEditGeneration.current === capturedDraftEdit &&
+          createIntentGeneration.current === capturedIntent
+        ) {
+          replaceDraft({ ...draftRef.current, name: "", duration: "", energy: "" });
+        }
       }
     } catch (error) {
       setMessageIsError(true);
@@ -430,7 +733,15 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
   }
 
   async function updateEntry() {
-    if (!session || !edit || !day) return;
+    if (
+      !canUseControls() ||
+      !session ||
+      !edit ||
+      editRef.current !== edit ||
+      !day ||
+      dayRef.current !== day
+    )
+      return;
     try {
       const prepared = prepareActivityUpdate(
         edit.name,
@@ -464,7 +775,7 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
               : `Activity moved to ${edit.localDate}; this source day was refreshed.`,
         })
       ) {
-        setEdit(null);
+        if (editRef.current === edit) setEdit(null);
       }
     } catch (error) {
       setMessageIsError(true);
@@ -473,7 +784,14 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
   }
 
   async function deleteEntry(entry: ActivityEntry) {
-    if (!session) return;
+    if (
+      !canUseControls() ||
+      !session ||
+      !day ||
+      dayRef.current !== day ||
+      !day.entries.includes(entry)
+    )
+      return;
     if (!window.confirm(`Delete ${entry.name} from this activity history?`)) return;
     const initiatingOwnerUserId = session.user.id;
     const intentKey = `delete:${initiatingOwnerUserId}:${entry.id}:${entry.revision}`;
@@ -493,12 +811,28 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
   }
 
   async function signOut() {
+    if (!canUseControls()) return;
+    inFlight.current = true;
+    const generation = ++mutationGeneration.current;
+    const scope = scopeGeneration.current;
+    const owner = ownerRef.current;
+    invalidateReuse();
     setBusy("logout");
+    const current = () =>
+      mounted.current &&
+      !privateClosed.current &&
+      mutationGeneration.current === generation &&
+      scopeGeneration.current === scope &&
+      ownerRef.current === owner &&
+      routeRef.current === routeContext;
     const confirmed = await confirmBrowserLogout(
       () => fetch("/api/auth/logout", { method: "POST", cache: "no-store" }),
-      signInAgain,
+      () => {
+        if (current()) signInAgain();
+      },
     );
-    if (!confirmed) {
+    if (!confirmed && current()) {
+      inFlight.current = false;
       setMessage("Sign out could not be confirmed. Your activity log remains open; retry.");
       setState("error");
       setMessageIsError(true);
@@ -506,8 +840,27 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
     }
   }
 
+  useEffect(() => {
+    if (
+      reuseChoice &&
+      reuseChoiceRef.current === reuseChoice &&
+      mounted.current &&
+      !privateClosed.current &&
+      routeRef.current === routeContext &&
+      handledRouteRef.current === routeContext
+    ) {
+      reuseKeepRef.current?.focus();
+    }
+  }, [reuseChoice, routeContext]);
+
   const dateQuery = date ? `?date=${encodeURIComponent(date)}` : "";
-  const controlsDisabled = busy !== null || !session || state === "loading";
+  const controlsDisabled =
+    busy !== null ||
+    !session ||
+    state === "loading" ||
+    !mounted.current ||
+    privateClosed.current ||
+    handledRouteRef.current !== routeContext;
   const createDisabled =
     controlsDisabled || state !== "ready" || day === null || day.localDate !== date;
 
@@ -556,7 +909,7 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
           <button
             aria-label="Previous day"
             disabled={!date || controlsDisabled}
-            onClick={() => setDate(shiftLocalDate(date, -1))}
+            onClick={() => selectDate(shiftLocalDate(date, -1))}
             type="button"
           >
             ←
@@ -566,10 +919,7 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
             disabled={!date || controlsDisabled}
             id="activity-date"
             onChange={(event) => {
-              if (isLocalDate(event.target.value)) {
-                setDate(event.target.value);
-                setEdit(null);
-              }
+              selectDate(event.target.value);
             }}
             type="date"
             value={date}
@@ -577,7 +927,7 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
           <button
             aria-label="Next day"
             disabled={!date || controlsDisabled}
-            onClick={() => setDate(shiftLocalDate(date, 1))}
+            onClick={() => selectDate(shiftLocalDate(date, 1))}
             type="button"
           >
             →
@@ -586,7 +936,7 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
             disabled={controlsDisabled}
             onClick={() => {
               const timeZone = day?.timeZone ?? session?.profile.timeZone;
-              if (timeZone) setDate(localDateInTimeZone(new Date(), timeZone));
+              if (timeZone) selectDate(localDateInTimeZone(new Date(), timeZone));
             }}
             type="button"
           >
@@ -605,7 +955,9 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
           <button
             className="buttonQuiet activityRetry"
             disabled={busy !== null}
-            onClick={() => void loadDay(date)}
+            onClick={() => {
+              if (canUseControls()) void loadDay(date);
+            }}
             type="button"
           >
             Retry day view
@@ -631,6 +983,34 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
                 <h2 id="activity-add-heading">Add activity</h2>
               </div>
             </div>
+            {reuseChoice ? (
+              <div role="status" aria-live="polite">
+                <p>
+                  Your Add draft contains details. Keep editing it or replace those fields with
+                  saved details from {reuseChoice.entry.name}. The selected date and time stay
+                  unchanged.
+                </p>
+                <div className="entryActions">
+                  <button
+                    className="buttonQuiet"
+                    disabled={createDisabled || edit !== null}
+                    onClick={() => resolveReuse(reuseChoice, false)}
+                    ref={reuseKeepRef}
+                    type="button"
+                  >
+                    Keep editing
+                  </button>
+                  <button
+                    className="buttonQuiet"
+                    disabled={createDisabled || edit !== null}
+                    onClick={() => resolveReuse(reuseChoice, true)}
+                    type="button"
+                  >
+                    Replace draft with saved details
+                  </button>
+                </div>
+              </div>
+            ) : null}
             <form
               className="workspaceForm activityForm"
               onSubmit={(event) => {
@@ -643,10 +1023,11 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
                 <input
                   disabled={createDisabled}
                   maxLength={240}
-                  onChange={(event) => setName(event.target.value)}
+                  onChange={(event) => changeDraft("name", event.target.value)}
                   placeholder="Trail run"
+                  ref={addNameRef}
                   required
-                  value={name}
+                  value={session ? name : ""}
                 />
               </label>
               <label className="formField">
@@ -656,10 +1037,10 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
                   disabled={createDisabled}
                   inputMode="numeric"
                   maxLength={4}
-                  onChange={(event) => setDuration(event.target.value)}
+                  onChange={(event) => changeDraft("duration", event.target.value)}
                   placeholder="30"
                   required
-                  value={duration}
+                  value={session ? duration : ""}
                 />
               </label>
               <small className="fieldHelp" id="activity-duration-help">
@@ -672,9 +1053,9 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
                   disabled={createDisabled}
                   inputMode="decimal"
                   maxLength={9}
-                  onChange={(event) => setEnergy(event.target.value)}
+                  onChange={(event) => changeDraft("energy", event.target.value)}
                   placeholder="250"
-                  value={energy}
+                  value={session ? energy : ""}
                 />
               </label>
               <small className="fieldHelp" id="activity-energy-help">
@@ -686,12 +1067,11 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
                 <input
                   disabled={createDisabled}
                   onChange={(event) => {
-                    untouchedDefaultOccurredAt.current = null;
-                    setLocalTime(event.target.value);
+                    changeDraft("localTime", event.target.value);
                   }}
                   required
                   type="time"
-                  value={localTime}
+                  value={session ? localTime : ""}
                 />
               </label>
               <button className="buttonPrimary" disabled={createDisabled} type="submit">
@@ -729,11 +1109,7 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
                         <input
                           disabled={controlsDisabled}
                           maxLength={240}
-                          onChange={(event) =>
-                            setEdit((current) =>
-                              current ? { ...current, name: event.target.value } : current,
-                            )
-                          }
+                          onChange={(event) => changeEdit("name", event.target.value)}
                           required
                           value={edit.name}
                         />
@@ -744,11 +1120,7 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
                           disabled={controlsDisabled}
                           inputMode="numeric"
                           maxLength={4}
-                          onChange={(event) =>
-                            setEdit((current) =>
-                              current ? { ...current, duration: event.target.value } : current,
-                            )
-                          }
+                          onChange={(event) => changeEdit("duration", event.target.value)}
                           required
                           value={edit.duration}
                         />
@@ -760,11 +1132,7 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
                           disabled={controlsDisabled}
                           inputMode="decimal"
                           maxLength={9}
-                          onChange={(event) =>
-                            setEdit((current) =>
-                              current ? { ...current, energy: event.target.value } : current,
-                            )
-                          }
+                          onChange={(event) => changeEdit("energy", event.target.value)}
                           value={edit.energy}
                         />
                       </label>
@@ -775,11 +1143,7 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
                         <span>Local date</span>
                         <input
                           disabled={controlsDisabled}
-                          onChange={(event) =>
-                            setEdit((current) =>
-                              current ? { ...current, localDate: event.target.value } : current,
-                            )
-                          }
+                          onChange={(event) => changeEdit("localDate", event.target.value)}
                           required
                           type="date"
                           value={edit.localDate}
@@ -789,11 +1153,7 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
                         <span>Local time</span>
                         <input
                           disabled={controlsDisabled}
-                          onChange={(event) =>
-                            setEdit((current) =>
-                              current ? { ...current, localTime: event.target.value } : current,
-                            )
-                          }
+                          onChange={(event) => changeEdit("localTime", event.target.value)}
                           required
                           type="time"
                           value={edit.localTime}
@@ -809,7 +1169,9 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
                         <button
                           className="buttonQuiet"
                           disabled={controlsDisabled}
-                          onClick={() => setEdit(null)}
+                          onClick={() => {
+                            if (canUseControls() && editRef.current === edit) setEdit(null);
+                          }}
                           type="button"
                         >
                           Cancel
@@ -831,18 +1193,18 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
                       </div>
                       <div className="entryActions">
                         <button
+                          aria-label={`Reuse details from ${entry.name}`}
+                          className="buttonQuiet"
+                          disabled={createDisabled || edit !== null}
+                          onClick={() => reuseEntry(entry)}
+                          type="button"
+                        >
+                          Reuse details
+                        </button>
+                        <button
                           className="buttonQuiet"
                           disabled={controlsDisabled}
-                          onClick={() =>
-                            setEdit({
-                              entry,
-                              name: entry.name,
-                              duration: String(entry.durationMinutes),
-                              energy: entry.selfReportedEnergyKilocalories ?? "",
-                              localDate: entry.localDate,
-                              localTime: entry.localTime.slice(0, 5),
-                            })
-                          }
+                          onClick={() => beginEdit(entry)}
                           type="button"
                         >
                           Edit activity
