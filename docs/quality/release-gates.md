@@ -828,3 +828,21 @@ acceptance.
   run canonical gates with fresh client outputs. Source-validated synthetic Chrome
   verifies known/missing metadata, draft independence, no added requests, narrow
   wrapping and expired-session route closure. All external/release gates remain.
+
+
+## ADR 0053 Optional saved-recipe log time
+
+- Blank retains precise automatic now for today and noon for another local day.
+  Explicit raw HH:mm resolves in the verified profile zone with unchanged DST
+  semantics; invalid, browser-incomplete and gap input writes nothing. Only a valid
+  fully empty browser control selects automatic time. Preserve exact recipe pins.
+- Web unresolved retries keep original automatic keys and exact body/time; explicit
+  times have distinct intent identity. Native durable replay keeps its existing
+  ownership and immutable payload. Same-value edits, stale controls, selected and
+  profile/private resets and deliberate zone-conflict review require regressions.
+- Keep unrelated builder/filter/nutrition drafts independent. Require actual
+  component/helper/type/format checks, independent review, frozen canonical gates
+  with fresh client outputs and source-validated synthetic Chrome explicit/past,
+  blank, readback/retry, keyboard/narrow and expiry proof. Real persistence, physical
+  native/protected-storage/OS-kill, assistive, concurrent React, external reviewer,
+  hosted and release acceptance remain separate.

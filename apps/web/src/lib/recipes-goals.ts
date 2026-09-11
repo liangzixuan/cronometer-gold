@@ -1306,10 +1306,15 @@ export function prepareRecipeLogOperation(
     readonly mealSlot: MealSlot;
     readonly localDate: string;
     readonly timeZone: string;
+    readonly localTime?: string;
   },
   now: Date,
   operationIdFactory: () => string,
 ): StableMutation<RecipeLogBody> {
+  const explicitInstant =
+    input.localTime === undefined || input.localTime === ""
+      ? null
+      : recipeLogInstant(input.localDate, input.localTime, input.timeZone);
   const intentKey = JSON.stringify([
     input.recipeId,
     input.recipeVersionId,
@@ -1317,6 +1322,7 @@ export function prepareRecipeLogOperation(
     input.mealSlot,
     input.localDate,
     input.timeZone,
+    ...(explicitInstant === null ? [] : ["explicit-time", input.localTime]),
   ]);
   return prepareStableMutation(
     pending,
@@ -1325,7 +1331,7 @@ export function prepareRecipeLogOperation(
       recipeVersionId: input.recipeVersionId,
       portion: input.portion,
       mealSlot: input.mealSlot,
-      occurredAt: quickAddOccurredAt(input.localDate, input.timeZone, now),
+      occurredAt: explicitInstant ?? quickAddOccurredAt(input.localDate, input.timeZone, now),
     }),
     operationIdFactory,
   );

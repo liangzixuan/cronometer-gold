@@ -155,6 +155,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Show saved reminder weekdays | ADR 0050 saved membership, existing focused checks, fresh canonical gates and synthetic Chrome saved-days/draft/narrow/expiry proof passed; automatic/external/device/release separate |
 | Automatic evidence / independent review | Show saved biometric date/time zones | ADR 0051 saved local dates, saved-zone seconds and explicit zones; existing focused checks, fresh canonical gates and synthetic Chrome saved-zone/date-boundary/draft/narrow/expiry proof passed; automatic/external/device/release separate |
 | Automatic evidence / independent review | Label missing biometric metadata on web | ADR 0052 explicit name/unit fallbacks; existing focused checks, fresh canonical gates and synthetic Chrome known/missing/draft/narrow/expiry proof passed; automatic/external/release separate |
+| Automatic evidence / independent review | Optional saved-recipe log time on web/native | ADR 0053 explicit time, automatic defaults and retry identity; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1495,14 +1496,29 @@ Base `98735cf691e3b7e01371468ecf982dfc215d4a2f` CI `34545614574` and container
 Base results do not transfer to this slice. External/device/hosted/release
 acceptance remains separate.
 
+### Optional saved-recipe log time: source/local complete
+
+[ADR 0053](../adr/0053-optional-recipe-log-time.md) adds a blank-default local-time
+field to saved-recipe logging on web/native. Preserve automatic now/today and
+noon/other-date defaults, exact recipe pins and pending retry identity; explicit
+HH:mm uses the existing verified profile-zone resolver. Keep log-draft guards
+separate from builder/filter state and retain deliberate zone-change review.
+No backend, date-math or outbox format changes were needed. Focused regressions,
+independent review, frozen canonical gates and synthetic Chrome logging/readback,
+retry, keyboard/narrow and expiry proof passed.
+
+At September 11, 2026 02:18:51 UTC, base
+`57cb08e5ec9a44345dc99d858d1d1f1b7863efee` CI `34546957152` and container
+`34546957160` both succeeded. Base results do not transfer to this slice.
+External/device/hosted/release acceptance remains separate.
+
 ### Next bounded candidate
 
 Revalidate exact automatic results and external-review findings. The next bounded
-candidate is optional explicit local-time selection when logging a saved recipe
-on web/native. Preserve untouched automatic timing, exact recipe revision,
-amount/meal and draft state; use the existing saved-date/time resolver and
-verified profile zone. Preserve timestamp/body/key on unchanged retries and
-distinguish deliberate time edits. Existing occurredAt payloads can support this
-without backend/outbox-schema changes. Verify default/explicit timing, past dates,
-DST and profile changes, retries, synthetic logging/readback and narrow layout.
-No successor implementation has started; external/device/release gates remain.
+candidate is Load more in the recipe builder's reviewed-food ingredient search
+on web/native: both currently discard the returned cursor after the first 20
+matches. Reuse existing food-search cursor builders/parsers, preserve committed
+query, loaded order and exact public food-version pins, and leave builder and
+recipe-log drafts/retries intact. Verify continuation/failure/retry, obsolete
+results, later-page Add and keyboard/narrow behavior. No successor implementation
+has started; live catalogue, external/device/hosted/release gates remain.

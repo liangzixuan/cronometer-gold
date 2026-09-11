@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   goalWriteBody,
@@ -296,5 +296,109 @@ describe("goal and recipe accessibility semantics", () => {
     expect(recipeSourceLines({ sources: [source, source] })).toEqual([
       "Data source: USDA FoodData Central · CC0-1.0",
     ]);
+  });
+});
+
+describe("optional recipe log times", () => {
+  const input = {
+    recipeId: "ce126b7f-dfe5-4ee4-a75c-6b0f50c1963e",
+    recipeVersionId: "db2ed69e-29d1-4330-a210-0a804f9ff2b3",
+    portion: { kind: "serving", amount: "1.250000" } as const,
+    mealSlot: "dinner" as const,
+    localDate: "2026-11-01",
+    timeZone: "America/Chicago",
+  };
+  const now = new Date("2026-11-01T07:30:45.123Z");
+
+  it("keeps the exact legacy key and first automatic instant for omitted or empty time", () => {
+    const pending = new Map<string, StableMutation<RecipeLogBody>>();
+    const id = vi.fn(() => "first");
+    const automatic = prepareRecipeLogOperation(pending, input, now, id);
+    expect(automatic.intentKey).toBe(
+      JSON.stringify([
+        input.recipeId,
+        input.recipeVersionId,
+        input.portion,
+        input.mealSlot,
+        input.localDate,
+        input.timeZone,
+      ]),
+    );
+    expect(automatic.body.occurredAt).toBe(now.toISOString());
+    pending.set(automatic.intentKey, automatic);
+    expect(
+      prepareRecipeLogOperation(pending, { ...input, localTime: "" }, new Date("invalid"), id),
+    ).toBe(automatic);
+    expect(id).toHaveBeenCalledTimes(1);
+    expect(
+      prepareRecipeLogOperation(
+        new Map(),
+        { ...input, localDate: "2026-10-31", localTime: "" },
+        now,
+        id,
+      ).body.occurredAt,
+    ).toBe("2026-10-31T17:00:00.000Z");
+  });
+
+  it.each([
+    ["2026-11-01", "01:30", "2026-11-01T06:30:00.000Z"],
+    ["2026-09-09", "00:00", "2026-09-09T05:00:00.000Z"],
+    ["2026-09-09", "23:59", "2026-09-10T04:59:00.000Z"],
+  ])(
+    "resolves explicit %s %s through the existing profile-zone convention",
+    (localDate, localTime, expected) => {
+      const operation = prepareRecipeLogOperation(
+        new Map(),
+        { ...input, localDate, localTime },
+        now,
+        () => "explicit",
+      );
+      expect(operation.body).toEqual({
+        recipeVersionId: input.recipeVersionId,
+        portion: input.portion,
+        mealSlot: input.mealSlot,
+        occurredAt: expected,
+      });
+      expect(operation.intentKey).toContain('"explicit-time"');
+    },
+  );
+
+  it.each([" ", "01:30 ", "1:30", "24:00", "12:60", "12:00:01", "02:30"])(
+    "rejects invalid explicit input %j before pending lookup or identity allocation",
+    (localTime) => {
+      const pending = new Map<string, StableMutation<RecipeLogBody>>();
+      const get = vi.spyOn(pending, "get");
+      const id = vi.fn(() => "invalid");
+      expect(() =>
+        prepareRecipeLogOperation(
+          pending,
+          { ...input, localDate: "2026-03-08", localTime },
+          now,
+          id,
+        ),
+      ).toThrow(RangeError);
+      expect(get).not.toHaveBeenCalled();
+      expect(id).not.toHaveBeenCalled();
+      expect(pending.size).toBe(0);
+    },
+  );
+
+  it("retains unresolved automatic and explicit A-to-B-to-A operations independently", () => {
+    const pending = new Map<string, StableMutation<RecipeLogBody>>();
+    let sequence = 0;
+    const id = () => String(++sequence);
+    const prepare = (localTime: string) => {
+      const operation = prepareRecipeLogOperation(pending, { ...input, localTime }, now, id);
+      pending.set(operation.intentKey, operation);
+      return operation;
+    };
+    const automatic = prepare("");
+    const a = prepare("01:30");
+    const b = prepare("01:31");
+    expect(new Set([automatic.operationId, a.operationId, b.operationId]).size).toBe(3);
+    expect(prepare("01:30")).toBe(a);
+    expect(prepare("")).toBe(automatic);
+    expect(prepare("01:31")).toBe(b);
+    expect(sequence).toBe(3);
   });
 });

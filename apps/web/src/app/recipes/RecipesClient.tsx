@@ -36,6 +36,7 @@ import {
   type RecipeLogBody,
   type RecipeSummaryView,
   type RecipeView,
+  recipeLogInstant,
   recipeLogKindFor,
   recipeSourceLines,
   type StableMutation,
@@ -204,7 +205,13 @@ export function fenceRecipeLogForTimeZoneChange(
 export function recipeLogTimeZoneReviewMessage(
   localDate: string,
   currentTimeZone: string | null,
+  localTime = "",
 ): string {
+  if (localTime) {
+    return currentTimeZone
+      ? `Your profile time zone changed to ${currentTimeZone}. This recipe was not logged. Review ${localDate} at ${localTime} in that zone, then confirm the day and time before logging again.`
+      : "Your profile time zone changed. This recipe was not logged, and its stale retry was cleared. Current account settings could not be reloaded; refresh this page, then review the local diary day and time before logging again.";
+  }
   return currentTimeZone
     ? `Your profile time zone changed to ${currentTimeZone}. This recipe was not logged. Review ${localDate} as a local day in that zone, then confirm the day before logging again.`
     : "Your profile time zone changed. This recipe was not logged, and its stale retry was cleared. Current account settings could not be reloaded; refresh this page, then review the local diary day before logging again.";
@@ -332,6 +339,23 @@ export function RecipesClient() {
   const [diaryGroups, setDiaryGroups] = useState<readonly DiaryGroup[]>(defaultDiaryGroups);
   const [logKind, setLogKind] = useState<"grams" | "serving">("serving");
   const [logAmount, setLogAmount] = useState("1");
+  const [logTime, setLogTime] = useState("");
+  const logTimeInput = useRef<HTMLInputElement | null>(null);
+  const logDraftGeneration = useRef(0);
+  const activeLog = useRef<object | null>(null);
+  const logProfileRef = useRef({ timeZone, diaryGroups });
+  if (
+    logProfileRef.current.timeZone !== timeZone ||
+    logProfileRef.current.diaryGroups !== diaryGroups
+  ) {
+    logProfileRef.current = { timeZone, diaryGroups };
+  }
+  const logProfile = logProfileRef.current;
+  const logContext = logDraftGeneration.current;
+  const logRouteReady =
+    filterScopeRef.current === filterScope && filterVerifiedScope === filterScope;
+  const logControlsUnavailable =
+    busy !== null || state !== "ready" || !logRouteReady || activeLog.current !== null;
   const pendingSaves = useRef(
     new Map<string, StableMutation<ReturnType<typeof recipeBodyFromBuilder>>>(),
   );
@@ -368,6 +392,9 @@ export function RecipesClient() {
     (next: RecipeView | null) => {
       // Invalidate retained controls even when a previously viewed version is reopened.
       selectionGeneration.current += 1;
+      activeLog.current = null;
+      logDraftGeneration.current += 1;
+      setLogTime("");
       clearCopyConfirmation();
       setSelectedState(next);
       setNutritionBasis(next?.nutrientsPerServing != null ? "perServing" : "per100Grams");
@@ -558,6 +585,7 @@ export function RecipesClient() {
     ownerUserId.current = null;
     pendingSaves.current.clear();
     pendingLogs.current.clear();
+    activeLog.current = null;
     setDate("");
     setTimeZone(null);
     setDateReviewRequired(false);
@@ -702,6 +730,7 @@ export function RecipesClient() {
         nestedFilterRef.current = next;
         setNestedFilter(next);
       }
+      logDraftGeneration.current += 1;
       setTimeZone(session.profile.timeZone);
       setDiaryGroups(session.profile.diaryGroups);
       return session.profile.timeZone;
@@ -714,6 +743,12 @@ export function RecipesClient() {
 
   useEffect(() => {
     mounted.current = true;
+    logDraftGeneration.current += 1;
+    setLogTime("");
+    if (activeLog.current !== null) {
+      activeLog.current = null;
+      setBusy(null);
+    }
     resetSavedFilter();
     const requestScope = filterScopeRef.current;
     const controller = new AbortController();
@@ -774,7 +809,7 @@ export function RecipesClient() {
       privateReadControllers.current.clear();
       profileRefreshController.current?.abort();
     };
-  }, [loadRecipes, requestedDate, resetSavedFilter, signInAgain, setState]);
+  }, [loadRecipes, requestedDate, resetSavedFilter, signInAgain, setBusy, setState]);
 
   async function openRecipe(recipeId: string, successMessage?: string) {
     const initiatingOwnerUserId = ownerUserId.current;
@@ -1145,15 +1180,36 @@ export function RecipesClient() {
       ownerUserId.current === reviewOwner &&
       selected !== null &&
       selectionGeneration.current === nutritionContext &&
+      logDraftGeneration.current === logContext &&
+      activeLog.current === null &&
+      logProfileRef.current === logProfile &&
+      filterScopeRef.current === filterScope &&
+      filterVerifiedScope === filterScope &&
       stateRef.current === "ready" &&
       busyRef.current === null
     );
   }
 
+  function changeLogField<T>(current: T, next: T, install: (value: T) => void) {
+    if (!canEditLogSelection() || current === next) return;
+    logDraftGeneration.current += 1;
+    install(next);
+  }
+
+  function validateLogTimeInput(): boolean {
+    if (logTimeInput.current?.validity.valid === false) {
+      setMessage("Complete the local time, or clear every time segment to use the automatic time.");
+      return false;
+    }
+    return true;
+  }
+
   async function logRecipe() {
-    if (!canEditLogSelection()) return;
+    if (!canEditLogSelection() || !validateLogTimeInput()) return;
     if (dateReviewRequired) {
-      setMessage("Review and confirm the local diary day before logging this recipe again.");
+      setMessage(
+        "Review and confirm the local diary day and optional time before logging this recipe again.",
+      );
       return;
     }
     if (!isLocalDate(date)) {
@@ -1175,6 +1231,15 @@ export function RecipesClient() {
       effectiveLogKind === "grams"
         ? ({ kind: "grams", grams: logAmount } as const)
         : ({ kind: "serving", amount: logAmount } as const);
+    const token = {};
+    activeLog.current = token;
+    const isCurrent = () =>
+      activeLog.current === token &&
+      mounted.current &&
+      !privateUiClosed.current &&
+      ownerUserId.current === initiatingOwnerUserId &&
+      selectionGeneration.current === nutritionContext &&
+      filterScopeRef.current === filterScope;
     setBusy("log");
     setMessage("Logging this exact recipe revision…");
     try {
@@ -1187,6 +1252,7 @@ export function RecipesClient() {
           mealSlot,
           localDate: date,
           timeZone,
+          localTime: logTime,
         },
         new Date(),
         createOperationId,
@@ -1206,18 +1272,21 @@ export function RecipesClient() {
           cache: "no-store",
         },
       );
+      if (!isCurrent()) return;
       if (response.status === 401) return signInAgain();
       const body = await responseJson(response);
+      if (!isCurrent()) return;
       if (!response.ok) {
         if (
           fenceRecipeLogForTimeZoneChange(pendingLogs.current, operation, response.status, body)
         ) {
+          logDraftGeneration.current += 1;
           setDateReviewRequired(true);
           setTimeZone(null);
           const currentTimeZone =
             await refreshRecipeProfileAfterTimeZoneChange(initiatingOwnerUserId);
-          if (privateUiClosed.current) return;
-          setMessage(recipeLogTimeZoneReviewMessage(date, currentTimeZone));
+          if (!isCurrent()) return;
+          setMessage(recipeLogTimeZoneReviewMessage(date, currentTimeZone, logTime));
           return;
         }
         throw new Error(responseMessage(body, "The recipe could not be logged."));
@@ -1225,6 +1294,7 @@ export function RecipesClient() {
       const mutation = parseDiaryMutation(body);
       pendingLogs.current.delete(operation.intentKey);
       const loggedDate = mutation.entry?.localDate ?? date;
+      logDraftGeneration.current += 1;
       setDate(loggedDate);
       setMessage(
         mutation.replayed
@@ -1232,24 +1302,40 @@ export function RecipesClient() {
           : `Recipe logged to ${diaryGroupLabel(diaryGroups, mealSlot)}.`,
       );
     } catch (caught) {
+      if (!isCurrent()) return;
       setMessage(
         `${caught instanceof Error ? caught.message : "The recipe could not be logged."} Choose Log again to retry safely.`,
       );
     } finally {
-      setBusy(null);
+      if (isCurrent()) {
+        activeLog.current = null;
+        setBusy(null);
+      }
     }
   }
 
   function confirmRecipeDateReview() {
-    if (!canEditLogSelection()) return;
+    if (!canEditLogSelection() || !validateLogTimeInput()) return;
     if (!timeZone) {
       setMessage(
         "Current account settings are unavailable. Refresh this page before confirming a local diary day.",
       );
       return;
     }
+    try {
+      if (!isLocalDate(date)) throw new RangeError("Choose a valid local diary day.");
+      if (logTime !== "") recipeLogInstant(date, logTime, timeZone);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Choose a valid local diary time.");
+      return;
+    }
+    logDraftGeneration.current += 1;
     setDateReviewRequired(false);
-    setMessage(`${date} is confirmed as a local diary day in ${timeZone}. Choose Log when ready.`);
+    setMessage(
+      logTime
+        ? `${date} at ${logTime} is confirmed in ${timeZone}. Choose Log when ready.`
+        : `${date} is confirmed as a local diary day in ${timeZone}. Choose Log when ready.`,
+    );
   }
 
   const filterOwner = ownerUserId.current;
@@ -1907,10 +1993,13 @@ export function RecipesClient() {
                     <label className="formField">
                       <span>Portion</span>
                       <select
-                        disabled={busy !== null || state !== "ready"}
+                        disabled={logControlsUnavailable}
                         onChange={(event) => {
-                          if (canEditLogSelection())
-                            setLogKind(event.target.value as "grams" | "serving");
+                          changeLogField(
+                            logKind,
+                            event.target.value as "grams" | "serving",
+                            setLogKind,
+                          );
                         }}
                         value={logKind}
                       >
@@ -1925,9 +2014,9 @@ export function RecipesClient() {
                       <input
                         inputMode="decimal"
                         maxLength={19}
-                        disabled={busy !== null || state !== "ready"}
+                        disabled={logControlsUnavailable}
                         onChange={(event) => {
-                          if (canEditLogSelection()) setLogAmount(event.target.value);
+                          changeLogField(logAmount, event.target.value, setLogAmount);
                         }}
                         value={logAmount}
                       />
@@ -1936,19 +2025,32 @@ export function RecipesClient() {
                       <span>Local diary date</span>
                       <input
                         maxLength={10}
-                        disabled={busy !== null || state !== "ready"}
+                        disabled={logControlsUnavailable}
                         onChange={(event) => {
-                          if (canEditLogSelection()) setDate(event.target.value);
+                          changeLogField(date, event.target.value, setDate);
                         }}
                         value={date}
                       />
                     </label>
                     <label className="formField">
+                      <span>Local time (optional)</span>
+                      <input
+                        ref={logTimeInput}
+                        type="time"
+                        step={60}
+                        disabled={logControlsUnavailable}
+                        onChange={(event) => {
+                          changeLogField(logTime, event.target.value, setLogTime);
+                        }}
+                        value={logRouteReady ? logTime : ""}
+                      />
+                    </label>
+                    <label className="formField">
                       <span>Meal</span>
                       <select
-                        disabled={busy !== null || state !== "ready"}
+                        disabled={logControlsUnavailable}
                         onChange={(event) => {
-                          if (canEditLogSelection()) setMealSlot(event.target.value as MealSlot);
+                          changeLogField(mealSlot, event.target.value as MealSlot, setMealSlot);
                         }}
                         value={mealSlot}
                       >
@@ -1961,22 +2063,25 @@ export function RecipesClient() {
                     </label>
                   </div>
                   <p className="fieldHelp">
-                    Interpreted in {timeZone ?? "your verified profile zone"}. The diary snapshot
+                    Interpreted in {timeZone ?? "your verified profile zone"}. Leave time blank to
+                    use the current instant for today or noon for another day. The diary snapshot
                     pins recipe version {selected.versionNumber}.
                   </p>
                   {dateReviewRequired ? (
                     <button
                       className="buttonSecondary"
-                      disabled={!timeZone || busy !== null || state !== "ready"}
+                      disabled={!timeZone || logControlsUnavailable}
                       onClick={confirmRecipeDateReview}
                       type="button"
                     >
-                      Confirm {date} as local day
+                      {logTime
+                        ? `Confirm ${date} at ${logTime} in ${timeZone}`
+                        : `Confirm ${date} as local day`}
                     </button>
                   ) : null}{" "}
                   <button
                     className="buttonPrimary"
-                    disabled={busy !== null || state !== "ready" || dateReviewRequired || !timeZone}
+                    disabled={dateReviewRequired || !timeZone || logControlsUnavailable}
                     onClick={() => void logRecipe()}
                     type="button"
                   >

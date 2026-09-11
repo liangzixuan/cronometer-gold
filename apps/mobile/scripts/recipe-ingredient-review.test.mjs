@@ -2,7 +2,11 @@ import * as React from "react";
 import { AppState } from "react-native";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { QuickAddEnqueueAmbiguousError } from "../src/diary/quick-add-outbox";
+import {
+  createQuickAddOutboxController,
+  QuickAddEnqueueAmbiguousError,
+} from "../src/diary/quick-add-outbox";
+import { createQuickAddOutboxStore } from "../src/diary/quick-add-outbox-store";
 import { RecipesScreen } from "../src/recipes/RecipesScreen";
 
 const hooks = vi.hoisted(() => ({ current: null, appListeners: new Set() }));
@@ -1462,7 +1466,7 @@ describe("mobile copy saved recipe to new draft", () => {
     );
     let tree = await openNutritionRecipe(harness);
     const beforeInputs = draftInputs(tree).filter(
-      ([label]) => !["Amount", "Local date"].includes(label),
+      ([label]) => !["Amount", "Local date", "Local time (optional)"].includes(label),
     );
     const stalePublish = pressable(tree, "Publish revision").props.onPress;
     const staleLog = pressable(tree, "Secure & log recipe").props.onPress;
@@ -2380,6 +2384,7 @@ describe("native loaded saved-recipe name filter", () => {
     try {
       let tree = await openNutritionRecipe(harness);
       input(tree, "Amount").props.onChangeText("2.123456");
+      tree = await harness.settle();
       input(tree, "Local date").props.onChangeText("2026-09-07");
       tree = await click(harness, "Lunch");
       const log = pressable(tree, "Secure & log recipe").props.onPress;
@@ -2923,6 +2928,7 @@ describe("native loaded nested-recipe filter", () => {
     try {
       let tree = await openNutritionRecipe(harness);
       input(tree, "Amount").props.onChangeText("2.123456");
+      tree = await harness.settle();
       input(tree, "Local date").props.onChangeText("2026-09-07");
       tree = await click(harness, "Lunch");
       const log = pressable(tree, "Secure & log recipe").props.onPress;
@@ -3056,6 +3062,339 @@ describe("native loaded nested-recipe filter", () => {
       ).toHaveLength(0);
     } finally {
       harness.unmount();
+    }
+  });
+});
+
+async function editRecipeLog(harness, label, value) {
+  input(await harness.settle(), label).props.onChangeText(value);
+  return harness.settle();
+}
+function recipeLogCallbacks(tree) {
+  return [
+    () => input(tree, "Local time (optional)").props.onChangeText("22:59"),
+    () => input(tree, "Local date").props.onChangeText("2026-09-08"),
+    () => input(tree, "Amount").props.onChangeText("99"),
+    () => pressable(tree, "Grams").props.onPress(),
+    () => pressable(tree, "Lunch").props.onPress(),
+    () => pressable(tree, "Secure & log recipe").props.onPress(),
+  ];
+}
+function logTimeSetup(handler, overrides = {}) {
+  const result = nutritionSetup(undefined, handler, {
+    diaryGroups: [
+      { mealSlot: "breakfast", label: "Breakfast" },
+      { mealSlot: "lunch", label: "Lunch" },
+    ],
+    ...overrides,
+  });
+  result.props.quickAddOutboxController.enqueueOperation.mockResolvedValue({
+    operationId: "time-log",
+  });
+  return result;
+}
+
+describe("optional saved recipe log time", () => {
+  for (const [date, time, expected] of [
+    ["2026-11-01", "", "2026-11-01T07:30:42.123Z"],
+    ["2026-10-31", "", "2026-10-31T17:00:00.000Z"],
+    ["2026-11-01", "01:30", "2026-11-01T06:30:00.000Z"],
+    ["2026-10-31", "00:00", "2026-10-31T05:00:00.000Z"],
+    ["2026-10-31", "23:59", "2026-11-01T04:59:00.000Z"],
+  ]) {
+    it(`resolves ${date} ${time || "automatic"} without changing the saved version or raw portion`, async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-11-01T07:30:42.123Z"));
+      const { harness, props, requests } = logTimeSetup();
+      try {
+        let tree = await openNutritionRecipe(harness);
+        expect(input(tree, "Local time (optional)").props.value).toBe("");
+        expect(screenText(tree)).toContain("now for today or noon on another date");
+        await editRecipeLog(harness, "Local date", date);
+        await editRecipeLog(harness, "Amount", "2.123456");
+        await click(harness, "Lunch");
+        if (time === "") await editRecipeLog(harness, "Local time (optional)", "00:01");
+        tree = await editRecipeLog(harness, "Local time (optional)", time);
+        const before = requests.length;
+        await click(harness, "Secure & log recipe");
+        expect(props.quickAddOutboxController.enqueueOperation).toHaveBeenCalledExactlyOnceWith({
+          operationKind: "recipe",
+          recipeName: "Saved recipe",
+          recipeId,
+          recipeVersionId: versionId,
+          portion: { kind: "serving", amount: "2.123456", servingLabel: "bowl" },
+          mealSlot: "lunch",
+          localDate: date,
+          occurredAt: expected,
+        });
+        expect(requests).toHaveLength(before);
+        expect(input(tree, "Local time (optional)").props.value).toBe(time);
+      } finally {
+        harness.unmount();
+        vi.useRealTimers();
+      }
+    });
+  }
+  for (const time of [" ", " 1:30", "1:30", "24:00", "12:60", "02:30"]) {
+    it(`rejects raw invalid or DST-gap time ${JSON.stringify(time)} before enqueue`, async () => {
+      const { harness, props, requests } = logTimeSetup();
+      await openNutritionRecipe(harness);
+      await editRecipeLog(harness, "Local date", "2026-03-08");
+      await editRecipeLog(harness, "Local time (optional)", time);
+      const before = requests.length;
+      const tree = await click(harness, "Secure & log recipe");
+      expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+      expect(requests).toHaveLength(before);
+      expect(input(tree, "Local time (optional)").props.value).toBe(time);
+      expect(screenText(tree)).toContain(time === "02:30" ? "does not exist" : "Invalid local");
+      harness.unmount();
+    });
+  }
+  it("rejects all pre-edit log callbacks, but current same-value date/time edits keep Log usable", async () => {
+    const { harness, props } = logTimeSetup();
+    const old = await openNutritionRecipe(harness);
+    const callbacks = recipeLogCallbacks(old);
+    input(old, "Local time (optional)").props.onChangeText("08:15");
+    for (const callback of callbacks) callback();
+    let tree = await harness.settle();
+    expect(input(tree, "Amount").props.value).toBe("1");
+    expect(input(tree, "Local time (optional)").props.value).toBe("08:15");
+    expect(pressable(tree, "Grams").props.accessibilityState.checked).toBe(false);
+    expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+    const currentLog = pressable(tree, "Secure & log recipe").props.onPress;
+    input(tree, "Local date").props.onChangeText(input(tree, "Local date").props.value);
+    input(tree, "Local time (optional)").props.onChangeText("08:15");
+    currentLog();
+    tree = await harness.settle();
+    expect(props.quickAddOutboxController.enqueueOperation).toHaveBeenCalledTimes(1);
+    expect(input(tree, "Local time (optional)").props.value).toBe("08:15");
+    harness.unmount();
+  });
+  it("keeps time and unsaved builder/nutrition/filter state independent across date edits and list refresh", async () => {
+    const { harness, props } = logTimeSetup();
+    let tree = await openNutritionRecipe(harness);
+    input(tree, "Recipe name").props.onChangeText("Unsaved variation");
+    tree = await editRecipeLog(harness, "Local time (optional)", "09:27");
+    tree = await click(harness, "Per 100 g");
+    await editRecipeLog(harness, "Local date", "2026-09-07");
+    tree = await filterSaved(harness, "hidden saved");
+    tree = await filterNested(harness, "hidden nested");
+    expect(input(tree, "Recipe name").props.value).toBe("Unsaved variation");
+    expect(input(tree, "Local time (optional)").props.value).toBe("09:27");
+    expect(pressable(tree, "Per 100 g").props.accessibilityState.checked).toBe(true);
+    tree = await click(harness, "Refresh");
+    expect(input(tree, "Local time (optional)").props.value).toBe("09:27");
+    expect(input(tree, "Recipe name").props.value).toBe("Unsaved variation");
+    expect(input(tree, "Filter loaded saved recipes by name").props.value).toBe("hidden saved");
+    expect(nestedInput(tree).props.value).toBe("hidden nested");
+    expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+    harness.unmount();
+  });
+  for (const action of ["open", "New", "copy", "save"]) {
+    it(`clears optional time on ${action} selection replacement and rejects the old controls`, async () => {
+      const { harness, props } = logTimeSetup();
+      await openNutritionRecipe(harness);
+      const old = await editRecipeLog(harness, "Local time (optional)", "10:20");
+      const callbacks = recipeLogCallbacks(old);
+      let tree;
+      if (action === "open") tree = await openNutritionRecipe(harness);
+      else if (action === "New") tree = await click(harness, "New recipe");
+      else if (action === "copy") tree = await click(harness, "Copy to new draft");
+      else tree = await click(harness, "Publish revision");
+      for (const callback of callbacks) callback();
+      tree = await harness.settle();
+      expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+      if (action === "New" || action === "copy") tree = await openNutritionRecipe(harness);
+      expect(input(tree, "Local time (optional)").props.value).toBe("");
+      harness.unmount();
+    });
+  }
+  it("fences both old and uninstalled profile controls before effects and clears time after profile A-to-B-to-A", async () => {
+    const { harness, props } = logTimeSetup();
+    let tree = await openNutritionRecipe(harness);
+    input(tree, "Recipe name").props.onChangeText("Keep builder");
+    tree = await editRecipeLog(harness, "Local time (optional)", "12:34");
+    const old = recipeLogCallbacks(tree);
+    harness.updateProps({ profileTimeZone: "Asia/Tokyo" });
+    tree = harness.renderWithoutEffects();
+    expect(input(tree, "Local time (optional)").props).toMatchObject({
+      value: "",
+      editable: false,
+    });
+    for (const callback of [...old, ...recipeLogCallbacks(tree)]) callback();
+    harness.updateProps({ profileTimeZone: "America/Chicago" });
+    tree = harness.renderWithoutEffects();
+    for (const callback of [...old, ...recipeLogCallbacks(tree)]) callback();
+    harness.flushEffects();
+    tree = await harness.settle();
+    expect(input(tree, "Local time (optional)").props.value).toBe("");
+    expect(input(tree, "Recipe name").props.value).toBe("Keep builder");
+    expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+    await editRecipeLog(harness, "Local time (optional)", "15:01");
+    await click(harness, "Secure & log recipe");
+    expect(props.quickAddOutboxController.enqueueOperation).toHaveBeenCalledTimes(1);
+    harness.unmount();
+  });
+  for (const boundary of ["owner", "token", "API", "controller", "background", "unmount"]) {
+    it(`fences retained optional-time and Log controls at ${boundary}`, async () => {
+      const { harness, props } = logTimeSetup();
+      await openNutritionRecipe(harness);
+      const old = await editRecipeLog(harness, "Local time (optional)", "06:19");
+      const callbacks = recipeLogCallbacks(old);
+      if (boundary === "background") background();
+      else if (boundary === "unmount") harness.unmount();
+      else {
+        harness.updateProps(
+          boundary === "owner"
+            ? { ownerUserId: "replacement" }
+            : boundary === "token"
+              ? { accessToken: "replacement" }
+              : boundary === "API"
+                ? { apiBase: new URL("http://127.0.0.1:4001") }
+                : { quickAddOutboxController: { ...props.quickAddOutboxController } },
+        );
+        harness.renderWithoutEffects();
+      }
+      for (const callback of callbacks) callback();
+      expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+      expect(harness.writesAfterUnmount).toBe(0);
+      if (boundary !== "unmount") harness.unmount();
+    });
+  }
+  for (const boundary of ["background", "profile", "refresh"])
+    for (const outcome of ["accepted", "ambiguous"]) {
+      it(`retains captured time and releases the ${outcome} enqueue after ${boundary}`, async () => {
+        const held = deferred();
+        const { harness, props } = logTimeSetup();
+        props.quickAddOutboxController.enqueueOperation.mockImplementation(async () => {
+          await held.promise;
+          if (outcome === "ambiguous")
+            throw new QuickAddEnqueueAmbiguousError("held-time", new Error("Storage uncertain"));
+          return { operationId: "held-time" };
+        });
+        await openNutritionRecipe(harness);
+        await editRecipeLog(harness, "Local date", "2026-09-07");
+        let tree = await editRecipeLog(harness, "Local time (optional)", "14:45");
+        const staleLog = pressable(tree, "Secure & log recipe").props.onPress;
+        staleLog();
+        staleLog();
+        tree = await harness.settle();
+        expect(props.quickAddOutboxController.enqueueOperation).toHaveBeenCalledTimes(1);
+        expect(input(tree, "Local time (optional)").props.editable).toBe(false);
+        const captured = props.quickAddOutboxController.enqueueOperation.mock.calls[0][0];
+        expect(captured.occurredAt).toBe("2026-09-07T19:45:00.000Z");
+        if (boundary === "background") background();
+        else if (boundary === "profile") harness.updateProps({ profileTimeZone: "Asia/Tokyo" });
+        else await click(harness, "Refresh");
+        await harness.settle();
+        held.resolve();
+        tree = await harness.settle();
+        expect(captured.occurredAt).toBe("2026-09-07T19:45:00.000Z");
+        expect(props.quickAddOutboxController.requestDrain).toHaveBeenCalledExactlyOnceWith(
+          "held-time",
+        );
+        if (boundary === "refresh") {
+          expect(screenText(tree)).toContain(
+            outcome === "accepted" ? "is queued securely" : "could not confirm whether",
+          );
+          expect(input(tree, "Local time (optional)").props.value).toBe("14:45");
+        } else {
+          expect(screenText(tree)).not.toContain("is queued securely");
+          expect(screenText(tree)).not.toContain("could not confirm whether");
+        }
+        harness.unmount();
+      });
+    }
+  for (const queue of [
+    { status: "ready", pendingCount: 50 },
+    { status: "closed", pendingCount: 0 },
+    { status: "owner_mismatch", pendingCount: 0 },
+    { status: "unavailable", pendingCount: 1, reason: "storage" },
+    { status: "unavailable", pendingCount: 1, reason: "credential" },
+  ]) {
+    it(`checks live ${queue.status}/${queue.reason ?? queue.pendingCount} queue before an explicit enqueue`, async () => {
+      const { harness, props } = logTimeSetup();
+      await openNutritionRecipe(harness);
+      const tree = await editRecipeLog(harness, "Local time (optional)", "17:09");
+      props.quickAddOutboxController.getState = () => queue;
+      pressable(tree, "Secure & log recipe").props.onPress();
+      expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+      harness.unmount();
+    });
+  }
+  it("hands exact explicit time to the real queue, whose network retries reuse bytes/key and whose new enqueues get fresh IDs", async () => {
+    const values = new Map();
+    const store = createQuickAddOutboxStore({
+      lockKey: `recipe-time-${crypto.randomUUID()}`,
+      storage: {
+        get: async (key) => values.get(key) ?? null,
+        set: async (key, value) => {
+          values.set(key, value);
+        },
+        delete: async (key) => {
+          values.delete(key);
+        },
+      },
+    });
+    const wire = [];
+    let nextId = 0;
+    const controller = createQuickAddOutboxController({
+      apiBase: new URL("http://127.0.0.1:4000"),
+      ownerUserId: owner,
+      expectedTimeZone: "America/Chicago",
+      store,
+      accessToken: () => "synthetic-session",
+      isForeground: () => true,
+      operationId: () => `00000000-0000-4000-8000-${String(++nextId).padStart(12, "0")}`,
+      sha256Hex: async () => "f".repeat(64),
+      onUnauthorized: async () => {},
+      onFatalStoreError: async () => {},
+      fetcher: async (url, options) => {
+        wire.push({
+          url: url.toString(),
+          body: options.body,
+          headers: new Headers(options.headers),
+        });
+        throw new Error("Synthetic lost network confirmation");
+      },
+    });
+    const enqueue = vi.spyOn(controller, "enqueueOperation");
+    const { harness } = nutritionSetup(undefined, undefined, {
+      quickAddOutboxController: controller,
+      quickAddOutboxState: controller.getState(),
+    });
+    try {
+      await openNutritionRecipe(harness);
+      await editRecipeLog(harness, "Local date", "2026-09-07");
+      await editRecipeLog(harness, "Local time (optional)", "14:45");
+      await click(harness, "Secure & log recipe");
+      await enqueue.mock.results[0].value;
+      await harness.settle();
+      await controller.requestDrain();
+      const saved = (await store.snapshot(owner)).items[0];
+      expect(saved.body.occurredAt).toBe("2026-09-07T19:45:00.000Z");
+      const first = wire[0];
+      expect(first.headers.get("idempotency-key")).toBe(saved.operationId);
+      expect(first.headers.get("x-expected-profile-time-zone")).toBe("America/Chicago");
+      expect(first.body).toBe(JSON.stringify(saved.body));
+      await editRecipeLog(harness, "Local time (optional)", "15:15");
+      const beforeRetry = wire.length;
+      await controller.requestDrain();
+      expect(wire).toHaveLength(beforeRetry + 1);
+      expect(wire.at(-1).body).toBe(first.body);
+      expect(wire.at(-1).headers.get("idempotency-key")).toBe(saved.operationId);
+      expect((await store.snapshot(owner)).items[0]).toEqual(saved);
+      await editRecipeLog(harness, "Local time (optional)", "14:45");
+      await click(harness, "Secure & log recipe");
+      await enqueue.mock.results[1].value;
+      await harness.settle();
+      const items = (await store.snapshot(owner)).items;
+      expect(items).toHaveLength(2);
+      expect(items[1].operationId).not.toBe(saved.operationId);
+      expect(items[1].body).toEqual(saved.body);
+    } finally {
+      harness.unmount();
+      controller.close();
     }
   });
 });

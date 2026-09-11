@@ -19,7 +19,6 @@ import {
   diaryGroupLabel,
   isLocalDate,
   localDateInTimeZone,
-  type MealSlot,
   nutrientDisplay,
   parseSession,
   quickAddOccurredAt,
@@ -45,6 +44,7 @@ import {
   type RecipeSummaryView,
   type RecipeView,
   recipeDraftIngredients,
+  recipeLogInstant,
   recipeLogKindFor,
   recipeSourceLines,
   type StableMutation,
@@ -266,10 +266,15 @@ export function RecipesScreen({
   const [busy, setBusyState] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [foods, setFoods] = useState<readonly FoodSearchHit[]>([]);
-  const [date, setDate] = useState(() => localDateInTimeZone(new Date(), profileTimeZone));
-  const [meal, setMeal] = useState<MealSlot>(() => defaultMealForTime());
-  const [logKind, setLogKind] = useState<"grams" | "serving">("serving");
-  const [logAmount, setLogAmount] = useState("1");
+  const [logDraft, setLogDraft] = useState(() => ({
+    date: localDateInTimeZone(new Date(), profileTimeZone),
+    meal: defaultMealForTime(),
+    kind: "serving" as "grams" | "serving",
+    amount: "1",
+    time: "",
+  }));
+  const logDraftRef = useRef(logDraft);
+  const { date, meal, kind: logKind, amount: logAmount } = logDraft;
   const [ready, setReadyState] = useState(false);
   const [closed, setClosed] = useState(false);
   const [reviewKey, setReviewKey] = useState(0);
@@ -286,6 +291,15 @@ export function RecipesScreen({
   if (filterScopeRef.current.scope !== scope || filterScopeRef.current.profileKey !== profileKey)
     filterScopeRef.current = { scope, profileKey };
   const filterScope = filterScopeRef.current;
+  const logContextRef = useRef({ scope, profileKey, controller: quickAddOutboxController });
+  if (
+    logContextRef.current.scope !== scope ||
+    logContextRef.current.profileKey !== profileKey ||
+    logContextRef.current.controller !== quickAddOutboxController
+  )
+    logContextRef.current = { scope, profileKey, controller: quickAddOutboxController };
+  const logContext = logContextRef.current;
+  const installedLogContext = useRef<typeof logContext | null>(null);
   const installedFilterScope = useRef<typeof filterScope | null>(null);
   const closedFilterScope = useRef<typeof scope | null>(null);
   const installedScope = useRef<typeof scope | null>(null);
@@ -341,14 +355,26 @@ export function RecipesScreen({
     copyChoiceRef.current = null;
     setCopyChoice(null);
   }, []);
+  const updateLogDraft = useCallback((change: Partial<typeof logDraft>) => {
+    const next = { ...logDraftRef.current, ...change };
+    logDraftRef.current = next;
+    setLogDraft(next);
+  }, []);
+  useEffect(() => {
+    if (installedLogContext.current !== logContext) {
+      installedLogContext.current = logContext;
+      updateLogDraft({ time: "" });
+    }
+  }, [logContext, updateLogDraft]);
   const replaceSelected = useCallback(
     (recipe: RecipeView | null) => {
       clearCopyChoice();
       selectedRef.current = recipe;
       setSelected(recipe);
+      updateLogDraft({ time: "" });
       setNutritionBasis(recipe?.nutrientsPerServing ? "serving" : "100g");
     },
-    [clearCopyChoice],
+    [clearCopyChoice, updateLogDraft],
   );
   const replaceBuilder = useCallback(
     (value: Builder) => {
@@ -623,6 +649,22 @@ export function RecipesScreen({
   function canUseSelectedRecipe() {
     return canEdit() && selected !== null && selectedRef.current === selected;
   }
+  function canUseRecipeLog() {
+    return (
+      canUseSelectedRecipe() &&
+      logContextRef.current === logContext &&
+      installedLogContext.current === logContext &&
+      logDraftRef.current === logDraft &&
+      !recipeLogEnqueueInFlight.current
+    );
+  }
+  function changeRecipeLog<TField extends keyof typeof logDraft>(
+    field: TField,
+    value: (typeof logDraft)[TField],
+  ) {
+    if (!canUseRecipeLog() || logDraft[field] === value) return;
+    updateLogDraft({ [field]: value });
+  }
   function selectNutritionBasis(basis: "100g" | "serving") {
     if (
       !canEdit() ||
@@ -642,8 +684,7 @@ export function RecipesScreen({
     replaceSelected(null);
     setFoods([]);
     setQuery("");
-    setLogKind("grams");
-    setLogAmount("1");
+    updateLogDraft({ kind: "grams", amount: "1" });
     setMessage(
       `Copied saved ${recipe.name} v${recipe.versionNumber} to a new draft. Review it and choose Create recipe to save it separately.`,
     );
@@ -725,8 +766,7 @@ export function RecipesScreen({
     setFoods([]);
     setQuery("");
     setBusy(null);
-    setLogKind("grams");
-    setLogAmount("1");
+    updateLogDraft({ kind: "grams", amount: "1" });
     setMessage("New recipe builder opened.");
   }
   function beginBuilderRequest(label: string, expectedReview = renderReview) {
@@ -763,7 +803,7 @@ export function RecipesScreen({
       const recipe = parseRecipeResponse(body);
       if (!(await verifyOwner(controller, current)) || !current()) return;
       replaceSelected(recipe);
-      setLogKind(recipeLogKindFor(recipe));
+      updateLogDraft({ kind: recipeLogKindFor(recipe) });
       setMessage(successMessage ?? `Recipe version ${recipe.versionNumber} loaded.`);
       setBusy(null);
       builderRequest.current = null;
@@ -962,8 +1002,7 @@ export function RecipesScreen({
       if (!(await verifyOwner(controller, current)) || !current()) return;
       pending.current.delete(key);
       replaceSelected(mutation.recipe);
-      setLogKind(recipeLogKindFor(mutation.recipe));
-      setLogAmount("1");
+      updateLogDraft({ kind: recipeLogKindFor(mutation.recipe), amount: "1" });
       setBusy(null);
       builderRequest.current = null;
       replaceBuilder(mobileBuilderFromRecipe(mutation.recipe));
@@ -989,8 +1028,13 @@ export function RecipesScreen({
   }
 
   async function log() {
-    if (!canEdit()) return;
+    if (!canUseRecipeLog()) return;
     const epoch = lifecycle.current;
+    const canPublishLog = () =>
+      scopeIsCurrent(epoch) &&
+      logContextRef.current === logContext &&
+      selectedRef.current === selected &&
+      logDraftRef.current === logDraft;
     const canRegisterReceipt = () =>
       mounted.current &&
       !privateClosed.current &&
@@ -1023,9 +1067,14 @@ export function RecipesScreen({
     const effectiveLogKind = selected.servingCount === null ? "grams" : logKind;
     let occurredAt: string;
     try {
-      occurredAt = quickAddOccurredAt(date, profileTimeZone, new Date());
-    } catch {
-      setMessage("That local date is not valid in your diary time zone.");
+      occurredAt =
+        logDraft.time === ""
+          ? quickAddOccurredAt(date, profileTimeZone, new Date())
+          : recipeLogInstant(date, logDraft.time, profileTimeZone);
+    } catch (caught) {
+      setMessage(
+        caught instanceof Error ? caught.message : "That local date or time is not valid.",
+      );
       return;
     }
     recipeLogEnqueueInFlight.current = true;
@@ -1049,7 +1098,7 @@ export function RecipesScreen({
         occurredAt,
       });
       if (canRegisterReceipt()) ownedRecipeLogOperations.current.add(item.operationId);
-      if (scopeIsCurrent(epoch)) {
+      if (canPublishLog()) {
         setMessage(
           `${selected.name} is queued securely for ${diaryGroupLabel(diaryGroups, meal)} on ${date}. It is not included in diary totals until the server confirms it.`,
         );
@@ -1060,13 +1109,13 @@ export function RecipesScreen({
     } catch (caught) {
       if (caught instanceof QuickAddEnqueueAmbiguousError) {
         if (canRegisterReceipt()) ownedRecipeLogOperations.current.add(caught.operationId);
-        if (scopeIsCurrent(epoch)) {
+        if (canPublishLog()) {
           setMessage(
             "Secure storage could not confirm whether the recipe was queued. Do not press Log again until the queue status recovers.",
           );
         }
         void quickAddOutboxController.requestDrain(caught.operationId);
-      } else if (scopeIsCurrent(epoch)) {
+      } else if (canPublishLog()) {
         setMessage(
           "The recipe was not queued. Refresh this screen and try again after the diary session is current.",
         );
@@ -1094,8 +1143,12 @@ export function RecipesScreen({
   const matchingNestedRecipes = eligibleNestedRecipes.filter((recipe) =>
     recipe.name.toLowerCase().includes(nestedFilter.value.trim().toLowerCase()),
   );
+  const logContextVisible =
+    scopeVisible && active.current && installedLogContext.current === logContext;
+  const logFieldsDisabled =
+    builderDisabled || !logContextVisible || recipeLogEnqueueInFlight.current;
   const recipeLogUnavailable =
-    builderDisabled ||
+    logFieldsDisabled ||
     quickAddOutboxState.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS ||
     quickAddOutboxState.status === "closed" ||
     quickAddOutboxState.status === "owner_mismatch" ||
@@ -1591,58 +1644,56 @@ export function RecipesScreen({
             <Text style={styles.sectionTitle}>Log exact v{selected.versionNumber}</Text>
             <View style={styles.row}>
               <Chip
-                disabled={builderDisabled}
+                disabled={logFieldsDisabled}
                 active={logKind === "grams"}
                 label="Grams"
-                onPress={() => {
-                  if (canUseSelectedRecipe()) setLogKind("grams");
-                }}
+                onPress={() => changeRecipeLog("kind", "grams")}
               />
               {selected.servingCount ? (
                 <Chip
-                  disabled={builderDisabled}
+                  disabled={logFieldsDisabled}
                   active={logKind === "serving"}
                   label={selected.servingLabel ?? "Serving"}
-                  onPress={() => {
-                    if (canUseSelectedRecipe()) setLogKind("serving");
-                  }}
+                  onPress={() => changeRecipeLog("kind", "serving")}
                 />
               ) : null}
             </View>
             <Field
-              disabled={builderDisabled}
+              disabled={logFieldsDisabled}
               label="Amount"
               maxLength={19}
               value={logAmount}
-              onChange={(value) => {
-                if (canUseSelectedRecipe()) setLogAmount(value);
-              }}
+              onChange={(value) => changeRecipeLog("amount", value)}
               numeric
             />
             <Field
-              disabled={builderDisabled}
+              disabled={logFieldsDisabled}
               label="Local date"
               maxLength={10}
               value={date}
-              onChange={(value) => {
-                if (canUseSelectedRecipe()) setDate(value);
-              }}
+              onChange={(value) => changeRecipeLog("date", value)}
+            />
+            <Field
+              disabled={logFieldsDisabled}
+              label="Local time (optional)"
+              maxLength={5}
+              value={logContextVisible ? logDraft.time : ""}
+              onChange={(value) => changeRecipeLog("time", value)}
             />
             <View style={styles.row}>
               {diaryGroups.map(({ mealSlot: slot, label }) => (
                 <Chip
-                  disabled={builderDisabled}
+                  disabled={logFieldsDisabled}
                   active={meal === slot}
                   key={slot}
                   label={label}
-                  onPress={() => {
-                    if (canUseSelectedRecipe()) setMeal(slot);
-                  }}
+                  onPress={() => changeRecipeLog("meal", slot)}
                 />
               ))}
             </View>
             <Text style={styles.help}>
-              Interpreted in {profileTimeZone}; the exact recipe revision is pinned.
+              Leave time blank to use now for today or noon on another date. Enter HH:mm for an
+              explicit time in {profileTimeZone}; the exact recipe revision is pinned.
             </Text>
             {quickAddOutboxState.pendingCount > 0 ? (
               <Text accessibilityLiveRegion="polite" style={styles.help}>

@@ -384,6 +384,7 @@ beforeEach(() => {
 afterEach(() => {
   hooks.unmount();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -2812,6 +2813,490 @@ describe("actual loaded nested-recipe filtering", () => {
         expect(field(nestedFilterLabel).props.value).toBe("");
         if (transition !== "replay") expect(nestedRecipeNames()).toEqual([]);
       }
+    },
+  );
+});
+
+const optionalTimeLabel = "Local time (optional)";
+function retryableLogFetcher() {
+  const fetcher = nutritionFetcher();
+  const original = required(fetcher.getMockImplementation());
+  fetcher.mockImplementation(async (url, init) =>
+    init?.method === "POST" && url.includes("/log?")
+      ? Response.json({ error: "Lost confirmation" }, { status: 503 })
+      : original(url, init),
+  );
+  return fetcher;
+}
+function recipeLogPosts(fetcher: ReturnType<typeof nutritionFetcher>) {
+  return fetcher.mock.calls.filter(
+    ([url, init]) => init?.method === "POST" && url.includes("/log?"),
+  );
+}
+function acceptedRecipeLog() {
+  return Response.json({
+    data: {
+      replayed: false,
+      entry: null,
+      affectedDays: [{ localDate: "2026-09-09", revision: "1" }],
+    },
+  });
+}
+
+describe("actual optional recipe log time", () => {
+  it.each([
+    ["2026-11-01", "", "2026-11-01T07:30:45.123Z"],
+    ["2026-10-31", "", "2026-10-31T17:00:00.000Z"],
+    ["2026-11-01", "01:30", "2026-11-01T06:30:00.000Z"],
+    ["2026-09-09", "00:00", "2026-09-09T05:00:00.000Z"],
+  ])("logs %s at %j with the exact expected instant", async (date, time, expected) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-01T07:30:45.123Z"));
+    const fetcher = retryableLogFetcher();
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    expect(field(optionalTimeLabel).props.value).toBe("");
+    expect(field(optionalTimeLabel).props.type).toBe("time");
+    await change("Local diary date", date);
+    await change(optionalTimeLabel, time);
+    await change("Amount", "1.250000");
+    await change("Meal", "lunch");
+    const count = fetcher.mock.calls.length;
+    // A current same-value callback must not strand the immediately captured Log action.
+    const log = button("Log recipe");
+    invoke(field(optionalTimeLabel), "onChange", { target: { value: time } });
+    expect(fetcher.mock.calls).toHaveLength(count);
+    invoke(log, "onClick");
+    await hooks.settle();
+    const [url, init] = required(recipeLogPosts(fetcher)[0]);
+    expect(url).toBe(`/api/recipes/${recipeId}/log?profileTimeZonePrecondition=v1`);
+    expect(JSON.parse(String(init?.body))).toEqual({
+      recipeVersionId: versionId,
+      portion: { kind: "serving", amount: "1.250000" },
+      mealSlot: "lunch",
+      occurredAt: expected,
+    });
+    expect(new Headers(init?.headers).get("x-expected-profile-time-zone")).toBe("America/Chicago");
+    expect(field(optionalTimeLabel).props.value).toBe(time);
+  });
+
+  it.each([" ", "07:30 ", "24:00", "07:30:01", "02:30"])(
+    "rejects raw invalid or skipped time %j without a request",
+    async (time) => {
+      const fetcher = retryableLogFetcher();
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      await change("Local diary date", "2026-03-08");
+      await change(optionalTimeLabel, time);
+      const count = fetcher.mock.calls.length;
+      await click("Log recipe");
+      expect(fetcher.mock.calls).toHaveLength(count);
+      expect(field(optionalTimeLabel).props.value).toBe(time);
+      expect(button("Log recipe").props.disabled).toBe(false);
+      expect(text()).toContain(time === "02:30" ? "does not exist" : "Invalid local diary time");
+    },
+  );
+
+  it("keeps each pending automatic/time intent across retries, clock changes and A-to-B-to-A edits", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-01T07:30:45.123Z"));
+    const fetcher = retryableLogFetcher();
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await change("Local diary date", "2026-11-01");
+    await click("Log recipe");
+    vi.setSystemTime(new Date("2026-11-01T08:45:56.789Z"));
+    await change(optionalTimeLabel, "01:30");
+    await click("Log recipe");
+    await change(optionalTimeLabel, "01:31");
+    await click("Log recipe");
+    await change(optionalTimeLabel, "01:30");
+    await click("Log recipe");
+    await change(optionalTimeLabel, "");
+    await click("Log recipe");
+    const posts = recipeLogPosts(fetcher);
+    expect(posts).toHaveLength(5);
+    const bodies = posts.map(([, init]) => init?.body);
+    const keys = posts.map(([, init]) => new Headers(init?.headers).get("idempotency-key"));
+    expect(new Set(keys.slice(0, 3)).size).toBe(3);
+    expect(bodies[3]).toBe(bodies[1]);
+    expect(keys[3]).toBe(keys[1]);
+    expect(bodies[4]).toBe(bodies[0]);
+    expect(keys[4]).toBe(keys[0]);
+    expect(JSON.parse(String(bodies[4])).occurredAt).toBe("2026-11-01T07:30:45.123Z");
+  });
+
+  it("fences all retained log fields and Log synchronously after time changes without affecting other drafts", async () => {
+    const fetcher = retryableLogFetcher();
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await change("Name", "Unsaved independent name");
+    await click("Copy to new draft");
+    const confirmation = text();
+    const draft = editorValues();
+    const old = [optionalTimeLabel, "Local diary date", "Amount", "Portion", "Meal"].map(field);
+    const log = button("Log recipe");
+    invoke(old[0] as ElementNode, "onChange", { target: { value: "07:30" } });
+    for (const [i, value] of ["09:00", "2026-09-01", "999", "grams", "lunch"].entries()) {
+      invoke(required(old[i]), "onChange", { target: { value } });
+    }
+    invoke(log, "onClick");
+    await hooks.settle();
+    expect(recipeLogPosts(fetcher)).toHaveLength(0);
+    expect(field(optionalTimeLabel).props.value).toBe("07:30");
+    expect(field("Local diary date").props.value).toBe("2026-09-09");
+    expect(field("Amount").props.value).toBe("1");
+    expect(field("Portion").props.value).toBe("serving");
+    expect(editorValues()).toEqual(draft);
+    expect(text()).toContain("Keep editing");
+    expect(confirmation).toContain("Keep editing");
+    await change(savedFilterLabel, "Hidden selection");
+    await change(nestedFilterLabel, "Nested only");
+    await click("Per 100 g");
+    expect(field(optionalTimeLabel).props.value).toBe("07:30");
+    expect(editorValues()).toEqual(draft);
+    await change("Local diary date", "2026-09-08");
+    expect(field(optionalTimeLabel).props.value).toBe("07:30");
+  });
+
+  it.each(["New", "copy", "open", "save"])(
+    "resets time and rejects previous controls after %s replaces the selection",
+    async (transition) => {
+      const fetcher = retryableLogFetcher();
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      await change(optionalTimeLabel, "07:30");
+      const old = field(optionalTimeLabel),
+        log = button("Log recipe");
+      if (transition === "New") await click("New recipe");
+      else if (transition === "copy") await click("Copy to new draft");
+      else if (transition === "save") {
+        await change("Name", "Saved revision");
+        save();
+        await hooks.settle();
+      } else {
+        openSaved();
+        await hooks.settle();
+      }
+      invoke(old, "onChange", { target: { value: "23:59" } });
+      invoke(log, "onClick");
+      await hooks.settle();
+      expect(recipeLogPosts(fetcher)).toHaveLength(0);
+      if (transition === "New" || transition === "copy") {
+        openSaved();
+        await hooks.settle();
+      }
+      expect(field(optionalTimeLabel).props.value).toBe("");
+    },
+  );
+
+  it.each(["route", "owner", "unmount"])(
+    "rejects retained log callbacks after %s changes private context",
+    async (transition) => {
+      const fetcher = retryableLogFetcher();
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      await change(optionalTimeLabel, "07:30");
+      const old = field(optionalTimeLabel),
+        log = button("Log recipe");
+      if (transition === "route") {
+        navigation.query = "date=2026-09-08";
+        hooks.renderWithoutEffects();
+        expect(field(optionalTimeLabel).props.value).toBe("");
+        expect(field(optionalTimeLabel).props.disabled).toBe(true);
+      } else if (transition === "owner") {
+        const original = required(fetcher.getMockImplementation());
+        fetcher.mockImplementation(async (url, init) =>
+          url === "/api/auth/me"
+            ? session("a3fd8855-90c8-42df-8f21-2f5a4060fa08")
+            : original(url, init),
+        );
+        openSaved();
+        await hooks.settle();
+      } else hooks.unmount();
+      const count = fetcher.mock.calls.length,
+        updates = hooks.afterClose();
+      invoke(old, "onChange", { target: { value: "23:59" } });
+      invoke(log, "onClick");
+      expect(fetcher.mock.calls).toHaveLength(count);
+      expect(hooks.afterClose()).toBe(updates);
+      if (transition === "route") {
+        hooks.render();
+        await hooks.settle();
+        expect(field(optionalTimeLabel).props.value).toBe("");
+      }
+    },
+  );
+
+  it("retains date/time for new-zone confirmation and rejects stale confirmation after a further time edit", async () => {
+    const fetcher = retryableLogFetcher();
+    const original = required(fetcher.getMockImplementation());
+    let posts = 0;
+    fetcher.mockImplementation(async (url, init) => {
+      if (init?.method === "POST" && url.includes("/log?")) {
+        posts += 1;
+        return posts === 1
+          ? Response.json({ code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 })
+          : Response.json({ error: "Lost confirmation" }, { status: 503 });
+      }
+      if (url === "/api/auth/me" && posts > 0) {
+        const profile = await session().json();
+        profile.data.profile.timeZone = "UTC";
+        return Response.json(profile);
+      }
+      return original(url, init);
+    });
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await change(optionalTimeLabel, "07:30");
+    const old = field(optionalTimeLabel);
+    await click("Log recipe");
+    expect(field(optionalTimeLabel).props.value).toBe("07:30");
+    expect(text()).toContain("Review 2026-09-09 at 07:30 in that zone");
+    expect(button("Log recipe").props.disabled).toBe(true);
+    invoke(old, "onChange", { target: { value: "23:59" } });
+    await hooks.settle();
+    expect(field(optionalTimeLabel).props.value).toBe("07:30");
+    const confirm = button("Confirm 2026-09-09 at 07:30 in UTC");
+    invoke(field(optionalTimeLabel), "onChange", { target: { value: "08:45" } });
+    invoke(confirm, "onClick");
+    await hooks.settle();
+    expect(button("Log recipe").props.disabled).toBe(true);
+    await click("Confirm 2026-09-09 at 08:45 in UTC");
+    await click("Log recipe");
+    const writes = recipeLogPosts(fetcher);
+    expect(writes).toHaveLength(2);
+    expect(JSON.parse(String(writes[1]?.[1]?.body)).occurredAt).toBe("2026-09-09T08:45:00.000Z");
+    expect(new Headers(writes[1]?.[1]?.headers).get("x-expected-profile-time-zone")).toBe("UTC");
+    expect(new Headers(writes[1]?.[1]?.headers).get("idempotency-key")).not.toBe(
+      new Headers(writes[0]?.[1]?.headers).get("idempotency-key"),
+    );
+  });
+
+  it("locks pending time controls but accepts a current receipt across same-owner list refresh", async () => {
+    const fetcher = nutritionFetcher();
+    const original = required(fetcher.getMockImplementation());
+    const pending = deferred<Response>();
+    fetcher.mockImplementation(async (url, init) => {
+      if (url.startsWith("/api/recipes?")) {
+        const response = await nutritionCollection([nutritionRecipe()]).json();
+        response.page.nextCursor = "next";
+        return Response.json(response);
+      }
+      if (init?.method === "POST" && url.includes("/log?")) return pending.promise;
+      return original(url, init);
+    });
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await change(optionalTimeLabel, "07:30");
+    const time = field(optionalTimeLabel),
+      log = button("Log recipe"),
+      more = button("Load more recipes");
+    invoke(log, "onClick");
+    invoke(time, "onChange", { target: { value: "23:59" } });
+    invoke(log, "onClick");
+    await hooks.settle();
+    expect(field(optionalTimeLabel).props.disabled).toBe(true);
+    expect(field(optionalTimeLabel).props.value).toBe("07:30");
+    invoke(more, "onClick");
+    await hooks.settle();
+    expect(fetcher.mock.calls.filter(([url]) => url.startsWith("/api/recipes?"))).toHaveLength(2);
+    pending.resolve(acceptedRecipeLog());
+    await hooks.settle();
+    expect(recipeLogPosts(fetcher)).toHaveLength(1);
+    expect(text()).toContain("Recipe logged to");
+    expect(button("Log recipe").props.disabled).toBe(false);
+    await click("Log recipe");
+    const writes = recipeLogPosts(fetcher);
+    expect(new Headers(writes[1]?.[1]?.headers).get("idempotency-key")).not.toBe(
+      new Headers(writes[0]?.[1]?.headers).get("idempotency-key"),
+    );
+  });
+
+  it.each(["fetch", "json"])(
+    "ignores a delayed old log at its %s boundary after a route replacement",
+    async (boundary) => {
+      const fetcher = retryableLogFetcher();
+      const original = required(fetcher.getMockImplementation());
+      const pendingFetch = deferred<Response>(),
+        pendingJson = deferred<unknown>();
+      fetcher.mockImplementation(async (url, init) => {
+        if (init?.method === "POST" && url.includes("/log?")) {
+          if (boundary === "fetch") return pendingFetch.promise;
+          const response = acceptedRecipeLog();
+          response.json = () => pendingJson.promise;
+          return response;
+        }
+        return original(url, init);
+      });
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      await change(optionalTimeLabel, "07:30");
+      await click("Log recipe");
+      navigation.query = "date=2026-09-08";
+      hooks.renderWithoutEffects();
+      if (boundary === "fetch")
+        pendingFetch.resolve(Response.json({ error: "Old expiry" }, { status: 401 }));
+      else pendingJson.resolve(await acceptedRecipeLog().json());
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(router.replace).not.toHaveBeenCalled();
+      hooks.render();
+      await hooks.settle();
+      expect(field("Local diary date").props.value).toBe("2026-09-08");
+      expect(field(optionalTimeLabel).props.value).toBe("");
+      expect(button("Log recipe").props.disabled).toBe(false);
+      expect(text()).not.toContain("Recipe logged to");
+    },
+  );
+});
+
+describe("native time input validity when logging a recipe", () => {
+  function installTimeInput(valid: boolean) {
+    const input = { value: "", validity: { valid, badInput: !valid } };
+    const ref = field(optionalTimeLabel).props.ref as { current: HTMLInputElement | null };
+    expect(ref).toBeDefined();
+    ref.current = input as unknown as HTMLInputElement;
+    return input;
+  }
+
+  it("blocks repeated partial-empty input before allocation and preserves automatic retry through genuine clearing", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-09T14:30:45.123Z"));
+    const originalCrypto = crypto;
+    const allocate = vi.fn(() => originalCrypto.randomUUID());
+    vi.stubGlobal("crypto", { randomUUID: allocate });
+    const fetcher = retryableLogFetcher();
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await change(optionalTimeLabel, "07:30");
+    const input = installTimeInput(false);
+    await change(optionalTimeLabel, "");
+    expect(field(optionalTimeLabel).props.value).toBe("");
+    const before = fetcher.mock.calls.length,
+      beforeIds = allocate.mock.calls.length;
+    await click("Log recipe");
+    await click("Log recipe");
+    expect(fetcher.mock.calls).toHaveLength(before);
+    expect(allocate).toHaveBeenCalledTimes(beforeIds);
+    expect(button("Log recipe").props.disabled).toBe(false);
+    expect(text()).toContain("Complete the local time, or clear every time segment");
+
+    input.validity = { valid: true, badInput: false };
+    await change(optionalTimeLabel, "");
+    await click("Log recipe");
+    const first = required(recipeLogPosts(fetcher)[0]);
+    expect(JSON.parse(String(first[1]?.body)).occurredAt).toBe("2026-09-09T14:30:45.123Z");
+    vi.setSystemTime(new Date("2026-09-09T18:45:56.789Z"));
+    input.validity = { valid: false, badInput: true };
+    await change(optionalTimeLabel, "");
+    await click("Log recipe");
+    expect(recipeLogPosts(fetcher)).toHaveLength(1);
+    expect(allocate).toHaveBeenCalledTimes(beforeIds + 1);
+    input.validity = { valid: true, badInput: false };
+    await change(optionalTimeLabel, "");
+    await click("Log recipe");
+    const retry = required(recipeLogPosts(fetcher)[1]);
+    expect(retry[1]?.body).toBe(first[1]?.body);
+    expect(new Headers(retry[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(first[1]?.headers).get("idempotency-key"),
+    );
+    expect(allocate).toHaveBeenCalledTimes(beforeIds + 1);
+
+    input.validity = { valid: false, badInput: true };
+    await click("Log recipe");
+    input.validity = { valid: true, badInput: false };
+    input.value = "07:45";
+    await change(optionalTimeLabel, "07:45");
+    await click("Log recipe");
+    expect(recipeLogPosts(fetcher)).toHaveLength(3);
+    expect(JSON.parse(String(recipeLogPosts(fetcher)[2]?.[1]?.body)).occurredAt).toBe(
+      "2026-09-09T12:45:00.000Z",
+    );
+    expect(allocate).toHaveBeenCalledTimes(beforeIds + 2);
+  });
+
+  it("requires a valid native time control before confirming a refreshed profile zone", async () => {
+    const fetcher = retryableLogFetcher();
+    const original = required(fetcher.getMockImplementation());
+    let posted = false;
+    fetcher.mockImplementation(async (url, init) => {
+      if (init?.method === "POST" && url.includes("/log?")) {
+        posted = true;
+        return Response.json({ code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 });
+      }
+      if (url === "/api/auth/me" && posted) {
+        const profile = await session().json();
+        profile.data.profile.timeZone = "UTC";
+        return Response.json(profile);
+      }
+      return original(url, init);
+    });
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await change(optionalTimeLabel, "07:30");
+    await click("Log recipe");
+    const input = installTimeInput(false);
+    await change(optionalTimeLabel, "");
+    const before = fetcher.mock.calls.length;
+    await click("Confirm 2026-09-09 as local day");
+    expect(text()).toContain("Complete the local time, or clear every time segment");
+    expect(button("Log recipe").props.disabled).toBe(true);
+    expect(fetcher.mock.calls).toHaveLength(before);
+    input.validity = { valid: true, badInput: false };
+    await change(optionalTimeLabel, "");
+    await click("Confirm 2026-09-09 as local day");
+    expect(button("Log recipe").props.disabled).toBe(false);
+    expect(fetcher.mock.calls).toHaveLength(before);
+  });
+
+  it.each(["route", "unmount"])(
+    "does not inspect a current invalid control from stale Log or confirmation after %s",
+    async (transition) => {
+      const fetcher = retryableLogFetcher();
+      const original = required(fetcher.getMockImplementation());
+      fetcher.mockImplementation(async (url, init) =>
+        init?.method === "POST" && url.includes("/log?")
+          ? Response.json({ code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 })
+          : original(url, init),
+      );
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      await click("Log recipe");
+      const confirm = button("Confirm 2026-09-09 as local day"),
+        log = button("Log recipe");
+      const readValidity = vi.fn(() => ({ valid: false, badInput: true }));
+      const ref = field(optionalTimeLabel).props.ref as { current: HTMLInputElement | null };
+      ref.current = {
+        get validity() {
+          return readValidity();
+        },
+      } as unknown as HTMLInputElement;
+      if (transition === "route") {
+        navigation.query = "date=2026-09-08";
+        hooks.renderWithoutEffects();
+      } else hooks.unmount();
+      const before = fetcher.mock.calls.length,
+        updates = hooks.afterClose(),
+        beforeText = text();
+      invoke(log, "onClick");
+      invoke(confirm, "onClick");
+      expect(readValidity).not.toHaveBeenCalled();
+      expect(fetcher.mock.calls).toHaveLength(before);
+      expect(hooks.afterClose()).toBe(updates);
+      expect(text()).toBe(beforeText);
     },
   );
 });
