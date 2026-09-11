@@ -153,6 +153,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Filter loaded nested-recipe choices | ADR 0048 independent filter/counts/Clear and exact pins, focused review, canonical gates, fresh client outputs and synthetic Chrome draft/paging/retry/keyboard/narrow/expiry proof passed; automatic/external/device/release separate |
 | Automatic evidence / independent review | Inspect logged diary entry nutrients | ADR 0049 exact logged-portion disclosures, focused review, canonical gates, fresh client outputs and synthetic Chrome values/draft/paging/meal/date/keyboard/narrow/expiry proof passed; automatic/external/device/release separate |
 | Automatic evidence / independent review | Show saved reminder weekdays | ADR 0050 saved membership, existing focused checks, fresh canonical gates and synthetic Chrome saved-days/draft/narrow/expiry proof passed; automatic/external/device/release separate |
+| Automatic evidence / independent review | Show saved biometric date/time zones | ADR 0051 saved local dates, saved-zone seconds and explicit zones; existing focused checks, fresh canonical gates and synthetic Chrome saved-zone/date-boundary/draft/narrow/expiry proof passed; automatic/external/device/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1465,11 +1466,27 @@ container `34539555627` remained in progress at September 10, 2026 23:31:22 UTC.
 Base results do not transfer to this slice. Device, notification delivery,
 external reviewer, hosted and release acceptance remain separate.
 
+### Saved biometric date/time zones: source/local complete
+
+[ADR 0051](../adr/0051-saved-biometric-time-zones.md) makes each reading's saved
+local date, saved-zone time with seconds and explicit zone visible on web/native.
+Discovery showed existing time helpers return only HH:mm; use an inline Intl
+history formatter while preserving shared helpers, editor precision and operation
+identity. No state, helper, request, parser or backend changes are required.
+Existing focused suites, independent review, canonical gates and synthetic Chrome
+date-boundary/draft/narrow/expiry proof passed.
+
+Base `3fb9a002dc9e375f3b984f79b433f0b138ff4a26` CI `34543863214` and container
+`34543863220` remained in progress at September 10, 2026 23:52:06 UTC.
+Base results do not transfer to this slice; external/device/hosted/release
+acceptance remains separate.
+
 ### Next bounded candidate
 
 Revalidate exact automatic results and external-review findings. The next bounded
-candidate is clarifying saved biometric date/time and time zone on web/native.
-Use each reading's saved localDate and timeZone with existing formatting helpers,
-including a zone different from the browser and a date boundary. Preserve source,
-measuredAt, editor values and operation identity. No new state, request, helper or
-backend change is proposed. No successor implementation has started.
+candidate is web-only explicit missing biometric metric-name and unit labels,
+matching native history when the saved reading's exact definition is unavailable.
+Preserve saved values, date/time context, known-definition labels and editors.
+Label an unavailable metric name and unit explicitly without inferring either.
+No lookup, state, request or write change is proposed. No successor implementation
+has started.

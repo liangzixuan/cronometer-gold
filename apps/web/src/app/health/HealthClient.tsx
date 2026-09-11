@@ -2530,7 +2530,15 @@ export function HealthClient() {
                           {definition?.name ?? "Metric"}
                         </strong>
                         <small>
-                          {new Date(event.measuredAt).toLocaleString()} · {event.source.kind}
+                          {event.localDate} ·{" "}
+                          {new Intl.DateTimeFormat("en-GB", {
+                            timeZone: event.timeZone,
+                            hour: "2-digit",
+                            minute: "2-digit",
+                            second: "2-digit",
+                            hourCycle: "h23",
+                          }).format(new Date(event.measuredAt))}{" "}
+                          · {event.timeZone} · {event.source.kind}
                         </small>
                       </div>
                       {event.source.kind === "manual" ? (

@@ -2948,8 +2948,14 @@ export function RetentionScreen({
                 </Text>
                 <Text style={styles.meta}>
                   {event.localDate} ·{" "}
-                  {localTimeInTimeZone(new Date(event.measuredAt), event.timeZone).slice(0, 5)} ·{" "}
-                  {event.source.kind}
+                  {new Intl.DateTimeFormat("en-GB", {
+                    timeZone: event.timeZone,
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                    hourCycle: "h23",
+                  }).format(new Date(event.measuredAt))}{" "}
+                  · {event.timeZone} · {event.source.kind}
                 </Text>
                 <View style={styles.actions}>
                   {event.source.kind === "manual" ? (

@@ -56,6 +56,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0048](./0048-loaded-nested-recipe-filter.md) | Filter loaded nested-recipe ingredient choices by name | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
 | [0049](./0049-logged-diary-entry-nutrients.md) | Inspect nutrients for a logged diary portion | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
 | [0050](./0050-saved-reminder-weekdays.md) | Show saved reminder weekdays | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
+| [0051](./0051-saved-biometric-time-zones.md) | Show saved biometric dates, times and time zones | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

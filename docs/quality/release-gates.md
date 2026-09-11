@@ -803,3 +803,17 @@ acceptance.
 - Source-validated synthetic Chrome verifies saved membership, edit independence,
   no added requests, narrow layout and expiry. Device, assistive technology,
   real persistence, notification delivery, external and release gates remain.
+
+
+## ADR 0051 Saved biometric date/time zones
+
+- Web/native history displays saved localDate, saved-zone HH:mm:ss, explicit zone
+  and source for manual/imported readings. Preserve metric/unit fallbacks, exact
+  values, stored instants, raw editors and operation identity.
+- Keep shared minute-precision editor helpers and all requests/state/contracts
+  unchanged. Run existing focused suites, types/format, independent review and
+  canonical gates with fresh client outputs.
+- Source-validated synthetic Chrome verifies seconds, midnight/date boundaries,
+  differing saved zones, raw draft independence, no requests, narrow layout and
+  expired-session route reload. Device, assistive technology, real persistence,
+  external reviewer, hosted and release gates remain separate.
