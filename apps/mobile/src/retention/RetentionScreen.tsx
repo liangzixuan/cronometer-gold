@@ -405,6 +405,13 @@ export function RetentionScreen({
     cursor: null,
     message: "Loading reading history…",
   }));
+  const [historyFilter, setHistoryFilter] = useState({ value: "" });
+  const historyFilterRef = useRef(historyFilter);
+  const resetHistoryFilter = useCallback(() => {
+    const next = { value: "" };
+    historyFilterRef.current = next;
+    setHistoryFilter(next);
+  }, []);
   const historyRef = useRef(history);
   const installHistory = useCallback((next: ReadingHistory) => {
     historyRef.current = next;
@@ -460,6 +467,7 @@ export function RetentionScreen({
     historyScopeRef.current = { privateScope: customScope, profileTimeZone };
   const historyScope = historyScopeRef.current;
   const historyInstalled = useRef<typeof historyScope | null>(null);
+  const historyFilterScope = useRef(historyScope);
   const recentHistory = useRef({ privateScope: customScope, range: history.range });
   const eventWrite = useRef<object | null>(null);
   const [eventWriting, setEventWriting] = useState(false);
@@ -534,6 +542,7 @@ export function RetentionScreen({
   const closeCustom = useCallback(() => {
     if (!currentCustomScope(customEpoch.current)) return;
     customClosed.current = customScope;
+    resetHistoryFilter();
     resetSavedFoodFilter();
     setVerifiedFoodListScope(null);
     abortTrendRead();
@@ -555,6 +564,7 @@ export function RetentionScreen({
     customScope,
     installCustom,
     resetFoodDetails,
+    resetHistoryFilter,
     resetSavedFoodFilter,
     setBusy,
   ]);
@@ -634,6 +644,10 @@ export function RetentionScreen({
     [currentCustomScope, historyScope],
   );
   useEffect(() => {
+    if (historyFilterScope.current !== historyScope) {
+      historyFilterScope.current = historyScope;
+      resetHistoryFilter();
+    }
     const replacedPrivate = recentHistory.current.privateScope !== customScope;
     if (replacedPrivate) {
       setEventWriting(false);
@@ -675,6 +689,7 @@ export function RetentionScreen({
     historyScope,
     installHistory,
     profileTimeZone,
+    resetHistoryFilter,
     setBusy,
     setEventDraft,
   ]);
@@ -1781,8 +1796,27 @@ export function RetentionScreen({
       eventWrite.current === null
     );
   }
+  function selectHistoryMetric(value: string) {
+    if (!canReadHistory() || historyFilterRef.current !== historyFilter) return;
+    if (
+      value !== "" &&
+      value !== historyFilter.value &&
+      !definitionsRef.current.some((item) => item.id === value) &&
+      !historyRef.current.items.some((item) => item.definitionId === value)
+    )
+      return;
+    if (value === historyFilter.value) return;
+    const next = { value };
+    historyFilterRef.current = next;
+    setHistoryFilter(next);
+  }
   function currentHistoryRow(event: BiometricEvent) {
-    return canReadHistory() && historyRef.current.items.includes(event);
+    return (
+      canReadHistory() &&
+      historyFilterRef.current === historyFilter &&
+      (historyFilter.value === "" || historyFilter.value === event.definitionId) &&
+      historyRef.current.items.includes(event)
+    );
   }
   function canEditReading() {
     return (
@@ -2643,6 +2677,37 @@ export function RetentionScreen({
 
   const historyVisible = currentHistoryScope(customEpoch.current);
   const historyDisabled = !historyVisible || loading || historyPending || eventWriting;
+  const historyMetricLabels = new Map(
+    definitions.map((item) => [item.id, `${item.name} (${item.canonicalUnit})`]),
+  );
+  const historyMetricIds = [...historyMetricLabels.keys()];
+  for (const event of history.items) {
+    if (!historyMetricIds.includes(event.definitionId)) historyMetricIds.push(event.definitionId);
+  }
+  if (historyFilter.value && !historyMetricIds.includes(historyFilter.value))
+    historyMetricIds.push(historyFilter.value);
+  const historyMetricChoices = historyVisible
+    ? [
+        { key: "", label: "All metrics" },
+        ...historyMetricIds.map((id) => {
+          const label = historyMetricLabels.get(id);
+          const ambiguous =
+            label &&
+            [...historyMetricLabels.values()].filter((value) => value === label).length > 1;
+          return {
+            key: id,
+            label: label
+              ? `${label}${ambiguous ? ` · ${id}` : ""}`
+              : `Metric unavailable · unit unavailable · ${id}`,
+          };
+        }),
+      ]
+    : [{ key: "", label: "All metrics" }];
+  const shownHistory = historyVisible
+    ? history.items.filter(
+        (event) => historyFilter.value === "" || event.definitionId === historyFilter.value,
+      )
+    : [];
   const earlierRange = shiftedHistoryRange(history.range, -1);
   const newerRange = shiftedHistoryRange(history.range, 1);
   const isRecentHistory =
@@ -3391,7 +3456,7 @@ export function RetentionScreen({
                 Adjacent windows share a boundary.
               </Text>
               <Text accessibilityLiveRegion="polite" style={styles.help}>
-                {history.items.length} loaded readings.{" "}
+                Showing {shownHistory.length} of {history.items.length} loaded readings.{" "}
                 {history.cursor
                   ? "More readings may remain in this window."
                   : "No continuation is available for this window."}
@@ -3402,6 +3467,24 @@ export function RetentionScreen({
                 </Text>
               ) : null}
             </>
+          ) : null}
+          <View accessibilityLabel="History metric">
+            <Text style={styles.label}>History metric</Text>
+            <ChipRow
+              disabled={historyDisabled}
+              items={historyMetricChoices}
+              selected={historyVisible ? historyFilter.value : ""}
+              onSelect={selectHistoryMetric}
+              wrapLabels
+            />
+          </View>
+          {historyVisible ? (
+            <Text style={styles.help}>
+              Filters only loaded readings; more readings may be available.
+              {historyFilter.value && shownHistory.length === 0
+                ? " No loaded readings match this metric."
+                : ""}
+            </Text>
           ) : null}
           <View style={styles.actions}>
             <Button
@@ -3431,7 +3514,7 @@ export function RetentionScreen({
               secondary
             />
           </View>
-          {(historyVisible ? history.items : []).map((event) => {
+          {shownHistory.map((event) => {
             const definition = definitions.find((item) => item.id === event.definitionId);
             return (
               <View key={event.id} style={styles.card}>

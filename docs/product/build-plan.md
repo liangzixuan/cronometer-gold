@@ -160,6 +160,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Earlier biometric history on web/native | ADR 0055 fixed inclusive windows, exact continuation and editor/trend independence; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 | Automatic evidence / independent review | Reminder day presets on web/native | ADR 0056 local memberships, exact retries and explicit consent/save; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 | Automatic evidence / independent review | Expand all diary meals on web/native | ADR 0057 local overview, preserved drafts/disclosures/paging and existing private/queue guards; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
+| Automatic evidence / independent review | Loaded biometric history metric filter on web/native | ADR 0058 exact metric IDs, truthful loaded counts and editor/trend independence; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1574,6 +1575,20 @@ At 2026-09-11T15:55:20.582850+00:00, base
 `34580740091` both succeeded. Base results do not transfer to this slice.
 External/device/hosted/release acceptance remains separate.
 
+### Loaded biometric history metric filter: source/local complete
+
+[ADR 0058](../adr/0058-biometric-history-filter.md) adds a local metric-ID filter
+and All metrics reset without changing the loaded history or its requests.
+Preserve exact readings, missing metadata, paging/window/error meaning, raw editor
+and independent trend/composer inputs. Focused regressions, independent review,
+fresh canonical gates and synthetic Chrome no-request/draft/paging/narrow/expiry
+proof passed. Shared contracts and protected queues remain unchanged.
+
+At 2026-09-11T17:16:07.644872+00:00, base
+`b063d0c64f11d306801552a26505c758c803a112` CI `34626392780` and container
+`34626392736` remained in progress. Base results do not transfer to this slice.
+External/device/hosted/release acceptance remains separate.
+
 ### Next bounded candidate
 
-Filter loaded biometric history by metric on web/native, with an All metrics reset. Derive displayed rows from the existing loaded snapshot using metric IDs; retain source order, exact values, missing-definition labels and truthful shown/loaded counts. Keep continuation available even with zero matches, preserve independent editor/trend inputs and require zero filter requests. Begin with a bounded card covering duplicate names, missing metadata, paging/window/error boundaries and retained row controls. No successor code is included in this slice.
+Add name/code search and Clear to the web goal nutrient picker, matching the existing native goal flow. Filter the loaded eligible registry locally while keeping explicit Add, exact nutrient identity, truthful matching/available counts, raw target/source/rationale drafts, reference Customize locks and exact save/retry identity. Begin with a bounded acceptance card and actual-component evidence for hidden/stale Add, zero/all-added results, current read/write/history availability, keyboard/390px and zero search requests. No successor implementation is included in ADR0058.

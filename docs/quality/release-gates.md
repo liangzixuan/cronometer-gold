@@ -912,3 +912,20 @@ acceptance.
   frozen fresh canonical gates and synthetic Chrome multi-group/no-request/
   disclosure/editor/paging/keyboard/narrow/expiry proof. Real persistence, native,
   assistive technology, concurrent React, external and release gates stay separate.
+
+
+## ADR 0058 Loaded biometric history metric filter
+
+- Filter only the presentation of loaded history by exact metric ID. Preserve
+  loaded order/values/metadata, backing snapshot/cursor, range/error meaning and
+  continuation with zero matches. Distinguish shown from loaded, with explicit
+  unavailable metadata and duplicate-label identity. All metrics is a true no-op
+  when current; selected missing IDs remain reachable across same-scope windows.
+- Use existing history availability and private/lifecycle rules plus a narrow
+  filter generation/membership guard for retained Edit/Delete controls. Preserve
+  editor/raw drafts, exact retry bodies/keys, accepted receipts and independent
+  trends/composers. No filter requests, storage, operations or outbox changes.
+- Require focused actual-component/helper/type/format checks, independent review,
+  frozen canonical gates and production Next/BFF synthetic Chrome choice/reset/
+  zero-request/draft/continuation/retry/keyboard/narrow/expiry proof. Real device,
+  persistence, assistive, concurrent React, external and release gates remain.

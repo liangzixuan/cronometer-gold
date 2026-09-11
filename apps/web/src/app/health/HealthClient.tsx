@@ -307,6 +307,10 @@ export function HealthClient() {
   const [definitions, setDefinitions] = useState<readonly BiometricDefinition[]>([]);
   const [history, setHistoryState] = useState<BiometricHistory>(emptyHistory);
   const historyRef = useRef(history);
+  const [historyMetric, setHistoryMetric] = useState("");
+  const historyMetricRef = useRef(historyMetric);
+  const historyMetricGeneration = useRef(0);
+  const renderedHistoryMetricGeneration = historyMetricGeneration.current;
   const recentHistory = useRef<BiometricWindow | null>(null);
   const historyController = useRef<AbortController | null>(null);
   const historyGeneration = useRef(0);
@@ -521,6 +525,12 @@ export function HealthClient() {
     setSavedFoodFilter("");
   }, []);
 
+  const resetHistoryMetric = useCallback(() => {
+    historyMetricGeneration.current += 1;
+    historyMetricRef.current = "";
+    setHistoryMetric("");
+  }, []);
+
   const installHistory = useCallback((next: BiometricHistory) => {
     historyRef.current = next;
     setHistoryState(next);
@@ -547,6 +557,7 @@ export function HealthClient() {
             JSON.stringify([next.user.id, next.profile]))
       ) {
         reminderControls.current += 1;
+        resetHistoryMetric();
         invalidateHistory();
         if (!next || next.user.id !== previous.user.id) {
           recentHistory.current = null;
@@ -572,6 +583,7 @@ export function HealthClient() {
       invalidateHistory,
       invalidateCustomControls,
       resetSavedFoodFilter,
+      resetHistoryMetric,
     ],
   );
 
@@ -638,6 +650,7 @@ export function HealthClient() {
     setCustomSaving(false);
     invalidateCustomControls();
     resetSavedFoodFilter();
+    resetHistoryMetric();
     savedFoodFilterScope.current = null;
     setVerifiedFoodListOwner(null);
     foodListGeneration.current += 1;
@@ -699,6 +712,7 @@ export function HealthClient() {
     invalidateCustomControls,
     replaceCustom,
     resetSavedFoodFilter,
+    resetHistoryMetric,
     router,
     setSession,
     setReminders,
@@ -1039,6 +1053,32 @@ export function HealthClient() {
     ownerUserId.current === session.user.id &&
     history.owner === session.user.id;
   const events = historyVisible ? history.events : [];
+  const shownEvents = historyMetric
+    ? events.filter((event) => event.definitionId === historyMetric)
+    : events;
+  const historyMetricChoices = historyVisible
+    ? [
+        ...new Set([
+          ...definitions.map((definition) => definition.id),
+          ...events.map((event) => event.definitionId),
+          ...(historyMetric ? [historyMetric] : []),
+        ]),
+      ].map((id) => {
+        const definition = definitions.find((item) => item.id === id);
+        return {
+          id,
+          label: definition ? `${definition.name} (${definition.canonicalUnit})` : null,
+        };
+      })
+    : [];
+  const historyMetricLabelCounts = new Map<string, number>();
+  for (const choice of historyMetricChoices) {
+    if (choice.label !== null)
+      historyMetricLabelCounts.set(
+        choice.label,
+        (historyMetricLabelCounts.get(choice.label) ?? 0) + 1,
+      );
+  }
   const historyUnavailable =
     !historyVisible ||
     historyController.current !== null ||
@@ -1077,8 +1117,32 @@ export function HealthClient() {
       eventWrite.current === null
     );
   }
+  function canUseHistoryMetric() {
+    return (
+      historyVisible &&
+      canUseHistory() &&
+      historyMetricGeneration.current === renderedHistoryMetricGeneration &&
+      historyMetricRef.current === historyMetric
+    );
+  }
+  function changeHistoryMetric(next: string) {
+    if (
+      !canUseHistoryMetric() ||
+      (next !== "" && !historyMetricChoices.some((choice) => choice.id === next)) ||
+      next === historyMetricRef.current
+    )
+      return;
+    historyMetricGeneration.current += 1;
+    historyMetricRef.current = next;
+    setHistoryMetric(next);
+  }
   function canUseEventRow(event: BiometricEvent) {
-    return canUseHistory() && history.verified && history.events.includes(event);
+    return (
+      canUseHistoryMetric() &&
+      history.verified &&
+      history.events.includes(event) &&
+      (historyMetric === "" || event.definitionId === historyMetric)
+    );
   }
   async function loadHistory(target: BiometricWindow, append = false) {
     if (
@@ -3059,6 +3123,44 @@ export function HealthClient() {
                   Reload history
                 </button>
               </div>
+              <div className="retentionForm">
+                <label style={{ minWidth: 0 }}>
+                  History metric
+                  <select
+                    style={{ maxWidth: "100%" }}
+                    disabled={!canUseHistoryMetric()}
+                    value={historyVisible ? historyMetric : ""}
+                    onChange={(event) => changeHistoryMetric(event.target.value)}
+                  >
+                    <option value="">All metrics</option>
+                    {historyMetricChoices.map((choice) => (
+                      <option key={choice.id} value={choice.id}>
+                        {choice.label === null
+                          ? `Metric unavailable (unit unavailable) · ${choice.id}`
+                          : `${choice.label}${(historyMetricLabelCounts.get(choice.label) ?? 0) > 1 ? ` · ${choice.id}` : ""}`}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="entryActions">
+                  <button
+                    type="button"
+                    disabled={!canUseHistoryMetric()}
+                    onClick={() => changeHistoryMetric("")}
+                  >
+                    All metrics
+                  </button>
+                </div>
+              </div>
+              {historyVisible && history.verified ? (
+                <p id="biometric-history-filter-status" role="status" aria-live="polite">
+                  Showing {shownEvents.length} of {events.length} loaded readings. This filter
+                  applies only to loaded readings.
+                  {historyMetric && shownEvents.length === 0
+                    ? " No loaded readings match this metric."
+                    : ""}
+                </p>
+              ) : null}
               <p
                 id="biometric-history-status"
                 role="status"
@@ -3079,7 +3181,7 @@ export function HealthClient() {
                 )}
               </p>
               <ul className="recordList">
-                {events.map((event) => {
+                {shownEvents.map((event) => {
                   const definition = definitions.find((item) => item.id === event.definitionId);
                   return (
                     <li key={event.id}>

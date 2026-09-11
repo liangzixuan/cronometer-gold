@@ -3094,3 +3094,436 @@ describe("reminder day presets", () => {
     expect(reminderField("Private in-app label").props.value).toBe("");
   });
 });
+
+const duplicateHistoryDefinition = {
+  ...historyDefinition,
+  id: "4bcfa2bf-4950-43f7-9f24-000000000002",
+  status: "archived" as const,
+};
+const emptyHistoryDefinition = {
+  ...historyDefinition,
+  id: "4bcfa2bf-4950-43f7-9f24-000000000003",
+  name: "Height",
+  dimension: "length" as const,
+  canonicalUnit: "cm",
+};
+const missingHistoryMetric = "4bcfa2bf-4950-43f7-9f24-000000000004";
+const otherMissingHistoryMetric = "4bcfa2bf-4950-43f7-9f24-000000000005";
+function metricHistoryWorkspace() {
+  const result = historyWorkspace();
+  result.state.definitions = [
+    historyDefinition,
+    duplicateHistoryDefinition,
+    emptyHistoryDefinition,
+  ];
+  const items = [
+    { ...reading(1), value: "0.00000" },
+    { ...reading(2), definitionId: duplicateHistoryDefinition.id, value: "-2.50000" },
+    {
+      ...reading(3),
+      definitionId: otherMissingHistoryMetric,
+      value: "7".repeat(160),
+      source: { ...reading().source, kind: "apple_healthkit" as const, externalId: "import-3" },
+    },
+    { ...reading(4), definitionId: missingHistoryMetric },
+    { ...reading(5), definitionId: otherMissingHistoryMetric },
+  ];
+  result.state.eventRead = () => eventPage(items);
+  return { ...result, items };
+}
+function historyMetricControl() {
+  const label = requiredHistory(
+    elements(biometricSection()).find(
+      (node) => node.type === "label" && text(node).startsWith("History metric"),
+    ),
+  );
+  return requiredHistory(elements(label).find((node) => node.type === "select"));
+}
+function historyMetricOptions() {
+  return elements(historyMetricControl())
+    .filter((node) => node.type === "option")
+    .map((node) => ({ id: node.props.value, label: text(node) }));
+}
+function historyFilterStatus() {
+  return text(
+    elements().find((node) => node.props.id === "biometric-history-filter-status") ?? null,
+  );
+}
+async function chooseHistoryMetric(id: string) {
+  const control = historyMetricControl();
+  expect(control.props.disabled).toBe(false);
+  invoke(control, "onChange", { target: { value: id } });
+  await hooks.settle();
+}
+function inputsExceptHistoryMetric() {
+  const metric = historyMetricControl();
+  return elements()
+    .filter(
+      (node) => node !== metric && ["input", "select", "textarea"].includes(String(node.type)),
+    )
+    .map((node) => ({ type: node.type, value: node.props.value, checked: node.props.checked }));
+}
+
+describe("loaded biometric history metric filter", () => {
+  it("does not invent loaded counts or expose private choices during initial unverified loading", async () => {
+    const { state, fetcher } = metricHistoryWorkspace();
+    const pending = deferred<Response>();
+    state.read = () => pending.promise;
+    await mount();
+    expect(historyFilterStatus()).toBe("");
+    expect(historyStatus()).toContain("unavailable until your private data is verified");
+    expect(historyMetricControl().props.disabled).toBe(true);
+    expect(historyMetricOptions()).toEqual([{ id: "", label: "All metrics" }]);
+    const requests = fetcher.mock.calls.length;
+    invoke(historyMetricControl(), "onChange", { target: { value: historyDefinition.id } });
+    invoke(button("All metrics"), "onClick");
+    await hooks.settle();
+    expect(fetcher.mock.calls).toHaveLength(requests);
+    pending.resolve(page(state.items));
+    await hooks.settle();
+    expect(historyFilterStatus()).toContain("Showing 5 of 5 loaded readings");
+    expect(historyMetricControl().props.value).toBe("");
+  });
+
+  it("uses ordered exact IDs, distinguishes duplicate and unavailable metadata, and preserves every saved row without requests", async () => {
+    const { items, fetcher } = metricHistoryWorkspace();
+    await mount();
+    const original = JSON.stringify(items),
+      rows = eventRows().map((node) => text(node)),
+      requests = fetcher.mock.calls.length;
+    expect(historyMetricOptions()).toEqual([
+      { id: "", label: "All metrics" },
+      { id: historyDefinition.id, label: `Weight (kg) · ${historyDefinition.id}` },
+      {
+        id: duplicateHistoryDefinition.id,
+        label: `Weight (kg) · ${duplicateHistoryDefinition.id}`,
+      },
+      { id: emptyHistoryDefinition.id, label: "Height (cm)" },
+      {
+        id: otherMissingHistoryMetric,
+        label: `Metric unavailable (unit unavailable) · ${otherMissingHistoryMetric}`,
+      },
+      {
+        id: missingHistoryMetric,
+        label: `Metric unavailable (unit unavailable) · ${missingHistoryMetric}`,
+      },
+    ]);
+    expect(historyFilterStatus()).toContain("Showing 5 of 5 loaded readings");
+    const allocate = vi.fn();
+    vi.stubGlobal("crypto", { randomUUID: allocate });
+    await chooseHistoryMetric(duplicateHistoryDefinition.id);
+    expect(eventRows().map((node) => text(node))).toEqual([rows[1]]);
+    expect(historyFilterStatus()).toContain("Showing 1 of 5 loaded readings");
+    await chooseHistoryMetric(otherMissingHistoryMetric);
+    expect(eventRows().map((node) => text(node))).toEqual([rows[2], rows[4]]);
+    expect(text(eventRows()[0])).toContain("7".repeat(160));
+    expect(text(eventRows()[0])).toContain("unit unavailable · Metric unavailable");
+    expect(text(eventRows()[0])).toContain("12:34:56 · UTC · apple_healthkit");
+    expect(
+      elements(eventRows()[0]).some((node) => node.type === "button" && text(node) === "Edit"),
+    ).toBe(false);
+    await click("All metrics");
+    expect(eventRows().map((node) => text(node))).toEqual(rows);
+    expect(button("All metrics").props.disabled).toBe(false);
+    expect(historyFilterStatus()).toContain("only to loaded readings");
+    expect(fetcher.mock.calls).toHaveLength(requests);
+    expect(allocate).not.toHaveBeenCalled();
+    expect(JSON.stringify(items)).toBe(original);
+  });
+
+  it("keeps current-ID resets true no-ops and rejects hidden/restored row or stale filter callbacks before effects", async () => {
+    const { fetcher } = metricHistoryWorkspace();
+    await mount();
+    const edit = button("Edit", eventRows()[0]),
+      oldDelete = button("Delete", eventRows()[0]),
+      input = historyMetricControl(),
+      reset = button("All metrics");
+    invoke(reset, "onClick");
+    invoke(reset, "onClick");
+    invoke(input, "onChange", { target: { value: "" } });
+    invoke(edit, "onClick");
+    await hooks.settle();
+    expect(text(eventForm())).toContain("Edit manual event");
+    await click("Cancel", eventForm());
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal("window", { confirm });
+    const before = fetcher.mock.calls.length;
+    invoke(historyMetricControl(), "onChange", {
+      target: { value: duplicateHistoryDefinition.id },
+    });
+    invoke(edit, "onClick");
+    invoke(oldDelete, "onClick");
+    invoke(reset, "onClick");
+    invoke(input, "onChange", { target: { value: "" } });
+    await hooks.settle();
+    expect(historyMetricControl().props.value).toBe(duplicateHistoryDefinition.id);
+    expect(text(eventForm())).toContain("Log event");
+    expect(confirm).not.toHaveBeenCalled();
+    await click("All metrics");
+    invoke(edit, "onClick");
+    invoke(oldDelete, "onClick");
+    await hooks.settle();
+    expect(text(eventForm())).toContain("Log event");
+    invoke(historyMetricControl(), "onChange", { target: { value: "unknown-unloaded-id" } });
+    await hooks.settle();
+    expect(historyMetricControl().props.value).toBe("");
+    expect(fetcher.mock.calls).toHaveLength(before);
+    expect(confirm).not.toHaveBeenCalled();
+    await chooseHistoryMetric(duplicateHistoryDefinition.id);
+    const current = button("Edit", eventRows()[0]),
+      same = historyMetricControl();
+    invoke(same, "onChange", { target: { value: duplicateHistoryDefinition.id } });
+    invoke(current, "onClick");
+    await hooks.settle();
+    expect(eventField("Exact value").props.value).toBe("-2.50000");
+  });
+
+  it("keeps every raw editor/trend/custom-food/reminder input and disclosure independent when its edited row is hidden", async () => {
+    const { fetcher } = metricHistoryWorkspace();
+    await mount();
+    await click("Edit", eventRows()[0]);
+    await changeEvent("Exact value", "71.200000");
+    await changeEvent("Local date", "2026-09-09");
+    await changeEvent("Local time", "07:23");
+    await change("From", "2026-08-01");
+    await change("Name", " Unrelated custom name ");
+    await changeReminderInput("Private in-app label", " Unrelated reminder ");
+    await toggle(food());
+    const inputs = inputsExceptHistoryMetric(),
+      message = status(),
+      before = fetcher.mock.calls.length;
+    await chooseHistoryMetric(emptyHistoryDefinition.id);
+    expect(eventRows()).toHaveLength(0);
+    expect(historyFilterStatus()).toContain("Showing 0 of 5 loaded readings");
+    expect(historyFilterStatus()).toContain("No loaded readings match this metric");
+    expect(inputsExceptHistoryMetric()).toEqual(inputs);
+    expect(status()).toBe(message);
+    expect(details(food()).props.hidden).toBe(false);
+    expect(fetcher.mock.calls).toHaveLength(before);
+    await click("All metrics");
+    expect(inputsExceptHistoryMetric()).toEqual(inputs);
+    expect(eventRows()).toHaveLength(5);
+  });
+
+  it("keeps zero-match continuation reachable and preserves overlap order, exact cursor and terminal-page meaning", async () => {
+    const { state, items, fetcher, eventReads } = metricHistoryWorkspace();
+    state.eventRead = () => eventPage(items, "filter.next");
+    await mount();
+    await chooseHistoryMetric(emptyHistoryDefinition.id);
+    const pending = deferred<Response>();
+    state.eventRead = () => pending.promise;
+    const old = historyMetricControl(),
+      reset = button("All metrics");
+    invoke(button("Load older biometric events"), "onClick");
+    invoke(old, "onChange", { target: { value: "" } });
+    invoke(reset, "onClick");
+    await hooks.settle();
+    expect(historyMetricControl().props.disabled).toBe(true);
+    expect(button("All metrics").props.disabled).toBe(true);
+    expect(historyMetricControl().props.value).toBe(emptyHistoryDefinition.id);
+    expect(eventRows()).toHaveLength(0);
+    pending.resolve(
+      eventPage(
+        [
+          { ...items[0], value: "999.000" } as BiometricEvent,
+          { ...reading(6), definitionId: emptyHistoryDefinition.id },
+        ],
+        "filter.last",
+      ),
+    );
+    await hooks.settle();
+    expect(historyFilterStatus()).toContain("Showing 1 of 6 loaded readings");
+    expect(text(eventRows()[0])).toContain("6.200 cm · Height");
+    expect(requestRange(eventReads()[1]?.[0])).toEqual({
+      ...requestRange(eventReads()[0]?.[0]),
+      cursor: "filter.next",
+    });
+    const before = fetcher.mock.calls.length;
+    await click("All metrics");
+    expect(text(eventRows()[0])).toContain("0.00000 kg");
+    expect(fetcher.mock.calls).toHaveLength(before);
+    await chooseHistoryMetric(emptyHistoryDefinition.id);
+    state.eventRead = () => eventPage([]);
+    await click("Load older biometric events");
+    expect(historyMetricControl().props.value).toBe(emptyHistoryDefinition.id);
+    expect(historyFilterStatus()).toContain("Showing 1 of 6 loaded readings");
+    expect(historyStatus()).toContain("No more readings in this window");
+    expect(
+      elements().some(
+        (node) => node.type === "button" && text(node) === "Load older biometric events",
+      ),
+    ).toBe(false);
+  });
+
+  it.each(["503", "400"])(
+    "retains the selected metric and truthful loaded count through continuation%s and explicit recovery",
+    async (failure) => {
+      const { state, items, eventReads } = metricHistoryWorkspace();
+      state.eventRead = () => eventPage(items, "same.cursor");
+      await mount();
+      await chooseHistoryMetric(emptyHistoryDefinition.id);
+      state.eventRead = () =>
+        Response.json({ error: "Page unavailable" }, { status: Number(failure) });
+      await click("Load older biometric events");
+      expect(historyMetricControl().props.value).toBe(emptyHistoryDefinition.id);
+      expect(historyFilterStatus()).toContain("Showing 0 of 5 loaded readings");
+      expect(historyStatus()).not.toContain("No more readings in this window");
+      state.eventRead = () =>
+        eventPage([{ ...reading(6), definitionId: emptyHistoryDefinition.id }]);
+      await click(failure === "400" ? "Reload history" : "Load older biometric events");
+      expect(historyMetricControl().props.value).toBe(emptyHistoryDefinition.id);
+      expect(eventRows()).toHaveLength(1);
+      expect(requestRange(eventReads().at(-1)?.[0]).cursor).toBe(
+        failure === "400" ? null : "same.cursor",
+      );
+    },
+  );
+
+  it("retains an unavailable selected ID across empty windows, reload and failed full Retry without inventing verified counts", async () => {
+    const { state, eventReads } = metricHistoryWorkspace();
+    await mount();
+    await chooseHistoryMetric(missingHistoryMetric);
+    state.eventRead = () => eventPage([]);
+    await click("Earlier window");
+    expect(historyMetricControl().props.value).toBe(missingHistoryMetric);
+    expect(historyMetricOptions().at(-1)?.id).toBe(missingHistoryMetric);
+    expect(historyMetricOptions().some((choice) => choice.id === otherMissingHistoryMetric)).toBe(
+      false,
+    );
+    expect(historyFilterStatus()).toContain("Showing 0 of 0 loaded readings");
+    await click("Reload history");
+    await click("Newer window");
+    await click("Earlier window");
+    await click("Recent history");
+    expect(historyMetricControl().props.value).toBe(missingHistoryMetric);
+    state.read = () => Response.json({ error: "Failed full verification" }, { status: 503 });
+    hooks.replayEffects();
+    await hooks.settle();
+    expect(historyMetricControl().props.value).toBe(missingHistoryMetric);
+    // A failed same-scope full read retains the existing last-verified history snapshot.
+    expect(historyFilterStatus()).toContain("Showing 0 of 0 loaded readings");
+    expect(historyStatus()).toContain("Private data could not be verified");
+    state.read = null;
+    const prior = eventReads().length;
+    await click("Retry private data");
+    expect(eventReads()).toHaveLength(prior + 1);
+    expect(historyMetricControl().props.value).toBe(missingHistoryMetric);
+    expect(historyFilterStatus()).toContain("Showing 0 of 0 loaded readings");
+  });
+
+  it.each(["window", "reload", "full read", "profile", "owner", "background", "unmount"])(
+    "fences retained select/reset/row actions through%s using existing history scope",
+    async (transition) => {
+      const view = visibility(),
+        { state, fetcher } = metricHistoryWorkspace();
+      await mount();
+      await chooseHistoryMetric(duplicateHistoryDefinition.id);
+      const input = historyMetricControl(),
+        reset = button("All metrics"),
+        edit = button("Edit", eventRows()[0]),
+        remove = button("Delete", eventRows()[0]),
+        confirm = vi.fn(() => true);
+      vi.stubGlobal("window", { confirm });
+      if (transition === "window") await click("Earlier window");
+      else if (transition === "reload") await click("Reload history");
+      else if (transition === "background") {
+        await view.set("hidden");
+        expect(historyMetricOptions()).toEqual([{ id: "", label: "All metrics" }]);
+        expect(historyMetricControl().props.value).toBe("");
+        await view.set("visible");
+      } else if (transition === "unmount") hooks.unmount();
+      else {
+        if (transition === "profile") state.timeZone = "America/Chicago";
+        if (transition === "owner") state.owner = otherOwner;
+        hooks.replayEffects();
+        await hooks.settle();
+      }
+      const before = fetcher.mock.calls.length,
+        rendered = text(),
+        inputs = inputsExceptHistoryMetric();
+      invoke(input, "onChange", { target: { value: missingHistoryMetric } });
+      invoke(reset, "onClick");
+      invoke(edit, "onClick");
+      invoke(remove, "onClick");
+      await hooks.settle();
+      expect(fetcher.mock.calls).toHaveLength(before);
+      expect(text()).toBe(rendered);
+      expect(inputsExceptHistoryMetric()).toEqual(inputs);
+      expect(confirm).not.toHaveBeenCalled();
+      if (transition !== "unmount")
+        expect(historyMetricControl().props.value).toBe(
+          ["profile", "owner"].includes(transition) ? "" : duplicateHistoryDefinition.id,
+        );
+      if (transition === "owner")
+        expect(historyMetricOptions()).toEqual([{ id: "", label: "All metrics" }]);
+    },
+  );
+
+  it("preserves exact failed PATCH body/key and raw off-filter editor through local changes and retry", async () => {
+    const { state, fetcher } = metricHistoryWorkspace();
+    await mount();
+    await click("Edit", eventRows()[0]);
+    await changeEvent("Exact value", "71.200000");
+    state.write = () => Response.json({ error: "Ambiguous correction" }, { status: 503 });
+    await saveReading();
+    const first = requiredHistory(fetcher.mock.calls.find(([, init]) => init?.method === "PATCH")),
+      message = status();
+    await chooseHistoryMetric(emptyHistoryDefinition.id);
+    expect(eventRows()).toHaveLength(0);
+    expect(status()).toBe(message);
+    expect(eventField("Exact value").props.value).toBe("71.200000");
+    expect(eventField("Local time").props.value).toBe("12:34");
+    await saveReading();
+    const writes = fetcher.mock.calls.filter(([, init]) => init?.method === "PATCH");
+    expect(writes).toHaveLength(2);
+    expect(first[1]?.body).toBe(JSON.stringify({ value: "71.200000" }));
+    expect(writes[1]?.[1]?.body).toBe(first[1]?.body);
+    expect(new Headers(writes[1]?.[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(first[1]?.headers).get("idempotency-key"),
+    );
+    expect(new Headers(first[1]?.headers).get("if-match")).toBe('"1"');
+  });
+
+  it.each(["current", "background"])(
+    "preserves accepted off-filter edit cleanup after%s and rejects filter changes during its live write",
+    async (transition) => {
+      const view = visibility(),
+        { state, fetcher } = metricHistoryWorkspace();
+      state.cursor = "private.next";
+      state.continuation = () => page([], null);
+      await mount();
+      await click("Edit", eventRows()[0]);
+      await changeEvent("Exact value", "71.9000");
+      await chooseHistoryMetric(duplicateHistoryDefinition.id);
+      const pending = deferred<Response>();
+      state.write = () => pending.promise;
+      const input = historyMetricControl(),
+        reset = button("All metrics");
+      invoke(eventForm(), "onSubmit", { preventDefault() {} });
+      invoke(input, "onChange", { target: { value: "" } });
+      invoke(reset, "onClick");
+      await hooks.settle();
+      await click("Load more private foods");
+      expect(historyMetricControl().props.disabled).toBe(true);
+      expect(button("All metrics").props.disabled).toBe(true);
+      invoke(historyMetricControl(), "onChange", { target: { value: "" } });
+      await hooks.settle();
+      expect(historyMetricControl().props.value).toBe(duplicateHistoryDefinition.id);
+      expect(fetcher.mock.calls.filter(([, init]) => init?.method === "PATCH")).toHaveLength(1);
+      if (transition === "background") await view.set("hidden");
+      pending.resolve(
+        Response.json({
+          data: { event: { ...reading(), revision: "2", value: "71.9000" }, replayed: false },
+        }),
+      );
+      await hooks.settle();
+      if (transition === "background") await view.set("visible");
+      expect(historyMetricControl().props.value).toBe(duplicateHistoryDefinition.id);
+      expect(eventField("Exact value").props.value).toBe("");
+      expect(text(eventForm())).toContain("Log event");
+      expect(eventRows()).toHaveLength(1);
+      await click("All metrics");
+      expect(text(eventRows()[0])).toContain("71.9000");
+    },
+  );
+});
