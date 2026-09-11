@@ -159,6 +159,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Recipe ingredient food-search pages on web/native | ADR 0054 committed query, explicit continuation and exact version pins; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 | Automatic evidence / independent review | Earlier biometric history on web/native | ADR 0055 fixed inclusive windows, exact continuation and editor/trend independence; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 | Automatic evidence / independent review | Reminder day presets on web/native | ADR 0056 local memberships, exact retries and explicit consent/save; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
+| Automatic evidence / independent review | Expand all diary meals on web/native | ADR 0057 local overview, preserved drafts/disclosures/paging and existing private/queue guards; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1559,6 +1560,20 @@ At September 11, 2026 08:06:01 UTC, base
 container `34571423175` remained in progress. Base results do not transfer to this
 slice. External/device/notification-delivery/hosted/release acceptance is separate.
 
+### Expand all diary meals: source/local complete
+
+[ADR 0057](../adr/0057-diary-expand-all.md) adds one local action to restore all
+collapsed meal groups using existing presentation ownership. Preserve exact
+totals, nutrient disclosures, raw editors, pagination and native queue holds.
+Focused regressions, independent review, fresh canonical gates and synthetic
+Chrome multi-group/no-request/editor/paging/keyboard/narrow/expiry evidence passed.
+Shared contracts and protected queues remain unchanged.
+
+At 2026-09-11T15:55:20.582850+00:00, base
+`37505ee7fd20dbb0f34be4539db8daa35e806eea` CI `34580740120` and container
+`34580740091` both succeeded. Base results do not transfer to this slice.
+External/device/hosted/release acceptance remains separate.
+
 ### Next bounded candidate
 
-Expand all diary meals on web/native: offer one local action to restore the full day after collapsing several meal groups. Reuse the existing meal presentation ownership, clear only collapsed membership with an exact no-op when already expanded, and preserve nutrient disclosures, raw editors, outbox and requests. Begin with a bounded acceptance card and focused stale-day/private-state and editor/queue regression cases. This is a candidate for the next turn; no successor code is included here.
+Filter loaded biometric history by metric on web/native, with an All metrics reset. Derive displayed rows from the existing loaded snapshot using metric IDs; retain source order, exact values, missing-definition labels and truthful shown/loaded counts. Keep continuation available even with zero matches, preserve independent editor/trend inputs and require zero filter requests. Begin with a bounded card covering duplicate names, missing metadata, paging/window/error boundaries and retained row controls. No successor code is included in this slice.

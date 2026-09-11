@@ -1430,7 +1430,7 @@ export function DiaryScreen({
     });
   }
 
-  function toggleMeal(meal: MealSlot) {
+  function canUseMealControls(): boolean {
     const presentation = mealPresentation.current;
     if (
       !presentation.mounted ||
@@ -1448,12 +1448,24 @@ export function DiaryScreen({
       mealGuard.current.hold ||
       editorRef.current !== null ||
       activeMutation.current !== null ||
-      mealToggleUnavailable ||
-      !diary?.entries.some((entry) => entry.mealSlot === meal)
+      mealToggleUnavailable
     )
-      return;
+      return false;
     const queue = quickAddOutboxController.getState();
-    if (queue.status !== "idle" || queue.pendingCount > 0) return;
+    if (queue.status !== "idle" || queue.pendingCount > 0) return false;
+    return true;
+  }
+
+  function expandAllMeals() {
+    if (!canUseMealControls() || mealPresentation.current.collapsed.size === 0) return;
+    mealPresentation.current.collapsed = new Set();
+    mealPresentation.current.generation += 1;
+    refreshMealPresentation((value) => value + 1);
+  }
+
+  function toggleMeal(meal: MealSlot) {
+    if (!diary?.entries.some((entry) => entry.mealSlot === meal) || !canUseMealControls()) return;
+    const presentation = mealPresentation.current;
     const collapsed = new Set(presentation.collapsed);
     if (collapsed.has(meal)) collapsed.delete(meal);
     else collapsed.add(meal);
@@ -1816,6 +1828,28 @@ export function DiaryScreen({
             {diary.entries.length} of {diaryPage.page.totalEntries} entries loaded. Nutrition totals
             include all {diaryPage.page.totalEntries}.
           </Text>
+        ) : null}
+
+        {diary &&
+        diary.entries.length > 0 &&
+        state === "ready" &&
+        mealSnapshotScope.current === mealScopeKey &&
+        !privateUiClosed.current &&
+        requestedMealRoute === appliedRouteGeneration.current ? (
+          <Pressable
+            accessibilityLabel="Expand all meals"
+            accessibilityRole="button"
+            accessibilityState={{ disabled: mealToggleUnavailable }}
+            disabled={mealToggleUnavailable}
+            onPress={expandAllMeals}
+            style={styles.secondaryButton}
+          >
+            <Text
+              style={[styles.secondaryText, mealToggleUnavailable && styles.disabledMealToggle]}
+            >
+              Expand all meals
+            </Text>
+          </Pressable>
         ) : null}
 
         {diary && diaryPage?.page.totalEntries === 0 && state === "ready" ? (

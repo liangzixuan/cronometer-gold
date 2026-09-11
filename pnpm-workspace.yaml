@@ -19,21 +19,32 @@ overrides:
   react-dom: 19.2.3
 
 minimumReleaseAgeExclude:
-  - '@expo/cli@57.0.23'
+  - '@expo/cli@57.0.23 || 57.0.24'
   - '@expo/metro-file-map@57.0.3'
   - babel-preset-expo@57.0.11
-  - expo@57.0.21
+  - expo@57.0.21 || 57.0.22
   - expo-build-properties@57.0.17
-  - expo-modules-core@57.0.17
+  - expo-modules-core@57.0.17 || 57.0.18
   - expo-modules-jsi@57.1.0
-  - expo-notifications@57.0.17
-  - fast-uri@3.1.7
-  - fast-uri@4.1.4
+  - expo-notifications@57.0.17 || 57.0.18
+  - fast-uri@3.1.7 || 4.1.4
+  - '@expo/fingerprint@0.20.13'
+  - '@expo/prebuild-config@57.0.16'
+  - expo-application@57.0.3
+  - expo-asset@57.0.17
+  - expo-camera@57.0.5
+  - expo-constants@57.0.18
+  - expo-crypto@57.0.3
+  - expo-file-system@57.0.7
+  - expo-font@57.0.4
+  - expo-keep-awake@57.0.2
+  - expo-modules-autolinking@57.0.13
+  - expo-secure-store@57.0.4
 
 supportedArchitectures:
-  os: [current, darwin, linux]
-  cpu: [current, arm64, x64]
-  libc: [current, glibc, musl]
+  os: [ current, darwin, linux ]
+  cpu: [ current, arm64, x64 ]
+  libc: [ current, glibc, musl ]
 
 allowBuilds:
   esbuild: true

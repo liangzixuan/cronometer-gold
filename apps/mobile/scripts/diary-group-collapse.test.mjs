@@ -43,6 +43,7 @@ function screenHarness(props) {
   let tree;
   let unmounted = false;
   let writesAfterUnmount = 0;
+  let stateWrites = 0;
   const sameDependencies = (left, right) =>
     left !== undefined &&
     right !== undefined &&
@@ -56,6 +57,7 @@ function screenHarness(props) {
       return [
         slot.value,
         (update) => {
+          stateWrites += 1;
           if (unmounted) writesAfterUnmount += 1;
           const next = typeof update === "function" ? update(slot.value) : update;
           if (!Object.is(next, slot.value)) {
@@ -129,6 +131,9 @@ function screenHarness(props) {
       for (const slot of slots) slot.cleanup?.();
       for (const slot of slots) if (slot.effect) slot.cleanup = slot.effect();
       dirty = true;
+    },
+    get stateWrites() {
+      return stateWrites;
     },
     get writesAfterUnmount() {
       return writesAfterUnmount;
@@ -455,12 +460,19 @@ describe("native diary meal group collapse", () => {
     ).toBeDefined();
     expect(toggle(tree, "Custom lunch", false)).toBeDefined();
     expect(toggle(tree, "Custom dinner").props.accessibilityState.expanded).toBe(true);
+    byLabel(tree, "Expand all meals").props.onPress();
+    tree = await harness.settle();
+    for (const group of groups)
+      expect(toggle(tree, group.label).props.accessibilityState.expanded).toBe(true);
   });
   it("retains real empty-day and empty-meal meaning", async () => {
     const { harness } = setup(() => response(page(selectedDate, [], null, 0, [])));
     const tree = await harness.settle();
     expect(screenText(tree)).toContain("Start with a food you actually ate.");
     expect(screenText(tree)).toContain("0 of 0 entries loaded");
+    expect(
+      nodes(tree, (node) => node.props.accessibilityLabel === "Expand all meals"),
+    ).toHaveLength(0);
     expect(
       nodes(tree, (node) =>
         node.props.accessibilityLabel?.match(/^(Expand|Collapse) .* entries$/u),
@@ -547,13 +559,16 @@ describe("native diary meal group collapse", () => {
     toggle(tree, "Breakfast").props.onPress();
     tree = await harness.settle();
     const old = toggle(tree, "Breakfast", false).props.onPress;
+    const expand = byLabel(tree, "Expand all meals").props.onPress;
     const before = requests.length;
     receive();
     old();
+    expand();
     tree = await harness.settle();
     expect(requests).toHaveLength(before + 3);
     expect(toggle(tree, "Breakfast", false)).toBeDefined();
     old();
+    expand();
     tree = await harness.settle();
     expect(toggle(tree, "Breakfast", false)).toBeDefined();
   });
@@ -580,6 +595,7 @@ describe("native diary meal group collapse", () => {
       toggle(tree, "Breakfast").props.onPress();
       tree = await harness.settle();
       const old = toggle(tree, "Breakfast", false).props.onPress;
+      const expand = byLabel(tree, "Expand all meals").props.onPress;
       harness.updateProps(
         change === "owner"
           ? { expectedOwnerUserId: "another-owner" }
@@ -593,7 +609,11 @@ describe("native diary meal group collapse", () => {
       );
       tree = harness.renderWithoutEffects();
       expect(toggle(tree, "Breakfast").props.disabled).toBe(true);
+      expect(
+        nodes(tree, (node) => node.props.accessibilityLabel === "Expand all meals"),
+      ).toHaveLength(0);
       old();
+      expand();
       tree = harness.renderWithoutEffects();
       expect(toggle(tree, "Breakfast").props.accessibilityState.expanded).toBe(true);
     });
@@ -632,8 +652,10 @@ describe("native diary meal group collapse", () => {
     const { harness, controller } = setup();
     let tree = await harness.settle();
     const old = toggle(tree, "Breakfast").props.onPress;
+    const expand = byLabel(tree, "Expand all meals").props.onPress;
     byLabel(tree, "Edit Apple entry and private note").props.onPress();
     old();
+    expand();
     tree = await harness.settle();
     byLabel(tree, "Quantity", "TextInput").props.onChangeText("2.0001");
     tree = await harness.settle();
@@ -642,8 +664,11 @@ describe("native diary meal group collapse", () => {
     );
     tree = await harness.settle();
     for (const label of groupLabels) expect(toggle(tree, label).props.disabled).toBe(true);
+    expect(byLabel(tree, "Expand all meals").props.disabled).toBe(true);
+    byLabel(tree, "Expand all meals").props.onPress();
     toggle(tree, "Lunch").props.onPress();
     old();
+    expand();
     tree = await harness.settle();
     expect(byLabel(tree, "Quantity", "TextInput").props.value).toBe("2.0001");
     expect(byLabel(tree, "Private note for Apple", "TextInput").props.value).toBe(
@@ -654,6 +679,7 @@ describe("native diary meal group collapse", () => {
     tree = await harness.settle();
     expect(toggle(tree, "Breakfast").props.disabled).toBe(false);
     old();
+    expand();
     tree = await harness.settle();
     expect(toggle(tree, "Breakfast").props.accessibilityState.expanded).toBe(true);
   });
@@ -718,11 +744,16 @@ describe("native diary meal group collapse", () => {
   it("rechecks pending controller state synchronously before prop delivery", async () => {
     const { harness, setQueue } = setup();
     let tree = await harness.settle();
+    toggle(tree, "Lunch").props.onPress();
+    tree = await harness.settle();
     const old = toggle(tree, "Breakfast").props.onPress;
+    const expand = byLabel(tree, "Expand all meals").props.onPress;
     setQueue({ status: "pending", pendingCount: 1 }, undefined, false);
     old();
+    expand();
     tree = await harness.settle();
     expect(toggle(tree, "Breakfast").props.accessibilityState.expanded).toBe(true);
+    expect(toggle(tree, "Lunch", false).props.accessibilityState.expanded).toBe(false);
   });
   for (const transition of ["date", "refresh"]) {
     it(`fences route ${transition} replacement before effects and preserves only same-day choices`, async () => {
@@ -731,6 +762,7 @@ describe("native diary meal group collapse", () => {
       toggle(tree, "Breakfast").props.onPress();
       tree = await harness.settle();
       const old = toggle(tree, "Breakfast", false).props.onPress;
+      const expand = byLabel(tree, "Expand all meals").props.onPress;
       harness.updateProps(
         transition === "date"
           ? { requestedDate: "2026-08-16", refreshKey: "next" }
@@ -739,10 +771,12 @@ describe("native diary meal group collapse", () => {
       tree = harness.renderWithoutEffects();
       expect(toggle(tree, "Breakfast", false).props.disabled).toBe(true);
       old();
+      expand();
       toggle(tree, "Breakfast", false).props.onPress();
       harness.flushEffects();
       tree = await harness.settle();
       old();
+      expand();
       tree = await harness.settle();
       expect(toggle(tree, "Breakfast", transition === "date")).toBeDefined();
     });
@@ -767,17 +801,25 @@ describe("native diary meal group collapse", () => {
     toggle(tree, "Breakfast").props.onPress();
     tree = await harness.settle();
     const old = toggle(tree, "Breakfast", false).props.onPress;
+    const expand = byLabel(tree, "Expand all meals").props.onPress;
     byLabel(tree, "Load more diary entries").props.onPress();
     old();
+    expand();
     tree = await harness.settle();
     expect(toggle(tree, "Breakfast", false).props.disabled).toBe(true);
+    expect(byLabel(tree, "Expand all meals").props.disabled).toBe(true);
     pending.resolve(response({}, 503));
     tree = await harness.settle();
     expect(toggle(tree, "Breakfast", false)).toBeDefined();
     old();
+    expand();
     byLabel(tree, "Retry loading more diary entries").props.onPress();
     tree = await harness.settle();
     expect(toggle(tree, "Breakfast", false)).toBeDefined();
+    expect(screenText(tree)).toContain("21 of 21 entries loaded");
+    byLabel(tree, "Expand all meals").props.onPress();
+    tree = await harness.settle();
+    expect(toggle(tree, "Breakfast").props.accessibilityState.expanded).toBe(true);
     expect(screenText(tree)).toContain("21 of 21 entries loaded");
   });
   it("hides unavailable private snapshots and rejects controls after failed reload or401", async () => {
@@ -813,6 +855,7 @@ describe("native diary meal group collapse", () => {
     toggle(tree, "Breakfast").props.onPress();
     tree = await harness.settle();
     const old = toggle(tree, "Breakfast", false).props.onPress;
+    const expand = byLabel(tree, "Expand all meals").props.onPress;
     setQueue({
       status: "blocked",
       pendingCount: 1,
@@ -827,6 +870,9 @@ describe("native diary meal group collapse", () => {
     });
     tree = await harness.settle();
     expect(toggle(tree, "Breakfast").props.disabled).toBe(true);
+    expect(byLabel(tree, "Expand all meals").props.disabled).toBe(true);
+    byLabel(tree, "Expand all meals").props.onPress();
+    expand();
     byLabel(tree, "Retry queued Apple change exactly").props.onPress();
     tree = await harness.settle();
     expect(controller.retryBlockedHead).toHaveBeenCalledExactlyOnceWith("blocked-operation");
@@ -840,6 +886,7 @@ describe("native diary meal group collapse", () => {
     setQueue({ status: "idle", pendingCount: 0 });
     tree = await harness.settle();
     old();
+    expand();
     tree = await harness.settle();
     expect(toggle(tree, "Breakfast", false).props.disabled).toBe(false);
   });
@@ -1370,5 +1417,99 @@ describe("native logged diary entry nutrient details", () => {
     harness.unmount();
     old();
     expect(harness.writesAfterUnmount).toBe(0);
+  });
+});
+
+describe("native Expand all diary meals", () => {
+  it("restores multiple loaded meals with exact nutrient choices, counts and no local side effects", async () => {
+    const { harness, requests, controller } = setup();
+    let tree = await toggleNutrients(harness, entry.id);
+    tree = await toggleNutrients(harness, recipeEntry.id);
+    const original = JSON.stringify(entries);
+    const count = requests.length;
+    toggle(tree, "Breakfast").props.onPress();
+    tree = await harness.settle();
+    toggle(tree, "Dinner").props.onPress();
+    tree = await harness.settle();
+    expect(
+      nodes(tree, (node) => node.props.accessibilityLabel === "Saved nutrients for Apple"),
+    ).toHaveLength(0);
+    expect(
+      nodes(tree, (node) => node.props.accessibilityLabel === "Saved nutrients for Bean stew"),
+    ).toHaveLength(0);
+    const expand = byLabel(tree, "Expand all meals");
+    expect(expand.props.accessibilityRole).toBe("button");
+    expect(expand.props.accessibilityState).toEqual({ disabled: false });
+    expand.props.onPress();
+    tree = await harness.settle();
+    for (const label of groupLabels)
+      expect(toggle(tree, label).props.accessibilityState.expanded).toBe(true);
+    expect(entryNutrientDetails(tree, entry.id)).toHaveLength(1);
+    expect(entryNutrientDetails(tree, recipeEntry.id)).toHaveLength(1);
+    expect(screenText(tree)).toContain("3 of 3 entries loaded");
+    expect(screenText(tree)).toContain("95.25 kcal");
+    expect(byLabel(tree, "Add food to Breakfast")).toBeDefined();
+    expect(requests).toHaveLength(count);
+    expect(controller.enqueueOperation).not.toHaveBeenCalled();
+    expect(controller.requestDrain).not.toHaveBeenCalled();
+    expect(JSON.stringify(entries)).toBe(original);
+  });
+  it("keeps an already-expanded action mounted/enabled and an exact no-op preserves a current individual toggle", async () => {
+    const { harness, requests, controller } = setup();
+    let tree = await harness.settle();
+    const close = toggle(tree, "Breakfast").props.onPress;
+    const expand = byLabel(tree, "Expand all meals");
+    expect(expand.props.disabled).toBe(false);
+    const writes = harness.stateWrites;
+    const count = requests.length;
+    expand.props.onPress();
+    expand.props.onPress();
+    expect(harness.stateWrites).toBe(writes);
+    close();
+    tree = await harness.settle();
+    expect(toggle(tree, "Breakfast", false).props.accessibilityState.expanded).toBe(false);
+    expect(byLabel(tree, "Expand all meals").props.disabled).toBe(false);
+    expect(requests).toHaveLength(count);
+    expect(controller.enqueueOperation).not.toHaveBeenCalled();
+  });
+  it("invalidates prior callbacks after a real expansion and cannot clear a later collapse choice", async () => {
+    const { harness } = setup();
+    let tree = await harness.settle();
+    toggle(tree, "Breakfast").props.onPress();
+    tree = await harness.settle();
+    const expand = byLabel(tree, "Expand all meals").props.onPress;
+    const oldClose = toggle(tree, "Dinner").props.onPress;
+    expand();
+    oldClose();
+    expand();
+    tree = await harness.settle();
+    expect(toggle(tree, "Dinner").props.accessibilityState.expanded).toBe(true);
+    toggle(tree, "Breakfast").props.onPress();
+    tree = await harness.settle();
+    expand();
+    tree = await harness.settle();
+    expect(toggle(tree, "Breakfast", false).props.accessibilityState.expanded).toBe(false);
+  });
+  it("rejects a retained Expand across background return and unmount without clearing current choices", async () => {
+    const { harness, requests } = setup();
+    let tree = await harness.settle();
+    toggle(tree, "Breakfast").props.onPress();
+    tree = await harness.settle();
+    const old = byLabel(tree, "Expand all meals").props.onPress;
+    const count = requests.length;
+    appState("background");
+    old();
+    tree = await harness.settle();
+    expect(byLabel(tree, "Expand all meals").props.disabled).toBe(true);
+    appState("active");
+    tree = await harness.settle();
+    old();
+    tree = await harness.settle();
+    expect(toggle(tree, "Breakfast", false)).toBeDefined();
+    const current = byLabel(tree, "Expand all meals").props.onPress;
+    harness.unmount();
+    current();
+    expect(harness.writesAfterUnmount).toBe(0);
+    expect(requests).toHaveLength(count);
   });
 });

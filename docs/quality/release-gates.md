@@ -897,3 +897,18 @@ acceptance.
   fresh canonical gates and synthetic Chrome presets/overrides/consent/no-premature-
   requests/explicit-save/retry/keyboard/narrow/expiry proof. Preserve every real
   device, notification delivery, external reviewer, hosted and release gate.
+
+
+## ADR 0057 Expand all diary meals
+
+- One local action clears current collapsed membership, reusing existing scope
+  and generation. Already-expanded activation performs no state/generation write;
+  retain the current button and keyboard focus. No request, operation or mutation.
+- Preserve exact totals, missingness, entries/order, labels, nutrient disclosures,
+  raw editors, paging/retry and individual controls. Enforce existing private/day/
+  read/mutation and native live-outbox guards; obsolete actions cannot clear a
+  newer collapse choice. Keep editor and queue visibility holds intact.
+- Require focused actual-component/helper/type/format checks, independent review,
+  frozen fresh canonical gates and synthetic Chrome multi-group/no-request/
+  disclosure/editor/paging/keyboard/narrow/expiry proof. Real persistence, native,
+  assistive technology, concurrent React, external and release gates stay separate.

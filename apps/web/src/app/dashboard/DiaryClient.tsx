@@ -387,6 +387,14 @@ export function DiaryClient() {
     setMealVisibility(next);
   }
 
+  function expandAllMeals() {
+    if (!canUseMealControls() || collapsedMeals.size === 0) return;
+    mealVisibilityGeneration.current += 1;
+    const next = { scope: mealViewScope, collapsed: new Set<MealSlot>() };
+    mealVisibilityRef.current = next;
+    setMealVisibility(next);
+  }
+
   function beginEntryEdit(entry: DiaryEntry) {
     if (!canUseMealControls() || !session || !diary?.entries.includes(entry)) return;
     setEditor(editState(entry, diary, session.profile.timeZone));
@@ -1741,6 +1749,17 @@ export function DiaryClient() {
               {diary.entries.length} of {diaryPage.page.totalEntries} entries loaded. Nutrition
               totals include all {diaryPage.page.totalEntries}.
             </p>
+            {diary.entries.length > 0 ? (
+              <button
+                aria-controls="diary-entry-groups"
+                className="buttonQuiet"
+                disabled={!canUseMealControls()}
+                onClick={expandAllMeals}
+                type="button"
+              >
+                Expand all meals
+              </button>
+            ) : null}
             {!completeDayLoaded ? (
               <p className="fieldHelp">Load the complete day before changing entry order.</p>
             ) : null}

@@ -433,6 +433,16 @@ describe("actual diary meal visibility", () => {
     expect(field("Quantity").props.value).toBe("2.125000");
     expect(field("Private note").props.value).toBe("  keep this unsaved note  ");
     await click("Collapse Lunch");
+    const raw = ["Quantity", "Private note", "Meal", "Local date", "Local time"].map(
+      (label) => field(label).props.value,
+    );
+    await click("Expand all meals");
+    expect(
+      ["Quantity", "Private note", "Meal", "Local date", "Local time"].map(
+        (label) => field(label).props.value,
+      ),
+    ).toEqual(raw);
+    expect(button("Collapse Lunch").props["aria-expanded"]).toBe(true);
     expect(field("Quantity").props.value).toBe("2.125000");
     await click("Cancel editing Apple 0");
     await click("Collapse Breakfast");
@@ -461,11 +471,14 @@ describe("diary collapse paging and work in progress", () => {
     await click("Collapse Lunch");
     expect(text(group("lunch"))).toContain("No entries loaded for this meal yet");
     expect(text(group("lunch"))).not.toContain("Loaded entries hidden.");
-    const expand = button("Expand Breakfast");
+    const expand = button("Expand Breakfast"),
+      expandAll = button("Expand all meals");
     invoke(button("Load more"));
     invoke(expand);
+    invoke(expandAll);
     await hooks.settle();
     expect(button("Expand Breakfast").props.disabled).toBe(true);
+    expect(button("Expand all meals").props.disabled).toBe(true);
     expect(text()).toContain("20 of 22 entries loaded. Nutrition totals include all 22.");
     pending.resolve(Response.json(second));
     await hooks.settle();
@@ -478,6 +491,11 @@ describe("diary collapse paging and work in progress", () => {
     expect(text(group("dinner"))).not.toContain("loaded for this meal yet");
     await click("Expand Lunch");
     expect(text(group("lunch"))).toContain("Apple 20");
+    const requests = fetch.mock.calls.length;
+    await click("Expand all meals");
+    expect(button("Collapse Breakfast").props["aria-expanded"]).toBe(true);
+    expect(text(group("breakfast"))).toContain("Apple 0");
+    expect(fetch.mock.calls).toHaveLength(requests);
     expect(fetch.mock.calls.filter(([url]) => url.includes("cursor="))).toHaveLength(1);
     expect(fetch.mock.calls.every(([, init]) => init?.method === undefined)).toBe(true);
   });
@@ -577,10 +595,14 @@ describe("diary collapse paging and work in progress", () => {
     await click("Edit Apple 0");
     await change("Quantity", "2.125000");
     await change("Private note", "New exact note");
-    const collapseLunch = button("Collapse Lunch");
+    await click("Collapse Lunch");
+    const expandAll = button("Expand all meals");
+    const collapseBreakfast = button("Collapse Breakfast");
     invoke(button("Save changes to Apple 0"));
-    invoke(collapseLunch);
+    invoke(collapseBreakfast);
+    invoke(expandAll);
     await hooks.settle();
+    expect(button("Expand all meals").props.disabled).toBe(true);
     expect(button("Collapse Breakfast").props.disabled).toBe(true);
     expect(button("Collapse Lunch").props.disabled).toBe(true);
     expect(field("Quantity").props.value).toBe("2.125000");
@@ -597,6 +619,9 @@ describe("diary collapse paging and work in progress", () => {
       elements().find((node) => node.type === "p" && node.props.tabIndex === -1) ?? null,
     );
     const requestsBeforeDetails = fetch.mock.calls.length;
+    expect(button("Expand Lunch").props["aria-expanded"]).toBe(false);
+    await click("Expand all meals");
+    expect(button("Collapse Lunch").props["aria-expanded"]).toBe(true);
     await toggleNutrients(0);
     await toggleNutrients(0);
     expect(
@@ -634,14 +659,17 @@ describe("diary collapse paging and work in progress", () => {
     await click("Customize diary groups");
     await change("Group 1 label", "Morning meal with a long custom label");
     await click("Move group 1 down");
-    const oldToggle = button("Expand Breakfast");
+    const oldToggle = button("Expand Breakfast"),
+      expandAll = button("Expand all meals");
     const form = elements().find(
       (node) => node.type === "form" && text(node).includes("Save groups"),
     );
     if (!form) throw new Error("Missing profile form");
     invoke(form, "onSubmit", { preventDefault() {} });
     invoke(oldToggle);
+    invoke(expandAll);
     await hooks.settle();
+    expect(button("Expand all meals").props.disabled).toBe(true);
     expect(button("Collapse Breakfast").props.disabled).toBe(true);
     expect(text(group("breakfast"))).toContain("Apple 0");
     pending.resolve(Response.json({ data: { profile } }));
@@ -659,6 +687,10 @@ describe("diary collapse paging and work in progress", () => {
         )
         .map((node) => node.props["aria-labelledby"]),
     ).toEqual(["meal-lunch", "meal-breakfast", "meal-dinner", "meal-snacks"]);
+    await click("Expand all meals");
+    expect(button("Collapse Morning meal with a long custom label").props["aria-expanded"]).toBe(
+      true,
+    );
   });
 });
 
@@ -666,9 +698,11 @@ describe("diary collapse private scope", () => {
   it("resets on a committed date and does not revive prior choices when returning", async () => {
     await mount();
     await click("Collapse Breakfast");
-    const oldToggle = button("Expand Breakfast");
+    const oldToggle = button("Expand Breakfast"),
+      oldExpandAll = button("Expand all meals");
     invoke(button("Next day"));
     invoke(oldToggle);
+    invoke(oldExpandAll);
     route.date = "2026-08-16";
     await hooks.settle();
     expect(button("Collapse Breakfast").props["aria-expanded"]).toBe(true);
@@ -678,6 +712,7 @@ describe("diary collapse private scope", () => {
     route.date = "2026-08-15";
     await hooks.settle();
     invoke(oldToggle);
+    invoke(oldExpandAll);
     await hooks.settle();
     expect(button("Collapse Breakfast").props["aria-expanded"]).toBe(true);
   });
@@ -693,7 +728,8 @@ describe("diary collapse private scope", () => {
       );
       await mount(fetch);
       await click("Collapse Breakfast");
-      const oldToggle = button("Expand Breakfast");
+      const oldToggle = button("Expand Breakfast"),
+        oldExpandAll = button("Expand all meals");
       if (transition === "route-before-effects") {
         route.date = "2026-08-16";
         hooks.renderWithoutEffects();
@@ -708,6 +744,7 @@ describe("diary collapse private scope", () => {
       const requests = fetch.mock.calls.length;
       const before = text();
       invoke(oldToggle);
+      invoke(oldExpandAll);
       if (transition !== "route-before-effects") await hooks.settle();
       expect(text()).toBe(before);
       expect(fetch).toHaveBeenCalledTimes(requests);
@@ -735,7 +772,8 @@ describe("diary collapse private scope", () => {
     });
     await mount(fetch);
     await click("Collapse Breakfast");
-    const oldToggle = button("Expand Breakfast");
+    const oldToggle = button("Expand Breakfast"),
+      oldExpandAll = button("Expand all meals");
     await click("Customize diary groups");
     await change("Group 1 label", "Morning");
     const form = elements().find(
@@ -746,6 +784,7 @@ describe("diary collapse private scope", () => {
     await hooks.settle();
     const requests = fetch.mock.calls.length;
     invoke(oldToggle);
+    invoke(oldExpandAll);
     await hooks.settle();
     expect(text()).not.toContain("Apple 0");
     expect(text()).not.toContain("Loaded entries hidden.");
@@ -758,6 +797,9 @@ describe("diary collapse private scope", () => {
     expect(text()).toContain("No foods logged for this local day.");
     expect(text()).toContain("Nothing logged");
     expect(text()).not.toContain("Loaded entries hidden.");
+    expect(
+      elements().some((node) => node.type === "button" && text(node) === "Expand all meals"),
+    ).toBe(false);
     expect(
       elements().some((node) => node.props["aria-controls"] === "meal-entries-breakfast"),
     ).toBe(false);
@@ -880,16 +922,19 @@ describe("diary collapse snapshot invariants", () => {
     );
     await mount(fetch);
     await click("Collapse Breakfast");
-    const oldToggle = button("Expand Breakfast");
+    const oldToggle = button("Expand Breakfast"),
+      oldExpandAll = button("Expand all meals");
     invoke(button("Next day"));
     route.date = "2026-08-16";
     await hooks.settle();
     invoke(oldToggle);
+    invoke(oldExpandAll);
     await hooks.settle();
     expect(text()).not.toContain("Loaded entries hidden.");
     pending.resolve(Response.json({ error: "Day unavailable." }, { status: 503 }));
     await hooks.settle();
     invoke(oldToggle);
+    invoke(oldExpandAll);
     await hooks.settle();
     expect(text()).toContain("Day unavailable.");
     failNextDay = false;
@@ -1324,5 +1369,111 @@ describe("logged portion nutrient details", () => {
       await toggleNutrients(0);
       expect(nutrientControl(0).props["aria-expanded"]).toBe(true);
     }
+  });
+});
+
+describe("Expand all diary meals", () => {
+  it("restores every loaded group and its nutrient choices without altering evidence or issuing effects", async () => {
+    const fixture = page([entry(0), entry(1, "lunch"), entry(2, "dinner")], "d1.next-page", 24);
+    const original = JSON.stringify(fixture),
+      fetch = await mount(fetcher(fixture));
+    await toggleNutrients(0);
+    const groups = defaultDiaryGroups.map((item) => text(group(item.mealSlot)));
+    const evidence = () =>
+      elements()
+        .filter(
+          (node) =>
+            node.props.id === "diary-page-count" ||
+            node.props["aria-labelledby"] === "nutrition-summary-title",
+        )
+        .map((node) => text(node));
+    const beforeEvidence = evidence(),
+      message = text(elements().find((node) => node.props.role === "status") ?? null);
+    const links = elements()
+      .filter((node) => typeof node.props.href === "string")
+      .map((node) => node.props.href);
+    expect(links).toContain("/foods?date=2026-08-15&meal=breakfast");
+    expect(links).toContain("/foods?date=2026-08-15&meal=lunch");
+    await click("Collapse Breakfast");
+    await click("Collapse Lunch");
+    await click("Collapse Dinner");
+    await click("Collapse Snacks");
+    const requests = fetch.mock.calls.length,
+      allocate = vi.fn();
+    vi.stubGlobal("crypto", { randomUUID: allocate });
+    const control = button("Expand all meals");
+    expect(control.props.type).toBe("button");
+    expect(control.props["aria-controls"]).toBe("diary-entry-groups");
+    expect(control.props["aria-pressed"]).toBeUndefined();
+    expect(control.props["aria-expanded"]).toBeUndefined();
+    await click("Expand all meals");
+    expect(defaultDiaryGroups.map((item) => text(group(item.mealSlot)))).toEqual(groups);
+    expect(nutrientControl(0).props["aria-expanded"]).toBe(true);
+    expect(nutrientControl(1).props["aria-expanded"]).toBe(false);
+    expect(evidence()).toEqual(beforeEvidence);
+    expect(text()).toContain("3 of 24 entries loaded");
+    expect(text(group("snacks"))).toContain("No entries loaded for this meal yet");
+    expect(text(elements().find((node) => node.props.role === "status") ?? null)).toBe(message);
+    expect(
+      elements()
+        .filter((node) => typeof node.props.href === "string")
+        .map((node) => node.props.href),
+    ).toEqual(links);
+    expect(button("Load more").props.disabled).toBe(false);
+    expect(fetch.mock.calls).toHaveLength(requests);
+    expect(allocate).not.toHaveBeenCalled();
+    expect(JSON.stringify(fixture)).toBe(original);
+  });
+
+  it("keeps repeated empty membership a true no-op and rejects callbacks from before newer collapse choices", async () => {
+    const fetch = await mount(),
+      requests = fetch.mock.calls.length;
+    const noop = button("Expand all meals"),
+      collapse = button("Collapse Breakfast"),
+      status = text();
+    invoke(noop);
+    invoke(noop);
+    await hooks.settle();
+    expect(button("Expand all meals").props.disabled).toBe(false);
+    expect(text()).toBe(status);
+    invoke(collapse);
+    await hooks.settle();
+    expect(button("Expand Breakfast").props["aria-expanded"]).toBe(false);
+    invoke(noop);
+    await hooks.settle();
+    expect(button("Expand Breakfast").props["aria-expanded"]).toBe(false);
+    const changed = button("Expand all meals"),
+      oldSingle = button("Expand Breakfast");
+    invoke(changed);
+    invoke(changed);
+    invoke(oldSingle);
+    await hooks.settle();
+    expect(button("Collapse Breakfast").props["aria-expanded"]).toBe(true);
+    const currentSingle = button("Collapse Lunch"),
+      currentNoop = button("Expand all meals");
+    invoke(currentNoop);
+    invoke(currentNoop);
+    invoke(currentSingle);
+    await hooks.settle();
+    expect(button("Expand Lunch").props["aria-expanded"]).toBe(false);
+    invoke(changed);
+    await hooks.settle();
+    expect(button("Expand Lunch").props["aria-expanded"]).toBe(false);
+    expect(fetch.mock.calls).toHaveLength(requests);
+  });
+
+  it("rejects a retained owner-A expansion before effects without clearing owner-B meal choices", async () => {
+    const fetch = await mount();
+    await click("Collapse Breakfast");
+    const old = button("Expand all meals");
+    hooks.replaceVerifiedSessionBeforeEffects(parseSession(session(anotherOwner)));
+    await click("Collapse Lunch");
+    const before = text(),
+      requests = fetch.mock.calls.length;
+    invoke(old);
+    await hooks.settle();
+    expect(text()).toBe(before);
+    expect(button("Expand Lunch").props["aria-expanded"]).toBe(false);
+    expect(fetch.mock.calls).toHaveLength(requests);
   });
 });
