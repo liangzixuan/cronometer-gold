@@ -60,6 +60,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0052](./0052-missing-biometric-metadata-labels.md) | Label missing biometric metadata on web | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
 | [0053](./0053-optional-recipe-log-time.md) | Optional local time for saved recipe logs | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
 | [0054](./0054-recipe-ingredient-food-search-pages.md) | Page reviewed foods in recipe ingredient search | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
+| [0055](./0055-biometric-history-windows.md) | Navigate earlier biometric history windows | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

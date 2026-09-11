@@ -157,6 +157,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Label missing biometric metadata on web | ADR 0052 explicit name/unit fallbacks; existing focused checks, fresh canonical gates and synthetic Chrome known/missing/draft/narrow/expiry proof passed; automatic/external/release separate |
 | Automatic evidence / independent review | Optional saved-recipe log time on web/native | ADR 0053 explicit time, automatic defaults and retry identity; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 | Automatic evidence / independent review | Recipe ingredient food-search pages on web/native | ADR 0054 committed query, explicit continuation and exact version pins; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
+| Automatic evidence / independent review | Earlier biometric history on web/native | ADR 0055 fixed inclusive windows, exact continuation and editor/trend independence; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1528,13 +1529,28 @@ At September 11, 2026 04:19:33 UTC, base
 container `34557672519` remained in progress. Base results do not transfer to
 this slice. External/device/hosted/release acceptance remains separate.
 
+### Earlier biometric history: source/local complete
+
+[ADR 0055](../adr/0055-biometric-history-windows.md) adds bounded Earlier/Newer/Recent
+navigation and explicit Reload to web/native biometric history. Preserve fixed
+inclusive UTC ranges, exact cursor ownership and saved reading metadata. Keep
+edit drafts/retries and independent trend/custom-food/reminder/log state. Focused
+regressions, receipt/state review, frozen canonical gates and synthetic Chrome
+earlier-page/retry/invalid-cursor/draft/keyboard/narrow/expiry evidence passed.
+Shared contracts and parsers remain unchanged.
+
+At September 11, 2026 05:51:01 UTC, base
+`95ee517190bbaf16e42ac8e879eef2ceaa208078` CI `34564694180` succeeded;
+container `34564694124` remained in progress. Base results do not transfer to this
+slice. External/device/hosted/release acceptance remains separate.
+
 ### Next bounded candidate
 
 Revalidate exact automatic results and external-review findings. The next bounded
-candidate is access to earlier biometric history on web/native. Both clients load
-only the last 120 days through tomorrow; existing continuation stays inside that
-same fixed window. Inspect the existing from/to/cursor contract and add a bounded
-history-only earlier-window/recent control if the acceptance card can preserve
-exact readings, current window/cursor ownership, edit drafts and independent
-trend inputs. No successor implementation has started. Live catalogue, external,
-device, hosted and release gates remain separate.
+candidate is reminder day presets on web/native: Weekdays, Weekends and Every day
+beside the current individual day controls. Both clients already keep canonical
+1..7 membership and explicit Create/Save. A future acceptance card should preserve
+individual overrides, label/time/status, saved day labels, consent and exact retry
+identity; presets must make no request or permission prompt. No successor edits
+have started. Device, notification delivery, external, hosted and release gates
+remain separate.

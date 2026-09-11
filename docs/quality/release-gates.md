@@ -862,3 +862,22 @@ acceptance.
   canonical gates with fresh outputs and source-validated synthetic Chrome later
   page/Add/retry/invalid-cursor/no-write/keyboard/narrow/expiry proof. All catalogue,
   persistence, device, assistive, concurrent React, external and release gates remain.
+
+
+## ADR 0055 Earlier biometric history windows
+
+- Explicit Earlier/Newer/Recent/Reload controls use fixed 121-day inclusive UTC
+  windows, shared exact boundaries, truthful labels and existing limit 100.
+  Replace on navigation/reload; continue only the exact installed range/cursor.
+  Preserve rows/cursor on retryable errors; cursor 400 requires explicit Reload.
+- Fence duplicate, stale response/status/finalizer and retained row controls by
+  current range/request/private/lifecycle identity before effects. Serialize
+  history reads and event writes independently of shared busy state; preserve
+  accepted cleanup, raw drafts, timestamp precision and exact retry identity.
+  Accepted rows must belong to the installed range. Preserve independent trends,
+  custom-food state, reminders and logs. Empty windows must remain navigable.
+- Require focused component/helper/type/format proof, independent source review,
+  frozen fresh canonical gates and source-validated synthetic Chrome earlier
+  history/continuation/retry/invalid-cursor/dirty-edit/no-write/keyboard/narrow/expiry
+  proof. All persistence, device, assistive, concurrent React, external reviewer,
+  hosted and release gates remain separate.

@@ -54,6 +54,48 @@ import {
 
 type LoadState = "loading" | "ready" | "error";
 
+interface BiometricWindow {
+  readonly from: string;
+  readonly to: string;
+}
+interface BiometricHistory {
+  readonly window: BiometricWindow | null;
+  readonly events: readonly BiometricEvent[];
+  readonly cursor: string | null;
+  readonly status: LoadState;
+  readonly verified: boolean;
+  readonly message: string;
+  readonly owner: string | null;
+}
+const HISTORY_DAY = 86_400_000;
+const HISTORY_WIDTH = 121 * HISTORY_DAY;
+const HISTORY_MIN = Date.parse("0100-01-02T00:00:00.000Z");
+const HISTORY_MAX = Date.parse("9999-12-30T23:59:59.999Z");
+function historyWindow(from: number, to: number): BiometricWindow | null {
+  return Number.isFinite(from) &&
+    Number.isFinite(to) &&
+    from >= HISTORY_MIN &&
+    to <= HISTORY_MAX &&
+    to - from === HISTORY_WIDTH
+    ? { from: new Date(from).toISOString(), to: new Date(to).toISOString() }
+    : null;
+}
+function eventInWindow(event: BiometricEvent, range: BiometricWindow): boolean {
+  const measured = Date.parse(event.measuredAt);
+  return measured >= Date.parse(range.from) && measured <= Date.parse(range.to);
+}
+function emptyHistory(): BiometricHistory {
+  return {
+    window: null,
+    events: [],
+    cursor: null,
+    status: "loading",
+    verified: false,
+    message: "Biometric history has not been loaded.",
+    owner: null,
+  };
+}
+
 interface CustomDraft {
   readonly id: string | null;
   readonly revision: string | null;
@@ -263,12 +305,18 @@ export function HealthClient() {
   const [expandedFoods, setExpandedFoods] = useState<ReadonlySet<CustomFood>>(new Set());
   const [customFoodCursor, setCustomFoodCursor] = useState<string | null>(null);
   const [definitions, setDefinitions] = useState<readonly BiometricDefinition[]>([]);
-  const [events, setEvents] = useState<readonly BiometricEvent[]>([]);
-  const [eventCursor, setEventCursor] = useState<string | null>(null);
-  const [eventWindow, setEventWindow] = useState<{
-    readonly from: string;
-    readonly to: string;
-  } | null>(null);
+  const [history, setHistoryState] = useState<BiometricHistory>(emptyHistory);
+  const historyRef = useRef(history);
+  const recentHistory = useRef<BiometricWindow | null>(null);
+  const historyController = useRef<AbortController | null>(null);
+  const historyGeneration = useRef(0);
+  const renderedHistoryGeneration = historyGeneration.current;
+  const eventWrite = useRef<object | null>(null);
+  const [eventWriting, setEventWriting] = useState(false);
+  const eventDraftGeneration = useRef(0);
+  const renderedEventDraftGeneration = eventDraftGeneration.current;
+  const eventWindow = history.window;
+  const eventCursor = history.cursor;
   const [reminders, setReminders] = useState<readonly Reminder[]>([]);
   const [integrations, setIntegrations] = useState<readonly PlatformIntegration[]>([]);
   const [custom, setCustomState] = useState<CustomDraft>(() => blankCustom(""));
@@ -452,8 +500,37 @@ export function HealthClient() {
     setSavedFoodFilter("");
   }, []);
 
+  const installHistory = useCallback((next: BiometricHistory) => {
+    historyRef.current = next;
+    setHistoryState(next);
+  }, []);
+  const invalidateHistory = useCallback(() => {
+    historyController.current?.abort();
+    historyController.current = null;
+    historyGeneration.current += 1;
+    const current = historyRef.current;
+    installHistory({
+      ...current,
+      status: "error",
+      message: "Reload history to verify this window.",
+    });
+  }, [installHistory]);
+
   const setSession = useCallback(
     (next: SessionSummary | null) => {
+      const previous = installedSession.current;
+      if (
+        previous &&
+        (!next ||
+          JSON.stringify([previous.user.id, previous.profile]) !==
+            JSON.stringify([next.user.id, next.profile]))
+      ) {
+        invalidateHistory();
+        if (!next || next.user.id !== previous.user.id) {
+          recentHistory.current = null;
+          installHistory(emptyHistory());
+        }
+      }
       if (installedSession.current !== next) {
         closeFoodDetails();
         invalidateCustomControls();
@@ -467,7 +544,13 @@ export function HealthClient() {
       installedSession.current = next;
       setSessionState(next);
     },
-    [closeFoodDetails, invalidateCustomControls, resetSavedFoodFilter],
+    [
+      closeFoodDetails,
+      installHistory,
+      invalidateHistory,
+      invalidateCustomControls,
+      resetSavedFoodFilter,
+    ],
   );
 
   const installCustomFoods = useCallback(
@@ -551,9 +634,12 @@ export function HealthClient() {
     setCustomFoods([]);
     setCustomFoodCursor(null);
     setDefinitions([]);
-    setEvents([]);
-    setEventCursor(null);
-    setEventWindow(null);
+    invalidateHistory();
+    recentHistory.current = null;
+    installHistory(emptyHistory());
+    eventWrite.current = null;
+    setEventWriting(false);
+    eventDraftGeneration.current += 1;
     setReminders([]);
     setIntegrations([]);
     replaceCustom(blankCustom(""));
@@ -590,6 +676,8 @@ export function HealthClient() {
     resetSavedFoodFilter,
     router,
     setSession,
+    installHistory,
+    invalidateHistory,
   ]);
 
   const revalidateHealthSession = useCallback(async (signal: AbortSignal) => {
@@ -662,9 +750,17 @@ export function HealthClient() {
     if (
       privateUiClosed.current ||
       !mounted.current ||
+      eventWrite.current !== null ||
       (loadController.current && !loadController.current.signal.aborted)
     )
       return;
+    invalidateHistory();
+    const historyEpoch = historyGeneration.current;
+    installHistory({
+      ...historyRef.current,
+      status: "loading",
+      message: "Loading biometric history…",
+    });
     const generation = ++foodListGeneration.current;
     invalidateCustomControls();
     setVerifiedFoodListOwner(null);
@@ -693,8 +789,15 @@ export function HealthClient() {
         throw new HealthOwnerFenceError();
       }
       const now = new Date();
-      const rangeStart = new Date(now.getTime() - 120 * 24 * 60 * 60 * 1_000).toISOString();
-      const rangeEnd = new Date(now.getTime() + 24 * 60 * 60 * 1_000).toISOString();
+      const capturedRecent =
+        recentHistory.current ??
+        historyWindow(now.getTime() - 120 * HISTORY_DAY, now.getTime() + HISTORY_DAY);
+      if (!capturedRecent)
+        throw new Error("The current instant is outside the supported biometric history range.");
+      recentHistory.current = capturedRecent;
+      const capturedWindow = historyRef.current.window ?? capturedRecent;
+      const rangeStart = capturedWindow.from;
+      const rangeEnd = capturedWindow.to;
       await installHealthPrivateDataForOwner({
         expectedOwnerUserId: nextSession.user.id,
         signal: controller.signal,
@@ -759,6 +862,7 @@ export function HealthClient() {
           ) {
             throw new HealthOwnerFenceError();
           }
+          const historyIsCurrent = historyGeneration.current === historyEpoch;
           ownerUserId.current = nextSession.user.id;
           const localToday = localDateInTimeZone(now, currentSession.profile.timeZone);
           setSession(currentSession);
@@ -779,9 +883,17 @@ export function HealthClient() {
           setVerifiedFoodListOwner(nextSession.user.id);
           setCustomFoodCursor(data.customPage.nextCursor);
           setDefinitions(data.definitions);
-          setEvents(data.eventPage.items);
-          setEventCursor(data.eventPage.nextCursor);
-          setEventWindow({ from: rangeStart, to: rangeEnd });
+          installHistory({
+            window: capturedWindow,
+            events: historyIsCurrent ? data.eventPage.items : [],
+            cursor: historyIsCurrent ? data.eventPage.nextCursor : null,
+            status: historyIsCurrent ? "ready" : "error",
+            verified: historyIsCurrent,
+            message: historyIsCurrent
+              ? ""
+              : "History changed while this workspace was loading. Choose Reload history to verify this window.",
+            owner: nextSession.user.id,
+          });
           setReminders(data.reminders);
           setIntegrations(data.integrations);
           setFrom((value) => value || shiftLocalDate(localToday, -13));
@@ -817,6 +929,13 @@ export function HealthClient() {
       if (controller.signal.aborted) return;
       if (error instanceof HealthOwnerFenceError) return signInAgain();
       setState("error");
+      if (historyGeneration.current === historyEpoch)
+        installHistory({
+          ...historyRef.current,
+          status: "error",
+          message:
+            "Private data could not be verified. Retry private data or reload this history window.",
+        });
       setMessage(
         error instanceof Error ? error.message : "Private health data could not be loaded.",
       );
@@ -827,6 +946,8 @@ export function HealthClient() {
   }, [
     closeFoodDetails,
     installCustomFoods,
+    installHistory,
+    invalidateHistory,
     invalidateCustomControls,
     replaceCustom,
     revalidateHealthSession,
@@ -880,45 +1001,150 @@ export function HealthClient() {
     }
   }
 
-  async function loadMoreEvents() {
-    if (!eventCursor || !eventWindow) return;
-    const initiatingOwnerUserId = ownerUserId.current;
-    if (initiatingOwnerUserId === null || privateUiClosed.current) return;
+  const historyScope = session ? JSON.stringify([session.user.id, session.profile]) : null;
+  const historyVisible =
+    mounted.current &&
+    visible.current &&
+    !privateUiClosed.current &&
+    session !== null &&
+    ownerUserId.current === session.user.id &&
+    history.owner === session.user.id;
+  const events = historyVisible ? history.events : [];
+  const historyUnavailable =
+    !historyVisible ||
+    historyController.current !== null ||
+    loadController.current !== null ||
+    eventWriting;
+  const earlierWindow = eventWindow
+    ? historyWindow(
+        Date.parse(eventWindow.from) - HISTORY_WIDTH,
+        Date.parse(eventWindow.to) - HISTORY_WIDTH,
+      )
+    : null;
+  const newerWindow =
+    eventWindow &&
+    recentHistory.current &&
+    Date.parse(eventWindow.to) < Date.parse(recentHistory.current.to)
+      ? historyWindow(
+          Date.parse(eventWindow.from) + HISTORY_WIDTH,
+          Date.parse(eventWindow.to) + HISTORY_WIDTH,
+        )
+      : null;
+
+  function canUseHistory() {
+    const current = installedSession.current;
+    return (
+      mounted.current &&
+      visible.current &&
+      (typeof document === "undefined" || document.visibilityState !== "hidden") &&
+      !privateUiClosed.current &&
+      current !== null &&
+      ownerUserId.current === current.user.id &&
+      JSON.stringify([current.user.id, current.profile]) === historyScope &&
+      historyRef.current === history &&
+      historyGeneration.current === renderedHistoryGeneration &&
+      historyController.current === null &&
+      loadController.current === null &&
+      eventWrite.current === null
+    );
+  }
+  function canUseEventRow(event: BiometricEvent) {
+    return canUseHistory() && history.verified && history.events.includes(event);
+  }
+  async function loadHistory(target: BiometricWindow, append = false) {
+    if (
+      !canUseHistory() ||
+      (append && (!history.verified || !eventCursor || target !== eventWindow))
+    )
+      return;
     const controller = new AbortController();
+    historyController.current = controller;
     privateReadControllers.current.add(controller);
-    setBusy("event-more");
+    const epoch = ++historyGeneration.current;
+    const initiatingOwner = ownerUserId.current;
+    const cursor = append ? eventCursor : null;
+    installHistory({
+      ...history,
+      window: target,
+      events: append ? history.events : [],
+      cursor: append ? cursor : null,
+      status: "loading",
+      verified: append && history.verified,
+      message: "Loading biometric history…",
+    });
+    const isCurrent = () =>
+      mounted.current &&
+      visible.current &&
+      (typeof document === "undefined" || document.visibilityState !== "hidden") &&
+      !privateUiClosed.current &&
+      historyController.current === controller &&
+      !controller.signal.aborted &&
+      historyGeneration.current === epoch &&
+      ownerUserId.current === initiatingOwner &&
+      installedSession.current !== null &&
+      JSON.stringify([installedSession.current.user.id, installedSession.current.profile]) ===
+        historyScope;
     try {
-      await installHealthPrivateDataForOwner({
-        expectedOwnerUserId: initiatingOwnerUserId,
-        signal: controller.signal,
-        loadPrivateData: async () =>
-          parseBiometricEvents(
-            await request(
-              `biometrics/events?from=${encodeURIComponent(eventWindow.from)}&to=${encodeURIComponent(eventWindow.to)}&limit=100&cursor=${encodeURIComponent(eventCursor)}`,
-              { signal: controller.signal },
-            ),
-          ),
-        revalidateSession: () => revalidateHealthSession(controller.signal),
-        install: (page) => {
-          if (privateUiClosed.current || ownerUserId.current !== initiatingOwnerUserId) {
-            throw new HealthOwnerFenceError();
-          }
-          setEvents((items) => [
-            ...items,
-            ...page.items.filter((event) => !items.some((existing) => existing.id === event.id)),
-          ]);
-          setEventCursor(page.nextCursor);
-        },
+      const response = await fetch(
+        `/api/retention/biometrics/events?from=${encodeURIComponent(target.from)}&to=${encodeURIComponent(target.to)}&limit=100${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
+        { headers: { accept: "application/json" }, cache: "no-store", signal: controller.signal },
+      );
+      if (!isCurrent()) return;
+      if (response.status === 401) throw new HealthOwnerFenceError();
+      if (response.status === 400 && cursor) {
+        installHistory({
+          ...historyRef.current,
+          cursor: null,
+          status: "error",
+          message:
+            "This continuation is no longer available. Choose Reload history for a fresh page in this window.",
+        });
+        return;
+      }
+      const body = await json(response);
+      if (!isCurrent()) return;
+      if (!response.ok)
+        throw new Error(responseError(body, "Biometric history could not be loaded."));
+      const page = parseBiometricEvents(body);
+      const currentSession = await revalidateHealthSession(controller.signal);
+      if (!isCurrent()) return;
+      if (currentSession.user.id !== initiatingOwner) throw new HealthOwnerFenceError();
+      if (JSON.stringify([currentSession.user.id, currentSession.profile]) !== historyScope) {
+        setSession(currentSession);
+        installHistory({
+          ...historyRef.current,
+          status: "error",
+          message: "Your profile changed. Reload history to verify this window.",
+        });
+        return;
+      }
+      installHistory({
+        window: target,
+        events: append
+          ? [
+              ...history.events,
+              ...page.items.filter(
+                (event) => !history.events.some((existing) => existing.id === event.id),
+              ),
+            ]
+          : page.items,
+        cursor: page.nextCursor,
+        status: "ready",
+        verified: true,
+        message: "",
+        owner: initiatingOwner,
       });
     } catch (error) {
-      if (controller.signal.aborted) return;
+      if (!isCurrent()) return;
       if (error instanceof HealthOwnerFenceError) return signInAgain();
-      setMessage(
-        error instanceof Error ? error.message : "More biometric events could not be loaded.",
-      );
+      installHistory({
+        ...historyRef.current,
+        status: "error",
+        message: `${error instanceof Error ? error.message : "Biometric history could not be loaded."} ${cursor ? "Load older biometric events to retry this page." : "Choose Reload history to retry this window."}`,
+      });
     } finally {
       privateReadControllers.current.delete(controller);
-      if (!privateUiClosed.current) setBusy(null);
+      if (historyController.current === controller) historyController.current = null;
     }
   }
 
@@ -928,6 +1154,7 @@ export function HealthClient() {
     visible.current = typeof document === "undefined" || document.visibilityState !== "hidden";
     const visibilityChanged = () => {
       visible.current = document.visibilityState !== "hidden";
+      invalidateHistory();
       customLifecycle.current += 1;
       customWrite.current = null;
       setCustomSaving(false);
@@ -940,6 +1167,9 @@ export function HealthClient() {
     void loadAll();
     return () => {
       mounted.current = false;
+      historyController.current?.abort();
+      historyController.current = null;
+      historyGeneration.current += 1;
       customLifecycle.current += 1;
       customControlGeneration.current += 1;
       customCopyChoiceRef.current = null;
@@ -957,7 +1187,7 @@ export function HealthClient() {
       privateReadControllers.current.clear();
       profileRefreshController.current?.abort();
     };
-  }, [closeFoodDetails, invalidateCustomControls, loadAll]);
+  }, [closeFoodDetails, invalidateCustomControls, invalidateHistory, loadAll]);
 
   async function refreshCustomLogProfileAfterTimeZoneChange(
     initiatingUserId: string,
@@ -1353,7 +1583,80 @@ export function HealthClient() {
     );
   }
 
+  function canEditEventDraft() {
+    const current = installedSession.current;
+    return (
+      mounted.current &&
+      visible.current &&
+      (typeof document === "undefined" || document.visibilityState !== "hidden") &&
+      !privateUiClosed.current &&
+      current !== null &&
+      ownerUserId.current === current.user.id &&
+      JSON.stringify([current.user.id, current.profile]) === historyScope &&
+      eventDraftGeneration.current === renderedEventDraftGeneration
+    );
+  }
+  function changeEventField(current: string, next: string, setValue: (value: string) => void) {
+    if (!canEditEventDraft() || current === next) return;
+    eventDraftGeneration.current += 1;
+    setValue(next);
+  }
+  function eventWriteAvailable() {
+    return (
+      canEditEventDraft() &&
+      eventWrite.current === null &&
+      historyController.current === null &&
+      loadController.current === null
+    );
+  }
+  function editEvent(event: BiometricEvent) {
+    if (!canUseEventRow(event)) return;
+    eventDraftGeneration.current += 1;
+    setEditingEvent(event);
+    setSelectedDefinition(event.definitionId);
+    setEventValue(event.value);
+    setEventDate(event.localDate);
+    setEventTime(localTimeInTimeZone(new Date(event.measuredAt), event.timeZone).slice(0, 5));
+  }
+  async function requestEventMutation(
+    input: {
+      readonly path: string;
+      readonly method: "POST" | "PATCH" | "DELETE";
+      readonly body?: unknown;
+      readonly key: string;
+      readonly revision?: string;
+    },
+    ownsWrite: () => boolean,
+  ) {
+    const response = await fetch(`/api/retention/${input.path}`, {
+      method: input.method,
+      headers: {
+        accept: "application/json",
+        ...(input.body === undefined ? {} : { "content-type": "application/json" }),
+        "idempotency-key": operation(input.key),
+        ...(input.revision ? { "if-match": quoteRevision(input.revision) } : {}),
+      },
+      ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }),
+      cache: "no-store",
+    });
+    if (!ownsWrite()) return undefined;
+    if (response.status === 401) {
+      signInAgain();
+      return undefined;
+    }
+    const body = await json(response);
+    if (!ownsWrite()) return undefined;
+    if (!response.ok)
+      throw new PrivateRequestFailure(
+        responseError(body, "The private health request failed."),
+        response.status,
+        body,
+      );
+    return parseBiometricMutation(body);
+  }
+
   async function saveEvent() {
+    if (!eventWriteAvailable()) return;
     if (
       !session ||
       !selectedDefinitionRecord ||
@@ -1380,50 +1683,109 @@ export function HealthClient() {
         };
     const path = editingEvent ? `biometrics/events/${editingEvent.id}` : "biometrics/events";
     const key = `event:${editingEvent?.id ?? "new"}:${editingEvent?.revision ?? "0"}:${JSON.stringify(body)}`;
+    const token = {},
+      initiatingOwner = session.user.id,
+      draftGeneration = eventDraftGeneration.current;
+    eventWrite.current = token;
+    setEventWriting(true);
+    const ownsWrite = () =>
+      mounted.current &&
+      !privateUiClosed.current &&
+      eventWrite.current === token &&
+      ownerUserId.current === initiatingOwner &&
+      installedSession.current?.user.id === initiatingOwner;
     setBusy("event");
     try {
-      const saved = parseBiometricMutation(
-        await request(path, {
+      const saved = await requestEventMutation(
+        {
+          path,
           method: editingEvent ? "PATCH" : "POST",
           body,
           key,
           ...(editingEvent ? { revision: editingEvent.revision } : {}),
-        }),
+        },
+        ownsWrite,
       );
+      if (!ownsWrite() || saved === undefined) return;
       operations.current.delete(key);
-      if (saved) setEvents((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
-      setEditingEvent(null);
-      setEventValue("");
+      const current = historyRef.current;
+      if (saved && current.owner === initiatingOwner && current.window)
+        installHistory({
+          ...current,
+          events: [
+            ...(eventInWindow(saved, current.window) ? [saved] : []),
+            ...current.events.filter((item) => item.id !== saved.id),
+          ],
+        });
+      if (eventDraftGeneration.current === draftGeneration) {
+        eventDraftGeneration.current += 1;
+        setEditingEvent(null);
+        setEventValue("");
+      }
       setMessage("Biometric event saved with its exact entered decimal.");
     } catch (error) {
+      if (!ownsWrite()) return;
       setMessage(
         `${error instanceof Error ? error.message : "Biometric event could not be saved."} Submit again to retry safely.`,
       );
     } finally {
-      setBusy(null);
+      if (eventWrite.current === token) {
+        eventWrite.current = null;
+        if (mounted.current && !privateUiClosed.current) {
+          setEventWriting(false);
+          setBusy(null);
+        }
+      }
     }
   }
 
   async function deleteEvent(event: BiometricEvent) {
-    if (event.source.kind !== "manual" || !window.confirm("Delete this manual biometric event?"))
+    if (
+      !canUseEventRow(event) ||
+      !eventWriteAvailable() ||
+      event.source.kind !== "manual" ||
+      !window.confirm("Delete this manual biometric event?")
+    )
       return;
+    if (!canUseEventRow(event) || !eventWriteAvailable()) return;
     const key = `event-delete:${event.id}:${event.revision}`;
+    const token = {},
+      initiatingOwner = ownerUserId.current;
+    eventWrite.current = token;
+    setEventWriting(true);
+    const ownsWrite = () =>
+      mounted.current &&
+      !privateUiClosed.current &&
+      eventWrite.current === token &&
+      initiatingOwner !== null &&
+      ownerUserId.current === initiatingOwner &&
+      installedSession.current?.user.id === initiatingOwner;
     setBusy(`event:${event.id}`);
     try {
-      parseBiometricMutation(
-        await request(`biometrics/events/${event.id}`, {
-          method: "DELETE",
-          key,
-          revision: event.revision,
-        }),
+      const saved = await requestEventMutation(
+        { path: `biometrics/events/${event.id}`, method: "DELETE", key, revision: event.revision },
+        ownsWrite,
       );
+      if (!ownsWrite() || saved === undefined) return;
       operations.current.delete(key);
-      setEvents((items) => items.filter((item) => item.id !== event.id));
+      const current = historyRef.current;
+      if (current.owner === initiatingOwner)
+        installHistory({
+          ...current,
+          events: current.events.filter((item) => item.id !== event.id),
+        });
       setMessage("Manual biometric event deleted.");
     } catch (error) {
+      if (!ownsWrite()) return;
       setMessage(error instanceof Error ? error.message : "Biometric event could not be deleted.");
     } finally {
-      setBusy(null);
+      if (eventWrite.current === token) {
+        eventWrite.current = null;
+        if (mounted.current && !privateUiClosed.current) {
+          setEventWriting(false);
+          setBusy(null);
+        }
+      }
     }
   }
 
@@ -1702,7 +2064,12 @@ export function HealthClient() {
           {message}
         </p>
         {state === "error" ? (
-          <button className="secondaryAction" onClick={() => void loadAll()} type="button">
+          <button
+            className="secondaryAction"
+            disabled={eventWriting}
+            onClick={() => void loadAll()}
+            type="button"
+          >
             Retry private data
           </button>
         ) : null}
@@ -1745,7 +2112,11 @@ export function HealthClient() {
               Biometric
               <select
                 value={selectedDefinition}
-                onChange={(event) => setSelectedDefinition(event.target.value)}
+                onChange={(event) => {
+                  if (selectedDefinition === event.target.value) return;
+                  eventDraftGeneration.current += 1;
+                  setSelectedDefinition(event.target.value);
+                }}
               >
                 <option value="">None</option>
                 {definitions.map((item) => (
@@ -2464,7 +2835,13 @@ export function HealthClient() {
                   <select
                     disabled={editingEvent !== null}
                     value={selectedDefinition}
-                    onChange={(event) => setSelectedDefinition(event.target.value)}
+                    onChange={(event) =>
+                      changeEventField(
+                        selectedDefinition,
+                        event.target.value,
+                        setSelectedDefinition,
+                      )
+                    }
                   >
                     {definitions
                       .filter((item) => item.status === "active")
@@ -2482,7 +2859,9 @@ export function HealthClient() {
                       inputMode="decimal"
                       maxLength={160}
                       value={eventValue}
-                      onChange={(event) => setEventValue(event.target.value)}
+                      onChange={(event) =>
+                        changeEventField(eventValue, event.target.value, setEventValue)
+                      }
                     />
                   </label>
                   <label>
@@ -2490,7 +2869,9 @@ export function HealthClient() {
                     <input
                       type="date"
                       value={eventDate}
-                      onChange={(event) => setEventDate(event.target.value)}
+                      onChange={(event) =>
+                        changeEventField(eventDate, event.target.value, setEventDate)
+                      }
                     />
                   </label>
                   <label>
@@ -2498,7 +2879,9 @@ export function HealthClient() {
                     <input
                       type="time"
                       value={eventTime}
-                      onChange={(event) => setEventTime(event.target.value)}
+                      onChange={(event) =>
+                        changeEventField(eventTime, event.target.value, setEventTime)
+                      }
                     />
                   </label>
                 </div>
@@ -2507,11 +2890,26 @@ export function HealthClient() {
                   and time are untouched, the original seconds and milliseconds are preserved.
                 </small>
                 <div className="entryActions">
-                  <button disabled={busy === "event"} type="submit">
+                  <button
+                    disabled={
+                      eventWriting ||
+                      historyController.current !== null ||
+                      loadController.current !== null ||
+                      !session
+                    }
+                    type="submit"
+                  >
                     {editingEvent ? "Save event" : "Log event"}
                   </button>
                   {editingEvent ? (
-                    <button onClick={() => setEditingEvent(null)} type="button">
+                    <button
+                      onClick={() => {
+                        if (!canEditEventDraft()) return;
+                        eventDraftGeneration.current += 1;
+                        setEditingEvent(null);
+                      }}
+                      type="button"
+                    >
                       Cancel
                     </button>
                   ) : null}
@@ -2519,6 +2917,67 @@ export function HealthClient() {
               </form>
             </div>
             <div>
+              <div className="entryActions" style={{ flexWrap: "wrap" }}>
+                <button
+                  type="button"
+                  disabled={historyUnavailable || earlierWindow === null}
+                  onClick={() => {
+                    if (earlierWindow) void loadHistory(earlierWindow);
+                  }}
+                >
+                  Earlier window
+                </button>
+                <button
+                  type="button"
+                  disabled={historyUnavailable || newerWindow === null}
+                  onClick={() => {
+                    if (newerWindow) void loadHistory(newerWindow);
+                  }}
+                >
+                  Newer window
+                </button>
+                <button
+                  type="button"
+                  disabled={
+                    historyUnavailable ||
+                    !recentHistory.current ||
+                    eventWindow?.from === recentHistory.current.from
+                  }
+                  onClick={() => {
+                    if (recentHistory.current) void loadHistory(recentHistory.current);
+                  }}
+                >
+                  Recent history
+                </button>
+                <button
+                  type="button"
+                  disabled={historyUnavailable || !eventWindow}
+                  onClick={() => {
+                    if (eventWindow) void loadHistory(eventWindow);
+                  }}
+                >
+                  Reload history
+                </button>
+              </div>
+              <p
+                id="biometric-history-status"
+                role="status"
+                aria-live="polite"
+                style={{ overflowWrap: "anywhere" }}
+              >
+                {historyVisible && eventWindow ? (
+                  <>
+                    UTC history: {eventWindow.from} through {eventWindow.to}. Includes both
+                    endpoints. Adjacent windows share their boundary.
+                    {history.verified
+                      ? ` ${events.length} loaded readings. ${eventCursor ? "More readings may be available in this window." : history.status === "ready" ? "No more readings in this window." : "No continuation is available."}`
+                      : " This window has not been verified."}
+                    {history.message ? ` ${history.message}` : ""}
+                  </>
+                ) : (
+                  "Biometric history is unavailable until your private data is verified."
+                )}
+              </p>
               <ul className="recordList">
                 {events.map((event) => {
                   const definition = definitions.find((item) => item.id === event.definitionId);
@@ -2544,25 +3003,15 @@ export function HealthClient() {
                       {event.source.kind === "manual" ? (
                         <div className="entryActions">
                           <button
-                            onClick={() => {
-                              setEditingEvent(event);
-                              setSelectedDefinition(event.definitionId);
-                              setEventValue(event.value);
-                              setEventDate(event.localDate);
-                              setEventTime(
-                                localTimeInTimeZone(
-                                  new Date(event.measuredAt),
-                                  event.timeZone,
-                                ).slice(0, 5),
-                              );
-                            }}
+                            disabled={historyUnavailable || !history.verified}
+                            onClick={() => editEvent(event)}
                             type="button"
                           >
                             Edit
                           </button>
                           <button
                             className="dangerAction"
-                            disabled={busy === `event:${event.id}`}
+                            disabled={historyUnavailable || !history.verified}
                             onClick={() => void deleteEvent(event)}
                             type="button"
                           >
@@ -2574,10 +3023,12 @@ export function HealthClient() {
                   );
                 })}
               </ul>
-              {eventCursor ? (
+              {historyVisible && eventCursor ? (
                 <button
-                  disabled={busy === "event-more"}
-                  onClick={() => void loadMoreEvents()}
+                  disabled={historyUnavailable}
+                  onClick={() => {
+                    if (eventWindow) void loadHistory(eventWindow, true);
+                  }}
                   type="button"
                 >
                   Load older biometric events

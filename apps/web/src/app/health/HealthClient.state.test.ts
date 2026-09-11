@@ -119,7 +119,7 @@ vi.mock("react", async (importOriginal) => ({
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
-import type { CustomFood } from "../../lib/retention";
+import type { BiometricDefinition, BiometricEvent, CustomFood } from "../../lib/retention";
 import { HealthClient } from "./HealthClient";
 
 interface ElementNode {
@@ -322,6 +322,8 @@ function workspace(
     read: null as null | (() => Response | Promise<Response>),
     continuation: null as null | (() => Response | Promise<Response>),
     write: null as null | ((url: string, init: RequestInit) => Response | Promise<Response>),
+    eventRead: null as null | ((url: string) => Response | Promise<Response>),
+    definitions: [] as readonly BiometricDefinition[],
   };
   const fetcher = vi.fn(async (url: string, init?: RequestInit): Promise<Response> => {
     if (url === "/api/auth/me")
@@ -343,7 +345,11 @@ function workspace(
         ? state.trend(url)
         : Response.json({ error: "No trend fixture" }, { status: 503 });
     if (url.startsWith("/api/retention/biometrics/events?"))
-      return Response.json({ data: [], page: { nextCursor: null } });
+      return state.eventRead
+        ? state.eventRead(url)
+        : Response.json({ data: [], page: { nextCursor: null } });
+    if (url === "/api/retention/biometrics/definitions")
+      return Response.json({ data: state.definitions });
     if (
       [
         "/api/nutrients/targetable",
@@ -395,6 +401,7 @@ function visibility() {
 afterEach(() => {
   hooks.unmount();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   vi.clearAllMocks();
 });
 
@@ -1850,5 +1857,759 @@ describe("actual saved custom-food Copy to new draft", () => {
     invoke(oldCopy, "onClick");
     expect(hooks.afterClose()).toBe(updates);
     expect(fetcher).toHaveBeenCalledTimes(before);
+  });
+});
+
+const historyDay = 86_400_000;
+const historySpan = 121 * historyDay;
+const historyDefinition: BiometricDefinition = {
+  id: "4bcfa2bf-4950-43f7-9f24-000000000001",
+  revision: "1",
+  status: "active",
+  name: "Weight",
+  dimension: "mass",
+  canonicalUnit: "kg",
+  notes: null,
+  createdAt: instant,
+  updatedAt: instant,
+};
+function reading(index = 1, measuredAt = "2026-09-10T12:34:56.789Z"): BiometricEvent {
+  return {
+    id: `5bcfa2bf-4950-43f7-9f24-${String(index).padStart(12, "0")}`,
+    revision: "1",
+    definitionId: historyDefinition.id,
+    measuredAt,
+    localDate: measuredAt.slice(0, 10),
+    timeZone: "UTC",
+    value: `${index}.200`,
+    source: { kind: "manual", deviceId: null, externalId: null, externalRevision: null },
+    createdAt: instant,
+    updatedAt: instant,
+  };
+}
+function eventPage(items: readonly BiometricEvent[], cursor: string | null = null) {
+  return Response.json({ data: items, page: { nextCursor: cursor } });
+}
+function historyWorkspace(now = instant) {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(now));
+  const result = workspace();
+  result.state.definitions = [historyDefinition];
+  result.state.timeZone = "UTC";
+  result.state.eventRead = (url) => {
+    const range = requestRange(url),
+      event = reading();
+    return eventPage(
+      Date.parse(event.measuredAt) >= Date.parse(range.from) &&
+        Date.parse(event.measuredAt) <= Date.parse(range.to)
+        ? [event]
+        : [],
+    );
+  };
+  return {
+    ...result,
+    eventReads: () =>
+      result.fetcher.mock.calls.filter(([url]) =>
+        url.startsWith("/api/retention/biometrics/events?"),
+      ),
+  };
+}
+function biometricSection() {
+  const node = elements().find((node) => node.props["aria-labelledby"] === "biometrics-heading");
+  if (!node) throw new Error("Missing biometric section");
+  return node;
+}
+function eventRows() {
+  return elements(biometricSection()).filter(
+    (node) =>
+      node.type === "li" &&
+      elements(node).some((child) => child.type === "small" && text(child).includes(" · UTC · ")),
+  );
+}
+function eventField(label: string) {
+  const wrapper = elements(biometricSection()).find(
+    (node) => node.type === "label" && text(node).trim() === label,
+  );
+  const input = elements(wrapper ?? null).find((node) =>
+    ["input", "select"].includes(String(node.type)),
+  );
+  if (!input) throw new Error(`Missing event field ${label}`);
+  return input;
+}
+async function changeEvent(label: string, value: string) {
+  invoke(eventField(label), "onChange", { target: { value } });
+  await hooks.settle();
+}
+function historyStatus() {
+  return text(elements().find((node) => node.props.id === "biometric-history-status"));
+}
+function eventForm() {
+  const form = elements(biometricSection()).find(
+    (node) =>
+      node.type === "form" &&
+      (text(node).includes("Edit manual event") || text(node).includes("Log event")),
+  );
+  if (!form) throw new Error("Missing event form");
+  return form;
+}
+async function saveReading() {
+  invoke(eventForm(), "onSubmit", { preventDefault() {} });
+  await hooks.settle();
+}
+function requiredHistory<T>(value: T | null | undefined): T {
+  if (value === null || value === undefined) throw new Error("Expected history fixture value");
+  return value;
+}
+function requestRange(url: string | undefined) {
+  const params = new URL(requiredHistory(url), "http://localhost").searchParams;
+  return {
+    from: requiredHistory(params.get("from")),
+    to: requiredHistory(params.get("to")),
+    cursor: params.get("cursor"),
+    limit: params.get("limit"),
+  };
+}
+
+describe("biometric history windows", () => {
+  it("moves exact inclusive121day windows, keeps a captured Recent anchor and preserves every raw form/disclosure", async () => {
+    const { eventReads, fetcher } = historyWorkspace();
+    await mount();
+    await click("Edit", eventRows()[0]);
+    await changeEvent("Exact value", "71.23000");
+    await changeEvent("Local time", "13:14");
+    await change("Name", " Unsaved custom food ");
+    await change("Private in-app label", " Raw reminder ");
+    await change("From", "2026-08-01");
+    await toggle(food());
+    const forms = formValues(),
+      message = status(),
+      before = fetcher.mock.calls.length;
+    const original = requestRange(eventReads()[0]?.[0]);
+    expect(original).toEqual({
+      from: new Date(Date.parse(instant) - 120 * historyDay).toISOString(),
+      to: new Date(Date.parse(instant) + historyDay).toISOString(),
+      cursor: null,
+      limit: "100",
+    });
+    expect(button("Newer window").props.disabled).toBe(true);
+    expect(button("Recent history").props.disabled).toBe(true);
+    await click("Earlier window");
+    const earlier = requestRange(eventReads()[1]?.[0]);
+    expect(earlier.to).toBe(original.from);
+    expect(Date.parse(earlier.to) - Date.parse(earlier.from)).toBe(historySpan);
+    expect(historyStatus()).toContain(
+      `${earlier.from} through ${earlier.to}. Includes both endpoints`,
+    );
+    expect(formValues()).toEqual(forms);
+    expect(status()).toBe(message);
+    expect(details(food()).props.hidden).toBe(false);
+    expect(fetcher.mock.calls.slice(before).map(([url]) => url.split("?")[0])).toEqual([
+      "/api/retention/biometrics/events",
+      "/api/auth/me",
+    ]);
+    await click("Earlier window");
+    await click("Newer window");
+    expect(requestRange(eventReads()[3]?.[0])).toEqual(earlier);
+    vi.setSystemTime(new Date(Date.parse(instant) + 10 * historyDay));
+    await click("Recent history");
+    expect(requestRange(eventReads()[4]?.[0])).toEqual(original);
+    expect(formValues()).toEqual(forms);
+    expect(status()).toBe(message);
+  });
+
+  it("loads100 then overlap/new IDs then empty terminal in server order, retaining boundary readings", async () => {
+    const { state, eventReads } = historyWorkspace();
+    const recentFrom = new Date(Date.parse(instant) - 120 * historyDay).toISOString();
+    const items = Array.from({ length: 100 }, (_, index) =>
+      reading(
+        index + 1,
+        index === 0 ? recentFrom : new Date(Date.parse(recentFrom) - index * 1000).toISOString(),
+      ),
+    );
+    state.eventRead = (url) => {
+      const range = requestRange(url);
+      if (!range.cursor)
+        return eventPage(range.from === recentFrom ? items.slice(0, 1) : items, "history.one");
+      if (range.cursor === "history.one")
+        return eventPage(
+          [
+            { ...requiredHistory(items[99]), value: "999.000" },
+            reading(101, requiredHistory(items[99]).measuredAt),
+            reading(102, requiredHistory(items[99]).measuredAt),
+          ],
+          "history.two",
+        );
+      return eventPage([]);
+    };
+    await mount();
+    await click("Earlier window");
+    expect(eventRows()).toHaveLength(100);
+    expect(text(eventRows()[0])).toContain("1.200");
+    await click("Load older biometric events");
+    expect(eventRows()).toHaveLength(102);
+    expect(text(eventRows()[99])).toContain("100.200");
+    expect(text(eventRows()[100])).toContain("101.200");
+    expect(historyStatus()).toContain("102 loaded readings");
+    const first = requestRange(eventReads()[1]?.[0]),
+      page = requestRange(eventReads()[2]?.[0]);
+    expect(page).toEqual({ ...first, cursor: "history.one" });
+    await click("Load older biometric events");
+    expect(eventRows()).toHaveLength(102);
+    expect(historyStatus()).toContain("No more readings in this window");
+    expect(
+      elements().some(
+        (node) => node.type === "button" && text(node) === "Load older biometric events",
+      ),
+    ).toBe(false);
+  });
+
+  it.each([null, "empty.next"])(
+    "keeps empty windows navigable with truthful cursor%s status",
+    async (cursor) => {
+      const { state } = historyWorkspace();
+      state.eventRead = () => eventPage([], cursor);
+      await mount();
+      expect(historyStatus()).toContain("0 loaded readings");
+      expect(historyStatus()).toContain(
+        cursor ? "More readings may be available" : "No more readings in this window",
+      );
+      await click("Earlier window");
+      expect(eventRows()).toHaveLength(0);
+      expect(button("Recent history").props.disabled).toBe(false);
+    },
+  );
+
+  it.each(["503", "malformed", "400"])(
+    "retains exact continuation state after%s and explicitly recovers",
+    async (failure) => {
+      const { state, eventReads } = historyWorkspace();
+      let fail = true;
+      state.eventRead = (url) =>
+        !requestRange(url).cursor
+          ? eventPage([reading()], "same.cursor")
+          : fail
+            ? failure === "malformed"
+              ? Response.json({ data: [], page: { nextCursor: "bad!" } })
+              : Response.json({ error: "Page failure" }, { status: Number(failure) })
+            : eventPage([reading(2)]);
+      await mount();
+      const loaded = text(eventRows()[0]);
+      await click("Load older biometric events");
+      expect(text(eventRows()[0])).toBe(loaded);
+      expect(historyStatus()).not.toContain("No more readings in this window");
+      fail = false;
+      if (failure === "400") {
+        expect(historyStatus()).toContain("Choose Reload history");
+        await click("Reload history");
+        expect(requestRange(eventReads()[2]?.[0]).cursor).toBeNull();
+      } else {
+        await click("Load older biometric events");
+        expect(eventReads()[2]?.[0]).toBe(eventReads()[1]?.[0]);
+        expect(eventRows()).toHaveLength(2);
+      }
+    },
+  );
+
+  it("clears old rows before a moved-window request/failure and retries that exact target", async () => {
+    const { state, eventReads } = historyWorkspace();
+    await mount();
+    const pending = deferred<Response>();
+    state.eventRead = () => pending.promise;
+    const oldEdit = button("Edit", eventRows()[0]);
+    const oldDelete = button("Delete", eventRows()[0]);
+    const confirm = vi.fn(() => true);
+    vi.stubGlobal("window", { confirm });
+    const earlier = button("Earlier window");
+    invoke(earlier, "onClick");
+    invoke(earlier, "onClick");
+    invoke(oldEdit, "onClick");
+    invoke(oldDelete, "onClick");
+    await hooks.settle();
+    expect(eventRows()).toHaveLength(0);
+    expect(confirm).not.toHaveBeenCalled();
+    expect(eventReads()).toHaveLength(2);
+    expect(button("Reload history").props.disabled).toBe(true);
+    const target = requestRange(eventReads()[1]?.[0]);
+    expect(historyStatus()).toContain(target.from);
+    pending.resolve(Response.json({ error: "Try again" }, { status: 503 }));
+    await hooks.settle();
+    expect(historyStatus()).toContain("This window has not been verified");
+    state.eventRead = () => eventPage([reading(2, target.to)]);
+    await click("Reload history");
+    expect(eventReads()[2]?.[0]).toBe(eventReads()[1]?.[0]);
+    expect(eventRows()).toHaveLength(1);
+  });
+
+  it.each([200, 400, 401])(
+    "ignores obsolete%s before JSON/finally while a replacement read is pending",
+    async (code) => {
+      const view = visibility();
+      const { state, eventReads, fetcher } = historyWorkspace();
+      await mount();
+      const first = deferred<Response>(),
+        second = deferred<Response>();
+      state.eventRead = () => first.promise;
+      await click("Earlier window");
+      await view.set("hidden");
+      await view.set("visible");
+      state.eventRead = () => second.promise;
+      await click("Reload history");
+      const before = fetcher.mock.calls.length;
+      const response = Response.json({ error: "Old receipt" }, { status: code });
+      const parse = vi.spyOn(response, "json");
+      first.resolve(response);
+      await hooks.settle();
+      expect(parse).not.toHaveBeenCalled();
+      expect(router.replace).not.toHaveBeenCalled();
+      expect(button("Reload history").props.disabled).toBe(true);
+      invoke(button("Reload history"), "onClick");
+      await hooks.settle();
+      expect(fetcher.mock.calls).toHaveLength(before);
+      second.resolve(eventPage([reading(2)]));
+      await hooks.settle();
+      expect(eventRows()).toHaveLength(1);
+      expect(eventReads()).toHaveLength(3);
+    },
+  );
+
+  it("ignores deferred old JSON after a full same-owner Retry retains the exact selected range", async () => {
+    const { state, eventReads } = historyWorkspace();
+    await mount();
+    await click("Earlier window");
+    const selected = requestRange(eventReads()[1]?.[0]),
+      body = deferred<unknown>();
+    state.eventRead = () => {
+      const response = eventPage([]);
+      response.json = () => body.promise;
+      return response;
+    };
+    await click("Reload history");
+    state.eventRead = () => eventPage([reading(3, selected.to)]);
+    hooks.replayEffects();
+    await hooks.settle();
+    expect(requestRange(eventReads()[3]?.[0])).toEqual(selected);
+    body.resolve(await eventPage([reading(8)]).json());
+    await hooks.settle();
+    expect(text(eventRows()[0])).toContain("3.200");
+    expect(historyStatus()).toContain(selected.from);
+  });
+
+  it.each(["profile", "owner", "unmount"])(
+    "fences history response/controls after%s changes context",
+    async (transition) => {
+      const { state, fetcher } = historyWorkspace();
+      await mount();
+      const old = button("Earlier window");
+      const pending = deferred<Response>();
+      state.eventRead = () => pending.promise;
+      await click("Earlier window");
+      if (transition === "unmount") hooks.unmount();
+      else state.auth = () => session(transition === "owner" ? otherOwner : owner, "Europe/Paris");
+      pending.resolve(eventPage([reading(2)]));
+      await hooks.settle();
+      const before = fetcher.mock.calls.length,
+        updates = hooks.afterClose();
+      invoke(old, "onClick");
+      await hooks.settle();
+      expect(fetcher.mock.calls).toHaveLength(before);
+      expect(hooks.afterClose()).toBe(updates);
+      if (transition === "owner") expect(router.replace).toHaveBeenCalledWith("/login");
+      if (transition === "profile") {
+        expect(historyStatus()).toContain("Your profile changed");
+        expect(eventRows()).toHaveLength(0);
+      }
+    },
+  );
+
+  it.each(["0100-08-01T00:00:00.000Z", "9999-12-29T23:59:59.999Z"])(
+    "respects conservative complete-window bounds at%s",
+    async (now) => {
+      const { state, eventReads } = historyWorkspace(now);
+      state.eventRead = () => eventPage([]);
+      await mount();
+      if (now.startsWith("0100")) expect(button("Earlier window").props.disabled).toBe(true);
+      else {
+        await click("Earlier window");
+        await click("Newer window");
+        expect(button("Newer window").props.disabled).toBe(true);
+      }
+      for (const [url] of eventReads()) {
+        const range = requestRange(url);
+        expect(Date.parse(range.from)).toBeGreaterThanOrEqual(
+          Date.parse("0100-01-02T00:00:00.000Z"),
+        );
+        expect(Date.parse(range.to)).toBeLessThanOrEqual(Date.parse("9999-12-30T23:59:59.999Z"));
+        expect(Date.parse(range.to) - Date.parse(range.from)).toBe(historySpan);
+      }
+    },
+  );
+});
+
+describe("biometric history and event operations", () => {
+  it("preserves exact value-only PATCH retry and original seconds while its dirty editor is off-window", async () => {
+    const { state, fetcher } = historyWorkspace();
+    await mount();
+    await click("Edit", eventRows()[0]);
+    await changeEvent("Exact value", "71.2000");
+    state.write = () => Response.json({ error: "Ambiguous saved change" }, { status: 503 });
+    await saveReading();
+    const first = fetcher.mock.calls.filter(
+      ([url, init]) => url.includes("/biometrics/events/") && init?.method === "PATCH",
+    )[0];
+    expect(first?.[1]?.body).toBe(JSON.stringify({ value: "71.2000" }));
+    expect(new Headers(first?.[1]?.headers).get("if-match")).toBe('"1"');
+    const forms = formValues(),
+      message = status();
+    state.eventRead = () => eventPage([]);
+    await click("Earlier window");
+    expect(formValues()).toEqual(forms);
+    expect(status()).toBe(message);
+    await saveReading();
+    const writes = fetcher.mock.calls.filter(
+      ([url, init]) => url.includes("/biometrics/events/") && init?.method === "PATCH",
+    );
+    expect(writes).toHaveLength(2);
+    expect(writes[1]?.[1]?.body).toBe(first?.[1]?.body);
+    expect(new Headers(writes[1]?.[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(first?.[1]?.headers).get("idempotency-key"),
+    );
+    expect(eventField("Local time").props.value).toBe("12:34");
+  });
+
+  it("keeps A-to-B-to-A Create identity through history movement without changing defaults", async () => {
+    const { state, fetcher } = historyWorkspace();
+    await mount();
+    state.write = () => Response.json({ error: "Unknown outcome" }, { status: 503 });
+    await changeEvent("Exact value", "71.000");
+    await saveReading();
+    await click("Earlier window");
+    await changeEvent("Exact value", "72.000");
+    await saveReading();
+    await click("Recent history");
+    await changeEvent("Exact value", "71.000");
+    await saveReading();
+    const writes = fetcher.mock.calls.filter(
+      ([url, init]) => url === "/api/retention/biometrics/events" && init?.method === "POST",
+    );
+    expect(writes).toHaveLength(3);
+    expect(writes[0]?.[1]?.body).toBe(writes[2]?.[1]?.body);
+    const keys = writes.map(([, init]) => new Headers(init?.headers).get("idempotency-key"));
+    expect(keys[0]).toBe(keys[2]);
+    expect(keys[1]).not.toBe(keys[0]);
+    expect(JSON.parse(String(writes[0]?.[1]?.body))).toEqual({
+      definitionId: historyDefinition.id,
+      measuredAt: instant,
+      value: "71.000",
+    });
+  });
+
+  it.each(["save", "delete"])(
+    "blocks history reads and duplicate%s synchronously during its live write even after unrelated busy clears",
+    async (action) => {
+      const { state, eventReads, fetcher } = historyWorkspace();
+      state.cursor = "private.next";
+      state.continuation = () => page([], null);
+      await mount();
+      const pending = deferred<Response>();
+      state.write = () => pending.promise;
+      vi.stubGlobal("window", { confirm: vi.fn(() => true) });
+      await changeEvent("Exact value", "71.200");
+      const earlier = button("Earlier window"),
+        reload = button("Reload history"),
+        remove = button("Delete", eventRows()[0]),
+        form = eventForm();
+      if (action === "save") invoke(form, "onSubmit", { preventDefault() {} });
+      else invoke(remove, "onClick");
+      invoke(earlier, "onClick");
+      invoke(reload, "onClick");
+      invoke(form, "onSubmit", { preventDefault() {} });
+      invoke(remove, "onClick");
+      await hooks.settle();
+      expect(eventReads()).toHaveLength(1);
+      expect(
+        fetcher.mock.calls.filter(([, init]) => init?.method && init.method !== "GET"),
+      ).toHaveLength(1);
+      // A real independent continuation clears shared busy while the event lease stays live.
+      await click("Load more private foods");
+      expect(
+        fetcher.mock.calls.some(([url]) =>
+          url.includes("custom-foods?limit=50&cursor=private.next"),
+        ),
+      ).toBe(true);
+      invoke(button("Reload history"), "onClick");
+      await hooks.settle();
+      expect(eventReads()).toHaveLength(1);
+      pending.resolve(
+        Response.json({
+          data: {
+            event: action === "save" ? { ...reading(), revision: "2", value: "71.200" } : null,
+            replayed: false,
+          },
+        }),
+      );
+      await hooks.settle();
+      expect(button("Earlier window").props.disabled).toBe(false);
+      if (action === "save") expect(eventField("Exact value").props.value).toBe("");
+      else expect(eventRows()).toHaveLength(0);
+    },
+  );
+
+  it("blocks Save/Delete during history reads before paint and resumes the same editor afterward", async () => {
+    const { state, fetcher } = historyWorkspace();
+    await mount();
+    await click("Edit", eventRows()[0]);
+    await changeEvent("Exact value", "71.5");
+    const remove = button("Delete", eventRows()[0]),
+      form = eventForm(),
+      confirm = vi.fn(() => true);
+    vi.stubGlobal("window", { confirm });
+    const pending = deferred<Response>();
+    state.eventRead = () => pending.promise;
+    invoke(button("Reload history"), "onClick");
+    invoke(form, "onSubmit", { preventDefault() {} });
+    invoke(remove, "onClick");
+    await hooks.settle();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(fetcher.mock.calls.some(([, init]) => init?.method === "PATCH")).toBe(false);
+    expect(button("Save event").props.disabled).toBe(true);
+    pending.resolve(eventPage([reading()]));
+    await hooks.settle();
+    expect(eventField("Exact value").props.value).toBe("71.5");
+    expect(button("Save event").props.disabled).toBe(false);
+  });
+
+  it.each(["background", "raw-edit", "trend-metric"])(
+    "accepts a valid receipt after%s, reconciling membership and clearing only the owned draft",
+    async (changeKind) => {
+      const view = visibility();
+      const { state } = historyWorkspace();
+      const otherDefinition = {
+        ...historyDefinition,
+        id: "4bcfa2bf-4950-43f7-9f24-000000000002",
+        name: "Height",
+      };
+      state.definitions = [historyDefinition, otherDefinition];
+      await mount();
+      await click("Edit", eventRows()[0]);
+      await changeEvent("Exact value", "71.9000");
+      const pending = deferred<Response>();
+      state.write = () => pending.promise;
+      await saveReading();
+      if (changeKind === "background") await view.set("hidden");
+      else if (changeKind === "raw-edit") await changeEvent("Exact value", "72.0000");
+      else {
+        const selector = elements().find(
+          (node) => node.type === "label" && text(node).startsWith("Biometric"),
+        );
+        const control = elements(selector ?? null).find((node) => node.type === "select");
+        invoke(requiredHistory(control), "onChange", { target: { value: otherDefinition.id } });
+        await hooks.settle();
+      }
+      pending.resolve(
+        Response.json({
+          data: { event: { ...reading(), revision: "2", value: "71.9000" }, replayed: false },
+        }),
+      );
+      await hooks.settle();
+      if (changeKind === "background") {
+        await view.set("visible");
+        expect(eventField("Exact value").props.value).toBe("");
+      } else
+        expect(eventField("Exact value").props.value).toBe(
+          changeKind === "raw-edit" ? "72.0000" : "71.9000",
+        );
+      expect(text(eventRows()[0])).toContain("71.9000");
+      expect(status()).toContain("Biometric event saved");
+    },
+  );
+
+  it.each(["create-outside", "edit-outside", "edit-boundary"])(
+    "installs accepted%s only according to current inclusive window membership",
+    async (kind) => {
+      const { state } = historyWorkspace();
+      await mount();
+      const old = reading();
+      if (kind !== "create-outside") await click("Edit", eventRows()[0]);
+      await changeEvent("Exact value", "88.000");
+      const recentTo = new Date(Date.parse(instant) + historyDay).toISOString();
+      const saved = {
+        ...old,
+        id: kind === "create-outside" ? reading(9).id : old.id,
+        revision: "2",
+        value: "88.000",
+        measuredAt: kind === "edit-boundary" ? recentTo : "2025-01-01T12:00:00.000Z",
+        localDate: kind === "edit-boundary" ? recentTo.slice(0, 10) : "2025-01-01",
+      };
+      state.write = () => Response.json({ data: { event: saved, replayed: false } });
+      await saveReading();
+      expect(eventField("Exact value").props.value).toBe("");
+      expect(eventRows()).toHaveLength(kind === "edit-outside" ? 0 : 1);
+      if (kind === "create-outside") expect(text(eventRows()[0])).toContain("1.200");
+      if (kind === "edit-boundary") expect(text(eventRows()[0])).toContain("88.000");
+    },
+  );
+
+  it("rejects full Retry during a live event write and preserves selected range when Retry resumes", async () => {
+    const { state, eventReads } = historyWorkspace();
+    await mount();
+    await click("Earlier window");
+    state.read = () => Response.json({ error: "Private load failed" }, { status: 503 });
+    hooks.replayEffects();
+    await hooks.settle();
+    const retry = button("Retry private data");
+    await changeEvent("Exact value", "78.000");
+    const pending = deferred<Response>();
+    state.write = () => pending.promise;
+    await saveReading();
+    const count = eventReads().length;
+    invoke(retry, "onClick");
+    await hooks.settle();
+    expect(eventReads()).toHaveLength(count);
+    pending.resolve(Response.json({ data: { event: reading(), replayed: false } }));
+    await hooks.settle();
+    state.read = null;
+    await click("Retry private data");
+    expect(requestRange(eventReads().at(-1)?.[0])).toEqual(requestRange(eventReads()[1]?.[0]));
+  });
+});
+
+describe("biometric receipt private ownership", () => {
+  it.each(["fetch", "json"])(
+    "ignores an old event receipt at%s after another read closes private scope",
+    async (boundary) => {
+      const { state, fetcher } = historyWorkspace();
+      state.cursor = "private.next";
+      state.continuation = () => page([], null);
+      await mount();
+      await changeEvent("Exact value", "73.001");
+      const delayedFetch = deferred<Response>(),
+        delayedJson = deferred<unknown>();
+      const response = Response.json({ data: { event: reading(), replayed: false } });
+      const parse = vi.fn(() => delayedJson.promise);
+      if (boundary === "json") response.json = parse;
+      state.write = () => (boundary === "fetch" ? delayedFetch.promise : response);
+      await saveReading();
+      state.auth = () => session(otherOwner);
+      await click("Load more private foods");
+      const before = fetcher.mock.calls.length,
+        redirects = router.replace.mock.calls.length,
+        closedUpdates = hooks.afterClose(),
+        closedText = text();
+      if (boundary === "fetch") {
+        const expired = Response.json({ error: "Obsolete expiry" }, { status: 401 });
+        expired.json = parse;
+        delayedFetch.resolve(expired);
+      } else delayedJson.resolve({ data: { event: reading(), replayed: false } });
+      await hooks.settle();
+      if (boundary === "fetch") expect(parse).not.toHaveBeenCalled();
+      expect(fetcher.mock.calls).toHaveLength(before);
+      expect(router.replace.mock.calls).toHaveLength(redirects);
+      expect(hooks.afterClose()).toBe(closedUpdates);
+      expect(text()).toBe(closedText);
+      expect(eventRows()).toHaveLength(0);
+    },
+  );
+});
+
+describe("biometric history initial visibility recovery", () => {
+  it.each([
+    { phase: "auth", foreground: "before" },
+    { phase: "auth", foreground: "after" },
+    { phase: "events", foreground: "before" },
+    { phase: "events", foreground: "after" },
+  ])(
+    "recovers an initial $phase read when visibility returns $foreground the full receipt",
+    async ({ phase, foreground }) => {
+      const view = visibility();
+      const { state, eventReads } = historyWorkspace();
+      state.trend = (url) => {
+        const params = new URL(url, "http://localhost").searchParams;
+        return Response.json({
+          data: {
+            definition: historyDefinition,
+            timeZone: "UTC",
+            from: params.get("from"),
+            to: params.get("to"),
+            bucket: "day",
+            points: [],
+          },
+        });
+      };
+      const pending = deferred<Response>();
+      if (phase === "auth") {
+        let first = true;
+        state.auth = () => {
+          if (first) {
+            first = false;
+            return pending.promise;
+          }
+          return session(owner, "UTC");
+        };
+      } else state.eventRead = () => pending.promise;
+      await mount();
+      await view.set("hidden");
+      if (foreground === "before") await view.set("visible");
+      pending.resolve(
+        phase === "auth" ? session(owner, "UTC") : eventPage([reading()], "discarded.cursor"),
+      );
+      await hooks.settle();
+      expect(status()).toBe("Private health workspace is current.");
+      if (foreground === "after") await view.set("visible");
+      expect(eventReads()).toHaveLength(1);
+      expect(eventRows()).toHaveLength(0);
+      expect(
+        elements().some(
+          (node) => node.type === "button" && text(node) === "Load older biometric events",
+        ),
+      ).toBe(false);
+      expect(text(biometricSection())).toContain("Weight (kg)");
+      expect(historyStatus()).toContain("This window has not been verified");
+      expect(historyStatus()).toContain("Reload history");
+      expect(button("Reload history").props.disabled).toBe(false);
+      expect(button("Earlier window").props.disabled).toBe(false);
+      const initial = requestRange(eventReads()[0]?.[0]);
+      state.eventRead = () => eventPage([reading(2)]);
+      await click("Reload history");
+      expect(requestRange(eventReads()[1]?.[0])).toEqual(initial);
+      expect(historyStatus()).toContain("1 loaded readings");
+      expect(text(eventRows()[0])).toContain("2.200");
+      expect(historyStatus()).not.toContain("not been verified");
+    },
+  );
+
+  it("keeps an earlier selected range and raw editor recoverable after visibility invalidates a full Retry", async () => {
+    const view = visibility();
+    const { state, eventReads } = historyWorkspace();
+    await mount();
+    await click("Edit", eventRows()[0]);
+    await changeEvent("Exact value", "75.00010");
+    await changeEvent("Local time", "07:32");
+    await change("From", "2026-08-01");
+    await click("Earlier window");
+    const selected = requestRange(eventReads()[1]?.[0]);
+    const forms = formValues();
+    state.read = () => Response.json({ error: "Private retry fixture" }, { status: 503 });
+    hooks.replayEffects();
+    await hooks.settle();
+    state.read = null;
+    const pending = deferred<Response>();
+    state.eventRead = () => pending.promise;
+    await click("Retry private data");
+    await view.set("hidden");
+    await view.set("visible");
+    pending.resolve(eventPage([reading(8, selected.to)], "discarded.cursor"));
+    await hooks.settle();
+    expect(status()).toBe("Private health workspace is current.");
+    expect(formValues()).toEqual(forms);
+    expect(eventRows()).toHaveLength(0);
+    expect(historyStatus()).toContain(selected.from);
+    expect(button("Reload history").props.disabled).toBe(false);
+    const count = eventReads().length;
+    state.eventRead = () => eventPage([reading(9, selected.to)]);
+    await click("Reload history");
+    expect(eventReads()).toHaveLength(count + 1);
+    expect(requestRange(eventReads().at(-1)?.[0])).toEqual(selected);
+    expect(formValues()).toEqual(forms);
+    expect(text(eventRows()[0])).toContain("9.200");
   });
 });

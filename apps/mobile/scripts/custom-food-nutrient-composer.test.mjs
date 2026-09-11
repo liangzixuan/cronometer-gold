@@ -3993,3 +3993,490 @@ describe("native biometric reading units and immutable edit identity", () => {
     });
   });
 });
+
+const HISTORY_DAY = 86_400_000;
+function historyClock(instant = "2026-09-11T12:34:56.789Z") {
+  const OriginalDate = Date;
+  vi.stubGlobal(
+    "Date",
+    class extends OriginalDate {
+      constructor(...args) {
+        super(...(args.length ? args : [instant]));
+      }
+      static now() {
+        return OriginalDate.parse(instant);
+      }
+    },
+  );
+}
+const historyReads = (requests) =>
+  requests.filter(
+    (request) => request.method === "GET" && request.url.pathname === "/v1/biometrics/events",
+  );
+const requestRange = (request) => ({
+  from: request.url.searchParams.get("from"),
+  to: request.url.searchParams.get("to"),
+});
+const historyPage = (items = [], cursor = null) =>
+  response({ data: items, page: { nextCursor: cursor } });
+function olderReading(
+  id = "12cfa2bf-4950-43f7-9f24-b983ac803012",
+  measuredAt = "2026-01-01T03:04:05.123Z",
+) {
+  return { ...readingEvent, id, measuredAt, localDate: measuredAt.slice(0, 10), timeZone: "UTC" };
+}
+
+describe("native biometric history windows", () => {
+  for (const instant of ["2026-09-11T12:34:56.789Z", "2024-03-11T06:00:00.000Z"]) {
+    it(`keeps exact inclusive121-day windows and returns to captured Recent at ${instant}`, async () => {
+      historyClock(instant);
+      const { harness, requests } = setupReadings();
+      let tree = await harness.settle();
+      const recent = requestRange(historyReads(requests)[0]);
+      expect(recent).toEqual({
+        from: new Date(Date.parse(instant) - 120 * HISTORY_DAY).toISOString(),
+        to: new Date(Date.parse(instant) + HISTORY_DAY).toISOString(),
+      });
+      expect(button(tree, "Newer window").props.disabled).toBe(true);
+      expect(button(tree, "Recent history").props.disabled).toBe(true);
+      expect(text(tree)).toContain("both endpoints included");
+      const before = requests.length;
+      tree = await click(harness, "Earlier window");
+      const earlier = requestRange(historyReads(requests)[1]);
+      expect(earlier.to).toBe(recent.from);
+      expect(Date.parse(earlier.to) - Date.parse(earlier.from)).toBe(121 * HISTORY_DAY);
+      expect(requests).toHaveLength(before + 1);
+      expect(historyReads(requests)[1].url.searchParams.get("limit")).toBe("100");
+      await click(harness, "Newer window");
+      expect(requestRange(historyReads(requests)[2])).toEqual(recent);
+      await click(harness, "Earlier window");
+      await click(harness, "Earlier window");
+      tree = await click(harness, "Recent history");
+      expect(requestRange(historyReads(requests).at(-1))).toEqual(recent);
+      expect(button(tree, "Newer window").props.disabled).toBe(true);
+      expect(writes(requests)).toHaveLength(0);
+      harness.unmount();
+    });
+  }
+  it("refuses a full earlier target below the conservative bound without clamping or requests", async () => {
+    historyClock();
+    // Isolate history's instant anchor from unrelated Intl/editor ancient-year formatting.
+    vi.spyOn(Date, "now").mockReturnValue(Date.parse("0100-05-03T00:00:00.000Z"));
+    const { harness, requests } = setupReadings(undefined, { entries: [] });
+    const tree = await harness.settle();
+    const before = requests.length;
+    const earlier = button(tree, "Earlier window");
+    expect(earlier.props.disabled).toBe(true);
+    earlier.props.onPress();
+    expect(requests).toHaveLength(before);
+    expect(requestRange(historyReads(requests)[0]).from).toBe("0100-01-03T00:00:00.000Z");
+    harness.unmount();
+  });
+  it("keeps an empty older window navigable and full Refresh reloads its exact range", async () => {
+    historyClock();
+    const { harness, requests } = setupReadings((request) =>
+      request.method === "GET" && request.url.pathname === "/v1/biometrics/events"
+        ? historyPage()
+        : undefined,
+    );
+    await click(harness, "Earlier window");
+    const older = requestRange(historyReads(requests).at(-1));
+    let tree = await click(harness, "Refresh private data");
+    expect(requestRange(historyReads(requests).at(-1))).toEqual(older);
+    expect(text(tree)).toContain("0 loaded readings");
+    expect(button(tree, "Earlier window").props.disabled).toBe(false);
+    expect(button(tree, "Newer window").props.disabled).toBe(false);
+    tree = await click(harness, "Reload history");
+    expect(requestRange(historyReads(requests).at(-1))).toEqual(older);
+    harness.unmount();
+  });
+  for (const failure of ["http", "malformed", "invalid-cursor"]) {
+    it(`keeps cursor/window ownership through ${failure} continuation and explicit retry`, async () => {
+      historyClock();
+      let pages = 0;
+      const later = {
+        ...readingEvent,
+        id: "22cfa2bf-4950-43f7-9f24-b983ac803012",
+        value: "71.000009",
+      };
+      const { harness, requests } = setupReadings((request) => {
+        if (request.method !== "GET" || request.url.pathname !== "/v1/biometrics/events") return;
+        if (!request.url.searchParams.has("cursor"))
+          return historyPage([readingEvent], "cursor.same");
+        if (++pages === 1)
+          return failure === "http"
+            ? response({}, 503)
+            : failure === "invalid-cursor"
+              ? response({}, 400)
+              : response({ data: [], page: { nextCursor: "bad$" } });
+        return historyPage([{ ...readingEvent, value: "999.000009" }, later]);
+      });
+      let tree = await click(harness, "Load more readings");
+      expect(text(biometricCard(tree, readingEvent.id))).toContain(readingEvent.value);
+      if (failure === "invalid-cursor") {
+        expect(text(tree)).toContain("Use Reload history");
+        expect(
+          nodes(tree, (node) => node.type === "Pressable" && text(node) === "Load more readings"),
+        ).toHaveLength(0);
+        expect(historyReads(requests)).toHaveLength(2);
+        await click(harness, "Reload history");
+        expect(historyReads(requests)[2].url.searchParams.has("cursor")).toBe(false);
+      }
+      const before = historyReads(requests).at(-1);
+      tree = await click(harness, "Load more readings");
+      const last = historyReads(requests).at(-1);
+      expect(requestRange(last)).toEqual(requestRange(before));
+      expect(last.url.searchParams.get("cursor")).toBe("cursor.same");
+      expect(text(biometricCard(tree, readingEvent.id))).toContain(readingEvent.value);
+      expect(text(biometricCard(tree, later.id))).toContain(later.value);
+      harness.unmount();
+    });
+  }
+  it("preserves server order/overlap and empty terminal pages without implying all history is loaded", async () => {
+    historyClock();
+    let pages = 0;
+    const next = {
+      ...readingEvent,
+      id: "22cfa2bf-4950-43f7-9f24-b983ac803012",
+      value: "71.000009",
+    };
+    const { harness } = setupReadings((request) =>
+      request.method === "GET" && request.url.pathname === "/v1/biometrics/events"
+        ? !request.url.searchParams.has("cursor")
+          ? historyPage([readingEvent], "page1")
+          : ++pages === 1
+            ? historyPage([{ ...readingEvent, value: "999" }, next], "page2")
+            : historyPage()
+        : undefined,
+    );
+    let tree = await click(harness, "Load more readings");
+    expect(text(biometricCard(tree, readingEvent.id))).toContain(readingEvent.value);
+    expect(text(biometricCard(tree, next.id))).toContain(next.value);
+    tree = await click(harness, "Load more readings");
+    expect(text(tree)).toContain("2 loaded readings");
+    expect(text(tree)).toContain("No continuation is available for this window");
+    harness.unmount();
+  });
+  for (const phase of ["fetch401", "json", "failure"]) {
+    it(`rejects obsolete ${phase} and finally while full Refresh owns the current selected range`, async () => {
+      historyClock();
+      const old = deferred();
+      const newest = deferred();
+      let reads = 0;
+      const { harness, requests, props } = setupReadings((request) => {
+        if (request.method !== "GET" || request.url.pathname !== "/v1/biometrics/events") return;
+        reads += 1;
+        if (reads === 1) return historyPage([readingEvent], "oldcursor");
+        if (reads === 2)
+          return phase === "json" ? { ...historyPage(), json: () => old.promise } : old.promise;
+        return newest.promise;
+      });
+      await click(harness, "Load more readings");
+      await click(harness, "Refresh private data");
+      old.resolve(
+        phase === "fetch401"
+          ? response({}, 401)
+          : phase === "failure"
+            ? response({}, 503)
+            : { data: [olderReading()], page: { nextCursor: "oldpage" } },
+      );
+      let tree = await harness.settle();
+      expect(button(tree, "Earlier window").props.disabled).toBe(true);
+      expect(
+        nodes(tree, (node) => node.type === "View" && node.key === readingEvent.id),
+      ).toHaveLength(0);
+      expect(props.onUnauthorized).not.toHaveBeenCalled();
+      newest.resolve(historyPage([readingEvent]));
+      tree = await harness.settle();
+      expect(button(tree, "Earlier window").props.disabled).toBe(false);
+      expect(requestRange(historyReads(requests)[2])).toEqual(
+        requestRange(historyReads(requests)[0]),
+      );
+      harness.unmount();
+    });
+  }
+  it("keeps dirty off-window edit, exact retry key and independent trend/custom inputs", async () => {
+    historyClock();
+    let attempts = 0;
+    const { harness, requests } = setupReadings((request) => {
+      if (request.method === "PATCH") {
+        if (++attempts === 1) throw new Error("Synthetic lost edit receipt");
+        return response({
+          data: {
+            replayed: true,
+            event: { ...readingEvent, revision: "10", value: "-71.00000900" },
+          },
+        });
+      }
+      if (
+        request.method === "GET" &&
+        request.url.pathname === "/v1/biometrics/events" &&
+        historyReads(requests).length > 1
+      )
+        return historyPage([olderReading()]);
+    });
+    await pressBiometric(harness, "Edit", readingEvent.id);
+    await type(harness, readingValueLabel(), "-71.00000900");
+    await type(harness, "From (YYYY-MM-DD)", "2026-08-01");
+    await type(harness, "Name", "Untouched custom draft");
+    const before = await harness.settle();
+    const time = input(before, "Local time").props.value;
+    await pressBiometric(harness, "Save reading");
+    const first = writes(requests)[0];
+    let tree = await click(harness, "Earlier window");
+    expect(input(tree, readingValueLabel()).props.value).toBe("-71.00000900");
+    expect(input(tree, "Local date").props.value).toBe(readingEvent.localDate);
+    expect(input(tree, "Local time").props.value).toBe(time);
+    expect(input(tree, "From (YYYY-MM-DD)").props.value).toBe("2026-08-01");
+    expect(input(tree, "Name").props.value).toBe("Untouched custom draft");
+    tree = await pressBiometric(harness, "Save reading");
+    expect(writes(requests)[1].body).toBe(first.body);
+    expect(writes(requests)[1].headers["idempotency-key"]).toBe(first.headers["idempotency-key"]);
+    expect(JSON.parse(first.body)).toEqual({ value: "-71.00000900" });
+    expect(input(tree, readingValueLabel()).props.value).toBe("");
+    expect(
+      nodes(tree, (node) => node.type === "View" && node.key === readingEvent.id),
+    ).toHaveLength(0);
+    expect(text(biometricCard(tree, olderReading().id))).toContain(olderReading().value);
+    harness.unmount();
+  });
+  it("rejects stale row Edit/Delete, retained Save and duplicate navigation before paint", async () => {
+    historyClock();
+    const held = deferred();
+    const { harness, requests } = setupReadings((request) =>
+      request.method === "GET" &&
+      request.url.pathname === "/v1/biometrics/events" &&
+      historyReads(requests).length > 1
+        ? held.promise
+        : undefined,
+    );
+    await pressBiometric(harness, "Edit", readingEvent.id);
+    await type(harness, readingValueLabel(), "78.000009");
+    const before = await harness.settle();
+    const edit = button(biometricCard(before, readingEvent.id), "Edit").props.onPress;
+    const remove = button(biometricCard(before, readingEvent.id), "Delete").props.onPress;
+    const save = button(before, "Save reading").props.onPress;
+    const earlier = button(before, "Earlier window").props.onPress;
+    const allocated = hooks.operation;
+    earlier();
+    earlier();
+    save();
+    edit();
+    remove();
+    let tree = await harness.settle();
+    expect(button(tree, "Earlier window").props.disabled).toBe(true);
+    expect(historyReads(requests)).toHaveLength(2);
+    expect(writes(requests)).toHaveLength(0);
+    expect(hooks.operation).toBe(allocated);
+    expect(input(tree, readingValueLabel()).props.value).toBe("78.000009");
+    held.resolve(historyPage([olderReading()]));
+    tree = await harness.settle();
+    expect(button(tree, "Earlier window").props.disabled).toBe(false);
+    edit();
+    remove();
+    expect(writes(requests)).toHaveLength(0);
+    expect(hooks.operation).toBe(allocated);
+    harness.unmount();
+  });
+  for (const boundary of ["owner", "profile", "background", "unmount"]) {
+    it(`rejects old history JSON and retained controls through ${boundary}`, async () => {
+      historyClock();
+      const held = deferred();
+      let reads = 0;
+      const { harness, requests, props } = setupReadings((request) =>
+        request.method === "GET" && request.url.pathname === "/v1/biometrics/events"
+          ? ++reads === 1
+            ? historyPage([readingEvent], "held")
+            : reads === 2
+              ? { ...historyPage(), json: () => held.promise }
+              : historyPage()
+          : undefined,
+      );
+      const before = await harness.settle();
+      const edit = button(biometricCard(before, readingEvent.id), "Edit").props.onPress;
+      const remove = button(biometricCard(before, readingEvent.id), "Delete").props.onPress;
+      const reload = button(before, "Reload history").props.onPress;
+      await click(harness, "Load more readings");
+      if (boundary === "unmount") harness.unmount();
+      else if (boundary === "background") state("background");
+      else {
+        harness.updateProps(
+          boundary === "owner"
+            ? { ownerUserId: "new-owner", sessionEpoch: 2 }
+            : { profileTimeZone: "Asia/Tokyo" },
+        );
+        const hidden = harness.renderWithoutEffects();
+        expect(
+          nodes(hidden, (node) => node.type === "View" && node.key === readingEvent.id),
+        ).toHaveLength(0);
+      }
+      const count = historyReads(requests).length;
+      const allRequests = requests.length;
+      edit();
+      remove();
+      reload();
+      expect(historyReads(requests)).toHaveLength(count);
+      held.resolve({ data: [olderReading()], page: { nextCursor: "obsolete" } });
+      if (boundary === "unmount") {
+        for (let tick = 0; tick < 30; tick += 1) await Promise.resolve();
+        expect(harness.writesAfterUnmount).toBe(0);
+      } else {
+        harness.flushEffects();
+        const tree = await harness.settle();
+        if (boundary === "profile") {
+          expect(historyReads(requests)).toHaveLength(count);
+          expect(requests).toHaveLength(allRequests);
+        }
+        expect(
+          nodes(tree, (node) => node.type === "View" && node.key === olderReading().id),
+        ).toHaveLength(0);
+        harness.unmount();
+      }
+      expect(props.onUnauthorized).not.toHaveBeenCalled();
+      expect(writes(requests)).toHaveLength(0);
+    });
+  }
+  it("serializes a pending event write against navigation/full Refresh and accepts its background receipt with normal cleanup", async () => {
+    historyClock();
+    const held = deferred();
+    const { harness, requests } = setupReadings((request) =>
+      request.method === "PATCH" ? held.promise : undefined,
+    );
+    await pressBiometric(harness, "Edit", readingEvent.id);
+    await type(harness, readingValueLabel(), "73.00000900");
+    const before = await harness.settle();
+    const earlier = button(before, "Earlier window").props.onPress;
+    await pressBiometric(harness, "Save reading");
+    const count = requests.length;
+    earlier();
+    button(await harness.settle(), "Refresh private data").props.onPress();
+    expect(requests).toHaveLength(count);
+    state("background");
+    await harness.settle();
+    held.resolve(
+      response({
+        data: { replayed: false, event: { ...readingEvent, revision: "10", value: "73.00000900" } },
+      }),
+    );
+    let tree = await harness.settle();
+    expect(input(tree, readingValueLabel()).props.value).toBe("");
+    state("active");
+    tree = await harness.settle();
+    expect(text(biometricCard(tree, readingEvent.id))).toContain("73.00000900");
+    expect(button(tree, "Earlier window").props.disabled).toBe(false);
+    expect(writes(requests)).toHaveLength(1);
+    harness.unmount();
+  });
+  for (const staleResponse of ["accepted", "unauthorized"])
+    it(`retires an old private write lease and rejects its ${staleResponse} response while the replacement owns a pending write`, async () => {
+      historyClock();
+      const old = deferred();
+      const next = deferred();
+      let writesSeen = 0;
+      const { harness, requests, props } = setupReadings((request) =>
+        request.method === "PATCH" ? (++writesSeen === 1 ? old.promise : next.promise) : undefined,
+      );
+      await pressBiometric(harness, "Edit", readingEvent.id);
+      await type(harness, readingValueLabel(), "74.000001");
+      await pressBiometric(harness, "Save reading");
+      harness.updateProps({
+        ownerUserId: "another-owner",
+        sessionEpoch: 2,
+        accessToken: "replacement",
+      });
+      let tree = await harness.settle();
+      expect(historyReads(requests)).toHaveLength(2);
+      expect(button(tree, "Earlier window").props.disabled).toBe(false);
+      await pressBiometric(harness, "Edit", readingEvent.id);
+      await type(harness, readingValueLabel(), "75.000001");
+      await pressBiometric(harness, "Save reading");
+      old.resolve(
+        staleResponse === "unauthorized"
+          ? response({}, 401)
+          : response({ data: { replayed: false, event: { ...readingEvent, value: "74.000001" } } }),
+      );
+      tree = await harness.settle();
+      expect(button(tree, "Earlier window").props.disabled).toBe(true);
+      expect(props.onUnauthorized).not.toHaveBeenCalled();
+      expect(input(tree, readingValueLabel()).props.value).toBe("75.000001");
+      next.resolve(
+        response({ data: { replayed: false, event: { ...readingEvent, value: "75.000001" } } }),
+      );
+      tree = await harness.settle();
+      expect(button(tree, "Earlier window").props.disabled).toBe(false);
+      expect(input(tree, readingValueLabel()).props.value).toBe("");
+      harness.unmount();
+    });
+});
+
+describe("native history event-write ownership refinements", () => {
+  it("recovers history controls in a replacement private scope after a current write401", async () => {
+    historyClock();
+    const { harness, requests, props } = setupReadings((request) =>
+      request.method === "PATCH" ? response({}, 401) : undefined,
+    );
+    await pressBiometric(harness, "Edit", readingEvent.id);
+    await pressBiometric(harness, "Save reading");
+    expect(props.onUnauthorized).toHaveBeenCalledTimes(1);
+    harness.updateProps({
+      ownerUserId: "replacement-owner",
+      sessionEpoch: 2,
+      accessToken: "replacement-session",
+    });
+    const tree = await harness.settle();
+    expect(historyReads(requests)).toHaveLength(2);
+    expect(button(tree, "Earlier window").props.disabled).toBe(false);
+    await click(harness, "Earlier window");
+    expect(historyReads(requests)).toHaveLength(3);
+    harness.unmount();
+  });
+  it("releases its pending presentation after unrelated busy cleanup and an identical repeated failure", async () => {
+    historyClock();
+    const held = deferred();
+    let attempts = 0;
+    const repeated = "The private health request failed. Submit again for an exact retry.";
+    const { harness, requests } = setupReadings((request) => {
+      if (request.method === "PATCH") return ++attempts === 1 ? response({}, 503) : held.promise;
+      if (request.method === "POST" && request.url.pathname === "/v1/biometrics/definitions")
+        throw new Error(repeated);
+    });
+    await pressBiometric(harness, "Edit", readingEvent.id);
+    await type(harness, readingValueLabel(), "76.000009");
+    await pressBiometric(harness, "Save reading");
+    await pressBiometric(harness, "Save reading");
+    let tree = await click(harness, "Create definition");
+    expect(text(tree)).toContain(repeated);
+    expect(button(tree, "Earlier window").props.disabled).toBe(true);
+    held.resolve(response({}, 503));
+    tree = await harness.settle();
+    expect(button(tree, "Earlier window").props.disabled).toBe(false);
+    expect(input(tree, readingValueLabel()).props.value).toBe("76.000009");
+    const patches = writes(requests).filter((request) => request.method === "PATCH");
+    expect(patches[1].headers["idempotency-key"]).toBe(patches[0].headers["idempotency-key"]);
+    harness.unmount();
+  });
+  for (const firstStatus of [200, 412]) {
+    it(`preserves malformed acceptance retry identity and original412 eviction semantics for status${firstStatus}`, async () => {
+      historyClock();
+      let attempts = 0;
+      const { harness, requests } = setupReadings((request) =>
+        request.method === "PATCH"
+          ? ++attempts === 1
+            ? response({ unexpected: true }, firstStatus)
+            : response({ data: { replayed: false, event: { ...readingEvent, revision: "10" } } })
+          : undefined,
+      );
+      await pressBiometric(harness, "Edit", readingEvent.id);
+      await pressBiometric(harness, "Save reading");
+      await click(harness, "Earlier window");
+      await pressBiometric(harness, "Save reading");
+      const [first, second] = writes(requests);
+      expect(second.body).toBe(first.body);
+      expect(second.headers["if-match"]).toBe(first.headers["if-match"]);
+      if (firstStatus === 200)
+        expect(second.headers["idempotency-key"]).toBe(first.headers["idempotency-key"]);
+      else expect(second.headers["idempotency-key"]).not.toBe(first.headers["idempotency-key"]);
+      harness.unmount();
+    });
+  }
+});
