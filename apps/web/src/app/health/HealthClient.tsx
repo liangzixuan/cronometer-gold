@@ -317,7 +317,16 @@ export function HealthClient() {
   const renderedEventDraftGeneration = eventDraftGeneration.current;
   const eventWindow = history.window;
   const eventCursor = history.cursor;
-  const [reminders, setReminders] = useState<readonly Reminder[]>([]);
+  const [reminders, setRemindersState] = useState<readonly Reminder[]>([]);
+  const remindersRef = useRef(reminders);
+  const setReminders = useCallback(
+    (change: readonly Reminder[] | ((current: readonly Reminder[]) => readonly Reminder[])) => {
+      const next = typeof change === "function" ? change(remindersRef.current) : change;
+      remindersRef.current = next;
+      setRemindersState(next);
+    },
+    [],
+  );
   const [integrations, setIntegrations] = useState<readonly PlatformIntegration[]>([]);
   const [custom, setCustomState] = useState<CustomDraft>(() => blankCustom(""));
   const [customSource, setCustomSource] = useState<CustomFood | null>(null);
@@ -336,7 +345,19 @@ export function HealthClient() {
   const [eventDate, setEventDate] = useState("");
   const [eventTime, setEventTime] = useState("");
   const [editingEvent, setEditingEvent] = useState<BiometricEvent | null>(null);
-  const [reminder, setReminder] = useState<ReminderDraft>(() => reminderDraft());
+  const [reminder, setReminderState] = useState<ReminderDraft>(() => reminderDraft());
+  const reminderRef = useRef(reminder);
+  const reminderGeneration = useRef(0);
+  const reminderControls = useRef(0);
+  const renderedReminderGeneration = reminderGeneration.current;
+  const renderedReminderControls = reminderControls.current;
+  const reminderWrite = useRef<object | null>(null);
+  const [reminderSaving, setReminderSaving] = useState(false);
+  const replaceReminder = useCallback((next: ReminderDraft) => {
+    reminderRef.current = next;
+    reminderGeneration.current += 1;
+    setReminderState(next);
+  }, []);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [selectedNutrient, setSelectedNutrient] = useState("");
@@ -525,6 +546,7 @@ export function HealthClient() {
           JSON.stringify([previous.user.id, previous.profile]) !==
             JSON.stringify([next.user.id, next.profile]))
       ) {
+        reminderControls.current += 1;
         invalidateHistory();
         if (!next || next.user.id !== previous.user.id) {
           recentHistory.current = null;
@@ -654,7 +676,10 @@ export function HealthClient() {
     setEventDate("");
     setEventTime("");
     setEditingEvent(null);
-    setReminder(reminderDraft());
+    reminderWrite.current = null;
+    setReminderSaving(false);
+    reminderControls.current += 1;
+    replaceReminder(reminderDraft());
     setFrom("");
     setTo("");
     setSelectedNutrient("");
@@ -676,6 +701,8 @@ export function HealthClient() {
     resetSavedFoodFilter,
     router,
     setSession,
+    setReminders,
+    replaceReminder,
     installHistory,
     invalidateHistory,
   ]);
@@ -754,6 +781,7 @@ export function HealthClient() {
       (loadController.current && !loadController.current.signal.aborted)
     )
       return;
+    reminderControls.current += 1;
     invalidateHistory();
     const historyEpoch = historyGeneration.current;
     installHistory({
@@ -952,6 +980,7 @@ export function HealthClient() {
     replaceCustom,
     revalidateHealthSession,
     setSession,
+    setReminders,
     signInAgain,
   ]);
 
@@ -1154,6 +1183,7 @@ export function HealthClient() {
     visible.current = typeof document === "undefined" || document.visibilityState !== "hidden";
     const visibilityChanged = () => {
       visible.current = document.visibilityState !== "hidden";
+      reminderControls.current += 1;
       invalidateHistory();
       customLifecycle.current += 1;
       customWrite.current = null;
@@ -1167,6 +1197,7 @@ export function HealthClient() {
     void loadAll();
     return () => {
       mounted.current = false;
+      reminderControls.current += 1;
       historyController.current?.abort();
       historyController.current = null;
       historyGeneration.current += 1;
@@ -1789,7 +1820,44 @@ export function HealthClient() {
     }
   }
 
+  const reminderScope = session ? JSON.stringify([session.user.id, session.profile]) : null;
+  function canEditReminder() {
+    const current = installedSession.current;
+    return (
+      mounted.current &&
+      visible.current &&
+      (typeof document === "undefined" || document.visibilityState !== "hidden") &&
+      !privateUiClosed.current &&
+      current !== null &&
+      ownerUserId.current === current.user.id &&
+      JSON.stringify([current.user.id, current.profile]) === reminderScope &&
+      reminderGeneration.current === renderedReminderGeneration &&
+      reminderControls.current === renderedReminderControls &&
+      reminderRef.current === reminder &&
+      reminderWrite.current === null
+    );
+  }
+  function changeReminderDraft(next: ReminderDraft) {
+    if (!canEditReminder() || JSON.stringify(next) === JSON.stringify(reminderRef.current)) return;
+    replaceReminder(next);
+  }
+  function reminderDaysMatch(days: readonly number[]) {
+    return (
+      reminder.daysOfWeek.length === days.length &&
+      days.every((day) => reminder.daysOfWeek.includes(day))
+    );
+  }
+  function selectReminderDays(days: readonly number[]) {
+    if (!canEditReminder() || reminderDaysMatch(days)) return;
+    replaceReminder({ ...reminder, daysOfWeek: days });
+  }
+  function editReminder(item: Reminder) {
+    if (!canEditReminder() || !remindersRef.current.includes(item)) return;
+    replaceReminder(reminderDraft(item));
+  }
+
   async function saveReminder() {
+    if (!canEditReminder()) return;
     if (!session || !reminder.label.trim() || reminder.daysOfWeek.length < 1)
       return setMessage("Reminder label, time, and at least one day are required.");
     const body = reminder.id
@@ -1810,26 +1878,58 @@ export function HealthClient() {
         };
     const path = reminder.id ? `reminders/${reminder.id}` : "reminders";
     const key = `reminder:${reminder.id ?? "new"}:${reminder.revision ?? "0"}:${JSON.stringify(body)}`;
+    const token = {},
+      initiatingOwner = session.user.id,
+      draft = reminderRef.current;
+    reminderWrite.current = token;
+    setReminderSaving(true);
+    const ownsWrite = () =>
+      mounted.current &&
+      !privateUiClosed.current &&
+      reminderWrite.current === token &&
+      ownerUserId.current === initiatingOwner &&
+      installedSession.current?.user.id === initiatingOwner;
     setBusy("reminder");
     try {
-      const saved = parseReminderResponse(
-        await request(path, {
-          method: reminder.id ? "PATCH" : "POST",
-          body,
-          key,
-          ...(reminder.revision ? { revision: reminder.revision } : {}),
-        }),
-      );
+      const response = await fetch(`/api/retention/${path}`, {
+        method: reminder.id ? "PATCH" : "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "idempotency-key": operation(key),
+          ...(reminder.revision ? { "if-match": quoteRevision(reminder.revision) } : {}),
+        },
+        body: JSON.stringify(body),
+        cache: "no-store",
+      });
+      if (!ownsWrite()) return;
+      if (response.status === 401) return signInAgain();
+      const responseBody = await json(response);
+      if (!ownsWrite()) return;
+      if (!response.ok)
+        throw new PrivateRequestFailure(
+          responseError(responseBody, "The private health request failed."),
+          response.status,
+          responseBody,
+        );
+      const saved = parseReminderResponse(responseBody);
       operations.current.delete(key);
       setReminders((items) => [saved, ...items.filter((item) => item.id !== saved.id)]);
-      setReminder(reminderDraft());
+      if (reminderRef.current === draft) replaceReminder(reminderDraft());
       setMessage("Reminder saved. A signed mobile app must sync it before local delivery begins.");
     } catch (error) {
+      if (!ownsWrite()) return;
       setMessage(
         `${error instanceof Error ? error.message : "Reminder could not be saved."} Submit again to retry safely.`,
       );
     } finally {
-      setBusy(null);
+      if (reminderWrite.current === token) {
+        reminderWrite.current = null;
+        if (mounted.current && !privateUiClosed.current) {
+          setReminderSaving(false);
+          setBusy(null);
+        }
+      }
     }
   }
 
@@ -3063,7 +3163,10 @@ export function HealthClient() {
                 <input
                   maxLength={120}
                   value={reminder.label}
-                  onChange={(event) => setReminder({ ...reminder, label: event.target.value })}
+                  disabled={!canEditReminder()}
+                  onChange={(event) =>
+                    changeReminderDraft({ ...reminder, label: event.target.value })
+                  }
                 />
               </label>
               <label>
@@ -3071,11 +3174,33 @@ export function HealthClient() {
                 <input
                   type="time"
                   value={reminder.localTime}
-                  onChange={(event) => setReminder({ ...reminder, localTime: event.target.value })}
+                  disabled={!canEditReminder()}
+                  onChange={(event) =>
+                    changeReminderDraft({ ...reminder, localTime: event.target.value })
+                  }
                 />
               </label>
               <fieldset>
                 <legend>Days</legend>
+                <div className="entryActions" style={{ flexWrap: "wrap" }}>
+                  {(
+                    [
+                      ["Weekdays", [1, 2, 3, 4, 5]],
+                      ["Weekends", [6, 7]],
+                      ["Every day", [1, 2, 3, 4, 5, 6, 7]],
+                    ] as const
+                  ).map(([label, days]) => (
+                    <button
+                      key={label}
+                      type="button"
+                      aria-pressed={reminderDaysMatch(days)}
+                      disabled={!canEditReminder()}
+                      onClick={() => selectReminderDays(days)}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
                 <div className="dayChoices">
                   {dayNames.map((name, index) => {
                     const day = index + 1;
@@ -3083,8 +3208,9 @@ export function HealthClient() {
                       <label key={name}>
                         <input
                           checked={reminder.daysOfWeek.includes(day)}
+                          disabled={!canEditReminder()}
                           onChange={() =>
-                            setReminder({
+                            changeReminderDraft({
                               ...reminder,
                               daysOfWeek: reminder.daysOfWeek.includes(day)
                                 ? reminder.daysOfWeek.filter((item) => item !== day)
@@ -3104,11 +3230,17 @@ export function HealthClient() {
                 local notifications by a signed mobile app.
               </label>
               <div className="entryActions">
-                <button disabled={busy === "reminder"} type="submit">
+                <button disabled={reminderSaving || !canEditReminder()} type="submit">
                   {reminder.id ? "Save reminder" : "Create reminder"}
                 </button>
                 {reminder.id ? (
-                  <button onClick={() => setReminder(reminderDraft())} type="button">
+                  <button
+                    disabled={!canEditReminder()}
+                    onClick={() => {
+                      if (canEditReminder()) replaceReminder(reminderDraft());
+                    }}
+                    type="button"
+                  >
                     Cancel edit
                   </button>
                 ) : null}
@@ -3131,7 +3263,11 @@ export function HealthClient() {
                     <small>Lock screen: {item.deliveryPolicy.lockScreenText}</small>
                   </div>
                   <div className="entryActions">
-                    <button onClick={() => setReminder(reminderDraft(item))} type="button">
+                    <button
+                      disabled={!canEditReminder()}
+                      onClick={() => editReminder(item)}
+                      type="button"
+                    >
                       Edit
                     </button>
                     {item.status !== "revoked" ? (

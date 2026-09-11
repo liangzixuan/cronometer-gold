@@ -191,6 +191,14 @@ function initialCustomLog(
 }
 
 const dayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
+const reminderDayPresets = [
+  { key: "weekdays", label: "Weekdays", days: [1, 2, 3, 4, 5] },
+  { key: "weekends", label: "Weekends", days: [6, 7] },
+  { key: "every-day", label: "Every day", days: [1, 2, 3, 4, 5, 6, 7] },
+] as const;
+function sameReminderDays(left: readonly number[], right: readonly number[]): boolean {
+  return left.length === right.length && right.every((day) => left.includes(day));
+}
 const EXACT_DECIMAL = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/u;
 const API_CURSOR = /^[A-Za-z0-9_.-]{1,512}$/u;
 const MAX_EXPORT_BYTES = 10_737_418_240;
@@ -412,7 +420,12 @@ export function RetentionScreen({
     historyRequest.current = null;
     setHistoryPending(false);
   }, []);
-  const [reminders, setReminders] = useState<readonly Reminder[]>([]);
+  const [reminders, setRemindersState] = useState<readonly Reminder[]>([]);
+  const remindersRef = useRef(reminders);
+  const setReminders = useCallback((items: readonly Reminder[]) => {
+    remindersRef.current = items;
+    setRemindersState(items);
+  }, []);
   const [integrations, setIntegrations] = useState<readonly PlatformIntegration[]>([]);
   const [custom, setCustomState] = useState<CustomDraft>(blankCustom);
   const customRef = useRef(custom);
@@ -665,7 +678,37 @@ export function RetentionScreen({
     setBusy,
     setEventDraft,
   ]);
-  const [reminderDraft, setReminderDraft] = useState<ReminderDraft>(initialReminder);
+  const [reminderDraft, setReminderDraftState] = useState<ReminderDraft>(initialReminder);
+  const reminderDraftRef = useRef(reminderDraft);
+  const installReminderDraft = useCallback((draft: ReminderDraft) => {
+    reminderDraftRef.current = draft;
+    setReminderDraftState(draft);
+  }, []);
+  const reminderScopeRef = useRef({ privateScope: customScope, profileTimeZone });
+  if (
+    reminderScopeRef.current.privateScope !== customScope ||
+    reminderScopeRef.current.profileTimeZone !== profileTimeZone
+  )
+    reminderScopeRef.current = { privateScope: customScope, profileTimeZone };
+  const reminderScope = reminderScopeRef.current;
+  const reminderInstalled = useRef<typeof reminderScope | null>(null);
+  const reminderPrivate = useRef(customScope);
+  const reminderWrite = useRef<object | null>(null);
+  const [reminderWriting, setReminderWriting] = useState(false);
+  useEffect(() => {
+    if (reminderPrivate.current !== customScope) {
+      reminderPrivate.current = customScope;
+      reminderWrite.current = null;
+      setReminderWriting(false);
+      if (busyRef.current === "reminder") setBusy(null);
+      installReminderDraft(initialReminder());
+      setReminders([]);
+    }
+    reminderInstalled.current = reminderScope;
+    return () => {
+      reminderInstalled.current = null;
+    };
+  }, [customScope, installReminderDraft, reminderScope, setBusy, setReminders]);
   const [trendInputs, setTrendInputsState] = useState(() => ({
     from: shiftLocalDate(today, -13),
     to: today,
@@ -827,24 +870,32 @@ export function RetentionScreen({
     [accessToken, apiBase, onUnauthorized, stableOperation],
   );
 
-  const reconcileReminders = useCallback(async (items: readonly Reminder[]) => {
-    try {
-      const result = await reconcileLocalReminderSchedules(
-        items,
-        createExpoNotificationAdapter(),
-        createSecureReminderScheduleStore(),
-      );
-      if (result.permission !== "granted" && items.some((item) => item.status === "active")) {
-        setMessage(
-          "Reminder schedules are saved, but local notification permission is not active.",
+  const reconcileReminders = useCallback(
+    async (items: readonly Reminder[], current: () => boolean = () => true) => {
+      try {
+        const result = await reconcileLocalReminderSchedules(
+          items,
+          createExpoNotificationAdapter(),
+          createSecureReminderScheduleStore(),
         );
+        if (
+          current() &&
+          result.permission !== "granted" &&
+          items.some((item) => item.status === "active")
+        ) {
+          setMessage(
+            "Reminder schedules are saved, but local notification permission is not active.",
+          );
+        }
+      } catch (error) {
+        if (current())
+          setMessage(
+            error instanceof Error ? error.message : "Local reminders could not be reconciled.",
+          );
       }
-    } catch (error) {
-      setMessage(
-        error instanceof Error ? error.message : "Local reminders could not be reconciled.",
-      );
-    }
-  }, []);
+    },
+    [],
+  );
 
   const loadAll = useCallback(async () => {
     const epoch = customEpoch.current;
@@ -1008,6 +1059,7 @@ export function RetentionScreen({
     setDefinitions,
     setFoods,
     setLoading,
+    setReminders,
   ]);
 
   useEffect(() => {
@@ -1029,7 +1081,7 @@ export function RetentionScreen({
       })();
     });
     return () => subscription.remove();
-  }, [reconcileReminders, request]);
+  }, [reconcileReminders, request, setReminders]);
 
   const renderedCustomEpoch = customEpoch.current;
   const savedFoodFilterVisible =
@@ -1965,7 +2017,36 @@ export function RetentionScreen({
     await reconcileReminders(next);
   }
 
+  function currentReminderDraft() {
+    return (
+      currentCustomScope(renderedCustomEpoch) &&
+      reminderScopeRef.current === reminderScope &&
+      reminderInstalled.current === reminderScope &&
+      reminderDraftRef.current === reminderDraft &&
+      reminderWrite.current === null
+    );
+  }
+  function changeReminderDraft(changes: Partial<Omit<ReminderDraft, "reminder">>) {
+    if (!currentReminderDraft()) return;
+    if (
+      Object.entries(changes).every(
+        ([key, value]) => reminderDraft[key as keyof ReminderDraft] === value,
+      )
+    )
+      return;
+    installReminderDraft({ ...reminderDraft, ...changes });
+  }
+  function chooseReminderDays(key: string) {
+    if (!currentReminderDraft()) return;
+    const preset = reminderDayPresets.find((item) => item.key === key);
+    if (!preset || sameReminderDays(reminderDraft.days, preset.days)) return;
+    installReminderDraft({ ...reminderDraft, days: preset.days });
+  }
+  function cancelReminder() {
+    if (currentReminderDraft()) installReminderDraft(initialReminder());
+  }
   async function saveReminder() {
+    if (!currentReminderDraft()) return;
     if (
       !reminderDraft.label.trim() ||
       !/^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/u.test(reminderDraft.localTime) ||
@@ -1973,51 +2054,101 @@ export function RetentionScreen({
     ) {
       return setMessage("A reminder needs a label, local time, and at least one weekday.");
     }
-    if (!reminderDraft.reminder) {
-      const permission = await createExpoNotificationAdapter().requestPermissionInContext();
-      if (permission !== "granted") {
-        setMessage("Notification access was not granted. No reminder consent was recorded.");
+    const write = {};
+    reminderWrite.current = write;
+    setReminderWriting(true);
+    const accepted = () =>
+      customMounted.current &&
+      customScopeRef.current === customScope &&
+      customInstalled.current === customScope &&
+      customClosed.current !== customScope &&
+      reminderWrite.current === write;
+    try {
+      if (!reminderDraft.reminder) {
+        const permission = await createExpoNotificationAdapter().requestPermissionInContext();
+        if (
+          !accepted() ||
+          reminderScopeRef.current !== reminderScope ||
+          reminderDraftRef.current !== reminderDraft
+        )
+          return;
+        if (!currentCustomScope(renderedCustomEpoch)) {
+          if (currentCustomScope(customEpoch.current))
+            setMessage("Choose Grant access and create again to save the current reminder draft.");
+          return;
+        }
+        if (permission !== "granted") {
+          setMessage("Notification access was not granted. No reminder consent was recorded.");
+          return;
+        }
+      }
+      const body = reminderDraft.reminder
+        ? {
+            label: reminderDraft.label.trim(),
+            localTime: reminderDraft.localTime,
+            daysOfWeek: reminderDraft.days,
+            timeZone: profileTimeZone,
+            status: reminderDraft.status,
+          }
+        : {
+            label: reminderDraft.label.trim(),
+            localTime: reminderDraft.localTime,
+            daysOfWeek: reminderDraft.days,
+            timeZone: profileTimeZone,
+            channel: "local" as const,
+            consentGranted: true as const,
+          };
+      const path = reminderDraft.reminder
+        ? `/v1/reminders/${reminderDraft.reminder.id}`
+        : "/v1/reminders";
+      const key = `reminder:${reminderDraft.reminder?.id ?? "new"}:${reminderDraft.reminder?.revision ?? "0"}:${JSON.stringify(body)}`;
+      setBusy("reminder");
+      const serializedBody = JSON.stringify(body);
+      const operation = stableOperation(key, serializedBody);
+      const response = await fetch(apiUrl(apiBase, path).toString(), {
+        method: reminderDraft.reminder ? "PATCH" : "POST",
+        headers: authenticatedHeaders(accessToken, {
+          "content-type": "application/json",
+          "idempotency-key": operation.id,
+          ...(reminderDraft.reminder
+            ? { "if-match": quoteRevision(reminderDraft.reminder.revision) }
+            : {}),
+        }),
+        body: serializedBody,
+      });
+      if (!accepted()) return;
+      if (response.status === 401) {
+        closeCustom();
+        await unauthorizedRef.current();
         return;
       }
-    }
-    const body = reminderDraft.reminder
-      ? {
-          label: reminderDraft.label.trim(),
-          localTime: reminderDraft.localTime,
-          daysOfWeek: reminderDraft.days,
-          timeZone: profileTimeZone,
-          status: reminderDraft.status,
-        }
-      : {
-          label: reminderDraft.label.trim(),
-          localTime: reminderDraft.localTime,
-          daysOfWeek: reminderDraft.days,
-          timeZone: profileTimeZone,
-          channel: "local" as const,
-          consentGranted: true as const,
-        };
-    const path = reminderDraft.reminder
-      ? `/v1/reminders/${reminderDraft.reminder.id}`
-      : "/v1/reminders";
-    const key = `reminder:${reminderDraft.reminder?.id ?? "new"}:${reminderDraft.reminder?.revision ?? "0"}:${JSON.stringify(body)}`;
-    setBusy("reminder");
-    try {
-      const saved = parseReminderResponse(
-        await request(path, {
-          method: reminderDraft.reminder ? "PATCH" : "POST",
-          body,
-          operationKey: key,
-          ...(reminderDraft.reminder ? { revision: reminderDraft.reminder.revision } : {}),
-        }),
-      );
-      const next = [saved, ...reminders.filter((item) => item.id !== saved.id)];
-      await refreshReminderSchedules(next);
-      setReminderDraft(initialReminder());
+      const value = await jsonBody(response);
+      if (!accepted()) return;
+      if (response.status === 412) operations.current.delete(key);
+      if (!response.ok) throw new Error(responseError(value, "The private health request failed."));
+      operations.current.delete(key);
+      const saved = parseReminderResponse(value);
+      const next = [saved, ...remindersRef.current.filter((item) => item.id !== saved.id)];
+      setReminders(next);
+      await reconcileReminders(next, accepted);
+      if (!accepted()) return;
+      if (reminderDraftRef.current === reminderDraft) installReminderDraft(initialReminder());
       setMessage("Reminder saved. Lock-screen copy contains no meal, goal, or health details.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Reminder could not be saved.");
+      if (accepted())
+        setMessage(error instanceof Error ? error.message : "Reminder could not be saved.");
     } finally {
-      setBusy(null);
+      if (reminderWrite.current === write) {
+        if (
+          customMounted.current &&
+          customScopeRef.current === customScope &&
+          customInstalled.current === customScope
+        ) {
+          setReminderWriting(false);
+          if (busyRef.current === "reminder") setBusy(null);
+        }
+        reminderWrite.current = null;
+      }
     }
   }
 
@@ -2495,7 +2626,13 @@ export function RetentionScreen({
   }
 
   function editReminder(reminder: Reminder) {
-    setReminderDraft({
+    if (
+      !currentReminderDraft() ||
+      !remindersRef.current.includes(reminder) ||
+      reminder.status === "revoked"
+    )
+      return;
+    installReminderDraft({
       reminder,
       label: reminder.label,
       localTime: reminder.localTime,
@@ -2511,6 +2648,12 @@ export function RetentionScreen({
   const isRecentHistory =
     history.range.from === recentHistory.current.range.from &&
     history.range.to === recentHistory.current.range.to;
+  const reminderVisible =
+    currentCustomScope(customEpoch.current) &&
+    reminderScopeRef.current === reminderScope &&
+    reminderInstalled.current === reminderScope;
+  const visibleReminder = reminderVisible ? reminderDraft : initialReminder();
+  const reminderDisabled = !reminderVisible || reminderWriting;
   const customVisible = currentCustomScope(customEpoch.current);
   const visibleComposer = customVisible ? composer : blankComposer();
   const customDisabled = !customVisible || loading || busy !== null || customWrite.current !== null;
@@ -3344,38 +3487,52 @@ export function RetentionScreen({
         >
           <LabeledInput
             label="Private in-app label"
-            value={reminderDraft.label}
-            onChangeText={(label) => setReminderDraft({ ...reminderDraft, label })}
+            value={reminderVisible ? reminderDraft.label : ""}
+            disabled={reminderDisabled}
+            onChangeText={(label) => changeReminderDraft({ label })}
             maxLength={120}
           />
           <LabeledInput
             label={`Local time in ${profileTimeZone}`}
-            value={reminderDraft.localTime}
-            onChangeText={(localTime) => setReminderDraft({ ...reminderDraft, localTime })}
+            value={reminderVisible ? reminderDraft.localTime : ""}
+            disabled={reminderDisabled}
+            onChangeText={(localTime) => changeReminderDraft({ localTime })}
             maxLength={5}
           />
           <ChipRow
+            items={reminderDayPresets}
+            selected={
+              reminderVisible
+                ? (reminderDayPresets.find((item) =>
+                    sameReminderDays(reminderDraft.days, item.days),
+                  )?.key ?? "")
+                : ""
+            }
+            onSelect={chooseReminderDays}
+            disabled={reminderDisabled}
+          />
+          <ChipRow
+            disabled={reminderDisabled}
             multiple
             items={dayNames.map((label, index) => ({ key: String(index + 1), label }))}
-            selected={reminderDraft.days.map(String)}
+            selected={reminderVisible ? reminderDraft.days.map(String) : []}
             onSelect={(key) => {
               const day = Number(key);
               const days = reminderDraft.days.includes(day)
                 ? reminderDraft.days.filter((item) => item !== day)
                 : [...reminderDraft.days, day].sort();
-              setReminderDraft({ ...reminderDraft, days });
+              changeReminderDraft({ days });
             }}
           />
-          {reminderDraft.reminder ? (
+          {visibleReminder.reminder ? (
             <ChipRow
+              disabled={reminderDisabled}
               items={[
                 { key: "active", label: "Active" },
                 { key: "paused", label: "Paused" },
               ]}
-              selected={reminderDraft.status}
-              onSelect={(status) =>
-                setReminderDraft({ ...reminderDraft, status: status as "active" | "paused" })
-              }
+              selected={visibleReminder.status}
+              onSelect={(status) => changeReminderDraft({ status: status as "active" | "paused" })}
             />
           ) : (
             <Text style={styles.help}>
@@ -3385,18 +3542,20 @@ export function RetentionScreen({
           )}
           <View style={styles.actions}>
             <Button
-              label={reminderDraft.reminder ? "Save reminder" : "Grant access and create"}
+              label={visibleReminder.reminder ? "Save reminder" : "Grant access and create"}
               onPress={() => void saveReminder()}
+              disabled={reminderDisabled}
             />
-            {reminderDraft.reminder ? (
+            {visibleReminder.reminder ? (
               <Button
                 label="Cancel"
-                onPress={() => setReminderDraft(initialReminder())}
+                onPress={cancelReminder}
+                disabled={reminderDisabled}
                 secondary
               />
             ) : null}
           </View>
-          {reminders.map((reminder) => (
+          {(reminderVisible ? reminders : []).map((reminder) => (
             <View key={reminder.id} style={styles.card}>
               <Text style={styles.cardTitle}>{reminder.label}</Text>
               <Text style={styles.meta}>
@@ -3409,7 +3568,12 @@ export function RetentionScreen({
               <View style={styles.actions}>
                 {reminder.status !== "revoked" ? (
                   <>
-                    <Button label="Edit / pause" onPress={() => editReminder(reminder)} secondary />
+                    <Button
+                      label="Edit / pause"
+                      onPress={() => editReminder(reminder)}
+                      disabled={reminderDisabled}
+                      secondary
+                    />
                     <Button label="Revoke" onPress={() => void revokeReminder(reminder)} danger />
                   </>
                 ) : null}

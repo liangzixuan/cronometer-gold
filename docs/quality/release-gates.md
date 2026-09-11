@@ -881,3 +881,19 @@ acceptance.
   history/continuation/retry/invalid-cursor/dirty-edit/no-write/keyboard/narrow/expiry
   proof. All persistence, device, assistive, concurrent React, external reviewer,
   hosted and release gates remain separate.
+
+
+## ADR 0056 Reminder day presets
+
+- Web/native presets select canonical Weekdays [1..5], Weekends [6,7] or Every day
+  [1..7], with membership-based selected states and true same-membership no-ops
+  preserving raw array order. Retain individual overrides and explicit validation.
+- Presets change only draft days and send no request, operation allocation,
+  permission prompt or scheduling action. Preserve other fields, saved cards,
+  consent, Edit/Cancel and exact request identities. Guard current raw draft and
+  private/profile/lifecycle ownership, including retained controls and native
+  permission/save/reconciliation intervals; shared busy is not a save lease.
+- Require focused component/helper/type/format checks, independent review, frozen
+  fresh canonical gates and synthetic Chrome presets/overrides/consent/no-premature-
+  requests/explicit-save/retry/keyboard/narrow/expiry proof. Preserve every real
+  device, notification delivery, external reviewer, hosted and release gate.

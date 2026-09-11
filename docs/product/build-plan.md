@@ -158,6 +158,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Optional saved-recipe log time on web/native | ADR 0053 explicit time, automatic defaults and retry identity; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 | Automatic evidence / independent review | Recipe ingredient food-search pages on web/native | ADR 0054 committed query, explicit continuation and exact version pins; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 | Automatic evidence / independent review | Earlier biometric history on web/native | ADR 0055 fixed inclusive windows, exact continuation and editor/trend independence; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
+| Automatic evidence / independent review | Reminder day presets on web/native | ADR 0056 local memberships, exact retries and explicit consent/save; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1544,13 +1545,20 @@ At September 11, 2026 05:51:01 UTC, base
 container `34564694124` remained in progress. Base results do not transfer to this
 slice. External/device/hosted/release acceptance remains separate.
 
+### Reminder day presets: source/local complete
+
+[ADR 0056](../adr/0056-reminder-day-presets.md) adds local Weekdays, Weekends and
+Every day shortcuts beside individual day controls. Preserve raw fields, saved
+cards, consent and exact retry identity; matching membership is a true no-op.
+Reminder-only draft/save ownership, focused checks, independent review, fresh
+canonical gates and synthetic Chrome preset/override/explicit-save/retry/keyboard/
+narrow/expiry evidence passed. Scheduling and shared contracts stay intact.
+
+At September 11, 2026 08:06:01 UTC, base
+`efc0708f1815795a19185ea80ecf5fd88fd0254b` CI `34571423168` succeeded;
+container `34571423175` remained in progress. Base results do not transfer to this
+slice. External/device/notification-delivery/hosted/release acceptance is separate.
+
 ### Next bounded candidate
 
-Revalidate exact automatic results and external-review findings. The next bounded
-candidate is reminder day presets on web/native: Weekdays, Weekends and Every day
-beside the current individual day controls. Both clients already keep canonical
-1..7 membership and explicit Create/Save. A future acceptance card should preserve
-individual overrides, label/time/status, saved day labels, consent and exact retry
-identity; presets must make no request or permission prompt. No successor edits
-have started. Device, notification delivery, external, hosted and release gates
-remain separate.
+Expand all diary meals on web/native: offer one local action to restore the full day after collapsing several meal groups. Reuse the existing meal presentation ownership, clear only collapsed membership with an exact no-op when already expanded, and preserve nutrient disclosures, raw editors, outbox and requests. Begin with a bounded acceptance card and focused stale-day/private-state and editor/queue regression cases. This is a candidate for the next turn; no successor code is included here.

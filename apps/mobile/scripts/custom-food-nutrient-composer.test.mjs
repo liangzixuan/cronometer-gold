@@ -4,7 +4,10 @@ import * as React from "react";
 import { AppState } from "react-native";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createExpoNotificationAdapter } from "../src/retention/notifications";
 import { parseCanonicalNutrientInput, RetentionScreen } from "../src/retention/RetentionScreen";
+import { reconcileLocalReminderSchedules } from "../src/retention/reminder-schedule";
+import { parseReminders } from "../src/retention/retention";
 
 vi.mock("expo-secure-store", () => ({
   WHEN_UNLOCKED_THIS_DEVICE_ONLY: "device-only",
@@ -17,7 +20,23 @@ vi.mock("../src/retention/reminder-schedule", () => ({
   createSecureReminderScheduleStore: vi.fn(),
   reconcileLocalReminderSchedules: vi.fn(async () => ({ permission: "granted" })),
 }));
-const hooks = vi.hoisted(() => ({ current: null, appListeners: new Set(), operation: 0 }));
+const hooks = vi.hoisted(() => ({
+  current: null,
+  appListeners: new Set(),
+  operation: 0,
+  notificationPermission: vi.fn(async () => "granted"),
+  currentPermission: vi.fn(async () => "granted"),
+  scheduleNotification: vi.fn(),
+  cancelNotification: vi.fn(),
+}));
+vi.mock("../src/retention/notifications", () => ({
+  createExpoNotificationAdapter: vi.fn(() => ({
+    requestPermissionInContext: hooks.notificationPermission,
+    currentPermission: hooks.currentPermission,
+    schedule: hooks.scheduleNotification,
+    cancel: hooks.cancelNotification,
+  })),
+}));
 vi.mock("react", async (original) => ({
   ...(await original()),
   useState: (...args) => hooks.current.useState(...args),
@@ -4479,4 +4498,519 @@ describe("native history event-write ownership refinements", () => {
       harness.unmount();
     });
   }
+});
+
+const savedReminder = {
+  id: "018f6f58-4e2c-7b62-8f0b-3d75491713b5",
+  revision: "3",
+  status: "paused",
+  label: "Saved private reminder",
+  localTime: "20:15",
+  daysOfWeek: [7, 6],
+  timeZone: "America/Chicago",
+  channel: "local",
+  consent: { policyVersion: "local-reminders-v1", grantedAt: timestamp, revokedAt: null },
+  deliveryPolicy: {
+    title: "Nutrition Tracker",
+    lockScreenText: "Time to check in.",
+    includesHealthDetails: false,
+  },
+  createdAt: timestamp,
+  updatedAt: timestamp,
+};
+function setupReminders(handler = () => undefined, items = [savedReminder]) {
+  hooks.notificationPermission.mockReset().mockResolvedValue("granted");
+  reconcileLocalReminderSchedules.mockReset().mockResolvedValue({ permission: "granted" });
+  parseReminders({ data: items });
+  return setup((request, requests) => {
+    const result = handler(request, requests);
+    if (result !== undefined) return result;
+    if (request.url.pathname.startsWith("/v1/reminders")) {
+      if (request.method === "GET") return response({ data: items });
+      const body = JSON.parse(request.body);
+      return response({
+        data: {
+          replayed: false,
+          reminder: {
+            ...savedReminder,
+            channel: "local",
+            id:
+              request.method === "POST" ? "118f6f58-4e2c-7b62-8f0b-3d75491713b5" : savedReminder.id,
+            revision: "4",
+            status: body.status ?? "active",
+            ...Object.fromEntries(Object.entries(body).filter(([key]) => key !== "consentGranted")),
+          },
+        },
+      });
+    }
+  });
+}
+function reminderSection(tree) {
+  const found = nodes(
+    tree,
+    (node) =>
+      node.type === "View" &&
+      React.Children.toArray(node.props.children).some(
+        (child) => child.type === "Text" && text(child) === "Private local reminders",
+      ),
+  );
+  expect(found).toHaveLength(1);
+  return found[0];
+}
+function reminderCard(tree, id = savedReminder.id) {
+  const found = nodes(reminderSection(tree), (node) => node.type === "View" && node.key === id);
+  expect(found).toHaveLength(1);
+  return found[0];
+}
+async function pressReminder(harness, label, card = false) {
+  const tree = await harness.settle();
+  const target = button(card ? reminderCard(tree) : reminderSection(tree), label);
+  expect(target.props.disabled).not.toBe(true);
+  target.props.onPress();
+  return harness.settle();
+}
+function reminderDays(tree) {
+  const section = reminderSection(tree);
+  return ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].flatMap((label, index) =>
+    button(section, label).props.accessibilityState.checked ? [index + 1] : [],
+  );
+}
+function reminderEffects(requests) {
+  return {
+    requests: requests.length,
+    operations: hooks.operation,
+    permission: hooks.notificationPermission.mock.calls.length,
+    currentPermission: hooks.currentPermission.mock.calls.length,
+    schedule: hooks.scheduleNotification.mock.calls.length,
+    cancel: hooks.cancelNotification.mock.calls.length,
+    reconcile: reconcileLocalReminderSchedules.mock.calls.length,
+    adapter: createExpoNotificationAdapter.mock.calls.length,
+  };
+}
+const reminderWrites = (requests) =>
+  writes(requests).filter((request) => request.url.pathname.startsWith("/v1/reminders"));
+
+describe("native reminder day presets", () => {
+  for (const [label, days] of [
+    ["Weekdays", [1, 2, 3, 4, 5]],
+    ["Weekends", [6, 7]],
+    ["Every day", [1, 2, 3, 4, 5, 6, 7]],
+  ]) {
+    it(`selects ${label} locally, preserves all fields/cards and supports an individual override`, async () => {
+      const { harness, requests } = setupReminders();
+      await pressReminder(harness, "Edit / pause", true);
+      await type(harness, "Private in-app label", "  Exact private label  ");
+      await type(harness, "Local time in America/Chicago", "07:09");
+      await type(harness, "Name", "Independent custom draft");
+      await type(harness, "From (YYYY-MM-DD)", "2026-08-01");
+      const before = await harness.settle();
+      const savedText = text(reminderCard(before));
+      const effects = reminderEffects(requests);
+      let tree = await pressReminder(harness, label);
+      expect(reminderDays(tree)).toEqual(days);
+      expect(button(reminderSection(tree), label).props.accessibilityState.selected).toBe(true);
+      expect(input(tree, "Private in-app label").props.value).toBe("  Exact private label  ");
+      expect(input(tree, "Local time in America/Chicago").props.value).toBe("07:09");
+      expect(button(reminderSection(tree), "Paused").props.accessibilityState.selected).toBe(true);
+      expect(input(tree, "Name").props.value).toBe("Independent custom draft");
+      expect(input(tree, "From (YYYY-MM-DD)").props.value).toBe("2026-08-01");
+      expect(text(reminderCard(tree))).toBe(savedText);
+      tree = await pressReminder(harness, "Mon");
+      expect(reminderDays(tree)).toEqual(
+        days.includes(1) ? days.filter((day) => day !== 1) : [1, ...days],
+      );
+      expect(button(reminderSection(tree), label).props.accessibilityState.selected).toBe(false);
+      expect(reminderEffects(requests)).toEqual(effects);
+      harness.unmount();
+    });
+  }
+  it("keeps an unordered matching saved array and current Submit unchanged through repeated no-op presets", async () => {
+    const { harness, requests } = setupReminders((request) =>
+      request.method === "PATCH" ? response({}, 503) : undefined,
+    );
+    await pressReminder(harness, "Edit / pause", true);
+    await pressReminder(harness, "Save reminder");
+    const tree = await harness.settle();
+    const save = button(reminderSection(tree), "Save reminder").props.onPress;
+    const weekend = button(reminderSection(tree), "Weekends").props.onPress;
+    const before = reminderEffects(requests);
+    const message = text(tree);
+    const stateWrites = harness.stateWrites;
+    weekend();
+    weekend();
+    expect(harness.stateWrites).toBe(stateWrites);
+    expect(text(await harness.settle())).toBe(message);
+    expect(reminderEffects(requests)).toEqual(before);
+    save();
+    await harness.settle();
+    const [first, next] = reminderWrites(requests);
+    expect(JSON.parse(first.body).daysOfWeek).toEqual([7, 6]);
+    expect(next.body).toBe(first.body);
+    expect(next.headers["idempotency-key"]).toBe(first.headers["idempotency-key"]);
+    expect(hooks.notificationPermission).not.toHaveBeenCalled();
+    harness.unmount();
+  });
+  it("keeps explicit empty-day validation and creates only after in-context permission", async () => {
+    const { harness, requests } = setupReminders();
+    let tree = await harness.settle();
+    expect(button(reminderSection(tree), "Every day").props.accessibilityState.selected).toBe(true);
+    for (const day of ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"])
+      await pressReminder(harness, day);
+    tree = await pressReminder(harness, "Grant access and create");
+    expect(text(tree)).toContain("at least one weekday");
+    expect(reminderWrites(requests)).toHaveLength(0);
+    expect(hooks.notificationPermission).not.toHaveBeenCalled();
+    await type(harness, "Private in-app label", "  New reminder  ");
+    await type(harness, "Local time in America/Chicago", "05:17");
+    await pressReminder(harness, "Weekdays");
+    tree = await pressReminder(harness, "Grant access and create");
+    const [write] = reminderWrites(requests);
+    expect(write.method).toBe("POST");
+    expect(write.url.pathname).toBe("/v1/reminders");
+    expect(JSON.parse(write.body)).toEqual({
+      label: "New reminder",
+      localTime: "05:17",
+      daysOfWeek: [1, 2, 3, 4, 5],
+      timeZone: "America/Chicago",
+      channel: "local",
+      consentGranted: true,
+    });
+    expect(write.headers["if-match"]).toBeUndefined();
+    expect(hooks.notificationPermission).toHaveBeenCalledTimes(1);
+    expect(text(tree)).toContain("Reminder saved.");
+    expect(reminderDays(tree)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    harness.unmount();
+  });
+  it("saves a paused revision with unchanged time/status/quoted revision, then Cancel restores defaults", async () => {
+    const { harness, requests } = setupReminders();
+    await pressReminder(harness, "Edit / pause", true);
+    await pressReminder(harness, "Weekdays");
+    let tree = await pressReminder(harness, "Save reminder");
+    const [write] = reminderWrites(requests);
+    expect(write.method).toBe("PATCH");
+    expect(write.url.pathname).toBe(`/v1/reminders/${savedReminder.id}`);
+    expect(write.headers["if-match"]).toBe('"3"');
+    expect(JSON.parse(write.body)).toEqual({
+      label: savedReminder.label,
+      localTime: "20:15",
+      daysOfWeek: [1, 2, 3, 4, 5],
+      timeZone: "America/Chicago",
+      status: "paused",
+    });
+    expect(text(reminderCard(tree))).toContain("Saved days: Mon, Tue, Wed, Thu, Fri");
+    expect(hooks.notificationPermission).not.toHaveBeenCalled();
+    await pressReminder(harness, "Edit / pause", true);
+    await pressReminder(harness, "Weekends");
+    tree = await pressReminder(harness, "Cancel");
+    expect(input(tree, "Private in-app label").props.value).toBe("Daily check-in");
+    expect(reminderDays(tree)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    harness.unmount();
+  });
+  it("reuses exact unresolved canonical preset A-to-B-to-A bodies and keys without rotating intent", async () => {
+    const { harness, requests } = setupReminders((request) =>
+      request.method === "PATCH" ? response({}, 503) : undefined,
+    );
+    await pressReminder(harness, "Edit / pause", true);
+    for (const preset of ["Weekdays", "Weekends", "Weekdays"]) {
+      await pressReminder(harness, preset);
+      await pressReminder(harness, "Save reminder");
+    }
+    const [first, other, retry] = reminderWrites(requests);
+    expect(retry.body).toBe(first.body);
+    expect(retry.headers["idempotency-key"]).toBe(first.headers["idempotency-key"]);
+    expect(other.headers["idempotency-key"]).not.toBe(first.headers["idempotency-key"]);
+    expect(JSON.parse(other.body).daysOfWeek).toEqual([6, 7]);
+    harness.unmount();
+  });
+  it("rejects retained draft/day/status/Edit/Cancel/Submit controls after a changed preset before paint", async () => {
+    const { harness, requests } = setupReminders();
+    await pressReminder(harness, "Edit / pause", true);
+    const before = await harness.settle();
+    const section = reminderSection(before);
+    const retained = ["Mon", "Active", "Cancel", "Save reminder", "Every day"].map(
+      (label) => button(section, label).props.onPress,
+    );
+    const edit = button(reminderCard(before), "Edit / pause").props.onPress;
+    const label = input(before, "Private in-app label").props.onChangeText;
+    const time = input(before, "Local time in America/Chicago").props.onChangeText;
+    const effects = reminderEffects(requests);
+    button(section, "Weekdays").props.onPress();
+    for (const action of retained) action();
+    edit();
+    label("Obsolete");
+    time("01:02");
+    const tree = await harness.settle();
+    expect(reminderDays(tree)).toEqual([1, 2, 3, 4, 5]);
+    expect(input(tree, "Private in-app label").props.value).toBe(savedReminder.label);
+    expect(input(tree, "Local time in America/Chicago").props.value).toBe("20:15");
+    expect(button(reminderSection(tree), "Paused").props.accessibilityState.selected).toBe(true);
+    expect(reminderEffects(requests)).toEqual(effects);
+    harness.unmount();
+  });
+  it("rejects a prior preset after Edit/Cancel installs and preserves same-value field callbacks", async () => {
+    const { harness, requests } = setupReminders();
+    let tree = await harness.settle();
+    const old = button(reminderSection(tree), "Weekdays").props.onPress;
+    await pressReminder(harness, "Edit / pause", true);
+    old();
+    tree = await harness.settle();
+    expect(reminderDays(tree)).toEqual([6, 7]);
+    const currentPreset = button(reminderSection(tree), "Weekdays").props.onPress;
+    input(tree, "Private in-app label").props.onChangeText(savedReminder.label);
+    currentPreset();
+    tree = await harness.settle();
+    expect(reminderDays(tree)).toEqual([1, 2, 3, 4, 5]);
+    const oldAfterCancel = button(reminderSection(tree), "Weekends").props.onPress;
+    await pressReminder(harness, "Cancel");
+    oldAfterCancel();
+    expect(reminderDays(await harness.settle())).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(reminderWrites(requests)).toHaveLength(0);
+    harness.unmount();
+  });
+  for (const replacement of ["owner", "token", "api", "profile"]) {
+    it(`fences old and uninstalled controls on ${replacement} replacement and restores current availability`, async () => {
+      const { harness, requests } = setupReminders();
+      await type(harness, "Private in-app label", "Retained private draft");
+      await pressReminder(harness, "Weekdays");
+      const before = await harness.settle();
+      const old = button(reminderSection(before), "Weekends").props.onPress;
+      const requestCount = requests.length;
+      harness.updateProps(
+        replacement === "owner"
+          ? { ownerUserId: otherOwner, sessionEpoch: 2 }
+          : replacement === "token"
+            ? { accessToken: "other-token" }
+            : replacement === "api"
+              ? { apiBase: new URL("http://127.0.0.1:4100") }
+              : { profileTimeZone: "Asia/Tokyo" },
+      );
+      const hidden = harness.renderWithoutEffects();
+      expect(input(hidden, "Private in-app label").props.value).toBe("");
+      expect(button(reminderSection(hidden), "Weekends").props.disabled).toBe(true);
+      old();
+      button(reminderSection(hidden), "Weekends").props.onPress();
+      harness.flushEffects();
+      let tree = await harness.settle();
+      if (replacement === "profile") {
+        expect(requests).toHaveLength(requestCount);
+        expect(input(tree, "Private in-app label").props.value).toBe("Retained private draft");
+        expect(reminderDays(tree)).toEqual([1, 2, 3, 4, 5]);
+        expect(input(tree, "Local time in Asia/Tokyo").props.value).toBe("20:00");
+        expect(text(reminderCard(tree))).toContain(savedReminder.label);
+      } else {
+        expect(input(tree, "Private in-app label").props.value).toBe("Daily check-in");
+        expect(reminderDays(tree)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      }
+      tree = await pressReminder(harness, "Weekends");
+      expect(reminderDays(tree)).toEqual([6, 7]);
+      harness.unmount();
+    });
+  }
+  for (const boundary of ["background", "inactive", "unmount"]) {
+    it(`rejects retained presets/Submit across ${boundary} without permission or writes`, async () => {
+      const { harness, requests } = setupReminders();
+      const tree = await harness.settle();
+      const section = reminderSection(tree);
+      const preset = button(section, "Weekdays").props.onPress;
+      const save = button(section, "Grant access and create").props.onPress;
+      const effects = reminderEffects(requests);
+      if (boundary === "unmount") harness.unmount();
+      else state(boundary);
+      preset();
+      save();
+      if (boundary !== "unmount") {
+        await harness.settle();
+        harness.unmount();
+      }
+      expect(reminderEffects(requests)).toEqual(effects);
+      expect(harness.writesAfterUnmount).toBe(0);
+    });
+  }
+  it("holds local controls and duplicate Create before permission settles, then denial releases with no consent write", async () => {
+    const held = deferred();
+    const { harness, requests } = setupReminders();
+    hooks.notificationPermission.mockImplementation(() => held.promise);
+    const before = await harness.settle();
+    const section = reminderSection(before);
+    const create = button(section, "Grant access and create").props.onPress;
+    const preset = button(section, "Weekdays").props.onPress;
+    create();
+    create();
+    preset();
+    let tree = await harness.settle();
+    expect(button(reminderSection(tree), "Weekdays").props.disabled).toBe(true);
+    expect(input(tree, "Private in-app label").props.editable).toBe(false);
+    expect(hooks.notificationPermission).toHaveBeenCalledTimes(1);
+    expect(reminderWrites(requests)).toHaveLength(0);
+    held.resolve("denied");
+    tree = await harness.settle();
+    expect(text(tree)).toContain("No reminder consent was recorded");
+    expect(button(reminderSection(tree), "Weekdays").props.disabled).toBe(false);
+    expect(reminderDays(tree)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(reminderWrites(requests)).toHaveLength(0);
+    harness.unmount();
+  });
+  it("requires a fresh explicit Create after leaving and returning to foreground during permission", async () => {
+    const held = deferred();
+    const { harness, requests } = setupReminders();
+    hooks.notificationPermission.mockImplementationOnce(() => held.promise);
+    await type(harness, "Private in-app label", "Still unsaved");
+    await pressReminder(harness, "Weekdays");
+    await pressReminder(harness, "Grant access and create");
+    const allocated = hooks.operation;
+    state("background");
+    await harness.settle();
+    state("active");
+    await harness.settle();
+    held.resolve("granted");
+    let tree = await harness.settle();
+    expect(reminderWrites(requests)).toHaveLength(0);
+    expect(hooks.operation).toBe(allocated);
+    expect(text(tree)).toContain("Choose Grant access and create again");
+    expect(input(tree, "Private in-app label").props.value).toBe("Still unsaved");
+    expect(reminderDays(tree)).toEqual([1, 2, 3, 4, 5]);
+    expect(button(reminderSection(tree), "Grant access and create").props.disabled).toBe(false);
+    tree = await pressReminder(harness, "Grant access and create");
+    expect(reminderWrites(requests)).toHaveLength(1);
+    expect(hooks.notificationPermission).toHaveBeenCalledTimes(2);
+    expect(text(tree)).toContain("Reminder saved.");
+    harness.unmount();
+  });
+  for (const replacement of ["private", "profile"]) {
+    it(`does not submit a granted permission from replaced ${replacement} context and releases controls`, async () => {
+      const held = deferred();
+      const { harness, requests } = setupReminders();
+      hooks.notificationPermission.mockImplementation(() => held.promise);
+      await pressReminder(harness, "Grant access and create");
+      harness.updateProps(
+        replacement === "private"
+          ? { ownerUserId: otherOwner, sessionEpoch: 2 }
+          : { profileTimeZone: "Asia/Tokyo" },
+      );
+      await harness.settle();
+      held.resolve("granted");
+      const tree = await harness.settle();
+      expect(reminderWrites(requests)).toHaveLength(0);
+      expect(button(reminderSection(tree), "Weekdays").props.disabled).toBe(false);
+      harness.unmount();
+    });
+  }
+  for (const boundary of ["background", "profile"]) {
+    it(`preserves a same-private issued save and cleanup across ${boundary}, holding through reconciliation`, async () => {
+      const held = deferred();
+      const reconcile = deferred();
+      const { harness, requests } = setupReminders((request) =>
+        request.method === "PATCH" ? held.promise : undefined,
+      );
+      await pressReminder(harness, "Edit / pause", true);
+      await pressReminder(harness, "Weekdays");
+      const before = await harness.settle();
+      const preset = button(reminderSection(before), "Weekends").props.onPress;
+      await pressReminder(harness, "Save reminder");
+      if (boundary === "background") state("background");
+      else harness.updateProps({ profileTimeZone: "Asia/Tokyo" });
+      await harness.settle();
+      reconcileLocalReminderSchedules.mockImplementationOnce(() => reconcile.promise);
+      held.resolve(
+        response({
+          data: {
+            replayed: false,
+            reminder: { ...savedReminder, revision: "4", daysOfWeek: [1, 2, 3, 4, 5] },
+          },
+        }),
+      );
+      let tree = await harness.settle();
+      preset();
+      expect(button(reminderSection(tree), "Weekdays").props.disabled).toBe(true);
+      reconcile.resolve({ permission: "granted" });
+      tree = await harness.settle();
+      if (boundary === "background") {
+        state("active");
+        tree = await harness.settle();
+      }
+      expect(input(tree, "Private in-app label").props.value).toBe("Daily check-in");
+      expect(reminderDays(tree)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+      expect(button(reminderSection(tree), "Weekdays").props.disabled).toBe(false);
+      expect(JSON.parse(reminderWrites(requests)[0].body).timeZone).toBe("America/Chicago");
+      harness.unmount();
+    });
+  }
+  for (const phase of ["fetch401", "json"]) {
+    it(`rejects obsolete ${phase} effects/finally while a replacement private scope owns its save`, async () => {
+      const old = deferred();
+      const next = deferred();
+      let attempts = 0;
+      const { harness, requests, props } = setupReminders((request) => {
+        if (request.method !== "PATCH") return;
+        if (++attempts === 1)
+          return phase === "json" ? { ...response({}), json: () => old.promise } : old.promise;
+        return next.promise;
+      });
+      await pressReminder(harness, "Edit / pause", true);
+      await pressReminder(harness, "Save reminder");
+      harness.updateProps({ ownerUserId: otherOwner, sessionEpoch: 2, accessToken: "replacement" });
+      await harness.settle();
+      await pressReminder(harness, "Edit / pause", true);
+      await pressReminder(harness, "Weekdays");
+      await pressReminder(harness, "Save reminder");
+      old.resolve(
+        phase === "fetch401"
+          ? response({}, 401)
+          : {
+              data: {
+                replayed: false,
+                reminder: { ...savedReminder, label: "Old private receipt" },
+              },
+            },
+      );
+      let tree = await harness.settle();
+      expect(props.onUnauthorized).not.toHaveBeenCalled();
+      expect(button(reminderSection(tree), "Weekends").props.disabled).toBe(true);
+      expect(text(tree)).not.toContain("Old private receipt");
+      next.resolve(
+        response({
+          data: {
+            replayed: false,
+            reminder: { ...savedReminder, revision: "4", daysOfWeek: [1, 2, 3, 4, 5] },
+          },
+        }),
+      );
+      tree = await harness.settle();
+      expect(button(reminderSection(tree), "Weekends").props.disabled).toBe(false);
+      expect(input(tree, "Private in-app label").props.value).toBe("Daily check-in");
+      expect(reminderWrites(requests)).toHaveLength(2);
+      harness.unmount();
+    });
+  }
+  it("releases own rendered pending state after unrelated busy cleanup and a repeated identical save failure", async () => {
+    const held = deferred();
+    let attempts = 0;
+    const { harness } = setupReminders((request) => {
+      if (request.method === "PATCH") return ++attempts === 1 ? response({}, 503) : held.promise;
+      if (request.method === "POST" && request.url.pathname === "/v1/biometrics/definitions")
+        return response({}, 503);
+    });
+    await pressReminder(harness, "Edit / pause", true);
+    await pressReminder(harness, "Save reminder");
+    await pressReminder(harness, "Save reminder");
+    await click(harness, "Create definition");
+    expect(button(reminderSection(await harness.settle()), "Weekdays").props.disabled).toBe(true);
+    held.resolve(response({}, 503));
+    const tree = await harness.settle();
+    expect(button(reminderSection(tree), "Weekdays").props.disabled).toBe(false);
+    harness.unmount();
+  });
+  it("recovers a new private scope after the current reminder save closes the session", async () => {
+    const { harness, props } = setupReminders((request) =>
+      request.method === "PATCH" ? response({}, 401) : undefined,
+    );
+    await pressReminder(harness, "Edit / pause", true);
+    await pressReminder(harness, "Save reminder");
+    expect(props.onUnauthorized).toHaveBeenCalledTimes(1);
+    harness.updateProps({ ownerUserId: otherOwner, sessionEpoch: 2, accessToken: "new-session" });
+    const tree = await harness.settle();
+    expect(button(reminderSection(tree), "Weekdays").props.disabled).toBe(false);
+    await pressReminder(harness, "Weekdays");
+    harness.unmount();
+  });
 });

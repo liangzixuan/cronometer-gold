@@ -119,7 +119,12 @@ vi.mock("react", async (importOriginal) => ({
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
-import type { BiometricDefinition, BiometricEvent, CustomFood } from "../../lib/retention";
+import type {
+  BiometricDefinition,
+  BiometricEvent,
+  CustomFood,
+  Reminder,
+} from "../../lib/retention";
 import { HealthClient } from "./HealthClient";
 
 interface ElementNode {
@@ -324,6 +329,7 @@ function workspace(
     write: null as null | ((url: string, init: RequestInit) => Response | Promise<Response>),
     eventRead: null as null | ((url: string) => Response | Promise<Response>),
     definitions: [] as readonly BiometricDefinition[],
+    reminders: [] as readonly Reminder[],
   };
   const fetcher = vi.fn(async (url: string, init?: RequestInit): Promise<Response> => {
     if (url === "/api/auth/me")
@@ -350,6 +356,7 @@ function workspace(
         : Response.json({ data: [], page: { nextCursor: null } });
     if (url === "/api/retention/biometrics/definitions")
       return Response.json({ data: state.definitions });
+    if (url === "/api/retention/reminders") return Response.json({ data: state.reminders });
     if (
       [
         "/api/nutrients/targetable",
@@ -2611,5 +2618,479 @@ describe("biometric history initial visibility recovery", () => {
     expect(requestRange(eventReads().at(-1)?.[0])).toEqual(selected);
     expect(formValues()).toEqual(forms);
     expect(text(eventRows()[0])).toContain("9.200");
+  });
+});
+
+const reminderDayNames = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+function savedReminder(
+  index = 1,
+  days: readonly number[] = [1, 3, 5],
+  status: Reminder["status"] = "active",
+): Reminder {
+  return {
+    id: `6bcfa2bf-4950-43f7-9f24-${String(index).padStart(12, "0")}`,
+    revision: "3",
+    label: `Saved reminder ${index}`,
+    localTime: "19:23",
+    daysOfWeek: days,
+    status,
+    timeZone: "America/Chicago",
+    channel: "local",
+    consent: {
+      policyVersion: "local-reminders-v1",
+      grantedAt: instant,
+      revokedAt: status === "revoked" ? instant : null,
+    },
+    deliveryPolicy: {
+      title: "Nutrition Tracker",
+      lockScreenText: "Time to check in.",
+      includesHealthDetails: false,
+    },
+    createdAt: instant,
+    updatedAt: instant,
+  };
+}
+function reminderWorkspace() {
+  const result = workspace();
+  result.state.reminders = [
+    savedReminder(),
+    savedReminder(2, [7, 6], "paused"),
+    savedReminder(3, [1, 2, 3, 4, 5, 6, 7], "revoked"),
+  ];
+  return result;
+}
+function reminderSection() {
+  return requiredHistory(
+    elements().find((node) => node.props["aria-labelledby"] === "reminders-heading"),
+  );
+}
+function reminderForm() {
+  return requiredHistory(elements(reminderSection()).find((node) => node.type === "form"));
+}
+function reminderField(label: string) {
+  const wrapper = requiredHistory(
+    elements(reminderForm()).find((node) => node.type === "label" && text(node).trim() === label),
+  );
+  return requiredHistory(elements(wrapper).find((node) => node.type === "input"));
+}
+function reminderCard(label: string) {
+  return requiredHistory(
+    elements(reminderSection()).find(
+      (node) =>
+        node.type === "li" &&
+        elements(node).some((child) => child.type === "strong" && text(child) === label),
+    ),
+  );
+}
+function selectedReminderDays() {
+  return reminderDayNames.filter((day) => reminderField(day).props.checked);
+}
+async function changeReminderInput(label: string, value: string) {
+  invoke(reminderField(label), "onChange", { target: { value } });
+  await hooks.settle();
+}
+async function toggleReminderDay(day: string) {
+  invoke(reminderField(day), "onChange");
+  await hooks.settle();
+}
+async function saveReminderForm() {
+  invoke(reminderForm(), "onSubmit", { preventDefault() {} });
+  await hooks.settle();
+}
+function reminderWrites(fetcher: ReturnType<typeof workspace>["fetcher"]) {
+  return fetcher.mock.calls.filter(
+    ([url, init]) =>
+      url.startsWith("/api/retention/reminders") &&
+      (init?.method === "POST" || init?.method === "PATCH"),
+  );
+}
+function consentStructure() {
+  const form = reminderForm();
+  const children = (form.props.children as readonly unknown[]).filter(
+    (child) => child !== null && child !== false,
+  );
+  const label = requiredHistory(
+    elements(form).find((node) => node.props.className === "consentLine"),
+  );
+  const input = requiredHistory(elements(label).find((node) => node.type === "input"));
+  return {
+    formType: form.type,
+    labelIndex: children.indexOf(label),
+    labelType: label.type,
+    inputType: input.type,
+    inputProps: input.props,
+  };
+}
+
+describe("reminder day presets", () => {
+  it("changes only days, exposes pressed membership and leaves consent structure/cards/other inputs untouched without effects", async () => {
+    const { fetcher } = reminderWorkspace();
+    await mount();
+    await changeReminderInput("Private in-app label", " Raw schedule ");
+    await changeReminderInput("Local time", "06:37");
+    await change("Name", " Unrelated custom draft ");
+    await toggle(food());
+    const formBefore = formValues(),
+      cardsBefore = text(
+        requiredHistory(elements(reminderSection()).find((node) => node.type === "ul")),
+      ),
+      message = status(),
+      consent = consentStructure(),
+      before = fetcher.mock.calls.length;
+    const allocate = vi.fn(() => "a0ec1bb6-195f-44d3-a0b4-09d8cafbb6d0"),
+      confirm = vi.fn(),
+      permission = vi.fn();
+    vi.stubGlobal("crypto", { randomUUID: allocate });
+    vi.stubGlobal("window", { confirm });
+    vi.stubGlobal("Notification", { requestPermission: permission });
+    for (const [label, days] of [
+      ["Weekdays", ["Mon", "Tue", "Wed", "Thu", "Fri"]],
+      ["Weekends", ["Sat", "Sun"]],
+      ["Every day", reminderDayNames],
+    ] as const) {
+      expect(button(label).props.type).toBe("button");
+      await click(label);
+      expect(selectedReminderDays()).toEqual(days);
+      expect(button(label).props["aria-pressed"]).toBe(true);
+      expect(consentStructure()).toEqual(consent);
+      expect(consent.inputProps).toEqual({ required: true, type: "checkbox" });
+      expect(formValues()).toEqual(formBefore);
+      expect(status()).toBe(message);
+    }
+    await toggleReminderDay("Wed");
+    expect(selectedReminderDays()).toEqual(["Mon", "Tue", "Thu", "Fri", "Sat", "Sun"]);
+    for (const label of ["Weekdays", "Weekends", "Every day"])
+      expect(button(label).props["aria-pressed"]).toBe(false);
+    expect(
+      text(requiredHistory(elements(reminderSection()).find((node) => node.type === "ul"))),
+    ).toBe(cardsBefore);
+    expect(details(food()).props.hidden).toBe(false);
+    expect(fetcher.mock.calls).toHaveLength(before);
+    expect(allocate).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(permission).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unordered saved Weekends array and exact ambiguous PATCH on same-value immediate Save", async () => {
+    const { state, fetcher } = reminderWorkspace();
+    await mount();
+    await click("Edit", reminderCard("Saved reminder 2"));
+    state.write = () => Response.json({ error: "Ambiguous save" }, { status: 503 });
+    await saveReminderForm();
+    const first = requiredHistory(reminderWrites(fetcher)[0]);
+    const before = status(),
+      form = reminderForm(),
+      preset = button("Weekends");
+    invoke(preset, "onClick");
+    invoke(preset, "onClick");
+    invoke(form, "onSubmit", { preventDefault() {} });
+    await hooks.settle();
+    const writes = reminderWrites(fetcher);
+    expect(writes).toHaveLength(2);
+    expect(writes[1]?.[1]?.body).toBe(first[1]?.body);
+    expect(JSON.parse(String(first[1]?.body))).toEqual({
+      label: "Saved reminder 2",
+      localTime: "19:23",
+      daysOfWeek: [7, 6],
+      timeZone: "America/Chicago",
+      status: "paused",
+    });
+    expect(first[0]).toBe(`/api/retention/reminders/${savedReminder(2).id}`);
+    expect(new Headers(first[1]?.headers).get("if-match")).toBe('"3"');
+    expect(new Headers(writes[1]?.[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(first[1]?.headers).get("idempotency-key"),
+    );
+    expect(status()).toBe(before);
+    expect(button("Weekends").props["aria-pressed"]).toBe(true);
+  });
+
+  it.each(["Create", "paused revision"])(
+    "submits exact canonical preset plus individual override only on explicit%s",
+    async (mode) => {
+      const { state, fetcher } = reminderWorkspace();
+      await mount();
+      if (mode === "paused revision") await click("Edit", reminderCard("Saved reminder 2"));
+      await changeReminderInput("Private in-app label", " Morning schedule ");
+      await changeReminderInput("Local time", "06:45");
+      await click("Weekdays");
+      await toggleReminderDay("Wed");
+      const saved = {
+        ...savedReminder(
+          mode === "Create" ? 4 : 2,
+          [1, 2, 4, 5],
+          mode === "Create" ? "active" : "paused",
+        ),
+        label: "Morning schedule",
+        localTime: "06:45",
+        revision: "4",
+      };
+      state.write = () => Response.json({ data: { reminder: saved, replayed: false } });
+      expect(reminderWrites(fetcher)).toHaveLength(0);
+      await saveReminderForm();
+      const [url, init] = requiredHistory(reminderWrites(fetcher)[0]);
+      expect(init?.method).toBe(mode === "Create" ? "POST" : "PATCH");
+      expect(url).toBe(
+        mode === "Create"
+          ? "/api/retention/reminders"
+          : `/api/retention/reminders/${savedReminder(2).id}`,
+      );
+      expect(JSON.parse(String(init?.body))).toEqual({
+        label: "Morning schedule",
+        localTime: "06:45",
+        daysOfWeek: [1, 2, 4, 5],
+        timeZone: "America/Chicago",
+        ...(mode === "Create" ? { channel: "local", consentGranted: true } : { status: "paused" }),
+      });
+      expect(new Headers(init?.headers).get("if-match")).toBe(mode === "Create" ? null : '"3"');
+      expect(selectedReminderDays()).toEqual(reminderDayNames);
+      expect(reminderField("Private in-app label").props.value).toBe("");
+      expect(text(reminderCard("Morning schedule"))).toContain("Saved days: Mon, Tue, Thu, Fri");
+    },
+  );
+
+  it("retains A-to-B-to-A canonical Create body/key and malformed success retries", async () => {
+    const { state, fetcher } = reminderWorkspace();
+    await mount();
+    await changeReminderInput("Private in-app label", "Schedule");
+    state.write = () => Response.json({ data: { reminder: { bad: true }, replayed: false } });
+    await click("Weekdays");
+    await saveReminderForm();
+    await click("Weekends");
+    await saveReminderForm();
+    await click("Weekdays");
+    await saveReminderForm();
+    const writes = reminderWrites(fetcher);
+    expect(writes).toHaveLength(3);
+    expect(writes[2]?.[1]?.body).toBe(writes[0]?.[1]?.body);
+    const keys = writes.map(([, init]) => new Headers(init?.headers).get("idempotency-key"));
+    expect(keys[0]).toBe(keys[2]);
+    expect(keys[1]).not.toBe(keys[0]);
+    expect(reminderField("Private in-app label").props.value).toBe("Schedule");
+  });
+
+  it("preserves empty-set validation and allows returning to a preset", async () => {
+    const { fetcher } = reminderWorkspace();
+    await mount();
+    await changeReminderInput("Private in-app label", "Empty days");
+    for (const day of reminderDayNames) await toggleReminderDay(day);
+    expect(selectedReminderDays()).toEqual([]);
+    await saveReminderForm();
+    expect(reminderWrites(fetcher)).toHaveLength(0);
+    expect(status()).toContain("at least one day");
+    await click("Weekends");
+    expect(selectedReminderDays()).toEqual(["Sat", "Sun"]);
+  });
+
+  it.each([
+    "preset",
+    "field",
+    "toggle",
+    "Edit",
+    "Cancel",
+    "full load",
+    "background",
+    "profile",
+    "owner",
+    "unmount",
+  ])(
+    "rejects retained reminder controls after%s without restoring old drafts or requests",
+    async (transition) => {
+      const view = visibility(),
+        { state, fetcher } = reminderWorkspace();
+      await mount();
+      await click("Edit", reminderCard("Saved reminder 2"));
+      const preset = button("Weekdays"),
+        input = reminderField("Private in-app label"),
+        day = reminderField("Mon"),
+        edit = button("Edit", reminderCard("Saved reminder 1")),
+        cancel = button("Cancel edit"),
+        form = reminderForm();
+      if (transition === "preset") await click("Every day");
+      else if (transition === "field") await changeReminderInput("Private in-app label", "Changed");
+      else if (transition === "toggle") await toggleReminderDay("Mon");
+      else if (transition === "Edit") await click("Edit", reminderCard("Saved reminder 1"));
+      else if (transition === "Cancel") await click("Cancel edit");
+      else if (transition === "background") {
+        await view.set("hidden");
+        await view.set("visible");
+      } else if (transition === "unmount") hooks.unmount();
+      else {
+        if (transition === "profile") state.timeZone = "UTC";
+        if (transition === "owner") state.owner = otherOwner;
+        hooks.replayEffects();
+        await hooks.settle();
+      }
+      const before = fetcher.mock.calls.length,
+        values = formValues(),
+        rendered = text(),
+        updates = hooks.afterClose();
+      invoke(preset, "onClick");
+      invoke(input, "onChange", { target: { value: "Stale" } });
+      invoke(day, "onChange");
+      invoke(edit, "onClick");
+      invoke(cancel, "onClick");
+      invoke(form, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(fetcher.mock.calls).toHaveLength(before);
+      expect(formValues()).toEqual(values);
+      expect(text()).toBe(rendered);
+      expect(hooks.afterClose()).toBe(updates);
+    },
+  );
+
+  it.each(["background", "same-owner full load", "profile"])(
+    "protects a live Save despite unrelated busy cleanup and preserves accepted cleanup after%s",
+    async (transition) => {
+      const view = visibility(),
+        { state, fetcher } = reminderWorkspace();
+      state.cursor = "private.next";
+      state.continuation = () => page([], null);
+      await mount();
+      await click("Edit", reminderCard("Saved reminder 2"));
+      await click("Weekdays");
+      const pending = deferred<Response>();
+      state.write = () => pending.promise;
+      const preset = button("Every day"),
+        input = reminderField("Private in-app label"),
+        edit = button("Edit", reminderCard("Saved reminder 1")),
+        cancel = button("Cancel edit"),
+        form = reminderForm();
+      invoke(form, "onSubmit", { preventDefault() {} });
+      invoke(preset, "onClick");
+      invoke(input, "onChange", { target: { value: "Stale" } });
+      invoke(edit, "onClick");
+      invoke(cancel, "onClick");
+      invoke(form, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      await click("Load more private foods");
+      expect(button("Weekends").props.disabled).toBe(true);
+      invoke(button("Weekends"), "onClick");
+      await hooks.settle();
+      expect(selectedReminderDays()).toEqual(["Mon", "Tue", "Wed", "Thu", "Fri"]);
+      expect(reminderWrites(fetcher)).toHaveLength(1);
+      if (transition === "background") await view.set("hidden");
+      else {
+        if (transition === "profile") state.timeZone = "UTC";
+        hooks.replayEffects();
+        await hooks.settle();
+      }
+      pending.resolve(
+        Response.json({
+          data: {
+            reminder: { ...savedReminder(2, [1, 2, 3, 4, 5], "paused"), revision: "4" },
+            replayed: false,
+          },
+        }),
+      );
+      await hooks.settle();
+      if (transition === "background") await view.set("visible");
+      expect(reminderField("Private in-app label").props.value).toBe("");
+      expect(selectedReminderDays()).toEqual(reminderDayNames);
+      expect(button("Weekdays").props.disabled).toBe(false);
+      expect(status()).toContain("Reminder saved.");
+      expect(text(reminderCard("Saved reminder 2"))).toContain(
+        "Saved days: Mon, Tue, Wed, Thu, Fri",
+      );
+    },
+  );
+
+  it.each(["fetch", "json"])(
+    "ignores old reminder receipt at%s while a replacement owner has a newer live Save",
+    async (boundary) => {
+      const { state, fetcher } = reminderWorkspace();
+      state.cursor = "private.next";
+      state.continuation = () => page([], null);
+      await mount();
+      await changeReminderInput("Private in-app label", "Owned schedule");
+      await click("Weekdays");
+      const delayed = deferred<Response>(),
+        body = deferred<unknown>();
+      const response = Response.json({ data: { reminder: savedReminder(), replayed: false } }),
+        parse = vi.fn(() => body.promise);
+      if (boundary === "json") response.json = parse;
+      state.write = () => (boundary === "fetch" ? delayed.promise : response);
+      await saveReminderForm();
+      state.auth = () => session(otherOwner);
+      await click("Load more private foods");
+      expect(button("Weekdays").props.disabled).toBe(true);
+      expect(reminderField("Private in-app label").props.value).toBe("");
+      hooks.unmount();
+      state.auth = null;
+      state.owner = otherOwner;
+      await mount();
+      await changeReminderInput("Private in-app label", "Replacement schedule");
+      await click("Weekends");
+      const current = deferred<Response>();
+      state.write = () => current.promise;
+      await saveReminderForm();
+      const before = fetcher.mock.calls.length,
+        redirects = router.replace.mock.calls.length,
+        rendered = text();
+      if (boundary === "fetch") {
+        const expired = Response.json({ error: "Expired" }, { status: 401 });
+        expired.json = parse;
+        delayed.resolve(expired);
+      } else body.resolve({ data: { reminder: savedReminder(), replayed: false } });
+      await hooks.settle();
+      if (boundary === "fetch") expect(parse).not.toHaveBeenCalled();
+      expect(fetcher.mock.calls).toHaveLength(before);
+      expect(router.replace.mock.calls).toHaveLength(redirects);
+      expect(text()).toBe(rendered);
+      expect(button("Weekdays").props.disabled).toBe(true);
+      expect(reminderField("Private in-app label").props.value).toBe("Replacement schedule");
+      invoke(reminderForm(), "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(fetcher.mock.calls).toHaveLength(before);
+      current.resolve(
+        Response.json({
+          data: {
+            reminder: { ...savedReminder(4, [6, 7]), label: "Replacement schedule" },
+            replayed: false,
+          },
+        }),
+      );
+      await hooks.settle();
+      expect(reminderField("Private in-app label").props.value).toBe("");
+      expect(button("Weekdays").props.disabled).toBe(false);
+      expect(text(reminderCard("Replacement schedule"))).toContain("Saved days: Sat, Sun");
+    },
+  );
+
+  it("closes a current expired Save before JSON and permits a new private scope to save", async () => {
+    const { state, fetcher } = reminderWorkspace();
+    await mount();
+    await changeReminderInput("Private in-app label", "Expiring schedule");
+    await click("Weekdays");
+    const parse = vi.fn();
+    state.write = () => {
+      const response = Response.json({ error: "Expired" }, { status: 401 });
+      response.json = parse;
+      return response;
+    };
+    await saveReminderForm();
+    expect(parse).not.toHaveBeenCalled();
+    expect(router.replace).toHaveBeenCalledWith("/login");
+    expect(reminderField("Private in-app label").props.value).toBe("");
+    expect(button("Weekdays").props.disabled).toBe(true);
+    hooks.unmount();
+    state.owner = otherOwner;
+    await mount();
+    await changeReminderInput("Private in-app label", "New owner schedule");
+    await click("Weekends");
+    state.write = () =>
+      Response.json({
+        data: {
+          reminder: { ...savedReminder(4, [6, 7]), label: "New owner schedule" },
+          replayed: false,
+        },
+      });
+    await saveReminderForm();
+    const writes = reminderWrites(fetcher);
+    expect(writes).toHaveLength(2);
+    expect(new Headers(writes[0]?.[1]?.headers).get("idempotency-key")).not.toBe(
+      new Headers(writes[1]?.[1]?.headers).get("idempotency-key"),
+    );
+    expect(button("Weekdays").props.disabled).toBe(false);
+    expect(reminderField("Private in-app label").props.value).toBe("");
   });
 });
