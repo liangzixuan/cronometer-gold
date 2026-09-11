@@ -156,6 +156,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Show saved biometric date/time zones | ADR 0051 saved local dates, saved-zone seconds and explicit zones; existing focused checks, fresh canonical gates and synthetic Chrome saved-zone/date-boundary/draft/narrow/expiry proof passed; automatic/external/device/release separate |
 | Automatic evidence / independent review | Label missing biometric metadata on web | ADR 0052 explicit name/unit fallbacks; existing focused checks, fresh canonical gates and synthetic Chrome known/missing/draft/narrow/expiry proof passed; automatic/external/release separate |
 | Automatic evidence / independent review | Optional saved-recipe log time on web/native | ADR 0053 explicit time, automatic defaults and retry identity; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
+| Automatic evidence / independent review | Recipe ingredient food-search pages on web/native | ADR 0054 committed query, explicit continuation and exact version pins; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1512,13 +1513,28 @@ At September 11, 2026 02:18:51 UTC, base
 `34546957160` both succeeded. Base results do not transfer to this slice.
 External/device/hosted/release acceptance remains separate.
 
+### Recipe ingredient food-search pages: source/local complete
+
+[ADR 0054](../adr/0054-recipe-ingredient-food-search-pages.md) exposes existing
+reviewed-food search cursors through explicit Load more on web/native. Preserve
+committed query, loaded order, exact version pins and all builder/log drafts.
+Transient failures retain rows/cursor; invalid continuations require Search again.
+Current request/result/Add guards, focused regressions, independent review, fresh
+canonical gates and synthetic Chrome later-page/retry/keyboard/narrow/expiry
+evidence passed. Shared contracts remain unchanged.
+
+At September 11, 2026 04:19:33 UTC, base
+`3e82536700a7de03dce9dedc352cdcae53329aef` CI `34557672504` succeeded;
+container `34557672519` remained in progress. Base results do not transfer to
+this slice. External/device/hosted/release acceptance remains separate.
+
 ### Next bounded candidate
 
 Revalidate exact automatic results and external-review findings. The next bounded
-candidate is Load more in the recipe builder's reviewed-food ingredient search
-on web/native: both currently discard the returned cursor after the first 20
-matches. Reuse existing food-search cursor builders/parsers, preserve committed
-query, loaded order and exact public food-version pins, and leave builder and
-recipe-log drafts/retries intact. Verify continuation/failure/retry, obsolete
-results, later-page Add and keyboard/narrow behavior. No successor implementation
-has started; live catalogue, external/device/hosted/release gates remain.
+candidate is access to earlier biometric history on web/native. Both clients load
+only the last 120 days through tomorrow; existing continuation stays inside that
+same fixed window. Inspect the existing from/to/cursor contract and add a bounded
+history-only earlier-window/recent control if the acceptance card can preserve
+exact readings, current window/cursor ownership, edit drafts and independent
+trend inputs. No successor implementation has started. Live catalogue, external,
+device, hosted and release gates remain separate.

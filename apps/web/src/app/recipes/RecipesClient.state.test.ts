@@ -3300,3 +3300,658 @@ describe("native time input validity when logging a recipe", () => {
     },
   );
 });
+
+function ingredientSearchFood(index: number, changes: Partial<FoodSearchHit> = {}): FoodSearchHit {
+  return {
+    ...food,
+    foodId: String(1001 + index),
+    foodVersionId: String(2001 + index),
+    name: `Reviewed food ${index}`,
+    defaultServing: { ...food.defaultServing, servingId: String(3001 + index) },
+    ...changes,
+  };
+}
+function ingredientSearchPage(items: readonly FoodSearchHit[], cursor: string | null = null) {
+  return Response.json({ data: items, page: { nextCursor: cursor } });
+}
+function ingredientSearchRows() {
+  return elements().filter(
+    (node) =>
+      node.props.className === "ingredientResult" &&
+      elements(node).some((child) => child.type === "button" && text(child) === "Add serving"),
+  );
+}
+function ingredientSearchNames() {
+  return ingredientSearchRows().map((row) =>
+    text(required(elements(row).find((node) => node.type === "strong"))),
+  );
+}
+function ingredientSearchAdd(index: number, mode: "grams" | "serving" = "grams") {
+  return required(
+    elements(required(ingredientSearchRows()[index])).find(
+      (node) =>
+        node.type === "button" && text(node) === (mode === "grams" ? "Add 100 g" : "Add serving"),
+    ),
+  );
+}
+function ingredientSearchStatus() {
+  return text(
+    required(
+      elements().find(
+        (node) => node.props.role === "status" && node.props.className === "fieldHelp",
+      ),
+    ),
+  );
+}
+function pagedIngredientFetcher() {
+  const fetcher = nutritionFetcher();
+  const original = required(fetcher.getMockImplementation());
+  const first = Array.from({ length: 20 }, (_, index) => ingredientSearchFood(index));
+  const later = [
+    ingredientSearchFood(20, { name: "Same name" }),
+    ingredientSearchFood(21, { foodId: first[0]?.foodId ?? "1001", name: "Same name" }),
+  ];
+  fetcher.mockImplementation(async (url, init) => {
+    if (url.startsWith("/api/foods/search?")) {
+      const cursor = new URL(url, "https://example.test").searchParams.get("cursor");
+      if (cursor === null) return ingredientSearchPage(first, "page.one");
+      if (cursor === "page.one")
+        return ingredientSearchPage(
+          [
+            {
+              ...required(first[19]),
+              name: "Overlapping replacement must not displace loaded object",
+            },
+            ...later,
+          ],
+          "page.two",
+        );
+      if (cursor === "page.two") return ingredientSearchPage([]);
+      throw new Error(`Unexpected ingredient cursor: ${cursor}`);
+    }
+    return original(url, init);
+  });
+  return { fetcher, first, later };
+}
+function ingredientSearchReads(fetcher: ReturnType<typeof nutritionFetcher>) {
+  return fetcher.mock.calls.filter(([url]) => url.startsWith("/api/foods/search?"));
+}
+
+describe("actual paged reviewed-food ingredient search", () => {
+  it("merges20/overlap/empty pages and saves exact later-page pins while preserving other drafts", async () => {
+    const { fetcher, first, later } = pagedIngredientFetcher();
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await change("Name", "Keep this dirty recipe");
+    await change("Instructions (optional)", "Raw instructions  ");
+    await change(optionalTimeLabel, "07:30");
+    await change("Amount", "1.250000");
+    await change("Meal", "lunch");
+    await change(savedFilterLabel, "Saved");
+    await change(nestedFilterLabel, "Nested draft");
+    await click("Per 100 g");
+    await click("Copy to new draft");
+    const nutrition = nutritionRows();
+    const log = ["Local diary date", optionalTimeLabel, "Amount", "Portion", "Meal"].map(
+      (label) => field(label).props.value,
+    );
+    const before = fetcher.mock.calls.length;
+    await change("Find a reviewed food", "  Ｏats   bowl  ");
+    expect(fetcher.mock.calls).toHaveLength(before);
+    const draft = editorValues();
+    await click("Search");
+    expect(ingredientSearchReads(fetcher)[0]?.[0]).toBe(
+      "/api/foods/search?query=Oats+bowl&intent=all&limit=20",
+    );
+    expect(ingredientSearchStatus()).toContain("20 reviewed foods loaded for “Oats bowl”");
+    const oldAdd = ingredientSearchAdd(0);
+    await click("Load more foods");
+    expect(ingredientSearchNames()).toEqual([
+      ...first.map((item) => item.name),
+      ...later.map((item) => item.name),
+    ]);
+    expect(ingredientSearchRows()).toHaveLength(22);
+    expect(ingredientSearchReads(fetcher)[1]?.[0]).toBe(
+      "/api/foods/search?query=Oats+bowl&intent=all&cursor=page.one&limit=20",
+    );
+    await click("Load more foods");
+    expect(ingredientSearchRows()).toHaveLength(22);
+    expect(hasButton("Load more foods")).toBe(false);
+    expect(ingredientSearchStatus()).toContain("No more results are available in this search.");
+    expect(editorValues()).toEqual(draft);
+    expect(nutritionRows()).toEqual(nutrition);
+    expect(
+      ["Local diary date", optionalTimeLabel, "Amount", "Portion", "Meal"].map(
+        (label) => field(label).props.value,
+      ),
+    ).toEqual(log);
+    expect(field(savedFilterLabel).props.value).toBe("Saved");
+    expect(field(nestedFilterLabel).props.value).toBe("Nested draft");
+    expect(hasButton(confirmCopyLabel)).toBe(true);
+    const beforeAdd = fetcher.mock.calls.length;
+    invoke(oldAdd, "onClick");
+    await hooks.settle();
+    expect(editorValues()).toEqual(draft);
+    invoke(ingredientSearchAdd(20, "serving"), "onClick");
+    await hooks.settle();
+    invoke(ingredientSearchAdd(21), "onClick");
+    await hooks.settle();
+    expect(fetcher.mock.calls).toHaveLength(beforeAdd);
+    expect(field(optionalTimeLabel).props.value).toBe("07:30");
+    save();
+    await hooks.settle();
+    const writes = fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(writes).toHaveLength(1);
+    expect(JSON.parse(String(writes[0]?.[1]?.body)).ingredients.slice(-2)).toEqual([
+      {
+        kind: "food",
+        foodVersionId: later[0]?.foodVersionId,
+        portion: { kind: "serving", servingId: later[0]?.defaultServing?.servingId, amount: "1" },
+        position: 1,
+        note: null,
+      },
+      {
+        kind: "food",
+        foodVersionId: later[1]?.foodVersionId,
+        portion: { kind: "grams", grams: "100" },
+        position: 2,
+        note: null,
+      },
+    ]);
+  });
+
+  it.each([null, "empty.next"])(
+    "distinguishes an empty loaded page with cursor%s from an unverified search",
+    async (cursor) => {
+      const { fetcher } = pagedIngredientFetcher();
+      const original = required(fetcher.getMockImplementation());
+      fetcher.mockImplementation(async (url, init) =>
+        url.startsWith("/api/foods/search?")
+          ? ingredientSearchPage([], cursor)
+          : original(url, init),
+      );
+      await mountReady();
+      expect(ingredientSearchStatus()).toContain("Search to load");
+      expect(ingredientSearchStatus()).not.toContain("No more results");
+      await change("Find a reviewed food", "empty");
+      await click("Search");
+      expect(ingredientSearchStatus()).toContain("0 reviewed foods loaded for “empty”");
+      expect(hasButton("Load more foods")).toBe(cursor !== null);
+      expect(ingredientSearchStatus()).toContain(
+        cursor ? "More results may be available" : "No more results are available in this search",
+      );
+    },
+  );
+
+  it("binds exact raw query, same-value actions and stale A-to-B-to-A callbacks without requests on typing", async () => {
+    const { fetcher } = pagedIngredientFetcher();
+    await mountReady();
+    await change("Find a reviewed food", " oats ");
+    await click("Search");
+    const raw = field("Find a reviewed food"),
+      more = button("Load more foods"),
+      add = ingredientSearchAdd(0),
+      search = button("Search");
+    const before = fetcher.mock.calls.length;
+    invoke(raw, "onChange", { target: { value: "oats" } });
+    invoke(more, "onClick");
+    invoke(add, "onClick");
+    invoke(search, "onClick");
+    await hooks.settle();
+    expect(fetcher.mock.calls).toHaveLength(before);
+    expect(button("Load more foods").props.disabled).toBe(true);
+    expect(ingredientSearchAdd(0).props.disabled).toBe(true);
+    expect(ingredientSearchStatus()).toContain("loaded for “oats”");
+    await change("Find a reviewed food", " oats ");
+    invoke(raw, "onChange", { target: { value: "obsolete" } });
+    invoke(more, "onClick");
+    invoke(add, "onClick");
+    await hooks.settle();
+    expect(field("Find a reviewed food").props.value).toBe(" oats ");
+    expect(fetcher.mock.calls).toHaveLength(before);
+    const currentMore = button("Load more foods");
+    invoke(field("Find a reviewed food"), "onChange", { target: { value: " oats " } });
+    invoke(currentMore, "onClick");
+    invoke(currentMore, "onClick");
+    await hooks.settle();
+    expect(ingredientSearchReads(fetcher)).toHaveLength(2);
+  });
+
+  it("fresh Search replaces even the same query and prevents retained result/cursor actions", async () => {
+    const { fetcher } = pagedIngredientFetcher();
+    await mountReady();
+    await change("Find a reviewed food", "oats");
+    await click("Search");
+    const old = ingredientSearchAdd(0),
+      more = button("Load more foods");
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation(async (url, init) =>
+      url.startsWith("/api/foods/search?")
+        ? ingredientSearchPage([ingredientSearchFood(50)], "new.page")
+        : original(url, init),
+    );
+    const search = button("Search");
+    invoke(search, "onClick");
+    invoke(search, "onClick");
+    await hooks.settle();
+    expect(ingredientSearchNames()).toEqual(["Reviewed food 50"]);
+    const before = fetcher.mock.calls.length,
+      draft = editorValues();
+    invoke(old, "onClick");
+    invoke(more, "onClick");
+    await hooks.settle();
+    expect(fetcher.mock.calls).toHaveLength(before);
+    expect(editorValues()).toEqual(draft);
+    expect(ingredientSearchReads(fetcher)).toHaveLength(2);
+    expect(ingredientSearchReads(fetcher)[1]?.[0]).not.toContain("cursor=");
+  });
+
+  it.each(["503", "malformed"])(
+    "retains loaded results/cursor for exact continuation retry after%s",
+    async (failure) => {
+      const { fetcher, first } = pagedIngredientFetcher();
+      const original = required(fetcher.getMockImplementation());
+      let attempts = 0;
+      fetcher.mockImplementation(async (url, init) => {
+        if (url.includes("cursor=page.one") && ++attempts === 1)
+          return failure === "503"
+            ? Response.json({ error: "Temporary search outage" }, { status: 503 })
+            : Response.json({ data: [], page: { nextCursor: "invalid$cursor" } });
+        return original(url, init);
+      });
+      await mountReady();
+      await change("Find a reviewed food", "oats");
+      await click("Search");
+      await click("Load more foods");
+      expect(ingredientSearchNames()).toEqual(first.map((item) => item.name));
+      expect(ingredientSearchStatus()).toContain("Choose Load more foods to retry this page");
+      expect(button("Load more foods").props.disabled).toBe(false);
+      await click("Load more foods");
+      const reads = ingredientSearchReads(fetcher);
+      expect(reads[2]?.[0]).toBe(reads[1]?.[0]);
+      expect(ingredientSearchRows()).toHaveLength(22);
+    },
+  );
+
+  it("requires explicit fresh Search after400 without claiming terminal exhaustion or retrying automatically", async () => {
+    const { fetcher } = pagedIngredientFetcher();
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation(async (url, init) =>
+      url.includes("cursor=page.one")
+        ? Response.json({ error: "Cursor expired" }, { status: 400 })
+        : original(url, init),
+    );
+    await mountReady();
+    await change("Find a reviewed food", "oats");
+    await click("Search");
+    const more = button("Load more foods");
+    await click("Load more foods");
+    expect(ingredientSearchRows()).toHaveLength(20);
+    expect(ingredientSearchStatus()).toContain("Search again for a fresh result set");
+    expect(ingredientSearchStatus()).not.toContain("No more results");
+    expect(hasButton("Load more foods")).toBe(false);
+    const before = fetcher.mock.calls.length;
+    invoke(more, "onClick");
+    await hooks.settle();
+    expect(fetcher.mock.calls).toHaveLength(before);
+    expect(ingredientSearchReads(fetcher)).toHaveLength(2);
+    await click("Search");
+    expect(ingredientSearchReads(fetcher)[2]?.[0]).not.toContain("cursor=");
+  });
+
+  it.each([200, 400, 401])(
+    "ignores obsolete continuation status%s before JSON or UI effects",
+    async (status) => {
+      const { fetcher } = pagedIngredientFetcher();
+      const original = required(fetcher.getMockImplementation());
+      const pending = deferred<Response>(),
+        replacement = deferred<Response>();
+      fetcher.mockImplementation(async (url, init) => {
+        if (url.includes("cursor=page.one")) return pending.promise;
+        if (url.includes("query=barley")) return replacement.promise;
+        return original(url, init);
+      });
+      await mountReady();
+      await change("Find a reviewed food", "oats");
+      await click("Search");
+      await click("Load more foods");
+      await change("Find a reviewed food", "barley");
+      const retainedSearch = button("Search");
+      await click("Search");
+      const response = Response.json(
+        { data: [ingredientSearchFood(70)], page: { nextCursor: null } },
+        { status },
+      );
+      const json = vi.spyOn(response, "json");
+      const before = fetcher.mock.calls.length;
+      pending.resolve(response);
+      await hooks.settle();
+      expect(json).not.toHaveBeenCalled();
+      expect(router.replace).not.toHaveBeenCalled();
+      expect(fetcher.mock.calls).toHaveLength(before);
+      expect(button("Searching…").props.disabled).toBe(true);
+      invoke(retainedSearch, "onClick");
+      invoke(button("Searching…"), "onClick");
+      await hooks.settle();
+      expect(fetcher.mock.calls).toHaveLength(before);
+      expect(ingredientSearchRows()).toHaveLength(0);
+      replacement.resolve(ingredientSearchPage([ingredientSearchFood(60)], "barley.next"));
+      await hooks.settle();
+      expect(ingredientSearchNames()).toEqual(["Reviewed food 60"]);
+      expect(button("Load more foods").props.disabled).toBe(false);
+      expect(ingredientSearchStatus()).not.toContain("Search again");
+    },
+  );
+
+  it("ignores a delayed parsed body when a newer query already owns the results", async () => {
+    const { fetcher } = pagedIngredientFetcher();
+    const original = required(fetcher.getMockImplementation());
+    const pending = deferred<unknown>();
+    fetcher.mockImplementation(async (url, init) => {
+      if (url.includes("cursor=page.one")) {
+        const response = ingredientSearchPage([]);
+        response.json = () => pending.promise;
+        return response;
+      }
+      if (url.includes("query=barley")) return ingredientSearchPage([ingredientSearchFood(60)]);
+      return original(url, init);
+    });
+    await mountReady();
+    await change("Find a reviewed food", "oats");
+    await click("Search");
+    await click("Load more foods");
+    await change("Find a reviewed food", "barley");
+    await click("Search");
+    const before = fetcher.mock.calls.length;
+    pending.resolve(await ingredientSearchPage([ingredientSearchFood(70)]).json());
+    await hooks.settle();
+    expect(fetcher.mock.calls).toHaveLength(before);
+    expect(ingredientSearchNames()).toEqual(["Reviewed food 60"]);
+  });
+
+  it.each(["New", "copy", "open", "save", "route", "unmount"])(
+    "fences retained search/Add/cursor controls after%s replaces the context",
+    async (transition) => {
+      const { fetcher } = pagedIngredientFetcher();
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      await change("Find a reviewed food", "oats");
+      await click("Search");
+      const raw = field("Find a reviewed food"),
+        add = ingredientSearchAdd(0),
+        search = button("Search"),
+        more = button("Load more foods");
+      if (transition === "New") await click("New recipe");
+      else if (transition === "copy") await click("Copy to new draft");
+      else if (transition === "open") {
+        openSaved();
+        await hooks.settle();
+      } else if (transition === "save") {
+        save();
+        await hooks.settle();
+      } else if (transition === "route") {
+        navigation.query = "date=2026-09-08";
+        hooks.renderWithoutEffects();
+      } else hooks.unmount();
+      const before = fetcher.mock.calls.length,
+        draft = editorValues(),
+        beforeText = text(),
+        updates = hooks.afterClose();
+      invoke(raw, "onChange", { target: { value: "obsolete" } });
+      invoke(add, "onClick");
+      invoke(search, "onClick");
+      invoke(more, "onClick");
+      expect(fetcher.mock.calls).toHaveLength(before);
+      expect(hooks.afterClose()).toBe(updates);
+      expect(editorValues()).toEqual(draft);
+      expect(text()).toBe(beforeText);
+      if (transition !== "unmount") expect(ingredientSearchRows()).toHaveLength(0);
+    },
+  );
+
+  it("keeps results through ordinary builder edits but rejects old Add before allocation or success", async () => {
+    const { fetcher } = pagedIngredientFetcher();
+    await mountReady();
+    await change("Find a reviewed food", "oats");
+    await click("Search");
+    const old = ingredientSearchAdd(0);
+    await change("Name", "Changed builder");
+    const originalCrypto = crypto,
+      allocate = vi.fn(() => originalCrypto.randomUUID());
+    vi.stubGlobal("crypto", { randomUUID: allocate });
+    const before = fetcher.mock.calls.length,
+      beforeText = text();
+    invoke(old, "onClick");
+    await hooks.settle();
+    expect(allocate).not.toHaveBeenCalled();
+    expect(text()).toBe(beforeText);
+    expect(ingredientSearchRows()).toHaveLength(20);
+    const add = ingredientSearchAdd(0),
+      second = ingredientSearchAdd(1);
+    invoke(add, "onClick");
+    invoke(second, "onClick");
+    await hooks.settle();
+    expect(allocate).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls).toHaveLength(before);
+    expect(text()).toContain("Ingredients (1/50)");
+  });
+
+  it("keeps the reviewed serving and50 ingredient guards for later-page controls", async () => {
+    const { fetcher } = pagedIngredientFetcher();
+    const original = required(fetcher.getMockImplementation());
+    fetcher.mockImplementation(async (url, init) =>
+      url.includes("cursor=page.one")
+        ? ingredientSearchPage([ingredientSearchFood(30, { defaultServing: null })])
+        : original(url, init),
+    );
+    await mountReady();
+    expect(
+      review().onConfirm(Array.from({ length: 49 }, (_, index) => ingredient(`cap-${index}`))),
+    ).toBe(true);
+    await hooks.settle();
+    await change("Find a reviewed food", "oats");
+    await click("Search");
+    await click("Load more foods");
+    expect(ingredientSearchAdd(20, "serving").props.disabled).toBe(true);
+    invoke(ingredientSearchAdd(20, "serving"), "onClick");
+    await hooks.settle();
+    expect(text()).toContain("Ingredients (49/50)");
+    invoke(ingredientSearchAdd(20), "onClick");
+    await hooks.settle();
+    expect(text()).toContain("Ingredients (50/50)");
+    expect(ingredientSearchAdd(0).props.disabled).toBe(true);
+    invoke(ingredientSearchAdd(0), "onClick");
+    await hooks.settle();
+    expect(text()).toContain("Ingredients (50/50)");
+    expect(fetcher.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(0);
+  });
+
+  it.each(["owner", "profile"])(
+    "rejects newly received search data after revalidation changes%s",
+    async (changeScope) => {
+      const { fetcher } = pagedIngredientFetcher();
+      const original = required(fetcher.getMockImplementation());
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      await change(optionalTimeLabel, "07:30");
+      await change("Name", "Raw independent draft");
+      fetcher.mockImplementation(async (url, init) => {
+        if (url === "/api/auth/me") {
+          if (changeScope === "owner") return session(secondRecipeId);
+          const profile = await session().json();
+          profile.data.profile.timeZone = "UTC";
+          return Response.json(profile);
+        }
+        return original(url, init);
+      });
+      await change("Find a reviewed food", "oats");
+      await click("Search");
+      expect(ingredientSearchRows()).toHaveLength(0);
+      if (changeScope === "owner") expect(router.replace).toHaveBeenCalledWith("/login");
+      else {
+        expect(ingredientSearchStatus()).toContain("Your profile changed");
+        expect(hasButton("Load more foods")).toBe(false);
+        expect(field(optionalTimeLabel).props.value).toBe("07:30");
+        expect(field("Name").props.value).toBe("Raw independent draft");
+      }
+    },
+  );
+
+  it.each(["save", "log"])(
+    "preserves pending%s body/key and log time through search and continuation",
+    async (action) => {
+      const { fetcher } = pagedIngredientFetcher();
+      const original = required(fetcher.getMockImplementation());
+      fetcher.mockImplementation(async (url, init) =>
+        init?.method === "POST"
+          ? Response.json({ error: "Confirmation unavailable" }, { status: 503 })
+          : original(url, init),
+      );
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      await change(optionalTimeLabel, "07:30");
+      await change("Amount", "1.250000");
+      await change("Name", "Unsaved retry draft");
+      if (action === "save") {
+        save();
+        await hooks.settle();
+      } else await click("Log recipe");
+      const sharedStatus = text(
+        required(elements().find((node) => node.props.className === "workspaceStatus")),
+      );
+      await change("Find a reviewed food", "oats");
+      await click("Search");
+      await click("Load more foods");
+      expect(field(optionalTimeLabel).props.value).toBe("07:30");
+      expect(text()).toContain(sharedStatus);
+      if (action === "save") {
+        save();
+        await hooks.settle();
+      } else await click("Log recipe");
+      const writes = fetcher.mock.calls.filter(([, init]) => init?.method === "POST");
+      expect(writes).toHaveLength(2);
+      expect(writes[1]?.[1]?.body).toBe(writes[0]?.[1]?.body);
+      expect(new Headers(writes[1]?.[1]?.headers).get("idempotency-key")).toBe(
+        new Headers(writes[0]?.[1]?.headers).get("idempotency-key"),
+      );
+      expect(field(optionalTimeLabel).props.value).toBe("07:30");
+    },
+  );
+});
+
+describe("ingredient continuation across live context changes", () => {
+  it("installs a pending page into the same builder after ordinary raw edits without overwriting them", async () => {
+    const { fetcher } = pagedIngredientFetcher();
+    const original = required(fetcher.getMockImplementation()),
+      pending = deferred<Response>();
+    fetcher.mockImplementation(async (url, init) =>
+      url.includes("cursor=page.one") ? pending.promise : original(url, init),
+    );
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await change("Find a reviewed food", "oats");
+    await click("Search");
+    await click("Load more foods");
+    await change("Name", "Draft changed during paging");
+    await change("Rolled oats quantity in grams", "9.000001");
+    await change(optionalTimeLabel, "08:45");
+    const draft = editorValues();
+    pending.resolve(ingredientSearchPage([ingredientSearchFood(25)]));
+    await hooks.settle();
+    expect(ingredientSearchRows()).toHaveLength(21);
+    expect(editorValues()).toEqual(draft);
+    expect(field(optionalTimeLabel).props.value).toBe("08:45");
+  });
+
+  it.each(["route", "unmount", "open"])(
+    "ignores delayed continuation expiry after %s replaces its context",
+    async (transition) => {
+      const { fetcher } = pagedIngredientFetcher();
+      const original = required(fetcher.getMockImplementation()),
+        pending = deferred<Response>();
+      fetcher.mockImplementation(async (url, init) =>
+        url.includes("cursor=page.one") ? pending.promise : original(url, init),
+      );
+      await mountReady();
+      openSaved();
+      await hooks.settle();
+      await change("Find a reviewed food", "oats");
+      await click("Search");
+      await click("Load more foods");
+      if (transition === "route") {
+        navigation.query = "date=2026-09-08";
+        hooks.renderWithoutEffects();
+      } else if (transition === "unmount") hooks.unmount();
+      else {
+        openSaved();
+        await hooks.settle();
+      }
+      const updates = hooks.afterClose(),
+        before = fetcher.mock.calls.length;
+      const response = Response.json({ error: "Old expiry" }, { status: 401 }),
+        json = vi.spyOn(response, "json");
+      pending.resolve(response);
+      await hooks.settle();
+      expect(json).not.toHaveBeenCalled();
+      expect(router.replace).not.toHaveBeenCalled();
+      expect(fetcher.mock.calls).toHaveLength(before);
+      expect(hooks.afterClose()).toBe(updates);
+      if (transition !== "unmount") expect(ingredientSearchRows()).toHaveLength(0);
+    },
+  );
+
+  it("resets search on an installed zone conflict while preserving raw log time and ignoring the old page", async () => {
+    const { fetcher } = pagedIngredientFetcher();
+    const original = required(fetcher.getMockImplementation()),
+      pending = deferred<Response>();
+    let posted = false;
+    fetcher.mockImplementation(async (url, init) => {
+      if (url.includes("cursor=page.one")) return pending.promise;
+      if (init?.method === "POST" && url.includes("/log?")) {
+        posted = true;
+        return Response.json({ code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 });
+      }
+      if (url === "/api/auth/me" && posted) {
+        const profile = await session().json();
+        profile.data.profile.timeZone = "UTC";
+        return Response.json(profile);
+      }
+      return original(url, init);
+    });
+    await mountReady();
+    openSaved();
+    await hooks.settle();
+    await change(optionalTimeLabel, "07:30");
+    await change("Name", "Keep raw draft");
+    await change("Find a reviewed food", "oats");
+    await click("Search");
+    const retainedAdd = ingredientSearchAdd(0),
+      retainedMore = button("Load more foods"),
+      originalIngredients = ingredientValues();
+    await click("Load more foods");
+    await click("Log recipe");
+    expect(field(optionalTimeLabel).props.value).toBe("07:30");
+    expect(field("Name").props.value).toBe("Keep raw draft");
+    expect(field("Find a reviewed food").props.value).toBe("");
+    expect(ingredientSearchRows()).toHaveLength(0);
+    const before = fetcher.mock.calls.length,
+      currentText = text();
+    invoke(retainedAdd, "onClick");
+    invoke(retainedMore, "onClick");
+    await hooks.settle();
+    expect(fetcher.mock.calls).toHaveLength(before);
+    expect(ingredientValues()).toEqual(originalIngredients);
+    expect(field("Local diary date").props.value).toBe("2026-09-09");
+    expect(text()).toBe(currentText);
+    pending.resolve(Response.json({ error: "Old search expiry" }, { status: 401 }));
+    await hooks.settle();
+    expect(fetcher.mock.calls).toHaveLength(before);
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(button("Confirm 2026-09-09 at 07:30 in UTC").props.disabled).toBe(false);
+  });
+});

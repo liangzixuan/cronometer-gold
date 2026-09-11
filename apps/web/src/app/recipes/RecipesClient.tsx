@@ -22,6 +22,9 @@ import {
 import {
   buildSearchRequestPath,
   type FoodSearchHit,
+  isInvalidContinuationResponse,
+  mergeFoodSearchResults,
+  normalizeSearchText,
   parseFoodSearchPage,
 } from "../../lib/food-search";
 import {
@@ -58,6 +61,36 @@ interface BuilderState {
   readonly servingCount: string;
   readonly servingLabel: string;
   readonly ingredients: readonly RecipeIngredientDraft[];
+}
+
+interface IngredientFoodSearch {
+  readonly rawQuery: string | null;
+  readonly query: string;
+  readonly results: readonly FoodSearchHit[];
+  readonly cursor: string | null;
+  readonly status: "idle" | LoadState;
+  readonly message: string;
+  readonly verified: boolean;
+  readonly route: object | null;
+  readonly owner: string | null;
+  readonly scope: number;
+  readonly profile: string;
+}
+
+function emptyFoodSearch(): IngredientFoodSearch {
+  return {
+    rawQuery: null,
+    query: "",
+    results: [],
+    cursor: null,
+    status: "idle",
+    message: "",
+    verified: false,
+    route: null,
+    owner: null,
+    scope: -1,
+    profile: "",
+  };
 }
 
 interface CopyConfirmation {
@@ -332,11 +365,18 @@ export function RecipesClient() {
   const [state, setLoadState] = useState<LoadState>("loading");
   const [message, setMessage] = useState("Loading your private recipes…");
   const [busy, setBusyState] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [foodResults, setFoodResults] = useState<readonly FoodSearchHit[]>([]);
-  const [searchState, setSearchState] = useState<"idle" | LoadState>("idle");
+  const [foodQuery, setFoodQuery] = useState({ route: filterScope, value: "" });
+  const foodQueryRef = useRef(foodQuery);
+  const query = foodQuery.route === filterScope ? foodQuery.value : "";
+  const [foodSearch, setFoodSearchState] = useState<IngredientFoodSearch>(emptyFoodSearch);
+  const foodSearchRef = useRef(foodSearch);
+  const foodSearchRequest = useRef<AbortController | null>(null);
+  const foodSearchScope = useRef(0);
   const [mealSlot, setMealSlot] = useState<MealSlot>(() => defaultMealForTime());
   const [diaryGroups, setDiaryGroups] = useState<readonly DiaryGroup[]>(defaultDiaryGroups);
+  const foodProfile = JSON.stringify([timeZone, diaryGroups]);
+  const foodProfileRef = useRef(foodProfile);
+  foodProfileRef.current = foodProfile;
   const [logKind, setLogKind] = useState<"grams" | "serving">("serving");
   const [logAmount, setLogAmount] = useState("1");
   const [logTime, setLogTime] = useState("");
@@ -383,6 +423,21 @@ export function RecipesClient() {
     setLoadedRecipesScope(null);
   }, []);
 
+  const installFoodSearch = useCallback((next: IngredientFoodSearch) => {
+    foodSearchRef.current = next;
+    setFoodSearchState(next);
+  }, []);
+
+  const resetFoodSearch = useCallback(() => {
+    foodSearchRequest.current?.abort();
+    foodSearchRequest.current = null;
+    foodSearchScope.current += 1;
+    const next = { route: filterScopeRef.current, value: "" };
+    foodQueryRef.current = next;
+    setFoodQuery(next);
+    installFoodSearch(emptyFoodSearch());
+  }, [installFoodSearch]);
+
   const clearCopyConfirmation = useCallback(() => {
     copyConfirmationRef.current = null;
     setCopyConfirmation(null);
@@ -392,6 +447,7 @@ export function RecipesClient() {
     (next: RecipeView | null) => {
       // Invalidate retained controls even when a previously viewed version is reopened.
       selectionGeneration.current += 1;
+      resetFoodSearch();
       activeLog.current = null;
       logDraftGeneration.current += 1;
       setLogTime("");
@@ -399,7 +455,7 @@ export function RecipesClient() {
       setSelectedState(next);
       setNutritionBasis(next?.nutrientsPerServing != null ? "perServing" : "per100Grams");
     },
-    [clearCopyConfirmation],
+    [clearCopyConfirmation, resetFoodSearch],
   );
 
   const replaceBuilder = useCallback(
@@ -463,9 +519,6 @@ export function RecipesClient() {
     reviewGeneration.current += 1;
     setSelected(null);
     replaceBuilder(copied);
-    setQuery("");
-    setFoodResults([]);
-    setSearchState("idle");
     setLogKind("grams");
     setLogAmount("1");
     setMessage(
@@ -565,9 +618,6 @@ export function RecipesClient() {
     setBusy(null);
     setSelected(null);
     replaceBuilder(emptyBuilder());
-    setQuery("");
-    setFoodResults([]);
-    setSearchState("idle");
     setLogKind("grams");
     setLogAmount("1");
     setMessage("New recipe builder opened.");
@@ -597,9 +647,6 @@ export function RecipesClient() {
     setState("loading");
     setMessage("Closing your private recipe workspace…");
     setBusy(null);
-    setQuery("");
-    setFoodResults([]);
-    setSearchState("idle");
     setMealSlot(defaultMealForTime());
     setDiaryGroups(defaultDiaryGroups);
     setLogKind("serving");
@@ -729,6 +776,7 @@ export function RecipesClient() {
         setSavedFilter(next);
         nestedFilterRef.current = next;
         setNestedFilter(next);
+        resetFoodSearch();
       }
       logDraftGeneration.current += 1;
       setTimeZone(session.profile.timeZone);
@@ -743,6 +791,7 @@ export function RecipesClient() {
 
   useEffect(() => {
     mounted.current = true;
+    resetFoodSearch();
     logDraftGeneration.current += 1;
     setLogTime("");
     if (activeLog.current !== null) {
@@ -804,12 +853,22 @@ export function RecipesClient() {
       builderGeneration.current += 1;
       reviewGeneration.current += 1;
       builderRequest.current = null;
+      foodSearchRequest.current?.abort();
+      foodSearchRequest.current = null;
       controller.abort();
       for (const privateController of privateReadControllers.current) privateController.abort();
       privateReadControllers.current.clear();
       profileRefreshController.current?.abort();
     };
-  }, [loadRecipes, requestedDate, resetSavedFilter, signInAgain, setBusy, setState]);
+  }, [
+    loadRecipes,
+    requestedDate,
+    resetSavedFilter,
+    resetFoodSearch,
+    signInAgain,
+    setBusy,
+    setState,
+  ]);
 
   async function openRecipe(recipeId: string, successMessage?: string) {
     const initiatingOwnerUserId = ownerUserId.current;
@@ -876,58 +935,186 @@ export function RecipesClient() {
     }
   }
 
-  async function searchFoods() {
-    const searchContext = reviewGeneration.current;
-    const initiatingOwnerUserId = ownerUserId.current;
+  const foodSearchVisible =
+    mounted.current &&
+    !privateUiClosed.current &&
+    reviewOwner !== null &&
+    filterVerifiedScope === filterScope &&
+    foodSearch.route === filterScope &&
+    foodSearch.owner === reviewOwner &&
+    foodSearch.scope === foodSearchScope.current &&
+    foodSearch.profile === foodProfile;
+  const foodResults = foodSearchVisible ? foodSearch.results : [];
+  const searchState = foodSearchVisible ? foodSearch.status : "idle";
+  const foodQueryMatches = foodSearchVisible && foodSearch.rawQuery === query;
+  const foodControlsUnavailable =
+    !mounted.current ||
+    privateUiClosed.current ||
+    !reviewOwner ||
+    filterVerifiedScope !== filterScope ||
+    busy !== null ||
+    activeLog.current !== null ||
+    state !== "ready";
+  const foodChoicesUnavailable =
+    foodControlsUnavailable ||
+    !foodQueryMatches ||
+    !foodSearch.verified ||
+    foodSearchRequest.current !== null;
+
+  function canUseFoodSearchControls() {
+    return (
+      mounted.current &&
+      !privateUiClosed.current &&
+      reviewOwner !== null &&
+      ownerUserId.current === reviewOwner &&
+      filterScopeRef.current === filterScope &&
+      filterVerifiedScope === filterScope &&
+      foodProfileRef.current === foodProfile &&
+      foodQueryRef.current === foodQuery &&
+      reviewGeneration.current === reviewContext &&
+      builderGeneration.current === builderContext &&
+      builderRef.current === builder &&
+      busyRef.current === null &&
+      activeLog.current === null &&
+      stateRef.current === "ready"
+    );
+  }
+
+  function changeFoodQuery(value: string) {
+    if (!canUseFoodSearchControls() || value === query) return;
+    foodSearchRequest.current?.abort();
+    foodSearchRequest.current = null;
+    const next = { route: filterScope, value };
+    foodQueryRef.current = next;
+    setFoodQuery(next);
+    if (foodSearchRef.current.status === "loading") {
+      installFoodSearch({
+        ...foodSearchRef.current,
+        status: "error",
+        message: "Search changed. Choose Search to load the edited query.",
+      });
+    }
+  }
+
+  async function searchFoods(append = false) {
+    if (!canUseFoodSearchControls() || foodSearchRequest.current !== null) return;
+    const previous = foodSearchRef.current;
     if (
-      initiatingOwnerUserId === null ||
-      privateUiClosed.current ||
-      !mounted.current ||
-      initiatingOwnerUserId !== reviewOwner ||
-      reviewGeneration.current !== reviewContext
+      append &&
+      (previous !== foodSearch ||
+        !foodQueryMatches ||
+        !previous.verified ||
+        previous.cursor === null)
     )
       return;
+    const cursor = append ? (previous.cursor ?? undefined) : undefined;
+    const normalized = append ? previous.query : normalizeSearchText(query);
     const controller = new AbortController();
+    const scope = foodSearchScope.current;
+    foodSearchRequest.current = controller;
     privateReadControllers.current.add(controller);
-    setSearchState("loading");
+    const current: IngredientFoodSearch = append
+      ? { ...previous, status: "loading", message: "Loading more reviewed foods…" }
+      : {
+          ...emptyFoodSearch(),
+          rawQuery: query,
+          query: normalized,
+          route: filterScope,
+          owner: reviewOwner,
+          scope,
+          profile: foodProfile,
+          status: "loading",
+          message: `Searching for “${normalized}”…`,
+        };
+    installFoodSearch(current);
+    const isCurrent = () =>
+      mounted.current &&
+      !privateUiClosed.current &&
+      !controller.signal.aborted &&
+      foodSearchRequest.current === controller &&
+      foodSearchScope.current === scope &&
+      filterScopeRef.current === filterScope &&
+      ownerUserId.current === reviewOwner &&
+      foodProfileRef.current === foodProfile &&
+      foodQueryRef.current === foodQuery;
     try {
-      await installRecipePrivateDataForOwner({
-        expectedOwnerUserId: initiatingOwnerUserId,
-        signal: controller.signal,
-        loadPrivateData: async () => {
-          const response = await fetch(buildSearchRequestPath({ query, intent: "all" }), {
-            headers: { accept: "application/json" },
-            cache: "no-store",
-            signal: controller.signal,
-          });
-          if (response.status === 401) throw new RecipeOwnerFenceError();
-          const body = await responseJson(response);
-          if (!response.ok) throw new Error(responseMessage(body, "Food search is unavailable."));
-          return parseFoodSearchPage(body);
+      const response = await fetch(
+        buildSearchRequestPath({
+          query: normalized,
+          intent: "all",
+          ...(cursor === undefined ? {} : { cursor }),
+        }),
+        {
+          headers: { accept: "application/json" },
+          cache: "no-store",
+          signal: controller.signal,
         },
-        revalidateSession: () => revalidateRecipeSession(controller.signal),
-        install: (page) => {
-          if (privateUiClosed.current || ownerUserId.current !== initiatingOwnerUserId) {
-            throw new RecipeOwnerFenceError();
-          }
-          if (!mounted.current || reviewGeneration.current !== searchContext) return;
-          setFoodResults(page.data);
-          setSearchState("ready");
-        },
+      );
+      if (!isCurrent()) return;
+      if (response.status === 401) throw new RecipeOwnerFenceError();
+      if (isInvalidContinuationResponse(response.status, cursor)) {
+        installFoodSearch({
+          ...current,
+          cursor: null,
+          status: "error",
+          message:
+            "These results changed while you were browsing. Search again for a fresh result set.",
+        });
+        return;
+      }
+      const body = await responseJson(response);
+      if (!isCurrent()) return;
+      if (!response.ok) throw new Error(responseMessage(body, "Food search is unavailable."));
+      const page = parseFoodSearchPage(body);
+      const session = await revalidateRecipeSession(controller.signal);
+      if (!isCurrent()) return;
+      if (session.user.id !== reviewOwner) throw new RecipeOwnerFenceError();
+      if (JSON.stringify([session.profile.timeZone, session.profile.diaryGroups]) !== foodProfile) {
+        installFoodSearch({
+          ...current,
+          results: [],
+          cursor: null,
+          verified: false,
+          status: "error",
+          message:
+            "Your profile changed. Refresh this page before searching for ingredients again.",
+        });
+        return;
+      }
+      const merged = mergeFoodSearchResults(previous.results, page.data, append);
+      installFoodSearch({
+        ...current,
+        results: merged,
+        cursor: page.page.nextCursor,
+        verified: true,
+        status: "ready",
+        message: "",
       });
     } catch (caught) {
-      if (controller.signal.aborted || reviewGeneration.current !== searchContext) return;
+      if (!isCurrent()) return;
       if (caught instanceof RecipeOwnerFenceError) return signInAgain();
-      setFoodResults([]);
-      setSearchState("error");
-      setMessage(caught instanceof Error ? caught.message : "Food search is unavailable.");
+      installFoodSearch({
+        ...current,
+        status: "error",
+        message: `${caught instanceof Error ? caught.message : "Food search is unavailable."} ${append ? "Choose Load more foods to retry this page, or Search to start again." : "Choose Search to try again."}`,
+      });
     } finally {
       privateReadControllers.current.delete(controller);
+      if (foodSearchRequest.current === controller) foodSearchRequest.current = null;
     }
   }
 
   function addFood(food: FoodSearchHit, mode: "grams" | "serving") {
-    if (reviewGeneration.current !== reviewContext) return;
+    if (
+      !canUseFoodSearchControls() ||
+      foodSearchRequest.current !== null ||
+      foodSearchRef.current !== foodSearch ||
+      !foodQueryMatches ||
+      !foodSearch.verified ||
+      !foodSearch.results.includes(food) ||
+      (mode === "serving" && !food.defaultServing?.gramWeight)
+    )
+      return;
     if (builder.ingredients.length >= 50) {
       setMessage("A recipe supports at most 50 ingredients.");
       return;
@@ -1763,16 +1950,14 @@ export function RecipesClient() {
                       <div className="searchInputRow">
                         <input
                           maxLength={128}
-                          onChange={(event) => {
-                            if (reviewGeneration.current === reviewContext)
-                              setQuery(event.target.value);
-                          }}
+                          disabled={foodControlsUnavailable}
+                          onChange={(event) => changeFoodQuery(event.target.value)}
                           placeholder="e.g. rolled oats"
                           value={query}
                         />
                         <button
                           className="buttonSecondary"
-                          disabled={searchState === "loading"}
+                          disabled={foodControlsUnavailable || foodSearchRequest.current !== null}
                           onClick={() => void searchFoods()}
                           type="button"
                         >
@@ -1781,6 +1966,15 @@ export function RecipesClient() {
                       </div>
                     </label>
                   </div>
+                  <p className="fieldHelp" role="status" aria-live="polite">
+                    {foodSearchVisible && foodSearch.verified
+                      ? `${foodResults.length} reviewed foods loaded for “${foodSearch.query}”. ${foodSearch.cursor ? "More results may be available." : foodSearch.status === "ready" ? "No more results are available in this search." : ""}`
+                      : "Search to load reviewed foods for your ingredients."}
+                    {foodSearchVisible && foodSearch.message ? ` ${foodSearch.message}` : ""}
+                    {foodSearchVisible && foodSearch.rawQuery !== null && !foodQueryMatches
+                      ? " Your query has changed. Search to replace these results before adding or loading more."
+                      : ""}
+                  </p>
                   {foodResults.length ? (
                     <div className="ingredientSearchResults">
                       {foodResults.map((food) => (
@@ -1800,7 +1994,9 @@ export function RecipesClient() {
                             <button
                               className="buttonQuiet"
                               disabled={
-                                !food.defaultServing?.gramWeight || builder.ingredients.length >= 50
+                                foodChoicesUnavailable ||
+                                !food.defaultServing?.gramWeight ||
+                                builder.ingredients.length >= 50
                               }
                               onClick={() => addFood(food, "serving")}
                               type="button"
@@ -1809,7 +2005,7 @@ export function RecipesClient() {
                             </button>{" "}
                             <button
                               className="buttonQuiet"
-                              disabled={builder.ingredients.length >= 50}
+                              disabled={foodChoicesUnavailable || builder.ingredients.length >= 50}
                               onClick={() => addFood(food, "grams")}
                               type="button"
                             >
@@ -1819,6 +2015,16 @@ export function RecipesClient() {
                         </article>
                       ))}
                     </div>
+                  ) : null}
+                  {foodSearchVisible && foodSearch.cursor !== null ? (
+                    <button
+                      className="buttonSecondary"
+                      type="button"
+                      disabled={foodChoicesUnavailable}
+                      onClick={() => void searchFoods(true)}
+                    >
+                      {searchState === "loading" ? "Loading more foods…" : "Load more foods"}
+                    </button>
                   ) : null}
                   <section className="workspaceSection" aria-labelledby="nested-recipes-heading">
                     <h3 id="nested-recipes-heading">Nested recipe ingredients</h3>

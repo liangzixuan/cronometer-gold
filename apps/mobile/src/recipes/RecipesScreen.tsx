@@ -30,7 +30,14 @@ import {
   type QuickAddOutboxControllerState,
   type QuickAddReceipt,
 } from "../diary/quick-add-outbox";
-import { buildSearchUrl, type FoodSearchHit, parseSearchPage } from "../search/food-search";
+import {
+  buildSearchUrl,
+  type FoodSearchHit,
+  isInvalidContinuationResponse,
+  mergeSearchResults,
+  normalizeSearchText,
+  parseSearchPage,
+} from "../search/food-search";
 import { palette } from "../theme";
 import { PastedIngredientReview } from "./PastedIngredientReview";
 import {
@@ -75,6 +82,26 @@ interface Builder {
   readonly servingCount: string;
   readonly servingLabel: string;
   readonly ingredients: readonly RecipeIngredientDraft[];
+}
+
+interface IngredientFoodSearch {
+  readonly draft: { readonly value: string };
+  readonly committedDraft: string | null;
+  readonly query: string;
+  readonly foods: readonly FoodSearchHit[];
+  readonly cursor: string | null;
+  readonly message: string;
+}
+
+function emptyFoodSearch(): IngredientFoodSearch {
+  return {
+    draft: { value: "" },
+    committedDraft: null,
+    query: "",
+    foods: [],
+    cursor: null,
+    message: "",
+  };
 }
 
 interface CopyChoice {
@@ -264,8 +291,8 @@ export function RecipesScreen({
   const [message, setMessage] = useState("Loading your private recipes…");
   const [loading, setLoading] = useState(true);
   const [busy, setBusyState] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [foods, setFoods] = useState<readonly FoodSearchHit[]>([]);
+  const [foodSearch, setFoodSearch] = useState<IngredientFoodSearch>(emptyFoodSearch);
+  const foodSearchRef = useRef(foodSearch);
   const [logDraft, setLogDraft] = useState(() => ({
     date: localDateInTimeZone(new Date(), profileTimeZone),
     meal: defaultMealForTime(),
@@ -335,18 +362,32 @@ export function RecipesScreen({
     nestedFilterRef.current = next;
     setNestedFilter(next);
   }, []);
-  useEffect(() => {
-    if (installedFilterScope.current !== filterScope) {
-      installedFilterScope.current = filterScope;
-      resetSavedFilter();
-      resetNestedFilter();
-    }
-  }, [filterScope, resetNestedFilter, resetSavedFilter]);
 
   const setBusy = useCallback((value: string | null) => {
     busyRef.current = value;
     setBusyState(value);
   }, []);
+  const installFoodSearch = useCallback((next: IngredientFoodSearch) => {
+    foodSearchRef.current = next;
+    setFoodSearch(next);
+  }, []);
+  const resetFoodSearch = useCallback(() => {
+    if (busyRef.current === "search") {
+      builderRequest.current?.abort();
+      builderRequest.current = null;
+      setBusy(null);
+    }
+    installFoodSearch(emptyFoodSearch());
+  }, [installFoodSearch, setBusy]);
+  useEffect(() => {
+    if (installedFilterScope.current !== filterScope) {
+      installedFilterScope.current = filterScope;
+      resetFoodSearch();
+      resetSavedFilter();
+      resetNestedFilter();
+    }
+  }, [filterScope, resetFoodSearch, resetNestedFilter, resetSavedFilter]);
+
   const setReady = useCallback((value: boolean) => {
     readyRef.current = value;
     setReadyState(value);
@@ -369,12 +410,13 @@ export function RecipesScreen({
   const replaceSelected = useCallback(
     (recipe: RecipeView | null) => {
       clearCopyChoice();
+      resetFoodSearch();
       selectedRef.current = recipe;
       setSelected(recipe);
       updateLogDraft({ time: "" });
       setNutritionBasis(recipe?.nutrientsPerServing ? "serving" : "100g");
     },
-    [clearCopyChoice, updateLogDraft],
+    [clearCopyChoice, resetFoodSearch, updateLogDraft],
   );
   const replaceBuilder = useCallback(
     (value: Builder) => {
@@ -431,8 +473,7 @@ export function RecipesScreen({
     setListVerified(false);
     replaceSelected(null);
     setNextCursor(null);
-    setQuery("");
-    setFoods([]);
+    resetFoodSearch();
     setReady(false);
     setClosed(true);
     setBusy(null);
@@ -444,6 +485,7 @@ export function RecipesScreen({
     invalidateReview,
     replaceBuilder,
     replaceSelected,
+    resetFoodSearch,
     resetNestedFilter,
     resetSavedFilter,
     scope,
@@ -490,8 +532,7 @@ export function RecipesScreen({
     setListVerified(false);
     replaceSelected(null);
     setNextCursor(null);
-    setQuery("");
-    setFoods([]);
+    resetFoodSearch();
     setBusy(null);
     setReady(false);
     setClosed(false);
@@ -505,7 +546,16 @@ export function RecipesScreen({
       pending.current.clear();
       ownedRecipeLogOperations.current.clear();
     };
-  }, [abortRequests, invalidateReview, replaceBuilder, replaceSelected, scope, setBusy, setReady]);
+  }, [
+    abortRequests,
+    invalidateReview,
+    replaceBuilder,
+    replaceSelected,
+    resetFoodSearch,
+    scope,
+    setBusy,
+    setReady,
+  ]);
 
   const loadRecipes = useCallback(
     async (cursor: string | null = null) => {
@@ -566,6 +616,7 @@ export function RecipesScreen({
         active.current = false;
         lifecycle.current += 1;
         abortRequests();
+        resetFoodSearch();
         invalidateReview();
         setBusy(null);
         setReady(false);
@@ -576,7 +627,7 @@ export function RecipesScreen({
       }
     });
     return () => subscription.remove();
-  }, [abortRequests, invalidateReview, loadRecipes, scope, setBusy, setReady]);
+  }, [abortRequests, invalidateReview, loadRecipes, resetFoodSearch, scope, setBusy, setReady]);
   useEffect(() => {
     return subscribeQuickAddReceipts((receipt) => {
       if (
@@ -682,8 +733,7 @@ export function RecipesScreen({
     ownedRecipeLogOperations.current.clear();
     replaceBuilder({ ...copied, recipeId: null, revision: null });
     replaceSelected(null);
-    setFoods([]);
-    setQuery("");
+    resetFoodSearch();
     updateLogDraft({ kind: "grams", amount: "1" });
     setMessage(
       `Copied saved ${recipe.name} v${recipe.versionNumber} to a new draft. Review it and choose Create recipe to save it separately.`,
@@ -763,8 +813,7 @@ export function RecipesScreen({
     creationIntent.current += 1;
     replaceBuilder(emptyBuilder());
     replaceSelected(null);
-    setFoods([]);
-    setQuery("");
+    resetFoodSearch();
     setBusy(null);
     updateLogDraft({ kind: "grams", amount: "1" });
     setMessage("New recipe builder opened.");
@@ -818,27 +867,82 @@ export function RecipesScreen({
       }
     }
   }
-  async function search() {
+  function canUseFoodSearch() {
+    return (
+      canEdit() &&
+      filterScopeRef.current === filterScope &&
+      installedFilterScope.current === filterScope &&
+      closedFilterScope.current !== scope &&
+      foodSearchRef.current === foodSearch &&
+      builderRef.current === builder
+    );
+  }
+  function changeFoodQuery(value: string) {
+    if (!canUseFoodSearch()) return;
+    const nextValue = value.slice(0, 128);
+    if (foodSearch.draft.value === nextValue) return;
+    installFoodSearch({ ...foodSearch, draft: { value: nextValue } });
+  }
+  async function search(append = false) {
+    if (!canUseFoodSearch()) return;
+    const cursor = append ? (foodSearch.cursor ?? undefined) : undefined;
+    if (append && (!cursor || foodSearch.draft.value !== foodSearch.committedDraft)) return;
+    const query = append ? foodSearch.query : normalizeSearchText(foodSearch.draft.value);
+    const starting: IngredientFoodSearch = {
+      ...foodSearch,
+      ...(append ? {} : { query, committedDraft: foodSearch.draft.value, foods: [], cursor: null }),
+      message: append ? "Loading more foods…" : `Searching for “${query}”…`,
+    };
+    let url: URL;
+    try {
+      url = buildSearchUrl(apiBase, query, "all", cursor);
+    } catch (caught) {
+      installFoodSearch({
+        ...starting,
+        message: caught instanceof Error ? caught.message : "Food search is unavailable.",
+      });
+      return;
+    }
     const request = beginBuilderRequest("search");
     if (!request) return;
-    const { controller, current } = request;
+    const { controller } = request;
+    installFoodSearch(starting);
+    const current = () =>
+      request.current() &&
+      filterScopeRef.current === filterScope &&
+      installedFilterScope.current === filterScope &&
+      foodSearchRef.current.draft === starting.draft;
     try {
-      const response = await fetch(buildSearchUrl(apiBase, query, "all").toString(), {
+      const response = await fetch(url.toString(), {
         headers: { accept: "application/json" },
         signal: controller.signal,
       });
       if (!current()) return;
+      if (isInvalidContinuationResponse(response.status, cursor)) {
+        installFoodSearch({
+          ...starting,
+          cursor: null,
+          message: "These results changed while you were browsing. Search again for fresh results.",
+        });
+        return;
+      }
       const body = await jsonBody(response);
       if (!current()) return;
       if (!response.ok) throw new Error("Food search is unavailable.");
       const page = parseSearchPage(body);
       if (!(await verifyOwner(controller, current)) || !current()) return;
-      setFoods(page.data);
+      installFoodSearch({
+        ...starting,
+        foods: mergeSearchResults(starting.foods, page.data, append),
+        cursor: page.page.nextCursor,
+        message: "",
+      });
     } catch (caught) {
-      if (current()) {
-        setFoods([]);
-        setMessage(caught instanceof Error ? caught.message : "Food search is unavailable.");
-      }
+      if (current())
+        installFoodSearch({
+          ...starting,
+          message: caught instanceof Error ? caught.message : "Food search is unavailable.",
+        });
     } finally {
       if (current()) {
         setBusy(null);
@@ -847,7 +951,12 @@ export function RecipesScreen({
     }
   }
   function addFood(food: FoodSearchHit, mode: "grams" | "serving") {
-    if (!canEdit()) return;
+    if (
+      !canUseFoodSearch() ||
+      foodSearch.draft.value !== foodSearch.committedDraft ||
+      !foodSearchRef.current.foods.includes(food)
+    )
+      return;
     const current = builderRef.current;
     if (current.ingredients.length >= 50) {
       setMessage("A recipe supports at most 50 ingredients.");
@@ -1139,6 +1248,9 @@ export function RecipesScreen({
   );
   const builderDisabled = busy !== null || !ready || !scopeVisible;
   const nestedPickerDisabled = builderDisabled || filterDisabled;
+  const foodSearchDisabled = builderDisabled || filterDisabled;
+  const foodQueryChanged = foodSearch.draft.value !== foodSearch.committedDraft;
+  const foodResultsDisabled = foodSearchDisabled || foodQueryChanged;
   const eligibleNestedRecipes = recipes.filter((recipe) => recipe.id !== builder.recipeId);
   const matchingNestedRecipes = eligibleNestedRecipes.filter((recipe) =>
     recipe.name.toLowerCase().includes(nestedFilter.value.trim().toLowerCase()),
@@ -1423,16 +1535,15 @@ export function RecipesScreen({
             ) : null}
             <Field
               label="Search foods"
-              disabled={builderDisabled}
+              disabled={foodSearchDisabled}
               maxLength={128}
-              value={query}
-              onChange={(value) => {
-                if (canEdit()) setQuery(value);
-              }}
+              value={filterVisible ? foodSearch.draft.value : ""}
+              onChange={changeFoodQuery}
             />
             <Pressable
               accessibilityRole="button"
-              disabled={builderDisabled}
+              accessibilityState={{ disabled: foodSearchDisabled }}
+              disabled={foodSearchDisabled}
               onPress={() => void search()}
               style={styles.secondary}
             >
@@ -1440,7 +1551,21 @@ export function RecipesScreen({
                 {busy === "search" ? "Searching…" : "Search foods"}
               </Text>
             </Pressable>
-            {foods.map((food) => (
+            {filterVisible && foodSearch.committedDraft !== null ? (
+              <Text accessibilityLiveRegion="polite" style={styles.help}>
+                {foodSearch.foods.length} loaded results for “{foodSearch.query}”.{" "}
+                {foodSearch.cursor
+                  ? "More results may be available."
+                  : "No continuation is available for this search."}
+                {foodQueryChanged ? " Search again to use the edited query." : ""}
+              </Text>
+            ) : null}
+            {filterVisible && foodSearch.message ? (
+              <Text accessibilityLiveRegion="polite" style={styles.help}>
+                {foodSearch.message}
+              </Text>
+            ) : null}
+            {(filterVisible ? foodSearch.foods : []).map((food) => (
               <View key={food.foodVersionId} style={styles.ingredient}>
                 <Text style={styles.cardTitle}>{food.name}</Text>
                 <Text style={styles.meta}>
@@ -1450,7 +1575,11 @@ export function RecipesScreen({
                   {food.defaultServing?.gramWeight ? (
                     <Pressable
                       accessibilityRole="button"
-                      disabled={builderDisabled}
+                      accessibilityState={{
+                        disabled: foodResultsDisabled || builder.ingredients.length >= 50,
+                      }}
+                      disabled={foodResultsDisabled || builder.ingredients.length >= 50}
+                      accessibilityLabel={`Add ${food.defaultServing.label} of ${food.name}, food version ${food.foodVersionId}`}
                       onPress={() => addFood(food, "serving")}
                       style={styles.secondary}
                     >
@@ -1459,7 +1588,11 @@ export function RecipesScreen({
                   ) : null}
                   <Pressable
                     accessibilityRole="button"
-                    disabled={builderDisabled}
+                    accessibilityState={{
+                      disabled: foodResultsDisabled || builder.ingredients.length >= 50,
+                    }}
+                    disabled={foodResultsDisabled || builder.ingredients.length >= 50}
+                    accessibilityLabel={`Add 100 g of ${food.name}, food version ${food.foodVersionId}`}
                     onPress={() => addFood(food, "grams")}
                     style={styles.secondary}
                   >
@@ -1468,6 +1601,17 @@ export function RecipesScreen({
                 </View>
               </View>
             ))}
+            {filterVisible && foodSearch.cursor !== null ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: foodResultsDisabled }}
+                disabled={foodResultsDisabled}
+                onPress={() => void search(true)}
+                style={styles.secondary}
+              >
+                <Text style={styles.secondaryText}>Load more foods</Text>
+              </Pressable>
+            ) : null}
             <Text accessibilityRole="header" style={styles.sectionTitle}>
               Nested recipe ingredients
             </Text>

@@ -846,3 +846,19 @@ acceptance.
   blank, readback/retry, keyboard/narrow and expiry proof. Real persistence, physical
   native/protected-storage/OS-kill, assistive, concurrent React, external reviewer,
   hosted and release acceptance remain separate.
+
+
+## ADR 0054 Recipe ingredient food-search pages
+
+- Explicit web/native continuation reuses committed normalized query, opaque
+  cursor and existing version merge semantics. Preserve loaded source order and
+  objects, exact public version/serving pins and truthful loaded counts; fresh
+  Search replaces. Raw typing sends nothing and fences retained controls.
+- Retryable failures retain rows/cursor; continuation 400 removes the cursor and
+  requires explicit Search without automatic restart. Reject duplicate requests,
+  obsolete responses/statuses/finalizers and stale Add controls before side effects.
+  Preserve builder/review/filter/nutrition/log-time and pending mutation identity.
+- Require actual-component/helper/type/format checks, independent review, frozen
+  canonical gates with fresh outputs and source-validated synthetic Chrome later
+  page/Add/retry/invalid-cursor/no-write/keyboard/narrow/expiry proof. All catalogue,
+  persistence, device, assistive, concurrent React, external and release gates remain.

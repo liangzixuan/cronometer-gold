@@ -2,6 +2,7 @@ import * as React from "react";
 import { AppState } from "react-native";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { newOperationId } from "../src/auth/operation-id";
 import {
   createQuickAddOutboxController,
   QuickAddEnqueueAmbiguousError,
@@ -3396,5 +3397,510 @@ describe("optional saved recipe log time", () => {
       harness.unmount();
       controller.close();
     }
+  });
+});
+
+const pagedFood = (id, name = `Reviewed food ${id}`) => ({
+  ...food,
+  foodId: String(id),
+  foodVersionId: String(id + 1000),
+  name,
+});
+const foodPage = (items, nextCursor = null, status = 200) =>
+  response({ data: items, page: { nextCursor } }, status);
+const foodRequests = (requests) =>
+  requests.filter((request) => request.url.pathname === "/v1/foods/search");
+const foodAdds = (tree) =>
+  nodes(
+    tree,
+    (node) =>
+      node.type === "Pressable" && node.props.accessibilityLabel?.startsWith("Add 100 g of "),
+  );
+async function searchIngredientFoods(harness, query = "  Ｏats   bowl  ") {
+  const tree = await harness.settle();
+  input(tree, "Search foods").props.onChangeText(query);
+  return click(harness, "Search foods");
+}
+
+describe("mobile recipe ingredient food search pages", () => {
+  it("uses committed normalization/cursors and preserves overlap objects, version identity, order and empty terminal counts", async () => {
+    const first = Array.from({ length: 20 }, (_, index) => pagedFood(index + 1));
+    const duplicateName = pagedFood(21, first[0].name);
+    const nextVersion = { ...first[0], foodVersionId: "9999" };
+    const { harness, requests } = setup((request) => {
+      if (request.url.pathname !== "/v1/foods/search") return;
+      const cursor = request.url.searchParams.get("cursor");
+      return cursor === null
+        ? foodPage(first, "page_two.token")
+        : cursor === "page_two.token"
+          ? foodPage(
+              [{ ...first[0], name: "Replaced overlap" }, duplicateName, nextVersion],
+              "terminal",
+            )
+          : foodPage([]);
+    });
+    let tree = await searchIngredientFoods(harness);
+    expect(foodRequests(requests)[0].url.searchParams.toString()).toBe(
+      "query=Oats+bowl&intent=all&limit=20",
+    );
+    expect(input(tree, "Search foods").props.value).toBe("  Ｏats   bowl  ");
+    expect(screenText(tree)).toContain("20 loaded results for “ Oats bowl ”");
+    tree = await click(harness, "Load more foods");
+    expect(foodRequests(requests)[1].url.searchParams.get("cursor")).toBe("page_two.token");
+    expect(foodRequests(requests)[1].url.searchParams.get("query")).toBe("Oats bowl");
+    expect(foodAdds(tree).map((node) => node.props.accessibilityLabel)).toEqual(
+      [...first, duplicateName, nextVersion].map(
+        (item) => `Add 100 g of ${item.name}, food version ${item.foodVersionId}`,
+      ),
+    );
+    expect(screenText(tree)).not.toContain("Replaced overlap");
+    tree = await click(harness, "Load more foods");
+    expect(foodAdds(tree)).toHaveLength(22);
+    expect(screenText(tree)).toContain("22 loaded results");
+    expect(screenText(tree)).toContain("No continuation is available");
+    expect(
+      nodes(tree, (node) => node.type === "Pressable" && screenText(node) === "Load more foods"),
+    ).toHaveLength(0);
+    expect(postRequests(requests)).toHaveLength(0);
+    harness.unmount();
+  });
+  it("keeps Load more reachable for an empty nonterminal first page", async () => {
+    const { harness, requests } = setup((request) =>
+      request.url.pathname === "/v1/foods/search"
+        ? request.url.searchParams.has("cursor")
+          ? foodPage([pagedFood(24)])
+          : foodPage([], "empty_next")
+        : undefined,
+    );
+    let tree = await searchIngredientFoods(harness);
+    expect(screenText(tree)).toContain("0 loaded results");
+    expect(screenText(tree)).toContain("More results may be available");
+    expect(pressable(tree, "Load more foods").props.disabled).toBe(false);
+    tree = await click(harness, "Load more foods");
+    expect(foodAdds(tree)).toHaveLength(1);
+    expect(foodRequests(requests)).toHaveLength(2);
+    harness.unmount();
+  });
+  it("keeps raw edits local, locks retained results, and does not revive old A-to-B-to-A controls", async () => {
+    const { harness, requests } = setup((request) =>
+      request.url.pathname === "/v1/foods/search" ? foodPage([food], "next") : undefined,
+    );
+    let tree = await searchIngredientFoods(harness, "Oats");
+    const oldAdd = foodAdds(tree)[0].props.onPress;
+    const oldMore = pressable(tree, "Load more foods").props.onPress;
+    const oldSearch = pressable(tree, "Search foods").props.onPress;
+    const oldInput = input(tree, "Search foods").props.onChangeText;
+    const before = requests.length;
+    oldInput("Other");
+    oldAdd();
+    oldMore();
+    oldSearch();
+    oldInput("stale overwrite");
+    tree = await harness.settle();
+    expect(input(tree, "Search foods").props.value).toBe("Other");
+    expect(foodAdds(tree)[0].props.disabled).toBe(true);
+    expect(pressable(tree, "Load more foods").props.disabled).toBe(true);
+    expect(screenText(tree)).toContain("1 loaded results for “ Oats ”");
+    expect(screenText(tree)).toContain("Search again to use the edited query");
+    expect(requests).toHaveLength(before);
+    input(tree, "Search foods").props.onChangeText("Oats");
+    tree = await harness.settle();
+    oldAdd();
+    oldMore();
+    oldSearch();
+    expect(requests).toHaveLength(before);
+    expect(review(tree).props.remainingCapacity).toBe(50);
+    input(tree, "Search foods").props.onChangeText("Oats");
+    foodAdds(tree)[0].props.onPress();
+    tree = await harness.settle();
+    expect(review(tree).props.remainingCapacity).toBe(49);
+    expect(requests).toHaveLength(before);
+    harness.unmount();
+  });
+  it("replaces results immediately on a fresh Search, rejects duplicate before-paint starts and retained prior-result Add", async () => {
+    const later = deferred();
+    let count = 0;
+    const { harness, requests } = setup((request) =>
+      request.url.pathname === "/v1/foods/search"
+        ? ++count === 1
+          ? foodPage([food], "old_cursor")
+          : later.promise
+        : undefined,
+    );
+    let tree = await searchIngredientFoods(harness, "first");
+    const oldAdd = foodAdds(tree)[0].props.onPress;
+    input(tree, "Search foods").props.onChangeText("second");
+    tree = await harness.settle();
+    const search = pressable(tree, "Search foods").props.onPress;
+    search();
+    search();
+    oldAdd();
+    tree = await harness.settle();
+    expect(foodAdds(tree)).toHaveLength(0);
+    expect(foodRequests(requests)).toHaveLength(2);
+    expect(foodRequests(requests)[1].url.searchParams.has("cursor")).toBe(false);
+    later.resolve(foodPage([pagedFood(45)]));
+    tree = await harness.settle();
+    oldAdd();
+    expect(review(await harness.settle()).props.remainingCapacity).toBe(50);
+    expect(foodAdds(tree)[0].props.accessibilityLabel).toContain("1045");
+    harness.unmount();
+  });
+  for (const failure of ["transport", "malformed", "http"]) {
+    it(`preserves rows and exact cursor for explicit retry after ${failure} continuation failure`, async () => {
+      let attempts = 0;
+      const { harness, requests } = setup((request) => {
+        if (request.url.pathname !== "/v1/foods/search") return;
+        if (!request.url.searchParams.has("cursor")) return foodPage([food], "retry.same");
+        if (++attempts === 1) {
+          if (failure === "transport") return Promise.reject(new Error("temporary transport"));
+          return failure === "malformed"
+            ? response({ data: [], page: { nextCursor: "bad$cursor" } })
+            : response({}, 503);
+        }
+        return foodPage([pagedFood(55)]);
+      });
+      await searchIngredientFoods(harness);
+      let tree = await click(harness, "Load more foods");
+      expect(foodAdds(tree)).toHaveLength(1);
+      expect(pressable(tree, "Load more foods").props.disabled).toBe(false);
+      tree = await click(harness, "Load more foods");
+      expect(foodRequests(requests)[2].url.href).toBe(foodRequests(requests)[1].url.href);
+      expect(foodAdds(tree)).toHaveLength(2);
+      expect(postRequests(requests)).toHaveLength(0);
+      harness.unmount();
+    });
+  }
+  it("drops an invalid continuation without restarting and requires explicit Search for a new result set", async () => {
+    const { harness, requests } = setup((request) =>
+      request.url.pathname === "/v1/foods/search"
+        ? request.url.searchParams.has("cursor")
+          ? response({}, 400)
+          : foodPage([food], "invalidated")
+        : undefined,
+    );
+    await searchIngredientFoods(harness);
+    let tree = await click(harness, "Load more foods");
+    expect(foodAdds(tree)).toHaveLength(1);
+    expect(screenText(tree)).toContain("Search again for fresh results");
+    expect(
+      nodes(tree, (node) => node.type === "Pressable" && screenText(node) === "Load more foods"),
+    ).toHaveLength(0);
+    expect(foodRequests(requests)).toHaveLength(2);
+    tree = await click(harness, "Search foods");
+    expect(foodRequests(requests)).toHaveLength(3);
+    expect(foodRequests(requests)[2].url.searchParams.has("cursor")).toBe(false);
+    expect(pressable(tree, "Load more foods").props.disabled).toBe(false);
+    harness.unmount();
+  });
+  for (const phase of ["fetch400", "json", "owner401"]) {
+    it(`ignores a stale continuation ${phase} and its finally while a new search owns the builder request`, async () => {
+      const old = deferred();
+      const newest = deferred();
+      let searchCount = 0;
+      let awaitOwner = false;
+      const { harness, requests, props } = setup((request) => {
+        if (request.url.pathname === "/v1/foods/search") {
+          searchCount += 1;
+          if (searchCount === 1) return foodPage([food], "old_page");
+          if (searchCount === 2) {
+            if (phase === "fetch400") return old.promise;
+            if (phase === "json") return { ...foodPage([]), json: () => old.promise };
+            awaitOwner = true;
+            return foodPage([pagedFood(61)], "obsolete");
+          }
+          return newest.promise;
+        }
+        if (request.url.pathname === "/v1/auth/me" && awaitOwner) {
+          awaitOwner = false;
+          return old.promise;
+        }
+      });
+      await searchIngredientFoods(harness);
+      let tree = await click(harness, "Load more foods");
+      const retained = input(tree, "Search foods").props.onChangeText;
+      await click(harness, "New recipe");
+      await searchIngredientFoods(harness, "newest");
+      old.resolve(
+        phase === "fetch400" || phase === "owner401"
+          ? response({}, 400 + (phase === "owner401" ? 1 : 0))
+          : { data: [pagedFood(61)], page: { nextCursor: "obsolete" } },
+      );
+      tree = await harness.settle();
+      retained("old query");
+      expect(input(tree, "Search foods").props.value).toBe("newest");
+      expect(pressable(tree, "Searching…").props.disabled).toBe(true);
+      expect(foodAdds(tree)).toHaveLength(0);
+      expect(props.onUnauthorized).not.toHaveBeenCalled();
+      newest.resolve(foodPage([pagedFood(62)], "new_cursor"));
+      tree = await harness.settle();
+      expect(foodAdds(tree)[0].props.accessibilityLabel).toContain("1062");
+      expect(pressable(tree, "Load more foods").props.disabled).toBe(false);
+      expect(foodRequests(requests)).toHaveLength(3);
+      harness.unmount();
+    });
+  }
+  for (const boundary of ["owner", "token", "api", "profile", "background", "unmount"]) {
+    it(`rejects retained pagination/row/query actions and late JSON after ${boundary}`, async () => {
+      const held = deferred();
+      let currentOwner = owner;
+      const { harness, requests, props } = setup((request) => {
+        if (request.url.pathname === "/v1/auth/me") return session(currentOwner);
+        if (request.url.pathname === "/v1/foods/search")
+          return request.url.searchParams.has("cursor")
+            ? { ...foodPage([]), json: () => held.promise }
+            : foodPage([food], "held_page");
+      });
+      let tree = await searchIngredientFoods(harness);
+      const add = foodAdds(tree)[0].props.onPress;
+      const more = pressable(tree, "Load more foods").props.onPress;
+      const query = input(tree, "Search foods").props.onChangeText;
+      more();
+      more();
+      await harness.settle();
+      expect(foodRequests(requests)).toHaveLength(2);
+      if (boundary === "owner") currentOwner = "7047c1c7-517a-429a-b571-6ba22f9d7147";
+      if (boundary === "background") background();
+      else if (boundary === "unmount") harness.unmount();
+      else
+        harness.updateProps(
+          boundary === "owner"
+            ? { ownerUserId: currentOwner }
+            : boundary === "token"
+              ? { accessToken: "replacement-token" }
+              : boundary === "api"
+                ? { apiBase: new URL("http://127.0.0.1:4999") }
+                : { profileTimeZone: "Asia/Tokyo" },
+        );
+      if (boundary !== "unmount" && boundary !== "background") {
+        tree = harness.renderWithoutEffects();
+        expect(foodAdds(tree)).toHaveLength(0);
+        if (boundary === "profile") {
+          expect(input(tree, "Search foods").props.value).toBe("");
+          input(tree, "Search foods").props.onChangeText("uninstalled");
+        } else {
+          expect(
+            nodes(
+              tree,
+              (node) =>
+                node.type === "TextInput" && node.props.accessibilityLabel === "Search foods",
+            ),
+          ).toHaveLength(0);
+        }
+      }
+      const before = foodRequests(requests).length;
+      add();
+      more();
+      query("old private query");
+      held.resolve({ data: [pagedFood(71)], page: { nextCursor: "late" } });
+      if (boundary === "unmount") {
+        for (let turn = 0; turn < 30; turn += 1) await Promise.resolve();
+        expect(harness.writesAfterUnmount).toBe(0);
+      } else {
+        harness.flushEffects();
+        tree = await harness.settle();
+        expect(foodAdds(tree)).toHaveLength(0);
+        if (boundary === "background") {
+          foreground();
+          tree = await harness.settle();
+          expect(input(tree, "Search foods").props.value).toBe("");
+        }
+        harness.unmount();
+      }
+      expect(foodRequests(requests)).toHaveLength(before);
+      expect(props.onUnauthorized).not.toHaveBeenCalled();
+    });
+  }
+  it("uses later-page exact gram/serving pins in Create and retains its exact retry body/key across search paging", async () => {
+    const later = {
+      ...pagedFood(88),
+      defaultServing: {
+        ...food.defaultServing,
+        servingId: "888",
+        label: "precise bowl",
+        quantity: "0.250001",
+        gramWeight: "47.123456",
+      },
+    };
+    const { harness, requests } = setup((request) =>
+      request.url.pathname === "/v1/foods/search"
+        ? request.url.searchParams.has("cursor")
+          ? foodPage([later])
+          : foodPage([food], "second")
+        : request.method === "POST"
+          ? response({}, 503)
+          : undefined,
+    );
+    await fill(harness);
+    await searchIngredientFoods(harness);
+    let tree = await click(harness, "Load more foods");
+    foodAdds(tree)[1].props.onPress();
+    tree = await harness.settle();
+    pressable(tree, "Add precise bowl").props.onPress();
+    tree = await harness.settle();
+    expect(postRequests(requests)).toHaveLength(0);
+    await click(harness, "Create recipe");
+    const first = postRequests(requests)[0];
+    const body = JSON.parse(first.body);
+    expect(body.ingredients.slice(1)).toEqual([
+      {
+        kind: "food",
+        foodVersionId: "1088",
+        portion: { kind: "grams", grams: "100" },
+        position: 1,
+        note: null,
+      },
+      {
+        kind: "food",
+        foodVersionId: "1088",
+        portion: { kind: "serving", servingId: "888", amount: "1" },
+        position: 2,
+        note: null,
+      },
+    ]);
+    expect(input(tree, "Quantity in precise bowl").props.value).toBe("1");
+    await searchIngredientFoods(harness, "different search");
+    await click(harness, "Load more foods");
+    await click(harness, "Create recipe");
+    expect(postRequests(requests)[1].body).toBe(first.body);
+    expect(postRequests(requests)[1].headers["idempotency-key"]).toBe(
+      first.headers["idempotency-key"],
+    );
+    harness.unmount();
+  });
+  it("requires a current rendered builder for Add, preserves results for fresh Add, and enforces the actual50-row cap", async () => {
+    const { harness, requests } = setup();
+    let tree = await searchIngredientFoods(harness);
+    const oldAdd = foodAdds(tree)[0].props.onPress;
+    input(tree, "Recipe name").props.onChangeText("Changed builder");
+    const allocated = newOperationId.mock.calls.length;
+    const status = screenText(
+      nodes(
+        tree,
+        (node) => node.type === "Text" && node.props.accessibilityLiveRegion === "polite",
+      )[0],
+    );
+    oldAdd();
+    expect(newOperationId).toHaveBeenCalledTimes(allocated);
+    tree = await harness.settle();
+    expect(
+      screenText(
+        nodes(
+          tree,
+          (node) => node.type === "Text" && node.props.accessibilityLiveRegion === "polite",
+        )[0],
+      ),
+    ).toBe(status);
+    expect(review(tree).props.remainingCapacity).toBe(50);
+    expect(review(tree).props.onConfirm(Array.from({ length: 49 }, () => ingredient()))).toBe(true);
+    tree = await harness.settle();
+    expect(foodAdds(tree)).toHaveLength(1);
+    foodAdds(tree)[0].props.onPress();
+    tree = await harness.settle();
+    expect(review(tree).props.remainingCapacity).toBe(0);
+    expect(foodAdds(tree)[0].props.disabled).toBe(true);
+    foodAdds(tree)[0].props.onPress();
+    expect(review(await harness.settle()).props.remainingCapacity).toBe(0);
+    expect(postRequests(requests)).toHaveLength(0);
+    harness.unmount();
+  });
+  for (const replacement of ["open", "save", "copy"]) {
+    it(`clears search state and rejects old rows on ${replacement} while preserving normal replacement behavior`, async () => {
+      const { harness, requests } = nutritionSetup(undefined, (request) =>
+        request.method === "POST" ? mutation() : undefined,
+      );
+      if (replacement === "copy") await openNutritionRecipe(harness);
+      else await fill(harness);
+      const before = await searchIngredientFoods(harness);
+      const add = foodAdds(before)[0].props.onPress;
+      if (replacement === "open") await openNutritionRecipe(harness);
+      else await click(harness, replacement === "save" ? "Create recipe" : "Copy to new draft");
+      add();
+      const tree = await harness.settle();
+      expect(input(tree, "Search foods").props.value).toBe("");
+      expect(foodAdds(tree)).toHaveLength(0);
+      if (replacement === "save") expect(postRequests(requests)).toHaveLength(1);
+      harness.unmount();
+    });
+  }
+  it("preserves dirty builder, saved/nested filters, nutrition and exact log draft across Search/paging", async () => {
+    const { harness, requests, props } = nutritionSetup(undefined, (request) =>
+      request.url.pathname === "/v1/foods/search"
+        ? request.url.searchParams.has("cursor")
+          ? foodPage([pagedFood(95)])
+          : foodPage([food], "other")
+        : undefined,
+    );
+    await openNutritionRecipe(harness);
+    let tree = await editRecipeLog(harness, "Local date", "2026-09-07");
+    tree = await editRecipeLog(harness, "Local time (optional)", "14:45");
+    tree = await editRecipeLog(harness, "Amount", "1.250000");
+    input(tree, "Recipe name").props.onChangeText("Dirty saved builder");
+    tree = await harness.settle();
+    input(tree, "Filter loaded saved recipes by name").props.onChangeText("missing saved");
+    input(tree, "Filter loaded nested recipes by name").props.onChangeText("missing nested");
+    tree = await click(harness, "Per 100 g");
+    await click(harness, "Copy to new draft");
+    tree = await searchIngredientFoods(harness);
+    tree = await click(harness, "Load more foods");
+    expect(input(tree, "Recipe name").props.value).toBe("Dirty saved builder");
+    expect(input(tree, "Filter loaded saved recipes by name").props.value).toBe("missing saved");
+    expect(input(tree, "Filter loaded nested recipes by name").props.value).toBe("missing nested");
+    expect(input(tree, "Local date").props.value).toBe("2026-09-07");
+    expect(input(tree, "Local time (optional)").props.value).toBe("14:45");
+    expect(input(tree, "Amount").props.value).toBe("1.250000");
+    expect(pressable(tree, "Per 100 g").props.accessibilityState.checked).toBe(true);
+    expect(screenText(tree)).toContain("Discard edits and copy saved version");
+    expect(postRequests(requests)).toHaveLength(0);
+    expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+    await click(harness, "Keep editing");
+    await click(harness, "Secure & log recipe");
+    const enqueued = props.quickAddOutboxController.enqueueOperation.mock.calls[0][0];
+    expect(enqueued.occurredAt).toBe("2026-09-07T19:45:00.000Z");
+    expect(enqueued.recipeVersionId).toBe(versionId);
+    harness.unmount();
+  });
+});
+
+describe("mobile ingredient paging review independence", () => {
+  it("preserves the pasted-review callback, exact notes/quantity/order and excludes a serving without reviewed mass", async () => {
+    const later = {
+      ...pagedFood(96),
+      defaultServing: { ...food.defaultServing, label: "unresolved bowl", gramWeight: null },
+    };
+    const { harness, requests } = setup((request) =>
+      request.url.pathname === "/v1/foods/search"
+        ? request.url.searchParams.has("cursor")
+          ? foodPage([later])
+          : foodPage([food], "later")
+        : undefined,
+    );
+    let tree = await fill(harness);
+    input(tree, "Rolled oats note (optional)").props.onChangeText("Exact saved draft note");
+    input(tree, "Quantity in grams").props.onChangeText("125.000009");
+    tree = await harness.settle();
+    const transfer = review(tree).props.onConfirm;
+    await searchIngredientFoods(harness);
+    tree = await click(harness, "Load more foods");
+    expect(input(tree, "Rolled oats note (optional)").props.value).toBe("Exact saved draft note");
+    expect(input(tree, "Quantity in grams").props.value).toBe("125.000009");
+    expect(
+      nodes(
+        tree,
+        (node) => node.type === "Pressable" && screenText(node) === "Add unresolved bowl",
+      ),
+    ).toHaveLength(0);
+    expect(transfer([ingredient()])).toBe(true);
+    tree = await harness.settle();
+    expect(review(tree).props.remainingCapacity).toBe(48);
+    expect(
+      nodes(
+        tree,
+        (node) =>
+          node.type === "TextInput" && node.props.accessibilityLabel === "Quantity in grams",
+      ).map((node) => node.props.value),
+    ).toEqual(["125.000009", "125.000001"]);
+    expect(postRequests(requests)).toHaveLength(0);
+    harness.unmount();
   });
 });
