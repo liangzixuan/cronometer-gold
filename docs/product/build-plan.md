@@ -154,6 +154,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Inspect logged diary entry nutrients | ADR 0049 exact logged-portion disclosures, focused review, canonical gates, fresh client outputs and synthetic Chrome values/draft/paging/meal/date/keyboard/narrow/expiry proof passed; automatic/external/device/release separate |
 | Automatic evidence / independent review | Show saved reminder weekdays | ADR 0050 saved membership, existing focused checks, fresh canonical gates and synthetic Chrome saved-days/draft/narrow/expiry proof passed; automatic/external/device/release separate |
 | Automatic evidence / independent review | Show saved biometric date/time zones | ADR 0051 saved local dates, saved-zone seconds and explicit zones; existing focused checks, fresh canonical gates and synthetic Chrome saved-zone/date-boundary/draft/narrow/expiry proof passed; automatic/external/device/release separate |
+| Automatic evidence / independent review | Label missing biometric metadata on web | ADR 0052 explicit name/unit fallbacks; existing focused checks, fresh canonical gates and synthetic Chrome known/missing/draft/narrow/expiry proof passed; automatic/external/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1481,12 +1482,27 @@ Base `3fb9a002dc9e375f3b984f79b433f0b138ff4a26` CI `34543863214` and container
 Base results do not transfer to this slice; external/device/hosted/release
 acceptance remains separate.
 
+### Missing biometric metadata labels: source/local complete
+
+[ADR 0052](../adr/0052-missing-biometric-metadata-labels.md) adds explicit web
+history labels when a reading's exact definition is unavailable. Preserve known
+metadata, exact values, saved time/source and all editor/request behavior. This
+changes only two literals. Existing focused checks, independent review,
+canonical gates and synthetic Chrome known/missing/draft/narrow/expiry proof passed.
+
+Base `98735cf691e3b7e01371468ecf982dfc215d4a2f` CI `34545614574` and container
+`34545614573` remained in progress at September 11, 2026 00:16:55 UTC.
+Base results do not transfer to this slice. External/device/hosted/release
+acceptance remains separate.
+
 ### Next bounded candidate
 
 Revalidate exact automatic results and external-review findings. The next bounded
-candidate is web-only explicit missing biometric metric-name and unit labels,
-matching native history when the saved reading's exact definition is unavailable.
-Preserve saved values, date/time context, known-definition labels and editors.
-Label an unavailable metric name and unit explicitly without inferring either.
-No lookup, state, request or write change is proposed. No successor implementation
-has started.
+candidate is optional explicit local-time selection when logging a saved recipe
+on web/native. Preserve untouched automatic timing, exact recipe revision,
+amount/meal and draft state; use the existing saved-date/time resolver and
+verified profile zone. Preserve timestamp/body/key on unchanged retries and
+distinguish deliberate time edits. Existing occurredAt payloads can support this
+without backend/outbox-schema changes. Verify default/explicit timing, past dates,
+DST and profile changes, retries, synthetic logging/readback and narrow layout.
+No successor implementation has started; external/device/release gates remain.

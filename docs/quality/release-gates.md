@@ -817,3 +817,14 @@ acceptance.
   differing saved zones, raw draft independence, no requests, narrow layout and
   expired-session route reload. Device, assistive technology, real persistence,
   external reviewer, hosted and release gates remain separate.
+
+
+## ADR 0052 Missing biometric metadata labels
+
+- Web saved history labels missing units and metric names explicitly for manual
+  and imported records. Keep known headings, exact values and saved time/source;
+  do not infer metadata or add lookups, state, requests or editor changes.
+- Reuse existing focused suites, affected types/format and independent review;
+  run canonical gates with fresh client outputs. Source-validated synthetic Chrome
+  verifies known/missing metadata, draft independence, no added requests, narrow
+  wrapping and expired-session route closure. All external/release gates remain.

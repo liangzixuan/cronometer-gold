@@ -2526,8 +2526,8 @@ export function HealthClient() {
                     <li key={event.id}>
                       <div>
                         <strong>
-                          {event.value} {definition?.canonicalUnit ?? ""} ·{" "}
-                          {definition?.name ?? "Metric"}
+                          {event.value} {definition?.canonicalUnit ?? "unit unavailable"} ·{" "}
+                          {definition?.name ?? "Metric unavailable"}
                         </strong>
                         <small>
                           {event.localDate} ·{" "}
