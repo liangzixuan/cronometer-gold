@@ -244,6 +244,18 @@ export function GoalsClient() {
   const [builder, setBuilder] = useState<GoalBuilder>(() => emptyGoal(""));
   const [definitions, setDefinitions] = useState<readonly TargetableNutrient[]>([]);
   const [selectedNutrientId, setSelectedNutrientId] = useState("");
+  const [nutrientQuery, setNutrientQuery] = useState("");
+  const nutrientQueryRef = useRef("");
+  const nutrientSelectionRef = useRef("");
+  const pickerGeneration = useRef(0);
+  const pickerScope = useRef<string | null>(null);
+  const pickerMounted = useRef(false);
+  const pickerRoute = useRef({ requestedDate });
+  if (pickerRoute.current.requestedDate !== requestedDate) {
+    pickerRoute.current = { requestedDate };
+  }
+  const loadedPickerRoute = useRef<typeof pickerRoute.current | null>(null);
+  const pickerDefinitions = useRef<readonly TargetableNutrient[]>([]);
   const [goal, setGoal] = useState<GoalView | null>(null);
   const [progress, setProgress] = useState<GoalProgressView | null>(null);
   const [referenceSets, setReferenceSets] = useState<ReferenceTargetSetList | null>(null);
@@ -269,7 +281,29 @@ export function GoalsClient() {
   const candidateGeneration = useRef(0);
   const effectiveDateRef = useRef(builder.effectiveFrom);
 
+  const resetNutrientPicker = useCallback(() => {
+    pickerGeneration.current += 1;
+    nutrientQueryRef.current = "";
+    nutrientSelectionRef.current = "";
+    setNutrientQuery("");
+    setSelectedNutrientId("");
+  }, []);
+
+  const installPickerScope = useCallback(
+    (ownerSession: SessionSummary, localDate: string) => {
+      const nextScope = JSON.stringify([ownerSession.user.id, ownerSession.profile, localDate]);
+      if (pickerScope.current !== nextScope) {
+        resetNutrientPicker();
+        pickerScope.current = nextScope;
+      }
+    },
+    [resetNutrientPicker],
+  );
+
   const signInAgain = useCallback(() => {
+    resetNutrientPicker();
+    pickerScope.current = null;
+    loadedPickerRoute.current = null;
     generation.current += 1;
     loadController.current?.abort();
     authController.current?.abort();
@@ -281,7 +315,7 @@ export function GoalsClient() {
     setReferenceSets(null);
     router.replace("/login");
     router.refresh();
-  }, [router]);
+  }, [router, resetNutrientPicker]);
 
   const load = useCallback(
     async (localDate: string, ownerSession: SessionSummary) => {
@@ -291,6 +325,7 @@ export function GoalsClient() {
       const requestGeneration = generation.current + 1;
       generation.current = requestGeneration;
       const ownerUserId = ownerSession.user.id;
+      const requestRoute = pickerRoute.current;
       selectedDateRef.current = localDate;
       setState("loading");
       const requestIsCurrent = () =>
@@ -390,8 +425,10 @@ export function GoalsClient() {
         if (!requestIsCurrent()) return;
         setGoal(nextGoal);
         setProgress(nextProgress);
+        installPickerScope(ownerSession, localDate);
+        pickerDefinitions.current = nextDefinitions;
+        loadedPickerRoute.current = requestRoute;
         setDefinitions(nextDefinitions);
-        setSelectedNutrientId(nextDefinitions[0]?.nutrientId ?? "");
         let nextBuilder = nextGoal ? goalBuilderFromGoal(nextGoal) : emptyGoal(localDate);
         const appliedSet = nextReferenceSets
           ? carriedReferenceSet(nextReferenceSets, nextGoal)
@@ -433,7 +470,7 @@ export function GoalsClient() {
         if (loadController.current === controller) loadController.current = null;
       }
     },
-    [signInAgain],
+    [signInAgain, installPickerScope],
   );
 
   const refreshSessionAndGoals = useCallback(
@@ -464,6 +501,7 @@ export function GoalsClient() {
           preferredDate && isLocalDate(preferredDate)
             ? preferredDate
             : localDateInTimeZone(new Date(), nextSession.profile.timeZone);
+        installPickerScope(nextSession, localDate);
         selectedDateRef.current = localDate;
         setDate(localDate);
         await load(localDate, nextSession);
@@ -479,14 +517,17 @@ export function GoalsClient() {
         if (authController.current === controller) authController.current = null;
       }
     },
-    [load, signInAgain],
+    [load, signInAgain, installPickerScope],
   );
 
   useEffect(() => {
+    pickerMounted.current = true;
     void refreshSessionAndGoals(
       requestedDate && isLocalDate(requestedDate) ? requestedDate : undefined,
     );
     return () => {
+      pickerMounted.current = false;
+      pickerGeneration.current += 1;
       authController.current?.abort();
       loadController.current?.abort();
       writeController.current?.abort();
@@ -526,6 +567,7 @@ export function GoalsClient() {
         if (!requestIsCurrent()) return;
         if (response.status === 401) return signInAgain();
         if (response.status === 404) {
+          pickerGeneration.current += 1;
           setTemplatesSupported(false);
           setReferenceSets(null);
           setSelectedReferenceGroup("");
@@ -547,6 +589,7 @@ export function GoalsClient() {
           throw new Error("Your effective date or profile changed while candidates were loading.");
         }
         if (!requestIsCurrent()) return;
+        pickerGeneration.current += 1;
         setTemplatesSupported(true);
         setReferenceSets(parsed);
         setSelectedReferenceGroup("");
@@ -629,6 +672,7 @@ export function GoalsClient() {
       if (!requestIsCurrent()) return;
       const nextSession = { ...ownerSession, profile };
       sessionRef.current = nextSession;
+      installPickerScope(nextSession, selectedDateRef.current);
       setProfileBirthDate(profile.birthDate ?? "");
       setProfileSexAtBirth(profile.sexAtBirth ?? "");
       await loadCandidates(effectiveDateRef.current, nextSession);
@@ -692,35 +736,51 @@ export function GoalsClient() {
     );
   }
 
+  function changeNutrientQuery(raw: string) {
+    if (!canUseNutrientPicker()) return;
+    const next = raw.slice(0, 100);
+    if (nutrientQueryRef.current === next) return;
+    pickerGeneration.current += 1;
+    nutrientQueryRef.current = next;
+    setNutrientQuery(next);
+  }
+
+  function selectNutrient(next: string) {
+    if (!canUseNutrientPicker() || !matchingNutrients.some((item) => item.nutrientId === next))
+      return;
+    if (effectiveNutrientId === next) return;
+    pickerGeneration.current += 1;
+    nutrientSelectionRef.current = next;
+    setSelectedNutrientId(next);
+  }
+
   function addTarget() {
-    if (builder.reference) {
-      setMessage("Choose Customize before editing a source-verified candidate draft.");
-      return;
-    }
-    const definition = definitions.find((candidate) => candidate.nutrientId === selectedNutrientId);
-    if (
-      !definition ||
-      builder.targets.some((target) => target.definition.nutrientId === definition.nutrientId)
-    )
-      return;
-    if (builder.targets.length >= 256) {
-      setMessage("A goal supports at most 256 nutrient targets.");
-      return;
-    }
-    setBuilder({
-      ...builder,
-      targets: [
-        ...builder.targets,
-        {
-          definition,
-          minimumAmount: "",
-          targetAmount: "",
-          maximumAmount: "",
-          sourceLabel: "",
-          sourceVersion: "",
-          rationale: "",
-        },
-      ],
+    if (!canUseNutrientPicker()) return;
+    const definition = matchingNutrients.find((item) => item.nutrientId === effectiveNutrientId);
+    if (!definition || !pickerDefinitions.current.includes(definition)) return;
+    setBuilder((current) => {
+      if (
+        current !== builder ||
+        current.reference !== null ||
+        current.targets.some((target) => target.definition.nutrientId === definition.nutrientId) ||
+        current.targets.length >= 256
+      )
+        return current;
+      return {
+        ...current,
+        targets: [
+          ...current.targets,
+          {
+            definition,
+            minimumAmount: "",
+            targetAmount: "",
+            maximumAmount: "",
+            sourceLabel: "",
+            sourceVersion: "",
+            rationale: "",
+          },
+        ],
+      };
     });
   }
 
@@ -858,6 +918,53 @@ export function GoalsClient() {
     verifiedApplied &&
     referenceSets?.applied?.appliedProfileRevision !== referenceSets?.profileRevision;
   const referenceLocked = !referenceCustomized && (builder.reference !== null || verifiedApplied);
+  const availableNutrients = definitions.filter(
+    (definition) =>
+      !builder.targets.some((target) => target.definition.nutrientId === definition.nutrientId),
+  );
+  const matchingNutrients = availableNutrients.filter((definition) =>
+    `${definition.name} ${definition.code}`
+      .toLowerCase()
+      .includes(nutrientQuery.trim().toLowerCase()),
+  );
+  const effectiveNutrientId = matchingNutrients.some(
+    (item) => item.nutrientId === selectedNutrientId,
+  )
+    ? selectedNutrientId
+    : (matchingNutrients[0]?.nutrientId ?? "");
+  const renderedPickerGeneration = pickerGeneration.current;
+  const renderedReadGeneration = generation.current;
+  const renderedPickerRoute = pickerRoute.current;
+  const renderedPickerScope = pickerScope.current;
+  const renderedPickerSession = sessionRef.current;
+  function canUseNutrientPicker() {
+    return (
+      pickerMounted.current &&
+      state === "ready" &&
+      !busy &&
+      !profileBusy &&
+      !historicalGoal &&
+      !referenceLocked &&
+      !!renderedPickerSession &&
+      sessionRef.current === renderedPickerSession &&
+      pickerScope.current !== null &&
+      pickerScope.current === renderedPickerScope &&
+      pickerRoute.current === renderedPickerRoute &&
+      loadedPickerRoute.current === renderedPickerRoute &&
+      selectedDateRef.current === date &&
+      effectiveDateRef.current === builder.effectiveFrom &&
+      generation.current === renderedReadGeneration &&
+      pickerGeneration.current === renderedPickerGeneration &&
+      nutrientQueryRef.current === nutrientQuery &&
+      nutrientSelectionRef.current === selectedNutrientId &&
+      pickerDefinitions.current === definitions &&
+      !authController.current &&
+      !loadController.current &&
+      !writeController.current &&
+      !profileController.current
+    );
+  }
+  const pickerDisabled = !canUseNutrientPicker();
 
   return (
     <>
@@ -1341,29 +1448,66 @@ export function GoalsClient() {
                       make an editable copy and clear verified provenance.
                     </p>
                   ) : (
-                    <div className="searchInputRow">
-                      <select
-                        aria-label="Nutrient to add"
-                        onChange={(event) => setSelectedNutrientId(event.target.value)}
-                        value={selectedNutrientId}
+                    <>
+                      <label className="formField">
+                        <span>Find a nutrient</span>
+                        <input
+                          maxLength={100}
+                          value={nutrientQuery}
+                          disabled={pickerDisabled}
+                          onChange={(event) => changeNutrientQuery(event.target.value)}
+                        />
+                      </label>
+                      <button
+                        className="buttonSecondary"
+                        disabled={pickerDisabled}
+                        onClick={() => changeNutrientQuery("")}
+                        type="button"
                       >
-                        {definitions
-                          .filter(
-                            (definition) =>
-                              !builder.targets.some(
-                                (target) => target.definition.nutrientId === definition.nutrientId,
-                              ),
-                          )
-                          .map((definition) => (
+                        Clear nutrient search
+                      </button>
+                      <p className="fieldHelp" aria-live="polite">
+                        {state === "loading"
+                          ? "Loading nutrients…"
+                          : `${matchingNutrients.length} matching · ${availableNutrients.length} available · ${definitions.length} loaded. Search applies only to loaded nutrients.`}
+                      </p>
+                      {state !== "loading" && definitions.length === 0 ? (
+                        <p className="fieldHelp">
+                          No nutrients are loaded. Retry goals if loading failed.
+                        </p>
+                      ) : state !== "loading" && availableNutrients.length === 0 ? (
+                        <p className="fieldHelp">All loaded nutrients are already in this draft.</p>
+                      ) : state !== "loading" && matchingNutrients.length === 0 ? (
+                        <p className="fieldHelp">No available nutrients match this search.</p>
+                      ) : null}
+                      <div className="searchInputRow">
+                        <select
+                          aria-label="Nutrient to add"
+                          disabled={pickerDisabled || matchingNutrients.length === 0}
+                          onChange={(event) => selectNutrient(event.target.value)}
+                          value={effectiveNutrientId}
+                        >
+                          {matchingNutrients.length === 0 ? (
+                            <option value="">No available match</option>
+                          ) : null}
+                          {matchingNutrients.map((definition) => (
                             <option key={definition.nutrientId} value={definition.nutrientId}>
                               {definition.name} ({definition.unit})
                             </option>
                           ))}
-                      </select>
-                      <button className="buttonSecondary" onClick={addTarget} type="button">
-                        Add nutrient
-                      </button>
-                    </div>
+                        </select>
+                        <button
+                          className="buttonSecondary"
+                          disabled={
+                            pickerDisabled || !effectiveNutrientId || builder.targets.length >= 256
+                          }
+                          onClick={addTarget}
+                          type="button"
+                        >
+                          Add nutrient
+                        </button>
+                      </div>
+                    </>
                   )}
                   <div className="goalTargetGrid">
                     {builder.targets.map((target, index) => (
@@ -1517,6 +1661,10 @@ export function GoalsClient() {
                 maxLength={10}
                 onChange={(event) => {
                   const nextDate = event.target.value;
+                  if (selectedDateRef.current !== nextDate) {
+                    resetNutrientPicker();
+                    pickerScope.current = null;
+                  }
                   selectedDateRef.current = nextDate;
                   loadController.current?.abort();
                   setDate(nextDate);

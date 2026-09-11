@@ -161,6 +161,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Reminder day presets on web/native | ADR 0056 local memberships, exact retries and explicit consent/save; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 | Automatic evidence / independent review | Expand all diary meals on web/native | ADR 0057 local overview, preserved drafts/disclosures/paging and existing private/queue guards; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 | Automatic evidence / independent review | Loaded biometric history metric filter on web/native | ADR 0058 exact metric IDs, truthful loaded counts and editor/trend independence; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
+| Automatic evidence / independent review | Web goal nutrient search | ADR 0059 local name/code search, visible selection, explicit Add and draft/save independence; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1589,6 +1590,20 @@ At 2026-09-11T17:16:07.644872+00:00, base
 `34626392736` remained in progress. Base results do not transfer to this slice.
 External/device/hosted/release acceptance remains separate.
 
+### Web goal nutrient search: source/local complete
+
+[ADR 0059](../adr/0059-web-goal-nutrient-search.md) adds name/code search and Clear
+to the web goal nutrient picker using the loaded registry. Preserve exact IDs,
+source order, explicit Add, raw drafts, reference/history locks and save/retry
+identity. Focused component/helper checks, independent review, frozen canonical
+gates and production Chrome search/Add/draft/synthetic-save/keyboard/narrow/expiry
+proof passed. Native and shared contracts remain unchanged.
+
+At 2026-09-11T17:51:26.156817+00:00, base
+`2aff420887adc82ef30c7e288f6725ad279afe09` CI `34629733671` and container
+`34629733657` remained in progress. Base results do not transfer to this slice.
+External/device/hosted/release acceptance remains separate.
+
 ### Next bounded candidate
 
-Add name/code search and Clear to the web goal nutrient picker, matching the existing native goal flow. Filter the loaded eligible registry locally while keeping explicit Add, exact nutrient identity, truthful matching/available counts, raw target/source/rationale drafts, reference Customize locks and exact save/retry identity. Begin with a bounded acceptance card and actual-component evidence for hidden/stale Add, zero/all-added results, current read/write/history availability, keyboard/390px and zero search requests. No successor implementation is included in ADR0058.
+Consider copying a saved manual fixed-energy goal into a new dated draft on web/native. Existing New goal starts empty; the existing goal-to-builder converters preserve exact thresholds, source/version and rationale fields. Begin with a bounded acceptance card for explicit saved-source copy, dirty-draft Keep/Discard, reviewed date, cleared goal identity/revision and explicit Create without If-Match. Preserve pending/ambiguous retry ownership and current private/date/object guards; initially exclude verified/derived reference cases rather than silently changing provenance. Require exact no-request field transfer, source preservation, Create/retry and keyboard/narrow evidence. No successor implementation is included in ADR0059; external/device/hosted/release acceptance remains separate.

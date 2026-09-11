@@ -64,6 +64,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0056](./0056-reminder-day-presets.md) | Choose reminder day presets | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
 | [0057](./0057-diary-expand-all.md) | Expand all diary meals | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
 | [0058](./0058-biometric-history-filter.md) | Filter loaded biometric history by metric | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
+| [0059](./0059-web-goal-nutrient-search.md) | Search the web goal nutrient picker | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

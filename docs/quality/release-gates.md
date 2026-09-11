@@ -929,3 +929,19 @@ acceptance.
   frozen canonical gates and production Next/BFF synthetic Chrome choice/reset/
   zero-request/draft/continuation/retry/keyboard/narrow/expiry proof. Real device,
   persistence, assistive, concurrent React, external and release gates remain.
+
+
+## ADR 0059 Web goal nutrient search
+
+- Search only loaded eligible definitions by literal trimmed name/code text.
+  Preserve source order, exact IDs/units, truthful matching/available/loaded counts
+  and distinct empty/error states. Clear changes query only; Add uses the visible
+  eligible ID and preserves duplicate/cap/reference/history guards.
+- Keep picker state separate from requests and mutations. Reject stale/hidden
+  picker actions and replaced-builder Add effects; preserve raw drafts, explicit
+  Customize, exact save/retry body/key and accepted receipt ownership. Apply current
+  private/route/date/read/write availability without broad controller changes.
+- Require focused actual-component/helper/type/format checks, independent review,
+  frozen canonical gates and production Next/BFF synthetic Chrome no-request/
+  search/Add/draft/synthetic-save/retry/keyboard/narrow/expiry proof. Real backend,
+  device, assistive, concurrent React, external and release gates remain separate.
