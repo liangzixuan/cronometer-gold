@@ -163,6 +163,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Loaded biometric history metric filter on web/native | ADR 0058 exact metric IDs, truthful loaded counts and editor/trend independence; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 | Automatic evidence / independent review | Web goal nutrient search | ADR 0059 local name/code search, visible selection, explicit Add and draft/save independence; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 | Automatic evidence / independent review | Saved manual goal copy on web/native | ADR 0060 exact saved fields, dirty confirmation, reviewed date and preserved Create/retry identity; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
+| Automatic evidence / independent review | Health trend date shortcuts on web/native | ADR 0061 inclusive profile-local dates, no-op/custom range actions and preserved trend loading; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1620,6 +1621,21 @@ At 2026-09-14T03:40:03.368987+00:00, base
 34633157036 both succeeded. Base results do not transfer to this slice.
 External/device/hosted/release acceptance remains separate.
 
+### Health trend date shortcuts: source/local complete
+
+[ADR 0061](../adr/0061-trend-date-presets.md) adds Last 7, 30 and 90 days to
+Health trends on web/native. Use one current profile-local instant per press,
+atomic inclusive dates and matching-range no-ops. Preserve custom dates, series,
+unrelated drafts and web automatic/native explicit loading. Focused checks,
+independent review, frozen canonical gates and production Chrome range/custom/
+no-op/draft/keyboard/narrow/expiry proof passed. Shared contracts and
+protected queues remain unchanged.
+
+At 2026-09-14T04:27:51.779032+00:00, base
+b3a8c6b049499b27ba8d01c416756427d0227c3e CI 34805794900 and container 34805794915 were in progress.
+Base results do not transfer to this slice; no automatic success is claimed.
+External/device/hosted/release acceptance remains separate.
+
 ### Next bounded candidate
 
-Candidate: add Last 7 / 30 / 90 days shortcuts to Health trends on web/native. Both current clients require manually editing From and To. Use the existing profile-local calendar helper and trend read ownership, preserve custom dates, selected series, unrelated drafts, protected queues and pending writes. Capture today once per press; use inclusive From = today + (1 - N) calendar days. A matching pair must be a true no-op. Preserve web automatic loading and native explicit Load trends. Before implementation, revalidate exact source and acceptance for calendar/DST/year boundaries, stale/private/zone ownership, request counts, missingness, keyboard and 390px layout. No API, schema, reports, clinical interpretation or release expansion.
+Candidate: allow None for the native Health trend biometric series, matching the existing web choice. Current native options list only saved metrics even though loadTrends already supports nutrient-only reads. Begin with a bounded acceptance card and fresh source check: preserve dates/presets, selected nutrient/search and raw drafts, make matching None a true no-op, reuse existing trend input/read ownership, keep explicit Load, retain None on same-private refresh, and allow choosing a metric again. Verify nutrient-only versus two-series GETs, stale/private/zone callbacks, unchanged write/retry/queue behavior and native source/export evidence. Scope native screen and existing component tests plus ADR/index/plan/gates; no web, API, shared helper or release expansion. Do not substitute web browser QA for native UI acceptance.

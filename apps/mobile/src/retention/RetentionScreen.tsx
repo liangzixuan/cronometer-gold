@@ -33,6 +33,7 @@ import {
   diaryGroupLabel,
   isLocalDate,
   isPositiveDecimal,
+  localDateInTimeZone,
   localDateTimeToInstant,
   localTimeInTimeZone,
   type MealSlot,
@@ -1171,6 +1172,23 @@ export function RetentionScreen({
     installTrendInputs({ ...trendInputs, [field]: value });
     if (field !== "definitionId") setNutrientTrend(null);
     if (field !== "nutrientId") setBiometricTrend(null);
+  }
+  function applyTrendDatePreset(days: 7 | 30 | 90) {
+    if (!trendReady || !trendMetadataCurrent() || trendInputsRef.current !== trendInputs) return;
+    let nextFrom: string;
+    let nextTo: string;
+    try {
+      nextTo = localDateInTimeZone(new Date(), profileTimeZone);
+      nextFrom = shiftLocalDate(nextTo, 1 - days);
+      if (!isLocalDate(nextFrom) || !isLocalDate(nextTo) || nextFrom > nextTo) return;
+    } catch {
+      return;
+    }
+    if (from === nextFrom && to === nextTo) return;
+    abortTrendRead();
+    installTrendInputs({ ...trendInputs, from: nextFrom, to: nextTo });
+    setNutrientTrend(null);
+    setBiometricTrend(null);
   }
   async function loadTrends() {
     if (
@@ -2781,6 +2799,20 @@ export function RetentionScreen({
             onChangeText={(value) => changeTrendInput("to", value)}
             maxLength={10}
           />
+          <Text style={styles.help}>
+            Ranges include today in {profileTimeZone}. Choose Load local-day trends to view them.
+          </Text>
+          <View style={styles.actions}>
+            {([7, 30, 90] as const).map((days) => (
+              <Button
+                key={days}
+                label={`Last ${days} days`}
+                disabled={!trendReady}
+                onPress={() => applyTrendDatePreset(days)}
+                secondary
+              />
+            ))}
+          </View>
           <Text style={styles.label}>Nutrient</Text>
           <LabeledInput
             label="Find a trend nutrient by name"

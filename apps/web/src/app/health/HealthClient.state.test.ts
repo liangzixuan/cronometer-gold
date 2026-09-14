@@ -319,7 +319,7 @@ function workspace(
   const state = {
     items: initial,
     picker: [] as readonly unknown[],
-    trend: null as null | ((url: string) => Response),
+    trend: null as null | ((url: string) => Response | Promise<Response>),
     auth: null as null | (() => Response | Promise<Response>),
     cursor: null as string | null,
     owner,
@@ -3524,6 +3524,447 @@ describe("loaded biometric history metric filter", () => {
       expect(eventRows()).toHaveLength(1);
       await click("All metrics");
       expect(text(eventRows()[0])).toContain("71.9000");
+    },
+  );
+});
+
+function trendField(label: string) {
+  const section = elements().find((node) => node.props["aria-labelledby"] === "trends-heading");
+  const wrapper = elements(section).find(
+    (node) => node.type === "label" && text((node.props.children as unknown[])[0]).trim() === label,
+  );
+  return requiredHistory(
+    elements(wrapper).find((node) => node.type === "input" || node.type === "select"),
+  );
+}
+function trendDates() {
+  return { from: trendField("From").props.value, to: trendField("To").props.value };
+}
+function trendText() {
+  return text(elements().find((node) => node.props.className === "trendTables"));
+}
+function inputsExceptTrendDates() {
+  const dates = [trendField("From"), trendField("To")];
+  return elements()
+    .filter(
+      (node) =>
+        ["input", "select", "textarea"].includes(String(node.type)) && !dates.includes(node),
+    )
+    .map((node) => [node.type, node.props.value, node.props.checked]);
+}
+function trendResponse(path: string, timeZone: string) {
+  const params = new URL(path, "http://127.0.0.1").searchParams;
+  const from = params.get("from"),
+    to = params.get("to");
+  const point = {
+    localDate: from,
+    startsAt: `${from}T05:00:00.000Z`,
+    endsAt: `${from}T23:00:00.000Z`,
+  };
+  if (path.includes("/biometrics?"))
+    return Response.json({
+      data: {
+        definition: historyDefinition,
+        from,
+        to,
+        timeZone,
+        bucket: "day",
+        points: [
+          {
+            ...point,
+            count: 1,
+            first: "0.00000",
+            last: "0.00000",
+            minimum: "0.00000",
+            maximum: "0.00000",
+          },
+        ],
+      },
+    });
+  const id = params.get("nutrientId") ?? "2";
+  return Response.json({
+    data: {
+      nutrient: { id, code: "protein", name: "Response protein", unit: "g" },
+      from,
+      to,
+      timeZone,
+      bucket: "day",
+      watermarkRevision: "1",
+      points: [
+        {
+          ...point,
+          aggregate: {
+            nutrientId: id,
+            code: "protein",
+            name: "Response protein",
+            unit: "g",
+            knownAmount: "0",
+            completeness: "partial",
+            isExact: false,
+            contributorCount: 2,
+            quantifiedCount: 1,
+            traceCount: 0,
+            unknownCount: 1,
+            unknownReasonCounts: {
+              not_reported: 1,
+              not_analyzed: 0,
+              not_applicable: 0,
+              withheld: 0,
+            },
+          },
+        },
+      ],
+    },
+  });
+}
+function trendWorkspace(now = "2026-09-14T03:00:00.000Z", timeZone = "America/Chicago") {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(now));
+  const result = workspace();
+  result.state.timeZone = timeZone;
+  result.state.definitions = [historyDefinition];
+  result.state.picker = [
+    { id: "2", code: "protein", name: "Protein", unit: "g", category: "macronutrient" },
+    { id: "3", code: "fat", name: "Fat", unit: "g", category: "macronutrient" },
+  ];
+  result.state.trend = (path) => trendResponse(path, result.state.timeZone);
+  return {
+    ...result,
+    trendReads: () =>
+      result.fetcher.mock.calls.filter(([path]) => path.startsWith("/api/retention/trends/")),
+  };
+}
+
+describe("Health trend date shortcuts", () => {
+  it.each([
+    [7, "2026-09-14T03:00:00.000Z", "America/Chicago", "2026-09-07", "2026-09-13"],
+    [30, "2026-03-01T01:00:00.000Z", "Asia/Tokyo", "2026-01-31", "2026-03-01"],
+    [90, "2026-01-02T01:00:00.000Z", "America/Chicago", "2025-10-04", "2026-01-01"],
+    [7, "2024-03-03T12:00:00.000Z", "UTC", "2024-02-26", "2024-03-03"],
+    [7, "2026-03-10T03:00:00.000Z", "America/Chicago", "2026-03-03", "2026-03-09"],
+    [7, "2026-11-03T03:00:00.000Z", "America/Chicago", "2026-10-27", "2026-11-02"],
+  ])("loads the inclusive %i-day pair for %s in %s", async (days, now, zone, from, to) => {
+    const { fetcher, trendReads, writes } = trendWorkspace(String(now), String(zone));
+    await mount();
+    const before = fetcher.mock.calls.length;
+    await click(`Last ${days} days`);
+    expect(trendDates()).toEqual({ from, to });
+    expect(fetcher.mock.calls.slice(before).map(([path]) => path.split("?")[0])).toEqual([
+      "/api/retention/trends/nutrients",
+      "/api/retention/trends/biometrics",
+      "/api/auth/me",
+    ]);
+    expect(
+      trendReads()
+        .slice(-2)
+        .map(([path]) => {
+          const params = new URL(path, "http://127.0.0.1").searchParams;
+          return [params.get("from"), params.get("to")];
+        }),
+    ).toEqual([
+      [from, to],
+      [from, to],
+    ]);
+    expect(trendText()).toContain(String(from));
+    expect(trendText()).toContain("0.00000 kg");
+    expect(trendText()).toContain("At least 0 g · partial");
+    expect(writes()).toHaveLength(0);
+    for (const count of [7, 30, 90]) expect(button(`Last ${count} days`).props.type).toBe("button");
+    expect(text()).toContain("Ranges end today in your profile time zone.");
+  });
+
+  it("samples the clock once per press and uses the new day on a later press", async () => {
+    const { fetcher } = trendWorkspace();
+    await mount();
+    const BaseDate = Date;
+    let captures = 0;
+    vi.stubGlobal(
+      "Date",
+      class extends BaseDate {
+        constructor(value?: string | number) {
+          if (value === undefined) {
+            captures += 1;
+            super("2026-09-14T04:59:59.999Z");
+          } else super(value);
+        }
+      },
+    );
+    invoke(button("Last 7 days"), "onClick");
+    expect(captures).toBe(1);
+    vi.stubGlobal("Date", BaseDate);
+    await hooks.settle();
+    expect(trendDates()).toEqual({ from: "2026-09-07", to: "2026-09-13" });
+    const before = fetcher.mock.calls.length;
+    await click("Last 7 days");
+    expect(fetcher.mock.calls).toHaveLength(before);
+    vi.setSystemTime(new Date("2026-09-14T05:00:00.000Z"));
+    await click("Last 7 days");
+    expect(trendDates()).toEqual({ from: "2026-09-08", to: "2026-09-14" });
+  });
+
+  it.each(["pending", "failed"])(
+    "leaves matching %s reads, results and feedback untouched",
+    async (phase) => {
+      const { state, fetcher, trendReads } = trendWorkspace();
+      await mount();
+      const pending = deferred<Response>();
+      state.trend = (path) =>
+        path.includes("/nutrients?") ? pending.promise : trendResponse(path, state.timeZone);
+      await click("Last 7 days");
+      if (phase === "failed") {
+        pending.resolve(
+          Response.json({ error: "Keep exact failed trend feedback" }, { status: 503 }),
+        );
+        await hooks.settle();
+      }
+      const before = fetcher.mock.calls.length,
+        message = status(),
+        result = trendText();
+      const signal = trendReads().at(-2)?.[1]?.signal;
+      const priorSignal = signal?.aborted;
+      const matching = button("Last 7 days"),
+        other = button("Last 30 days");
+      invoke(matching, "onClick");
+      invoke(matching, "onClick");
+      await hooks.settle();
+      expect(fetcher.mock.calls).toHaveLength(before);
+      expect(signal?.aborted).toBe(priorSignal);
+      expect(status()).toBe(message);
+      expect(trendText()).toBe(result);
+      state.trend = (path) => trendResponse(path, state.timeZone);
+      invoke(other, "onClick");
+      await hooks.settle();
+      expect(trendDates()).toEqual({ from: "2026-08-15", to: "2026-09-13" });
+      pending.resolve(Response.json({ error: "Obsolete" }, { status: 503 }));
+      await hooks.settle();
+    },
+  );
+
+  it("preserves custom dates, selected series, every raw draft and an ambiguous write body/key", async () => {
+    const { state, fetcher, writes } = trendWorkspace();
+    await mount();
+    await click("Revise", card(food()));
+    await change("Name", "  Raw private food draft  ");
+    await change("Notes (optional)", " exact notes ");
+    await click("Log pinned v1", card(food()));
+    await change("Exact quantity", "2.000");
+    await change("Local date", "2026-09-08");
+    await change("Local time", "07:34");
+    await changeEvent("Exact value", "0.00000");
+    await changeReminderInput("Private in-app label", " Raw reminder ");
+    await changeReminderInput("Local time", "07:06");
+    invoke(trendField("Nutrient"), "onChange", { target: { value: "3" } });
+    await hooks.settle();
+    invoke(trendField("Biometric"), "onChange", { target: { value: "" } });
+    await hooks.settle();
+    const pending = deferred<Response>();
+    state.write = () => pending.promise;
+    await submit("Save new version");
+    const before = inputsExceptTrendDates();
+    const historyBefore = text(biometricSection());
+    await click("Last 90 days");
+    expect(inputsExceptTrendDates()).toEqual(before);
+    expect(text(biometricSection())).toBe(historyBefore);
+    expect(writes()).toHaveLength(1);
+    pending.resolve(Response.json({ error: "Ambiguous private food write" }, { status: 503 }));
+    await hooks.settle();
+    await change("From", "2026-08-01");
+    await change("To", "2026-08-12");
+    expect(trendDates()).toEqual({ from: "2026-08-01", to: "2026-08-12" });
+    await click("Last 30 days");
+    state.write = () => Response.json({ error: "Still ambiguous" }, { status: 503 });
+    await submit("Save new version");
+    expect(writes()).toHaveLength(2);
+    expect(writes()[1]?.[1]?.body).toBe(writes()[0]?.[1]?.body);
+    expect(new Headers(writes()[1]?.[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(writes()[0]?.[1]?.headers).get("idempotency-key"),
+    );
+    expect(new Headers(writes()[1]?.[1]?.headers).get("if-match")).toBe('"1"');
+    expect(
+      fetcher.mock.calls
+        .filter(([path]) => path.startsWith("/api/retention/trends/"))
+        .slice(-1)[0]?.[0],
+    ).toContain("nutrientId=3");
+  });
+
+  it.each(["From", "To", "Nutrient", "Biometric"])(
+    "rejects retained presets across raw %s A-B-A changes before effects",
+    async (label) => {
+      const { fetcher } = trendWorkspace();
+      await mount();
+      const stale = button("Last 90 days");
+      const old = trendField(label),
+        value = old.props.value;
+      const replacement = label === "Nutrient" ? "3" : label === "Biometric" ? "" : "2026-08-01";
+      invoke(old, "onChange", { target: { value: replacement } });
+      invoke(stale, "onClick");
+      hooks.renderWithoutEffects();
+      expect(trendField(label).props.value).toBe(replacement);
+      invoke(trendField(label), "onChange", { target: { value } });
+      hooks.renderWithoutEffects();
+      const dates = trendDates(),
+        before = fetcher.mock.calls.length;
+      invoke(stale, "onClick");
+      hooks.renderWithoutEffects();
+      expect(trendDates()).toEqual(dates);
+      expect(fetcher.mock.calls).toHaveLength(before);
+      await hooks.settle();
+    },
+  );
+
+  it.each(["success", "401", "503"])(
+    "aborts obsolete %s before a new pair paints and preserves the newer result",
+    async (outcome) => {
+      const { state, trendReads } = trendWorkspace();
+      await mount();
+      const pending = deferred<Response>();
+      state.trend = () => pending.promise;
+      await click("Last 7 days");
+      const old = trendReads().slice(-2),
+        stale = button("Last 90 days");
+      state.trend = (path) => trendResponse(path, state.timeZone);
+      invoke(button("Last 30 days"), "onClick");
+      expect(old.every(([, init]) => init?.signal?.aborted)).toBe(true);
+      invoke(stale, "onClick");
+      await hooks.settle();
+      const dates = trendDates(),
+        result = trendText(),
+        message = status();
+      pending.resolve(
+        outcome === "success"
+          ? trendResponse(old[0]?.[0] ?? "", state.timeZone)
+          : Response.json({ error: "obsolete response" }, { status: Number(outcome) }),
+      );
+      await hooks.settle();
+      expect(trendDates()).toEqual(dates);
+      expect(trendText()).toBe(result);
+      expect(status()).toBe(message);
+      expect(router.replace).not.toHaveBeenCalled();
+    },
+  );
+
+  it("preserves manually entered dates during initial loading and disables unverified shortcuts", async () => {
+    const { state } = trendWorkspace();
+    const pending = deferred<Response>();
+    state.auth = () => pending.promise;
+    hooks.mount(HealthClient);
+    const stale = button("Last 90 days");
+    expect(stale.props.disabled).toBe(true);
+    hooks.renderWithoutEffects();
+    invoke(trendField("From"), "onChange", { target: { value: "2026-08-01" } });
+    hooks.renderWithoutEffects();
+    invoke(trendField("To"), "onChange", { target: { value: "2026-08-12" } });
+    hooks.renderWithoutEffects();
+    invoke(stale, "onClick");
+    state.auth = null;
+    pending.resolve(session());
+    await hooks.settle();
+    expect(trendDates()).toEqual({ from: "2026-08-01", to: "2026-08-12" });
+    expect(button("Last 90 days").props.disabled).toBe(false);
+  });
+
+  it("rejects full-refresh and profile-zone callbacks and uses the newly verified zone", async () => {
+    const { state, fetcher } = trendWorkspace("2026-09-14T03:00:00.000Z");
+    await mount();
+    const stale = button("Last 7 days"),
+      dates = trendDates();
+    const pending = deferred<Response>();
+    state.auth = () => pending.promise;
+    hooks.replayEffects();
+    invoke(stale, "onClick");
+    hooks.renderWithoutEffects();
+    expect(trendDates()).toEqual(dates);
+    expect(button("Last 7 days").props.disabled).toBe(true);
+    state.timeZone = "Asia/Tokyo";
+    state.auth = null;
+    pending.resolve(session(owner, state.timeZone));
+    await hooks.settle();
+    const before = fetcher.mock.calls.length;
+    invoke(stale, "onClick");
+    await hooks.settle();
+    expect(fetcher.mock.calls).toHaveLength(before);
+    await click("Last 7 days");
+    expect(trendDates()).toEqual({ from: "2026-09-08", to: "2026-09-14" });
+  });
+
+  it("rejects hidden-before-event, restored, expired and unmounted shortcuts", async () => {
+    const view = visibility();
+    const { state, fetcher } = trendWorkspace();
+    await mount();
+    const stale = button("Last 90 days"),
+      dates = trendDates(),
+      before = fetcher.mock.calls.length;
+    view.document.visibilityState = "hidden";
+    invoke(stale, "onClick");
+    hooks.renderWithoutEffects();
+    expect(button("Last 90 days").props.disabled).toBe(true);
+    expect(trendDates()).toEqual(dates);
+    await view.set("visible");
+    invoke(stale, "onClick");
+    await hooks.settle();
+    expect(fetcher.mock.calls).toHaveLength(before);
+    const current = button("Last 90 days");
+    state.owner = otherOwner;
+    hooks.replayEffects();
+    await hooks.settle();
+    invoke(current, "onClick");
+    await hooks.settle();
+    expect(trendDates()).toEqual({ from: "", to: "" });
+    expect(button("Last 90 days").props.disabled).toBe(true);
+    expect(router.replace).toHaveBeenCalledWith("/login");
+    hooks.unmount();
+    const updates = hooks.afterClose(),
+      requests = fetcher.mock.calls.length;
+    invoke(current, "onClick");
+    expect(hooks.afterClose()).toBe(updates);
+    expect(fetcher.mock.calls).toHaveLength(requests);
+  });
+
+  it("rejects unsupported derived dates locally without replacing current inputs", async () => {
+    const { fetcher } = trendWorkspace();
+    await mount();
+    const before = fetcher.mock.calls.length,
+      dates = trendDates(),
+      message = status();
+    vi.setSystemTime(new Date("0001-01-01T12:00:00.000Z"));
+    await click("Last 90 days");
+    expect(trendDates()).toEqual(dates);
+    expect(status()).toBe(message);
+    expect(fetcher.mock.calls).toHaveLength(before);
+  });
+});
+
+describe("trend shortcut aggregate meaning", () => {
+  it.each(["exact zero", "unknown", "no data"])(
+    "keeps %s distinct after a shortcut",
+    async (kind) => {
+      const { state } = trendWorkspace();
+      state.trend = async (path) => {
+        const response = trendResponse(path, state.timeZone);
+        if (!path.includes("/nutrients?")) return response;
+        const body = await response.json();
+        const aggregate = body.data.points[0].aggregate;
+        if (kind === "no data") body.data.points[0].aggregate = null;
+        else {
+          aggregate.completeness = kind === "exact zero" ? "complete" : "unknown";
+          aggregate.isExact = kind === "exact zero";
+          aggregate.contributorCount = 1;
+          aggregate.quantifiedCount = kind === "exact zero" ? 1 : 0;
+          aggregate.unknownCount = kind === "exact zero" ? 0 : 1;
+          aggregate.unknownReasonCounts.not_reported = aggregate.unknownCount;
+        }
+        return Response.json(body);
+      };
+      await mount();
+      await click("Last 7 days");
+      expect(trendText()).toContain(
+        kind === "exact zero"
+          ? "0 g · exact"
+          : kind === "unknown"
+            ? "At least 0 g · unknown"
+            : "No data",
+      );
+      expect(trendText()).toContain("2026-09-07");
     },
   );
 });

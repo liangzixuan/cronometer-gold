@@ -344,7 +344,8 @@ export function HealthClient() {
   >("mass");
   const [definitionUnit, setDefinitionUnit] = useState("kg");
   const [editingDefinition, setEditingDefinition] = useState<BiometricDefinition | null>(null);
-  const [selectedDefinition, setSelectedDefinition] = useState("");
+  const [selectedDefinition, setSelectedDefinitionState] = useState("");
+  const selectedDefinitionRef = useRef(selectedDefinition);
   const [eventValue, setEventValue] = useState("");
   const [eventDate, setEventDate] = useState("");
   const [eventTime, setEventTime] = useState("");
@@ -362,9 +363,13 @@ export function HealthClient() {
     reminderGeneration.current += 1;
     setReminderState(next);
   }, []);
-  const [from, setFrom] = useState("");
-  const [to, setTo] = useState("");
-  const [selectedNutrient, setSelectedNutrient] = useState("");
+  const [trendRange, setTrendRange] = useState({ from: "", to: "" });
+  const trendRangeRef = useRef(trendRange);
+  const { from, to } = trendRange;
+  const trendControls = useRef(0);
+  const renderedTrendControls = trendControls.current;
+  const [selectedNutrient, setSelectedNutrientState] = useState("");
+  const selectedNutrientRef = useRef(selectedNutrient);
   const [nutrientTrend, setNutrientTrend] = useState<NutrientTrend | null>(null);
   const [biometricTrend, setBiometricTrend] = useState<BiometricTrend | null>(null);
   const [exportJob, setExportJob] = useState<AccountExportJob | null>(null);
@@ -412,6 +417,68 @@ export function HealthClient() {
   const renderedListGeneration = foodListGeneration.current;
   const renderedDisclosureGeneration = disclosureGeneration.current;
   const diaryGroups = session?.profile.diaryGroups ?? defaultDiaryGroups;
+
+  const replaceTrendRange = useCallback((next: { from: string; to: string }) => {
+    const current = trendRangeRef.current;
+    if (current.from === next.from && current.to === next.to) return;
+    trendController.current?.abort();
+    trendControls.current += 1;
+    trendRangeRef.current = next;
+    setTrendRange(next);
+  }, []);
+  const setSelectedNutrient = useCallback((change: string | ((value: string) => string)) => {
+    const next = typeof change === "function" ? change(selectedNutrientRef.current) : change;
+    if (next === selectedNutrientRef.current) return;
+    trendController.current?.abort();
+    trendControls.current += 1;
+    selectedNutrientRef.current = next;
+    setSelectedNutrientState(next);
+  }, []);
+  const setSelectedDefinition = useCallback((change: string | ((value: string) => string)) => {
+    const next = typeof change === "function" ? change(selectedDefinitionRef.current) : change;
+    if (next === selectedDefinitionRef.current) return;
+    trendController.current?.abort();
+    trendControls.current += 1;
+    selectedDefinitionRef.current = next;
+    setSelectedDefinitionState(next);
+  }, []);
+  const trendScope = session ? JSON.stringify([session.user.id, session.profile]) : null;
+  function canUseTrendInputs() {
+    const currentSession = installedSession.current;
+    return (
+      mounted.current &&
+      visible.current &&
+      (typeof document === "undefined" || document.visibilityState !== "hidden") &&
+      !privateUiClosed.current &&
+      trendControls.current === renderedTrendControls &&
+      trendRangeRef.current === trendRange &&
+      selectedNutrientRef.current === selectedNutrient &&
+      selectedDefinitionRef.current === selectedDefinition &&
+      (currentSession ? JSON.stringify([currentSession.user.id, currentSession.profile]) : null) ===
+        trendScope &&
+      (currentSession === null || ownerUserId.current === currentSession.user.id)
+    );
+  }
+  function canUseTrendPreset() {
+    return (
+      canUseTrendInputs() &&
+      session !== null &&
+      state === "ready" &&
+      loadController.current === null &&
+      profileRefreshController.current === null
+    );
+  }
+  function chooseTrendDays(days: 7 | 30 | 90) {
+    if (!canUseTrendPreset() || session === null) return;
+    try {
+      const today = localDateInTimeZone(new Date(), session.profile.timeZone);
+      const start = shiftLocalDate(today, 1 - days);
+      if (!isLocalDate(today) || !isLocalDate(start) || start > today) return;
+      replaceTrendRange({ from: start, to: today });
+    } catch {
+      // An unsupported clock/date must not replace a usable custom range.
+    }
+  }
 
   const renderedCustomGeneration = customGeneration.current;
   const renderedCustomControl = customControlGeneration.current;
@@ -556,6 +623,8 @@ export function HealthClient() {
           JSON.stringify([previous.user.id, previous.profile]) !==
             JSON.stringify([next.user.id, next.profile]))
       ) {
+        trendControls.current += 1;
+        trendController.current?.abort();
         reminderControls.current += 1;
         resetHistoryMetric();
         invalidateHistory();
@@ -693,8 +762,7 @@ export function HealthClient() {
     setReminderSaving(false);
     reminderControls.current += 1;
     replaceReminder(reminderDraft());
-    setFrom("");
-    setTo("");
+    replaceTrendRange({ from: "", to: "" });
     setSelectedNutrient("");
     setNutrientTrend(null);
     setBiometricTrend(null);
@@ -717,6 +785,9 @@ export function HealthClient() {
     setSession,
     setReminders,
     replaceReminder,
+    replaceTrendRange,
+    setSelectedDefinition,
+    setSelectedNutrient,
     installHistory,
     invalidateHistory,
   ]);
@@ -795,6 +866,7 @@ export function HealthClient() {
       (loadController.current && !loadController.current.signal.aborted)
     )
       return;
+    trendControls.current += 1;
     reminderControls.current += 1;
     invalidateHistory();
     const historyEpoch = historyGeneration.current;
@@ -938,8 +1010,10 @@ export function HealthClient() {
           });
           setReminders(data.reminders);
           setIntegrations(data.integrations);
-          setFrom((value) => value || shiftLocalDate(localToday, -13));
-          setTo((value) => value || localToday);
+          replaceTrendRange({
+            from: trendRangeRef.current.from || shiftLocalDate(localToday, -13),
+            to: trendRangeRef.current.to || localToday,
+          });
           setEventDate((value) => value || localToday);
           setEventTime(
             (value) =>
@@ -995,6 +1069,9 @@ export function HealthClient() {
     revalidateHealthSession,
     setSession,
     setReminders,
+    replaceTrendRange,
+    setSelectedDefinition,
+    setSelectedNutrient,
     signInAgain,
   ]);
 
@@ -1247,6 +1324,7 @@ export function HealthClient() {
     visible.current = typeof document === "undefined" || document.visibilityState !== "hidden";
     const visibilityChanged = () => {
       visible.current = document.visibilityState !== "hidden";
+      trendControls.current += 1;
       reminderControls.current += 1;
       invalidateHistory();
       customLifecycle.current += 1;
@@ -1261,6 +1339,7 @@ export function HealthClient() {
     void loadAll();
     return () => {
       mounted.current = false;
+      trendControls.current += 1;
       reminderControls.current += 1;
       historyController.current?.abort();
       historyController.current = null;
@@ -2253,17 +2332,33 @@ export function HealthClient() {
             <legend>Date range and series</legend>
             <label>
               From
-              <input type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
+              <input
+                type="date"
+                value={from}
+                onChange={(event) => {
+                  if (canUseTrendInputs())
+                    replaceTrendRange({ ...trendRangeRef.current, from: event.target.value });
+                }}
+              />
             </label>
             <label>
               To
-              <input type="date" value={to} onChange={(event) => setTo(event.target.value)} />
+              <input
+                type="date"
+                value={to}
+                onChange={(event) => {
+                  if (canUseTrendInputs())
+                    replaceTrendRange({ ...trendRangeRef.current, to: event.target.value });
+                }}
+              />
             </label>
             <label>
               Nutrient
               <select
                 value={selectedNutrient}
-                onChange={(event) => setSelectedNutrient(event.target.value)}
+                onChange={(event) => {
+                  if (canUseTrendInputs()) setSelectedNutrient(event.target.value);
+                }}
               >
                 {nutrients.map((item) => (
                   <option key={item.nutrientId} value={item.nutrientId}>
@@ -2277,7 +2372,7 @@ export function HealthClient() {
               <select
                 value={selectedDefinition}
                 onChange={(event) => {
-                  if (selectedDefinition === event.target.value) return;
+                  if (!canUseTrendInputs() || selectedDefinition === event.target.value) return;
                   eventDraftGeneration.current += 1;
                   setSelectedDefinition(event.target.value);
                 }}
@@ -2292,6 +2387,20 @@ export function HealthClient() {
               </select>
             </label>
           </fieldset>
+          <fieldset className="retentionFilters" aria-label="Recent trend ranges">
+            {([7, 30, 90] as const).map((days) => (
+              <button
+                key={days}
+                className="secondaryAction"
+                disabled={!canUseTrendPreset()}
+                onClick={() => chooseTrendDays(days)}
+                type="button"
+              >
+                Last {days} days
+              </button>
+            ))}
+          </fieldset>
+          <p className="finePrint">Ranges end today in your profile time zone.</p>
           <div className="trendTables">
             <div>
               <h3>{nutrientTrend?.nutrient.name ?? "Nutrition"}</h3>

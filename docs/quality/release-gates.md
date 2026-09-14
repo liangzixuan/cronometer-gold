@@ -962,3 +962,18 @@ acceptance.
   frozen canonical gates and production Next/BFF synthetic Chrome no-request/
   copy/draft/Create/replay/keyboard/narrow/expiry evidence. Real backend, device,
   assistive, concurrent React, external and release gates remain separate.
+
+## ADR 0061 Health trend date shortcuts
+
+- Capture current profile-local today once per press and atomically install
+  inclusive 7/30/90-day pairs with existing calendar helpers. Matching raw pairs
+  are true no-ops; custom dates and selected series remain available.
+- Reject stale input/series/private/profile/lifecycle callbacks and retire only
+  superseded trend reads. Preserve unrelated drafts, operations, queues and
+  mutation/retry/receipt semantics.
+- Preserve web automatic and native explicit loading; no intermediate date-pair
+  reads, no domain writes, no fabricated zero or changed aggregate meaning.
+- Require focused actual-component/calendar/type/format checks, independent
+  review, frozen canonical gates and production Next/BFF synthetic Chrome range,
+  no-op/custom/draft/keyboard/narrow/expiry evidence. Real backend, device,
+  assistive, concurrent React, external and release gates remain separate.
