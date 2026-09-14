@@ -299,6 +299,20 @@ export function HealthClient() {
   const [message, setMessage] = useState("Opening your private health workspace…");
   const [session, setSessionState] = useState<SessionSummary | null>(null);
   const [nutrients, setNutrients] = useState<readonly TargetableNutrient[]>([]);
+  const [trendNutrientFilter, setTrendNutrientFilterState] = useState({ value: "" });
+  const trendNutrientFilterRef = useRef(trendNutrientFilter);
+  const trendNutrientScope = useRef<string | null>(null);
+  const trendNutrientRegistry = useRef<{
+    readonly values: readonly TargetableNutrient[];
+    readonly scope: string;
+  } | null>(null);
+  const renderedTrendNutrientRegistry = trendNutrientRegistry.current;
+  const installTrendNutrientFilter = useCallback((value: string) => {
+    if (value === trendNutrientFilterRef.current.value) return;
+    const next = { value };
+    trendNutrientFilterRef.current = next;
+    setTrendNutrientFilterState(next);
+  }, []);
   const [customFoods, setCustomFoods] = useState<readonly CustomFood[]>([]);
   const [savedFoodFilter, setSavedFoodFilter] = useState("");
   const [verifiedFoodListOwner, setVerifiedFoodListOwner] = useState<string | null>(null);
@@ -458,6 +472,51 @@ export function HealthClient() {
         trendScope &&
       (currentSession === null || ownerUserId.current === currentSession.user.id)
     );
+  }
+  function currentTrendNutrientChoices() {
+    return (
+      canUseTrendInputs() &&
+      session !== null &&
+      installedSession.current === session &&
+      state === "ready" &&
+      loadController.current === null &&
+      profileRefreshController.current === null &&
+      trendNutrientRegistry.current === renderedTrendNutrientRegistry &&
+      renderedTrendNutrientRegistry?.values === nutrients &&
+      renderedTrendNutrientRegistry.scope === trendScope
+    );
+  }
+  const trendNutrientChoicesReady = currentTrendNutrientChoices();
+  const normalizedTrendNutrientFilter = trendNutrientFilter.value.trim().toLowerCase();
+  const matchingTrendNutrients = trendNutrientChoicesReady
+    ? nutrients.filter((item) => item.name.toLowerCase().includes(normalizedTrendNutrientFilter))
+    : [];
+  const chosenTrendNutrient = trendNutrientChoicesReady
+    ? nutrients.find((item) => item.nutrientId === selectedNutrient)
+    : undefined;
+  const offeredTrendNutrients = trendNutrientChoicesReady
+    ? nutrients.filter(
+        (item) => item.nutrientId === selectedNutrient || matchingTrendNutrients.includes(item),
+      )
+    : [];
+  function changeTrendNutrientFilter(value: string) {
+    if (
+      !currentTrendNutrientChoices() ||
+      trendNutrientFilterRef.current !== trendNutrientFilter ||
+      value.length > 200
+    )
+      return;
+    installTrendNutrientFilter(value);
+  }
+  function chooseTrendNutrient(value: string) {
+    if (
+      !currentTrendNutrientChoices() ||
+      trendNutrientFilterRef.current !== trendNutrientFilter ||
+      value === selectedNutrient ||
+      !matchingTrendNutrients.some((item) => item.nutrientId === value)
+    )
+      return;
+    setSelectedNutrient(value);
   }
   function canUseTrendPreset() {
     return (
@@ -640,6 +699,11 @@ export function HealthClient() {
       }
       if (next !== null) {
         const nextScope = JSON.stringify([next.user.id, next.profile]);
+        if (trendNutrientScope.current !== nextScope) {
+          trendNutrientRegistry.current = null;
+          installTrendNutrientFilter("");
+        }
+        trendNutrientScope.current = nextScope;
         if (savedFoodFilterScope.current !== nextScope) resetSavedFoodFilter();
         savedFoodFilterScope.current = nextScope;
       }
@@ -653,6 +717,7 @@ export function HealthClient() {
       invalidateCustomControls,
       resetSavedFoodFilter,
       resetHistoryMetric,
+      installTrendNutrientFilter,
     ],
   );
 
@@ -734,6 +799,9 @@ export function HealthClient() {
     ownerUserId.current = null;
     operations.current.clear();
     setSession(null);
+    trendNutrientScope.current = null;
+    trendNutrientRegistry.current = null;
+    installTrendNutrientFilter("");
     setNutrients([]);
     setCustomFoods([]);
     setCustomFoodCursor(null);
@@ -788,6 +856,7 @@ export function HealthClient() {
     replaceTrendRange,
     setSelectedDefinition,
     setSelectedNutrient,
+    installTrendNutrientFilter,
     installHistory,
     invalidateHistory,
   ]);
@@ -866,6 +935,7 @@ export function HealthClient() {
       (loadController.current && !loadController.current.signal.aborted)
     )
       return;
+    trendNutrientRegistry.current = null;
     trendControls.current += 1;
     reminderControls.current += 1;
     invalidateHistory();
@@ -992,6 +1062,10 @@ export function HealthClient() {
             data.customPage.items,
           );
           if (!installCustomFoods(customItems, generation, nextSession.user.id)) return;
+          trendNutrientRegistry.current = {
+            values: data.nutrients,
+            scope: JSON.stringify([currentSession.user.id, currentSession.profile]),
+          };
           if (customLoadReceipts.current === receiptOverlay) customLoadReceipts.current = null;
           foodDetailsReady.current = true;
           setVerifiedFoodListOwner(nextSession.user.id);
@@ -2352,17 +2426,48 @@ export function HealthClient() {
                 }}
               />
             </label>
-            <label>
+            <label style={{ flex: "1 1 220px", minWidth: 0 }}>
+              Find a trend nutrient by name
+              <input
+                type="search"
+                value={trendNutrientChoicesReady ? trendNutrientFilter.value : ""}
+                maxLength={200}
+                disabled={!trendNutrientChoicesReady}
+                aria-describedby="trend-nutrient-search-status"
+                onChange={(event) => changeTrendNutrientFilter(event.target.value)}
+              />
+            </label>
+            <button
+              className="secondaryAction"
+              disabled={!trendNutrientChoicesReady}
+              onClick={() => changeTrendNutrientFilter("")}
+              type="button"
+            >
+              Clear trend nutrient filter
+            </button>
+            <label style={{ flex: "1 1 220px", minWidth: 0 }}>
               Nutrient
               <select
-                value={selectedNutrient}
-                onChange={(event) => {
-                  if (canUseTrendInputs()) setSelectedNutrient(event.target.value);
-                }}
+                value={trendNutrientChoicesReady ? selectedNutrient : ""}
+                disabled={!trendNutrientChoicesReady}
+                aria-describedby="trend-nutrient-search-status"
+                onChange={(event) => chooseTrendNutrient(event.target.value)}
               >
-                {nutrients.map((item) => (
+                {!trendNutrientChoicesReady ? (
+                  <option value="">Trend nutrients unavailable</option>
+                ) : !chosenTrendNutrient ? (
+                  <option value={selectedNutrient}>
+                    {selectedNutrient
+                      ? "Current selection unavailable in the loaded list"
+                      : "No trend nutrient selected"}
+                  </option>
+                ) : null}
+                {offeredTrendNutrients.map((item) => (
                   <option key={item.nutrientId} value={item.nutrientId}>
                     {item.name} ({item.unit})
+                    {item.nutrientId === selectedNutrient && !matchingTrendNutrients.includes(item)
+                      ? " · current selection, outside filter"
+                      : ""}
                   </option>
                 ))}
               </select>
@@ -2387,6 +2492,20 @@ export function HealthClient() {
               </select>
             </label>
           </fieldset>
+          <p className="finePrint" id="trend-nutrient-search-status" aria-live="polite">
+            {trendNutrientChoicesReady
+              ? nutrients.length === 0
+                ? "No trend nutrients are available in the loaded list."
+                : `${matchingTrendNutrients.length} matching of ${nutrients.length} loaded trend nutrients.`
+              : state === "loading" && !privateUiClosed.current
+                ? "Loading the trend nutrient list…"
+                : "The trend nutrient list is unavailable. Reload this page to try again."}
+            {trendNutrientChoicesReady &&
+            nutrients.length > 0 &&
+            matchingTrendNutrients.length === 0
+              ? " No loaded nutrients match this name."
+              : ""}
+          </p>
           <fieldset className="retentionFilters" aria-label="Recent trend ranges">
             {([7, 30, 90] as const).map((days) => (
               <button

@@ -1003,3 +1003,18 @@ acceptance.
   reads, existing focused checks, types/format, independent review, frozen canonical
   gates and native exports. Native source/export proof is not rendered-device,
   assistive, concurrent React, real persistence, external or release acceptance.
+
+
+## ADR 0064 Search web Health trend nutrients
+
+- Literal bounded local name filtering preserves source order, exact IDs/units,
+  selected context outside matches and truthful matching/loaded/no-match/empty/
+  unavailable meaning. Missing selected metadata stays explicitly unavailable.
+- Filter/Clear no-ops and edits issue no requests, choose no series, abort no read
+  and leave results, drafts, operations/retries and private data protocols intact.
+  Current matching selection keeps existing automatic exact-ID loading.
+- Separate query/registry/private ownership rejects stale/excluded/unknown choices,
+  raw edit-restore, refresh, profile/private and lifecycle callbacks. Require focused
+  tests/types/format, independent review, frozen canonical gates and production
+  synthetic Chrome no-request/selection/draft/keyboard/narrow/expiry proof. Real
+  services, concurrent React, assistive, external/device/release gates remain.

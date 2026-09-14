@@ -3968,3 +3968,482 @@ describe("trend shortcut aggregate meaning", () => {
     },
   );
 });
+
+const trendSearchLabel = "Find a trend nutrient by name";
+const clearTrendSearchLabel = "Clear trend nutrient filter";
+function trendSearchStatus() {
+  return text(elements().find((node) => node.props.id === "trend-nutrient-search-status"));
+}
+function trendNutrientOptions() {
+  return elements(trendField("Nutrient"))
+    .filter((node) => node.type === "option")
+    .map((node) => ({ value: node.props.value, label: text(node) }));
+}
+function trendSearchWorkspace() {
+  const result = trendWorkspace();
+  result.state.picker = [
+    { id: "3", code: "vitamin_c_first", name: "Vitamin C", unit: "mg", category: "vitamin" },
+    { id: "2", code: "protein", name: "Protein", unit: "g", category: "macronutrient" },
+    { id: "4", code: "vitamin_c_second", name: "Vitamin C", unit: "ug", category: "vitamin" },
+    {
+      id: "9007199254740993",
+      code: "literal",
+      name: "Literal [C].*",
+      unit: "IU",
+      category: "vitamin",
+    },
+    { id: "6", code: "sodium", name: "Sodium", unit: "mg", category: "mineral" },
+  ];
+  return result;
+}
+async function selectTrendNutrient(value: string) {
+  invoke(trendField("Nutrient"), "onChange", { target: { value } });
+  await hooks.settle();
+}
+function inputsExceptTrendSearch() {
+  const search = field(trendSearchLabel);
+  return elements()
+    .filter(
+      (node) => ["input", "select", "textarea"].includes(String(node.type)) && node !== search,
+    )
+    .map((node) => [node.type, node.props.value, node.props.checked]);
+}
+
+describe("web Health trend nutrient name search", () => {
+  it("matches trimmed literal case-insensitive names while preserving raw text, loaded order, IDs and units", async () => {
+    const { fetcher } = trendSearchWorkspace();
+    await mount();
+    await selectTrendNutrient("2");
+    const before = fetcher.mock.calls.length,
+      all = trendNutrientOptions();
+    await change(trendSearchLabel, "  VITAMIN c  ");
+    expect(field(trendSearchLabel).props.value).toBe("  VITAMIN c  ");
+    expect(field(trendSearchLabel).props.maxLength).toBe(200);
+    expect(trendSearchStatus()).toBe("2 matching of 5 loaded trend nutrients.");
+    expect(trendNutrientOptions()).toEqual([
+      { value: "3", label: "Vitamin C (mg)" },
+      { value: "2", label: "Protein (g) · current selection, outside filter" },
+      { value: "4", label: "Vitamin C (ug)" },
+    ]);
+    expect(trendField("Nutrient").props.value).toBe("2");
+    await change(trendSearchLabel, "[c].*");
+    expect(trendNutrientOptions()).toEqual([
+      { value: "2", label: "Protein (g) · current selection, outside filter" },
+      { value: "9007199254740993", label: "Literal [C].* (IU)" },
+    ]);
+    await click(clearTrendSearchLabel);
+    expect(trendNutrientOptions()).toEqual(all);
+    expect(fetcher.mock.calls).toHaveLength(before);
+    expect(button(clearTrendSearchLabel).props.type).toBe("button");
+  });
+
+  it("keeps a zero-match selection represented and rejects excluded or unknown IDs without automatic substitution", async () => {
+    const { fetcher } = trendSearchWorkspace();
+    await mount();
+    const before = fetcher.mock.calls.length,
+      chosen = trendField("Nutrient").props.value;
+    await change(trendSearchLabel, "not a loaded name");
+    expect(trendSearchStatus()).toBe(
+      "0 matching of 5 loaded trend nutrients. No loaded nutrients match this name.",
+    );
+    expect(trendNutrientOptions()).toEqual([
+      { value: chosen, label: "Vitamin C (mg) · current selection, outside filter" },
+    ]);
+    await selectTrendNutrient("2");
+    await selectTrendNutrient("999");
+    await selectTrendNutrient(String(chosen));
+    expect(trendField("Nutrient").props.value).toBe(chosen);
+    expect(fetcher.mock.calls).toHaveLength(before);
+    await click(clearTrendSearchLabel);
+    expect(trendNutrientOptions()).toHaveLength(5);
+  });
+
+  it("changes selection only on the current matching exact ID and preserves the automatic read contract", async () => {
+    const { fetcher, writes } = trendSearchWorkspace();
+    await mount();
+    const dates = trendDates();
+    await change(trendSearchLabel, "[C].*");
+    const before = fetcher.mock.calls.length;
+    await selectTrendNutrient("9007199254740993");
+    expect(trendField("Nutrient").props.value).toBe("9007199254740993");
+    const requests = fetcher.mock.calls.slice(before).map(([path]) => path);
+    expect(requests).toEqual([
+      `/api/retention/trends/nutrients?nutrientId=9007199254740993&from=${dates.from}&to=${dates.to}`,
+      `/api/retention/trends/biometrics?definitionId=${historyDefinition.id}&from=${dates.from}&to=${dates.to}`,
+      "/api/auth/me",
+    ]);
+    expect(trendNutrientOptions()).toEqual([
+      { value: "9007199254740993", label: "Literal [C].* (IU)" },
+    ]);
+    expect(writes()).toHaveLength(0);
+    const after = fetcher.mock.calls.length;
+    await selectTrendNutrient("9007199254740993");
+    expect(fetcher.mock.calls).toHaveLength(after);
+  });
+
+  it("treats same raw query, empty Clear and overlength callbacks as true no-ops", async () => {
+    const { fetcher } = trendSearchWorkspace();
+    await mount();
+    const clear = button(clearTrendSearchLabel),
+      select = trendField("Nutrient");
+    invoke(clear, "onClick");
+    invoke(clear, "onClick");
+    invoke(select, "onChange", { target: { value: "2" } });
+    await hooks.settle();
+    expect(trendField("Nutrient").props.value).toBe("2");
+    const before = fetcher.mock.calls.length;
+    await change(trendSearchLabel, " ".repeat(200));
+    expect(field(trendSearchLabel).props.value).toBe(" ".repeat(200));
+    const old = field(trendSearchLabel),
+      currentClear = button(clearTrendSearchLabel);
+    invoke(old, "onChange", { target: { value: "x".repeat(201) } });
+    invoke(old, "onChange", { target: { value: " ".repeat(200) } });
+    invoke(currentClear, "onClick");
+    await hooks.settle();
+    expect(field(trendSearchLabel).props.value).toBe("");
+    expect(trendSearchStatus()).toBe("5 matching of 5 loaded trend nutrients.");
+    expect(fetcher.mock.calls).toHaveLength(before);
+  });
+
+  it.each(["pending", "failed"])(
+    "preserves %s trend reads, results and feedback through search and Clear",
+    async (phase) => {
+      const { state, fetcher, trendReads } = trendSearchWorkspace();
+      await mount();
+      const pending = deferred<Response>();
+      state.trend = () => pending.promise;
+      await click("Last 7 days");
+      const reads = trendReads().slice(-2);
+      if (phase === "failed") {
+        pending.resolve(Response.json({ error: "Exact trend failure remains" }, { status: 503 }));
+        await hooks.settle();
+      }
+      const before = fetcher.mock.calls.length,
+        inputs = inputsExceptTrendSearch(),
+        result = trendText(),
+        message = status();
+      const aborts = reads.map(([, init]) => init?.signal?.aborted);
+      await change(trendSearchLabel, "Sodium");
+      await click(clearTrendSearchLabel);
+      expect(fetcher.mock.calls).toHaveLength(before);
+      expect(reads.map(([, init]) => init?.signal?.aborted)).toEqual(aborts);
+      expect(inputsExceptTrendSearch()).toEqual(inputs);
+      expect(trendText()).toBe(result);
+      expect(status()).toBe(message);
+      pending.resolve(Response.json({ error: "Current pending result" }, { status: 503 }));
+      await hooks.settle();
+      if (phase === "pending") expect(status()).toBe("Current pending result");
+    },
+  );
+
+  it.each(["exact zero", "unknown", "no data"])(
+    "preserves %s rendering and all request state during local filtering",
+    async (kind) => {
+      const { state, fetcher } = trendSearchWorkspace();
+      state.trend = async (path) => {
+        const response = trendResponse(path, state.timeZone);
+        if (!path.includes("/nutrients?")) return response;
+        const body = await response.json(),
+          aggregate = body.data.points[0].aggregate;
+        if (kind === "no data") body.data.points[0].aggregate = null;
+        else {
+          aggregate.completeness = kind === "exact zero" ? "complete" : "unknown";
+          aggregate.isExact = kind === "exact zero";
+          aggregate.contributorCount = 1;
+          aggregate.quantifiedCount = kind === "exact zero" ? 1 : 0;
+          aggregate.unknownCount = kind === "exact zero" ? 0 : 1;
+          aggregate.unknownReasonCounts.not_reported = aggregate.unknownCount;
+        }
+        return Response.json(body);
+      };
+      await mount();
+      const result = trendText(),
+        before = fetcher.mock.calls.length;
+      expect(result).toContain(
+        kind === "no data"
+          ? "No data"
+          : kind === "exact zero"
+            ? "0 g · exact"
+            : "At least 0 g · unknown",
+      );
+      await change(trendSearchLabel, "absent");
+      await click(clearTrendSearchLabel);
+      expect(trendText()).toBe(result);
+      expect(fetcher.mock.calls).toHaveLength(before);
+    },
+  );
+
+  it("preserves exact raw editors, history and an unrelated ambiguous write body/key", async () => {
+    const { state, fetcher, writes } = trendSearchWorkspace();
+    state.eventRead = () => eventPage([reading()]);
+    await mount();
+    await click("Revise", card(food()));
+    await change("Name", "  Raw private food draft  ");
+    await change("Notes (optional)", " exact notes ");
+    await click("Log pinned v1", card(food()));
+    await change("Exact quantity", "2.000");
+    await change("Local date", "2026-09-08");
+    await change("Local time", "07:34");
+    await changeEvent("Exact value", "0.00000");
+    await changeReminderInput("Private in-app label", " Raw reminder ");
+    await changeReminderInput("Local time", "07:06");
+    await click("Last 7 days");
+    const pending = deferred<Response>();
+    state.write = () => pending.promise;
+    await submit("Save new version");
+    const before = fetcher.mock.calls.length,
+      inputs = inputsExceptTrendSearch(),
+      history = text(biometricSection()),
+      result = trendText(),
+      message = status();
+    await change(trendSearchLabel, "Sodium");
+    await click(clearTrendSearchLabel);
+    expect(inputsExceptTrendSearch()).toEqual(inputs);
+    expect(text(biometricSection())).toBe(history);
+    expect(trendText()).toBe(result);
+    expect(status()).toBe(message);
+    expect(fetcher.mock.calls).toHaveLength(before);
+    expect(writes()).toHaveLength(1);
+    pending.resolve(Response.json({ error: "Ambiguous private food write" }, { status: 503 }));
+    await hooks.settle();
+    await change(trendSearchLabel, "none");
+    await click(clearTrendSearchLabel);
+    state.write = () => Response.json({ error: "Still ambiguous" }, { status: 503 });
+    await submit("Save new version");
+    expect(writes()).toHaveLength(2);
+    expect(writes()[1]?.[1]?.body).toBe(writes()[0]?.[1]?.body);
+    expect(new Headers(writes()[1]?.[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(writes()[0]?.[1]?.headers).get("idempotency-key"),
+    );
+    expect(new Headers(writes()[1]?.[1]?.headers).get("if-match")).toBe('"1"');
+  });
+
+  it("rejects old query, Clear and selection after a raw edit-and-restore cycle before effects", async () => {
+    const { fetcher } = trendSearchWorkspace();
+    await mount();
+    const oldQuery = field(trendSearchLabel),
+      oldClear = button(clearTrendSearchLabel),
+      oldSelect = trendField("Nutrient"),
+      before = fetcher.mock.calls.length;
+    invoke(oldQuery, "onChange", { target: { value: "Sodium" } });
+    invoke(oldSelect, "onChange", { target: { value: "2" } });
+    invoke(oldClear, "onClick");
+    hooks.renderWithoutEffects();
+    expect(field(trendSearchLabel).props.value).toBe("Sodium");
+    invoke(field(trendSearchLabel), "onChange", { target: { value: "" } });
+    hooks.renderWithoutEffects();
+    invoke(oldQuery, "onChange", { target: { value: "stale" } });
+    invoke(oldSelect, "onChange", { target: { value: "2" } });
+    invoke(oldClear, "onClick");
+    hooks.renderWithoutEffects();
+    expect(field(trendSearchLabel).props.value).toBe("");
+    expect(trendField("Nutrient").props.value).toBe("3");
+    expect(fetcher.mock.calls).toHaveLength(before);
+    await selectTrendNutrient("2");
+    expect(trendField("Nutrient").props.value).toBe("2");
+  });
+
+  it("does not invalidate retained date preset or unrelated editor callbacks while filtering", async () => {
+    trendSearchWorkspace();
+    await mount();
+    const preset = button("Last 7 days"),
+      reminderInput = reminderField("Private in-app label");
+    invoke(field(trendSearchLabel), "onChange", { target: { value: "Sodium" } });
+    invoke(reminderInput, "onChange", { target: { value: "still current" } });
+    invoke(preset, "onClick");
+    await hooks.settle();
+    expect(field(trendSearchLabel).props.value).toBe("Sodium");
+    expect(reminderField("Private in-app label").props.value).toBe("still current");
+    expect(trendDates()).toEqual({ from: "2026-09-07", to: "2026-09-13" });
+  });
+
+  it.each(["From", "To", "Nutrient", "Biometric"])(
+    "rejects retained search controls after %s changes before effects",
+    async (label) => {
+      const { fetcher } = trendSearchWorkspace();
+      await mount();
+      const query = field(trendSearchLabel),
+        select = trendField("Nutrient"),
+        clear = button(clearTrendSearchLabel);
+      const next = label === "Nutrient" ? "2" : label === "Biometric" ? "" : "2026-08-01";
+      invoke(trendField(label), "onChange", { target: { value: next } });
+      const before = fetcher.mock.calls.length;
+      invoke(query, "onChange", { target: { value: "stale" } });
+      invoke(select, "onChange", { target: { value: "6" } });
+      invoke(clear, "onClick");
+      hooks.renderWithoutEffects();
+      expect(field(trendSearchLabel).props.value).toBe("");
+      expect(trendField("Nutrient").props.value).toBe(label === "Nutrient" ? "2" : "3");
+      expect(fetcher.mock.calls).toHaveLength(before);
+      await hooks.settle();
+    },
+  );
+
+  it("retains same-scope query and an unavailable selected ID after replacing loaded metadata", async () => {
+    const { state, fetcher } = trendSearchWorkspace();
+    await mount();
+    await selectTrendNutrient("2");
+    await change(trendSearchLabel, " vitamin ");
+    const query = field(trendSearchLabel),
+      select = trendField("Nutrient"),
+      clear = button(clearTrendSearchLabel);
+    const pending = deferred<Response>();
+    state.read = () => pending.promise;
+    state.picker = [
+      {
+        id: "4",
+        code: "vitamin_c_second",
+        name: "Current Vitamin C",
+        unit: "ug",
+        category: "vitamin",
+      },
+    ];
+    hooks.replayEffects();
+    invoke(query, "onChange", { target: { value: "stale" } });
+    invoke(select, "onChange", { target: { value: "3" } });
+    invoke(clear, "onClick");
+    hooks.renderWithoutEffects();
+    expect(field(trendSearchLabel).props.value).toBe("");
+    expect(trendField("Nutrient").props.disabled).toBe(true);
+    expect(trendNutrientOptions()).toEqual([{ value: "", label: "Trend nutrients unavailable" }]);
+    expect(trendSearchStatus()).toContain("Loading");
+    pending.resolve(page(state.items));
+    await hooks.settle();
+    expect(field(trendSearchLabel).props.value).toBe(" vitamin ");
+    expect(trendField("Nutrient").props.value).toBe("2");
+    expect(trendNutrientOptions()).toEqual([
+      { value: "2", label: "Current selection unavailable in the loaded list" },
+      { value: "4", label: "Current Vitamin C (ug)" },
+    ]);
+    expect(trendSearchStatus()).toBe("1 matching of 1 loaded trend nutrients.");
+    const before = fetcher.mock.calls.length;
+    invoke(query, "onChange", { target: { value: "stale" } });
+    invoke(select, "onChange", { target: { value: "3" } });
+    invoke(clear, "onClick");
+    await selectTrendNutrient("2");
+    expect(fetcher.mock.calls).toHaveLength(before);
+    expect(field(trendSearchLabel).props.value).toBe(" vitamin ");
+  });
+
+  it.each(["empty", "failed", "loading"])(
+    "distinguishes a %s registry without claiming matches or guessing metadata",
+    async (phase) => {
+      const { state, fetcher } = trendSearchWorkspace();
+      const pending = deferred<Response>();
+      state.picker = [];
+      if (phase === "failed")
+        state.read = () =>
+          Response.json({ error: "Fixture registry load failed" }, { status: 503 });
+      if (phase === "loading") state.read = () => pending.promise;
+      await mount();
+      const before = fetcher.mock.calls.length;
+      invoke(field(trendSearchLabel), "onChange", { target: { value: "private" } });
+      invoke(button(clearTrendSearchLabel), "onClick");
+      invoke(trendField("Nutrient"), "onChange", { target: { value: "2" } });
+      await hooks.settle();
+      expect(fetcher.mock.calls).toHaveLength(before);
+      expect(trendSearchStatus()).toBe(
+        phase === "empty"
+          ? "No trend nutrients are available in the loaded list."
+          : phase === "loading"
+            ? "Loading the trend nutrient list…"
+            : "The trend nutrient list is unavailable. Reload this page to try again.",
+      );
+      expect(trendNutrientOptions()).toEqual([
+        {
+          value: "",
+          label: phase === "empty" ? "No trend nutrient selected" : "Trend nutrients unavailable",
+        },
+      ]);
+      pending.resolve(page(state.items));
+      await hooks.settle();
+    },
+  );
+
+  it.each(["America/Chicago", "Asia/Tokyo"])(
+    "fences profile refresh to %s and retains only same-scope query",
+    async (zone) => {
+      const { state, fetcher } = trendSearchWorkspace();
+      await mount();
+      await click("Log pinned v1", card(food()));
+      await change("Exact quantity", "2.375");
+      await change(trendSearchLabel, " vitamin ");
+      const query = field(trendSearchLabel),
+        select = trendField("Nutrient"),
+        clear = button(clearTrendSearchLabel);
+      const pending = deferred<Response>();
+      state.auth = () => pending.promise;
+      state.write = () =>
+        Response.json({ error: "Zone changed", code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 });
+      await submit("Log exact version");
+      const during = fetcher.mock.calls.length;
+      invoke(query, "onChange", { target: { value: "stale" } });
+      invoke(select, "onChange", { target: { value: "2" } });
+      invoke(clear, "onClick");
+      hooks.renderWithoutEffects();
+      expect(field(trendSearchLabel).props.disabled).toBe(true);
+      expect(fetcher.mock.calls).toHaveLength(during);
+      pending.resolve(session(owner, zone));
+      await hooks.settle();
+      const before = fetcher.mock.calls.length;
+      invoke(query, "onChange", { target: { value: "stale" } });
+      invoke(select, "onChange", { target: { value: "2" } });
+      invoke(clear, "onClick");
+      await hooks.settle();
+      expect(fetcher.mock.calls).toHaveLength(before);
+      expect(field(trendSearchLabel).props.value).toBe(
+        zone === "America/Chicago" ? " vitamin " : "",
+      );
+      expect(field("Exact quantity").props.value).toBe("2.375");
+      if (zone !== "America/Chicago") {
+        expect(trendSearchStatus()).toContain("unavailable");
+        state.auth = null;
+        state.timeZone = zone;
+        hooks.replayEffects();
+        await hooks.settle();
+        expect(field(trendSearchLabel).props.value).toBe("");
+        expect(field(trendSearchLabel).props.disabled).toBe(false);
+      }
+    },
+  );
+
+  it("hides background query/metadata before effects, rejects restored callbacks and clears private closure", async () => {
+    const view = visibility(),
+      { state, fetcher } = trendSearchWorkspace();
+    await mount();
+    await change(trendSearchLabel, " private name ");
+    const query = field(trendSearchLabel),
+      select = trendField("Nutrient"),
+      clear = button(clearTrendSearchLabel),
+      before = fetcher.mock.calls.length;
+    view.document.visibilityState = "hidden";
+    invoke(query, "onChange", { target: { value: "stale" } });
+    invoke(select, "onChange", { target: { value: "2" } });
+    invoke(clear, "onClick");
+    hooks.renderWithoutEffects();
+    expect(field(trendSearchLabel).props.value).toBe("");
+    expect(trendNutrientOptions()).toEqual([{ value: "", label: "Trend nutrients unavailable" }]);
+    await view.set("visible");
+    invoke(query, "onChange", { target: { value: "stale" } });
+    invoke(select, "onChange", { target: { value: "2" } });
+    invoke(clear, "onClick");
+    await hooks.settle();
+    expect(field(trendSearchLabel).props.value).toBe(" private name ");
+    expect(fetcher.mock.calls).toHaveLength(before);
+    const current = field(trendSearchLabel);
+    state.owner = otherOwner;
+    hooks.replayEffects();
+    await hooks.settle();
+    expect(router.replace).toHaveBeenCalledWith("/login");
+    expect(field(trendSearchLabel).props.value).toBe("");
+    expect(trendNutrientOptions()).toEqual([{ value: "", label: "Trend nutrients unavailable" }]);
+    hooks.unmount();
+    const updates = hooks.afterClose(),
+      requests = fetcher.mock.calls.length;
+    invoke(current, "onChange", { target: { value: "stale" } });
+    invoke(select, "onChange", { target: { value: "2" } });
+    invoke(clear, "onClick");
+    expect(hooks.afterClose()).toBe(updates);
+    expect(fetcher.mock.calls).toHaveLength(requests);
+  });
+});

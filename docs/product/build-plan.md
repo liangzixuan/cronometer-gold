@@ -166,6 +166,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Health trend date shortcuts on web/native | ADR 0061 inclusive profile-local dates, no-op/custom range actions and preserved trend loading; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 | Automatic evidence / independent review | Nutrition-only Health trends on native | ADR 0062 None choice, explicit one/two-series loading and preserved trend/draft/private ownership; focused review, fresh canonical gates and native exports passed; external/device/release separate |
 | Automatic evidence / independent review | Units in native Health trend metric choices | ADR 0063 exact units and wrapping labels with preserved None/IDs/loading; focused checks, independent review, fresh canonical gates and native exports passed; external/device/release separate |
+| Automatic evidence / independent review | Search web Health trend nutrients | ADR 0064 local name search/Clear, selected context and preserved reads/drafts/private ownership; focused review, fresh canonical gates and synthetic Chrome passed; external/device/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1669,16 +1670,29 @@ At 2026-09-14T06:40:58.017334+00:00, base
 container `34812901639` remained in progress. Base automatic results do not
 transfer to this slice.
 
+### Web Health trend nutrient search: source/local complete
+
+[ADR 0064](../adr/0064-web-trend-nutrient-search.md) adds local name search and
+Clear, preserving source order, IDs/units and the current selected option outside
+matches. Truthful unavailable/empty/no-match states and separate current filter/
+registry ownership keep requests, results, raw drafts and operations independent.
+Deliberate matching selection keeps existing automatic loading. Focused checks,
+independent source review, frozen canonical gates and production synthetic Chrome
+search/no-request/selection/draft/keyboard/narrow/expiry proof passed.
+
+At 2026-09-14T07:06:39.041811+00:00, base
+`9b4a867c1fa8b3f69ca3852b7f91623ae6c03a47` CI `34815244194` succeeded;
+container `34815244121` remained in progress. Base automatic results do not
+transfer to this slice. External/device/real-service/release acceptance stays
+separate.
+
 ### Next bounded candidate
 
-Add local name search and Clear to the web Health trend nutrient choices, matching
-native's existing filter. Web currently renders the entire loaded nutrient list
-in one select. Prepare a separate acceptance card: preserve selected nutrient and
-biometric IDs, dates/presets, results, pending reads and raw drafts. Filtering/Clear
-issues no requests or automatic selection; keep the current selected option
-represented when outside the filter. Preserve order/units and truthful no-match,
-empty and unavailable states, with current private/metadata callback ownership.
-Deliberate selection retains existing automatic loading. Scope web screen/state
-tests and ADR/index/plan/gates, with focused checks and production synthetic Chrome
-search/no-request/hidden-selection/keyboard/narrow/expiry evidence. No API, native
-or shared helper change. No successor implementation has started.
+Add Clear to the native custom-food named-nutrient composer filter. It currently
+has local name search and matching choices but no reset action. Reuse the existing
+changeComposer query transition, preserving selected nutrient, raw amount/state/
+reason, canonical text and explicit Add/save/retry. Prepare a separate native-only
+card with no-match recovery, empty-query no-op, stale/private/pending-save guards
+and no-request/operation/queue evidence. Native screen/component tests plus
+ADR/index/plan/gates, focused checks and native exports; no new helper, backend,
+web or contract change. No successor implementation has started.
