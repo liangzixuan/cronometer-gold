@@ -2982,6 +2982,12 @@ export function RetentionScreen({
               disabled={composerDisabled}
               onChangeText={(query) => changeComposer({ query })}
             />
+            <Button
+              label="Clear nutrient filter"
+              disabled={composerDisabled}
+              onPress={() => changeComposer({ query: "" })}
+              secondary
+            />
             <Text style={styles.help}>
               {composerAvailable
                 ? `${matchedNutrients.length} matching of ${availableNutrients.length} available nutrients.`

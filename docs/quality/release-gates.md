@@ -1018,3 +1018,17 @@ acceptance.
   tests/types/format, independent review, frozen canonical gates and production
   synthetic Chrome no-request/selection/draft/keyboard/narrow/expiry proof. Real
   services, concurrent React, assistive, external/device/release gates remain.
+
+
+## ADR 0065 Clear the native named nutrient filter
+
+- Clear restores the current available choices without selecting or adding a
+  nutrient. Preserve exact selected ID, raw amount/state/reason, canonical text
+  and other drafts; retain existing query-edit feedback and copy-choice behavior.
+- Reuse changeComposer and composerDisabled. Empty query is a true no-op;
+  stale/private/registry/lifecycle and pending-save callbacks remain fenced.
+  No request, operation allocation, domain write or protected queue mutation.
+- Require compact component recovery/preservation/guard evidence, focused checks,
+  affected types/format, independent review, frozen canonical gates and native
+  exports. Device, assistive, concurrent React, real persistence, external and
+  release acceptance remain separate.

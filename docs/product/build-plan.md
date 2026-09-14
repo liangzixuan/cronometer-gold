@@ -167,6 +167,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Nutrition-only Health trends on native | ADR 0062 None choice, explicit one/two-series loading and preserved trend/draft/private ownership; focused review, fresh canonical gates and native exports passed; external/device/release separate |
 | Automatic evidence / independent review | Units in native Health trend metric choices | ADR 0063 exact units and wrapping labels with preserved None/IDs/loading; focused checks, independent review, fresh canonical gates and native exports passed; external/device/release separate |
 | Automatic evidence / independent review | Search web Health trend nutrients | ADR 0064 local name search/Clear, selected context and preserved reads/drafts/private ownership; focused review, fresh canonical gates and synthetic Chrome passed; external/device/release separate |
+| Automatic evidence / independent review | Clear the native named nutrient filter | ADR 0065 existing guarded query reset preserves nutrient draft and explicit Add/save/retry; focused checks, independent review, fresh canonical gates and native exports passed; external/device/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1686,13 +1687,27 @@ container `34815244121` remained in progress. Base automatic results do not
 transfer to this slice. External/device/real-service/release acceptance stays
 separate.
 
+### Native named nutrient filter Clear: source/local complete
+
+[ADR 0065](../adr/0065-native-composer-clear.md) adds a secondary Clear action
+through the existing composer query transition. Restore available choices while
+preserving the selected nutrient, raw draft and canonical text; no automatic Add,
+save, requests or queue changes. Existing no-op, private, registry, stale-callback
+and pending-save guards remain authoritative. Focused regressions, independent
+review, fresh canonical gates and native exports passed.
+
+At 2026-09-14T15:24:47.630258+00:00, base `e70f7a25df3383e691a2a5f44485394dde62658e` automatic evidence was:
+ci `34819446482` completed / success; container supply chain `34819446470` completed / success. These exact base results do not transfer to this slice.
+Physical-device, external reviewer and release acceptance remain separate.
+
 ### Next bounded candidate
 
-Add Clear to the native custom-food named-nutrient composer filter. It currently
-has local name search and matching choices but no reset action. Reuse the existing
-changeComposer query transition, preserving selected nutrient, raw amount/state/
-reason, canonical text and explicit Add/save/retry. Prepare a separate native-only
-card with no-match recovery, empty-query no-op, stale/private/pending-save guards
-and no-request/operation/queue evidence. Native screen/component tests plus
-ADR/index/plan/gates, focused checks and native exports; no new helper, backend,
-web or contract change. No successor implementation has started.
+Allow long names and units to wrap in the native custom-food named nutrient
+choices using the existing ChipRow wrapLabels option. The composer currently
+uses ordinary chips without the width bound already used by trend choices.
+Prepare a separate native presentation card: preserve complete labels, source
+order, exact selected IDs, search/Clear, raw composer values and explicit Add/save
+behavior. One existing prop plus compact component coverage, affected types and
+format, independent review, fresh canonical gates and native exports; no helper,
+controller, API, web or dependency changes. Source/style and export evidence does
+not establish physical-device or assistive acceptance. No successor implementation has started.
