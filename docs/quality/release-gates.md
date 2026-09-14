@@ -991,3 +991,15 @@ acceptance.
   frozen canonical check/build/licenses and fresh native exports. Web browser
   evidence is not native UI proof; real backend, rendered device, assistive,
   concurrent React, external reviewer and release acceptance remain separate.
+
+
+## ADR 0063 Units in native Health trend metric choices
+
+- Show the exact saved canonical unit in each metric choice with existing archived
+  status and wrapping labels. Preserve None, source order, exact IDs, radio state
+  and current metadata availability; no conversion or inferred unit.
+- Keep all input/read/write/private/queue protocols and existing loading unchanged.
+  Require same-name/different-unit and long/archived/None evidence, exact selected-ID
+  reads, existing focused checks, types/format, independent review, frozen canonical
+  gates and native exports. Native source/export proof is not rendered-device,
+  assistive, concurrent React, real persistence, external or release acceptance.

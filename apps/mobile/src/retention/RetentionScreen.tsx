@@ -2863,13 +2863,14 @@ export function RetentionScreen({
                     { key: "", label: "None" },
                     ...definitions.map((item) => ({
                       key: item.id,
-                      label: `${item.name}${item.status === "archived" ? " (archived)" : ""}`,
+                      label: `${item.name} (${item.canonicalUnit})${item.status === "archived" ? " (archived)" : ""}`,
                     })),
                   ]
                 : []
             }
             selected={trendReady ? selectedDefinition : ""}
             disabled={!trendReady}
+            wrapLabels
             onSelect={(value) => changeTrendInput("definitionId", value)}
           />
           <Button

@@ -68,6 +68,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0060](./0060-goal-copy.md) | Copy a saved manual goal into a new draft | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
 | [0061](./0061-trend-date-presets.md) | Health trend date shortcuts | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
 | [0062](./0062-native-trend-none.md) | Nutrition-only Health trends on native | Source/local complete; automatic and release acceptance separate |
+| [0063](./0063-native-trend-units.md) | Units in native Health trend metric choices | Source/local complete; automatic and release acceptance separate |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

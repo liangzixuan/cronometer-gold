@@ -165,6 +165,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Saved manual goal copy on web/native | ADR 0060 exact saved fields, dirty confirmation, reviewed date and preserved Create/retry identity; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 | Automatic evidence / independent review | Health trend date shortcuts on web/native | ADR 0061 inclusive profile-local dates, no-op/custom range actions and preserved trend loading; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 | Automatic evidence / independent review | Nutrition-only Health trends on native | ADR 0062 None choice, explicit one/two-series loading and preserved trend/draft/private ownership; focused review, fresh canonical gates and native exports passed; external/device/release separate |
+| Automatic evidence / independent review | Units in native Health trend metric choices | ADR 0063 exact units and wrapping labels with preserved None/IDs/loading; focused checks, independent review, fresh canonical gates and native exports passed; external/device/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1654,14 +1655,30 @@ At 2026-09-14T06:04:30.849689+00:00, base
 container `34808132346` remained in progress. Base automatic results do not
 transfer to this slice.
 
+### Native Health trend metric units: source/local complete
+
+[ADR 0063](../adr/0063-native-trend-units.md) adds exact canonical units to
+metric choices and reuses wrapping labels. Preserve None, source order, archived
+status, exact IDs/selected state and existing input/read/write ownership. A compact
+same-name/different-unit regression and existing focused checks, independent review,
+frozen canonical gates and native exports passed. No browser surrogate was used;
+physical-device/external/release acceptance remains separate.
+
+At 2026-09-14T06:40:58.017334+00:00, base
+`6ef2ae968377843a628f16ce75f13412d3309a96` CI `34812901655` succeeded;
+container `34812901639` remained in progress. Base automatic results do not
+transfer to this slice.
+
 ### Next bounded candidate
 
-Show canonical units in native Health trend biometric choices, matching existing
-web labels. The native picker currently shows only metric name and archived
-status, so equal names in different units are indistinguishable before loading.
-Use existing wrapping labels; preserve None, source order, exact IDs, selected
-state and all request/draft/queue behavior. Prepare a separate card for native
-screen/component tests and ADR/index/plan/gates, with same-name/different-unit,
-long/archived labels and exact selected-ID read evidence. No conversion, backend,
-web or contract change. Native source/export proof does not replace device
-acceptance. No successor implementation has started.
+Add local name search and Clear to the web Health trend nutrient choices, matching
+native's existing filter. Web currently renders the entire loaded nutrient list
+in one select. Prepare a separate acceptance card: preserve selected nutrient and
+biometric IDs, dates/presets, results, pending reads and raw drafts. Filtering/Clear
+issues no requests or automatic selection; keep the current selected option
+represented when outside the filter. Preserve order/units and truthful no-match,
+empty and unavailable states, with current private/metadata callback ownership.
+Deliberate selection retains existing automatic loading. Scope web screen/state
+tests and ADR/index/plan/gates, with focused checks and production synthetic Chrome
+search/no-request/hidden-selection/keyboard/narrow/expiry evidence. No API, native
+or shared helper change. No successor implementation has started.

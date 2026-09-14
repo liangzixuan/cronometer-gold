@@ -1815,7 +1815,7 @@ describe("native full loaded trend nutrient selection", () => {
           field === "nutrient"
             ? await click(harness, "Sodium · mg")
             : field === "biometric"
-              ? await clickTrend(harness, "Other weight metric")
+              ? await clickTrend(harness, "Other weight metric (kg)")
               : await type(harness, "From (YYYY-MM-DD)", "2026-10-31");
         const headers = trendHeaders(tree);
         expect(headers).toHaveLength(field === "date" ? 0 : 1);
@@ -1908,7 +1908,7 @@ describe("native full loaded trend nutrient selection", () => {
       expect(text(tree)).toContain("Selected nutrient: Protein · g");
       const load = button(tree, "Load local-day trends").props.onPress;
       const oldDate = input(tree, "From (YYYY-MM-DD)").props.onChangeText;
-      const oldMetric = button(trendSection(tree), "Other weight metric").props.onPress;
+      const oldMetric = button(trendSection(tree), "Other weight metric (kg)").props.onPress;
       await type(harness, "From (YYYY-MM-DD)", "2026-10-31");
       await type(harness, "From (YYYY-MM-DD)", "2026-11-01");
       load();
@@ -1917,7 +1917,7 @@ describe("native full loaded trend nutrient selection", () => {
       tree = await harness.settle();
       expect(input(tree, "From (YYYY-MM-DD)").props.value).toBe("2026-11-01");
       expect(
-        button(trendSection(tree), "Weight trend metric").props.accessibilityState.selected,
+        button(trendSection(tree), "Weight trend metric (kg)").props.accessibilityState.selected,
       ).toBe(true);
       expect(trendRequests(requests)).toHaveLength(0);
       const currentLoad = button(tree, "Load local-day trends").props.onPress;
@@ -2321,9 +2321,9 @@ describe("native full loaded trend nutrient selection", () => {
         ).map(text);
         expect(metricChoices).toEqual([
           "None",
-          "Concurrent metric",
-          "Weight trend metric (archived)",
-          "Other weight metric",
+          "Concurrent metric (kg)",
+          "Weight trend metric (kg) (archived)",
+          "Other weight metric (kg)",
         ]);
         expect(input(tree, "Find a trend nutrient by name").props.editable).toBe(true);
         expect(writes(requests)).toHaveLength(2);
@@ -2365,9 +2365,9 @@ describe("native full loaded trend nutrient selection", () => {
       ).map(text);
       expect(metricChoices).toEqual([
         "None",
-        created.name,
-        trendDefinition.name,
-        "Other weight metric",
+        `${created.name} (${created.canonicalUnit})`,
+        `${trendDefinition.name} (${trendDefinition.canonicalUnit})`,
+        "Other weight metric (kg)",
       ]);
       expect(input(tree, "Find a trend nutrient by name").props.editable).toBe(true);
       expect(writes(requests)).toHaveLength(1);
@@ -2406,9 +2406,10 @@ describe("native full loaded trend nutrient selection", () => {
       expect(trendHeaders(tree)).toHaveLength(0);
       state("active");
       tree = await harness.settle();
-      expect(button(trendSection(tree), created.name).props.accessibilityState.disabled).toBe(
-        false,
-      );
+      expect(
+        button(trendSection(tree), `${created.name} (${created.canonicalUnit})`).props
+          .accessibilityState.disabled,
+      ).toBe(false);
       expect(input(tree, "Find a trend nutrient by name").props.editable).toBe(true);
       expect(writes(requests)).toHaveLength(1);
       tree = await click(harness, "Load local-day trends");
@@ -3936,7 +3937,10 @@ describe("native biometric reading units and immutable edit identity", () => {
     tree = await pressBiometric(harness, "Use", otherTrendDefinition.id);
     expect(input(tree, readingValueLabel()).props.value).toBe(readingEvent.value);
     expect(
-      button(trendSection(tree), otherTrendDefinition.name).props.accessibilityState.selected,
+      button(
+        trendSection(tree),
+        `${otherTrendDefinition.name} (${otherTrendDefinition.canonicalUnit})`,
+      ).props.accessibilityState.selected,
     ).toBe(true);
     tree = await pressBiometric(harness, "Cancel");
     expect(readingMetricChoice(tree, `${otherTrendDefinition.name} (kg)`).props.disabled).toBe(
@@ -5677,7 +5681,7 @@ describe("native Health trend date shortcuts", () => {
     const { harness, requests, props } = setupTrends();
     try {
       await clickTrend(harness, "Sodium · mg");
-      await clickTrend(harness, "Other weight metric");
+      await clickTrend(harness, "Other weight metric (kg)");
       await type(harness, "Find a trend nutrient by name", "  sod  ");
       await type(harness, "Name", "  Raw custom name  ");
       await type(
@@ -5980,8 +5984,8 @@ describe("native optional biometric trend None", () => {
         ).map(text);
         expect(choices).toEqual([
           "None",
-          trendDefinition.name,
-          `${metric.name}${status === "archived" ? " (archived)" : ""}`,
+          `${trendDefinition.name} (${trendDefinition.canonicalUnit})`,
+          `${metric.name} (${metric.canonicalUnit})${status === "archived" ? " (archived)" : ""}`,
         ]);
         expect(trendHeaders(tree)).toEqual([nutrientHeader]);
         expect(rows).toContain("2026-11-01 : 0 g · exact");
@@ -5998,7 +6002,7 @@ describe("native optional biometric trend None", () => {
         expect(trendHeaders(tree)).toEqual([nutrientHeader]);
         tree = await clickTrend(
           harness,
-          `${metric.name}${status === "archived" ? " (archived)" : ""}`,
+          `${metric.name} (${metric.canonicalUnit})${status === "archived" ? " (archived)" : ""}`,
         );
         expect(button(trendSection(tree), "None").props.accessibilityState.selected).toBe(false);
         expect(trendRequests(requests)).toHaveLength(3);
@@ -6124,7 +6128,10 @@ describe("native optional biometric trend None", () => {
       const tree = await harness.settle();
       expect(button(trendSection(tree), "None").props.accessibilityState.selected).toBe(false);
       expect(
-        button(trendSection(tree), otherTrendDefinition.name).props.accessibilityState.selected,
+        button(
+          trendSection(tree),
+          `${otherTrendDefinition.name} (${otherTrendDefinition.canonicalUnit})`,
+        ).props.accessibilityState.selected,
       ).toBe(true);
     } finally {
       harness.unmount();
@@ -6272,7 +6279,7 @@ describe("native optional biometric trend None", () => {
       const second = writes(requests)[1];
       expect(second.body).toBe(first.body);
       expect(second.headers["idempotency-key"]).toBe(first.headers["idempotency-key"]);
-      await clickTrend(harness, trendDefinition.name);
+      await clickTrend(harness, `${trendDefinition.name} (${trendDefinition.canonicalUnit})`);
       const count = requests.length;
       const tree = await clickTrend(harness, "None");
       expect(canonical(tree)).toBe("208=7.00000100");
@@ -6301,7 +6308,10 @@ describe("native optional biometric trend None", () => {
       oldNone();
       expect(harness.stateWrites).toBe(stateWrites);
       tree = await harness.settle();
-      const oldMetric = button(trendSection(tree), otherTrendDefinition.name).props.onPress;
+      const oldMetric = button(
+        trendSection(tree),
+        `${otherTrendDefinition.name} (${otherTrendDefinition.canonicalUnit})`,
+      ).props.onPress;
       const oldLoad = button(tree, "Load local-day trends").props.onPress;
       button(trendSection(tree), "None").props.onPress();
       stateWrites = harness.stateWrites;
@@ -6311,11 +6321,97 @@ describe("native optional biometric trend None", () => {
       tree = await harness.settle();
       expect(button(trendSection(tree), "None").props.accessibilityState.selected).toBe(true);
       const obsoleteNone = button(trendSection(tree), "None").props.onPress;
-      button(trendSection(tree), trendDefinition.name).props.onPress();
+      button(
+        trendSection(tree),
+        `${trendDefinition.name} (${trendDefinition.canonicalUnit})`,
+      ).props.onPress();
       stateWrites = harness.stateWrites;
       obsoleteNone();
       expect(harness.stateWrites).toBe(stateWrites);
       expect(trendRequests(requests)).toHaveLength(0);
+    } finally {
+      harness.unmount();
+    }
+  });
+});
+
+describe("native Health trend metric units", () => {
+  it("distinguishes same-name units by exact ID and wraps complete long archived labels", async () => {
+    const kg = { ...trendDefinition, name: "Weight" };
+    const lb = { ...otherTrendDefinition, name: "Weight", canonicalUnit: "lb" };
+    const archived = {
+      ...trendDefinition,
+      id: "2bcfa2bf-4950-43f7-9f24-b983ac803012",
+      name: "M".repeat(120),
+      canonicalUnit: "U".repeat(32),
+      status: "archived",
+    };
+    const archivedLabel = `${archived.name} (${archived.canonicalUnit}) (archived)`;
+    const { harness, requests, props } = setupTrends(undefined, { metrics: [kg, archived, lb] });
+    try {
+      await setTrendDates(harness);
+      await type(harness, "Name", "  Exact raw draft  ");
+      await type(
+        harness,
+        "Canonical nutrients per 100 g",
+        "208=0.00000000100\r\n999=unknown:withheld",
+      );
+      await type(harness, "Find a trend nutrient by name", "  prot  ");
+      let tree = await harness.settle();
+      const inputs = editorSnapshot(tree).inputs;
+      const operation = hooks.operation;
+      const labels = ["None", "Weight (kg)", archivedLabel, "Weight (lb)"];
+      const choices = nodes(
+        trendSection(tree),
+        (node) => node.props.accessibilityRole === "radio" && !text(node).includes(" · "),
+      );
+      expect(choices.map(text)).toEqual(labels);
+      expect(choices.map((choice) => choice.key)).toEqual(["", kg.id, archived.id, lb.id]);
+      expect(choices.map((choice) => choice.props.accessibilityState.selected)).toEqual([
+        false,
+        true,
+        false,
+        false,
+      ]);
+      for (const choice of choices) {
+        expect(choice.props.accessibilityState.disabled).toBe(false);
+        expect(choice.props.style).toContainEqual({ maxWidth: "100%", minWidth: 0, flexShrink: 1 });
+      }
+      for (const metric of [lb, kg]) {
+        const count = requests.length;
+        tree = await clickTrend(harness, `Weight (${metric.canonicalUnit})`);
+        expect(
+          button(trendSection(tree), `Weight (${metric.canonicalUnit})`).props.accessibilityState
+            .selected,
+        ).toBe(true);
+        expect(editorSnapshot(tree).inputs).toEqual(inputs);
+        expect(requests).toHaveLength(count);
+        tree = await click(harness, "Load local-day trends");
+        const reads = trendRequests(requests).slice(-2);
+        expect(reads.map((request) => request.url.pathname)).toEqual([
+          "/v1/trends/nutrients",
+          "/v1/trends/biometrics",
+        ]);
+        expect([...reads[1].url.searchParams]).toEqual([
+          ["definitionId", metric.id],
+          ["from", "2026-11-01"],
+          ["to", "2026-11-01"],
+        ]);
+        expect(text(trendSection(tree))).toContain(`70.000001 ${metric.canonicalUnit}`);
+      }
+      const count = requests.length;
+      tree = await clickTrend(harness, archivedLabel);
+      expect(button(trendSection(tree), archivedLabel).props.accessibilityState.selected).toBe(
+        true,
+      );
+      tree = await clickTrend(harness, "None");
+      expect(button(trendSection(tree), "None").props.accessibilityState.selected).toBe(true);
+      expect(editorSnapshot(tree).inputs).toEqual(inputs);
+      expect(requests).toHaveLength(count);
+      expect(writes(requests)).toHaveLength(0);
+      expect(hooks.operation).toBe(operation);
+      expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+      expect(props.quickAddOutboxController.requestDrain).not.toHaveBeenCalled();
     } finally {
       harness.unmount();
     }
