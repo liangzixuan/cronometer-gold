@@ -72,6 +72,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0064](./0064-web-trend-nutrient-search.md) | Search web Health trend nutrients | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
 | [0065](./0065-native-composer-clear.md) | Clear the native named nutrient filter | Source/local complete; automatic and release acceptance separate |
 | [0066](./0066-native-composer-wrap.md) | Wrap native named nutrient choices | Source/local complete; automatic and release acceptance separate |
+| [0067](./0067-web-nutrient-availability.md) | Explain unavailable web nutrient additions | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

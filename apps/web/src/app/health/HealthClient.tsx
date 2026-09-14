@@ -585,6 +585,33 @@ export function HealthClient() {
     clearCustomCopyChoice();
     setCustomState(next);
   }
+  function currentCustomNutrientMetadata() {
+    return (
+      canUseCustomControls() &&
+      session !== null &&
+      installedSession.current === session &&
+      state === "ready" &&
+      loadController.current === null &&
+      profileRefreshController.current === null &&
+      trendNutrientRegistry.current === renderedTrendNutrientRegistry &&
+      renderedTrendNutrientRegistry?.values === nutrients &&
+      renderedTrendNutrientRegistry.scope === customScope
+    );
+  }
+  const customNutrientMetadataReady = currentCustomNutrientMetadata();
+  const nextCustomNutrient = customNutrientMetadataReady
+    ? nutrients.find((item) => !custom.nutrients.some((row) => row.nutrientId === item.nutrientId))
+    : undefined;
+  function addCustomNutrient() {
+    if (!currentCustomNutrientMetadata() || !nextCustomNutrient) return;
+    setCustom({
+      ...custom,
+      nutrients: [
+        ...custom.nutrients,
+        { nutrientId: nextCustomNutrient.nutrientId, state: "quantified", amountPer100Grams: "0" },
+      ],
+    });
+  }
   function canCopyCustomFood(food: CustomFood) {
     return (
       canUseCustomControls() &&
@@ -2780,23 +2807,22 @@ export function HealthClient() {
                   </div>
                 ))}
                 <button
-                  onClick={() => {
-                    const nutrientId = nutrients.find(
-                      (item) => !custom.nutrients.some((row) => row.nutrientId === item.nutrientId),
-                    )?.nutrientId;
-                    if (nutrientId)
-                      setCustom({
-                        ...custom,
-                        nutrients: [
-                          ...custom.nutrients,
-                          { nutrientId, state: "quantified", amountPer100Grams: "0" },
-                        ],
-                      });
-                  }}
+                  disabled={!nextCustomNutrient}
+                  aria-describedby="custom-nutrient-availability"
+                  onClick={addCustomNutrient}
                   type="button"
                 >
                   Add nutrient
                 </button>
+                <p className="finePrint" id="custom-nutrient-availability" aria-live="polite">
+                  {!customNutrientMetadataReady
+                    ? "The nutrient list is not available right now."
+                    : nutrients.length === 0
+                      ? "No nutrients are available in the loaded list."
+                      : !nextCustomNutrient
+                        ? "All loaded nutrients are already in this draft. Remove a row to add that nutrient again."
+                        : "Add the next unused nutrient from the loaded list."}
+                </p>
               </fieldset>
               <label>
                 Notes (optional)

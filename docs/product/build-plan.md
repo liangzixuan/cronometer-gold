@@ -169,6 +169,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Search web Health trend nutrients | ADR 0064 local name search/Clear, selected context and preserved reads/drafts/private ownership; focused review, fresh canonical gates and synthetic Chrome passed; external/device/release separate |
 | Automatic evidence / independent review | Clear the native named nutrient filter | ADR 0065 existing guarded query reset preserves nutrient draft and explicit Add/save/retry; focused checks, independent review, fresh canonical gates and native exports passed; external/device/release separate |
 | Automatic evidence / independent review | Wrap native named nutrient choices | ADR 0066 existing wrapping option preserves full labels and IDs/drafts/explicit Add; focused checks, independent review, fresh canonical gates and native exports passed; device/external/release separate |
+| Automatic evidence / independent review | Explain unavailable web nutrient additions | ADR 0067 truthful availability and guarded Add preserve raw drafts and explicit save/retry; focused review, fresh canonical gates and synthetic Chrome passed; external/device/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1712,14 +1713,27 @@ native exports passed; physical-device/external/release acceptance is separate.
 At 2026-09-14T15:54:22.737185+00:00, base `c46ee859efb0eb434319ca9a88120ac35343b61f` automatic evidence was:
 container supply chain `34863554257` in_progress; ci `34863554217` completed / success. These base results do not transfer to this slice.
 
+### Web nutrient addition availability: source/local complete
+
+[ADR 0067](../adr/0067-web-nutrient-availability.md) explains when Add nutrient
+has no remaining verified loaded choice. Preserve first-unused ID order/defaults,
+raw drafts, private ownership and explicit save/retry; distinguish exhaustion from
+empty/unavailable metadata. Existing state evidence, independent review, fresh
+canonical gates and complete-registry production synthetic Chrome proof passed.
+
+At 2026-09-14T18:42:26.452765+00:00, base `486b0639acd90817e5aaac1748eb0612e22e1166` automatic evidence was:
+container supply chain `34867094432` completed / success; ci `34867094501` completed / success. These base results do not transfer to this slice.
+
 ### Next bounded candidate
 
-Explain when the web custom-food Add nutrient action has no remaining loaded
-choice. The existing button silently does nothing once all loaded nutrient IDs
-are represented or the list is empty. Prepare a separate card to disable that
-action with truthful exhausted, empty or unavailable feedback and restore it
-after a row is removed. Preserve first-unused ID order, the existing quantified
-default amount, raw rows, private/draft ownership and explicit save/retry. Scope
-the web control and existing state suite plus ADR/index/plan/gates, focused checks
-and production synthetic Chrome proof; no new picker, remote search or contract.
+Prevent duplicate nutrient choices across web custom-food rows. Each row currently
+offers IDs already used elsewhere, so changing a row can replace its raw value
+with a duplicate quantified zero and only Save explains the conflict. Prepare a
+separate card to disable already-used alternatives and guard that transition,
+preserving each row's current/legacy fallback choice and raw same-ID values.
+Removing or changing another row should release its former ID. Preserve valid
+different-ID defaults, exact IDs regardless of duplicate names, existing ownership
+and save validation/retry. Scope the web control and existing state suite plus
+ADR/index/plan/gates; focused checks, independent review, fresh canonical gates
+and production synthetic Chrome evidence. No new picker or contract is required.
 No successor implementation has started.

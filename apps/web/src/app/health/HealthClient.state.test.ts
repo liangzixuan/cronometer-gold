@@ -4447,3 +4447,260 @@ describe("web Health trend nutrient name search", () => {
     expect(fetcher.mock.calls).toHaveLength(requests);
   });
 });
+
+function customNutrientAvailability() {
+  return text(elements().find((node) => node.props.id === "custom-nutrient-availability"));
+}
+function customNutrientRows() {
+  return elements(customForm()).filter((node) => node.props.className === "nutrientDraftRow");
+}
+function customNutrientValues() {
+  return customNutrientRows().map((row) =>
+    elements(row)
+      .filter((node) => node.type === "input" || node.type === "select")
+      .map((node) => node.props.value),
+  );
+}
+function customAvailabilityWorkspace(initial: CustomFood = food()) {
+  const result = workspace([initial]);
+  result.state.picker = [
+    { id: "4", code: "first", name: "First loaded", unit: "mg", category: "vitamin" },
+    { id: "2", code: "protein", name: "Protein", unit: "g", category: "macronutrient" },
+    { id: "3", code: "last", name: "Last loaded", unit: "ug", category: "vitamin" },
+  ];
+  return result;
+}
+
+describe("web custom-food nutrient addition availability", () => {
+  it("adds unused IDs in loaded order, explains exhaustion and restores a removed choice without touching exact legacy rows", async () => {
+    const saved = allStates();
+    const { fetcher } = customAvailabilityWorkspace(saved);
+    await mount();
+    await click("Revise", card(saved));
+    await change("Name", " Raw saved-food name ");
+    await change("Amount per 100 grams 1", " 001.2300 ");
+    await change("Unknown reason 4", "withheld");
+    const originalRows = customNutrientValues(),
+      name = field("Name").props.value;
+    const before = fetcher.mock.calls.length;
+    const allocate = vi.fn(() => "cdfd121e-6fbc-42f5-8630-e1cb60f9c351");
+    vi.stubGlobal("crypto", { randomUUID: allocate });
+    expect(button("Add nutrient").props.disabled).toBe(false);
+    expect(button("Add nutrient").props["aria-describedby"]).toBe("custom-nutrient-availability");
+    await click("Add nutrient");
+    expect(customNutrientValues()).toEqual([...originalRows, ["2", "quantified", "0"]]);
+    expect(field("Name").props.value).toBe(name);
+    expect(button("Add nutrient").props.disabled).toBe(true);
+    expect(customNutrientAvailability()).toBe(
+      "All loaded nutrients are already in this draft. Remove a row to add that nutrient again.",
+    );
+    const exhausted = button("Add nutrient");
+    invoke(exhausted, "onClick");
+    await hooks.settle();
+    expect(customNutrientValues()).toHaveLength(originalRows.length + 1);
+    await click("Remove nutrient 3");
+    expect(button("Add nutrient").props.disabled).toBe(false);
+    await click("Add nutrient");
+    expect(customNutrientValues().at(-1)).toEqual(["4", "quantified", "0"]);
+    expect(customNutrientValues().slice(0, 2)).toEqual(originalRows.slice(0, 2));
+    expect(customNutrientValues().slice(2, 6)).toEqual(originalRows.slice(3));
+    expect(button("Add nutrient").props.disabled).toBe(true);
+    expect(fetcher.mock.calls).toHaveLength(before);
+    expect(allocate).not.toHaveBeenCalled();
+  });
+
+  it("uses first unused source order rather than numeric IDs and fences duplicate callbacks before paint", async () => {
+    const { fetcher } = customAvailabilityWorkspace();
+    await mount();
+    await click("Revise", card(food()));
+    const before = fetcher.mock.calls.length,
+      add = button("Add nutrient");
+    invoke(add, "onClick");
+    invoke(add, "onClick");
+    hooks.renderWithoutEffects();
+    expect(customNutrientValues()).toEqual([
+      ["2", "quantified", "12.375"],
+      ["4", "quantified", "0"],
+    ]);
+    await click("Add nutrient");
+    expect(customNutrientValues().at(-1)).toEqual(["3", "quantified", "0"]);
+    expect(button("Add nutrient").props.disabled).toBe(true);
+    expect(fetcher.mock.calls).toHaveLength(before);
+  });
+
+  it("distinguishes loading or failed metadata from a verified empty list and recovers only after accepted metadata", async () => {
+    const { state, fetcher } = customAvailabilityWorkspace();
+    const pending = deferred<Response>();
+    state.read = () => pending.promise;
+    await mount();
+    const unavailable = button("Add nutrient"),
+      before = fetcher.mock.calls.length;
+    expect(unavailable.props.disabled).toBe(true);
+    expect(customNutrientAvailability()).toBe("The nutrient list is not available right now.");
+    invoke(unavailable, "onClick");
+    expect(fetcher.mock.calls).toHaveLength(before);
+    pending.resolve(Response.json({ error: "Metadata receipt unavailable" }, { status: 503 }));
+    await hooks.settle();
+    expect(button("Add nutrient").props.disabled).toBe(true);
+    expect(customNutrientAvailability()).toContain("not available");
+    state.read = null;
+    state.picker = [];
+    await click("Retry private data");
+    expect(button("Add nutrient").props.disabled).toBe(true);
+    expect(customNutrientAvailability()).toBe("No nutrients are available in the loaded list.");
+    state.picker = [
+      { id: "2", code: "protein", name: "Protein", unit: "g", category: "macronutrient" },
+    ];
+    hooks.replayEffects();
+    await hooks.settle();
+    expect(button("Add nutrient").props.disabled).toBe(false);
+    expect(customNutrientAvailability()).toBe("Add the next unused nutrient from the loaded list.");
+    invoke(unavailable, "onClick");
+    await hooks.settle();
+    expect(customNutrientRows()).toHaveLength(0);
+    await click("Add nutrient");
+    expect(customNutrientValues()).toEqual([["2", "quantified", "0"]]);
+  });
+
+  it("rejects retained Add after raw edit-restore and pending or replaced registry receipts", async () => {
+    const { state, fetcher } = customAvailabilityWorkspace();
+    await mount();
+    await click("Revise", card(food()));
+    const old = button("Add nutrient"),
+      name = String(field("Name").props.value);
+    invoke(field("Name"), "onChange", { target: { value: "temporary raw draft" } });
+    invoke(old, "onClick");
+    hooks.renderWithoutEffects();
+    invoke(field("Name"), "onChange", { target: { value: name } });
+    hooks.renderWithoutEffects();
+    invoke(old, "onClick");
+    await hooks.settle();
+    expect(customNutrientRows()).toHaveLength(1);
+    const beforeRefresh = button("Add nutrient"),
+      pending = deferred<Response>();
+    state.read = () => pending.promise;
+    state.picker = [
+      { id: "99", code: "new", name: "New accepted nutrient", unit: "mg", category: "mineral" },
+    ];
+    hooks.replayEffects();
+    invoke(beforeRefresh, "onClick");
+    hooks.renderWithoutEffects();
+    expect(button("Add nutrient").props.disabled).toBe(true);
+    pending.resolve(page(state.items));
+    await hooks.settle();
+    const before = fetcher.mock.calls.length;
+    invoke(beforeRefresh, "onClick");
+    await hooks.settle();
+    expect(customNutrientRows()).toHaveLength(1);
+    expect(fetcher.mock.calls).toHaveLength(before);
+    await click("Add nutrient");
+    expect(customNutrientValues()).toEqual([
+      ["2", "quantified", "12.375"],
+      ["99", "quantified", "0"],
+    ]);
+  });
+
+  it("keeps Add independent of trend query, date and series replacements before effects", async () => {
+    const { fetcher } = trendSearchWorkspace();
+    await mount();
+    const add = button("Add nutrient");
+    invoke(field(trendSearchLabel), "onChange", { target: { value: "Sodium" } });
+    hooks.renderWithoutEffects();
+    invoke(trendField("From"), "onChange", { target: { value: "2026-08-01" } });
+    hooks.renderWithoutEffects();
+    invoke(trendField("Biometric"), "onChange", { target: { value: "" } });
+    hooks.renderWithoutEffects();
+    const before = fetcher.mock.calls.length,
+      range = trendDates();
+    expect(button("Add nutrient").props.disabled).toBe(false);
+    invoke(add, "onClick");
+    hooks.renderWithoutEffects();
+    expect(customNutrientValues()).toEqual([
+      ["3", "quantified", "0"],
+      ["2", "quantified", "0"],
+    ]);
+    expect(field(trendSearchLabel).props.value).toBe("Sodium");
+    expect(trendDates()).toEqual(range);
+    expect(trendField("Biometric").props.value).toBe("");
+    expect(fetcher.mock.calls).toHaveLength(before);
+    await hooks.settle();
+  });
+
+  it("preserves local Add during a pending save and reuses the exact original ambiguous retry after removal", async () => {
+    const { state, fetcher, writes } = customAvailabilityWorkspace();
+    await mount();
+    await click("Revise", card(food()));
+    const pending = deferred<Response>(),
+      add = button("Add nutrient");
+    state.write = () => pending.promise;
+    await submit("Save new version");
+    const before = fetcher.mock.calls.length,
+      body = writes()[0]?.[1]?.body;
+    expect(button("Add nutrient").props.disabled).toBe(false);
+    invoke(add, "onClick");
+    await hooks.settle();
+    expect(customNutrientValues().at(-1)).toEqual(["4", "quantified", "0"]);
+    expect(fetcher.mock.calls).toHaveLength(before);
+    expect(writes()).toHaveLength(1);
+    expect(writes()[0]?.[1]?.body).toBe(body);
+    pending.resolve(Response.json({ error: "Ambiguous saved version" }, { status: 503 }));
+    await hooks.settle();
+    await click("Remove nutrient 2");
+    state.write = () => Response.json({ error: "Still ambiguous" }, { status: 503 });
+    await submit("Save new version");
+    expect(writes()).toHaveLength(2);
+    expect(writes()[1]?.[1]?.body).toBe(body);
+    expect(new Headers(writes()[1]?.[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(writes()[0]?.[1]?.headers).get("idempotency-key"),
+    );
+    expect(new Headers(writes()[1]?.[1]?.headers).get("if-match")).toBe('"1"');
+  });
+
+  it("blocks hidden, profile-unverified, expired and unmounted retained additions without changing the draft", async () => {
+    const view = visibility(),
+      { state, fetcher } = customAvailabilityWorkspace();
+    await mount();
+    await click("Revise", card(food()));
+    const old = button("Add nutrient"),
+      rows = customNutrientValues();
+    view.document.visibilityState = "hidden";
+    invoke(old, "onClick");
+    hooks.renderWithoutEffects();
+    expect(button("Add nutrient").props.disabled).toBe(true);
+    await view.set("visible");
+    invoke(old, "onClick");
+    await hooks.settle();
+    expect(customNutrientValues()).toEqual(rows);
+    await click("Log pinned v1", card(food()));
+    await change("Exact quantity", "2");
+    const profileOld = button("Add nutrient"),
+      pending = deferred<Response>();
+    state.auth = () => pending.promise;
+    state.write = () =>
+      Response.json({ error: "Zone changed", code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 });
+    await submit("Log exact version");
+    invoke(profileOld, "onClick");
+    hooks.renderWithoutEffects();
+    expect(button("Add nutrient").props.disabled).toBe(true);
+    pending.resolve(session(owner, "America/Chicago"));
+    await hooks.settle();
+    invoke(profileOld, "onClick");
+    await hooks.settle();
+    expect(customNutrientValues()).toEqual(rows);
+    const current = button("Add nutrient");
+    state.auth = null;
+    state.owner = otherOwner;
+    hooks.replayEffects();
+    await hooks.settle();
+    expect(router.replace).toHaveBeenCalledWith("/login");
+    invoke(current, "onClick");
+    await hooks.settle();
+    expect(customNutrientRows()).toHaveLength(0);
+    hooks.unmount();
+    const updates = hooks.afterClose(),
+      requests = fetcher.mock.calls.length;
+    invoke(current, "onClick");
+    expect(hooks.afterClose()).toBe(updates);
+    expect(fetcher.mock.calls).toHaveLength(requests);
+  });
+});

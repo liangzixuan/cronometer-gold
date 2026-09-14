@@ -1043,3 +1043,16 @@ acceptance.
   focused guards/retries, types/format, independent review and frozen canonical
   gates/native exports. Device, assistive, concurrent React, real persistence,
   external and release acceptance remain separate.
+
+
+## ADR 0067 Web nutrient addition availability
+
+- Distinguish exhausted verified choices from empty/unavailable metadata. Associate
+  feedback with disabled Add and restore it after a loaded choice becomes unused.
+- Preserve first-unused source order/defaults, exact raw rows, pending-save editing,
+  private ownership and explicit save/retry. Retained Add callbacks require current
+  metadata and custom draft; trend controls must not own this local action.
+- Require focused state/types/format, independent review, frozen canonical gates
+  and complete-registry production synthetic Chrome proof with request accounting
+  and owned cleanup. Real-service/restore/privacy, external, device and release
+  acceptance remain separate.
