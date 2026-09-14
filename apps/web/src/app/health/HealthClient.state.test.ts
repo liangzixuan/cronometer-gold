@@ -1571,7 +1571,7 @@ describe("actual saved custom-food Copy to new draft", () => {
 
   it("rejects retained original field, row, Revise, Cancel and submit controls after Copy", async () => {
     const first = food();
-    const { fetcher, writes } = workspace([first]);
+    const { fetcher, writes } = customAvailabilityWorkspace(first);
     await mount();
     await click("Revise", card(first));
     const originalFields = elements(customForm()).filter(
@@ -1579,6 +1579,7 @@ describe("actual saved custom-food Copy to new draft", () => {
     );
     const oldRemove = button("Remove nutrient 1");
     const oldAdd = button("Add nutrient");
+    const oldNutrient = field("Nutrient 1");
     const oldRevise = button("Revise", card(first));
     const oldCancel = button("Cancel edit");
     const oldForm = customForm();
@@ -1586,6 +1587,7 @@ describe("actual saved custom-food Copy to new draft", () => {
     const before = formValues();
     const requests = fetcher.mock.calls.length;
     for (const node of originalFields) invoke(node, "onChange", { target: { value: "stale" } });
+    invoke(oldNutrient, "onChange", { target: { value: "4" } });
     for (const node of [oldRemove, oldAdd, oldRevise, oldCancel]) invoke(node, "onClick");
     invoke(oldForm, "onSubmit", { preventDefault() {} });
     await hooks.settle();
@@ -4567,16 +4569,20 @@ describe("web custom-food nutrient addition availability", () => {
     await mount();
     await click("Revise", card(food()));
     const old = button("Add nutrient"),
+      oldChoice = field("Nutrient 1"),
       name = String(field("Name").props.value);
     invoke(field("Name"), "onChange", { target: { value: "temporary raw draft" } });
     invoke(old, "onClick");
+    invoke(oldChoice, "onChange", { target: { value: "4" } });
     hooks.renderWithoutEffects();
     invoke(field("Name"), "onChange", { target: { value: name } });
     hooks.renderWithoutEffects();
     invoke(old, "onClick");
+    invoke(oldChoice, "onChange", { target: { value: "4" } });
     await hooks.settle();
     expect(customNutrientRows()).toHaveLength(1);
     const beforeRefresh = button("Add nutrient"),
+      beforeRefreshChoice = field("Nutrient 1"),
       pending = deferred<Response>();
     state.read = () => pending.promise;
     state.picker = [
@@ -4584,15 +4590,19 @@ describe("web custom-food nutrient addition availability", () => {
     ];
     hooks.replayEffects();
     invoke(beforeRefresh, "onClick");
+    invoke(beforeRefreshChoice, "onChange", { target: { value: "99" } });
     hooks.renderWithoutEffects();
     expect(button("Add nutrient").props.disabled).toBe(true);
     pending.resolve(page(state.items));
     await hooks.settle();
     const before = fetcher.mock.calls.length;
     invoke(beforeRefresh, "onClick");
+    invoke(beforeRefreshChoice, "onChange", { target: { value: "99" } });
     await hooks.settle();
     expect(customNutrientRows()).toHaveLength(1);
     expect(fetcher.mock.calls).toHaveLength(before);
+    await change("Nutrient 1", "4");
+    expect(customNutrientValues()).toEqual([["2", "quantified", "12.375"]]);
     await click("Add nutrient");
     expect(customNutrientValues()).toEqual([
       ["2", "quantified", "12.375"],
@@ -4603,7 +4613,8 @@ describe("web custom-food nutrient addition availability", () => {
   it("keeps Add independent of trend query, date and series replacements before effects", async () => {
     const { fetcher } = trendSearchWorkspace();
     await mount();
-    const add = button("Add nutrient");
+    const add = button("Add nutrient"),
+      choice = field("Nutrient 1");
     invoke(field(trendSearchLabel), "onChange", { target: { value: "Sodium" } });
     hooks.renderWithoutEffects();
     invoke(trendField("From"), "onChange", { target: { value: "2026-08-01" } });
@@ -4613,11 +4624,15 @@ describe("web custom-food nutrient addition availability", () => {
     const before = fetcher.mock.calls.length,
       range = trendDates();
     expect(button("Add nutrient").props.disabled).toBe(false);
+    invoke(choice, "onChange", { target: { value: "4" } });
+    hooks.renderWithoutEffects();
+    expect(customNutrientValues()).toEqual([["4", "quantified", "0"]]);
     invoke(add, "onClick");
+    invoke(button("Add nutrient"), "onClick");
     hooks.renderWithoutEffects();
     expect(customNutrientValues()).toEqual([
+      ["4", "quantified", "0"],
       ["3", "quantified", "0"],
-      ["2", "quantified", "0"],
     ]);
     expect(field(trendSearchLabel).props.value).toBe("Sodium");
     expect(trendDates()).toEqual(range);
@@ -4631,13 +4646,20 @@ describe("web custom-food nutrient addition availability", () => {
     await mount();
     await click("Revise", card(food()));
     const pending = deferred<Response>(),
-      add = button("Add nutrient");
+      add = button("Add nutrient"),
+      choice = field("Nutrient 1");
     state.write = () => pending.promise;
     await submit("Save new version");
     const before = fetcher.mock.calls.length,
       body = writes()[0]?.[1]?.body;
     expect(button("Add nutrient").props.disabled).toBe(false);
+    invoke(choice, "onChange", { target: { value: "3" } });
+    await hooks.settle();
+    expect(customNutrientValues()).toEqual([["3", "quantified", "0"]]);
+    await change("Nutrient 1", "2");
+    await change("Amount per 100 grams 1", "12.375");
     invoke(add, "onClick");
+    invoke(button("Add nutrient"), "onClick");
     await hooks.settle();
     expect(customNutrientValues().at(-1)).toEqual(["4", "quantified", "0"]);
     expect(fetcher.mock.calls).toHaveLength(before);
@@ -4662,45 +4684,195 @@ describe("web custom-food nutrient addition availability", () => {
     await mount();
     await click("Revise", card(food()));
     const old = button("Add nutrient"),
+      oldChoice = field("Nutrient 1"),
       rows = customNutrientValues();
     view.document.visibilityState = "hidden";
     invoke(old, "onClick");
+    invoke(oldChoice, "onChange", { target: { value: "4" } });
     hooks.renderWithoutEffects();
     expect(button("Add nutrient").props.disabled).toBe(true);
     await view.set("visible");
     invoke(old, "onClick");
+    invoke(oldChoice, "onChange", { target: { value: "4" } });
     await hooks.settle();
     expect(customNutrientValues()).toEqual(rows);
     await click("Log pinned v1", card(food()));
     await change("Exact quantity", "2");
     const profileOld = button("Add nutrient"),
+      profileChoice = field("Nutrient 1"),
       pending = deferred<Response>();
     state.auth = () => pending.promise;
     state.write = () =>
       Response.json({ error: "Zone changed", code: "DIARY_TIME_ZONE_CHANGED" }, { status: 409 });
     await submit("Log exact version");
     invoke(profileOld, "onClick");
+    invoke(profileChoice, "onChange", { target: { value: "4" } });
     hooks.renderWithoutEffects();
     expect(button("Add nutrient").props.disabled).toBe(true);
     pending.resolve(session(owner, "America/Chicago"));
     await hooks.settle();
     invoke(profileOld, "onClick");
+    invoke(profileChoice, "onChange", { target: { value: "4" } });
     await hooks.settle();
     expect(customNutrientValues()).toEqual(rows);
-    const current = button("Add nutrient");
+    const current = button("Add nutrient"),
+      currentChoice = field("Nutrient 1");
     state.auth = null;
     state.owner = otherOwner;
     hooks.replayEffects();
     await hooks.settle();
     expect(router.replace).toHaveBeenCalledWith("/login");
     invoke(current, "onClick");
+    invoke(currentChoice, "onChange", { target: { value: "4" } });
     await hooks.settle();
     expect(customNutrientRows()).toHaveLength(0);
     hooks.unmount();
     const updates = hooks.afterClose(),
       requests = fetcher.mock.calls.length;
     invoke(current, "onClick");
+    invoke(currentChoice, "onChange", { target: { value: "4" } });
     expect(hooks.afterClose()).toBe(updates);
     expect(fetcher.mock.calls).toHaveLength(requests);
+  });
+});
+
+function customNutrientOptions(index: number) {
+  return elements(field(`Nutrient ${index}`))
+    .filter((node) => node.type === "option")
+    .map((node) => ({
+      id: node.props.value,
+      label: text(node),
+      disabled: node.props.disabled === true,
+    }));
+}
+
+describe("web custom-food nutrient row uniqueness", () => {
+  it("preserves raw same-ID and rejected choices, ordered names/units and legacy options while releasing changed or removed IDs", async () => {
+    const saved = allStates();
+    const { state, fetcher } = customAvailabilityWorkspace(saved);
+    state.picker = [
+      { id: "4", code: "first", name: "Shared name", unit: "mg", category: "vitamin" },
+      { id: "2", code: "protein", name: "Protein", unit: "g", category: "macronutrient" },
+      { id: "3", code: "last", name: "Shared name", unit: "ug", category: "vitamin" },
+    ];
+    await mount();
+    await click("Revise", card(saved));
+    await change("Name", " Raw nutrient draft ");
+    await change("Amount per 100 grams 1", " 001.2300 ");
+    await change("Amount per 100 grams 2", "0.0000");
+    const original = formValues(),
+      rows = customNutrientValues(),
+      message = status(),
+      before = fetcher.mock.calls.length;
+    const allocate = vi.fn(() => "cdfd121e-6fbc-42f5-8630-e1cb60f9c351");
+    vi.stubGlobal("crypto", { randomUUID: allocate });
+    expect(customNutrientOptions(1)).toEqual([
+      { id: "1", label: "Saved Energy (kcal) · saved nutrient", disabled: false },
+      { id: "4", label: "Shared name (mg) · already in this draft", disabled: true },
+      { id: "2", label: "Protein (g)", disabled: false },
+      { id: "3", label: "Shared name (ug) · already in this draft", disabled: true },
+    ]);
+    expect(customNutrientOptions(3)[0]).toEqual({
+      id: "4",
+      label: "Shared name (mg)",
+      disabled: false,
+    });
+    for (const [index, row] of rows.entries()) {
+      const select = field(`Nutrient ${index + 1}`);
+      for (const nutrientId of [String(row[0]), row[0] === "3" ? "4" : "3", "99"]) {
+        invoke(select, "onChange", { target: { value: nutrientId } });
+      }
+    }
+    await hooks.settle();
+    expect(formValues()).toEqual(original);
+    expect(status()).toBe(message);
+    await change("Nutrient 2", "2");
+    expect(customNutrientValues()[1]).toEqual(["2", "quantified", "0"]);
+    expect(customNutrientOptions(1).at(-1)).toEqual({
+      id: "3",
+      label: "Shared name (ug)",
+      disabled: false,
+    });
+    await change("Nutrient 1", "3");
+    expect(customNutrientValues()[0]).toEqual(["3", "quantified", "0"]);
+    await click("Remove nutrient 3");
+    expect(customNutrientOptions(2)[0]).toEqual({
+      id: "4",
+      label: "Shared name (mg)",
+      disabled: false,
+    });
+    await change("Nutrient 2", "4");
+    expect(customNutrientValues()).toEqual([
+      ["3", "quantified", "0"],
+      ["4", "quantified", "0"],
+      ...rows.slice(3),
+    ]);
+    expect(field("Name").props.value).toBe(" Raw nutrient draft ");
+    expect(fetcher.mock.calls).toHaveLength(before);
+    expect(allocate).not.toHaveBeenCalled();
+  });
+
+  it("fences competing callbacks before paint and retained callbacks for a removed row", async () => {
+    const saved = food();
+    const second = allStates().currentVersion.nutrients[1];
+    if (!second) throw new Error("Missing second fixture row");
+    const source = {
+      ...saved,
+      currentVersion: {
+        ...saved.currentVersion,
+        nutrients: [...saved.currentVersion.nutrients, second],
+      },
+    };
+    const { fetcher } = customAvailabilityWorkspace(source);
+    await mount();
+    await click("Revise", card(source));
+    const first = field("Nutrient 1"),
+      secondChoice = field("Nutrient 2"),
+      before = fetcher.mock.calls.length;
+    invoke(first, "onChange", { target: { value: "4" } });
+    invoke(secondChoice, "onChange", { target: { value: "4" } });
+    hooks.renderWithoutEffects();
+    expect(customNutrientValues()).toEqual([
+      ["4", "quantified", "0"],
+      ["3", "quantified", "0"],
+    ]);
+    const removed = field("Nutrient 2");
+    invoke(button("Remove nutrient 2"), "onClick");
+    invoke(removed, "onChange", { target: { value: "2" } });
+    await hooks.settle();
+    expect(customNutrientValues()).toEqual([["4", "quantified", "0"]]);
+    expect(customNutrientOptions(1).at(-1)?.disabled).toBe(false);
+    expect(fetcher.mock.calls).toHaveLength(before);
+  });
+
+  it("keeps an existing duplicated current ID enabled without silently repairing either raw row", async () => {
+    const saved = food();
+    const row = saved.currentVersion.nutrients[0];
+    if (!row) throw new Error("Missing fixture row");
+    const source = {
+      ...saved,
+      currentVersion: {
+        ...saved.currentVersion,
+        nutrients: [row, { ...row, state: "trace" as const, amountPer100Grams: null }],
+      },
+    };
+    const { fetcher } = customAvailabilityWorkspace(source);
+    await mount();
+    await click("Revise", card(source));
+    const rows = customNutrientValues(),
+      before = fetcher.mock.calls.length;
+    for (const index of [1, 2]) {
+      expect(customNutrientOptions(index).find((item) => item.id === "2")).toEqual({
+        id: "2",
+        label: "Protein (g)",
+        disabled: false,
+      });
+      await change(`Nutrient ${index}`, "2");
+    }
+    expect(customNutrientValues()).toEqual(rows);
+    await change("Nutrient 2", "4");
+    expect(customNutrientValues()).toEqual([rows[0], ["4", "quantified", "0"]]);
+    expect(customNutrientOptions(2).find((item) => item.id === "2")?.disabled).toBe(true);
+    expect(fetcher.mock.calls).toHaveLength(before);
   });
 });

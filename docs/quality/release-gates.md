@@ -1056,3 +1056,16 @@ acceptance.
   and complete-registry production synthetic Chrome proof with request accounting
   and owned cleanup. Real-service/restore/privacy, external, device and release
   acceptance remain separate.
+
+
+## ADR 0068 Web nutrient row uniqueness
+
+- Disable and explain already-used alternatives while retaining current and saved
+  fallback choices. Same-ID/duplicate/unloaded selections preserve every raw field;
+  valid different IDs keep existing defaults and released IDs become available.
+- Reuse current custom/metadata/private guards. Preserve save-time editing,
+  uniqueness validation and ambiguous retry; no trend-control ownership coupling.
+- Require compact component/types/format evidence, independent review, frozen
+  canonical gates and complete-registry production synthetic Chrome option/raw-row/
+  request/keyboard/narrow proof with owned cleanup. Real-service/restore/privacy,
+  concurrent React, assistive, external, device and release acceptance stay separate.

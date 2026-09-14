@@ -612,6 +612,25 @@ export function HealthClient() {
       ],
     });
   }
+  function changeCustomNutrient(index: number, nutrientId: string) {
+    if (!currentCustomNutrientMetadata()) return;
+    const row = custom.nutrients[index];
+    if (
+      !row ||
+      row.nutrientId === nutrientId ||
+      !nutrients.some((item) => item.nutrientId === nutrientId) ||
+      custom.nutrients.some(
+        (item, rowIndex) => rowIndex !== index && item.nutrientId === nutrientId,
+      )
+    )
+      return;
+    setCustom({
+      ...custom,
+      nutrients: custom.nutrients.map((item, rowIndex) =>
+        rowIndex === index ? { nutrientId, state: "quantified", amountPer100Grams: "0" } : item,
+      ),
+    });
+  }
   function canCopyCustomFood(food: CustomFood) {
     return (
       canUseCustomControls() &&
@@ -2677,20 +2696,7 @@ export function HealthClient() {
                     <select
                       aria-label={`Nutrient ${index + 1}`}
                       value={row.nutrientId}
-                      onChange={(event) =>
-                        setCustom({
-                          ...custom,
-                          nutrients: custom.nutrients.map((item, rowIndex) =>
-                            rowIndex === index
-                              ? {
-                                  nutrientId: event.target.value,
-                                  state: "quantified",
-                                  amountPer100Grams: "0",
-                                }
-                              : item,
-                          ),
-                        })
-                      }
+                      onChange={(event) => changeCustomNutrient(index, event.target.value)}
                     >
                       {!nutrients.some((item) => item.nutrientId === row.nutrientId) ? (
                         <option value={row.nutrientId}>
@@ -2704,11 +2710,24 @@ export function HealthClient() {
                           })()}
                         </option>
                       ) : null}
-                      {nutrients.map((item) => (
-                        <option key={item.nutrientId} value={item.nutrientId}>
-                          {item.name} ({item.unit})
-                        </option>
-                      ))}
+                      {nutrients.map((item) => {
+                        const usedElsewhere =
+                          item.nutrientId !== row.nutrientId &&
+                          custom.nutrients.some(
+                            (other, rowIndex) =>
+                              rowIndex !== index && other.nutrientId === item.nutrientId,
+                          );
+                        return (
+                          <option
+                            key={item.nutrientId}
+                            value={item.nutrientId}
+                            disabled={usedElsewhere}
+                          >
+                            {item.name} ({item.unit})
+                            {usedElsewhere ? " · already in this draft" : ""}
+                          </option>
+                        );
+                      })}
                     </select>
                     <select
                       aria-label={`Nutrient state ${index + 1}`}

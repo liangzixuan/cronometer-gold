@@ -170,6 +170,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Clear the native named nutrient filter | ADR 0065 existing guarded query reset preserves nutrient draft and explicit Add/save/retry; focused checks, independent review, fresh canonical gates and native exports passed; external/device/release separate |
 | Automatic evidence / independent review | Wrap native named nutrient choices | ADR 0066 existing wrapping option preserves full labels and IDs/drafts/explicit Add; focused checks, independent review, fresh canonical gates and native exports passed; device/external/release separate |
 | Automatic evidence / independent review | Explain unavailable web nutrient additions | ADR 0067 truthful availability and guarded Add preserve raw drafts and explicit save/retry; focused review, fresh canonical gates and synthetic Chrome passed; external/device/release separate |
+| Automatic evidence / independent review | Prevent duplicate web nutrient choices | ADR 0068 guarded row selection and disabled used alternatives preserve raw/current choices and explicit save/retry; focused review, fresh canonical gates and synthetic Chrome passed; external/device/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1724,16 +1725,26 @@ canonical gates and complete-registry production synthetic Chrome proof passed.
 At 2026-09-14T18:42:26.452765+00:00, base `486b0639acd90817e5aaac1748eb0612e22e1166` automatic evidence was:
 container supply chain `34867094432` completed / success; ci `34867094501` completed / success. These base results do not transfer to this slice.
 
+### Web nutrient row uniqueness: source/local complete
+
+[ADR 0068](../adr/0068-web-nutrient-uniqueness.md) prevents duplicate nutrient
+choices across custom-food rows. Preserve current/legacy options and raw same-ID
+values; valid different IDs retain quantified zero defaults. Existing metadata,
+private/draft and save guards remain authoritative. Focused review, fresh canonical
+gates and complete-registry production synthetic Chrome proof passed.
+
+At 2026-09-14T19:26:29.423269+00:00, base `9e524341ac556390b1ff6195dd1d0de4882c9574` automatic evidence was:
+ci `34885753265` completed / success; container supply chain `34885753580` in_progress. These base results do not transfer to this slice.
+
 ### Next bounded candidate
 
-Prevent duplicate nutrient choices across web custom-food rows. Each row currently
-offers IDs already used elsewhere, so changing a row can replace its raw value
-with a duplicate quantified zero and only Save explains the conflict. Prepare a
-separate card to disable already-used alternatives and guard that transition,
-preserving each row's current/legacy fallback choice and raw same-ID values.
-Removing or changing another row should release its former ID. Preserve valid
-different-ID defaults, exact IDs regardless of duplicate names, existing ownership
-and save validation/retry. Scope the web control and existing state suite plus
-ADR/index/plan/gates; focused checks, independent review, fresh canonical gates
-and production synthetic Chrome evidence. No new picker or contract is required.
+Protect unsaved custom-food work when choosing Revise on a saved card, on web
+and native. Both current Revise handlers immediately replace the draft; native
+also clears unappended nutrient inputs. Copy already offers Keep/Discard for
+dirty work. Reuse that local confirmation so unchanged drafts open directly,
+Keep preserves all raw fields and native scratch inputs, and only a current
+explicit Discard installs the named saved revision. Preserve Copy/create versus
+Revise identity, source/private ownership, pending-save guards and explicit
+save/retry. Require a bounded acceptance card before edits, actual-component
+evidence, applicable canonical/native exports and synthetic Chrome proof.
 No successor implementation has started.
