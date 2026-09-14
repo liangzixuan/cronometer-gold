@@ -977,3 +977,17 @@ acceptance.
   review, frozen canonical gates and production Next/BFF synthetic Chrome range,
   no-op/custom/draft/keyboard/narrow/expiry evidence. Real backend, device,
   assistive, concurrent React, external and release gates remain separate.
+
+
+## ADR 0062 Nutrition-only Health trends on native
+
+- None uses the existing optional biometric ID and guarded trend-input path.
+  Matching selection is a true no-op. Changed selection retires only obsolete
+  trend work, clears its biometric result and preserves nutrient results/dates.
+- Keep explicit one-series/two-series loading, same-private None retention and
+  stale/private/zone/lifecycle ownership. Preserve search, raw drafts, shared busy
+  state, domain writes, retries and protected queues without new operations.
+- Require focused actual-native-component/type/format checks, independent review,
+  frozen canonical check/build/licenses and fresh native exports. Web browser
+  evidence is not native UI proof; real backend, rendered device, assistive,
+  concurrent React, external reviewer and release acceptance remain separate.

@@ -1167,7 +1167,8 @@ export function RetentionScreen({
       return;
     if (field === "nutrientId" && trendFilterRef.current !== trendFilter) return;
     if (field === "nutrientId" && !nutrients.some((item) => item.nutrientId === value)) return;
-    if (field === "definitionId" && !definitions.some((item) => item.id === value)) return;
+    if (field === "definitionId" && value !== "" && !definitions.some((item) => item.id === value))
+      return;
     abortTrendRead();
     installTrendInputs({ ...trendInputs, [field]: value });
     if (field !== "definitionId") setNutrientTrend(null);
@@ -2856,10 +2857,17 @@ export function RetentionScreen({
           />
           <Text style={styles.label}>Biometric</Text>
           <ChipRow
-            items={(trendReady ? definitions : []).map((item) => ({
-              key: item.id,
-              label: `${item.name}${item.status === "archived" ? " (archived)" : ""}`,
-            }))}
+            items={
+              trendReady
+                ? [
+                    { key: "", label: "None" },
+                    ...definitions.map((item) => ({
+                      key: item.id,
+                      label: `${item.name}${item.status === "archived" ? " (archived)" : ""}`,
+                    })),
+                  ]
+                : []
+            }
             selected={trendReady ? selectedDefinition : ""}
             disabled={!trendReady}
             onSelect={(value) => changeTrendInput("definitionId", value)}

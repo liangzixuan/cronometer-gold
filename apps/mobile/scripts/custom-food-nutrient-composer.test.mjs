@@ -2009,9 +2009,15 @@ describe("native full loaded trend nutrient selection", () => {
         let tree = await type(harness, "Find a trend nutrient by name", "sod");
         const oldFilter = input(tree, "Find a trend nutrient by name").props.onChangeText;
         const oldLoad = button(tree, "Load local-day trends").props.onPress;
+        const oldNone = button(trendSection(tree), "None").props.onPress;
         refreshing = true;
         button(tree, "Refresh private data").props.onPress();
         oldLoad();
+        {
+          const noneWrites = harness.stateWrites;
+          oldNone();
+          expect(harness.stateWrites).toBe(noneWrites);
+        }
         oldFilter("late");
         tree = await harness.settle();
         expect(input(tree, "Find a trend nutrient by name").props.editable).toBe(false);
@@ -2023,6 +2029,11 @@ describe("native full loaded trend nutrient selection", () => {
         );
         tree = await harness.settle();
         oldLoad();
+        {
+          const noneWrites = harness.stateWrites;
+          oldNone();
+          expect(harness.stateWrites).toBe(noneWrites);
+        }
         pendingClear();
         oldFilter("older");
         tree = await harness.settle();
@@ -2063,6 +2074,7 @@ describe("native full loaded trend nutrient selection", () => {
           const oldFilter = input(tree, "Find a trend nutrient by name").props.onChangeText;
           const oldChoice = button(tree, "Sodium · mg").props.onPress;
           const oldLoad = button(tree, "Load local-day trends").props.onPress;
+          const oldNone = button(trendSection(tree), "None").props.onPress;
           delay = true;
           await click(harness, "Load local-day trends");
           harness.updateProps(
@@ -2082,6 +2094,11 @@ describe("native full loaded trend nutrient selection", () => {
           oldFilter("stale");
           oldChoice();
           oldLoad();
+          {
+            const noneWrites = harness.stateWrites;
+            oldNone();
+            expect(harness.stateWrites).toBe(noneWrites);
+          }
           held.resolve(phase === "fetch401" ? response({}, 401) : nutrientTrendResponse(captured));
           await Promise.resolve();
           harness.flushEffects();
@@ -2177,10 +2194,16 @@ describe("native full loaded trend nutrient selection", () => {
       await setTrendDates(harness);
       let tree = await harness.settle();
       const oldLoad = button(tree, "Load local-day trends").props.onPress;
+      const oldNone = button(trendSection(tree), "None").props.onPress;
       await click(harness, "Load local-day trends");
       expect(props.onUnauthorized).toHaveBeenCalledTimes(1);
       harness.replayEffects();
       oldLoad();
+      {
+        const noneWrites = harness.stateWrites;
+        oldNone();
+        expect(harness.stateWrites).toBe(noneWrites);
+      }
       tree = await harness.settle();
       expect(button(tree, "Load local-day trends").props.disabled).toBe(true);
       expect(trendHeaders(tree)).toHaveLength(0);
@@ -2297,6 +2320,7 @@ describe("native full loaded trend nutrient selection", () => {
           (node) => node.props.accessibilityRole === "radio" && !text(node).includes(" · "),
         ).map(text);
         expect(metricChoices).toEqual([
+          "None",
           "Concurrent metric",
           "Weight trend metric (archived)",
           "Other weight metric",
@@ -2339,7 +2363,12 @@ describe("native full loaded trend nutrient selection", () => {
         trendSection(tree),
         (node) => node.props.accessibilityRole === "radio" && !text(node).includes(" · "),
       ).map(text);
-      expect(metricChoices).toEqual([created.name, trendDefinition.name, "Other weight metric"]);
+      expect(metricChoices).toEqual([
+        "None",
+        created.name,
+        trendDefinition.name,
+        "Other weight metric",
+      ]);
       expect(input(tree, "Find a trend nutrient by name").props.editable).toBe(true);
       expect(writes(requests)).toHaveLength(1);
       tree = await click(harness, "Load local-day trends");
@@ -2487,10 +2516,16 @@ describe("native full loaded trend nutrient selection", () => {
     const tree = await harness.settle();
     const oldFilter = input(tree, "Find a trend nutrient by name").props.onChangeText;
     const oldLoad = button(tree, "Load local-day trends").props.onPress;
+    const oldNone = button(trendSection(tree), "None").props.onPress;
     await click(harness, "Load local-day trends");
     harness.unmount();
     oldFilter("unmounted");
     oldLoad();
+    {
+      const noneWrites = harness.stateWrites;
+      oldNone();
+      expect(harness.stateWrites).toBe(noneWrites);
+    }
     held.resolve(nutrientTrendResponse(captured));
     for (let turn = 0; turn < 30; turn += 1) await Promise.resolve();
     expect(harness.writesAfterUnmount).toBe(0);
@@ -5917,4 +5952,372 @@ describe("native Health trend date shortcuts", () => {
       }
     });
   }
+});
+
+describe("native optional biometric trend None", () => {
+  for (const status of ["active", "archived"]) {
+    it(`offers None before ${status} metric choices and restores paired reads explicitly`, async () => {
+      const metric = { ...otherTrendDefinition, status };
+      const { harness, requests } = setupTrends(undefined, { metrics: [trendDefinition, metric] });
+      try {
+        await setTrendDates(harness);
+        let tree = await click(harness, "Load local-day trends");
+        const nutrientHeader = trendHeaders(tree)[0];
+        const rows = text(trendSection(tree));
+        const count = requests.length;
+        const operation = hooks.operation;
+        const dates = trendDateValues(tree);
+        tree = await clickTrend(harness, "None");
+        expect(button(trendSection(tree), "None").key).toBe("");
+        expect(button(trendSection(tree), "None").props.accessibilityRole).toBe("radio");
+        expect(button(trendSection(tree), "None").props.accessibilityState).toEqual({
+          selected: true,
+          disabled: false,
+        });
+        const choices = nodes(
+          trendSection(tree),
+          (node) => node.props.accessibilityRole === "radio" && !text(node).includes(" · "),
+        ).map(text);
+        expect(choices).toEqual([
+          "None",
+          trendDefinition.name,
+          `${metric.name}${status === "archived" ? " (archived)" : ""}`,
+        ]);
+        expect(trendHeaders(tree)).toEqual([nutrientHeader]);
+        expect(rows).toContain("2026-11-01 : 0 g · exact");
+        expect(text(trendSection(tree))).toContain("2026-11-01 : 0 g · exact");
+        expect(trendDateValues(tree)).toEqual(dates);
+        expect(requests).toHaveLength(count);
+        expect(hooks.operation).toBe(operation);
+        tree = await click(harness, "Load local-day trends");
+        expect(
+          trendRequests(requests)
+            .slice(2)
+            .map((request) => request.url.pathname),
+        ).toEqual(["/v1/trends/nutrients"]);
+        expect(trendHeaders(tree)).toEqual([nutrientHeader]);
+        tree = await clickTrend(
+          harness,
+          `${metric.name}${status === "archived" ? " (archived)" : ""}`,
+        );
+        expect(button(trendSection(tree), "None").props.accessibilityState.selected).toBe(false);
+        expect(trendRequests(requests)).toHaveLength(3);
+        tree = await click(harness, "Load local-day trends");
+        expect(
+          trendRequests(requests)
+            .slice(3)
+            .map((request) => [request.url.pathname, request.url.searchParams.get("definitionId")]),
+        ).toEqual([
+          ["/v1/trends/nutrients", null],
+          ["/v1/trends/biometrics", metric.id],
+        ]);
+        expect(trendHeaders(tree)).toHaveLength(2);
+        expect(writes(requests)).toHaveLength(0);
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+
+  it("offers selected None with verified-empty definitions and disables Load if nutrients are also empty", async () => {
+    const { harness, requests } = setupTrends(undefined, { available: [], metrics: [] });
+    try {
+      const tree = await setTrendDates(harness);
+      expect(button(trendSection(tree), "None").props.accessibilityState.selected).toBe(true);
+      expect(button(tree, "Load local-day trends").props.disabled).toBe(true);
+      const stateWrites = harness.stateWrites;
+      const count = requests.length;
+      button(trendSection(tree), "None").props.onPress();
+      button(tree, "Load local-day trends").props.onPress();
+      expect(harness.stateWrites).toBe(stateWrites);
+      expect(requests).toHaveLength(count);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("clears the only selected series locally without requesting an empty trend", async () => {
+    const { harness, requests } = setupTrends(undefined, { available: [] });
+    try {
+      await setTrendDates(harness);
+      await click(harness, "Load local-day trends");
+      const count = requests.length;
+      const tree = await clickTrend(harness, "None");
+      expect(trendHeaders(tree)).toHaveLength(0);
+      expect(button(tree, "Load local-day trends").props.disabled).toBe(true);
+      button(tree, "Load local-day trends").props.onPress();
+      expect(requests).toHaveLength(count);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  for (const outcome of ["loaded", "pending", "failed"]) {
+    it(`keeps matching None a true no-op with ${outcome} nutrient-only results`, async () => {
+      const held = deferred();
+      let captured;
+      const { harness, requests } = setupTrends((request) => {
+        if (request.url.pathname !== "/v1/trends/nutrients") return undefined;
+        captured = request;
+        return outcome === "pending"
+          ? held.promise
+          : outcome === "failed"
+            ? response({}, 503)
+            : undefined;
+      });
+      try {
+        await setTrendDates(harness);
+        await clickTrend(harness, "None");
+        const tree = await click(harness, "Load local-day trends");
+        const before = editorSnapshot(tree);
+        const headers = trendHeaders(tree);
+        const count = requests.length;
+        const operation = hooks.operation;
+        const stateWrites = harness.stateWrites;
+        button(trendSection(tree), "None").props.onPress();
+        expect(harness.stateWrites).toBe(stateWrites);
+        const after = await harness.settle();
+        expect(editorSnapshot(after)).toEqual(before);
+        expect(trendHeaders(after)).toEqual(headers);
+        expect(requests).toHaveLength(count);
+        expect(hooks.operation).toBe(operation);
+        if (outcome === "pending") {
+          expect(captured.signal.aborted).toBe(false);
+          held.resolve(response(nutrientTrendResponse(captured)));
+          expect(trendHeaders(await harness.settle())).toHaveLength(1);
+        }
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+
+  it("retains None through presets and same-private removed/reintroduced metric refreshes", async () => {
+    historyClock("2026-11-07T18:00:00.000Z");
+    let metrics = [trendDefinition, otherTrendDefinition];
+    const { harness, requests } = setupTrends((request) =>
+      request.url.pathname === "/v1/biometrics/definitions"
+        ? response({ data: metrics })
+        : undefined,
+    );
+    try {
+      await setTrendDates(harness);
+      await clickTrend(harness, "None");
+      await type(harness, "Find a trend nutrient by name", "  prot  ");
+      await type(harness, "Name", "  Raw custom food  ");
+      for (const days of [7, 30, 90]) {
+        const tree = await click(harness, `Last ${days} days`);
+        expect(button(trendSection(tree), "None").props.accessibilityState.selected).toBe(true);
+        expect(input(tree, "Find a trend nutrient by name").props.value).toBe("  prot  ");
+      }
+      const dates = trendDateValues(await harness.settle());
+      for (const next of [[], [otherTrendDefinition, trendDefinition]]) {
+        metrics = next;
+        const tree = await click(harness, "Refresh private data");
+        expect(button(trendSection(tree), "None").props.accessibilityState.selected).toBe(true);
+        expect(trendDateValues(tree)).toEqual(dates);
+        expect(input(tree, "Find a trend nutrient by name").props.value).toBe("  prot  ");
+        expect(input(tree, "Name").props.value).toBe("  Raw custom food  ");
+      }
+      expect(trendRequests(requests)).toHaveLength(0);
+      harness.updateProps({ ownerUserId: otherOwner, accessToken: "new-private-scope" });
+      const tree = await harness.settle();
+      expect(button(trendSection(tree), "None").props.accessibilityState.selected).toBe(false);
+      expect(
+        button(trendSection(tree), otherTrendDefinition.name).props.accessibilityState.selected,
+      ).toBe(true);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("preserves exact raw editors, history, selected nutrient and search when clearing the biometric", async () => {
+    const { harness, requests, props } = setupReadings();
+    try {
+      await setTrendDates(harness);
+      await clickTrend(harness, "Sodium · mg");
+      await type(harness, "Find a trend nutrient by name", "  sod  ");
+      await pressBiometric(harness, "Edit", readingEvent.id);
+      await type(harness, readingValueLabel(), "-71.00000000100");
+      await type(harness, "Definition notes", "  Raw metric notes  ");
+      await type(harness, "Private in-app label", "  Raw reminder  ");
+      await type(harness, "Name", "  Raw custom food  ");
+      await type(
+        harness,
+        "Canonical nutrients per 100 g",
+        " 208=0.00000100\r\n999=unknown:withheld ",
+      );
+      await type(harness, "Find an available nutrient by name", "prot");
+      await click(harness, "Protein (g)");
+      await type(harness, "Protein amount (g per 100 g)", "0.00000000000000100");
+      await click(harness, "Log exact version");
+      await type(harness, "Quantity", "1.00000100");
+      input(logEditor(await harness.settle()), "Local time").props.onChangeText("12:34");
+      const before = await harness.settle();
+      const inputs = editorSnapshot(before).inputs;
+      const history = text(biometricSection(before));
+      const count = requests.length;
+      const operation = hooks.operation;
+      const tree = await clickTrend(harness, "None");
+      expect(editorSnapshot(tree).inputs).toEqual(inputs);
+      expect(text(biometricSection(tree))).toBe(history);
+      expect(button(trendSection(tree), "Sodium · mg").props.accessibilityState.selected).toBe(
+        true,
+      );
+      expect(requests).toHaveLength(count);
+      expect(hooks.operation).toBe(operation);
+      expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+      expect(props.quickAddOutboxController.requestDrain).not.toHaveBeenCalled();
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  for (const phase of ["success", "fetch401", "JSON", "failure"]) {
+    it(`retires the paired read on None and rejects late biometric ${phase} after a later nutrient load`, async () => {
+      const held = deferred();
+      const later = deferred();
+      let biometricRequest;
+      let nutrientRequest;
+      let attempts = 0;
+      const { harness, requests, props } = setupTrends((request) => {
+        if (request.url.pathname === "/v1/trends/biometrics") {
+          biometricRequest = request;
+          return phase === "JSON"
+            ? { status: 200, ok: true, json: () => held.promise }
+            : held.promise;
+        }
+        if (request.url.pathname === "/v1/trends/nutrients" && ++attempts === 2) {
+          nutrientRequest = request;
+          return later.promise;
+        }
+        return undefined;
+      });
+      try {
+        await setTrendDates(harness);
+        await click(harness, "Load local-day trends");
+        const count = requests.length;
+        let tree = await clickTrend(harness, "None");
+        expect(biometricRequest.signal.aborted).toBe(true);
+        expect(requests).toHaveLength(count);
+        expect(trendHeaders(tree)).toHaveLength(0);
+        await click(harness, "Load local-day trends");
+        held.resolve(
+          phase === "fetch401"
+            ? response({}, 401)
+            : phase === "failure"
+              ? response({}, 503)
+              : phase === "JSON"
+                ? biometricTrendResponse(biometricRequest)
+                : response(biometricTrendResponse(biometricRequest)),
+        );
+        tree = await harness.settle();
+        expect(button(tree, "Loading…").props.disabled).toBe(true);
+        expect(nutrientRequest.signal.aborted).toBe(false);
+        expect(props.onUnauthorized).not.toHaveBeenCalled();
+        later.resolve(response(nutrientTrendResponse(nutrientRequest)));
+        tree = await harness.settle();
+        expect(trendHeaders(tree)).toHaveLength(1);
+        expect(trendRequests(requests)).toHaveLength(3);
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+
+  it("does not let an obsolete paired read unlock a current custom save after None", async () => {
+    const old = deferred();
+    const save = deferred();
+    const { harness, requests } = setupTrends((request) => {
+      if (request.method === "POST") return save.promise;
+      if (request.url.pathname === "/v1/trends/biometrics") return old.promise;
+      return undefined;
+    });
+    try {
+      await setTrendDates(harness);
+      await fillManual(harness, "7.00000100");
+      await click(harness, "Load local-day trends");
+      await clickTrend(harness, "None");
+      await click(harness, "Create private food");
+      old.resolve(response({}, 503));
+      const tree = await harness.settle();
+      expect(button(tree, "Create private food").props.disabled).toBe(true);
+      expect(writes(requests)[0].signal.aborted).toBe(false);
+      save.resolve(receipt(writes(requests)[0]));
+      await harness.settle();
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("preserves a live ambiguous custom retry body/key and leaves protected queues untouched", async () => {
+    const held = deferred();
+    let attempts = 0;
+    const { harness, requests, props } = setupTrends((request) => {
+      if (request.method === "POST" && request.url.pathname === "/v1/custom-foods") {
+        if (++attempts === 1) throw new Error("Synthetic lost custom receipt");
+        return held.promise;
+      }
+      return undefined;
+    });
+    try {
+      await setTrendDates(harness);
+      await fillManual(harness, "7.00000100");
+      await click(harness, "Create private food");
+      const first = writes(requests)[0];
+      const operation = hooks.operation;
+      await clickTrend(harness, "None");
+      expect(hooks.operation).toBe(operation);
+      await click(harness, "Create private food");
+      const second = writes(requests)[1];
+      expect(second.body).toBe(first.body);
+      expect(second.headers["idempotency-key"]).toBe(first.headers["idempotency-key"]);
+      await clickTrend(harness, trendDefinition.name);
+      const count = requests.length;
+      const tree = await clickTrend(harness, "None");
+      expect(canonical(tree)).toBe("208=7.00000100");
+      expect(requests).toHaveLength(count);
+      expect(hooks.operation).toBe(operation);
+      expect(second.signal.aborted).toBe(false);
+      expect(button(tree, "Create private food").props.disabled).toBe(true);
+      held.resolve(receipt(second));
+      await harness.settle();
+      expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+      expect(props.quickAddOutboxController.requestDrain).not.toHaveBeenCalled();
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("rejects retained None, metric and Load callbacks after raw ABA and synchronous series changes", async () => {
+    const { harness, requests } = setupTrends();
+    try {
+      let tree = await setTrendDates(harness);
+      const oldNone = button(trendSection(tree), "None").props.onPress;
+      input(tree, "From (YYYY-MM-DD)").props.onChangeText("2026-10-31");
+      tree = harness.renderWithoutEffects();
+      input(tree, "From (YYYY-MM-DD)").props.onChangeText("2026-11-01");
+      let stateWrites = harness.stateWrites;
+      oldNone();
+      expect(harness.stateWrites).toBe(stateWrites);
+      tree = await harness.settle();
+      const oldMetric = button(trendSection(tree), otherTrendDefinition.name).props.onPress;
+      const oldLoad = button(tree, "Load local-day trends").props.onPress;
+      button(trendSection(tree), "None").props.onPress();
+      stateWrites = harness.stateWrites;
+      oldMetric();
+      oldLoad();
+      expect(harness.stateWrites).toBe(stateWrites);
+      tree = await harness.settle();
+      expect(button(trendSection(tree), "None").props.accessibilityState.selected).toBe(true);
+      const obsoleteNone = button(trendSection(tree), "None").props.onPress;
+      button(trendSection(tree), trendDefinition.name).props.onPress();
+      stateWrites = harness.stateWrites;
+      obsoleteNone();
+      expect(harness.stateWrites).toBe(stateWrites);
+      expect(trendRequests(requests)).toHaveLength(0);
+    } finally {
+      harness.unmount();
+    }
+  });
 });

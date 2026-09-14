@@ -164,6 +164,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Web goal nutrient search | ADR 0059 local name/code search, visible selection, explicit Add and draft/save independence; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 | Automatic evidence / independent review | Saved manual goal copy on web/native | ADR 0060 exact saved fields, dirty confirmation, reviewed date and preserved Create/retry identity; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 | Automatic evidence / independent review | Health trend date shortcuts on web/native | ADR 0061 inclusive profile-local dates, no-op/custom range actions and preserved trend loading; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
+| Automatic evidence / independent review | Nutrition-only Health trends on native | ADR 0062 None choice, explicit one/two-series loading and preserved trend/draft/private ownership; focused review, fresh canonical gates and native exports passed; external/device/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1636,6 +1637,31 @@ b3a8c6b049499b27ba8d01c416756427d0227c3e CI 34805794900 and container 3480579491
 Base results do not transfer to this slice; no automatic success is claimed.
 External/device/hosted/release acceptance remains separate.
 
+### Nutrition-only Health trends on native: source/local complete
+
+[ADR 0062](../adr/0062-native-trend-none.md) exposes None for the optional
+biometric trend through existing input/read ownership. Preserve dates, nutrient
+selection/search, unrelated drafts and retries, true matching-choice no-ops and
+same-private refresh retention. Explicit Load reads only nutrition with None and
+restores paired reads when a saved metric is chosen.
+
+Focused native checks, independent source review, frozen canonical gates and fresh
+native exports passed. No browser surrogate was used. Device, assistive, concurrent
+React, real persistence, external reviewer and release gates remain.
+
+At 2026-09-14T06:04:30.849689+00:00, base
+`4eaeb15a164febb6a90dc99b2baeca51d9a36d39` CI `34808132234` succeeded;
+container `34808132346` remained in progress. Base automatic results do not
+transfer to this slice.
+
 ### Next bounded candidate
 
-Candidate: allow None for the native Health trend biometric series, matching the existing web choice. Current native options list only saved metrics even though loadTrends already supports nutrient-only reads. Begin with a bounded acceptance card and fresh source check: preserve dates/presets, selected nutrient/search and raw drafts, make matching None a true no-op, reuse existing trend input/read ownership, keep explicit Load, retain None on same-private refresh, and allow choosing a metric again. Verify nutrient-only versus two-series GETs, stale/private/zone callbacks, unchanged write/retry/queue behavior and native source/export evidence. Scope native screen and existing component tests plus ADR/index/plan/gates; no web, API, shared helper or release expansion. Do not substitute web browser QA for native UI acceptance.
+Show canonical units in native Health trend biometric choices, matching existing
+web labels. The native picker currently shows only metric name and archived
+status, so equal names in different units are indistinguishable before loading.
+Use existing wrapping labels; preserve None, source order, exact IDs, selected
+state and all request/draft/queue behavior. Prepare a separate card for native
+screen/component tests and ADR/index/plan/gates, with same-name/different-unit,
+long/archived labels and exact selected-ID read evidence. No conversion, backend,
+web or contract change. Native source/export proof does not replace device
+acceptance. No successor implementation has started.
