@@ -82,6 +82,20 @@ interface GoalBuilder {
   } | null;
 }
 
+interface CopySource {
+  readonly goal: GoalView;
+  readonly builder: GoalBuilder;
+  readonly scope: object;
+  readonly date: string;
+  readonly generation: number;
+}
+
+interface CopyChoice {
+  readonly source: CopySource;
+  readonly builder: GoalBuilder;
+  readonly generation: number;
+}
+
 interface Props {
   readonly apiBase: URL;
   readonly accessToken: string;
@@ -260,7 +274,56 @@ export function GoalsScreen({
   const [goal, setGoal] = useState<GoalView | null>(null);
   const [progress, setProgress] = useState<GoalProgressView | null>(null);
   const [definitions, setDefinitions] = useState<readonly TargetableNutrient[]>([]);
-  const [builder, setBuilder] = useState<GoalBuilder>(() => emptyGoal(date));
+  const [builder, setBuilderState] = useState<GoalBuilder>(() => emptyGoal(date));
+  const builderRef = useRef(builder);
+  const builderGeneration = useRef(0);
+  const [copySource, setCopySource] = useState<CopySource | null>(null);
+  const copySourceRef = useRef<CopySource | null>(null);
+  const [copyChoice, setCopyChoice] = useState<CopyChoice | null>(null);
+  const copyChoiceRef = useRef<CopyChoice | null>(null);
+  const copyMounted = useRef(false);
+  const copyPrivateClosed = useRef(false);
+  const scopeValues = [
+    apiBase,
+    accessToken,
+    expectedOwnerUserId,
+    sessionEpoch,
+    profileRevision,
+    profileTimeZone,
+    profileBirthDate,
+    profileSexAtBirth,
+  ];
+  const copyScope = useRef({ values: scopeValues });
+  if (!scopeValues.every((value, index) => Object.is(value, copyScope.current.values[index]))) {
+    copyScope.current = { values: scopeValues };
+  }
+  const clearCopyChoice = useCallback(() => {
+    if (copyChoiceRef.current === null) return;
+    copyChoiceRef.current = null;
+    setCopyChoice(null);
+  }, []);
+  const invalidateCopySource = useCallback(() => {
+    copySourceRef.current = null;
+    setCopySource(null);
+    clearCopyChoice();
+  }, [clearCopyChoice]);
+  const setBuilder = useCallback(
+    (update: GoalBuilder | ((current: GoalBuilder) => GoalBuilder)) => {
+      const current = builderRef.current;
+      const next = typeof update === "function" ? update(current) : update;
+      if (next === current) return;
+      builderRef.current = next;
+      builderGeneration.current += 1;
+      clearCopyChoice();
+      setBuilderState(next);
+    },
+    [clearCopyChoice],
+  );
+  const closeCopyPrivate = useCallback(() => {
+    copyPrivateClosed.current = true;
+    invalidateCopySource();
+    return onUnauthorized();
+  }, [invalidateCopySource, onUnauthorized]);
   const [nutrientQuery, setNutrientQuery] = useState("");
   const [message, setMessage] = useState("Loading versioned goals…");
   const [loading, setLoading] = useState(true);
@@ -301,6 +364,8 @@ export function GoalsScreen({
 
   const load = useCallback(
     async (localDate: string) => {
+      invalidateCopySource();
+      const initiatingCopyScope = copyScope.current;
       loadController.current?.abort();
       const controller = new AbortController();
       loadController.current = controller;
@@ -354,7 +419,7 @@ export function GoalsScreen({
             (response) => response.status === 401,
           )
         )
-          return onUnauthorized();
+          return closeCopyPrivate();
         const [currentBody, progressBody, definitionsBody, referenceBody] = await Promise.all([
           jsonBody(currentResponse),
           jsonBody(progressResponse),
@@ -382,7 +447,7 @@ export function GoalsScreen({
             signal: controller.signal,
           });
           if (!requestIsCurrent()) return;
-          if (effectiveReferenceResponse.status === 401) return onUnauthorized();
+          if (effectiveReferenceResponse.status === 401) return closeCopyPrivate();
           effectiveReferenceBody = await jsonBody(effectiveReferenceResponse);
           if (!requestIsCurrent()) return;
         }
@@ -408,9 +473,11 @@ export function GoalsScreen({
           }
         }
         if (!requestIsCurrent()) return;
+        const nextProgress = parseGoalProgress(progressBody);
+        const nextDefinitions = parseTargetableNutrients(definitionsBody);
         setGoal(nextGoal);
-        setProgress(parseGoalProgress(progressBody));
-        setDefinitions(parseTargetableNutrients(definitionsBody));
+        setProgress(nextProgress);
+        setDefinitions(nextDefinitions);
         let nextBuilder = nextGoal ? nativeGoalBuilderFromGoal(nextGoal) : emptyGoal(localDate);
         const applied = nextReferenceSets?.applied ?? null;
         const appliedSet = nextReferenceSets
@@ -434,6 +501,26 @@ export function GoalsScreen({
         setSelectedReferenceGroup(appliedSet?.groupCode ?? "");
         setReferenceAcknowledged(false);
         setReferenceCustomized(false);
+        if (
+          nextGoal &&
+          ["active", "archived"].includes(nextGoal.status) &&
+          nextGoal.energy.mode === "fixed" &&
+          nextReferenceSets?.applied === null &&
+          nextReferenceSets.date === nextGoal.effectiveFrom &&
+          nextReferenceSets.profileRevision === profileRevisionRef.current &&
+          initiatingCopyScope === copyScope.current &&
+          !copyPrivateClosed.current
+        ) {
+          const source: CopySource = {
+            goal: nextGoal,
+            builder: nextBuilder,
+            scope: initiatingCopyScope,
+            date: localDate,
+            generation: requestGeneration,
+          };
+          copySourceRef.current = source;
+          setCopySource(source);
+        }
         setMessage(
           nextGoal
             ? `Goal version ${nextGoal.versionNumber} applies on ${localDate}.${nativeAppliedReferenceMatchesGoal(applied, nextGoal) ? " Its source-verified candidate provenance was confirmed." : ""}${candidateWarning}`
@@ -449,15 +536,28 @@ export function GoalsScreen({
         }
       }
     },
-    [accessToken, apiBase, expectedOwnerUserId, onUnauthorized, sessionEpoch],
+    [
+      accessToken,
+      apiBase,
+      closeCopyPrivate,
+      expectedOwnerUserId,
+      invalidateCopySource,
+      sessionEpoch,
+      setBuilder,
+    ],
   );
 
   useEffect(() => {
+    copyMounted.current = true;
+    copyPrivateClosed.current = false;
     const localDate = localDateInTimeZone(new Date(), profileTimeZone);
     dateRef.current = localDate;
     setDate(localDate);
     void load(localDate);
     return () => {
+      copyMounted.current = false;
+      copySourceRef.current = null;
+      copyChoiceRef.current = null;
       generation.current += 1;
       loadController.current?.abort();
       writeController.current?.abort();
@@ -500,7 +600,7 @@ export function GoalsScreen({
           signal: controller.signal,
         });
         if (!requestIsCurrent()) return;
-        if (response.status === 401) return onUnauthorized();
+        if (response.status === 401) return closeCopyPrivate();
         if (response.status === 404) {
           setTemplatesSupported(false);
           setReferenceSets(null);
@@ -538,7 +638,7 @@ export function GoalsScreen({
         if (candidateController.current === controller) candidateController.current = null;
       }
     },
-    [accessToken, apiBase, expectedOwnerUserId, onUnauthorized, sessionEpoch],
+    [accessToken, apiBase, closeCopyPrivate, expectedOwnerUserId, sessionEpoch],
   );
 
   async function refreshProfileAfterConflict(
@@ -560,7 +660,7 @@ export function GoalsScreen({
       signal: controller.signal,
     });
     if (!current()) return;
-    if (response.status === 401) return onUnauthorized();
+    if (response.status === 401) return closeCopyPrivate();
     const body = await jsonBody(response);
     if (!current()) return;
     if (!response.ok)
@@ -616,11 +716,11 @@ export function GoalsScreen({
         signal: controller.signal,
       });
       if (!requestIsCurrent()) return;
-      if (response.status === 401) return onUnauthorized();
+      if (response.status === 401) return closeCopyPrivate();
       const body = await jsonBody(response);
       if (!requestIsCurrent()) return;
       if (response.status === 409 && problemCode(body) === "PROFILE_OWNER_CHANGED") {
-        return onUnauthorized();
+        return closeCopyPrivate();
       }
       if (response.status === 409 || response.status === 412) {
         await refreshProfileAfterConflict(controller, initiatingOwner, initiatingEpoch);
@@ -813,14 +913,14 @@ export function GoalsScreen({
         signal: controller.signal,
       });
       if (!requestIsCurrent()) return;
-      if (response.status === 401) return onUnauthorized();
+      if (response.status === 401) return closeCopyPrivate();
       const responseBody = await jsonBody(response);
       if (!requestIsCurrent()) return;
       if (
         response.status === 409 &&
         ["PROFILE_OWNER_CHANGED", "GOAL_OWNER_CHANGED"].includes(problemCode(responseBody) ?? "")
       ) {
-        return onUnauthorized();
+        return closeCopyPrivate();
       }
       if (response.status === 409 || response.status === 412) {
         pending.current.delete(key);
@@ -829,7 +929,7 @@ export function GoalsScreen({
           signal: controller.signal,
         });
         if (!requestIsCurrent()) return;
-        if (profileResponse.status === 401) return onUnauthorized();
+        if (profileResponse.status === 401) return closeCopyPrivate();
         const profileBody = await jsonBody(profileResponse);
         if (!requestIsCurrent()) return;
         if (profileResponse.ok) {
@@ -878,6 +978,80 @@ export function GoalsScreen({
         setSaving(false);
       }
     }
+  }
+
+  function canCopySavedGoal() {
+    return (
+      copyMounted.current &&
+      !copyPrivateClosed.current &&
+      !loading &&
+      !saving &&
+      !profileSaving &&
+      !loadController.current &&
+      !writeController.current &&
+      !profileController.current &&
+      !candidateController.current &&
+      copySource !== null &&
+      copySourceRef.current === copySource &&
+      copySource.goal === goal &&
+      copySource.scope === copyScope.current &&
+      copySource.date === date &&
+      dateRef.current === date &&
+      copySource.generation === generation.current &&
+      profileRevisionRef.current === profileRevision &&
+      builderRef.current === builder
+    );
+  }
+
+  function installCopiedGoal(source: CopySource) {
+    const next = {
+      ...nativeGoalBuilderFromGoal(source.goal),
+      goalId: null,
+      revision: null,
+      effectiveFrom: "",
+      reference: null,
+    };
+    candidateGeneration.current += 1;
+    candidateController.current?.abort();
+    candidateController.current = null;
+    effectiveDateRef.current = "";
+    setBuilder(next);
+    setReferenceSets(null);
+    setSelectedReferenceGroup("");
+    setReferenceAcknowledged(false);
+    setReferenceCustomized(false);
+    setMessage(
+      `Copied saved goal version ${source.goal.versionNumber} to a new draft. Choose its effective date and review the values, then choose Create goal.`,
+    );
+  }
+
+  function copySavedGoal() {
+    if (!canCopySavedGoal() || !copySource) return;
+    if (JSON.stringify(builder) !== JSON.stringify(copySource.builder)) {
+      const choice = { source: copySource, builder, generation: builderGeneration.current };
+      copyChoiceRef.current = choice;
+      setCopyChoice(choice);
+      return;
+    }
+    installCopiedGoal(copySource);
+  }
+
+  function copyChoiceIsCurrent(choice: CopyChoice) {
+    return (
+      canCopySavedGoal() &&
+      copyChoiceRef.current === choice &&
+      copySourceRef.current === choice.source &&
+      builderRef.current === choice.builder &&
+      builderGeneration.current === choice.generation
+    );
+  }
+
+  function keepCopyEditing(choice: CopyChoice) {
+    if (copyChoiceIsCurrent(choice)) clearCopyChoice();
+  }
+
+  function discardAndCopy(choice: CopyChoice) {
+    if (copyChoiceIsCurrent(choice)) installCopiedGoal(choice.source);
   }
 
   function beginNewGoal() {
@@ -937,6 +1111,49 @@ export function GoalsScreen({
           </Pressable>
         ) : null}
         <View style={styles.panel}>
+          {copySource &&
+          copySourceRef.current === copySource &&
+          copySource.scope === copyScope.current ? (
+            <View>
+              <Text style={styles.help}>
+                Copy saved goal version {copySource.goal.versionNumber}, effective from{" "}
+                {copySource.goal.effectiveFrom}. Review a new date before creating it.
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: !canCopySavedGoal() }}
+                disabled={!canCopySavedGoal()}
+                onPress={copySavedGoal}
+                style={styles.secondary}
+              >
+                <Text style={styles.secondaryText}>Copy saved goal to new draft</Text>
+              </Pressable>
+              {copyChoice && copyChoiceRef.current === copyChoice ? (
+                <View>
+                  <Text accessibilityLiveRegion="polite" style={styles.help}>
+                    You have unsaved edits. Keep editing, or discard those edits and copy saved goal
+                    version {copyChoice.source.goal.versionNumber}.
+                  </Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={!canCopySavedGoal()}
+                    onPress={() => keepCopyEditing(copyChoice)}
+                    style={styles.secondary}
+                  >
+                    <Text style={styles.secondaryText}>Keep editing</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={!canCopySavedGoal()}
+                    onPress={() => discardAndCopy(copyChoice)}
+                    style={styles.secondary}
+                  >
+                    <Text style={styles.secondaryText}>Discard edits and copy saved version</Text>
+                  </Pressable>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
           {builder.goalId ? (
             <Pressable
               accessibilityRole="button"
@@ -1483,6 +1700,7 @@ export function GoalsScreen({
             value={date}
             maxLength={10}
             onChange={(nextDate) => {
+              if (nextDate !== dateRef.current) invalidateCopySource();
               dateRef.current = nextDate;
               loadController.current?.abort();
               setDate(nextDate);

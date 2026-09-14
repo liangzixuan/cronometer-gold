@@ -1024,3 +1024,570 @@ it("fences retained Add when a current candidate receipt re-locks the same custo
   expect(field("Find a nutrient").props.value).toBe("vitamin");
   expect(rawEditor().filter(([label]) => typeof label === "string")).toEqual(before);
 });
+
+const copyLabel = "Copy saved goal to new draft";
+const discardLabel = "Discard edits and copy saved version";
+function manualReferences(localDate = day) {
+  return { data: { ...referenceFixture().data, date: localDate, applied: null } };
+}
+async function copyWorkspace(settings: Parameters<typeof workspace>[0] = {}) {
+  return workspace({
+    ...settings,
+    goal: settings.goal === undefined ? savedGoal() : settings.goal,
+    intercept: (call) => {
+      const intercepted = settings.intercept?.(call);
+      if (intercepted !== undefined) return intercepted;
+      if (call.path.startsWith("/api/goals/reference-target-sets?")) {
+        const localDate = new URL(call.path, "https://fixture.test").searchParams.get("date");
+        return Response.json(manualReferences(localDate ?? day));
+      }
+      return undefined;
+    },
+  });
+}
+function hasButton(label: string) {
+  return elements().some((node) => node.type === "button" && text(node) === label);
+}
+function assertSavedRows() {
+  expect(field("Daily energy (kcal)").props.value).toBe("2100.00");
+  expect(field("Why this energy target?").props.value).toBe(" Saved rationale. ");
+  expect(field("Calcium minimum mg").props.value).toBe("0.00");
+  expect(field("Calcium target mg").props.value).toBe("100.0000");
+  expect(field("Calcium maximum mg").props.value).toBe("");
+  expect(field("Calcium target source").props.value).toBe(" Saved source ");
+  expect(field("Calcium source version").props.value).toBe(" v1 ");
+  expect(field("Calcium rationale").props.value).toBe(" Saved target rationale ");
+}
+
+describe("copy saved manual goal", () => {
+  it("copies exact saved fields locally, preserves search/profile drafts, and requires a reviewed date", async () => {
+    const allocation = vi.spyOn(globalThis.crypto, "randomUUID");
+    const source = savedGoal();
+    const saved = structuredClone(source);
+    const { calls } = await copyWorkspace({ goal: source });
+    await change("Find a nutrient", " vitamin ");
+    await change("Birth date (YYYY-MM-DD)", "1990-01-01");
+    await change("Sex at birth", "female");
+    const count = calls.length;
+    await click(copyLabel);
+    expect(hasButton(discardLabel)).toBe(false);
+    expect(text()).toContain("NEW GOAL");
+    expect(text()).toContain(`Copy saved goal version 3, effective ${day}`);
+    expect(field("Effective from").props.value).toBe("");
+    expect(field("Effective from").props.readOnly).toBe(false);
+    expect(field("Progress date").props.value).toBe(day);
+    expect(field("Find a nutrient").props.value).toBe(" vitamin ");
+    assertSavedRows();
+    expect(source).toEqual(saved);
+    expect(calls).toHaveLength(count);
+    expect(allocation).not.toHaveBeenCalled();
+    await submit();
+    await hooks.settle();
+    expect(status()).toBe("Effective date must be a real YYYY-MM-DD local date.");
+    expect(calls).toHaveLength(count);
+    expect(allocation).not.toHaveBeenCalled();
+    // The existing profile section requires a loaded candidate list. Its draft
+    // fields reappear unchanged after this separate explicit date read.
+    await change("Effective from", "2026-09-13");
+    invoke(field("Effective from"), "onBlur");
+    await hooks.settle();
+    expect(field("Birth date (YYYY-MM-DD)").props.value).toBe("1990-01-01");
+    expect(field("Sex at birth").props.value).toBe("female");
+    expect(allocation).not.toHaveBeenCalled();
+  });
+
+  it("preserves target order, metadata, nullable values and exact zero/long decimals through Create", async () => {
+    const base = savedGoal();
+    const row = required(base.currentVersion.nutrientTargets[0]);
+    const source = {
+      ...base,
+      currentVersion: {
+        ...base.currentVersion,
+        nutrientTargets: [
+          {
+            ...row,
+            definition: registry[1],
+            minimumAmount: null,
+            targetAmount: null,
+            maximumAmount: "0",
+            source: { label: " Max only ", version: null },
+            rationale: null,
+          },
+          { ...row, targetAmount: "123.123456789012" },
+        ],
+      },
+    };
+    const { calls } = await copyWorkspace({
+      intercept: ({ path, init }) => {
+        if (path.startsWith("/api/goals/current?"))
+          return Response.json({ data: { goal: source } });
+        if (init?.method === "POST") return Response.json({}, { status: 503 });
+        return undefined;
+      },
+    });
+    await click(copyLabel);
+    expect(
+      targetRows().map((row) => text(elements(row).find((node) => node.type === "strong"))),
+    ).toEqual(["Magnesium", "Calcium"]);
+    expect(field("Magnesium minimum mg").props.value).toBe("");
+    expect(field("Magnesium maximum mg").props.value).toBe("0");
+    await change("Effective from", "2026-09-13");
+    await submit();
+    await hooks.settle();
+    const call = required(writes(calls)[0]);
+    expect(call.path).toBe("/api/goals");
+    expect(new Headers(call.init?.headers).get("if-match")).toBeNull();
+    expect(JSON.parse(String(call.init?.body))).toEqual({
+      expectedOwnerUserId: owner,
+      effectiveFrom: "2026-09-13",
+      energy: { mode: "fixed", targetKcal: "2100.00", rationale: " Saved rationale. " },
+      nutrientTargets: [
+        {
+          nutrientId: "1090",
+          minimumAmount: null,
+          targetAmount: null,
+          maximumAmount: "0",
+          source: { label: " Max only ", version: null },
+          rationale: null,
+        },
+        {
+          nutrientId: "1087",
+          minimumAmount: "0.00",
+          targetAmount: "123.123456789012",
+          maximumAmount: null,
+          source: { label: " Saved source ", version: " v1 " },
+          rationale: " Saved target rationale ",
+        },
+      ],
+    });
+  });
+
+  it("Keeps every dirty field and discards only to the saved source without requests or allocation", async () => {
+    const allocation = vi.spyOn(globalThis.crypto, "randomUUID");
+    const { calls } = await copyWorkspace();
+    await change("Daily energy (kcal)", "2200.000001");
+    await change("Why this energy target?", " Dirty rationale ");
+    await change("Calcium minimum mg", "1");
+    await change("Calcium target mg", "101");
+    await change("Calcium maximum mg", "300");
+    await change("Calcium target source", " Dirty source ");
+    await change("Calcium source version", " Dirty version ");
+    await change("Calcium rationale", " Dirty target rationale ");
+    const before = rawEditor(),
+      message = status(),
+      count = calls.length;
+    await click(copyLabel);
+    expect(rawEditor()).toEqual(before);
+    await click("Keep editing");
+    expect(rawEditor()).toEqual(before);
+    expect(status()).toBe(message);
+    await click(copyLabel);
+    await click(discardLabel);
+    assertSavedRows();
+    expect(field("Effective from").props.value).toBe("");
+    expect(calls).toHaveLength(count);
+    expect(allocation).not.toHaveBeenCalled();
+  });
+
+  it.each(["active", "archived"])(
+    "copies %s saved history without unlocking its revision",
+    async (savedStatus) => {
+      await copyWorkspace({
+        goal: { ...savedGoal(), status: savedStatus, effectiveTo: "2026-09-12" },
+      });
+      expect(button("Closed goal history is read-only").props.disabled).toBe(true);
+      await click(copyLabel);
+      expect(button("Create goal").props.disabled).toBe(false);
+      expect(field("Effective from").props.readOnly).toBe(false);
+      assertSavedRows();
+    },
+  );
+
+  it.each([
+    "none",
+    "draft",
+    "404",
+    "failed",
+    "wrong date",
+    "wrong profile",
+    "applied",
+    "mismatched applied",
+    "derived",
+  ])("withholds copy for %s source/provenance even after manual customization", async (kind) => {
+    const base = savedGoal();
+    const derived = {
+      ...base,
+      currentVersion: {
+        ...base.currentVersion,
+        energy: {
+          mode: "derived",
+          targetKcal: "2100",
+          bmrKcal: "1400",
+          profileRevision: "4",
+          ageYears: 35,
+          heightCm: "170",
+          weightKg: "70",
+          sexAtBirth: "male",
+          activityLevelCode: "sedentary_or_light",
+          activityFactor: "1.5",
+          adjustmentKcal: "0",
+          rationale: " Saved derived rationale ",
+          source: {
+            equation: {
+              code: "mifflin-st-jeor-ree",
+              version: "1990-original",
+              url: "https://example.test/equation",
+            },
+            activityPolicy: {
+              code: "fao-who-unu-pal-policy",
+              version: "2004-reviewed-v1",
+              sourceUrl: "https://example.test/pal",
+            },
+          },
+        },
+      },
+    };
+    await copyWorkspace({
+      goal: kind === "none" ? null : kind === "draft" ? { ...base, status: "draft" } : base,
+      intercept: ({ path }) => {
+        if (kind === "derived" && path.startsWith("/api/goals/current?"))
+          return Response.json({ data: { goal: derived } });
+        if (!path.startsWith("/api/goals/reference-target-sets?")) return undefined;
+        if (kind === "404" || kind === "failed")
+          return Response.json({}, { status: kind === "404" ? 404 : 503 });
+        if (kind === "wrong date") return Response.json(manualReferences("2026-09-10"));
+        if (kind === "wrong profile")
+          return Response.json({ data: { ...manualReferences().data, profileRevision: "5" } });
+        if (kind === "applied" || kind === "mismatched applied") {
+          const reference = referenceFixture();
+          if (kind === "mismatched applied") reference.data.applied.goalRevision = "4";
+          return Response.json(reference);
+        }
+        return undefined;
+      },
+    });
+    expect(hasButton(copyLabel)).toBe(false);
+    if (kind === "applied")
+      await click("Customize as editable targets and clear verified provenance");
+    if (kind === "derived") {
+      expect(text()).toContain("Explainable energy estimate");
+      invoke(field("Fixed target"), "onChange");
+      await hooks.settle();
+    }
+    expect(hasButton(copyLabel)).toBe(false);
+  });
+
+  it("requires source-effective-date provenance and retains eligibility across unrelated candidate changes", async () => {
+    const source = { ...savedGoal(), effectiveFrom: "2026-09-07" };
+    let laterCandidate = false;
+    const { calls } = await copyWorkspace({
+      goal: source,
+      intercept: ({ path }) =>
+        laterCandidate && path.startsWith("/api/goals/reference-target-sets?")
+          ? Response.json(referenceFixture())
+          : undefined,
+    });
+    expect(calls.some((call) => call.path.endsWith("reference-target-sets?date=2026-09-07"))).toBe(
+      true,
+    );
+    await click("New goal");
+    laterCandidate = true;
+    invoke(field("Effective from"), "onBlur");
+    await hooks.settle();
+    expect(button(copyLabel).props.disabled).toBe(false);
+    await click(copyLabel);
+    await click(discardLabel);
+    assertSavedRows();
+    expect(field("Effective from").props.value).toBe("");
+    expect(text()).not.toContain("These source-verified candidate rows are read-only.");
+  });
+});
+
+describe("saved goal copy ownership", () => {
+  it.each(["energy", "threshold", "source", "Add", "Remove", "New", "mode", "date"])(
+    "rejects retained Copy and Discard after a raw %s replacement before paint",
+    async (kind) => {
+      const { calls } = await copyWorkspace();
+      await change("Why this energy target?", " Dirty ");
+      await click(copyLabel);
+      const oldCopy = button(copyLabel),
+        oldDiscard = button(discardLabel),
+        oldKeep = button("Keep editing");
+      const count = calls.length;
+      if (kind === "energy")
+        invoke(field("Daily energy (kcal)"), "onChange", { target: { value: "9999" } });
+      if (kind === "threshold")
+        invoke(field("Calcium target mg"), "onChange", { target: { value: "222" } });
+      if (kind === "source")
+        invoke(field("Calcium target source"), "onChange", { target: { value: " Changed " } });
+      if (kind === "Add") invoke(button("Add nutrient"), "onClick");
+      if (kind === "Remove") invoke(button("Remove"), "onClick");
+      if (kind === "New") invoke(button("New goal"), "onClick");
+      if (kind === "mode") invoke(field("Profile-derived estimate"), "onChange");
+      if (kind === "date")
+        invoke(field("Effective from"), "onChange", { target: { value: "2026-09-14" } });
+      invoke(oldCopy, "onClick");
+      invoke(oldDiscard, "onClick");
+      invoke(oldKeep, "onClick");
+      await hooks.settle();
+      expect(hasButton(discardLabel)).toBe(false);
+      expect(status()).not.toContain("Copied saved goal");
+      expect(calls).toHaveLength(count);
+      if (kind !== "New") expect(field("Why this energy target?").props.value).toBe(" Dirty ");
+      if (kind === "energy") expect(field("Daily energy (kcal)").props.value).toBe("9999");
+      if (kind === "threshold") expect(field("Calcium target mg").props.value).toBe("222");
+      if (kind === "source") expect(field("Calcium target source").props.value).toBe(" Changed ");
+      if (kind === "Add") expect(targetRows()).toHaveLength(2);
+      if (kind === "Remove" || kind === "New") expect(targetRows()).toHaveLength(0);
+      if (kind === "date") expect(field("Effective from").props.value).toBe("2026-09-14");
+    },
+  );
+
+  it("rejects A-to-B-to-A edits and old Discard after Keep and a new confirmation", async () => {
+    await copyWorkspace();
+    await change("Why this energy target?", " Dirty ");
+    await click(copyLabel);
+    const stale = button(discardLabel);
+    const input = field("Why this energy target?");
+    invoke(input, "onChange", { target: { value: " Other " } });
+    invoke(input, "onChange", { target: { value: " Dirty " } });
+    invoke(stale, "onClick");
+    await hooks.settle();
+    expect(status()).not.toContain("Copied saved goal");
+    await click(copyLabel);
+    const firstDiscard = button(discardLabel);
+    await click("Keep editing");
+    await click(copyLabel);
+    const before = rawEditor(),
+      message = status();
+    invoke(firstDiscard, "onClick");
+    await hooks.settle();
+    expect(rawEditor()).toEqual(before);
+    expect(status()).toBe(message);
+    expect(hasButton(discardLabel)).toBe(true);
+    await click(discardLabel);
+    assertSavedRows();
+  });
+
+  it.each(["2026-09-12", "invalid"])(
+    "rejects actual progress date %s and A-to-B-to-A until a full load",
+    async (nextDate) => {
+      await copyWorkspace();
+      await change("Why this energy target?", " Dirty ");
+      await click(copyLabel);
+      const copy = button(copyLabel),
+        discard = button(discardLabel),
+        dateInput = field("Progress date");
+      invoke(dateInput, "onChange", { target: { value: nextDate } });
+      invoke(copy, "onClick");
+      invoke(discard, "onClick");
+      invoke(dateInput, "onChange", { target: { value: day } });
+      invoke(copy, "onClick");
+      invoke(discard, "onClick");
+      await hooks.settle();
+      expect(button(copyLabel).props.disabled).toBe(true);
+      expect(field("Why this energy target?").props.value).toBe(" Dirty ");
+      invoke(field("Progress date"), "onBlur");
+      await hooks.settle();
+      expect(button(copyLabel).props.disabled).toBe(false);
+      invoke(discard, "onClick");
+      await hooks.settle();
+      expect(field("Effective from").props.value).toBe(day);
+    },
+  );
+
+  it("rejects retained controls across route-before-effect and unmount without metadata updates", async () => {
+    const { calls } = await copyWorkspace();
+    await change("Why this energy target?", " Dirty ");
+    await click(copyLabel);
+    const old = [button(copyLabel), button(discardLabel), button("Keep editing")];
+    const before = rawEditor(),
+      message = status(),
+      count = calls.length;
+    navigation.query = "date=2026-09-12";
+    hooks.renderWithoutEffects();
+    for (const node of old) invoke(node, "onClick");
+    expect(rawEditor()).toEqual(before);
+    expect(status()).toBe(message);
+    expect(button(copyLabel).props.disabled).toBe(true);
+    hooks.unmount();
+    for (const node of old) invoke(node, "onClick");
+    expect(hooks.afterClose()).toBe(0);
+    expect(calls).toHaveLength(count);
+  });
+
+  it.each(["auth", "load", "write", "profile", "candidate"])(
+    "blocks live %s work before paint and rejects obsolete controls after receipt",
+    async (phase) => {
+      const response = deferred<Response>();
+      let active = false;
+      const targetPath =
+        phase === "auth"
+          ? "/api/auth/me"
+          : phase === "load"
+            ? "/api/nutrients/targetable"
+            : phase === "write"
+              ? `/api/goals/${savedGoal().id}/revisions`
+              : phase === "profile"
+                ? "/api/profile"
+                : `/api/goals/reference-target-sets?date=${day}`;
+      const result = await copyWorkspace({
+        intercept: ({ path }) => (active && path === targetPath ? response.promise : undefined),
+      });
+      await change("Why this energy target?", " Dirty ");
+      await click(copyLabel);
+      const old = [button(copyLabel), button(discardLabel)];
+      active = true;
+      if (phase === "auth") hooks.replayEffects();
+      if (phase === "load") invoke(field("Progress date"), "onBlur");
+      if (phase === "candidate") invoke(field("Effective from"), "onBlur");
+      if (phase === "write") void submit();
+      if (phase === "profile") invoke(button("Save profile and check eligibility"), "onClick");
+      for (const node of old) invoke(node, "onClick");
+      await hooks.settle();
+      expect(field("Why this energy target?").props.value).toBe(" Dirty ");
+      expect(status()).not.toContain("Copied saved goal");
+      hooks.render();
+      if (hasButton(copyLabel)) expect(button(copyLabel).props.disabled).toBe(true);
+      active = false;
+      if (phase === "auth") response.resolve(session("51f6bdfa-9cb4-4b8f-9f8f-fd2bc45b46cb"));
+      if (phase === "load") response.resolve(Response.json({ data: registry }));
+      if (phase === "candidate") response.resolve(Response.json(manualReferences()));
+      if (phase === "write") {
+        const accepted = savedGoal(undefined, "4");
+        result.setGoal(accepted);
+        response.resolve(Response.json({ data: { replayed: true, goal: accepted } }));
+      }
+      if (phase === "profile") {
+        const profile = (await session().json()).data.profile;
+        profile.revision = "5";
+        response.resolve(Response.json({ data: { profile } }));
+      }
+      await hooks.settle();
+      if (phase === "candidate") {
+        expect(button(copyLabel).props.disabled).toBe(false);
+        // Same source/builder still owns its choice after an unrelated candidate read.
+        await click("Keep editing");
+        await click(copyLabel);
+      } else {
+        const editor = rawEditor(),
+          message = status();
+        for (const node of old) invoke(node, "onClick");
+        await hooks.settle();
+        expect(rawEditor()).toEqual(editor);
+        expect(status()).toBe(message);
+        if (phase === "profile") expect(button(copyLabel).props.disabled).toBe(true);
+        else expect(button(copyLabel).props.disabled).toBe(false);
+      }
+    },
+  );
+
+  it("withholds failed reload provenance, restores on Retry, and closes old controls on 401", async () => {
+    let mode = "normal";
+    await copyWorkspace({
+      intercept: ({ path }) =>
+        path.startsWith("/api/goals/current?") && mode !== "normal"
+          ? Response.json({}, { status: mode === "expired" ? 401 : 503 })
+          : undefined,
+    });
+    const old = button(copyLabel);
+    mode = "failed";
+    invoke(field("Progress date"), "onBlur");
+    await hooks.settle();
+    expect(hasButton(copyLabel)).toBe(false);
+    invoke(old, "onClick");
+    expect(field("Effective from").props.value).toBe(day);
+    mode = "normal";
+    await click("Retry goals");
+    expect(button(copyLabel).props.disabled).toBe(false);
+    const current = button(copyLabel);
+    mode = "expired";
+    invoke(field("Progress date"), "onBlur");
+    await hooks.settle();
+    expect(router.replace).toHaveBeenCalledWith("/login");
+    const before = rawEditor(),
+      message = status();
+    invoke(old, "onClick");
+    invoke(current, "onClick");
+    await hooks.settle();
+    expect(rawEditor()).toEqual(before);
+    expect(status()).toBe(message);
+    expect(hasButton(copyLabel)).toBe(false);
+  });
+});
+
+describe("copied goal mutation ownership", () => {
+  it("preserves pending revision and exact ambiguous Create body/date identity across repeated copies", async () => {
+    const { calls } = await copyWorkspace({
+      intercept: ({ init }) =>
+        init?.method === "POST" ? Response.json({}, { status: 503 }) : undefined,
+    });
+    await submit();
+    await hooks.settle();
+    const revision = required(writes(calls)[0]);
+    await click(copyLabel);
+    await change("Effective from", "2026-09-13");
+    await submit();
+    await hooks.settle();
+    const first = required(writes(calls)[1]);
+    const firstKey = new Headers(first.init?.headers).get("idempotency-key");
+    const count = calls.length;
+    await click(copyLabel);
+    await click(discardLabel);
+    expect(calls).toHaveLength(count);
+    await change("Effective from", "2026-09-13");
+    await submit();
+    await hooks.settle();
+    const same = required(writes(calls)[2]);
+    expect(same.init?.body).toBe(first.init?.body);
+    expect(new Headers(same.init?.headers).get("idempotency-key")).toBe(firstKey);
+    expect(new Headers(same.init?.headers).get("if-match")).toBeNull();
+    expect(new Headers(revision.init?.headers).get("if-match")).toBe('"3"');
+    expect(new Headers(revision.init?.headers).get("idempotency-key")).not.toBe(firstKey);
+    await change("Effective from", "2026-09-14");
+    await submit();
+    await hooks.settle();
+    const otherDate = required(writes(calls)[3]);
+    expect(new Headers(otherDate.init?.headers).get("idempotency-key")).not.toBe(firstKey);
+    await change("Effective from", "2026-09-13");
+    await change("Why this energy target?", " Other body ");
+    await submit();
+    await hooks.settle();
+    const otherBody = required(writes(calls)[4]);
+    expect(new Headers(otherBody.init?.headers).get("idempotency-key")).not.toBe(firstKey);
+    invoke(field("Progress date"), "onBlur");
+    await hooks.settle();
+    await submit();
+    await hooks.settle();
+    const replayRevision = required(writes(calls)[5]);
+    expect(replayRevision.init?.body).toBe(revision.init?.body);
+    expect(new Headers(replayRevision.init?.headers).get("idempotency-key")).toBe(
+      new Headers(revision.init?.headers).get("idempotency-key"),
+    );
+  });
+
+  it("accepts the explicit Create receipt and keeps earlier saved values intact on readback", async () => {
+    const accepted = {
+      ...savedGoal(undefined, "1"),
+      id: "19b38885-4de5-4bfc-9cdc-3b0a1a8eb445",
+      effectiveFrom: "2026-09-13",
+    };
+    const { calls } = await copyWorkspace({
+      intercept: ({ init }) =>
+        init?.method === "POST"
+          ? Response.json({ data: { replayed: true, goal: accepted } }, { status: 201 })
+          : undefined,
+    });
+    await click(copyLabel);
+    await change("Effective from", "2026-09-13");
+    await submit();
+    await hooks.settle();
+    expect(status()).toBe("The earlier goal save was confirmed safely.");
+    expect(text()).toContain("GOAL REVISION 3");
+    expect(field("Progress date").props.value).toBe(day);
+    assertSavedRows();
+    expect(writes(calls)).toHaveLength(1);
+    expect(writes(calls)[0]?.path).toBe("/api/goals");
+    expect(button(copyLabel).props.disabled).toBe(false);
+  });
+});

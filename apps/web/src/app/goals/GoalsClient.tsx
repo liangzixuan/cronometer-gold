@@ -73,6 +73,20 @@ interface GoalBuilder {
   } | null;
 }
 
+interface SavedGoalCopySource {
+  readonly goal: GoalView;
+  readonly session: SessionSummary;
+  readonly route: { readonly requestedDate: string | null };
+  readonly progressDate: string;
+  readonly scope: string | null;
+  readonly readGeneration: number;
+}
+
+interface GoalCopyConfirmation {
+  readonly source: SavedGoalCopySource;
+  readonly builder: GoalBuilder;
+}
+
 export function emptyGoal(date: string): GoalBuilder {
   return {
     goalId: null,
@@ -241,7 +255,37 @@ export function GoalsClient() {
   const [date, setDate] = useState(
     requestedDate && isLocalDate(requestedDate) ? requestedDate : "",
   );
-  const [builder, setBuilder] = useState<GoalBuilder>(() => emptyGoal(""));
+  const [builder, setBuilderState] = useState<GoalBuilder>(() => emptyGoal(""));
+  const builderRef = useRef(builder);
+  const [copySource, setCopySourceState] = useState<SavedGoalCopySource | null>(null);
+  const copySourceRef = useRef<SavedGoalCopySource | null>(null);
+  const [copyConfirmation, setCopyConfirmation] = useState<GoalCopyConfirmation | null>(null);
+  const copyConfirmationRef = useRef<GoalCopyConfirmation | null>(null);
+  const clearCopyConfirmation = useCallback(() => {
+    copyConfirmationRef.current = null;
+    setCopyConfirmation(null);
+  }, []);
+  const setBuilder = useCallback(
+    (change: GoalBuilder | ((current: GoalBuilder) => GoalBuilder)) => {
+      const current = builderRef.current;
+      const next = typeof change === "function" ? change(current) : change;
+      if (next === current) return;
+      // Keep local actions aware of raw edits before React paints. Functional
+      // changes remain pure; confirmation and ref updates happen outside them.
+      builderRef.current = next;
+      clearCopyConfirmation();
+      setBuilderState(next);
+    },
+    [clearCopyConfirmation],
+  );
+  const setCopySource = useCallback(
+    (next: SavedGoalCopySource | null) => {
+      copySourceRef.current = next;
+      clearCopyConfirmation();
+      setCopySourceState(next);
+    },
+    [clearCopyConfirmation],
+  );
   const [definitions, setDefinitions] = useState<readonly TargetableNutrient[]>([]);
   const [selectedNutrientId, setSelectedNutrientId] = useState("");
   const [nutrientQuery, setNutrientQuery] = useState("");
@@ -301,6 +345,7 @@ export function GoalsClient() {
   );
 
   const signInAgain = useCallback(() => {
+    setCopySource(null);
     resetNutrientPicker();
     pickerScope.current = null;
     loadedPickerRoute.current = null;
@@ -315,10 +360,11 @@ export function GoalsClient() {
     setReferenceSets(null);
     router.replace("/login");
     router.refresh();
-  }, [router, resetNutrientPicker]);
+  }, [router, resetNutrientPicker, setCopySource]);
 
   const load = useCallback(
     async (localDate: string, ownerSession: SessionSummary) => {
+      setCopySource(null);
       loadController.current?.abort();
       const controller = new AbortController();
       loadController.current = controller;
@@ -428,6 +474,20 @@ export function GoalsClient() {
         installPickerScope(ownerSession, localDate);
         pickerDefinitions.current = nextDefinitions;
         loadedPickerRoute.current = requestRoute;
+        setCopySource(
+          nextGoal?.energy.mode === "fixed" &&
+            (nextGoal.status === "active" || nextGoal.status === "archived") &&
+            nextReferenceSets?.applied === null
+            ? {
+                goal: nextGoal,
+                session: ownerSession,
+                route: requestRoute,
+                progressDate: localDate,
+                scope: pickerScope.current,
+                readGeneration: requestGeneration,
+              }
+            : null,
+        );
         setDefinitions(nextDefinitions);
         let nextBuilder = nextGoal ? goalBuilderFromGoal(nextGoal) : emptyGoal(localDate);
         const appliedSet = nextReferenceSets
@@ -470,7 +530,7 @@ export function GoalsClient() {
         if (loadController.current === controller) loadController.current = null;
       }
     },
-    [signInAgain, installPickerScope],
+    [signInAgain, installPickerScope, setCopySource, setBuilder],
   );
 
   const refreshSessionAndGoals = useCallback(
@@ -895,6 +955,80 @@ export function GoalsClient() {
     }
   }
 
+  function canCopySavedGoal() {
+    return (
+      copySource !== null &&
+      copySourceRef.current === copySource &&
+      goal === copySource.goal &&
+      pickerMounted.current &&
+      state === "ready" &&
+      !busy &&
+      !profileBusy &&
+      builderRef.current === builder &&
+      sessionRef.current === copySource.session &&
+      pickerRoute.current === copySource.route &&
+      loadedPickerRoute.current === copySource.route &&
+      pickerScope.current !== null &&
+      pickerScope.current === copySource.scope &&
+      date === copySource.progressDate &&
+      selectedDateRef.current === copySource.progressDate &&
+      effectiveDateRef.current === builder.effectiveFrom &&
+      generation.current === copySource.readGeneration &&
+      !authController.current &&
+      !loadController.current &&
+      !writeController.current &&
+      !profileController.current &&
+      !candidateController.current
+    );
+  }
+
+  function copySavedGoalToDraft() {
+    if (!canCopySavedGoal() || !copySource) return;
+    const next = {
+      ...goalBuilderFromGoal(copySource.goal),
+      goalId: null,
+      revision: null,
+      effectiveFrom: "",
+      reference: null,
+    };
+    candidateController.current?.abort();
+    candidateController.current = null;
+    candidateGeneration.current += 1;
+    effectiveDateRef.current = next.effectiveFrom;
+    setBuilder(next);
+    setReferenceSets(null);
+    setSelectedReferenceGroup("");
+    setReferenceAcknowledged(false);
+    setReferenceCustomized(false);
+    setMessage(
+      `Copied saved goal version ${copySource.goal.versionNumber} to a new draft. Choose its effective date, review the values, then Create goal. Saved values are unchanged.`,
+    );
+  }
+
+  function requestGoalCopy() {
+    if (!canCopySavedGoal() || !copySource) return;
+    if (JSON.stringify(builder) === JSON.stringify(goalBuilderFromGoal(copySource.goal))) {
+      copySavedGoalToDraft();
+      return;
+    }
+    const confirmation = { source: copySource, builder };
+    copyConfirmationRef.current = confirmation;
+    setCopyConfirmation(confirmation);
+  }
+
+  function resolveGoalCopy(discard: boolean) {
+    if (
+      !canCopySavedGoal() ||
+      !copyConfirmation ||
+      copyConfirmationRef.current !== copyConfirmation ||
+      copySourceRef.current !== copyConfirmation.source ||
+      builderRef.current !== copyConfirmation.builder
+    )
+      return;
+    if (discard) copySavedGoalToDraft();
+    else clearCopyConfirmation();
+  }
+
   function beginNewGoal() {
     if (!isLocalDate(date)) {
       setMessage("Choose a real progress date before starting a new goal.");
@@ -1038,6 +1172,50 @@ export function GoalsClient() {
                 </>
               ) : null}
             </div>
+            {copySource ? (
+              <section className="workspaceSection" aria-label="Copy saved goal">
+                <p className="fieldHelp">
+                  Copy saved goal version {copySource.goal.versionNumber}, effective{" "}
+                  {copySource.goal.effectiveFrom}, into a new dated draft. Creating it may close the
+                  prior active goal period; its saved values stay intact.
+                </p>
+                <button
+                  className="buttonSecondary"
+                  disabled={!canCopySavedGoal()}
+                  onClick={requestGoalCopy}
+                  type="button"
+                >
+                  Copy saved goal to new draft
+                </button>
+                {copyConfirmation &&
+                copyConfirmationRef.current === copyConfirmation &&
+                canCopySavedGoal() ? (
+                  <fieldset
+                    aria-labelledby="copy-goal-confirmation"
+                    style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}
+                  >
+                    <p id="copy-goal-confirmation" className="coverageCopy" aria-live="polite">
+                      This editor has unsaved changes. Keep editing, or discard them and copy saved
+                      goal version {copySource.goal.versionNumber}.
+                    </p>
+                    <button
+                      className="buttonQuiet"
+                      onClick={() => resolveGoalCopy(false)}
+                      type="button"
+                    >
+                      Keep editing
+                    </button>{" "}
+                    <button
+                      className="buttonSecondary"
+                      onClick={() => resolveGoalCopy(true)}
+                      type="button"
+                    >
+                      Discard edits and copy saved version
+                    </button>
+                  </fieldset>
+                ) : null}
+              </section>
+            ) : null}
             <form className="workspaceForm" onSubmit={(event) => void save(event)}>
               <fieldset className="goalEditorFields" disabled={busy || historicalGoal}>
                 <label className="formField">

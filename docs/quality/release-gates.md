@@ -945,3 +945,20 @@ acceptance.
   frozen canonical gates and production Next/BFF synthetic Chrome no-request/
   search/Add/draft/synthetic-save/retry/keyboard/narrow/expiry proof. Real backend,
   device, assistive, concurrent React, external and release gates remain separate.
+
+## ADR 0060 Saved manual goal copy
+
+- Bind manual-copy eligibility to a successfully loaded saved fixed-energy goal
+  and authoritative effective-date/profile reference evidence with applied null.
+  Unknown or verified/derived sources remain excluded; Customize cannot change
+  saved-source eligibility. Historical revision locks remain intact.
+- Copy exact saved strings/IDs/order/units and nullable metadata into a new draft
+  with blank destination date and cleared identity/reference. Dirty Keep/Discard
+  and retained-callback guards protect raw fields and all related metadata.
+- Local Copy/Keep/Discard issue no requests and allocate no operations. Preserve
+  pending maps and exact Create/revision/retry identity; explicit Create and
+  applicable-date readback remain required.
+- Require focused actual-component/helper/type/format checks, independent review,
+  frozen canonical gates and production Next/BFF synthetic Chrome no-request/
+  copy/draft/Create/replay/keyboard/narrow/expiry evidence. Real backend, device,
+  assistive, concurrent React, external and release gates remain separate.

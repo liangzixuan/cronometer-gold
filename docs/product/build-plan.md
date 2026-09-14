@@ -162,6 +162,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Expand all diary meals on web/native | ADR 0057 local overview, preserved drafts/disclosures/paging and existing private/queue guards; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 | Automatic evidence / independent review | Loaded biometric history metric filter on web/native | ADR 0058 exact metric IDs, truthful loaded counts and editor/trend independence; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 | Automatic evidence / independent review | Web goal nutrient search | ADR 0059 local name/code search, visible selection, explicit Add and draft/save independence; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
+| Automatic evidence / independent review | Saved manual goal copy on web/native | ADR 0060 exact saved fields, dirty confirmation, reviewed date and preserved Create/retry identity; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1604,6 +1605,21 @@ At 2026-09-11T17:51:26.156817+00:00, base
 `34629733657` remained in progress. Base results do not transfer to this slice.
 External/device/hosted/release acceptance remains separate.
 
+### Saved manual goal copy: source/local complete
+
+[ADR 0060](../adr/0060-goal-copy.md) copies a positively verified saved manual
+fixed-energy goal into a new draft on web/native. Preserve exact target/source
+fields and saved values; use explicit dirty Keep/Discard, a blank destination
+date and existing Create/retry ownership. Focused component/helper checks,
+independent review, frozen canonical gates and production Chrome copy/draft/
+synthetic-save/keyboard/narrow/expiry proof passed. Shared contracts and
+protected queues remain unchanged.
+
+At 2026-09-14T03:40:03.368987+00:00, base
+251f3a095d791d03f0fbda54e488872466ea1c82 CI 34633156925 and container
+34633157036 both succeeded. Base results do not transfer to this slice.
+External/device/hosted/release acceptance remains separate.
+
 ### Next bounded candidate
 
-Consider copying a saved manual fixed-energy goal into a new dated draft on web/native. Existing New goal starts empty; the existing goal-to-builder converters preserve exact thresholds, source/version and rationale fields. Begin with a bounded acceptance card for explicit saved-source copy, dirty-draft Keep/Discard, reviewed date, cleared goal identity/revision and explicit Create without If-Match. Preserve pending/ambiguous retry ownership and current private/date/object guards; initially exclude verified/derived reference cases rather than silently changing provenance. Require exact no-request field transfer, source preservation, Create/retry and keyboard/narrow evidence. No successor implementation is included in ADR0059; external/device/hosted/release acceptance remains separate.
+Candidate: add Last 7 / 30 / 90 days shortcuts to Health trends on web/native. Both current clients require manually editing From and To. Use the existing profile-local calendar helper and trend read ownership, preserve custom dates, selected series, unrelated drafts, protected queues and pending writes. Capture today once per press; use inclusive From = today + (1 - N) calendar days. A matching pair must be a true no-op. Preserve web automatic loading and native explicit Load trends. Before implementation, revalidate exact source and acceptance for calendar/DST/year boundaries, stale/private/zone ownership, request counts, missingness, keyboard and 390px layout. No API, schema, reports, clinical interpretation or release expansion.
