@@ -3000,6 +3000,7 @@ export function RetentionScreen({
                 label: `${item.name} (${item.unit})`,
               }))}
               selected={customVisible ? composer.nutrientId : ""}
+              wrapLabels
               onSelect={(nutrientId) => changeComposer({ nutrientId })}
             />
             <Text style={styles.label}>

@@ -419,6 +419,73 @@ describe("native named custom-food nutrient composer", () => {
       harness.unmount();
     }
   });
+  it("wraps complete maximum-length named nutrient labels and adds the selected exact ID", async () => {
+    const name = "Long nutrient ".padEnd(200, "n");
+    const unit = "u".repeat(32);
+    const registry = [
+      { ...protein, id: "902", code: "long_unit", name, unit },
+      protein,
+      { ...sodium, id: "901", code: "same_name", name },
+    ];
+    const labels = registry.map((row) => `${row.name} (${row.unit})`);
+    const { harness, requests, props } = setup((request) =>
+      request.url.pathname === "/v1/nutrients/targetable"
+        ? response({ data: registry })
+        : undefined,
+    );
+    try {
+      await type(harness, "Name", "Owner food");
+      const raw = " 208=125.5000\r\n\r\n 999=unknown:withheld  ";
+      let tree = await type(harness, "Canonical nutrients per 100 g", raw);
+      const choices = nodes(
+        tree,
+        (node) => node.props.accessibilityRole === "radio" && labels.includes(text(node)),
+      );
+      expect(choices.map((choice) => [choice.key, text(choice)])).toEqual(
+        registry.map((row, index) => [row.id, labels[index]]),
+      );
+      for (const choice of choices) {
+        expect(choice.props.accessibilityState).toEqual({ selected: false, disabled: false });
+        expect(choice.props.style).toContainEqual({ maxWidth: "100%", minWidth: 0, flexShrink: 1 });
+        const label = nodes(choice, (node) => node.type === "Text");
+        expect(label).toHaveLength(1);
+        expect(label[0].props.children).toBe(text(choice));
+        expect(label[0].props.numberOfLines).toBeUndefined();
+        expect(label[0].props.ellipsizeMode).toBeUndefined();
+      }
+      const before = requests.length;
+      const operation = hooks.operation;
+      await click(harness, labels[2]);
+      const amount = "0.00000000000000100";
+      await type(harness, `${name} amount (mg per 100 g)`, amount);
+      await click(harness, labels[0]);
+      tree = await type(harness, "Find an available nutrient by name", "no such nutrient");
+      expect(text(tree)).toContain("0 matching of 3 available nutrients");
+      tree = await click(harness, "Clear nutrient filter");
+      expect(input(tree, "Find an available nutrient by name").props.value).toBe("");
+      expect(labels.map((label) => button(tree, label).props.accessibilityState.selected)).toEqual([
+        true,
+        false,
+        false,
+      ]);
+      expect(input(tree, `${name} amount (${unit} per 100 g)`).props.value).toBe(amount);
+      expect(button(tree, "Quantified").props.accessibilityState.selected).toBe(true);
+      expect(input(tree, "Name").props.value).toBe("Owner food");
+      expect(canonical(tree)).toBe(raw);
+      expect(requests).toHaveLength(before);
+      expect(hooks.operation).toBe(operation);
+      expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+      expect(props.quickAddOutboxController.requestDrain).not.toHaveBeenCalled();
+      tree = await click(harness, "Add nutrient row to draft");
+      expect(canonical(tree)).toBe(`${raw}\r\n902=${amount}`);
+      expect(requests).toHaveLength(before);
+      expect(hooks.operation).toBe(operation);
+      expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+      expect(props.quickAddOutboxController.requestDrain).not.toHaveBeenCalled();
+    } finally {
+      harness.unmount();
+    }
+  });
   for (const amount of ["0", "0.00000000000000100"])
     it(`appends exact quantified ${amount} losslessly and saves only explicitly`, async () => {
       const { harness, requests } = setup();

@@ -168,6 +168,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Units in native Health trend metric choices | ADR 0063 exact units and wrapping labels with preserved None/IDs/loading; focused checks, independent review, fresh canonical gates and native exports passed; external/device/release separate |
 | Automatic evidence / independent review | Search web Health trend nutrients | ADR 0064 local name search/Clear, selected context and preserved reads/drafts/private ownership; focused review, fresh canonical gates and synthetic Chrome passed; external/device/release separate |
 | Automatic evidence / independent review | Clear the native named nutrient filter | ADR 0065 existing guarded query reset preserves nutrient draft and explicit Add/save/retry; focused checks, independent review, fresh canonical gates and native exports passed; external/device/release separate |
+| Automatic evidence / independent review | Wrap native named nutrient choices | ADR 0066 existing wrapping option preserves full labels and IDs/drafts/explicit Add; focused checks, independent review, fresh canonical gates and native exports passed; device/external/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1700,14 +1701,25 @@ At 2026-09-14T15:24:47.630258+00:00, base `e70f7a25df3383e691a2a5f44485394dde626
 ci `34819446482` completed / success; container supply chain `34819446470` completed / success. These exact base results do not transfer to this slice.
 Physical-device, external reviewer and release acceptance remain separate.
 
+### Native named nutrient choice wrapping: source/local complete
+
+[ADR 0066](../adr/0066-native-composer-wrap.md) enables the existing wrapping
+option on the named nutrient composer. Keep full names/units, exact IDs, source
+order, selected state, search/Clear and raw drafts. No handler or shared style
+changes. Compact component evidence, source review, fresh canonical gates and
+native exports passed; physical-device/external/release acceptance is separate.
+
+At 2026-09-14T15:54:22.737185+00:00, base `c46ee859efb0eb434319ca9a88120ac35343b61f` automatic evidence was:
+container supply chain `34863554257` in_progress; ci `34863554217` completed / success. These base results do not transfer to this slice.
+
 ### Next bounded candidate
 
-Allow long names and units to wrap in the native custom-food named nutrient
-choices using the existing ChipRow wrapLabels option. The composer currently
-uses ordinary chips without the width bound already used by trend choices.
-Prepare a separate native presentation card: preserve complete labels, source
-order, exact selected IDs, search/Clear, raw composer values and explicit Add/save
-behavior. One existing prop plus compact component coverage, affected types and
-format, independent review, fresh canonical gates and native exports; no helper,
-controller, API, web or dependency changes. Source/style and export evidence does
-not establish physical-device or assistive acceptance. No successor implementation has started.
+Explain when the web custom-food Add nutrient action has no remaining loaded
+choice. The existing button silently does nothing once all loaded nutrient IDs
+are represented or the list is empty. Prepare a separate card to disable that
+action with truthful exhausted, empty or unavailable feedback and restore it
+after a row is removed. Preserve first-unused ID order, the existing quantified
+default amount, raw rows, private/draft ownership and explicit save/retry. Scope
+the web control and existing state suite plus ADR/index/plan/gates, focused checks
+and production synthetic Chrome proof; no new picker, remote search or contract.
+No successor implementation has started.

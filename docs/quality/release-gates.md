@@ -1032,3 +1032,14 @@ acceptance.
   affected types/format, independent review, frozen canonical gates and native
   exports. Device, assistive, concurrent React, real persistence, external and
   release acceptance remain separate.
+
+
+## ADR 0066 Wrap native named nutrient choices
+
+- Apply existing wrapping to complete named nutrient labels; preserve exact
+  name/unit/ID/order, radio state, search/Clear, raw drafts and explicit Add/save.
+- No handler, shared style, request, private-context or queue protocol change.
+  Require compact long-label/distinct-unit/exact-ID component evidence, existing
+  focused guards/retries, types/format, independent review and frozen canonical
+  gates/native exports. Device, assistive, concurrent React, real persistence,
+  external and release acceptance remain separate.
