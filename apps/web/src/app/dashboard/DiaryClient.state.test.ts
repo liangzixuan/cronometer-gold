@@ -138,8 +138,11 @@ vi.mock("next/navigation", () => ({
 import {
   defaultDiaryGroups,
   diaryDayOrderDigest,
+  localDateInTimeZone,
+  localTimeInTimeZone,
   type MealSlot,
   nutrientDisplay,
+  parseDiaryCorrectionMutation,
   parseDiaryPage,
   parseSession,
 } from "../../lib/diary";
@@ -360,6 +363,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   hooks.unmount();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
 });
@@ -1288,6 +1292,7 @@ describe("logged portion nutrient details", () => {
     async (change) => {
       const fetch = await mount();
       await toggleNutrients(0);
+      const oldRepeat = button("Repeat Apple 0 today");
       const oldHide = nutrientControl(0),
         requests = fetch.mock.calls.length;
       const replacement = session(change === "owner" ? anotherOwner : owner);
@@ -1296,6 +1301,7 @@ describe("logged portion nutrient details", () => {
       hooks.replaceVerifiedSessionBeforeEffects(parseSession(replacement));
       expect(nutrientDetail(0)).toBeUndefined();
       invoke(oldHide);
+      invoke(oldRepeat);
       expect(nutrientDetail(0)).toBeUndefined();
       hooks.replaceVerifiedSessionBeforeEffects(parseSession(session()));
       expect(nutrientDetail(0)).toBeUndefined();
@@ -1321,6 +1327,7 @@ describe("logged portion nutrient details", () => {
     await mount(fetch);
     await toggleNutrients(0);
     const oldHide = nutrientControl(0);
+    const oldRepeat = button("Repeat Apple 0 today");
     if (transition === "route") {
       route.date = "2026-08-16";
       hooks.renderWithoutEffects();
@@ -1351,6 +1358,7 @@ describe("logged portion nutrient details", () => {
     const requests = fetch.mock.calls.length,
       before = text();
     invoke(oldHide);
+    invoke(oldRepeat);
     if (transition !== "route") await hooks.settle();
     expect(text()).toBe(before);
     expect(fetch.mock.calls).toHaveLength(requests);
@@ -1475,5 +1483,421 @@ describe("Expand all diary meals", () => {
     expect(text()).toBe(before);
     expect(button("Expand Lunch").props["aria-expanded"]).toBe(false);
     expect(fetch.mock.calls).toHaveLength(requests);
+  });
+});
+
+describe("actual Diary Repeat retry identity", () => {
+  it.each([
+    ["minute", "2026-08-15T18:00:59.000Z", "2026-08-15T18:01:01.000Z", "2026-08-15T18:00:00.000Z"],
+    [
+      "local midnight",
+      "2026-08-16T04:59:59.000Z",
+      "2026-08-16T05:00:01.000Z",
+      "2026-08-16T04:59:00.000Z",
+    ],
+  ])(
+    "pins unresolved Repeat across a %s boundary",
+    async (_boundary, firstTime, retryTime, occurredAt) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(firstTime));
+      if (_boundary === "local midnight") route.date = null;
+      const writes: Array<{ url: string; body: string | null; headers: Record<string, string> }> =
+        [];
+      const base = fetcher();
+      const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST" && url.includes("/repeat?")) {
+          writes.push({
+            url,
+            body: typeof init.body === "string" ? init.body : null,
+            headers: Object.fromEntries(new Headers(init.headers)),
+          });
+          return Response.json(
+            { error: "The accepted response may have been lost." },
+            { status: 503 },
+          );
+        }
+        return base(url, init);
+      });
+      await mount(fetch);
+      await click("Repeat Apple 0 today");
+      expect(writes).toHaveLength(1);
+      expect(writes[0]?.url).toBe(
+        `/api/diary/entries/${entry(0).id}/repeat?date=2026-08-15&profileTimeZonePrecondition=v1`,
+      );
+      expect(writes[0]?.body).toBe(JSON.stringify({ occurredAt, mealSlot: "breakfast" }));
+      expect(writes[0]?.headers["if-match"]).toBe('"3"');
+      expect(writes[0]?.headers["x-expected-profile-time-zone"]).toBe("America/Chicago");
+      expect(text()).toContain(
+        "Choose Repeat again to retry the same operation for 2026-08-15 safely.",
+      );
+      vi.setSystemTime(new Date(retryTime));
+      await click("Repeat Apple 0 today");
+      expect(writes).toHaveLength(2);
+      expect(writes[1]).toEqual(writes[0]);
+    },
+  );
+});
+
+interface CapturedRepeat {
+  readonly url: string;
+  readonly body: string;
+  readonly headers: Record<string, string>;
+}
+function captureRepeat(url: string, init: RequestInit): CapturedRepeat {
+  if (typeof init.body !== "string") throw new Error("Repeat body must be serialized.");
+  return { url, body: init.body, headers: Object.fromEntries(new Headers(init.headers)) };
+}
+function repeatReceipt(request: CapturedRepeat, resultNumber = 100) {
+  const body = JSON.parse(request.body) as { occurredAt: string; mealSlot: MealSlot };
+  const instant = new Date(body.occurredAt);
+  const zone = request.headers["x-expected-profile-time-zone"] ?? "";
+  const localDate = localDateInTimeZone(instant, zone);
+  const sourceId = new URL(request.url, "https://app.example.test").pathname.split("/")[4];
+  const result = {
+    ...entry(resultNumber, body.mealSlot, localDate),
+    revision: "1",
+    occurredAt: body.occurredAt,
+    timeZone: zone,
+    localTime: localTimeInTimeZone(instant, zone),
+  };
+  const affectedDays = [{ localDate, revision: "9" }];
+  const payload = {
+    data: {
+      replayed: true,
+      entry: result,
+      affectedDays,
+      receipt: {
+        protocol: "v1",
+        operationId: request.headers["idempotency-key"],
+        kind: "repeat",
+        expectedSubjects: [
+          { entryId: sourceId, revision: request.headers["if-match"]?.replaceAll('"', "") },
+        ],
+        resultSubjects: [{ entryId: result.id, revision: "1", state: "active" }],
+        affectedDays,
+      },
+    },
+  };
+  expect(() => parseDiaryCorrectionMutation(payload)).not.toThrow();
+  return payload;
+}
+async function visitDiaryDate(date: string) {
+  route.date = date;
+  hooks.render();
+  await hooks.settle();
+}
+
+describe("Diary Repeat envelope lifecycle", () => {
+  it("retains transport, generic conflict, malformed and mismatched results, then starts a new intent only after verified success", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-16T04:59:59.000Z"));
+    const writes: CapturedRepeat[] = [];
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url.includes("/repeat?")) {
+        const request = captureRepeat(url, init);
+        writes.push(request);
+        if (writes.length === 1) throw new TypeError("Connection lost after sending the request.");
+        if (writes.length === 2)
+          return Response.json({ code: "UNCLASSIFIED_CONFLICT" }, { status: 409 });
+        if (writes.length === 3) return Response.json({ data: { malformed: true } });
+        const receipt = repeatReceipt(request);
+        if (writes.length === 4) receipt.data.receipt.operationId = entry(999).id;
+        return Response.json(receipt);
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      if (attempt) vi.setSystemTime(new Date(`2026-08-16T05:0${attempt}:01.000Z`));
+      await click("Repeat Apple 0 today");
+      if (attempt < 4) expect(text()).toContain("same operation for 2026-08-15 safely.");
+    }
+    expect(writes).toHaveLength(5);
+    for (const request of writes.slice(1)) expect(request).toEqual(writes[0]);
+    expect(text()).toContain("Pinned entry version repeated");
+    vi.setSystemTime(new Date("2026-08-16T05:05:01.000Z"));
+    await click("Repeat Apple 0 today");
+    expect(writes).toHaveLength(6);
+    expect(writes[5]?.body).toBe(
+      '{"occurredAt":"2026-08-16T05:05:00.000Z","mealSlot":"breakfast"}',
+    );
+    expect(writes[5]?.headers["idempotency-key"]).not.toBe(writes[0]?.headers["idempotency-key"]);
+    expect(writes[5]?.url).toBe(writes[0]?.url);
+  });
+
+  it("keeps independent unresolved source entries separate and rejects same-paint concurrent Repeat", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-15T18:00:59.000Z"));
+    const pending = deferred<Response>();
+    const writes: CapturedRepeat[] = [];
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url.includes("/repeat?")) {
+        writes.push(captureRepeat(url, init));
+        return writes.length === 1 ? pending.promise : Response.json({}, { status: 503 });
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    const first = button("Repeat Apple 0 today"),
+      second = button("Repeat Apple 1 today");
+    invoke(first);
+    invoke(first);
+    invoke(second);
+    await hooks.settle();
+    expect(writes).toHaveLength(1);
+    pending.resolve(Response.json({}, { status: 503 }));
+    await hooks.settle();
+    vi.setSystemTime(new Date("2026-08-15T18:01:01.000Z"));
+    await click("Repeat Apple 1 today");
+    vi.setSystemTime(new Date("2026-08-16T05:01:01.000Z"));
+    await click("Repeat Apple 0 today");
+    await click("Repeat Apple 1 today");
+    expect(writes).toHaveLength(4);
+    expect(writes[2]).toEqual(writes[0]);
+    expect(writes[3]).toEqual(writes[1]);
+    expect(writes[0]?.headers["idempotency-key"]).not.toBe(writes[1]?.headers["idempotency-key"]);
+    expect(JSON.parse(writes[1]?.body ?? "{}").mealSlot).toBe("lunch");
+  });
+
+  it("retires verified success before failed readback and does not reuse its operation after explicit Retry", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-15T18:00:59.000Z"));
+    const writes: CapturedRepeat[] = [];
+    let failReadback = false;
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url.includes("/repeat?")) {
+        const request = captureRepeat(url, init);
+        writes.push(request);
+        failReadback = writes.length === 1;
+        return Response.json(repeatReceipt(request));
+      }
+      if (url.startsWith("/api/diary?") && failReadback) {
+        failReadback = false;
+        return Response.json({ error: "Readback unavailable." }, { status: 503 });
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    await click("Repeat Apple 0 today");
+    expect(text()).toContain(
+      "The entry was repeated, but fresh diary data could not be confirmed.",
+    );
+    await click("Retry");
+    vi.setSystemTime(new Date("2026-08-15T18:01:01.000Z"));
+    await click("Repeat Apple 0 today");
+    expect(writes).toHaveLength(2);
+    expect(writes[1]?.headers["idempotency-key"]).not.toBe(writes[0]?.headers["idempotency-key"]);
+    expect(writes[1]?.body).toContain("2026-08-15T18:01:00.000Z");
+  });
+
+  it("retries the original envelope after a fresh same-owner source date, revision and zone change while rejecting old rendered controls", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-15T18:00:59.000Z"));
+    const writes: CapturedRepeat[] = [];
+    let changedSource = false;
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url.includes("/repeat?")) {
+        const request = captureRepeat(url, init);
+        writes.push(request);
+        return writes.length === 1
+          ? Response.json({}, { status: 503 })
+          : Response.json(repeatReceipt(request));
+      }
+      if (changedSource && url.startsWith("/api/diary?"))
+        return Response.json(
+          page(
+            [{ ...entry(0, "dinner", "2026-08-16"), revision: "4" }],
+            null,
+            1,
+            "2026-08-16",
+            "9",
+          ),
+        );
+      return base(url, init);
+    });
+    await mount(fetch);
+    await click("Repeat Apple 0 today");
+    const old = button("Repeat Apple 0 today");
+    changedSource = true;
+    await visitDiaryDate("2026-08-16");
+    const beforeZone = button("Repeat Apple 0 today");
+    const replacement = session();
+    replacement.data.profile.timeZone = "UTC";
+    hooks.replaceVerifiedSessionBeforeEffects(parseSession(replacement));
+    const count = fetch.mock.calls.length;
+    invoke(old);
+    invoke(beforeZone);
+    expect(fetch.mock.calls).toHaveLength(count);
+    hooks.render();
+    await hooks.settle();
+    vi.setSystemTime(new Date("2026-08-16T06:05:01.000Z"));
+    await click("Repeat Apple 0 today");
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toEqual(writes[0]);
+    expect(writes[1]?.url).toContain("date=2026-08-15&");
+    expect(writes[1]?.headers["if-match"]).toBe('"3"');
+    expect(writes[1]?.headers["x-expected-profile-time-zone"]).toBe("America/Chicago");
+    expect(text()).toContain("Pinned entry version repeated");
+  });
+
+  it.each([412, 409])(
+    "releases the captured intent only after definitive %s recovery",
+    async (status) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-08-15T18:00:59.000Z"));
+      const writes: CapturedRepeat[] = [];
+      let recovered = false;
+      const base = fetcher();
+      const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST" && url.includes("/repeat?")) {
+          writes.push(captureRepeat(url, init));
+          if (writes.length === 1) {
+            recovered = true;
+            return Response.json(
+              { code: status === 409 ? "DIARY_TIME_ZONE_CHANGED" : "ENTRY_PRECONDITION_FAILED" },
+              { status },
+            );
+          }
+          return Response.json({}, { status: 503 });
+        }
+        if (recovered && status === 409 && url === "/api/auth/me") {
+          const replacement = session();
+          replacement.data.profile.timeZone = "UTC";
+          return Response.json(replacement);
+        }
+        if (recovered && url.startsWith("/api/diary?"))
+          return Response.json(page([{ ...entry(0), revision: "4" }], null, 1));
+        return base(url, init);
+      });
+      await mount(fetch);
+      await click("Repeat Apple 0 today");
+      expect(text()).toContain(
+        status === 409 ? "Nothing was repeated" : "The source entry changed",
+      );
+      vi.setSystemTime(new Date("2026-08-15T18:02:01.000Z"));
+      await click("Repeat Apple 0 today");
+      expect(writes).toHaveLength(2);
+      expect(writes[1]?.body).toContain("2026-08-15T18:02:00.000Z");
+      expect(writes[1]?.headers["idempotency-key"]).not.toBe(writes[0]?.headers["idempotency-key"]);
+      expect(writes[1]?.headers["if-match"]).toBe('"4"');
+      expect(writes[1]?.headers["x-expected-profile-time-zone"]).toBe(
+        status === 409 ? "UTC" : "America/Chicago",
+      );
+    },
+  );
+
+  it("does not let a late old receipt retire a newer unresolved slot or release its pending mutation", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-16T05:01:01.000Z"));
+    const oldResponse = deferred<Response>(),
+      currentResponse = deferred<Response>();
+    const writes: CapturedRepeat[] = [];
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url.includes("/repeat?")) {
+        const request = captureRepeat(url, init);
+        writes.push(request);
+        if (writes.length === 1) return oldResponse.promise;
+        if (writes.length === 2) return Response.json(repeatReceipt(request));
+        if (writes.length === 3) return currentResponse.promise;
+        return Response.json({}, { status: 503 });
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    invoke(button("Repeat Apple 0 today"));
+    await hooks.settle();
+    await visitDiaryDate("2026-08-16");
+    await visitDiaryDate("2026-08-15");
+    await click("Repeat Apple 0 today");
+    expect(writes[1]).toEqual(writes[0]);
+    vi.setSystemTime(new Date("2026-08-16T05:02:01.000Z"));
+    invoke(button("Repeat Apple 0 today"));
+    await hooks.settle();
+    expect(writes).toHaveLength(3);
+    expect(writes[2]?.headers["idempotency-key"]).not.toBe(writes[0]?.headers["idempotency-key"]);
+    const oldRequest = writes[0];
+    if (!oldRequest) throw new Error("Missing old request.");
+    oldResponse.resolve(Response.json(repeatReceipt(oldRequest)));
+    await hooks.settle();
+    expect(button("Repeat Apple 0 today").props.disabled).toBe(true);
+    expect(writes).toHaveLength(3);
+    currentResponse.resolve(Response.json({}, { status: 503 }));
+    await hooks.settle();
+    vi.setSystemTime(new Date("2026-08-16T05:03:01.000Z"));
+    await click("Repeat Apple 0 today");
+    expect(writes).toHaveLength(4);
+    expect(writes[3]).toEqual(writes[2]);
+  });
+
+  it("closes Repeat on current401 and rejects the retained control after private closure and unmount", async () => {
+    const writes: CapturedRepeat[] = [];
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url.includes("/repeat?")) {
+        writes.push(captureRepeat(url, init));
+        return Response.json({}, { status: 401 });
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    const old = button("Repeat Apple 0 today");
+    await click("Repeat Apple 0 today");
+    expect(router.replace).toHaveBeenCalledWith("/login");
+    const count = fetch.mock.calls.length;
+    invoke(old);
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(count);
+    hooks.unmount();
+    invoke(old);
+    await hooks.settle();
+    expect(fetch.mock.calls).toHaveLength(count);
+    expect(hooks.afterClose()).toBe(0);
+    expect(writes).toHaveLength(1);
+  });
+});
+
+describe("Diary Repeat overlapping receipt publication", () => {
+  it("publishes the current matching retry after an old-view matching response arrives first", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-15T18:00:59.000Z"));
+    const oldResponse = deferred<Response>(),
+      retryResponse = deferred<Response>();
+    const writes: CapturedRepeat[] = [];
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url.includes("/repeat?")) {
+        writes.push(captureRepeat(url, init));
+        return writes.length === 1 ? oldResponse.promise : retryResponse.promise;
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    invoke(button("Repeat Apple 0 today"));
+    await hooks.settle();
+    await visitDiaryDate("2026-08-16");
+    await visitDiaryDate("2026-08-15");
+    vi.setSystemTime(new Date("2026-08-15T18:01:01.000Z"));
+    invoke(button("Repeat Apple 0 today"));
+    await hooks.settle();
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toEqual(writes[0]);
+    const request = writes[0];
+    if (!request) throw new Error("Missing shared request.");
+    const reads = fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?")).length;
+    oldResponse.resolve(Response.json(repeatReceipt(request)));
+    await hooks.settle();
+    expect(button("Repeat Apple 0 today").props.disabled).toBe(true);
+    retryResponse.resolve(Response.json(repeatReceipt(request)));
+    await hooks.settle();
+    expect(text()).toContain("Pinned entry version repeated");
+    expect(button("Repeat Apple 0 today").props.disabled).toBe(false);
+    expect(fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?")).length).toBe(
+      reads + 1,
+    );
   });
 });

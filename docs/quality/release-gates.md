@@ -1159,3 +1159,19 @@ acceptance.
 - Require focused component/helper/types/format, independent source/final reviews,
   frozen canonical gates and both native exports. Device/assistive/concurrent React,
   persistence, external Claude Code, hosted and release acceptance remain separate.
+
+
+## ADR 0075 Stable web Diary Repeat retries
+
+- Record deterministic minute/local-midnight baseline failure before source edits.
+  Retain exact unresolved body/URL/revision/expected zone/idempotency identity per
+  current-owner source entry through ambiguous errors and fresh same-owner reloads.
+- Only verified matching success, existing explicit time-zone 409/412 recovery or
+  private close/unmount retires the matching envelope. Generic conflicts retain it;
+  verified success releases before readback, and deliberate later Repeat is new.
+- Fence stale/private/loading/concurrent invocations without blocking supported
+  collapse or midnight retry. Preserve receipt/server contracts and other mutations.
+- Require focused component/helper/types/format, source review, frozen canonical
+  gates and validated production Next/BFF synthetic Chrome retry accounting/expiry
+  with owned cleanup, then final staged review. No real-persistence, device,
+  external reviewer, hosted or release acceptance follows from synthetic proof.

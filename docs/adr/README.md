@@ -80,6 +80,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0072](./0072-native-nutrient-edit.md) | Edit named nutrient rows in native drafts | Source/local complete; automatic and release acceptance separate |
 | [0073](./0073-native-draft-nutrient-filter.md) | Find nutrient rows in native drafts | Source/local complete; automatic and release acceptance separate |
 | [0074](./0074-native-picker-availability.md) | Prevent duplicate native nutrient choices | Source/local complete; automatic and release acceptance separate |
+| [0075](./0075-web-repeat-retry.md) | Preserve web Diary Repeat retries across clock changes | Source/local complete; automatic and release acceptance separate |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

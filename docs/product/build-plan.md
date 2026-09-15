@@ -177,6 +177,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Edit named nutrient rows in native drafts | ADR 0072 fixed-row Edit/Apply preserves exact raw text and unfinished input; focused review, fresh canonical gates and native exports passed; external/device/release separate |
 | Automatic evidence / independent review | Find nutrient rows in native drafts | ADR 0073 local name/exact-ID search preserves raw draft and active editing; focused review, fresh canonical gates and native exports passed; external/device/release separate |
 | Automatic evidence / independent review | Prevent duplicate native nutrient choices | ADR 0074 exact occupied-ID availability preserves retained input and explicit Add/Save; focused review, fresh canonical gates and native exports passed; external/device/release separate |
+| Automatic evidence / independent review | Preserve web Diary Repeat retry identity | ADR 0075 exact unresolved envelopes preserve clock-boundary retries; baseline, focused review, fresh canonical gates and production synthetic Chrome passed; external/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1819,24 +1820,29 @@ external/device/release acceptance stays separate.
 At 2026-09-15T04:01:59.740569+00:00, base `46d577353769d9517504b1eb4af86f32c46eb731` automatic evidence was:
 container supply chain `34924016864` in_progress; ci `34924016865` completed / success. These base results do not transfer to this slice.
 
+### Stable web Diary Repeat retries: source/local complete
+
+[ADR 0075](../adr/0075-web-repeat-retry.md) pins an unresolved Repeat's request
+bytes, source preconditions and operation identity across minute/day changes and
+fresh same-owner reloads. Independent entries remain separate; verified completion
+or existing definitive recovery retires only the matching envelope. Preserve
+current private/view authority and receipt validation with no automatic replay.
+The failing clock regression, focused review, fresh canonical gates and dedicated
+Chrome proof passed; external/release acceptance remains separate.
+
+At 2026-09-15T06:28:05.023004+00:00, base `ad0a4b86c1210595f3bad52ff625e7960f313eb4` automatic evidence was:
+ci `34928436357` completed / success; container supply chain `34928436329` completed / success. These base results do not transfer to this slice.
+
 ### Next bounded candidate
 
-Preserve the exact web Diary Repeat request across an ambiguous retry. Source
-inspection found that each Repeat click computes a fresh current minute and body,
-while the operation-key helper includes that body. The current map retains only
-operation IDs, so retrying after a minute or profile-local day boundary can allocate
-a different key despite the message promising the same operation. The existing
-immediate-retry component case does not advance the clock. This is source evidence;
-no runtime reproduction has been performed yet.
-
-Start a separate acceptance card and deterministic clock regression. Retain the
-first unresolved repeat body, URL/source date, source revision, expected time zone
-and idempotency key within the current private owner through transport failure,
-malformed/mismatched receipts and minute/day changes. Verified completion releases
-that intent so a deliberate later Repeat can create a new operation. Preserve
-existing definitive-conflict and private/source lifecycle guards, receipt validation
-and server contracts. Scope DiaryClient.tsx, its existing component suite and docs;
-no helper/backend/native/persistence or release change. Verify lost-response and
-minute/midnight retry identity, successful retry followed by a new deliberate
-intent, independent source entries and existing private/conflict paths before
-applicable canonical and browser evidence. No successor implementation has started.
+Reconcile current readiness and the execution queue before selecting another feature.
+Many completed source slices still appear as dated automatic-evidence follow-ups.
+Record read-only CI and supply-chain observations for the exact delivered HEAD;
+preserve historical results with their own commits and keep pending or failed
+checks explicit. Consolidate actionable print, external review, device/accessibility
+and beta gaps into one compact current record, then select one source-backed
+user-visible milestone or named beta blocker with an owner and testable exit.
+Native Repeat inspection found an existing durable saved request, so an analogous
+clock-change implementation is not justified. This successor is bounded evidence
+and roadmap work: no feature implementation, speculative hardening, workflow
+control, deployment or broad validation rerun. No successor implementation has started.

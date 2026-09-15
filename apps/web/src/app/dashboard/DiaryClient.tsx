@@ -82,6 +82,21 @@ interface EntryEditor extends DiaryEditorOrigin {
   readonly originalLocalTime: string;
 }
 
+interface RepeatOperation {
+  readonly sourceEntryId: string;
+  readonly sourceRevision: string;
+  readonly sourceDate: string;
+  readonly expectedTimeZone: string;
+  readonly targetDate: string;
+  readonly entryName: string;
+  readonly key: string;
+  readonly operationId: string;
+  readonly url: string;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly body: { readonly occurredAt: string; readonly mealSlot: MealSlot };
+  readonly serializedBody: string;
+}
+
 interface MutationOwner {
   readonly sourceDate: string;
   readonly token: number;
@@ -211,6 +226,7 @@ export function DiaryClient() {
   const explicitDateRef = useRef(explicitDate);
   explicitDateRef.current = explicitDate;
   const operationIds = useRef(new Map<string, string>());
+  const repeatOperations = useRef(new Map<string, RepeatOperation>());
   const loadController = useRef<AbortController | null>(null);
   const hydrationOverviewController = useRef<AbortController | null>(null);
   const activityOverviewController = useRef<AbortController | null>(null);
@@ -421,6 +437,7 @@ export function DiaryClient() {
     timeZoneRefreshController.current = null;
     pageRequestBusy.current = false;
     operationIds.current.clear();
+    repeatOperations.current.clear();
     setDiaryPage(null);
     setEditor(null);
     setSession(null);
@@ -764,6 +781,7 @@ export function DiaryClient() {
 
   useEffect(
     () => () => {
+      repeatOperations.current.clear();
       viewEpoch.current += 1;
       activeMutation.current = null;
       requestGeneration.current += 1;
@@ -1145,41 +1163,107 @@ export function DiaryClient() {
   }
 
   async function repeatEntry(entry: DiaryEntry) {
-    if (!session || !diary) {
-      setMessage("Your profile time zone is required before repeating an entry.");
+    if (
+      !session ||
+      !diary ||
+      privateUiClosed.current ||
+      privateUiGeneration.current !== mealPrivateGeneration ||
+      viewEpoch.current !== mealViewEpoch ||
+      requestGeneration.current !== mealRequestGeneration ||
+      !entryNutrientActive.current ||
+      (typeof document !== "undefined" && document.visibilityState === "hidden") ||
+      entryNutrientEpoch.current !== renderedNutrientEpoch ||
+      entryNutrientInstalledScope.current?.ownerUserId !== session.user.id ||
+      explicitDateRef.current !== explicitDate ||
+      dateRef.current !== date ||
+      sessionRef.current !== session ||
+      diaryPageRef.current !== diaryPage ||
+      !diary.entries.includes(entry) ||
+      state !== "ready" ||
+      pageRequestBusy.current ||
+      activeMutation.current !== null ||
+      profileController.current !== null ||
+      timeZoneRefreshController.current !== null ||
+      profileBusy
+    )
       return;
-    }
-    const now = new Date();
-    const targetDate = localDateInTimeZone(now, session.profile.timeZone);
-    const targetTime = localTimeInTimeZone(now, session.profile.timeZone).slice(0, 5);
-    const body = {
-      occurredAt: localDateTimeToInstant(targetDate, targetTime, session.profile.timeZone),
-      mealSlot: entry.mealSlot,
-    };
-    const key = diaryRepeatOperationKey(entry.id, entry.revision, session.profile.timeZone, body);
-    const requestOperationId = operationId(key);
-    const owner = beginMutation(diary.localDate, entry.id);
-    setMessage(`Repeating the pinned ${entryName(entry)} version…`);
-    try {
-      const response = await fetch(
-        `/api/diary/entries/${encodeURIComponent(entry.id)}/repeat?date=${encodeURIComponent(owner.sourceDate)}&profileTimeZonePrecondition=v1`,
-        {
-          method: "POST",
-          headers: {
-            accept: "application/json",
-            "content-type": "application/json",
-            "idempotency-key": requestOperationId,
-            "if-match": quoteRevision(entry.revision),
-            "x-expected-profile-time-zone": session.profile.timeZone,
-          },
-          body: JSON.stringify(body),
-          cache: "no-store",
+
+    const ownerUserId = session.user.id;
+    const privateGeneration = privateUiGeneration.current;
+    const slot = JSON.stringify([ownerUserId, entry.id]);
+    let pending = repeatOperations.current.get(slot);
+    if (!pending) {
+      const now = new Date();
+      const targetDate = localDateInTimeZone(now, session.profile.timeZone);
+      const targetTime = localTimeInTimeZone(now, session.profile.timeZone).slice(0, 5);
+      const body = {
+        occurredAt: localDateTimeToInstant(targetDate, targetTime, session.profile.timeZone),
+        mealSlot: entry.mealSlot,
+      };
+      const key = diaryRepeatOperationKey(entry.id, entry.revision, session.profile.timeZone, body);
+      const requestOperationId = operationId(key);
+      pending = {
+        sourceEntryId: entry.id,
+        sourceRevision: entry.revision,
+        sourceDate: diary.localDate,
+        expectedTimeZone: session.profile.timeZone,
+        targetDate,
+        entryName: entryName(entry),
+        key,
+        operationId: requestOperationId,
+        url: `/api/diary/entries/${encodeURIComponent(entry.id)}/repeat?date=${encodeURIComponent(diary.localDate)}&profileTimeZonePrecondition=v1`,
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          "idempotency-key": requestOperationId,
+          "if-match": quoteRevision(entry.revision),
+          "x-expected-profile-time-zone": session.profile.timeZone,
         },
-      );
-      if (response.status === 401) return signInAgain();
+        body,
+        serializedBody: JSON.stringify(body),
+      };
+      repeatOperations.current.set(slot, pending);
+    }
+    const operation = pending;
+    const privateOwnerIsCurrent = () =>
+      !privateUiClosed.current &&
+      privateUiGeneration.current === privateGeneration &&
+      sessionRef.current?.user.id === ownerUserId;
+    const requestIsCurrent = () =>
+      privateOwnerIsCurrent() && repeatOperations.current.get(slot) === operation;
+    const responseIsCurrent = () =>
+      privateOwnerIsCurrent() &&
+      (!repeatOperations.current.has(slot) || repeatOperations.current.get(slot) === operation);
+    const resolvedMessage =
+      "An earlier response already resolved this Repeat. Refresh your diary for current details.";
+    const retireOperation = () => {
+      if (!requestIsCurrent()) return;
+      repeatOperations.current.delete(slot);
+      operationIds.current.delete(operation.key);
+    };
+    const owner = beginMutation(diary.localDate, entry.id);
+    setMessage(`Repeating the pinned ${operation.entryName} version for ${operation.targetDate}…`);
+    try {
+      const response = await fetch(operation.url, {
+        method: "POST",
+        headers: operation.headers,
+        body: operation.serializedBody,
+        cache: "no-store",
+      });
+      if (!responseIsCurrent()) return;
+      if (response.status === 401) {
+        if (requestIsCurrent()) return signInAgain();
+        if (mutationIsCurrent(owner)) setMessage(resolvedMessage);
+        return;
+      }
       const responseBody = await json(response);
+      if (!responseIsCurrent()) return;
+      if (!response.ok && !requestIsCurrent()) {
+        if (mutationIsCurrent(owner)) setMessage(resolvedMessage);
+        return;
+      }
       if (response.status === 409 && responseCode(responseBody) === "DIARY_TIME_ZONE_CHANGED") {
-        operationIds.current.delete(key);
+        retireOperation();
         if (!mutationIsCurrent(owner)) return;
         const currentTimeZone = await refreshProfileAfterTimeZoneChange(owner);
         if (!mutationIsCurrent(owner)) return;
@@ -1192,7 +1276,7 @@ export function DiaryClient() {
         return;
       }
       if (response.status === 412) {
-        operationIds.current.delete(key);
+        retireOperation();
         if (!mutationIsCurrent(owner)) return;
         const reloaded = await loadDiary(owner.sourceDate);
         if (mutationIsCurrent(owner)) {
@@ -1210,35 +1294,39 @@ export function DiaryClient() {
       const mutation = parseDiaryCorrectionMutation(responseBody);
       if (
         !diaryCorrectionMatchesRequest(mutation, {
-          body,
-          entryId: entry.id,
-          entryRevision: entry.revision,
-          expectedTimeZone: session.profile.timeZone,
+          body: operation.body,
+          entryId: operation.sourceEntryId,
+          entryRevision: operation.sourceRevision,
+          expectedTimeZone: operation.expectedTimeZone,
           kind: "repeat",
-          operationId: requestOperationId,
-          sourceLocalDate: owner.sourceDate,
+          operationId: operation.operationId,
+          sourceLocalDate: operation.sourceDate,
         })
       ) {
         throw new TypeError("The server returned a correction receipt for a different repeat.");
       }
-      operationIds.current.delete(key);
-      const repeatedDate = mutation.entry?.localDate ?? targetDate;
+      retireOperation();
+      const repeatedDate = mutation.entry?.localDate ?? operation.targetDate;
       await reportMutationReceipt(
         owner,
         mutation,
         repeatedDate === owner.sourceDate
-          ? `Pinned entry version repeated in ${diaryGroupLabel(diaryGroups, entry.mealSlot)} with fresh authoritative totals.`
-          : `Pinned entry version repeated in ${diaryGroupLabel(diaryGroups, entry.mealSlot)} for ${repeatedDate}.`,
+          ? `Pinned entry version repeated in ${diaryGroupLabel(diaryGroups, operation.body.mealSlot)} with fresh authoritative totals.`
+          : `Pinned entry version repeated in ${diaryGroupLabel(diaryGroups, operation.body.mealSlot)} for ${repeatedDate}.`,
         "The entry was repeated, but fresh diary data could not be confirmed. Choose Retry.",
       );
     } catch (error) {
-      if (mutationIsCurrent(owner)) {
-        setMessage(
-          `${error instanceof Error ? error.message : "The entry could not be repeated."} Choose Repeat again to retry the same operation safely.`,
-        );
+      if (privateOwnerIsCurrent() && mutationIsCurrent(owner)) {
+        if (requestIsCurrent()) {
+          setMessage(
+            `${error instanceof Error ? error.message : "The entry could not be repeated."} Choose Repeat again to retry the same operation for ${operation.targetDate} safely.`,
+          );
+        } else if (!repeatOperations.current.has(slot)) {
+          setMessage(resolvedMessage);
+        }
       }
     } finally {
-      finishMutation(owner);
+      if (privateOwnerIsCurrent()) finishMutation(owner);
     }
   }
 
