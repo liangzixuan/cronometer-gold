@@ -172,6 +172,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Explain unavailable web nutrient additions | ADR 0067 truthful availability and guarded Add preserve raw drafts and explicit save/retry; focused review, fresh canonical gates and synthetic Chrome passed; external/device/release separate |
 | Automatic evidence / independent review | Prevent duplicate web nutrient choices | ADR 0068 guarded row selection and disabled used alternatives preserve raw/current choices and explicit save/retry; focused review, fresh canonical gates and synthetic Chrome passed; external/device/release separate |
 | Automatic evidence / independent review | Protect unsaved custom-food drafts when revising | ADR 0069 current Keep/Discard choice preserves raw web/native work and captured saved revision; focused review, fresh canonical gates/native exports and synthetic Chrome passed; external/device/release separate |
+| Automatic evidence / independent review | Protect unfinished native nutrient input when saving | ADR 0070 Add-or-clear recovery preserves raw entry work, explicit Add and normal post-Add Save; focused review, fresh canonical gates and native exports passed; external/device/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1749,16 +1750,30 @@ exports and complete-registry production synthetic Chrome proof passed.
 At 2026-09-15T00:36:23.527574+00:00, base `56902c0c43dbed9d8b82380379f9f7110a58dca4` automatic evidence was:
 ci `34889719666` completed / success; container supply chain `34889719660` completed / success. These base results do not transfer to this slice.
 
+### Unfinished native nutrient input at Save: source/local complete
+
+[ADR 0070](../adr/0070-native-composer-save.md) protects named nutrient work that
+has not been appended before Create or Save. Explain Add-or-clear recovery,
+preserve raw food/canonical/filter fields and explicit Add, and distinguish
+query-only changes and acknowledged post-Add controls. Preserve current private/
+draft/source/write guards and exact request/retry identity. Focused review, fresh
+canonical gates and native exports passed; external/device/release acceptance
+remains separate.
+
+At 2026-09-15T01:20:48.736123+00:00, base `f55d0dfcce119785aa251df0c8fd94f267976437` automatic evidence was:
+container supply chain `34916410927` in_progress; ci `34916411059` completed / success. These base results do not transfer to this slice.
+
 ### Next bounded candidate
 
-Protect unfinished native nutrient input when saving a custom food. Save currently
-serializes only appended canonical rows and clears the composer on success; an
-amount entered for another nutrient without Add is omitted and then lost. Keep
-explicit Add authoritative and provide an Add-or-clear recovery before Save can
-discard unresolved entry work. Distinguish that work from query-only filtering
-and the selection/state left behind by a successful Add, so ordinary post-Add
-Save remains available. Preserve raw precision, trace/unknown reasons, private
-ownership and exact request/retry identity. Start with a separate acceptance card
-for the native screen and existing component suite, focused review and applicable
-canonical/native export evidence; no silent append or service contract change.
+Remove a named nutrient row from the native custom-food draft without editing its
+numeric-ID text line. ADR 0040 still leaves row removal to the canonical text
+field. Expose current parsable rows with exact loaded names/units or an explicit
+ID fallback, and let a deliberate Remove delete only that raw row. Preserve all
+other canonical bytes, order, newlines, exact amounts and unknown reasons, plus
+the composer/filter/entry acknowledgement and food fields. Invalid or duplicate
+canonical text keeps manual recovery instead of guessed removal. Preserve current
+draft/private/busy guards and exact explicit Save/retry; no local request,
+operation allocation, automatic append or save. Start a separate acceptance card
+with a narrow pure removal helper and meaningful helper/component regressions,
+source review, applicable canonical gates and native exports before delivery.
 No successor implementation has started.

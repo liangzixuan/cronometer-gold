@@ -75,6 +75,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0067](./0067-web-nutrient-availability.md) | Explain unavailable web nutrient additions | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
 | [0068](./0068-web-nutrient-uniqueness.md) | Prevent duplicate web nutrient choices | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
 | [0069](./0069-custom-revise-guard.md) | Protect unsaved custom-food drafts when revising | Source/local complete; synthetic Chrome QA passed; automatic/release separate |
+| [0070](./0070-native-composer-save.md) | Protect unfinished native nutrient input when saving | Source/local complete; automatic and release acceptance separate |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

@@ -146,6 +146,14 @@ interface CustomCopyChoice {
   readonly epoch: number;
 }
 
+function sameComposerEntry(left: NutrientComposer, right: NutrientComposer): boolean {
+  return (
+    left.nutrientId === right.nutrientId &&
+    left.state === right.state &&
+    left.amount === right.amount &&
+    left.reason === right.reason
+  );
+}
 function blankComposer(): NutrientComposer {
   return { query: "", nutrientId: "", state: "quantified", amount: "", reason: "" };
 }
@@ -451,6 +459,7 @@ export function RetentionScreen({
   const customEditorOffset = useRef(0);
   const [composer, setComposerState] = useState<NutrientComposer>(blankComposer);
   const composerRef = useRef(composer);
+  const composerEntryBaseline = useRef(composer);
   const [composerStatus, setComposerStatus] = useState("");
   const customScopeRef = useRef({ ownerUserId, sessionEpoch, accessToken, base: apiBase.href });
   if (
@@ -520,6 +529,7 @@ export function RetentionScreen({
         customBaseline.current = value.id === null ? blankCustom() : value;
         setCustomCopyStatus("");
         const next = blankComposer();
+        composerEntryBaseline.current = next;
         composerRef.current = next;
         setComposerState(next);
         setComposerStatus("");
@@ -1345,6 +1355,16 @@ export function RetentionScreen({
     setComposerState(next);
     setComposerStatus("");
   }
+  function clearNutrientEntry() {
+    if (!canEditCustom()) return;
+    const next = { ...blankComposer(), query: composer.query };
+    if (sameComposerEntry(composer, next)) return;
+    clearCustomCopyChoice();
+    composerEntryBaseline.current = next;
+    composerRef.current = next;
+    setComposerState(next);
+    setComposerStatus("");
+  }
   function addNutrientRow() {
     if (
       !canEditCustom() ||
@@ -1376,6 +1396,7 @@ export function RetentionScreen({
       const nextText = appendCanonicalNutrientInput(custom.nutrients, candidate, nutrients);
       installCustom({ ...custom, nutrients: nextText });
       const next = { ...composer, amount: "" };
+      composerEntryBaseline.current = next;
       composerRef.current = next;
       setComposerState(next);
       setComposerStatus(
@@ -1471,6 +1492,12 @@ export function RetentionScreen({
 
   async function saveCustomFood() {
     if (!canEditCustom()) return;
+    if (!sameComposerEntry(composer, composerEntryBaseline.current)) {
+      setComposerStatus(
+        "Add the unfinished nutrient row to the draft or choose Clear nutrient entry before saving.",
+      );
+      return;
+    }
     clearCustomCopyChoice();
     if (!custom.name.trim()) return setMessage("A custom food name is required.");
     let nutrientRows: readonly CustomFoodNutrientDraft[];
@@ -2993,7 +3020,8 @@ export function RetentionScreen({
             </Text>
             <Text style={styles.help}>
               This picker contains a limited nutrient list. Calories or missing nutrients can still
-              use the manual text field below. Adding a row does not save the food.
+              use the manual text field below. Adding a row does not save the food. Finish nutrient
+              input with Add nutrient row to draft or Clear nutrient entry before saving.
             </Text>
             <LabeledInput
               label="Find an available nutrient by name"
@@ -3083,6 +3111,12 @@ export function RetentionScreen({
               label="Add nutrient row to draft"
               disabled={composerDisabled}
               onPress={addNutrientRow}
+              secondary
+            />
+            <Button
+              label="Clear nutrient entry"
+              disabled={customDisabled}
+              onPress={clearNutrientEntry}
               secondary
             />
             {customVisible && composerStatus ? (

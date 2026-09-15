@@ -1083,3 +1083,17 @@ acceptance.
   native exports plus complete-core production synthetic Chrome choice/raw-field/
   request/keyboard/narrow/expiry proof and owned cleanup. Real-service, concurrent
   React, assistive, external reviewer, device and release acceptance stay separate.
+
+
+## ADR 0070 Unfinished native nutrient input at Save
+
+- Create/Save must preserve unresolved named nutrient work and require explicit
+  Add-or-clear recovery before requests or operation allocation. Query-only and
+  acknowledged post-Add controls must permit ordinary Save, including trace and
+  unknown. Failed Add cannot acknowledge work; never silently append or round.
+- Clear preserves filter, canonical rows and raw food fields, with existing
+  draft/composer/private/lifecycle/loading/write guards and no registry dependency.
+  Keep exact create/revision/retry, manual canonical editing and queue contracts.
+- Require compact component/helper/types/format evidence, independent source and
+  final reviews, frozen canonical gates and both native exports. Concurrent React,
+  device/assistive behavior, real persistence, external and release stay separate.

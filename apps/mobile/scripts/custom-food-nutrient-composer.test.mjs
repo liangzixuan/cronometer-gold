@@ -498,6 +498,15 @@ describe("native named custom-food nutrient composer", () => {
         tree = await click(harness, "Add nutrient row to draft");
         expect(canonical(tree)).toBe(raw);
         await type(harness, "Protein amount (g per 100 g)", amount);
+        const operation = hooks.operation;
+        tree = await click(harness, "Create private food");
+        expect(text(tree)).toContain(
+          "Add the unfinished nutrient row to the draft or choose Clear nutrient entry before saving.",
+        );
+        expect(canonical(tree)).toBe(raw);
+        expect(input(tree, "Protein amount (g per 100 g)").props.value).toBe(amount);
+        expect(writes(requests)).toHaveLength(0);
+        expect(hooks.operation).toBe(operation);
         tree = await click(harness, "Add nutrient row to draft");
         expect(canonical(tree).startsWith(raw)).toBe(true);
         expect(canonical(tree).endsWith(`203=${amount}`)).toBe(true);
@@ -526,6 +535,7 @@ describe("native named custom-food nutrient composer", () => {
     it(`keeps ${label} distinct and requires an explicit unknown reason`, async () => {
       const { harness, requests } = setup();
       try {
+        await type(harness, "Name", "Owner food");
         let tree = await click(harness, "Protein (g)");
         tree = await click(harness, reason ? "Unknown" : "Trace");
         if (reason) {
@@ -534,22 +544,43 @@ describe("native named custom-food nutrient composer", () => {
           expect(text(tree)).toContain("Choose an explicit unknown reason");
           tree = await click(harness, label);
         }
+        tree = await click(harness, "Create private food");
+        expect(text(tree)).toContain(
+          "Add the unfinished nutrient row to the draft or choose Clear nutrient entry before saving.",
+        );
+        expect(writes(requests)).toHaveLength(0);
         tree = await click(harness, "Add nutrient row to draft");
         expect(canonical(tree)).toBe(reason ? `203=unknown:${reason}` : "203=trace");
         expect(writes(requests)).toHaveLength(0);
+        await type(harness, "Find an available nutrient by name", "no matching nutrient");
+        await click(harness, "Create private food");
+        expect(JSON.parse(writes(requests)[0].body).nutrients).toEqual([
+          {
+            nutrientId: "203",
+            state: reason ? "unknown" : "trace",
+            amountPer100Grams: null,
+            ...(reason ? { reason } : {}),
+          },
+        ]);
       } finally {
         harness.unmount();
       }
     });
   it("rejects duplicate or invalid manual text and preserves the draft on failed append", async () => {
-    const { harness } = setup();
+    const { harness, requests } = setup();
     try {
+      await type(harness, "Name", "Owner food");
       await type(harness, "Canonical nutrients per 100 g", "203=1");
       await click(harness, "Protein (g)");
       await click(harness, "Trace");
       let tree = await click(harness, "Add nutrient row to draft");
       expect(canonical(tree)).toBe("203=1");
       expect(text(tree)).toMatch(/already|once|duplicate/i);
+      tree = await click(harness, "Create private food");
+      expect(text(tree)).toContain(
+        "Add the unfinished nutrient row to the draft or choose Clear nutrient entry before saving.",
+      );
+      expect(writes(requests)).toHaveLength(0);
       await type(harness, "Canonical nutrients per 100 g", "broken manual text");
       tree = await click(harness, "Add nutrient row to draft");
       expect(canonical(tree)).toBe("broken manual text");
@@ -621,6 +652,7 @@ describe("native named custom-food nutrient composer", () => {
       tree = await type(harness, "Protein amount (g per 100 g)", "2.00");
       tree = await type(harness, "Find an available nutrient by name", "prot");
       const oldClear = button(tree, "Clear nutrient filter").props.onPress;
+      const oldEntryClear = button(tree, "Clear nutrient entry").props.onPress;
       const oldAdd = button(tree, "Add nutrient row to draft").props.onPress;
       tree = await type(harness, "Protein amount (g per 100 g)", "3.00");
       oldCancel();
@@ -631,6 +663,7 @@ describe("native named custom-food nutrient composer", () => {
       oldAdd();
       const clearWrites = harness.stateWrites;
       oldClear();
+      oldEntryClear();
       expect(harness.stateWrites).toBe(clearWrites);
       tree = await harness.settle();
       expect(input(tree, "Find an available nutrient by name").props.value).toBe("prot");
@@ -692,6 +725,7 @@ describe("native named custom-food nutrient composer", () => {
       let tree = await fillManual(harness);
       tree = await type(harness, "Find an available nutrient by name", "prot");
       const oldClear = button(tree, "Clear nutrient filter").props.onPress;
+      const oldEntryClear = button(tree, "Clear nutrient entry").props.onPress;
       const save = button(tree, "Create private food").props.onPress;
       const edit = input(tree, "Name").props.onChangeText;
       const choose = button(tree, "Protein (g)").props.onPress;
@@ -701,6 +735,7 @@ describe("native named custom-food nutrient composer", () => {
       choose();
       const clearWrites = harness.stateWrites;
       oldClear();
+      oldEntryClear();
       expect(harness.stateWrites).toBe(clearWrites);
       tree = await harness.settle();
       expect(button(tree, "Clear nutrient filter").props.disabled).toBe(true);
@@ -731,10 +766,13 @@ describe("native named custom-food nutrient composer", () => {
           let tree = await fillManual(harness);
           await click(harness, "Protein (g)");
           tree = await click(harness, "Unknown");
+          await click(harness, "Withheld");
+          await click(harness, "Add nutrient row to draft");
           tree = await type(harness, "Find an available nutrient by name", "prot");
           const oldField = input(tree, "Name").props.onChangeText;
           const oldAdd = button(tree, "Add nutrient row to draft").props.onPress;
           const oldClear = button(tree, "Clear nutrient filter").props.onPress;
+          const oldEntryClear = button(tree, "Clear nutrient entry").props.onPress;
           await click(harness, "Create private food");
           harness.updateProps(
             boundary === "owner"
@@ -754,6 +792,7 @@ describe("native named custom-food nutrient composer", () => {
           oldAdd();
           const clearWrites = harness.stateWrites;
           oldClear();
+          oldEntryClear();
           expect(harness.stateWrites).toBe(clearWrites);
           expect(button(tree, "Clear nutrient filter").props.disabled).toBe(true);
           harness.flushEffects();
@@ -818,12 +857,14 @@ describe("native named custom-food nutrient composer", () => {
     try {
       let tree = await type(harness, "Find an available nutrient by name", "prot");
       const oldClear = button(tree, "Clear nutrient filter").props.onPress;
+      const oldEntryClear = button(tree, "Clear nutrient entry").props.onPress;
       const old = button(tree, "Revise").props.onPress;
       newer = true;
       tree = await click(harness, "Refresh private data");
       old();
       const clearWrites = harness.stateWrites;
       oldClear();
+      oldEntryClear();
       expect(harness.stateWrites).toBe(clearWrites);
       expect(input(tree, "Find an available nutrient by name").props.value).toBe("prot");
       tree = await harness.settle();
@@ -846,16 +887,26 @@ describe("native named custom-food nutrient composer", () => {
         request.method === "POST" ? (++attempt === 1 ? held.promise : receipt(request)) : undefined,
       );
       try {
-        let tree = await fillManual(harness, "0.0100");
+        await fillManual(harness, "0.0100");
+        await click(harness, "Protein (g)");
+        await click(harness, "Trace");
+        let tree = await click(harness, "Add nutrient row to draft");
         const old = input(tree, "Name").props.onChangeText;
+        const oldEntryClear = button(tree, "Clear nutrient entry").props.onPress;
         await click(harness, "Create private food");
         if (boundary === "background") {
           state("background");
           tree = await harness.settle();
           expect(input(tree, "Name").props.value).toBe("");
+          const stateWrites = harness.stateWrites;
+          oldEntryClear();
+          expect(harness.stateWrites).toBe(stateWrites);
           state("active");
         } else harness.replayEffects();
         tree = await harness.settle();
+        const stateWrites = harness.stateWrites;
+        oldEntryClear();
+        expect(harness.stateWrites).toBe(stateWrites);
         old("late old field");
         held.resolve(response({}, 401));
         tree = await harness.settle();
@@ -901,10 +952,12 @@ describe("native named custom-food nutrient composer", () => {
     const tree = await type(harness, "Find an available nutrient by name", "prot");
     const old = input(tree, "Name").props.onChangeText;
     const oldClear = button(tree, "Clear nutrient filter").props.onPress;
+    const oldEntryClear = button(tree, "Clear nutrient entry").props.onPress;
     await click(harness, "Create private food");
     harness.unmount();
     old("unmounted");
     oldClear();
+    oldEntryClear();
     held.resolve(await receipt(writes(requests)[0]).json());
     for (let turn = 0; turn < 30; turn += 1) await Promise.resolve();
     expect(harness.writesAfterUnmount).toBe(0);
@@ -6907,6 +6960,264 @@ describe("native named nutrient filter Clear", () => {
       expect(harness.stateWrites).toBe(stateWrites);
       expect(editorSnapshot(await harness.settle())).toEqual(before);
       expect(requests).toHaveLength(count);
+    } finally {
+      harness.unmount();
+    }
+  });
+});
+
+describe("native unfinished nutrient entry Save protection", () => {
+  const blocked =
+    "Add the unfinished nutrient row to the draft or choose Clear nutrient entry before saving.";
+  for (const amount of [" ", "not-an-exact-amount"])
+    it(`retains invalid raw entry ${JSON.stringify(amount)} through failed Add and Save until explicit Clear`, async () => {
+      const { harness, requests, props } = setup();
+      try {
+        await fillManual(harness, "0.00000000000000100");
+        await click(harness, "Protein (g)");
+        await type(harness, "Protein amount (g per 100 g)", amount);
+        await type(harness, "Find an available nutrient by name", "no match");
+        const before = requests.length;
+        const operation = hooks.operation;
+        let tree = await click(harness, "Add nutrient row to draft");
+        expect(canonical(tree)).toBe("208=0.00000000000000100");
+        tree = await click(harness, "Create private food");
+        expect(text(tree)).toContain(blocked);
+        expect(input(tree, "Protein amount (g per 100 g)").props.value).toBe(amount);
+        await click(harness, "Clear nutrient filter");
+        tree = await click(harness, "Create private food");
+        expect(text(tree)).toContain(blocked);
+        const fields = rawCustomFields(tree);
+        tree = await click(harness, "Clear nutrient entry");
+        expect(rawCustomFields(tree)).toEqual(fields);
+        expect(input(tree, "Exact amount per 100 g").props.value).toBe("");
+        expect(button(tree, "Protein (g)").props.accessibilityState.selected).toBe(false);
+        expect(text(tree)).not.toContain(blocked);
+        expect(requests).toHaveLength(before);
+        expect(hooks.operation).toBe(operation);
+        expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+        expect(props.quickAddOutboxController.requestDrain).not.toHaveBeenCalled();
+        await click(harness, "Create private food");
+        expect(JSON.parse(writes(requests)[0].body).nutrients).toEqual([
+          { nutrientId: "208", state: "quantified", amountPer100Grams: "0.00000000000000100" },
+        ]);
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  for (const entry of ["selection", "trace", "unknown", "hidden raw amount"])
+    it(`protects ${entry} work without requiring a valid appended candidate`, async () => {
+      const { harness, requests } = setup();
+      try {
+        await fillManual(harness);
+        if (entry === "selection" || entry === "hidden raw amount")
+          await click(harness, "Protein (g)");
+        if (entry === "hidden raw amount")
+          await type(harness, "Protein amount (g per 100 g)", "  raw  ");
+        if (entry === "trace" || entry === "hidden raw amount") await click(harness, "Trace");
+        if (entry === "unknown") await click(harness, "Unknown");
+        let tree = await click(harness, "Create private food");
+        expect(text(tree)).toContain(blocked);
+        expect(writes(requests)).toHaveLength(0);
+        expect(canonical(tree)).toBe("208=0");
+        if (entry === "hidden raw amount") {
+          tree = await click(harness, "Quantified");
+          expect(input(tree, "Protein amount (g per 100 g)").props.value).toBe("  raw  ");
+        }
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  it("preserves unresolved entry through same-private failed registry refresh and allows entry Clear without that registry", async () => {
+    let failed = false;
+    const { harness, requests } = setup((request) =>
+      failed && request.url.pathname === "/v1/nutrients/targetable" ? response({}, 503) : undefined,
+    );
+    try {
+      await fillManual(harness, "12.340006");
+      await type(harness, "Notes", "  raw notes  ");
+      await click(harness, "Protein (g)");
+      await type(harness, "Protein amount (g per 100 g)", "0.00000000000000100");
+      await click(harness, "Unknown");
+      await click(harness, "Withheld");
+      await type(harness, "Find an available nutrient by name", "  PROT  ");
+      failed = true;
+      let tree = await click(harness, "Refresh private data");
+      expect(button(tree, "Add nutrient row to draft").props.disabled).toBe(true);
+      expect(button(tree, "Clear nutrient filter").props.disabled).toBe(true);
+      expect(button(tree, "Clear nutrient entry").props.disabled).toBe(false);
+      expect(button(tree, "Withheld").props.accessibilityState.selected).toBe(true);
+      const before = requests.length;
+      const fields = rawCustomFields(tree);
+      tree = await click(harness, "Create private food");
+      expect(text(tree)).toContain(blocked);
+      tree = await click(harness, "Clear nutrient entry");
+      expect(rawCustomFields(tree)).toEqual(fields);
+      expect(input(tree, "Find an available nutrient by name").props.value).toBe("  PROT  ");
+      expect(input(tree, "Exact amount per 100 g").props.value).toBe("");
+      expect(button(tree, "Quantified").props.accessibilityState.selected).toBe(true);
+      expect(requests).toHaveLength(before);
+      await click(harness, "Create private food");
+      expect(JSON.parse(writes(requests)[0].body).nutrients).toEqual([
+        { nutrientId: "208", state: "quantified", amountPer100Grams: "12.340006" },
+      ]);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("compares the acknowledged exact entry rather than query or edit history, including hidden reason changes", async () => {
+    const { harness, requests } = setup();
+    try {
+      await fillManual(harness);
+      await click(harness, "Protein (g)");
+      await click(harness, "Unknown");
+      await click(harness, "Withheld");
+      await click(harness, "Add nutrient row to draft");
+      await click(harness, "Not reported");
+      await click(harness, "Trace");
+      let tree = await click(harness, "Create private food");
+      expect(text(tree)).toContain(blocked);
+      await click(harness, "Unknown");
+      tree = await click(harness, "Create private food");
+      expect(text(tree)).toContain(blocked);
+      expect(writes(requests)).toHaveLength(0);
+      await click(harness, "Withheld");
+      await type(harness, "Find an available nutrient by name", "no matching nutrient");
+      await click(harness, "Refresh private data");
+      await click(harness, "Create private food");
+      expect(JSON.parse(writes(requests)[0].body).nutrients[1]).toEqual({
+        nutrientId: "203",
+        state: "unknown",
+        amountPer100Grams: null,
+        reason: "withheld",
+      });
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  for (const mode of ["create", "revise"])
+    it(`keeps ${mode} pending ownership and exact ambiguous retry through blocked input and local Clear`, async () => {
+      const held = deferred();
+      let attempt = 0;
+      const { harness, requests, props } = setup((request) =>
+        request.method === "POST" ? (++attempt === 1 ? held.promise : receipt(request)) : undefined,
+      );
+      try {
+        if (mode === "revise") await click(harness, "Revise");
+        else await fillManual(harness, "12.340006");
+        await click(harness, "Protein (g)");
+        await click(harness, "Trace");
+        let tree = await click(harness, "Add nutrient row to draft");
+        const clear = button(tree, "Clear nutrient entry").props.onPress;
+        const label = mode === "revise" ? "Save new version" : "Create private food";
+        tree = await click(harness, label);
+        const first = writes(requests)[0];
+        expect(first.url.pathname).toBe(
+          mode === "revise" ? `/v1/custom-foods/${foodId}/revisions` : "/v1/custom-foods",
+        );
+        expect(first.headers["if-match"]).toBe(mode === "revise" ? '"1"' : undefined);
+        expect(button(tree, "Clear nutrient entry").props.disabled).toBe(true);
+        const stateWrites = harness.stateWrites;
+        clear();
+        button(tree, "Clear nutrient entry").props.onPress();
+        expect(harness.stateWrites).toBe(stateWrites);
+        held.resolve(response({ data: { malformed: true } }));
+        await harness.settle();
+        await click(harness, "Sodium (mg)");
+        await click(harness, "Quantified");
+        await type(harness, "Sodium amount (mg per 100 g)", "0.00000000000000100");
+        await type(harness, "Find an available nutrient by name", "  sod  ");
+        const operation = hooks.operation;
+        const count = requests.length;
+        tree = await click(harness, label);
+        expect(text(tree)).toContain(blocked);
+        const bodyFields = rawCustomFields(tree);
+        tree = await click(harness, "Clear nutrient entry");
+        expect(rawCustomFields(tree)).toEqual(bodyFields);
+        expect(input(tree, "Find an available nutrient by name").props.value).toBe("  sod  ");
+        expect(requests).toHaveLength(count);
+        expect(hooks.operation).toBe(operation);
+        expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+        expect(props.quickAddOutboxController.requestDrain).not.toHaveBeenCalled();
+        tree = await click(harness, label);
+        expect(writes(requests)).toHaveLength(2);
+        expect(writes(requests)[1].body).toBe(first.body);
+        expect(writes(requests)[1].headers).toEqual(first.headers);
+        expect(input(tree, "Name").props.value).toBe("");
+        await fillManual(harness, "0");
+        await click(harness, "Create private food");
+        expect(writes(requests)).toHaveLength(3);
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  it("keeps matching blank Clear harmless and fences retained Clear/Save and replacement callbacks around raw edits", async () => {
+    const { harness, requests } = setup();
+    try {
+      await fillManual(harness);
+      await type(harness, "Find an available nutrient by name", "  query  ");
+      let tree = await copyCustom(harness);
+      const discard = button(tree, discardCustomCopy).props.onPress;
+      const oldClear = button(tree, "Clear nutrient entry").props.onPress;
+      const oldSave = button(tree, "Create private food").props.onPress;
+      let stateWrites = harness.stateWrites;
+      oldClear();
+      expect(harness.stateWrites).toBe(stateWrites);
+      discard();
+      tree = await harness.settle();
+      expect(input(tree, "Name").props.value).toBe(sourceFood.currentVersion.name);
+      const amount = input(tree, "Exact amount per 100 g").props.onChangeText;
+      amount("0");
+      stateWrites = harness.stateWrites;
+      oldClear();
+      oldSave();
+      expect(harness.stateWrites).toBe(stateWrites);
+      tree = await harness.settle();
+      expect(input(tree, "Exact amount per 100 g").props.value).toBe("0");
+      tree = await requestCustomReplacement(harness, "revise");
+      const revise = button(tree, discardCustomRevise).props.onPress;
+      const blockedSave = button(tree, "Create private food").props.onPress;
+      const clear = button(tree, "Clear nutrient entry").props.onPress;
+      clear();
+      stateWrites = harness.stateWrites;
+      clear();
+      blockedSave();
+      revise();
+      expect(harness.stateWrites).toBe(stateWrites);
+      tree = await harness.settle();
+      expect(customCopyChoices(tree)).toHaveLength(0);
+      expect(input(tree, "Name").props.value).toBe(sourceFood.currentVersion.name);
+      expect(writes(requests)).toHaveLength(0);
+      await click(harness, "Create private food");
+      expect(writes(requests)).toHaveLength(1);
+      expect(writes(requests)[0].headers["if-match"]).toBeUndefined();
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("acknowledges the new blank composer only after an accepted replacement or Cancel reset", async () => {
+    const { harness, requests } = setup();
+    try {
+      await fillManual(harness);
+      await type(harness, "Exact amount per 100 g", "unfinished");
+      await requestCustomReplacement(harness, "revise");
+      await click(harness, discardCustomRevise);
+      await click(harness, "Protein (g)");
+      await click(harness, "Trace");
+      await click(harness, "Add nutrient row to draft");
+      await click(harness, "Cancel edit");
+      await fillManual(harness);
+      await click(harness, "Create private food");
+      expect(writes(requests)).toHaveLength(1);
+      expect(JSON.parse(writes(requests)[0].body).nutrients).toEqual([
+        { nutrientId: "208", state: "quantified", amountPer100Grams: "0" },
+      ]);
     } finally {
       harness.unmount();
     }
