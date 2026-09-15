@@ -107,7 +107,8 @@ interface CustomDraft {
   readonly nutrients: readonly CustomFoodNutrient[];
 }
 
-interface CustomCopyChoice {
+interface CustomDraftChoice {
+  readonly action: "copy" | "revise";
   readonly food: CustomFood;
   readonly draft: CustomDraft;
   readonly generation: number;
@@ -348,7 +349,7 @@ export function HealthClient() {
   const [integrations, setIntegrations] = useState<readonly PlatformIntegration[]>([]);
   const [custom, setCustomState] = useState<CustomDraft>(() => blankCustom(""));
   const [customSource, setCustomSource] = useState<CustomFood | null>(null);
-  const [customCopyChoice, setCustomCopyChoice] = useState<CustomCopyChoice | null>(null);
+  const [customDraftChoice, setCustomDraftChoice] = useState<CustomDraftChoice | null>(null);
   const [customSaving, setCustomSaving] = useState(false);
   const [customLog, setCustomLog] = useState<CustomLogDraft | null>(null);
   const [customLogDateReviewRequired, setCustomLogDateReviewRequired] = useState(false);
@@ -405,7 +406,7 @@ export function HealthClient() {
     readonly owner: string | null;
     readonly foods: Map<string, CustomFood>;
   } | null>(null);
-  const customCopyChoiceRef = useRef<CustomCopyChoice | null>(null);
+  const customDraftChoiceRef = useRef<CustomDraftChoice | null>(null);
   const customNameInput = useRef<HTMLInputElement | null>(null);
   const customKeepButton = useRef<HTMLButtonElement | null>(null);
   const loadController = useRef<AbortController | null>(null);
@@ -543,24 +544,24 @@ export function HealthClient() {
   const renderedCustomControl = customControlGeneration.current;
   const customScope = session ? JSON.stringify([session.user.id, session.profile]) : null;
 
-  const clearCustomCopyChoice = useCallback(() => {
-    customCopyChoiceRef.current = null;
-    setCustomCopyChoice(null);
+  const clearCustomDraftChoice = useCallback(() => {
+    customDraftChoiceRef.current = null;
+    setCustomDraftChoice(null);
   }, []);
   const invalidateCustomControls = useCallback(() => {
     customControlGeneration.current += 1;
-    clearCustomCopyChoice();
-  }, [clearCustomCopyChoice]);
+    clearCustomDraftChoice();
+  }, [clearCustomDraftChoice]);
   const replaceCustom = useCallback(
     (next: CustomDraft, source: CustomFood | null = null, clean = true) => {
       customRef.current = next;
       customGeneration.current += 1;
       customBaseline.current = clean ? next : null;
-      clearCustomCopyChoice();
+      clearCustomDraftChoice();
       setCustomState(next);
       setCustomSource(source);
     },
-    [clearCustomCopyChoice],
+    [clearCustomDraftChoice],
   );
   function canUseCustomControls() {
     const currentSession = installedSession.current;
@@ -582,7 +583,7 @@ export function HealthClient() {
       return;
     customRef.current = next;
     customGeneration.current += 1;
-    clearCustomCopyChoice();
+    clearCustomDraftChoice();
     setCustomState(next);
   }
   function currentCustomNutrientMetadata() {
@@ -641,48 +642,46 @@ export function HealthClient() {
       customWrite.current === null
     );
   }
-  function copyCustomFood(food: CustomFood) {
+  function installCustomDraft(food: CustomFood, action: CustomDraftChoice["action"]) {
     if (!canCopyCustomFood(food)) return;
-    customCreateIntent.current += 1;
-    replaceCustom({ ...customDraft(food), id: null, revision: null }, food, false);
+    if (action === "copy") {
+      customCreateIntent.current += 1;
+      replaceCustom({ ...customDraft(food), id: null, revision: null }, food, false);
+    } else replaceCustom(customDraft(food), food);
     customNameInput.current?.focus();
   }
-  function requestCustomCopy(food: CustomFood) {
-    if (!canCopyCustomFood(food)) return;
+  function requestCustomDraftChoice(food: CustomFood, action: CustomDraftChoice["action"]) {
+    if (customDraftChoiceRef.current !== customDraftChoice || !canCopyCustomFood(food)) return;
     if (
       customBaseline.current &&
       JSON.stringify(customRef.current) === JSON.stringify(customBaseline.current)
     ) {
-      copyCustomFood(food);
+      installCustomDraft(food, action);
       return;
     }
-    const choice = { food, draft: customRef.current, generation: customGeneration.current };
-    customCopyChoiceRef.current = choice;
-    setCustomCopyChoice(choice);
+    const choice = { action, food, draft: customRef.current, generation: customGeneration.current };
+    customDraftChoiceRef.current = choice;
+    setCustomDraftChoice(choice);
   }
-  function resolveCustomCopy(discard: boolean) {
+  function resolveCustomDraftChoice(discard: boolean) {
     if (
-      !customCopyChoice ||
-      customCopyChoiceRef.current !== customCopyChoice ||
-      customCopyChoice.draft !== customRef.current ||
-      customCopyChoice.generation !== customGeneration.current ||
-      !canCopyCustomFood(customCopyChoice.food)
+      !customDraftChoice ||
+      customDraftChoiceRef.current !== customDraftChoice ||
+      customDraftChoice.draft !== customRef.current ||
+      customDraftChoice.generation !== customGeneration.current ||
+      !canCopyCustomFood(customDraftChoice.food)
     )
       return;
-    if (discard) copyCustomFood(customCopyChoice.food);
-    else clearCustomCopyChoice();
-  }
-  function reviseCustomFood(food: CustomFood) {
-    if (!canCopyCustomFood(food)) return;
-    replaceCustom(customDraft(food), food);
+    if (discard) installCustomDraft(customDraftChoice.food, customDraftChoice.action);
+    else clearCustomDraftChoice();
   }
   function cancelCustomEdit() {
     if (!canUseCustomControls() || customWrite.current !== null) return;
     replaceCustom(blankCustom(nutrients[0]?.nutrientId ?? ""));
   }
   useEffect(() => {
-    if (customCopyChoice) customKeepButton.current?.focus();
-  }, [customCopyChoice]);
+    if (customDraftChoice) customKeepButton.current?.focus();
+  }, [customDraftChoice]);
 
   const closeFoodDetails = useCallback(() => {
     disclosureGeneration.current += 1;
@@ -1466,7 +1465,7 @@ export function HealthClient() {
       historyGeneration.current += 1;
       customLifecycle.current += 1;
       customControlGeneration.current += 1;
-      customCopyChoiceRef.current = null;
+      customDraftChoiceRef.current = null;
       customWrite.current = null;
       savedFoodFilterGeneration.current += 1;
       foodListGeneration.current += 1;
@@ -1591,7 +1590,7 @@ export function HealthClient() {
 
   async function saveCustomFood() {
     if (!canUseCustomControls() || !session || customWrite.current !== null) return;
-    clearCustomCopyChoice();
+    clearCustomDraftChoice();
     if (!custom.name.trim() || custom.nutrients.length < 1)
       return setMessage("Name and at least one nutrient are required.");
     if (
@@ -2632,24 +2631,27 @@ export function HealthClient() {
                   food.
                 </p>
               ) : null}
-              {customCopyChoice &&
-              customCopyChoiceRef.current === customCopyChoice &&
-              canCopyCustomFood(customCopyChoice.food) ? (
-                <fieldset aria-labelledby="custom-copy-choice">
-                  <p id="custom-copy-choice" aria-live="polite">
-                    This editor has an unsaved draft. Keep editing, or discard it and copy saved{" "}
-                    {customCopyChoice.food.currentVersion.name} v
-                    {customCopyChoice.food.currentVersion.versionNumber}.
+              {customDraftChoice &&
+              customDraftChoiceRef.current === customDraftChoice &&
+              canCopyCustomFood(customDraftChoice.food) ? (
+                <fieldset aria-labelledby="custom-draft-choice">
+                  <p id="custom-draft-choice" aria-live="polite">
+                    This editor has an unsaved draft. Keep editing, or discard it and{" "}
+                    {customDraftChoice.action === "copy" ? "copy" : "revise"} saved{" "}
+                    {customDraftChoice.food.currentVersion.name} v
+                    {customDraftChoice.food.currentVersion.versionNumber}.
                   </p>
                   <button
                     ref={customKeepButton}
-                    onClick={() => resolveCustomCopy(false)}
+                    onClick={() => resolveCustomDraftChoice(false)}
                     type="button"
                   >
                     Keep editing
                   </button>
-                  <button onClick={() => resolveCustomCopy(true)} type="button">
-                    Discard draft and copy saved version
+                  <button onClick={() => resolveCustomDraftChoice(true)} type="button">
+                    {customDraftChoice.action === "copy"
+                      ? "Discard draft and copy saved version"
+                      : "Discard draft and revise"}
                   </button>
                 </fieldset>
               ) : null}
@@ -2945,14 +2947,14 @@ export function HealthClient() {
                         </button>
                         <button
                           disabled={!canCopyCustomFood(food)}
-                          onClick={() => reviseCustomFood(food)}
+                          onClick={() => requestCustomDraftChoice(food, "revise")}
                           type="button"
                         >
                           Revise
                         </button>
                         <button
                           disabled={!canCopyCustomFood(food)}
-                          onClick={() => requestCustomCopy(food)}
+                          onClick={() => requestCustomDraftChoice(food, "copy")}
                           aria-label={`Copy ${food.currentVersion.name} v${food.currentVersion.versionNumber} to new draft`}
                           type="button"
                         >

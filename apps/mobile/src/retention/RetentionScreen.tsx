@@ -138,6 +138,7 @@ interface NutrientComposer {
   readonly reason: "" | "not_reported" | "not_analyzed" | "not_applicable" | "withheld";
 }
 interface CustomCopyChoice {
+  readonly action: "copy" | "revise";
   readonly food: CustomFood;
   readonly draft: CustomDraft;
   readonly composer: NutrientComposer;
@@ -1403,13 +1404,23 @@ export function RetentionScreen({
     );
     workspaceScroll.current?.scrollTo({ y: customEditorOffset.current, animated: true });
   }
-  function copySavedCustom(food: CustomFood) {
-    if (!copySourceIsCurrent(food) || customCopyChoiceRef.current !== customCopyChoice) return;
+  function installRevisedCustom(food: CustomFood) {
+    installCustom(customDraft(food), true);
+    workspaceScroll.current?.scrollTo({ y: customEditorOffset.current, animated: true });
+  }
+  function requestCustomChoice(food: CustomFood, action: CustomCopyChoice["action"]) {
+    if (
+      !copySourceIsCurrent(food) ||
+      (action === "revise" && foodsRef.current !== foods) ||
+      customCopyChoiceRef.current !== customCopyChoice
+    )
+      return;
     if (
       JSON.stringify(custom) !== JSON.stringify(customBaseline.current) ||
       JSON.stringify(composer) !== JSON.stringify(blankComposer())
     ) {
       const choice = {
+        action,
         food,
         draft: custom,
         composer,
@@ -1421,7 +1432,8 @@ export function RetentionScreen({
       workspaceScroll.current?.scrollTo({ y: customEditorOffset.current, animated: true });
       return;
     }
-    installCopiedCustom(food);
+    if (action === "copy") installCopiedCustom(food);
+    else installRevisedCustom(food);
   }
   function customCopyChoiceIsCurrent(choice: CustomCopyChoice): boolean {
     return (
@@ -1430,11 +1442,14 @@ export function RetentionScreen({
       choice.composer === composerRef.current &&
       choice.profileScope === foodFilterScopeRef.current &&
       choice.epoch === customEpoch.current &&
+      (choice.action !== "revise" || foodsRef.current === foods) &&
       copySourceIsCurrent(choice.food)
     );
   }
-  function confirmCustomCopy(choice: CustomCopyChoice) {
-    if (customCopyChoiceIsCurrent(choice)) installCopiedCustom(choice.food);
+  function confirmCustomChoice(choice: CustomCopyChoice) {
+    if (!customCopyChoiceIsCurrent(choice)) return;
+    if (choice.action === "copy") installCopiedCustom(choice.food);
+    else installRevisedCustom(choice.food);
   }
   function keepEditingCustom(choice: CustomCopyChoice) {
     if (customCopyChoiceIsCurrent(choice)) clearCustomCopyChoice();
@@ -1447,7 +1462,7 @@ export function RetentionScreen({
       !foodsRef.current.includes(food)
     )
       return;
-    installCustom(customDraft(food), true);
+    requestCustomChoice(food, "revise");
   }
   function cancelCustom() {
     if (!canEditCustom()) return;
@@ -2923,7 +2938,8 @@ export function RetentionScreen({
               <Text style={styles.cardTitle}>Replace unsaved custom-food work?</Text>
               <Text style={styles.help}>
                 Keep editing, or discard this draft and any nutrient inputs not yet added to it,
-                then copy saved {customCopyChoice.food.currentVersion.name}, version{" "}
+                then {customCopyChoice.action === "copy" ? "copy" : "revise"} saved{" "}
+                {customCopyChoice.food.currentVersion.name}, version{" "}
                 {customCopyChoice.food.currentVersion.versionNumber}.
               </Text>
               <Button
@@ -2932,8 +2948,12 @@ export function RetentionScreen({
                 secondary
               />
               <Button
-                label="Discard draft and copy saved version"
-                onPress={() => confirmCustomCopy(customCopyChoice)}
+                label={
+                  customCopyChoice.action === "copy"
+                    ? "Discard draft and copy saved version"
+                    : "Discard draft and revise"
+                }
+                onPress={() => confirmCustomChoice(customCopyChoice)}
                 secondary
               />
             </View>
@@ -3215,7 +3235,7 @@ export function RetentionScreen({
                   accessibilityLabel={`Copy saved ${food.currentVersion.name}, version ${food.currentVersion.versionNumber}, to a new draft`}
                   accessibilityState={{ disabled: customDisabled }}
                   disabled={customDisabled}
-                  onPress={() => copySavedCustom(food)}
+                  onPress={() => requestCustomChoice(food, "copy")}
                   style={[styles.button, styles.buttonSecondary, customDisabled && styles.disabled]}
                 >
                   <Text style={[styles.buttonText, styles.buttonSecondaryText]}>

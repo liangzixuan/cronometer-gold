@@ -1569,32 +1569,36 @@ describe("actual saved custom-food Copy to new draft", () => {
     expect(fetcher).toHaveBeenCalledTimes(requests);
   });
 
-  it("rejects retained original field, row, Revise, Cancel and submit controls after Copy", async () => {
-    const first = food();
-    const { fetcher, writes } = customAvailabilityWorkspace(first);
-    await mount();
-    await click("Revise", card(first));
-    const originalFields = elements(customForm()).filter(
-      (node) => typeof node.props.onChange === "function",
-    );
-    const oldRemove = button("Remove nutrient 1");
-    const oldAdd = button("Add nutrient");
-    const oldNutrient = field("Nutrient 1");
-    const oldRevise = button("Revise", card(first));
-    const oldCancel = button("Cancel edit");
-    const oldForm = customForm();
-    await copyFood(first);
-    const before = formValues();
-    const requests = fetcher.mock.calls.length;
-    for (const node of originalFields) invoke(node, "onChange", { target: { value: "stale" } });
-    invoke(oldNutrient, "onChange", { target: { value: "4" } });
-    for (const node of [oldRemove, oldAdd, oldRevise, oldCancel]) invoke(node, "onClick");
-    invoke(oldForm, "onSubmit", { preventDefault() {} });
-    await hooks.settle();
-    expect(formValues()).toEqual(before);
-    expect(fetcher).toHaveBeenCalledTimes(requests);
-    expect(writes()).toHaveLength(0);
-  });
+  it.each(["copy", "revise"] as const)(
+    "rejects retained original field, row, Revise, Cancel and submit controls after %s",
+    async (action) => {
+      const first = food();
+      const { fetcher, writes } = customAvailabilityWorkspace(first);
+      await mount();
+      await click("Revise", card(first));
+      const originalFields = elements(customForm()).filter(
+        (node) => typeof node.props.onChange === "function",
+      );
+      const oldRemove = button("Remove nutrient 1");
+      const oldAdd = button("Add nutrient");
+      const oldNutrient = field("Nutrient 1");
+      const oldRevise = button("Revise", card(first));
+      const oldCancel = button("Cancel edit");
+      const oldForm = customForm();
+      if (action === "copy") await copyFood(first);
+      else await click("Revise", card(first));
+      const before = formValues();
+      const requests = fetcher.mock.calls.length;
+      for (const node of originalFields) invoke(node, "onChange", { target: { value: "stale" } });
+      invoke(oldNutrient, "onChange", { target: { value: "4" } });
+      for (const node of [oldRemove, oldAdd, oldRevise, oldCancel]) invoke(node, "onClick");
+      invoke(oldForm, "onSubmit", { preventDefault() {} });
+      await hooks.settle();
+      expect(formValues()).toEqual(before);
+      expect(fetcher).toHaveBeenCalledTimes(requests);
+      expect(writes()).toHaveLength(0);
+    },
+  );
 
   it("keeps same-value controls usable and fences duplicate Copy before paint", async () => {
     const first = food();
@@ -1639,23 +1643,26 @@ describe("actual saved custom-food Copy to new draft", () => {
     expect(new Headers(writes()[5]?.[1]?.headers).get("idempotency-key")).not.toBe(keys[0]);
   });
 
-  it("blocks Copy and duplicate saves through its own pending write after unrelated work completes", async () => {
+  it("blocks Copy, Revise and duplicate saves through its own pending write after unrelated work completes", async () => {
     const first = food();
     const { state, writes } = workspace([first]);
     state.cursor = "next";
     await mount();
     await copyFood(first);
-    const oldCopy = copyButton(first);
+    const oldCopy = copyButton(first),
+      oldRevise = button("Revise", card(first));
     const oldSubmit = customForm();
     const pending = deferred<Response>();
     state.write = () => pending.promise;
     invoke(oldSubmit, "onSubmit", { preventDefault() {} });
     invoke(oldCopy, "onClick");
+    invoke(oldRevise, "onClick");
     invoke(oldSubmit, "onSubmit", { preventDefault() {} });
     await hooks.settle();
     state.continuation = () => page([food(2)]);
     await click("Load more private foods");
     expect(copyButton(first).props.disabled).toBe(true);
+    expect(button("Revise", card(first)).props.disabled).toBe(true);
     expect(button("Saving…").props.disabled).toBe(true);
     expect(writes()).toHaveLength(1);
     pending.resolve(receipt(newSaved(first)));
@@ -1839,34 +1846,65 @@ describe("actual saved custom-food Copy to new draft", () => {
     expect(writes()).toHaveLength(1);
   });
 
-  it("closes choice on full refresh, background and unmount without reusing old controls", async () => {
-    const view = visibility();
-    const first = food();
-    const { fetcher } = workspace([first]);
-    await mount();
-    await change("Name", "Draft");
-    await copyFood(first);
-    const oldDiscard = button(discardCustomCopy);
-    const oldCopy = copyButton(first);
-    await view.set("hidden");
-    invoke(oldDiscard, "onClick");
-    await view.set("visible");
-    invoke(oldCopy, "onClick");
-    await hooks.settle();
-    expect(field("Name").props.value).toBe("Draft");
-    expect(elements().some((node) => text(node) === discardCustomCopy)).toBe(false);
-    await copyFood(first);
-    hooks.replayEffects();
-    await hooks.settle();
-    expect(elements().some((node) => text(node) === discardCustomCopy)).toBe(false);
-    const before = fetcher.mock.calls.length;
-    hooks.unmount();
-    const updates = hooks.afterClose();
-    invoke(oldDiscard, "onClick");
-    invoke(oldCopy, "onClick");
-    expect(hooks.afterClose()).toBe(updates);
-    expect(fetcher).toHaveBeenCalledTimes(before);
-  });
+  it.each(["copy", "revise"] as const)(
+    "closes %s choice on full refresh, background, owner change and unmount without reusing old controls",
+    async (action) => {
+      const view = visibility();
+      const first = food();
+      const { state, fetcher } = workspace([first]);
+      const discardLabel = action === "copy" ? discardCustomCopy : discardCustomRevise;
+      const choose = async (source: CustomFood) =>
+        action === "copy" ? copyFood(source) : click("Revise", card(source));
+      await mount();
+      await change("Name", "Draft");
+      await choose(first);
+      const oldDiscard = button(discardLabel);
+      const oldCopy = action === "copy" ? copyButton(first) : button("Revise", card(first));
+      await view.set("hidden");
+      invoke(oldDiscard, "onClick");
+      await view.set("visible");
+      invoke(oldCopy, "onClick");
+      await hooks.settle();
+      expect(field("Name").props.value).toBe("Draft");
+      expect(elements().some((node) => text(node) === discardLabel)).toBe(false);
+      await choose(first);
+      const beforeRefresh = button(discardLabel),
+        pending = deferred<Response>();
+      const later = {
+        ...first,
+        revision: "2",
+        currentVersion: { ...first.currentVersion, versionNumber: 2, name: "Refreshed version" },
+      };
+      state.read = () => pending.promise;
+      hooks.replayEffects();
+      invoke(beforeRefresh, "onClick");
+      pending.resolve(page([later]));
+      await hooks.settle();
+      invoke(beforeRefresh, "onClick");
+      await hooks.settle();
+      expect(field("Name").props.value).toBe("Draft");
+      expect(elements().some((node) => text(node) === discardLabel)).toBe(false);
+      await choose(later);
+      expect(customDraftChoiceText()).toContain("Refreshed version v2.");
+      const beforeOwnerChange = button(discardLabel);
+      state.read = null;
+      state.owner = otherOwner;
+      hooks.replayEffects();
+      await hooks.settle();
+      invoke(beforeOwnerChange, "onClick");
+      await hooks.settle();
+      expect(router.replace).toHaveBeenCalledWith("/login");
+      expect(customDraftChoiceText()).toBe("");
+      expect(field("Name").props.value).toBe("");
+      const before = fetcher.mock.calls.length;
+      hooks.unmount();
+      const updates = hooks.afterClose();
+      invoke(oldDiscard, "onClick");
+      invoke(oldCopy, "onClick");
+      expect(hooks.afterClose()).toBe(updates);
+      expect(fetcher).toHaveBeenCalledTimes(before);
+    },
+  );
 });
 
 const historyDay = 86_400_000;
@@ -4874,5 +4912,161 @@ describe("web custom-food nutrient row uniqueness", () => {
     expect(customNutrientValues()).toEqual([rows[0], ["4", "quantified", "0"]]);
     expect(customNutrientOptions(2).find((item) => item.id === "2")?.disabled).toBe(true);
     expect(fetcher.mock.calls).toHaveLength(before);
+  });
+});
+
+const discardCustomRevise = "Discard draft and revise";
+function customDraftChoiceText() {
+  return text(elements().find((node) => node.props.id === "custom-draft-choice") ?? null);
+}
+
+describe("web custom-food dirty Revise protection", () => {
+  it("keeps dirty new and revised raw drafts intact, focuses the safe choice, and revises clean baselines directly", async () => {
+    const first = allStates(),
+      base = food(2);
+    const second = {
+      ...base,
+      revision: "7",
+      currentVersion: { ...base.currentVersion, versionNumber: 7 },
+    };
+    const { state, fetcher, writes } = workspace([first, second]);
+    await mount();
+    await change("Name", "  unfinished  ");
+    await change("Notes (optional)", "  raw\n notes  ");
+    const rawNew = formValues(),
+      requests = fetcher.mock.calls.length,
+      message = status();
+    const allocate = vi.fn(() => "cdfd121e-6fbc-42f5-8630-e1cb60f9c351");
+    vi.stubGlobal("crypto", { randomUUID: allocate });
+    invoke(button("Revise", card(first)), "onClick");
+    hooks.renderWithoutEffects();
+    const keepFocus = vi.fn(),
+      nameFocus = vi.fn();
+    (button("Keep editing").props.ref as { current: unknown }).current = { focus: keepFocus };
+    (field("Name").props.ref as { current: unknown }).current = { focus: nameFocus };
+    hooks.render();
+    expect(keepFocus).toHaveBeenCalledOnce();
+    expect(customDraftChoiceText()).toContain(`revise saved ${first.currentVersion.name} v1.`);
+    await click("Keep editing");
+    expect(formValues()).toEqual(rawNew);
+    expect(status()).toBe(message);
+    expect(nameFocus).not.toHaveBeenCalled();
+    await click("Revise", card(first));
+    await click(discardCustomRevise);
+    expect(nameFocus).toHaveBeenCalledOnce();
+    expect(button("Save new version")).toBeDefined();
+    expect(customNutrientValues()).toEqual(
+      first.currentVersion.nutrients
+        .map((row) => [
+          row.nutrient.id,
+          row.state,
+          row.state === "unknown" ? row.reason : row.amountPer100Grams,
+        ])
+        .map((row) => (row[1] === "trace" ? row.slice(0, 2) : row)),
+    );
+    await change("Name", `${first.currentVersion.name} `);
+    await change("Serving grams", "001.2500");
+    await change("Amount per 100 grams 1", " 001.2300 ");
+    const rawRevision = formValues();
+    await click("Revise", card(second));
+    expect(customDraftChoiceText()).toContain(`revise saved ${second.currentVersion.name} v7.`);
+    await click("Keep editing");
+    expect(formValues()).toEqual(rawRevision);
+    await change("Name", first.currentVersion.name);
+    await change("Serving grams", first.currentVersion.serving?.grams ?? "");
+    await change("Amount per 100 grams 1", longAmount);
+    await click("Revise", card(second));
+    expect(customDraftChoiceText()).toBe("");
+    expect(field("Name").props.value).toBe(second.currentVersion.name);
+    expect(nameFocus).toHaveBeenCalledTimes(2);
+    expect(fetcher.mock.calls).toHaveLength(requests);
+    expect(allocate).not.toHaveBeenCalled();
+    state.write = () => Response.json({ error: "Ambiguous revision" }, { status: 503 });
+    await submit("Save new version");
+    await submit("Save new version");
+    expect(writes()).toHaveLength(2);
+    expect(writes()[0]?.[0]).toBe(`/api/retention/custom-foods/${second.id}/revisions`);
+    expect(new Headers(writes()[0]?.[1]?.headers).get("if-match")).toBe('"7"');
+    expect(JSON.parse(String(writes()[0]?.[1]?.body))).toEqual(savedRequest(second));
+    expect(writes()[1]?.[1]?.body).toBe(writes()[0]?.[1]?.body);
+    expect(new Headers(writes()[1]?.[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(writes()[0]?.[1]?.headers).get("idempotency-key"),
+    );
+  });
+
+  it("keeps copied drafts dirty and their ambiguous create retry intact until explicitly revising the saved identity", async () => {
+    const first = food();
+    const { state, fetcher, writes } = workspace([first]);
+    await mount();
+    await copyFood(first);
+    state.write = () => Response.json({ error: "Receipt unavailable" }, { status: 503 });
+    await submit("Create private food");
+    const original = writes()[0]?.[1],
+      raw = formValues(),
+      requests = fetcher.mock.calls.length;
+    await click("Revise", card(first));
+    expect(customDraftChoiceText()).toContain(`revise saved ${first.currentVersion.name} v1.`);
+    await click("Keep editing");
+    expect(formValues()).toEqual(raw);
+    expect(fetcher.mock.calls).toHaveLength(requests);
+    await submit("Create private food");
+    expect(writes()[1]?.[1]?.body).toBe(original?.body);
+    expect(new Headers(writes()[1]?.[1]?.headers).get("idempotency-key")).toBe(
+      new Headers(original?.headers).get("idempotency-key"),
+    );
+    await click("Revise", card(first));
+    await click(discardCustomRevise);
+    expect(button("Save new version")).toBeDefined();
+    expect(text(customForm())).not.toContain("New draft copied");
+    await submit("Save new version");
+    expect(writes()[2]?.[0]).toBe(`/api/retention/custom-foods/${first.id}/revisions`);
+    expect(writes()[2]?.[1]?.body).toBe(original?.body);
+    expect(new Headers(writes()[2]?.[1]?.headers).get("if-match")).toBe('"1"');
+    expect(new Headers(original?.headers).has("if-match")).toBe(false);
+  });
+
+  it("fences competing Copy/Revise targets before paint and old Keep/Discard after raw edit-restore", async () => {
+    const first = food(),
+      second = food(2);
+    const { fetcher } = workspace([first, second]);
+    await mount();
+    await change("Name", "Raw draft");
+    const requests = fetcher.mock.calls.length,
+      originalCopy = copyButton(second),
+      originalRevise = button("Revise", card(second));
+    invoke(button("Revise", card(first)), "onClick");
+    invoke(originalCopy, "onClick");
+    invoke(originalRevise, "onClick");
+    hooks.renderWithoutEffects();
+    expect(customDraftChoiceText()).toContain(`revise saved ${first.currentVersion.name} v1.`);
+    const oldDiscard = button(discardCustomRevise),
+      oldKeep = button("Keep editing");
+    invoke(copyButton(second), "onClick");
+    invoke(oldDiscard, "onClick");
+    invoke(oldKeep, "onClick");
+    hooks.renderWithoutEffects();
+    expect(customDraftChoiceText()).toContain(`copy saved ${second.currentVersion.name} v1.`);
+    const oldCopyDiscard = button(discardCustomCopy),
+      oldCopy = copyButton(first);
+    invoke(button("Revise", card(second)), "onClick");
+    invoke(oldCopyDiscard, "onClick");
+    invoke(oldCopy, "onClick");
+    hooks.renderWithoutEffects();
+    expect(customDraftChoiceText()).toContain(`revise saved ${second.currentVersion.name} v1.`);
+    const beforeEdit = button(discardCustomRevise);
+    invoke(field("Name"), "onChange", { target: { value: "Temporary" } });
+    hooks.renderWithoutEffects();
+    invoke(field("Name"), "onChange", { target: { value: "Raw draft" } });
+    hooks.renderWithoutEffects();
+    invoke(beforeEdit, "onClick");
+    invoke(oldKeep, "onClick");
+    await hooks.settle();
+    expect(field("Name").props.value).toBe("Raw draft");
+    expect(customDraftChoiceText()).toBe("");
+    await click("Revise", card(second));
+    await click(discardCustomRevise);
+    expect(field("Name").props.value).toBe(second.currentVersion.name);
+    expect(button("Save new version")).toBeDefined();
+    expect(fetcher.mock.calls).toHaveLength(requests);
   });
 });

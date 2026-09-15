@@ -1069,3 +1069,17 @@ acceptance.
   canonical gates and complete-registry production synthetic Chrome option/raw-row/
   request/keyboard/narrow proof with owned cleanup. Real-service/restore/privacy,
   concurrent React, assistive, external, device and release acceptance stay separate.
+
+
+## ADR 0069 Custom-food Revise draft protection
+
+- Dirty web/native drafts and unappended native composer work require a local
+  Keep/Discard choice naming the saved revision; clean drafts open directly.
+  Keep preserves raw work and only current Discard installs the captured revision.
+- Retain action-specific Copy/create and Revise identity, clean baselines, exact
+  save/retry and draft/source/private/pending-save guards. Superseded or stale
+  confirmation callbacks cannot replace work or allocate requests/operations.
+- Require component/types/format, independent review, frozen canonical gates and
+  native exports plus complete-core production synthetic Chrome choice/raw-field/
+  request/keyboard/narrow/expiry proof and owned cleanup. Real-service, concurrent
+  React, assistive, external reviewer, device and release acceptance stay separate.

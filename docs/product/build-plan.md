@@ -171,6 +171,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Wrap native named nutrient choices | ADR 0066 existing wrapping option preserves full labels and IDs/drafts/explicit Add; focused checks, independent review, fresh canonical gates and native exports passed; device/external/release separate |
 | Automatic evidence / independent review | Explain unavailable web nutrient additions | ADR 0067 truthful availability and guarded Add preserve raw drafts and explicit save/retry; focused review, fresh canonical gates and synthetic Chrome passed; external/device/release separate |
 | Automatic evidence / independent review | Prevent duplicate web nutrient choices | ADR 0068 guarded row selection and disabled used alternatives preserve raw/current choices and explicit save/retry; focused review, fresh canonical gates and synthetic Chrome passed; external/device/release separate |
+| Automatic evidence / independent review | Protect unsaved custom-food drafts when revising | ADR 0069 current Keep/Discard choice preserves raw web/native work and captured saved revision; focused review, fresh canonical gates/native exports and synthetic Chrome passed; external/device/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1736,15 +1737,28 @@ gates and complete-registry production synthetic Chrome proof passed.
 At 2026-09-14T19:26:29.423269+00:00, base `9e524341ac556390b1ff6195dd1d0de4882c9574` automatic evidence was:
 ci `34885753265` completed / success; container supply chain `34885753580` in_progress. These base results do not transfer to this slice.
 
+### Custom-food Revise draft protection: source/local complete
+
+[ADR 0069](../adr/0069-custom-revise-guard.md) reuses the current Copy confirmation
+when Revise would replace unsaved web/native work. Clean drafts open directly;
+Keep preserves raw fields and native composer scratch; explicit current Discard
+installs the captured saved revision. Existing ownership, creation intent and
+save/retry remain authoritative. Focused review, fresh canonical gates/native
+exports and complete-registry production synthetic Chrome proof passed.
+
+At 2026-09-15T00:36:23.527574+00:00, base `56902c0c43dbed9d8b82380379f9f7110a58dca4` automatic evidence was:
+ci `34889719666` completed / success; container supply chain `34889719660` completed / success. These base results do not transfer to this slice.
+
 ### Next bounded candidate
 
-Protect unsaved custom-food work when choosing Revise on a saved card, on web
-and native. Both current Revise handlers immediately replace the draft; native
-also clears unappended nutrient inputs. Copy already offers Keep/Discard for
-dirty work. Reuse that local confirmation so unchanged drafts open directly,
-Keep preserves all raw fields and native scratch inputs, and only a current
-explicit Discard installs the named saved revision. Preserve Copy/create versus
-Revise identity, source/private ownership, pending-save guards and explicit
-save/retry. Require a bounded acceptance card before edits, actual-component
-evidence, applicable canonical/native exports and synthetic Chrome proof.
+Protect unfinished native nutrient input when saving a custom food. Save currently
+serializes only appended canonical rows and clears the composer on success; an
+amount entered for another nutrient without Add is omitted and then lost. Keep
+explicit Add authoritative and provide an Add-or-clear recovery before Save can
+discard unresolved entry work. Distinguish that work from query-only filtering
+and the selection/state left behind by a successful Add, so ordinary post-Add
+Save remains available. Preserve raw precision, trace/unknown reasons, private
+ownership and exact request/retry identity. Start with a separate acceptance card
+for the native screen and existing component suite, focused review and applicable
+canonical/native export evidence; no silent append or service contract change.
 No successor implementation has started.

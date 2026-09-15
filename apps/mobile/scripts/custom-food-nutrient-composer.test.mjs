@@ -829,6 +829,10 @@ describe("native named custom-food nutrient composer", () => {
       tree = await harness.settle();
       expect(input(tree, "Name").props.value).toBe("");
       tree = await click(harness, "Revise");
+      expect(input(tree, "Name").props.value).toBe("");
+      expect(input(tree, "Find an available nutrient by name").props.value).toBe("prot");
+      expect(text(tree)).toMatch(/then revise saved New version\s*, version 2\s*\./u);
+      tree = await click(harness, "Discard draft and revise");
       expect(input(tree, "Name").props.value).toBe("New version");
     } finally {
       harness.unmount();
@@ -3181,6 +3185,20 @@ async function copyCustom(harness, food = sourceFood) {
   return harness.settle();
 }
 const discardCustomCopy = "Discard draft and copy saved version";
+const discardCustomRevise = "Discard draft and revise";
+function reviseCustomButton(tree, food = sourceFood) {
+  const cards = nodes(tree, (node) => node.type === "View" && node.key === food.id);
+  expect(cards).toHaveLength(1);
+  return button(cards[0], "Revise");
+}
+async function requestCustomReplacement(harness, action, food = sourceFood) {
+  if (action === "copy") return copyCustom(harness, food);
+  const target = reviseCustomButton(await harness.settle(), food);
+  expect(target.props.disabled).toBe(false);
+  target.props.onPress();
+  return harness.settle();
+}
+
 function customCopyChoices(tree) {
   return nodes(
     tree,
@@ -3301,55 +3319,57 @@ describe("native saved custom-food copy to new draft", () => {
     }
   });
 
-  for (const field of ["Name", "Canonical nutrients per 100 g"])
-    it(`requires an explicit discard for raw ${field} whitespace that request normalization would hide`, async () => {
-      const { harness, requests } = setup();
-      try {
-        let tree = await click(harness, "Revise");
-        const value = input(tree, field).props.value;
-        await type(harness, field, `${value} `);
-        tree = await copyCustom(harness);
-        expect(customCopyChoices(tree)).toHaveLength(1);
-        const before = editorSnapshot(tree);
-        tree = await click(harness, "Keep editing");
-        expect(editorSnapshot(tree)).toEqual(before);
-        await copyCustom(harness);
-        tree = await click(harness, discardCustomCopy);
-        expect(input(tree, field).props.value).toBe(value);
-        expect(requests).toHaveLength(6);
-      } finally {
-        harness.unmount();
-      }
-    });
-
-  for (const scratch of ["query", "choice", "amount", "trace", "reason"])
-    it(`includes unappended composer ${scratch} in the discard choice and preserves it on Keep editing`, async () => {
-      const { harness } = setup();
-      try {
-        await harness.settle();
-        if (scratch === "query") await type(harness, "Find an available nutrient by name", "sod");
-        if (scratch === "choice") await click(harness, "Sodium (mg)");
-        if (scratch === "amount") await type(harness, "Exact amount per 100 g", "0.00100");
-        if (scratch === "trace") await click(harness, "Trace");
-        if (scratch === "reason") {
-          await click(harness, "Unknown");
-          await click(harness, "Withheld");
+  for (const action of ["copy", "revise"])
+    for (const field of ["Name", "Canonical nutrients per 100 g"])
+      it(`requires an explicit ${action} discard for raw ${field} whitespace that request normalization would hide`, async () => {
+        const { harness, requests } = setup();
+        try {
+          let tree = await click(harness, "Revise");
+          const value = input(tree, field).props.value;
+          await type(harness, field, `${value} `);
+          tree = await requestCustomReplacement(harness, action);
+          expect(customCopyChoices(tree)).toHaveLength(1);
+          const before = editorSnapshot(tree);
+          tree = await click(harness, "Keep editing");
+          expect(editorSnapshot(tree)).toEqual(before);
+          await requestCustomReplacement(harness, action);
+          tree = await click(harness, action === "copy" ? discardCustomCopy : discardCustomRevise);
+          expect(input(tree, field).props.value).toBe(value);
+          expect(requests).toHaveLength(6);
+        } finally {
+          harness.unmount();
         }
-        let tree = await copyCustom(harness);
-        const before = editorSnapshot(tree);
-        expect(customCopyChoices(tree)).toHaveLength(1);
-        tree = await click(harness, "Keep editing");
-        expect(editorSnapshot(tree)).toEqual(before);
-        await copyCustom(harness);
-        tree = await click(harness, discardCustomCopy);
-        expect(input(tree, "Find an available nutrient by name").props.value).toBe("");
-        expect(input(tree, "Exact amount per 100 g").props.value).toBe("");
-        expect(button(tree, "Quantified").props.accessibilityState.selected).toBe(true);
-        expect(canonical(tree)).toBe("208=125.5000");
-      } finally {
-        harness.unmount();
-      }
-    });
+      });
+
+  for (const action of ["copy", "revise"])
+    for (const scratch of ["query", "choice", "amount", "trace", "reason"])
+      it(`includes unappended composer ${scratch} in the ${action} discard choice and preserves it on Keep editing`, async () => {
+        const { harness } = setup();
+        try {
+          await harness.settle();
+          if (scratch === "query") await type(harness, "Find an available nutrient by name", "sod");
+          if (scratch === "choice") await click(harness, "Sodium (mg)");
+          if (scratch === "amount") await type(harness, "Exact amount per 100 g", "0.00100");
+          if (scratch === "trace") await click(harness, "Trace");
+          if (scratch === "reason") {
+            await click(harness, "Unknown");
+            await click(harness, "Withheld");
+          }
+          let tree = await requestCustomReplacement(harness, action);
+          const before = editorSnapshot(tree);
+          expect(customCopyChoices(tree)).toHaveLength(1);
+          tree = await click(harness, "Keep editing");
+          expect(editorSnapshot(tree)).toEqual(before);
+          await requestCustomReplacement(harness, action);
+          tree = await click(harness, action === "copy" ? discardCustomCopy : discardCustomRevise);
+          expect(input(tree, "Find an available nutrient by name").props.value).toBe("");
+          expect(input(tree, "Exact amount per 100 g").props.value).toBe("");
+          expect(button(tree, "Quantified").props.accessibilityState.selected).toBe(true);
+          expect(canonical(tree)).toBe("208=125.5000");
+        } finally {
+          harness.unmount();
+        }
+      });
 
   it("keeps filter/disclosures/pinned log and loaded trends independent, including a filtered-out confirmation source", async () => {
     const { harness, requests, props } = setupTrends();
@@ -3463,7 +3483,8 @@ describe("native saved custom-food copy to new draft", () => {
         keep();
         tree = await harness.settle();
         expect(rawCustomFields(tree)).toEqual(before);
-        expect(customCopyChoices(tree)).toHaveLength(0);
+        expect(customCopyChoices(tree)).toHaveLength(action === "Revise" ? 1 : 0);
+        if (action === "Revise") expect(button(tree, discardCustomRevise)).toBeDefined();
         expect(requests).toHaveLength(count);
       } finally {
         harness.unmount();
@@ -3546,7 +3567,10 @@ describe("native saved custom-food copy to new draft", () => {
         : undefined,
     );
     try {
-      let tree = await copyCustom(harness);
+      await copyCustom(harness);
+      let tree = await requestCustomReplacement(harness, "revise");
+      const oldRevise = reviseCustomButton(tree).props.onPress;
+      const oldDiscard = button(tree, discardCustomRevise).props.onPress;
       const oldCopy = customCopyButton(tree).props.onPress;
       const oldSave = button(tree, "Create private food").props.onPress;
       await click(harness, "Create private food");
@@ -3555,7 +3579,11 @@ describe("native saved custom-food copy to new draft", () => {
       expect(customCopyButton(tree).props.disabled).toBe(true);
       expect(button(tree, "Create private food").props.disabled).toBe(true);
       oldCopy();
+      oldRevise();
+      oldDiscard();
       oldSave();
+      tree = await harness.settle();
+      expect(customCopyChoices(tree)).toHaveLength(0);
       expect(
         writes(requests).filter((request) => request.url.pathname === "/v1/custom-foods"),
       ).toHaveLength(1);
@@ -3884,6 +3912,288 @@ describe("native saved custom-food copy to new draft", () => {
     confirm();
     expect(requests).toHaveLength(count);
     expect(harness.writesAfterUnmount).toBe(0);
+  });
+});
+
+describe("native dirty custom-food Revise protection", () => {
+  it("opens pristine and unchanged saved revisions directly with a clean baseline", async () => {
+    const { harness, requests, props } = setup();
+    try {
+      await harness.settle();
+      const before = requests.length;
+      const operation = hooks.operation;
+      let tree = await requestCustomReplacement(harness, "revise");
+      expect(customCopyChoices(tree)).toHaveLength(0);
+      const saved = rawCustomFields(tree);
+      tree = await requestCustomReplacement(harness, "revise");
+      expect(customCopyChoices(tree)).toHaveLength(0);
+      expect(rawCustomFields(tree)).toEqual(saved);
+      expect(button(tree, "Save new version").props.disabled).toBe(false);
+      tree = await copyCustom(harness);
+      expect(customCopyChoices(tree)).toHaveLength(0);
+      expect(button(tree, "Create private food").props.disabled).toBe(false);
+      expect(requests).toHaveLength(before);
+      expect(hooks.operation).toBe(operation);
+      expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+      expect(props.quickAddOutboxController.requestDrain).not.toHaveBeenCalled();
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  for (const draft of ["new", "copied"])
+    it(`preserves a dirty ${draft} draft on Keep and installs only the current captured revision on Discard`, async () => {
+      const { harness, requests, props } = setup();
+      try {
+        if (draft === "copied") await copyCustom(harness);
+        else {
+          await type(harness, "Name", "  Unsaved name  ");
+          await type(harness, "Notes", "First line\n  raw second line  ");
+          await type(
+            harness,
+            "Canonical nutrients per 100 g",
+            " 208=0.00100\r\n999=unknown:withheld ",
+          );
+        }
+        const operation = hooks.operation;
+        const count = requests.length;
+        const before = editorSnapshot(await harness.settle());
+        let tree = await requestCustomReplacement(harness, "revise");
+        expect(text(tree)).toMatch(/then revise saved Saved private food\s*, version 1\s*\./u);
+        expect(editorSnapshot(tree)).toEqual(before);
+        tree = await click(harness, "Keep editing");
+        expect(editorSnapshot(tree)).toEqual(before);
+        tree = await requestCustomReplacement(harness, "revise");
+        const discard = button(tree, discardCustomRevise).props.onPress;
+        input(tree, "Name").props.onChangeText(input(tree, "Name").props.value);
+        discard();
+        discard();
+        tree = await harness.settle();
+        expect(customCopyChoices(tree)).toHaveLength(0);
+        expect(input(tree, "Name").props.value).toBe(sourceFood.currentVersion.name);
+        expect(canonical(tree)).toBe("208=125.5000");
+        expect(button(tree, "Save new version").props.disabled).toBe(false);
+        tree = await requestCustomReplacement(harness, "revise");
+        expect(customCopyChoices(tree)).toHaveLength(0);
+        expect(requests).toHaveLength(count);
+        expect(hooks.operation).toBe(operation);
+        expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+        expect(props.quickAddOutboxController.requestDrain).not.toHaveBeenCalled();
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  for (const [first, second] of [
+    ["copy", "revise"],
+    ["revise", "copy"],
+  ])
+    it(`binds ${first}-to-${second} supersession to its exact saved source and action`, async () => {
+      const { harness, requests } = setup((request) =>
+        request.url.pathname === "/v1/custom-foods" && request.method === "GET"
+          ? response({ data: [sourceFood, archivedFood], page: { nextCursor: null } })
+          : undefined,
+      );
+      try {
+        await fillManual(harness, "2.00100");
+        let tree = await requestCustomReplacement(harness, first);
+        const oldKeep = button(tree, "Keep editing").props.onPress;
+        const oldDiscard = button(tree, first === "copy" ? discardCustomCopy : discardCustomRevise)
+          .props.onPress;
+        const oldField = input(tree, "Name").props.onChangeText;
+        const oldSave = button(tree, "Create private food").props.onPress;
+        tree = await requestCustomReplacement(harness, second, archivedFood);
+        const before = editorSnapshot(tree);
+        const stateWrites = harness.stateWrites;
+        oldKeep();
+        oldDiscard();
+        expect(harness.stateWrites).toBe(stateWrites);
+        tree = await harness.settle();
+        expect(editorSnapshot(tree)).toEqual(before);
+        expect(text(tree)).toContain(`then ${second} saved Archived private food`);
+        tree = await click(harness, second === "copy" ? discardCustomCopy : discardCustomRevise);
+        oldField("obsolete draft");
+        oldSave();
+        tree = await harness.settle();
+        expect(input(tree, "Name").props.value).toBe(archivedFood.currentVersion.name);
+        expect(
+          button(tree, second === "copy" ? "Create private food" : "Save new version"),
+        ).toBeDefined();
+        expect(writes(requests)).toHaveLength(0);
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  for (const invalidation of ["raw edit/restore", "composer edit/restore"])
+    it(`rejects a retained Revise choice after ${invalidation}`, async () => {
+      const { harness, requests } = setup();
+      try {
+        await fillManual(harness, "1.00");
+        let tree = await requestCustomReplacement(harness, "revise");
+        const discard = button(tree, discardCustomRevise).props.onPress;
+        const keep = button(tree, "Keep editing").props.onPress;
+        const label = invalidation === "raw edit/restore" ? "Name" : "Exact amount per 100 g";
+        const original = input(tree, label).props.value;
+        await type(harness, label, "later");
+        tree = await type(harness, label, original);
+        const before = editorSnapshot(tree);
+        const stateWrites = harness.stateWrites;
+        discard();
+        keep();
+        expect(harness.stateWrites).toBe(stateWrites);
+        tree = await harness.settle();
+        expect(editorSnapshot(tree)).toEqual(before);
+        expect(customCopyChoices(tree)).toHaveLength(0);
+        expect(writes(requests)).toHaveLength(0);
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  for (const boundary of ["owner", "profile", "lifecycle"])
+    it(`rejects pending Revise controls across the ${boundary} boundary`, async () => {
+      const { harness, requests } = setup();
+      try {
+        await fillManual(harness);
+        let tree = await requestCustomReplacement(harness, "revise");
+        const revise = reviseCustomButton(tree).props.onPress;
+        const discard = button(tree, discardCustomRevise).props.onPress;
+        const keep = button(tree, "Keep editing").props.onPress;
+        if (boundary === "lifecycle") state("background");
+        else
+          harness.updateProps(
+            boundary === "owner" ? { ownerUserId: otherOwner } : { profileTimeZone: "UTC" },
+          );
+        tree = harness.renderWithoutEffects();
+        expect(customCopyChoices(tree)).toHaveLength(0);
+        const stateWrites = harness.stateWrites;
+        revise();
+        discard();
+        keep();
+        expect(harness.stateWrites).toBe(stateWrites);
+        harness.flushEffects();
+        if (boundary === "lifecycle") state("active");
+        await harness.settle();
+        tree = await type(harness, "Name", "Replacement draft");
+        const before = editorSnapshot(tree);
+        revise();
+        discard();
+        keep();
+        tree = await harness.settle();
+        expect(editorSnapshot(tree)).toEqual(before);
+        expect(writes(requests)).toHaveLength(0);
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  it("keeps native list-receipt identity on a pending Revise after appending another saved page", async () => {
+    const { harness, requests } = setup((request) =>
+      request.url.pathname === "/v1/custom-foods"
+        ? response(
+            request.url.searchParams.has("cursor")
+              ? { data: [archivedFood], page: { nextCursor: null } }
+              : { data: [sourceFood], page: { nextCursor: "later-page" } },
+          )
+        : undefined,
+    );
+    try {
+      await fillManual(harness);
+      let tree = await requestCustomReplacement(harness, "revise");
+      const revise = reviseCustomButton(tree).props.onPress;
+      const discard = button(tree, discardCustomRevise).props.onPress;
+      tree = await click(harness, "Load more custom foods");
+      const before = editorSnapshot(tree);
+      const count = requests.length;
+      const stateWrites = harness.stateWrites;
+      revise();
+      discard();
+      expect(harness.stateWrites).toBe(stateWrites);
+      tree = await harness.settle();
+      expect(editorSnapshot(tree)).toEqual(before);
+      tree = await click(harness, discardCustomRevise);
+      expect(button(tree, "Save new version")).toBeDefined();
+      expect(input(tree, "Name").props.value).toBe(sourceFood.currentVersion.name);
+      expect(requests).toHaveLength(count);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("rejects an old saved source after refresh and pins the current later revision through explicit save/retry", async () => {
+    const later = {
+      ...sourceFood,
+      revision: "9",
+      currentVersion: {
+        ...sourceFood.currentVersion,
+        id: "999",
+        versionNumber: 9,
+        name: "Later saved food",
+      },
+    };
+    let refreshed = false;
+    const { harness, requests } = setup((request) => {
+      if (request.method === "POST") return response({ data: { malformed: true } });
+      if (refreshed && request.url.pathname === "/v1/custom-foods")
+        return response({ data: [later], page: { nextCursor: null } });
+      return undefined;
+    });
+    try {
+      await fillManual(harness);
+      let tree = await requestCustomReplacement(harness, "revise");
+      const oldRevise = reviseCustomButton(tree).props.onPress;
+      const oldDiscard = button(tree, discardCustomRevise).props.onPress;
+      refreshed = true;
+      tree = await click(harness, "Refresh private data");
+      const before = editorSnapshot(tree);
+      oldRevise();
+      oldDiscard();
+      tree = await harness.settle();
+      expect(editorSnapshot(tree)).toEqual(before);
+      expect(customCopyChoices(tree)).toHaveLength(0);
+      tree = await requestCustomReplacement(harness, "revise", later);
+      expect(text(tree)).toMatch(/then revise saved Later saved food\s*, version 9\s*\./u);
+      await click(harness, discardCustomRevise);
+      await type(
+        harness,
+        "Canonical nutrients per 100 g",
+        "208=0.00000000000000100\r\n307=trace\r\n999=unknown:withheld",
+      );
+      await click(harness, "Save new version");
+      const first = writes(requests)[0];
+      expect(first.url.pathname).toBe(`/v1/custom-foods/${foodId}/revisions`);
+      expect(first.headers["if-match"]).toBe('"9"');
+      expect(JSON.parse(first.body)).toEqual({
+        name: later.currentVersion.name,
+        brandName: "Private brand",
+        notes: "Keep notes",
+        serving: { label: "scoop", grams: "25.000001" },
+        nutrients: [
+          { nutrientId: "208", state: "quantified", amountPer100Grams: "0.00000000000000100" },
+          { nutrientId: "307", state: "trace", amountPer100Grams: null },
+          { nutrientId: "999", state: "unknown", amountPer100Grams: null, reason: "withheld" },
+        ],
+      });
+      const operation = hooks.operation;
+      await requestCustomReplacement(harness, "revise", later);
+      await click(harness, "Keep editing");
+      expect(hooks.operation).toBe(operation);
+      await click(harness, "Save new version");
+      expect(writes(requests)[1].body).toBe(first.body);
+      expect(writes(requests)[1].headers["idempotency-key"]).toBe(first.headers["idempotency-key"]);
+      await type(harness, "Name", "Body B");
+      await click(harness, "Save new version");
+      await type(harness, "Name", later.currentVersion.name);
+      await click(harness, "Save new version");
+      expect(writes(requests)[3].body).toBe(first.body);
+      expect(writes(requests)[3].headers["idempotency-key"]).toBe(first.headers["idempotency-key"]);
+      expect(writes(requests)[2].headers["idempotency-key"]).not.toBe(
+        first.headers["idempotency-key"],
+      );
+    } finally {
+      harness.unmount();
+    }
   });
 });
 
