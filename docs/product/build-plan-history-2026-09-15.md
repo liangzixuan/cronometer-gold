@@ -1,0 +1,1861 @@
+# Historical build-plan snapshot — 2026-09-15
+
+This is the original roadmap at `abdcd8391a03d8a03bc5f3f185e4a1a642425c18`, preserved verbatim
+below. Its dates, pending outcomes, counts and “next” language are historical
+observations, not current task selection or provider state. Newer results never
+retroactively change a result recorded here.
+
+Use the [current build plan](build-plan.md) for ordering and milestone boundaries,
+and [current readiness](../quality/current-readiness.md) for the dated evidence
+snapshot and unresolved acceptance work. Do not append new delivery records here.
+
+<!-- Original roadmap snapshot begins below. -->
+
+# Product Build Plan
+
+This repository implements an independent consumer nutrition tracker. It does
+not use Cronometer code, branding, assets, copy, or proprietary food records.
+
+## Product promise
+
+The first complete release lets a person track everything they eat and
+accurately understand calories, macronutrients, and micronutrients. Accuracy
+means preserving source provenance and missingness—not presenting absent values
+as measured zeros.
+
+## Delivery status
+
+Here, **implemented** means the source and its local/CI evidence are complete. It
+does not mean a feature has passed controlled-beta, signed-device, independent-
+reviewer, or production-release acceptance.
+
+1. **Foundation (implemented):** modular monorepo, exact nutrition math, immutable
+   diary snapshots, PostgreSQL schema, API/client shells, CI, and local services.
+2. **Canonical food ingestion core (implemented):** release-candidate manifests and
+   real-data adapters for USDA FoodData Central and Health Canada CNF, plus
+   resumable staging, validation, atomic activation, rollback, and provenance.
+3. **Food search (implemented against controlled fixtures):** disposable Meilisearch projection,
+   generic/branded intent, autocomplete, typo tolerance, reviewed synonyms,
+   bounded recent/favorite reranking, and authoritative exact barcode lookup.
+4. **Diary vertical slice (implemented):** account/profile, local-day diary, serving
+   selection, add/edit/delete, meal groups, exact daily totals, retry-safe
+   idempotency, and opt-in 20-entry response pages with coherent whole-day
+   totals, encrypted revision-bound continuations, and legacy full-day
+   compatibility. The reviewed 50-active-entry day cap remains.
+5. **Recipes and goals (implemented):** yield-aware versioned recipes, immutable
+   recipe diary snapshots, versioned targets, bounded energy estimates, and
+   lower-bound nutrient progress. This implemented claim covers user-authored
+   nutrient targets. M1B-R's source-verified reference-template candidate is
+   source-complete across the database, API, web, and mobile and has passed the
+   ordered local validation run. It remains blocked from clinical review,
+   controlled-beta enablement, and commercial enablement.
+6. **Retention and privacy (implemented; release-gated):** timezone-correct
+   nutrient and biometric trends, exact-version repeat logging, private versioned
+   custom foods, biometrics, and hydration entries, consented local reminders,
+   coherent JSON/CSV export, erasure/recovery, and read-only HealthKit/Health
+   Connect weight adapters are wired across database, API/worker, web, and mobile
+   with package and integration evidence. The real API/worker privacy drill now
+   populates and independently enumerates all 65 retained export entity families.
+   It requires
+   exact source-ID/count reconciliation in JSON and decompressed CSV; proves
+   cross-owner survival; verifies audit and artifact-lifecycle redaction; expires
+   one artifact; cancels queued reminder delivery after pause/revoke; and
+   reconciles the erased owner's rows and projections. Public routes create the
+   supported user workflows; narrow direct fixtures cover only route-unreachable
+   compatibility/evidence tables, including catalogue/source/import, audit,
+   legacy nutrient/barcode, and legacy operation rows. This closes the local
+   all-retained-entity source gate, not M2. Signed physical-device, independent-
+   reviewer, hosted access/restore, notification-delivery, and controlled-beta
+   evidence still block release.
+7. **Bounded nutrition reports (implemented; release-gated):** one coherent,
+   owner-scoped snapshot now provides 7-, 14-, 30-, or custom 1–31-day reports
+   across all 15 core nutrients on web and mobile. It preserves profile-local
+   day boundaries, immutable diary provenance, current saved-goal versions,
+   reference-target expiry, quantified zero, trace, partial, unknown, and
+   completely missing days. This closes M3A's local source slice only; it does
+   not claim clinical interpretation, signed-device acceptance, hosted
+   availability, printable/PDF output, scheduled delivery, or full premium
+   parity.
+8. **Durable diary corrections and ordering (implemented; release-gated):** the
+   native protected FIFO now covers repeat, edit, delete, and one complete-day
+   within-meal reorder in addition to food, recipe, and custom-food logging.
+   Web uses the same strong correction and ordering receipts, and browser recipe
+   and custom-food logging now has the paired profile-time-zone guard. This
+   closes M1C's local source slices, not signed-device lifecycle, protected-
+   storage, OS-kill, accessibility, hosted, browser-persistence, background-
+   delivery, or controlled-beta acceptance.
+9. **Coordinated Today overview (source-complete; local gates passed):** one selected
+   profile-local date coordinates the diary with independently loaded hydration
+   and activity summaries on web and mobile. The bounded cards expose exact
+   water amount/count and recorded activity duration/count without combining
+   revisions or changing nutrition and energy math. ADR 0026 keeps hosted,
+   signed-device, physical cross-client, and assistive-technology acceptance open.
+
+## Forward milestones
+
+Roadmap priority is user-visible product parity and a provable release path, not
+depth in any one infrastructure lane. While live catalogue, hosting, device, or
+external-identity work awaits its separate approval or external evidence, the
+default next work is the smallest safe user-visible source milestone. Only a
+demonstrated P0/P1 correctness, privacy, security, data-loss, cross-owner, or
+release-authority defect—or work required by the next beta exit gate—interrupts
+that order. This is scheduling, not a waiver: every M0 and M2 acceptance gate
+remains fail-closed.
+
+### Execution queue
+
+Historical checkpoint (2026-09-09; automatic observations below are dated evidence):
+recovered M1E and its mobile summary-reload and
+web group-draft corrections pass the complete applicable local validation,
+including canonical `pnpm check`, build, database/API integration, isolated
+restore, search, email, privacy, and exact loopback API readiness after the
+approved Windows Docker recovery. M1E checkpoint `f4ebca8` has successful CI
+and container supply-chain evidence (runs `34390646294` and `34390646269`).
+M1F hydration time corrections are source/local complete: final canonical checks,
+builds, 358 database tests, 351 API tests, isolated restore with restored-API tests,
+search, email, privacy, synthetic browser daily-loop, and exact Windows/WSL readiness
+passed. M1F checkpoint `cb22cf0` has successful CI (run `34397666336`); its
+container supply-chain run `34397666277` failed in the web image build. Clean-source
+reproduction confirmed that its web-only build omitted the newly required contracts
+output. The corrected command builds the workspace dependency closure first;
+regression checks and an isolated clean-source build pass. This repairs the source
+defect; replacement exact-commit container evidence is still required. Both print
+and build-repair commits were delivered as `87356d2`; CI `34415057674` passed,
+while container supply-chain run `34415057669` is still in progress at the latest
+read-only observation.
+
+M3B printable-report checkpoint `514e2c1`, canonical checks/build and six synthetic
+Letter/A4 PDFs pass under ADR 0028. The real web/BFF fixture proves session
+failures, profile-change closure and date-draft invalidation. The user confirmed
+native Chrome preview and Cancel; subsequent browser inspection verified cleanup.
+Repeat printing and direct Ctrl+P remain unconfirmed manual checks. Continue with
+a reviewed source checkpoint while keeping those checks open; neither full local
+acceptance nor the roadmap's implemented status is claimed. Docker was unnecessary
+for this bounded web presentation proof. Independent review and release acceptance
+remain separate.
+
+Use [the development workflow](../quality/development-workflow.md) for continuation,
+validation, evidence, and agent ownership. Keep one product acceptance card active;
+the detailed milestone boundaries below remain authoritative.
+
+| Order | Deliverable | Concrete exit |
+| --- | --- | --- |
+| Independent review | Finish and stabilize M1E Today overview | Selected date survives both detail round trips; diary receipts reload summary cards; a background profile refresh cannot overwrite another client's meal-group edits; focused regressions and final applicable local gates pass, review findings are resolved, and applicable exact-commit automatic checks reach terminal success |
+| Build repair / automatic evidence | M1F: complete the daily hydration correction flow | Web and mobile let a person correct when water was logged through the existing `occurredAt` API, explain profile-local time and ambiguous/invalid times, and refresh the affected day after a move; retain retry/revision/privacy rules and prove the food/water/activity/report journey with synthetic local data |
+| Acceptance follow-up | M3B: print the current nutrition report on web | Print the already loaded coherent report as readable Letter/A4 output, preserving exact evidence and missingness; session closure or invalidation prevents stale private output; repeat-print/direct-Ctrl+P manual checks and exact-commit automatic evidence remain open |
+| Automatic evidence / independent review | M4A: review a pasted ingredient list on web | Local checks and synthetic browser flow passed; `88930fe` and status update `58abb4c` were delivered. Record exact-commit CI/container evidence and preserve independent/release acceptance |
+| Automatic evidence / independent review | M4B: review a pasted ingredient list on mobile | Source/local gates passed; collector diagnostic recovery delivered as `2df4493` with successful CI `34423562282`; container `34423562294` remains pending at the latest observation |
+| Automatic evidence / independent review | Saved recipe nutrition basis and coverage | Delivered `7274ddc`; CI `34425778573` passed; container `34425778640` remains pending at current observation; independent/device/release acceptance stays separate |
+| Automatic evidence / independent review | Copy saved recipe to a new draft | ADR 0032 source, independent in-task review, canonical local gates and synthetic Chrome copy/create/retry QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
+| Automatic evidence / independent review | Reorder recipe ingredients in the draft | ADR 0033 source, independent in-task review, canonical local gates and synthetic Chrome create/revision/retry QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
+| Automatic evidence / independent review | Previous/next nutrition report period | ADR 0034 source, independent in-task review, canonical local gates and synthetic Chrome period/dirty-date/retry QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
+| Automatic evidence / independent review | Open source diary days from report evidence | ADR 0035 source, independent in-task review, canonical local gates and synthetic Chrome source-date/missing-day/navigation QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
+| Automatic evidence / independent review | Collapse diary meal groups | ADR 0036 source, independent in-task review, canonical local gates and synthetic Chrome keyboard/narrow/paging/editor/date QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
+| Automatic evidence / independent review | Reuse activity details in a new draft | ADR 0037 source, independent in-task review, canonical local gates and synthetic Chrome exact-field/create/retry/narrow/keyboard QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
+| Automatic evidence / independent review | Hydration amount presets in the Add form | ADR 0038 source, independent in-task review, canonical local gates and synthetic Chrome preset/custom/create/retry/narrow/keyboard QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
+| Automatic evidence / independent review | Filter the loaded saved-recipe list by name | ADR 0039 source, independent in-task review, canonical local gates and synthetic Chrome no-request/paging/draft/keyboard/narrow/expiry QA passed; record exact-commit automatic results and preserve independent/device/release acceptance |
+| Automatic evidence / independent review | Bound PowerShell startup discovery in the synthetic collector proof | Reviewed version-only timing repair and full local producer/Tailscale/canonical gates passed; record replacement exact-commit CI/container results without transferring earlier results |
+| Automatic evidence / independent review | Named nutrient rows for native custom foods | ADR 0040 source, independent in-task review, focused native/helper tests, canonical local gates and fresh native exports passed; record exact-commit automatic results and preserve device/independent/release acceptance |
+| Automatic evidence / independent review | Inspect saved custom-food nutrients without editing | ADR 0041 source, independent in-task review, canonical local gates and synthetic Chrome exact-state/no-request/paging/draft/keyboard/narrow/Retry/expiry proof passed; record exact-commit automatic results and preserve device/independent/release acceptance |
+| Automatic evidence / independent review | Select every loaded nutrient for native Health trends | ADR 0042 source, independent in-task review, focused native behavior/types, canonical local gates and fresh exports passed; record exact-commit automatic results and preserve device/independent/release acceptance |
+| Automatic evidence / independent review | Filter loaded saved custom foods by name | ADR 0043 source, independent in-task review, canonical local gates and synthetic Chrome no-request/details/draft/paging/keyboard/narrow/expiry proof passed; record exact-commit automatic results and preserve device/independent/release acceptance |
+| Automatic evidence / independent review | Copy a saved custom food to a new draft | ADR 0044 source, independent in-task review, canonical local gates and synthetic Chrome copy/draft/Create/retry/keyboard/narrow/expiry proof passed; record exact-commit automatic results and preserve device/independent/release acceptance |
+| Automatic evidence / independent review | Native biometric reading units and identity | ADR 0045 source, independent in-task review, focused native identity/value/body/retry checks, canonical local gates and fresh native exports passed; preserve exact-commit automatic, external reviewer, device and release acceptance |
+| Automatic evidence / independent review | Native Goals nutrient picker | ADR 0046 all-match/unit/count/Clear source, focused component/helper checks, independent in-task review, canonical local gates and fresh native exports passed; automatic, device, external reviewer and release acceptance remain separate |
+| Automatic evidence / independent review | Activity Add duration presets | ADR 0047 focused component/type/format, independent in-task review, canonical local gates, fresh client outputs and synthetic Chrome preset/manual/create/readback/retry/keyboard/narrow/expiry proof passed; automatic/external/device/release separate |
+| Automatic evidence / independent review | Filter loaded nested-recipe choices | ADR 0048 independent filter/counts/Clear and exact pins, focused review, canonical gates, fresh client outputs and synthetic Chrome draft/paging/retry/keyboard/narrow/expiry proof passed; automatic/external/device/release separate |
+| Automatic evidence / independent review | Inspect logged diary entry nutrients | ADR 0049 exact logged-portion disclosures, focused review, canonical gates, fresh client outputs and synthetic Chrome values/draft/paging/meal/date/keyboard/narrow/expiry proof passed; automatic/external/device/release separate |
+| Automatic evidence / independent review | Show saved reminder weekdays | ADR 0050 saved membership, existing focused checks, fresh canonical gates and synthetic Chrome saved-days/draft/narrow/expiry proof passed; automatic/external/device/release separate |
+| Automatic evidence / independent review | Show saved biometric date/time zones | ADR 0051 saved local dates, saved-zone seconds and explicit zones; existing focused checks, fresh canonical gates and synthetic Chrome saved-zone/date-boundary/draft/narrow/expiry proof passed; automatic/external/device/release separate |
+| Automatic evidence / independent review | Label missing biometric metadata on web | ADR 0052 explicit name/unit fallbacks; existing focused checks, fresh canonical gates and synthetic Chrome known/missing/draft/narrow/expiry proof passed; automatic/external/release separate |
+| Automatic evidence / independent review | Optional saved-recipe log time on web/native | ADR 0053 explicit time, automatic defaults and retry identity; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
+| Automatic evidence / independent review | Recipe ingredient food-search pages on web/native | ADR 0054 committed query, explicit continuation and exact version pins; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
+| Automatic evidence / independent review | Earlier biometric history on web/native | ADR 0055 fixed inclusive windows, exact continuation and editor/trend independence; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
+| Automatic evidence / independent review | Reminder day presets on web/native | ADR 0056 local memberships, exact retries and explicit consent/save; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
+| Automatic evidence / independent review | Expand all diary meals on web/native | ADR 0057 local overview, preserved drafts/disclosures/paging and existing private/queue guards; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
+| Automatic evidence / independent review | Loaded biometric history metric filter on web/native | ADR 0058 exact metric IDs, truthful loaded counts and editor/trend independence; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
+| Automatic evidence / independent review | Web goal nutrient search | ADR 0059 local name/code search, visible selection, explicit Add and draft/save independence; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
+| Automatic evidence / independent review | Saved manual goal copy on web/native | ADR 0060 exact saved fields, dirty confirmation, reviewed date and preserved Create/retry identity; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
+| Automatic evidence / independent review | Health trend date shortcuts on web/native | ADR 0061 inclusive profile-local dates, no-op/custom range actions and preserved trend loading; focused checks, independent source review, fresh canonical gates and synthetic Chrome passed; external/release separate |
+| Automatic evidence / independent review | Nutrition-only Health trends on native | ADR 0062 None choice, explicit one/two-series loading and preserved trend/draft/private ownership; focused review, fresh canonical gates and native exports passed; external/device/release separate |
+| Automatic evidence / independent review | Units in native Health trend metric choices | ADR 0063 exact units and wrapping labels with preserved None/IDs/loading; focused checks, independent review, fresh canonical gates and native exports passed; external/device/release separate |
+| Automatic evidence / independent review | Search web Health trend nutrients | ADR 0064 local name search/Clear, selected context and preserved reads/drafts/private ownership; focused review, fresh canonical gates and synthetic Chrome passed; external/device/release separate |
+| Automatic evidence / independent review | Clear the native named nutrient filter | ADR 0065 existing guarded query reset preserves nutrient draft and explicit Add/save/retry; focused checks, independent review, fresh canonical gates and native exports passed; external/device/release separate |
+| Automatic evidence / independent review | Wrap native named nutrient choices | ADR 0066 existing wrapping option preserves full labels and IDs/drafts/explicit Add; focused checks, independent review, fresh canonical gates and native exports passed; device/external/release separate |
+| Automatic evidence / independent review | Explain unavailable web nutrient additions | ADR 0067 truthful availability and guarded Add preserve raw drafts and explicit save/retry; focused review, fresh canonical gates and synthetic Chrome passed; external/device/release separate |
+| Automatic evidence / independent review | Prevent duplicate web nutrient choices | ADR 0068 guarded row selection and disabled used alternatives preserve raw/current choices and explicit save/retry; focused review, fresh canonical gates and synthetic Chrome passed; external/device/release separate |
+| Automatic evidence / independent review | Protect unsaved custom-food drafts when revising | ADR 0069 current Keep/Discard choice preserves raw web/native work and captured saved revision; focused review, fresh canonical gates/native exports and synthetic Chrome passed; external/device/release separate |
+| Automatic evidence / independent review | Protect unfinished native nutrient input when saving | ADR 0070 Add-or-clear recovery preserves raw entry work, explicit Add and normal post-Add Save; focused review, fresh canonical gates and native exports passed; external/device/release separate |
+| Automatic evidence / independent review | Remove named nutrient rows from native drafts | ADR 0071 explicit current-row removal preserves raw bytes and unfinished input; focused review, fresh canonical gates and native exports passed; external/device/release separate |
+| Automatic evidence / independent review | Edit named nutrient rows in native drafts | ADR 0072 fixed-row Edit/Apply preserves exact raw text and unfinished input; focused review, fresh canonical gates and native exports passed; external/device/release separate |
+| Automatic evidence / independent review | Find nutrient rows in native drafts | ADR 0073 local name/exact-ID search preserves raw draft and active editing; focused review, fresh canonical gates and native exports passed; external/device/release separate |
+| Automatic evidence / independent review | Prevent duplicate native nutrient choices | ADR 0074 exact occupied-ID availability preserves retained input and explicit Add/Save; focused review, fresh canonical gates and native exports passed; external/device/release separate |
+| Automatic evidence / independent review | Preserve web Diary Repeat retry identity | ADR 0075 exact unresolved envelopes preserve clock-boundary retries; baseline, focused review, fresh canonical gates and production synthetic Chrome passed; external/release separate |
+
+M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
+time editing, a paired profile-zone guard, exact legacy replay, and amount-only
+precision preservation. Its acceptance card covers same-day and cross-day changes,
+nonexistent/repeated local minutes, transport retry, stale owner/session/zone/revision,
+accepted-write/read-failure recovery, and a synthetic browser daily-loop journey.
+The browser journey exposed two pre-existing blockers within that acceptance path:
+custom-food readers rejected the API's decimal version IDs as non-UUIDs, and the
+web report's Strict Mode effect replay left its private UI permanently closed.
+Their bounded parser/lifecycle corrections accompany M1F, with realistic response
+fixtures and component effect tests. The browser also identified an incomplete
+local core nutrient registry; synthetic setup uses checked-in definitions while
+preserving the report's completeness invariant. The stop condition is reviewed
+source, passing applicable local gates and recorded exact-commit automatic evidence.
+Water targets, intake advice, non-water fluids,
+reminders, offline writes and device ingestion stay outside this slice. Synthetic
+browser and accessible-state tests do not replace the physical-device, cross-client,
+assistive-technology or hosted acceptance required by M1/M2.
+
+The M3B acceptance follow-up is **Print current nutrition report** (browser
+Save as PDF), defined by [ADR 0028](../adr/0028-print-current-nutrition-report.md). Reuse the current 1–31-day snapshot and selected nutrient; preserve
+exact amounts, quantified zero, trace, partial/unknown/missing days, saved-target
+periods and expiry notices, timezone, capture time, profile revision and watermark.
+Letter/A4 output must keep complete tables and repeated column headers, hide app
+controls, and avoid clipped content. Printing is unavailable while loading,
+invalidated or unauthorized; a session change must not expose stale private data.
+Verify representative 1-, 7- and 31-day browser-generated PDFs and all nutrient
+selections. Scope is web report presentation and focused lifecycle/visual checks,
+with no new API, retained entity, external dependency or storage. Scheduled
+delivery, automated sharing, scores/advice, all-nutrient booklets, mobile OS print
+and hosted enablement remain excluded. This uses the existing M3A evidence before
+adding scheduling infrastructure or M4 imported-content interpretation. Its manual
+checks, replacement container evidence and independent review need their own
+closure while the user-directed next source slice advances.
+
+The delivered source slice is **M4A: review a pasted ingredient list on web**, under
+[ADR 0029](../adr/0029-pasted-ingredient-review.md), within the existing recipe-text
+import milestone. Existing recipe editors already accept
+descriptions/instructions and version-pinned ingredients. The bounded slice accepts
+up to 50 ingredient lines in a new-recipe draft, retains each original line, and
+lets the user explicitly resolve food/version and exact quantity through existing
+search and gram-resolved portions. Require confirmation before transfer to the
+builder; unresolved quantities cannot become saved ingredients. Preserve existing
+drafts, required yield, exact decimal arithmetic and session cleanup. Raw pasted
+text stays in memory. URL fetching, automatic food creation, inferred nutrition,
+AI services, new retained data, automated sharing and mobile UI are excluded.
+Local checkpoint `88930fe` passed canonical checks (437 web tests, 157 root policy
+tests), production build, applicable license policy and synthetic Next/BFF browser
+review, including cancellation, failed-search retry, exact transfer and session
+closure. Component tests cover the final save payload and retry semantics; the
+browser fixture does not establish recipe POST or real API/database acceptance.
+The user approved delivery and the next source step. Commits `88930fe` and
+`58abb4c` were pushed normally on 2026-09-09. Exact-head CI `34419129234` passed at 2026-09-10 00:02:55 UTC; container supply
+chain `34419129305` remains in progress at the latest read-only observation.
+Independent Claude Code review and exact-commit automatic acceptance remain open;
+M3B and every existing release gate remain separate.
+
+The source/local-complete slice is **M4B: review pasted ingredient lines in the mobile
+new-recipe builder**, under [ADR 0030](../adr/0030-mobile-pasted-ingredient-review.md).
+Share the pure M4A parser through the existing contracts workspace while preserving
+web behavior. Add native explicit search, food/version and exact quantity review,
+per-line confirmation and one-shot transfer into the latest draft. Clear raw review
+on background, scope replacement, cancellation or session closure. Fence parent
+loads/save receipts and retain stable retries without changing the protected diary
+outbox. Native component tests and Expo exports are local source evidence;
+signed-device, keyboard/screen-reader and hosted acceptance stay open. Stop after
+review and applicable local validation, with exact automatic status recorded.
+Final canonical checks passed: 157 root policy, 75 contracts, 428 web and 635 mobile
+(including 10 runner) tests. Type/test graphs passed 17/17 tasks with 11/12 cached;
+build passed 11/11 with 7 cached and fresh iOS/Android exports. Dependency/config
+and license gates passed. Independent in-task findings are fixed; source harnesses
+remain narrower than native device evidence. M4B `74bd59e` and standing Git delivery
+instructions `6f5c68d` were pushed. Exact-head CI `34422227933` failed in the synthetic
+Windows collector prerequisite before application checks; database and secret jobs
+passed. The hosted five-second `process-boundary` failure is not reproduced by the
+unchanged local proof. Recovery adds fixed redacted stage/error labels while keeping
+all timeout, identity, canonicalization and negative-case assertions unchanged.
+Recovery was delivered as `2df4493`; replacement CI `34423562282` passed on
+2026-09-10 at 01:04:56 UTC, including the unchanged native producer limits.
+Container `34423562294` remains in progress at the current read-only observation.
+The recovery preserves its diagnostic limits and is complete; container and
+independent acceptance remain separate follow-ups.
+
+The source/local-complete slice is **Saved recipe nutrition basis and coverage**, under
+[ADR 0031](../adr/0031-recipe-nutrition-basis-and-coverage.md). Both clients expose
+the available saved serving/100 g vectors and exact saved version while keeping
+builder edits and diary portions independent. Existing `nutrientDisplay` semantics
+preserve quantified zero, unknown, partial and trace. Selection/session transition
+regressions and independent in-task review passed. Canonical checks passed with
+438 web/649 mobile (including 10 runner)/157 root policy tests; type/test graphs
+17/17 with 15 cached each, build 11/11 with 9 cached and fresh web/iOS/Android
+outputs, and applicable dependency/config/license gates. Synthetic production
+Next/BFF Chrome checks passed for basis changes, saved/draft/log separation,
+no-serving recipes, keyboard selection, 390 px long-label wrapping and expiry
+closure. Physical native, assistive-technology, Claude Code and release acceptance
+remain separate from source and synthetic browser evidence. No API, schema, retained data,
+new dependency, calculation or release enablement is included.
+Delivered checkpoint `7274ddc` has successful CI `34425778573`, completed
+2026-09-10 01:36:45 UTC. Container `34425778640` remains in progress at the
+2026-09-10 01:43:50 UTC read-only observation.
+
+**Copy a saved recipe to a new draft** is complete at source/local-validation
+level under [ADR 0032](../adr/0032-copy-saved-recipe-to-new-draft.md). Both clients
+reuse their saved-to-builder converter and existing create endpoint, preserving
+pinned food/nested versions, exact quantities and editable fields while clearing
+original root identity and saved nutrition/logging selection. Dirty editors use
+an inline, generation-bound keep/discard choice. A copied draft has a distinct
+creation intent; retries within it retain the exact body and operation key.
+No API/schema/dependency/new calculation was added.
+
+Independent in-task review and canonical local gates passed September 10, 2026
+UTC: 455 fresh web tests, 658 mobile tests plus 10 runner tests, 157 root policy
+tests, dependency/config/license checks, and fresh web/iOS/Android builds. Type
+and test graphs each passed 17/17 with 15 cached; build passed 11/11 with 9 cached.
+Synthetic production Next/BFF Chrome QA passed clean/dirty copy, keyboard cancel,
+saved-field preservation, explicit create and exact-body/key recovery from a
+simulated lost receipt with one new recipe and unchanged original, 390 px
+confirmation layout and expiry closure. Exact-commit automatic evidence remains
+to be recorded in the delivery handoff. Physical native, assistive-technology,
+independent Claude Code, real persistence and release gates stay separate.
+
+Copy checkpoint `ae05bdc` has successful CI `34428567984`, completed
+2026-09-10 02:19:00 UTC. Container `34428567975` remains in progress at the
+2026-09-10 02:29:25 UTC read-only observation.
+
+**Reorder recipe ingredients in the draft** is source/local complete under
+[ADR 0033](../adr/0033-reorder-recipe-draft-ingredients.md). Web/mobile adjacent
+move buttons preserve ingredient identities, version pins, exact portions, notes
+and attribution; existing adapters persist contiguous positions only through
+explicit Create/Publish. Boundary and stale controls are guarded. Moves invalidate
+pending copy-discard choices and leave saved nutrition/logging independent.
+No API/schema/dependency/calculation or external release change was added.
+
+Independent in-task review and canonical local gates passed September 10, 2026
+UTC: 473 fresh web tests, 680 mobile plus 10 runner tests, 157 root policy tests,
+dependency/config/license checks and fresh web/iOS/Android builds. Type/test
+graphs each passed 17/17 with 15 cached; build passed 11/11 with 9 cached.
+Synthetic production Next/BFF Chrome QA passed keyboard/boundary moves, exact
+row-field preservation, long-label wrapping at 390 px, no write before explicit
+save, reordered create and revision readback, exact-body/key lost-receipt retry
+with one new revision, dirty/copy-choice invalidation and expiry closure.
+Exact-commit automatic results belong in the delivery handoff. Real persistence,
+physical native, accessibility, independent Claude Code and release gates remain.
+
+Ingredient ordering checkpoint `a0b0983` has successful CI `34431074508`,
+completed 2026-09-10 02:57:18 UTC. Container `34431074453` remains in progress
+at the 2026-09-10 03:30:37 UTC read-only observation.
+
+**Previous/next nutrition report period** is source/local complete under
+[ADR 0034](../adr/0034-adjacent-nutrition-report-periods.md). Web/mobile controls
+move a coherent interval by its inclusive 1–31-day length, preserve nutrient
+selection and calendar/service bounds, and clear old visible/print snapshots.
+Unapplied date fields disable movement with Update report guidance. Corrected
+report-scoped UTC arithmetic preserves early years; owned URL echoes and exact
+verified-profile installation avoid duplicate reads without bypassing replacement
+route, stale request, owner/session/profile or native lifecycle guards.
+No report math, API/schema/dependency or release change was added.
+
+Independent in-task review and canonical local gates passed September 10, 2026
+UTC: 513 fresh web tests, 725 mobile plus 10 runner tests, 157 root policy tests,
+dependency/config/license checks and fresh web/iOS/Android builds. Type/test
+graphs each passed 17/17 with 15 cached; build passed 11/11 with 9 cached.
+Synthetic production Next/BFF Chrome QA passed previous/next date and URL changes,
+nutrient retention, keyboard activation, 390 px control/guidance layout, dirty-date
+invalidation/restoration, one read per move, failed-period retry and expiry closure.
+Exact-commit automatic results belong in the delivery handoff. Cached tasks and
+opt-in service skips are not fresh integrations. Physical native, accessibility,
+real persistence, independent Claude Code and release gates remain.
+
+Report-period checkpoint `ea38f61` has successful exact-commit CI `34435560531`
+(updated 2026-09-10 04:07:21 UTC) and container supply chain `34435560524`
+(updated 05:28:41 UTC), verified read-only at 06:49:44 UTC. These results do
+not waive independent/device/release acceptance.
+
+**Open source diary days from report evidence** is source/local complete under
+[ADR 0035](../adr/0035-report-source-diary-navigation.md). Web/mobile actions use
+sorted unique contributing dates, with a report-date fallback only for missing
+days. The UI preserves the profile-local report date and explains that the current
+diary may differ from the snapshot. Existing web routes and native Today
+date/refresh navigation supply destinations; native focus return reloads the
+applied report and creates fresh actions. Dirty dates and stale/duplicate/private
+controls remain fenced, and web navigation invalidates print preparation.
+No API/schema/dependency, diary editing, nutrition math or release change was added.
+
+Independent in-task review and canonical local gates passed September 10, 2026
+UTC: 546 fresh web tests, 752 mobile plus 10 runner tests, 157 root policy tests,
+dependency/config/license checks and fresh web/iOS/Android builds. Type/test
+graphs each passed 17/17 with 15 cached; build passed 11/11 with 9 cached.
+Synthetic production Next/BFF Chrome QA passed multiple/shifted source-date and
+missing-day destinations, deduplication, current-diary meaning, Browser Back,
+keyboard activation, 390 px explanation/control layout, dirty-date guards,
+no prefetch, one diary read per explicit action, no domain writes and expiry
+closure. Exact automatic results belong in the delivery handoff. Cached tasks,
+opt-in service skips, source exports and synthetic QA do not replace real
+persistence, physical native, accessibility, Claude Code or release acceptance.
+
+**Collapse diary meal groups** is source/local complete under
+[ADR 0036](../adr/0036-collapsible-diary-meal-groups.md). Default-expanded,
+in-memory controls use stable meal slots within the current owner/session/date.
+Headings, Add food, whole-day totals/counts and page controls remain available;
+empty and not-yet-loaded meals retain their meaning. Active edits and pending
+operations stay visible. Coherent same-day refresh/paging retains choices;
+date/private-scope changes reset them. No API/schema/storage/outbox/math change
+was added. Independent in-task review and canonical local gates passed with
+569 fresh web tests, 781 mobile plus 10 runner tests, and 157 root policy tests.
+Type/test graphs passed 17/17 with 15 cached; build passed 11/11 with nine cached
+and fresh web/iOS/Android outputs. Dependency/config/license gates passed.
+
+Synthetic production Next/BFF Chrome QA passed independent toggles, keyboard and
+390 px long-label controls, unchanged exact whole-day evidence, failed next-page
+retry and 20-to-24-entry merge, preserved editor draft/Cancel, short/empty-day
+resets and expiry closure. No domain writes occurred. All owned QA processes,
+listeners, viewport overrides and tabs were cleaned up. Exact-commit automatic
+results belong in the delivery handoff; cached service tasks, synthetic pages and
+exports do not replace real persistence, physical native, assistive technology,
+independent Claude Code or release acceptance. Base `feb50682450f7782597763a030f0b34426a282ab`
+CI `34449289735` succeeded (updated 07:24:14 UTC); container `34449289773` was
+still in progress at the September 10, 2026 07:33:20 UTC read-only follow-up.
+
+The source checkpoint **Reuse activity details in a new draft** follows
+[ADR 0037](../adr/0037-reuse-activity-details.md). Exact saved name, whole-minute
+duration and nullable self-reported calories populate the existing Add draft;
+selected date/time and explicit Add remain. Dirty choices, active editors,
+private/lifecycle state and late receipts are fenced. Accepted reuse creates fresh
+intent; an unchanged uncertain submission retains its exact body/key. No
+API/schema/outbox/calculation or calorie-estimation change is included.
+
+Independent in-task review, focused actual-component suites and canonical local
+check/build/license gates passed. Fresh web 600 and mobile 821 tests plus 10 native
+runner tests and 157 root policy tests passed; type/test graphs 17/17 (15 cached),
+build 11/11 (9 cached), and 535 production licenses (14 reviewed exceptions) passed.
+Synthetic production Next/BFF Chrome QA proved exact fields, no POST before Add,
+three new entries from four submissions with one exact replay, unchanged originals,
+dirty Keep/Replace, keyboard/390-pixel layout, date/time cancellation and expiry.
+The fixture-only hydration header correction and final successful overview are
+recorded outside Git. Owned Chrome/viewport/process cleanup completed. Cached and
+service-gated evidence does not establish fresh integration, real persistence,
+physical native, assistive technology, independent Claude Code or release acceptance.
+Base `9c4672995ddf716ce5e5d5c887a6d2c8bc4202ae` CI `34452053324`
+succeeded (updated September 10, 2026 07:57:13 UTC); container `34452053297`
+was still in progress at the 08:05:10 UTC read-only follow-up. Automatic
+results remain separate from this slice and release acceptance.
+
+The source checkpoint **Hydration amount presets in the Add form** follows
+[ADR 0038](../adr/0038-hydration-amount-presets.md). The 250 mL and 500 mL controls
+replace only the existing amount draft, retain selected date/time/default instant
+and require explicit Add. Custom amounts remain available. Presets share ordinary
+draft-edit guards and preserve exact frozen pending requests, accepted-write
+recovery, active row editors and current private/date/lifecycle state. No advice,
+targets, automatic logging, unit conversion, persistence, API, outbox or math change.
+
+Independent in-task review, focused actual-component/correction suites, canonical
+check/build/license gates and source-validated production Next/BFF Chrome QA passed.
+Fresh web 619 and mobile 845 tests plus
+10 native runner and 157 root policy tests passed;
+type/test graphs 17/17 (15 cached), build 11/11 (9 cached), and
+535 production licenses (14 reviewed exceptions)
+passed. Browser proof covers preset/custom/same-value choices, no write before Add,
+exact create/readback, lost-confirmation retry, accepted-write/read-failure recovery,
+keyboard/390-pixel controls, selected days and expiry. Owned QA cleanup completed.
+Cached/opt-in service evidence does not establish fresh integration. Physical
+native, real persistence, assistive technology, independent Claude Code and release
+acceptance remain separate.
+Base `c10c676aa9eb81244bc94371a8f1bacc699e35b3` CI `34455317539` succeeded
+(updated September 10, 2026 08:33:53 UTC); container `34455317575` remained
+in progress at the 08:41:10 UTC read-only follow-up. Automatic and release
+acceptance remain separate.
+
+The source checkpoint **Filter loaded saved recipes by name** follows
+[ADR 0039](../adr/0039-loaded-saved-recipe-filter.md). Independent in-memory text
+narrows only loaded saved names using trimmed, case-insensitive literal substring
+matching, preserving order/identity and duplicate-name IDs. Loaded/matched counts
+and explicit Load more remain available with no matches; initial verification,
+failed continuation and empty terminal pages retain truthful meaning. Filter/Clear
+make no requests and preserve selected detail, builder/copy/import/review state,
+nutrition/log context, nested choices and frozen operations. Existing private,
+profile, route and lifecycle fences clear/hide replaced query state.
+No API, storage, dependency or mutation contract change is included.
+
+Independent in-task review, 130 web/164 native focused tests, affected types and
+format checks, canonical check/build/licenses and source-validated production
+Next/BFF Chrome QA passed. Fresh web 637 and native 861
+tests plus 10 native runner and 157 root policy
+tests passed; licenses covered 535 packages and
+14 reviewed exceptions. Chrome proved no-request filtering,
+selected/dirty draft preservation, zero-match paging, failure/retry, overlap/dedup,
+empty terminal count, Clear/keyboard/390-pixel controls and expiry. Owned QA
+cleanup completed. Cache reuse/service skips are explicit in readiness;
+physical native, real persistence, assistive technology, independent Claude Code
+and release acceptance remain separate.
+
+Base `bf28347520b213b6e4e0f4c09e725174a5021c1a` CI `34458946024` succeeded
+(updated September 10, 2026 09:14:11 UTC); container `34458946044` remained
+in progress at the 09:24:49 UTC read-only observation. This base evidence does
+not transfer automatic acceptance to the new source checkpoint.
+
+The source checkpoint **Named nutrient rows for native custom foods** follows
+[ADR 0040](../adr/0040-native-custom-food-nutrient-composer.md). The named composer
+appends a validated available nutrient with an explicit per-100-g amount, trace or
+unknown reason. Canonical text remains the lossless manual edit/remove path,
+including energy and other IDs absent from the targetable picker. No implicit save
+or measured zero is added. Custom-only draft/session/lifecycle guards preserve
+stable unresolved body/key retries through malformed success and ordinary edits.
+HealthRoute passes existing owner/session identity without remounting other flows.
+
+Independent in-task review, focused helper/actual native component tests, affected
+types/format, canonical check/build/licenses and fresh iOS/Android exports passed.
+Exact counts, cache status and limits are recorded in ADR 0040 and Windows readiness.
+No web implementation, endpoint, schema, dependency, storage, outbox or math change
+is included. Native mocks/exports do not replace device layout, assistive technology,
+real persistence, external Claude Code, hosted or release acceptance.
+
+Base `0b6d50c36550c4c06269dc78c88159f8cb331ff1` CI `34462121394` succeeded
+(updated September 10, 2026 09:48:13 UTC); container `34462121401` remained
+in progress at the 10:04:12 UTC read-only observation. This base evidence does
+not transfer automatic acceptance to this source checkpoint.
+
+### Source/local recovery: synthetic collector runtime startup
+
+September 10, 2026 read-only observation of exact source
+`f160f57f7ee14487b5546f68e9308e564081a728` found CI `34465804010`
+failed (updated 10:29:37 UTC); container `34465804063` succeeded (updated
+11:49:41 UTC). The quality job failed before pnpm setup at the synthetic Windows
+collector producer check. Its fixed diagnostic was
+`powershell-version-timeout`: the version subprocess exceeded five seconds before
+any collector phase ran. Database and secret-scan jobs succeeded. This is a runtime
+discovery timing failure, not evidence of a nutrient-composer or collector-output
+defect. The unchanged producer passed locally with native Linux PowerShell 7.6.5;
+that local result does not reproduce the hosted timing or erase the failed gate.
+
+Acceptance card (before implementation):
+
+- User task/result: restore reliable bounded prerequisite discovery so the full
+  synthetic collector proof can run on a slower-starting hosted runtime. Allocate
+  one explicit 20-second version-discovery deadline, matching the existing
+  collector-process budget; retain the five-second WSL path bridge and 20-second
+  collector deadlines. The version probe remains a single invocation without
+  retry, shell, warm-up subprocess, environment injection or unbounded waiting.
+- Evidence acceptance: retain strict supported-version parsing, empty stderr,
+  executable hash/recheck, sanitized environment, phase repetition and exact
+  golden output, all three negative cases, zero-stdout and leak rejection. Keep
+  the collector source/security-surface/normalized-identity hashes and v3 snapshot
+  validation unchanged. Update only the runtime-discovery prose in the existing
+  snapshot contract. Only the reviewed producer-runner digest changes with its source.
+- Required evidence: a bounded process-adapter regression completes after the
+  former five-second limit, and version-discovery dispatch is asserted to use the
+  new 20-second bound. This does not simulate slow genuine PowerShell startup.
+  Timeout and launch failures still emit only fixed redacted stage diagnostics; bridge/collector
+  budgets and single invocation remain asserted. Run the focused process/static
+  tests, complete Tailscale Python suite, real synthetic producer, independent
+  review and frozen canonical check/build/licenses. Record fresh versus cached
+  results, source hashes and exact command times.
+- Scope: producer runner, its process regression tests, its existing pinned-hash
+  static tests, the existing snapshot-contract runtime prose and this roadmap.
+  No collector, workflow, application, dependency, schema, security policy, private
+  credential, tailnet or deployment change.
+- Stop: reviewed source/local validation, normal commit/non-force push and exact
+  automatic observations recorded. A new automatic success remains required;
+  the repair cannot turn the earlier failed run green. No manual workflow
+  dispatch/rerun/cancel is authorized or needed. Saved nutrient Show/Hide remains
+  the next product candidate and has no implementation in this recovery.
+
+Independent in-task review and focused process/static regressions passed. The
+six-second isolated Python child verifies the bounded process adapter beyond the
+former five-second allowance; it is not a reproduction of slow genuine PowerShell.
+The unchanged base and repaired producer each passed locally using native Linux
+PowerShell 7.6.5. All collector source identities, golden snapshots and manifest
+hashes match; two executions per phase and all three negative cases still pass.
+
+Frozen final validation passed between 2026-09-10T16:29:48Z and
+2026-09-10T16:30:27Z: complete Tailscale suite 73 tests,
+real synthetic producer and canonical `pnpm check`, `pnpm build`,
+`pnpm licenses:check`. Root policy ran 157 tests; unchanged web
+637, native 982 plus 10 runner results
+and application builds came from cache. This recovery has no fresh application
+or device validation claim. License policy passed 535 production
+packages with 14 reviewed exceptions. All five candidate
+hashes stayed fixed during gates; only this roadmap's completion prose changed
+afterward. Exact logs, versions, hashes and limitations are in Windows readiness.
+
+Source/local recovery is complete. Exact recovery commit
+`9bb7148e12ef1d5b85336eb62427d6e463b8084d` CI `34502777762` succeeded
+(updated September 10, 2026 16:38:55 UTC); container `34502777764` was still in
+progress at the 16:40:18 UTC read-only observation. External review, Windows-host
+policy, production collector and release acceptance remain separate. No manual workflow control, dependency install, private corpus,
+tailnet, cloud, application or deployment action was performed.
+
+**Inspect saved custom-food nutrients without editing** is source/local complete
+under [ADR 0041](../adr/0041-saved-custom-food-nutrient-details.md). Web/native
+saved cards now show exact ordered snapshot values, zero, trace and explicit
+unknown reasons, including energy and non-targetable IDs. Local disclosures
+preserve drafts and pending operations; current scope/version guards reject stale
+controls. Independent in-task review, actual component checks, frozen canonical
+check/build/licenses and fresh web/native outputs passed. Synthetic Chrome proved
+exact states, no-request toggles, paging, draft/log independence, keyboard,
+390-pixel layout, error Retry and expiry. Same-mount lifecycle refresh and retained
+control behavior remain separately proved by component fixtures. No new ready
+Refresh was introduced. Exact-commit automatic, external Claude Code, physical
+native, real persistence, assistive technology, hosted and release acceptance
+remain separate. Windows readiness keeps raw evidence outside Git.
+
+Prepare the external decisions alongside product work, without executing them:
+
+| Lane | Decision/evidence owner | Next reviewable package | Exit gate |
+| --- | --- | --- | --- |
+| M0 live catalogue | User selects acquisition/storage operators and named source/rights reviewers | Exact source, independent acquisition plan, immutable storage/retention plan, costs, measurable catalogue thresholds, and remaining database caller-cutover work | Approved identities, rights, scale/reconciliation/search evidence and separate activation decision |
+| M2 usable beta | User selects host, budget and device operators; independent security/device reviewers accept evidence | One deployment/access/backup-restore proposal plus Windows phone trust plan and signed-build/identifier-history requirements | Reviewed hosted restore/access and signed physical-client acceptance |
+| Optional reference targets | Named scientific, legal/privacy and copyright reviewers | ADR 0021's existing bounded policy and default-off implementation | All required approvals before enablement; manual goals remain usable |
+
+Unassigned owners are unresolved decisions, not implied approvals. No elapsed time,
+source-test result, or synthetic reviewer substitutes for external evidence. Advance
+an external lane only when its action-specific authorization and prerequisites exist.
+
+M1A camera barcode capture is implemented at source level and awaits signed-device
+acceptance. M1B-G's bounded configuration of the four existing diary labels and
+their display order is implemented in source and has passed the ordered local
+validation runbook; hosted and signed-device acceptance remain pending. M1B-R's
+database, API, web, and mobile source implementation and ordered local
+validation are complete. ADR 0021 pins its source-verified candidate
+policy, exact adult 19–50 vector, exclusions, expiry, and rollout boundary. A
+named RD or qualified clinical-science approval, legal/privacy approval,
+commercial copyright approval, hosted acceptance, and signed-device,
+cross-client, and accessibility acceptance still gate release. It must not be
+described as clinically reviewed, government-endorsed, or commercially
+available while those gates are open. M3A's bounded multi-day nutrition report
+and charts are source-complete and have passed the ordered local validation
+runbook. M1C-A durable logging and M1C-B durable corrections plus atomic entry
+ordering are source-complete and have passed the ordered local validation
+runbook. M1C remains release-gated on signed-device and controlled-beta evidence.
+M1D-A's owner-private online manual-activity slice is source-complete and has
+passed the ordered local validation runbook. It remains online-only and
+release-gated; it adds no earned-calorie adjustment, diary-outbox operation,
+platform-health import, wearable integration, reminder, phone exposure, hosted
+acceptance, or signed-device acceptance. M1 remains open for cross-client,
+accessibility, controlled-beta, and other documented acceptance evidence. M1E's
+web and mobile source slice is complete and has passed the ordered local
+validation runbook. ADR 0026 coordinates the existing diary, hydration, and
+activity day views around one profile-local selected date without creating
+cross-domain energy arithmetic or claiming an atomic snapshot. Hosted,
+signed-device, physical cross-client, and assistive-technology acceptance remain
+open.
+External M0/M2 work remains separately gated. Arbitrary add/delete/hide group identities remain a future migration
+milestone rather than part of M1B-G. M0's authenticated acquisition, review,
+and activation lane proceeds in parallel when its separately approved external
+work is available. M2 still requires both M0 and M1 acceptance.
+
+Remaining database writer closure, runtime-identity cutover,
+external-principal binding, target canaries, and CONTRACT revocation remain
+mandatory before live staging, promotion, rollback, or activation. They do not
+preempt safe M1 source work while the affected capabilities remain
+`NOLOGIN` and unassigned unless a concrete high-severity defect is
+demonstrated. Hardening without a named release gate, observed defect, owner,
+and testable exit condition stays queued.
+
+No OCI retry automation, live acquisition/staging/activation, cloud cost or paid
+fallback, Azure/OCI Terraform plan/apply, Name.com DNS change, workflow
+dispatch/rerun/cancel, Tailscale join/policy/routes/Serve, firewall/listener/
+phone exposure, or EAS build/signing is authorized by this sequencing decision.
+Each retains its separate explicit-approval gate.
+
+1. **M0 — parallel live-catalogue and release-authority gate (required before
+   real-user beta or activation):**
+   revalidate upstream release identity; build verified, database-free parser
+   evidence; obtain two genuinely independent authenticated acquisitions,
+   immutable artifacts, rights/attribution approval, and reviewed nutrient
+   mappings; stage into a non-current catalogue; and complete reconciliation,
+   outlier, real-scale memory, search/index, relevance, barcode, completeness,
+   and rollback review. Activation is a separately approved final action and is
+   never implied by successful staging or synthetic fixtures.
+   The FDC Foundation database-free inspection boundary is implemented locally:
+   it now requires pinned artifact and parser identities, exact inventory, and
+   deterministic baseline evidence. The dated Foundation parser smoke accepted
+   363 foods, so it is an evidence-pipeline pilot rather than consumer-viable
+   catalogue acceptance. Before M0 closes, independent reviewers must define
+   and approve numeric thresholds for food, branded-food, and GTIN counts;
+   nutrient-mapping and completeness coverage; benchmark search recall and
+   zero-result rate; and parser/index memory, build time, latency, and footprint.
+   The staged candidate must meet those evidence-bound thresholds; this plan
+   does not infer them from the 363-food pilot.
+
+   A bounded database-free full-FDC CSV inspector source slice is covered locally
+   by synthetic archives. It meets this plan's implemented definition only when
+   exact-change CI also passes. It requires exact manifest-driven inventory,
+   dispositions, explicit manifest-supplied data-type/market mappings,
+   required-header contracts and ordered-header evidence, disk-partitioned joins,
+   row/disposition accounting, and deterministic evidence without opening
+   PostgreSQL. Controlled acquisitions, real inventory/header and mapping
+   review, rights review, representative-scale resource evidence, a streaming
+   staging path, reconciliation, search/index evidence, and every activation
+   review above remain open. Changed upstream bytes remain unpinned.
+
+   A bounded M0B database-authority EXPAND phase defines static, non-login
+   capability roles for stage, validate, three independent approval classes,
+   promote-and-activate, and rollback. Fixed-purpose staging, validation,
+   reviewer approval, identifier-only promotion, and rollback now sit behind
+   database-authenticated `SECURITY DEFINER` boundaries. Exact stage provenance,
+   parser evidence, records, mapping revisions, and validated-food documents are
+   sealed or frozen before later authority acts, and database audit identity is
+   derived without fabricating values for existing or owner-compatible local
+   rows. Migration 0021 independently recomputes the exact 100-gram nutrient
+   transformation and freezes record and batch semantic attestations before any
+   decision boundary. Its text parity is explicit: NFC normalization, exact
+   ECMAScript whitespace trim/collapse, and JavaScript UTF-16-unit bounds; JSON
+   numeric `100.0` equals `100`, while a string must be exactly `"100"`. It does
+   not close M0B. Migration 0022 additionally binds capability-mediated
+   approval, promotion, and rollback audit labels to authenticated PostgreSQL
+   `session_user`, while preserving the explicitly trusted owner/local path.
+   External OIDC/workload-principal verification is still absent. Target
+   deployment logins and
+   credential/caller cutover, independently operated validator execution,
+   external-principal binding, remaining shared-writer profiles, direct-DML
+   revocation, representative-scale evidence, and target-environment
+   verifier/canary evidence remain required before live catalogue work.
+   Logical restore now reapplies the pinned migration-0014 function/trigger
+   manifest plus the forward migration-0015 approval/guard ACL correction,
+   migration-0016 plus migration-0017 food-search function/trigger
+   policies, migration-0018's nutrient-registry lock protocol, and
+   migration-0019's frozen materialization, replacement activation-authority
+   constraint, and promotion/rollback boundary plus migration-0020's sealed
+   stage/validate boundary, migration-0021's exact-100-gram semantic
+   attestation, migration-0022's database-actor binding under an explicit owner,
+   and migration-0023's reference-target identity and vector integrity boundary.
+   The transactional repair policy pins 55 function identities, 56 exact trigger
+   bindings, sixteen catalogue authority-evidence columns, all nine catalogue
+   authority CHECKs, both reference-integrity CHECKs, and the unique
+   activation-to-batch index. It compares a canonical source/target version-14
+   authority fingerprint, including column
+   ACL state and trigger table schemas, while `PUBLIC CONNECT` remains revoked
+   and the effective login allowlist stays exact. Public-table triggers and
+   every cross-schema binding of a dedicated public authority trigger function
+   enter that fingerprint. It
+   first requires the exact tracked filename/file-byte-SHA ledger in
+   `public.app_schema_migration`, ignoring an owner-schema shadow. The EXPAND CI drill still uses
+   `nutrition_local` as both executor and owner, so it does not prove separate
+   runtime fencing.
+
+   DEPLOY-0 now implements the source-only evidence slice without claiming live
+   deployment. Its canonical, credential-free policy permits exactly three safe
+   reviewer logins, each with its single matching approval capability and
+   PostgreSQL 17 `ADMIN FALSE`, `INHERIT TRUE`, and `SET FALSE`; the other four
+   capabilities remain unassigned. The strict verifier checks the exact
+   `public.app_schema_migration` names and SHA-256s against the tracked migration
+   files, requires `public` to be the only non-system schema, and checks exact
+   database/schema and object ACLs and grantors, relation/type
+   ownership, default and column ACL absence, all nine authority CHECKs, the
+   sixteen authority-evidence columns, the unique activation-to-batch index, all
+   54 authority functions with exact execute ACLs, unsafe authority on any
+   other public routine, and the exact 54-trigger protected shared-food/outbox
+   authority set with exact table and function
+   schemas. Every binding of a
+   dedicated public authority trigger function enters the evidence even when
+   its table is outside `public`. It also checks the effective login allowlist,
+   seven isolated sessions, role
+   attributes, object ownership, effective
+   privileges, and the complete touched membership graph. Eight zero-write
+   `23503`/`42501` canaries then prove matching/mismatched reviewer behavior,
+   non-reviewer denial, direct-DML denial, unchanged fingerprints, and zero row
+   delta. Persisted credential-free evidence includes the canonical stable
+   structure projection plus its recomputable SHA-256 and excludes volatile
+   backend PIDs. The policy, evidence, canary, and CLI report use schema version
+   6. The real-loopback ephemeral-database integration passes and leaves no
+   database or role residue. The policy carries no credentials or private
+   identity claims. Live login provisioning, membership mutation, credentials,
+   external-principal binding, DEPLOY, and CONTRACT remain blocked.
+2. **M1 — user-visible daily loop (current source priority):** activity/exercise,
+   private diary notes, configurable groups, durable offline retry/reorder,
+   email-verification release acceptance
+   and password recovery, a source-verified reference-target candidate, and
+   production-grade weight sync, with cross-client end-to-end and accessibility
+   acceptance.
+   M1A implements camera barcode capture only as an ephemeral input adapter to the
+   existing authoritative exact lookup. Permission starts only from an explicit
+   Scan action; frames stay on-device and are not retained; repeated detections
+   are consumed once; only EAN-8, EAN-13, UPC-A, and ITF-14 decimal payloads
+   reach the existing GTIN/check-digit path; and the person must still confirm
+   the existing add action. Manual entry remains available for denial, cancel,
+   invalid, no-match, and network-error states. The durable quick-add envelope
+   is unchanged and still contains no barcode. Local source acceptance covers
+   classification/deduplication tests, native permission policy, dependency
+   checks, typecheck, lint, and mobile export. Signed iOS/Android camera,
+   lifecycle, and accessibility evidence remains an M2 gate and authorizes no
+   phone exposure or EAS action.
+   M1B-G implements owner-specific names and display order for exactly the four
+   stable `breakfast`, `lunch`, `dinner`, and `snacks` identities across the
+   private API, web, and mobile. It does not rewrite diary history, cursors,
+   idempotency inputs, or queued quick-add envelopes. Source implementation and
+   ordered local validation are complete while hosted validation and signed
+   cross-client evidence remain pending, so it does not yet meet this plan's full
+   **implemented** definition. M1B-R's database, API, web, and mobile source
+   implementation and ordered local validation are complete. Its
+   `us-ca-dri-adults-19-50` version-1 policy is source-verified and bounded to an
+   explicitly selected, profile-matched `male-19-50` or `female-19-50` group,
+   nonpregnant/nonlactating scope, server materialization, versioned
+   acknowledgement, and exclusive reference applicability/current-read expiry
+   on the 51st birthday. That policy is not clinical approval: a named RD or
+   qualified clinical-science approval, legal/privacy approval, commercial
+   copyright approval, hosted acceptance, and signed-device, cross-client, and
+   accessibility reviews still block controlled beta and commercial enablement.
+   Creating, deleting, hiding, archiving, or restoring arbitrary groups remains
+   future work requiring durable identity and history semantics.
+   Plain-water hydration is implemented locally across PostgreSQL, the private
+   API, web, and mobile as an owner-scoped exact-integer milliliter ledger.
+   Server-derived profile-local coordinates, strong entry/day revisions,
+   digest-bound idempotency, logical deletion, and immutable revision history
+   keep create, amount correction, and delete replay-safe and timezone-explainable.
+   Its 1–20,000 mL per-entry, 64-active-entry, and 100,000 mL daily limits are
+   operational abuse and overflow bounds, not intake guidance. Its four private
+   entity families are route-first in the 65-family export/erasure drill. This
+   closes only the online hydration CRUD source slice. Client time editing is
+   source/local complete under [ADR 0027](../adr/0027-hydration-time-corrections.md).
+   Targets, reminders, non-water fluids, offline/background mutation,
+   device/platform ingestion, and signed-device, cross-client, and accessibility
+   evidence remain open.
+
+   M1F is the explicit hydration time-correction slice under ADR 0027; its source
+   implementation and applicable local validation are complete. Amount-only edits preserve the exact original instant and
+   historical coordinates. A deliberate time change resolves the current profile's
+   local minute with explicit repeated-hour choice and rejects nonexistent times.
+   The additive paired profile-zone precondition prevents a concurrent zone change
+   from silently moving the entry; legacy PATCH and accepted replay stay compatible.
+   The clients retain exact retries, reconcile conflicts, and refresh the source
+   day while making a cross-day destination visible. No new retained entity,
+   migration, intake recommendation or nutrition calculation is introduced.
+
+   M1D-A is the owner-private online manual-activity slice accepted by ADR 0025.
+   Its source implementation and ordered local validation are complete. An entry
+   records a bounded canonical name, whole-minute duration, start
+   instant, and optional explicitly self-reported calories. Profile-local day
+   navigation exposes current entries and the exact sum of recorded durations;
+   immutable revisions remain in private account history. Missing calories stay
+   null and no day calorie aggregate is published. Activity never changes a
+   nutrition goal, remaining calories, progress, energy balance, PAL, explicit
+   adjustment, dietary report, or `exercise_budget_kcal`; PAL already includes
+   ordinary habitual activity. Any earned-calorie or exercise-energy adjustment
+   requires a separate product/scientific decision and versioned calculation
+   policy. M1D-A remains online-only and adds no diary-outbox operation, platform
+   health permission/import, wearable integration, reminder, or phone exposure.
+
+   M1E is the bounded coordinated Today-overview slice accepted by ADR 0026.
+   One selected profile-local date drives the diary and independently loaded
+   hydration and activity summaries across web and mobile. The overview exposes
+   exact plain-water milliliters and entry count plus the exact additive sum of
+   recorded activity minutes and entry count, and preserves that date when navigating to either
+   detail screen. The shared date key does not re-bucket immutable historical
+   entries after a profile-zone change. Empty, loading, and failure remain
+   distinct per domain with targeted retry. It is a presentation overview, not one transactionally
+   coherent cross-domain snapshot. It adds no database migration or backend
+   `/v1` contract; the internal web hydration BFF now requires a same-token
+   expected-owner preflight. It never aggregates activity calories and changes no nutrition, goal, progress,
+   remaining-calorie, energy-balance, PAL, report, or `exercise_budget_kcal`
+   calculation. Hosted, signed-device, physical cross-client, and accessibility
+   evidence remain open.
+
+   Private notes attached to food and recipe entries are implemented locally.
+   Repeat preserves a note. Clearing hides it from the current display, while
+   immutable prior revisions remain in private account exports until whole-
+   account erasure deletes them. Structured logs redact note fields. This is the
+   first entry-note sub-slice, not standalone diary notes.
+   Standalone day/note-only entries remain open and require a separately reviewed
+   immutable-entry model. The real API/worker privacy drill now covers every
+   retained entity family, but that local evidence does not close M1 or M2.
+
+   Bounded diary pagination is implemented locally across PostgreSQL, the private
+   API, web, and mobile. New diary screens request at most 20 entries per page;
+   every page repeats whole-day totals and count, encrypted continuations bind the
+   owner/date/limit/day revision/effective time-zone state, and a stale day forces
+   a page-one restart. Legacy date-only readers still receive the complete bounded
+   day. The 50-entry write/aggregation cap remains until separate scale and client-
+   virtualization evidence supports a change. This closes one M1 source slice,
+   not M1, signed-device, cross-client, accessibility, controlled-beta, or release
+   acceptance. A future staggered pagination deployment must remain API-first as
+   specified by ADR 0012.
+
+   M1C-A generalizes the bounded native public-food quick-add outbox into one
+   durable diary-log FIFO for positive default-serving or gram quantities of
+   public foods, exact recipe versions, and exact private custom-food versions.
+   It preserves the existing 50 owner-bound device-only SecureStore slots and
+   legacy version-1 items, persists before sending, replays one exact
+   idempotent request at a time in the foreground, and blocks at a terminal head
+   until exact retry or confirmed head-only discard. Every new operation uses a
+   paired API query marker and expected-profile-time-zone header so an older
+   server fails closed and a delayed first delivery cannot silently move to a
+   different local day. Sign-out, unauthorized-session, accepted-erasure,
+   owner-mismatch, and corruption paths keep the same retryable private-device
+   cleanup ledger. Web and mobile public-food search also accept a positive
+   default-serving amount or grams. At the M1C-A boundary, web recipe and custom-
+   food logging remained unguarded legacy online-only flows; M1C-B adds their
+   paired profile-time-zone guard while intentionally leaving browser persistence
+   open. M1C-B also extends the native FIFO to durable repeat, edit, delete, and
+   complete-day within-meal reorder, with strong subject/revision and order
+   receipts shared by web and API. Signed iOS/Android crash-boundary, lifecycle,
+   protected-storage, OS-kill, and accessibility evidence remains open, as do
+   offline catalogue and diary reads, web persistence, and background delivery.
+   Rollout remains API-first as specified by ADRs 0023 and 0024; ADR 0013 remains
+   the historical first slice.
+
+   Additive email verification is implemented locally across PostgreSQL, an
+   authenticated request route, a public confirmation route, web, and mobile.
+   Registration never sends automatically and unverified accounts keep their
+   existing access. Each 24-hour capability has 256 bits of randomness and only
+   its SHA-256 digest is persisted. A token-hash transaction fence and bounded
+   account-first row lock preserve the prior action on pre-acceptance delivery
+   failure, serialize loopback Mailpit acceptance with digest promotion, and make
+   an immediate confirmation wait for issuance commit. Confirmation validates the action's
+   existing normalized-email binding before consuming it, setting
+   `email_verified_at`, and writing a redacted audit event. Browser links carry
+   the capability only in a fragment that an early bootstrap removes before
+   interactive navigation or submission; scrub failure aborts. Native clients
+   use resend/status plus external-browser completion, not application deep
+   links. Production provider/domain/TLS/authentication/outbox/retry/suppression
+   review, shared request and confirmation abuse limiting, verification
+   enforcement, signed-client, and accessibility evidence remain open.
+   API-first rollout and the full boundary are specified by ADR 0014.
+
+   SMTP acceptance and database commit are not a distributed transaction. A
+   database failure after accepted local mail may leave that new message
+   unusable while preserving the previous action and returning unavailability;
+   this is one reason a production delivery/idempotency design remains blocked.
+
+   Password recovery is implemented locally across the shared action table,
+   public API, exact-loopback Mailpit, web, and mobile request flow. A public
+   request returns one exact acknowledgement for every schema-valid
+   target-dependent outcome, including missing delivery configuration and
+   delivery/commit failure. Each one-hour capability is digest-only and bound
+   to the active password account's current email. Account-first locking
+   preserves the prior accepted action on pre-acceptance failure and serializes
+   resends. Confirmation uses a fresh salt and the current bounded scrypt
+   parameters, then atomically rotates the credential, verifies the bound email,
+   invalidates outstanding verification, revokes every unrevoked session and
+   every unconsumed reauthentication proof, and writes a redacted audit without
+   creating a new session. Exact-verifier fencing prevents registration, login,
+   or reauthentication work begun with the old password from minting authority
+   after reset, and one exact post-lock database instant governs completion.
+   The web scrubs the fragment before showing password controls, keeps it only
+   in an ephemeral closure, streams hard request/response limits, and destroys
+   it across page hide or back/forward-cache restoration. Mobile independently
+   bounds the request response and has no native recovery link or token storage.
+   Shared source/target abuse controls,
+   timing-enumeration evidence, durable or provider-idempotent delivery,
+   authenticated TLS/provider/sender/domain, retry/suppression/bounce operations,
+   support/legal copy, signed clients, and accessibility acceptance remain open.
+   ADR 0015 specifies the full boundary.
+
+   No signed clients exist yet, so the entry-note source also proves only a
+   coordinated deployment. Before a future staggered note rollout, M2 must add an
+   explicit compatibility phase and capability signal: the server first accepts
+   note writes while `note` output remains optional; editors stay hidden until
+   they observe that capability; tolerant clients are staged; only then may
+   server output become required.
+
+   M1C-A is durable logging parity: one bounded, owner-fenced native FIFO for
+   quantity-aware public-food, exact recipe-version, and exact custom-food-
+   version creates. Acceptance requires lossless legacy-item replay,
+   persist-before-send across crash/restart boundaries, mixed-kind FIFO order,
+   explicit terminal-head recovery, atomic profile-time-zone drift rejection,
+   exact receipts, cleanup, and browser/mobile public-food convergence. Browser
+   recipe/custom-food logging remains legacy online-only and unguarded against a
+   concurrent profile-time-zone change; it is explicitly outside M1C-A. M1C-A does
+   not claim an offline catalogue or a readable offline diary after cold restart.
+
+   M1C-B implements durable repeat, edit, and delete plus a day-revision-bound
+   atomic entry-ordering protocol. Its source evidence covers correction
+   dependencies, stronger subject/revision receipts, typed lossless note-capacity
+   refusal, all-or-nothing within-meal ordering, stale-day behavior, replay after
+   restart, and web/mobile convergence. A series of scalar `position` patches is
+   not accepted as atomic reorder evidence. M1C's local source implementation is
+   complete; M1 remains open until signed-device lifecycle, protected-storage,
+   OS-kill, accessibility, hosted, and controlled-beta acceptance pass. Neither
+   slice authorizes background delivery, phone exposure, signed builds, or
+   controlled beta.
+3. **M2 — controlled beta:** source-only hosting and signed-build preparation may
+   proceed in parallel, but real execution still requires reviewed hosting and
+   digest-pinned seven-image
+   deployment; HTTPS, access-control, and off-host restore evidence; controlled-
+   beta review of the locally complete 65-family API/worker export-erasure flow;
+   a reviewed Windows-host/WSL private-phone boundary; a signed iOS/Android device
+   matrix; and independent security, browser/device, accessibility, scientific,
+   and legal review. Cloud, DNS, Terraform, Tailscale, firewall, and EAS actions
+   keep their separate approval gates.
+4. **M3 — premium analysis and planning:** M3A's bounded multi-day nutrition
+   report and charts are source-complete with ordered local evidence. This first
+   slice uses authoritative,
+   immutable diary and goal evidence to present a bounded profile-local date
+   range, calories, macronutrients, micronutrients, target comparisons, and
+   explicit known/trace/unknown or missing coverage across web and mobile. It
+   must preserve timezone and target-version boundaries and provide selectable
+   nutrient charts without medical interpretation. Hosted and signed-device
+   acceptance remain open. Printable/PDF output,
+   scheduled reports, nutrition scores/balance meters, macro scheduling,
+   fasting, sharing, and production or signed-device acceptance remain later
+   work. This source sequencing does not waive M0, M1, or M2 release gates.
+5. **M4 — premium capture and discovery:** recipe URL/text import, food and
+   nutrient suggestions, photo/voice input, private sharing, and coaching, only
+   after their privacy and claims boundaries are reviewed.
+6. **M5 — commercial launch:** first-party entitlements, plans/trials, web and
+   app-store billing, support, monitoring, and SLOs only after M1 and M2 pass.
+
+## Non-negotiable engineering rules
+
+- PostgreSQL is authoritative; search and cache are rebuildable projections.
+- Food-source terms are reviewed before ingestion. Every release has a manifest,
+  checksum, license record, and reproducible import run.
+- Nutrient arithmetic uses exact decimals and distinguishes known zero, trace,
+  and unknown values.
+- Logged nutrition is snapshotted and cannot be rewritten by later catalogue,
+  serving, goal, or recipe changes.
+- Private health data is least-privilege, encrypted in transit and at rest,
+  excluded from telemetry, exportable, and deletable.
+- Begin as a modular monolith. Extract ingestion/search workers only when load or
+  operational isolation justifies it.
+
+## Canonical-ingestion boundary
+
+The release pipeline, real FDC/CNF parsers, supported-service database workflow,
+approval gates, atomic promotion, idempotent replay, and forward rollback are
+implemented and tested. Database constraints independently preserve immutable
+provenance, evidence classification, canonical evidence fields, and initial
+workflow states. The bounded M0B EXPAND change adds seven static `NOLOGIN`
+capability roles and places the three reviewer approval classes behind one narrow
+database-authenticated `SECURITY DEFINER` function. Database-derived approval
+audit fields remain null for historical and owner-compatible local calls rather
+than claiming an identity that was not authenticated.
+
+Migration 0015 hardens that EXPAND state forward-only: database-audit fields on
+new or changed activation and rollback rows remain constrained to paired `NULL`
+values until their reviewed wrappers exist, and the approval function is first
+reduced to owner-only execution after the stricter activation constraint is
+installed as `NOT VALID`.
+With no capability-role members or legacy paired non-NULL activation-authority
+evidence, it grants the exact three reviewer roles. Constraint validation is an
+independent gate: it succeeds whenever no legacy paired non-NULL
+activation-authority evidence exists, even if a capability membership keeps the
+reviewer ACL owner-only. Legacy evidence leaves the constraint unvalidated. Any
+unsafe membership or legacy evidence blocks complete readiness through its
+corresponding ACL, membership, or constraint evidence, avoiding rollback into
+the exposed 0014 policy; a later reviewed forward policy is required for repair
+and enablement.
+
+Migration 0016 then hardens the existing `food_source` eligibility-to-search
+call chain without broadening authority. It fails closed over the exact two
+application-schema `SECURITY INVOKER` function identities, bodies, owners,
+default ACLs, executable metadata, unconfigured pre-state, and exact enabled
+trigger binding before pinning both search paths to `pg_catalog`, the captured
+application schema, and `pg_temp`. It changes no function body, owner, ACL, or
+invoker status and grants no privilege. At the 0016 boundary,
+`enqueue_food_search_food_eligibility_change`,
+`enqueue_food_search_serving_insert`, `enqueue_food_search_barcode_insert`, and
+`enqueue_food_search_barcode_update` still resolved their own unqualified
+relations and revision-function call through the ambient caller path and
+required the subsequent 0017 review.
+
+Migration 0017 completes that bounded namespace hardening for those four
+remaining food, serving, and barcode outbox paths. It fails closed over each
+exact application-schema `SECURITY INVOKER` function and exact ordinary enabled
+statement-trigger binding before pinning only the four function-local search
+paths. It changes no function body, owner, ACL, invoker status, table, or trigger
+and grants no privilege. This removes the known ambient/temp-schema redirection
+path, but it does not make runtime privilege separation safe.
+
+Migration 0018 establishes one active-nutrient-registry advisory reader/writer
+protocol across diary, recipe, goal, custom-food, mapping, and catalogue
+materialization paths. Its fail-closed preflight attests the exact writer and
+recipe-reconciliation functions and seven trigger bindings; it then adds a
+default-ACL `SECURITY INVOKER` reader helper, replaces the final runtime nutrient
+table lock, pins all four search paths, and expands writer-trigger coverage to
+every nutrient update and delete. No runtime identity or elevated execution
+authority is added.
+
+This closes the application-path lock prerequisite, not arbitrary owner SQL.
+Direct recipe DML, nutrient `TRUNCATE`, and nutrient DDL remain unsupported
+during runtime; maintenance must quiesce callers and acquire the exclusive
+registry advisory key before taking table locks. Fixed-purpose writers must
+discover and order source locks before the registry lock rather than adding
+generic recipe statement triggers.
+
+Migration 0019 implements the first fixed-purpose shared-table workflow slice.
+Validation freezes a canonical version-1 materialization document and SHA-256
+per valid food plus the complete active mapping-revision set. Identifier-only
+promotion and rollback functions materialize or repoint only that evidence,
+derive database audit identity, require three authenticated reviewer identities
+for capability-mediated promotion, and preserve lock ordering. Their capability
+roles remain unassigned, and no live catalogue, login, credential, or caller is
+created.
+
+Migration 0020 implements the fixed-purpose stage/validate slice. Stage-only
+functions create or resume one bounded attempt, append contiguous chunks of at
+most 250 records with an atomic checkpoint, and persist parser evidence. The
+complete batch is capped at 10,000 records and 64 MiB of stored canonical JSON.
+A database-computed one-time seal binds provenance, the full parser evidence,
+the exact stage checkpoint, the ordered record set, and active mapping revisions;
+guards prevent post-seal records,
+checkpoint changes, or audit/seal rewrites. A different validate-only database
+login may observe and finalize only that exact sealed input; observation output
+and the validation request are each capped at 128 MiB. The roles receive
+only schema `USAGE` and their exact function `EXECUTE`, with no direct relation
+privilege. Owner/local null-lineage compatibility remains and both capabilities
+remain unassigned.
+
+Migration 0021 independently recomputes the exact 100-gram nutrient
+transformation from the sealed canonical payload and reviewed mapping revisions,
+then compares it with the validator's frozen food document. It freezes
+contract-version-1 record and batch semantic SHA-256 attestations. Approval,
+promotion, and rollback to a non-null release fail closed unless the complete
+attestation is present; a null rollback target may still deactivate. The
+migration refuses pre-existing `ready` or `promoting` rows instead of backfilling
+evidence. Historical unattested completed releases remain representable and may
+retain an existing active pointer, but cannot be newly approved, promoted,
+claimed as attested, or selected for rollback. Direct schema-owner SQL remains
+trusted, and the migration assigns no live identity or caller.
+
+Migration 0022 prevents capability callers from choosing the actor label stored
+for approval, promotion, or rollback. Non-owner wrappers derive that label from
+authenticated PostgreSQL `session_user`, and both authority CHECKs require it to
+match `database_principal`; migration preflight refuses conflicting historical
+rows instead of rewriting them. Owner/local calls retain their supplied label
+with paired-null database authority. This closes spoofable database audit text,
+not external identity verification, live role assignment, or caller cutover.
+
+These limits are safety ceilings rather than
+representative full-catalogue scale proof; a bounded paged production protocol
+and measured resource/lock budgets remain open.
+
+This is not production role/function isolation. Owner/local compatibility still
+leaves a principal with table DML inside the trusted boundary; no live runtime
+login or externally verified workload principal is bound to stage, validate,
+promotion, or rollback
+capabilities; and deployment cutover, independent validator execution,
+direct-DML revocation, ordinary-deploy fingerprinting, and role canaries remain
+open. The isolated logical-restore drill now pins and reapplies the
+migration-0014 function/trigger manifest and migration-0015 approval/guard ACL
+correction plus migration-0016's two search-path pins and exact
+source-eligibility trigger and migration-0017's four search-path pins and exact
+food/serving/barcode trigger bindings plus migration-0018's four nutrient-lock
+functions and seven trigger bindings plus migration-0019's frozen-evidence
+boundary and migration-0020's six audit/seal columns, two checks, five workflow
+functions, owner-only helper, and three guards, migration-0021's four
+semantic-attestation columns, two checks, independent semantic functions and
+two guards, plus migration-0022's two actor-binding checks and three public
+wrapper bodies, plus migration-0023's two reference-integrity checks, reference
+reconciliation function, and two deferred triggers: the complete
+55-function/56-trigger combined catalogue/reference boundary under the
+version-14 fingerprint,
+rejecting owner, constraint, ACL, or fingerprint drift before replay or API
+probing. A live FDC release has intentionally not
+been promoted: the checked-in candidate remains non-importable until two
+independently authenticated operators
+agree on the streamed artifact, rights review is recorded, immutable object
+storage is provisioned, and the complete nutrient map is reviewed. Current-vs-
+candidate database reconciliation now atomically emits canonical, digest-bound,
+read-only evidence into a private, symlink-free repo-local `.local-data` evidence
+tree only after database cleanup, without granting approval or promotion
+eligibility. Separate retained full-registry mapping review, high-impact nutrient
+outlier review, and search/index evidence remain pre-activation work. The FDC
+full-CSV path now has a database-free, bounded, manifest-driven inspector with
+seven relational adapter roles, explicit reference/guide dispositions,
+explicit manifest-supplied raw-value mappings, disk-partitioned joins,
+row/disposition accounting, and deterministic baseline evidence. It is
+synthetic-fixture proof only: real dual acquisition,
+archive inventory/headers/mappings, scale evidence, and database staging remain
+open. The CNF
+path now includes database-free `cnf inspect` evidence and trusted-runner
+`catalogue stage-cnf`: it enforces the exact full archive inventory around the
+nine-CSV, five-adapter/four-reference-only contract, strict table and
+conservation baselines before database access, checkpointed idempotent staging,
+immutable parser-report verification, frozen replay, and database cleanup before
+final output. Successful parses retain only the nine selected CSVs for review;
+failure cleanup is bound to the captured identity of each extracted file. This
+implementation is proven with synthetic fixtures, not a live CNF acquisition.
+Dual fresh acquisitions, exact guide-member names and real-release baselines,
+rights/attribution review, immutable storage, reviewed mappings, representative
+parser-scale evidence, reconciliation/outlier review, and search/index evidence
+still block activation but not the completed ingestion-core milestone. Promoted
+releases freeze the complete active
+mapping-revision set for exact historical revalidation, and canonical report
+hashing/writing is incremental. The database observer and document builder still
+retain full validated snapshots and the result object, so representative
+full-FDC peak-memory evidence remains a live-release blocker. Tests use
+synthetic approvals only to verify the transaction and historical-snapshot
+invariants; they are not production attestations.
+
+## Food-search boundary
+
+The search index is generated from one coherent promoted-catalogue snapshot,
+versioned, count-verified, and atomically swapped. PostgreSQL remains authoritative
+for source rights and barcode identity. Projection revisions, fail-closed API
+checks, `no-store` responses, and a bounded PostgreSQL fallback prevent an old or
+unpublished index from extending a rights change. The public document excludes
+user and health data and carries reviewed attribution through API, web, and mobile
+surfaces. Search relevance and the PostgreSQL-to-Meilisearch publication path are
+covered by real-service integration tests.
+
+## Diary boundary
+
+The write-capable private loop now uses normalized password accounts, bounded
+scrypt work, revocable opaque sessions, server-side ownership checks, strong
+entry revision preconditions, and UUID/digest-bound diary idempotency. Web bearer
+tokens remain in a host-only Secure/HttpOnly/SameSite cookie behind origin checks
+and a nonce CSP; native tokens use platform secure storage. Every food entry pins
+its food version, source release, reviewed attribution, effective IANA time zone,
+serving resolution, nutrition-engine version, and immutable reason-counted
+nutrient vector. Day reads are coherent snapshots, cross-day moves advance both
+day revisions, and trace, quantified zero, partial coverage, and unknown remain
+distinct through the clients.
+
+The checked-in food-release candidates are still deliberately non-promotable,
+so diary integration evidence uses a synthetic promoted catalogue fixture rather
+than claiming a live USDA or CNF release. Production password-recovery
+acceptance and signed-device preview testing remain controlled-beta gates rather
+than hidden claims of this milestone. M1C's bounded native diary-operation path
+stores a closed food/recipe/custom-food create and repeat/edit/delete/reorder
+union, never a bearer token, search query, arbitrary request, or response body.
+Private notes are stored only inside a typed update envelope, are never
+truncated, and fail before sending when the reviewed 1,600-byte protected slot
+cannot hold them. It preserves exact mixed-operation FIFO replay across restarts
+but does not claim an offline catalogue, an offline diary cache, browser
+persistence, background delivery, or general offline synchronization.
+Account
+export and deletion are implemented and locally drilled under the retention and
+privacy milestone; they are not production evidence. Diary screens now opt into
+20-entry pages while legacy date-only readers retain a complete-day response.
+Every page is derived with the authoritative whole-day totals inside one
+repeatable-read snapshot; encrypted continuations reject a changed day or
+effective profile time zone instead of merging revisions. Pagination bounds each
+transfer but does not make writes, aggregation, export, erasure, or accumulated
+client memory unbounded. A local day therefore remains capped at 50 food and
+recipe entries and 256 nutrients until separately reviewed scale and
+virtualization evidence justifies a change.
+
+## Recipes-and-goals boundary
+
+An authenticated person can create and revise a private recipe from immutable
+food or nested-recipe versions, provide measured or estimated final yield, and
+log either grams or a defined serving. Recipe versions retain the exact resolved
+ingredients, calculation and identity-retention assumptions, reason-counted
+nutrient coverage, warnings, and transitive source attribution. Cycles, excessive
+depth or closure, cross-owner dependencies, ambiguous servings, and stale
+revisions fail closed. A diary log pins the selected recipe version and remains
+unchanged by later recipe edits.
+
+Daily goals are immutable revisions with explicit effective dates. Energy can be
+a user-supplied fixed value or a visibly estimated Mifflin–St Jeor result for the
+reviewed adult/profile boundary, multiplied by an explicitly selected PAL. The
+snapshot retains every input and source and does not add ordinary exercise a
+second time. The existing goal path remains user-supplied and source-labelled;
+it does not silently invent DRI defaults. ADR 0021 separately defines an
+explicit, previewed, server-materialized M1B-R candidate whose immutable source,
+group, applicability, acknowledgement, and expiry must remain visible. Progress
+is derived from one coherent diary/goal snapshot and labels trace, partial, or
+unknown intake as a known lower bound rather than exact completion. Web and
+native clients preserve idempotent retry bodies and exact recipe versions.
+
+Migration `0005` deliberately refuses experimental legacy recipe or goal roots
+that lack the immutable evidence required by these contracts. They require a
+reviewed export/remediation and API-based recreation; the migration does not
+fabricate nutrition, yield, source, or equation history. Whole-account erasure
+is implemented and locally drilled under the retention milestone. M1B-R policy
+is source-verified candidate evidence only; it remains blocked from clinical and
+commercial claims until ADR 0021's reviews pass. Inferred or automatic reference
+targets, retention-factor datasets, therapeutic goals, and signed-device
+validation remain controlled-beta work and are not claimed here.
+
+## Parallel release acceptance target — live catalogue evidence
+
+M0 is complete only when an exact publisher artifact is independently acquired
+by two authenticated principals, content-addressed and immutably retained,
+rights/attribution-reviewed, parsed by a reviewed digest-pinned build, mapped
+through reviewed nutrient revisions, and staged without changing the current
+catalogue. Reconciliation, high-impact outliers, representative scale and peak
+memory, complete mapping transitions, search relevance and zero-result rate,
+barcode integrity, index count/build/latency/footprint, and forward rollback must
+all produce digest-bound review evidence. Three distinct role approvals and an
+explicit activation decision are still required before promotion and alias
+switching. See [release gates](../quality/release-gates.md) and the
+[food-source runbook](../../infra/runbooks/food-source-release.md).
+
+The source now has a provider-neutral version-1 acquisition identity and
+retention-evidence contract. It structurally binds each fresh observation to an
+externally verified runner/source identity, requires a separate authenticated
+storage workload with conditional-create, service-checksum, and retention
+evidence active at receipt recording, and deterministically assembles two matches
+only as frozen
+`pending-review`/`not-granted` evidence. `artifact observe` also rejects unknown
+or caller-authored identity/tool options and derives its tool identity from the
+co-located package metadata. This is synthetic source readiness, not live
+evidence: no approved runner or immutable food-release store exists, and no
+current USDA artifact has been acquired.
+
+The source/local M0A gate now uses manifest version 4 only and rejects version 3
+rather than changing version 3 in place. Version 4 has exactly two release classes:
+`live-reviewed` and `fixture-nonrelease`. Every non-template manifest, including a
+fixture, traverses the same fail-closed runtime path with a complete canonical
+authenticated-release evidence bundle. That bundle contains the deterministic
+two-acquisition candidate, an externally obtained current-retention verification
+whose validity window is no longer than 24 hours, and a named decision binding the
+canonical manifest-authority subject, release class and scope, candidate digest,
+and current-retention digest. The manifest binds the resulting complete-bundle
+digest.
+
+The staging database persists the release class, bundle and decision digests,
+retained-object version, and retention-evidence expiry as immutable provenance.
+Validation evidence includes those values, so later role approvals bind them
+transitively through the validation digest. A persisted `fixture-nonrelease` batch
+may exercise parsing, staging, validation, and deterministic replay, but runtime and
+database transitions prevent it from being approved, promoted, activated, or used
+as a rollback target. There is no test-mode, environment-variable, or CLI flag that
+bypasses the bundle gate. The migration preserves pre-gate history as
+`legacy-unbound`; it does not invent provenance for existing rows or allow that
+history to become new live authority.
+
+This closes the manifest-v4 source-code enforcement gap, not live M0B. The parser checks
+structure, canonical digests, cross-object identity, and chronology, but it does
+not authenticate OIDC or workload identity, verify signatures, query provider
+state, or prove object existence or retention. No protected live runner, real dual
+acquisition, distinct immutable-storage workload, current provider query, or named
+review has been performed. The M0B database-authority EXPAND phase narrows
+staging, validation, reviewer approval, promotion, and rollback through static
+capability roles and database-authenticated functions. It deliberately retains
+owner/local compatibility, and no workflow transition has a deployed identity
+or independently proven validator runtime.
+Every live staging, approval, promotion, activation, and rollback remains blocked
+until deploy and CONTRACT cutover close direct DML, readiness proves the exact
+owners and ACLs with role canaries, and the external controls provide trustworthy
+evidence and receive explicit authorization.
+
+The initial full-CSV inspector implements a database-free candidate contract and
+synthetic-fixture evidence for bounded parsing and joins. It has not inspected
+the current USDA archive and therefore does not close the live source gate.
+Exact inventory, headers, raw values, type/market semantics, real-scale
+footprint/runtime, thresholds, staging, reconciliation, search, rights,
+approvals, and activation all remain open.
+
+The real API/worker privacy drill now populates and independently enumerates all
+65 retained export entity families. Exact IDs and counts reconcile across the
+source snapshot, JSON, and decompressed CSV; forbidden field-name checks and
+independent sentinels prove audit-field redaction; artifact lifecycle rows omit
+object locators, encryption identifiers, and ciphertext-byte metadata; the
+erased owner's rows and projections reconcile while a cross-owner account and
+session survive. Hydration create, update, and logical delete are seeded through
+authenticated routes; its day, entry, immutable-revision, and operation families
+participate in exact export and erased-owner zero-row reconciliation while an
+independently queried cross-owner hydration entry survives. Narrow direct
+fixtures cover route-unreachable compatibility/
+evidence tables,
+including catalogue/source/import, audit, legacy nutrient/barcode, and legacy
+operation rows. This completes the local all-retained-entity source gate, but not
+M2: production notification, signed-device, independent-reviewer, physical-phone,
+hosted access/restore, and public-release acceptance remain fail-closed.
+
+### Native Health trend nutrient selection: source/local complete
+
+[ADR 0042](../adr/0042-native-trend-nutrient-picker.md) removes the native
+24-choice truncation. Local name filtering exposes all loaded targetable entries
+up to the existing 256-item bound, with source order, distinct identities, names/
+units and selected context. Filter-only edits preserve current reads/results;
+explicit loading and participating inputs are bound to current private scope,
+metadata and result identity. Mismatched and obsolete reads cannot relabel or
+replace later work. Unrelated custom/log drafts, disclosures and shared mutation
+protocols remain intact. No new endpoint, math, advice, storage or web change.
+
+Independent in-task review, native actual-component checks, affected types/format,
+canonical check/build/licenses and fresh native exports passed. Native mocks and
+exports are not rendered-device, assistive technology, concurrent React, real
+persistence, external Claude Code, hosted or release acceptance. Raw evidence and
+exact delivery/automatic state are recorded in Windows readiness outside Git.
+
+Delivered base `8b94c330b3ed41fd099130e23da017adf9427bb3` CI `34507669521`
+succeeded (updated September 10, 2026 17:26:44 UTC); container `34507669423`
+remained in progress at the 17:31:40 UTC preflight observation. Those historical
+base results do not transfer automatic acceptance to this new slice.
+
+### Loaded saved custom-food filtering: source/local complete
+
+[ADR 0043](../adr/0043-loaded-saved-custom-food-filter.md) adds local name
+filtering and Clear to web/native saved-food cards. Loaded order, distinct IDs,
+explicit paging, open nutrient disclosures, drafts and pending operation identity
+are preserved. Separate first-list verification prevents initial failures or
+manual saved records from implying a complete listing. Current API pages read
+active records only; retained archived client rows do not imply archive browsing.
+
+Focused actual-component checks, independent in-task review, canonical local
+gates, fresh client outputs and production Next/BFF synthetic dedicated-Chrome
+no-request/details/draft/paging/keyboard/narrow/expiry proof passed. Real service,
+physical native, assistive technology, concurrent React, external Claude Code,
+hosted and release acceptance remain separate. Exact delivery and automatic state
+are recorded in Windows readiness outside Git.
+
+Historical base `064616a2f692b94a39fb85bc6bac1fd52a08c2b5` CI `34512970603`
+succeeded; container `34512970717` remained in progress at the September 10,
+2026 19:03:10 UTC preflight. Base automatic results do not transfer to this slice.
+
+### Copy a saved custom food: source/local complete
+
+[ADR 0044](../adr/0044-copy-saved-custom-food-to-new-draft.md) adds local Copy
+to new draft on web/native. Exact saved fields, nutrient IDs and decimal strings
+are preserved, including unavailable picker entries. Raw unsaved draft and native
+composer replacement needs a current source-bound choice. Explicit Create uses a
+fresh copy intent with stable same-intent retries; pending writes and late list
+responses cannot overwrite later work or remove an accepted save. Filtering,
+disclosures and pinned logging remain independent.
+
+Focused actual-component checks, independent in-task review, canonical local
+gates, fresh client outputs and production Next/BFF synthetic dedicated-Chrome
+copy/draft/Create/lost-receipt/retry/keyboard/narrow/expiry proof passed. Real
+persistence, physical native, assistive technology, concurrent React, external
+Claude Code, hosted and release acceptance remain separate. Exact delivery and
+automatic state are recorded in Windows readiness outside Git.
+
+At the September 10, 2026 19:35:59 UTC preflight, base
+`71b7fff605404a13de27f495c39eda64b2541c10` had CI `34521109804` and container
+`34521109674` in progress. Base results do not transfer to this slice.
+
+### Native biometric reading units: source/local complete
+
+[ADR 0045](../adr/0045-native-biometric-reading-units.md) gives native metric
+choices, the selected value field and saved readings explicit unit context from
+the current loaded definition. Exact values remain untouched; missing metadata
+stays unavailable. Edit keeps the original event's definition ID, including
+retained selection actions, while definition Use still selects trends.
+No new read, conversion, mutation contract or shared controller is introduced.
+
+Focused actual-component/retention checks, affected types/format, independent
+in-task review, frozen canonical gates and fresh native exports passed. Unchanged
+web results/builds were cached; physical native, assistive technology, concurrent
+React, real persistence, external Claude Code, hosted and release acceptance
+remain separate. Exact delivery and automatic state belong in Windows readiness.
+
+At the September 10, 2026 20:29:06 UTC read-only observation, delivered base
+`df984b20199b50bab5e258c88c74b6a7892b0fd9` CI `34525236235` succeeded (updated
+20:21:02 UTC); container `34525236213` remained in progress. These base results
+do not transfer to this slice.
+
+### Native Goals nutrient picker: source/local complete
+
+[ADR 0046](../adr/0046-native-goals-nutrient-picker.md) exposes every eligible
+loaded match with name/unit, matching/available/loaded counts and Clear. Search
+retains existing name/code semantics. Explicit Add, raw drafts, historical and
+reference locks and save identity remain intact. No new API or nutrition logic.
+
+Focused component/helper checks, types/format, independent in-task review and
+frozen canonical gates with fresh native exports passed. Unchanged web results
+were cached. Physical native, assistive technology, concurrent React, real
+persistence, external Claude Code, hosted and release acceptance remain separate.
+Exact delivery and automatic observations belong in Windows readiness.
+
+At the September 10, 2026 20:53:05 UTC read-only observation, delivered base
+`b3f83348ed7aff37a789b6ef6a8a69cc431d2ea7` CI `34528132653` succeeded (updated
+20:50:12 UTC); container `34528132698` remained in progress. Base results do not
+transfer to this slice.
+
+### Activity Add duration presets: source/local complete
+
+[ADR 0047](../adr/0047-activity-duration-presets.md) adds 15-, 30- and 60-minute
+duration shortcuts through the ordinary Add edit path on web/native. Custom
+entry, chosen/default time, optional self-reported calories, explicit Add,
+independent row Edit and existing retry identity remain intact. No advice,
+automatic logging or new contract is introduced.
+
+Focused component/type/format checks, independent in-task review, frozen canonical
+gates with fresh client outputs and bounded production Next/BFF dedicated-Chrome
+synthetic proof passed. Real persistence, native devices, assistive technology,
+concurrent React, external reviewer, hosted and release acceptance remain
+separate. Exact delivery and automatic state are recorded in Windows readiness.
+
+At the September 10, 2026 21:06:04 UTC preflight, delivered base
+`f6e521f9ae9ba1a303b09187846368097adeb71e` CI `34530127670` and container
+`34530127679` were in progress. Base results do not transfer to this slice.
+
+### Loaded nested-recipe ingredient filtering: source/local complete
+
+[ADR 0048](../adr/0048-loaded-nested-recipe-filter.md) adds an independent local
+name filter to the web/native nested-recipe picker. Preserve loaded order,
+duplicate identities, self-exclusion, exact version pins, existing explicit paging
+and every other recipe workspace draft. Truthful matched/eligible-loaded counts,
+unverified/no-match/incomplete meaning, small current-query/choice guards and
+keyboard/narrow controls are required. No API or nutrition calculation changes.
+
+Focused component/type/format checks, independent in-task review, frozen canonical
+gates with fresh client outputs and bounded production Next/BFF dedicated-Chrome
+synthetic proof passed. Real persistence, device, assistive technology,
+concurrent React, external reviewer, hosted and release acceptance remain separate.
+
+At the September 10, 2026 21:34:06 UTC preflight, base
+`10e3141ebd48ee7f46a137f45401b9b6921f36d1` CI `34532752403` and container
+`34532752391` were in progress. Base results do not transfer to this slice.
+
+### Logged diary entry nutrients: source/local complete
+
+[ADR 0049](../adr/0049-logged-diary-entry-nutrients.md) exposes each loaded entry's
+saved nutrient vector for its logged portion on web/native. Preserve exact values,
+missingness and coverage through existing display helpers. Independent disclosures
+leave edits, paging, meal choices, totals and retry identity unchanged. Current
+entry/private/date/lifecycle guards, focused review, canonical local gates and
+synthetic Chrome evidence passed. No API or nutrition math changes.
+
+Base `490fb98480a43bef8a8c65ecbb4f59c02086f6f3` CI `34536352453` and container
+`34536352396` were in progress at the September 10, 2026 22:19:01 UTC preflight.
+Base results do not transfer to this slice. External review, device, hosted and
+release acceptance remain separate.
+
+### Saved reminder weekdays: source/local complete
+
+[ADR 0050](../adr/0050-saved-reminder-weekdays.md) adds a Saved days label using
+existing weekday membership on web/native. Preserve time, zone, status, drafts
+and all scheduling/session protocols. This is a small rendering change with no
+new state, requests or helpers. Existing focused suites, source review, canonical
+gates and bounded synthetic Chrome proof passed.
+
+Base `f1367235a3f3574b2ba74dc5a88df8de55bd0473` CI `34539555642` succeeded;
+container `34539555627` remained in progress at September 10, 2026 23:31:22 UTC.
+Base results do not transfer to this slice. Device, notification delivery,
+external reviewer, hosted and release acceptance remain separate.
+
+### Saved biometric date/time zones: source/local complete
+
+[ADR 0051](../adr/0051-saved-biometric-time-zones.md) makes each reading's saved
+local date, saved-zone time with seconds and explicit zone visible on web/native.
+Discovery showed existing time helpers return only HH:mm; use an inline Intl
+history formatter while preserving shared helpers, editor precision and operation
+identity. No state, helper, request, parser or backend changes are required.
+Existing focused suites, independent review, canonical gates and synthetic Chrome
+date-boundary/draft/narrow/expiry proof passed.
+
+Base `3fb9a002dc9e375f3b984f79b433f0b138ff4a26` CI `34543863214` and container
+`34543863220` remained in progress at September 10, 2026 23:52:06 UTC.
+Base results do not transfer to this slice; external/device/hosted/release
+acceptance remains separate.
+
+### Missing biometric metadata labels: source/local complete
+
+[ADR 0052](../adr/0052-missing-biometric-metadata-labels.md) adds explicit web
+history labels when a reading's exact definition is unavailable. Preserve known
+metadata, exact values, saved time/source and all editor/request behavior. This
+changes only two literals. Existing focused checks, independent review,
+canonical gates and synthetic Chrome known/missing/draft/narrow/expiry proof passed.
+
+Base `98735cf691e3b7e01371468ecf982dfc215d4a2f` CI `34545614574` and container
+`34545614573` remained in progress at September 11, 2026 00:16:55 UTC.
+Base results do not transfer to this slice. External/device/hosted/release
+acceptance remains separate.
+
+### Optional saved-recipe log time: source/local complete
+
+[ADR 0053](../adr/0053-optional-recipe-log-time.md) adds a blank-default local-time
+field to saved-recipe logging on web/native. Preserve automatic now/today and
+noon/other-date defaults, exact recipe pins and pending retry identity; explicit
+HH:mm uses the existing verified profile-zone resolver. Keep log-draft guards
+separate from builder/filter state and retain deliberate zone-change review.
+No backend, date-math or outbox format changes were needed. Focused regressions,
+independent review, frozen canonical gates and synthetic Chrome logging/readback,
+retry, keyboard/narrow and expiry proof passed.
+
+At September 11, 2026 02:18:51 UTC, base
+`57cb08e5ec9a44345dc99d858d1d1f1b7863efee` CI `34546957152` and container
+`34546957160` both succeeded. Base results do not transfer to this slice.
+External/device/hosted/release acceptance remains separate.
+
+### Recipe ingredient food-search pages: source/local complete
+
+[ADR 0054](../adr/0054-recipe-ingredient-food-search-pages.md) exposes existing
+reviewed-food search cursors through explicit Load more on web/native. Preserve
+committed query, loaded order, exact version pins and all builder/log drafts.
+Transient failures retain rows/cursor; invalid continuations require Search again.
+Current request/result/Add guards, focused regressions, independent review, fresh
+canonical gates and synthetic Chrome later-page/retry/keyboard/narrow/expiry
+evidence passed. Shared contracts remain unchanged.
+
+At September 11, 2026 04:19:33 UTC, base
+`3e82536700a7de03dce9dedc352cdcae53329aef` CI `34557672504` succeeded;
+container `34557672519` remained in progress. Base results do not transfer to
+this slice. External/device/hosted/release acceptance remains separate.
+
+### Earlier biometric history: source/local complete
+
+[ADR 0055](../adr/0055-biometric-history-windows.md) adds bounded Earlier/Newer/Recent
+navigation and explicit Reload to web/native biometric history. Preserve fixed
+inclusive UTC ranges, exact cursor ownership and saved reading metadata. Keep
+edit drafts/retries and independent trend/custom-food/reminder/log state. Focused
+regressions, receipt/state review, frozen canonical gates and synthetic Chrome
+earlier-page/retry/invalid-cursor/draft/keyboard/narrow/expiry evidence passed.
+Shared contracts and parsers remain unchanged.
+
+At September 11, 2026 05:51:01 UTC, base
+`95ee517190bbaf16e42ac8e879eef2ceaa208078` CI `34564694180` succeeded;
+container `34564694124` remained in progress. Base results do not transfer to this
+slice. External/device/hosted/release acceptance remains separate.
+
+### Reminder day presets: source/local complete
+
+[ADR 0056](../adr/0056-reminder-day-presets.md) adds local Weekdays, Weekends and
+Every day shortcuts beside individual day controls. Preserve raw fields, saved
+cards, consent and exact retry identity; matching membership is a true no-op.
+Reminder-only draft/save ownership, focused checks, independent review, fresh
+canonical gates and synthetic Chrome preset/override/explicit-save/retry/keyboard/
+narrow/expiry evidence passed. Scheduling and shared contracts stay intact.
+
+At September 11, 2026 08:06:01 UTC, base
+`efc0708f1815795a19185ea80ecf5fd88fd0254b` CI `34571423168` succeeded;
+container `34571423175` remained in progress. Base results do not transfer to this
+slice. External/device/notification-delivery/hosted/release acceptance is separate.
+
+### Expand all diary meals: source/local complete
+
+[ADR 0057](../adr/0057-diary-expand-all.md) adds one local action to restore all
+collapsed meal groups using existing presentation ownership. Preserve exact
+totals, nutrient disclosures, raw editors, pagination and native queue holds.
+Focused regressions, independent review, fresh canonical gates and synthetic
+Chrome multi-group/no-request/editor/paging/keyboard/narrow/expiry evidence passed.
+Shared contracts and protected queues remain unchanged.
+
+At 2026-09-11T15:55:20.582850+00:00, base
+`37505ee7fd20dbb0f34be4539db8daa35e806eea` CI `34580740120` and container
+`34580740091` both succeeded. Base results do not transfer to this slice.
+External/device/hosted/release acceptance remains separate.
+
+### Loaded biometric history metric filter: source/local complete
+
+[ADR 0058](../adr/0058-biometric-history-filter.md) adds a local metric-ID filter
+and All metrics reset without changing the loaded history or its requests.
+Preserve exact readings, missing metadata, paging/window/error meaning, raw editor
+and independent trend/composer inputs. Focused regressions, independent review,
+fresh canonical gates and synthetic Chrome no-request/draft/paging/narrow/expiry
+proof passed. Shared contracts and protected queues remain unchanged.
+
+At 2026-09-11T17:16:07.644872+00:00, base
+`b063d0c64f11d306801552a26505c758c803a112` CI `34626392780` and container
+`34626392736` remained in progress. Base results do not transfer to this slice.
+External/device/hosted/release acceptance remains separate.
+
+### Web goal nutrient search: source/local complete
+
+[ADR 0059](../adr/0059-web-goal-nutrient-search.md) adds name/code search and Clear
+to the web goal nutrient picker using the loaded registry. Preserve exact IDs,
+source order, explicit Add, raw drafts, reference/history locks and save/retry
+identity. Focused component/helper checks, independent review, frozen canonical
+gates and production Chrome search/Add/draft/synthetic-save/keyboard/narrow/expiry
+proof passed. Native and shared contracts remain unchanged.
+
+At 2026-09-11T17:51:26.156817+00:00, base
+`2aff420887adc82ef30c7e288f6725ad279afe09` CI `34629733671` and container
+`34629733657` remained in progress. Base results do not transfer to this slice.
+External/device/hosted/release acceptance remains separate.
+
+### Saved manual goal copy: source/local complete
+
+[ADR 0060](../adr/0060-goal-copy.md) copies a positively verified saved manual
+fixed-energy goal into a new draft on web/native. Preserve exact target/source
+fields and saved values; use explicit dirty Keep/Discard, a blank destination
+date and existing Create/retry ownership. Focused component/helper checks,
+independent review, frozen canonical gates and production Chrome copy/draft/
+synthetic-save/keyboard/narrow/expiry proof passed. Shared contracts and
+protected queues remain unchanged.
+
+At 2026-09-14T03:40:03.368987+00:00, base
+251f3a095d791d03f0fbda54e488872466ea1c82 CI 34633156925 and container
+34633157036 both succeeded. Base results do not transfer to this slice.
+External/device/hosted/release acceptance remains separate.
+
+### Health trend date shortcuts: source/local complete
+
+[ADR 0061](../adr/0061-trend-date-presets.md) adds Last 7, 30 and 90 days to
+Health trends on web/native. Use one current profile-local instant per press,
+atomic inclusive dates and matching-range no-ops. Preserve custom dates, series,
+unrelated drafts and web automatic/native explicit loading. Focused checks,
+independent review, frozen canonical gates and production Chrome range/custom/
+no-op/draft/keyboard/narrow/expiry proof passed. Shared contracts and
+protected queues remain unchanged.
+
+At 2026-09-14T04:27:51.779032+00:00, base
+b3a8c6b049499b27ba8d01c416756427d0227c3e CI 34805794900 and container 34805794915 were in progress.
+Base results do not transfer to this slice; no automatic success is claimed.
+External/device/hosted/release acceptance remains separate.
+
+### Nutrition-only Health trends on native: source/local complete
+
+[ADR 0062](../adr/0062-native-trend-none.md) exposes None for the optional
+biometric trend through existing input/read ownership. Preserve dates, nutrient
+selection/search, unrelated drafts and retries, true matching-choice no-ops and
+same-private refresh retention. Explicit Load reads only nutrition with None and
+restores paired reads when a saved metric is chosen.
+
+Focused native checks, independent source review, frozen canonical gates and fresh
+native exports passed. No browser surrogate was used. Device, assistive, concurrent
+React, real persistence, external reviewer and release gates remain.
+
+At 2026-09-14T06:04:30.849689+00:00, base
+`4eaeb15a164febb6a90dc99b2baeca51d9a36d39` CI `34808132234` succeeded;
+container `34808132346` remained in progress. Base automatic results do not
+transfer to this slice.
+
+### Native Health trend metric units: source/local complete
+
+[ADR 0063](../adr/0063-native-trend-units.md) adds exact canonical units to
+metric choices and reuses wrapping labels. Preserve None, source order, archived
+status, exact IDs/selected state and existing input/read/write ownership. A compact
+same-name/different-unit regression and existing focused checks, independent review,
+frozen canonical gates and native exports passed. No browser surrogate was used;
+physical-device/external/release acceptance remains separate.
+
+At 2026-09-14T06:40:58.017334+00:00, base
+`6ef2ae968377843a628f16ce75f13412d3309a96` CI `34812901655` succeeded;
+container `34812901639` remained in progress. Base automatic results do not
+transfer to this slice.
+
+### Web Health trend nutrient search: source/local complete
+
+[ADR 0064](../adr/0064-web-trend-nutrient-search.md) adds local name search and
+Clear, preserving source order, IDs/units and the current selected option outside
+matches. Truthful unavailable/empty/no-match states and separate current filter/
+registry ownership keep requests, results, raw drafts and operations independent.
+Deliberate matching selection keeps existing automatic loading. Focused checks,
+independent source review, frozen canonical gates and production synthetic Chrome
+search/no-request/selection/draft/keyboard/narrow/expiry proof passed.
+
+At 2026-09-14T07:06:39.041811+00:00, base
+`9b4a867c1fa8b3f69ca3852b7f91623ae6c03a47` CI `34815244194` succeeded;
+container `34815244121` remained in progress. Base automatic results do not
+transfer to this slice. External/device/real-service/release acceptance stays
+separate.
+
+### Native named nutrient filter Clear: source/local complete
+
+[ADR 0065](../adr/0065-native-composer-clear.md) adds a secondary Clear action
+through the existing composer query transition. Restore available choices while
+preserving the selected nutrient, raw draft and canonical text; no automatic Add,
+save, requests or queue changes. Existing no-op, private, registry, stale-callback
+and pending-save guards remain authoritative. Focused regressions, independent
+review, fresh canonical gates and native exports passed.
+
+At 2026-09-14T15:24:47.630258+00:00, base `e70f7a25df3383e691a2a5f44485394dde62658e` automatic evidence was:
+ci `34819446482` completed / success; container supply chain `34819446470` completed / success. These exact base results do not transfer to this slice.
+Physical-device, external reviewer and release acceptance remain separate.
+
+### Native named nutrient choice wrapping: source/local complete
+
+[ADR 0066](../adr/0066-native-composer-wrap.md) enables the existing wrapping
+option on the named nutrient composer. Keep full names/units, exact IDs, source
+order, selected state, search/Clear and raw drafts. No handler or shared style
+changes. Compact component evidence, source review, fresh canonical gates and
+native exports passed; physical-device/external/release acceptance is separate.
+
+At 2026-09-14T15:54:22.737185+00:00, base `c46ee859efb0eb434319ca9a88120ac35343b61f` automatic evidence was:
+container supply chain `34863554257` in_progress; ci `34863554217` completed / success. These base results do not transfer to this slice.
+
+### Web nutrient addition availability: source/local complete
+
+[ADR 0067](../adr/0067-web-nutrient-availability.md) explains when Add nutrient
+has no remaining verified loaded choice. Preserve first-unused ID order/defaults,
+raw drafts, private ownership and explicit save/retry; distinguish exhaustion from
+empty/unavailable metadata. Existing state evidence, independent review, fresh
+canonical gates and complete-registry production synthetic Chrome proof passed.
+
+At 2026-09-14T18:42:26.452765+00:00, base `486b0639acd90817e5aaac1748eb0612e22e1166` automatic evidence was:
+container supply chain `34867094432` completed / success; ci `34867094501` completed / success. These base results do not transfer to this slice.
+
+### Web nutrient row uniqueness: source/local complete
+
+[ADR 0068](../adr/0068-web-nutrient-uniqueness.md) prevents duplicate nutrient
+choices across custom-food rows. Preserve current/legacy options and raw same-ID
+values; valid different IDs retain quantified zero defaults. Existing metadata,
+private/draft and save guards remain authoritative. Focused review, fresh canonical
+gates and complete-registry production synthetic Chrome proof passed.
+
+At 2026-09-14T19:26:29.423269+00:00, base `9e524341ac556390b1ff6195dd1d0de4882c9574` automatic evidence was:
+ci `34885753265` completed / success; container supply chain `34885753580` in_progress. These base results do not transfer to this slice.
+
+### Custom-food Revise draft protection: source/local complete
+
+[ADR 0069](../adr/0069-custom-revise-guard.md) reuses the current Copy confirmation
+when Revise would replace unsaved web/native work. Clean drafts open directly;
+Keep preserves raw fields and native composer scratch; explicit current Discard
+installs the captured saved revision. Existing ownership, creation intent and
+save/retry remain authoritative. Focused review, fresh canonical gates/native
+exports and complete-registry production synthetic Chrome proof passed.
+
+At 2026-09-15T00:36:23.527574+00:00, base `56902c0c43dbed9d8b82380379f9f7110a58dca4` automatic evidence was:
+ci `34889719666` completed / success; container supply chain `34889719660` completed / success. These base results do not transfer to this slice.
+
+### Unfinished native nutrient input at Save: source/local complete
+
+[ADR 0070](../adr/0070-native-composer-save.md) protects named nutrient work that
+has not been appended before Create or Save. Explain Add-or-clear recovery,
+preserve raw food/canonical/filter fields and explicit Add, and distinguish
+query-only changes and acknowledged post-Add controls. Preserve current private/
+draft/source/write guards and exact request/retry identity. Focused review, fresh
+canonical gates and native exports passed; external/device/release acceptance
+remains separate.
+
+At 2026-09-15T01:20:48.736123+00:00, base `f55d0dfcce119785aa251df0c8fd94f267976437` automatic evidence was:
+container supply chain `34916410927` in_progress; ci `34916411059` completed / success. These base results do not transfer to this slice.
+
+### Native named nutrient row removal: source/local complete
+
+[ADR 0071](../adr/0071-native-nutrient-remove.md) adds an explicit Remove action
+for current parsable draft rows with exact names/units or ID fallbacks. Preserve
+unrelated raw canonical bytes and delimiters, all food/composer/filter fields and
+entry acknowledgement. Invalid text retains manual recovery; last-row removal
+allows an empty draft while Save keeps its existing validation. Current ownership
+and exact explicit Save/retry remain authoritative. Focused review, fresh canonical
+gates and native exports passed; external/device/release acceptance stays separate.
+
+At 2026-09-15T01:43:40.174191+00:00, base `639e9a361b86eab1f29741753af1008a71dd5e30` automatic evidence was:
+ci `34918272837` in_progress; container supply chain `34918272857` in_progress. These base results do not transfer to this slice.
+
+### Native named nutrient row editing: source/local complete
+
+[ADR 0072](../adr/0072-native-nutrient-edit.md) adds fixed-row Edit and explicit
+Apply to the existing composer. Preserve exact row position, delimiters and other
+raw bytes; same-value Apply retains original formatting. Protect unfinished work
+before entering/switching, require Apply/Clear before Save and fence stale targets.
+Current metadata/private/draft/write guards and exact explicit Save/retry remain
+authoritative. Focused review, fresh canonical gates and native exports passed;
+external/device/release acceptance stays separate.
+
+At 2026-09-15T02:11:04.737851+00:00, base `5c7e40a2c4dcbefd8397ba0f228081f3757e4b40` automatic evidence was:
+ci `34919684554` completed / success; container supply chain `34919684489` in_progress. These base results do not transfer to this slice.
+
+### Native draft nutrient row search: source/local complete
+
+[ADR 0073](../adr/0073-native-draft-nutrient-filter.md) adds separate local
+name/exact-ID search and Clear to the draft row list. Preserve source order,
+truthful counts/recovery, canonical bytes, composer query and active Edit/Apply.
+Filter receipt guards protect visible row actions without invalidating explicit
+Apply/Save; current metadata/private/draft/write guards remain authoritative.
+Focused review, fresh canonical gates and native exports passed;
+external/device/release acceptance stays separate.
+
+At 2026-09-15T02:48:21.189502+00:00, base `582abc3a61d06f73b6d3119b5df0bdc203f19f59` automatic evidence was:
+container supply chain `34921671836` in_progress; ci `34921671835` completed / success. These base results do not transfer to this slice.
+
+### Native Add-picker availability: source/local complete
+
+[ADR 0074](../adr/0074-native-picker-availability.md) identifies and prevents
+occupied-ID choices and duplicate Add using the existing full parser. Retain raw
+current choices, filters and post-Add acknowledgement; distinguish loaded matches
+from unused availability, and recover invalid text manually without guessed IDs.
+Current Edit/Apply, metadata/private/draft guards and exact Save/retry remain intact.
+Focused review, fresh canonical gates and native exports passed;
+external/device/release acceptance stays separate.
+
+At 2026-09-15T04:01:59.740569+00:00, base `46d577353769d9517504b1eb4af86f32c46eb731` automatic evidence was:
+container supply chain `34924016864` in_progress; ci `34924016865` completed / success. These base results do not transfer to this slice.
+
+### Stable web Diary Repeat retries: source/local complete
+
+[ADR 0075](../adr/0075-web-repeat-retry.md) pins an unresolved Repeat's request
+bytes, source preconditions and operation identity across minute/day changes and
+fresh same-owner reloads. Independent entries remain separate; verified completion
+or existing definitive recovery retires only the matching envelope. Preserve
+current private/view authority and receipt validation with no automatic replay.
+The failing clock regression, focused review, fresh canonical gates and dedicated
+Chrome proof passed; external/release acceptance remains separate.
+
+At 2026-09-15T06:28:05.023004+00:00, base `ad0a4b86c1210595f3bad52ff625e7960f313eb4` automatic evidence was:
+ci `34928436357` completed / success; container supply chain `34928436329` completed / success. These base results do not transfer to this slice.
+
+### Next bounded candidate
+
+Reconcile current readiness and the execution queue before selecting another feature.
+Many completed source slices still appear as dated automatic-evidence follow-ups.
+Record read-only CI and supply-chain observations for the exact delivered HEAD;
+preserve historical results with their own commits and keep pending or failed
+checks explicit. Consolidate actionable print, external review, device/accessibility
+and beta gaps into one compact current record, then select one source-backed
+user-visible milestone or named beta blocker with an owner and testable exit.
+Native Repeat inspection found an existing durable saved request, so an analogous
+clock-change implementation is not justified. This successor is bounded evidence
+and roadmap work: no feature implementation, speculative hardening, workflow
+control, deployment or broad validation rerun. No successor implementation has started.

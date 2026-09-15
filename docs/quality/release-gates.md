@@ -227,9 +227,11 @@ acceptance.
   and deletion,
   immutable revisions and logical tombstones, digest-bound replay, strong entry
   and day revisions, profile-time-zone race handling, explicit-`occurredAt`
-  cross-day moves, and owner-isolated export/erasure. Browser and signed
-  iOS/Android acceptance covers the shipped amount-correction UI; client time
-  editing remains open and cannot be claimed from API coverage. The 1–20,000 mL
+  cross-day moves, and owner-isolated export/erasure. Client time editing is
+  source/local complete under [ADR 0027](../adr/0027-hydration-time-corrections.md).
+  Browser and signed iOS/Android acceptance must cover both amount and time
+  correction; signed-device evidence remains open and cannot be claimed from API
+  or synthetic client coverage. The 1–20,000 mL
   per-entry, 64-active-entry, and 100,000 mL daily ceilings are operational
   abuse/overflow bounds, never targets or intake advice. Targets, reminders,
   non-water fluids, offline/background mutation, device/platform ingestion, and
