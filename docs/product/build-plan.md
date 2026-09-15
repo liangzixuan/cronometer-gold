@@ -176,6 +176,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Remove named nutrient rows from native drafts | ADR 0071 explicit current-row removal preserves raw bytes and unfinished input; focused review, fresh canonical gates and native exports passed; external/device/release separate |
 | Automatic evidence / independent review | Edit named nutrient rows in native drafts | ADR 0072 fixed-row Edit/Apply preserves exact raw text and unfinished input; focused review, fresh canonical gates and native exports passed; external/device/release separate |
 | Automatic evidence / independent review | Find nutrient rows in native drafts | ADR 0073 local name/exact-ID search preserves raw draft and active editing; focused review, fresh canonical gates and native exports passed; external/device/release separate |
+| Automatic evidence / independent review | Prevent duplicate native nutrient choices | ADR 0074 exact occupied-ID availability preserves retained input and explicit Add/Save; focused review, fresh canonical gates and native exports passed; external/device/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1805,20 +1806,37 @@ external/device/release acceptance stays separate.
 At 2026-09-15T02:48:21.189502+00:00, base `582abc3a61d06f73b6d3119b5df0bdc203f19f59` automatic evidence was:
 container supply chain `34921671836` in_progress; ci `34921671835` completed / success. These base results do not transfer to this slice.
 
+### Native Add-picker availability: source/local complete
+
+[ADR 0074](../adr/0074-native-picker-availability.md) identifies and prevents
+occupied-ID choices and duplicate Add using the existing full parser. Retain raw
+current choices, filters and post-Add acknowledgement; distinguish loaded matches
+from unused availability, and recover invalid text manually without guessed IDs.
+Current Edit/Apply, metadata/private/draft guards and exact Save/retry remain intact.
+Focused review, fresh canonical gates and native exports passed;
+external/device/release acceptance stays separate.
+
+At 2026-09-15T04:01:59.740569+00:00, base `46d577353769d9517504b1eb4af86f32c46eb731` automatic evidence was:
+container supply chain `34924016864` in_progress; ci `34924016865` completed / success. These base results do not transfer to this slice.
+
 ### Next bounded candidate
 
-Make native Add-picker availability reflect nutrients already in the draft.
-The current picker still presents represented IDs as available: selecting one and
-entering a value reaches duplicate rejection at Add and leaves unfinished scratch
-that blocks Save. Web already prevents equivalent duplicate choices in ADR 0068.
-Identify represented IDs and prevent selecting them as new rows, with recovery to
-edit the existing row or choose an unused nutrient. Prevent duplicate Add while
-preserving retained current selection, exact amount/state/reason, both filters and
-acknowledged post-Add state; do not auto-clear or choose the next nutrient. Removing
-a row releases only its exact ID, and duplicate names remain independent. Keep the
-unchanged full parser authoritative; malformed canonical text has manual recovery
-without guessed occupied IDs. Preserve current Edit/Apply, private/draft/metadata
-guards and exact explicit Save/retry. Scope a separate acceptance card to the
-native screen/component suite and docs, with compact duplicate/retained-choice,
-removal, invalid-text and local-operation checks before applicable canonical and
-native export evidence. No successor implementation has started.
+Preserve the exact web Diary Repeat request across an ambiguous retry. Source
+inspection found that each Repeat click computes a fresh current minute and body,
+while the operation-key helper includes that body. The current map retains only
+operation IDs, so retrying after a minute or profile-local day boundary can allocate
+a different key despite the message promising the same operation. The existing
+immediate-retry component case does not advance the clock. This is source evidence;
+no runtime reproduction has been performed yet.
+
+Start a separate acceptance card and deterministic clock regression. Retain the
+first unresolved repeat body, URL/source date, source revision, expected time zone
+and idempotency key within the current private owner through transport failure,
+malformed/mismatched receipts and minute/day changes. Verified completion releases
+that intent so a deliberate later Repeat can create a new operation. Preserve
+existing definitive-conflict and private/source lifecycle guards, receipt validation
+and server contracts. Scope DiaryClient.tsx, its existing component suite and docs;
+no helper/backend/native/persistence or release change. Verify lost-response and
+minute/midnight retry identity, successful retry followed by a new deliberate
+intent, independent source entries and existing private/conflict paths before
+applicable canonical and browser evidence. No successor implementation has started.

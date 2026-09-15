@@ -1489,6 +1489,13 @@ export function RetentionScreen({
       )
     )
       return;
+    if (
+      "nutrientId" in change &&
+      (draftNutrientRows === null ||
+        !nutrients.some((item) => item.nutrientId === next.nutrientId) ||
+        occupiedNutrientIds?.has(next.nutrientId))
+    )
+      return;
     clearCustomCopyChoice();
     composerRef.current = next;
     setComposerState(next);
@@ -1510,7 +1517,8 @@ export function RetentionScreen({
       composer.editing !== null ||
       composerRef.current !== composer ||
       registry.current?.scope !== customScope ||
-      registry.current.values !== nutrients
+      registry.current.values !== nutrients ||
+      !selectedNutrientUnused
     )
       return;
     try {
@@ -2932,6 +2940,16 @@ export function RetentionScreen({
     }
   }
 
+  const occupiedNutrientIds =
+    draftNutrientRows === null ? null : new Set(draftNutrientRows.map((row) => row.nutrientId));
+  const unusedNutrientCount =
+    occupiedNutrientIds === null
+      ? null
+      : availableNutrients.filter((item) => !occupiedNutrientIds.has(item.nutrientId)).length;
+  const selectedNutrientOccupied = occupiedNutrientIds?.has(composer.nutrientId) ?? false;
+  const selectedNutrientUnused =
+    occupiedNutrientIds !== null && Boolean(chosenNutrient) && !selectedNutrientOccupied;
+
   const draftNutrientQuery = draftNutrientFilter.value.trim().toLowerCase();
   const matchingDraftNutrients = (draftNutrientRows ?? []).filter((row) => {
     const name = availableNutrients.find((item) => item.nutrientId === row.nutrientId)?.name;
@@ -3192,14 +3210,33 @@ export function RetentionScreen({
             />
             <Text style={styles.help}>
               {composerAvailable
-                ? `${matchedNutrients.length} matching of ${availableNutrients.length} available nutrients.`
+                ? `${matchedNutrients.length} matching of ${availableNutrients.length} loaded nutrients.${!visibleComposer.editing && unusedNutrientCount !== null ? ` ${unusedNutrientCount} unused loaded nutrient${unusedNutrientCount === 1 ? "" : "s"}.` : ""}`
                 : "The named nutrient list has not loaded. Choose Refresh private data to try again. Manual text entry remains available."}
             </Text>
+            {!visibleComposer.editing &&
+            composerAvailable &&
+            (draftNutrientRows === null ||
+              availableNutrients.length === 0 ||
+              unusedNutrientCount === 0 ||
+              selectedNutrientOccupied) ? (
+              <Text accessibilityLiveRegion="polite" style={styles.help}>
+                {draftNutrientRows === null
+                  ? "Fix invalid or duplicate canonical nutrient text below before adding a named row."
+                  : availableNutrients.length === 0
+                    ? "No nutrients are available in the loaded list. Manual text entry remains available."
+                    : unusedNutrientCount === 0
+                      ? "All loaded nutrients are already in this draft. Choose Clear nutrient entry, then Edit an existing row, or remove a row to add that nutrient again."
+                      : "This nutrient is already in the draft. Choose an unused nutrient, or choose Clear nutrient entry and Edit the existing row."}
+              </Text>
+            ) : null}
             <ChipRow
               disabled={composerDisabled || Boolean(visibleComposer.editing)}
               items={matchedNutrients.map((item) => ({
                 key: item.nutrientId,
-                label: `${item.name} (${item.unit})`,
+                label: `${item.name} (${item.unit})${!visibleComposer.editing && occupiedNutrientIds?.has(item.nutrientId) ? " · already in this draft" : ""}`,
+                disabled:
+                  !visibleComposer.editing &&
+                  (occupiedNutrientIds === null || occupiedNutrientIds.has(item.nutrientId)),
               }))}
               selected={customVisible ? composer.nutrientId : ""}
               wrapLabels
@@ -3267,7 +3304,7 @@ export function RetentionScreen({
             ) : null}
             <Button
               label={visibleComposer.editing ? "Apply nutrient edit" : "Add nutrient row to draft"}
-              disabled={composerDisabled}
+              disabled={composerDisabled || (!visibleComposer.editing && !selectedNutrientUnused)}
               onPress={visibleComposer.editing ? applyNutrientRow : addNutrientRow}
               secondary
             />
@@ -4222,7 +4259,11 @@ function LabeledInput(props: {
 
 function ChipRow(props: {
   readonly disabled?: boolean;
-  readonly items: readonly { readonly key: string; readonly label: string }[];
+  readonly items: readonly {
+    readonly key: string;
+    readonly label: string;
+    readonly disabled?: boolean;
+  }[];
   readonly selected: string | readonly string[];
   readonly onSelect: (key: string) => void;
   readonly multiple?: boolean;
@@ -4233,17 +4274,18 @@ function ChipRow(props: {
     <View accessibilityRole={props.multiple ? undefined : "radiogroup"} style={styles.chips}>
       {props.items.map((item) => {
         const active = selected.includes(item.key);
+        const disabled = Boolean(props.disabled || item.disabled);
         return (
           <Pressable
             accessibilityRole={props.multiple ? "checkbox" : "radio"}
             accessibilityState={
-              props.multiple
-                ? { checked: active, disabled: Boolean(props.disabled) }
-                : { selected: active, disabled: Boolean(props.disabled) }
+              props.multiple ? { checked: active, disabled } : { selected: active, disabled }
             }
-            disabled={props.disabled}
+            disabled={disabled}
             key={item.key}
-            onPress={() => props.onSelect(item.key)}
+            onPress={() => {
+              if (!disabled) props.onSelect(item.key);
+            }}
             style={[
               styles.chip,
               props.wrapLabels && styles.wrappingChip,

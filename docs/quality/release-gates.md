@@ -1143,3 +1143,19 @@ acceptance.
 - Require component/helper/types/format, independent source/final reviews, frozen
   canonical gates and both native exports. Device/assistive/concurrent React, real
   persistence, external Claude Code, hosted and release acceptance remain separate.
+
+
+## ADR 0074 Native Add-picker availability
+
+- Annotate/disable represented exact IDs in the current loaded Add picker; keep
+  order, names/units, independent duplicate names and truthful loaded/unused counts.
+  Full-parser invalid text has manual recovery with no guessed occupied IDs.
+- Reject occupied/unloaded/invalid new selection and Add before mutation. Preserve
+  same-ID no-op, retained raw choice, both queries, acknowledged post-Add state and
+  exact explicit Save/retry. Removal releases only its exact ID; no auto-selection.
+- Keep current metadata/private/draft/composer/lifecycle/write authority. Add-only
+  availability must not block fixed-row Apply or ordinary Save. Existing ChipRow
+  callers retain their behavior; parser/helpers and local operations stay unchanged.
+- Require focused component/helper/types/format, independent source/final reviews,
+  frozen canonical gates and both native exports. Device/assistive/concurrent React,
+  persistence, external Claude Code, hosted and release acceptance remain separate.
