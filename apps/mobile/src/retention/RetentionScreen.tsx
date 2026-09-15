@@ -48,7 +48,11 @@ import {
 } from "../diary/quick-add-outbox";
 import { parseTargetableNutrients, type TargetableNutrient } from "../recipes/recipes-goals";
 import { palette } from "../theme";
-import { appendCanonicalNutrientInput, parseCanonicalNutrientInput } from "./custom-food-nutrients";
+import {
+  appendCanonicalNutrientInput,
+  parseCanonicalNutrientInput,
+  removeCanonicalNutrientInput,
+} from "./custom-food-nutrients";
 
 export { parseCanonicalNutrientInput } from "./custom-food-nutrients";
 
@@ -1334,6 +1338,15 @@ export function RetentionScreen({
   function changeCustom(field: keyof Omit<CustomDraft, "id" | "revision">, value: string) {
     if (!canEditCustom() || custom[field] === value) return;
     installCustom({ ...custom, [field]: value });
+  }
+  function removeNutrientRow(nutrientId: string) {
+    if (!canEditCustom() || registry.current !== renderedDraftNutrientRegistry) return;
+    try {
+      const next = removeCanonicalNutrientInput(custom.nutrients, nutrientId);
+      installCustom({ ...custom, nutrients: next });
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "The nutrient row could not be removed.");
+    }
   }
   function changeComposer(change: Partial<NutrientComposer>) {
     if (
@@ -2793,6 +2806,15 @@ export function RetentionScreen({
     item.name.toLowerCase().includes(composer.query.trim().toLowerCase()),
   );
   const chosenNutrient = availableNutrients.find((item) => item.nutrientId === composer.nutrientId);
+  const renderedDraftNutrientRegistry = registry.current;
+  let draftNutrientRows: readonly CustomFoodNutrientDraft[] | null = [];
+  if (customVisible && custom.nutrients.trim()) {
+    try {
+      draftNutrientRows = parseCanonicalNutrientInput(custom.nutrients);
+    } catch {
+      draftNutrientRows = null;
+    }
+  }
 
   const customLogUnavailable =
     busy !== null ||
@@ -3138,6 +3160,61 @@ export function RetentionScreen({
             One row per nutrient ID. Use an exact amount, trace, or unknown:not_reported /
             not_analyzed / not_applicable / withheld.
           </Text>
+          {customVisible ? (
+            <View style={styles.savedNutrients}>
+              <Text accessibilityRole="header" style={styles.cardTitle}>
+                Draft nutrients per 100 g
+              </Text>
+              {draftNutrientRows === null ? (
+                <Text style={styles.help}>
+                  Edit canonical nutrient text to fix invalid or duplicate rows before removing a
+                  row.
+                </Text>
+              ) : draftNutrientRows.length === 0 ? (
+                <Text style={styles.help}>
+                  No nutrient rows in this draft. Add a row or use canonical text.
+                </Text>
+              ) : (
+                draftNutrientRows.map((row) => {
+                  const nutrient = availableNutrients.find(
+                    (item) => item.nutrientId === row.nutrientId,
+                  );
+                  const label = nutrient
+                    ? `${nutrient.name} (${nutrient.unit})`
+                    : `Nutrient ID ${row.nutrientId} · unit unavailable`;
+                  return (
+                    <View key={row.nutrientId} style={styles.savedNutrientRow}>
+                      <Text style={styles.rowText}>{label}</Text>
+                      <Text style={styles.rowText}>
+                        {row.state === "quantified"
+                          ? row.amountPer100Grams
+                          : row.state === "trace"
+                            ? "Trace"
+                            : `Unknown (${
+                                {
+                                  not_reported: "not reported",
+                                  not_analyzed: "not analyzed",
+                                  not_applicable: "not applicable",
+                                  withheld: "withheld",
+                                }[row.reason]
+                              })`}
+                      </Text>
+                      <Button
+                        label={
+                          nutrient
+                            ? `Remove ${label} (ID ${row.nutrientId})`
+                            : `Remove nutrient ID ${row.nutrientId}`
+                        }
+                        disabled={customDisabled}
+                        onPress={() => removeNutrientRow(row.nutrientId)}
+                        secondary
+                      />
+                    </View>
+                  );
+                })
+              )}
+            </View>
+          ) : null}
           <LabeledInput
             label="Notes"
             value={customVisible ? custom.notes : ""}

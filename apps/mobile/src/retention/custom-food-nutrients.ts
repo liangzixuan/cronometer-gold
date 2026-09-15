@@ -109,3 +109,16 @@ export function appendCanonicalNutrientInput(
   parseCanonicalNutrientInput(next);
   return next;
 }
+
+/** Removes one validated raw row while retaining every line delimiter and unrelated byte. */
+export function removeCanonicalNutrientInput(value: string, nutrientId: string): string {
+  if (typeof value !== "string") throw new TypeError("Canonical nutrient text must be a string.");
+  const rows = parseCanonicalNutrientInput(value);
+  if (!rows.some((row) => row.nutrientId === nutrientId)) {
+    throw new TypeError("Choose a nutrient ID present in the current draft.");
+  }
+  return value
+    .split(/(\r?\n)/u)
+    .map((line, index) => (index % 2 === 0 && line.trim().startsWith(nutrientId + "=") ? "" : line))
+    .join("");
+}

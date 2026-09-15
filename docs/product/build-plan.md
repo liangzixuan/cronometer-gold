@@ -173,6 +173,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Prevent duplicate web nutrient choices | ADR 0068 guarded row selection and disabled used alternatives preserve raw/current choices and explicit save/retry; focused review, fresh canonical gates and synthetic Chrome passed; external/device/release separate |
 | Automatic evidence / independent review | Protect unsaved custom-food drafts when revising | ADR 0069 current Keep/Discard choice preserves raw web/native work and captured saved revision; focused review, fresh canonical gates/native exports and synthetic Chrome passed; external/device/release separate |
 | Automatic evidence / independent review | Protect unfinished native nutrient input when saving | ADR 0070 Add-or-clear recovery preserves raw entry work, explicit Add and normal post-Add Save; focused review, fresh canonical gates and native exports passed; external/device/release separate |
+| Automatic evidence / independent review | Remove named nutrient rows from native drafts | ADR 0071 explicit current-row removal preserves raw bytes and unfinished input; focused review, fresh canonical gates and native exports passed; external/device/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1763,17 +1764,33 @@ remains separate.
 At 2026-09-15T01:20:48.736123+00:00, base `f55d0dfcce119785aa251df0c8fd94f267976437` automatic evidence was:
 container supply chain `34916410927` in_progress; ci `34916411059` completed / success. These base results do not transfer to this slice.
 
+### Native named nutrient row removal: source/local complete
+
+[ADR 0071](../adr/0071-native-nutrient-remove.md) adds an explicit Remove action
+for current parsable draft rows with exact names/units or ID fallbacks. Preserve
+unrelated raw canonical bytes and delimiters, all food/composer/filter fields and
+entry acknowledgement. Invalid text retains manual recovery; last-row removal
+allows an empty draft while Save keeps its existing validation. Current ownership
+and exact explicit Save/retry remain authoritative. Focused review, fresh canonical
+gates and native exports passed; external/device/release acceptance stays separate.
+
+At 2026-09-15T01:43:40.174191+00:00, base `639e9a361b86eab1f29741753af1008a71dd5e30` automatic evidence was:
+ci `34918272837` in_progress; container supply chain `34918272857` in_progress. These base results do not transfer to this slice.
+
 ### Next bounded candidate
 
-Remove a named nutrient row from the native custom-food draft without editing its
-numeric-ID text line. ADR 0040 still leaves row removal to the canonical text
-field. Expose current parsable rows with exact loaded names/units or an explicit
-ID fallback, and let a deliberate Remove delete only that raw row. Preserve all
-other canonical bytes, order, newlines, exact amounts and unknown reasons, plus
-the composer/filter/entry acknowledgement and food fields. Invalid or duplicate
-canonical text keeps manual recovery instead of guessed removal. Preserve current
-draft/private/busy guards and exact explicit Save/retry; no local request,
-operation allocation, automatic append or save. Start a separate acceptance card
-with a narrow pure removal helper and meaningful helper/component regressions,
-source review, applicable canonical gates and native exports before delivery.
-No successor implementation has started.
+Edit a named native nutrient row's amount or evidence state in place. The current
+preview offers Remove, while Add rejects an existing ID; correcting a value still
+requires manual numeric-ID text or deletion and re-addition that changes order.
+Reuse the composer with a fixed captured row ID and explicit Apply. Validate the
+current draft and candidate, replace only the selected raw line content and retain
+its position, every delimiter and all other bytes. Same-value Apply should preserve
+the original formatting. Keep exact decimals, trace/unknown reasons and truthful
+name/unit or ID fallbacks. Protect unfinished composer work before entering or
+switching edits; reuse Save protection so pending edits cannot be silently omitted.
+Clear exits row editing without changing canonical rows. Keep current draft,
+composer, target, metadata/private/lifecycle/write guards and exact explicit Save/
+retry; no auto-add, remove/reappend, unit conversion or network/queue action.
+Start a separate acceptance card for the existing four native code/test files,
+compact helper/component checks, source review and applicable canonical/native
+export evidence. No successor implementation has started.

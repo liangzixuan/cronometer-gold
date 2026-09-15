@@ -1097,3 +1097,17 @@ acceptance.
 - Require compact component/helper/types/format evidence, independent source and
   final reviews, frozen canonical gates and both native exports. Concurrent React,
   device/assistive behavior, real persistence, external and release stay separate.
+
+
+## ADR 0071 Native named nutrient row removal
+
+- Show exact current parsed rows with verified name/unit or explicit ID fallback.
+  Invalid/duplicate text offers manual recovery; last-row removal permits an empty
+  draft while Save retains its row validation. Parser and append stay unchanged.
+- Explicit current Remove deletes only selected raw line content, preserving all
+  delimiters/unrelated bytes and food/composer/filter/acknowledgement. No requests,
+  operations, auto-add/save or queue action. Retain private/draft/source/lifecycle/
+  write guards, replacement invalidation and exact explicit Save/retry.
+- Require helper/component/types/format evidence, independent source/final review,
+  frozen canonical gates and both native exports. Concurrent React, device/assistive,
+  real persistence, external and release acceptance remain separate.

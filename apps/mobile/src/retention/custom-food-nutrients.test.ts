@@ -1,7 +1,11 @@
 import type { CustomFoodNutrientDraft } from "@nutrition-tracker/contracts";
 import { describe, expect, it } from "vitest";
 
-import { appendCanonicalNutrientInput, parseCanonicalNutrientInput } from "./custom-food-nutrients";
+import {
+  appendCanonicalNutrientInput,
+  parseCanonicalNutrientInput,
+  removeCanonicalNutrientInput,
+} from "./custom-food-nutrients";
 
 const available = Object.freeze([
   Object.freeze({ nutrientId: "1" }),
@@ -235,4 +239,113 @@ describe("lossless named custom-food nutrient append", () => {
       ).toThrow();
     },
   );
+});
+
+describe("lossless canonical nutrient row removal", () => {
+  it.each([
+    [" 1=0 \n\n2=trace\n3=unknown:withheld", "1", "\n\n2=trace\n3=unknown:withheld"],
+    [
+      "1=0\r\n\t2=trace  \r\n \r\n3=unknown:withheld\r\n",
+      "2",
+      "1=0\r\n\r\n \r\n3=unknown:withheld\r\n",
+    ],
+    [" \r\n1=0\n\t\r\n 2=trace \r\n3=unknown:withheld", "3", " \r\n1=0\n\t\r\n 2=trace \r\n"],
+  ])(
+    "removes exact first/middle/last ID %s while retaining LF, CRLF and mixed delimiters",
+    (before, id, expected) => {
+      expect(removeCanonicalNutrientInput(before, id)).toBe(expected);
+      expect(parseCanonicalNutrientInput(expected)).toEqual(
+        parseCanonicalNutrientInput(before).filter((row) => row.nutrientId !== id),
+      );
+    },
+  );
+
+  it.each([
+    ["1=0", "1", ""],
+    [" 1=trace \r\n", "1", "\r\n"],
+    [" \r\n\t 20=unknown:withheld\t\n\t", "20", " \r\n\n\t"],
+  ])(
+    "allows last-row removal to leave an empty draft with unchanged surrounding blanks: %j",
+    (before, id, expected) => {
+      expect(removeCanonicalNutrientInput(before, id)).toBe(expected);
+      expect(() => parseCanonicalNutrientInput(expected)).toThrow("between 1 and 256");
+    },
+  );
+
+  it("retains exact zero, long precision, legacy IDs and all unknown reasons without numeric conversion", () => {
+    const precision = "0." + "1".repeat(198);
+    const untouched = " 1=" + precision + " \r\n9007199254740993=0\n11=trace\r\n";
+    const unknownLines = reasons.map((reason, index) => String(index + 20) + "=unknown:" + reason);
+    const before = untouched + "\t99999999999999999999=trace  \n" + unknownLines.join("\r\n");
+    const expected = untouched + "\n" + unknownLines.join("\r\n");
+    expect(removeCanonicalNutrientInput(before, "99999999999999999999")).toBe(expected);
+    expect(removeCanonicalNutrientInput(expected, "1")).toBe(
+      "\r\n9007199254740993=0\n11=trace\r\n\n" + unknownLines.join("\r\n"),
+    );
+    for (const [index, line] of unknownLines.entries()) {
+      const raw = "1=" + precision + "\n \t" + line + "  \r\n11=0";
+      expect(removeCanonicalNutrientInput(raw, String(index + 20))).toBe(
+        "1=" + precision + "\n\r\n11=0",
+      );
+    }
+  });
+
+  it("rejects absent or non-exact IDs instead of changing a neighboring numeric prefix", () => {
+    const before = " 1=0 \r\n11=trace\n9007199254740993=unknown:withheld";
+    for (const id of [
+      "2",
+      "",
+      "0",
+      "01",
+      "1 ",
+      " 1",
+      "1\n",
+      "1=0",
+      "9007199254740992",
+      "100000000000000000000",
+    ]) {
+      expect(() => removeCanonicalNutrientInput(before, id)).toThrow(
+        "present in the current draft",
+      );
+    }
+    expect(() => removeCanonicalNutrientInput(before, 1 as unknown as string)).toThrow(
+      "present in the current draft",
+    );
+    expect(removeCanonicalNutrientInput(before, "1")).toBe(
+      "\r\n11=trace\n9007199254740993=unknown:withheld",
+    );
+  });
+
+  it("validates all current rows first, refusing malformed, duplicate or empty input without repair", () => {
+    for (const before of [
+      "",
+      " \r\n\t ",
+      "1=0\ninvalid",
+      "1=0\n2=-1",
+      "1=0\n2=unknown:missing",
+      "1=0\n1=trace",
+      "1=0\n2=0\n2=trace",
+      "01=0",
+      "1=" + "1".repeat(201),
+    ]) {
+      expect(() => removeCanonicalNutrientInput(before, "1")).toThrow();
+    }
+    expect(() => removeCanonicalNutrientInput("1=0\n1=trace", "missing")).toThrow("only once");
+    expect(() => removeCanonicalNutrientInput(null as unknown as string, "1")).toThrow(
+      "must be a string",
+    );
+  });
+
+  it("accepts the parser's 256-row boundary and text length while refusing an already oversized row set", () => {
+    const rows = Array.from({ length: 256 }, (_, index) => String(index + 1) + "=0");
+    const full = rows.join("\n");
+    const next = removeCanonicalNutrientInput(full, "256");
+    expect(next).toBe(rows.slice(0, -1).join("\n") + "\n");
+    expect(parseCanonicalNutrientInput(next)).toHaveLength(255);
+    expect(() => removeCanonicalNutrientInput(full + "\n257=trace", "257")).toThrow(
+      "between 1 and 256",
+    );
+    const prefix = "1=0".padEnd(12_001, " ");
+    expect(removeCanonicalNutrientInput(prefix + "\n2=trace", "2")).toBe(prefix + "\n");
+  });
 });
