@@ -175,6 +175,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Protect unfinished native nutrient input when saving | ADR 0070 Add-or-clear recovery preserves raw entry work, explicit Add and normal post-Add Save; focused review, fresh canonical gates and native exports passed; external/device/release separate |
 | Automatic evidence / independent review | Remove named nutrient rows from native drafts | ADR 0071 explicit current-row removal preserves raw bytes and unfinished input; focused review, fresh canonical gates and native exports passed; external/device/release separate |
 | Automatic evidence / independent review | Edit named nutrient rows in native drafts | ADR 0072 fixed-row Edit/Apply preserves exact raw text and unfinished input; focused review, fresh canonical gates and native exports passed; external/device/release separate |
+| Automatic evidence / independent review | Find nutrient rows in native drafts | ADR 0073 local name/exact-ID search preserves raw draft and active editing; focused review, fresh canonical gates and native exports passed; external/device/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1791,18 +1792,33 @@ external/device/release acceptance stays separate.
 At 2026-09-15T02:11:04.737851+00:00, base `5c7e40a2c4dcbefd8397ba0f228081f3757e4b40` automatic evidence was:
 ci `34919684554` completed / success; container supply chain `34919684489` in_progress. These base results do not transfer to this slice.
 
+### Native draft nutrient row search: source/local complete
+
+[ADR 0073](../adr/0073-native-draft-nutrient-filter.md) adds separate local
+name/exact-ID search and Clear to the draft row list. Preserve source order,
+truthful counts/recovery, canonical bytes, composer query and active Edit/Apply.
+Filter receipt guards protect visible row actions without invalidating explicit
+Apply/Save; current metadata/private/draft/write guards remain authoritative.
+Focused review, fresh canonical gates and native exports passed;
+external/device/release acceptance stays separate.
+
+At 2026-09-15T02:48:21.189502+00:00, base `582abc3a61d06f73b6d3119b5df0bdc203f19f59` automatic evidence was:
+container supply chain `34921671836` in_progress; ci `34921671835` completed / success. These base results do not transfer to this slice.
+
 ### Next bounded candidate
 
-Find an existing nutrient row in a large native draft by name or exact ID. Drafts
-can contain 256 rows, while the current preview renders all rows and the existing
-search only filters the Add picker. Add a separate local draft-row filter and
-Clear, using literal trimmed case-insensitive current names or exact string IDs.
-Keep original order, truthful matched/total/no-match/invalid/empty states and ID
-fallback matching when metadata is unavailable. Filtering preserves canonical
-bytes, raw food fields, composer query/acknowledgement, active Edit/Apply identity
-and exact explicit Save/retry; hiding an edited row must not cancel its work.
-No requests, operations, auto-selection or draft replacement. Reuse current row,
-metadata/private/lifecycle guards and existing controls. Start a separate acceptance
-card scoped to the native screen/component suite and docs, with compact filter,
-fallback, active-edit, raw preservation and stale-callback checks before applicable
-canonical/native export evidence. No successor implementation has started.
+Make native Add-picker availability reflect nutrients already in the draft.
+The current picker still presents represented IDs as available: selecting one and
+entering a value reaches duplicate rejection at Add and leaves unfinished scratch
+that blocks Save. Web already prevents equivalent duplicate choices in ADR 0068.
+Identify represented IDs and prevent selecting them as new rows, with recovery to
+edit the existing row or choose an unused nutrient. Prevent duplicate Add while
+preserving retained current selection, exact amount/state/reason, both filters and
+acknowledged post-Add state; do not auto-clear or choose the next nutrient. Removing
+a row releases only its exact ID, and duplicate names remain independent. Keep the
+unchanged full parser authoritative; malformed canonical text has manual recovery
+without guessed occupied IDs. Preserve current Edit/Apply, private/draft/metadata
+guards and exact explicit Save/retry. Scope a separate acceptance card to the
+native screen/component suite and docs, with compact duplicate/retained-choice,
+removal, invalid-text and local-operation checks before applicable canonical and
+native export evidence. No successor implementation has started.

@@ -1127,3 +1127,19 @@ acceptance.
 - Require helper/component/types/format, independent source/final reviews, frozen
   canonical gates and both native exports. Device/assistive/concurrent React, real
   persistence, external Claude Code, hosted and release acceptance remain separate.
+
+
+## ADR 0073 Native draft nutrient row search
+
+- Match current names literally/case-insensitively or exact string IDs; preserve
+  order and raw query within 200 characters. Show truthful counts, no-match/empty
+  and invalid recovery; missing metadata keeps exact-ID fallback matching.
+- Search/Clear change only visibility, preserving raw draft, composer query,
+  acknowledgement, active hidden Edit/Apply and exact Save/retry. No requests,
+  operations, queues, auto-selection, draft replacement or Copy/Revise invalidation.
+- Fence Search/Clear and visible Edit/Remove by filter receipt, including query
+  restore; Apply/Save remain independent. Retain metadata/private/draft/lifecycle/
+  write guards and deliberate reset behavior. Canonical helper/tests stay unchanged.
+- Require component/helper/types/format, independent source/final reviews, frozen
+  canonical gates and both native exports. Device/assistive/concurrent React, real
+  persistence, external Claude Code, hosted and release acceptance remain separate.

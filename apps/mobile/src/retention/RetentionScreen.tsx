@@ -485,6 +485,8 @@ export function RetentionScreen({
   const customRef = useRef(custom);
   const customBaseline = useRef<CustomDraft>(blankCustom());
   const customCreationIntent = useRef(0);
+  const [draftNutrientFilter, setDraftNutrientFilter] = useState({ value: "" });
+  const draftNutrientFilterRef = useRef(draftNutrientFilter);
   const [customCopyChoice, setCustomCopyChoice] = useState<CustomCopyChoice | null>(null);
   const customCopyChoiceRef = useRef(customCopyChoice);
   const [customCopyStatus, setCustomCopyStatus] = useState("");
@@ -565,6 +567,9 @@ export function RetentionScreen({
       customRef.current = value;
       setCustomState(value);
       if (resetComposer) {
+        const nextFilter = { value: "" };
+        draftNutrientFilterRef.current = nextFilter;
+        setDraftNutrientFilter(nextFilter);
         customBaseline.current = value.id === null ? blankCustom() : value;
         setCustomCopyStatus("");
         const next = blankComposer();
@@ -1374,8 +1379,25 @@ export function RetentionScreen({
     if (!canEditCustom() || custom[field] === value) return;
     installCustom({ ...custom, [field]: value });
   }
+  function changeDraftNutrientFilter(value: string) {
+    if (
+      !canEditCustom() ||
+      draftNutrientFilterRef.current !== draftNutrientFilter ||
+      value.length > 200 ||
+      value === draftNutrientFilter.value
+    )
+      return;
+    const next = { value };
+    draftNutrientFilterRef.current = next;
+    setDraftNutrientFilter(next);
+  }
   function removeNutrientRow(nutrientId: string) {
-    if (!canEditCustom() || registry.current !== renderedDraftNutrientRegistry) return;
+    if (
+      !canEditCustom() ||
+      registry.current !== renderedDraftNutrientRegistry ||
+      draftNutrientFilterRef.current !== draftNutrientFilter
+    )
+      return;
     try {
       const next = removeCanonicalNutrientInput(custom.nutrients, nutrientId);
       installCustom({ ...custom, nutrients: next });
@@ -1393,7 +1415,12 @@ export function RetentionScreen({
     );
   }
   function editNutrientRow(nutrientId: string) {
-    if (!canEditCustom() || registry.current !== renderedDraftNutrientRegistry) return;
+    if (
+      !canEditCustom() ||
+      registry.current !== renderedDraftNutrientRegistry ||
+      draftNutrientFilterRef.current !== draftNutrientFilter
+    )
+      return;
     if (composer.editing?.nutrientId === nutrientId) return;
     if (composer.editing || !sameComposerEntry(composer, composerEntryBaseline.current)) {
       setComposerStatus(
@@ -2905,6 +2932,16 @@ export function RetentionScreen({
     }
   }
 
+  const draftNutrientQuery = draftNutrientFilter.value.trim().toLowerCase();
+  const matchingDraftNutrients = (draftNutrientRows ?? []).filter((row) => {
+    const name = availableNutrients.find((item) => item.nutrientId === row.nutrientId)?.name;
+    return (
+      !draftNutrientQuery ||
+      row.nutrientId === draftNutrientQuery ||
+      Boolean(name?.toLowerCase().includes(draftNutrientQuery))
+    );
+  });
+
   const customLogUnavailable =
     busy !== null ||
     quickAddOutboxState.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS ||
@@ -3264,6 +3301,25 @@ export function RetentionScreen({
               <Text accessibilityRole="header" style={styles.cardTitle}>
                 Draft nutrients per 100 g
               </Text>
+              <LabeledInput
+                label="Find a draft nutrient by name or exact ID"
+                value={draftNutrientFilter.value}
+                maxLength={200}
+                disabled={customDisabled}
+                onChangeText={changeDraftNutrientFilter}
+              />
+              <Button
+                label="Clear draft nutrient filter"
+                disabled={customDisabled}
+                onPress={() => changeDraftNutrientFilter("")}
+                secondary
+              />
+              {draftNutrientRows !== null ? (
+                <Text style={styles.help}>
+                  {matchingDraftNutrients.length} matching of {draftNutrientRows.length} draft
+                  nutrient rows.
+                </Text>
+              ) : null}
               {draftNutrientRows === null ? (
                 <Text style={styles.help}>
                   Edit canonical nutrient text to fix invalid or duplicate rows before editing or
@@ -3273,8 +3329,12 @@ export function RetentionScreen({
                 <Text style={styles.help}>
                   No nutrient rows in this draft. Add a row or use canonical text.
                 </Text>
+              ) : matchingDraftNutrients.length === 0 ? (
+                <Text style={styles.help}>
+                  No draft nutrient rows match this filter. Clear the filter to show all rows.
+                </Text>
               ) : (
-                draftNutrientRows.map((row) => {
+                matchingDraftNutrients.map((row) => {
                   const nutrient = availableNutrients.find(
                     (item) => item.nutrientId === row.nutrientId,
                   );
