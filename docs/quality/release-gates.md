@@ -1111,3 +1111,19 @@ acceptance.
 - Require helper/component/types/format evidence, independent source/final review,
   frozen canonical gates and both native exports. Concurrent React, device/assistive,
   real persistence, external and release acceptance remain separate.
+
+
+## ADR 0072 Native named nutrient row editing
+
+- Fixed-ID Edit/Apply updates one validated current raw line in place with exact
+  decimals/states/reasons, order and all delimiters/unrelated bytes retained.
+  Same parsed values return original text; parser/append/remove remain unchanged.
+- Preserve unfinished entry before entering/switching; repeat current Edit is a
+  no-op. Active edits require Apply/Clear before Save. Clear exits without changing
+  canonical rows or query. Metadata fallback and invalid-text recovery stay truthful.
+- Fence captured source/target and registry receipt across manual changes/restore,
+  removal/re-addition, private/lifecycle/loading/write and replacement boundaries.
+  Preserve exact Save/retry and other fields; no local network, operations or queue.
+- Require helper/component/types/format, independent source/final reviews, frozen
+  canonical gates and both native exports. Device/assistive/concurrent React, real
+  persistence, external Claude Code, hosted and release acceptance remain separate.

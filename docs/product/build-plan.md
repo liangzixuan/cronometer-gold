@@ -174,6 +174,7 @@ the detailed milestone boundaries below remain authoritative.
 | Automatic evidence / independent review | Protect unsaved custom-food drafts when revising | ADR 0069 current Keep/Discard choice preserves raw web/native work and captured saved revision; focused review, fresh canonical gates/native exports and synthetic Chrome passed; external/device/release separate |
 | Automatic evidence / independent review | Protect unfinished native nutrient input when saving | ADR 0070 Add-or-clear recovery preserves raw entry work, explicit Add and normal post-Add Save; focused review, fresh canonical gates and native exports passed; external/device/release separate |
 | Automatic evidence / independent review | Remove named nutrient rows from native drafts | ADR 0071 explicit current-row removal preserves raw bytes and unfinished input; focused review, fresh canonical gates and native exports passed; external/device/release separate |
+| Automatic evidence / independent review | Edit named nutrient rows in native drafts | ADR 0072 fixed-row Edit/Apply preserves exact raw text and unfinished input; focused review, fresh canonical gates and native exports passed; external/device/release separate |
 
 M1F follows [ADR 0027](../adr/0027-hydration-time-corrections.md): explicit client
 time editing, a paired profile-zone guard, exact legacy replay, and amount-only
@@ -1777,20 +1778,31 @@ gates and native exports passed; external/device/release acceptance stays separa
 At 2026-09-15T01:43:40.174191+00:00, base `639e9a361b86eab1f29741753af1008a71dd5e30` automatic evidence was:
 ci `34918272837` in_progress; container supply chain `34918272857` in_progress. These base results do not transfer to this slice.
 
+### Native named nutrient row editing: source/local complete
+
+[ADR 0072](../adr/0072-native-nutrient-edit.md) adds fixed-row Edit and explicit
+Apply to the existing composer. Preserve exact row position, delimiters and other
+raw bytes; same-value Apply retains original formatting. Protect unfinished work
+before entering/switching, require Apply/Clear before Save and fence stale targets.
+Current metadata/private/draft/write guards and exact explicit Save/retry remain
+authoritative. Focused review, fresh canonical gates and native exports passed;
+external/device/release acceptance stays separate.
+
+At 2026-09-15T02:11:04.737851+00:00, base `5c7e40a2c4dcbefd8397ba0f228081f3757e4b40` automatic evidence was:
+ci `34919684554` completed / success; container supply chain `34919684489` in_progress. These base results do not transfer to this slice.
+
 ### Next bounded candidate
 
-Edit a named native nutrient row's amount or evidence state in place. The current
-preview offers Remove, while Add rejects an existing ID; correcting a value still
-requires manual numeric-ID text or deletion and re-addition that changes order.
-Reuse the composer with a fixed captured row ID and explicit Apply. Validate the
-current draft and candidate, replace only the selected raw line content and retain
-its position, every delimiter and all other bytes. Same-value Apply should preserve
-the original formatting. Keep exact decimals, trace/unknown reasons and truthful
-name/unit or ID fallbacks. Protect unfinished composer work before entering or
-switching edits; reuse Save protection so pending edits cannot be silently omitted.
-Clear exits row editing without changing canonical rows. Keep current draft,
-composer, target, metadata/private/lifecycle/write guards and exact explicit Save/
-retry; no auto-add, remove/reappend, unit conversion or network/queue action.
-Start a separate acceptance card for the existing four native code/test files,
-compact helper/component checks, source review and applicable canonical/native
-export evidence. No successor implementation has started.
+Find an existing nutrient row in a large native draft by name or exact ID. Drafts
+can contain 256 rows, while the current preview renders all rows and the existing
+search only filters the Add picker. Add a separate local draft-row filter and
+Clear, using literal trimmed case-insensitive current names or exact string IDs.
+Keep original order, truthful matched/total/no-match/invalid/empty states and ID
+fallback matching when metadata is unavailable. Filtering preserves canonical
+bytes, raw food fields, composer query/acknowledgement, active Edit/Apply identity
+and exact explicit Save/retry; hiding an edited row must not cancel its work.
+No requests, operations, auto-selection or draft replacement. Reuse current row,
+metadata/private/lifecycle guards and existing controls. Start a separate acceptance
+card scoped to the native screen/component suite and docs, with compact filter,
+fallback, active-edit, raw preservation and stale-callback checks before applicable
+canonical/native export evidence. No successor implementation has started.

@@ -5,6 +5,7 @@ import {
   appendCanonicalNutrientInput,
   parseCanonicalNutrientInput,
   removeCanonicalNutrientInput,
+  replaceCanonicalNutrientInput,
 } from "./custom-food-nutrients";
 
 const available = Object.freeze([
@@ -347,5 +348,171 @@ describe("lossless canonical nutrient row removal", () => {
     );
     const prefix = "1=0".padEnd(12_001, " ");
     expect(removeCanonicalNutrientInput(prefix + "\n2=trace", "2")).toBe(prefix + "\n");
+  });
+});
+
+describe("lossless fixed-ID canonical nutrient row replacement", () => {
+  it.each([
+    [
+      " \t1=0 \n\n11=trace\n20=unknown:withheld",
+      "1",
+      quantified("1", "0.00"),
+      "1=0.00\n\n11=trace\n20=unknown:withheld",
+    ],
+    [
+      "1=0\r\n 2=trace\t\r\n \r\n3=unknown:not_reported\r\n",
+      "2",
+      { nutrientId: "2", state: "unknown", amountPer100Grams: null, reason: "withheld" } as const,
+      "1=0\r\n2=unknown:withheld\r\n \r\n3=unknown:not_reported\r\n",
+    ],
+    [
+      " \r\n1=0\n\t\r\n 2=trace \r\n3=unknown:withheld",
+      "3",
+      quantified("3", "9007199254740993.000001"),
+      " \r\n1=0\n\t\r\n 2=trace \r\n3=9007199254740993.000001",
+    ],
+  ])(
+    "replaces first/middle/last raw content in place without changing delimiters: %j",
+    (before, id, candidate, expected) => {
+      expect(replaceCanonicalNutrientInput(before, id, Object.freeze(candidate))).toBe(expected);
+      expect(parseCanonicalNutrientInput(expected)).toEqual(
+        parseCanonicalNutrientInput(before).map((row) => (row.nutrientId === id ? candidate : row)),
+      );
+    },
+  );
+
+  it("returns all original whitespace and delimiters for exact parsed values across every evidence state", () => {
+    const raw =
+      " \r\n\t1=0.00  \n2=trace\r\n" +
+      reasons
+        .map((reason, index) => "  " + String(index + 20) + "=unknown:" + reason + "\t")
+        .join("\n") +
+      "\r\n \t";
+    for (const row of parseCanonicalNutrientInput(raw)) {
+      expect(replaceCanonicalNutrientInput(raw, row.nutrientId, Object.freeze(row))).toBe(raw);
+    }
+    expect(replaceCanonicalNutrientInput(" 1=0.00 \n11=trace", "1", quantified("1", "0"))).toBe(
+      "1=0\n11=trace",
+    );
+  });
+
+  it("preserves 200-character decimals and legacy IDs exactly while supporting trace and all unknown reasons", () => {
+    const precision = "0." + "1".repeat(198);
+    const raw = " 99999999999999999999=0 \r\n9007199254740993=trace\n1=unknown:withheld";
+    const exact =
+      "99999999999999999999=" + precision + "\r\n9007199254740993=trace\n1=unknown:withheld";
+    expect(
+      replaceCanonicalNutrientInput(
+        raw,
+        "99999999999999999999",
+        quantified("99999999999999999999", precision),
+      ),
+    ).toBe(exact);
+    expect(
+      replaceCanonicalNutrientInput(raw, "99999999999999999999", {
+        nutrientId: "99999999999999999999",
+        state: "trace",
+        amountPer100Grams: null,
+      }),
+    ).toBe("99999999999999999999=trace\r\n9007199254740993=trace\n1=unknown:withheld");
+    for (const reason of reasons) {
+      const candidate = {
+        nutrientId: "9007199254740993",
+        state: "unknown",
+        amountPer100Grams: null,
+        reason,
+      } as const;
+      expect(replaceCanonicalNutrientInput(raw, candidate.nutrientId, candidate)).toBe(
+        " 99999999999999999999=0 \r\n9007199254740993=unknown:" + reason + "\n1=unknown:withheld",
+      );
+    }
+  });
+
+  it("requires the exact present target and refuses redirecting a candidate to another present row", () => {
+    const raw = " 1=0 \r\n11=trace";
+    for (const id of ["", "0", "01", "1 ", " 1", "1\n", "2", "100000000000000000000"]) {
+      expect(() => replaceCanonicalNutrientInput(raw, id, quantified("1"))).toThrow(
+        "present in the current draft",
+      );
+    }
+    expect(() =>
+      replaceCanonicalNutrientInput(raw, 1 as unknown as string, quantified("1")),
+    ).toThrow("present in the current draft");
+    expect(() => replaceCanonicalNutrientInput(raw, "1", quantified("11"))).toThrow(
+      "keep the selected nutrient ID",
+    );
+    expect(() => replaceCanonicalNutrientInput(raw, "1", quantified("2"))).toThrow(
+      "keep the selected nutrient ID",
+    );
+  });
+
+  it("validates every current row before candidate or no-op handling instead of repairing malformed input", () => {
+    for (const raw of [
+      "",
+      " \r\n\t ",
+      "1=0\ninvalid",
+      "1=0\n2=-1",
+      "1=0\n2=unknown:missing",
+      "1=0\n1=trace",
+      "1=0\n2=0\n2=trace",
+    ]) {
+      expect(() => replaceCanonicalNutrientInput(raw, "1", quantified("1"))).toThrow();
+    }
+    expect(() =>
+      replaceCanonicalNutrientInput(
+        "1=0\n1=trace",
+        "missing",
+        null as unknown as CustomFoodNutrientDraft,
+      ),
+    ).toThrow("only once");
+    expect(() =>
+      replaceCanonicalNutrientInput(null as unknown as string, "1", quantified("1")),
+    ).toThrow("must be a string");
+  });
+
+  it("rejects malformed candidate fields, noncanonical amounts and invalid unknown states without dropping irrelevant fields", () => {
+    const raw = " 1=0 \r\n2=trace";
+    for (const candidate of [
+      null,
+      {},
+      { ...quantified("1"), nutrientId: 1 },
+      quantified("01"),
+      quantified("1", "-0"),
+      quantified("1", "01"),
+      quantified("1", "1e3"),
+      quantified("1", "0\n"),
+      quantified("1", "1".repeat(201)),
+      { ...quantified("1"), reason: "withheld" },
+      { nutrientId: "1", state: "trace", amountPer100Grams: "0" },
+      { nutrientId: "1", state: "unknown", amountPer100Grams: null },
+      { nutrientId: "1", state: "unknown", amountPer100Grams: null, reason: "missing" },
+      {
+        nutrientId: "1",
+        state: "unknown",
+        amountPer100Grams: null,
+        reason: "withheld",
+        extra: "ignored",
+      },
+    ]) {
+      expect(() =>
+        replaceCanonicalNutrientInput(raw, "1", candidate as CustomFoodNutrientDraft),
+      ).toThrow();
+    }
+  });
+
+  it("retains the parser's 256-row boundary without imposing an unrelated total text limit", () => {
+    const rows = Array.from({ length: 256 }, (_, index) => String(index + 1) + "=0");
+    const full = rows.join("\n");
+    expect(replaceCanonicalNutrientInput(full, "256", quantified("256", "0.0000"))).toBe(
+      rows.slice(0, -1).join("\n") + "\n256=0.0000",
+    );
+    expect(() =>
+      replaceCanonicalNutrientInput(full + "\n257=trace", "257", quantified("257")),
+    ).toThrow("between 1 and 256");
+    const prefix = "1=0".padEnd(12_001, " ");
+    const precision = "1".repeat(200);
+    expect(
+      replaceCanonicalNutrientInput(prefix + "\r\n2=trace", "2", quantified("2", precision)),
+    ).toBe(prefix + "\r\n2=" + precision);
   });
 });

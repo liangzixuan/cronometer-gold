@@ -122,3 +122,26 @@ export function removeCanonicalNutrientInput(value: string, nutrientId: string):
     .map((line, index) => (index % 2 === 0 && line.trim().startsWith(nutrientId + "=") ? "" : line))
     .join("");
 }
+
+/** Replaces one fixed-ID row in place; an exact value match preserves its original raw formatting. */
+export function replaceCanonicalNutrientInput(
+  value: string,
+  nutrientId: string,
+  candidate: CustomFoodNutrientDraft,
+): string {
+  if (typeof value !== "string") throw new TypeError("Canonical nutrient text must be a string.");
+  const rows = parseCanonicalNutrientInput(value);
+  const current = rows.find((row) => row.nutrientId === nutrientId);
+  if (!current) throw new TypeError("Choose a nutrient ID present in the current draft.");
+  const replacement = canonicalCandidateLine(candidate);
+  if (candidate.nutrientId !== nutrientId) {
+    throw new TypeError("The replacement must keep the selected nutrient ID.");
+  }
+  if (canonicalCandidateLine(current) === replacement) return value;
+  return value
+    .split(/(\r?\n)/u)
+    .map((line, index) =>
+      index % 2 === 0 && line.trim().startsWith(nutrientId + "=") ? replacement : line,
+    )
+    .join("");
+}

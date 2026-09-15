@@ -52,6 +52,7 @@ import {
   appendCanonicalNutrientInput,
   parseCanonicalNutrientInput,
   removeCanonicalNutrientInput,
+  replaceCanonicalNutrientInput,
 } from "./custom-food-nutrients";
 
 export { parseCanonicalNutrientInput } from "./custom-food-nutrients";
@@ -135,6 +136,11 @@ interface CustomDraft {
 }
 
 interface NutrientComposer {
+  readonly editing: {
+    readonly nutrientId: string;
+    readonly canonicalEpoch: number;
+    readonly registry: object | null;
+  } | null;
   readonly query: string;
   readonly nutrientId: string;
   readonly state: "quantified" | "trace" | "unknown";
@@ -159,7 +165,34 @@ function sameComposerEntry(left: NutrientComposer, right: NutrientComposer): boo
   );
 }
 function blankComposer(): NutrientComposer {
-  return { query: "", nutrientId: "", state: "quantified", amount: "", reason: "" };
+  return { editing: null, query: "", nutrientId: "", state: "quantified", amount: "", reason: "" };
+}
+
+function composerNutrientDraft(composer: NutrientComposer): CustomFoodNutrientDraft {
+  let candidate: CustomFoodNutrientDraft;
+  if (composer.state === "quantified")
+    candidate = {
+      nutrientId: composer.nutrientId,
+      state: "quantified",
+      amountPer100Grams: composer.amount,
+    };
+  else if (composer.state === "trace")
+    candidate = { nutrientId: composer.nutrientId, state: "trace", amountPer100Grams: null };
+  else {
+    if (!composer.reason)
+      throw new TypeError(
+        composer.editing
+          ? "Choose an explicit unknown reason before applying this edit."
+          : "Choose an explicit unknown reason before adding this row.",
+      );
+    candidate = {
+      nutrientId: composer.nutrientId,
+      state: "unknown",
+      amountPer100Grams: null,
+      reason: composer.reason,
+    };
+  }
+  return candidate;
 }
 
 interface EventDraft {
@@ -464,6 +497,7 @@ export function RetentionScreen({
   const [composer, setComposerState] = useState<NutrientComposer>(blankComposer);
   const composerRef = useRef(composer);
   const composerEntryBaseline = useRef(composer);
+  const customNutrientEpoch = useRef(0);
   const [composerStatus, setComposerStatus] = useState("");
   const customScopeRef = useRef({ ownerUserId, sessionEpoch, accessToken, base: apiBase.href });
   if (
@@ -527,6 +561,7 @@ export function RetentionScreen({
   const installCustom = useCallback(
     (value: CustomDraft, resetComposer = false) => {
       clearCustomCopyChoice();
+      if (value.nutrients !== customRef.current.nutrients) customNutrientEpoch.current += 1;
       customRef.current = value;
       setCustomState(value);
       if (resetComposer) {
@@ -1348,12 +1383,76 @@ export function RetentionScreen({
       setMessage(error instanceof Error ? error.message : "The nutrient row could not be removed.");
     }
   }
+  function currentNutrientEdit() {
+    const target = composer.editing;
+    return (
+      target !== null &&
+      target.canonicalEpoch === customNutrientEpoch.current &&
+      target.registry === registry.current &&
+      registry.current === renderedDraftNutrientRegistry
+    );
+  }
+  function editNutrientRow(nutrientId: string) {
+    if (!canEditCustom() || registry.current !== renderedDraftNutrientRegistry) return;
+    if (composer.editing?.nutrientId === nutrientId) return;
+    if (composer.editing || !sameComposerEntry(composer, composerEntryBaseline.current)) {
+      setComposerStatus(
+        composer.editing
+          ? "Apply the current nutrient edit or choose Clear nutrient entry before editing another row."
+          : "Add the unfinished nutrient row to the draft or choose Clear nutrient entry before editing a row.",
+      );
+      return;
+    }
+    const row = draftNutrientRows?.find((item) => item.nutrientId === nutrientId);
+    if (!row) return;
+    const next: NutrientComposer = {
+      ...composer,
+      editing: {
+        nutrientId,
+        canonicalEpoch: customNutrientEpoch.current,
+        registry: registry.current,
+      },
+      nutrientId,
+      state: row.state,
+      amount: row.state === "quantified" ? row.amountPer100Grams : "",
+      reason: row.state === "unknown" ? row.reason : "",
+    };
+    clearCustomCopyChoice();
+    composerRef.current = next;
+    setComposerState(next);
+    setComposerStatus("");
+    workspaceScroll.current?.scrollTo({ y: customEditorOffset.current, animated: true });
+  }
+  function applyNutrientRow() {
+    if (!canEditCustom() || !currentNutrientEdit() || !composer.editing) return;
+    try {
+      const nextText = replaceCanonicalNutrientInput(
+        custom.nutrients,
+        composer.editing.nutrientId,
+        composerNutrientDraft(composer),
+      );
+      if (nextText !== custom.nutrients) installCustom({ ...custom, nutrients: nextText });
+      else clearCustomCopyChoice();
+      const next = { ...composer, editing: null, amount: "" };
+      composerEntryBaseline.current = next;
+      composerRef.current = next;
+      setComposerState(next);
+      setComposerStatus(
+        "Nutrient row updated in the draft. Choose Create private food or Save new version to save it.",
+      );
+    } catch (error) {
+      setComposerStatus(
+        error instanceof Error ? error.message : "The nutrient row could not be updated.",
+      );
+    }
+  }
   function changeComposer(change: Partial<NutrientComposer>) {
     if (
       !canEditCustom() ||
       composerRef.current !== composer ||
-      registry.current?.scope !== customScope ||
-      registry.current.values !== nutrients
+      (composer.editing
+        ? !currentNutrientEdit() || "nutrientId" in change || "editing" in change
+        : registry.current?.scope !== customScope || registry.current.values !== nutrients)
     )
       return;
     const next = { ...composer, ...change };
@@ -1371,7 +1470,7 @@ export function RetentionScreen({
   function clearNutrientEntry() {
     if (!canEditCustom()) return;
     const next = { ...blankComposer(), query: composer.query };
-    if (sameComposerEntry(composer, next)) return;
+    if (!composer.editing && sameComposerEntry(composer, next)) return;
     clearCustomCopyChoice();
     composerEntryBaseline.current = next;
     composerRef.current = next;
@@ -1381,31 +1480,14 @@ export function RetentionScreen({
   function addNutrientRow() {
     if (
       !canEditCustom() ||
+      composer.editing !== null ||
       composerRef.current !== composer ||
       registry.current?.scope !== customScope ||
       registry.current.values !== nutrients
     )
       return;
     try {
-      let candidate: CustomFoodNutrientDraft;
-      if (composer.state === "quantified")
-        candidate = {
-          nutrientId: composer.nutrientId,
-          state: "quantified",
-          amountPer100Grams: composer.amount,
-        };
-      else if (composer.state === "trace")
-        candidate = { nutrientId: composer.nutrientId, state: "trace", amountPer100Grams: null };
-      else {
-        if (!composer.reason)
-          throw new TypeError("Choose an explicit unknown reason before adding this row.");
-        candidate = {
-          nutrientId: composer.nutrientId,
-          state: "unknown",
-          amountPer100Grams: null,
-          reason: composer.reason,
-        };
-      }
+      const candidate = composerNutrientDraft(composer);
       const nextText = appendCanonicalNutrientInput(custom.nutrients, candidate, nutrients);
       installCustom({ ...custom, nutrients: nextText });
       const next = { ...composer, amount: "" };
@@ -1505,6 +1587,12 @@ export function RetentionScreen({
 
   async function saveCustomFood() {
     if (!canEditCustom()) return;
+    if (composer.editing) {
+      setComposerStatus(
+        "Apply the current nutrient edit or choose Clear nutrient entry before saving.",
+      );
+      return;
+    }
     if (!sameComposerEntry(composer, composerEntryBaseline.current)) {
       setComposerStatus(
         "Add the unfinished nutrient row to the draft or choose Clear nutrient entry before saving.",
@@ -2800,13 +2888,14 @@ export function RetentionScreen({
     customVisible &&
     registry.current?.scope === customScope &&
     registry.current.values === nutrients;
-  const composerDisabled = customDisabled || !composerAvailable;
+  const renderedDraftNutrientRegistry = registry.current;
+  const composerDisabled =
+    customDisabled || (composer.editing ? !currentNutrientEdit() : !composerAvailable);
   const availableNutrients = composerAvailable ? nutrients : [];
   const matchedNutrients = availableNutrients.filter((item) =>
     item.name.toLowerCase().includes(composer.query.trim().toLowerCase()),
   );
   const chosenNutrient = availableNutrients.find((item) => item.nutrientId === composer.nutrientId);
-  const renderedDraftNutrientRegistry = registry.current;
   let draftNutrientRows: readonly CustomFoodNutrientDraft[] | null = [];
   if (customVisible && custom.nutrients.trim()) {
     try {
@@ -3038,13 +3127,19 @@ export function RetentionScreen({
           />
           <View style={styles.editor}>
             <Text accessibilityRole="header" style={styles.subheading}>
-              Add a named nutrient row
+              {visibleComposer.editing ? "Edit nutrient row" : "Add a named nutrient row"}
             </Text>
             <Text style={styles.help}>
-              This picker contains a limited nutrient list. Calories or missing nutrients can still
-              use the manual text field below. Adding a row does not save the food. Finish nutrient
-              input with Add nutrient row to draft or Clear nutrient entry before saving.
+              {visibleComposer.editing
+                ? "The nutrient ID is fixed for this edit. Apply nutrient edit updates the draft; it does not save the food. Clear nutrient entry exits without changing the row."
+                : "This picker contains a limited nutrient list. Calories or missing nutrients can still use the manual text field below. Adding a row does not save the food. Finish nutrient input with Add nutrient row to draft or Clear nutrient entry before saving."}
             </Text>
+            {visibleComposer.editing && !currentNutrientEdit() ? (
+              <Text accessibilityLiveRegion="polite" style={styles.help}>
+                The row or nutrient list changed. Choose Clear nutrient entry, then edit the current
+                row.
+              </Text>
+            ) : null}
             <LabeledInput
               label="Find an available nutrient by name"
               value={customVisible ? composer.query : ""}
@@ -3064,7 +3159,7 @@ export function RetentionScreen({
                 : "The named nutrient list has not loaded. Choose Refresh private data to try again. Manual text entry remains available."}
             </Text>
             <ChipRow
-              disabled={composerDisabled}
+              disabled={composerDisabled || Boolean(visibleComposer.editing)}
               items={matchedNutrients.map((item) => ({
                 key: item.nutrientId,
                 label: `${item.name} (${item.unit})`,
@@ -3076,7 +3171,9 @@ export function RetentionScreen({
             <Text style={styles.label}>
               {chosenNutrient
                 ? `${chosenNutrient.name} · ${chosenNutrient.unit} per 100 g`
-                : "Choose an available nutrient"}
+                : visibleComposer.editing
+                  ? `Nutrient ID ${visibleComposer.editing.nutrientId} · unit unavailable`
+                  : "Choose an available nutrient"}
             </Text>
             <ChipRow
               disabled={composerDisabled}
@@ -3096,7 +3193,9 @@ export function RetentionScreen({
                 label={
                   chosenNutrient
                     ? `${chosenNutrient.name} amount (${chosenNutrient.unit} per 100 g)`
-                    : "Exact amount per 100 g"
+                    : visibleComposer.editing
+                      ? `Nutrient ID ${visibleComposer.editing.nutrientId} amount (per 100 g; unit unavailable)`
+                      : "Exact amount per 100 g"
                 }
                 value={customVisible ? composer.amount : ""}
                 maxLength={200}
@@ -3130,9 +3229,9 @@ export function RetentionScreen({
               </>
             ) : null}
             <Button
-              label="Add nutrient row to draft"
+              label={visibleComposer.editing ? "Apply nutrient edit" : "Add nutrient row to draft"}
               disabled={composerDisabled}
-              onPress={addNutrientRow}
+              onPress={visibleComposer.editing ? applyNutrientRow : addNutrientRow}
               secondary
             />
             <Button
@@ -3167,8 +3266,8 @@ export function RetentionScreen({
               </Text>
               {draftNutrientRows === null ? (
                 <Text style={styles.help}>
-                  Edit canonical nutrient text to fix invalid or duplicate rows before removing a
-                  row.
+                  Edit canonical nutrient text to fix invalid or duplicate rows before editing or
+                  removing a row.
                 </Text>
               ) : draftNutrientRows.length === 0 ? (
                 <Text style={styles.help}>
@@ -3199,6 +3298,16 @@ export function RetentionScreen({
                                 }[row.reason]
                               })`}
                       </Text>
+                      <Button
+                        label={
+                          nutrient
+                            ? `Edit ${label} (ID ${row.nutrientId})`
+                            : `Edit nutrient ID ${row.nutrientId}`
+                        }
+                        disabled={customDisabled}
+                        onPress={() => editNutrientRow(row.nutrientId)}
+                        secondary
+                      />
                       <Button
                         label={
                           nutrient
