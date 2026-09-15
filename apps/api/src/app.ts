@@ -13,6 +13,7 @@ import { registerErrorHandling } from "./http/error-handler.js";
 import { createLoggerOptions } from "./logging.js";
 import type { ActivityService } from "./modules/activity/activity.routes.js";
 import type { AuthService } from "./modules/auth/auth-service.js";
+import type { DayNoteService } from "./modules/diary/day-note.routes.js";
 import type { DiaryService } from "./modules/diary/diary.routes.js";
 import type { FoodSearchService } from "./modules/foods/food.routes.js";
 import type { GoalService } from "./modules/goals/goal.routes.js";
@@ -33,6 +34,7 @@ export interface BuildAppOptions {
   activityService?: ActivityService;
   profileService?: ProfileService;
   diaryService?: DiaryService;
+  dayNoteService?: DayNoteService;
   hydrationService?: HydrationService;
   recipeService?: RecipeService;
   goalService?: GoalService;
@@ -109,6 +111,7 @@ export function buildApp(options: BuildAppOptions = {}): FastifyInstance {
     ...(options.authService ? { authService: options.authService } : {}),
     ...(options.profileService ? { profileService: options.profileService } : {}),
     ...(options.diaryService ? { diaryService: options.diaryService } : {}),
+    ...(options.dayNoteService ? { dayNoteService: options.dayNoteService } : {}),
     ...(options.hydrationService ? { hydrationService: options.hydrationService } : {}),
     ...(options.recipeService ? { recipeService: options.recipeService } : {}),
     ...(options.goalService ? { goalService: options.goalService } : {}),

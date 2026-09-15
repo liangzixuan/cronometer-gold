@@ -32,6 +32,9 @@ export const PRIVACY_EXPORT_ENTITIES = [
   "custom_food_version",
   "device",
   "diary_day",
+  "diary_day_note",
+  "diary_day_note_operation",
+  "diary_day_note_revision",
   "diary_entry",
   "diary_entry_legacy_nutrient",
   "diary_entry_nutrient",
@@ -125,7 +128,7 @@ export interface PrivacyExportSnapshot {
 }
 
 export interface PrivacyExportManifest {
-  readonly formatVersion: "nutrition-account-export-v1";
+  readonly formatVersion: "nutrition-account-export-v2";
   readonly capturedAt: string;
   readonly snapshotWatermark: string;
   readonly entities: readonly {
@@ -559,7 +562,7 @@ export async function spoolPrivacyExportSnapshot(input: {
     const manifestBase: PrivacyExportManifestBase = {
       capturedAt: input.snapshot.capturedAt,
       entities,
-      formatVersion: "nutrition-account-export-v1",
+      formatVersion: "nutrition-account-export-v2",
       reconciled: true,
       semanticEvidence,
       snapshotWatermark: input.snapshot.snapshotWatermark,

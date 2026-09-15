@@ -463,6 +463,49 @@ describe("database retention service", () => {
     ).not.toHaveProperty("objectKey");
   });
 
+  it("preserves completed v1 artifact bytes and reconciliation without inventing new families", async () => {
+    const bytes = Buffer.from(
+      `${JSON.stringify(
+        {
+          manifest: { formatVersion: "nutrition-account-export-v1", legacyExtension: "retained" },
+          entities: { diary_entry_revision: [{ note: "  Cafe\u0301\r\n" }] },
+        },
+        null,
+        2,
+      )}\r\n`,
+      "utf8",
+    );
+    const legacyArtifact = {
+      ...exportArtifact,
+      plaintextBytes: String(bytes.byteLength),
+      plaintextSha256: createHash("sha256").update(bytes).digest("hex"),
+    };
+    const legacyJob = completedExportJob([legacyArtifact]);
+    const before = structuredClone(legacyJob);
+    databaseMocks.getPrivacyExportJob.mockResolvedValue(legacyJob);
+    const dispose = vi.fn(async () => undefined);
+    const openAuthenticated = vi.fn(async () => ({
+      contentLength: bytes.byteLength,
+      dispose,
+      stream: Readable.from([bytes]),
+    }));
+    const retention = service("unused", { bulkhead: { openAuthenticated }, store: {} });
+    const opened = await retention.getExportArtifact({ exportId: batchId, format: "json", userId });
+    if (!opened) throw new Error("Expected the completed historical artifact");
+    const chunks: Buffer[] = [];
+    for await (const chunk of opened.stream) chunks.push(Buffer.from(chunk));
+    expect(Buffer.concat(chunks)).toEqual(bytes);
+    expect(opened.contentLength).toBe(bytes.byteLength);
+    expect(legacyJob).toEqual(before);
+    expect(legacyJob.reconciliation).not.toHaveProperty("formatVersion");
+    expect(opened.sha256).toBe(legacyArtifact.plaintextSha256);
+    expect(opened.stream.destroyed).toBe(true);
+    expect(databaseMocks.recordPrivacyExportArtifactDownloadAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ outcome: "opened" }),
+    );
+  });
+
   it("maps the durable first-start timestamp rather than a later job update", async () => {
     databaseMocks.getPrivacyExportJob.mockResolvedValue({
       ...completedExportJob([exportArtifact]),

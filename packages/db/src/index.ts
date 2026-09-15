@@ -206,6 +206,7 @@ export {
   type DatabaseClientOptions,
   hasDatabaseTlsQueryParameter,
 } from "./client.js";
+export * from "./day-notes.js";
 export {
   type CreateFoodDiaryEntryInput,
   type CreateRecipeDiaryEntryInput,

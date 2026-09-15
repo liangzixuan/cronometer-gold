@@ -18,6 +18,7 @@ import { parseActivityDay } from "../activity/activity";
 import { apiUrl, authenticatedHeaders, jsonBody, responseError } from "../api/private-api";
 import { parseHydrationDay } from "../hydration/hydration";
 import { palette } from "../theme";
+import { DiaryDayNote } from "./DiaryDayNote";
 import {
   bindDiaryReorderDigestEvidence,
   buildDiaryReorderPlan,
@@ -1658,6 +1659,29 @@ export function DiaryScreen({
             </View>
           </View>
         ) : null}
+
+        <DiaryDayNote
+          apiBase={apiBase}
+          accessToken={accessToken}
+          ownerUserId={expectedOwnerUserId}
+          sessionEpoch={sessionEpoch}
+          localDate={date}
+          profileTimeZone={profileTimeZone}
+          profileBusy={groupBusy}
+          isSessionCurrent={(owner, epoch) =>
+            !privateUiClosed.current &&
+            expectedOwnerUserIdRef.current === owner &&
+            sessionEpochRef.current === epoch
+          }
+          isDateCurrent={(day) =>
+            !privateUiClosed.current &&
+            dateRef.current === day &&
+            currentMealRoute.current === appliedRouteGeneration.current
+          }
+          onReturn={(day) => transitionCommittedDate(day)}
+          onProfileUpdated={onProfileUpdated}
+          onUnauthorized={closeForUnauthorized}
+        />
 
         <Pressable
           accessibilityRole="button"

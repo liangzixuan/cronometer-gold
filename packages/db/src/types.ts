@@ -749,6 +749,37 @@ export interface DiaryEntryNutrientSnapshotTable {
   created_at: CreatedTimestamp;
 }
 
+export interface DiaryDayNoteTable {
+  id: string;
+  user_id: string;
+  local_date: DateOnly;
+  current_revision_id: string;
+  current_revision_number: Int8;
+  state: "active" | "cleared";
+  created_at: CreatedTimestamp;
+  updated_at: UpdatedTimestamp;
+}
+export interface DiaryDayNoteRevisionTable {
+  id: string;
+  day_note_id: string;
+  user_id: string;
+  local_date: DateOnly;
+  revision_number: Int8;
+  supersedes_revision_id: string | null;
+  operation: "set" | "clear";
+  note: string | null;
+  recorded_time_zone: string;
+  created_at: CreatedTimestamp;
+}
+export interface DiaryDayNoteOperationTable {
+  user_id: string;
+  client_operation_id: string;
+  request_digest: string;
+  day_note_id: string;
+  result_payload: ImmutableJson;
+  created_at: CreatedTimestamp;
+}
+
 export interface ActivityDayTable {
   id: UuidId;
   user_id: string;
@@ -1521,6 +1552,9 @@ export interface RetentionDeadLetterEventTable {
 export interface Database {
   account_erasure_job: AccountErasureJobTable;
   account_erasure_receipt: AccountErasureReceiptTable;
+  diary_day_note: DiaryDayNoteTable;
+  diary_day_note_revision: DiaryDayNoteRevisionTable;
+  diary_day_note_operation: DiaryDayNoteOperationTable;
   activity_day: ActivityDayTable;
   activity_entry: ActivityEntryTable;
   activity_entry_revision: ActivityEntryRevisionTable;

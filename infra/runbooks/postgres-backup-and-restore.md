@@ -96,8 +96,8 @@ surface. The transactional repair policy
 pins 54 function identities, 54 exact trigger bindings, the sixteen
 authority-evidence column definitions, all nine authority CHECKs,
 and the unique activation-to-batch index. Before creating a
-dump, the drill requires the exact 22 `public.app_schema_migration` names and
-SHA-256s from the tracked migration files, ignoring any owner-schema shadow
+dump, the drill requires the complete `public.app_schema_migration` names and
+SHA-256s from every tracked migration file, ignoring any owner-schema shadow
 ledger, and corroborates that ledger after restore. The drill then
 compares a canonical source/target role, schema, type, table, sequence,
 column-ACL, function, trigger, authority-constraint, and authority-index
@@ -108,6 +108,14 @@ or target isolation differs, stop the rehearsal; do not improvise grants.
 
 Do not interpolate an unreviewed variable into a delete/drop command. Cleanup of a
 drill database is a separate approved action after evidence is retained.
+
+Migration 0026 adds standalone day-note roots, immutable revisions and operation
+receipts, plus the current export-completion inventory fence. Restore their full
+schema and history using the complete forward migration set. A cleared note still
+has retained history. For an owner covered by an authenticated erasure-ledger
+record, replay must remove all three note families before restore readiness is
+attested. Active owners' saved and cleared history remains intact. The existing
+source/target authority fingerprint and exact ledger checks remain required.
 
 ## Validation
 

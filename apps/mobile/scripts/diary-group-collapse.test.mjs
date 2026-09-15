@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Alert, AppState } from "react-native";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { DiaryDayNote } from "../src/diary/DiaryDayNote";
 import { DiaryScreen } from "../src/diary/DiaryScreen";
 import { resetDiaryGroups } from "../src/diary/diary";
 
@@ -403,6 +404,29 @@ afterEach(() => {
 });
 
 describe("native diary meal group collapse", () => {
+  it("wires an independent day-note card on empty days with synchronous private and route guards", async () => {
+    const { harness, props, controller } = setup(() =>
+      response(page(selectedDate, [], null, 0, [])),
+    );
+    const tree = await harness.settle();
+    const card = nodes(tree, (node) => node.type === DiaryDayNote)[0];
+    expect(card).toBeDefined();
+    expect(card.props.localDate).toBe(selectedDate);
+    expect(card.props.ownerUserId).toBe(props.expectedOwnerUserId);
+    expect(card.props.isSessionCurrent(props.expectedOwnerUserId, props.sessionEpoch)).toBe(true);
+    expect(card.props.isDateCurrent(selectedDate)).toBe(true);
+    harness.updateProps({ requestedDate: "2026-08-16", refreshKey: "day-note-route" });
+    harness.renderWithoutEffects();
+    expect(card.props.isDateCurrent(selectedDate)).toBe(false);
+    harness.updateProps({
+      expectedOwnerUserId: "other-owner",
+      sessionEpoch: props.sessionEpoch + 1,
+    });
+    harness.renderWithoutEffects();
+    expect(card.props.isSessionCurrent(props.expectedOwnerUserId, props.sessionEpoch)).toBe(false);
+    expect(controller.enqueueOperation).not.toHaveBeenCalled();
+    expect(controller.requestDrain).not.toHaveBeenCalled();
+  });
   it("starts expanded and hides only loaded entry content without changing totals, counts or requests", async () => {
     const { harness, requests, controller, props } = setup();
     let tree = await harness.settle();

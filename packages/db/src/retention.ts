@@ -766,6 +766,9 @@ export type PrivacyExportEntity =
   | "custom_food_version"
   | "device"
   | "diary_day"
+  | "diary_day_note"
+  | "diary_day_note_operation"
+  | "diary_day_note_revision"
   | "diary_entry"
   | "diary_entry_legacy_nutrient"
   | "diary_entry_nutrient"
@@ -850,6 +853,7 @@ export interface CreatePrivacyExportJobInput extends RetentionOperationInput {
   readonly requestedFormats: readonly ("csv" | "json")[];
 }
 export interface PrivacyExportReconciliationInput {
+  readonly formatVersion: "nutrition-account-export-v2";
   readonly snapshotWatermark: string;
   readonly entities: readonly {
     readonly entity: string;
@@ -6720,6 +6724,33 @@ const EXPORT_ENTITY_SPECS: readonly PrivacyExportEntitySpec[] = [
     "owner.operation = 'delete'",
   ),
   exportSpec(
+    "diary_day_note",
+    "diary_day_note",
+    "diary_day_note t",
+    "t.user_id",
+    "t.id::text",
+    "t.current_revision_number::text",
+    "t.state = 'cleared'",
+  ),
+  exportSpec(
+    "diary_day_note_revision",
+    "diary_day_note_revision",
+    "diary_day_note_revision t",
+    "t.user_id",
+    "t.id::text",
+    "t.revision_number::text",
+    "t.operation = 'clear'",
+  ),
+  exportSpec(
+    "diary_day_note_operation",
+    "diary_day_note_operation",
+    "diary_day_note_operation t",
+    "t.user_id",
+    "t.client_operation_id::text",
+    "null",
+    "false",
+  ),
+  exportSpec(
     "diary_operation",
     "diary_operation",
     "diary_operation t",
@@ -7202,6 +7233,9 @@ const EXPORT_ENTITY_SPECS: readonly PrivacyExportEntitySpec[] = [
 // column is either deliberately emitted or named in the entity's redacted set above. A forward
 // schema change therefore fails export before a row is materialized until it is reviewed here.
 const EXPORT_TABLE_SCHEMA_SHA256: Readonly<Record<string, string>> = {
+  diary_day_note: "4413023f26ad55b76f40f48c877fc1677244c8a98b314e5f048afad3e466b4f3",
+  diary_day_note_operation: "216b5266fa92a64b647027cfe60439d6b05ca35755e5b56e03973802132616b4",
+  diary_day_note_revision: "9ab4245bfd9e8c6faebfe4b31661b7a96accb691d863aff88f4df8855e8946ed",
   app_user: "2289e77b06addc3a6edffbac67395ea570347b4d02bf5371cba92e245e88af67",
   activity_day: "82db5d391d43d860456b55fb2afb9d77d875169703c9ea86c0cd43e3a476b317",
   activity_entry: "e3ab04fee93142d5a059d82ad1c7c7fd430c64ac7eac6f759ab69d70b07a3dbf",
@@ -7416,6 +7450,17 @@ const ERASURE_TABLE_SPECS: readonly ErasureTableSpec[] = [
     "custom_food_version_nutrient",
     "custom_food_version",
     "custom_food_version_nutrient_custom_food_id_food_version_i_fkey",
+  ),
+  eraseByCascade("diary_day_note", "app_user", "diary_day_note_user_fk"),
+  eraseByCascade(
+    "diary_day_note_revision",
+    "diary_day_note",
+    "diary_day_note_revision_root_owner_date_fk",
+  ),
+  eraseByCascade(
+    "diary_day_note_operation",
+    "diary_day_note",
+    "diary_day_note_operation_root_owner_fk",
   ),
   eraseByCascade("diary_entry", "diary", "diary_entry_diary_id_user_id_fkey"),
   eraseByCascade(
@@ -8092,14 +8137,23 @@ function assertExportReconciliation(
   requireDigest(reconciliation.sourceSemanticDigest, "sourceSemanticDigest");
   requireDigest(reconciliation.exportedSemanticDigest, "exportedSemanticDigest");
   if (
+    reconciliation.formatVersion !== "nutrition-account-export-v2" ||
     !reconciliation.reconciled ||
     reconciliation.snapshotWatermark !== watermark ||
     reconciliation.sourceSemanticDigest !== semanticDigest ||
     reconciliation.exportedSemanticDigest !== semanticDigest
   )
     throw new RetentionExportNotReadyError();
-  if (reconciliation.entities.length !== snapshots.length) throw new RetentionExportNotReadyError();
+  const expected = new Set(EXPORT_ENTITY_SPECS.map((spec) => spec.entity));
+  if (
+    snapshots.length !== expected.size ||
+    new Set(snapshots.map((snapshot) => snapshot.entity)).size !== expected.size ||
+    snapshots.some((snapshot) => !expected.has(snapshot.entity)) ||
+    reconciliation.entities.length !== snapshots.length
+  )
+    throw new RetentionExportNotReadyError();
   const supplied = new Map(reconciliation.entities.map((row) => [row.entity, row]));
+  if (supplied.size !== expected.size) throw new RetentionExportNotReadyError();
   for (const snapshot of snapshots) {
     const row = supplied.get(snapshot.entity);
     if (row) {

@@ -41,9 +41,13 @@ reviewer, or production-release acceptance.
    custom foods, biometrics, and hydration entries, consented local reminders,
    coherent JSON/CSV export, erasure/recovery, and read-only HealthKit/Health
    Connect weight adapters are wired across database, API/worker, web, and mobile
-   with package and integration evidence. The real API/worker privacy drill now
-   populates and independently enumerates all 65 retained export entity families.
-   It requires
+   with package and integration evidence. At the last delivered baseline, the
+   real API/worker privacy drill populated and independently enumerated all 65
+   retained export entity families. ADR 0076's working source extends the inventory
+   to 68 and has passed the real export/erasure drill. Its corrected clients have
+   completed the scoped browser flows and measured 390px checks; final local
+   compatibility and validation now pass. Commit/push and exact-commit automatic
+   evidence remain pending in current readiness. The drill requires
    exact source-ID/count reconciliation in JSON and decompressed CSV; proves
    cross-owner survival; verifies audit and artifact-lifecycle redaction; expires
    one artifact; cancels queued reminder delivery after pause/revoke; and
@@ -100,34 +104,53 @@ older result, and source completion never closes external acceptance.
 
 | Order | Work | Owner and concrete exit |
 | --- | --- | --- |
-| Next source milestone | Standalone private day notes | Implementation owner: Codex in the current task; independent model/code reviewer required. Write the acceptance/model ADR, then implement explicit date-bound notes on empty or populated diary days with immutable history, exact retry/conflict and complete export/erasure evidence. See the bounded candidate below. |
+| Active delivery | Standalone private day notes | Implementation owner: Codex in the current task. Reviewed source, local integration, desktop/390px browser flows and final canonical/dependency gates are complete under ADR 0076. Delivery is underway: commit/push under standing authorization, then record exact-commit automatic outcomes. |
+| Next source candidate, after the active milestone | Native acceptance evidence contracts | Evidence maintainer and independent reviewer define a versioned successor to P0 v2 for camera capture, configurable groups and standalone notes. Synchronize capture, package, normalization, source-bundle and manifest coverage before collecting device acceptance. This row starts with contract/model review, not device or cloud execution. |
 | Delivery follow-up | Exact-commit automatic evidence | Delivery owner records CI and actual supply-chain job outcomes for the identified commit. Missing, running or skipped required jobs remain open; artifact/provenance and release approval stay separate. |
 | Local acceptance follow-up | Repeat printing and direct Ctrl+P | Browser QA operator/user completes the two remaining ADR 0028 checks on a pinned build and retains the observed result. Existing preview/Cancel and PDF evidence do not close them. |
 | External review | Commit-specific Claude Code review | External reviewer supplies the report and decision; implementation owner resolves findings. In-task reviews do not substitute. |
 | Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Release owner assigns the roles and reviewable packages listed in current readiness; each lane advances only under applicable existing authorization and its unchanged release gate. |
 
-### Next bounded candidate: standalone private day notes
+### Active bounded milestone: standalone private day notes
 
-A person should be able to record private context for a selected diary day without
-adding a food or recipe entry. Current web/native editors save notes only as part
-of an existing entry; standalone day notes remain explicitly open in M1 below.
+[ADR 0076](../adr/0076-standalone-private-day-notes.md) now has an accepted model
+and reviewed database/API, web and native implementation. One private note belongs
+to the selected date, including empty diary days. Saves and clears retain immutable
+history; owner/session guards, exact retries and deliberate conflict recovery
+protect in-memory drafts. This slice adds no offline queue, food entry, nutrition
+calculation, attachment, sharing, reminder, advice, hosting or signing behavior.
 
-Start with a separately reviewed acceptance and immutable model ADR. The proposed
-boundary is one owner-private note per selected local date, explicit create/edit/
-clear on web and native, saved date/zone semantics, immutable revisions, stable
-retry identity, conflict recovery and draft/session protection. Existing entry
-notes and nutrition totals remain unchanged. Clearing current text must have
-explicit history/export semantics; account erasure must cover every added entity.
+Focused proof now covers 130 web cases and 114 unchanged native cases. Actual
+browser QA found and verified fixes for disabled editors after date navigation
+and focus lost after conflict recovery. Dedicated Chrome and the subsequently
+available, user-authorized Brave exercised empty/populated note flows, exact raw
+drafts, both conflict choices, explicit keyboard saves, revoked-session closure,
+owner isolation, the length limit and date navigation. Fresh Brave checks on the
+focus-fixed build confirmed that Keep, Use saved note and ordinary Cancel focus
+the enabled textarea; recovery choices do not write until an explicit Save.
+The populated day's pinned food and nutrient observations stayed unchanged.
+A later measured 390×844 viewport also passed note/error/conflict layout and
+keyboard recovery without document overflow. Earlier viewport attempts had no
+effect; their delayed change is unexplained. This is browser evidence, not
+physical-device or screen-reader acceptance.
 
-Before implementation, prove the required real local database/API and retention
-validation prerequisites. Require contract/DB/API owner/date/revision/idempotency
-tests, actual-client draft/retry/expiry checks, canonical validation and the real
-export/erasure drill including existing entities and cross-owner survival. A
-synthetic browser or native bundle cannot replace those checks. Exclude offline
-queue changes, arbitrary note-entry kinds, attachments, rich text, sharing,
-reminders, advice, hosting, signing and release execution. This reconciliation
-does not implement the successor or approve its model. No successor implementation
-has started.
+The exact `expo-build-properties@57.0.19` exception/install and one additional
+production audit were explicitly approved and completed. Final `pnpm check`,
+`pnpm build`, audit and license policy passed; a clean-source native export
+freshly built both platform bundles. Current readiness separates fresh and
+cached results and records the four lower-severity audit advisories. Independent
+source/dependency comparison carries forward the dated database/API, 68-family
+export/erasure, restore and browser proofs; these were not rerun for the mobile
+dependency patch. Earlier failures and approvals remain historical evidence.
+Source and local validation are complete. Delivery is underway under standing
+normal commit/non-force push authorization; the feature commit, push and its
+automatic outcomes remain pending at this snapshot.
+After exact-commit delivery evidence, close the native evidence-contract gap before
+adding another small product feature. P0 v2's fixed 19-flow inventory cannot
+authenticate the new camera, configurable-group and day-note workflows. A bounded
+successor should version that evidence chain together and preserve rejection of
+incomplete or mixed-generation submissions. It does not collect or approve signed
+device, accessibility, hosted, catalogue or external reviewer evidence.
 
 ### Milestone and external-decision boundaries
 
@@ -342,7 +365,7 @@ Each retains its separate explicit-approval gate.
    keep create, amount correction, and delete replay-safe and timezone-explainable.
    Its 1–20,000 mL per-entry, 64-active-entry, and 100,000 mL daily limits are
    operational abuse and overflow bounds, not intake guidance. Its four private
-   entity families are route-first in the 65-family export/erasure drill. This
+   entity families are route-first in the current export/erasure drill. This
    closes only the online hydration CRUD source slice. Client time editing is
    source/local complete under [ADR 0027](../adr/0027-hydration-time-corrections.md).
    Targets, reminders, non-water fluids, offline/background mutation,
@@ -391,11 +414,12 @@ Each retains its separate explicit-approval gate.
    Private notes attached to food and recipe entries are implemented locally.
    Repeat preserves a note. Clearing hides it from the current display, while
    immutable prior revisions remain in private account exports until whole-
-   account erasure deletes them. Structured logs redact note fields. This is the
-   first entry-note sub-slice, not standalone diary notes.
-   Standalone day/note-only entries remain open and require a separately reviewed
-   immutable-entry model. The real API/worker privacy drill now covers every
-   retained entity family, but that local evidence does not close M1 or M2.
+   account erasure deletes them. Structured logs redact note fields. The
+   entry-note sub-slice remains distinct from standalone day notes.
+   ADR 0076 separately accepts and implements one owner-private note per date,
+   with saved/cleared immutable history and exact retry/conflict behavior. Its
+   reviewed working source and 68-family privacy/recovery evidence await final
+   canonical, browser and delivery validation. This does not close M1 or M2.
 
    Bounded diary pagination is implemented locally across PostgreSQL, the private
    API, web, and mobile. New diary screens request at most 20 entries per page;
@@ -510,7 +534,7 @@ Each retains its separate explicit-approval gate.
    proceed in parallel, but real execution still requires reviewed hosting and
    digest-pinned seven-image
    deployment; HTTPS, access-control, and off-host restore evidence; controlled-
-   beta review of the locally complete 65-family API/worker export-erasure flow;
+   beta review of the complete current API/worker export-erasure inventory;
    a reviewed Windows-host/WSL private-phone boundary; a signed iOS/Android device
    matrix; and independent security, browser/device, accessibility, scientific,
    and legal review. Cloud, DNS, Terraform, Tailscale, firewall, and EAS actions

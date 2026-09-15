@@ -1,40 +1,41 @@
 # Current readiness
 
-Snapshot observed **2026-09-15T07:19:36.320201+00:00** against
-`abdcd8391a03d8a03bc5f3f185e4a1a642425c18` on `codex/retention-features`.
-This is a dated evidence record, not a live monitor or release approval. Revalidate
-the exact checkout and workflow states when continuing; a later documentation
-commit has separate automatic results in the dated Windows handoff.
+Snapshot observed **2026-09-15T22:39:22.693148+00:00** for the uncommitted ADR 0076 working tree on
+`codex/retention-features`, based on `d49815160c823a8258b5b29938d199773b25d413`.
+The exact dirty diff, new-file hashes, commands and independent reviews are retained
+in `WINDOWS-READINESS-2026-09-15-DAY-NOTES.md` in the Windows handoff. No feature
+commit or push has occurred. This dated record is not release approval.
 
 Use the [build plan](../product/build-plan.md) for priorities and the
-[release gates](release-gates.md) for authoritative acceptance. Older observations
-are preserved in the [historical roadmap](../product/build-plan-history-2026-09-15.md)
-and individual ADRs; they are not active implementation work.
+[release gates](release-gates.md) for authoritative acceptance. The
+[historical roadmap](../product/build-plan-history-2026-09-15.md) retains earlier
+delivery evidence unchanged; it does not describe current pending source work.
 
 ## Current proof and limits
 
 | Dimension | Evidence at this snapshot |
 | --- | --- |
-| Source identity | Local, tracking and live remote matched the full SHA above; working tree was clean before this documentation change. |
-| Latest functional local validation | ADR 0075 ran fresh check/build/licenses on its frozen source at 2026-09-15 06:49–06:50 UTC: 1,019 web, 1,519 native plus 10 runner and 157 root checks; production Next and both native exports passed, zero cached tasks. License policy passed 535 packages with 14 reviewed exceptions. 89 optional integration cases were skipped. |
-| Browser evidence | ADR 0075's corrected production Next/BFF synthetic Chrome journey preserved one accepted Repeat across a real minute boundary, then created a distinct deliberate operation; expiry and owned cleanup passed. The first fixture ETag mismatch and its correction remain in the handoff. This is bounded synthetic evidence. |
-| CI | [Run 34940122506](https://github.com/liangzixuan/cronometer-gold/actions/runs/34940122506) completed successfully; provider update 2026-09-15T07:13:17Z. |
-| Container workflow | [Run 34940122492](https://github.com/liangzixuan/cronometer-gold/actions/runs/34940122492) remains in progress. Five jobs were returned: upstream input validation, PostgreSQL, Caddy and Meilisearch succeeded; the Node runtime producer is running. The four dependent application jobs are not yet present in this observation. |
-| This reconciliation | Documentation only. Validate diff/references/anchors, exact history preservation, unchanged application bytes and independent review. Do not represent inherited tests or builds as newly run for these prose changes. |
+| Source | Standalone private day notes and the browser-discovered readiness/focus fixes are source-complete and independently reviewed. Final canonical, dependency and local acceptance gates now pass. Desktop and measured 390px browser proofs remain applicable after the reviewed mobile-only dependency update. Delivery is underway; the feature commit, push and exact-commit automatic results remain pending. |
+| Focused clients and backend | The new post-commit focus fix passed 130 web focused cases, zero skips, affected types/formatting and independent review. Both Keep/Use focus regressions failed on original source before passing fixed; stale queued focus is rejected after date/private/draft/background changes. The unchanged native readiness fix retains its earlier 114-case proof. The earlier 21 backend cases include real note and retention DB cases. These are component/source tests, not physical-device evidence. |
+| Real database/API | Earlier dated runs: full DB suite 362 passed, none skipped; full API suite 358 passed and four opt-in cases skipped. The real 68-family privacy drill passed two artifact-store cases and one route-first API/worker case; restore integrations separately passed two worker cases and one API case. Post-install review verified unchanged server implementation, tests, resolved runtime graphs and 411 non-policy restore inputs. These runs remain source-applicable; final canonical validation did not freshly execute them. Mailpit opt-ins were not rerun. |
+| Migration/recovery | Main applied only migration 0026, then applied zero on replay. Before upgrade, a baseline-25 logical restore passed forward upgrade, twice-current and checksum-rejection/recovery checks. Current-26 logical restores checked all 93 tables and exact note-family contents; authenticated deletion-ledger replay erased one synthetic owner across 68 families, preserved the other owner and passed fresh-epoch readiness. Owned targets and temporary dumps were removed. |
+| Corrected validation failures | A paginated-food ETag equality assertion incorrectly ignored randomized cursors; each response now verifies its own exact body hash, while food/cursor invariants remain. An existing catalogue-expiry test now observes both clocks before its unchanged rejection assertions. Independent review and the affected reruns passed; original failures remain recorded. |
+| Approved dependency prerequisite | After the earlier six approved Expo updates, the user explicitly approved the exact `expo-build-properties@57.0.19` release-age exception/install and one additional production audit. The four-file resolver result exactly matched the reviewed proposal and passed strict frozen/strict-peer install. Independent review found only the expected mobile edge/version replacement across 12 importers, 723 packages and 726 snapshots; 929 other source inputs were unchanged before final prose edits. No broader exception or unrelated graph change was introduced. The historical 20:14 compatibility failure remains recorded. |
+| Final canonical gates | `pnpm check` passed at 22:28:23–22:28:47 UTC: 1,713 fresh passes (157 root, 1,546 mobile Vitest and ten wrapper cases), plus 2,327 cached passes and 93 cached opt-in skips; no fresh cases were skipped. Type/test graphs each reused 16 of 17 tasks, freshly executing mobile. The 1,094 web cases were cached from the prior fresh focus-fix run. `pnpm build` passed at 22:29:11–22:29:27 with 11 successful tasks, ten cached and native fresh. Cached or skipped integration results are not new service runs. |
+| License/audit and isolated build | License policy passed at 22:30:35–22:30:36 UTC for 535 production packages with 14 existing reviewed exceptions. The one newly approved audit ran at 22:30:18–22:30:19 and passed with zero reviewed advisories/exceptions and four lower-severity advisories visible; that authorization is consumed. The earlier audit remains historical. A separate 22:30:43–22:31:02 source-only native build verified 933 inputs/modes and freshly built contracts plus iOS/Android bundles without copied application output or Turbo. Installation reused 651 store packages, downloaded zero and added 654, with a three-minute policy-cache result. This is fresh application-output proof, not a fresh dependency download or physical-device acceptance. |
+| Browser/device | Chrome verified empty/populated create/edit/clear/rewrite and the corrected draft Return/Cancel flow. Later Brave checks on that readiness build passed both conflict choices without implicit writes, explicit keyboard save, revoked-session closure, owner isolation, the 2,001-scalar limit and date navigation. After rebuild, fresh Brave checks verified enabled-textarea focus for Keep, Use saved note and ordinary Cancel, exact raw/saved text, explicit save to revision 9 and no implicit write at revision 10; the populated day stayed at note revision 4 with unchanged pinned food and nutrients. Earlier checks apply to unchanged handlers; focus checks are fresh. A later measured 390×844 viewport (client/scroll width 375) passed saved-note, 2,001-scalar validation and conflict layouts without document overflow, plus keyboard Cancel/Use focus and no implicit write at revision 11. Earlier no-effect viewport attempts remain recorded; the delayed change has no established cause. Reset to desktop was verified and extra owned tabs closed. The owned preview was stopped at 22:25 UTC before dependency installation. Post-install source/graph review carries forward these dated browser observations; no new browser run is claimed. DOM/UI evidence does not establish HTTP status, SQL history, physical-device or screen-reader acceptance. |
+| Last delivered baseline CI | [CI 34942210512](https://github.com/liangzixuan/cronometer-gold/actions/runs/34942210512) passed for d498151. [Container workflow 34942210542](https://github.com/liangzixuan/cronometer-gold/actions/runs/34942210542) passed with all nine actual jobs, observed at 16:07 UTC. Those results do not cover the uncommitted feature. |
 
 The [supply-chain policy](container-supply-chain.md#required-github-configuration)
-requires nine real jobs for the exact default-branch release commit: the Node
-producer, four applications, three service images and upstream input validation.
-Missing or skipped jobs do not pass that gate. Successful workflow status alone
-does not establish the required image digests, provenance, reviewer decisions or
-deployment acceptance. No workflow dispatch, rerun or cancellation occurred.
+still requires all nine actual jobs for the exact release commit, plus the required
+image digests, provenance and reviewer decisions. No workflow controls, cloud/EAS,
+phone exposure or deployment action was taken. Local synthetic recovery does not
+establish hosted or off-host recovery acceptance.
 
-The latest functional proof is recorded outside Git in
-`WINDOWS-READINESS-2026-09-15-WEB-REPEAT-RETRY.md`; the current documentation
-proof is in `WINDOWS-READINESS-2026-09-15-READINESS-RECONCILIATION.md` in the Windows
-handoff. Runtime logs and machine-local paths remain there. This slice runs no
-service/browser or application gate and makes no current Docker-engine, database,
-restore, hosted or physical-device health claim.
+Docker Desktop was recovered by preserving and recreating only stale IPC
+directories. The real guarded loopback dependencies supported these integrations;
+no factory reset, volume deletion or credential change occurred. The existing
+dedicated-Chrome workaround for Codex browser crashes remains in effect.
 
 ## Actionable acceptance gaps
 
@@ -47,7 +48,7 @@ authorizations within their original scope.
 | Automatic delivery evidence | Delivery owner re-reads the exact commit's CI and actual container jobs. | Both applicable workflows complete successfully with required jobs executed; release artifact/digest/provenance requirements remain separate. [Supply chain](container-supply-chain.md#required-github-configuration). |
 | Web printing | Browser QA operator/user performs repeat printing and direct Ctrl+P on a pinned build. | Observe cleanup of authorized hidden snapshots and neutral direct-print guidance. Six Letter/A4 PDFs and preview/Cancel remain dated evidence; the two checks are still unconfirmed. [ADR 0028](../adr/0028-print-current-nutrition-report.md#evidence-update--2026-09-09). |
 | External code review | External Claude Code reviewer reviews the identified commit/diff; implementation owner resolves findings. | Retained report and decision tied to that source. In-task agent reviews and release attestations are different evidence. [Review boundary](../adr/0028-print-current-nutrition-report.md). |
-| Native evidence contracts | Native evidence maintainer and independent reviewer version the capture/package/normalizer/source-bundle/manifest coverage for camera barcode and configurable groups. | Existing P0 v2's 19 flows cannot authenticate these additions; reviewed contracts must cover them before acceptance collection. [P0 limitation](../../infra/runbooks/p0-client-smoke.md), [native gates](release-gates.md). |
+| Native evidence contracts | Native evidence maintainer and independent reviewer version capture/package/normalizer/source-bundle/manifest coverage for camera barcode, configurable groups and standalone day notes. | Existing P0 v2's 19 flows do not authenticate these additions; reviewed contracts must cover them before acceptance collection. This is the next bounded source candidate after ADR 0076 exact-commit delivery evidence. [P0 limitation](../../infra/runbooks/p0-client-smoke.md), [native gates](release-gates.md). |
 | Signed device and accessibility | Release owner confirms identifier history and numbering; device operators and reviewers prepare approved Windows relay/capture prerequisites and the physical iOS/Android matrix. | Exact signed artifacts, protected-storage/OS-kill, notification, cross-client and accessibility evidence with required attestations. Exports do not substitute. [Windows boundary](../../infra/runbooks/physical-device-windows-wsl2-private-https.md), [release matrix](../../infra/runbooks/platform-health-release.md). |
 | Hosted beta and mail/privacy operations | Deployment/security, database/privacy and mail owners review target/budget, seven-image deployment, TLS/access/readiness, off-host restore and production delivery operations. | Hosted restore/erasure replay and access evidence, approved provider/sender and abuse/retry/suppression operations, independent review and rollout decisions. [Release](../../infra/runbooks/platform-health-release.md), [restore](../../infra/runbooks/postgres-backup-and-restore.md), [mail/privacy gates](release-gates.md). |
 | Live catalogue and database authority | Acquisition/storage operators, data-quality/rights reviewers and database authority owner provide authenticated dual acquisition, immutable retention, manifest-v4 review bundle, mapping/scale evidence and caller cutover. | Approved numeric catalogue/search/resource thresholds, three distinct role approvals and separate activation decision. The 363-food pilot and synthetic fixtures are insufficient. [Source runbook](../../infra/runbooks/food-source-release.md), [catalogue boundary](../product/build-plan.md#parallel-release-acceptance-target--live-catalogue-evidence). |
@@ -68,18 +69,20 @@ Hydration client time editing is source/local complete under
 still open. The source already implements nonce-based web CSP. Neither should
 be reintroduced as missing source work from an older summary.
 
-## Next product milestone
+## Active milestone and successor
 
-**Standalone private day notes** is the next bounded M1 candidate. Current
-[web](../../apps/web/src/app/dashboard/DiaryClient.tsx) and
-[native](../../apps/mobile/src/diary/DiaryScreen.tsx) editors require an existing
-food/recipe entry to save a note; an empty day has no standalone note. The
-[build-plan candidate](../product/build-plan.md#next-bounded-candidate-standalone-private-day-notes)
-sets model review, immutable history, exact retry/conflict, privacy and real local
-validation prerequisites before implementation. Implementation owner: Codex in the
-current task; independent model/code reviewer required. No successor source or
-model change is included in this reconciliation.
-
-Native Repeat already retries its saved durable envelope, so another clock-change
-fix there is not justified by the inspected source. Do not add speculative
-hardening or reopen finished source slices merely to fill the queue.
+Deliver [standalone private day notes](../adr/0076-standalone-private-day-notes.md)
+before opening another implementation slice. Source and local validation are
+complete: the exact .19 dependency approval was applied, canonical check/build,
+the newly authorized audit, license policy and clean-source native export pass.
+The independent applicability review retains earlier integration and desktop/390px
+browser evidence on unchanged inputs. Commit/push and exact-commit automatic
+outcomes remain pending at this snapshot; delivery is underway under standing
+ordinary commit/non-force push authorization. New source changes require the
+affected checks. Hosted, signed-device, Claude Code and release acceptance
+remain separate.
+The next bounded candidate is the native acceptance evidence-contract update
+described above. Begin with independent model review of versioning, required
+flows and complete capture-to-manifest bindings. Preserve all current evidence
+checks and historical v2 semantics. No device, cloud, signing, hosted or external
+reviewer acceptance is implied by preparing that source contract.

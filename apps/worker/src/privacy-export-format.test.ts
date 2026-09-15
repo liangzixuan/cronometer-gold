@@ -21,6 +21,7 @@ import {
 } from "./privacy-export-format.js";
 
 const roots: string[] = [];
+const DAY_NOTE_RAW = " \r\nCafe\u0301 \ud83e\udd57\n";
 
 afterEach(async () => {
   await Promise.all(
@@ -160,9 +161,11 @@ async function buildFixture(root: string) {
       reason: "not_analyzed",
       state: "unknown",
     }),
+    row("diary_day_note_revision", 5, { note: DAY_NOTE_RAW, operation: "save" }),
+    row("diary_day_note_revision", 6, { note: null, operation: "clear" }, { deleted: true }),
     row(
       "diary_entry_revision",
-      5,
+      7,
       {
         foodProvenance: {
           customFoodId: "10000000-0000-4000-8000-000000000001",
@@ -174,11 +177,13 @@ async function buildFixture(root: string) {
       },
       { deleted: true },
     ),
-  ].sort(
-    (left, right) =>
-      PRIVACY_EXPORT_ENTITIES.indexOf(left.entityType) -
-      PRIVACY_EXPORT_ENTITIES.indexOf(right.entityType),
-  );
+  ]
+    .sort(
+      (left, right) =>
+        PRIVACY_EXPORT_ENTITIES.indexOf(left.entityType) -
+        PRIVACY_EXPORT_ENTITIES.indexOf(right.entityType),
+    )
+    .map((item, index) => ({ ...item, ordinal: String(index + 1) }));
   const spool = await spoolPrivacyExportSnapshot({
     maximumBytes: MAX_PRIVACY_EXPORT_ROW_BYTES,
     snapshot: {
@@ -198,6 +203,28 @@ async function buildFixture(root: string) {
 }
 
 describe("privacy export formatting", () => {
+  it("refuses a legacy snapshot that omits standalone day-note history", async () => {
+    const root = join(tmpdir(), `privacy-export-legacy-notes-${randomBytes(8).toString("hex")}`);
+    roots.push(root);
+    await import("node:fs/promises").then(({ mkdir }) => mkdir(root, { mode: 0o700 }));
+    // This is the old producer's otherwise-valid empty account inventory. It cannot
+    // establish that the new note families are empty; only a fresh DB snapshot can.
+    const legacyEvidence = evidence([]).filter((item) => !item.entity.startsWith("diary_day_note"));
+    await expect(
+      spoolPrivacyExportSnapshot({
+        maximumBytes: MAX_PRIVACY_EXPORT_ROW_BYTES,
+        snapshot: {
+          capturedAt: "2026-09-15T12:00:00.000Z",
+          entities: legacyEvidence,
+          records: records([]),
+          semanticEvidence: semanticEvidence(),
+          snapshotWatermark: "legacy-note-inventory",
+        },
+        temporaryDirectory: root,
+      }),
+    ).rejects.toThrow("Export source evidence is incomplete");
+  });
+
   it("neutralizes spreadsheet formulas and applies exact RFC 4180 quoting", () => {
     expect(csvCell("=SUM(A1:A2)")).toBe("'=SUM(A1:A2)");
     expect(csvCell("+1")).toBe("'+1");
@@ -224,6 +251,14 @@ describe("privacy export formatting", () => {
     const jsonBytes = await readFile(firstJson.path);
     const parsed = JSON.parse(jsonBytes.toString("utf8")) as Record<string, unknown>;
     expect(jsonBytes.toString("utf8")).toBe(`${canonicalJson(parsed)}\n`);
+    expect(parsed.manifest).toMatchObject({ formatVersion: "nutrition-account-export-v2" });
+    expect(
+      (parsed.entities as Record<string, readonly { payload: unknown; deleted: boolean }[]>)
+        .diary_day_note_revision,
+    ).toMatchObject([
+      { payload: { note: DAY_NOTE_RAW, operation: "save" }, deleted: false },
+      { payload: { note: null, operation: "clear" }, deleted: true },
+    ]);
     const exportedDiaryRevisions = (
       parsed.entities as {
         diary_entry_revision: readonly {
@@ -254,6 +289,14 @@ describe("privacy export formatting", () => {
       semanticEvidence: { digest: string };
     };
     expect(logicalManifest.semanticEvidence.digest).toBe(semanticEvidence().digest);
+    expect(logicalManifest).toMatchObject({ formatVersion: "nutrition-account-export-v2" });
+    const dayNoteCsv = requiredZipEntry(
+      entries,
+      "entities/diary_day_note_revision/part-000001.csv",
+    ).toString("utf8");
+    expect(dayNoteCsv).toContain(csvCell(canonicalJson({ note: DAY_NOTE_RAW, operation: "save" })));
+    expect(dayNoteCsv).toContain(csvCell(canonicalJson({ note: null, operation: "clear" })));
+    expect(dayNoteCsv).toContain(",true,");
     const deliveredManifest = JSON.parse(
       requiredZipEntry(entries, "files.json").toString("utf8"),
     ) as {

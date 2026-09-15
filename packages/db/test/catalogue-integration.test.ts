@@ -527,6 +527,20 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
       await new Promise((resolve) =>
         setTimeout(resolve, Math.max(0, evidenceValidUntil.getTime() - Date.now() + 100)),
       );
+      // A completed timer does not establish expiry if the wall clock has moved.
+      const expiryWaitDeadline = performance.now() + 5_000;
+      while (true) {
+        const observed = await sql<{ expired: boolean }>`
+          select clock_timestamp() > ${evidenceValidUntil}::timestamptz as expired
+        `.execute(database);
+        if (Date.now() > evidenceValidUntil.getTime() && observed.rows[0]?.expired) break;
+        if (performance.now() >= expiryWaitDeadline) {
+          throw new Error(
+            "Expiry fixture did not reach its deadline on both application and DB clocks",
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
       await expect(
         approveBatch(database, {
           approvalReference: "review://expired",

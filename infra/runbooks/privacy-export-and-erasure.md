@@ -13,7 +13,7 @@ named bounded polls: seed export, one-artifact expiry, measured export, and
 erasure. Its static contract rejects an additional hidden poll.
 
 The fixture populates and independently enumerates the compile-pinned set of all
-65 retained export entity families. Every family must have a nonzero source
+68 retained export entity families. Every family must have a nonzero source
 count and exact IDs/counts must reconcile across the source snapshot, JSON, and
 decompressed CSV. Forbidden field-name assertions and independent sentinels
 verify redaction in every exported audit row; artifact lifecycle rows must omit
@@ -40,10 +40,40 @@ and its owner session must survive. Activity duration and optional self-reported
 energy remain historical observations only and never alter a nutrition goal,
 energy balance, or profile activity-level/PAL setting.
 
+Standalone day notes are route-first on empty and populated diary days. Set,
+edit, clear and rewrite preserve one owner/date identity and immutable revisions.
+The root, revision and operation families must reconcile exact IDs/counts in
+JSON and decompressed CSV. Decode CSV payloads independently and preserve exact
+whitespace, line endings, Unicode and null-clear history. Erasure removes all
+three families; a cross-owner note and its authenticated session survive. Note
+writes must leave food rows, totals, day revisions and existing cursors unchanged.
+
 This is local synthetic evidence, not permission to inspect a person's artifact,
 expose a listener, use production data, or operate a cloud deployment. It does
 not replace notification-delivery, hosted access-control, off-host restore,
 signed-device, independent-reviewer, or controlled-beta evidence.
+
+## Day-note export version transition
+
+[ADR 0076](../../docs/adr/0076-standalone-private-day-notes.md) adds three retained
+families. Fresh logical manifests use `nutrition-account-export-v2` with the exact
+68-family inventory, including explicit zero counts. Delivery and nutrition
+semantic evidence keep their existing versions; notes change no nutrition math.
+
+Keep already completed v1 artifacts, digests, reconciliation and download/expiry
+behavior unchanged. A historical v1 inventory may predate 65 families. Never add
+empty note rows to an old artifact or label an old snapshot as v2. Pending or
+retryable jobs take a new coherent 68-family snapshot with a new snapshot ID;
+prior uploads must be cancelled and deleted before publication can complete.
+
+Upgrade or stop old export workers before enabling note writes in a deployment.
+Migration 0026 additionally rejects any new completion without the v2 marker and
+exact duplicate-free 68-family inventory. An old in-flight completion rolls back
+its artifact insertion, upload promotion and spool deletion together. The fence
+keeps the existing artifact/format/expiry checks and permits maintenance of an
+already completed historical job. Do not bypass this fence to recover a job;
+use the reviewed retry and prior-upload cleanup path. Deployment remains a
+separately approved action.
 
 ## Export release checklist
 
@@ -85,7 +115,7 @@ ciphertext does not satisfy expiry or erasure.
    revokes sessions, device keys, integration consent, reminder schedules,
    download access, and queued delivery/import work.
 3. Delete user-owned data in the repository's reviewed dependency order. This
-   includes diary, hydration, and manual activity history, biometrics, custom foods,
+   includes diary and standalone day-note history, hydration, manual activity, biometrics, custom foods,
    recipes, goals,
    imports, devices, reminders, exports/artifacts, sessions, credentials,
    profile, and account identifiers. Do not bypass immutable guards from an

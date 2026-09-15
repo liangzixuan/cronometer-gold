@@ -18,6 +18,8 @@ import {
   type CurrentAccountResponse,
   type CustomFoodMutationResponse,
   canonicalJson,
+  type DayNoteMutationResponse,
+  type DayNoteResponse,
   type DeviceChallengeResponse,
   type DiaryDayResponse,
   type DiaryMutationResponse,
@@ -83,6 +85,9 @@ const EXPECTED_PRIVACY_EXPORT_ENTITY_SET: Readonly<Record<PrivacyExportEntity, t
   custom_food_version: true,
   device: true,
   diary_day: true,
+  diary_day_note: true,
+  diary_day_note_operation: true,
+  diary_day_note_revision: true,
   diary_entry: true,
   diary_entry_legacy_nutrient: true,
   diary_entry_nutrient: true,
@@ -131,6 +136,7 @@ const EXPECTED_PRIVACY_EXPORT_ENTITIES = Object.keys(
 ) as PrivacyExportEntity[];
 
 type ExportEntityRow = {
+  readonly deleted: boolean;
   readonly entityId: string;
   readonly payload: Readonly<Record<string, unknown>>;
   readonly revision: string | null;
@@ -279,18 +285,65 @@ function occurrenceCount(value: string, needle: string): number {
   return value.split(needle).length - 1;
 }
 
+function csvEntityRows(bytes: Buffer): string[][] {
+  const text = bytes.toString("utf8");
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let quoted = false;
+  let quoteClosed = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (quoted) {
+      if (character === '"') {
+        if (text[index + 1] === '"') {
+          field += '"';
+          index += 1;
+        } else {
+          quoted = false;
+          quoteClosed = true;
+        }
+      } else field += character;
+    } else if (character === "," || character === "\r") {
+      row.push(field);
+      field = "";
+      quoteClosed = false;
+      if (character === "\r") {
+        expect(text[index + 1]).toBe("\n");
+        index += 1;
+        rows.push(row);
+        row = [];
+      }
+    } else if (character === '"' && field === "" && !quoteClosed) {
+      quoted = true;
+    } else {
+      expect(quoteClosed).toBe(false);
+      expect(character).not.toBe('"');
+      expect(character).not.toBe("\n");
+      field += character;
+    }
+  }
+  expect(quoted).toBe(false);
+  expect(field).toBe("");
+  expect(row).toEqual([]);
+  expect(rows.shift()).toEqual([
+    "ordinal",
+    "entity_id",
+    "revision",
+    "deleted",
+    "watermark",
+    "payload_sha256",
+    "payload_json",
+  ]);
+  for (const fields of rows) expect(fields).toHaveLength(7);
+  return rows;
+}
+
 function csvEntityIds(bytes: Buffer): string[] {
-  const lines = bytes.toString("utf8").split("\r\n");
-  expect(lines.shift()).toBe(
-    "ordinal,entity_id,revision,deleted,watermark,payload_sha256,payload_json",
-  );
-  expect(lines.pop()).toBe("");
-  return lines.map((line) => {
-    const ordinalBoundary = line.indexOf(",");
-    const entityBoundary = line.indexOf(",", ordinalBoundary + 1);
-    expect(ordinalBoundary).toBeGreaterThan(0);
-    expect(entityBoundary).toBeGreaterThan(ordinalBoundary + 1);
-    return line.slice(ordinalBoundary + 1, entityBoundary);
+  return csvEntityRows(bytes).map((row) => {
+    const id = row[1];
+    if (!id) throw new Error("Expected a CSV entity identity");
+    return id;
   });
 }
 
@@ -1478,6 +1531,124 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
       expect(profileTimeZoneResponse.headers.etag).toBe('"1"');
       await expectDiaryPageStale(beforeTimeZoneCursor);
 
+      const emptyNoteDate = "2026-01-03";
+      const noteRawText = " \r\nCafe\u0301 \ud83e\udd57\n";
+      const noteEditedText = "Revised private day context";
+      const noteFinalText = "Current private day context";
+      const emptyNoteBefore = await app.inject({
+        method: "GET",
+        url: `/v1/diary/day-notes/${emptyNoteDate}`,
+        headers: { authorization, "x-expected-owner-user-id": userId },
+      });
+      expect(emptyNoteBefore.statusCode, emptyNoteBefore.body).toBe(200);
+      expect(emptyNoteBefore.headers.etag).toBe('"0"');
+      expect(emptyNoteBefore.json<DayNoteResponse>().data).toMatchObject({
+        id: null,
+        localDate: emptyNoteDate,
+        note: null,
+        revision: "0",
+      });
+      const foodBeforeNotes = await app.inject({
+        method: "GET",
+        url: `/v1/diary?date=${diaryLocalDate}&limit=20`,
+        headers: { authorization },
+      });
+      expect(foodBeforeNotes.statusCode, foodBeforeNotes.body).toBe(200);
+      const foodRowsBeforeNotes = await database
+        .selectFrom("diary")
+        .select("id")
+        .where("user_id", "=", userId)
+        .execute();
+      const putDayNote = async (date: string, revision: string, note: string | null) => {
+        const response = await app.inject({
+          method: "PUT",
+          url: `/v1/diary/day-notes/${date}`,
+          headers: {
+            authorization,
+            "x-expected-owner-user-id": userId,
+            "x-expected-profile-time-zone": "Asia/Tokyo",
+            "idempotency-key": randomUUID(),
+            "if-match": `"${revision}"`,
+          },
+          payload: { note },
+        });
+        expect(response.statusCode, response.body).toBe(200);
+        expect(response.headers["cache-control"]).toBe("no-store");
+        const result = response.json<DayNoteMutationResponse>().data.note;
+        expect(result).toMatchObject({
+          localDate: date,
+          ownerUserId: userId,
+          note,
+          recordedTimeZone: "Asia/Tokyo",
+          revision: (BigInt(revision) + 1n).toString(),
+        });
+        expect(response.headers.etag).toBe(`"${result.revision}"`);
+        return result;
+      };
+      const firstDayNote = await putDayNote(emptyNoteDate, "0", noteRawText);
+      const revisedDayNote = await putDayNote(emptyNoteDate, "1", noteEditedText);
+      const clearedDayNote = await putDayNote(emptyNoteDate, "2", null);
+      const clearRead = await app.inject({
+        method: "GET",
+        url: `/v1/diary/day-notes/${emptyNoteDate}`,
+        headers: { authorization, "x-expected-owner-user-id": userId },
+      });
+      expect(clearRead.statusCode, clearRead.body).toBe(200);
+      expect(clearRead.json<DayNoteResponse>().data).toEqual(clearedDayNote);
+      const rewrittenDayNote = await putDayNote(emptyNoteDate, "3", noteFinalText);
+      expect([revisedDayNote.id, clearedDayNote.id, rewrittenDayNote.id]).toEqual([
+        firstDayNote.id,
+        firstDayNote.id,
+        firstDayNote.id,
+      ]);
+      const populatedDayNote = await putDayNote(diaryLocalDate, "0", "Context beside food entries");
+      expect(populatedDayNote.id).not.toBe(firstDayNote.id);
+      const foodAfterNotes = await app.inject({
+        method: "GET",
+        url: `/v1/diary?date=${diaryLocalDate}&limit=20`,
+        headers: { authorization },
+      });
+      expect(foodAfterNotes.statusCode, foodAfterNotes.body).toBe(200);
+      const foodBeforeNotePage = foodBeforeNotes.json<DiaryDayResponse>();
+      const foodAfterNotePage = foodAfterNotes.json<DiaryDayResponse>();
+      expect(foodAfterNotePage.data).toEqual(foodBeforeNotePage.data);
+      expect(foodAfterNotePage.page?.totalEntries).toBe(foodBeforeNotePage.page?.totalEntries);
+      for (const response of [foodBeforeNotes, foodAfterNotes]) {
+        const digest = createHash("sha256")
+          .update(canonicalJson(response.json<DiaryDayResponse>()), "utf8")
+          .digest("base64url");
+        expect(response.headers.etag).toBe(`"p-${digest}"`);
+      }
+      const beforeNoteCursor = foodBeforeNotePage.page?.nextCursor;
+      if (!beforeNoteCursor) throw new Error("Expected a pre-note diary continuation");
+      const foodContinuationAfterNote = await app.inject({
+        method: "GET",
+        url: `/v1/diary?date=${diaryLocalDate}&limit=20&cursor=${encodeURIComponent(beforeNoteCursor)}`,
+        headers: { authorization },
+      });
+      expect(foodContinuationAfterNote.statusCode, foodContinuationAfterNote.body).toBe(200);
+      expect(foodContinuationAfterNote.json<DiaryDayResponse>().data.revision).toBe(
+        foodBeforeNotePage.data.revision,
+      );
+      expect(
+        await database.selectFrom("diary").select("id").where("user_id", "=", userId).execute(),
+      ).toEqual(foodRowsBeforeNotes);
+      const crossOwnerDayNoteResponse = await app.inject({
+        method: "PUT",
+        url: `/v1/diary/day-notes/${emptyNoteDate}`,
+        headers: {
+          authorization: crossOwnerAuthorization,
+          "x-expected-owner-user-id": crossOwnerUserId,
+          "x-expected-profile-time-zone": "America/Chicago",
+          "idempotency-key": randomUUID(),
+          "if-match": '"0"',
+        },
+        payload: { note: "Another owner's private day context" },
+      });
+      expect(crossOwnerDayNoteResponse.statusCode, crossOwnerDayNoteResponse.body).toBe(200);
+      const crossOwnerDayNote = crossOwnerDayNoteResponse.json<DayNoteMutationResponse>().data.note;
+      if (!crossOwnerDayNote.id) throw new Error("Expected a saved cross-owner day note");
+
       const hydrationLocalDate = "2026-01-02";
       const emptyHydrationResponse = await app.inject({
         method: "GET",
@@ -2394,6 +2565,9 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         ["activity_entry_revision", 4],
         ["activity_operation", 4],
         ["diary_day", 1],
+        ["diary_day_note", 2],
+        ["diary_day_note_revision", 5],
+        ["diary_day_note_operation", 5],
         ["diary_entry", 46],
         ["diary_entry_legacy_nutrient", 1],
         ["diary_entry_nutrient", 98],
@@ -2547,7 +2721,7 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
             { note: null, operation: "update", revision: "3" },
           ]);
           expect(parsed.manifest).toMatchObject({
-            formatVersion: "nutrition-account-export-v1",
+            formatVersion: "nutrition-account-export-v2",
             reconciled: true,
             semanticEvidence: {
               diaryDailyNutrientGroupCount: "2",
@@ -2713,6 +2887,23 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         user_watermark: [userId],
       };
       const directBoundaryQueries = {
+        diary_day_note: await database
+          .selectFrom("diary_day_note")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        diary_day_note_revision: await database
+          .selectFrom("diary_day_note_revision")
+          .select("id")
+          .where("user_id", "=", userId)
+          .execute(),
+        diary_day_note_operation: (
+          await database
+            .selectFrom("diary_day_note_operation")
+            .select("client_operation_id")
+            .where("user_id", "=", userId)
+            .execute()
+        ).map((row) => ({ id: row.client_operation_id })),
         activity_day: await database
           .selectFrom("activity_day")
           .select("id")
@@ -3085,6 +3276,7 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
           expect(rawJson).not.toContain(crossOwnerUserId);
           expect(rawJson).not.toContain(crossOwnerActivityEntry.id);
           expect(rawJson).not.toContain(crossOwnerHydrationEntry.id);
+          expect(rawJson).not.toContain(crossOwnerDayNote.id);
           expect(sha256(canonicalJson(measuredJson.manifest))).toBe(measuredExport.manifestSha256);
         } else {
           measuredZipEntries = storedZipEntries(download.rawPayload);
@@ -3103,6 +3295,45 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
       expect(measuredCsvText).not.toContain(crossOwnerUserId);
       expect(measuredCsvText).not.toContain(crossOwnerActivityEntry.id);
       expect(measuredCsvText).not.toContain(crossOwnerHydrationEntry.id);
+      expect(measuredCsvText).not.toContain(crossOwnerDayNote.id);
+      const noteRevisionPayloads = measuredJson.entities.diary_day_note_revision
+        .filter((row) => row.payload.day_note_id === firstDayNote.id)
+        .sort((left, right) => Number(left.revision) - Number(right.revision));
+      expect(noteRevisionPayloads.map((row) => row.payload.note)).toEqual([
+        noteRawText,
+        noteEditedText,
+        null,
+        noteFinalText,
+      ]);
+      expect(noteRevisionPayloads.map((row) => row.deleted)).toEqual([false, false, true, false]);
+      const noteCsvRows = csvEntityRows(
+        requiredZipEntry(measuredZipEntries, "entities/diary_day_note_revision/part-000001.csv"),
+      );
+      const csvNoteHistory = noteCsvRows
+        .map((row) => {
+          const payloadText = row[6];
+          if (!payloadText) throw new Error("Expected the exported note revision payload");
+          const payload = JSON.parse(payloadText) as Readonly<Record<string, unknown>>;
+          expect(sha256(payloadText)).toBe(row[5]);
+          expect(["true", "false"]).toContain(row[3]);
+          return { entityId: row[1], revision: row[2], deleted: row[3] === "true", payload };
+        })
+        .filter((row) => row.payload.day_note_id === firstDayNote.id)
+        .sort((left, right) => Number(left.revision) - Number(right.revision));
+      expect(csvNoteHistory).toEqual(
+        noteRevisionPayloads.map((row) => ({
+          entityId: row.entityId,
+          revision: row.revision,
+          deleted: row.deleted,
+          payload: row.payload,
+        })),
+      );
+      expect(csvNoteHistory.map((row) => row.payload.note)).toEqual([
+        noteRawText,
+        noteEditedText,
+        null,
+        noteFinalText,
+      ]);
       expect(Object.keys(measuredJson.entities).sort()).toEqual(
         [...EXPECTED_PRIVACY_EXPORT_ENTITIES].sort(),
       );
@@ -3265,6 +3496,23 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
           .where("id", "=", crossOwnerUserId)
           .execute(),
       ).toEqual([{ id: crossOwnerUserId }]);
+      const crossOwnerNoteAfterErasure = await app.inject({
+        method: "GET",
+        url: `/v1/diary/day-notes/${emptyNoteDate}`,
+        headers: {
+          authorization: crossOwnerAuthorization,
+          "x-expected-owner-user-id": crossOwnerUserId,
+        },
+      });
+      expect(crossOwnerNoteAfterErasure.statusCode, crossOwnerNoteAfterErasure.body).toBe(200);
+      expect(crossOwnerNoteAfterErasure.json<DayNoteResponse>().data).toEqual(crossOwnerDayNote);
+      expect(
+        await database
+          .selectFrom("diary_day_note")
+          .select("id")
+          .where("user_id", "=", crossOwnerUserId)
+          .execute(),
+      ).toEqual([{ id: crossOwnerDayNote.id }]);
       const crossOwnerHydrationAfterErasure = await app.inject({
         method: "GET",
         url: `/v1/hydration?date=${hydrationLocalDate}`,
@@ -3373,6 +3621,9 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
         biometric_event: "0",
         biometric_event_revision: "0",
         diary_day: "0",
+        diary_day_note: "0",
+        diary_day_note_revision: "0",
+        diary_day_note_operation: "0",
         diary_entry: "0",
         diary_entry_legacy_nutrient: "0",
         diary_entry_nutrient: "0",

@@ -67,6 +67,7 @@ import {
 } from "../../lib/diary-group-draft";
 import { type HydrationDay, parseHydrationDay } from "../../lib/hydration";
 import { confirmBrowserLogout } from "../../lib/private-api";
+import { DiaryDayNote } from "./DiaryDayNote";
 import { TodayOverviewCards } from "./TodayOverviewCards";
 
 type LoadState = "loading" | "ready" | "error";
@@ -1828,6 +1829,31 @@ export function DiaryClient() {
             hydration={hydrationOverviewForCurrentIdentity}
             onRetryActivity={() => void loadOverviewCard("activity", date)}
             onRetryHydration={() => void loadOverviewCard("hydration", date)}
+          />
+        ) : null}
+
+        {session && hasCommittedDate ? (
+          <DiaryDayNote
+            key={`${session.user.id}:${mealPrivateGeneration}`}
+            session={session}
+            localDate={date}
+            privateGeneration={mealPrivateGeneration}
+            isPrivateCurrent={() =>
+              !privateUiClosed.current &&
+              privateUiGeneration.current === mealPrivateGeneration &&
+              sessionRef.current?.user.id === session.user.id
+            }
+            isViewCurrent={() =>
+              !privateUiClosed.current &&
+              privateUiGeneration.current === mealPrivateGeneration &&
+              viewEpoch.current === mealViewEpoch &&
+              sessionRef.current === session &&
+              dateRef.current === date &&
+              explicitDateRef.current === explicitDate &&
+              (explicitDate === null || explicitDate === date)
+            }
+            onUnauthorized={signInAgain}
+            onReturn={chooseDate}
           />
         ) : null}
 

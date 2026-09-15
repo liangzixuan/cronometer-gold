@@ -10,6 +10,8 @@ import {
 import {
   assertDatabaseReady,
   createDatabase,
+  getDayNote,
+  putDayNote,
   reconcileErasedAccountRows,
   runMigrations,
 } from "@nutrition-tracker/db";
@@ -62,6 +64,48 @@ describe.skipIf(!enabled)("live MinIO to restored PostgreSQL erasure replay", ()
           id: subjectUserId,
         })
         .execute();
+      await database
+        .insertInto("user_profile")
+        .values({
+          user_id: subjectUserId,
+          time_zone: "America/Chicago",
+        })
+        .execute();
+      const restoredNote = await putDayNote(database, {
+        userId: subjectUserId,
+        localDate: "2026-08-16",
+        expectedRevision: "0",
+        expectedProfileTimeZone: "America/Chicago",
+        clientOperationId: randomUUID(),
+        requestDigest: "a".repeat(64),
+        note: "Restored private day context",
+      });
+      await putDayNote(database, {
+        userId: subjectUserId,
+        localDate: "2026-08-16",
+        expectedRevision: "1",
+        expectedProfileTimeZone: "America/Chicago",
+        clientOperationId: randomUUID(),
+        requestDigest: "b".repeat(64),
+        note: null,
+      });
+      expect(
+        await getDayNote(database, { userId: subjectUserId, localDate: "2026-08-16" }),
+      ).toMatchObject({ id: restoredNote.data.note.id, revision: "2", note: null });
+      expect(
+        await database
+          .selectFrom("diary_day_note_revision")
+          .select("id")
+          .where("user_id", "=", subjectUserId)
+          .execute(),
+      ).toHaveLength(2);
+      expect(
+        await database
+          .selectFrom("diary_day_note_operation")
+          .select("client_operation_id")
+          .where("user_id", "=", subjectUserId)
+          .execute(),
+      ).toHaveLength(2);
       const bucket = process.env.ERASURE_REPLAY_LEDGER_BUCKET ?? "nutrition-erasure-ledger";
       const endpoint = process.env.ERASURE_REPLAY_LEDGER_ENDPOINT ?? "http://127.0.0.1:9000";
       const region = process.env.ERASURE_REPLAY_LEDGER_REGION ?? "us-east-1";
@@ -134,6 +178,19 @@ describe.skipIf(!enabled)("live MinIO to restored PostgreSQL erasure replay", ()
           .where("id", "=", subjectUserId)
           .execute(),
       ).toEqual([]);
+      for (const table of [
+        "diary_day_note",
+        "diary_day_note_revision",
+        "diary_day_note_operation",
+      ] as const) {
+        expect(
+          await database
+            .selectFrom(table)
+            .select("user_id")
+            .where("user_id", "=", subjectUserId)
+            .execute(),
+        ).toEqual([]);
+      }
       await expect(
         assertWorkerDatabaseReady(database, {
           DATABASE_RESTORE_EPOCH: restoreEpoch,

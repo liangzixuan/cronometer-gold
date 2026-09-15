@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 
 import { type ActivityRoutesOptions, activityRoutes } from "./activity/activity.routes.js";
 import { type AuthRoutesOptions, authRoutes } from "./auth/auth.routes.js";
+import { type DayNoteRoutesOptions, dayNoteRoutes } from "./diary/day-note.routes.js";
 import { type DiaryRoutesOptions, diaryRoutes } from "./diary/diary.routes.js";
 import { type FoodRoutesOptions, foodRoutes } from "./foods/food.routes.js";
 import {
@@ -24,6 +25,7 @@ export interface V1RoutesOptions
     AuthRoutesOptions,
     ProfileRoutesOptions,
     DiaryRoutesOptions,
+    DayNoteRoutesOptions,
     HydrationRoutesOptions,
     RecipeRoutesOptions,
     GoalRoutesOptions,
@@ -78,6 +80,11 @@ export const v1Routes: FastifyPluginAsync<V1RoutesOptions> = async (app, options
     prefix: "/profile",
     ...(options.authService ? { authService: options.authService } : {}),
     ...(options.profileService ? { profileService: options.profileService } : {}),
+  });
+  void app.register(dayNoteRoutes, {
+    prefix: "/diary/day-notes",
+    ...(options.authService ? { authService: options.authService } : {}),
+    ...(options.dayNoteService ? { dayNoteService: options.dayNoteService } : {}),
   });
   void app.register(diaryRoutes, {
     prefix: "/diary",

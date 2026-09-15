@@ -48,6 +48,7 @@ import {
   markPrivacyExportStagedArtifactUploaded,
   type PrivacyExportEntitySnapshotRecord,
   type PrivacyExportRecord,
+  putDayNote,
   RecipeValidationError,
   rebindPlatformIntegration,
   recordBiometricEvent,
@@ -938,6 +939,24 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         ),
       ).rejects.toMatchObject({ code: "EXPORT_NOT_READY" });
       await sql`drop table unclassified_retention_probe`.execute(fixture.database);
+      // Simulate a persisted pre-0026 worker inventory: these three families
+      // were absent, not empty rows in the old 65-family snapshot.
+      await fixture.database
+        .deleteFrom("privacy_export_entity_snapshot")
+        .where("job_id", "=", exportJob.job.id)
+        .where("entity_type", "in", [
+          "diary_day_note",
+          "diary_day_note_revision",
+          "diary_day_note_operation",
+        ])
+        .execute();
+      expect(
+        await fixture.database
+          .selectFrom("privacy_export_entity_snapshot")
+          .select((builder) => builder.fn.countAll<string>().as("count"))
+          .where("job_id", "=", exportJob.job.id)
+          .executeTakeFirstOrThrow(),
+      ).toEqual({ count: "65" });
       const [abandoned] = await stagePrivacyExportArtifacts(fixture.database, {
         artifacts: [{ format: "json", objectKey: "exports/owner/stale-attempt.json.enc" }],
         jobId: exportJob.job.id,
@@ -963,6 +982,15 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         userId: fixture.owner.userId,
         workerId: "import-export-worker",
       });
+      const newDayNote = await putDayNote(fixture.database, {
+        userId: fixture.owner.userId,
+        localDate: "2026-09-15",
+        expectedRevision: "0",
+        expectedProfileTimeZone: "America/Chicago",
+        clientOperationId: randomUUID(),
+        requestDigest: digest("4"),
+        note: "New day context after the old export snapshot",
+      });
       const [reclaimed] = await claimPrivacyExportJobs(fixture.database, {
         now: retentionInstant("08-16T14:16:00Z"),
         workerId: "retry-export-worker",
@@ -983,6 +1011,21 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
           retryEntities = snapshot.entities;
           retrySemanticDigest = snapshot.semanticEvidence.digest;
           retrySnapshotId = snapshot.snapshotId;
+          expect(snapshot.snapshotId).not.toBe(securitySnapshotId);
+          expect(snapshot.entities).toHaveLength(68);
+          for (const entity of [
+            "diary_day_note",
+            "diary_day_note_revision",
+            "diary_day_note_operation",
+          ] as const) {
+            expect(snapshot.entities.find((row) => row.entity === entity)?.sourceCount).toBe("1");
+          }
+          const notes = await snapshot.page({ entity: "diary_day_note_revision", limit: 100 });
+          expect(notes.records).toHaveLength(1);
+          expect(notes.records[0]?.payload).toMatchObject({
+            day_note_id: newDayNote.data.note.id,
+            note: "New day context after the old export snapshot",
+          });
         },
       );
       const [retryArtifact] = await stagePrivacyExportArtifacts(fixture.database, {
@@ -1036,6 +1079,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         jobId: exportJob.job.id,
         manifestDigest: digest("e"),
         reconciliation: {
+          formatVersion: "nutrition-account-export-v2",
           entities: retryEntities.map((snapshot) => ({
             entity: snapshot.entity,
             exportedCount: snapshot.sourceCount,
@@ -1301,6 +1345,33 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         workerId: "artifact-fixture-worker",
       });
       expect(artifactJobClaim?.id).toBe(exportMutation.job.id);
+      // This artifact-cleanup fixture still needs a current reconciled inventory.
+      // Capture it through the normal snapshot boundary before seeding dead letters.
+      const { withPrivacyExportSnapshot } = await import("../src/index.js");
+      const artifactFixtureReconciliation = await withPrivacyExportSnapshot(
+        fixture.database,
+        {
+          jobId: exportMutation.job.id,
+          userId: fixture.owner.userId,
+          workerId: "artifact-fixture-worker",
+          maximumSnapshotBytes: TEST_EXPORT_SNAPSHOT_BYTES,
+        },
+        async (snapshot) => ({
+          formatVersion: "nutrition-account-export-v2",
+          entities: snapshot.entities.map((entity) => ({
+            entity: entity.entity,
+            sourceCount: entity.sourceCount,
+            exportedCount: entity.sourceCount,
+            sourceRecordSetSha256: entity.sourceRecordSetSha256,
+            exportedRecordSetSha256: entity.sourceRecordSetSha256,
+            watermarkRevision: entity.watermarkRevision,
+          })),
+          reconciled: true,
+          snapshotWatermark: snapshot.snapshotWatermark,
+          sourceSemanticDigest: snapshot.semanticEvidence.digest,
+          exportedSemanticDigest: snapshot.semanticEvidence.digest,
+        }),
+      );
       const cancelledStage = await fixture.database
         .insertInto("privacy_export_upload_artifact")
         .values({
@@ -1348,6 +1419,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         .updateTable("privacy_export_job")
         .set({
           completed_at: retentionInstant("08-17T01:34:00Z"),
+          reconciliation: artifactFixtureReconciliation,
           expires_at: retentionInstant("08-17T02:00:00Z"),
           status: "completed",
         })
@@ -1634,6 +1706,7 @@ describeDatabase("retention persistence", { timeout: 15_000 }, () => {
         manifestDigest: digest("c"),
         snapshotId,
         reconciliation: {
+          formatVersion: "nutrition-account-export-v2",
           entities: snapshots.map((snapshot) => ({
             entity: snapshot.entity,
             exportedCount: snapshot.sourceCount,

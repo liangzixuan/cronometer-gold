@@ -6,9 +6,11 @@ import {
 } from "@nutrition-tracker/search";
 
 import type { ApiDependencyConfig } from "./config.js";
+import { DatabaseDayNoteService } from "./day-note-persistence-service.js";
 import type { ActivityService } from "./modules/activity/activity.routes.js";
 import { type AuthService, SecureAuthService } from "./modules/auth/auth-service.js";
 import { LocalMailpitEmailDelivery } from "./modules/auth/email-delivery.js";
+import type { DayNoteService } from "./modules/diary/day-note.routes.js";
 import type { DiaryService } from "./modules/diary/diary.routes.js";
 import { DatabaseBackedFoodSearchService } from "./modules/foods/search-service.js";
 import type { GoalService } from "./modules/goals/goal.routes.js";
@@ -34,6 +36,7 @@ export interface ApiSearchRuntime {
   readonly activityService: ActivityService;
   readonly authService: AuthService;
   readonly diaryService: DiaryService;
+  readonly dayNoteService: DayNoteService;
   readonly foodSearchService: DatabaseBackedFoodSearchService;
   readonly goalService: GoalService;
   readonly nutritionReportService: NutritionReportService;
@@ -116,6 +119,7 @@ export async function createApiSearchRuntime(
     return {
       activityService: new DatabaseActivityService(database),
       authService,
+      dayNoteService: new DatabaseDayNoteService(database),
       diaryService: new DatabaseDiaryService(database, { cursorSecret: config.cursorSecret }),
       foodSearchService: new DatabaseBackedFoodSearchService({
         core,

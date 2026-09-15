@@ -147,6 +147,7 @@ import {
   parseSession,
 } from "../../lib/diary";
 import { DiaryClient } from "./DiaryClient";
+import { DiaryDayNote } from "./DiaryDayNote";
 
 interface ElementNode {
   readonly type: unknown;
@@ -1899,5 +1900,22 @@ describe("Diary Repeat overlapping receipt publication", () => {
     expect(fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?")).length).toBe(
       reads + 1,
     );
+  });
+});
+
+describe("independent day-note parent wiring", () => {
+  it("mounts on empty diary days and fences old note callbacks before date effects without loading the diary", async () => {
+    const fetch = await mount(fetcher(page([], null, 0)));
+    const child = elements().find((node) => node.type === DiaryDayNote);
+    if (!child) throw new Error("Missing independent day-note section");
+    expect(child.props.localDate).toBe("2026-08-15");
+    expect((child.props.isPrivateCurrent as () => boolean)()).toBe(true);
+    expect((child.props.isViewCurrent as () => boolean)()).toBe(true);
+    const before = fetch.mock.calls.length;
+    route.date = "2026-08-16";
+    hooks.renderWithoutEffects();
+    expect((child.props.isViewCurrent as () => boolean)()).toBe(false);
+    expect((child.props.isPrivateCurrent as () => boolean)()).toBe(true);
+    expect(fetch.mock.calls.length).toBe(before);
   });
 });

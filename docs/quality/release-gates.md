@@ -177,7 +177,7 @@ runs exactly four named bounded polls. They use the
 same combined search/retention worker runtime used by the worker entrypoint:
 seed export, one-artifact expiry, measured export, and erasure. A static
 contract rejects a hidden additional poll. The drill populates and independently
-enumerates the compile-pinned set of all 65 retained export entity families,
+enumerates the compile-pinned set of all 68 retained export entity families,
 requires nonzero source counts and exact ID/count reconciliation across the
 source snapshot, JSON, and decompressed CSV, and proves cross-owner account/
 session survival. Forbidden field-name assertions
@@ -187,6 +187,16 @@ encryption identifiers, and ciphertext-byte metadata. Supported user workflows
 are route-first, with narrow direct compatibility/evidence fixtures only for
 route-unreachable catalogue/source/import, audit, legacy nutrient/barcode, and
 legacy operation rows.
+
+Standalone day-note setup is route-first on empty and populated dates. Its
+root, revision and operation families must reconcile in both artifacts, including
+exact raw text and cleared history; all three must disappear for the erased owner
+while a cross-owner note survives. A saved note must not change food totals or
+invalidate an existing food-page cursor. Fresh exports require the v2 logical
+format and exact 68-family inventory. Existing completed v1 artifacts remain
+unchanged, and old pending snapshots must be recaptured with prior-upload cleanup.
+The migration's completion fence must reject legacy/malformed new publication
+atomically. See the [version transition](../../infra/runbooks/privacy-export-and-erasure.md#day-note-export-version-transition).
 
 Hydration setup is route-first: the authenticated fixture creates, revises, and
 logically deletes entries through the private HTTP surface. The day, entry,

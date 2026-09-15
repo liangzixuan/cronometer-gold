@@ -599,6 +599,7 @@ async function processExportJob(
         jobId: job.id,
         manifestDigest: materialized.manifestSha256,
         reconciliation: {
+          formatVersion: materialized.manifest.formatVersion,
           entities: materialized.manifest.entities.map((entity) => ({
             entity: entity.entity,
             exportedRecordSetSha256: entity.exportedRecordSetSha256,

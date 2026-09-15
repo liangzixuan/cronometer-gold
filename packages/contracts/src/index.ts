@@ -1,6 +1,7 @@
 export * from "./activity.js";
 export * from "./auth.js";
 export * from "./canonical-json.js";
+export * from "./day-notes.js";
 export * from "./diary.js";
 export * from "./error.js";
 export * from "./foods.js";
