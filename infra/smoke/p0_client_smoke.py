@@ -18,20 +18,21 @@ import stat
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, NoReturn, Sequence
 from urllib.parse import urlsplit
 
 
-REPORT_SCHEMA = "nutrition-tracker-p0-client-smoke-report-v2"
-REVIEW_PACKAGE_SCHEMA = "nutrition-tracker-p0-client-smoke-review-package-v2"
-CAPTURE_SCHEMA = "nutrition-tracker-p0-client-smoke-capture-v2"
-SOURCE_BUNDLE_SCHEMA = "nutrition-tracker-p0-client-smoke-source-capture-bundle-v2"
+REPORT_SCHEMA = "nutrition-tracker-p0-client-smoke-report-v3"
+REVIEW_PACKAGE_SCHEMA = "nutrition-tracker-p0-client-smoke-review-package-v3"
+CAPTURE_SCHEMA = "nutrition-tracker-p0-client-smoke-capture-v3"
+SOURCE_BUNDLE_SCHEMA = "nutrition-tracker-p0-client-smoke-source-capture-bundle-v3"
 UNSIGNED_TRUST_BOUNDARY = (
     "unsigned-structural-candidate-requires-independent-ed25519-health-manifest-review"
 )
 DATA_CLASSIFICATION = "synthetic-only"
 CLIENT_ROLES = ("browser", "ios", "android")
-FLOW_IDS = (
+_SHARED_FLOW_IDS = (
     "unauthenticated-entry",
     "register",
     "sign-in",
@@ -41,16 +42,22 @@ FLOW_IDS = (
     "diary-add-edit-delete",
     "diary-repeat",
     "diary-pagination",
+    "diary-group-configuration",
     "recipe-create-revise-log",
     "goal-create-revise-progress",
     "retention-trends",
     "custom-food-create-revise-log",
+    "diary-day-note",
     "biometric-create-edit-delete",
     "reminder-create-pause-revoke",
     "account-export-download",
     "sign-out-private-cleanup",
     "account-erasure",
     "erasure-status-after-session-revocation",
+)
+_NATIVE_FLOW_IDS = _SHARED_FLOW_IDS[:6] + ("camera-barcode-capture",) + _SHARED_FLOW_IDS[6:]
+FLOW_IDS_BY_CLIENT = MappingProxyType(
+    {"browser": _SHARED_FLOW_IDS, "ios": _NATIVE_FLOW_IDS, "android": _NATIVE_FLOW_IDS}
 )
 MAX_JSON_BYTES = 262_144
 MAX_SESSION_SECONDS = 24 * 60 * 60
@@ -256,11 +263,12 @@ def _capture(
         _fail(f"{role} capture does not match the review-package context.")
     captured_at = _instant(capture["capturedAt"], f"{role}.capturedAt")
     results = capture["results"]
-    if not isinstance(results, list) or len(results) != len(FLOW_IDS):
+    flow_ids = FLOW_IDS_BY_CLIENT[role]
+    if not isinstance(results, list) or len(results) != len(flow_ids):
         _fail(f"{role} capture must contain the exact ordered P0 flow inventory.")
     normalized: list[dict[str, str]] = []
     previous = started
-    for expected_flow, item in zip(FLOW_IDS, results, strict=True):
+    for expected_flow, item in zip(flow_ids, results, strict=True):
         result = _exact(item, ("flowId", "outcome", "observedAt"), f"{role}.{expected_flow}")
         observed = _instant(result["observedAt"], f"{role}.{expected_flow}.observedAt")
         if (

@@ -53,7 +53,9 @@ This source slice does not claim signed-device acceptance. Before controlled
 beta, a versioned iOS/Android evidence flow must prove permission, lifecycle,
 supported-format, duplicate-detection, no-microphone, scan-to-add, and
 VoiceOver/TalkBack behavior; existing P0 v2 food-search evidence cannot be
-reinterpreted to cover the camera.
+reinterpreted to cover the camera. The current P0 v3 contract requires the
+native-only `camera-barcode-capture` flow, while its shared group/day-note flows
+apply to all clients. See [ADR 0077](../../docs/adr/0077-role-specific-p0-evidence.md).
 
 ## Durable foreground diary operations
 
@@ -341,7 +343,7 @@ cannot weaken or replace that path.
 
 ## Reviewed artifact evidence and submission
 
-The external v5 evidence manifest has four separate binary roles. The device
+The external v6 evidence manifest has four separate binary roles. The device
 matrix is attached to the exact `physical-device` IPA and APK installed on the
 iPhone and Android phone. The same reviewer-signed manifest separately binds the
 exact production IPA and AAB, including their EAS build IDs, source commit,
@@ -382,7 +384,7 @@ been produced, installed where applicable, tested, downloaded, and independently
 reviewed. Before either profile runs its post-install gate, the hook requires
 Expo's cloud-build markers and exact pinned project ID, canonical build ID,
 platform, profile, and full Git commit; local EAS builds cannot satisfy this
-release context. After those steps, supply the v5 manifest, exact relay and P0
+release context. After those steps, supply the v6 manifest, exact relay and P0
 smoke reports/origin pins, and all four absolute artifact paths/build-ID pins listed in
 `config/README.md`, then verify it:
 

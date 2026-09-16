@@ -75,10 +75,10 @@ Supply the exact canonical P0 smoke candidate through exactly one of
 `.json` path in `NUTRITION_P0_CLIENT_SMOKE_REPORT_PATH`. The no-follow path read
 is current-user-owned and bounded to 256 KiB. The verifier requires the exact
 synthetic-only classification, unsigned trust marker, commit, private origin,
-physical-device EAS build IDs, timing, ordered 18-flow inventory, and protected
+physical-device EAS build IDs, timing, ordered role-specific 21/22/22-flow inventories, and protected
 source-capture hashes. Those structural assertions remain unauthenticated until
 the independent reviewer reconciles the protected raw captures, reruns the
-normalizer, and signs their exact report digest in the complete v5 manifest.
+normalizer, and signs their exact report digest in the complete v6 manifest.
 
 The manifest JSON itself and its exact SHA-256 are supplied as
 `NUTRITION_HEALTH_RELEASE_EVIDENCE_JSON` and

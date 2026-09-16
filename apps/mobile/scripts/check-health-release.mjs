@@ -22,7 +22,7 @@ import {
   validateReviewerTrustStore,
 } from "./reviewer-trust.mjs";
 
-export const HEALTH_RELEASE_EVIDENCE_SCHEMA = "nutrition-tracker-health-release-evidence-v5";
+export const HEALTH_RELEASE_EVIDENCE_SCHEMA = "nutrition-tracker-health-release-evidence-v6";
 export { HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA } from "./reviewer-trust.mjs";
 export const PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA =
   "nutrition-tracker-physical-device-relay-report-v4";
@@ -36,15 +36,15 @@ const PHYSICAL_DEVICE_RELAY_ADAPTER_PLATFORM = "windows-host";
 const PHYSICAL_DEVICE_RELAY_TEST_ADAPTER_PREFIX = "test-";
 const PHYSICAL_DEVICE_API_ORIGIN_COMMITMENT_DOMAIN =
   "nutrition-tracker-physical-device-api-origin-v1";
-export const P0_CLIENT_SMOKE_REPORT_SCHEMA = "nutrition-tracker-p0-client-smoke-report-v2";
+export const P0_CLIENT_SMOKE_REPORT_SCHEMA = "nutrition-tracker-p0-client-smoke-report-v3";
 const PHYSICAL_DEVICE_RELAY_TRUST_BOUNDARY =
   "unsigned-structural-candidate-requires-independent-ed25519-manifest-review";
 const P0_CLIENT_SMOKE_TRUST_BOUNDARY =
   "unsigned-structural-candidate-requires-independent-ed25519-health-manifest-review";
 const P0_CLIENT_SMOKE_DATA_CLASSIFICATION = "synthetic-only";
 const P0_CLIENT_SMOKE_SOURCE_CAPTURE_BUNDLE_SCHEMA =
-  "nutrition-tracker-p0-client-smoke-source-capture-bundle-v2";
-export const P0_CLIENT_SMOKE_FLOW_IDS = Object.freeze([
+  "nutrition-tracker-p0-client-smoke-source-capture-bundle-v3";
+const P0_CLIENT_SMOKE_COMMON_FLOW_IDS = Object.freeze([
   "unauthenticated-entry",
   "register",
   "sign-in",
@@ -54,10 +54,12 @@ export const P0_CLIENT_SMOKE_FLOW_IDS = Object.freeze([
   "diary-add-edit-delete",
   "diary-repeat",
   "diary-pagination",
+  "diary-group-configuration",
   "recipe-create-revise-log",
   "goal-create-revise-progress",
   "retention-trends",
   "custom-food-create-revise-log",
+  "diary-day-note",
   "biometric-create-edit-delete",
   "reminder-create-pause-revoke",
   "account-export-download",
@@ -65,6 +67,16 @@ export const P0_CLIENT_SMOKE_FLOW_IDS = Object.freeze([
   "account-erasure",
   "erasure-status-after-session-revocation",
 ]);
+const P0_CLIENT_SMOKE_NATIVE_FLOW_IDS = Object.freeze([
+  ...P0_CLIENT_SMOKE_COMMON_FLOW_IDS.slice(0, 6),
+  "camera-barcode-capture",
+  ...P0_CLIENT_SMOKE_COMMON_FLOW_IDS.slice(6),
+]);
+export const P0_CLIENT_SMOKE_FLOW_IDS_BY_CLIENT = Object.freeze({
+  browser: P0_CLIENT_SMOKE_COMMON_FLOW_IDS,
+  ios: P0_CLIENT_SMOKE_NATIVE_FLOW_IDS,
+  android: P0_CLIENT_SMOKE_NATIVE_FLOW_IDS,
+});
 
 const RELEASE_NUMBERING_SCHEMA = "nutrition-tracker-release-numbering-v1";
 const MAX_MANIFEST_BYTES = 32_768;
@@ -1232,6 +1244,7 @@ function validateP0ClientSmokeReport(
   );
   for (const role of ["browser", "ios", "android"]) {
     const client = report.clients[role];
+    const flowIds = P0_CLIENT_SMOKE_FLOW_IDS_BY_CLIENT[role];
     const name = `P0 client-smoke report.clients.${role}`;
     assertExactKeys(client, ["captureSha256", "testedEasBuildId", "capturedAt", "results"], name);
     assertSha256(client.captureSha256, `${name}.captureSha256`);
@@ -1244,14 +1257,11 @@ function validateP0ClientSmokeReport(
     if (client.testedEasBuildId !== expectedBuildId) {
       throw new TypeError(`${name}.testedEasBuildId must bind the reviewed physical build.`);
     }
-    if (
-      !Array.isArray(client.results) ||
-      client.results.length !== P0_CLIENT_SMOKE_FLOW_IDS.length
-    ) {
+    if (!Array.isArray(client.results) || client.results.length !== flowIds.length) {
       throw new TypeError(`${name}.results must contain the exact ordered P0 flow inventory.`);
     }
     let previousObservation = startedAt;
-    for (const [index, flowId] of P0_CLIENT_SMOKE_FLOW_IDS.entries()) {
+    for (const [index, flowId] of flowIds.entries()) {
       const result = client.results[index];
       const resultName = `${name}.results[${index}]`;
       assertExactKeys(result, ["flowId", "outcome", "observedAt"], resultName);

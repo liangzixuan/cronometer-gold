@@ -7,7 +7,7 @@ run a client, invoke Tailscale or EAS, or prove that an assertion happened. It
 does not authenticate a capture. It only checks a reviewer-prepared package
 structurally.
 
-The resulting `nutrition-tracker-p0-client-smoke-report-v2` is an unsigned
+The resulting `nutrition-tracker-p0-client-smoke-report-v3` is an unsigned
 candidate with this exact trust marker:
 
 `unsigned-structural-candidate-requires-independent-ed25519-health-manifest-review`
@@ -19,7 +19,7 @@ manifest that binds the candidate's exact SHA-256 digest.
 ## Exact inventory
 
 Use exactly three distinct capture files, one for each role: `browser`, `ios`,
-and `android`. Exercise these flows in this exact order on every role:
+and `android`. The browser must exercise these 21 flows in this exact order:
 
 1. `unauthenticated-entry`
 2. `register`
@@ -30,16 +30,24 @@ and `android`. Exercise these flows in this exact order on every role:
 7. `diary-add-edit-delete`
 8. `diary-repeat`
 9. `diary-pagination`
-10. `recipe-create-revise-log`
-11. `goal-create-revise-progress`
-12. `retention-trends`
-13. `custom-food-create-revise-log`
-14. `biometric-create-edit-delete`
-15. `reminder-create-pause-revoke`
-16. `account-export-download`
-17. `sign-out-private-cleanup`
-18. `account-erasure`
-19. `erasure-status-after-session-revocation`
+10. `diary-group-configuration`
+11. `recipe-create-revise-log`
+12. `goal-create-revise-progress`
+13. `retention-trends`
+14. `custom-food-create-revise-log`
+15. `diary-day-note`
+16. `biometric-create-edit-delete`
+17. `reminder-create-pause-revoke`
+18. `account-export-download`
+19. `sign-out-private-cleanup`
+20. `account-erasure`
+21. `erasure-status-after-session-revocation`
+
+iOS and Android each insert `camera-barcode-capture` immediately after
+`food-search`, for exactly 22 results per native role. No browser camera result,
+optional result or `not-applicable` outcome is accepted. All 19 original IDs keep
+their relative order; the added work occurs before export, cleanup and erasure.
+Browser typed-barcode lookup remains within `food-search`.
 
 Use synthetic accounts and synthetic nutrition/health values only. Never put a
 name, email address, device identifier, token, cookie, export contents, health
@@ -68,19 +76,46 @@ review observations outside Git. The capture envelope records only the minimal
 ordered pass assertion; it does not contain diary values or accessibility
 transcripts.
 
-Version 1 had 18 flows and did not cover this boundary. Its reports, review
-packages, captures, and source-bundle digest domain are historical only and are
-rejected by the current normalizer and release verifier. Never append a result
-to v1, relabel v1 bytes as v2, or infer a v2 pass from earlier evidence.
+### Added v3 observation boundaries
 
-Version 2 also predates owner-configurable diary labels and display order. It
-can continue to prove the exact 19 flows above, but it cannot prove rename,
-reorder, reset, cross-client convergence, profile-revision conflict, or
-canonical-slot quick-add behavior after configuration. Do not append those
-assertions to the closed v2 inventory or reinterpret a v2 signature. A future
-review must version the capture, review package, normalizer, source bundle, and
-health-release manifest together before that capability can clear signed-device
-acceptance.
+For native `camera-barcode-capture`, exercise permission grant, temporary and
+permanent denial with manual fallback; unavailable/cancel/background teardown;
+one lookup across repeated detections; EAN-8/EAN-13/UPC-A/ITF-14 behavior; invalid
+check digit, no match and network errors; typed-lookup parity and explicit
+confirmation before the existing mutation. Verify no microphone prompt, frame
+retention/upload, background capture, on-disk barcode persistence or widening of
+the durable diary envelope. Preserve physical VoiceOver/TalkBack observations.
+
+For `diary-group-configuration`, all roles rename and reorder the four groups,
+keep canonical destinations and native queued delivery unchanged, show coherent picker
+and receipt labels, converge after cross-client profile refresh, reset defaults
+and surface stale-profile conflicts without overwriting them. Include keyboard,
+browser screen-reader, VoiceOver and TalkBack observations for the applicable role.
+
+For `diary-day-note`, all roles exercise empty and populated day create/edit/
+clear/rewrite, exact raw text and limits, explicit Save/Clear and unchanged-draft
+behavior, original-date Return/Cancel and truthful loading/unavailability. Check
+exact ambiguous retry across date navigation and same-owner zone refresh,
+deliberate Keep/Use recovery and focus, stale/private/background fences, and
+unchanged food/nutrient state. Observe the disclosure that unsaved drafts and
+unresolved keys belong to the open diary only; no offline or crash-safe note
+persistence is promised. Preserve each role's keyboard/assistive observations.
+
+The later export, sign-out/private-cleanup and erasure flows must include those
+synthetic notes and retained history under the 68-family contract. Raw notes,
+barcodes, export contents and accessibility transcripts stay in the protected
+review material, never in the minimal JSON assertion envelopes.
+
+### Historical versions
+
+Version 1 had 18 flows and omitted diary pagination. Version 2 had the original
+19 common flows and omitted camera capture, configurable groups and standalone
+day notes. Those captures, packages, reports, source-bundle digest domains and
+old signed health manifests retain their historical meaning and are rejected by
+the current contract. Do not append new assertions, relabel bytes, reinterpret a
+signature or combine generations. Collect one complete new v3 package and obtain
+independent health-manifest v6 review. [ADR 0077](../../docs/adr/0077-role-specific-p0-evidence.md)
+defines the coordinated successor without changing earlier release obligations.
 
 ## Capture envelopes
 
@@ -88,11 +123,11 @@ Create a mode `0700` review directory. Preserve the original reviewer-observed
 material outside Git, then transcribe only the minimal pass assertions below
 into three distinct current-user-owned regular files at absolute normalized
 paths. Each file must be mode `0600`, non-symlink, strict UTF-8 JSON, and use the
-exact `nutrition-tracker-p0-client-smoke-capture-v2` envelope:
+exact `nutrition-tracker-p0-client-smoke-capture-v3` envelope:
 
 ```json
 {
-  "schemaVersion": "nutrition-tracker-p0-client-smoke-capture-v2",
+  "schemaVersion": "nutrition-tracker-p0-client-smoke-capture-v3",
   "dataClassification": "synthetic-only",
   "client": "browser",
   "gitCommit": "<40-lowercase-hex-commit>",
@@ -109,7 +144,7 @@ exact `nutrition-tracker-p0-client-smoke-capture-v2` envelope:
 }
 ```
 
-Supply all 19 result objects in the exact inventory order. Observation times
+Supply exactly 21 browser or 22 native result objects in the role's inventory order. Observation times
 must be monotonic. `capturedAt` must equal the final observation. For `ios` and
 `android`, `testedEasBuildId` is the distinct physical-device EAS build UUID;
 for `browser`, it is exactly `null`. All captures bind the same commit and the
@@ -117,11 +152,11 @@ exact private `.ts.net` HTTPS API origin exercised. This does not invent or bind
 a browser deployment origin.
 
 Create a fourth current-user-owned mode `0600` index with exact schema
-`nutrition-tracker-p0-client-smoke-review-package-v2`:
+`nutrition-tracker-p0-client-smoke-review-package-v3`:
 
 ```json
 {
-  "schemaVersion": "nutrition-tracker-p0-client-smoke-review-package-v2",
+  "schemaVersion": "nutrition-tracker-p0-client-smoke-review-package-v3",
   "trustBoundary": "unsigned-structural-candidate-requires-independent-ed25519-health-manifest-review",
   "dataClassification": "synthetic-only",
   "gitCommit": "<same-commit>",
@@ -159,16 +194,17 @@ chmod 0600 /absolute/review/p0-client-smoke-candidate.json
 
 The warning on stderr is mandatory. The normalizer does not execute any flow,
 inspect a user interface, or interpret the protected observations. It only
-validates the exact v2 envelopes and ordered structural pass assertions, hashes
+validates the exact v3 envelopes and ordered structural pass assertions, hashes
 the exact raw bytes for each capture, and derives `sourceCaptureBundleSha256`
-with a fixed domain-separated `browser`, `ios`, `android` order. Its structural
+with the `nutrition-tracker-p0-client-smoke-source-capture-bundle-v3`
+domain and fixed `browser`, `ios`, `android` order. Its structural
 `passed` values remain unauthenticated assertions.
 
 The independent reviewer must obtain the protected raw captures from the
 review source, compare their exact bytes and SHA-256 values with the candidate,
 verify the synthetic-only workflow observations and physical EAS build IDs,
 and rerun the normalizer from those exact files. The reviewer then puts
-`p0ClientSmoke.apiOrigin` and the exact candidate `reportSha256` into the v5
+`p0ClientSmoke.apiOrigin` and the exact candidate `reportSha256` into the v6
 health-release manifest and signs the full canonical manifest with the trusted
 Ed25519 review key. Only the repository health verifier's successful validation
 of that signed manifest and candidate is authoritative release evidence.

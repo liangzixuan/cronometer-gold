@@ -260,9 +260,11 @@ acceptance.
   handling, exact parity with typed lookup, and user confirmation before the
   existing mutation. It also proves no microphone prompt, frame/image
   retention or upload, background capture, durable/on-disk barcode persistence,
-  or widening of the durable quick-add envelope. Existing P0 v2 evidence cannot satisfy this
-  new claim; the capture/report/reviewer contract must be versioned before
-  signed-device acceptance.
+  or widening of the durable quick-add envelope. The P0 v3 native-only
+  `camera-barcode-capture` flow and health manifest v6 provide the required
+  versioned evidence contract under [ADR 0077](../adr/0077-role-specific-p0-evidence.md).
+  Historical P0 v2 evidence cannot satisfy this claim; actual signed-device
+  observations and independent review remain required.
 - Core generic foods meet the agreed nutrient-completeness definition at least
   90% of the time.
 - M1C-A's native diary-log outbox proves one 50-item encrypted, owner-bound FIFO
@@ -479,9 +481,10 @@ acceptance.
   quick-add delivery, converge after a cross-client profile refresh, reset to
   defaults, and surface a stale profile edit without overwriting it. Existing
   P0 v2 evidence does not contain that configuration flow and cannot satisfy
-  this added claim; the capture, package, normalizer, and signed release-manifest
-  contracts require their next reviewed version before controlled-beta
-  acceptance.
+  this added claim. P0 v3 requires `diary-group-configuration` on all three
+  clients, with the complete capture/package/source-bundle chain bound by the
+  v6 health manifest. Source contract validation does not clear controlled-beta
+  or device acceptance.
 - Export, account deletion, backup restore, and search reindex drills pass.
 - Signed internal Android APK and iOS IPA binaries compile from one clean commit
   and pass the physical-device matrix. A reviewer-signed manifest separately
@@ -511,12 +514,13 @@ acceptance.
   report hash does not clear this gate.
 - Browser and installed-device smoke tests render, navigate, and exercise the
   authenticated and unauthenticated states of every P0 client flow with
-  synthetic data, including the v2 `diary-pagination` flow. The canonical
-  unsigned candidate must bind the exact commit,
+  synthetic data, including the preserved `diary-pagination` flow and v3 group/day-note flows.
+  The exact inventory has 21 browser and 22 iOS/Android flows; native inventories
+  additionally require camera capture. The canonical unsigned candidate must bind the exact commit,
   private API origin, physical iOS/Android EAS build IDs, timing, ordered flow
   results, and protected source-capture hashes. It clears the gate only when an
   independent reviewer reconciles the raw captures, reruns the normalizer, and
-  signs the candidate's exact digest in the v5 health manifest.
+  signs the candidate's exact digest in the v6 health manifest.
 - Store identifiers, icons, splash assets, signing ownership, and disclosure
   contact are approved before the first TestFlight/Play upload.
 - VoiceOver, TalkBack, keyboard, reduced-motion, and contrast reviews cover every
@@ -1187,3 +1191,20 @@ acceptance.
   gates and validated production Next/BFF synthetic Chrome retry accounting/expiry
   with owned cleanup, then final staged review. No real-persistence, device,
   external reviewer, hosted or release acceptance follows from synthetic proof.
+
+
+## ADR 0077 P0 evidence contract successor
+
+- Require P0 v3 captures, review package, report and source-bundle domain together
+  with health manifest v6. Preserve all 19 earlier flow IDs and their relative
+  order; enforce the exact browser/iOS/Android inventories of 21/22/22. Missing,
+  duplicated, reordered, wrong-role, historical or mixed-generation results fail.
+- `diary-day-note` observations cover exact raw empty/populated-day create/edit/
+  clear/rewrite, explicit writes, date-bound recovery and retries, reviewed
+  conflicts/focus, private lifecycle fences and online-only draft limits. The
+  later export/cleanup/erasure flows include synthetic notes and retained history.
+- Preserve minimal synthetic assertions, protected raw captures, exact origin/
+  commit/build/time/source-byte bindings and independent Ed25519 review. Unit or
+  cross-language compatibility tests do not authenticate device observations.
+  All previous artifact, relay, health, identity, accessibility and release gates
+  remain unchanged; no signing, device run, hosting or release is authorized.

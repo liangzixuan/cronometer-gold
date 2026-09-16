@@ -41,13 +41,13 @@ reviewer, or production-release acceptance.
    custom foods, biometrics, and hydration entries, consented local reminders,
    coherent JSON/CSV export, erasure/recovery, and read-only HealthKit/Health
    Connect weight adapters are wired across database, API/worker, web, and mobile
-   with package and integration evidence. At the last delivered baseline, the
-   real API/worker privacy drill populated and independently enumerated all 65
-   retained export entity families. ADR 0076's working source extends the inventory
-   to 68 and has passed the real export/erasure drill. Its corrected clients have
-   completed the scoped browser flows and measured 390px checks; final local
-   compatibility and validation now pass. Commit/push and exact-commit automatic
-   evidence remain pending in current readiness. The drill requires
+   with package and integration evidence. At the delivered ADR 0076 baseline,
+   the real API/worker privacy drill populated and independently enumerated all
+   68 retained export entity families. Corrected clients passed the scoped browser
+   flows and measured 390px checks; final local compatibility and validation passed.
+   Commit `9344057` passed all three CI and nine actual container jobs. Current
+   readiness retains their exact dated evidence and separates the next contract
+   milestone from device acceptance. The drill requires
    exact source-ID/count reconciliation in JSON and decompressed CSV; proves
    cross-owner survival; verifies audit and artifact-lifecycle redaction; expires
    one artifact; cancels queued reminder delivery after pause/revoke; and
@@ -104,53 +104,36 @@ older result, and source completion never closes external acceptance.
 
 | Order | Work | Owner and concrete exit |
 | --- | --- | --- |
-| Active delivery | Standalone private day notes | Implementation owner: Codex in the current task. Reviewed source, local integration, desktop/390px browser flows and final canonical/dependency gates are complete under ADR 0076. Delivery is underway: commit/push under standing authorization, then record exact-commit automatic outcomes. |
-| Next source candidate, after the active milestone | Native acceptance evidence contracts | Evidence maintainer and independent reviewer define a versioned successor to P0 v2 for camera capture, configurable groups and standalone notes. Synchronize capture, package, normalization, source-bundle and manifest coverage before collecting device acceptance. This row starts with contract/model review, not device or cloud execution. |
+| Active delivery milestone | Native acceptance evidence contracts | ADR 0077 source is complete and locally verified: P0 v3 with exact browser/iOS/Android inventories of 21/22/22 and health manifest v6. Independent review, focused tests and canonical check/build passed. Record the successor commit and all required exact-commit automatic outcomes before opening another source slice. Device and cloud execution remain separately gated. |
 | Delivery follow-up | Exact-commit automatic evidence | Delivery owner records CI and actual supply-chain job outcomes for the identified commit. Missing, running or skipped required jobs remain open; artifact/provenance and release approval stay separate. |
 | Local acceptance follow-up | Repeat printing and direct Ctrl+P | Browser QA operator/user completes the two remaining ADR 0028 checks on a pinned build and retains the observed result. Existing preview/Cancel and PDF evidence do not close them. |
 | External review | Commit-specific Claude Code review | External reviewer supplies the report and decision; implementation owner resolves findings. In-task reviews do not substitute. |
 | Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Release owner assigns the roles and reviewable packages listed in current readiness; each lane advances only under applicable existing authorization and its unchanged release gate. |
 
-### Active bounded milestone: standalone private day notes
+### Active bounded milestone: native acceptance evidence contracts
 
-[ADR 0076](../adr/0076-standalone-private-day-notes.md) now has an accepted model
-and reviewed database/API, web and native implementation. One private note belongs
-to the selected date, including empty diary days. Saves and clears retain immutable
-history; owner/session guards, exact retries and deliberate conflict recovery
-protect in-memory drafts. This slice adds no offline queue, food entry, nutrition
-calculation, attachment, sharing, reminder, advice, hosting or signing behavior.
+[ADR 0076](../adr/0076-standalone-private-day-notes.md) is delivered at `9344057`.
+Its final local checks, scoped browser/integration evidence and exact-commit
+automatic CI/container results passed. Signed-device, hosted, independent Claude
+review and release acceptance remain separate; see current readiness for dates.
 
-Focused proof now covers 130 web cases and 114 unchanged native cases. Actual
-browser QA found and verified fixes for disabled editors after date navigation
-and focus lost after conflict recovery. Dedicated Chrome and the subsequently
-available, user-authorized Brave exercised empty/populated note flows, exact raw
-drafts, both conflict choices, explicit keyboard saves, revoked-session closure,
-owner isolation, the length limit and date navigation. Fresh Brave checks on the
-focus-fixed build confirmed that Keep, Use saved note and ordinary Cancel focus
-the enabled textarea; recovery choices do not write until an explicit Save.
-The populated day's pinned food and nutrient observations stayed unchanged.
-A later measured 390×844 viewport also passed note/error/conflict layout and
-keyboard recovery without document overflow. Earlier viewport attempts had no
-effect; their delayed change is unexplained. This is browser evidence, not
-physical-device or screen-reader acceptance.
+[ADR 0077](../adr/0077-role-specific-p0-evidence.md) addresses the closed P0 v2
+inventory's inability to authenticate native camera capture, configurable groups
+and standalone notes. Independent model review accepted all 19 previous IDs in
+relative order plus two shared flows and one native-only camera flow. Exact
+inventories are 21 browser and 22 for each native client; a browser camera pass
+or an N/A result is invalid. Current capture, package, report and source-bundle
+contracts advance together to v3, with independently signed health manifest v6.
 
-The exact `expo-build-properties@57.0.19` exception/install and one additional
-production audit were explicitly approved and completed. Final `pnpm check`,
-`pnpm build`, audit and license policy passed; a clean-source native export
-freshly built both platform bundles. Current readiness separates fresh and
-cached results and records the four lower-severity audit advisories. Independent
-source/dependency comparison carries forward the dated database/API, 68-family
-export/erasure, restore and browser proofs; these were not rerun for the mobile
-dependency patch. Earlier failures and approvals remain historical evidence.
-Source and local validation are complete. Delivery is underway under standing
-normal commit/non-force push authorization; the feature commit, push and its
-automatic outcomes remain pending at this snapshot.
-After exact-commit delivery evidence, close the native evidence-contract gap before
-adding another small product feature. P0 v2's fixed 19-flow inventory cannot
-authenticate the new camera, configurable-group and day-note workflows. A bounded
-successor should version that evidence chain together and preserve rejection of
-incomplete or mixed-generation submissions. It does not collect or approve signed
-device, accessibility, hosted, catalogue or external reviewer evidence.
+Implementation and independent review are complete. Focused Python 13/13 and
+JavaScript 33/33 tests, canonical `pnpm check` and `pnpm build` passed on September
+16 UTC. Incomplete, relabelled and mixed-version submissions are rejected while
+raw-byte, identity, time, private-file, artifact and reviewer-signature checks
+remain intact. The relay report remains v4. These tools do not collect or
+authenticate device observations. Exact-commit CI and all nine actual container
+jobs remain pending until observed after delivery. Finish that gate before another
+product feature; device, accessibility, hosted, catalogue and reviewer release
+gates remain open.
 
 ### Milestone and external-decision boundaries
 
@@ -418,8 +401,9 @@ Each retains its separate explicit-approval gate.
    entry-note sub-slice remains distinct from standalone day notes.
    ADR 0076 separately accepts and implements one owner-private note per date,
    with saved/cleared immutable history and exact retry/conflict behavior. Its
-   reviewed working source and 68-family privacy/recovery evidence await final
-   canonical, browser and delivery validation. This does not close M1 or M2.
+   reviewed source, 68-family privacy/recovery evidence, final canonical and
+   browser validation, and all three CI/nine container jobs passed at `9344057`.
+   Signed-device and release acceptance remain open; this does not close M1 or M2.
 
    Bounded diary pagination is implemented locally across PostgreSQL, the private
    API, web, and mobile. New diary screens request at most 20 entries per page;

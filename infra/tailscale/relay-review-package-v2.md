@@ -17,9 +17,11 @@ service.
 
 The normalizer remains structural only. It authenticates neither the raw source
 nor a reviewer and emits only an unsigned
-`nutrition-tracker-physical-device-relay-report-v4` candidate. The unchanged v5
+`nutrition-tracker-physical-device-relay-report-v4` candidate. The current v6
 health manifest may bind the exact v4 report bytes only after independent
-review. A v5 manifest that binds a legacy v2 or v3 report must fail closed.
+review. A v6 manifest that binds a legacy v2 or v3 relay report must fail closed.
+P0's v3 successor changes the outer health version; it does not change this
+relay package, report or source-bundle contract.
 
 ## Review-package index
 
@@ -325,7 +327,7 @@ The fixed test vector for canonical origin `https://relay.example.ts.net` is
 `324c46636c4c63c6dd63502c753892fcc8cdbce343fd0d760fa29417397ee19e`.
 
 The v4 consumer must recompute that commitment from the already validated,
-signed v5 `physicalDeviceApiRelay.apiOrigin` and require an exact match. The
+signed v6 `physicalDeviceApiRelay.apiOrigin` and require an exact match. The
 protected capture index and every approved-phone readiness probe bind that same
 origin before redaction. An origin mismatch must fail even when the report
 digest and every other structural field are valid.
@@ -339,6 +341,8 @@ implemented offline Windows generation is review package v2, source bundle v2,
 and normalized report v4. Historical Mac material cannot be upgraded,
 relabeled, supplemented, or partially reused; adoption requires a new
 continuous Windows session and complete recollection of every matrix role.
+
+### Historical relay-v4 cutover under health manifest v5
 
 The atomic validator cutover deliberately makes health manifest
 `nutrition-tracker-health-release-evidence-v5` accept report v4 and reject its
@@ -354,3 +358,13 @@ The offline implementation is structural only. Its immutable production adapter
 registry remains empty; no exact Windows output corpus, authentic capture, or
 reviewer signature is checked in. It cannot clear a live release gate or the
 Windows physical-phone blocker.
+
+
+### Current outer-manifest coupling
+
+[ADR 0077](../../docs/adr/0077-role-specific-p0-evidence.md) advances the current
+health manifest to `nutrition-tracker-health-release-evidence-v6` alongside P0
+v3. The historical v5 cutover above is preserved as history. Current release
+verification requires v6, P0 v3 and relay v4 together; old manifests are not
+relabelled or re-signed automatically. Relay origin commitment, source bytes,
+adapter restrictions and independent reviewer obligations remain unchanged.

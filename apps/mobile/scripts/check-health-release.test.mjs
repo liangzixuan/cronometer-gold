@@ -7,7 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   HEALTH_RELEASE_EVIDENCE_SCHEMA,
   HEALTH_RELEASE_REVIEWER_TRUST_SCHEMA,
-  P0_CLIENT_SMOKE_FLOW_IDS,
+  P0_CLIENT_SMOKE_FLOW_IDS_BY_CLIENT,
   P0_CLIENT_SMOKE_REPORT_SCHEMA,
   PHYSICAL_DEVICE_RELAY_REPORT_SCHEMA,
   physicalDeviceApiOriginCommitmentSha256,
@@ -333,37 +333,33 @@ function relayReportDigest(report = physicalDeviceRelayReport()) {
   return createHash("sha256").update(relayReportBytes(report)).digest("hex");
 }
 
-function p0ClientResults() {
-  return P0_CLIENT_SMOKE_FLOW_IDS.map((flowId, index) => ({
+function p0ClientResults(role) {
+  return P0_CLIENT_SMOKE_FLOW_IDS_BY_CLIENT[role].map((flowId, index) => ({
     flowId,
     outcome: "passed",
-    observedAt: `2026-08-16T07:${String(index + 1).padStart(2, "0")}:00.000Z`,
+    observedAt: new Date(
+      Date.parse("2026-08-16T07:00:00.000Z") + (index + 1) * 60_000,
+    ).toISOString(),
   }));
 }
 
 function p0ClientSmokeReport() {
-  const clients = {
-    browser: {
-      captureSha256: "7".repeat(64),
-      testedEasBuildId: null,
-      capturedAt: "2026-08-16T07:19:00.000Z",
-      results: p0ClientResults(),
-    },
-    ios: {
-      captureSha256: "8".repeat(64),
-      testedEasBuildId: buildIds.physicalDevice.ios,
-      capturedAt: "2026-08-16T07:19:00.000Z",
-      results: p0ClientResults(),
-    },
-    android: {
-      captureSha256: "9".repeat(64),
-      testedEasBuildId: buildIds.physicalDevice.android,
-      capturedAt: "2026-08-16T07:19:00.000Z",
-      results: p0ClientResults(),
-    },
-  };
+  const clients = Object.fromEntries(
+    ["browser", "ios", "android"].map((role, index) => {
+      const results = p0ClientResults(role);
+      return [
+        role,
+        {
+          captureSha256: String(index + 7).repeat(64),
+          testedEasBuildId: role === "browser" ? null : buildIds.physicalDevice[role],
+          capturedAt: results.at(-1).observedAt,
+          results,
+        },
+      ];
+    }),
+  );
   const sourceCaptureBundleDigest = createHash("sha256").update(
-    "nutrition-tracker-p0-client-smoke-source-capture-bundle-v2\n",
+    "nutrition-tracker-p0-client-smoke-source-capture-bundle-v3\n",
   );
   for (const role of ["browser", "ios", "android"]) {
     sourceCaptureBundleDigest.update(`${role}\n${clients[role].captureSha256}\n`);
@@ -636,17 +632,19 @@ describe("native health release evidence", () => {
     });
   });
 
-  it("requires signed v5 relay and P0 smoke evidence with exact keys", async () => {
-    const legacy = unsignedManifest();
-    legacy.schemaVersion = "nutrition-tracker-health-release-evidence-v4";
-    await expect(
-      validateHealthReleaseEvidence(
-        environmentFor(attest(legacy)),
-        checkTime,
-        trustStore,
-        releaseRuntime,
-      ),
-    ).rejects.toThrow(/health-release-evidence-v5/u);
+  it("requires signed v6 relay and P0 smoke evidence with exact keys", async () => {
+    for (const version of [4, 5]) {
+      const legacy = unsignedManifest();
+      legacy.schemaVersion = `nutrition-tracker-health-release-evidence-v${version}`;
+      await expect(
+        validateHealthReleaseEvidence(
+          environmentFor(attest(legacy)),
+          checkTime,
+          trustStore,
+          releaseRuntime,
+        ),
+      ).rejects.toThrow(/health-release-evidence-v6/u);
+    }
 
     const missing = unsignedManifest();
     delete missing.physicalDeviceApiRelay;
@@ -937,12 +935,17 @@ describe("native health release evidence", () => {
     ).rejects.toThrow(/canonical field order/u);
   });
 
-  it("binds an unsigned synthetic P0 smoke candidate through the signed v5 manifest", async () => {
+  it("binds an unsigned synthetic P0 smoke candidate through the signed v6 manifest", async () => {
     const mutations = [
       [
         "legacy v1 report schema",
         (report) => (report.schemaVersion = "nutrition-tracker-p0-client-smoke-report-v1"),
-        /p0-client-smoke-report-v2/u,
+        /p0-client-smoke-report-v3/u,
+      ],
+      [
+        "legacy v2 report in a newly signed v6 manifest",
+        (report) => (report.schemaVersion = "nutrition-tracker-p0-client-smoke-report-v2"),
+        /p0-client-smoke-report-v3/u,
       ],
       [
         "wrong trust marker",
@@ -1023,6 +1026,95 @@ describe("native health release evidence", () => {
     }
   });
 
+  it("requires each new role-specific flow without relabeling the historical inventory", async () => {
+    const cases = [];
+    for (const role of ["browser", "ios", "android"]) {
+      const required = ["diary-group-configuration", "diary-day-note"];
+      if (role !== "browser") required.push("camera-barcode-capture");
+      for (const flowId of required) {
+        cases.push([
+          `${role} omits ${flowId}`,
+          (report) => {
+            report.clients[role].results = report.clients[role].results.filter(
+              (row) => row.flowId !== flowId,
+            );
+          },
+        ]);
+      }
+    }
+    cases.push(
+      [
+        "browser claims native camera",
+        (report) => {
+          report.clients.browser.results.splice(6, 0, {
+            flowId: "camera-barcode-capture",
+            outcome: "passed",
+            observedAt: report.clients.browser.results[5].observedAt,
+          });
+        },
+      ],
+      [
+        "old nineteen flows relabeled as v3",
+        (report) => {
+          for (const client of Object.values(report.clients)) {
+            client.results = client.results.filter(
+              (row) =>
+                !["camera-barcode-capture", "diary-group-configuration", "diary-day-note"].includes(
+                  row.flowId,
+                ),
+            );
+            client.capturedAt = client.results.at(-1).observedAt;
+          }
+        },
+      ],
+      [
+        "duplicate new flow without changing length",
+        (report) => {
+          const results = report.clients.ios.results;
+          results.find((row) => row.flowId === "diary-day-note").flowId =
+            "diary-group-configuration";
+        },
+      ],
+      [
+        "new flows in the wrong order",
+        (report) => {
+          const results = report.clients.android.results;
+          const group = results.find((row) => row.flowId === "diary-group-configuration");
+          const note = results.find((row) => row.flowId === "diary-day-note");
+          [group.flowId, note.flowId] = [note.flowId, group.flowId];
+        },
+      ],
+      [
+        "old v2 source-bundle digest domain",
+        (report) => {
+          const digest = createHash("sha256").update(
+            "nutrition-tracker-p0-client-smoke-source-capture-bundle-v2\n",
+          );
+          for (const role of ["browser", "ios", "android"]) {
+            digest.update(`${role}\n${report.clients[role].captureSha256}\n`);
+          }
+          report.sourceCaptureBundleSha256 = digest.digest("hex");
+        },
+      ],
+    );
+    for (const [label, mutate] of cases) {
+      const smokeReport = p0ClientSmokeReport();
+      mutate(smokeReport);
+      const manifest = attest(unsignedManifest(physicalDeviceRelayReport(), smokeReport));
+      await expect(
+        validateHealthReleaseEvidence(
+          environmentFor(manifest, physicalDeviceRelayReport(), smokeReport),
+          checkTime,
+          trustStore,
+          releaseRuntime,
+        ),
+        label,
+      ).rejects.toThrow(
+        /ordered P0 flow inventory|ordered structural pass assertion|sourceCaptureBundleSha256/u,
+      );
+    }
+  });
+
   it("requires P0 smoke completion to precede manifest review strictly", async () => {
     const smokeReport = p0ClientSmokeReport();
     const relayReport = physicalDeviceRelayReport();
@@ -1096,7 +1188,7 @@ describe("native health release evidence", () => {
     ).rejects.toThrow(/canonical field order/u);
   });
 
-  it("requires the signed v5 manifest itself to use canonical unambiguous JSON", async () => {
+  it("requires the signed v6 manifest itself to use canonical unambiguous JSON", async () => {
     const manifest = attest();
     const noncanonical = JSON.stringify(manifest);
     await expect(

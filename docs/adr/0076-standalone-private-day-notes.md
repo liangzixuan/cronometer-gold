@@ -512,3 +512,17 @@ remain pending. The previous baseline's automatic results do not cover this
 tree. External Claude Code review, hosted, signed-device/accessibility and
 release acceptance remain separate. The next bounded source candidate starts
 with native evidence-contract model review after exact-commit delivery proof.
+
+
+## Delivery closure — 2026-09-16 UTC
+
+The prior source/local snapshot above is preserved as history. The reviewed 51
+paths were committed and pushed as `93440578072202710f94f10e6c0dc15bf5a17660`.
+[CI 35032737042](https://github.com/liangzixuan/cronometer-gold/actions/runs/35032737042)
+passed its three jobs; [container run 35032737075](https://github.com/liangzixuan/cronometer-gold/actions/runs/35032737075)
+passed all nine actual jobs on attempt one. Exact responses, source closure and
+independent review were bound in the private delivery record at
+2026-09-16T01:38:39Z with clean equal local/tracking/live heads. This closes source
+delivery, not hosted, physical-device, external Claude or release acceptance.
+[ADR 0077](0077-role-specific-p0-evidence.md) is the bounded successor for the
+versioned native acceptance-evidence gap; it does not alter this note decision.
