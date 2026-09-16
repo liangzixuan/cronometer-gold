@@ -205,11 +205,13 @@ Keep the candidate owned by the current operator and mode `0600` in ignored
 include raw status/configuration output,
 Tailscale IPs, node IDs, user identities, auth keys, tokens, health payloads, or
 device identifiers in the normalized candidate; retain any sensitive source
-captures only in the independently controlled review location. The candidate
-alone is rejected as release authority. Only after the independent reviewer
-checks every exact source byte may they sign the complete v6 health manifest;
-that trusted Ed25519 signature binds the candidate's exact SHA-256 digest,
-trust-boundary marker, and all-18 source bundle digest.
+captures only in the independently controlled review location. The historical
+candidate alone was not release authority; its all-18 bundle remains historical.
+For current Windows evidence, independent review must reconcile the v4 report
+and every source byte under the
+[review-package v2 normative matrix](../tailscale/relay-review-package-v2.md#normative-phaseevidence-matrix),
+currently 72 roles. Only that compatible report and bundle may be bound by the
+current v6 health-manifest signature; this does not make a Mac v2 candidate valid.
 
 Do not supply a historical Mac v2 candidate through the current relay-report
 path or base64 environment inputs. Those gate inputs are reserved for a

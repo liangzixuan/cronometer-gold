@@ -23,6 +23,7 @@
     "test:localstack": "python3 -B infra/localstack/run-tests.py",
     "test:localstack:contracts": "python3 -B -m unittest discover -s infra/localstack/tests -p 'test_*.py'",
     "test:tailscale:contracts": "python3 -B -m unittest discover -s infra/tailscale/tests -p 'test_*.py'",
+    "test:smoke:contracts": "python3 -B -m unittest infra.smoke.tests.test_p0_client_smoke",
     "manifests:check": "tsx scripts/check-food-source-manifests.mjs",
     "restore:drill": "node scripts/postgres-restore-drill.mjs",
     "infra:config": "docker compose --project-name nutrition-tracker-local --env-file .env -f infra/docker/compose.yml config --quiet",

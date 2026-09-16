@@ -49,6 +49,9 @@ jobs:
       - name: Validate the physical-device private-tailnet policy renderer
         run: python3 -B -m unittest discover -s infra/tailscale/tests -p 'test_*.py'
 
+      - name: Validate the P0 client-smoke normalizer contracts
+        run: python3 -B -m unittest infra.smoke.tests.test_p0_client_smoke
+
       - name: Prove the synthetic Windows collector producer boundary
         run: python3 -B -m infra.tailscale.tests.windows_install_collector_producer_check
 

@@ -104,36 +104,40 @@ older result, and source completion never closes external acceptance.
 
 | Order | Work | Owner and concrete exit |
 | --- | --- | --- |
-| Active delivery milestone | Native acceptance evidence contracts | ADR 0077 source is complete and locally verified: P0 v3 with exact browser/iOS/Android inventories of 21/22/22 and health manifest v6. Independent review, focused tests and canonical check/build passed. Record the successor commit and all required exact-commit automatic outcomes before opening another source slice. Device and cloud execution remain separately gated. |
-| Delivery follow-up | Exact-commit automatic evidence | Delivery owner records CI and actual supply-chain job outcomes for the identified commit. Missing, running or skipped required jobs remain open; artifact/provenance and release approval stay separate. |
-| Local acceptance follow-up | Repeat printing and direct Ctrl+P | Browser QA operator/user completes the two remaining ADR 0028 checks on a pinned build and retains the observed result. Existing preview/Cancel and PDF evidence do not close them. |
-| External review | Commit-specific Claude Code review | External reviewer supplies the report and decision; implementation owner resolves findings. In-task reviews do not substitute. |
+| Active source milestone | ADR 0077 review follow-up | Wire Python normalizer tests into push/PR CI and a named local command, strengthen semantic predecessor/timing coverage, and reconcile runbook/status prose without changing parser behavior or adding features. The exact `expo-build-properties@57.0.20` prerequisite is approved and installed; strict install, mobile configuration, audit and license checks passed. Final source checks and the successor's exact-commit automatic evidence remain pending. |
+| Delivery follow-up | Exact-commit automatic evidence | ADR 0077 at `805b937` is delivered with all three CI/nine actual container jobs passed on attempt one. The follow-up requires its own successful exact-commit checks; artifact/provenance and release approval stay separate. |
+| Completed local follow-up | Repeat printing and direct Ctrl+P | September 16 Brave checks passed repeated preview/Cancel cleanup and neutral direct Ctrl+P on a content-bound build. [ADR 0028](../adr/0028-print-current-nutrition-report.md#native-browser-follow-up--2026-09-16-utc) retains dated scope and limits. |
+| External review | Commit-specific Claude Code review | Full user-provided Claude Code CLI/Opus 5 report, September 16 21:05–21:31 UTC, reports no ADR 0077 blockers at `805b937` within its 17-file diff and P0 trust-path scope. Follow-up bytes and excluded application/release scopes are not covered. |
 | Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Release owner assigns the roles and reviewable packages listed in current readiness; each lane advances only under applicable existing authorization and its unchanged release gate. |
 
-### Active bounded milestone: native acceptance evidence contracts
+### Active bounded milestone: ADR 0077 review follow-up
 
 [ADR 0076](../adr/0076-standalone-private-day-notes.md) is delivered at `9344057`.
-Its final local checks, scoped browser/integration evidence and exact-commit
-automatic CI/container results passed. Signed-device, hosted, independent Claude
-review and release acceptance remain separate; see current readiness for dates.
+[ADR 0077](../adr/0077-role-specific-p0-evidence.md) is delivered at `805b937`,
+with P0 v3 inventories of 21/22/22 and health manifest v6. Source/local evidence
+passed; delivery closed September 16 at 03:33:22 UTC after all three CI and nine
+actual container jobs succeeded on attempt one. The 06:17:15 UTC read-only
+observation confirmed those same outcomes, without rerunning workflows.
+Device, hosted, signed-review and release acceptance remain separate.
 
-[ADR 0077](../adr/0077-role-specific-p0-evidence.md) addresses the closed P0 v2
-inventory's inability to authenticate native camera capture, configurable groups
-and standalone notes. Independent model review accepted all 19 previous IDs in
-relative order plus two shared flows and one native-only camera flow. Exact
-inventories are 21 browser and 22 for each native client; a browser camera pass
-or an N/A result is invalid. Current capture, package, report and source-bundle
-contracts advance together to v3, with independently signed health manifest v6.
+The accepted review follow-up adds explicit Python CI/local-test wiring,
+semantic predecessor and time-boundary regressions, and concise contract/status
+clarifications. Existing v3 timestamps stay non-decreasing, including ties;
+out-of-session/backward times and incorrect final-capture times remain invalid.
+The follow-up now has 15 changed files: the original 11-file review scope plus
+four approved dependency inputs. The production normalizer/verifier and product
+behavior remain unchanged. Canonical `pnpm check` failed on September 16 at
+21:48:02 UTC during `mobile:check` when Expo required `~57.0.20` but
+`expo-build-properties@57.0.19` was pinned. The 157 root cases passed before
+that failure; canonical type/test stages were not reached.
 
-Implementation and independent review are complete. Focused Python 13/13 and
-JavaScript 33/33 tests, canonical `pnpm check` and `pnpm build` passed on September
-16 UTC. Incomplete, relabelled and mixed-version submissions are rejected while
-raw-byte, identity, time, private-file, artifact and reviewer-signature checks
-remain intact. The relay report remains v4. These tools do not collect or
-authenticate device observations. Exact-commit CI and all nine actual container
-jobs remain pending until observed after delivery. Finish that gate before another
-product feature; device, accessibility, hosted, catalogue and reviewer release
-gates remain open.
+The user then approved the exact `57.0.20` release-age exception, installation
+and one production audit. Installed bytes match the reviewed four-file proposal;
+strict frozen/strict-peer install, mobile configuration and license policy passed.
+The approved audit passed with zero reviewed advisories and four lower-severity
+advisories visible; that authorization is consumed. The earlier failure and
+previous approvals remain historical. Final canonical validation and the
+successor's exact-commit automatic evidence remain pending.
 
 ### Milestone and external-decision boundaries
 

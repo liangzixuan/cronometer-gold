@@ -171,6 +171,66 @@ class P0ClientSmokeTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             SMOKE.FLOW_IDS_BY_CLIENT["browser"] = expected_native
 
+    def test_new_flows_follow_their_semantic_predecessors(self) -> None:
+        for role, flows in SMOKE.FLOW_IDS_BY_CLIENT.items():
+            with self.subTest(role=role):
+                self.assertEqual(
+                    flows[flows.index("diary-pagination") + 1], "diary-group-configuration"
+                )
+                self.assertEqual(
+                    flows[flows.index("custom-food-create-revise-log") + 1], "diary-day-note"
+                )
+                if role == "browser":
+                    self.assertNotIn("camera-barcode-capture", flows)
+                else:
+                    self.assertEqual(
+                        flows[flows.index("food-search") + 1], "camera-barcode-capture"
+                    )
+
+    def test_accepts_adjacent_and_all_equal_observation_times(self) -> None:
+        for all_equal in (False, True):
+            with self.subTest(all_equal=all_equal):
+                self.bundle = CaptureBundle(Path(self.temporary.name))
+                for capture in self.bundle.values.values():
+                    if all_equal:
+                        for result in capture["results"]:
+                            result["observedAt"] = self.bundle.started_at
+                        capture["capturedAt"] = self.bundle.started_at
+                    else:
+                        capture["results"][6]["observedAt"] = capture["results"][5]["observedAt"]
+                if all_equal:
+                    self.bundle.executed_at = self.bundle.started_at
+                    self.bundle.completed_at = self.bundle.started_at
+                self.index = self.bundle.write()
+                report = json.loads(SMOKE.normalize_candidate(str(self.index)))
+                for role in SMOKE.CLIENT_ROLES:
+                    self.assertEqual(report["clients"][role]["results"], self.bundle.values[role]["results"])
+                    self.assertEqual(report["clients"][role]["capturedAt"], self.bundle.values[role]["capturedAt"])
+                if all_equal:
+                    self.assertEqual(report["startedAt"], report["executedAt"])
+                    self.assertEqual(report["executedAt"], report["completedAt"])
+
+    def test_rejects_decreasing_out_of_session_and_unbound_capture_times(self) -> None:
+        for role in SMOKE.CLIENT_ROLES:
+            for case in ("decreasing", "before-start", "after-execution", "capture-mismatch"):
+                with self.subTest(role=role, case=case):
+                    self.bundle = CaptureBundle(Path(self.temporary.name))
+                    self.index = self.bundle.write()
+                    def mutate(capture):
+                        if case == "decreasing":
+                            capture["results"][5]["observedAt"] = capture["results"][3]["observedAt"]
+                        elif case == "before-start":
+                            capture["results"][0]["observedAt"] = "2026-08-25T23:59:59.999Z"
+                        elif case == "after-execution":
+                            capture["results"][-1]["observedAt"] = "2026-08-26T01:04:00.001Z"
+                            capture["capturedAt"] = capture["results"][-1]["observedAt"]
+                        else:
+                            capture["capturedAt"] = capture["results"][-2]["observedAt"]
+                    self.rewrite(role, mutate)
+                    message = "capturedAt must equal" if case == "capture-mismatch" else "ordered structural pass assertion"
+                    with self.assertRaisesRegex(SMOKE.P0SmokeError, message):
+                        SMOKE.normalize_candidate(str(self.index))
+
     def test_bundle_digest_has_fixed_role_order_and_binds_every_capture(self) -> None:
         raws = {
             role: Path(self.bundle.paths[role]).read_bytes() for role in SMOKE.CLIENT_ROLES

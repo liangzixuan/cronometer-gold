@@ -33,7 +33,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0025](./0025-manual-activity-ledger-boundary.md) | Private manual-activity ledger boundary | Accepted for local implementation; automatic energy adjustment, offline mutation, platform import, and device evidence blocked |
 | [0026](./0026-coordinated-today-overview.md) | Coordinated profile-local Today overview | Accepted for local implementation; hosted, signed-device, physical cross-client, and assistive-technology evidence blocked |
 | [0027](./0027-hydration-time-corrections.md) | Explicit profile-local hydration time corrections | Accepted for local implementation; hosted and physical-client acceptance pending |
-| [0028](./0028-print-current-nutrition-report.md) | Print the current coherent nutrition report on web | Source checkpoint; preview/Cancel verified; repeat/direct print, automatic evidence and independent review pending |
+| [0028](./0028-print-current-nutrition-report.md) | Print the current coherent nutrition report on web | Source delivered; bounded repeat/Cancel and Ctrl+P passed September 16; external/release acceptance separate |
 | [0029](./0029-pasted-ingredient-review.md) | Explicit review of pasted ingredient lines in the web new-recipe builder | Accepted; local validation passed; automatic and release evidence pending |
 | [0030](./0030-mobile-pasted-ingredient-review.md) | Explicit native review of pasted ingredient lines using shared parsing and existing recipe contracts | Accepted for bounded source implementation; validation and release evidence pending |
 | [0031](./0031-recipe-nutrition-basis-and-coverage.md) | Explicit saved-recipe nutrition basis and coverage on web and mobile | Source complete; local validation passed; automatic and release evidence pending |
@@ -82,7 +82,7 @@ ADR with a new ADR instead of rewriting its decision.
 | [0074](./0074-native-picker-availability.md) | Prevent duplicate native nutrient choices | Source/local complete; automatic and release acceptance separate |
 | [0075](./0075-web-repeat-retry.md) | Preserve web Diary Repeat retries across clock changes | Source/local complete; automatic and release acceptance separate |
 | [0076](./0076-standalone-private-day-notes.md) | Standalone owner-private day notes with immutable history and complete export/erasure | Source/local and exact-commit automatic evidence complete at 9344057; external/release acceptance pending |
-| [0077](./0077-role-specific-p0-evidence.md) | Role-specific P0 v3 capture/review evidence and health manifest v6 | Source complete and local verified; exact-commit automatic evidence pending; device/release acceptance separate |
+| [0077](./0077-role-specific-p0-evidence.md) | Role-specific P0 v3 capture/review evidence and health manifest v6 | Implemented at 805b937; review follow-up validation pending; external/device/release acceptance separate |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

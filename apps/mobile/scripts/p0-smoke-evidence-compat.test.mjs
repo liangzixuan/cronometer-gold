@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,30 +20,152 @@ const normalizer = join(repositoryRoot, "infra", "smoke", "p0_client_smoke.py");
 const iosBuildId = "11111111-1111-4111-8111-111111111111";
 const androidBuildId = "22222222-2222-4222-8222-222222222222";
 
+function createCaptureIndex(directory) {
+  return execFileSync(
+    "python3",
+    [
+      "-B",
+      "-c",
+      [
+        "import sys",
+        "from pathlib import Path",
+        "from infra.smoke.tests.test_p0_client_smoke import CaptureBundle",
+        "print(CaptureBundle(Path(sys.argv[1])).write())",
+      ].join("; "),
+      directory,
+    ],
+    { cwd: repositoryRoot, encoding: "utf8" },
+  ).trim();
+}
+
+function normalizeCandidate(indexPath) {
+  return execFileSync(
+    "python3",
+    ["-B", normalizer, "--capture-index", indexPath, "--acknowledge-unsigned-candidate"],
+    { cwd: repositoryRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+}
+
+function validateCandidate(report) {
+  return validateUnsignedP0ClientSmokeCandidateStructureForReview(
+    report,
+    { apiOrigin: report.apiOrigin },
+    report.gitCommit,
+    {
+      physicalDevice: {
+        ios: { easBuildId: iosBuildId },
+        android: { easBuildId: androidBuildId },
+      },
+    },
+    Date.parse(report.executedAt),
+    Date.parse("2026-08-26T01:10:00.000Z"),
+  );
+}
+
+function assertSemanticAdjacency(inventories) {
+  for (const role of ["browser", "ios", "android"]) {
+    const ids = inventories[role];
+    expect(ids[ids.indexOf("diary-pagination") + 1]).toBe("diary-group-configuration");
+    expect(ids[ids.indexOf("custom-food-create-revise-log") + 1]).toBe("diary-day-note");
+    if (role === "browser") expect(ids).not.toContain("camera-barcode-capture");
+    else expect(ids[ids.indexOf("food-search") + 1]).toBe("camera-barcode-capture");
+  }
+}
+
 describe("P0 client-smoke review-package normalizer trust boundary", () => {
+  it("binds new flows to semantic predecessors independently of generated fixtures", () => {
+    assertSemanticAdjacency(P0_CLIENT_SMOKE_FLOW_IDS_BY_CLIENT);
+    for (const role of ["ios", "android"]) {
+      const wrongPosition = structuredClone(P0_CLIENT_SMOKE_FLOW_IDS_BY_CLIENT);
+      const ids = wrongPosition[role];
+      ids.splice(ids.indexOf("camera-barcode-capture"), 1);
+      ids.splice(ids.indexOf("food-search"), 0, "camera-barcode-capture");
+      expect(() => assertSemanticAdjacency(wrongPosition)).toThrow();
+    }
+  });
+
+  it.each(["adjacent", "all"])("accepts %s tied times from actual Python normalization", (ties) => {
+    const directory = mkdtempSync(join(tmpdir(), "nutrition-p0-smoke-ties-"));
+    try {
+      const indexPath = createCaptureIndex(directory);
+      const index = JSON.parse(readFileSync(indexPath, "utf8"));
+      for (const role of ["browser", "ios", "android"]) {
+        const capture = JSON.parse(readFileSync(index.captures[role], "utf8"));
+        if (ties === "all") {
+          for (const result of capture.results) result.observedAt = index.startedAt;
+          capture.capturedAt = index.startedAt;
+        } else {
+          capture.results[6].observedAt = capture.results[5].observedAt;
+        }
+        writeFileSync(index.captures[role], JSON.stringify(capture));
+      }
+      if (ties === "all") {
+        index.executedAt = index.startedAt;
+        index.completedAt = index.startedAt;
+        writeFileSync(indexPath, JSON.stringify(index));
+      }
+      const reportBytes = normalizeCandidate(indexPath);
+      const report = JSON.parse(reportBytes);
+      expect(reportBytes).toBe(`${canonicalJson(report)}\n`);
+      expect(validateCandidate(report)).toEqual(report);
+      const bundleDigest = createHash("sha256").update(
+        "nutrition-tracker-p0-client-smoke-source-capture-bundle-v3\n",
+      );
+      for (const role of ["browser", "ios", "android"]) {
+        const raw = readFileSync(index.captures[role]);
+        const capture = JSON.parse(raw);
+        const digest = createHash("sha256").update(raw).digest("hex");
+        expect(report.clients[role].captureSha256).toBe(digest);
+        expect(report.clients[role].results).toEqual(capture.results);
+        expect(report.clients[role].capturedAt).toBe(capture.results.at(-1).observedAt);
+        bundleDigest.update(`${role}\n${digest}\n`);
+      }
+      expect(report.sourceCaptureBundleSha256).toBe(bundleDigest.digest("hex"));
+      if (ties === "all") {
+        expect(report.startedAt).toBe(report.executedAt);
+        expect(report.executedAt).toBe(report.completedAt);
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["decreasing", "before-start", "after-execution", "capture-mismatch"])(
+    "rejects %s times in every client",
+    (timingCase) => {
+      const directory = mkdtempSync(join(tmpdir(), "nutrition-p0-smoke-time-rejection-"));
+      try {
+        const original = JSON.parse(normalizeCandidate(createCaptureIndex(directory)));
+        for (const role of ["browser", "ios", "android"]) {
+          const report = structuredClone(original);
+          const client = report.clients[role];
+          if (timingCase === "decreasing") {
+            client.results[5].observedAt = client.results[3].observedAt;
+          } else if (timingCase === "before-start") {
+            client.results[0].observedAt = "2026-08-25T23:59:59.999Z";
+          } else if (timingCase === "after-execution") {
+            client.results.at(-1).observedAt = "2026-08-26T01:04:00.001Z";
+            client.capturedAt = client.results.at(-1).observedAt;
+          } else {
+            client.capturedAt = client.results.at(-2).observedAt;
+          }
+          expect(() => validateCandidate(report)).toThrow(
+            timingCase === "capture-mismatch"
+              ? /capturedAt must equal/u
+              : /ordered structural pass assertion/u,
+          );
+        }
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("emits a structurally compatible unsigned candidate that remains untrusted alone", async () => {
     const directory = mkdtempSync(join(tmpdir(), "nutrition-p0-smoke-compat-"));
     try {
-      const indexPath = execFileSync(
-        "python3",
-        [
-          "-B",
-          "-c",
-          [
-            "import sys",
-            "from pathlib import Path",
-            "from infra.smoke.tests.test_p0_client_smoke import CaptureBundle",
-            "print(CaptureBundle(Path(sys.argv[1])).write())",
-          ].join("; "),
-          directory,
-        ],
-        { cwd: repositoryRoot, encoding: "utf8" },
-      ).trim();
-      const reportBytes = execFileSync(
-        "python3",
-        ["-B", normalizer, "--capture-index", indexPath, "--acknowledge-unsigned-candidate"],
-        { cwd: repositoryRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-      );
+      const indexPath = createCaptureIndex(directory);
+      const reportBytes = normalizeCandidate(indexPath);
       const report = JSON.parse(reportBytes);
       expect(reportBytes).toBe(`${canonicalJson(report)}\n`);
       expect(report.schemaVersion).toBe(P0_CLIENT_SMOKE_REPORT_SCHEMA);
@@ -79,10 +202,6 @@ describe("P0 client-smoke review-package normalizer trust boundary", () => {
         expect(Object.isFrozen(ids)).toBe(true);
         expect(ids).toHaveLength(role === "browser" ? 21 : 22);
         expect(ids.filter((flowId) => historicalIds.includes(flowId))).toEqual(historicalIds);
-        expect(ids[ids.indexOf("diary-pagination") + 1]).toBe("diary-group-configuration");
-        expect(ids[ids.indexOf("custom-food-create-revise-log") + 1]).toBe("diary-day-note");
-        if (role === "browser") expect(ids).not.toContain("camera-barcode-capture");
-        else expect(ids[ids.indexOf("food-search") + 1]).toBe("camera-barcode-capture");
       }
       expect(report.trustBoundary).toBe(
         "unsigned-structural-candidate-requires-independent-ed25519-health-manifest-review",

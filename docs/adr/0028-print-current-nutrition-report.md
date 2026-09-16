@@ -1,6 +1,6 @@
 # ADR 0028: Print the current nutrition report on web
 
-- Status: Accepted for source implementation; native browser and automatic evidence pending
+- Status: Source delivered; bounded native-browser checks passed 2026-09-16; external/release acceptance separate
 - Date: 2026-09-09
 - Scope: M3B web presentation of the existing M3A report snapshot
 
@@ -121,3 +121,21 @@ with source checkpoint delivery does not close these checks or establish full
 local acceptance. Applicable exact-commit CI/container evidence, independent Claude
 Code review and the existing release gates remain required. The decision above
 and its acceptance criteria are unchanged.
+
+## Native-browser follow-up — 2026-09-16 UTC
+
+At 04:05:41 and 04:06:39 UTC, actual Brave report previews and Cancel passed on
+the same loaded synthetic 14-day Protein report. After each cancellation, print
+authorization was false, no printable article remained, the Print action was
+enabled and the report was unchanged. At 04:07:47 UTC, actual Ctrl+P displayed
+only the one-page neutral guidance; Cancel left the same clean state. These
+observations close the two previously unconfirmed repeat/shortcut checks.
+
+The existing production preview was content-bound to unchanged relevant source
+at `805b937`: it was not freshly rebuilt at that commit. The Windows readiness
+record `WINDOWS-READINESS-2026-09-16-PRINT-QA.md` retains the native observations
+and bounded peer review. Both prepared previews used Microsoft Print to PDF,
+but no final Print/Save or physical output occurred. Browser-owned headers and
+footers remained visible. The earlier six Letter/A4 PDFs remain dated evidence;
+this follow-up does not revalidate every nutrient/layout, API/database behavior,
+screen readers, physical devices, external Claude review or release acceptance.

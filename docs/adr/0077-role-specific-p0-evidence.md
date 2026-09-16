@@ -1,6 +1,6 @@
 # ADR 0077: Role-specific P0 review evidence for camera, groups and day notes
 
-- Status: Source complete and local verified; exact-commit automatic and external acceptance pending
+- Status: Implemented at `805b937`; review follow-up validation pending; external/release acceptance separate
 - Date: 2026-09-16 UTC
 - Planning baseline: `93440578072202710f94f10e6c0dc15bf5a17660`
 
@@ -107,8 +107,10 @@ or evidence that the normalizer can itself observe behavior.
 
 Keep the unsigned trust marker, synthetic-only classification, raw-byte capture
 hashes, domain-separated role order, exact private origin/commit/build IDs,
-monotonic UTC timing, session bounds, strict JSON and protected no-follow file
-reads. Keep independent Ed25519 review, reviewer trust/rotation, exact artifact
+non-decreasing UTC timing (equal `observedAt` values allowed within each role),
+inclusive `startedAt`–`executedAt` observation bounds, final `capturedAt`
+equality, strict JSON and protected no-follow file reads. Keep independent
+Ed25519 review, reviewer trust/rotation, exact artifact
 and deployment bindings and all health device checks unchanged. Relay review
 package/source-bundle v2 and relay report v4 remain their existing contracts;
 only their current outer health-manifest reference advances to v6.
@@ -158,3 +160,51 @@ This completes source and local validation only. Exact-commit automatic CI and
 all nine actual container jobs must still be observed after commit/push. External
 Claude review, protected physical-device observations, independent signed review,
 hosted acceptance and release approval remain separate.
+
+## Delivery and review follow-up — 2026-09-16 UTC
+
+Commit `805b93774791c7fc4fdfd71b5ec38c0fe09ef013` completed delivery at
+03:33:22 UTC with clean equal local/tracking/live heads. [CI 35046719322](https://github.com/liangzixuan/cronometer-gold/actions/runs/35046719322)
+passed all three jobs and [container run 35046719379](https://github.com/liangzixuan/cronometer-gold/actions/runs/35046719379)
+passed all nine actual jobs on attempt one, without skipped required jobs.
+A fresh read-only observation at 06:17:15 UTC confirmed those same outcomes;
+it did not rerun the workflows.
+
+The user supplied the full Claude Code CLI report (Opus 5,
+`claude-opus-5[1m]`, September 16 21:05–21:31 UTC), with no blocking findings
+for ADR 0077 at that commit. It identifies the exact base and packet manifest,
+covers the 17-file diff and surrounding P0 trust paths, and recommends the
+follow-up below. Its scope excludes web/API/database/worker implementation and
+does not approve successor bytes or constitute a signed release/device attestation.
+
+The active follow-up adds push/PR CI and a named local command for Python tests,
+pins each new flow's semantic predecessor, and documents/tests the existing
+non-decreasing time rule in both languages. Ties are accepted; earlier-than-start,
+backward and after-execution observations remain rejected, and `capturedAt`
+still equals the final observation. No production parser behavior changes.
+Authentic captures cannot be assumed absent; stricter timestamps would require
+a future reviewed contract decision. Current relay guidance also separates the
+historical 18-input bundle from the normative Windows v2 matrix of 72 roles.
+Final source checks and the follow-up commit's automatic evidence remain pending.
+
+### Approved compatibility prerequisite
+
+The follow-up's canonical check stopped at `mobile:check` on September 16
+21:48:02 UTC: Expo required `expo-build-properties~57.0.20` while `57.0.19`
+was pinned. Its 157 root cases passed first; canonical type/test stages were
+not reached. That failed run remains historical evidence.
+
+The user subsequently approved the exact `57.0.20` release-age exception,
+installation and one production audit. Installed bytes matched the reviewed
+four-file proposal; strict frozen/strict-peer installation, mobile configuration
+and license policy passed. The one approved audit passed at 22:06:38 UTC with
+zero reviewed advisories and four lower-severity advisories visible; its
+authorization is consumed. License policy covered 535 production packages and
+14 existing reviewed exceptions. The follow-up now has 15 changed files,
+including the four approved dependency inputs. The production Python normalizer
+and JavaScript verifier remain unchanged. An isolated source-only build then
+passed strict installation and contracts-before-mobile compilation, producing
+fresh iOS/Android bundles from all 934 unchanged source inputs without copied
+application output or Turbo. Final canonical validation and the new commit's
+automatic evidence are still pending; the older external review does not approve
+these new bytes.

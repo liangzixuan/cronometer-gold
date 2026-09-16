@@ -144,9 +144,13 @@ exact `nutrition-tracker-p0-client-smoke-capture-v3` envelope:
 }
 ```
 
-Supply exactly 21 browser or 22 native result objects in the role's inventory order. Observation times
-must be monotonic. `capturedAt` must equal the final observation. For `ios` and
-`android`, `testedEasBuildId` is the distinct physical-device EAS build UUID;
+Supply exactly 21 browser or 22 native result objects in the role's inventory
+order. Within each capture, `observedAt` values must be non-decreasing: equal
+timestamps are allowed. Every observation must fall within the inclusive
+`startedAt`–`executedAt` interval; an earlier-than-start, backward or
+after-execution observation is rejected. `capturedAt` must equal the final
+observation. For `ios` and `android`, `testedEasBuildId` is the distinct
+physical-device EAS build UUID;
 for `browser`, it is exactly `null`. All captures bind the same commit and the
 exact private `.ts.net` HTTPS API origin exercised. This does not invent or bind
 a browser deployment origin.
@@ -180,6 +184,10 @@ The session must be at most 24 hours and satisfy
 `startedAt <= executedAt <= completedAt`. A copied placeholder is intentionally
 invalid and cannot mint a candidate.
 
+This describes the existing v3 timing behavior; it does not tighten the parser.
+Do not infer that authentic captures are absent. Requiring strictly increasing
+timestamps would need a future reviewed contract decision.
+
 ## Normalize and independently review
 
 Run locally without adding the package or candidate to Git:
@@ -208,3 +216,10 @@ and rerun the normalizer from those exact files. The reviewer then puts
 health-release manifest and signs the full canonical manifest with the trusted
 Ed25519 review key. Only the repository health verifier's successful validation
 of that signed manifest and candidate is authoritative release evidence.
+
+## Local contract checks
+
+Run `pnpm test:smoke:contracts` from the repository root for the Python
+normalizer suite (`python3 -B -m unittest infra.smoke.tests.test_p0_client_smoke`).
+The push/PR quality workflow runs the same suite. These synthetic parser checks
+do not collect captures or establish device/release acceptance.
