@@ -102,7 +102,8 @@ retains earlier boundaries. A successful successor never changes an older result
 
 | Order | Work | Concrete exit |
 | --- | --- | --- |
-| Active source milestone | Optional native public-food log time (ADR 0081) | Shared optional time for search/barcode Add, unchanged automatic defaults and exact durable retries. Focused native review/checks, canonical gates and exact-commit automatic evidence. |
+| Active source milestone | Native public-food log date shortcuts (ADR 0082) | Today/Yesterday in the profile time zone at activation; preserve drafts, explicit Add and exact durable retries. Focused review/checks, canonical gates and exact-commit automatic evidence. |
+| Completed source milestone | Optional native public-food log time (ADR 0081) | Delivered at `ddd19bb`: shared explicit time with automatic defaults; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Compact native saved entry-note previews (ADR 0080) | Delivered at `28f6e4f`: exact compact/full saved text; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Native recipe draft protection (ADR 0079) | Delivered at `bacc261`: explicit dirty replacement, retained conflict edits and exact retries; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Compact native saved day-note preview (ADR 0078) | Delivered at `b9a081c`: bounded exact text with full/collapsed views; local gates and all three CI/nine actual container jobs passed. |
@@ -110,16 +111,15 @@ retains earlier boundaries. A successful successor never changes an older result
 | Completed external review | Scoped Claude review at `805b937` | The supplied report found no ADR 0077 blockers. Its recommendations were addressed in the delivered follow-up; the report remains limited to its original scope. Routine product work does not require another paid review. |
 | Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Advance only under applicable existing authorization and unchanged release gates. |
 
-### Active bounded milestone: optional native public-food log time
+### Active bounded milestone: native public-food log date shortcuts
 
-[ADR 0081](../adr/0081-native-public-food-log-time.md) lets a person choose an
-optional local time when adding a public food from search or barcode results.
-Blank preserves current-instant/today and local-noon/other-date defaults.
-Explicit time uses existing validation; preserve exact food/portion identity,
-private/route/lifecycle boundaries and secured retry bodies.
+[ADR 0082](../adr/0082-native-public-food-log-date-shortcuts.md) adds Today and
+Yesterday beside the public-food diary date. Resolve the profile-local calendar
+date at activation, retain manual entry/time/meal/quantities, and keep Add explicit.
+Preserve existing stale/context/lifecycle guards and exact secured retry bodies.
 
-The prior [entry-note previews](../adr/0080-native-saved-entry-note-preview.md)
-are delivered at `28f6e4f`. No dependency change, install, audit,
+The prior [optional log time](../adr/0081-native-public-food-log-time.md)
+is delivered at `ddd19bb`. No dependency change, install, audit,
 browser/service/device action or paid review is part of this native slice.
 The earlier Expo `.20` audit
 authorization is consumed. Follow the

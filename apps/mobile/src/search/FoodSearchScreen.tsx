@@ -23,6 +23,7 @@ import {
   localDateTimeToInstant,
   type MealSlot,
   quickAddOccurredAt,
+  shiftLocalDate,
 } from "../diary/diary";
 import {
   MAX_QUICK_ADD_OUTBOX_ITEMS,
@@ -322,6 +323,11 @@ export function FoodSearchScreen({
     logGeneration.current += 1;
     setDiaryDate(value);
     if (!isLocalDate(value)) setAddMessage("Date must use YYYY-MM-DD.");
+  }
+  function chooseRecentLogDate(offset: 0 | -1) {
+    if (!canEditLogDraft()) return;
+    const today = localDateInTimeZone(new Date(), profileTimeZone);
+    changeLogDate(offset === 0 ? today : shiftLocalDate(today, offset));
   }
   function changeLogTime(value: string) {
     if (!canEditLogDraft() || value === localTime) return;
@@ -1099,6 +1105,26 @@ export function FoodSearchScreen({
             style={styles.input}
             value={diaryDate}
           />
+          <View style={styles.intentRow}>
+            {(
+              [
+                { label: "Today", offset: 0 },
+                { label: "Yesterday", offset: -1 },
+              ] as const
+            ).map(({ label, offset }) => (
+              <Pressable
+                key={label}
+                accessibilityLabel={`Set diary date to ${label.toLowerCase()}`}
+                accessibilityRole="button"
+                accessibilityState={{ disabled: !canEditLogDraft() }}
+                disabled={!canEditLogDraft()}
+                onPress={() => chooseRecentLogDate(offset)}
+                style={[styles.intentButton, !canEditLogDraft() && styles.disabled]}
+              >
+                <Text style={styles.intentLabel}>{label}</Text>
+              </Pressable>
+            ))}
+          </View>
           <Text style={styles.fieldLabel}>Local time (optional)</Text>
           <TextInput
             accessibilityLabel="Local time (optional)"

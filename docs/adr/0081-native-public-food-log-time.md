@@ -1,6 +1,6 @@
 # ADR 0081: Optional local time for native public-food logging
 
-Status: Source complete and reviewed; final canonical and exact-commit automatic evidence pending.
+Status: Implemented at ddd19bb; local and exact-commit automatic evidence passed; device/release acceptance separate.
 
 ## Context
 
@@ -68,5 +68,18 @@ The final focused suite passed all 119 cases (35 component and 84 existing),
 with native types/format and independent source/documentation review passing.
 Receipt ownership survives ordinary draft edits while retired lifecycle outcomes
 cannot publish into the renewed view. Canonical check/build and the pushed
-commit's automatic outcomes will be recorded separately in dated readiness evidence.
+commit's automatic outcomes are recorded separately in dated readiness evidence.
 The synchronous hook harness is not concurrent React or physical-device proof.
+
+
+## Delivery evidence
+
+Delivered at `ddd19bb83435818c2ad4e424e912238b0dd8dff5`. Final canonical
+pnpm check passed 1,803 fresh tests, with 2,327 cached passes and 93 cached opt-in
+skips. Build passed all 11 tasks, ten cached; Android/iOS exports were fresh.
+All three jobs in [CI 35249813414](https://github.com/liangzixuan/cronometer-gold/actions/runs/35249813414)
+and all nine actual jobs in [container 35249813424](https://github.com/liangzixuan/cronometer-gold/actions/runs/35249813424)
+passed on attempt one. The final container job completed September 17, 2026,
+18:22:44 UTC; the 18:24:11 UTC observation verified complete job inventories.
+Clean matching local/tracking/live heads and all eight frozen committed files
+were reverified at 18:24:10 UTC. This evidence retains its exact commit scope.

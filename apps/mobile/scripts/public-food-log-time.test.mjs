@@ -546,6 +546,9 @@ describe("native optional public-food log time", () => {
       expect(first.headers.get("x-expected-profile-time-zone")).toBe("America/Chicago");
       await c.edit("Local time (optional)", "18:30");
       vi.setSystemTime(new Date("2026-09-18T01:00:00.000Z"));
+      byLabel(c.tree, "Set diary date to today", "Pressable").props.onPress();
+      await c.settle();
+      expect(byLabel(c.tree, "Diary local date").props.value).toBe("2026-09-17");
       const before = wire.length;
       await controller.requestDrain();
       expect(wire).toHaveLength(before + 1);
@@ -587,4 +590,168 @@ describe("public-food receipt lifecycle retirement", () => {
       });
     }
   }
+});
+
+describe("native public-food log date shortcuts", () => {
+  it.each(["search", "barcode"])(
+    "chooses profile-local dates without changing %s results, time, meal or quantity",
+    async (mode) => {
+      const c = await setup({ profileTimeZone: "Asia/Tokyo" }, mode);
+      await c.edit("Local time (optional)", "14:35");
+      if (mode === "barcode") {
+        byLabel(c.tree, "Use grams", "Pressable").props.onPress();
+        await c.settle();
+      }
+      await c.edit("Apple quantity", "1.000001");
+      const results = nodes(
+        c.tree,
+        (node) => node.type === "View" && node.props.accessibilityLabel?.startsWith("Apple."),
+      ).map((node) => node.props.accessibilityLabel);
+      const requests = c.requests.length;
+      const today = byLabel(c.tree, "Set diary date to today", "Pressable");
+      expect(today.props.accessibilityRole).toBe("button");
+      expect(today.props.accessibilityState.disabled).toBe(false);
+      today.props.onPress();
+      await c.settle();
+      expect(byLabel(c.tree, "Diary local date").props.value).toBe("2026-09-18");
+      byLabel(c.tree, "Set diary date to yesterday", "Pressable").props.onPress();
+      await c.settle();
+      expect(byLabel(c.tree, "Diary local date").props.value).toBe("2026-09-17");
+      expect(byLabel(c.tree, "Local time (optional)").props.value).toBe("14:35");
+      expect(byLabel(c.tree, "Apple quantity").props.value).toBe("1.000001");
+      expect(
+        nodes(
+          c.tree,
+          (node) => node.type === "View" && node.props.accessibilityLabel?.startsWith("Apple."),
+        ).map((node) => node.props.accessibilityLabel),
+      ).toEqual(results);
+      expect(c.requests).toHaveLength(requests);
+      expect(c.controller.enqueueOperation).not.toHaveBeenCalled();
+      expect(c.controller.requestDrain).not.toHaveBeenCalled();
+      await c.pressAdd();
+      expect(c.controller.enqueueOperation.mock.calls[0][0]).toMatchObject({
+        foodVersionId: "202",
+        localDate: "2026-09-17",
+        mealSlot: "lunch",
+        occurredAt: "2026-09-17T05:35:00.000Z",
+        portion:
+          mode === "barcode"
+            ? { kind: "grams", grams: "1.000001" }
+            : { kind: "serving", amount: "1.000001", servingId: "303" },
+      });
+    },
+  );
+
+  it("uses the tap-time clock when the current screen spans profile-local midnight", async () => {
+    const c = await setup();
+    vi.setSystemTime(new Date("2026-09-18T04:59:59.000Z"));
+    const today = byLabel(c.tree, "Set diary date to today", "Pressable").props.onPress;
+    vi.setSystemTime(new Date("2026-09-18T05:00:01.234Z"));
+    today();
+    await c.settle();
+    expect(byLabel(c.tree, "Diary local date").props.value).toBe("2026-09-18");
+    expect(byLabel(c.tree, "Local time (optional)").props.value).toBe("");
+    await c.pressAdd();
+    expect(c.controller.enqueueOperation.mock.calls[0][0].occurredAt).toBe(
+      "2026-09-18T05:00:01.234Z",
+    );
+  });
+
+  it.each([
+    ["2027-01-01T18:00:00.000Z", "2026-12-31", "2026-12-31T18:00:00.000Z"],
+    ["2028-03-01T18:00:00.000Z", "2028-02-29", "2028-02-29T18:00:00.000Z"],
+    ["2026-11-02T05:30:00.000Z", "2026-10-31", "2026-10-31T17:00:00.000Z"],
+  ])("chooses yesterday as a calendar day at %s", async (now, date, noon) => {
+    const c = await setup();
+    vi.setSystemTime(new Date(now));
+    byLabel(c.tree, "Set diary date to yesterday", "Pressable").props.onPress();
+    await c.settle();
+    expect(byLabel(c.tree, "Diary local date").props.value).toBe(date);
+    await c.pressAdd();
+    expect(c.controller.enqueueOperation.mock.calls[0][0].occurredAt).toBe(noon);
+  });
+
+  it("retires stale draft shortcuts but keeps unchanged-date controls and manual date entry usable", async () => {
+    const c = await setup();
+    const oldToday = byLabel(c.tree, "Set diary date to today", "Pressable").props.onPress;
+    await c.edit("Local time (optional)", "12:30");
+    oldToday();
+    await c.settle();
+    expect(byLabel(c.tree, "Diary local date").props.value).toBe("2026-09-16");
+    await c.edit("Diary local date", "2026-09-17");
+    const currentAdd = add(c.tree).props.onPress;
+    byLabel(c.tree, "Set diary date to today", "Pressable").props.onPress();
+    await c.settle();
+    currentAdd();
+    await c.settle();
+    expect(c.controller.enqueueOperation).toHaveBeenCalledTimes(1);
+    expect(c.controller.enqueueOperation.mock.calls[0][0].occurredAt).toBe(
+      "2026-09-17T17:30:00.000Z",
+    );
+  });
+
+  it.each([
+    ["session", { sessionEpoch: 8 }],
+    ["profile", { profileTimeZone: "Asia/Tokyo", profileRevision: "13" }],
+    ["route", { routeKey: "new-search" }],
+  ])("keeps retained shortcuts inert across %s replacement", async (_name, next) => {
+    const c = await setup();
+    const oldToday = byLabel(c.tree, "Set diary date to today", "Pressable").props.onPress;
+    const oldYesterday = byLabel(c.tree, "Set diary date to yesterday", "Pressable").props.onPress;
+    await c.change(next, false);
+    expect(byLabel(c.tree, "Set diary date to today", "Pressable").props.disabled).toBe(true);
+    oldToday();
+    oldYesterday();
+    c.h.flushEffects();
+    await c.settle();
+    await c.edit("Diary local date", "2026-09-14");
+    oldToday();
+    oldYesterday();
+    await c.settle();
+    expect(byLabel(c.tree, "Diary local date").props.value).toBe("2026-09-14");
+    expect(c.controller.enqueueOperation).not.toHaveBeenCalled();
+  });
+
+  it.each(["background", "blur", "unmount"])(
+    "keeps inactive or retired shortcuts inert after %s",
+    async (boundary) => {
+      const c = await setup();
+      const old = byLabel(c.tree, "Set diary date to today", "Pressable").props.onPress;
+      if (boundary === "unmount") c.h.unmount();
+      else if (boundary === "blur") await c.change({ isFocused: false });
+      else await c.app("background");
+      old();
+      if (boundary !== "unmount") {
+        await c.settle();
+        expect(byLabel(c.tree, "Set diary date to today", "Pressable").props.disabled).toBe(true);
+        if (boundary === "blur") await c.change({ isFocused: true });
+        else await c.app("active");
+        old();
+        await c.settle();
+        expect(byLabel(c.tree, "Diary local date").props.value).toBe("2026-09-16");
+      }
+      expect(c.h.writesAfterUnmount).toBe(0);
+      expect(c.controller.enqueueOperation).not.toHaveBeenCalled();
+    },
+  );
+
+  it("disables shortcuts during secure enqueue and preserves the original operation", async () => {
+    const c = await setup();
+    const held = deferred();
+    c.controller.enqueueOperation.mockReturnValue(held.promise);
+    const oldToday = byLabel(c.tree, "Set diary date to today", "Pressable").props.onPress;
+    await c.pressAdd();
+    const operation = JSON.stringify(c.controller.enqueueOperation.mock.calls[0][0]);
+    const today = byLabel(c.tree, "Set diary date to today", "Pressable");
+    expect(today.props.disabled).toBe(true);
+    expect(today.props.accessibilityState.disabled).toBe(true);
+    oldToday();
+    today.props.onPress();
+    await c.settle();
+    expect(byLabel(c.tree, "Diary local date").props.value).toBe("2026-09-16");
+    held.resolve({ operationId: "operation-1" });
+    await c.settle();
+    expect(JSON.stringify(c.controller.enqueueOperation.mock.calls[0][0])).toBe(operation);
+    expect(c.controller.enqueueOperation).toHaveBeenCalledTimes(1);
+  });
 });
