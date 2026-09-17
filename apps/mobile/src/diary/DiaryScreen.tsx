@@ -70,6 +70,7 @@ import {
   MAX_QUICK_ADD_OUTBOX_ITEMS,
   QuickAddEnqueueAmbiguousError,
 } from "./quick-add-outbox";
+import { savedNotePrefix } from "./saved-note-preview";
 import {
   acceptTodaySupportingSummary,
   activityTodaySummary,
@@ -261,21 +262,23 @@ export function DiaryScreen({
     mealPresentation.current.generation += 1;
   }
   const mealSnapshotScope = useRef<string | null>(null);
-  const [, refreshEntryNutrients] = useState(0);
-  const entryNutrients = useRef({
+  const [, refreshEntryDetails] = useState(0);
+  const entryDetails = useRef({
     scope: mealScopeKey,
-    open: new Set<DiaryEntry>(),
+    nutrients: new Set<DiaryEntry>(),
+    notes: new Set<DiaryEntry>(),
     generation: 0,
     mounted: false,
     active: AppState.currentState === "active",
   });
-  const clearEntryNutrients = useCallback(() => {
-    entryNutrients.current.open = new Set();
-    entryNutrients.current.generation += 1;
+  const clearEntryDetails = useCallback(() => {
+    entryDetails.current.nutrients = new Set();
+    entryDetails.current.notes = new Set();
+    entryDetails.current.generation += 1;
   }, []);
-  if (entryNutrients.current.scope !== mealScopeKey) {
-    entryNutrients.current.scope = mealScopeKey;
-    clearEntryNutrients();
+  if (entryDetails.current.scope !== mealScopeKey) {
+    entryDetails.current.scope = mealScopeKey;
+    clearEntryDetails();
   }
   const [busyEntry, setBusyEntry] = useState<string | null>(null);
   const [groupEditorOpen, setGroupEditorOpen] = useState(false);
@@ -339,7 +342,7 @@ export function DiaryScreen({
   const closeForUnauthorized = useCallback(() => {
     unauthorizedFlight.current ??= createDiaryUnauthorizedSingleFlight();
     if (!privateUiClosed.current) {
-      clearEntryNutrients();
+      clearEntryDetails();
       privateUiClosed.current = true;
       viewEpoch.current += 1;
       mutationSequence.current += 1;
@@ -367,12 +370,12 @@ export function DiaryScreen({
       setDate("");
     }
     return unauthorizedFlight.current.run(onUnauthorized);
-  }, [clearEntryNutrients, onUnauthorized]);
+  }, [clearEntryDetails, onUnauthorized]);
 
   const load = useCallback(
     async (requested: string, refreshedAfterStalePage = false) => {
       if (privateUiClosed.current || dateRef.current !== requested) return false;
-      clearEntryNutrients();
+      clearEntryDetails();
       const loadedMealScope = mealPresentation.current.scope;
       const generation = requestGeneration.current + 1;
       requestGeneration.current = generation;
@@ -424,7 +427,7 @@ export function DiaryScreen({
         return false;
       }
     },
-    [accessToken, apiBase, clearEntryNutrients, closeForUnauthorized],
+    [accessToken, apiBase, clearEntryDetails, closeForUnauthorized],
   );
 
   const loadSupportingSummary = useCallback(
@@ -564,7 +567,7 @@ export function DiaryScreen({
       setDateDraft(next);
       const dateChanged = next !== dateRef.current;
       if (!dateChanged && !forceReload) return;
-      clearEntryNutrients();
+      clearEntryDetails();
       viewEpoch.current += 1;
       activeMutation.current = null;
       requestGeneration.current += 1;
@@ -585,7 +588,7 @@ export function DiaryScreen({
       if (dateChanged) setDate(next);
       else setRouteReloadGeneration((generation) => generation + 1);
     },
-    [clearEntryNutrients],
+    [clearEntryDetails],
   );
 
   useEffect(() => {
@@ -728,21 +731,21 @@ export function DiaryScreen({
   }, []);
 
   useEffect(() => {
-    const presentation = entryNutrients.current;
+    const presentation = entryDetails.current;
     presentation.mounted = true;
     const subscription = AppState.addEventListener("change", (next) => {
       const active = next === "active";
       if (presentation.active === active) return;
       presentation.active = active;
-      clearEntryNutrients();
-      refreshEntryNutrients((value) => value + 1);
+      clearEntryDetails();
+      refreshEntryDetails((value) => value + 1);
     });
     return () => {
       presentation.mounted = false;
-      clearEntryNutrients();
+      clearEntryDetails();
       subscription.remove();
     };
-  }, [clearEntryNutrients]);
+  }, [clearEntryDetails]);
 
   function beginMutation(sourceDate: string, busyKey: string): MutationOwner {
     const token = mutationSequence.current + 1;
@@ -1372,45 +1375,76 @@ export function DiaryScreen({
     mealSnapshotScope.current !== mealScopeKey ||
     requestedMealRoute !== appliedRouteGeneration.current;
 
-  const entryNutrientGeneration = entryNutrients.current.generation;
-  const entryNutrientsCurrent =
-    entryNutrients.current.mounted &&
-    entryNutrients.current.active &&
-    entryNutrients.current.scope === mealScopeKey &&
+  const entryDetailGeneration = entryDetails.current.generation;
+  const entryDetailsCurrent =
+    entryDetails.current.mounted &&
+    entryDetails.current.active &&
+    entryDetails.current.scope === mealScopeKey &&
     !privateUiClosed.current &&
     state === "ready" &&
     diary !== null &&
     mealSnapshotScope.current === mealScopeKey &&
     requestedMealRoute === appliedRouteGeneration.current;
-  const entryNutrientToggleDisabled = !entryNutrientsCurrent || pageState === "loading";
+  const entryDetailToggleDisabled = !entryDetailsCurrent || pageState === "loading";
 
-  function toggleEntryNutrients(entry: DiaryEntry) {
-    const presentation = entryNutrients.current;
+  function toggleEntryDetail(entry: DiaryEntry, detail: "nutrients" | "notes") {
+    const presentation = entryDetails.current;
     if (
-      !entryNutrientsCurrent ||
+      !entryDetailsCurrent ||
       !presentation.mounted ||
       !presentation.active ||
       privateUiClosed.current ||
       presentation.scope !== mealScopeKey ||
-      presentation.generation !== entryNutrientGeneration ||
+      presentation.generation !== entryDetailGeneration ||
       currentMealRoute.current !== requestedMealRoute ||
       currentMealRoute.current !== appliedRouteGeneration.current ||
       mealSnapshotScope.current !== mealScopeKey ||
       viewEpoch.current !== mealViewEpoch ||
       requestGeneration.current !== mealRequestGeneration ||
       pageRequestBusy.current ||
-      entryNutrientToggleDisabled ||
+      entryDetailToggleDisabled ||
       mealPresentation.current.generation !== mealGeneration ||
       (!mealGuard.current.hold && mealPresentation.current.collapsed.has(entry.mealSlot)) ||
       !mealGuard.current.diaryPage?.data.entries.includes(entry)
     )
       return;
-    const open = new Set(presentation.open);
+    const open = new Set(presentation[detail]);
     if (open.has(entry)) open.delete(entry);
     else open.add(entry);
-    presentation.open = open;
+    presentation[detail] = open;
     presentation.generation += 1;
-    refreshEntryNutrients((value) => value + 1);
+    refreshEntryDetails((value) => value + 1);
+  }
+
+  function renderEntryNote(entry: DiaryEntry) {
+    if (entry.note === null || !entryDetailsCurrent) return null;
+    const prefix = savedNotePrefix(entry.note);
+    const shortened = prefix !== entry.note;
+    const expanded = entryDetails.current.notes.has(entry);
+    const displayed = shortened && !expanded ? `${prefix}…` : entry.note;
+    return (
+      <View style={styles.entryNoteBlock}>
+        <Text style={styles.entryNoteLabel}>Private note</Text>
+        <Text
+          accessibilityLabel={`Private note for ${entryName(entry)}: ${displayed}`}
+          style={styles.entryNote}
+        >
+          {displayed}
+        </Text>
+        {shortened ? (
+          <Pressable
+            accessibilityLabel={`${expanded ? "Show less" : "Show full note"} for ${entryName(entry)}, ${entryPortionLabel(entry)} at ${entry.localTime.slice(0, 5)}`}
+            accessibilityRole="button"
+            accessibilityState={{ expanded, disabled: entryDetailToggleDisabled }}
+            disabled={entryDetailToggleDisabled}
+            onPress={() => toggleEntryDetail(entry, "notes")}
+            style={styles.entryNutrientToggle}
+          >
+            <Text style={styles.addLink}>{expanded ? "Show less" : "Show full note"}</Text>
+          </Pressable>
+        ) : null}
+      </View>
+    );
   }
 
   function renderEntryNutrientRows(entry: DiaryEntry) {
@@ -1991,37 +2025,27 @@ export function DiaryScreen({
                         {entry.timeZone !== profileTimeZone ? (
                           <Text style={styles.entrySource}>Logged in {entry.timeZone}</Text>
                         ) : null}
-                        {entry.note !== null ? (
-                          <View style={styles.entryNoteBlock}>
-                            <Text style={styles.entryNoteLabel}>Private note</Text>
-                            <Text
-                              accessibilityLabel={`Private note for ${entryName(entry)}: ${entry.note}`}
-                              style={styles.entryNote}
-                            >
-                              {entry.note}
-                            </Text>
-                          </View>
-                        ) : null}
-                        {entryNutrientsCurrent ? (
+                        {renderEntryNote(entry)}
+                        {entryDetailsCurrent ? (
                           <View style={styles.entryNutrientBlock}>
                             <Pressable
-                              accessibilityLabel={`${entryNutrients.current.open.has(entry) ? "Hide" : "Show"} nutrients for ${entryName(entry)}, ${entryPortionLabel(entry)} at ${entry.localTime.slice(0, 5)}`}
+                              accessibilityLabel={`${entryDetails.current.nutrients.has(entry) ? "Hide" : "Show"} nutrients for ${entryName(entry)}, ${entryPortionLabel(entry)} at ${entry.localTime.slice(0, 5)}`}
                               accessibilityRole="button"
                               accessibilityState={{
-                                expanded: entryNutrients.current.open.has(entry),
-                                disabled: entryNutrientToggleDisabled,
+                                expanded: entryDetails.current.nutrients.has(entry),
+                                disabled: entryDetailToggleDisabled,
                               }}
-                              disabled={entryNutrientToggleDisabled}
-                              onPress={() => toggleEntryNutrients(entry)}
+                              disabled={entryDetailToggleDisabled}
+                              onPress={() => toggleEntryDetail(entry, "nutrients")}
                               style={styles.entryNutrientToggle}
                             >
                               <Text style={styles.addLink}>
-                                {entryNutrients.current.open.has(entry)
+                                {entryDetails.current.nutrients.has(entry)
                                   ? "Hide nutrients"
                                   : "Show nutrients"}
                               </Text>
                             </Pressable>
-                            {entryNutrients.current.open.has(entry) ? (
+                            {entryDetails.current.nutrients.has(entry) ? (
                               <View accessibilityLabel={`Saved nutrients for ${entryName(entry)}`}>
                                 <Text style={styles.entryNutrientContext}>
                                   Saved logged portion: {entryPortionLabel(entry)} · entry revision{" "}

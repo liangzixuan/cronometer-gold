@@ -1537,3 +1537,302 @@ describe("native Expand all diary meals", () => {
     expect(requests).toHaveLength(count);
   });
 });
+
+function entryNoteText(tree, id = entry.id) {
+  const found = nodes(
+    diaryEntryCard(tree, id),
+    (node) =>
+      node.type === "Text" && node.props.accessibilityLabel?.startsWith("Private note for "),
+  );
+  expect(found).toHaveLength(1);
+  return found[0];
+}
+function entryNoteToggle(tree, id = entry.id) {
+  const found = nodes(
+    diaryEntryCard(tree, id),
+    (node) =>
+      node.type === "Pressable" &&
+      /^(Show full note|Show less) for /u.test(node.props.accessibilityLabel ?? ""),
+  );
+  expect(found).toHaveLength(1);
+  return found[0];
+}
+async function toggleNote(harness, id = entry.id) {
+  const button = entryNoteToggle(await harness.settle(), id);
+  expect(button.props.disabled).toBe(false);
+  button.props.onPress();
+  return harness.settle();
+}
+const longEntryNote = `  ${"🍎".repeat(240)}\nexact saved tail  `;
+
+describe("native saved entry note previews", () => {
+  it.each(["\r\n", "\r", "\n", "\u2028", "\u2029"])(
+    "limits to four exact lines and exposes the same displayed text accessibly for %j",
+    async (separator) => {
+      const prefix = ["first", "", "🍎", "Cafe\u0301"].join(separator);
+      const full = `${prefix}${separator}last  `;
+      const { harness, requests, controller } = setup(() =>
+        response(page(selectedDate, [{ ...entry, note: full }])),
+      );
+      let tree = await harness.settle();
+      const count = requests.length;
+      expect(entryNoteText(tree).props.children).toBe(`${prefix}…`);
+      expect(entryNoteText(tree).props.accessibilityLabel).toBe(
+        `Private note for Apple: ${prefix}…`,
+      );
+      expect(entryNoteToggle(tree).props.accessibilityLabel).toBe(
+        "Show full note for Apple, 1.5 medium apple at 08:30",
+      );
+      expect(entryNoteToggle(tree).props.accessibilityState.expanded).toBe(false);
+      tree = await toggleNote(harness);
+      expect(entryNoteText(tree).props.children).toBe(full);
+      expect(entryNoteText(tree).props.accessibilityLabel).toBe(`Private note for Apple: ${full}`);
+      expect(entryNoteToggle(tree).props.accessibilityState.expanded).toBe(true);
+      tree = await toggleNote(harness);
+      expect(entryNoteText(tree).props.children).toBe(`${prefix}…`);
+      expect(requests).toHaveLength(count);
+      expect(controller.enqueueOperation).not.toHaveBeenCalled();
+      expect(controller.requestDrain).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    [longEntryNote, `  ${"🍎".repeat(238)}`],
+    [`${"a".repeat(239)}\r\ntail`, "a".repeat(239)],
+    ["one\r\ntwo\rthree\nfour\u2028five\u2029six", "one\r\ntwo\rthree\nfour"],
+  ])("uses exact code-point and mixed-line bounds", async (full, prefix) => {
+    const { harness } = setup(() => response(page(selectedDate, [{ ...entry, note: full }])));
+    let tree = await harness.settle();
+    expect(entryNoteText(tree).props.children).toBe(`${prefix}…`);
+    tree = await toggleNote(harness);
+    expect(entryNoteText(tree).props.children).toBe(full);
+  });
+
+  it("keeps null and short notes simple, including exact boundary-length and legacy long notes", async () => {
+    const short = `  ${"🍎".repeat(238)}`;
+    const rows = [
+      { ...entry, note: null },
+      { ...privateCustomEntry, note: short },
+      { ...recipeEntry, note: "r".repeat(3_000) },
+    ];
+    const { harness } = setup(() => response(page(selectedDate, rows)));
+    let tree = await harness.settle();
+    for (const id of [entry.id, privateCustomEntry.id]) {
+      expect(
+        nodes(diaryEntryCard(tree, id), (node) =>
+          /^(Show full note|Show less) for /u.test(node.props.accessibilityLabel ?? ""),
+        ),
+      ).toHaveLength(0);
+    }
+    expect(
+      nodes(diaryEntryCard(tree, entry.id), (node) =>
+        node.props.accessibilityLabel?.startsWith("Private note for "),
+      ),
+    ).toHaveLength(0);
+    expect(entryNoteText(tree, privateCustomEntry.id).props.children).toBe(short);
+    tree = await toggleNote(harness, recipeEntry.id);
+    expect(entryNoteText(tree, recipeEntry.id).props.children).toBe(rows[2].note);
+  });
+
+  it("keeps duplicate names and nutrient choices independent and fences old toggles", async () => {
+    const other = {
+      ...entry,
+      id: privateCustomEntry.id,
+      position: 1,
+      localTime: "09:30:00.000",
+      note: `other ${longEntryNote}`,
+    };
+    const rows = [
+      { ...entry, note: longEntryNote },
+      other,
+      { ...recipeEntry, note: longEntryNote },
+    ];
+    const original = JSON.stringify(rows);
+    const { harness, requests, controller } = setup(() => response(page(selectedDate, rows)));
+    let tree = await harness.settle();
+    const count = requests.length;
+    const oldShow = entryNoteToggle(tree).props.onPress;
+    oldShow();
+    oldShow();
+    tree = await harness.settle();
+    expect(entryNoteText(tree).props.children).toBe(longEntryNote);
+    expect(entryNoteToggle(tree, other.id).props.accessibilityState.expanded).toBe(false);
+    expect(entryNoteToggle(tree, other.id).props.accessibilityLabel).toContain("at 09:30");
+    const oldHide = entryNoteToggle(tree).props.onPress;
+    tree = await toggleNote(harness, other.id);
+    tree = await toggleNutrients(harness);
+    oldHide();
+    oldShow();
+    tree = await harness.settle();
+    expect(entryNoteText(tree).props.children).toBe(longEntryNote);
+    expect(entryNoteText(tree, other.id).props.children).toBe(other.note);
+    expect(entryNutrientDetails(tree)).toHaveLength(1);
+    tree = await toggleNote(harness);
+    expect(entryNoteToggle(tree).props.accessibilityState.expanded).toBe(false);
+    expect(entryNutrientDetails(tree)).toHaveLength(1);
+    expect(JSON.stringify(rows)).toBe(original);
+    expect(requests).toHaveLength(count);
+    expect(controller.enqueueOperation).not.toHaveBeenCalled();
+    expect(controller.requestDrain).not.toHaveBeenCalled();
+  });
+
+  it("preserves the full editor draft and exact pending correction while toggling the saved note", async () => {
+    const { harness, controller, setQueue } = setup(() =>
+      response(page(selectedDate, [{ ...entry, note: longEntryNote }])),
+    );
+    const held = deferred();
+    controller.enqueueOperation.mockReturnValue(held.promise);
+    let tree = await harness.settle();
+    byLabel(tree, "Edit Apple entry and private note").props.onPress();
+    tree = await harness.settle();
+    expect(byLabel(tree, "Private note for Apple", "TextInput").props.value).toBe(longEntryNote);
+    const changed = `${longEntryNote} correction`;
+    byLabel(tree, "Private note for Apple", "TextInput").props.onChangeText(changed);
+    tree = await toggleNote(harness);
+    expect(byLabel(tree, "Private note for Apple", "TextInput").props.value).toBe(changed);
+    expect(entryNoteText(tree).props.children).toBe(longEntryNote);
+    byLabel(tree, "Save changes to Apple").props.onPress();
+    tree = await harness.settle();
+    const operation = JSON.stringify(controller.enqueueOperation.mock.calls[0][0]);
+    expect(controller.enqueueOperation.mock.calls[0][0].body.note).toBe(changed);
+    tree = await toggleNote(harness);
+    setQueue(
+      { status: "pending", pendingCount: 1 },
+      { correctedEntryIds: [entry.id], reorderedLocalDates: [], pendingLocalDates: [selectedDate] },
+    );
+    held.resolve({ operationId: "note-preview-edit" });
+    await harness.settle();
+    expect(controller.enqueueOperation).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(controller.enqueueOperation.mock.calls[0][0])).toBe(operation);
+    expect(controller.requestDrain).toHaveBeenCalledExactlyOnceWith("note-preview-edit");
+  });
+
+  it("keeps expanded notes when a meal is collapsed and ignores hidden callbacks", async () => {
+    const { harness } = setup(() =>
+      response(page(selectedDate, [{ ...entry, note: longEntryNote }])),
+    );
+    let tree = await toggleNote(harness);
+    const oldHide = entryNoteToggle(tree).props.onPress;
+    toggle(tree, "Breakfast").props.onPress();
+    oldHide();
+    tree = await harness.settle();
+    expect(rawScreenText(tree)).not.toContain(longEntryNote);
+    toggle(tree, "Breakfast", false).props.onPress();
+    oldHide();
+    tree = await harness.settle();
+    expect(entryNoteText(tree).props.children).toBe(longEntryNote);
+  });
+
+  it("keeps existing choices through coherent paging, starts appended notes collapsed and retires loading callbacks", async () => {
+    const rows = Array.from({ length: 21 }, (_, index) => ({
+      ...entry,
+      id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      position: index,
+      note: longEntryNote,
+    }));
+    const held = deferred();
+    const { harness } = setup((request) =>
+      request.url.searchParams.has("cursor")
+        ? held.promise
+        : response(page(selectedDate, rows.slice(0, 20), "d1.next", 21)),
+    );
+    let tree = await toggleNote(harness, rows[0].id);
+    const old = entryNoteToggle(tree, rows[0].id).props.onPress;
+    byLabel(tree, "Load more diary entries").props.onPress();
+    old();
+    tree = await harness.settle();
+    expect(entryNoteToggle(tree, rows[0].id).props.disabled).toBe(true);
+    expect(entryNoteText(tree, rows[0].id).props.children).toBe(longEntryNote);
+    held.resolve(response(page(selectedDate, rows.slice(20), null, 21)));
+    tree = await harness.settle();
+    old();
+    tree = await harness.settle();
+    expect(entryNoteText(tree, rows[0].id).props.children).toBe(longEntryNote);
+    expect(entryNoteToggle(tree, rows[20].id).props.accessibilityState.expanded).toBe(false);
+  });
+
+  it("resets changed saved snapshots and dates without accepting retained controls", async () => {
+    let note = longEntryNote;
+    const { harness, receive } = setup((request) =>
+      response(page(request.url.searchParams.get("date"), [{ ...entry, note }])),
+    );
+    let tree = await toggleNote(harness);
+    const old = entryNoteToggle(tree).props.onPress;
+    note = `replacement ${longEntryNote}`;
+    receive();
+    old();
+    tree = await harness.settle();
+    expect(entryNoteToggle(tree).props.accessibilityState.expanded).toBe(false);
+    tree = await toggleNote(harness);
+    expect(entryNoteText(tree).props.children).toBe(note);
+    byLabel(tree, "Next day").props.onPress();
+    tree = await harness.settle();
+    old();
+    expect(entryNoteToggle(tree).props.accessibilityState.expanded).toBe(false);
+    byLabel(tree, "Previous day").props.onPress();
+    tree = await harness.settle();
+    old();
+    tree = await harness.settle();
+    expect(entryNoteToggle(tree).props.accessibilityState.expanded).toBe(false);
+  });
+
+  it.each(["owner", "session", "token", "api", "zone", "route"])(
+    "resets before %s scope effects and retires prior note callbacks",
+    async (boundary) => {
+      const { harness } = setup(() =>
+        response(page(selectedDate, [{ ...entry, note: longEntryNote }])),
+      );
+      let tree = await toggleNote(harness);
+      const old = entryNoteToggle(tree).props.onPress;
+      harness.updateProps(
+        boundary === "owner"
+          ? { expectedOwnerUserId: "replacement-owner" }
+          : boundary === "session"
+            ? { sessionEpoch: 8 }
+            : boundary === "token"
+              ? { accessToken: "replacement-token" }
+              : boundary === "api"
+                ? { apiBase: new URL("http://127.0.0.1:4001") }
+                : boundary === "zone"
+                  ? { profileTimeZone: "UTC" }
+                  : { requestedDate: selectedDate, refreshKey: "new-route" },
+      );
+      tree = harness.renderWithoutEffects();
+      old();
+      expect(rawScreenText(tree)).not.toContain(longEntryNote);
+      harness.flushEffects();
+      tree = await harness.settle();
+      old();
+      tree = await harness.settle();
+      expect(rawScreenText(tree)).not.toContain(longEntryNote);
+    },
+  );
+
+  it.each(["background", "inactive", "unknown"])(
+    "resets for %s and keeps stale/unmounted callbacks inert",
+    async (state) => {
+      const { harness, requests } = setup(() =>
+        response(page(selectedDate, [{ ...entry, note: longEntryNote }])),
+      );
+      let tree = await toggleNote(harness);
+      const old = entryNoteToggle(tree).props.onPress;
+      const count = requests.length;
+      appState(state);
+      old();
+      tree = await harness.settle();
+      expect(rawScreenText(tree)).not.toContain(longEntryNote);
+      appState("active");
+      tree = await harness.settle();
+      old();
+      tree = await harness.settle();
+      expect(entryNoteToggle(tree).props.accessibilityState.expanded).toBe(false);
+      tree = await toggleNote(harness);
+      const current = entryNoteToggle(tree).props.onPress;
+      harness.unmount();
+      current();
+      old();
+      expect(harness.writesAfterUnmount).toBe(0);
+      expect(requests).toHaveLength(count);
+    },
+  );
+});

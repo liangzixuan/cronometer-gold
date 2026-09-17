@@ -19,6 +19,7 @@ import { apiUrl, authenticatedHeaders, jsonBody } from "../api/private-api";
 import { newOperationId } from "../auth/operation-id";
 import { palette } from "../theme";
 import { isLocalDate, type ProfileSummary, parseSession } from "./diary";
+import { savedNotePrefix } from "./saved-note-preview";
 
 interface Props {
   readonly apiBase: URL;
@@ -85,17 +86,6 @@ function noteFromRaw(raw: string): string | null {
     throw new Error("Use up to 2,000 characters without invalid text characters.");
   }
   return raw;
-}
-
-function savedNotePrefix(note: string): string {
-  let prefix = [...note].slice(0, 240).join("");
-  if (prefix.endsWith("\r") && note[prefix.length] === "\n") prefix = prefix.slice(0, -1);
-  let line = 1;
-  for (const ending of prefix.matchAll(/\r\n|[\r\n\u2028\u2029]/gu)) {
-    if (line === 4) return prefix.slice(0, ending.index);
-    line += 1;
-  }
-  return prefix;
 }
 
 export function DiaryDayNote(props: Props) {

@@ -1,6 +1,6 @@
 # ADR 0079: Protect native recipe drafts during replacement
 
-Status: Accepted; source validation recorded in current readiness.
+Status: Implemented at `bacc261`; local and exact-commit automatic evidence passed; device/release acceptance separate.
 
 ## Context
 
@@ -54,3 +54,19 @@ copy/log assertions. Complete native types/format, independent in-task review,
 canonical check/build and exact-commit automatic checks. Record cache/skip
 boundaries. Component/export proof does not establish physical-device or
 assistive acceptance; formal reviewer and release gates remain unchanged.
+
+## Delivery evidence
+
+Delivered as `bacc261b0b61bf61f74e7aa14daba09fa9201510`. Focused native tests
+passed 207/207 after eight initial regressions were demonstrated on pre-fix
+source. Independent code/documentation review, native types/format and canonical
+gates passed. September 17 local check recorded 1,745 fresh passes, 2,327 cached
+passes and 93 cached opt-in skips; build passed eleven tasks with ten cached and
+fresh Android/iOS exports. These results do not rerun prior service/device work.
+
+[CI 35180214548](https://github.com/liangzixuan/cronometer-gold/actions/runs/35180214548)
+and [container 35180214556](https://github.com/liangzixuan/cronometer-gold/actions/runs/35180214556)
+passed all three and nine actual jobs on attempt one. The September 17 05:33 UTC
+observation records every job; the last container job completed at 05:26:51 UTC.
+The successor preflight confirmed clean, equal local/tracking/live heads. These
+results apply to this commit and do not establish release acceptance.
