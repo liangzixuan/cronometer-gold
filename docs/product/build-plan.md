@@ -95,49 +95,32 @@ remains fail-closed.
 
 ### Execution queue
 
-Use [current readiness](../quality/current-readiness.md) for the dated commit,
-automatic outcomes and acceptance gaps. The [historical roadmap snapshot](build-plan-history-2026-09-15.md)
-preserves every previous delivery record and its original evidence boundary.
-Completed source slices belong in the [ADR index](../adr/README.md), not as
-repeated pending rows in the active queue. A green successor never changes an
-older result, and source completion never closes external acceptance.
+Use [current readiness](../quality/current-readiness.md) for dated source,
+validation and acceptance gaps. Completed slices belong in the
+[ADR index](../adr/README.md); [historical roadmap evidence](build-plan-history-2026-09-15.md)
+retains earlier boundaries. A successful successor never changes an older result.
 
-| Order | Work | Owner and concrete exit |
+| Order | Work | Concrete exit |
 | --- | --- | --- |
-| Active source milestone | ADR 0077 review follow-up | Wire Python normalizer tests into push/PR CI and a named local command, strengthen semantic predecessor/timing coverage, and reconcile runbook/status prose without changing parser behavior or adding features. The exact `expo-build-properties@57.0.20` prerequisite is approved and installed; strict install, mobile configuration, audit and license checks passed. Final source checks and the successor's exact-commit automatic evidence remain pending. |
-| Delivery follow-up | Exact-commit automatic evidence | ADR 0077 at `805b937` is delivered with all three CI/nine actual container jobs passed on attempt one. The follow-up requires its own successful exact-commit checks; artifact/provenance and release approval stay separate. |
-| Completed local follow-up | Repeat printing and direct Ctrl+P | September 16 Brave checks passed repeated preview/Cancel cleanup and neutral direct Ctrl+P on a content-bound build. [ADR 0028](../adr/0028-print-current-nutrition-report.md#native-browser-follow-up--2026-09-16-utc) retains dated scope and limits. |
-| External review | Commit-specific Claude Code review | Full user-provided Claude Code CLI/Opus 5 report, September 16 21:05–21:31 UTC, reports no ADR 0077 blockers at `805b937` within its 17-file diff and P0 trust-path scope. Follow-up bytes and excluded application/release scopes are not covered. |
-| Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Release owner assigns the roles and reviewable packages listed in current readiness; each lane advances only under applicable existing authorization and its unchanged release gate. |
+| Active source milestone | Compact native saved day-note preview (ADR 0078) | Bound long saved text, provide explicit full/collapsed views, preserve exact editing/retry state and reject stale expansion controls. Focused component review/checks, canonical gates and exact-commit automatic evidence. |
+| Completed source milestone | ADR 0077 review follow-up | Delivered at `5d4c5a1`: Python CI/local wiring, semantic/time-boundary regressions, runbook corrections and approved Expo prerequisite. Local gates and all three CI/nine actual container jobs passed; dated details are in ADR 0077 and current readiness. |
+| Completed external review | Scoped Claude review at `805b937` | The supplied report found no ADR 0077 blockers. Its recommendations were addressed in the delivered follow-up; the report remains limited to its original scope. Routine product work does not require another paid review. |
+| Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Advance only under applicable existing authorization and unchanged release gates. |
 
-### Active bounded milestone: ADR 0077 review follow-up
+### Active bounded milestone: compact native saved day notes
 
-[ADR 0076](../adr/0076-standalone-private-day-notes.md) is delivered at `9344057`.
-[ADR 0077](../adr/0077-role-specific-p0-evidence.md) is delivered at `805b937`,
-with P0 v3 inventories of 21/22/22 and health manifest v6. Source/local evidence
-passed; delivery closed September 16 at 03:33:22 UTC after all three CI and nine
-actual container jobs succeeded on attempt one. The 06:17:15 UTC read-only
-observation confirmed those same outcomes, without rerunning workflows.
-Device, hosted, signed-review and release acceptance remain separate.
+[ADR 0078](../adr/0078-native-saved-day-note-preview.md) prevents a long saved note
+from dominating the native diary before food controls. Show a bounded text prefix
+and explicit Show full note / Show less. Preserve all exact saved text, draft,
+conflict and ambiguous-write behavior. Expansion is local to the current private
+session/date/saved revision, with no network or persistence change.
 
-The accepted review follow-up adds explicit Python CI/local-test wiring,
-semantic predecessor and time-boundary regressions, and concise contract/status
-clarifications. Existing v3 timestamps stay non-decreasing, including ties;
-out-of-session/backward times and incorrect final-capture times remain invalid.
-The follow-up now has 15 changed files: the original 11-file review scope plus
-four approved dependency inputs. The production normalizer/verifier and product
-behavior remain unchanged. Canonical `pnpm check` failed on September 16 at
-21:48:02 UTC during `mobile:check` when Expo required `~57.0.20` but
-`expo-build-properties@57.0.19` was pinned. The 157 root cases passed before
-that failure; canonical type/test stages were not reached.
-
-The user then approved the exact `57.0.20` release-age exception, installation
-and one production audit. Installed bytes match the reviewed four-file proposal;
-strict frozen/strict-peer install, mobile configuration and license policy passed.
-The approved audit passed with zero reviewed advisories and four lower-severity
-advisories visible; that authorization is consumed. The earlier failure and
-previous approvals remain historical. Final canonical validation and the
-successor's exact-commit automatic evidence remain pending.
+The prior review follow-up is delivered. Its approved `expo-build-properties@57.0.20`
+installation and one production audit are complete; the audit authorization is
+consumed. No dependency change, install, audit, browser/service/device action or
+paid review is part of this presentation slice. Follow the
+[proportionate review policy](../quality/development-workflow.md#proportionate-independent-review).
+Required signed-device and release acceptance remain separate.
 
 ### Milestone and external-decision boundaries
 

@@ -1,6 +1,6 @@
 # ADR 0077: Role-specific P0 review evidence for camera, groups and day notes
 
-- Status: Implemented at `805b937`; review follow-up validation pending; external/release acceptance separate
+- Status: Implemented at `805b937`; review follow-up delivered at `5d4c5a1`; external/device/release acceptance remain separate
 - Date: 2026-09-16 UTC
 - Planning baseline: `93440578072202710f94f10e6c0dc15bf5a17660`
 
@@ -177,7 +177,7 @@ covers the 17-file diff and surrounding P0 trust paths, and recommends the
 follow-up below. Its scope excludes web/API/database/worker implementation and
 does not approve successor bytes or constitute a signed release/device attestation.
 
-The active follow-up adds push/PR CI and a named local command for Python tests,
+The delivered follow-up adds push/PR CI and a named local command for Python tests,
 pins each new flow's semantic predecessor, and documents/tests the existing
 non-decreasing time rule in both languages. Ties are accepted; earlier-than-start,
 backward and after-execution observations remain rejected, and `capturedAt`
@@ -185,7 +185,7 @@ still equals the final observation. No production parser behavior changes.
 Authentic captures cannot be assumed absent; stricter timestamps would require
 a future reviewed contract decision. Current relay guidance also separates the
 historical 18-input bundle from the normative Windows v2 matrix of 72 roles.
-Final source checks and the follow-up commit's automatic evidence remain pending.
+Final source checks and automatic evidence passed for the follow-up, as recorded below.
 
 ### Approved compatibility prerequisite
 
@@ -205,6 +205,26 @@ including the four approved dependency inputs. The production Python normalizer
 and JavaScript verifier remain unchanged. An isolated source-only build then
 passed strict installation and contracts-before-mobile compilation, producing
 fresh iOS/Android bundles from all 934 unchanged source inputs without copied
-application output or Turbo. Final canonical validation and the new commit's
-automatic evidence are still pending; the older external review does not approve
-these new bytes.
+application output or Turbo. The earlier failure remains recorded separately from
+the successful approved validation.
+
+### Follow-up delivery and review scope
+
+The follow-up is delivered at `5d4c5a148b68bd9a7fb9f1f8c76b66ec9c2ecb68`.
+Focused Python 16/16 and JavaScript 40/40 passed. Final canonical check passed
+September 16 at 22:16:10–22:16:36 UTC with 1,721 fresh and 2,327 cached passes,
+plus 93 cached opt-in skips; build passed at 22:16:49–22:17:05 with 11 tasks,
+ten cached and native exports fresh. Cached results are not fresh service runs.
+[CI 35157033874](https://github.com/liangzixuan/cronometer-gold/actions/runs/35157033874)
+and [container run 35157033863](https://github.com/liangzixuan/cronometer-gold/actions/runs/35157033863)
+passed all three/nine actual jobs on attempt one, including the newly wired Python
+step. The September 16 23:53:10 UTC observation and independent review confirmed
+complete results; delivery then verified clean equal local/tracking/live heads.
+
+The original external review is finished and remains limited to `805b937` and
+its stated scope. The follow-up received independent in-task review and required
+checks; no second paid Claude review was run or is required to continue ordinary
+product work. Future paid reviews require explicit scope and spending approval
+under the [development workflow](../quality/development-workflow.md#proportionate-independent-review).
+Formal signed-device, external release-review and deployment acceptance remain
+separate; no report is relabelled as approval of later bytes.

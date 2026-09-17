@@ -128,6 +128,18 @@ dispatch/rerun/cancel, deployment, cloud spending, DNS, firewall/tailnet changes
 phone exposure, EAS/signing, or live catalogue actions. Their existing separate
 approval requirements and all review, validation and release gates remain in force.
 
+## Proportionate independent review
+
+Use a focused independent in-task review for ordinary source changes, alongside
+the applicable validation ladder. A completed external report retains its exact
+commit and scope; a later commit does not automatically require another paid
+Claude review. Obtain explicit scope and spending-limit approval before initiating
+or asking the user to run a paid external review. Prefer a coherent milestone or
+a named unresolved risk over a per-commit review cycle. Reuse verified unchanged
+evidence and avoid redundant agent passes or elaborate packets without a concrete
+need. In-task review also consumes Codex usage. None of this satisfies or removes
+formal reviewer, device, signed-evidence or release gates.
+
 ## Completion vocabulary
 
 Keep the build plan's existing **implemented** definition: source plus required

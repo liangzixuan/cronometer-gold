@@ -17,3 +17,15 @@ manual workflow dispatch/rerun/cancel, deployment, cloud spending, DNS,
 firewall/tailnet changes, phone exposure, EAS/signing or live catalogue actions.
 Those actions retain their existing approval and release requirements. Never
 commit secrets or machine-local data, or weaken a gate to make validation pass.
+
+## Proportionate review and paid external review
+
+Routine source work uses applicable checks, independent in-task review and CI.
+The completed Claude review at `805b937` remains evidence only for its recorded
+scope; it does not require a paid review of every successor or remediation.
+Obtain explicit user approval of scope and spending limit before initiating or
+asking the user to run another paid external review. Batch such reviews around
+a meaningful milestone or specific unresolved risk. Keep in-task review
+proportionate too: it consumes Codex usage. Avoid redundant passes, unnecessary
+review packets and status-only commit/build cycles. Preserve all formal reviewer,
+signed-evidence, device and release acceptance gates.

@@ -87,6 +87,17 @@ function noteFromRaw(raw: string): string | null {
   return raw;
 }
 
+function savedNotePrefix(note: string): string {
+  let prefix = [...note].slice(0, 240).join("");
+  if (prefix.endsWith("\r") && note[prefix.length] === "\n") prefix = prefix.slice(0, -1);
+  let line = 1;
+  for (const ending of prefix.matchAll(/\r\n|[\r\n\u2028\u2029]/gu)) {
+    if (line === 4) return prefix.slice(0, ending.index);
+    line += 1;
+  }
+  return prefix;
+}
+
 export function DiaryDayNote(props: Props) {
   const [, redraw] = useState(0);
   const propsRef = useRef(props);
@@ -111,6 +122,7 @@ export function DiaryDayNote(props: Props) {
   });
   const flight = useRef<{ operation: Operation; controller: AbortController } | null>(null);
   const recovery = useRef(false);
+  const expansion = useRef({ key: "", expanded: false });
   if (scope.current.key !== scopeKey) {
     scope.current = { key: scopeKey };
     model.current = empty(props.localDate);
@@ -473,11 +485,23 @@ export function DiaryDayNote(props: Props) {
   const busy = flight.current !== null || recovery.current || props.profileBusy;
   const canEdit =
     draft !== null && draft.phase === "editing" && renderedModel.operation === null && !busy;
-  const button = (label: string, action: () => void, disabled = false) => (
+  const previewKey = JSON.stringify([
+    scopeKey,
+    renderedEpoch,
+    props.localDate,
+    head?.id,
+    head?.revision,
+  ]);
+  if (expansion.current.key !== previewKey)
+    expansion.current = { key: previewKey, expanded: false };
+  const renderedExpansion = expansion.current;
+  const prefix = head?.note == null ? null : savedNotePrefix(head.note);
+  const shortened = prefix !== null && prefix !== head?.note;
+  const button = (label: string, action: () => void, disabled = false, expanded?: boolean) => (
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={label}
-      accessibilityState={{ disabled }}
+      accessibilityState={{ disabled, ...(expanded === undefined ? {} : { expanded }) }}
       disabled={disabled}
       onPress={() => {
         if (!disabled && currentView()) action();
@@ -499,11 +523,29 @@ export function DiaryDayNote(props: Props) {
       {head ? (
         <>
           <Text style={styles.saved}>
-            {head.note ??
-              (head.revision === "0"
-                ? "No note for this day yet."
-                : "The note for this day was cleared.")}
+            {shortened && !renderedExpansion.expanded
+              ? `${prefix}…`
+              : (head.note ??
+                (head.revision === "0"
+                  ? "No note for this day yet."
+                  : "The note for this day was cleared."))}
           </Text>
+          {shortened
+            ? button(
+                renderedExpansion.expanded ? "Show less" : "Show full note",
+                () => {
+                  if (model.current !== renderedModel || expansion.current !== renderedExpansion)
+                    return;
+                  expansion.current = {
+                    ...renderedExpansion,
+                    expanded: !renderedExpansion.expanded,
+                  };
+                  redraw((value) => value + 1);
+                },
+                false,
+                renderedExpansion.expanded,
+              )
+            : null}
           {head.recordedTimeZone ? (
             <Text style={styles.help}>
               Saved in {head.recordedTimeZone}. Current time zone: {props.profileTimeZone}.

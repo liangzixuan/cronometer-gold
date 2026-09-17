@@ -366,6 +366,183 @@ afterEach(() => {
 });
 
 describe("native private day notes", () => {
+  it.each(["\r\n", "\r", "\n", "\u2028", "\u2029"])(
+    "previews only four explicit lines without changing separator %j",
+    async (separator) => {
+      const prefix = ["first", "", "🍎", "Cafe\u0301"].join(separator);
+      const full = `${prefix}${separator}last`;
+      const c = await setup(saved(full));
+      expect(text(c.tree)).toContain(`${prefix}…`);
+      expect(text(c.tree)).not.toContain(full);
+      expect(button(c.tree, "Show full note").props.accessibilityState.expanded).toBe(false);
+      const before = c.calls.length;
+      await c.press("Show full note");
+      expect(text(c.tree)).toContain(full);
+      expect(button(c.tree, "Show less").props.accessibilityState.expanded).toBe(true);
+      await c.press("Show less");
+      expect(text(c.tree)).toContain(`${prefix}…`);
+      expect(c.calls).toHaveLength(before);
+    },
+  );
+  it.each([
+    ["🍎".repeat(240), "🍎".repeat(240), false],
+    ["🍎".repeat(241), "🍎".repeat(240), true],
+    [`${"a".repeat(239)}\r\nnext`, "a".repeat(239), true],
+  ])(
+    "bounds the raw prefix by Unicode scalars without splitting a CRLF %#",
+    async (full, prefix, shortened) => {
+      const c = await setup(saved(full));
+      expect(text(c.tree)).toContain(shortened ? `${prefix}…` : full);
+      expect(nodes(c.tree).some((node) => node.props.accessibilityLabel === "Show full note")).toBe(
+        shortened,
+      );
+      expect(nodes(c.tree).every((node) => node.props.numberOfLines === undefined)).toBe(true);
+      if (shortened) {
+        await c.press("Show full note");
+        expect(text(c.tree)).toContain(full);
+      }
+    },
+  );
+  it("leaves short, four-line, absent and cleared notes fully visible without a toggle", async () => {
+    for (const note of [
+      saved("a".repeat(239)),
+      saved("one\r\ntwo\rthree\nfour"),
+      absent(),
+      saved(null),
+    ]) {
+      const c = await setup(note);
+      expect(
+        nodes(c.tree).some((node) =>
+          ["Show full note", "Show less"].includes(node.props.accessibilityLabel),
+        ),
+      ).toBe(false);
+      expect(text(c.tree)).toContain(
+        note.note ??
+          (note.revision === "0"
+            ? "No note for this day yet."
+            : "The note for this day was cleared."),
+      );
+      expect(c.puts()).toHaveLength(0);
+    }
+  });
+  it("fences retained toggles and resets expansion on saved revision and date replacement", async () => {
+    const full = "saved ".repeat(50);
+    const c = await setup(saved(full));
+    const oldExpand = button(c.tree, "Show full note").props.onPress;
+    await c.press("Show full note");
+    const oldCollapse = button(c.tree, "Show less").props.onPress;
+    const writes = c.h.stateWrites;
+    oldExpand();
+    expect(c.h.stateWrites).toBe(writes);
+    c.store.set(DAY, saved(`${full}new`, "2"));
+    await c.press("Reload day note");
+    expect(button(c.tree, "Show full note").props.accessibilityState.expanded).toBe(false);
+    const replacedWrites = c.h.stateWrites;
+    oldCollapse();
+    oldExpand();
+    expect(c.h.stateWrites).toBe(replacedWrites);
+    await c.press("Show full note");
+    const priorDay = button(c.tree, "Show less").props.onPress;
+    c.store.set(NEXT, saved(full, "1", NEXT));
+    await c.change({ localDate: NEXT }, false);
+    const beforeEffects = c.h.stateWrites;
+    priorDay();
+    expect(c.h.stateWrites).toBe(beforeEffects);
+    c.h.flushEffects();
+    await c.settle();
+    expect(button(c.tree, "Show full note").props.accessibilityState.expanded).toBe(false);
+    await c.change({ localDate: DAY });
+    expect(button(c.tree, "Show full note").props.accessibilityState.expanded).toBe(false);
+    const returnedWrites = c.h.stateWrites;
+    priorDay();
+    expect(c.h.stateWrites).toBe(returnedWrites);
+    expect(c.puts()).toHaveLength(0);
+  });
+  it("resets expansion across background and private session replacement before stale actions", async () => {
+    const c = await setup(saved("private ".repeat(50)));
+    await c.press("Show full note");
+    const backgroundAction = button(c.tree, "Show less").props.onPress;
+    await c.app("background");
+    const hiddenWrites = c.h.stateWrites;
+    backgroundAction();
+    expect(c.h.stateWrites).toBe(hiddenWrites);
+    await c.app("active");
+    expect(button(c.tree, "Show full note").props.accessibilityState.expanded).toBe(false);
+    const priorSession = button(c.tree, "Show full note").props.onPress;
+    await c.change({ sessionEpoch: 2 }, false);
+    const sessionWrites = c.h.stateWrites;
+    priorSession();
+    expect(c.h.stateWrites).toBe(sessionWrites);
+    c.h.flushEffects();
+    await c.settle();
+    expect(button(c.tree, "Show full note").props.accessibilityState.expanded).toBe(false);
+    await c.press("Show full note");
+    const priorOwner = button(c.tree, "Show less").props.onPress;
+    c.store.set(DAY, saved("other ".repeat(50), "1", DAY, OTHER));
+    await c.change({ ownerUserId: OTHER, sessionEpoch: 3 }, false);
+    const ownerWrites = c.h.stateWrites;
+    priorOwner();
+    expect(c.h.stateWrites).toBe(ownerWrites);
+    c.h.flushEffects();
+    await c.settle();
+    expect(button(c.tree, "Show full note").props.accessibilityState.expanded).toBe(false);
+    c.authority.closed = true;
+    const currentExpand = button(c.tree, "Show full note").props.onPress;
+    const closedWrites = c.h.stateWrites;
+    currentExpand();
+    expect(c.h.stateWrites).toBe(closedWrites);
+    expect(c.h.renderWithoutEffects()).toBeNull();
+  });
+  it("preserves full editor text and an exact ambiguous retry through local toggles", async () => {
+    const full = "🍎\r\n".repeat(70);
+    const c = await setup(saved(full));
+    await c.press("Edit day note");
+    expect(input(c.tree).props.value).toBe(full);
+    const raw = `  ${full}Cafe\u0301\r\n `;
+    await c.type(raw);
+    const save = button(c.tree, "Save note").props.onPress;
+    const before = c.calls.length;
+    await c.press("Show full note");
+    await c.press("Show less");
+    expect(input(c.tree).props.value).toBe(raw);
+    expect(c.calls).toHaveLength(before);
+    c.config.put = () => {
+      throw new Error("ambiguous");
+    };
+    save();
+    await c.settle();
+    const first = c.puts()[0];
+    expect(first.init.body).toBe(JSON.stringify({ note: raw }));
+    await c.press("Show full note");
+    await c.press("Show less");
+    await c.press("Retry same note save");
+    expect(c.puts()).toHaveLength(2);
+    expect(c.puts()[1].url).toBe(first.url);
+    expect(c.puts()[1].init.body).toBe(first.init.body);
+    expect(c.puts()[1].init.headers).toEqual(first.init.headers);
+    expect(input(c.tree).props.value).toBe(raw);
+  });
+  it("keeps conflict-review text complete while only the saved presentation is collapsed", async () => {
+    const c = await setup(saved("original ".repeat(40)));
+    await c.press("Edit day note");
+    await c.type("retained draft");
+    c.config.put = () => response({ code: "DAY_NOTE_REVISION_CONFLICT" }, 412);
+    await c.press("Save note");
+    const latest = "latest\r\n".repeat(50);
+    c.store.set(DAY, saved(latest, "2"));
+    await c.press("Reload current note");
+    expect(text(c.tree)).toContain(latest);
+    expect(input(c.tree).props.value).toBe("retained draft");
+    const keep = button(c.tree, "Keep my draft").props.onPress;
+    const before = c.calls.length;
+    await c.press("Show full note");
+    await c.press("Show less");
+    expect(c.calls).toHaveLength(before);
+    keep();
+    await c.settle();
+    expect(input(c.tree).props.value).toBe("retained draft");
+    expect(button(c.tree, "Save note").props.disabled).toBe(false);
+  });
   it("loads virgin absence independently and creates an exact raw note without food requests", async () => {
     const c = await setup();
     expect(text(c.tree)).toContain("No note for this day yet.");
