@@ -1,6 +1,6 @@
 # ADR 0082: Native public-food log date shortcuts
 
-Status: Source complete and reviewed; final canonical and exact-commit automatic evidence pending.
+Status: Implemented at 2e77f20; local and exact-commit automatic evidence passed; device/release acceptance separate.
 
 ## Context
 
@@ -57,5 +57,18 @@ failed on original source (15 failures, 34 existing passes). After implementatio
 all 133 focused cases passed: 49 actual-screen cases and 84 existing helper/search/
 outbox cases. Native types/format and independent source/documentation review
 passed. The synchronous hook harness does not establish concurrent React or
-physical-device behavior. Final canonical and automatic outcomes will be recorded
+physical-device behavior. Final canonical and automatic outcomes are recorded
 separately in the dated readiness evidence.
+
+
+## Delivery evidence
+
+Delivered at `2e77f20e9ff1b6f8fb3cf67e8d21ce3c50d4f1cb`. Canonical pnpm
+check passed 1,817 fresh tests, with 2,327 cached passes and 93 cached opt-in skips.
+Build passed 11 tasks, ten cached; Android/iOS exports were fresh. All three
+actual jobs in [CI 35261057866](https://github.com/liangzixuan/cronometer-gold/actions/runs/35261057866)
+and all nine actual jobs in [container 35261057887](https://github.com/liangzixuan/cronometer-gold/actions/runs/35261057887)
+passed on attempt one. The final web job completed September 17, 2026, 20:14:35 UTC.
+The 21:15:24 UTC observation verified exact job inventories and successful
+outcomes; clean matching local/tracking/live heads and all seven frozen committed
+files were reverified at 21:15:21 UTC. This evidence retains its exact commit scope.

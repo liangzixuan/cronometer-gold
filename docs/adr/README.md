@@ -87,7 +87,8 @@ ADR with a new ADR instead of rewriting its decision.
 | [0079](./0079-native-recipe-draft-protection.md) | Preserve native recipe edits across replacement choices and revision conflicts | Implemented at bacc261; local and exact-commit automatic evidence passed; device/release acceptance separate |
 | [0080](./0080-native-saved-entry-note-preview.md) | Compact native saved diary entry notes with explicit full view | Implemented at 28f6e4f; local and exact-commit automatic evidence passed; device/release acceptance separate |
 | [0081](./0081-native-public-food-log-time.md) | Choose an optional local time for native public-food logs | Implemented at ddd19bb; local and exact-commit automatic evidence passed; device/release acceptance separate |
-| [0082](./0082-native-public-food-log-date-shortcuts.md) | Choose Today or Yesterday for native public-food logs | Accepted for bounded source implementation; validation and release acceptance pending |
+| [0082](./0082-native-public-food-log-date-shortcuts.md) | Choose Today or Yesterday for native public-food logs | Implemented at 2e77f20; local and exact-commit automatic evidence passed; device/release acceptance separate |
+| [0083](./0083-native-recipe-log-date-shortcuts.md) | Choose Today or Yesterday for native saved-recipe logs | Accepted for bounded source implementation; validation and release acceptance pending |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

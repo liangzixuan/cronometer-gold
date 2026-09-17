@@ -22,6 +22,7 @@ import {
   nutrientDisplay,
   parseSession,
   quickAddOccurredAt,
+  shiftLocalDate,
 } from "../diary/diary";
 import {
   MAX_QUICK_ADD_OUTBOX_ITEMS,
@@ -724,6 +725,11 @@ export function RecipesScreen({
   ) {
     if (!canUseRecipeLog() || logDraft[field] === value) return;
     updateLogDraft({ [field]: value });
+  }
+  function chooseRecentRecipeLogDate(offset: 0 | -1) {
+    if (logFieldsDisabled || !canUseRecipeLog()) return;
+    const today = localDateInTimeZone(new Date(), profileTimeZone);
+    changeRecipeLog("date", offset === 0 ? today : shiftLocalDate(today, offset));
   }
   function selectNutritionBasis(basis: "100g" | "serving") {
     if (
@@ -1893,6 +1899,26 @@ export function RecipesScreen({
               value={date}
               onChange={(value) => changeRecipeLog("date", value)}
             />
+            <View style={styles.row}>
+              {(
+                [
+                  ["Today", 0],
+                  ["Yesterday", -1],
+                ] as const
+              ).map(([label, offset]) => (
+                <Pressable
+                  key={label}
+                  accessibilityLabel={`Set recipe diary date to ${label.toLowerCase()}`}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: logFieldsDisabled }}
+                  disabled={logFieldsDisabled}
+                  onPress={() => chooseRecentRecipeLogDate(offset)}
+                  style={[styles.secondary, logFieldsDisabled && styles.disabled]}
+                >
+                  <Text style={styles.secondaryText}>{label}</Text>
+                </Pressable>
+              ))}
+            </View>
             <Field
               disabled={logFieldsDisabled}
               label="Local time (optional)"
