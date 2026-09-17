@@ -443,7 +443,8 @@ describe("mobile recipe review parent lifecycle", () => {
     const { harness } = setup();
     const tree = await fill(harness);
     const old = review(tree).props.onConfirm;
-    const newTree = await click(harness, "New recipe");
+    await click(harness, "New recipe");
+    const newTree = await click(harness, "Discard edits and start new recipe");
     input(newTree, "Recipe name").props.onChangeText("Newer draft");
     expect(old([ingredient()])).toBe(false);
     expect(input(await harness.settle(), "Recipe name").props.value).toBe("Newer draft");
@@ -490,7 +491,7 @@ describe("mobile recipe review parent lifecycle", () => {
     expect(old([ingredient()])).toBe(false);
   });
   for (const phase of ["fetch", "json"]) {
-    it(`ignores an old save ${phase} after New without claiming the old write failed`, async () => {
+    it(`blocks New until the in-flight save ${phase} settles without aborting it`, async () => {
       const delayed = deferred();
       const { harness, requests } = setup((request) =>
         request.method === "POST"
@@ -503,13 +504,16 @@ describe("mobile recipe review parent lifecycle", () => {
       const old = review(tree).props.onConfirm;
       await click(harness, "Create recipe");
       expect(postRequests(requests)).toHaveLength(1);
-      const next = await click(harness, "New recipe");
-      input(next, "Recipe name").props.onChangeText("New after save");
+      const next = await harness.settle();
+      expect(pressable(next, "New recipe").props.disabled).toBe(true);
+      pressable(next, "New recipe").props.onPress();
+      expect(postRequests(requests)[0].signal.aborted).toBe(false);
       delayed.resolve(phase === "fetch" ? mutation() : await mutation().json());
       const current = await harness.settle();
-      expect(input(current, "Recipe name").props.value).toBe("New after save");
-      expect(screenText(current)).not.toContain("published");
+      expect(input(current, "Recipe name").props.value).toBe("Saved recipe");
+      expect(screenText(current)).toContain("published");
       expect(old([ingredient()])).toBe(false);
+      expect(input(await click(harness, "New recipe"), "Recipe name").props.value).toBe("");
     });
   }
   for (const change of ["owner", "token", "destination"]) {
@@ -839,6 +843,7 @@ describe("reviewed mobile recipe draft and outbox regressions", () => {
     const staleSave = pressable(old, "Create recipe").props.onPress;
     const staleNew = pressable(old, "New recipe").props.onPress;
     await click(harness, "New recipe");
+    await click(harness, "Discard edits and start new recipe");
     await fill(harness, "Fresh owner draft");
     staleName("Old name");
     staleQuantity("999");
@@ -968,7 +973,7 @@ describe("reviewed mobile recipe draft and outbox regressions", () => {
         }
       });
     }
-  it("reloads a conflicting existing revision through the new request context", async () => {
+  it("preserves a conflicting existing revision until explicit discard reloads current values", async () => {
     let conflict = false;
     const { harness, requests } = setup((request) => {
       if (request.method === "POST") {
@@ -986,9 +991,12 @@ describe("reviewed mobile recipe draft and outbox regressions", () => {
     )[0].props.onPress();
     const loaded = await harness.settle();
     input(loaded, "Recipe name").props.onChangeText("Changed locally");
-    const current = await click(harness, "Publish revision");
+    let current = await click(harness, "Publish revision");
+    expect(input(current, "Recipe name").props.value).toBe("Changed locally");
+    expect(screenText(current)).toContain("Your edits are still here");
+    await openNutritionRecipe(harness);
+    current = await click(harness, "Discard edits and open saved recipe");
     expect(input(current, "Recipe name").props.value).toBe("Fresh conflict version");
-    expect(screenText(current)).toContain("Fresh values were loaded");
     expect(postRequests(requests)[0].headers["if-match"]).toBe('"1"');
   });
 });
@@ -1287,7 +1295,7 @@ describe("mobile saved recipe nutrition inspection", () => {
       expect(pressable(tree, "Per serving (bowl)").props.accessibilityState.checked).toBe(true);
     });
   }
-  it("defaults to 100 g when a conflict reload removes the saved serving", async () => {
+  it("keeps saved nutrition through conflict and resets it after an explicit reload removes the serving", async () => {
     const next = nutritionRecipe({
       serving: false,
       versionNumber: 2,
@@ -1304,7 +1312,12 @@ describe("mobile saved recipe nutrition inspection", () => {
     });
     let tree = await openNutritionRecipe(harness);
     const staleServing = pressable(tree, "Per serving (bowl)").props.onPress;
+    input(tree, "Recipe name").props.onChangeText("Unsaved revision");
     tree = await click(harness, "Publish revision");
+    expect(screenText(tree)).toContain("Saved nutrition: Saved recipe · v 1");
+    expect(input(tree, "Recipe name").props.value).toBe("Unsaved revision");
+    await openNutritionRecipe(harness);
+    tree = await click(harness, "Discard edits and open saved recipe");
     expect(screenText(tree)).toContain("Saved nutrition: Saved recipe · v 2");
     staleServing();
     tree = await harness.settle();
@@ -1651,9 +1664,19 @@ describe("mobile copy saved recipe to new draft", () => {
       props.quickAddOutboxController.enqueueOperation.mockReturnValue(delayed.promise);
       let tree = await openNutritionRecipe(harness);
       const staleCopy = pressable(tree, "Copy to new draft").props.onPress;
+      const staleNew = pressable(tree, "New recipe").props.onPress;
+      const staleOpen = nodes(
+        tree,
+        (node) => node.type === "Pressable" && screenText(node).startsWith("Saved recipe"),
+      )[0].props.onPress;
+      const expected = draftInputs(tree);
       tree = await click(harness, action === "save" ? "Publish revision" : "Secure & log recipe");
       expect(pressable(tree, "Copy to new draft").props.disabled).toBe(true);
+      expect(pressable(tree, "New recipe").props.disabled).toBe(true);
       staleCopy();
+      staleNew();
+      staleOpen();
+      expect(draftInputs(await harness.settle())).toEqual(expected);
       tree = await harness.settle();
       expect(screenText(tree)).toContain("Saved nutrition:");
       expect(nodes(tree, (node) => node.type === "PastedIngredientReview")).toHaveLength(0);
@@ -1674,9 +1697,11 @@ describe("mobile copy saved recipe to new draft", () => {
       await click(harness, "Create recipe");
       if (boundary === "copy") {
         await openNutritionRecipe(harness);
+        await click(harness, "Discard edits and open saved recipe");
         await click(harness, "Copy to new draft");
       } else {
-        let tree = await click(harness, "New recipe");
+        await click(harness, "New recipe");
+        let tree = await click(harness, "Discard edits and start new recipe");
         input(tree, "Recipe name").props.onChangeText("Saved recipe");
         input(tree, "Final yield grams").props.onChangeText("120");
         input(tree, "Instructions").props.onChangeText("Simmer.");
@@ -1726,7 +1751,8 @@ describe("mobile copy saved recipe to new draft", () => {
     expect(props.quickAddOutboxController.requestDrain).toHaveBeenCalledExactlyOnceWith(
       "original-log",
     );
-    tree = await openNutritionRecipe(harness);
+    await openNutritionRecipe(harness);
+    tree = await click(harness, "Discard edits and open saved recipe");
     retainedAmount("999");
     tree = await harness.settle();
     expect(input(tree, "Amount").props.value).toBe("1");
@@ -2629,7 +2655,8 @@ describe("native loaded nested-recipe filter", () => {
       tree = await harness.settle();
       expect(ingredientRows(tree)).toHaveLength(1);
       const prior = nestedPin(tree).props.onPress;
-      tree = await click(harness, "New recipe");
+      await click(harness, "New recipe");
+      tree = await click(harness, "Discard edits and start new recipe");
       prior();
       tree = await harness.settle();
       expect(nestedInput(tree).props.value).toBe("Saved");
@@ -3206,6 +3233,7 @@ describe("optional saved recipe log time", () => {
       tree = await harness.settle();
       expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
       if (action === "New" || action === "copy") tree = await openNutritionRecipe(harness);
+      if (action === "copy") tree = await click(harness, "Discard edits and open saved recipe");
       expect(input(tree, "Local time (optional)").props.value).toBe("");
       harness.unmount();
     });
@@ -3813,8 +3841,10 @@ describe("mobile recipe ingredient food search pages", () => {
       else await fill(harness);
       const before = await searchIngredientFoods(harness);
       const add = foodAdds(before)[0].props.onPress;
-      if (replacement === "open") await openNutritionRecipe(harness);
-      else await click(harness, replacement === "save" ? "Create recipe" : "Copy to new draft");
+      if (replacement === "open") {
+        await openNutritionRecipe(harness);
+        await click(harness, "Discard edits and open saved recipe");
+      } else await click(harness, replacement === "save" ? "Create recipe" : "Copy to new draft");
       add();
       const tree = await harness.settle();
       expect(input(tree, "Search foods").props.value).toBe("");
@@ -3903,4 +3933,231 @@ describe("mobile ingredient paging review independence", () => {
     expect(postRequests(requests)).toHaveLength(0);
     harness.unmount();
   });
+});
+
+describe("mobile recipe draft replacement protection", () => {
+  const discardNew = "Discard edits and start new recipe";
+  const discardOpen = "Discard edits and open saved recipe";
+
+  it("keeps a raw new builder until New is explicitly confirmed", async () => {
+    const { harness, requests } = nutritionSetup();
+    let tree = await fill(harness);
+    input(tree, "Description").props.onChangeText(" raw description \r\n");
+    input(tree, "Instructions").props.onChangeText(" raw instructions ");
+    input(tree, "Serving count (optional)").props.onChangeText("2.000001");
+    input(tree, "Serving label").props.onChangeText(" plate ");
+    tree = await harness.settle();
+    const expected = draftInputs(tree);
+    const before = requests.length;
+    tree = await click(harness, "New recipe");
+    expect(draftInputs(tree)).toEqual(expected);
+    expect(pressable(tree, discardNew)).toBeDefined();
+    tree = await click(harness, "Keep editing");
+    expect(draftInputs(tree)).toEqual(expected);
+    expect(requests).toHaveLength(before);
+    await click(harness, "New recipe");
+    tree = await click(harness, discardNew);
+    expect(input(tree, "Recipe name").props.value).toBe("");
+    expect(review(tree).props.remainingCapacity).toBe(50);
+    expect(requests).toHaveLength(before);
+  });
+
+  it("keeps a dirty revision and its ingredient pins until saved-card opening is confirmed", async () => {
+    const { harness, requests } = nutritionSetup(copyFixture());
+    let tree = await openNutritionRecipe(harness);
+    input(tree, "Recipe name").props.onChangeText(" raw revised name ");
+    input(tree, "Instructions").props.onChangeText(" retained instructions ");
+    tree = await harness.settle();
+    const expected = draftInputs(tree);
+    const before = requests.length;
+    tree = await openNutritionRecipe(harness);
+    expect(draftInputs(tree)).toEqual(expected);
+    expect(requests).toHaveLength(before);
+    expect(pressable(tree, discardOpen)).toBeDefined();
+    tree = await click(harness, "Keep editing");
+    expect(draftInputs(tree)).toEqual(expected);
+    await openNutritionRecipe(harness);
+    tree = await click(harness, discardOpen);
+    expect(input(tree, "Recipe name").props.value).toBe("Saved recipe");
+    expect(
+      requests.filter((request) => request.url.pathname === `/v1/recipes/${recipeId}`),
+    ).toHaveLength(2);
+    expect(postRequests(requests)).toHaveLength(0);
+  });
+
+  it("retains the raw builder and saved snapshot when a confirmed Open fails", async () => {
+    let failOpen = false;
+    const { harness, requests } = nutritionSetup(undefined, (request) => {
+      if (failOpen && request.url.pathname === `/v1/recipes/${recipeId}`) return response({}, 503);
+    });
+    let tree = await openNutritionRecipe(harness);
+    input(tree, "Recipe name").props.onChangeText(" Keep this raw name ");
+    input(tree, "Quantity in grams").props.onChangeText("135.000001");
+    tree = await harness.settle();
+    const expected = draftInputs(tree);
+    failOpen = true;
+    await openNutritionRecipe(harness);
+    tree = await click(harness, discardOpen);
+    expect(draftInputs(tree)).toEqual(expected);
+    expect(screenText(tree)).toContain("Saved nutrition: Saved recipe · v 1");
+    expect(screenText(tree)).toContain("The recipe could not be loaded.");
+    expect(postRequests(requests)).toHaveLength(0);
+    const before = requests.length;
+    tree = await openNutritionRecipe(harness);
+    expect(pressable(tree, discardOpen)).toBeDefined();
+    tree = await click(harness, "Keep editing");
+    expect(draftInputs(tree)).toEqual(expected);
+    expect(requests).toHaveLength(before);
+  });
+
+  it("preserves the exact ambiguous save retry after declining New and Open", async () => {
+    const { harness, requests } = nutritionSetup(undefined, (request) =>
+      request.method === "POST" ? response({}, 503) : undefined,
+    );
+    await fill(harness);
+    await click(harness, "Create recipe");
+    const before = requests.length;
+    await click(harness, "New recipe");
+    await click(harness, "Keep editing");
+    await openNutritionRecipe(harness);
+    await click(harness, "Keep editing");
+    expect(requests).toHaveLength(before);
+    await click(harness, "Create recipe");
+    const posts = postRequests(requests);
+    expect(posts).toHaveLength(2);
+    expect(posts[1].body).toBe(posts[0].body);
+    expect(posts[1].headers).toEqual(posts[0].headers);
+  });
+
+  it("preserves all edits on 412 without an automatic detail request and offers explicit recovery", async () => {
+    let conflict = false;
+    const { harness, requests } = nutritionSetup(undefined, (request) => {
+      if (request.method === "POST") {
+        conflict = true;
+        return response({}, 412);
+      }
+      if (conflict && request.url.pathname === `/v1/recipes/${recipeId}`)
+        return response({
+          data: { recipe: nutritionRecipe({ name: "Latest saved", versionNumber: 2 }) },
+        });
+    });
+    let tree = await openNutritionRecipe(harness);
+    input(tree, "Recipe name").props.onChangeText(" my exact revision ");
+    input(tree, "Quantity in grams").props.onChangeText("123.000001");
+    tree = await harness.settle();
+    const expected = draftInputs(tree);
+    tree = await click(harness, "Publish revision");
+    expect(draftInputs(tree)).toEqual(expected);
+    expect(screenText(tree)).toContain("Your edits are still here");
+    expect(
+      requests.filter((request) => request.url.pathname === `/v1/recipes/${recipeId}`),
+    ).toHaveLength(1);
+    await click(harness, "Publish revision");
+    const posts = postRequests(requests);
+    expect(posts[1].body).toBe(posts[0].body);
+    expect(posts[1].headers["if-match"]).toBe('"1"');
+    expect(posts[1].headers["idempotency-key"]).not.toBe(posts[0].headers["idempotency-key"]);
+    await openNutritionRecipe(harness);
+    tree = await click(harness, discardOpen);
+    expect(input(tree, "Recipe name").props.value).toBe("Latest saved");
+    tree = await click(harness, "Publish revision");
+    expect(postRequests(requests)[2].headers["if-match"]).toBe('"2"');
+  });
+
+  it("rejects retained navigation and choice callbacks after synchronous edits and supersession", async () => {
+    const { harness, requests } = nutritionSetup();
+    let tree = await openNutritionRecipe(harness);
+    const oldNew = pressable(tree, "New recipe").props.onPress;
+    const oldOpen = nodes(
+      tree,
+      (node) => node.type === "Pressable" && screenText(node).startsWith("Saved recipe"),
+    )[0].props.onPress;
+    input(tree, "Recipe name").props.onChangeText(" first edit ");
+    oldNew();
+    oldOpen();
+    tree = await harness.settle();
+    expect(input(tree, "Recipe name").props.value).toBe(" first edit ");
+    tree = await click(harness, "New recipe");
+    const staleDiscard = pressable(tree, discardNew).props.onPress;
+    const staleKeep = pressable(tree, "Keep editing").props.onPress;
+    input(tree, "Instructions").props.onChangeText(" later scratch ");
+    staleDiscard();
+    staleKeep();
+    tree = await harness.settle();
+    const expected = draftInputs(tree);
+    tree = await openNutritionRecipe(harness);
+    const before = requests.length;
+    staleDiscard();
+    staleKeep();
+    tree = await harness.settle();
+    expect(draftInputs(tree)).toEqual(expected);
+    expect(pressable(tree, discardOpen)).toBeDefined();
+    expect(requests).toHaveLength(before);
+  });
+
+  it("retires an obsolete Open choice after list refresh but preserves New and Copy choices", async () => {
+    const { harness, requests } = nutritionSetup();
+    let tree = await openNutritionRecipe(harness);
+    input(tree, "Recipe name").props.onChangeText(" retained draft ");
+    tree = await openNutritionRecipe(harness);
+    const oldDiscard = pressable(tree, discardOpen).props.onPress;
+    const oldKeep = pressable(tree, "Keep editing").props.onPress;
+    tree = await click(harness, "Refresh");
+    expect(
+      nodes(tree, (node) => node.type === "Pressable" && screenText(node) === discardOpen),
+    ).toHaveLength(0);
+    const before = requests.length;
+    oldDiscard();
+    oldKeep();
+    tree = await harness.settle();
+    expect(input(tree, "Recipe name").props.value).toBe(" retained draft ");
+    expect(requests).toHaveLength(before);
+    for (const action of ["New recipe", "Copy to new draft"]) {
+      await click(harness, action);
+      tree = await click(harness, "Refresh");
+      expect(
+        pressable(tree, action === "New recipe" ? discardNew : discardCopyLabel),
+      ).toBeDefined();
+      await click(harness, "Keep editing");
+    }
+  });
+
+  it("keeps pristine navigation direct, including fields restored exactly to saved values", async () => {
+    const { harness, requests } = nutritionSetup();
+    let tree = await click(harness, "New recipe");
+    expect(input(tree, "Recipe name").props.value).toBe("");
+    tree = await openNutritionRecipe(harness);
+    input(tree, "Recipe name").props.onChangeText("temporary");
+    tree = await harness.settle();
+    input(tree, "Recipe name").props.onChangeText("Saved recipe");
+    tree = await openNutritionRecipe(harness);
+    expect(
+      nodes(tree, (node) => node.type === "Pressable" && screenText(node) === "Keep editing"),
+    ).toHaveLength(0);
+    expect(
+      requests.filter((request) => request.url.pathname === `/v1/recipes/${recipeId}`),
+    ).toHaveLength(2);
+    tree = await click(harness, "New recipe");
+    expect(input(tree, "Recipe name").props.value).toBe("");
+  });
+
+  for (const boundary of ["owner", "background", "unmount"]) {
+    it(`rejects retained replacement choices across ${boundary}`, async () => {
+      const { harness, requests } = nutritionSetup();
+      await fill(harness);
+      const tree = await openNutritionRecipe(harness);
+      const discard = pressable(tree, discardOpen).props.onPress;
+      const keep = pressable(tree, "Keep editing").props.onPress;
+      if (boundary === "owner") {
+        harness.updateProps({ ownerUserId: "049eb964-1327-49a1-ab4f-5c7c41a6b68a" });
+        harness.renderWithoutEffects();
+      } else if (boundary === "background") background();
+      else harness.unmount();
+      const before = requests.length;
+      discard();
+      keep();
+      expect(requests).toHaveLength(before);
+      expect(harness.writesAfterUnmount).toBe(0);
+    });
+  }
 });

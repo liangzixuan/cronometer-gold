@@ -83,7 +83,8 @@ ADR with a new ADR instead of rewriting its decision.
 | [0075](./0075-web-repeat-retry.md) | Preserve web Diary Repeat retries across clock changes | Source/local complete; automatic and release acceptance separate |
 | [0076](./0076-standalone-private-day-notes.md) | Standalone owner-private day notes with immutable history and complete export/erasure | Source/local and exact-commit automatic evidence complete at 9344057; external/release acceptance pending |
 | [0077](./0077-role-specific-p0-evidence.md) | Role-specific P0 v3 capture/review evidence and health manifest v6 | Implemented at 805b937; review follow-up delivered at 5d4c5a1; external/device/release acceptance separate |
-| [0078](./0078-native-saved-day-note-preview.md) | Compact native saved day-note text with explicit full view | Accepted; source validation recorded in current readiness; device/release acceptance separate |
+| [0078](./0078-native-saved-day-note-preview.md) | Compact native saved day-note text with explicit full view | Implemented at b9a081c; local and exact-commit automatic evidence passed; device/release acceptance separate |
+| [0079](./0079-native-recipe-draft-protection.md) | Preserve native recipe edits across replacement choices and revision conflicts | Accepted; source validation recorded in current readiness; device/release acceptance separate |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

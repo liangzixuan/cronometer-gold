@@ -104,10 +104,18 @@ function emptyFoodSearch(): IngredientFoodSearch {
   };
 }
 
-interface CopyChoice {
-  readonly recipe: RecipeView;
+type DraftChoice = {
   readonly builderGeneration: number;
-}
+} & (
+  | { readonly action: "copy"; readonly recipe: RecipeView }
+  | { readonly action: "new"; readonly recipe: RecipeView | null }
+  | {
+      readonly action: "open";
+      readonly recipe: RecipeView | null;
+      readonly target: RecipeSummaryView;
+      readonly recipes: readonly RecipeSummaryView[];
+    }
+);
 
 function builderContentKey(builder: Builder): string {
   return JSON.stringify({
@@ -284,8 +292,8 @@ export function RecipesScreen({
   const [selected, setSelected] = useState<RecipeView | null>(null);
   const [nutritionBasis, setNutritionBasis] = useState<"100g" | "serving">("100g");
   const selectedRef = useRef(selected);
-  const [copyChoice, setCopyChoice] = useState<CopyChoice | null>(null);
-  const copyChoiceRef = useRef<CopyChoice | null>(null);
+  const [draftChoice, setDraftChoice] = useState<DraftChoice | null>(null);
+  const draftChoiceRef = useRef<DraftChoice | null>(null);
   const creationIntent = useRef(0);
   const [builder, setBuilderState] = useState<Builder>(emptyBuilder);
   const [message, setMessage] = useState("Loading your private recipes…");
@@ -392,9 +400,9 @@ export function RecipesScreen({
     readyRef.current = value;
     setReadyState(value);
   }, []);
-  const clearCopyChoice = useCallback(() => {
-    copyChoiceRef.current = null;
-    setCopyChoice(null);
+  const clearDraftChoice = useCallback(() => {
+    draftChoiceRef.current = null;
+    setDraftChoice(null);
   }, []);
   const updateLogDraft = useCallback((change: Partial<typeof logDraft>) => {
     const next = { ...logDraftRef.current, ...change };
@@ -409,18 +417,18 @@ export function RecipesScreen({
   }, [logContext, updateLogDraft]);
   const replaceSelected = useCallback(
     (recipe: RecipeView | null) => {
-      clearCopyChoice();
+      clearDraftChoice();
       resetFoodSearch();
       selectedRef.current = recipe;
       setSelected(recipe);
       updateLogDraft({ time: "" });
       setNutritionBasis(recipe?.nutrientsPerServing ? "serving" : "100g");
     },
-    [clearCopyChoice, resetFoodSearch, updateLogDraft],
+    [clearDraftChoice, resetFoodSearch, updateLogDraft],
   );
   const replaceBuilder = useCallback(
     (value: Builder) => {
-      clearCopyChoice();
+      clearDraftChoice();
       const previous = builderRef.current.ingredients;
       if (
         previous.length !== value.ingredients.length ||
@@ -433,13 +441,13 @@ export function RecipesScreen({
       builderGeneration.current += 1;
       setBuilderState(value);
     },
-    [clearCopyChoice],
+    [clearDraftChoice],
   );
   const invalidateReview = useCallback(() => {
-    clearCopyChoice();
+    clearDraftChoice();
     reviewGeneration.current += 1;
     setReviewKey(reviewGeneration.current);
-  }, [clearCopyChoice]);
+  }, [clearDraftChoice]);
   const abortRequests = useCallback(() => {
     builderRequest.current?.abort();
     listRequest.current?.abort();
@@ -588,6 +596,7 @@ export function RecipesScreen({
         if (!(await verifyOwner(controller, current)) || !current()) return;
         const nextRecipes = mergeRecipePage(recipesRef.current, page.data, cursor !== null);
         recipesRef.current = nextRecipes;
+        if (draftChoiceRef.current?.action === "open") clearDraftChoice();
         setRecipes(nextRecipes);
         setNextCursor(page.nextCursor);
         setReady(true);
@@ -603,7 +612,7 @@ export function RecipesScreen({
         }
       }
     },
-    [closeSession, scope, scopeIsCurrent, setReady, verifyOwner],
+    [clearDraftChoice, closeSession, scope, scopeIsCurrent, setReady, verifyOwner],
   );
 
   useEffect(() => {
@@ -740,30 +749,45 @@ export function RecipesScreen({
     );
   }
   function copySavedRecipe() {
-    if (!canEdit() || !selected || selectedRef.current !== selected) return;
+    if (
+      !canEdit() ||
+      !selected ||
+      selectedRef.current !== selected ||
+      builderRef.current !== builder ||
+      draftChoiceRef.current !== draftChoice
+    )
+      return;
     if (
       builderContentKey(builderRef.current) !== builderContentKey(mobileBuilderFromRecipe(selected))
     ) {
-      const choice = { recipe: selected, builderGeneration: builderGeneration.current };
-      copyChoiceRef.current = choice;
-      setCopyChoice(choice);
+      const choice: DraftChoice = {
+        action: "copy",
+        recipe: selected,
+        builderGeneration: builderGeneration.current,
+      };
+      draftChoiceRef.current = choice;
+      setDraftChoice(choice);
       return;
     }
     installCopiedDraft(selected);
   }
-  function copyChoiceIsCurrent(choice: CopyChoice) {
+  function draftChoiceIsCurrent(choice: DraftChoice) {
     return (
-      canEdit() &&
-      copyChoiceRef.current === choice &&
+      (choice.action === "new" ? canStartNewRecipe() : canEdit()) &&
+      draftChoiceRef.current === choice &&
       selectedRef.current === choice.recipe &&
-      builderGeneration.current === choice.builderGeneration
+      builderGeneration.current === choice.builderGeneration &&
+      (choice.action !== "open" || recipesRef.current === choice.recipes)
     );
   }
-  function confirmCopy(choice: CopyChoice) {
-    if (copyChoiceIsCurrent(choice)) installCopiedDraft(choice.recipe);
+  function confirmDraftChoice(choice: DraftChoice) {
+    if (!draftChoiceIsCurrent(choice)) return;
+    if (choice.action === "copy") installCopiedDraft(choice.recipe);
+    else if (choice.action === "new") installNewRecipe();
+    else void open(choice.target.id);
   }
-  function keepEditing(choice: CopyChoice) {
-    if (copyChoiceIsCurrent(choice)) clearCopyChoice();
+  function keepEditing(choice: DraftChoice) {
+    if (draftChoiceIsCurrent(choice)) clearDraftChoice();
   }
   function updateBuilder(change: (current: Builder) => Builder) {
     if (canEdit()) replaceBuilder(change(builderRef.current));
@@ -799,14 +823,59 @@ export function RecipesScreen({
     );
     return true;
   }
+  function canStartNewRecipe() {
+    return (
+      scopeIsCurrent(renderEpoch) &&
+      reviewGeneration.current === renderReview &&
+      readyRef.current &&
+      builderRef.current === builder &&
+      busyRef.current !== "save" &&
+      busyRef.current !== "log"
+    );
+  }
+  function builderHasEdits() {
+    const baseline = selectedRef.current
+      ? mobileBuilderFromRecipe(selectedRef.current)
+      : emptyBuilder();
+    return builderContentKey(builderRef.current) !== builderContentKey(baseline);
+  }
   function startNewRecipe() {
+    if (!canStartNewRecipe() || draftChoiceRef.current !== draftChoice) return;
+    if (builderHasEdits()) {
+      const choice: DraftChoice = {
+        action: "new",
+        recipe: selectedRef.current,
+        builderGeneration: builderGeneration.current,
+      };
+      draftChoiceRef.current = choice;
+      setDraftChoice(choice);
+      return;
+    }
+    installNewRecipe();
+  }
+  function requestOpenRecipe(target: RecipeSummaryView) {
     if (
-      !scopeIsCurrent(renderEpoch) ||
-      reviewGeneration.current !== renderReview ||
-      !readyRef.current ||
-      busyRef.current === "log"
+      !canEdit() ||
+      builderRef.current !== builder ||
+      recipesRef.current !== recipes ||
+      draftChoiceRef.current !== draftChoice
     )
       return;
+    if (builderHasEdits()) {
+      const choice: DraftChoice = {
+        action: "open",
+        recipe: selectedRef.current,
+        target,
+        recipes,
+        builderGeneration: builderGeneration.current,
+      };
+      draftChoiceRef.current = choice;
+      setDraftChoice(choice);
+      return;
+    }
+    void open(target.id);
+  }
+  function installNewRecipe() {
     builderRequest.current?.abort();
     builderRequest.current = null;
     invalidateReview();
@@ -1057,7 +1126,7 @@ export function RecipesScreen({
   }
   async function save() {
     if (!canEdit()) return;
-    clearCopyChoice();
+    clearDraftChoice();
     const snapshot = builderRef.current;
     let body: ReturnType<typeof requestBody>;
     try {
@@ -1097,12 +1166,9 @@ export function RecipesScreen({
         pending.current.delete(key);
         setBusy(null);
         builderRequest.current = null;
-        if (snapshot.recipeId)
-          await open(
-            snapshot.recipeId,
-            "The recipe changed elsewhere. Fresh values were loaded.",
-            reviewGeneration.current,
-          );
+        setMessage(
+          "The recipe changed elsewhere. Your edits are still here. Open the saved recipe and choose to discard edits to load its latest values, or keep this draft for reference.",
+        );
         return;
       }
       if (!response.ok)
@@ -1290,7 +1356,7 @@ export function RecipesScreen({
         <View style={styles.row}>
           <Pressable
             accessibilityRole="button"
-            disabled={!ready || !scopeVisible || busy === "log"}
+            disabled={!ready || !scopeVisible || busy === "save" || busy === "log"}
             onPress={startNewRecipe}
             style={styles.primary}
           >
@@ -1340,7 +1406,7 @@ export function RecipesScreen({
                 accessibilityState={{ selected: selected?.id === recipe.id }}
                 key={recipe.id}
                 disabled={builderDisabled}
-                onPress={() => void open(recipe.id)}
+                onPress={() => requestOpenRecipe(recipe)}
                 style={styles.recipeCard}
               >
                 <Text style={styles.cardTitle}>{recipe.name}</Text>
@@ -1360,6 +1426,40 @@ export function RecipesScreen({
           >
             <Text style={styles.secondaryText}>{loading ? "Loading…" : "Load more recipes"}</Text>
           </Pressable>
+        ) : null}
+        {scopeVisible && draftChoice && draftChoiceRef.current === draftChoice ? (
+          <View style={styles.copyChoice}>
+            <Text accessibilityLiveRegion="polite" style={styles.help}>
+              You have unsaved edits. Keep editing, or discard those edits and{" "}
+              {draftChoice.action === "copy"
+                ? `copy saved ${draftChoice.recipe.name} v${draftChoice.recipe.versionNumber}.`
+                : draftChoice.action === "open"
+                  ? `open saved ${draftChoice.target.name}.`
+                  : "start a new recipe."}
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              disabled={draftChoice.action === "new" ? !canStartNewRecipe() : builderDisabled}
+              onPress={() => keepEditing(draftChoice)}
+              style={styles.secondary}
+            >
+              <Text style={styles.secondaryText}>Keep editing</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              disabled={draftChoice.action === "new" ? !canStartNewRecipe() : builderDisabled}
+              onPress={() => confirmDraftChoice(draftChoice)}
+              style={styles.secondary}
+            >
+              <Text style={styles.secondaryText}>
+                {draftChoice.action === "copy"
+                  ? "Discard edits and copy saved version"
+                  : draftChoice.action === "open"
+                    ? "Discard edits and open saved recipe"
+                    : "Discard edits and start new recipe"}
+              </Text>
+            </Pressable>
+          </View>
         ) : null}
         {scopeVisible ? (
           <View style={styles.panel}>
@@ -1706,30 +1806,6 @@ export function RecipesScreen({
             >
               <Text style={styles.secondaryText}>Copy to new draft</Text>
             </Pressable>
-            {copyChoice && copyChoiceRef.current === copyChoice ? (
-              <View style={styles.copyChoice}>
-                <Text accessibilityLiveRegion="polite" style={styles.help}>
-                  You have unsaved edits. Keep editing, or discard those edits and copy saved{" "}
-                  {copyChoice.recipe.name} v{copyChoice.recipe.versionNumber}.
-                </Text>
-                <Pressable
-                  accessibilityRole="button"
-                  disabled={builderDisabled}
-                  onPress={() => keepEditing(copyChoice)}
-                  style={styles.secondary}
-                >
-                  <Text style={styles.secondaryText}>Keep editing</Text>
-                </Pressable>
-                <Pressable
-                  accessibilityRole="button"
-                  disabled={builderDisabled}
-                  onPress={() => confirmCopy(copyChoice)}
-                  style={styles.secondary}
-                >
-                  <Text style={styles.secondaryText}>Discard edits and copy saved version</Text>
-                </Pressable>
-              </View>
-            ) : null}
             <Text accessibilityRole="header" style={styles.sectionTitle}>
               Assumptions & warnings
             </Text>

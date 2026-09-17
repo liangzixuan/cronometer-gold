@@ -1,6 +1,7 @@
 # ADR 0078: Compact native saved day-note previews
 
-Status: Accepted; implementation and validation recorded in current readiness.
+Status: Implemented at b9a081c; local and exact-commit automatic evidence passed.
+Device, accessibility and release acceptance remain separate.
 
 ## Context
 
@@ -50,3 +51,14 @@ focused tests, relevant native types/format, independent in-task review, final
 canonical check/build with native exports, and exact-commit automatic checks.
 Record fresh/cached/skipped evidence separately in dated readiness. Component
 harnesses and exports do not establish physical-device or assistive behavior.
+
+## Delivered evidence
+
+Commit `b9a081c9b9a20a646832adb93942aeb5a4d33ada` passed 39 focused component
+cases, native types/format and canonical check/build. September 17 local check
+recorded 1,734 fresh passes, 2,327 cached passes and 93 cached opt-in skips;
+native iOS/Android exports ran fresh in an 11-task build with ten cached tasks.
+[CI 35172357843](https://github.com/liangzixuan/cronometer-gold/actions/runs/35172357843)
+and [container 35172357822](https://github.com/liangzixuan/cronometer-gold/actions/runs/35172357822)
+passed all three/nine actual jobs on attempt one, verified at 03:36:02 UTC.
+These results cover that commit and preserve the device/release limits above.

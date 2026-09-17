@@ -9,12 +9,17 @@ review at `805b937` is complete, its recommendations are addressed, and another
 paid review is not an active milestone. No external approval of successor bytes
 or release acceptance is implied.
 
-Active source work is [ADR 0078](../adr/0078-native-saved-day-note-preview.md): a
-compact native saved day-note preview with explicit expansion. It changes native
-presentation only; final evidence for this new slice remains to be recorded.
-The approved Expo `.20` installation and one production audit belong to the
-completed follow-up; that audit authorization is consumed. Historical failed
-checks and dated local-service/browser proof retain their original boundaries.
+[ADR 0078](../adr/0078-native-saved-day-note-preview.md) is delivered at
+`b9a081c9b9a20a646832adb93942aeb5a4d33ada`: 39 focused cases, canonical gates
+and fresh native exports passed, followed by all three CI/nine actual container
+jobs on attempt one. September 17 03:36 UTC evidence confirms successful exact
+results and a clean checkout with equal local/tracking/live heads.
+
+Active work is [ADR 0079](../adr/0079-native-recipe-draft-protection.md): native
+recipe replacement confirmation and preservation of edits on revision conflict.
+Final evidence for this successor remains to be recorded. The approved Expo `.20`
+installation/audit belong to the completed follow-up; audit authorization is
+consumed. Historical failures and service/browser evidence retain their dates.
 
 Use the [build plan](../product/build-plan.md) for priorities and the
 [release gates](release-gates.md) for authoritative acceptance. The
@@ -63,7 +68,7 @@ authorizations within their original scope.
 | Lane | Owner and next evidence | Exit |
 | --- | --- | --- |
 | Automatic delivery evidence | Delivery owner re-reads the exact commit's CI and actual container jobs. | Both applicable workflows complete successfully with required jobs executed; release artifact/digest/provenance requirements remain separate. [Supply chain](container-supply-chain.md#required-github-configuration). |
-| Native saved-note preview | Implementation owner and independent in-task reviewer validate bounded previews, exact full text, no-request toggles and stale-control rejection. | Focused native checks, canonical source gates and exact-commit automatic jobs; physical-device and assistive evidence remain separate. [ADR 0078](../adr/0078-native-saved-day-note-preview.md). |
+| Native recipe draft protection | Implementation owner and independent in-task reviewer validate explicit replacement, retained conflict edits and stale-choice rejection. | Focused native checks, canonical gates and exact-commit automatic jobs; physical-device and assistive evidence remain separate. [ADR 0079](../adr/0079-native-recipe-draft-protection.md). |
 | Signed device and accessibility | Release owner confirms identifier history and numbering; device operators and reviewers prepare approved Windows relay/capture prerequisites and the physical iOS/Android matrix. | Exact signed artifacts, protected-storage/OS-kill, notification, cross-client and accessibility evidence with required attestations. Exports do not substitute. [Windows boundary](../../infra/runbooks/physical-device-windows-wsl2-private-https.md), [release matrix](../../infra/runbooks/platform-health-release.md). |
 | Hosted beta and mail/privacy operations | Deployment/security, database/privacy and mail owners review target/budget, seven-image deployment, TLS/access/readiness, off-host restore and production delivery operations. | Hosted restore/erasure replay and access evidence, approved provider/sender and abuse/retry/suppression operations, independent review and rollout decisions. [Release](../../infra/runbooks/platform-health-release.md), [restore](../../infra/runbooks/postgres-backup-and-restore.md), [mail/privacy gates](release-gates.md). |
 | Live catalogue and database authority | Acquisition/storage operators, data-quality/rights reviewers and database authority owner provide authenticated dual acquisition, immutable retention, manifest-v4 review bundle, mapping/scale evidence and caller cutover. | Approved numeric catalogue/search/resource thresholds, three distinct role approvals and separate activation decision. The 363-food pilot and synthetic fixtures are insufficient. [Source runbook](../../infra/runbooks/food-source-release.md), [catalogue boundary](../product/build-plan.md#parallel-release-acceptance-target--live-catalogue-evidence). |
@@ -86,17 +91,14 @@ be reintroduced as missing source work from an older summary.
 
 ## Active milestone and successor
 
-Complete the bounded [ADR 0077 review follow-up](../adr/0077-role-specific-p0-evidence.md#delivery-and-review-follow-up--2026-09-16-utc):
-Python tests in push/PR CI and a named local command, semantic predecessor and
-existing time-rule regressions, and current-versus-historical documentation.
-Final source checks, independent review and the new commit's automatic evidence
-remain pending. No new product feature is selected.
+Complete [ADR 0079](../adr/0079-native-recipe-draft-protection.md) with native
+behavioral proof, independent in-task review, canonical validation and the new
+commit's automatic results. The completed ADR 0077 review follow-up and ADR 0078
+preview are historical baselines, not pending source tasks. Record the successor
+in the dated Windows readiness record and reconcile it with the next coherent
+source change; avoid a status-only commit/build cycle.
 
-The delivered `805b937` contract and the dated ADR 0028 print checks are complete
-within their recorded scopes. The newly approved audit passed at 22:06:38 UTC
-with zero reviewed advisories and four lower-severity advisories visible; its
-one-run authorization is consumed. License policy passed for 535 production
-packages with 14 existing reviewed exceptions. Earlier approvals and audits
-remain historical. The scoped external report, synthetic tests and source
-delivery do not close device, accessibility, cloud, signing, hosted or release
-acceptance.
+The scoped external report is complete at `805b937`. Another paid review needs
+explicit scope/spending approval. Audit authorization is consumed. Source,
+synthetic and automatic evidence do not close device/accessibility, hosted,
+catalogue, signing, scientific/legal or release acceptance.
