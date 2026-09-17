@@ -20,6 +20,7 @@ import {
   isLocalDate,
   isPositiveDecimal,
   localDateInTimeZone,
+  localDateTimeToInstant,
   type MealSlot,
   quickAddOccurredAt,
 } from "../diary/diary";
@@ -91,6 +92,11 @@ function foodAccessibilityLabel(food: FoodSearchHit): string {
 }
 
 interface FoodSearchScreenProps {
+  readonly ownerUserId: string;
+  readonly sessionEpoch: number;
+  readonly profileRevision: string;
+  readonly isFocused: boolean;
+  readonly routeKey: string;
   readonly apiBase: URL;
   readonly profileTimeZone: string;
   readonly diaryDate: string;
@@ -186,6 +192,11 @@ function quickAddQueueMessage(
 }
 
 export function FoodSearchScreen({
+  ownerUserId,
+  sessionEpoch,
+  profileRevision,
+  isFocused,
+  routeKey,
   apiBase,
   profileTimeZone,
   diaryDate: initialDate,
@@ -196,6 +207,41 @@ export function FoodSearchScreen({
   subscribeQuickAddReceipts,
   onAdded,
 }: FoodSearchScreenProps) {
+  const logScopeKey = JSON.stringify([
+    ownerUserId,
+    sessionEpoch,
+    profileRevision,
+    apiBase.href,
+    profileTimeZone,
+    routeKey,
+    initialDate,
+    initialMeal,
+  ]);
+  const logContext = useRef({ key: logScopeKey, controller: quickAddOutboxController });
+  if (
+    logContext.current.key !== logScopeKey ||
+    logContext.current.controller !== quickAddOutboxController
+  ) {
+    logContext.current = { key: logScopeKey, controller: quickAddOutboxController };
+  }
+  const renderedLogContext = logContext.current;
+  const installedLogContext = useRef<typeof renderedLogContext | null>(null);
+  const logLifecycle = useRef({
+    mounted: false,
+    active: AppState.currentState === "active",
+    focused: isFocused,
+    epoch: 0,
+  });
+  if (logLifecycle.current.focused !== isFocused) {
+    logLifecycle.current.focused = isFocused;
+    logLifecycle.current.epoch += 1;
+  }
+  const renderedLogEpoch = logLifecycle.current.epoch;
+  const logGeneration = useRef(0);
+  const renderedLogGeneration = logGeneration.current;
+  const [, refreshLogControls] = useState(0);
+  const [timeDraft, setTimeDraft] = useState({ context: renderedLogContext, value: "" });
+  const localTime = timeDraft.context === renderedLogContext ? timeDraft.value : "";
   const [diaryDate, setDiaryDate] = useState(() =>
     isLocalDate(initialDate) ? initialDate : localDateInTimeZone(new Date(), profileTimeZone),
   );
@@ -209,7 +255,7 @@ export function FoodSearchScreen({
     Readonly<Record<string, PublicFoodPortionDraft>>
   >({});
   const enqueueInFlight = useRef(false);
-  const ownedOperations = useRef(new Set<string>());
+  const ownedOperations = useRef(new Map<string, number>());
   const receivedOwnedReceiptCount = useRef(0);
   const outboxActionInFlight = useRef(false);
   const [outboxAction, setOutboxAction] = useState<"retry" | "discard" | null>(null);
@@ -241,11 +287,106 @@ export function FoodSearchScreen({
   const onAddedRef = useRef(onAdded);
   onAddedRef.current = onAdded;
 
+  const currentFoods = useRef({ results, barcodeResult });
+  currentFoods.current = { results, barcodeResult };
+
+  function currentLogContext() {
+    return (
+      logLifecycle.current.mounted &&
+      logContext.current === renderedLogContext &&
+      installedLogContext.current === renderedLogContext
+    );
+  }
+  function canUseLogContext() {
+    return (
+      currentLogContext() &&
+      logLifecycle.current.active &&
+      AppState.currentState === "active" &&
+      logLifecycle.current.focused &&
+      logLifecycle.current.epoch === renderedLogEpoch
+    );
+  }
+  function canUseLogDraft() {
+    return canUseLogContext() && logGeneration.current === renderedLogGeneration;
+  }
+  function canEditLogDraft() {
+    return canUseLogDraft() && !enqueueInFlight.current && !outboxActionInFlight.current;
+  }
+  function currentFood(food: FoodSearchHit) {
+    return (
+      currentFoods.current.results.includes(food) || currentFoods.current.barcodeResult === food
+    );
+  }
+  function changeLogDate(value: string) {
+    if (!canEditLogDraft() || value === diaryDate) return;
+    logGeneration.current += 1;
+    setDiaryDate(value);
+    if (!isLocalDate(value)) setAddMessage("Date must use YYYY-MM-DD.");
+  }
+  function changeLogTime(value: string) {
+    if (!canEditLogDraft() || value === localTime) return;
+    logGeneration.current += 1;
+    setTimeDraft({ context: renderedLogContext, value });
+  }
+  function changeLogMeal(value: MealSlot) {
+    if (!canEditLogDraft() || value === mealSlot) return;
+    logGeneration.current += 1;
+    setMealSlot(value);
+  }
+
+  useEffect(() => {
+    const lifecycle = logLifecycle.current;
+    lifecycle.mounted = true;
+    const subscription = AppState.addEventListener("change", (next) => {
+      const active = next === "active";
+      if (lifecycle.active === active) return;
+      lifecycle.active = active;
+      lifecycle.epoch += 1;
+      refreshLogControls((value) => value + 1);
+    });
+    return () => {
+      lifecycle.mounted = false;
+      lifecycle.epoch += 1;
+      subscription.remove();
+    };
+  }, []);
+
+  useEffect(() => {
+    installedLogContext.current = renderedLogContext;
+    logGeneration.current += 1;
+    ownedOperations.current.clear();
+    enqueueInFlight.current = false;
+    outboxActionInFlight.current = false;
+    setAddingVersion(null);
+    setOutboxAction(null);
+    setDiaryDate(
+      isLocalDate(initialDate) ? initialDate : localDateInTimeZone(new Date(), profileTimeZone),
+    );
+    setMealSlot(initialMeal);
+    setTimeDraft({ context: renderedLogContext, value: "" });
+    setPortionDrafts({});
+    setAddState("idle");
+    setAddMessage("Choose a local day, diary group, unit, and positive quantity.");
+  }, [renderedLogContext, initialDate, initialMeal, profileTimeZone]);
+
   useEffect(
     () =>
       subscribeQuickAddReceipts((receipt) => {
-        if (!ownedOperations.current.delete(receipt.operationId)) return;
+        const receiptEpoch = ownedOperations.current.get(receipt.operationId);
+        if (
+          !logLifecycle.current.mounted ||
+          logContext.current !== renderedLogContext ||
+          !ownedOperations.current.delete(receipt.operationId)
+        )
+          return;
         receivedOwnedReceiptCount.current += 1;
+        if (
+          receiptEpoch !== logLifecycle.current.epoch ||
+          !logLifecycle.current.active ||
+          AppState.currentState !== "active" ||
+          !logLifecycle.current.focused
+        )
+          return;
         const entry = receipt.mutation.entry;
         const loggedDate = entry?.localDate ?? receipt.mutation.affectedDays[0]?.localDate;
         if (!loggedDate) {
@@ -261,7 +402,7 @@ export function FoodSearchScreen({
         );
         onAddedRef.current(loggedDate);
       }),
-    [diaryGroups, subscribeQuickAddReceipts],
+    [diaryGroups, subscribeQuickAddReceipts, renderedLogContext],
   );
 
   useEffect(() => {
@@ -568,6 +709,7 @@ export function FoodSearchScreen({
   }
 
   async function addFood(food: FoodSearchHit, draft: PublicFoodPortionDraft) {
+    if (!canUseLogDraft() || !currentFood(food)) return;
     if (outboxActionInFlight.current) {
       setAddState("error");
       setAddMessage("Wait for the current queued-request action to finish.");
@@ -610,10 +752,17 @@ export function FoodSearchScreen({
     }
     let occurredAt: string;
     try {
-      occurredAt = quickAddOccurredAt(diaryDate, profileTimeZone, new Date());
-    } catch {
+      occurredAt =
+        localTime === ""
+          ? quickAddOccurredAt(diaryDate, profileTimeZone, new Date())
+          : localDateTimeToInstant(diaryDate, localTime, profileTimeZone);
+    } catch (error) {
       setAddState("error");
-      setAddMessage("That local date is not valid in your diary time zone.");
+      setAddMessage(
+        error instanceof Error
+          ? error.message
+          : "That local date or time is not valid in your diary time zone.",
+      );
       return;
     }
     enqueueInFlight.current = true;
@@ -641,34 +790,40 @@ export function FoodSearchScreen({
         mealSlot,
         occurredAt,
       });
-      ownedOperations.current.add(item.operationId);
-      setAddState("ready");
-      setAddMessage(
-        `${portionAmountLabel(draft)} of ${food.name} is queued securely for ${diaryGroupLabel(diaryGroups, mealSlot)} on ${diaryDate}. It is not included in diary totals until the server confirms it.`,
-      );
+      if (currentLogContext()) ownedOperations.current.set(item.operationId, renderedLogEpoch);
+      if (canUseLogDraft()) {
+        setAddState("ready");
+        setAddMessage(
+          `${portionAmountLabel(draft)} of ${food.name} is queued securely for ${diaryGroupLabel(diaryGroups, mealSlot)} on ${diaryDate}. It is not included in diary totals until the server confirms it.`,
+        );
+      }
       void quickAddOutboxController.requestDrain(item.operationId);
     } catch (error) {
       if (error instanceof QuickAddEnqueueAmbiguousError) {
-        ownedOperations.current.add(error.operationId);
+        if (currentLogContext()) ownedOperations.current.set(error.operationId, renderedLogEpoch);
         void quickAddOutboxController.requestDrain(error.operationId);
-        setAddState("error");
-        setAddMessage(
-          "Secure storage could not confirm whether the food was queued. Do not tap Add again until the queue status recovers.",
-        );
-      } else {
+        if (canUseLogDraft()) {
+          setAddState("error");
+          setAddMessage(
+            "Secure storage could not confirm whether the food was queued. Do not tap Add again until the queue status recovers.",
+          );
+        }
+      } else if (canUseLogDraft()) {
         setAddState("error");
         setAddMessage(
           "The food was not queued. Refresh this screen and try again after the diary session is current.",
         );
       }
     } finally {
-      enqueueInFlight.current = false;
-      setAddingVersion(null);
+      if (logContext.current === renderedLogContext) {
+        enqueueInFlight.current = false;
+        if (logLifecycle.current.mounted) setAddingVersion(null);
+      }
     }
   }
 
   async function retryQueuedAdds() {
-    if (outboxActionInFlight.current || enqueueInFlight.current) return;
+    if (!canUseLogContext() || outboxActionInFlight.current || enqueueInFlight.current) return;
     outboxActionInFlight.current = true;
     const receiptCount = receivedOwnedReceiptCount.current;
     setOutboxAction("retry");
@@ -677,7 +832,7 @@ export function FoodSearchScreen({
     try {
       await quickAddOutboxController.requestDrain();
       const current = quickAddOutboxController.getState();
-      if (receivedOwnedReceiptCount.current === receiptCount) {
+      if (canUseLogContext() && receivedOwnedReceiptCount.current === receiptCount) {
         setAddState(
           current.status === "blocked" || current.status === "unavailable" ? "error" : "ready",
         );
@@ -688,16 +843,19 @@ export function FoodSearchScreen({
         );
       }
     } catch {
+      if (!canUseLogContext()) return;
       setAddState("error");
       setAddMessage("The queued requests remain retained because retry could not start.");
     } finally {
-      outboxActionInFlight.current = false;
-      setOutboxAction(null);
+      if (logContext.current === renderedLogContext) {
+        outboxActionInFlight.current = false;
+        if (logLifecycle.current.mounted) setOutboxAction(null);
+      }
     }
   }
 
   async function retryBlockedAdd(operationId: string) {
-    if (outboxActionInFlight.current || enqueueInFlight.current) return;
+    if (!canUseLogContext() || outboxActionInFlight.current || enqueueInFlight.current) return;
     outboxActionInFlight.current = true;
     const receiptCount = receivedOwnedReceiptCount.current;
     setOutboxAction("retry");
@@ -706,7 +864,7 @@ export function FoodSearchScreen({
     try {
       await quickAddOutboxController.retryBlockedHead(operationId);
       const current = quickAddOutboxController.getState();
-      if (receivedOwnedReceiptCount.current === receiptCount) {
+      if (canUseLogContext() && receivedOwnedReceiptCount.current === receiptCount) {
         setAddState(
           current.status === "blocked" || current.status === "unavailable" ? "error" : "ready",
         );
@@ -717,18 +875,21 @@ export function FoodSearchScreen({
         );
       }
     } catch {
+      if (!canUseLogContext()) return;
       setAddState("error");
       setAddMessage(
         "The exact retry could not be confirmed. Review the queue status before acting again.",
       );
     } finally {
-      outboxActionInFlight.current = false;
-      setOutboxAction(null);
+      if (logContext.current === renderedLogContext) {
+        outboxActionInFlight.current = false;
+        if (logLifecycle.current.mounted) setOutboxAction(null);
+      }
     }
   }
 
   async function discardBlockedAdd(operationId: string, foodName: string) {
-    if (outboxActionInFlight.current || enqueueInFlight.current) return;
+    if (!canUseLogContext() || outboxActionInFlight.current || enqueueInFlight.current) return;
     outboxActionInFlight.current = true;
     const receiptCount = receivedOwnedReceiptCount.current;
     setOutboxAction("discard");
@@ -736,25 +897,29 @@ export function FoodSearchScreen({
     setAddMessage(`Discarding only the blocked ${foodName} request…`);
     try {
       await quickAddOutboxController.discardBlockedHead(operationId);
-      ownedOperations.current.delete(operationId);
-      if (receivedOwnedReceiptCount.current === receiptCount) {
+      if (currentLogContext()) ownedOperations.current.delete(operationId);
+      if (canUseLogContext() && receivedOwnedReceiptCount.current === receiptCount) {
         setAddState("ready");
         setAddMessage(`The blocked ${foodName} request was discarded. It was not added.`);
       }
     } catch {
+      if (!canUseLogContext()) return;
       setAddState("error");
       setAddMessage(
         "The discard could not be confirmed. Review the queue status before taking another action.",
       );
     } finally {
-      outboxActionInFlight.current = false;
-      setOutboxAction(null);
+      if (logContext.current === renderedLogContext) {
+        outboxActionInFlight.current = false;
+        if (logLifecycle.current.mounted) setOutboxAction(null);
+      }
     }
   }
 
   function confirmDiscardBlockedAdd(
     state: Extract<QuickAddOutboxControllerState, { status: "blocked" }>,
   ) {
+    if (!canUseLogContext()) return;
     Alert.alert(
       "Discard blocked diary log?",
       `This permanently removes only ${state.foodName} (${state.servingLabel}) for ${diaryGroupLabel(diaryGroups, state.mealSlot)} on ${state.localDate}. It has not been added. Remaining queued diary logs stay in order.`,
@@ -770,6 +935,11 @@ export function FoodSearchScreen({
   }
 
   function updatePortionDraft(food: FoodSearchHit, patch: Partial<PublicFoodPortionDraft>) {
+    if (!canEditLogDraft() || !currentFood(food)) return;
+    const previous = portionDraft(portionDrafts, food);
+    const next = { ...previous, ...patch };
+    if (next.kind === previous.kind && next.amount === previous.amount) return;
+    logGeneration.current += 1;
     setPortionDrafts((current) => ({
       ...current,
       [food.foodVersionId]: { ...portionDraft(current, food), ...patch },
@@ -793,7 +963,7 @@ export function FoodSearchScreen({
   function renderPortionControls(food: FoodSearchHit) {
     const draft = portionDraft(portionDrafts, food);
     const validAmount = isPositiveDecimal(draft.amount);
-    const disabled = addingVersion !== null || quickAddUnavailable;
+    const disabled = !canEditLogDraft() || addingVersion !== null || quickAddUnavailable;
     return (
       <View style={styles.portionControls}>
         <Text style={styles.portionHeading}>Quantity</Text>
@@ -924,20 +1094,35 @@ export function FoodSearchScreen({
           <TextInput
             accessibilityLabel="Diary local date"
             maxLength={10}
-            onChangeText={(value) => {
-              setDiaryDate(value);
-              if (!isLocalDate(value)) setAddMessage("Date must use YYYY-MM-DD.");
-            }}
+            editable={canEditLogDraft()}
+            onChangeText={changeLogDate}
             style={styles.input}
             value={diaryDate}
           />
+          <Text style={styles.fieldLabel}>Local time (optional)</Text>
+          <TextInput
+            accessibilityLabel="Local time (optional)"
+            autoCapitalize="none"
+            editable={canEditLogDraft()}
+            maxLength={5}
+            onChangeText={changeLogTime}
+            placeholder="HH:mm"
+            placeholderTextColor="#6f7b75"
+            style={styles.input}
+            value={localTime}
+          />
+          <Text style={styles.mutedCopy}>
+            {profileTimeZone}. Leave time blank for the current instant today, or noon on another
+            day. Enter HH:mm to choose a local time.
+          </Text>
           <View accessibilityRole="radiogroup" style={styles.intentRow}>
             {diaryGroups.map(({ mealSlot: meal, label }) => (
               <Pressable
                 accessibilityRole="radio"
-                accessibilityState={{ checked: mealSlot === meal }}
+                accessibilityState={{ checked: mealSlot === meal, disabled: !canEditLogDraft() }}
                 key={meal}
-                onPress={() => setMealSlot(meal)}
+                disabled={!canEditLogDraft()}
+                onPress={() => changeLogMeal(meal)}
                 style={[styles.intentButton, mealSlot === meal && styles.intentButtonSelected]}
               >
                 <Text style={[styles.intentLabel, mealSlot === meal && styles.intentLabelSelected]}>

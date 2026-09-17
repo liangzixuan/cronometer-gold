@@ -396,8 +396,14 @@ function ReportsRoute(props: AuthenticatedAppProps) {
 function SearchRoute(props: AuthenticatedAppProps) {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute<NativeStackScreenProps<RootStackParamList, "Search">["route"]>();
+  const isFocused = useIsFocused();
   return (
     <FoodSearchScreen
+      ownerUserId={props.session.user.id}
+      sessionEpoch={props.sessionEpoch}
+      profileRevision={props.session.profile.revision}
+      isFocused={isFocused}
+      routeKey={route.key}
       apiBase={props.apiBase}
       diaryDate={route.params.date}
       mealSlot={route.params.meal}

@@ -102,24 +102,26 @@ retains earlier boundaries. A successful successor never changes an older result
 
 | Order | Work | Concrete exit |
 | --- | --- | --- |
-| Active source milestone | Compact native saved entry-note previews (ADR 0080) | Bounded exact saved text with independent full/collapsed views; retain editing and outbox behavior. Focused native review/checks, canonical gates and exact-commit automatic evidence. |
+| Active source milestone | Optional native public-food log time (ADR 0081) | Shared optional time for search/barcode Add, unchanged automatic defaults and exact durable retries. Focused native review/checks, canonical gates and exact-commit automatic evidence. |
+| Completed source milestone | Compact native saved entry-note previews (ADR 0080) | Delivered at `28f6e4f`: exact compact/full saved text; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Native recipe draft protection (ADR 0079) | Delivered at `bacc261`: explicit dirty replacement, retained conflict edits and exact retries; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Compact native saved day-note preview (ADR 0078) | Delivered at `b9a081c`: bounded exact text with full/collapsed views; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | ADR 0077 review follow-up | Delivered at `5d4c5a1`: Python CI/local wiring, semantic/time-boundary regressions, runbook corrections and approved Expo prerequisite. Local gates and all three CI/nine actual container jobs passed; dated details are in ADR 0077 and current readiness. |
 | Completed external review | Scoped Claude review at `805b937` | The supplied report found no ADR 0077 blockers. Its recommendations were addressed in the delivered follow-up; the report remains limited to its original scope. Routine product work does not require another paid review. |
 | Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Advance only under applicable existing authorization and unchanged release gates. |
 
-### Active bounded milestone: compact native saved entry-note previews
+### Active bounded milestone: optional native public-food log time
 
-[ADR 0080](../adr/0080-native-saved-entry-note-preview.md) keeps long saved food
-and recipe entry notes compact in the native diary, with an explicit full-text
-view per entry. Preserve exact text, independent snapshot-bound expansion,
-private/lifecycle boundaries and existing edit/repeat/outbox behavior. This
-extends the reading control already available for standalone day notes.
+[ADR 0081](../adr/0081-native-public-food-log-time.md) lets a person choose an
+optional local time when adding a public food from search or barcode results.
+Blank preserves current-instant/today and local-noon/other-date defaults.
+Explicit time uses existing validation; preserve exact food/portion identity,
+private/route/lifecycle boundaries and secured retry bodies.
 
-The prior [recipe draft protection](../adr/0079-native-recipe-draft-protection.md)
-is delivered at `bacc261`. No dependency change, install, audit,
-browser/service/device action or paid review is part of this native slice. The earlier Expo `.20` audit
+The prior [entry-note previews](../adr/0080-native-saved-entry-note-preview.md)
+are delivered at `28f6e4f`. No dependency change, install, audit,
+browser/service/device action or paid review is part of this native slice.
+The earlier Expo `.20` audit
 authorization is consumed. Follow the
 [proportionate review policy](../quality/development-workflow.md#proportionate-independent-review).
 Required signed-device and release acceptance remain separate.

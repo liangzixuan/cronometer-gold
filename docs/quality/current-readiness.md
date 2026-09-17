@@ -22,13 +22,18 @@ CI/nine actual container jobs on attempt one. September 17 05:33 UTC evidence
 records complete automatic results; successor preflight confirms clean equal
 local/tracking/live heads.
 
-Active work is [ADR 0080](../adr/0080-native-saved-entry-note-preview.md): compact
-native saved diary entry notes with independent full/collapsed views. The
-focused baseline passed 97 cases; 23 new regressions failed on original native
-source before all 120 focused cases passed with the implementation. Native
-types/format and independent source review passed. Final canonical and
-exact-commit automatic evidence remains to be recorded in the dated Windows
-readiness record; these development checks do not establish device acceptance. The approved Expo `.20`
+[ADR 0080](../adr/0080-native-saved-entry-note-preview.md) is delivered at
+`28f6e4f10fbcbbb5253fec1b069e6a132ff47773`: 120 focused cases, independent
+review, canonical gates and native exports passed. All three CI/nine actual
+container jobs passed on attempt one; September 17 07:25 UTC evidence records
+complete outcomes and clean equal local/tracking/live heads.
+
+Active work is [ADR 0081](../adr/0081-native-public-food-log-time.md): optional
+native public-food log time shared by search and barcode Add. All 119 focused
+cases, native types/format and independent source/documentation review passed.
+Final canonical and exact-commit automatic evidence remains to be recorded in
+the dated Windows readiness record; component proof is not device acceptance.
+The approved Expo `.20`
 installation/audit belong to the completed follow-up; audit authorization is
 consumed. Historical failures and service/browser evidence retain their dates.
 
@@ -79,7 +84,7 @@ authorizations within their original scope.
 | Lane | Owner and next evidence | Exit |
 | --- | --- | --- |
 | Automatic delivery evidence | Delivery owner re-reads the exact commit's CI and actual container jobs. | Both applicable workflows complete successfully with required jobs executed; release artifact/digest/provenance requirements remain separate. [Supply chain](container-supply-chain.md#required-github-configuration). |
-| Native saved entry-note previews | Implementation owner and independent in-task reviewer validate exact saved text, independent expansion and stale/private/lifecycle boundaries. | Focused native checks, canonical gates and exact-commit automatic jobs; physical-device and assistive evidence remain separate. [ADR 0080](../adr/0080-native-saved-entry-note-preview.md). |
+| Optional native public-food log time | Implementation owner and independent in-task reviewer validate automatic/explicit time, stale/private/lifecycle boundaries and exact secured retries. | Focused native checks, canonical gates and exact-commit automatic jobs; physical-device and assistive evidence remain separate. [ADR 0081](../adr/0081-native-public-food-log-time.md). |
 | Signed device and accessibility | Release owner confirms identifier history and numbering; device operators and reviewers prepare approved Windows relay/capture prerequisites and the physical iOS/Android matrix. | Exact signed artifacts, protected-storage/OS-kill, notification, cross-client and accessibility evidence with required attestations. Exports do not substitute. [Windows boundary](../../infra/runbooks/physical-device-windows-wsl2-private-https.md), [release matrix](../../infra/runbooks/platform-health-release.md). |
 | Hosted beta and mail/privacy operations | Deployment/security, database/privacy and mail owners review target/budget, seven-image deployment, TLS/access/readiness, off-host restore and production delivery operations. | Hosted restore/erasure replay and access evidence, approved provider/sender and abuse/retry/suppression operations, independent review and rollout decisions. [Release](../../infra/runbooks/platform-health-release.md), [restore](../../infra/runbooks/postgres-backup-and-restore.md), [mail/privacy gates](release-gates.md). |
 | Live catalogue and database authority | Acquisition/storage operators, data-quality/rights reviewers and database authority owner provide authenticated dual acquisition, immutable retention, manifest-v4 review bundle, mapping/scale evidence and caller cutover. | Approved numeric catalogue/search/resource thresholds, three distinct role approvals and separate activation decision. The 363-food pilot and synthetic fixtures are insufficient. [Source runbook](../../infra/runbooks/food-source-release.md), [catalogue boundary](../product/build-plan.md#parallel-release-acceptance-target--live-catalogue-evidence). |
@@ -102,10 +107,9 @@ be reintroduced as missing source work from an older summary.
 
 ## Active milestone and successor
 
-Complete [ADR 0080](../adr/0080-native-saved-entry-note-preview.md) with native
+Complete [ADR 0081](../adr/0081-native-public-food-log-time.md) with native
 behavioral proof, independent in-task review, canonical validation and the new
-commit's automatic results. The completed ADR 0077 review follow-up, ADR 0078
-day-note preview and ADR 0079 draft protection are historical baselines, not
+commit's automatic results. ADRs 0077 through 0080 are delivered baselines, not
 pending source tasks. Record the successor
 in the dated Windows readiness record and reconcile it with the next coherent
 source change; avoid a status-only commit/build cycle.

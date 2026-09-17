@@ -1,6 +1,6 @@
 # ADR 0080: Compact native saved diary entry-note previews
 
-Status: Accepted; source review and development checks recorded in current readiness; final delivery evidence pending.
+Status: Implemented at `28f6e4f`; local and exact-commit automatic evidence passed; device/release acceptance separate.
 
 ## Context
 
@@ -53,3 +53,20 @@ or write effects. Preserve the editor, repeat, pagination and outbox assertions.
 Pass focused native tests, types/format, independent in-task review, canonical
 check/build and exact-commit automatic checks. Record cached and skipped results
 separately from fresh execution in the dated readiness evidence.
+
+## Delivery evidence
+
+Delivered at `28f6e4f10fbcbbb5253fec1b069e6a132ff47773`. All 23 new
+regressions failed on original source before the focused suite passed 120/120.
+Independent native/documentation review and types/format passed. September 17
+canonical check passed 1,768 fresh cases, replayed 2,327 cached passes and
+93 cached opt-in skips; build passed eleven tasks, ten cached, with fresh native
+exports. No dependency, installation, audit or paid review was needed.
+
+[CI 35187106773](https://github.com/liangzixuan/cronometer-gold/actions/runs/35187106773)
+and [container 35187106789](https://github.com/liangzixuan/cronometer-gold/actions/runs/35187106789)
+passed all three/nine actual jobs on attempt one. The final web job completed
+September 17 at 07:15:27 UTC; the 07:25:20 observation retained each outcome.
+At 07:25:41, local/tracking/live heads matched with a clean tree and all nine
+committed file hashes matching the reviewed freeze. These results apply to this
+commit; device, assistive and release acceptance remain separate.
