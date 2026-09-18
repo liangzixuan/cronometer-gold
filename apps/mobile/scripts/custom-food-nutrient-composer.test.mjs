@@ -8850,3 +8850,354 @@ describe("custom-food log date shortcuts", () => {
     }
   });
 });
+
+async function changeReadingField(harness, label, value) {
+  input(biometricSection(await harness.settle()), label).props.onChangeText(value);
+  return harness.settle();
+}
+function readingDateButton(tree, label) {
+  return button(biometricSection(tree), label);
+}
+
+describe("native biometric reading date shortcuts", () => {
+  it("chooses profile-local dates without changing required time, metric/raw value or other drafts and reads only on explicit actions", async () => {
+    historyClock("2026-09-17T20:00:00.000Z");
+    const { harness, requests, props } = setupReadings((request) =>
+      request.method === "POST" && request.url.pathname === "/v1/biometrics/events"
+        ? response({}, 503)
+        : undefined,
+    );
+    harness.updateProps({ profileTimeZone: "Asia/Tokyo" });
+    try {
+      await pressReadingMetric(harness, `${otherTrendDefinition.name} (kg)`);
+      await changeReadingField(harness, readingValueLabel(otherTrendDefinition), "-12.34000100");
+      await changeReadingField(harness, "Local date", "2026-09-01");
+      await changeReadingField(harness, "Local time", "14:35");
+      await type(harness, "Name", "  Untouched custom draft  ");
+      await type(harness, "From (YYYY-MM-DD)", "2026-08-01");
+      await filterHistory(harness, trendDefinition.id);
+      await click(harness, "Log exact version");
+      const customBefore = editorSnapshot(logEditor(await harness.settle()));
+      const count = requests.length;
+      const operation = hooks.operation;
+      for (const label of ["Today", "Yesterday"]) {
+        const tree = await pressBiometric(harness, label);
+        expect(readingDateButton(tree, label).props).toMatchObject({
+          accessibilityRole: "button",
+          disabled: false,
+          accessibilityState: { disabled: false },
+        });
+        const section = biometricSection(tree);
+        expect(input(section, "Local date").props.value).toBe(
+          label === "Today" ? "2026-09-18" : "2026-09-17",
+        );
+        expect(input(section, "Local time").props.value).toBe("14:35");
+        expect(input(section, readingValueLabel(otherTrendDefinition)).props.value).toBe(
+          "-12.34000100",
+        );
+        expect(
+          readingMetricChoice(tree, `${otherTrendDefinition.name} (kg)`).props.accessibilityState
+            .selected,
+        ).toBe(true);
+        expect(
+          historyMetricChoice(tree, trendDefinition.id).props.accessibilityState.selected,
+        ).toBe(true);
+        expect(input(tree, "Name").props.value).toBe("  Untouched custom draft  ");
+        expect(input(tree, "From (YYYY-MM-DD)").props.value).toBe("2026-08-01");
+        expect(editorSnapshot(logEditor(tree))).toEqual(customBefore);
+      }
+      expect(requests).toHaveLength(count);
+      expect(hooks.operation).toBe(operation);
+      expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+      await changeReadingField(harness, "Local time", "");
+      await pressBiometric(harness, "Log reading");
+      expect(writes(requests)).toHaveLength(0);
+      await changeReadingField(harness, "Local time", "14:35");
+      await pressBiometric(harness, "Log reading");
+      expect(writes(requests)).toHaveLength(1);
+      expect(JSON.parse(writes(requests)[0].body)).toEqual({
+        definitionId: otherTrendDefinition.id,
+        value: "-12.34000100",
+        measuredAt: "2026-09-17T05:35:00.000Z",
+      });
+      expect(writes(requests)[0].headers["if-match"]).toBeUndefined();
+      expect(historyReads(requests)).toHaveLength(1);
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("changes an edited date without changing event/revision/metric or the raw exact value", async () => {
+    historyClock("2026-09-17T20:00:00.000Z");
+    const { harness, requests } = setupReadings((request) =>
+      request.method === "PATCH" ? response({}, 503) : undefined,
+    );
+    try {
+      await pressBiometric(harness, "Edit", readingEvent.id);
+      await changeReadingField(harness, readingValueLabel(), "-0.000000100");
+      const tree = await pressBiometric(harness, "Yesterday");
+      expect(input(biometricSection(tree), "Local date").props.value).toBe("2026-09-16");
+      expect(input(biometricSection(tree), "Local time").props.value).toBe("07:00");
+      expect(readingMetricChoice(tree, `${trendDefinition.name} (kg)`).props).toMatchObject({
+        disabled: true,
+        accessibilityState: { selected: true },
+      });
+      expect(writes(requests)).toHaveLength(0);
+      await pressBiometric(harness, "Save reading");
+      const request = writes(requests)[0];
+      expect(request.url.pathname).toBe(`/v1/biometrics/events/${readingEvent.id}`);
+      expect(request.headers["if-match"]).toBe(`"${readingEvent.revision}"`);
+      expect(JSON.parse(request.body)).toEqual({
+        value: "-0.000000100",
+        measuredAt: "2026-09-16T12:00:00.000Z",
+      });
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("uses the tap clock after profile midnight while retaining the required time", async () => {
+    historyClock("2026-09-18T04:59:59.000Z");
+    const { harness } = setupReadings();
+    try {
+      const old = await changeReadingField(harness, "Local time", "08:17");
+      expect(input(biometricSection(old), "Local date").props.value).toBe("2026-09-17");
+      const choose = readingDateButton(old, "Today").props.onPress;
+      historyClock("2026-09-18T05:00:01.234Z");
+      choose();
+      const tree = await harness.settle();
+      expect(input(biometricSection(tree), "Local date").props.value).toBe("2026-09-18");
+      expect(input(biometricSection(tree), "Local time").props.value).toBe("08:17");
+    } finally {
+      harness.unmount();
+    }
+  });
+  for (const [now, date, measuredAt] of [
+    ["2027-01-01T18:00:00.000Z", "2026-12-31", "2026-12-31T18:34:00.000Z"],
+    ["2028-03-01T18:00:00.000Z", "2028-02-29", "2028-02-29T18:34:00.000Z"],
+    ["2026-11-02T05:30:00.000Z", "2026-10-31", "2026-10-31T17:34:00.000Z"],
+  ]) {
+    it(`chooses calendar yesterday ${date} rather than subtracting 24 hours`, async () => {
+      historyClock(now);
+      const { harness, requests } = setupReadings((request) =>
+        request.method === "POST" && request.url.pathname === "/v1/biometrics/events"
+          ? response({}, 503)
+          : undefined,
+      );
+      try {
+        await changeReadingField(harness, readingValueLabel(), "70.1000");
+        await changeReadingField(harness, "Local time", "12:34");
+        const tree = await pressBiometric(harness, "Yesterday");
+        expect(input(biometricSection(tree), "Local date").props.value).toBe(date);
+        await pressBiometric(harness, "Log reading");
+        expect(JSON.parse(writes(requests)[0].body)).toEqual({
+          definitionId: trendDefinition.id,
+          value: "70.1000",
+          measuredAt,
+        });
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+  it("preserves original fold seconds/milliseconds and same-date retry identity, but allocates a changed-date operation", async () => {
+    historyClock("2026-11-01T20:00:00.000Z");
+    const original = {
+      ...readingEvent,
+      localDate: "2026-11-01",
+      measuredAt: "2026-11-01T07:30:05.123Z",
+    };
+    const { harness, requests } = setupReadings(
+      (request) => (request.method === "PATCH" ? response({}, 503) : undefined),
+      { entries: [original] },
+    );
+    try {
+      await pressBiometric(harness, "Edit", original.id);
+      await pressBiometric(harness, "Yesterday");
+      let tree = await pressBiometric(harness, "Today");
+      expect(input(biometricSection(tree), "Local time").props.value).toBe("01:30");
+      const count = harness.stateWrites;
+      readingDateButton(tree, "Today").props.onPress();
+      expect(harness.stateWrites).toBe(count);
+      await pressBiometric(harness, "Save reading");
+      const first = writes(requests)[0];
+      expect(JSON.parse(first.body)).toEqual({ value: original.value });
+      tree = await pressBiometric(harness, "Today");
+      await pressBiometric(harness, "Save reading");
+      const retry = writes(requests)[1];
+      expect(retry.body).toBe(first.body);
+      expect(retry.headers["idempotency-key"]).toBe(first.headers["idempotency-key"]);
+      expect(retry.headers["if-match"]).toBe(`"${original.revision}"`);
+      expect(text(biometricCard(tree, original.id))).toContain("01:30:05");
+      await pressBiometric(harness, "Yesterday");
+      await pressBiometric(harness, "Save reading");
+      const changed = writes(requests)[2];
+      expect(JSON.parse(changed.body)).toEqual({
+        value: original.value,
+        measuredAt: "2026-10-31T06:30:00.000Z",
+      });
+      expect(changed.headers["idempotency-key"]).not.toBe(first.headers["idempotency-key"]);
+      expect(changed.headers["if-match"]).toBe(first.headers["if-match"]);
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("rejects retained callbacks after draft edits, Edit and Cancel before rerender", async () => {
+    historyClock("2026-09-17T20:00:00.000Z");
+    const { harness, requests } = setupReadings();
+    try {
+      let tree = await harness.settle();
+      const beforeChange = readingDateButton(tree, "Today").props.onPress;
+      input(biometricSection(tree), "Local date").props.onChangeText("2026-09-01");
+      beforeChange();
+      tree = await harness.settle();
+      expect(input(biometricSection(tree), "Local date").props.value).toBe("2026-09-01");
+      const beforeEdit = readingDateButton(tree, "Yesterday").props.onPress;
+      button(biometricCard(tree, readingEvent.id), "Edit").props.onPress();
+      beforeEdit();
+      tree = await harness.settle();
+      expect(input(biometricSection(tree), "Local date").props.value).toBe(readingEvent.localDate);
+      const beforeCancel = readingDateButton(tree, "Yesterday").props.onPress;
+      button(biometricSection(tree), "Cancel").props.onPress();
+      beforeCancel();
+      tree = await harness.settle();
+      expect(input(biometricSection(tree), "Local date").props.value).toBe("2026-09-17");
+      expect(input(biometricSection(tree), readingValueLabel()).props.value).toBe("");
+      expect(writes(requests)).toHaveLength(0);
+    } finally {
+      harness.unmount();
+    }
+  });
+  for (const boundary of ["private", "profile"]) {
+    it(`rejects prior and uninstalled ${boundary} callbacks, including ABA`, async () => {
+      historyClock("2026-09-17T20:00:00.000Z");
+      const { harness, props, requests } = setupReadings();
+      try {
+        let tree = await changeReadingField(harness, "Local date", "2026-09-01");
+        const stale = [
+          readingDateButton(tree, "Today").props.onPress,
+          readingDateButton(tree, "Yesterday").props.onPress,
+        ];
+        harness.updateProps(
+          boundary === "private"
+            ? { ownerUserId: otherOwner, sessionEpoch: 2 }
+            : { profileTimeZone: "Asia/Tokyo" },
+        );
+        tree = harness.renderWithoutEffects();
+        for (const label of ["Today", "Yesterday"]) {
+          const target = readingDateButton(tree, label);
+          expect(target.props).toMatchObject({
+            disabled: true,
+            accessibilityState: { disabled: true },
+          });
+          stale.push(target.props.onPress);
+        }
+        const before = harness.stateWrites;
+        for (const callback of stale) callback();
+        expect(harness.stateWrites).toBe(before);
+        harness.flushEffects();
+        await harness.settle();
+        harness.updateProps({
+          ownerUserId: props.ownerUserId,
+          sessionEpoch: props.sessionEpoch,
+          profileTimeZone: props.profileTimeZone,
+        });
+        await harness.settle();
+        await changeReadingField(harness, "Local date", "2026-09-03");
+        for (const callback of stale) callback();
+        tree = await harness.settle();
+        expect(input(biometricSection(tree), "Local date").props.value).toBe("2026-09-03");
+        tree = await pressBiometric(harness, "Yesterday");
+        expect(input(biometricSection(tree), "Local date").props.value).toBe("2026-09-16");
+        expect(writes(requests)).toHaveLength(0);
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+  for (const boundary of ["background", "unmount"]) {
+    it(`keeps retained reading-date controls inert across ${boundary}`, async () => {
+      const { harness } = setupReadings();
+      let tree = await changeReadingField(harness, "Local date", "2026-09-01");
+      const stale = [
+        readingDateButton(tree, "Today").props.onPress,
+        readingDateButton(tree, "Yesterday").props.onPress,
+      ];
+      if (boundary === "unmount") harness.unmount();
+      else {
+        state("background");
+        tree = await harness.settle();
+        for (const label of ["Today", "Yesterday"]) {
+          const target = readingDateButton(tree, label);
+          expect(target.props).toMatchObject({
+            disabled: true,
+            accessibilityState: { disabled: true },
+          });
+          stale.push(target.props.onPress);
+        }
+      }
+      const count = harness.stateWrites;
+      for (const callback of stale) callback();
+      expect(harness.stateWrites).toBe(count);
+      if (boundary === "background") {
+        state("active");
+        await harness.settle();
+        for (const callback of stale) callback();
+        tree = await harness.settle();
+        expect(input(biometricSection(tree), "Local date").props.value).toBe("2026-09-01");
+        expect(readingDateButton(tree, "Today").props.disabled).toBe(false);
+        harness.unmount();
+      }
+      expect(harness.writesAfterUnmount).toBe(0);
+    });
+  }
+  for (const action of ["read", "write"]) {
+    it(`keeps new date controls disabled during a pending history ${action} and retires disabled callbacks`, async () => {
+      historyClock("2026-09-17T20:00:00.000Z");
+      const held = deferred();
+      const { harness, requests } = setupReadings((request) =>
+        request.method === "PATCH" ||
+        (action === "read" &&
+          request.method === "GET" &&
+          request.url.pathname === "/v1/biometrics/events" &&
+          historyReads(requests).length > 1)
+          ? held.promise
+          : undefined,
+      );
+      try {
+        await pressBiometric(harness, "Edit", readingEvent.id);
+        let tree = await changeReadingField(harness, "Local date", "2026-09-01");
+        const before = [
+          readingDateButton(tree, "Today").props.onPress,
+          readingDateButton(tree, "Yesterday").props.onPress,
+        ];
+        button(
+          biometricSection(tree),
+          action === "read" ? "Reload history" : "Save reading",
+        ).props.onPress();
+        for (const callback of before) callback();
+        tree = await harness.settle();
+        const disabled = [];
+        for (const label of ["Today", "Yesterday"]) {
+          const target = readingDateButton(tree, label);
+          expect(target.props).toMatchObject({
+            disabled: true,
+            accessibilityState: { disabled: true },
+          });
+          disabled.push(target.props.onPress);
+          target.props.onPress();
+        }
+        expect(input(biometricSection(await harness.settle()), "Local date").props.value).toBe(
+          "2026-09-01",
+        );
+        held.resolve(action === "read" ? historyPage([readingEvent]) : response({}, 503));
+        await harness.settle();
+        for (const callback of disabled) callback();
+        tree = await harness.settle();
+        expect(input(biometricSection(tree), "Local date").props.value).toBe("2026-09-01");
+        expect(readingDateButton(tree, "Today").props.disabled).toBe(false);
+        expect(writes(requests)).toHaveLength(action === "read" ? 0 : 1);
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+});

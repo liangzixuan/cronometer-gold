@@ -2069,6 +2069,12 @@ export function RetentionScreen({
       eventWrite.current === null
     );
   }
+  function chooseReadingDate(offset: 0 | -1) {
+    if (readingDateDisabled || !canEditReading()) return;
+    const today = localDateInTimeZone(new Date(), profileTimeZone);
+    const localDate = offset === 0 ? today : shiftLocalDate(today, offset);
+    if (eventDraft.localDate !== localDate) setEventDraft({ ...eventDraft, localDate });
+  }
   function acceptedReadingIsCurrent() {
     return (
       customMounted.current &&
@@ -2919,6 +2925,7 @@ export function RetentionScreen({
 
   const historyVisible = currentHistoryScope(customEpoch.current);
   const historyDisabled = !historyVisible || loading || historyPending || eventWriting;
+  const readingDateDisabled = historyDisabled || !canEditReading();
   const historyMetricLabels = new Map(
     definitions.map((item) => [item.id, `${item.name} (${item.canonicalUnit})`]),
   );
@@ -3862,6 +3869,20 @@ export function RetentionScreen({
             onChangeText={(localDate) => setEventDraft({ ...eventDraft, localDate })}
             maxLength={10}
           />
+          <View style={styles.actions}>
+            <Button
+              label="Today"
+              disabled={readingDateDisabled}
+              onPress={() => chooseReadingDate(0)}
+              secondary
+            />
+            <Button
+              label="Yesterday"
+              disabled={readingDateDisabled}
+              onPress={() => chooseReadingDate(-1)}
+              secondary
+            />
+          </View>
           <LabeledInput
             label="Local time"
             value={eventDraft.localTime}
