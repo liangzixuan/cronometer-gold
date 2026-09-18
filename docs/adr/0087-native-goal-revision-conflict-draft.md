@@ -1,6 +1,6 @@
 # ADR 0087: Preserve native goal drafts after a revision conflict
 
-Status: Source complete and reviewed; final canonical and exact-commit automatic evidence pending.
+Status: Implemented at `53a43cc`; local and exact-commit automatic evidence passed. Device and release acceptance remain separate.
 
 ## Context
 
@@ -79,8 +79,8 @@ renders, stale disabled callbacks and unmount; explicit candidate-loading state
 resolves the gap without changing requests or policy. Final focused validation
 passed 120 cases (96 screen, 17 goal helpers, seven reference helpers), no skips;
 native types and scoped Biome check passed. Source and documentation review are
-recorded separately; final canonical and exact-commit automatic outcomes remain
-pending in the dated outside-Git readiness record.
+recorded separately; completed final gates and exact-commit automatic outcomes
+are summarized below and retained in the dated outside-Git readiness record.
 
 
 ## Approved Expo compatibility prerequisite
@@ -106,6 +106,24 @@ the 120 focused cases and scoped Biome check passed again on this graph. The one
 approved audit passed policy at 16:15 UTC, with four lower-severity advisories
 still visible; its authorization is consumed. License checks passed for 535
 production packages with 14 existing reviewed exceptions. Final canonical gates,
-the isolated build from source and exact-commit automatic results remain pending
-and will be recorded outside Git. Native exports and dependency checks do not
-establish device or release acceptance.
+the isolated build from source and exact-commit automatic results subsequently
+passed as recorded below. Native exports and dependency checks do not establish
+device or release acceptance.
+
+## Delivery evidence
+
+Delivered at `53a43ccb26da865b2c337c5d334fdf8832fdd13c` on September 18, 2026.
+Final canonical check passed at 16:24 UTC: 1,906 fresh tests passed, with 2,327
+cached passes and 93 cached opt-in skips; type/test graphs each passed 17 tasks,
+16 cached. Canonical build passed 11 tasks, ten cached, with fresh native exports.
+A separate source-only export passed strict frozen/peer installation followed by
+contracts and mobile builds without copied application outputs or Turbo cache.
+All 946 source input bytes and modes remained unchanged.
+
+[CI 35368561272](https://github.com/liangzixuan/cronometer-gold/actions/runs/35368561272)
+and [container 35368561239](https://github.com/liangzixuan/cronometer-gold/actions/runs/35368561239)
+passed all three and all nine actual jobs, respectively, on attempt one. The
+final web job completed at 17:49:26 UTC; official observation at 17:52:25 UTC
+retains every job outcome. Clean matching local/tracking/live heads and all
+eleven reviewed file hashes were verified at 17:53:05 UTC. The delivery monitor
+was paused. Signed-device, reviewer, hosted and release acceptance remain open.

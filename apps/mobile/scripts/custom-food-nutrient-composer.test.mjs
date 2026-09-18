@@ -652,11 +652,11 @@ describe("native named custom-food nutrient composer", () => {
       harness.unmount();
     }
   });
-  it("fences stale manual/choice/Add/Save/Revise/Cancel controls and keeps same-value edits usable", async () => {
+  it("fences stale manual/choice/Add/Save/Revise/New controls and keeps same-value edits usable", async () => {
     const { harness, requests } = setup();
     try {
       let tree = await click(harness, "Revise");
-      const oldCancel = button(tree, "Cancel edit").props.onPress;
+      const oldNew = button(tree, "New custom food").props.onPress;
       const oldSave = button(tree, "Save new version").props.onPress;
       const oldRevise = button(tree, "Revise").props.onPress;
       const oldManual = input(tree, "Canonical nutrients per 100 g").props.onChangeText;
@@ -668,7 +668,7 @@ describe("native named custom-food nutrient composer", () => {
       const oldEntryClear = button(tree, "Clear nutrient entry").props.onPress;
       const oldAdd = button(tree, "Add nutrient row to draft").props.onPress;
       tree = await type(harness, "Protein amount (g per 100 g)", "3.00");
-      oldCancel();
+      oldNew();
       oldSave();
       oldRevise();
       oldManual("208=999");
@@ -689,7 +689,8 @@ describe("native named custom-food nutrient composer", () => {
       tree = await harness.settle();
       expect(canonical(tree)).toBe("208=125.5000\n203=3.00");
       expect(writes(requests)).toHaveLength(0);
-      tree = await click(harness, "Cancel edit");
+      await click(harness, "New custom food");
+      tree = await click(harness, "Discard draft and start new food");
       expect(input(tree, "Exact amount per 100 g").props.value).toBe("");
       expect(canonical(tree)).toBe("");
     } finally {
@@ -3547,7 +3548,7 @@ describe("native saved custom-food copy to new draft", () => {
     }
   });
 
-  for (const action of ["edit/restore", "composer", "Revise", "Cancel edit", "save", "refresh"])
+  for (const action of ["edit/restore", "composer", "Revise", "New custom food", "save", "refresh"])
     it(`invalidates a pending copy choice after ${action}`, async () => {
       const { harness, requests } = setup((request) =>
         request.method === "POST" ? response({}, 503) : undefined,
@@ -3572,8 +3573,12 @@ describe("native saved custom-food copy to new draft", () => {
         keep();
         tree = await harness.settle();
         expect(rawCustomFields(tree)).toEqual(before);
-        expect(customCopyChoices(tree)).toHaveLength(action === "Revise" ? 1 : 0);
+        expect(customCopyChoices(tree)).toHaveLength(
+          action === "Revise" || action === "New custom food" ? 1 : 0,
+        );
         if (action === "Revise") expect(button(tree, discardCustomRevise)).toBeDefined();
+        if (action === "New custom food")
+          expect(button(tree, "Discard draft and start new food")).toBeDefined();
         expect(requests).toHaveLength(count);
       } finally {
         harness.unmount();
@@ -7269,7 +7274,7 @@ describe("native unfinished nutrient entry Save protection", () => {
     }
   });
 
-  it("acknowledges the new blank composer only after an accepted replacement or Cancel reset", async () => {
+  it("acknowledges the new blank composer only after an accepted replacement or explicit New discard", async () => {
     const { harness, requests } = setup();
     try {
       await fillManual(harness);
@@ -7282,7 +7287,8 @@ describe("native unfinished nutrient entry Save protection", () => {
       await click(harness, "Trace");
       await click(harness, "Add nutrient row to draft");
       await type(harness, draftFilterLabel, "203");
-      tree = await click(harness, "Cancel edit");
+      await click(harness, "New custom food");
+      tree = await click(harness, "Discard draft and start new food");
       expect(input(tree, draftFilterLabel).props.value).toBe("");
       await fillManual(harness);
       await click(harness, "Create private food");
@@ -9200,4 +9206,351 @@ describe("native biometric reading date shortcuts", () => {
       }
     });
   }
+});
+
+const newCustomLabel = "New custom food";
+const discardNewCustom = "Discard draft and start new food";
+
+describe("native protected New custom food", () => {
+  for (const listing of ["empty", "failed"])
+    it(`starts a blank food without a saved source after an ${listing} listing`, async () => {
+      const { harness, requests, props } = setup((request) =>
+        request.url.pathname === "/v1/custom-foods"
+          ? listing === "empty"
+            ? response({ data: [], page: { nextCursor: null } })
+            : response({}, 503)
+          : undefined,
+      );
+      try {
+        let tree = await harness.settle();
+        const count = requests.length;
+        const operation = hooks.operation;
+        expect(button(tree, newCustomLabel).props.accessibilityState).toEqual({ disabled: false });
+        tree = await click(harness, newCustomLabel);
+        expect(customCopyChoices(tree)).toHaveLength(0);
+        expect(Object.values(rawCustomFields(tree))).toEqual(Array(6).fill(""));
+        expect(
+          nodes(tree, (node) => node.type === "Pressable" && text(node) === "Cancel edit"),
+        ).toHaveLength(0);
+        expect(requests).toHaveLength(count);
+        expect(hooks.operation).toBe(operation);
+        expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  it("starts directly from an unchanged or raw-reverted saved revision", async () => {
+    const { harness, requests } = setup();
+    try {
+      let tree = await click(harness, "Revise");
+      const count = requests.length;
+      const operation = hooks.operation;
+      await type(harness, "Name", "temporary");
+      await type(harness, "Name", sourceFood.currentVersion.name);
+      tree = await click(harness, newCustomLabel);
+      expect(customCopyChoices(tree)).toHaveLength(0);
+      expect(Object.values(rawCustomFields(tree))).toEqual(Array(6).fill(""));
+      await click(harness, "Revise");
+      tree = await click(harness, newCustomLabel);
+      expect(customCopyChoices(tree)).toHaveLength(0);
+      expect(button(tree, "Create private food").props.disabled).toBe(false);
+      expect(requests).toHaveLength(count);
+      expect(hooks.operation).toBe(operation);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  for (const draft of ["new", "revision whitespace", "copied", "composer scratch", "nutrient edit"])
+    it(`protects exact ${draft} content until explicit discard and then creates a blank draft`, async () => {
+      const { harness, requests } = setup();
+      try {
+        if (draft === "copied") await copyCustom(harness);
+        else if (draft === "revision whitespace") {
+          await click(harness, "Revise");
+          await type(harness, "Name", `${sourceFood.currentVersion.name} `);
+        } else if (draft === "composer scratch") {
+          await type(harness, "Find an available nutrient by name", "  sod  ");
+          await click(harness, "Sodium (mg)");
+          await click(harness, "Unknown");
+          await click(harness, "Withheld");
+        } else if (draft === "nutrient edit") {
+          await fillManual(harness, "0.00000100");
+          await click(harness, "Edit nutrient ID 208");
+          await type(
+            harness,
+            "Nutrient ID 208 amount (per 100 g; unit unavailable)",
+            "0.00000000000000100",
+          );
+        } else {
+          await type(harness, "Name", "  raw new food  ");
+          await type(harness, "Notes", "First\r\n  second  ");
+          await type(
+            harness,
+            "Canonical nutrients per 100 g",
+            "\r\n203=0.00000000000000100\n307=trace\n999=unknown:withheld ",
+          );
+        }
+        const before = editorSnapshot(await harness.settle());
+        const count = requests.length;
+        const operation = hooks.operation;
+        let tree = await click(harness, newCustomLabel);
+        expect(customCopyChoices(tree)).toHaveLength(1);
+        expect(text(tree)).toContain("start a blank custom food");
+        expect(editorSnapshot(tree)).toEqual(before);
+        tree = await click(harness, "Keep editing");
+        expect(editorSnapshot(tree)).toEqual(before);
+        tree = await click(harness, newCustomLabel);
+        const discard = button(tree, discardNewCustom).props.onPress;
+        input(tree, "Name").props.onChangeText(input(tree, "Name").props.value);
+        discard();
+        const writesAfterDiscard = harness.stateWrites;
+        discard();
+        expect(harness.stateWrites).toBe(writesAfterDiscard);
+        tree = await harness.settle();
+        expect(customCopyChoices(tree)).toHaveLength(0);
+        expect(Object.values(rawCustomFields(tree))).toEqual(Array(6).fill(""));
+        expect(input(tree, "Find an available nutrient by name").props.value).toBe("");
+        expect(input(tree, "Exact amount per 100 g").props.value).toBe("");
+        expect(button(tree, "Quantified").props.accessibilityState.selected).toBe(true);
+        expect(requests).toHaveLength(count);
+        expect(hooks.operation).toBe(operation);
+        await fillManual(harness, "2.00");
+        await click(harness, "Create private food");
+        const saved = writes(requests)[0];
+        expect(saved.url.pathname).toBe("/v1/custom-foods");
+        expect(saved.headers["if-match"]).toBeUndefined();
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  for (const kind of ["create", "revision"])
+    it(`keeps an ambiguous ${kind} retry exact, while accepted New starts a distinct create intent`, async () => {
+      const { harness, requests } = setup((request) =>
+        request.method === "POST" ? response({}, 503) : undefined,
+      );
+      try {
+        if (kind === "revision") await click(harness, "Revise");
+        else await fillManual(harness, "0.00000100");
+        await type(harness, "Name", "Same request body");
+        const label = kind === "revision" ? "Save new version" : "Create private food";
+        await click(harness, label);
+        let tree = await click(harness, newCustomLabel);
+        const fields = rawCustomFields(tree);
+        const count = requests.length;
+        const operation = hooks.operation;
+        await click(harness, "Keep editing");
+        expect(requests).toHaveLength(count);
+        expect(hooks.operation).toBe(operation);
+        await click(harness, label);
+        const first = writes(requests)[0];
+        const retried = writes(requests)[1];
+        expect(retried.body).toBe(first.body);
+        expect(retried.headers).toEqual(first.headers);
+        await click(harness, newCustomLabel);
+        tree = await click(harness, discardNewCustom);
+        const operationBeforeRefill = hooks.operation;
+        for (const [field, value] of Object.entries(fields)) await type(harness, field, value);
+        expect(hooks.operation).toBe(operationBeforeRefill);
+        await click(harness, "Create private food");
+        const next = writes(requests)[2];
+        expect(next.url.pathname).toBe("/v1/custom-foods");
+        expect(next.body).toBe(first.body);
+        expect(next.headers["if-match"]).toBeUndefined();
+        expect(next.headers["idempotency-key"]).not.toBe(first.headers["idempotency-key"]);
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  it("keeps saved filters/details, pinned logging, trends and other private drafts independent", async () => {
+    const { harness, requests } = setupTrends();
+    try {
+      await setTrendDates(harness);
+      await click(harness, "Load local-day trends");
+      await toggleSaved(harness);
+      await click(harness, "Log exact version");
+      await type(harness, "Quantity", "1.000001");
+      await type(harness, "Definition notes", "Separate metric draft");
+      await type(harness, savedFoodFilterLabel, "Saved");
+      await fillManual(harness);
+      let tree = await harness.settle();
+      const logBefore = text(logEditor(tree));
+      const trendsBefore = trendHeaders(tree);
+      const count = requests.length;
+      await click(harness, newCustomLabel);
+      tree = await click(harness, discardNewCustom);
+      expect(input(tree, savedFoodFilterLabel).props.value).toBe("Saved");
+      expect(savedDetails(tree)).toHaveLength(1);
+      expect(text(logEditor(tree))).toBe(logBefore);
+      expect(trendHeaders(tree)).toEqual(trendsBefore);
+      expect(input(tree, "Definition notes").props.value).toBe("Separate metric draft");
+      expect(requests).toHaveLength(count);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("retires New/Keep/Discard across raw edit-restore and competing replacement choices before paint", async () => {
+    const { harness } = setup();
+    try {
+      await fillManual(harness);
+      let tree = await click(harness, newCustomLabel);
+      const old = [newCustomLabel, "Keep editing", discardNewCustom].map(
+        (label) => button(tree, label).props.onPress,
+      );
+      await type(harness, "Name", "changed");
+      tree = await type(harness, "Name", "Owner food");
+      for (const action of old) action();
+      tree = await harness.settle();
+      expect(customCopyChoices(tree)).toHaveLength(0);
+      tree = await click(harness, newCustomLabel);
+      const staleNew = button(tree, discardNewCustom).props.onPress;
+      tree = await copyCustom(harness);
+      staleNew();
+      tree = await harness.settle();
+      expect(button(tree, discardCustomCopy)).toBeDefined();
+      const staleCopy = button(tree, discardCustomCopy).props.onPress;
+      tree = await click(harness, newCustomLabel);
+      staleCopy();
+      expect(button(await harness.settle(), discardNewCustom)).toBeDefined();
+      await click(harness, discardNewCustom);
+      expect(input(await harness.settle(), "Name").props.value).toBe("");
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("retires retained New after a refresh or ambiguous write completes, including controls rendered disabled", async () => {
+    let held = null;
+    const { harness, requests } = setup((request) =>
+      request.method === "POST" ? held.promise : undefined,
+    );
+    try {
+      await fillManual(harness);
+      let tree = await harness.settle();
+      const oldNew = button(tree, newCustomLabel).props.onPress;
+      await click(harness, "Refresh private data");
+      oldNew();
+      expect(customCopyChoices(await harness.settle())).toHaveLength(0);
+      tree = await click(harness, newCustomLabel);
+      const oldChoice = [newCustomLabel, "Keep editing", discardNewCustom].map(
+        (label) => button(tree, label).props.onPress,
+      );
+      held = deferred();
+      await click(harness, "Create private food");
+      tree = await harness.settle();
+      expect(button(tree, newCustomLabel).props.accessibilityState.disabled).toBe(true);
+      const disabledNew = button(tree, newCustomLabel).props.onPress;
+      for (const action of oldChoice) action();
+      expect(customCopyChoices(await harness.settle())).toHaveLength(0);
+      held.resolve(response({}, 503));
+      await harness.settle();
+      for (const action of [...oldChoice, disabledNew]) action();
+      tree = await harness.settle();
+      expect(customCopyChoices(tree)).toHaveLength(0);
+      expect(input(tree, "Name").props.value).toBe("Owner food");
+      expect(writes(requests)).toHaveLength(1);
+      tree = await click(harness, newCustomLabel);
+      expect(button(tree, discardNewCustom)).toBeDefined();
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  for (const boundary of ["owner", "session", "token", "API", "zone", "groups"])
+    it(`retires New and its choice before ${boundary} replacement effects`, async () => {
+      const { harness } = setup();
+      try {
+        await fillManual(harness);
+        let tree = await click(harness, newCustomLabel);
+        const old = [newCustomLabel, "Keep editing", discardNewCustom].map(
+          (label) => button(tree, label).props.onPress,
+        );
+        harness.updateProps(
+          boundary === "owner"
+            ? { ownerUserId: otherOwner }
+            : boundary === "session"
+              ? { sessionEpoch: 2 }
+              : boundary === "token"
+                ? { accessToken: "replacement" }
+                : boundary === "API"
+                  ? { apiBase: new URL("http://127.0.0.1:4001") }
+                  : boundary === "zone"
+                    ? { profileTimeZone: "UTC" }
+                    : { diaryGroups: [{ mealSlot: "breakfast", label: "Changed", sortOrder: 0 }] },
+        );
+        tree = harness.renderWithoutEffects();
+        expect(customCopyChoices(tree)).toHaveLength(0);
+        for (const action of old) action();
+        harness.flushEffects();
+        await harness.settle();
+        tree = await type(harness, "Name", "Current context draft");
+        for (const action of old) action();
+        tree = await harness.settle();
+        expect(input(tree, "Name").props.value).toBe("Current context draft");
+        expect(customCopyChoices(tree)).toHaveLength(0);
+        tree = await click(harness, newCustomLabel);
+        expect(button(tree, discardNewCustom)).toBeDefined();
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  it("keeps New usable after repeated identical local save-validation failures", async () => {
+    const { harness, requests } = setup();
+    try {
+      await fillManual(harness);
+      await type(harness, "Canonical nutrients per 100 g", "unfinished raw input");
+      const count = requests.length;
+      await click(harness, "Create private food");
+      await click(harness, "Create private food");
+      let tree = await click(harness, newCustomLabel);
+      expect(button(tree, newCustomLabel).props.disabled).toBe(false);
+      expect(customCopyChoices(tree)).toHaveLength(1);
+      expect(canonical(tree)).toBe("unfinished raw input");
+      tree = await click(harness, discardNewCustom);
+      expect(canonical(tree)).toBe("");
+      expect(requests).toHaveLength(count);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("retires New across background/reactivation, private closure and unmount", async () => {
+    let closed = false;
+    const { harness, props } = setup((request) =>
+      closed && request.url.pathname === "/v1/custom-foods" ? response({}, 401) : undefined,
+    );
+    await fillManual(harness);
+    let tree = await click(harness, newCustomLabel);
+    const old = [newCustomLabel, "Keep editing", discardNewCustom].map(
+      (label) => button(tree, label).props.onPress,
+    );
+    state("background");
+    await harness.settle();
+    for (const action of old) action();
+    state("active");
+    await harness.settle();
+    for (const action of old) action();
+    tree = await harness.settle();
+    expect(input(tree, "Name").props.value).toBe("Owner food");
+    expect(customCopyChoices(tree)).toHaveLength(0);
+    tree = await click(harness, newCustomLabel);
+    const current = [newCustomLabel, "Keep editing", discardNewCustom].map(
+      (label) => button(tree, label).props.onPress,
+    );
+    closed = true;
+    await click(harness, "Refresh private data");
+    for (const action of current) action();
+    tree = await harness.settle();
+    expect(button(tree, newCustomLabel).props.disabled).toBe(true);
+    expect(customCopyChoices(tree)).toHaveLength(0);
+    expect(props.onUnauthorized).toHaveBeenCalledTimes(1);
+    harness.unmount();
+    for (const action of current) action();
+    expect(harness.writesAfterUnmount).toBe(0);
+  });
 });
