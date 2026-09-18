@@ -91,7 +91,8 @@ ADR with a new ADR instead of rewriting its decision.
 | [0083](./0083-native-recipe-log-date-shortcuts.md) | Choose Today or Yesterday for native saved-recipe logs | Implemented at af1c860; local and exact-commit automatic evidence passed; device/release acceptance separate |
 | [0084](./0084-native-custom-food-log-date-shortcuts.md) | Choose Today or Yesterday for native custom-food logs | Implemented at 6ad9129; local and exact-commit automatic evidence passed; device/release acceptance separate |
 | [0085](./0085-native-biometric-reading-date-shortcuts.md) | Choose Today or Yesterday for native biometric readings | Implemented at ab2c6de; local and exact-commit automatic evidence passed; device/release acceptance separate |
-| [0086](./0086-native-goal-new-draft-protection.md) | Protect native goal edits before starting a blank draft | Source complete and reviewed; final canonical/automatic evidence pending; device/release acceptance separate |
+| [0086](./0086-native-goal-new-draft-protection.md) | Protect native goal edits before starting a blank draft | Implemented at 053afe0; local and exact-commit automatic evidence passed; device/release acceptance separate |
+| [0087](./0087-native-goal-revision-conflict-draft.md) | Preserve native goal edits after a revision conflict | Source complete and reviewed; final canonical/automatic evidence pending; device/release acceptance separate |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

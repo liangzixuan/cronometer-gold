@@ -1654,3 +1654,347 @@ describe("native New goal draft protection", () => {
     expect(replayed.harness.stateWrites).toBe(count);
   });
 });
+
+const reloadConflictLabel = "Discard edits and reload saved goal";
+const refreshGoalLabel = "Refresh goals and progress";
+function conflictProfile() {
+  return response({
+    data: {
+      profile: {
+        displayName: null,
+        locale: "en",
+        timeZone: "America/Chicago",
+        unitSystem: "metric",
+        revision: "4",
+        birthDate: "1999-01-02",
+        sexAtBirth: "male",
+      },
+    },
+  });
+}
+function setupConflict(kind = "manual", handler = () => undefined) {
+  return setupNew(kind, {
+    handler: (request, requests) => {
+      const custom = handler(request, requests);
+      if (custom !== undefined) return custom;
+      if (request.method === "POST") return response({ code: "PRECONDITION_FAILED" }, 412);
+      if (request.url.pathname === "/v1/profile") return conflictProfile();
+      if (kind === "reference" && request.url.pathname === "/v1/goals/reference-target-sets") {
+        const ref = referenceFixture();
+        return response({ data: { ...ref.data, date: request.url.searchParams.get("date") } });
+      }
+      return undefined;
+    },
+  });
+}
+async function createConflict(harness) {
+  await type(harness, "Why this energy target?", " Raw conflicting reason \r\nkept ");
+  return click(harness, "Publish goal revision");
+}
+
+describe("native goal revision conflict draft preservation", () => {
+  for (const kind of ["manual", "derived", "reference"])
+    it(`preserves complete ${kind} draft and saved display on 412 without automatic reads`, async () => {
+      const { harness, requests, props } = setupConflict(kind);
+      let tree = await type(
+        harness,
+        "Why this energy target?",
+        " Raw conflicting reason \r\nkept ",
+      );
+      await type(harness, "Birth date YYYY-MM-DD", "2000-02-03");
+      if (kind === "manual") {
+        await type(harness, "Your selected daily energy (kcal)", "1900.000099");
+        await type(harness, "Protein target", "99.000000000001");
+        await type(harness, "Protein source (required)", " raw changed source ");
+      }
+      tree = await harness.settle();
+      const before = fields(tree);
+      const gets = requests.filter((request) => request.method === "GET").length;
+      tree = await click(harness, "Publish goal revision");
+      expect(writes(requests)).toHaveLength(1);
+      expect(fields(tree)).toEqual(before);
+      expect(requests.filter((request) => request.method === "GET")).toHaveLength(gets);
+      expect(props.onProfileUpdated).not.toHaveBeenCalled();
+      expect(text(tree)).toContain("Your edits are still here");
+      expect(text(tree)).toContain("Saved goal and progress may be out of date");
+      expect(hasButton(tree, refreshGoalLabel)).toBe(false);
+      expect(button(tree, reloadConflictLabel).props.accessibilityState).toEqual({
+        disabled: false,
+      });
+      if (kind === "reference") {
+        expect(input(tree, "Nutrient 1 target").props.editable).toBe(false);
+        expect(text(tree)).toContain("Verified on this goal");
+        expect(JSON.parse(writes(requests)[0].body)).toHaveProperty("referenceTargetSet");
+      }
+    });
+
+  it("retains edits and explicit recovery after a failed reload, then uses the freshly loaded revision", async () => {
+    let conflict = false;
+    let fail = false;
+    const latest = savedGoal([nutrient, sodium], { revision: "4" });
+    latest.currentVersion.versionNumber = 4;
+    latest.currentVersion.energy.rationale = "New saved rationale";
+    const { harness, requests } = setupConflict("manual", (request) => {
+      if (request.method === "POST") conflict = true;
+      if (conflict && request.url.pathname === "/v1/goals/current")
+        return response({ data: { goal: latest } });
+      if (fail && request.url.pathname === "/v1/nutrients/targetable") return response({}, 503);
+    });
+    let tree = await createConflict(harness);
+    const before = fields(tree);
+    const operations = hooks.operation;
+    fail = true;
+    tree = await click(harness, reloadConflictLabel);
+    expect(fields(tree)).toEqual(before);
+    expect(button(tree, reloadConflictLabel).props.disabled).toBe(false);
+    expect(hooks.operation).toBe(operations);
+    expect(writes(requests)).toHaveLength(1);
+    fail = false;
+    tree = await click(harness, reloadConflictLabel);
+    expect(input(tree, "Why this energy target?").props.value).toBe("New saved rationale");
+    expect(hasButton(tree, reloadConflictLabel)).toBe(false);
+    expect(hasButton(tree, refreshGoalLabel)).toBe(true);
+    expect(hooks.operation).toBe(operations);
+    await click(harness, "Publish goal revision");
+    expect(writes(requests)[1].headers["if-match"]).toBe('"4"');
+  });
+
+  it("retires definitive 412 keys but preserves exact 503 retries without rebasing", async () => {
+    let status = 412;
+    const { harness, requests } = setupConflict("manual", (request) =>
+      request.method === "POST" ? response({}, status) : undefined,
+    );
+    await createConflict(harness);
+    const first = writes(requests)[0];
+    await click(harness, "Publish goal revision");
+    const second = writes(requests)[1];
+    expect(second.body).toBe(first.body);
+    expect(second.headers["if-match"]).toBe('"3"');
+    expect(second.headers["idempotency-key"]).not.toBe(first.headers["idempotency-key"]);
+    status = 503;
+    await click(harness, "Publish goal revision");
+    const ambiguous = writes(requests)[2];
+    expect(ambiguous.headers["idempotency-key"]).not.toBe(second.headers["idempotency-key"]);
+    await click(harness, "Publish goal revision");
+    expect(writes(requests)[3].body).toBe(ambiguous.body);
+    expect(writes(requests)[3].headers).toEqual(ambiguous.headers);
+    expect(ambiguous.body).toBe(first.body);
+  });
+
+  it("rejects the retained ambiguous Refresh before repaint once a conflict is received", async () => {
+    const held = deferred();
+    const { harness, requests } = setupConflict("manual", (request) =>
+      request.method === "POST" ? held.promise : undefined,
+    );
+    const tree = await type(harness, "Why this energy target?", " Unsaved reason ");
+    const refresh = button(tree, refreshGoalLabel).props.onPress;
+    const save = button(tree, "Publish goal revision").props.onPress();
+    held.resolve(response({}, 412));
+    await save;
+    const count = requests.length;
+    const state = harness.stateWrites;
+    refresh();
+    expect(requests).toHaveLength(count);
+    expect(harness.stateWrites).toBe(state);
+    expect(hasButton(await harness.settle(), reloadConflictLabel)).toBe(true);
+  });
+
+  it("keeps conflict intent through edits while rejecting old recovery after draft ABA", async () => {
+    const { harness, requests } = setupConflict();
+    let tree = await createConflict(harness);
+    const old = button(tree, reloadConflictLabel).props.onPress;
+    const field = input(tree, "Protein target");
+    field.props.onChangeText("123");
+    field.props.onChangeText(field.props.value);
+    const count = requests.length;
+    old();
+    expect(requests).toHaveLength(count);
+    tree = await harness.settle();
+    expect(button(tree, reloadConflictLabel).props.disabled).toBe(false);
+    await click(harness, reloadConflictLabel);
+    expect(requests.length).toBeGreaterThan(count);
+  });
+
+  it("retires recovery after progress-date ABA without disabling a current explicit reload", async () => {
+    const { harness, requests } = setupConflict();
+    let tree = await createConflict(harness);
+    const old = button(tree, reloadConflictLabel).props.onPress;
+    const date = input(tree, "Progress date YYYY-MM-DD");
+    date.props.onChangeText("2026-09-20");
+    date.props.onChangeText(date.props.value);
+    const count = requests.length;
+    old();
+    expect(requests).toHaveLength(count);
+    tree = await harness.settle();
+    expect(button(tree, reloadConflictLabel).props.disabled).toBe(false);
+    await click(harness, reloadConflictLabel);
+    expect(hasButton(await harness.settle(), reloadConflictLabel)).toBe(false);
+  });
+
+  for (const work of ["goal", "profile", "candidate"])
+    it(`retires old recovery through ${work} work and failed completion`, async () => {
+      let hold = false;
+      const held = deferred();
+      const { harness, requests } = setupConflict("manual", (request) =>
+        hold &&
+        ((work === "goal" && request.method === "POST") ||
+          (work === "profile" && request.method === "PATCH") ||
+          (work === "candidate" && request.url.pathname === "/v1/goals/reference-target-sets"))
+          ? held.promise
+          : undefined,
+      );
+      let tree = await createConflict(harness);
+      const old = button(tree, reloadConflictLabel).props.onPress;
+      hold = true;
+      if (work === "candidate") input(tree, "Effective from YYYY-MM-DD").props.onEndEditing();
+      else
+        button(
+          tree,
+          work === "goal" ? "Publish goal revision" : "Save profile and check eligibility",
+        ).props.onPress();
+      let count = requests.length;
+      old();
+      expect(requests).toHaveLength(count);
+      tree = await harness.settle();
+      expect(button(tree, reloadConflictLabel).props.accessibilityState).toEqual({
+        disabled: true,
+      });
+      held.resolve(response({}, work === "candidate" ? 404 : 503));
+      tree = await harness.settle();
+      count = requests.length;
+      old();
+      expect(requests).toHaveLength(count);
+      expect(button(tree, reloadConflictLabel).props.disabled).toBe(false);
+    });
+
+  for (const replacement of [
+    { sessionEpoch: 2 },
+    { profileRevision: "5" },
+    { apiBase: new URL("http://127.0.0.1:4999") },
+  ])
+    it(`rejects recovery after private/profile scope ABA: ${Object.keys(replacement)[0]}`, async () => {
+      const { harness, requests, props } = setupConflict();
+      const tree = await createConflict(harness);
+      const old = button(tree, reloadConflictLabel).props.onPress;
+      harness.updateProps(replacement);
+      harness.renderWithoutEffects();
+      harness.updateProps(props);
+      harness.renderWithoutEffects();
+      const count = requests.length;
+      old();
+      expect(requests).toHaveLength(count);
+      harness.unmount();
+      old();
+      expect(harness.writesAfterUnmount).toBe(0);
+    });
+
+  it("rejects recovery on private closure and after effect replay", async () => {
+    let status = 412;
+    const { harness, requests, props } = setupConflict("manual", (request) =>
+      request.method === "POST" ? response({}, status) : undefined,
+    );
+    const tree = await createConflict(harness);
+    const old = button(tree, reloadConflictLabel).props.onPress;
+    status = 401;
+    await click(harness, "Publish goal revision");
+    expect(props.onUnauthorized).toHaveBeenCalledOnce();
+    let count = requests.length;
+    old();
+    expect(requests).toHaveLength(count);
+    harness.replayEffects();
+    await harness.settle();
+    count = requests.length;
+    old();
+    expect(requests).toHaveLength(count);
+  });
+
+  for (const action of ["new", "copy"])
+    it(`retires conflict only after confirmed ${action} replacement`, async () => {
+      const { harness, requests } = setupConflict();
+      let tree = await createConflict(harness);
+      const old = button(tree, reloadConflictLabel).props.onPress;
+      const target = action === "new" ? newLabel : copyLabel;
+      await click(harness, target);
+      tree = await click(harness, "Keep editing");
+      expect(hasButton(tree, reloadConflictLabel)).toBe(true);
+      await click(harness, target);
+      tree = await click(harness, action === "new" ? newDiscardLabel : discardLabel);
+      expect(hasButton(tree, reloadConflictLabel)).toBe(false);
+      expect(hasButton(tree, refreshGoalLabel)).toBe(true);
+      const count = requests.length;
+      old();
+      expect(requests).toHaveLength(count);
+    });
+
+  for (const code of ["GOAL_OWNER_CHANGED", "PROFILE_OWNER_CHANGED", "GOAL_PROFILE_CHANGED"])
+    it(`preserves existing 409 ${code} behavior`, async () => {
+      const { harness, requests, props } = setupConflict("manual", (request) =>
+        request.method === "POST" ? response({ code }, 409) : undefined,
+      );
+      await createConflict(harness);
+      if (code === "GOAL_PROFILE_CHANGED") {
+        expect(props.onUnauthorized).not.toHaveBeenCalled();
+        expect(props.onProfileUpdated).toHaveBeenCalledOnce();
+        expect(
+          requests.filter((request) => request.url.pathname === "/v1/goals/current"),
+        ).toHaveLength(2);
+      } else {
+        expect(props.onUnauthorized).toHaveBeenCalledOnce();
+        expect(requests.filter((request) => request.url.pathname === "/v1/profile")).toHaveLength(
+          0,
+        );
+      }
+    });
+});
+
+for (const replacement of [{ profileRevision: "5" }, { apiBase: new URL("http://127.0.0.1:4999") }])
+  it(`does not install delayed 412 conflict metadata into changed ${Object.keys(replacement)[0]} context`, async () => {
+    const held = deferred();
+    const { harness, requests, props } = setupConflict("manual", (request) =>
+      request.method === "POST" ? held.promise : undefined,
+    );
+    const tree = await type(harness, "Why this energy target?", " Retain raw draft ");
+    const save = button(tree, "Publish goal revision").props.onPress();
+    harness.updateProps(replacement);
+    harness.renderWithoutEffects();
+    const count = requests.length;
+    held.resolve(response({}, 412));
+    await save;
+    const after = harness.renderWithoutEffects();
+    expect(requests).toHaveLength(count);
+    expect(input(after, "Why this energy target?").props.value).toBe(" Retain raw draft ");
+    expect(hasButton(after, reloadConflictLabel)).toBe(false);
+    expect(text(after)).not.toContain("Your edits are still here");
+    expect(props.onProfileUpdated).not.toHaveBeenCalled();
+    harness.unmount();
+  });
+
+for (const conflicted of [false, true])
+  it(`reenables ${conflicted ? "conflict recovery" : "ordinary Refresh"} after repeated candidate 404 renders`, async () => {
+    let held = null;
+    const { harness, requests } = setupConflict("manual", (request) =>
+      held && request.url.pathname === "/v1/goals/reference-target-sets" ? held.promise : undefined,
+    );
+    let tree = conflicted ? await createConflict(harness) : await harness.settle();
+    const label = conflicted ? reloadConflictLabel : refreshGoalLabel;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      held = deferred();
+      input(tree, "Effective from YYYY-MM-DD").props.onEndEditing();
+      tree = await harness.settle();
+      expect(button(tree, label).props.accessibilityState).toEqual({ disabled: true });
+      const disabled = button(tree, label).props.onPress;
+      held.resolve(response({}, 404));
+      tree = await harness.settle();
+      expect(button(tree, label).props.accessibilityState).toEqual({ disabled: false });
+      const count = requests.length;
+      disabled();
+      expect(requests).toHaveLength(count);
+    }
+    held = deferred();
+    input(tree, "Effective from YYYY-MM-DD").props.onEndEditing();
+    await harness.settle();
+    harness.unmount();
+    held.resolve(response({}, 404));
+    for (let turn = 0; turn < 12; turn += 1) await Promise.resolve();
+    expect(harness.writesAfterUnmount).toBe(0);
+  });

@@ -58,15 +58,29 @@ review, canonical gates and fresh native exports passed. All three CI/nine actua
 container jobs passed on attempt one; September 18 07:23 UTC evidence records
 complete outcomes and clean equal local/tracking/live heads.
 
-Active work is [ADR 0086](../adr/0086-native-goal-new-draft-protection.md): protect
-unsaved native goal edits before Start a new goal. Keep exact raw edits or
-explicitly discard into the existing blank draft; pristine goals remain immediate.
-All 96 focused cases, native types/format and independent source/documentation
-review passed. Final canonical and exact-commit automatic evidence remains to be
-recorded in dated Windows readiness; component proof is not device acceptance.
-The approved Expo `.20`
-installation/audit belong to the completed follow-up; audit authorization is
-consumed. Historical failures and service/browser evidence retain their dates.
+[ADR 0086](../adr/0086-native-goal-new-draft-protection.md) is delivered at
+`053afe02096dd39723af35e3f32a68c93e9730d2`: 96 focused cases, independent
+review, canonical gates and fresh native exports passed. All three CI/nine actual
+container jobs passed on attempt one; September 18 09:07 UTC evidence records
+complete outcomes, followed by clean equal local/tracking/live heads and all
+seven reviewed file hashes at 09:10 UTC.
+
+Active work is [ADR 0087](../adr/0087-native-goal-revision-conflict-draft.md):
+preserve exact native goal edits on a revision conflict, then explicitly discard
+and reload saved values when chosen. No automatic profile/goal reads or implicit
+rebase; existing 409 and ambiguous-failure retry behavior remain unchanged.
+All 120 focused cases, native types and scoped Biome check passed after the
+independently reviewed candidate-completion correction. Final canonical and exact-
+commit automatic evidence remains to be recorded outside Git; component proof is
+not device acceptance. Expo compatibility blocked the initial canonical check.
+The user approved the exact six-package patch prerequisite described in
+[ADR 0087](../adr/0087-native-goal-revision-conflict-draft.md#approved-expo-compatibility-prerequisite).
+Independent actual-graph review, strict frozen/peer verification, all 120 focused
+cases and scoped Biome check passed on the new graph. The one approved audit and
+license check passed at September 18 16:15 UTC; four lower-severity advisories
+remain visible and the new audit authorization is consumed. The earlier Expo
+`.20` installation/audit remain completed historical follow-up evidence.
+Historical failures and service/browser evidence retain their dates.
 
 Use the [build plan](../product/build-plan.md) for priorities and the
 [release gates](release-gates.md) for authoritative acceptance. The
@@ -115,7 +129,7 @@ authorizations within their original scope.
 | Lane | Owner and next evidence | Exit |
 | --- | --- | --- |
 | Automatic delivery evidence | Delivery owner re-reads the exact commit's CI and actual container jobs. | Both applicable workflows complete successfully with required jobs executed; release artifact/digest/provenance requirements remain separate. [Supply chain](container-supply-chain.md#required-github-configuration). |
-| Native goal New-draft protection | Implementation owner and independent in-task reviewer validate raw Keep, explicit discard, pristine reset, complete loaded baseline and existing draft/context/request guards. | Focused native checks, canonical gates and exact-commit automatic jobs; physical-device and assistive evidence remain separate. [ADR 0086](../adr/0086-native-goal-new-draft-protection.md). |
+| Native goal revision-conflict draft preservation | Implementation owner and independent in-task reviewer validate exact 412 retention, explicit recovery, failed reload, stale callbacks and unchanged retry/profile/owner semantics. | Focused native checks, canonical gates and exact-commit automatic jobs; physical-device and assistive evidence remain separate. [ADR 0087](../adr/0087-native-goal-revision-conflict-draft.md). |
 | Signed device and accessibility | Release owner confirms identifier history and numbering; device operators and reviewers prepare approved Windows relay/capture prerequisites and the physical iOS/Android matrix. | Exact signed artifacts, protected-storage/OS-kill, notification, cross-client and accessibility evidence with required attestations. Exports do not substitute. [Windows boundary](../../infra/runbooks/physical-device-windows-wsl2-private-https.md), [release matrix](../../infra/runbooks/platform-health-release.md). |
 | Hosted beta and mail/privacy operations | Deployment/security, database/privacy and mail owners review target/budget, seven-image deployment, TLS/access/readiness, off-host restore and production delivery operations. | Hosted restore/erasure replay and access evidence, approved provider/sender and abuse/retry/suppression operations, independent review and rollout decisions. [Release](../../infra/runbooks/platform-health-release.md), [restore](../../infra/runbooks/postgres-backup-and-restore.md), [mail/privacy gates](release-gates.md). |
 | Live catalogue and database authority | Acquisition/storage operators, data-quality/rights reviewers and database authority owner provide authenticated dual acquisition, immutable retention, manifest-v4 review bundle, mapping/scale evidence and caller cutover. | Approved numeric catalogue/search/resource thresholds, three distinct role approvals and separate activation decision. The 363-food pilot and synthetic fixtures are insufficient. [Source runbook](../../infra/runbooks/food-source-release.md), [catalogue boundary](../product/build-plan.md#parallel-release-acceptance-target--live-catalogue-evidence). |
@@ -138,9 +152,9 @@ be reintroduced as missing source work from an older summary.
 
 ## Active milestone and successor
 
-Complete [ADR 0086](../adr/0086-native-goal-new-draft-protection.md) with native
+Complete [ADR 0087](../adr/0087-native-goal-revision-conflict-draft.md) with native
 behavioral proof, independent in-task review, canonical validation and the new
-commit's automatic results. ADRs 0077 through 0085 are delivered baselines, not
+commit's automatic results. ADRs 0077 through 0086 are delivered baselines, not
 pending source tasks. Record the successor
 in the dated Windows readiness record and reconcile it with the next coherent
 source change; avoid a status-only commit/build cycle.

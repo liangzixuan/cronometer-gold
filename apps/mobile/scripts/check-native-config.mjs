@@ -167,9 +167,9 @@ if (
 const exactDependencies = {
   "@kingstinct/react-native-healthkit": "14.0.2",
   "@sbaiahmed1/react-native-biometrics": "0.16.0",
-  "expo-build-properties": "57.0.20",
+  "expo-build-properties": "57.0.21",
   "expo-camera": "57.0.5",
-  "expo-notifications": "57.0.19",
+  "expo-notifications": "57.0.20",
   "react-native-health-connect": "4.1.3",
   "react-native-nitro-modules": "0.36.5",
 };

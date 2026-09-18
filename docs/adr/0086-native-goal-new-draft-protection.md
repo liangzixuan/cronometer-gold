@@ -1,6 +1,6 @@
 # ADR 0086: Native goal New-draft protection
 
-Status: Source complete and reviewed; final canonical and exact-commit automatic evidence pending.
+Status: Implemented at 053afe0; local and exact-commit automatic evidence passed; device/release acceptance separate.
 
 ## Context
 
@@ -71,4 +71,22 @@ value. Correcting that assertion produced 96 passing focused cases (72 screen,
 17 goal helpers, seven reference helpers), no skips. Native types/format and
 independent source/documentation review passed. The synchronous hook harness
 does not establish concurrent React or physical-device behavior. Final canonical
-and exact-commit automatic outcomes will be recorded separately outside Git.
+and exact-commit automatic outcomes are recorded below and outside Git.
+
+
+## Delivery evidence
+
+Delivered at `053afe02096dd39723af35e3f32a68c93e9730d2`. Canonical pnpm check
+passed 1,882 fresh tests, with 2,327 cached passes and 93 cached opt-in skips.
+Build passed 11 tasks, ten cached; Android/iOS exports were fresh. The first
+canonical attempt found eight test callback-return lint errors; corrected loop
+bodies passed scoped Biome check and all 96 focused cases before final validation.
+Application source was unchanged by that correction; the failure remains recorded.
+
+All three actual jobs in [CI 35320683018](https://github.com/liangzixuan/cronometer-gold/actions/runs/35320683018)
+and all nine actual jobs in [container 35320683031](https://github.com/liangzixuan/cronometer-gold/actions/runs/35320683031)
+passed on attempt one. The final web job completed September 18, 2026 at
+09:06:23 UTC. The 09:07:32 UTC observation verified complete actual job inventories
+and success; clean matching local/tracking/live heads and all seven frozen
+committed files were reverified at 09:10:22 UTC. Evidence is scoped to this
+commit; device and release acceptance remain separate.

@@ -102,7 +102,8 @@ retains earlier boundaries. A successful successor never changes an older result
 
 | Order | Work | Concrete exit |
 | --- | --- | --- |
-| Active source milestone | Native goal New-draft protection (ADR 0086) | Preserve unsaved goal edits until explicit Keep/Discard choice; unchanged goals start directly. Existing goal/reference/save semantics, focused review/checks, canonical gates and exact-commit automatic evidence. |
+| Active source milestone | Native goal revision-conflict draft preservation (ADR 0087) | Retain exact edits on 412, explain stale saved values and offer explicit discard/reload. Preserve retry and profile/owner semantics; focused review/checks, canonical gates and exact-commit automatic evidence. |
+| Completed source milestone | Native goal New-draft protection (ADR 0086) | Delivered at `053afe0`: explicit protection of unsaved goal edits; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Native biometric reading date shortcuts (ADR 0085) | Delivered at `ab2c6de`: profile-local date choices; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Native custom-food log date shortcuts (ADR 0084) | Delivered at `6ad9129`: profile-local date choices; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Native saved-recipe log date shortcuts (ADR 0083) | Delivered at `af1c860`: profile-local date choices; local gates and all three CI/nine actual container jobs passed. |
@@ -115,19 +116,21 @@ retains earlier boundaries. A successful successor never changes an older result
 | Completed external review | Scoped Claude review at `805b937` | The supplied report found no ADR 0077 blockers. Its recommendations were addressed in the delivered follow-up; the report remains limited to its original scope. Routine product work does not require another paid review. |
 | Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Advance only under applicable existing authorization and unchanged release gates. |
 
-### Active bounded milestone: native goal New-draft protection
+### Active bounded milestone: native goal revision-conflict draft preservation
 
-[ADR 0086](../adr/0086-native-goal-new-draft-protection.md) protects unsaved goal
-edits when Start a new goal would replace them. Keep editing preserves exact raw
-values; explicit discard starts the existing blank draft. Pristine saved goals
-stay immediate. Bind the complete loaded baseline to existing context/load/draft
-guards, independently of Copy eligibility. Keep goal publication explicit and
-preserve manual, derived and applied-reference semantics.
+[ADR 0087](../adr/0087-native-goal-revision-conflict-draft.md) preserves native
+goal edits when a revision save receives HTTP 412. Keep the exact draft and
+explain that saved values may be stale. Use the explicitly labelled Discard
+edits and reload saved goal action for recovery, without automatic reads or
+implicit rebasing. Preserve profile/owner conflicts and stable retry semantics.
 
-The prior [biometric date shortcuts](../adr/0085-native-biometric-reading-date-shortcuts.md)
-are delivered at `ab2c6de`. No dependency change, install, audit, browser/service/
-device action or paid review is part of this native slice. The earlier Expo `.20`
-audit authorization is consumed. Follow the
+The prior [New-draft protection](../adr/0086-native-goal-new-draft-protection.md)
+is delivered at `053afe0`. Expo's new compatibility requirements interrupted
+canonical validation; the user approved the exact six-package prerequisite in
+[ADR 0087](../adr/0087-native-goal-revision-conflict-draft.md#approved-expo-compatibility-prerequisite).
+Strict install, independent graph review, focused checks and the one approved
+audit passed; that audit authorization is now consumed. No browser/service/device
+action or paid review is part of this continuation. Follow the
 [proportionate review policy](../quality/development-workflow.md#proportionate-independent-review).
 Required signed-device and release acceptance remain separate.
 

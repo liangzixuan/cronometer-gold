@@ -97,6 +97,12 @@ interface CopyChoice {
   readonly generation: number;
 }
 
+interface GoalRevisionConflict {
+  readonly scope: object;
+  readonly goalId: string | null;
+  readonly revision: string | null;
+}
+
 interface Props {
   readonly apiBase: URL;
   readonly accessToken: string;
@@ -286,6 +292,13 @@ export function GoalsScreen({
   const copyChoiceRef = useRef<CopyChoice | null>(null);
   const copyMounted = useRef(false);
   const copyPrivateClosed = useRef(false);
+  const [revisionConflict, setRevisionConflict] = useState<GoalRevisionConflict | null>(null);
+  const revisionConflictRef = useRef<GoalRevisionConflict | null>(null);
+  const clearRevisionConflict = useCallback(() => {
+    if (revisionConflictRef.current === null) return;
+    revisionConflictRef.current = null;
+    setRevisionConflict(null);
+  }, []);
   const scopeValues = [
     apiBase,
     accessToken,
@@ -299,6 +312,7 @@ export function GoalsScreen({
   const copyScope = useRef({ values: scopeValues });
   if (!scopeValues.every((value, index) => Object.is(value, copyScope.current.values[index]))) {
     copyScope.current = { values: scopeValues };
+    revisionConflictRef.current = null;
   }
   const clearCopyChoice = useCallback(() => {
     if (copyChoiceRef.current === null) return;
@@ -310,6 +324,7 @@ export function GoalsScreen({
     if (copyChoiceRef.current?.action === "new") clearCopyChoice();
   }, [clearCopyChoice]);
   const invalidateCopySource = useCallback(() => {
+    newGoalActionGeneration.current += 1;
     newGoalSourceRef.current = null;
     copySourceRef.current = null;
     setCopySource(null);
@@ -320,23 +335,28 @@ export function GoalsScreen({
       const current = builderRef.current;
       const next = typeof update === "function" ? update(current) : update;
       if (next === current) return;
+      if (next.goalId !== current.goalId || next.revision !== current.revision) {
+        clearRevisionConflict();
+      }
       builderRef.current = next;
       builderGeneration.current += 1;
       clearCopyChoice();
       setBuilderState(next);
     },
-    [clearCopyChoice],
+    [clearCopyChoice, clearRevisionConflict],
   );
   const closeCopyPrivate = useCallback(() => {
     copyPrivateClosed.current = true;
+    clearRevisionConflict();
     invalidateCopySource();
     return onUnauthorized();
-  }, [invalidateCopySource, onUnauthorized]);
+  }, [clearRevisionConflict, invalidateCopySource, onUnauthorized]);
   const [nutrientQuery, setNutrientQuery] = useState("");
   const [message, setMessage] = useState("Loading versioned goals…");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [profileSaving, setProfileSaving] = useState(false);
+  const [candidateLoading, setCandidateLoading] = useState(false);
   const [referenceSets, setReferenceSets] = useState<NativeReferenceTargetList | null>(null);
   const [templatesSupported, setTemplatesSupported] = useState(true);
   const [selectedReferenceGroup, setSelectedReferenceGroup] = useState("");
@@ -516,6 +536,7 @@ export function GoalsScreen({
               }
             : null;
         effectiveDateRef.current = nextBuilder.effectiveFrom;
+        clearRevisionConflict();
         setBuilder(nextBuilder);
         setTemplatesSupported(effectiveReferenceResponse.status !== 404);
         setReferenceSets(nextReferenceSets);
@@ -561,6 +582,7 @@ export function GoalsScreen({
       accessToken,
       apiBase,
       closeCopyPrivate,
+      clearRevisionConflict,
       expectedOwnerUserId,
       invalidateCopySource,
       sessionEpoch,
@@ -577,6 +599,7 @@ export function GoalsScreen({
     void load(localDate);
     return () => {
       copyMounted.current = false;
+      revisionConflictRef.current = null;
       newGoalSourceRef.current = null;
       copySourceRef.current = null;
       copyChoiceRef.current = null;
@@ -599,6 +622,7 @@ export function GoalsScreen({
       candidateController.current?.abort();
       const controller = new AbortController();
       candidateController.current = controller;
+      setCandidateLoading(true);
       const requestGeneration = candidateGeneration.current + 1;
       candidateGeneration.current = requestGeneration;
       const initiatingOwner = expectedOwnerUserId;
@@ -658,7 +682,10 @@ export function GoalsScreen({
           caught instanceof Error ? caught.message : "Candidate targets could not be loaded.",
         );
       } finally {
-        if (candidateController.current === controller) candidateController.current = null;
+        if (candidateController.current === controller) {
+          candidateController.current = null;
+          if (copyMounted.current) setCandidateLoading(false);
+        }
       }
     },
     [
@@ -916,6 +943,7 @@ export function GoalsScreen({
     const initiatingEpoch = sessionEpoch;
     const requestGeneration = generation.current;
     const savedDate = date;
+    const initiatingDraftScope = copyScope.current;
     retireNewGoalActions();
     const controller = new AbortController();
     writeController.current = controller;
@@ -954,7 +982,27 @@ export function GoalsScreen({
       ) {
         return closeCopyPrivate();
       }
-      if (response.status === 409 || response.status === 412) {
+      if (response.status === 412) {
+        pending.current.delete(key);
+        if (
+          copyScope.current !== initiatingDraftScope ||
+          builderRef.current.goalId !== builder.goalId ||
+          builderRef.current.revision !== builder.revision
+        )
+          return;
+        const conflict: GoalRevisionConflict = {
+          scope: initiatingDraftScope,
+          goalId: builder.goalId,
+          revision: builder.revision,
+        };
+        revisionConflictRef.current = conflict;
+        setRevisionConflict(conflict);
+        setMessage(
+          "The saved goal changed elsewhere. Your edits are still here. Saved goal and progress may be out of date. Choose Discard edits and reload saved goal to load current values.",
+        );
+        return;
+      }
+      if (response.status === 409) {
         pending.current.delete(key);
         const profileResponse = await fetch(apiUrl(apiBase, "/v1/profile").toString(), {
           headers: authenticatedHeaders(accessToken),
@@ -1147,6 +1195,41 @@ export function GoalsScreen({
     setMessage("New goal draft started. Choose its effective date and explicit targets.");
   }
 
+  const currentConflict =
+    revisionConflict &&
+    revisionConflictRef.current === revisionConflict &&
+    revisionConflict.scope === copyScope.current &&
+    revisionConflict.goalId === builder.goalId &&
+    revisionConflict.revision === builder.revision
+      ? revisionConflict
+      : null;
+  const renderedRefreshScope = copyScope.current;
+  const renderedRefreshGeneration = generation.current;
+  function canRefreshGoals() {
+    return (
+      copyMounted.current &&
+      !copyPrivateClosed.current &&
+      !loading &&
+      !saving &&
+      !profileSaving &&
+      !candidateLoading &&
+      !loadController.current &&
+      !writeController.current &&
+      !profileController.current &&
+      !candidateController.current &&
+      copyScope.current === renderedRefreshScope &&
+      revisionConflictRef.current === currentConflict &&
+      builderRef.current === builder &&
+      dateRef.current === date &&
+      isLocalDate(date) &&
+      generation.current === renderedRefreshGeneration &&
+      newGoalActionGeneration.current === renderedNewGoalGeneration
+    );
+  }
+  function refreshGoals() {
+    if (canRefreshGoals()) void load(date);
+  }
+
   const available = definitions.filter(
     (definition) =>
       !builder.targets.some((target) => target.definition.nutrientId === definition.nutrientId),
@@ -1184,10 +1267,16 @@ export function GoalsScreen({
         {!loading ? (
           <Pressable
             accessibilityRole="button"
-            onPress={() => void load(date)}
+            accessibilityState={{ disabled: !canRefreshGoals() }}
+            disabled={!canRefreshGoals()}
+            onPress={refreshGoals}
             style={styles.refresh}
           >
-            <Text style={styles.link}>Refresh goals and progress</Text>
+            <Text style={styles.link}>
+              {currentConflict
+                ? "Discard edits and reload saved goal"
+                : "Refresh goals and progress"}
+            </Text>
           </Pressable>
         ) : null}
         <View style={styles.panel}>
