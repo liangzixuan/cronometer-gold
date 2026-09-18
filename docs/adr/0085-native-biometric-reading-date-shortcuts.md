@@ -1,6 +1,6 @@
 # ADR 0085: Native biometric reading date shortcuts
 
-Status: Source complete and reviewed; final canonical and exact-commit automatic evidence pending.
+Status: Implemented at ab2c6de; local and exact-commit automatic evidence passed; device/release acceptance separate.
 
 ## Context
 
@@ -61,4 +61,18 @@ cases passing. Fixed source passed all 441 focused cases (411 screen and 30
 date cases), native types/format and independent native/documentation review.
 The existing synchronous hook harness does not establish concurrent React or
 physical-device behavior. Final canonical and exact-commit automatic outcomes
-will be recorded separately in the dated readiness evidence outside Git.
+are recorded below and in dated readiness evidence outside Git.
+
+
+## Delivery evidence
+
+Delivered at `ab2c6dec89981f5ae2c299003ff8b1d39c8125f7`. Canonical pnpm
+check passed 1,860 fresh tests, with 2,327 cached passes and 93 cached opt-in skips.
+Build passed 11 tasks, ten cached; Android/iOS exports were fresh. All three
+actual jobs in [CI 35302039063](https://github.com/liangzixuan/cronometer-gold/actions/runs/35302039063)
+and all nine actual jobs in [container 35302039029](https://github.com/liangzixuan/cronometer-gold/actions/runs/35302039029)
+passed on attempt one. The final web job completed September 18, 2026 at
+04:35:47 UTC. The 07:23:30 UTC observation verified complete job inventories and
+successes; clean matching local/tracking/live heads and all seven frozen committed
+files were reverified at 07:23:28 UTC. Evidence is scoped to this exact commit;
+device and release acceptance remain separate.

@@ -102,7 +102,8 @@ retains earlier boundaries. A successful successor never changes an older result
 
 | Order | Work | Concrete exit |
 | --- | --- | --- |
-| Active source milestone | Native biometric reading date shortcuts (ADR 0085) | Today/Yesterday at profile-local activation; preserve required time, metric/edit identity, timestamp precision, explicit Save and stable retries. Focused review/checks, canonical gates and exact-commit automatic evidence. |
+| Active source milestone | Native goal New-draft protection (ADR 0086) | Preserve unsaved goal edits until explicit Keep/Discard choice; unchanged goals start directly. Existing goal/reference/save semantics, focused review/checks, canonical gates and exact-commit automatic evidence. |
+| Completed source milestone | Native biometric reading date shortcuts (ADR 0085) | Delivered at `ab2c6de`: profile-local date choices; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Native custom-food log date shortcuts (ADR 0084) | Delivered at `6ad9129`: profile-local date choices; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Native saved-recipe log date shortcuts (ADR 0083) | Delivered at `af1c860`: profile-local date choices; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Native public-food log date shortcuts (ADR 0082) | Delivered at `2e77f20`: profile-local date choices; local gates and all three CI/nine actual container jobs passed. |
@@ -114,16 +115,17 @@ retains earlier boundaries. A successful successor never changes an older result
 | Completed external review | Scoped Claude review at `805b937` | The supplied report found no ADR 0077 blockers. Its recommendations were addressed in the delivered follow-up; the report remains limited to its original scope. Routine product work does not require another paid review. |
 | Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Advance only under applicable existing authorization and unchanged release gates. |
 
-### Active bounded milestone: native biometric reading date shortcuts
+### Active bounded milestone: native goal New-draft protection
 
-[ADR 0085](../adr/0085-native-biometric-reading-date-shortcuts.md) adds Today and
-Yesterday beside the Log/Edit reading date. Resolve the profile-local calendar
-at activation; retain required time, exact value, metric/edit identity and saved
-timestamp precision. Reuse existing draft/history guards, keep Log/Save explicit
-and preserve exact retries after same-date choice. Reading writes stay online.
+[ADR 0086](../adr/0086-native-goal-new-draft-protection.md) protects unsaved goal
+edits when Start a new goal would replace them. Keep editing preserves exact raw
+values; explicit discard starts the existing blank draft. Pristine saved goals
+stay immediate. Bind the complete loaded baseline to existing context/load/draft
+guards, independently of Copy eligibility. Keep goal publication explicit and
+preserve manual, derived and applied-reference semantics.
 
-The prior [custom-food date shortcuts](../adr/0084-native-custom-food-log-date-shortcuts.md)
-are delivered at `6ad9129`. No dependency change, install, audit, browser/service/
+The prior [biometric date shortcuts](../adr/0085-native-biometric-reading-date-shortcuts.md)
+are delivered at `ab2c6de`. No dependency change, install, audit, browser/service/
 device action or paid review is part of this native slice. The earlier Expo `.20`
 audit authorization is consumed. Follow the
 [proportionate review policy](../quality/development-workflow.md#proportionate-independent-review).

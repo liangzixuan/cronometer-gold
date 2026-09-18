@@ -91,6 +91,7 @@ interface CopySource {
 }
 
 interface CopyChoice {
+  readonly action: "copy" | "new";
   readonly source: CopySource;
   readonly builder: GoalBuilder;
   readonly generation: number;
@@ -279,6 +280,8 @@ export function GoalsScreen({
   const builderGeneration = useRef(0);
   const [copySource, setCopySource] = useState<CopySource | null>(null);
   const copySourceRef = useRef<CopySource | null>(null);
+  const newGoalSourceRef = useRef<CopySource | null>(null);
+  const newGoalActionGeneration = useRef(0);
   const [copyChoice, setCopyChoice] = useState<CopyChoice | null>(null);
   const copyChoiceRef = useRef<CopyChoice | null>(null);
   const copyMounted = useRef(false);
@@ -302,7 +305,12 @@ export function GoalsScreen({
     copyChoiceRef.current = null;
     setCopyChoice(null);
   }, []);
+  const retireNewGoalActions = useCallback(() => {
+    newGoalActionGeneration.current += 1;
+    if (copyChoiceRef.current?.action === "new") clearCopyChoice();
+  }, [clearCopyChoice]);
   const invalidateCopySource = useCallback(() => {
+    newGoalSourceRef.current = null;
     copySourceRef.current = null;
     setCopySource(null);
     clearCopyChoice();
@@ -494,6 +502,19 @@ export function GoalsScreen({
             },
           };
         }
+        newGoalSourceRef.current =
+          nextGoal &&
+          initiatingCopyScope === copyScope.current &&
+          initiatingProfileRevision === profileRevisionRef.current &&
+          !copyPrivateClosed.current
+            ? {
+                goal: nextGoal,
+                builder: nextBuilder,
+                scope: initiatingCopyScope,
+                date: localDate,
+                generation: requestGeneration,
+              }
+            : null;
         effectiveDateRef.current = nextBuilder.effectiveFrom;
         setBuilder(nextBuilder);
         setTemplatesSupported(effectiveReferenceResponse.status !== 404);
@@ -556,6 +577,7 @@ export function GoalsScreen({
     void load(localDate);
     return () => {
       copyMounted.current = false;
+      newGoalSourceRef.current = null;
       copySourceRef.current = null;
       copyChoiceRef.current = null;
       generation.current += 1;
@@ -573,6 +595,7 @@ export function GoalsScreen({
         setMessage("Choose a real effective date before loading candidate targets.");
         return;
       }
+      retireNewGoalActions();
       candidateController.current?.abort();
       const controller = new AbortController();
       candidateController.current = controller;
@@ -638,7 +661,14 @@ export function GoalsScreen({
         if (candidateController.current === controller) candidateController.current = null;
       }
     },
-    [accessToken, apiBase, closeCopyPrivate, expectedOwnerUserId, sessionEpoch],
+    [
+      accessToken,
+      apiBase,
+      closeCopyPrivate,
+      expectedOwnerUserId,
+      retireNewGoalActions,
+      sessionEpoch,
+    ],
   );
 
   async function refreshProfileAfterConflict(
@@ -687,6 +717,7 @@ export function GoalsScreen({
     const initiatingOwner = expectedOwnerUserId;
     const initiatingEpoch = sessionEpoch;
     const requestGeneration = generation.current;
+    retireNewGoalActions();
     const controller = new AbortController();
     profileController.current = controller;
     const requestIsCurrent = () =>
@@ -885,6 +916,7 @@ export function GoalsScreen({
     const initiatingEpoch = sessionEpoch;
     const requestGeneration = generation.current;
     const savedDate = date;
+    retireNewGoalActions();
     const controller = new AbortController();
     writeController.current = controller;
     const requestIsCurrent = () =>
@@ -1028,7 +1060,12 @@ export function GoalsScreen({
   function copySavedGoal() {
     if (!canCopySavedGoal() || !copySource) return;
     if (JSON.stringify(builder) !== JSON.stringify(copySource.builder)) {
-      const choice = { source: copySource, builder, generation: builderGeneration.current };
+      const choice: CopyChoice = {
+        action: "copy",
+        source: copySource,
+        builder,
+        generation: builderGeneration.current,
+      };
       copyChoiceRef.current = choice;
       setCopyChoice(choice);
       return;
@@ -1038,9 +1075,10 @@ export function GoalsScreen({
 
   function copyChoiceIsCurrent(choice: CopyChoice) {
     return (
-      canCopySavedGoal() &&
+      (choice.action === "copy" ? canCopySavedGoal() : canStartNewGoal()) &&
       copyChoiceRef.current === choice &&
-      copySourceRef.current === choice.source &&
+      (choice.action === "copy" ? copySourceRef.current : newGoalSourceRef.current) ===
+        choice.source &&
       builderRef.current === choice.builder &&
       builderGeneration.current === choice.generation
     );
@@ -1050,15 +1088,57 @@ export function GoalsScreen({
     if (copyChoiceIsCurrent(choice)) clearCopyChoice();
   }
 
-  function discardAndCopy(choice: CopyChoice) {
-    if (copyChoiceIsCurrent(choice)) installCopiedGoal(choice.source);
+  function discardGoalEdits(choice: CopyChoice) {
+    if (!copyChoiceIsCurrent(choice)) return;
+    if (choice.action === "copy") installCopiedGoal(choice.source);
+    else installNewGoal();
+  }
+
+  const newGoalSource = newGoalSourceRef.current;
+  const renderedNewGoalGeneration = newGoalActionGeneration.current;
+  function canStartNewGoal() {
+    return (
+      copyMounted.current &&
+      !copyPrivateClosed.current &&
+      !loading &&
+      !saving &&
+      !profileSaving &&
+      !loadController.current &&
+      !writeController.current &&
+      !profileController.current &&
+      !candidateController.current &&
+      newGoalSource !== null &&
+      newGoalSourceRef.current === newGoalSource &&
+      newGoalSource.goal === goal &&
+      newGoalSource.scope === copyScope.current &&
+      newGoalSource.date === date &&
+      dateRef.current === date &&
+      isLocalDate(date) &&
+      newGoalSource.generation === generation.current &&
+      profileRevisionRef.current === profileRevision &&
+      builder.goalId === newGoalSource.goal.id &&
+      builderRef.current === builder &&
+      newGoalActionGeneration.current === renderedNewGoalGeneration
+    );
   }
 
   function beginNewGoal() {
-    if (!isLocalDate(date)) {
-      setMessage("Choose a real progress date before starting a new goal.");
+    if (!canStartNewGoal() || !newGoalSource) return;
+    if (JSON.stringify(builder) !== JSON.stringify(newGoalSource.builder)) {
+      const choice: CopyChoice = {
+        action: "new",
+        source: newGoalSource,
+        builder,
+        generation: builderGeneration.current,
+      };
+      copyChoiceRef.current = choice;
+      setCopyChoice(choice);
       return;
     }
+    installNewGoal();
+  }
+
+  function installNewGoal() {
     const next = emptyGoal(date);
     effectiveDateRef.current = next.effectiveFrom;
     setBuilder(next);
@@ -1128,36 +1208,44 @@ export function GoalsScreen({
               >
                 <Text style={styles.secondaryText}>Copy saved goal to new draft</Text>
               </Pressable>
-              {copyChoice && copyChoiceRef.current === copyChoice ? (
-                <View>
-                  <Text accessibilityLiveRegion="polite" style={styles.help}>
-                    You have unsaved edits. Keep editing, or discard those edits and copy saved goal
-                    version {copyChoice.source.goal.versionNumber}.
-                  </Text>
-                  <Pressable
-                    accessibilityRole="button"
-                    disabled={!canCopySavedGoal()}
-                    onPress={() => keepCopyEditing(copyChoice)}
-                    style={styles.secondary}
-                  >
-                    <Text style={styles.secondaryText}>Keep editing</Text>
-                  </Pressable>
-                  <Pressable
-                    accessibilityRole="button"
-                    disabled={!canCopySavedGoal()}
-                    onPress={() => discardAndCopy(copyChoice)}
-                    style={styles.secondary}
-                  >
-                    <Text style={styles.secondaryText}>Discard edits and copy saved version</Text>
-                  </Pressable>
-                </View>
-              ) : null}
+            </View>
+          ) : null}
+          {copyChoice && copyChoiceRef.current === copyChoice ? (
+            <View>
+              <Text accessibilityLiveRegion="polite" style={styles.help}>
+                {copyChoice.action === "copy"
+                  ? `You have unsaved edits. Keep editing, or discard those edits and copy saved goal version ${copyChoice.source.goal.versionNumber}.`
+                  : "You have unsaved edits. Keep editing, or discard those edits and start a new goal."}
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: !copyChoiceIsCurrent(copyChoice) }}
+                disabled={!copyChoiceIsCurrent(copyChoice)}
+                onPress={() => keepCopyEditing(copyChoice)}
+                style={styles.secondary}
+              >
+                <Text style={styles.secondaryText}>Keep editing</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityState={{ disabled: !copyChoiceIsCurrent(copyChoice) }}
+                disabled={!copyChoiceIsCurrent(copyChoice)}
+                onPress={() => discardGoalEdits(copyChoice)}
+                style={styles.secondary}
+              >
+                <Text style={styles.secondaryText}>
+                  {copyChoice.action === "copy"
+                    ? "Discard edits and copy saved version"
+                    : "Discard edits and start a new goal"}
+                </Text>
+              </Pressable>
             </View>
           ) : null}
           {builder.goalId ? (
             <Pressable
               accessibilityRole="button"
-              disabled={saving}
+              accessibilityState={{ disabled: !canStartNewGoal() }}
+              disabled={!canStartNewGoal()}
               onPress={beginNewGoal}
               style={styles.refresh}
             >

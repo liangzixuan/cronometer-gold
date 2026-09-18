@@ -619,6 +619,7 @@ describe("native Goals loaded nutrient picker", () => {
     const beforeNew = addChoice(tree, sodium).props.onPress;
     await type(harness, "Find a nutrient", "SODIUM");
     tree = await click(harness, "Start a new goal");
+    tree = await click(harness, newDiscardLabel);
     beforeNew();
     tree = await harness.settle();
     expect(input(tree, "Find a nutrient").props.value).toBe("SODIUM");
@@ -919,6 +920,7 @@ describe("native saved manual goal copy", () => {
     button(tree, "Start a new goal").props.onPress();
     beforeNew();
     tree = await harness.settle();
+    tree = await click(harness, newDiscardLabel);
     expect(input(tree, "Your selected daily energy (kcal)").props.value).toBe("");
     tree = await click(harness, copyLabel);
     const beforeDate = button(tree, discardLabel).props.onPress;
@@ -1160,33 +1162,7 @@ describe("native saved manual goal copy", () => {
 
 describe("native saved goal copy request boundaries", () => {
   it("excludes a valid derived saved source after an unsaved switch to fixed", async () => {
-    const source = savedGoal([nutrient]);
-    source.currentVersion.energy = {
-      mode: "derived",
-      targetKcal: "2100",
-      bmrKcal: "1500",
-      ageYears: 27,
-      heightCm: "175",
-      weightKg: "70",
-      sexAtBirth: "male",
-      profileRevision: "4",
-      activityLevelCode: "sedentary_or_light",
-      activityFactor: "1.4",
-      adjustmentKcal: "0",
-      source: {
-        equation: {
-          code: "mifflin-st-jeor-ree",
-          version: "1990-original",
-          url: "https://example.test/equation",
-        },
-        activityPolicy: {
-          code: "fao-who-unu-pal-policy",
-          version: "2004-reviewed-v1",
-          sourceUrl: "https://example.test/activity",
-        },
-      },
-      rationale: "Saved derived reason",
-    };
+    const source = derivedSavedGoal();
     const { harness, requests } = setupCopy({ goal: source });
     let tree = await harness.settle();
     expect(text(tree)).toContain("Goal version 3 applies");
@@ -1312,5 +1288,369 @@ describe("native saved goal copy request boundaries", () => {
     fail = false;
     tree = await click(harness, "Refresh goals and progress");
     expect(button(tree, copyLabel).props.disabled).toBe(false);
+  });
+});
+
+function derivedSavedGoal() {
+  const source = savedGoal([nutrient]);
+  source.currentVersion.energy = {
+    mode: "derived",
+    targetKcal: "2100",
+    bmrKcal: "1500",
+    ageYears: 27,
+    heightCm: "175",
+    weightKg: "70",
+    sexAtBirth: "male",
+    profileRevision: "4",
+    activityLevelCode: "sedentary_or_light",
+    activityFactor: "1.4",
+    adjustmentKcal: "0",
+    source: {
+      equation: {
+        code: "mifflin-st-jeor-ree",
+        version: "1990-original",
+        url: "https://example.test/equation",
+      },
+      activityPolicy: {
+        code: "fao-who-unu-pal-policy",
+        version: "2004-reviewed-v1",
+        sourceUrl: "https://example.test/activity",
+      },
+    },
+    rationale: "Saved derived reason",
+  };
+  return source;
+}
+
+const newLabel = "Start a new goal";
+const newDiscardLabel = "Discard edits and start a new goal";
+function setupNew(kind = "manual", options = {}) {
+  return setupCopy({
+    goal: kind === "derived" ? derivedSavedGoal() : savedGoal([nutrient, sodium]),
+    ...(kind === "reference"
+      ? {
+          handler: (request) => {
+            if (request.url.pathname !== "/v1/goals/reference-target-sets") return undefined;
+            const reference = referenceFixture();
+            return response({
+              data: { ...reference.data, date: request.url.searchParams.get("date") },
+            });
+          },
+        }
+      : {}),
+    ...options,
+  });
+}
+async function newChoice(harness) {
+  await type(harness, "Why this energy target?", " Unsaved goal reason ");
+  return click(harness, newLabel);
+}
+
+describe("native New goal draft protection", () => {
+  for (const kind of ["manual", "derived", "reference"]) {
+    it(`starts a pristine ${kind} goal directly without depending on Copy eligibility`, async () => {
+      const { harness, requests } = setupNew(kind);
+      let tree = await harness.settle();
+      if (kind !== "manual") expect(hasButton(tree, copyLabel)).toBe(false);
+      if (kind === "reference") {
+        expect(text(tree)).toContain("Its source-verified candidate provenance was confirmed.");
+        expect(input(tree, "Nutrient 1 target").props.editable).toBe(false);
+      }
+      const date = input(tree, "Progress date YYYY-MM-DD").props.value;
+      const count = requests.length;
+      const operations = hooks.operation;
+      tree = await click(harness, newLabel);
+      expect(hasButton(tree, newDiscardLabel)).toBe(false);
+      expect(input(tree, "Your selected daily energy (kcal)").props.value).toBe("");
+      expect(input(tree, "Effective from YYYY-MM-DD").props.value).toBe(date);
+      expect(text(tree)).toContain("Nutrient thresholds ( 0 /256)");
+      expect(hasButton(tree, "Create goal")).toBe(true);
+      expect(requests).toHaveLength(count);
+      expect(hooks.operation).toBe(operations);
+    });
+
+    it(`protects dirty ${kind} edits and treats exact reversion as pristine`, async () => {
+      const { harness, requests } = setupNew(kind);
+      let tree = await harness.settle();
+      const original = input(tree, "Why this energy target?").props.value;
+      const count = requests.length;
+      tree = await newChoice(harness);
+      expect(input(tree, "Why this energy target?").props.value).toBe(" Unsaved goal reason ");
+      expect(hasButton(tree, newDiscardLabel)).toBe(true);
+      tree = await click(harness, "Keep editing");
+      expect(input(tree, "Why this energy target?").props.value).toBe(" Unsaved goal reason ");
+      await type(harness, "Why this energy target?", original);
+      tree = await click(harness, newLabel);
+      expect(hasButton(tree, newDiscardLabel)).toBe(false);
+      expect(hasButton(tree, "Create goal")).toBe(true);
+      expect(requests).toHaveLength(count);
+    });
+  }
+
+  it("preserves every raw edit on Keep and resets only goal fields on explicit discard", async () => {
+    const source = savedGoal([sodium, nutrient]);
+    const snapshot = JSON.stringify(source);
+    const { harness, requests } = setupNew("manual", { goal: source });
+    await type(harness, "Find a nutrient", "  magnesium  ");
+    await type(harness, "Birth date YYYY-MM-DD", "2000-02-03");
+    for (const [label, value] of [
+      ["Your selected daily energy (kcal)", "1900.000099"],
+      ["Protein minimum", "0.000000001"],
+      ["Protein target", "99.000000000001"],
+      ["Protein maximum", "100.000000000001"],
+      ["Protein source (required)", " changed source "],
+      ["Protein source version", " changed version "],
+      ["Protein rationale", " changed rationale "],
+    ])
+      await type(harness, label, value);
+    let tree = await newChoice(harness);
+    const before = fields(tree);
+    const date = input(tree, "Progress date YYYY-MM-DD").props.value;
+    const count = requests.length;
+    const operations = hooks.operation;
+    expect(button(tree, newDiscardLabel).props.accessibilityState).toEqual({ disabled: false });
+    expect(button(tree, "Keep editing").props.accessibilityState).toEqual({ disabled: false });
+    tree = await click(harness, "Keep editing");
+    expect(fields(tree)).toEqual(before);
+    await click(harness, newLabel);
+    tree = await click(harness, newDiscardLabel);
+    expect(input(tree, "Your selected daily energy (kcal)").props.value).toBe("");
+    expect(input(tree, "Why this energy target?").props.value).toBe("");
+    expect(input(tree, "Effective from YYYY-MM-DD").props.value).toBe(date);
+    expect(text(tree)).toContain("Nutrient thresholds ( 0 /256)");
+    expect(input(tree, "Find a nutrient").props.value).toBe("  magnesium  ");
+    expect(input(tree, "Birth date YYYY-MM-DD").props.value).toBe("2000-02-03");
+    expect(JSON.stringify(source)).toBe(snapshot);
+    expect(requests).toHaveLength(count);
+    expect(hooks.operation).toBe(operations);
+  });
+
+  it("ignores search/profile drafts for dirtiness and protects customized reference targets", async () => {
+    const plain = setupNew();
+    await type(plain.harness, "Find a nutrient", "sodium");
+    await type(plain.harness, "Birth date YYYY-MM-DD", "2000-02-03");
+    let tree = await click(plain.harness, newLabel);
+    expect(hasButton(tree, newDiscardLabel)).toBe(false);
+    expect(input(tree, "Birth date YYYY-MM-DD").props.value).toBe("2000-02-03");
+    const verified = setupNew("reference");
+    await click(verified.harness, "Customize editable copy and clear verified provenance");
+    tree = await click(verified.harness, newLabel);
+    const before = fields(tree);
+    expect(hasButton(tree, newDiscardLabel)).toBe(true);
+    tree = await click(verified.harness, "Keep editing");
+    expect(fields(tree)).toEqual(before);
+    expect(input(tree, "Nutrient 1 source (required)").props.value).toContain(
+      "User-customized copy",
+    );
+  });
+
+  it("preserves ambiguous revision retries through Keep and creates only after confirmed New", async () => {
+    const { harness, requests } = setupNew("manual", {
+      handler: (request) => (request.method === "POST" ? response({}, 503) : undefined),
+    });
+    await type(harness, "Why this energy target?", " retry exact raw reason ");
+    await click(harness, "Publish goal revision");
+    const original = writes(requests)[0];
+    const count = requests.length;
+    const operations = hooks.operation;
+    await click(harness, newLabel);
+    await click(harness, "Keep editing");
+    expect(requests).toHaveLength(count);
+    expect(hooks.operation).toBe(operations);
+    await click(harness, "Publish goal revision");
+    expect(writes(requests)[1].body).toBe(original.body);
+    expect(writes(requests)[1].headers).toEqual(original.headers);
+    await click(harness, newLabel);
+    await click(harness, newDiscardLabel);
+    expect(writes(requests)).toHaveLength(2);
+    await type(harness, "Your selected daily energy (kcal)", "1800.000001");
+    await type(harness, "Why this energy target?", " New explicit goal ");
+    await click(harness, "Create goal");
+    const created = writes(requests)[2];
+    expect(created.url.pathname).toBe("/v1/goals");
+    expect(created.headers["if-match"]).toBeUndefined();
+    expect(created.headers["idempotency-key"]).not.toBe(original.headers["idempotency-key"]);
+    await click(harness, "Create goal");
+    expect(writes(requests)[3].body).toBe(created.body);
+    expect(writes(requests)[3].headers).toEqual(created.headers);
+  });
+
+  it("rejects retained New/Keep/Discard after synchronous edit ABA or target removal", async () => {
+    const { harness } = setupNew();
+    let tree = await newChoice(harness);
+    const callbacks = [newLabel, "Keep editing", newDiscardLabel].map(
+      (label) => button(tree, label).props.onPress,
+    );
+    const field = input(tree, "Protein target");
+    field.props.onChangeText("123");
+    field.props.onChangeText(field.props.value);
+    let count = harness.stateWrites;
+    callbacks.forEach((action) => {
+      action();
+    });
+    expect(harness.stateWrites).toBe(count);
+    tree = await click(harness, newLabel);
+    const discard = button(tree, newDiscardLabel).props.onPress;
+    nodes(
+      tree,
+      (node) => node.props?.accessibilityLabel === "Remove Protein target",
+    )[0].props.onPress();
+    count = harness.stateWrites;
+    discard();
+    expect(harness.stateWrites).toBe(count);
+    expect(fields(await harness.settle())).not.toHaveProperty("Protein target");
+  });
+
+  it("allows only the latest New or Copy choice to replace a draft", async () => {
+    const { harness } = setupNew();
+    let tree = await newChoice(harness);
+    const oldNew = button(tree, newDiscardLabel).props.onPress;
+    const keepNew = button(tree, "Keep editing").props.onPress;
+    tree = await click(harness, copyLabel);
+    expect(hasButton(tree, newDiscardLabel)).toBe(false);
+    let count = harness.stateWrites;
+    oldNew();
+    keepNew();
+    expect(harness.stateWrites).toBe(count);
+    const oldCopy = button(tree, discardLabel).props.onPress;
+    tree = await click(harness, newLabel);
+    expect(hasButton(tree, discardLabel)).toBe(false);
+    count = harness.stateWrites;
+    oldCopy();
+    expect(harness.stateWrites).toBe(count);
+    tree = await click(harness, newDiscardLabel);
+    expect(input(tree, "Your selected daily energy (kcal)").props.value).toBe("");
+  });
+
+  for (const replacement of [
+    { expectedOwnerUserId: "22222222-2222-4222-8222-222222222222" },
+    { sessionEpoch: 2 },
+    { profileRevision: "5" },
+    { profileTimeZone: "UTC" },
+    { accessToken: "replacement-synthetic-token" },
+    { apiBase: new URL("http://127.0.0.1:4999") },
+  ])
+    it(`retires New confirmation across context ABA: ${Object.keys(replacement)[0]}`, async () => {
+      const { harness, props } = setupNew();
+      const tree = await newChoice(harness);
+      const callbacks = [newLabel, "Keep editing", newDiscardLabel].map(
+        (label) => button(tree, label).props.onPress,
+      );
+      harness.updateProps(replacement);
+      harness.renderWithoutEffects();
+      harness.updateProps(props);
+      harness.renderWithoutEffects();
+      const count = harness.stateWrites;
+      callbacks.forEach((action) => {
+        action();
+      });
+      expect(harness.stateWrites).toBe(count);
+      harness.unmount();
+    });
+
+  it("retires progress-date ABA and failed loads, recovering only from a fresh load", async () => {
+    let fail = false;
+    const { harness } = setupNew("manual", {
+      handler: (request) =>
+        fail && request.url.pathname === "/v1/nutrients/targetable" ? response({}, 503) : undefined,
+    });
+    let tree = await newChoice(harness);
+    const old = [newLabel, newDiscardLabel].map((label) => button(tree, label).props.onPress);
+    const date = input(tree, "Progress date YYYY-MM-DD");
+    date.props.onChangeText("2026-09-20");
+    date.props.onChangeText(date.props.value);
+    let count = harness.stateWrites;
+    old.forEach((action) => {
+      action();
+    });
+    expect(harness.stateWrites).toBe(count);
+    tree = await harness.settle();
+    expect(button(tree, newLabel).props.accessibilityState).toEqual({ disabled: true });
+    fail = true;
+    tree = await click(harness, "Refresh goals and progress");
+    expect(button(tree, newLabel).props.disabled).toBe(true);
+    fail = false;
+    tree = await click(harness, "Refresh goals and progress");
+    expect(button(tree, newLabel).props.disabled).toBe(false);
+    count = harness.stateWrites;
+    old.forEach((action) => {
+      action();
+    });
+    expect(harness.stateWrites).toBe(count);
+  });
+
+  for (const work of ["goal", "profile", "candidate"])
+    it(`retires retained New actions through ${work} requests, including completion`, async () => {
+      const held = deferred();
+      let hold = false;
+      const { harness } = setupNew("manual", {
+        handler: (request) =>
+          hold &&
+          ((work === "goal" && request.method === "POST") ||
+            (work === "profile" && request.url.pathname === "/v1/profile") ||
+            (work === "candidate" && request.url.pathname === "/v1/goals/reference-target-sets"))
+            ? held.promise
+            : undefined,
+      });
+      let tree = await newChoice(harness);
+      const callbacks = [newLabel, "Keep editing", newDiscardLabel].map(
+        (label) => button(tree, label).props.onPress,
+      );
+      hold = true;
+      if (work === "candidate") input(tree, "Effective from YYYY-MM-DD").props.onEndEditing();
+      else
+        button(
+          tree,
+          work === "goal" ? "Publish goal revision" : "Save profile and check eligibility",
+        ).props.onPress();
+      let count = harness.stateWrites;
+      callbacks.forEach((action) => {
+        action();
+      });
+      expect(harness.stateWrites).toBe(count);
+      tree = await harness.settle();
+      expect(button(tree, newLabel).props.accessibilityState).toEqual({ disabled: true });
+      held.resolve(response({}, work === "candidate" ? 404 : 503));
+      tree = await harness.settle();
+      count = harness.stateWrites;
+      callbacks.forEach((action) => {
+        action();
+      });
+      expect(harness.stateWrites).toBe(count);
+      expect(hasButton(tree, newDiscardLabel)).toBe(false);
+      tree = await click(harness, newLabel);
+      expect(hasButton(tree, newDiscardLabel)).toBe(true);
+    });
+
+  it("rejects retained actions after unauthorized closure, unmount and effect replay", async () => {
+    const { harness, props } = setupNew("manual", {
+      handler: (request) => (request.method === "POST" ? response({}, 401) : undefined),
+    });
+    let tree = await newChoice(harness);
+    const callbacks = [newLabel, "Keep editing", newDiscardLabel].map(
+      (label) => button(tree, label).props.onPress,
+    );
+    await click(harness, "Publish goal revision");
+    expect(props.onUnauthorized).toHaveBeenCalledOnce();
+    let count = harness.stateWrites;
+    callbacks.forEach((action) => {
+      action();
+    });
+    expect(harness.stateWrites).toBe(count);
+    harness.unmount();
+    callbacks.forEach((action) => {
+      action();
+    });
+    expect(harness.writesAfterUnmount).toBe(0);
+    const replayed = setupNew();
+    tree = await newChoice(replayed.harness);
+    const oldNew = button(tree, newLabel).props.onPress;
+    const oldDiscard = button(tree, newDiscardLabel).props.onPress;
+    replayed.harness.replayEffects();
+    await replayed.harness.settle();
+    count = replayed.harness.stateWrites;
+    oldNew();
+    oldDiscard();
+    expect(replayed.harness.stateWrites).toBe(count);
   });
 });
