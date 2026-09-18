@@ -1,6 +1,6 @@
 # ADR 0089: Recover explicitly from native custom-food revision conflicts
 
-Status: Source complete and reviewed; final canonical and exact-commit automatic evidence pending.
+Status: Implemented at `956ccf1`; local and exact-commit automatic evidence passed. Device and release acceptance remain separate.
 
 ## Context
 
@@ -72,5 +72,12 @@ New conflict and recovery regressions failed on pre-change source; original
 failures and two corrected test-selector mistakes remain in outside-Git evidence.
 Final focused validation passed 575 cases (456 actual-screen, 100 nutrient helper
 and 19 response helper cases), with zero skips. Native types and scoped Biome
-passed. Independent source review found no open issue. Final canonical and
-exact-commit automatic results remain pending in the dated readiness record.
+passed. Independent source/prose review found no open issue. Canonical pnpm check
+passed with 1,951 fresh cases, 2,327 cached passes and 93 cached opt-in skips;
+pnpm build passed eleven tasks with ten cached and fresh Android/iOS exports.
+All three [CI jobs](https://github.com/liangzixuan/cronometer-gold/actions/runs/35393690150)
+and nine actual [container jobs](https://github.com/liangzixuan/cronometer-gold/actions/runs/35393690051)
+passed on attempt one at `956ccf145da513c2e89eacc7330d64be33cbd2da`.
+The September 18 22:33 UTC official observation records all jobs; final clean,
+equal local/tracking/live heads and seven reviewed file hashes were verified at
+22:34 UTC. No installation, local audit or device action was run.

@@ -83,14 +83,20 @@ and nine actual container35381644375 jobs passed on attempt one; September 18
 20:24 UTC official evidence records complete results. Clean equal local/tracking/
 live heads and all seven reviewed file hashes were reverified at 20:25 UTC.
 
-Active work is [ADR 0089](../adr/0089-native-custom-food-revision-conflict.md):
-explicit recovery from native custom-food revision conflicts. The existing 412
-path retains the draft but gives misleading retry guidance. Preserve edits,
-block saves of the known-conflicted revision and offer an explicit guarded read
-of current saved values. Failed recovery retains the draft; no implicit read,
-rebase or save. Independent source review, all 575 focused cases, native types
-and scoped Biome passed. Final canonical and exact-commit automatic results
-remain pending in the dated outside-Git readiness record. No new dependency,
+[ADR 0089](../adr/0089-native-custom-food-revision-conflict.md) is delivered at
+`956ccf145da513c2e89eacc7330d64be33cbd2da`: 575 focused cases, independent review,
+canonical check/build and fresh native exports passed. All three CI35393690150
+and nine actual container35393690051 jobs passed on attempt one; September 18
+22:33 UTC official evidence records complete results. Clean equal local/tracking/
+live heads and all seven reviewed file hashes were reverified at 22:34 UTC.
+
+Active work is [ADR 0090](../adr/0090-native-activity-edit-draft-protection.md):
+protect native activity edits before Cancel, row replacement or day navigation.
+Dirty fields require explicit Keep/Discard; pristine actions remain direct.
+Preserve exact inputs and retry identity, the independent Add form and existing
+private/lifecycle guards. Independent source review, all 111 focused cases, native
+types and scoped Biome passed. Final canonical and exact-commit automatic results
+remain pending in the dated outside-Git readiness record. No dependency,
 installation or audit is part of this slice.
 Device/release acceptance remains separate.
 
@@ -141,7 +147,7 @@ authorizations within their original scope.
 | Lane | Owner and next evidence | Exit |
 | --- | --- | --- |
 | Automatic delivery evidence | Delivery owner re-reads the exact commit's CI and actual container jobs. | Both applicable workflows complete successfully with required jobs executed; release artifact/digest/provenance requirements remain separate. [Supply chain](container-supply-chain.md#required-github-configuration). |
-| Native custom-food conflict recovery | Implementation owner and independent in-task reviewer validate retained edits, blocked stale saves, explicit reload success/failure, current response identity, private/request guards and exact ambiguous retries. | Focused native checks, canonical gates and exact-commit automatic jobs; physical-device and assistive evidence remain separate. [ADR 0089](../adr/0089-native-custom-food-revision-conflict.md). |
+| Native activity edit-draft protection | Implementation owner and independent in-task reviewer validate exact dirty/pristine fields, Keep/Discard across local transitions, typed dates, stale/private guards, independent Add state and exact retries. | Focused native checks, canonical gates and exact-commit automatic jobs; physical-device and assistive evidence remain separate. [ADR 0090](../adr/0090-native-activity-edit-draft-protection.md). |
 | Signed device and accessibility | Release owner confirms identifier history and numbering; device operators and reviewers prepare approved Windows relay/capture prerequisites and the physical iOS/Android matrix. | Exact signed artifacts, protected-storage/OS-kill, notification, cross-client and accessibility evidence with required attestations. Exports do not substitute. [Windows boundary](../../infra/runbooks/physical-device-windows-wsl2-private-https.md), [release matrix](../../infra/runbooks/platform-health-release.md). |
 | Hosted beta and mail/privacy operations | Deployment/security, database/privacy and mail owners review target/budget, seven-image deployment, TLS/access/readiness, off-host restore and production delivery operations. | Hosted restore/erasure replay and access evidence, approved provider/sender and abuse/retry/suppression operations, independent review and rollout decisions. [Release](../../infra/runbooks/platform-health-release.md), [restore](../../infra/runbooks/postgres-backup-and-restore.md), [mail/privacy gates](release-gates.md). |
 | Live catalogue and database authority | Acquisition/storage operators, data-quality/rights reviewers and database authority owner provide authenticated dual acquisition, immutable retention, manifest-v4 review bundle, mapping/scale evidence and caller cutover. | Approved numeric catalogue/search/resource thresholds, three distinct role approvals and separate activation decision. The 363-food pilot and synthetic fixtures are insufficient. [Source runbook](../../infra/runbooks/food-source-release.md), [catalogue boundary](../product/build-plan.md#parallel-release-acceptance-target--live-catalogue-evidence). |
@@ -164,9 +170,9 @@ be reintroduced as missing source work from an older summary.
 
 ## Active milestone and successor
 
-Complete [ADR 0089](../adr/0089-native-custom-food-revision-conflict.md) with native
+Complete [ADR 0090](../adr/0090-native-activity-edit-draft-protection.md) with native
 behavioral proof, independent in-task review, canonical validation and the new
-commit's automatic results. ADRs 0077 through 0088 are delivered baselines, not
+commit's automatic results. ADRs 0077 through 0089 are delivered baselines, not
 pending source tasks. Record the successor
 in the dated Windows readiness record and reconcile it with the next coherent
 source change; avoid a status-only commit/build cycle.

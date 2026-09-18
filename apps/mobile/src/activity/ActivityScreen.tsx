@@ -53,6 +53,20 @@ type ReuseChoice = {
   readonly actionGeneration: number;
 };
 
+type EditReplacementAction =
+  | { readonly kind: "cancel" }
+  | { readonly kind: "entry"; readonly entry: ActivityEntry }
+  | { readonly kind: "date"; readonly date: string };
+type EditReplacementChoice = {
+  readonly action: EditReplacementAction;
+  readonly draft: ActivityEditDraft;
+  readonly day: ReturnType<typeof parseActivityDay> | null;
+  readonly date: string;
+  readonly dateDraft: string;
+  readonly actionGeneration: number;
+  readonly lifecycle: number;
+};
+
 interface ActivityScreenProps {
   readonly apiBase: URL;
   readonly accessToken: string;
@@ -78,6 +92,17 @@ function editDraft(entry: ActivityEntry): ActivityEditDraft {
   };
 }
 
+function hasActivityEdits(draft: ActivityEditDraft): boolean {
+  const baseline = editDraft(draft.entry);
+  return (
+    draft.name !== baseline.name ||
+    draft.durationMinutes !== baseline.durationMinutes ||
+    draft.selfReportedEnergyKilocalories !== baseline.selfReportedEnergyKilocalories ||
+    draft.localDate !== baseline.localDate ||
+    draft.localTime !== baseline.localTime
+  );
+}
+
 function exactAffectedDays(
   mutation: ActivityMutation,
   expectedDates: ReadonlySet<string>,
@@ -99,6 +124,7 @@ export function ActivityScreen({
   const initialNow = useRef(new Date()).current;
   const scrollView = useRef<ScrollView | null>(null);
   const addSectionY = useRef(0);
+  const editReplacementY = useRef(0);
   const initialDate = todayDetailDate(requestedDate, profileTimeZone, initialNow);
   const [date, setDate] = useState(initialDate);
   const [dateDraft, setDateDraft] = useState(initialDate);
@@ -114,6 +140,10 @@ export function ActivityScreen({
   const [busy, setBusy] = useState<string | null>(null);
   const [reuseChoice, setReuseChoice] = useState<ReuseChoice | null>(null);
   const choiceRef = useRef<ReuseChoice | null>(null);
+  const [editReplacementChoice, setEditReplacementChoice] = useState<EditReplacementChoice | null>(
+    null,
+  );
+  const editReplacementChoiceRef = useRef<EditReplacementChoice | null>(null);
   const draftRef = useRef<AddFields>({
     name,
     durationMinutes,
@@ -182,6 +212,8 @@ export function ActivityScreen({
   const clearChoice = useCallback(() => {
     choiceRef.current = null;
     setReuseChoice(null);
+    editReplacementChoiceRef.current = null;
+    setEditReplacementChoice(null);
   }, []);
   const clearDay = useCallback(() => {
     dayRef.current = null;
@@ -393,7 +425,10 @@ export function ActivityScreen({
     installFields({ [field]: value });
   }
   function changeEdit(field: keyof Omit<ActivityEditDraft, "entry">, value: string) {
-    if (!currentAction() || !edit || editRef.current?.entry !== edit.entry) return;
+    if (!currentAction() || !edit || editRef.current !== edit) return;
+    if (editRef.current[field] === value) return;
+    actionGeneration.current += 1;
+    clearChoice();
     editRef.current = { ...editRef.current, [field]: value };
     setEdit(editRef.current);
   }
@@ -401,18 +436,74 @@ export function ActivityScreen({
     scrollView.current?.scrollTo({ y: addSectionY.current, animated: true });
     AccessibilityInfo.announceForAccessibility(message);
   }
-  function beginEdit(entry: ActivityEntry) {
-    if (!currentAction() || !day?.entries.includes(entry)) return;
+  function applyEditReplacement(action: EditReplacementAction) {
     actionGeneration.current += 1;
     clearChoice();
-    editRef.current = editDraft(entry);
+    editRef.current = action.kind === "entry" ? editDraft(action.entry) : null;
     setEdit(editRef.current);
+    if (action.kind !== "date") return;
+    draftGeneration.current += 1;
+    dateRef.current = action.date;
+    dateDraftRef.current = action.date;
+    setDateDraft(action.date);
+    clearDay();
+    setState("loading");
+    loadGeneration.current += 1;
+    loadController.current?.abort();
+    setDate(action.date);
+  }
+  function requestEditReplacement(action: EditReplacementAction) {
+    const draft = editRef.current;
+    if (!draft || !hasActivityEdits(draft)) {
+      applyEditReplacement(action);
+      return;
+    }
+    actionGeneration.current += 1;
+    clearChoice();
+    const choice: EditReplacementChoice = {
+      action,
+      draft,
+      day: dayRef.current,
+      date: dateRef.current,
+      dateDraft: dateDraftRef.current,
+      actionGeneration: actionGeneration.current,
+      lifecycle: lifecycle.current,
+    };
+    editReplacementChoiceRef.current = choice;
+    setEditReplacementChoice(choice);
+    scrollView.current?.scrollTo({ y: editReplacementY.current, animated: true });
+    AccessibilityInfo.announceForAccessibility(
+      "Your activity has unsaved edits. Keep editing or explicitly discard edits to continue.",
+    );
+  }
+  function resolveEditReplacement(choice: EditReplacementChoice, discard: boolean) {
+    if (
+      !currentAction(false) ||
+      editReplacementChoiceRef.current !== choice ||
+      editRef.current !== choice.draft ||
+      dayRef.current !== choice.day ||
+      dateRef.current !== choice.date ||
+      dateDraftRef.current !== choice.dateDraft ||
+      actionGeneration.current !== choice.actionGeneration ||
+      lifecycle.current !== choice.lifecycle ||
+      (choice.action.kind === "entry" && !choice.day?.entries.includes(choice.action.entry))
+    )
+      return;
+    if (discard) applyEditReplacement(choice.action);
+    else {
+      actionGeneration.current += 1;
+      clearChoice();
+      dateDraftRef.current = dateRef.current;
+      setDateDraft(dateRef.current);
+    }
+  }
+  function beginEdit(entry: ActivityEntry) {
+    if (!currentAction() || !day?.entries.includes(entry)) return;
+    requestEditReplacement({ kind: "entry", entry });
   }
   function cancelEdit() {
     if (!currentAction()) return;
-    actionGeneration.current += 1;
-    editRef.current = null;
-    setEdit(null);
+    requestEditReplacement({ kind: "cancel" });
   }
   function installReuse(entry: ActivityEntry) {
     createIntent.current += 1;
@@ -471,22 +562,12 @@ export function ActivityScreen({
       setDateDraft(date);
       return;
     }
-    if (value === date && dateDraftRef.current === value) return;
-    clearChoice();
-    actionGeneration.current += 1;
-    draftGeneration.current += 1;
-    editRef.current = null;
-    setEdit(null);
-    dateRef.current = value;
-    dateDraftRef.current = value;
-    setDateDraft(value);
-    if (value !== date) {
-      clearDay();
-      setState("loading");
-      loadGeneration.current += 1;
-      loadController.current?.abort();
-      setDate(value);
+    if (value === date) {
+      dateDraftRef.current = value;
+      setDateDraft(value);
+      return;
     }
+    requestEditReplacement({ kind: "date", date: value });
   }
 
   function operationId(key: string): string {
@@ -841,6 +922,60 @@ export function ActivityScreen({
             <Text style={styles.secondaryText}>Retry day view</Text>
           </Pressable>
         ) : null}
+
+        <View
+          accessibilityLabel="Activity edit replacement choice"
+          onLayout={(event) => {
+            editReplacementY.current = event.nativeEvent.layout.y;
+          }}
+        >
+          {scopeIsCurrent() &&
+          editReplacementChoice &&
+          editReplacementChoiceRef.current === editReplacementChoice &&
+          editRef.current === editReplacementChoice.draft &&
+          dayRef.current === editReplacementChoice.day &&
+          dateRef.current === editReplacementChoice.date &&
+          dateDraftRef.current === editReplacementChoice.dateDraft &&
+          lifecycle.current === editReplacementChoice.lifecycle &&
+          actionGeneration.current === editReplacementChoice.actionGeneration ? (
+            <View accessibilityLiveRegion="polite" style={styles.policyCard}>
+              <Text style={styles.policyTitle}>Keep your unsaved activity edits?</Text>
+              <Text style={styles.policyText}>
+                {editReplacementChoice.action.kind === "entry"
+                  ? `Editing ${editReplacementChoice.action.entry.name} would discard your current activity edits.`
+                  : editReplacementChoice.action.kind === "date"
+                    ? `Changing to ${editReplacementChoice.action.date} would discard your current activity edits.`
+                    : "Closing this editor would discard your current activity edits."}
+              </Text>
+              <View style={styles.actionRow}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: controlsDisabled }}
+                  disabled={controlsDisabled}
+                  onPress={() => resolveEditReplacement(editReplacementChoice, false)}
+                  style={styles.secondarySmall}
+                >
+                  <Text style={styles.secondaryText}>Keep editing</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: controlsDisabled }}
+                  disabled={controlsDisabled}
+                  onPress={() => resolveEditReplacement(editReplacementChoice, true)}
+                  style={styles.deleteSmall}
+                >
+                  <Text style={styles.deleteText}>
+                    {editReplacementChoice.action.kind === "entry"
+                      ? "Discard edits and edit activity"
+                      : editReplacementChoice.action.kind === "date"
+                        ? "Discard edits and change day"
+                        : "Discard edits and close"}
+                  </Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
+        </View>
 
         <View
           accessibilityLabel="Sum of recorded activity duration; overlapping activities are included"

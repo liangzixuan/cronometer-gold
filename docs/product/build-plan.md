@@ -102,7 +102,8 @@ retains earlier boundaries. A successful successor never changes an older result
 
 | Order | Work | Concrete exit |
 | --- | --- | --- |
-| Active source milestone | Native custom-food revision-conflict recovery (ADR 0089) | Retain edits after 412, prevent stale-revision resaves and explicitly reload verified saved values. Guarded recovery, focused review/checks, canonical gates and exact-commit automatic evidence. |
+| Active source milestone | Native activity edit-draft protection (ADR 0090) | Preserve dirty row edits across Cancel, row replacement and day navigation until explicit Keep/Discard. Focused behavioral proof, independent review, canonical gates and exact-commit automatic evidence. |
+| Completed source milestone | Native custom-food revision-conflict recovery (ADR 0089) | Delivered at `956ccf1`: retained edits and explicit verified recovery; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Protected native New custom food (ADR 0088) | Delivered at `be1390e`: guarded blank drafts and exact Keep/Discard; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Native goal revision-conflict draft preservation (ADR 0087) | Delivered at `53a43cc`: exact edits survive 412 with explicit recovery; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Native goal New-draft protection (ADR 0086) | Delivered at `053afe0`: explicit protection of unsaved goal edits; local gates and all three CI/nine actual container jobs passed. |
@@ -118,19 +119,18 @@ retains earlier boundaries. A successful successor never changes an older result
 | Completed external review | Scoped Claude review at `805b937` | The supplied report found no ADR 0077 blockers. Its recommendations were addressed in the delivered follow-up; the report remains limited to its original scope. Routine product work does not require another paid review. |
 | Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Advance only under applicable existing authorization and unchanged release gates. |
 
-### Active bounded milestone: native custom-food revision-conflict recovery
+### Active bounded milestone: native activity edit-draft protection
 
-[ADR 0089](../adr/0089-native-custom-food-revision-conflict.md) completes recovery
-from a custom-food revision conflict. Preserve attempted edits, explain that the
-saved revision changed, and block another save against that known-stale revision.
-An explicit discard/reload reads the affected food and installs only a verified
-matching active newer revision. Failed recovery keeps the draft. No implicit
-read, rebase or save is introduced.
+[ADR 0090](../adr/0090-native-activity-edit-draft-protection.md) protects unsaved
+activity corrections across Cancel, opening another row and selected-day
+navigation. Compare the exact five editable fields, preserve pristine direct
+actions and require explicit Keep/Discard before replacing dirty work. Preserve
+the independent Add form, existing retry identity and private/request guards.
 
-The prior [protected New custom food](../adr/0088-native-custom-food-new-draft.md)
-is delivered at `be1390e`, with local and exact-commit automatic evidence complete.
+The prior [custom-food conflict recovery](../adr/0089-native-custom-food-revision-conflict.md)
+is delivered at `956ccf1`, with local and exact-commit automatic evidence complete.
 No dependency change, installation, audit, browser/service/device action or paid
-review is part of ADR 0089. Prior audit authorization is consumed. Follow the
+review is part of ADR 0090. Prior audit authorization is consumed. Follow the
 [proportionate review policy](../quality/development-workflow.md#proportionate-independent-review).
 Required signed-device and release acceptance remain separate.
 

@@ -1042,3 +1042,420 @@ describe("native Activity Add duration presets", () => {
     expect(writes()[2].headers["idempotency-key"]).toBe(writes()[0].headers["idempotency-key"]);
   });
 });
+
+const editNames = {
+  name: "Edit activity name",
+  duration: "Edit activity duration in whole minutes",
+  energy: "Edit optional self-reported activity calories",
+  date: "Edit activity start date YYYY-MM-DD",
+  time: "Edit activity local start time",
+};
+const editBaseline = {
+  name: source.name,
+  duration: String(source.durationMinutes),
+  energy: source.selfReportedEnergyKilocalories,
+  date: source.localDate,
+  time: source.localTime.slice(0, 5),
+};
+async function fillEdit(harness, fields) {
+  let tree = await harness.settle();
+  for (const [field, value] of Object.entries(fields)) {
+    input(tree, editNames[field]).props.onChangeText(value);
+    tree = await harness.settle();
+  }
+  return tree;
+}
+function expectEdit(tree, fields) {
+  for (const [field, value] of Object.entries(fields)) {
+    expect(input(tree, editNames[field]).props.value, field).toBe(value);
+  }
+}
+function hasButton(tree, label) {
+  return nodes(tree, (node) => node.type === "Pressable" && text(node) === label).length > 0;
+}
+const discardLabels = {
+  cancel: "Discard edits and close",
+  row: "Discard edits and edit activity",
+  day: "Discard edits and change day",
+};
+
+describe("native activity edit-draft protection", () => {
+  for (const [field, raw] of Object.entries({
+    name: "  exact private draft  ",
+    duration: "045",
+    energy: "0.0010",
+    date: "2026-1",
+    time: "06:",
+  })) {
+    it(`protects exact ${field} edits when closing, without requests or operation allocation`, async () => {
+      const { harness, requests } = setup();
+      await fill(harness, { name: "Unrelated Add draft", duration: "29", time: "08:12" });
+      await press(harness, "Edit activity");
+      await fillEdit(harness, { [field]: raw });
+      const count = requests.length;
+      const operation = hooks.operation;
+      let tree = await press(harness, "Cancel");
+      expectEdit(tree, { ...editBaseline, [field]: raw });
+      expect(hasButton(tree, "Keep editing")).toBe(true);
+      expect(hasButton(tree, discardLabels.cancel)).toBe(true);
+      tree = await press(harness, "Keep editing");
+      expectEdit(tree, { ...editBaseline, [field]: raw });
+      expect(input(tree, names.name).props.value).toBe("Unrelated Add draft");
+      expect(input(tree, names.duration).props.value).toBe("29");
+      expect(input(tree, names.time).props.value).toBe("08:12");
+      expect(requests).toHaveLength(count);
+      expect(hooks.operation).toBe(operation);
+      tree = await press(harness, "Cancel");
+      const discard = button(tree, discardLabels.cancel).props.onPress;
+      discard();
+      discard();
+      tree = await harness.settle();
+      expect(
+        nodes(
+          tree,
+          (node) => node.type === "TextInput" && node.props.accessibilityLabel === editNames.name,
+        ),
+      ).toHaveLength(0);
+      expect(requests).toHaveLength(count);
+      expect(hooks.operation).toBe(operation);
+    });
+  }
+
+  it("guards replacement with another row, then installs exactly that saved row once", async () => {
+    const { harness, requests } = setup();
+    await press(harness, "Edit activity");
+    await fillEdit(harness, { name: "Raw edited activity", energy: "" });
+    const count = requests.length;
+    let tree = await press(harness, "Edit activity");
+    expectEdit(tree, { name: "Raw edited activity", energy: "" });
+    tree = await press(harness, "Keep editing");
+    expectEdit(tree, { name: "Raw edited activity", energy: "" });
+    tree = await press(harness, "Edit activity");
+    const discard = button(tree, discardLabels.row).props.onPress;
+    discard();
+    discard();
+    tree = await harness.settle();
+    expectEdit(tree, { name: second.name, duration: "17", energy: "", time: "07:45" });
+    await fillEdit(harness, { name: "Newer row B edits" });
+    discard();
+    tree = await harness.settle();
+    expectEdit(tree, { name: "Newer row B edits" });
+    expect(requests).toHaveLength(count);
+  });
+
+  for (const navigation of ["Previous activity day", "Next activity day", "Jump to today", "typed"])
+    it(`protects edits on ${navigation} and only reads the destination after discard`, async () => {
+      const { harness, requests, writes } = setup();
+      await press(harness, "Edit activity");
+      await fillEdit(harness, { name: "Keep this exact edit" });
+      if (navigation === "Jump to today") vi.setSystemTime(new Date("2026-11-03T18:00:00.000Z"));
+      const target =
+        navigation === "Previous activity day"
+          ? "2026-10-31"
+          : navigation === "Jump to today"
+            ? "2026-11-03"
+            : "2026-11-02";
+      const count = requests.length;
+      const operation = hooks.operation;
+      async function navigate() {
+        if (navigation !== "typed") return press(harness, navigation);
+        const tree = await fill(harness, { date: target });
+        input(tree, names.date).props.onEndEditing({ nativeEvent: { text: target } });
+        return harness.settle();
+      }
+      let tree = await navigate();
+      expectEdit(tree, { name: "Keep this exact edit" });
+      expect(requests).toHaveLength(count);
+      tree = await press(harness, "Keep editing");
+      expect(input(tree, names.date).props.value).toBe(selectedDate);
+      expectEdit(tree, { name: "Keep this exact edit" });
+      tree = await navigate();
+      const discard = button(tree, discardLabels.day).props.onPress;
+      discard();
+      discard();
+      tree = await harness.settle();
+      expect(input(tree, names.date).props.value).toBe(target);
+      expect(requests).toHaveLength(count + 1);
+      expect(requests.at(-1).url.searchParams.get("date")).toBe(target);
+      expect(writes()).toHaveLength(0);
+      expect(hooks.operation).toBe(operation);
+    });
+
+  for (const field of Object.keys(editNames))
+    it(`treats an exact ${field} round trip as pristine`, async () => {
+      const { harness } = setup();
+      await press(harness, "Edit activity");
+      await fillEdit(harness, { [field]: "temporary" });
+      await fillEdit(harness, { [field]: editBaseline[field] });
+      const tree = await press(harness, "Cancel");
+      expect(hasButton(tree, "Keep editing")).toBe(false);
+      expect(hasButton(tree, "Save activity")).toBe(false);
+    });
+
+  it("keeps pristine other-row and day transitions direct, including a blank optional value", async () => {
+    const { harness } = setup();
+    await press(harness, "Edit activity", 1);
+    let tree = await press(harness, "Edit activity");
+    expectEdit(tree, editBaseline);
+    expect(hasButton(tree, "Keep editing")).toBe(false);
+    tree = await press(harness, "Next activity day");
+    expect(input(tree, names.date).props.value).toBe("2026-11-02");
+    expect(hasButton(tree, "Keep editing")).toBe(false);
+  });
+
+  it("does not discard on unchanged or invalid day blur", async () => {
+    const { harness, requests } = setup();
+    await press(harness, "Edit activity");
+    await fillEdit(harness, { name: "Still editing" });
+    const count = requests.length;
+    for (const value of [selectedDate, "invalid"]) {
+      let tree = await fill(harness, { date: value });
+      input(tree, names.date).props.onEndEditing({ nativeEvent: { text: value } });
+      tree = await harness.settle();
+      expectEdit(tree, { name: "Still editing" });
+      expect(input(tree, names.date).props.value).toBe(selectedDate);
+      expect(hasButton(tree, "Keep editing")).toBe(false);
+    }
+    expect(requests).toHaveLength(count);
+  });
+
+  for (const field of Object.keys(editNames))
+    it(`rejects both retained replacement decisions after another ${field} edit before render`, async () => {
+      const { harness } = setup();
+      await press(harness, "Edit activity");
+      await fillEdit(harness, { name: "First edit" });
+      let tree = await press(harness, "Cancel");
+      const keep = button(tree, "Keep editing").props.onPress;
+      const discard = button(tree, discardLabels.cancel).props.onPress;
+      input(tree, editNames[field]).props.onChangeText("new raw value");
+      discard();
+      keep();
+      tree = await harness.settle();
+      expectEdit(tree, { [field]: "new raw value" });
+      expect(hasButton(tree, "Keep editing")).toBe(false);
+    });
+
+  it("rejects row/date/cancel actions retained before an edit and before a replacement choice", async () => {
+    const { harness, requests } = setup();
+    let tree = await press(harness, "Edit activity");
+    const row = button(tree, "Edit activity").props.onPress;
+    const day = button(tree, "Next activity day").props.onPress;
+    const cancel = button(tree, "Cancel").props.onPress;
+    input(tree, editNames.name).props.onChangeText("Newer edit");
+    row();
+    day();
+    cancel();
+    tree = await harness.settle();
+    expectEdit(tree, { name: "Newer edit" });
+    expect(hasButton(tree, "Keep editing")).toBe(false);
+    const count = requests.length;
+    const staleRow = button(tree, "Edit activity").props.onPress;
+    button(tree, "Cancel").props.onPress();
+    staleRow();
+    tree = await harness.settle();
+    expect(hasButton(tree, discardLabels.cancel)).toBe(true);
+    expect(hasButton(tree, discardLabels.row)).toBe(false);
+    expect(requests).toHaveLength(count);
+  });
+
+  for (const boundary of [
+    "add edit",
+    "typed date",
+    "background",
+    "scope",
+    "requested day",
+    "unmount",
+  ])
+    it(`invalidates replacement choices at ${boundary}`, async () => {
+      const { harness, requests } = setup();
+      await press(harness, "Edit activity");
+      await fillEdit(harness, { name: "Protected private edits" });
+      let tree = await press(harness, "Next activity day");
+      const discard = button(tree, discardLabels.day).props.onPress;
+      const keep = button(tree, "Keep editing").props.onPress;
+      const count = requests.length;
+      if (boundary === "add edit")
+        input(tree, names.name).props.onChangeText("Independent Add draft");
+      if (boundary === "typed date") input(tree, names.date).props.onChangeText("2026-11-05");
+      if (boundary === "background") appState("background");
+      if (boundary === "scope") {
+        harness.updateProps({ accessToken: "new-token" });
+        harness.renderWithoutEffects();
+      }
+      if (boundary === "requested day") {
+        harness.updateProps({ requestedDate: "2026-11-05" });
+        harness.renderWithoutEffects();
+      }
+      if (boundary === "unmount") harness.unmount();
+      discard();
+      keep();
+      expect(requests).toHaveLength(count);
+      if (boundary === "unmount") {
+        expect(harness.writesAfterUnmount).toBe(0);
+        return;
+      }
+      if (boundary === "scope" || boundary === "requested day") harness.flushEffects();
+      if (boundary === "background") appState("active");
+      tree = await harness.settle();
+      expect(hasButton(tree, "Keep editing")).toBe(false);
+      if (["add edit", "typed date", "background"].includes(boundary))
+        expectEdit(tree, { name: "Protected private edits" });
+    });
+
+  it("retains exact ambiguous PATCH retries and does not let old discard callbacks close a reloaded draft", async () => {
+    const { harness, writes } = setup((request) =>
+      request.method === "PATCH" ? response({}, 503) : undefined,
+    );
+    await press(harness, "Edit activity");
+    await fillEdit(harness, { name: "Exact retry name", duration: "46" });
+    let tree = await press(harness, "Cancel");
+    const discard = button(tree, discardLabels.cancel).props.onPress;
+    await press(harness, "Keep editing");
+    await press(harness, "Save activity");
+    discard();
+    tree = await press(harness, "Retry day view");
+    expectEdit(tree, { name: "Exact retry name", duration: "46" });
+    discard();
+    await press(harness, "Save activity");
+    expect(writes()).toHaveLength(2);
+    expect(writes()[1].body).toBe(writes()[0].body);
+    expect(writes()[1].headers["idempotency-key"]).toBe(writes()[0].headers["idempotency-key"]);
+    expect(writes()[1].headers["if-match"]).toBe('"2"');
+  });
+
+  it("fences retained Save after a synchronous raw edit without submitting the older body", async () => {
+    const { harness, writes } = setup();
+    let tree = await press(harness, "Edit activity");
+    const save = button(tree, "Save activity").props.onPress;
+    input(tree, editNames.name).props.onChangeText("Newer unsaved name");
+    save();
+    tree = await harness.settle();
+    expectEdit(tree, { name: "Newer unsaved name" });
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("rejects pending-write replacement controls and clears the editor only after verified acceptance", async () => {
+    const pending = deferred();
+    const { harness, writes, requests } = setup((request) =>
+      request.method === "PATCH" ? pending.promise : undefined,
+    );
+    await press(harness, "Edit activity");
+    await fillEdit(harness, { name: "Accepted activity name" });
+    let tree = await press(harness, "Cancel");
+    const discard = button(tree, discardLabels.cancel).props.onPress;
+    const keep = button(tree, "Keep editing").props.onPress;
+    const row = button(tree, "Edit activity").props.onPress;
+    const day = button(tree, "Next activity day").props.onPress;
+    button(tree, "Save activity").props.onPress();
+    discard();
+    keep();
+    row();
+    day();
+    tree = await harness.settle();
+    expectEdit(tree, { name: "Accepted activity name" });
+    expect(button(tree, "Save activity").props.disabled).toBe(true);
+    expect(button(tree, "Next activity day").props.disabled).toBe(true);
+    expect(hasButton(tree, "Keep editing")).toBe(false);
+    expect(writes()).toHaveLength(1);
+    expect(requests.filter((request) => request.method === "GET")).toHaveLength(1);
+    pending.resolve(
+      response({
+        data: {
+          replayed: false,
+          entry: { ...source, name: "Accepted activity name", revision: "3" },
+          affectedDays: [{ localDate: selectedDate, revision: "4" }],
+        },
+      }),
+    );
+    tree = await harness.settle();
+    expect(hasButton(tree, "Save activity")).toBe(false);
+    expect(input(tree, names.date).props.value).toBe(selectedDate);
+    expect(writes()).toHaveLength(1);
+    expect(requests.filter((request) => request.method === "GET")).toHaveLength(2);
+  });
+
+  it("keeps edits through failed reload and a newer same-ID day snapshot without rebasing the revision", async () => {
+    let gets = 0;
+    const { harness, writes } = setup((request) => {
+      if (request.method === "PATCH") return response({}, 503);
+      gets += 1;
+      if (gets === 2) return response({}, 503);
+      if (gets >= 3)
+        return response(
+          dayBody(selectedDate, [
+            { ...source, revision: "9", name: "Newer saved name", durationMinutes: 120 },
+            second,
+          ]),
+        );
+      return undefined;
+    });
+    await press(harness, "Edit activity");
+    await fillEdit(harness, { name: "My raw edit", duration: "46" });
+    let tree = await press(harness, "Cancel");
+    const discard = button(tree, discardLabels.cancel).props.onPress;
+    appState("background");
+    appState("active");
+    tree = await harness.settle();
+    expect(text(tree)).toContain("Activity history could not be loaded");
+    discard();
+    tree = await press(harness, "Retry day view");
+    expectEdit(tree, { ...editBaseline, name: "My raw edit", duration: "46" });
+    expect(hasButton(tree, "Keep editing")).toBe(false);
+    await press(harness, "Save activity");
+    expect(writes()).toHaveLength(1);
+    expect(writes()[0].headers["if-match"]).toBe('"2"');
+    expect(JSON.parse(writes()[0].body)).toEqual({ name: "My raw edit", durationMinutes: 46 });
+  });
+
+  for (const boundary of ["owner", "token", "api", "zone", "route"])
+    it(`hides private replacement content during a pre-effect ${boundary} scope render`, async () => {
+      const { harness } = setup();
+      await press(harness, "Edit activity");
+      await fillEdit(harness, { name: "Private raw edit" });
+      const tree = await press(harness, "Edit activity");
+      expect(text(tree)).toContain(`Editing ${second.name} would discard`);
+      const keep = button(tree, "Keep editing").props.onPress;
+      const discard = button(tree, discardLabels.row).props.onPress;
+      harness.updateProps(
+        boundary === "owner"
+          ? { expectedOwnerUserId: "5afda2f8-e150-40ed-88f1-a327cd5e2430" }
+          : boundary === "token"
+            ? { accessToken: "new-token" }
+            : boundary === "api"
+              ? { apiBase: new URL("http://127.0.0.1:4999") }
+              : boundary === "zone"
+                ? { profileTimeZone: "America/New_York" }
+                : { requestedDate: "2026-11-05" },
+      );
+      const changed = harness.renderWithoutEffects();
+      expect(text(changed)).not.toContain(second.name);
+      expect(hasButton(changed, "Keep editing")).toBe(false);
+      keep();
+      discard();
+      harness.flushEffects();
+      expect(hasButton(await harness.settle(), "Keep editing")).toBe(false);
+    });
+
+  it("scrolls to the measured replacement choice and announces it without changing the draft", async () => {
+    const { harness, requests } = setup();
+    let tree = await harness.settle();
+    const scrollTo = vi.fn();
+    nodes(tree, (node) => node.type === "ScrollView")[0].props.ref.current = { scrollTo };
+    const anchor = nodes(
+      tree,
+      (node) => node.props.accessibilityLabel === "Activity edit replacement choice",
+    );
+    expect(anchor).toHaveLength(1);
+    anchor[0].props.onLayout({ nativeEvent: { layout: { y: 310 } } });
+    await press(harness, "Edit activity");
+    await fillEdit(harness, { name: "Keep my draft" });
+    const count = requests.length;
+    tree = await press(harness, "Cancel");
+    expectEdit(tree, { name: "Keep my draft" });
+    expect(scrollTo).toHaveBeenLastCalledWith({ y: 310, animated: true });
+    expect(AccessibilityInfo.announceForAccessibility).toHaveBeenLastCalledWith(
+      "Your activity has unsaved edits. Keep editing or explicitly discard edits to continue.",
+    );
+    expect(requests).toHaveLength(count);
+  });
+});
