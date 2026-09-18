@@ -93,7 +93,8 @@ ADR with a new ADR instead of rewriting its decision.
 | [0085](./0085-native-biometric-reading-date-shortcuts.md) | Choose Today or Yesterday for native biometric readings | Implemented at ab2c6de; local and exact-commit automatic evidence passed; device/release acceptance separate |
 | [0086](./0086-native-goal-new-draft-protection.md) | Protect native goal edits before starting a blank draft | Implemented at 053afe0; local and exact-commit automatic evidence passed; device/release acceptance separate |
 | [0087](./0087-native-goal-revision-conflict-draft.md) | Preserve native goal edits after a revision conflict | Implemented at 53a43cc; local and exact-commit automatic evidence passed; device/release acceptance separate |
-| [0088](./0088-native-custom-food-new-draft.md) | Start a new native custom food with draft protection | Source complete and reviewed; final canonical/automatic evidence pending; device/release acceptance separate |
+| [0088](./0088-native-custom-food-new-draft.md) | Start a new native custom food with draft protection | Implemented at be1390e; local and exact-commit automatic evidence passed; device/release acceptance separate |
+| [0089](./0089-native-custom-food-revision-conflict.md) | Explicit recovery from native custom-food revision conflicts | Source complete and reviewed; final canonical/automatic evidence pending; device/release acceptance separate |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

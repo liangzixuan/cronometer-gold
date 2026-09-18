@@ -9554,3 +9554,482 @@ describe("native protected New custom food", () => {
     expect(harness.writesAfterUnmount).toBe(0);
   });
 });
+
+const customRecoveryLabel = "Discard edits and reload saved food";
+const laterCustomFood = {
+  ...sourceFood,
+  revision: "2",
+  currentVersion: {
+    ...sourceFood.currentVersion,
+    id: "999",
+    versionNumber: 2,
+    name: "Current saved food",
+    notes: "Current saved notes",
+  },
+};
+function customConflictSetup(handler = () => undefined) {
+  return setup((request, requests) => {
+    const result = handler(request, requests);
+    if (result !== undefined) return result;
+    if (request.method === "POST" && request.url.pathname.endsWith("/revisions"))
+      return response({ title: "Revision conflict" }, 412);
+    if (request.method === "GET" && request.url.pathname === `/v1/custom-foods/${foodId}`)
+      return response({ data: { customFood: laterCustomFood } });
+    return undefined;
+  });
+}
+function customRecoveryReads(requests) {
+  return requests.filter(
+    (request) => request.method === "GET" && request.url.pathname === `/v1/custom-foods/${foodId}`,
+  );
+}
+async function conflictCustomRevision(harness) {
+  await click(harness, "Revise");
+  await type(harness, "Notes", "  Preserve raw notes\r\n second line  ");
+  return click(harness, "Save new version");
+}
+function customRecoveryButtons(tree) {
+  return nodes(tree, (node) => node.type === "Pressable" && text(node) === customRecoveryLabel);
+}
+
+describe("native custom-food revision conflict recovery", () => {
+  it("retains raw fields/composer on412, performs no implicit read and blocks retained or edited stale-revision saves", async () => {
+    const held = deferred();
+    const { harness, requests } = customConflictSetup((request) =>
+      request.method === "POST" ? held.promise : undefined,
+    );
+    try {
+      await click(harness, "Revise");
+      await type(harness, "Notes", "  Original raw\r\n notes  ");
+      await click(harness, "Protein (g)");
+      await type(harness, "Protein amount (g per 100 g)", "0.00000000000000100");
+      await click(harness, "Add nutrient row to draft");
+      let tree = await type(harness, "Find an available nutrient by name", "  protein  ");
+      const before = editorSnapshot(tree);
+      const save = button(tree, "Save new version").props.onPress;
+      save();
+      held.resolve({
+        status: 412,
+        ok: false,
+        json: async () => {
+          throw new SyntaxError("Invalid JSON");
+        },
+      });
+      tree = await harness.settle();
+      expect(editorSnapshot(tree).inputs).toEqual(before.inputs);
+      expect(editorSnapshot(tree).choices).toEqual(before.choices);
+      expect(text(tree)).toContain("The saved food changed elsewhere. Your edits are still here.");
+      expect(text(tree)).not.toContain("Submit again for an exact retry");
+      expect(button(tree, "Save new version").props.accessibilityState.disabled).toBe(true);
+      const operation = hooks.operation;
+      save();
+      tree = await type(harness, "Name", "More local edits");
+      button(tree, "Save new version").props.onPress();
+      await harness.settle();
+      expect(writes(requests)).toHaveLength(1);
+      expect(customRecoveryReads(requests)).toHaveLength(0);
+      expect(hooks.operation).toBe(operation);
+      expect(customRecoveryButtons(tree)).toHaveLength(1);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("explicitly reads one current food without an operation ID, then enables a save at its exact newer revision", async () => {
+    const held = deferred();
+    let revisionSaves = 0;
+    const { harness, requests } = customConflictSetup((request) => {
+      if (request.method === "GET" && request.url.pathname === `/v1/custom-foods/${foodId}`)
+        return held.promise;
+      if (
+        request.method === "POST" &&
+        request.url.pathname.endsWith("/revisions") &&
+        ++revisionSaves > 1
+      )
+        return receipt(request, { revision: "3" });
+      return undefined;
+    });
+    try {
+      let tree = await conflictCustomRevision(harness);
+      const count = requests.length;
+      const operation = hooks.operation;
+      const recover = button(tree, customRecoveryLabel).props.onPress;
+      recover();
+      recover();
+      tree = await harness.settle();
+      expect(customRecoveryReads(requests)).toHaveLength(1);
+      expect(requests).toHaveLength(count + 1);
+      expect(hooks.operation).toBe(operation);
+      const read = customRecoveryReads(requests)[0];
+      expect(read.headers["idempotency-key"]).toBeUndefined();
+      expect(read.body).toBeUndefined();
+      expect(button(tree, customRecoveryLabel).props.accessibilityState.disabled).toBe(true);
+      expect(button(tree, newCustomLabel).props.disabled).toBe(true);
+      expect(button(tree, "Save new version").props.disabled).toBe(true);
+      const disabledRecover = button(tree, customRecoveryLabel).props.onPress;
+      held.resolve(response({ data: { customFood: laterCustomFood } }));
+      tree = await harness.settle();
+      expect(customRecoveryButtons(tree)).toHaveLength(0);
+      expect(input(tree, "Name").props.value).toBe(laterCustomFood.currentVersion.name);
+      expect(input(tree, "Notes").props.value).toBe(laterCustomFood.currentVersion.notes);
+      expect(input(tree, "Find an available nutrient by name").props.value).toBe("");
+      expect(button(tree, "Save new version").props.disabled).toBe(false);
+      disabledRecover();
+      recover();
+      await harness.settle();
+      expect(customRecoveryReads(requests)).toHaveLength(1);
+      await type(harness, "Notes", "Reviewed current version");
+      await click(harness, "Save new version");
+      const saved = writes(requests)[1];
+      expect(saved.headers["if-match"]).toBe('"2"');
+      expect(saved.headers["idempotency-key"]).not.toBe(
+        writes(requests)[0].headers["idempotency-key"],
+      );
+      expect(JSON.parse(saved.body).name).toBe(laterCustomFood.currentVersion.name);
+      tree = await harness.settle();
+      expect(input(tree, "Name").props.value).toBe("");
+      expect(customRecoveryButtons(tree)).toHaveLength(0);
+      expect(text(tree)).toContain("Saved owner-entered private food version");
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  for (const outcome of [
+    "503",
+    "malformed",
+    "wrong ID",
+    "same revision",
+    "older revision",
+    "archived",
+  ])
+    it(`retains exact work and recovery after a ${outcome} response, including repeated failure`, async () => {
+      const invalid =
+        outcome === "503"
+          ? response({}, 503)
+          : outcome === "malformed"
+            ? response({ data: { customFood: {} } })
+            : response({
+                data: {
+                  customFood: {
+                    ...laterCustomFood,
+                    ...(outcome === "wrong ID"
+                      ? { id: archivedFood.id }
+                      : outcome === "archived"
+                        ? { status: "archived" }
+                        : { revision: outcome === "same revision" ? "2" : "1" }),
+                  },
+                },
+              });
+      const { harness, requests } = customConflictSetup((request) => {
+        if (request.method === "GET" && request.url.pathname === "/v1/custom-foods")
+          return response({ data: [laterCustomFood], page: { nextCursor: null } });
+        if (request.method === "GET" && request.url.pathname === `/v1/custom-foods/${foodId}`)
+          return invalid;
+        return undefined;
+      });
+      try {
+        let tree = await conflictCustomRevision(harness);
+        await type(harness, "Find an available nutrient by name", "unfinished query");
+        tree = await type(harness, "Exact amount per 100 g", "0.00100");
+        const before = editorSnapshot(tree);
+        const operation = hooks.operation;
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          tree = await click(harness, customRecoveryLabel);
+          expect(editorSnapshot(tree).inputs).toEqual(before.inputs);
+          expect(editorSnapshot(tree).choices).toEqual(before.choices);
+          expect(button(tree, customRecoveryLabel).props.disabled).toBe(false);
+          expect(button(tree, "Save new version").props.disabled).toBe(true);
+        }
+        expect(customRecoveryReads(requests)).toHaveLength(2);
+        expect(writes(requests)).toHaveLength(1);
+        expect(hooks.operation).toBe(operation);
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  it("keeps conflict through Refresh and retires prior recovery actions after an edit/restore or refresh", async () => {
+    const { harness, requests } = customConflictSetup();
+    try {
+      let tree = await conflictCustomRevision(harness);
+      const old = button(tree, customRecoveryLabel).props.onPress;
+      await type(harness, "Name", "temporary");
+      await type(harness, "Name", sourceFood.currentVersion.name);
+      old();
+      tree = await harness.settle();
+      const beforeRefresh = button(tree, customRecoveryLabel).props.onPress;
+      await click(harness, "Refresh private data");
+      beforeRefresh();
+      tree = await harness.settle();
+      expect(customRecoveryReads(requests)).toHaveLength(0);
+      expect(customRecoveryButtons(tree)).toHaveLength(1);
+      expect(button(tree, "Save new version").props.disabled).toBe(true);
+      expect(input(tree, "Notes").props.value).toContain("Preserve raw notes");
+      await click(harness, customRecoveryLabel);
+      expect(customRecoveryReads(requests)).toHaveLength(1);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  for (const action of ["New", "Copy", "Revise"])
+    it(`keeps conflict on Keep editing and clears it only after accepted ${action} replacement`, async () => {
+      const { harness, requests } = customConflictSetup();
+      try {
+        let tree = await conflictCustomRevision(harness);
+        const oldRecovery = button(tree, customRecoveryLabel).props.onPress;
+        const replace = () =>
+          action === "New"
+            ? click(harness, newCustomLabel)
+            : action === "Copy"
+              ? copyCustom(harness)
+              : click(harness, "Revise");
+        await replace();
+        tree = await click(harness, "Keep editing");
+        expect(customRecoveryButtons(tree)).toHaveLength(1);
+        expect(button(tree, "Save new version").props.disabled).toBe(true);
+        await replace();
+        tree = await click(
+          harness,
+          action === "New"
+            ? discardNewCustom
+            : action === "Copy"
+              ? discardCustomCopy
+              : discardCustomRevise,
+        );
+        oldRecovery();
+        tree = await harness.settle();
+        expect(customRecoveryButtons(tree)).toHaveLength(0);
+        expect(customRecoveryReads(requests)).toHaveLength(0);
+        expect(
+          button(tree, action === "Revise" ? "Save new version" : "Create private food").props
+            .disabled,
+        ).toBe(false);
+      } finally {
+        harness.unmount();
+      }
+    });
+
+  for (const boundary of ["owner", "session", "API", "zone", "background", "unmount"])
+    it(`rejects a pending recovery result and retained callback after ${boundary}`, async () => {
+      const held = deferred();
+      const { harness, requests } = customConflictSetup((request) =>
+        request.method === "GET" && request.url.pathname === `/v1/custom-foods/${foodId}`
+          ? held.promise
+          : undefined,
+      );
+      let unmounted = false;
+      try {
+        let tree = await conflictCustomRevision(harness);
+        const old = button(tree, customRecoveryLabel).props.onPress;
+        await click(harness, customRecoveryLabel);
+        if (boundary === "unmount") {
+          harness.unmount();
+          unmounted = true;
+        } else if (boundary === "background") {
+          state("background");
+          await harness.settle();
+          state("active");
+          await harness.settle();
+        } else {
+          harness.updateProps(
+            boundary === "owner"
+              ? { ownerUserId: otherOwner }
+              : boundary === "session"
+                ? { sessionEpoch: 2 }
+                : boundary === "API"
+                  ? { apiBase: new URL("http://127.0.0.1:4001") }
+                  : { profileTimeZone: "UTC" },
+          );
+          harness.renderWithoutEffects();
+          old();
+          harness.flushEffects();
+          await harness.settle();
+        }
+        held.resolve(response({ data: { customFood: laterCustomFood } }));
+        if (!unmounted) {
+          tree = await harness.settle();
+          expect(input(tree, "Name").props.value).not.toBe(laterCustomFood.currentVersion.name);
+          await type(harness, "Name", "Newer local work");
+          old();
+          tree = await harness.settle();
+          expect(input(tree, "Name").props.value).toBe("Newer local work");
+        } else {
+          await Promise.resolve();
+          await Promise.resolve();
+          old();
+          expect(harness.writesAfterUnmount).toBe(0);
+        }
+        expect(customRecoveryReads(requests)).toHaveLength(1);
+      } finally {
+        if (!unmounted) harness.unmount();
+      }
+    });
+
+  it("does not attach a delayed412 to a replacement profile context", async () => {
+    const held = deferred();
+    const { harness } = customConflictSetup((request) =>
+      request.method === "POST" ? held.promise : undefined,
+    );
+    try {
+      await click(harness, "Revise");
+      await click(harness, "Save new version");
+      harness.updateProps({ profileTimeZone: "UTC" });
+      harness.renderWithoutEffects();
+      harness.flushEffects();
+      held.resolve(response({}, 412));
+      const tree = await harness.settle();
+      expect(customRecoveryButtons(tree)).toHaveLength(0);
+      expect(text(tree)).not.toContain("The saved food changed elsewhere");
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("ignores recovery overtaken by Refresh while preserving a fresh recovery and the draft", async () => {
+    const held = deferred();
+    const { harness, requests } = customConflictSetup((request) =>
+      request.method === "GET" && request.url.pathname === `/v1/custom-foods/${foodId}`
+        ? held.promise
+        : undefined,
+    );
+    try {
+      await conflictCustomRevision(harness);
+      await click(harness, customRecoveryLabel);
+      await click(harness, "Refresh private data");
+      held.resolve(response({ data: { customFood: laterCustomFood } }));
+      const tree = await harness.settle();
+      expect(input(tree, "Name").props.value).toBe(sourceFood.currentVersion.name);
+      expect(customRecoveryButtons(tree)).toHaveLength(1);
+      expect(button(tree, customRecoveryLabel).props.disabled).toBe(false);
+      expect(button(tree, "Save new version").props.disabled).toBe(true);
+      expect(customRecoveryReads(requests)).toHaveLength(1);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("keeps non412 exact retry behavior and does not offer revision recovery for a create412", async () => {
+    let status = 503;
+    const { harness, requests } = setup((request) =>
+      request.method === "POST" ? response({}, status) : undefined,
+    );
+    try {
+      await click(harness, "Revise");
+      await click(harness, "Save new version");
+      let tree = await click(harness, "Save new version");
+      expect(writes(requests)[1].body).toBe(writes(requests)[0].body);
+      expect(writes(requests)[1].headers).toEqual(writes(requests)[0].headers);
+      expect(customRecoveryButtons(tree)).toHaveLength(0);
+      await click(harness, newCustomLabel);
+      await fillManual(harness);
+      status = 412;
+      tree = await click(harness, "Create private food");
+      expect(customRecoveryButtons(tree)).toHaveLength(0);
+      expect(button(tree, "Create private food").props.disabled).toBe(false);
+    } finally {
+      harness.unmount();
+    }
+  });
+});
+
+describe("native custom-food conflict recovery boundaries", () => {
+  it("rejects a detail response behind a newer loaded row without regressing the list or draft", async () => {
+    const newest = {
+      ...laterCustomFood,
+      revision: "3",
+      currentVersion: {
+        ...laterCustomFood.currentVersion,
+        id: "1000",
+        versionNumber: 3,
+        name: "Newest saved food",
+      },
+    };
+    let refreshed = false;
+    const { harness, requests } = customConflictSetup((request) =>
+      refreshed && request.method === "GET" && request.url.pathname === "/v1/custom-foods"
+        ? response({ data: [newest], page: { nextCursor: null } })
+        : undefined,
+    );
+    try {
+      await conflictCustomRevision(harness);
+      refreshed = true;
+      await click(harness, "Refresh private data");
+      const tree = await click(harness, customRecoveryLabel);
+      expect(input(tree, "Name").props.value).toBe(sourceFood.currentVersion.name);
+      expect(text(nodes(tree, (node) => node.type === "View" && node.key === foodId))).toContain(
+        "Newest saved food",
+      );
+      expect(customRecoveryButtons(tree)).toHaveLength(1);
+      expect(customRecoveryReads(requests)).toHaveLength(1);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("updates only its loaded saved row and preserves other disclosures, filters, logs and private inputs", async () => {
+    const { harness, requests } = customConflictSetup((request) =>
+      request.method === "GET" && request.url.pathname === "/v1/custom-foods"
+        ? response({ data: [sourceFood, archivedFood], page: { nextCursor: null } })
+        : undefined,
+    );
+    try {
+      let tree = await harness.settle();
+      reviseCustomButton(tree).props.onPress();
+      await harness.settle();
+      await type(harness, "Notes", "Local changes");
+      await click(harness, "Save new version");
+      await toggleSaved(harness);
+      await toggleSaved(harness, archivedFood);
+      tree = await harness.settle();
+      const sourceCard = nodes(tree, (node) => node.type === "View" && node.key === sourceFood.id);
+      expect(sourceCard).toHaveLength(1);
+      button(sourceCard[0], "Log exact version").props.onPress();
+      await harness.settle();
+      await type(harness, "Quantity", "1.000001");
+      await type(harness, "Definition notes", "Unrelated metric work");
+      await type(harness, savedFoodFilterLabel, "private");
+      tree = await harness.settle();
+      const log = text(logEditor(tree));
+      const count = requests.length;
+      tree = await click(harness, customRecoveryLabel);
+      expect(input(tree, "Name").props.value).toBe(laterCustomFood.currentVersion.name);
+      expect(input(tree, savedFoodFilterLabel).props.value).toBe("private");
+      expect(input(tree, "Definition notes").props.value).toBe("Unrelated metric work");
+      expect(text(logEditor(tree))).toBe(log);
+      expect(savedDetails(tree)).toHaveLength(0);
+      expect(savedDetails(tree, archivedFood)).toHaveLength(1);
+      expect(text(savedDetails(tree, archivedFood))).toContain(archivedFood.currentVersion.name);
+      expect(requests).toHaveLength(count + 1);
+      tree = await click(harness, clearSavedFoodFilterLabel);
+      expect(savedFoodCards(tree)).toHaveLength(2);
+      expect(text(nodes(tree, (node) => node.type === "View" && node.key === foodId))).toContain(
+        laterCustomFood.currentVersion.name,
+      );
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("closes private recovery on401 and rejects its retained callback afterward", async () => {
+    const { harness, requests, props } = customConflictSetup((request) =>
+      request.method === "GET" && request.url.pathname === `/v1/custom-foods/${foodId}`
+        ? response({}, 401)
+        : undefined,
+    );
+    try {
+      let tree = await conflictCustomRevision(harness);
+      const recover = button(tree, customRecoveryLabel).props.onPress;
+      tree = await click(harness, customRecoveryLabel);
+      recover();
+      tree = await harness.settle();
+      expect(customRecoveryButtons(tree)).toHaveLength(0);
+      expect(input(tree, "Name").props.value).toBe("");
+      expect(props.onUnauthorized).toHaveBeenCalledTimes(1);
+      expect(customRecoveryReads(requests)).toHaveLength(1);
+    } finally {
+      harness.unmount();
+    }
+  });
+});

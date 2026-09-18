@@ -1,6 +1,6 @@
 # ADR 0088: Start a new native custom food without losing draft work
 
-Status: Source complete and reviewed; final canonical and exact-commit automatic evidence pending.
+Status: Implemented at `be1390e`; local and exact-commit automatic evidence passed. Device and release acceptance remain separate.
 
 ## Context
 
@@ -70,5 +70,11 @@ current controls repaint even when the validation message stays identical.
 Final focused validation passed 551 cases (432 screen, 100 nutrient helpers and
 19 response helpers), no skips; native types and scoped Biome check passed.
 Original failures, corrected test-fixture failures and source-review resolution
-remain in outside-Git evidence. Final canonical and exact-commit automatic
-outcomes remain pending there; no install, local audit or device action was run.
+remain in outside-Git evidence. Canonical pnpm check passed with 1,927 fresh
+passes, 2,327 cached passes and 93 cached opt-in skips; pnpm build passed with
+fresh Android/iOS exports. All three [CI jobs](https://github.com/liangzixuan/cronometer-gold/actions/runs/35381644649)
+and nine actual [container jobs](https://github.com/liangzixuan/cronometer-gold/actions/runs/35381644375)
+passed on attempt one at `be1390e9b18322a6a1b9280dee948d7834b1ea9f`.
+September 18 20:24 UTC official evidence records complete results; clean equal
+local/tracking/live heads and all seven reviewed file hashes were reverified
+at 20:25 UTC. No installation, local audit or device action was run.

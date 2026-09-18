@@ -135,6 +135,12 @@ interface CustomDraft {
   readonly nutrients: string;
 }
 
+interface CustomRevisionConflict {
+  readonly scope: object;
+  readonly foodId: string;
+  readonly revision: string;
+}
+
 interface NutrientComposer {
   readonly editing: {
     readonly nutrientId: string;
@@ -486,6 +492,13 @@ export function RetentionScreen({
   const customRef = useRef(custom);
   const customBaseline = useRef<CustomDraft>(blankCustom());
   const customCreationIntent = useRef(0);
+  const [customRevisionConflict, setCustomRevisionConflict] =
+    useState<CustomRevisionConflict | null>(null);
+  const customRevisionConflictRef = useRef(customRevisionConflict);
+  const clearCustomRevisionConflict = useCallback(() => {
+    customRevisionConflictRef.current = null;
+    setCustomRevisionConflict(null);
+  }, []);
   const [draftNutrientFilter, setDraftNutrientFilter] = useState({ value: "" });
   const draftNutrientFilterRef = useRef(draftNutrientFilter);
   const [customCopyChoice, setCustomCopyChoice] = useState<CustomCopyChoice | null>(null);
@@ -547,8 +560,9 @@ export function RetentionScreen({
       installedFoodFilterScope.current = foodFilterScope;
       resetSavedFoodFilter();
       clearCustomCopyChoice();
+      clearCustomRevisionConflict();
     }
-  }, [clearCustomCopyChoice, foodFilterScope, resetSavedFoodFilter]);
+  }, [clearCustomCopyChoice, clearCustomRevisionConflict, foodFilterScope, resetSavedFoodFilter]);
   const customInstalled = useRef<typeof customScope | null>(null);
   const customClosed = useRef<typeof customScope | null>(null);
   const customMounted = useRef(false);
@@ -572,6 +586,7 @@ export function RetentionScreen({
       customRef.current = value;
       setCustomState(value);
       if (resetComposer) {
+        clearCustomRevisionConflict();
         const nextFilter = { value: "" };
         draftNutrientFilterRef.current = nextFilter;
         setDraftNutrientFilter(nextFilter);
@@ -584,7 +599,7 @@ export function RetentionScreen({
         setComposerStatus("");
       }
     },
-    [clearCustomCopyChoice],
+    [clearCustomCopyChoice, clearCustomRevisionConflict],
   );
   const currentCustomScope = useCallback(
     (epoch: number) =>
@@ -1678,8 +1693,92 @@ export function RetentionScreen({
     setCustomCopyChoice(choice);
   }
 
+  function currentCustomRevisionConflict(): CustomRevisionConflict | null {
+    const conflict = customRevisionConflictRef.current;
+    return conflict &&
+      currentCustomScope(renderedCustomEpoch) &&
+      conflict.scope === foodFilterScopeRef.current &&
+      conflict.scope === foodFilterScope &&
+      installedFoodFilterScope.current === foodFilterScope &&
+      conflict.foodId === customRef.current.id &&
+      conflict.revision === customRef.current.revision
+      ? conflict
+      : null;
+  }
+  async function reloadConflictedCustomFood(conflict: CustomRevisionConflict) {
+    if (
+      customRecoveryDisabled ||
+      !canEditCustom() ||
+      currentCustomRevisionConflict() !== conflict ||
+      customChoiceGeneration.current !== renderedCustomChoiceGeneration ||
+      customCopyChoiceRef.current !== customCopyChoice
+    )
+      return;
+    clearCustomCopyChoice();
+    const generation = customChoiceGeneration.current;
+    const controller = new AbortController();
+    customWrite.current = controller;
+    const current = () =>
+      currentCustomRevisionConflict() === conflict &&
+      customRef.current === custom &&
+      composerRef.current === composer &&
+      customChoiceGeneration.current === generation &&
+      customWrite.current === controller &&
+      !controller.signal.aborted;
+    setBusy("custom");
+    try {
+      const response = await fetch(
+        apiUrl(apiBase, `/v1/custom-foods/${conflict.foodId}`).toString(),
+        {
+          headers: authenticatedHeaders(accessToken),
+          signal: controller.signal,
+        },
+      );
+      if (!current()) return;
+      if (response.status === 401) {
+        closeCustom();
+        await unauthorizedRef.current();
+        return;
+      }
+      const value = await jsonBody(response);
+      if (!current()) return;
+      if (!response.ok)
+        throw new Error(responseError(value, "The saved food could not be loaded."));
+      const saved = parseCustomFoodResponse(value);
+      if (
+        saved.id !== conflict.foodId ||
+        saved.status !== "active" ||
+        BigInt(saved.revision) <= BigInt(conflict.revision)
+      )
+        throw new Error("A matching active newer food revision was not returned.");
+      const loaded =
+        customFoodsScope.current === customScope
+          ? foodsRef.current.find((food) => food.id === saved.id)
+          : undefined;
+      if (
+        loaded &&
+        (BigInt(loaded.revision) > BigInt(saved.revision) ||
+          (BigInt(loaded.revision) === BigInt(saved.revision) && loaded.status !== "active"))
+      )
+        throw new Error("The returned food is older than the saved information already loaded.");
+      if (loaded) setFoods((foods) => foods.map((food) => (food.id === saved.id ? saved : food)));
+      installCustom(customDraft(saved), true);
+      setMessage("Loaded the newer saved food. Review it before saving another version.");
+    } catch (error) {
+      if (current())
+        setMessage(
+          `${error instanceof Error ? error.message : "The saved food could not be loaded."} Your edits are still here. Try Discard edits and reload saved food again.`,
+        );
+    } finally {
+      if (customWrite.current === controller) {
+        customWrite.current = null;
+        if (currentCustomScope(renderedCustomEpoch) && busyRef.current === "custom") setBusy(null);
+      }
+    }
+  }
+
   async function saveCustomFood() {
-    if (!canEditCustom()) return;
+    if (!canEditCustom() || currentCustomRevisionConflict()) return;
     if (composer.editing) {
       setComposerStatus(
         "Apply the current nutrient edit or choose Clear nutrient entry before saving.",
@@ -1750,7 +1849,25 @@ export function RetentionScreen({
       }
       const value = await jsonBody(response);
       if (!current()) return;
-      if (response.status === 412) customOperations.current.delete(key);
+      if (response.status === 412) {
+        customOperations.current.delete(key);
+        if (custom.id && custom.revision) {
+          if (
+            foodFilterScopeRef.current !== foodFilterScope ||
+            installedFoodFilterScope.current !== foodFilterScope
+          )
+            return;
+          const conflict: CustomRevisionConflict = {
+            scope: foodFilterScope,
+            foodId: custom.id,
+            revision: custom.revision,
+          };
+          customRevisionConflictRef.current = conflict;
+          setCustomRevisionConflict(conflict);
+          setMessage("The saved food changed elsewhere. Your edits are still here.");
+          return;
+        }
+      }
       if (!response.ok) throw new Error(responseError(value, "The private health request failed."));
       const saved = parseCustomFoodResponse(value);
       if (custom.id && saved.id !== custom.id)
@@ -3010,6 +3127,9 @@ export function RetentionScreen({
   const visibleComposer = customVisible ? composer : blankComposer();
   const customDisabled = !customVisible || loading || busy !== null || customWrite.current !== null;
   const customNewDisabled = customDisabled || !savedFoodFilterVisible;
+  const visibleCustomRevisionConflict =
+    customRevisionConflict === currentCustomRevisionConflict() ? customRevisionConflict : null;
+  const customRecoveryDisabled = customNewDisabled || !visibleCustomRevisionConflict;
   const composerAvailable =
     customVisible &&
     registry.current?.scope === customScope &&
@@ -3213,6 +3333,21 @@ export function RetentionScreen({
             customEditorOffset.current = event.nativeEvent.layout.y;
           }}
         >
+          {visibleCustomRevisionConflict ? (
+            <View style={styles.editor}>
+              <Text accessibilityLiveRegion="polite" style={styles.help}>
+                The saved food changed elsewhere. Your edits are still here. This revision cannot be
+                saved again. Keep editing for reference, start another draft, or explicitly discard
+                edits and load the newer saved food.
+              </Text>
+              <Button
+                label="Discard edits and reload saved food"
+                disabled={customRecoveryDisabled}
+                onPress={() => void reloadConflictedCustomFood(visibleCustomRevisionConflict)}
+                secondary
+              />
+            </View>
+          ) : null}
           {savedFoodFilterVisible && customCopyStatus ? (
             <Text accessibilityLiveRegion="polite" style={styles.help}>
               {customCopyStatus}
@@ -3532,7 +3667,7 @@ export function RetentionScreen({
           />
           <View style={styles.actions}>
             <Button
-              disabled={customDisabled}
+              disabled={customDisabled || Boolean(visibleCustomRevisionConflict)}
               label={customVisible && custom.id ? "Save new version" : "Create private food"}
               onPress={() => void saveCustomFood()}
             />

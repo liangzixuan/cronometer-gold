@@ -102,7 +102,8 @@ retains earlier boundaries. A successful successor never changes an older result
 
 | Order | Work | Concrete exit |
 | --- | --- | --- |
-| Active source milestone | Protected native New custom food (ADR 0088) | Start a blank custom food from new, copied or saved drafts; preserve unsaved work until explicit Keep/Discard choice. Existing retry/private guards, focused review/checks, canonical gates and exact-commit automatic evidence. |
+| Active source milestone | Native custom-food revision-conflict recovery (ADR 0089) | Retain edits after 412, prevent stale-revision resaves and explicitly reload verified saved values. Guarded recovery, focused review/checks, canonical gates and exact-commit automatic evidence. |
+| Completed source milestone | Protected native New custom food (ADR 0088) | Delivered at `be1390e`: guarded blank drafts and exact Keep/Discard; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Native goal revision-conflict draft preservation (ADR 0087) | Delivered at `53a43cc`: exact edits survive 412 with explicit recovery; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Native goal New-draft protection (ADR 0086) | Delivered at `053afe0`: explicit protection of unsaved goal edits; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Native biometric reading date shortcuts (ADR 0085) | Delivered at `ab2c6de`: profile-local date choices; local gates and all three CI/nine actual container jobs passed. |
@@ -117,20 +118,20 @@ retains earlier boundaries. A successful successor never changes an older result
 | Completed external review | Scoped Claude review at `805b937` | The supplied report found no ADR 0077 blockers. Its recommendations were addressed in the delivered follow-up; the report remains limited to its original scope. Routine product work does not require another paid review. |
 | Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Advance only under applicable existing authorization and unchanged release gates. |
 
-### Active bounded milestone: protected native New custom food
+### Active bounded milestone: native custom-food revision-conflict recovery
 
-[ADR 0088](../adr/0088-native-custom-food-new-draft.md) adds one native editor
-action to start a blank private food, including from new and copied drafts.
-Keep editing retains exact unsaved fields and nutrient input; explicit discard
-starts a fresh local creation intent. Pristine drafts remain immediate. Preserve
-existing retry identity and private/request guards, without creating a food until
-the person explicitly saves it.
+[ADR 0089](../adr/0089-native-custom-food-revision-conflict.md) completes recovery
+from a custom-food revision conflict. Preserve attempted edits, explain that the
+saved revision changed, and block another save against that known-stale revision.
+An explicit discard/reload reads the affected food and installs only a verified
+matching active newer revision. Failed recovery keeps the draft. No implicit
+read, rebase or save is introduced.
 
-The prior [goal revision-conflict preservation](../adr/0087-native-goal-revision-conflict-draft.md)
-is delivered at `53a43cc`, including its separately approved Expo prerequisite.
-That one local audit authorization is consumed. No dependency change, install,
-audit, browser/service/device action or paid review is part of ADR 0088. Follow
-the [proportionate review policy](../quality/development-workflow.md#proportionate-independent-review).
+The prior [protected New custom food](../adr/0088-native-custom-food-new-draft.md)
+is delivered at `be1390e`, with local and exact-commit automatic evidence complete.
+No dependency change, installation, audit, browser/service/device action or paid
+review is part of ADR 0089. Prior audit authorization is consumed. Follow the
+[proportionate review policy](../quality/development-workflow.md#proportionate-independent-review).
 Required signed-device and release acceptance remain separate.
 
 ### Milestone and external-decision boundaries
