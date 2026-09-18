@@ -102,7 +102,8 @@ retains earlier boundaries. A successful successor never changes an older result
 
 | Order | Work | Concrete exit |
 | --- | --- | --- |
-| Active source milestone | Native saved-recipe log date shortcuts (ADR 0083) | Today/Yesterday in the profile time zone at activation; preserve recipe/draft identity, explicit Log and exact durable retries. Focused review/checks, canonical gates and exact-commit automatic evidence. |
+| Active source milestone | Native custom-food log date shortcuts (ADR 0084) | Today/Yesterday in the profile time zone at activation; preserve required time, pinned food, drafts, explicit Log and exact durable retries. Focused review/checks, canonical gates and exact-commit automatic evidence. |
+| Completed source milestone | Native saved-recipe log date shortcuts (ADR 0083) | Delivered at `af1c860`: profile-local date choices; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Native public-food log date shortcuts (ADR 0082) | Delivered at `2e77f20`: profile-local date choices; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Optional native public-food log time (ADR 0081) | Delivered at `ddd19bb`: shared explicit time with automatic defaults; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Compact native saved entry-note previews (ADR 0080) | Delivered at `28f6e4f`: exact compact/full saved text; local gates and all three CI/nine actual container jobs passed. |
@@ -112,15 +113,16 @@ retains earlier boundaries. A successful successor never changes an older result
 | Completed external review | Scoped Claude review at `805b937` | The supplied report found no ADR 0077 blockers. Its recommendations were addressed in the delivered follow-up; the report remains limited to its original scope. Routine product work does not require another paid review. |
 | Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Advance only under applicable existing authorization and unchanged release gates. |
 
-### Active bounded milestone: native saved-recipe log date shortcuts
+### Active bounded milestone: native custom-food log date shortcuts
 
-[ADR 0083](../adr/0083-native-recipe-log-date-shortcuts.md) adds Today and
-Yesterday beside the saved-recipe log date. Resolve the profile-local calendar
-date at activation; retain manual entry, time, meal, portion and recipe drafts.
-Keep Log explicit, existing context/lifecycle guards and exact secured retries.
+[ADR 0084](../adr/0084-native-custom-food-log-date-shortcuts.md) adds Today and
+Yesterday beside the custom-food log date. Resolve the profile-local calendar
+date at activation; retain manual entry, required time, meal, portion, pinned
+food version and other drafts. Guard new controls against retired draft/context
+callbacks, keep Log explicit and preserve exact secured retries.
 
-The prior [public-food date shortcuts](../adr/0082-native-public-food-log-date-shortcuts.md)
-are delivered at `2e77f20`. No dependency change, install, audit,
+The prior [recipe date shortcuts](../adr/0083-native-recipe-log-date-shortcuts.md)
+are delivered at `af1c860`. No dependency change, install, audit,
 browser/service/device action or paid review is part of this native slice.
 The earlier Expo `.20` audit
 authorization is consumed. Follow the

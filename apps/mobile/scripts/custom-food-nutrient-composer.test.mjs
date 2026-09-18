@@ -4,6 +4,8 @@ import * as React from "react";
 import { AppState } from "react-native";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createQuickAddOutboxController } from "../src/diary/quick-add-outbox";
+import { createQuickAddOutboxStore } from "../src/diary/quick-add-outbox-store";
 import { createExpoNotificationAdapter } from "../src/retention/notifications";
 import { parseCanonicalNutrientInput, RetentionScreen } from "../src/retention/RetentionScreen";
 import { reconcileLocalReminderSchedules } from "../src/retention/reminder-schedule";
@@ -8459,6 +8461,392 @@ describe("native Add-picker nutrient availability", () => {
       expect(writes(requests)).toHaveLength(0);
     } finally {
       harness.unmount();
+    }
+  });
+});
+
+async function changeCustomLogField(harness, label, value) {
+  input(logEditor(await harness.settle()), label).props.onChangeText(value);
+  return harness.settle();
+}
+function customDateButton(tree, label) {
+  return button(logEditor(tree), label);
+}
+async function chooseCustomLogDate(harness, label) {
+  const target = customDateButton(await harness.settle(), label);
+  expect(target.props.disabled).toBe(false);
+  target.props.onPress();
+  return harness.settle();
+}
+
+describe("custom-food log date shortcuts", () => {
+  for (const kind of ["serving", "grams"]) {
+    it(`chooses profile-local dates while preserving the exact ${kind} log and unrelated raw drafts`, async () => {
+      historyClock("2026-09-17T20:00:00.000Z");
+      const { harness, props, requests } = setup(undefined, {
+        profileTimeZone: "Asia/Tokyo",
+        diaryGroups: [
+          { mealSlot: "breakfast", label: "Breakfast" },
+          { mealSlot: "lunch", label: "Lunch" },
+        ],
+      });
+      props.quickAddOutboxController.enqueueOperation.mockResolvedValue({
+        operationId: "date-log",
+      });
+      try {
+        await fillManual(harness, "4.00100");
+        await type(harness, "Notes", "  Unsaved notes  ");
+        await type(harness, "Definition notes", "  Biometric draft  ");
+        await type(harness, "Find an available nutrient by name", "prot");
+        await click(harness, "Protein (g)");
+        await type(harness, "Protein amount (g per 100 g)", "0.00000100");
+        await click(harness, "Log exact version");
+        await changeCustomLogField(harness, "Quantity", "1.230000");
+        await changeCustomLogField(harness, "Local date", "2026-09-01");
+        let tree = await changeCustomLogField(harness, "Local time", "14:35");
+        if (kind === "grams") {
+          button(logEditor(tree), "Grams").props.onPress();
+          tree = await harness.settle();
+        }
+        button(logEditor(tree), "Lunch").props.onPress();
+        await harness.settle();
+        await type(harness, savedFoodFilterLabel, "hidden source");
+        const before = requests.length;
+        const operation = hooks.operation;
+        for (const label of ["Today", "Yesterday"]) {
+          tree = await chooseCustomLogDate(harness, label);
+          expect(customDateButton(tree, label).props).toMatchObject({
+            accessibilityRole: "button",
+            accessibilityState: { disabled: false },
+          });
+          const editor = logEditor(tree);
+          expect(input(editor, "Local date").props.value).toBe(
+            label === "Today" ? "2026-09-18" : "2026-09-17",
+          );
+          expect(input(editor, "Local time").props.value).toBe("14:35");
+          expect(input(editor, "Quantity").props.value).toBe("1.230000");
+          expect(
+            button(editor, kind === "grams" ? "Grams" : "Serving").props.accessibilityState
+              .selected,
+          ).toBe(true);
+          expect(button(editor, "Lunch").props.accessibilityState.selected).toBe(true);
+          expect(text(editor)).toContain("Log Saved private food v 1");
+          expect(input(tree, "Name").props.value).toBe("Owner food");
+          expect(input(tree, "Notes").props.value).toBe("  Unsaved notes  ");
+          expect(canonical(tree)).toBe("208=4.00100");
+          expect(input(tree, "Definition notes").props.value).toBe("  Biometric draft  ");
+          expect(input(tree, "Protein amount (g per 100 g)").props.value).toBe("0.00000100");
+          expect(input(tree, savedFoodFilterLabel).props.value).toBe("hidden source");
+        }
+        expect(requests).toHaveLength(before);
+        expect(hooks.operation).toBe(operation);
+        expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+        expect(props.quickAddOutboxController.requestDrain).not.toHaveBeenCalled();
+        // Choosing a date does not introduce an automatic/optional time policy.
+        await changeCustomLogField(harness, "Local time", "");
+        await click(harness, "Secure & log pinned version");
+        expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+        await changeCustomLogField(harness, "Local time", "14:35");
+        await click(harness, "Secure & log pinned version");
+        expect(props.quickAddOutboxController.enqueueOperation).toHaveBeenCalledExactlyOnceWith({
+          operationKind: "custom_food",
+          customFoodName: "Saved private food",
+          customFoodId: foodId,
+          customFoodVersionId: "123",
+          customFoodVersionNumber: 1,
+          portion:
+            kind === "grams"
+              ? { kind: "grams", grams: "1.230000" }
+              : { kind: "serving", servingId: "456", amount: "1.230000", servingLabel: "scoop" },
+          mealSlot: "lunch",
+          localDate: "2026-09-17",
+          occurredAt: "2026-09-17T05:35:00.000Z",
+        });
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+  it("resolves Today at activation across profile midnight without changing the entered time", async () => {
+    historyClock("2026-09-18T04:59:59.000Z");
+    const { harness } = setup();
+    try {
+      let tree = await click(harness, "Log exact version");
+      tree = await changeCustomLogField(harness, "Local time", "08:17");
+      const choose = customDateButton(tree, "Today").props.onPress;
+      expect(input(logEditor(tree), "Local date").props.value).toBe("2026-09-17");
+      historyClock("2026-09-18T05:00:01.234Z");
+      choose();
+      tree = await harness.settle();
+      expect(input(logEditor(tree), "Local date").props.value).toBe("2026-09-18");
+      expect(input(logEditor(tree), "Local time").props.value).toBe("08:17");
+    } finally {
+      harness.unmount();
+    }
+  });
+  for (const [now, yesterday, instant] of [
+    ["2027-01-01T18:00:00.000Z", "2026-12-31", "2026-12-31T18:34:00.000Z"],
+    ["2028-03-01T18:00:00.000Z", "2028-02-29", "2028-02-29T18:34:00.000Z"],
+    ["2026-11-02T05:30:00.000Z", "2026-10-31", "2026-10-31T17:34:00.000Z"],
+  ]) {
+    it(`chooses calendar yesterday ${yesterday} with the preserved explicit time`, async () => {
+      historyClock(now);
+      const { harness, props } = setup();
+      props.quickAddOutboxController.enqueueOperation.mockResolvedValue({
+        operationId: "calendar-log",
+      });
+      try {
+        await click(harness, "Log exact version");
+        await changeCustomLogField(harness, "Local time", "12:34");
+        const tree = await chooseCustomLogDate(harness, "Yesterday");
+        expect(input(logEditor(tree), "Local date").props.value).toBe(yesterday);
+        await click(harness, "Secure & log pinned version");
+        expect(props.quickAddOutboxController.enqueueOperation.mock.calls[0][0]).toMatchObject({
+          localDate: yesterday,
+          occurredAt: instant,
+        });
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+  it("rejects stale draft, reopened and cancelled callbacks before render, and same-date selection is a no-op", async () => {
+    historyClock("2026-09-17T20:00:00.000Z");
+    const { harness } = setup();
+    try {
+      let tree = await click(harness, "Log exact version");
+      const old = customDateButton(tree, "Today").props.onPress;
+      input(logEditor(tree), "Local date").props.onChangeText("2026-09-01");
+      old();
+      tree = await harness.settle();
+      expect(input(logEditor(tree), "Local date").props.value).toBe("2026-09-01");
+      const beforeReopen = customDateButton(tree, "Yesterday").props.onPress;
+      button(tree, "Log exact version").props.onPress();
+      beforeReopen();
+      tree = await harness.settle();
+      expect(input(logEditor(tree), "Local date").props.value).toBe("2026-09-17");
+      const same = customDateButton(tree, "Today").props.onPress;
+      const count = harness.stateWrites;
+      same();
+      expect(harness.stateWrites).toBe(count);
+      button(logEditor(tree), "Cancel").props.onPress();
+      const afterCancel = harness.stateWrites;
+      same();
+      expect(harness.stateWrites).toBe(afterCancel);
+      tree = await harness.settle();
+      expect(
+        nodes(
+          tree,
+          (node) => node.type === "TextInput" && node.props.accessibilityLabel === "Quantity",
+        ),
+      ).toHaveLength(0);
+    } finally {
+      harness.unmount();
+    }
+  });
+  for (const boundary of ["owner", "session", "profile", "controller"]) {
+    it(`keeps old-origin shortcuts disabled through ${boundary} replacement, edits and ABA until reopened`, async () => {
+      historyClock("2026-09-17T20:00:00.000Z");
+      const { harness, props } = setup();
+      try {
+        let tree = await click(harness, "Log exact version");
+        tree = await changeCustomLogField(harness, "Local date", "2026-09-01");
+        const oldOpen = button(tree, "Log exact version").props.onPress;
+        const stale = [
+          customDateButton(tree, "Today").props.onPress,
+          customDateButton(tree, "Yesterday").props.onPress,
+        ];
+        const next =
+          boundary === "owner"
+            ? { ownerUserId: otherOwner }
+            : boundary === "session"
+              ? { sessionEpoch: 2 }
+              : boundary === "profile"
+                ? { profileTimeZone: "Asia/Tokyo" }
+                : { quickAddOutboxController: { ...props.quickAddOutboxController } };
+        harness.updateProps(next);
+        tree = harness.renderWithoutEffects();
+        for (const label of ["Today", "Yesterday"]) {
+          const target = customDateButton(tree, label);
+          expect(target.props).toMatchObject({
+            disabled: true,
+            accessibilityState: { disabled: true },
+          });
+          stale.push(target.props.onPress);
+        }
+        for (const callback of stale) callback();
+        harness.flushEffects();
+        tree = await harness.settle();
+        expect(input(logEditor(tree), "Local date").props.value).toBe("2026-09-01");
+        // Editing the retained draft must not adopt the replacement context.
+        tree = await changeCustomLogField(harness, "Local time", "09:21");
+        expect(customDateButton(tree, "Today").props.disabled).toBe(true);
+        harness.updateProps({
+          ownerUserId: props.ownerUserId,
+          sessionEpoch: props.sessionEpoch,
+          profileTimeZone: props.profileTimeZone,
+          quickAddOutboxController: props.quickAddOutboxController,
+        });
+        await harness.settle();
+        for (const callback of stale) callback();
+        tree = await harness.settle();
+        expect(customDateButton(tree, "Today").props.disabled).toBe(true);
+        expect(input(logEditor(tree), "Local date").props.value).toBe("2026-09-01");
+        // A stale opener cannot stamp an old draft with the current origin.
+        oldOpen();
+        tree = await harness.settle();
+        expect(customDateButton(tree, "Yesterday").props.disabled).toBe(true);
+        tree = await click(harness, "Log exact version");
+        expect(customDateButton(tree, "Today").props.disabled).toBe(false);
+        tree = await chooseCustomLogDate(harness, "Yesterday");
+        expect(input(logEditor(tree), "Local date").props.value).toBe("2026-09-16");
+        expect(props.quickAddOutboxController.enqueueOperation).not.toHaveBeenCalled();
+      } finally {
+        harness.unmount();
+      }
+    });
+  }
+  for (const boundary of ["background", "unmount"]) {
+    it(`keeps retired shortcut callbacks inert across ${boundary}`, async () => {
+      const { harness } = setup();
+      await click(harness, "Log exact version");
+      let tree = await changeCustomLogField(harness, "Local date", "2026-09-01");
+      const callbacks = [
+        customDateButton(tree, "Today").props.onPress,
+        customDateButton(tree, "Yesterday").props.onPress,
+      ];
+      if (boundary === "unmount") harness.unmount();
+      else {
+        state("background");
+        tree = await harness.settle();
+        for (const label of ["Today", "Yesterday"]) {
+          const target = customDateButton(tree, label);
+          expect(target.props).toMatchObject({
+            disabled: true,
+            accessibilityState: { disabled: true },
+          });
+          callbacks.push(target.props.onPress);
+        }
+      }
+      const count = harness.stateWrites;
+      for (const callback of callbacks) callback();
+      expect(harness.stateWrites).toBe(count);
+      if (boundary === "background") {
+        state("active");
+        await harness.settle();
+        for (const callback of callbacks) callback();
+        tree = await harness.settle();
+        expect(input(logEditor(tree), "Local date").props.value).toBe("2026-09-01");
+        expect(customDateButton(tree, "Today").props.disabled).toBe(false);
+        harness.unmount();
+      }
+      expect(harness.writesAfterUnmount).toBe(0);
+    });
+  }
+  it("rejects retained and current date controls while the exact log is being secured", async () => {
+    const held = deferred();
+    const { harness, props } = setup();
+    props.quickAddOutboxController.enqueueOperation.mockReturnValue(held.promise);
+    try {
+      await click(harness, "Log exact version");
+      let tree = await changeCustomLogField(harness, "Local date", "2026-09-01");
+      const callbacks = [
+        customDateButton(tree, "Today").props.onPress,
+        customDateButton(tree, "Yesterday").props.onPress,
+      ];
+      button(tree, "Secure & log pinned version").props.onPress();
+      for (const callback of callbacks) callback();
+      tree = await harness.settle();
+      for (const label of ["Today", "Yesterday"]) {
+        const target = customDateButton(tree, label);
+        expect(target.props).toMatchObject({
+          disabled: true,
+          accessibilityState: { disabled: true },
+        });
+        target.props.onPress();
+      }
+      expect(input(logEditor(await harness.settle()), "Local date").props.value).toBe("2026-09-01");
+      expect(props.quickAddOutboxController.enqueueOperation).toHaveBeenCalledTimes(1);
+      expect(props.quickAddOutboxController.enqueueOperation.mock.calls[0][0].localDate).toBe(
+        "2026-09-01",
+      );
+      held.resolve({ operationId: "held-date" });
+      await harness.settle();
+      expect(props.quickAddOutboxController.requestDrain).toHaveBeenCalledExactlyOnceWith(
+        "held-date",
+      );
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("keeps real protected retry bytes and identity after a different shortcut destination is chosen", async () => {
+    historyClock("2026-09-17T20:00:00.000Z");
+    const values = new Map();
+    const store = createQuickAddOutboxStore({
+      lockKey: `custom-date-${crypto.randomUUID()}`,
+      storage: {
+        get: async (key) => values.get(key) ?? null,
+        set: async (key, value) => {
+          values.set(key, value);
+        },
+        delete: async (key) => {
+          values.delete(key);
+        },
+      },
+    });
+    const wire = [];
+    const controller = createQuickAddOutboxController({
+      apiBase: new URL("http://127.0.0.1:4000"),
+      ownerUserId: owner,
+      expectedTimeZone: "America/Chicago",
+      store,
+      accessToken: () => "synthetic-session",
+      isForeground: () => true,
+      operationId: () => "00000000-0000-4000-8000-000000000001",
+      sha256Hex: async () => "f".repeat(64),
+      onUnauthorized: async () => {},
+      onFatalStoreError: async () => {},
+      fetcher: async (url, options) => {
+        wire.push({
+          url: url.toString(),
+          body: options.body,
+          headers: new Headers(options.headers),
+        });
+        throw new Error("Synthetic lost confirmation");
+      },
+    });
+    const enqueue = vi.spyOn(controller, "enqueueOperation");
+    const { harness } = setup(undefined, {
+      quickAddOutboxController: controller,
+      quickAddOutboxState: controller.getState(),
+    });
+    try {
+      await click(harness, "Log exact version");
+      await changeCustomLogField(harness, "Local date", "2026-09-07");
+      await changeCustomLogField(harness, "Local time", "14:45");
+      await click(harness, "Secure & log pinned version");
+      await enqueue.mock.results[0].value;
+      await harness.settle();
+      await controller.requestDrain();
+      const saved = (await store.snapshot(owner)).items[0];
+      expect(saved.body.occurredAt).toBe("2026-09-07T19:45:00.000Z");
+      const first = wire[0];
+      expect(first.body).toBe(JSON.stringify(saved.body));
+      expect(first.headers.get("idempotency-key")).toBe(saved.operationId);
+      expect(first.headers.get("x-expected-profile-time-zone")).toBe("America/Chicago");
+      await click(harness, "Log exact version");
+      const tree = await chooseCustomLogDate(harness, "Yesterday");
+      expect(input(logEditor(tree), "Local date").props.value).toBe("2026-09-16");
+      const before = wire.length;
+      await controller.requestDrain();
+      expect(wire).toHaveLength(before + 1);
+      expect(wire.at(-1).body).toBe(first.body);
+      expect(wire.at(-1).headers.get("idempotency-key")).toBe(saved.operationId);
+      expect((await store.snapshot(owner)).items[0]).toEqual(saved);
+      expect(enqueue).toHaveBeenCalledTimes(1);
+    } finally {
+      harness.unmount();
+      controller.close();
     }
   });
 });

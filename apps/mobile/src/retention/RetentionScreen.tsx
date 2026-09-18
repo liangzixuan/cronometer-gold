@@ -678,7 +678,27 @@ export function RetentionScreen({
     });
     return () => subscription.remove();
   }, [clearCustomCopyChoice, customScope, resetFoodDetails, setBusy]);
-  const [customLog, setCustomLog] = useState<CustomLogDraft | null>(null);
+  const customLogDateContextRef = useRef({
+    filterScope: foodFilterScope,
+    controller: quickAddOutboxController,
+  });
+  if (
+    customLogDateContextRef.current.filterScope !== foodFilterScope ||
+    customLogDateContextRef.current.controller !== quickAddOutboxController
+  )
+    customLogDateContextRef.current = {
+      filterScope: foodFilterScope,
+      controller: quickAddOutboxController,
+    };
+  const customLogDateContext = customLogDateContextRef.current;
+  const customLogOrigin = useRef<typeof customLogDateContext | null>(null);
+  const [customLog, setCustomLogState] = useState<CustomLogDraft | null>(null);
+  const customLogRef = useRef(customLog);
+  const setCustomLog = useCallback((value: CustomLogDraft | null) => {
+    customLogRef.current = value;
+    if (value === null) customLogOrigin.current = null;
+    setCustomLogState(value);
+  }, []);
   const [definitionName, setDefinitionName] = useState("Weight");
   const [definitionDimension, setDefinitionDimension] =
     useState<BiometricDefinition["dimension"]>("mass");
@@ -1756,6 +1776,31 @@ export function RetentionScreen({
     } finally {
       setBusy(null);
     }
+  }
+
+  function openCustomLog(food: CustomFood) {
+    customLogOrigin.current = customLogDateContext;
+    setCustomLog(initialCustomLog(food, profileTimeZone));
+  }
+  function canChooseCustomLogDate() {
+    return (
+      currentCustomScope(renderedCustomEpoch) &&
+      foodFilterScopeRef.current === foodFilterScope &&
+      installedFoodFilterScope.current === foodFilterScope &&
+      customLogDateContextRef.current === customLogDateContext &&
+      customLogOrigin.current === customLogDateContext &&
+      customLog !== null &&
+      customLogRef.current === customLog &&
+      !loadingRef.current &&
+      busyRef.current === null &&
+      !customLogEnqueueInFlight.current
+    );
+  }
+  function chooseCustomLogDate(offset: 0 | -1) {
+    if (customLogDateDisabled || !canChooseCustomLogDate() || !customLog) return;
+    const today = localDateInTimeZone(new Date(), profileTimeZone);
+    const localDate = offset === 0 ? today : shiftLocalDate(today, offset);
+    if (customLog.localDate !== localDate) setCustomLog({ ...customLog, localDate });
   }
 
   async function logCustomFood() {
@@ -2960,6 +3005,7 @@ export function RetentionScreen({
     );
   });
 
+  const customLogDateDisabled = !canChooseCustomLogDate();
   const customLogUnavailable =
     busy !== null ||
     quickAddOutboxState.pendingCount >= MAX_QUICK_ADD_OUTBOX_ITEMS ||
@@ -3565,11 +3611,7 @@ export function RetentionScreen({
                   onPress={() => reviseCustom(food)}
                   secondary
                 />
-                <Button
-                  label="Log exact version"
-                  onPress={() => setCustomLog(initialCustomLog(food, profileTimeZone))}
-                  secondary
-                />
+                <Button label="Log exact version" onPress={() => openCustomLog(food)} secondary />
                 {food.status === "active" ? (
                   <Button
                     label="Archive"
@@ -3631,6 +3673,20 @@ export function RetentionScreen({
                 onChangeText={(localDate) => setCustomLog({ ...customLog, localDate })}
                 maxLength={10}
               />
+              <View style={styles.actions}>
+                <Button
+                  label="Today"
+                  disabled={customLogDateDisabled}
+                  onPress={() => chooseCustomLogDate(0)}
+                  secondary
+                />
+                <Button
+                  label="Yesterday"
+                  disabled={customLogDateDisabled}
+                  onPress={() => chooseCustomLogDate(-1)}
+                  secondary
+                />
+              </View>
               <LabeledInput
                 label="Local time"
                 value={customLog.localTime}

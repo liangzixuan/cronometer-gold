@@ -1,6 +1,6 @@
 # ADR 0083: Native saved-recipe log date shortcuts
 
-Status: Source complete and reviewed; final canonical and exact-commit automatic evidence pending.
+Status: Implemented at af1c860; local and exact-commit automatic evidence passed; device/release acceptance separate.
 
 ## Context
 
@@ -60,5 +60,19 @@ failed on original source (15 failures, 206 existing passes). After implementati
 all 314 focused cases passed: 221 recipe-screen cases and 93 existing recipe/date/
 outbox cases. Native types/format and independent native/documentation review
 passed. The existing synchronous hook harness is not concurrent React or physical-
-device proof. Final canonical and automatic outcomes will be recorded separately
+device proof. Final canonical and automatic outcomes are recorded separately
 in the dated readiness evidence outside Git.
+
+
+## Delivery evidence
+
+Delivered at `af1c8603f0f7c2c6d06155f0816469dd519a8847`. Canonical pnpm
+check passed 1,831 fresh tests, with 2,327 cached passes and 93 cached opt-in skips.
+Build passed 11 tasks, ten cached; Android/iOS exports were fresh. All three
+actual jobs in [CI 35277117774](https://github.com/liangzixuan/cronometer-gold/actions/runs/35277117774)
+and all nine actual jobs in [container 35277117634](https://github.com/liangzixuan/cronometer-gold/actions/runs/35277117634)
+passed on attempt one. The final web job completed September 17, 2026, 23:02:09 UTC.
+The September 18 01:05:13 UTC observation verified exact job inventories and
+successful outcomes; clean matching local/tracking/live heads and all seven
+frozen committed files were reverified at 01:05:11 UTC. This evidence retains its
+exact commit scope and does not establish device or release acceptance.
