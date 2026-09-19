@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { isLocalDate, parseSession, type SessionSummary } from "../../lib/diary";
 import {
@@ -28,6 +28,15 @@ import { PrintableNutritionReport } from "./PrintableNutritionReport";
 import printStyles from "./report-print-shell.module.css";
 
 type LoadState = "loading" | "ready" | "error";
+
+interface DayInspection {
+  readonly report: NutritionReport;
+  readonly day: NutritionReportDay;
+  readonly session: SessionSummary;
+  readonly route: object;
+  readonly sessionGeneration: number;
+  readonly reportGeneration: number;
+}
 
 interface PrintCapture {
   readonly report: NutritionReport;
@@ -126,6 +135,17 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   const [printBusy, setPrintBusy] = useState(false);
   const [printMessage, setPrintMessage] = useState("");
   const [printCapture, setPrintCapture] = useState<PrintCapture | null>(null);
+  const [dayInspection, setDayInspection] = useState<DayInspection | null>(null);
+  const inspectionRef = useRef<DayInspection | null>(null);
+  const inspectionGeneration = useRef(0);
+  const inspectionMounted = useRef(false);
+  const inspectionActive = useRef(true);
+  const [inspectorAvailable, setInspectorAvailable] = useState(true);
+  const clearInspection = useCallback(() => {
+    inspectionRef.current = null;
+    inspectionGeneration.current += 1;
+    setDayInspection(null);
+  }, []);
 
   const privateUiClosed = useRef(false);
   const diaryNavigationPending = useRef(false);
@@ -211,6 +231,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
     controlGeneration.current += 1;
     ownedRouteCommit.current = null;
     completedReportRequest.current = null;
+    clearInspection();
     invalidatePrint();
     sessionExplicitlyClosed.current = true;
     privateUiClosed.current = true;
@@ -225,7 +246,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
     setMessage("Closing your private report…");
     router.replace("/login");
     router.refresh();
-  }, [invalidatePrint, router]);
+  }, [clearInspection, invalidatePrint, router]);
 
   useEffect(() => {
     const ownedCommit = ownedRouteCommit.current;
@@ -242,6 +263,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
     )
       return;
     diaryNavigationPending.current = false;
+    clearInspection();
     controlGeneration.current += 1;
     reportGeneration.current += 1;
     completedReportRequest.current = null;
@@ -308,7 +330,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
       }
     })();
     return () => controller.abort();
-  }, [initialFrom, initialTo, initialRouteKey, invalidatePrint, signInAgain]);
+  }, [clearInspection, initialFrom, initialTo, initialRouteKey, invalidatePrint, signInAgain]);
 
   useEffect(() => {
     if (!session || !range) return;
@@ -341,6 +363,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
       refreshRef.current === requestedRefreshKey &&
       sessionRef.current?.user.id === requestedOwner;
 
+    clearInspection();
     invalidatePrint();
     setState("loading");
     setReport(null);
@@ -412,7 +435,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
       }
     })();
     return () => controller.abort();
-  }, [invalidatePrint, range, refreshKey, session, signInAgain]);
+  }, [clearInspection, invalidatePrint, range, refreshKey, session, signInAgain]);
 
   useEffect(() => {
     // StrictMode replays mount effects. Reopen only the lifecycle gate;
@@ -433,6 +456,36 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
       reportController.current?.abort();
     };
   }, [closePrintGate]);
+
+  useEffect(() => {
+    inspectionMounted.current = true;
+    const visible = () => typeof document === "undefined" || document.visibilityState !== "hidden";
+    const eligible = () => visible() && (typeof document === "undefined" || document.hasFocus());
+    const updateAvailability = (available: boolean) => {
+      if (!inspectionMounted.current) return;
+      inspectionActive.current = available;
+      setInspectorAvailable(available);
+      clearInspection();
+    };
+    const blur = () => updateAvailability(false);
+    const focus = () => updateAvailability(eligible());
+    const visibility = () => updateAvailability(eligible());
+    inspectionActive.current = eligible();
+    setInspectorAvailable(inspectionActive.current);
+    window.addEventListener("blur", blur);
+    window.addEventListener("focus", focus);
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", visibility);
+    return () => {
+      inspectionMounted.current = false;
+      inspectionActive.current = false;
+      inspectionRef.current = null;
+      inspectionGeneration.current += 1;
+      window.removeEventListener("blur", blur);
+      window.removeEventListener("focus", focus);
+      if (typeof document !== "undefined")
+        document.removeEventListener("visibilitychange", visibility);
+    };
+  }, [clearInspection]);
 
   const selectedSeries = useMemo(
     () =>
@@ -499,7 +552,8 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   }
 
   function editRangeDate(field: "from" | "to", value: string) {
-    if (!canUseRangeControls()) return;
+    if (!canUseRangeControls() || value === (field === "from" ? draftFrom : draftTo)) return;
+    clearInspection();
     controlGeneration.current += 1;
     invalidatePrint();
     setRangeError("");
@@ -533,6 +587,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
     )
       return;
     diaryNavigationPending.current = true;
+    clearInspection();
     controlGeneration.current += 1;
     invalidatePrint();
     try {
@@ -637,6 +692,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
       ) {
         controlGeneration.current += 1;
         completedReportRequest.current = null;
+        clearInspection();
         invalidatePrint();
         setReport(null);
         setState("error");
@@ -649,6 +705,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
       setPrintMessage("Use your browser’s print dialog to print or save this snapshot as PDF.");
     } catch (error) {
       if (!isCurrent()) return;
+      clearInspection();
       invalidatePrint(false);
       setPrintMessage(
         error instanceof Error ? error.message : "Your print session could not be verified.",
@@ -659,6 +716,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
   function commitRange(next: NutritionReportRange, rewriteUrl = true) {
     if (!canUseRangeControls()) return;
     nutritionReportDates(next.from, next.to);
+    clearInspection();
     controlGeneration.current += 1;
     reportGeneration.current += 1;
     completedReportRequest.current = null;
@@ -718,6 +776,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
     )
       return;
     controlGeneration.current += 1;
+    clearInspection();
     invalidatePrint();
     setLogoutBusy(true);
     const confirmed = await confirmBrowserLogout(
@@ -729,6 +788,53 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
       setState("error");
       setLogoutBusy(false);
     }
+  }
+
+  const inspection = inspectionRef.current;
+  if (
+    inspection &&
+    (inspection.report !== report ||
+      inspection.session !== session ||
+      inspection.route !== routeContext ||
+      inspection.sessionGeneration !== sessionGeneration.current ||
+      inspection.reportGeneration !== reportGeneration.current)
+  ) {
+    inspectionRef.current = null;
+    inspectionGeneration.current += 1;
+  }
+  const visibleInspection =
+    printable && inspectorAvailable && dayInspection === inspectionRef.current
+      ? dayInspection
+      : null;
+  const renderedInspectionGeneration = inspectionGeneration.current;
+  function toggleInspection(day: NutritionReportDay) {
+    if (
+      !inspectionMounted.current ||
+      !inspectionActive.current ||
+      !canUseRangeControls() ||
+      !printable ||
+      !report ||
+      !session ||
+      printView.current?.report !== report ||
+      completedReportRequest.current?.report !== report ||
+      !report.days.includes(day) ||
+      inspectionGeneration.current !== renderedInspectionGeneration
+    )
+      return;
+    const next =
+      inspectionRef.current?.day === day
+        ? null
+        : {
+            report,
+            day,
+            session,
+            route: routeContext,
+            sessionGeneration: sessionGeneration.current,
+            reportGeneration: reportGeneration.current,
+          };
+    inspectionGeneration.current += 1;
+    inspectionRef.current = next;
+    setDayInspection(next);
   }
 
   const navigationDate = range?.to;
@@ -898,6 +1004,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
               reportGeneration.current += 1;
               completedReportRequest.current = null;
               reportController.current?.abort();
+              clearInspection();
               invalidatePrint();
               setReport(null);
               setState("loading");
@@ -1112,39 +1219,122 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
                     {selectedSeries.points.map((point, index) => {
                       const day = report.days[index];
                       return (
-                        <tr key={point.localDate}>
-                          <th scope="row">
-                            <time dateTime={point.localDate}>{point.localDate}</time>
-                            {day ? (
-                              <div style={{ display: "grid", gap: 8, marginTop: 8, maxWidth: 220 }}>
-                                {reportSourceDiaryDates(day).map((localDate) => (
+                        <Fragment key={point.localDate}>
+                          <tr>
+                            <th scope="row">
+                              <time dateTime={point.localDate}>{point.localDate}</time>
+                              {day ? (
+                                <div
+                                  style={{ display: "grid", gap: 8, marginTop: 8, maxWidth: 220 }}
+                                >
                                   <button
+                                    aria-label={`${visibleInspection?.day === day ? "Hide" : "View"} all nutrients for ${day.localDate}`}
+                                    aria-expanded={visibleInspection?.day === day}
+                                    aria-controls={`report-day-inspector-${day.localDate}`}
                                     className="buttonQuiet"
-                                    disabled={!printable}
-                                    key={localDate}
-                                    onClick={() => openSourceDiary(day, localDate)}
+                                    disabled={!printable || !inspectorAvailable}
+                                    onClick={() => toggleInspection(day)}
                                     type="button"
                                   >
-                                    Open diary for {localDate}
+                                    {visibleInspection?.day === day ? "Hide" : "View"} all nutrients
                                   </button>
-                                ))}
-                              </div>
-                            ) : null}
-                          </th>
-                          <td>{day?.entryCount ?? 0}</td>
-                          <td>{reportAmountText(point, selectedSeries.nutrient.unit)}</td>
-                          <td>{reportPointCoverageText(point)}</td>
-                          <td>
-                            {targetText(
-                              report,
-                              selectedSeries.nutrient.id,
-                              point,
-                              selectedSeries.nutrient.unit,
-                            )}
-                          </td>
-                          <td>{reportComparisonText(point)}</td>
-                          <td>{goalVersionLabel(report, point.goalVersionId)}</td>
-                        </tr>
+                                  {reportSourceDiaryDates(day).map((localDate) => (
+                                    <button
+                                      className="buttonQuiet"
+                                      disabled={!printable}
+                                      key={localDate}
+                                      onClick={() => openSourceDiary(day, localDate)}
+                                      type="button"
+                                    >
+                                      Open diary for {localDate}
+                                    </button>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </th>
+                            <td>{day?.entryCount ?? 0}</td>
+                            <td>{reportAmountText(point, selectedSeries.nutrient.unit)}</td>
+                            <td>{reportPointCoverageText(point)}</td>
+                            <td>
+                              {targetText(
+                                report,
+                                selectedSeries.nutrient.id,
+                                point,
+                                selectedSeries.nutrient.unit,
+                              )}
+                            </td>
+                            <td>{reportComparisonText(point)}</td>
+                            <td>{goalVersionLabel(report, point.goalVersionId)}</td>
+                          </tr>
+                          {day && visibleInspection?.day === day ? (
+                            <tr>
+                              <td colSpan={7}>
+                                <section
+                                  aria-labelledby={`report-day-inspector-heading-${day.localDate}`}
+                                  className="reportPanel"
+                                  id={`report-day-inspector-${day.localDate}`}
+                                >
+                                  <h3 id={`report-day-inspector-heading-${day.localDate}`}>
+                                    All nutrients for {day.localDate}
+                                  </h3>
+                                  <p className="coverageCopy">
+                                    {report.series.length} nutrients from the same snapshot captured{" "}
+                                    {displaySnapshot(report.snapshotAt)}. Report day:{" "}
+                                    {day.localDate} · {report.timeZone}. The chart and printed
+                                    report keep their selected nutrient.
+                                  </p>
+                                  <div className="reportTableScroller">
+                                    <table className="reportTable">
+                                      <caption>
+                                        Exact nutrient evidence for {day.localDate} in{" "}
+                                        {report.timeZone}
+                                      </caption>
+                                      <thead>
+                                        <tr>
+                                          <th scope="col">Nutrient (unit)</th>
+                                          <th scope="col">Logged amount</th>
+                                          <th scope="col">Coverage</th>
+                                          <th scope="col">Saved threshold</th>
+                                          <th scope="col">Comparison</th>
+                                          <th scope="col">Goal period</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {report.series.map((series) => {
+                                          const detail = series.points[index];
+                                          if (!detail) return null;
+                                          return (
+                                            <tr key={series.nutrient.id}>
+                                              <th scope="row">
+                                                {series.nutrient.name} ({series.nutrient.unit})
+                                              </th>
+                                              <td>
+                                                {reportAmountText(detail, series.nutrient.unit)}
+                                              </td>
+                                              <td>{reportPointCoverageText(detail)}</td>
+                                              <td>
+                                                {targetText(
+                                                  report,
+                                                  series.nutrient.id,
+                                                  detail,
+                                                  series.nutrient.unit,
+                                                )}
+                                              </td>
+                                              <td>{reportComparisonText(detail)}</td>
+                                              <td>
+                                                {goalVersionLabel(report, detail.goalVersionId)}
+                                              </td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </section>
+                              </td>
+                            </tr>
+                          ) : null}
+                        </Fragment>
                       );
                     })}
                   </tbody>

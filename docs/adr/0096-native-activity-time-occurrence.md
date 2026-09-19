@@ -1,6 +1,6 @@
 # ADR 0096: Choose native activity time occurrences explicitly
 
-Status: Source complete and reviewed; final canonical and exact-commit automatic evidence pending.
+Status: Implemented at `e3eb556`; local and exact-commit automatic evidence passed. Device/release acceptance remains separate.
 
 ## Context
 
@@ -74,4 +74,20 @@ was updated to require the new explicit choice. Expanded tests also caught
 reference invalidation without a render after identical time input. Deliberate
 time re-entry now requests a render, while unchanged metadata/date values and
 reselecting the current candidate remain true no-ops. Final canonical and exact-
-commit automatic evidence remains pending in the dated outside-Git record.
+commit automatic evidence was pending at the source checkpoint; the following
+delivery record closes that dated state.
+
+
+## Delivery evidence
+
+Delivered at `e3eb556febdb9ca97fe01b8f307d8868e32c8804`. Canonical check on
+September 19 passed 2,137 fresh cases plus 2,327 cached cases, with 93 cached
+opt-in skips. Build passed 11 tasks, ten cached, with fresh native exports.
+The 16:48:41 UTC official observation records all three actual jobs in
+[CI 35451489011](https://github.com/liangzixuan/cronometer-gold/actions/runs/35451489011)
+and all nine actual jobs in
+[container run 35451489006](https://github.com/liangzixuan/cronometer-gold/actions/runs/35451489006)
+completed successfully on attempt one at that exact commit. At 16:49:22 UTC,
+clean local, tracking and live heads and nine reviewed working-tree/committed
+hashes matched. Earlier pending observations remain dated history. These results
+do not establish physical-device, assistive-technology or release acceptance.

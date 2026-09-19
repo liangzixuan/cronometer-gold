@@ -142,7 +142,10 @@ vi.mock("react", async (importOriginal) => ({
 vi.mock("next/navigation", () => ({ useRouter: () => router }));
 
 import { nutritionReportDates, parseNutritionReport } from "../../lib/nutrition-reports";
-import { emptyNutritionReportFixture } from "../../test/nutrition-report-fixture";
+import {
+  emptyNutritionReportFixture,
+  zeroTargetNutritionReportFixture,
+} from "../../test/nutrition-report-fixture";
 import { ReportsClient } from "./ReportsClient";
 
 interface ElementNode {
@@ -1398,5 +1401,380 @@ describe("actual report source diary navigation", () => {
     expect(router.push).toHaveBeenCalledExactlyOnceWith("/dashboard?date=2026-08-31");
     expect(printedComponent()).toBeUndefined();
     expect(printGate()).toBe("false");
+  });
+});
+
+function dayInspectorButton(date: string, expanded = false): ElementNode {
+  const label = `${expanded ? "Hide" : "View"} all nutrients for ${date}`;
+  const matches = elements().filter(
+    (node) => node.type === "button" && node.props["aria-label"] === label,
+  );
+  expect(matches, label).toHaveLength(1);
+  return matches[0] as ElementNode;
+}
+function dayInspector(date: string): ElementNode {
+  const matches = elements().filter(
+    (node) => node.type === "section" && node.props.id === `report-day-inspector-${date}`,
+  );
+  expect(matches).toHaveLength(1);
+  return matches[0] as ElementNode;
+}
+
+describe("web report day inspector", () => {
+  it("shows all 15 exact nutrient rows from the same report without a new request", async () => {
+    const fixture = zeroTargetNutritionReportFixture();
+    const fetcher = vi.fn(async (url: string) =>
+      url === "/api/auth/me" ? session() : Response.json(fixture),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    hooks.mount(() => ReportsClient({ initialFrom: "2026-09-01", initialTo: "2026-09-01" }));
+    await hooks.settle();
+    const before = fetcher.mock.calls.length;
+    const open = dayInspectorButton("2026-09-01");
+    expect(open.props["aria-expanded"]).toBe(false);
+    (open.props.onClick as () => void)();
+    await hooks.settle();
+    const detail = dayInspector("2026-09-01");
+    const body = elements(detail).find((node) => node.type === "tbody");
+    const rows = elements(body).filter((node) => node.type === "tr");
+    expect(rows).toHaveLength(15);
+    for (const [index, series] of fixture.data.series.entries()) {
+      expect(text(rows[index])).toContain(`${series.nutrient.name} (${series.nutrient.unit})`);
+      expect(text(rows[index])).toContain(`1 ${series.nutrient.unit}`);
+    }
+    expect(dayInspectorButton("2026-09-01", true).props["aria-controls"]).toBe(detail.props.id);
+    const firstCells = elements(rows[0]).filter((node) => node.type === "td");
+    const secondCells = elements(rows[1]).filter((node) => node.type === "td");
+    expect(firstCells.slice(-3).map((node) => text(node))).toEqual([
+      "target 0 kcal · user_fixed 1",
+      "target percentage unavailable because the saved target is zero",
+      "Goal r3 · version 22222222",
+    ]);
+    expect(secondCells.slice(-3).map((node) => text(node))).toEqual([
+      "No saved threshold",
+      "Not compared",
+      "Goal r3 · version 22222222",
+    ]);
+    expect(fetcher).toHaveBeenCalledTimes(before);
+  });
+});
+
+function inspections() {
+  return elements().filter(
+    (node) =>
+      node.type === "section" &&
+      typeof node.props.id === "string" &&
+      node.props.id.startsWith("report-day-inspector-"),
+  );
+}
+async function openInspector(date = "2026-09-01") {
+  const node = dayInspectorButton(date);
+  expect(node.props.disabled).toBe(false);
+  invoke(node);
+  await hooks.settle();
+  return dayInspector(date);
+}
+
+describe("web report day inspector evidence and lifecycle", () => {
+  it("keeps quantified zero, exact decimals, trace, partial and unknown evidence distinct", async () => {
+    const fixture = sourceDiaryFixture("2026-09-01", undefined, "zero");
+    const variants = ["zero", "partial", "trace", "unknown"] as const;
+    fixture.data.series = fixture.data.series.map((series, index) => {
+      const variant = variants[index % variants.length] as SourceCoverage;
+      return sourceDiaryFixture("2026-09-01", undefined, variant).data.series[index] ?? series;
+    });
+    expect(parseNutritionReport(fixture).series).toHaveLength(15);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        url === "/api/auth/me" ? session(owner, "4", "UTC") : Response.json(fixture),
+      ),
+    );
+    await mountSourceDay();
+    const original = JSON.stringify(fixture);
+    const detail = await openInspector();
+    const rows = elements(elements(detail).find((node) => node.type === "tbody")).filter(
+      (node) => node.type === "tr",
+    );
+    expect(text(rows[0])).toContain("0 kcalComplete for logged diary contributions.");
+    expect(text(rows[1])).toContain(
+      "At least 0.123456789 gKnown lower bound; 2 of 3 contributions lack values.",
+    );
+    expect(text(rows[2])).toContain("At least 0 gKnown lower bound with 3 trace contributions.");
+    expect(text(rows[3])).toContain(
+      "UnknownAmount unknown because every diary contribution lacks a quantified value.",
+    );
+    expect(text(detail)).toContain("No saved goal");
+    expect(text(detail)).toContain("Not compared");
+    expect(JSON.stringify(fixture)).toBe(original);
+  });
+
+  it("keeps all 15 nutrient names and units for a missing day without inventing zeros", async () => {
+    readyFetcher();
+    await mountSourceDay();
+    const detail = await openInspector();
+    const rows = elements(elements(detail).find((node) => node.type === "tbody")).filter(
+      (node) => node.type === "tr",
+    );
+    const fixture = emptyNutritionReportFixture();
+    expect(rows).toHaveLength(15);
+    fixture.data.series.forEach((series, index) => {
+      expect(text(rows[index])).toContain(
+        `${series.nutrient.name} (${series.nutrient.unit})Missing`,
+      );
+      expect(text(rows[index])).toContain("No diary entries; this is missing, not zero.");
+    });
+  });
+
+  it("switches and closes exactly one day, rejecting duplicate and superseded same-render actions", async () => {
+    const fetcher = readyFetcher();
+    hooks.mount(() => ReportsClient({ initialFrom: "2026-09-01", initialTo: "2026-09-02" }));
+    await hooks.settle();
+    const first = dayInspectorButton("2026-09-01");
+    const staleSecond = dayInspectorButton("2026-09-02");
+    invoke(first);
+    invoke(first);
+    invoke(staleSecond);
+    await hooks.settle();
+    expect(inspections()).toHaveLength(1);
+    dayInspector("2026-09-01");
+    const oldHide = dayInspectorButton("2026-09-01", true);
+    await openInspector("2026-09-02");
+    invoke(oldHide);
+    await hooks.settle();
+    expect(inspections()).toHaveLength(1);
+    dayInspector("2026-09-02");
+    const hide = dayInspectorButton("2026-09-02", true);
+    invoke(hide);
+    invoke(hide);
+    invoke(first);
+    await hooks.settle();
+    expect(inspections()).toHaveLength(0);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves chart and selected-nutrient print scope, even when the print dialog blurs the window", async () => {
+    const { fetcher, fixture } = sourceDiaryFetcher();
+    await mountSourceDay();
+    await openInspector();
+    const retained = dayInspectorButton("2026-09-01", true);
+    nutrient("15");
+    await hooks.settle();
+    invoke(retained);
+    await hooks.settle();
+    expect(inspections()).toHaveLength(1);
+    expect(elements().find((node) => node.type === "select")?.props.value).toBe("15");
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    nativePrint.mockImplementation(() => {
+      expect(printedComponent()?.props.nutrientId).toBe("15");
+      expect(printedComponent()?.props.report).toEqual(fixture.data);
+      printEvents.dispatchEvent(new Event("blur"));
+      printEvents.dispatchEvent(new Event("beforeprint"));
+      expect(printGate()).toBe("true");
+    });
+    startPrint();
+    await hooks.settle();
+    expect(nativePrint).toHaveBeenCalledTimes(1);
+    expect(inspections()).toHaveLength(0);
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    printEvents.dispatchEvent(new Event("focus"));
+    await hooks.settle();
+    await openInspector();
+  });
+
+  it("retires inspection on a date edit and cannot revive it by returning to the original date", async () => {
+    const fetcher = readyFetcher();
+    await mountSourceDay();
+    const beforeOpen = dayInspectorButton("2026-09-01");
+    await openInspector();
+    const retained = dayInspectorButton("2026-09-01", true);
+    inputDate(0, "2026-08-31");
+    invoke(retained);
+    await hooks.settle();
+    expect(inspections()).toHaveLength(0);
+    expect(dayInspectorButton("2026-09-01").props.disabled).toBe(true);
+    inputDate(0, "2026-09-01");
+    await hooks.settle();
+    invoke(beforeOpen);
+    invoke(retained);
+    await hooks.settle();
+    expect(inspections()).toHaveLength(0);
+    await openInspector();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps controls live for unchanged dates without closing the chosen day", async () => {
+    readyFetcher();
+    await mountSourceDay();
+    await openInspector();
+    const hide = dayInspectorButton("2026-09-01", true);
+    inputDate(0, "2026-09-01");
+    inputDate(1, "2026-09-01");
+    invoke(hide);
+    await hooks.settle();
+    expect(inspections()).toHaveLength(0);
+    await openInspector();
+  });
+
+  it("binds replacement evidence at the same range and rejects retained prior-snapshot controls", async () => {
+    const first = zeroTargetNutritionReportFixture();
+    let fixture: unknown = first;
+    const fetcher = vi.fn(async (url: string) =>
+      url === "/api/auth/me" ? session() : Response.json(fixture),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    await mountSourceDay();
+    await openInspector();
+    const old = dayInspectorButton("2026-09-01", true);
+    fixture = emptyNutritionReportFixture();
+    const form = required(elements().find((node) => node.type === "form"));
+    invoke(form, "onSubmit", { preventDefault: vi.fn() });
+    invoke(old);
+    await hooks.settle();
+    expect(inspections()).toHaveLength(0);
+    invoke(old);
+    const detail = await openInspector();
+    expect(text(detail)).toContain("MissingNo diary entries");
+    expect(text(detail)).not.toContain("target 0 kcal");
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it.each(["period", "route", "logout", "expired", "profile", "effect-replay"] as const)(
+    "retires the selected day and stale callbacks across %s",
+    async (transition) => {
+      const fetcher = readyFetcher();
+      let props = { initialFrom: "2026-09-01", initialTo: "2026-09-01" };
+      hooks.mount(() => ReportsClient(props));
+      await hooks.settle();
+      const staleOpen = dayInspectorButton("2026-09-01");
+      await openInspector();
+      const staleHide = dayInspectorButton("2026-09-01", true);
+      if (transition === "period") invoke(button("Next period"));
+      if (transition === "route") {
+        props = { initialFrom: "2026-09-03", initialTo: "2026-09-03" };
+        hooks.renderWithoutEffects();
+      }
+      if (transition === "logout") {
+        fetcher.mockImplementation(async (url: string) =>
+          url === "/api/auth/logout" ? new Response(null, { status: 204 }) : session(),
+        );
+        invoke(button("Sign out"));
+      }
+      if (transition === "expired" || transition === "profile") {
+        fetcher.mockImplementation(async () =>
+          transition === "expired" ? new Response(null, { status: 401 }) : session(owner, "5"),
+        );
+        startPrint();
+      }
+      if (transition === "effect-replay") hooks.replayEffects();
+      invoke(staleOpen);
+      invoke(staleHide);
+      await hooks.settle();
+      expect(inspections()).toHaveLength(0);
+      invoke(staleOpen);
+      await hooks.settle();
+      expect(inspections()).toHaveLength(0);
+      if (transition === "route") {
+        hooks.render();
+        await hooks.settle();
+        await openInspector("2026-09-03");
+      }
+    },
+  );
+
+  it.each(["hidden", "unfocused"] as const)(
+    "starts closed and unavailable in an initially %s document",
+    async (initial) => {
+      const events = new EventTarget();
+      const documentState = {
+        visibilityState: initial === "hidden" ? "hidden" : "visible",
+        hasFocus: () => initial === "hidden",
+        addEventListener: events.addEventListener.bind(events),
+        removeEventListener: events.removeEventListener.bind(events),
+      };
+      vi.stubGlobal("document", documentState);
+      readyFetcher();
+      await mountSourceDay();
+      const unavailable = dayInspectorButton("2026-09-01");
+      expect(unavailable.props.disabled).toBe(true);
+      invoke(unavailable);
+      await hooks.settle();
+      expect(inspections()).toHaveLength(0);
+      documentState.visibilityState = "visible";
+      documentState.hasFocus = () => true;
+      printEvents.dispatchEvent(new Event("focus"));
+      await hooks.settle();
+      invoke(unavailable);
+      await hooks.settle();
+      expect(inspections()).toHaveLength(0);
+      await openInspector();
+    },
+  );
+
+  it.each(["blur", "visibility"] as const)(
+    "clears on %s and allows only a new choice after returning",
+    async (change) => {
+      const events = new EventTarget();
+      const documentState = {
+        visibilityState: "visible",
+        hasFocus: () => true,
+        addEventListener: events.addEventListener.bind(events),
+        removeEventListener: events.removeEventListener.bind(events),
+      };
+      vi.stubGlobal("document", documentState);
+      const fetcher = readyFetcher();
+      await mountSourceDay();
+      await openInspector();
+      const retained = dayInspectorButton("2026-09-01", true);
+      if (change === "blur") printEvents.dispatchEvent(new Event("blur"));
+      else {
+        documentState.visibilityState = "hidden";
+        events.dispatchEvent(new Event("visibilitychange"));
+      }
+      invoke(retained);
+      await hooks.settle();
+      expect(inspections()).toHaveLength(0);
+      documentState.visibilityState = "visible";
+      printEvents.dispatchEvent(new Event("focus"));
+      await hooks.settle();
+      invoke(retained);
+      await hooks.settle();
+      expect(inspections()).toHaveLength(0);
+      await openInspector();
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("does not write state through retained lifecycle or day callbacks after unmount", async () => {
+    const listen = vi.spyOn(window, "addEventListener");
+    const fetcher = readyFetcher();
+    await mountSourceDay();
+    await openInspector();
+    const retained = dayInspectorButton("2026-09-01", true);
+    const blur = required(listen.mock.calls.find(([name]) => name === "blur"))[1] as EventListener;
+    const focus = required(
+      listen.mock.calls.find(([name]) => name === "focus"),
+    )[1] as EventListener;
+    hooks.unmount();
+    invoke(retained);
+    blur(new Event("blur"));
+    focus(new Event("focus"));
+    await hooks.settle();
+    expect(hooks.afterClose()).toBe(0);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps original source diary dates and closes disclosure synchronously when navigation starts", async () => {
+    const { fetcher } = sourceDiaryFetcher();
+    await mountSourceDay();
+    await openInspector();
+    const retained = dayInspectorButton("2026-09-01", true);
+    expect(text()).toContain("These actions open the current diary;");
+    invoke(button("Open diary for 2026-08-31"));
+    invoke(retained);
+    await hooks.settle();
+    expect(inspections()).toHaveLength(0);
+    expect(router.push).toHaveBeenCalledExactlyOnceWith("/dashboard?date=2026-08-31");
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 });

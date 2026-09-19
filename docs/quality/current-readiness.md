@@ -134,13 +134,23 @@ September 19 14:51:23 UTC official evidence records complete results. Clean equa
 local, tracking and live heads and seven reviewed hashes were reverified at
 14:52:01 UTC.
 
-Active work is [ADR 0096](../adr/0096-native-activity-time-occurrence.md): explicit
-native activity choices for repeated local minutes in Add and time corrections.
-Preserve exact untouched timestamps, private/stale guards and exact retries.
-Independent source review, 130 focused cases, native types and scoped Biome
-passed. Final canonical and exact-commit automatic evidence remains pending. No
-API, dependency, installation, audit, service/browser/device or paid review action
-is part of this slice. Device/release acceptance remains separate.
+[ADR 0096](../adr/0096-native-activity-time-occurrence.md) is delivered at
+`e3eb556febdb9ca97fe01b8f307d8868e32c8804`: 130 focused cases, independent review,
+canonical check/build and fresh native exports passed. Canonical check recorded
+2,137 fresh and 2,327 cached passes, with 93 cached opt-in skips. All three
+CI35451489011 and nine actual container35451489006 jobs passed on attempt one;
+September 19 16:48:41 UTC official evidence records complete results. Clean equal
+local, tracking and live heads and nine reviewed hashes were reverified at
+16:49:22 UTC.
+
+Active work is [ADR 0097](../adr/0097-web-report-day-inspector.md): all 15 nutrients
+for one web report day from the loaded private snapshot. Preserve exact evidence,
+chart/print selection, current-diary links and private lifecycle guards.
+Independent source review, 163 focused cases, web types and scoped Biome passed.
+Final canonical and exact-commit automatic evidence remains pending. No API,
+dependency, installation, audit, service/browser/device or paid review action is
+part of this slice. Real-browser, assistive-technology and release acceptance
+remain separate.
 
 Use the [build plan](../product/build-plan.md) for priorities and the
 [release gates](release-gates.md) for authoritative acceptance. The
