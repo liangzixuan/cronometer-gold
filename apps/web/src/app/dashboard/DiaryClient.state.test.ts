@@ -136,6 +136,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 import {
+  type DiaryGroup,
   defaultDiaryGroups,
   diaryDayOrderDigest,
   localDateInTimeZone,
@@ -288,7 +289,7 @@ function page(
     page: { nextCursor, totalEntries },
   };
 }
-function session(id = owner, groups = defaultDiaryGroups, revision = "1") {
+function session(id = owner, groups: readonly DiaryGroup[] = defaultDiaryGroups, revision = "1") {
   return {
     data: {
       user: { id, email: "owner@example.test", emailVerified: true },
@@ -1917,5 +1918,407 @@ describe("independent day-note parent wiring", () => {
     expect((child.props.isViewCurrent as () => boolean)()).toBe(false);
     expect((child.props.isPrivateCurrent as () => boolean)()).toBe(true);
     expect(fetch.mock.calls.length).toBe(before);
+  });
+});
+
+describe("web diary repeat destination", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-08-20T18:25:37.456Z"));
+  });
+
+  it("opens one local destination composer with configured groups and cancels without a request", async () => {
+    const fetch = await mount();
+    const requests = fetch.mock.calls.length;
+    await click("Repeat Apple 0 to another day or meal");
+    expect(field("Repeat date").props.value).toBe("2026-08-20");
+    expect(field("Repeat meal").props.value).toBe("breakfast");
+    expect(text()).toContain("Today uses the current time; another date uses noon");
+    await change("Repeat date", "2026-08-21");
+    await change("Repeat meal", "lunch");
+    await click("Cancel repeat destination");
+    expect(
+      elements().some((node) => node.props["aria-label"] === "Repeat destination for Apple 0"),
+    ).toBe(false);
+    expect(fetch).toHaveBeenCalledTimes(requests);
+  });
+
+  it.each([
+    ["2026-08-20", "2026-08-20T18:25:37.456Z"],
+    ["2026-08-21", "2026-08-21T17:00:00.000Z"],
+    ["2026-01-10", "2026-01-10T18:00:00.000Z"],
+  ])(
+    "repeats a pinned food to %s using the existing date policy and configured meal order",
+    async (targetDate, occurredAt) => {
+      const groups = [
+        { mealSlot: "dinner" as const, label: "Evening" },
+        { mealSlot: "breakfast" as const, label: "Morning" },
+        { mealSlot: "snacks" as const, label: "Small meals" },
+        { mealSlot: "lunch" as const, label: "Midday" },
+      ];
+      const writes: CapturedRepeat[] = [];
+      const base = fetcher();
+      const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+        if (url === "/api/auth/me") return Response.json(session(owner, groups));
+        if (init?.method === "POST" && url.includes("/repeat?")) {
+          const request = captureRepeat(url, init);
+          writes.push(request);
+          return Response.json(repeatReceipt(request));
+        }
+        return base(url, init);
+      });
+      await mount(fetch);
+      await click("Repeat Apple 0 to another day or meal");
+      expect(
+        elements(field("Repeat meal"))
+          .filter((node) => node.type === "option")
+          .map((node) => [node.props.value, text(node)]),
+      ).toEqual(groups.map((group) => [group.mealSlot, group.label]));
+      await change("Repeat date", targetDate);
+      await change("Repeat meal", "lunch");
+      await click("Confirm repeat destination");
+      expect(writes).toHaveLength(1);
+      expect(writes[0]?.body).toBe(JSON.stringify({ occurredAt, mealSlot: "lunch" }));
+      expect(writes[0]?.headers["if-match"]).toBe('"3"');
+      expect(writes[0]?.headers["x-expected-profile-time-zone"]).toBe("America/Chicago");
+      expect(writes[0]?.url).toBe(
+        `/api/diary/entries/${entry(0).id}/repeat?date=2026-08-15&profileTimeZonePrecondition=v1`,
+      );
+      expect(text()).toContain(`Pinned entry version repeated in Midday for ${targetDate}.`);
+      expect(fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?")).length).toBe(1);
+      const summary = elements().find(
+        (node) => node.props["aria-labelledby"] === "nutrition-summary-title",
+      );
+      expect(text(summary)).toContain("≥ 125.500000000000 kcal");
+      expect(text()).not.toContain("Pending repeat:");
+    },
+  );
+
+  it("repeats a recipe from a locked source without reconstructing its snapshot", async () => {
+    const { foodProvenance: _provenance, ...recipeBase } = entry(2, "dinner");
+    const recipeEntry = {
+      ...recipeBase,
+      entryKind: "recipe",
+      foodVersionId: null,
+      recipeVersionId: "de1f6d0a-f7dc-4b25-b7b9-3eef1d44779a",
+      portion: { kind: "serving", amount: "1.250000", servingLabel: "bowl" },
+      food: null,
+      source: null,
+      sources: [source],
+      recipe: {
+        id: "df94a52f-e84a-4cd5-873e-227d1e213d62",
+        name: "Saved stew",
+        versionNumber: 2,
+        yieldGrams: "800",
+        yieldSource: "measured",
+        servingCount: "4",
+        servingLabel: "bowl",
+        calculationVersion: "recipe-v1",
+        retentionPolicy: {
+          code: "identity-retention-default",
+          version: "1",
+          assumption: "No cooking-retention factor was applied.",
+        },
+        warnings: [],
+      },
+    };
+    const fixture = {
+      ...page(),
+      data: { ...page().data, status: "locked", entries: [recipeEntry] },
+      page: { nextCursor: null, totalEntries: 1 },
+    };
+    expect(() => parseDiaryPage(fixture)).not.toThrow();
+    const writes: CapturedRepeat[] = [];
+    const base = fetcher();
+    await mount(
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.startsWith("/api/diary?")) return Response.json(fixture);
+        if (init?.method === "POST" && url.includes("/repeat?")) {
+          writes.push(captureRepeat(url, init));
+          return Response.json({ error: "Uncertain response" }, { status: 503 });
+        }
+        return base(url, init);
+      }),
+    );
+    await click("Repeat Saved stew to another day or meal");
+    await change("Repeat date", "2026-08-22");
+    await click("Confirm repeat destination");
+    expect(writes[0]?.url).toContain(recipeEntry.id);
+    expect(writes[0]?.headers["if-match"]).toBe('"3"');
+    expect(JSON.parse(writes[0]?.body ?? "{}")).toEqual({
+      occurredAt: "2026-08-22T17:00:00.000Z",
+      mealSlot: "dinner",
+    });
+  });
+
+  it.each([
+    ["Repeat date", "2026-02-30"],
+    ["Repeat date", ""],
+    ["Repeat meal", "unconfigured"],
+  ])("rejects invalid %s locally", async (label, value) => {
+    const fetch = await mount();
+    const count = fetch.mock.calls.length;
+    await click("Repeat Apple 0 to another day or meal");
+    await change(label, value);
+    await click("Confirm repeat destination");
+    expect(text()).toContain("Choose a valid repeat date and one of your configured meals.");
+    expect(field(label).props.value).toBe(value);
+    expect(fetch).toHaveBeenCalledTimes(count);
+  });
+
+  it("keeps a valid-calendar skipped date local and explains the zone error", async () => {
+    const apiaSession = session();
+    apiaSession.data.profile.timeZone = "Pacific/Apia";
+    const base = fetcher();
+    const fetch = vi.fn((url: string, init?: RequestInit) =>
+      url === "/api/auth/me" ? Promise.resolve(Response.json(apiaSession)) : base(url, init),
+    );
+    await mount(fetch);
+    const count = fetch.mock.calls.length;
+    await click("Repeat Apple 0 to another day or meal");
+    await change("Repeat date", "2011-12-30");
+    await click("Confirm repeat destination");
+    expect(text()).toContain("That repeat date has no usable time in your profile time zone.");
+    expect(fetch).toHaveBeenCalledTimes(count);
+  });
+
+  it("fences retained coordinate, cancel, confirm and open controls before rerender", async () => {
+    const fetch = await mount();
+    const count = fetch.mock.calls.length;
+    const oldOpen = button("Repeat Apple 0 to another day or meal");
+    await click("Repeat Apple 0 to another day or meal");
+    const oldConfirm = button("Confirm repeat destination");
+    const oldCancel = button("Cancel repeat destination");
+    const oldMeal = field("Repeat meal");
+    invoke(field("Repeat date"), "onChange", { target: { value: "2026-08-24" } });
+    invoke(oldConfirm);
+    invoke(oldCancel);
+    invoke(oldMeal, "onChange", { target: { value: "dinner" } });
+    invoke(oldOpen);
+    await hooks.settle();
+    expect(field("Repeat date").props.value).toBe("2026-08-24");
+    expect(field("Repeat meal").props.value).toBe("breakfast");
+    const earlierConfirm = button("Confirm repeat destination");
+    await click("Repeat Apple 1 to another day or meal");
+    invoke(earlierConfirm);
+    await hooks.settle();
+    expect(
+      elements().filter((node) =>
+        node.props["aria-label"]?.toString().startsWith("Repeat destination for "),
+      ),
+    ).toHaveLength(1);
+    expect(field("Repeat meal").props.value).toBe("lunch");
+    expect(fetch).toHaveBeenCalledTimes(count);
+  });
+
+  it.each([
+    "route",
+    "date-return",
+    "visibility",
+    "pagehide",
+    "unmount",
+    "logout",
+    "profile",
+    "collapse",
+    "edit",
+  ] as const)(
+    "retires the destination and rejects retained controls after %s",
+    async (transition) => {
+      const base = fetcher();
+      const fetch = vi.fn((url: string, init?: RequestInit) =>
+        url === "/api/auth/logout"
+          ? Promise.resolve(new Response(null, { status: 204 }))
+          : base(url, init),
+      );
+      await mount(fetch);
+      await click("Repeat Apple 0 to another day or meal");
+      const confirm = button("Confirm repeat destination"),
+        cancel = button("Cancel repeat destination"),
+        dateInput = field("Repeat date");
+      if (transition === "route") {
+        route.date = "2026-08-16";
+        hooks.renderWithoutEffects();
+      }
+      if (transition === "date-return") {
+        await visitDiaryDate("2026-08-16");
+        await visitDiaryDate("2026-08-15");
+      }
+      if (transition === "visibility") {
+        detailLifecycle.visibility = "hidden";
+        detailLifecycle.documentListeners.get("visibilitychange")?.();
+      }
+      if (transition === "pagehide") detailLifecycle.windowListeners.get("pagehide")?.();
+      if (transition === "unmount") hooks.unmount();
+      if (transition === "logout") await click("Sign out");
+      if (transition === "profile")
+        hooks.replaceVerifiedSessionBeforeEffects(
+          parseSession(session(owner, defaultDiaryGroups, "2")),
+        );
+      if (transition === "collapse") invoke(button("Collapse Breakfast"));
+      if (transition === "edit") invoke(button("Edit Apple 0"));
+      const count = fetch.mock.calls.length;
+      invoke(confirm);
+      invoke(cancel);
+      invoke(dateInput, "onChange", { target: { value: "2026-09-01" } });
+      if (transition !== "route") await hooks.settle();
+      expect(fetch).toHaveBeenCalledTimes(count);
+      expect(hooks.afterClose()).toBe(0);
+      if (transition !== "unmount")
+        expect(
+          elements().some((node) => node.props["aria-label"] === "Repeat destination for Apple 0"),
+        ).toBe(false);
+      if (transition === "collapse") {
+        await click("Expand Breakfast");
+        expect(
+          elements().some((node) => node.props["aria-label"] === "Repeat destination for Apple 0"),
+        ).toBe(false);
+      }
+    },
+  );
+
+  it("shows the immutable custom destination and explicitly retries the exact envelope across midnight", async () => {
+    const writes: CapturedRepeat[] = [];
+    const base = fetcher();
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === "POST" && url.includes("/repeat?")) {
+        const request = captureRepeat(url, init);
+        writes.push(request);
+        return writes.length === 1
+          ? Response.json({ error: "Response lost" }, { status: 503 })
+          : Response.json(repeatReceipt(request));
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    const oldToday = button("Repeat Apple 0 today");
+    const oldOpen = button("Repeat Apple 0 to another day or meal");
+    await click("Repeat Apple 0 to another day or meal");
+    await change("Repeat date", "2026-10-04");
+    await change("Repeat meal", "dinner");
+    await click("Confirm repeat destination");
+    expect(text()).toContain("Pending repeat: 2026-10-04 · Dinner · America/Chicago");
+    expect(button("Repeat Apple 0 to another day or meal").props.disabled).toBe(true);
+    expect(elements().some((node) => node.props["aria-label"] === "Repeat Apple 0 today")).toBe(
+      false,
+    );
+    invoke(oldToday);
+    invoke(oldOpen);
+    await hooks.settle();
+    expect(writes).toHaveLength(1);
+    const retry = button("Retry repeat for Apple 0");
+    vi.setSystemTime(new Date("2026-08-22T03:00:00.001Z"));
+    await click("Retry repeat for Apple 0");
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toEqual(writes[0]);
+    expect(writes[0]?.body).toBe(
+      JSON.stringify({ occurredAt: "2026-10-04T17:00:00.000Z", mealSlot: "dinner" }),
+    );
+    expect(text()).not.toContain("Pending repeat:");
+    invoke(retry);
+    await hooks.settle();
+    expect(writes).toHaveLength(2);
+  });
+
+  it("does not revive a cancelled destination from retained controls", async () => {
+    const fetch = await mount();
+    const count = fetch.mock.calls.length;
+    await click("Repeat Apple 0 to another day or meal");
+    const confirm = button("Confirm repeat destination"),
+      oldDate = field("Repeat date");
+    await click("Cancel repeat destination");
+    invoke(confirm);
+    invoke(oldDate, "onChange", { target: { value: "2026-10-01" } });
+    await hooks.settle();
+    expect(
+      elements().some((node) => node.props["aria-label"] === "Repeat destination for Apple 0"),
+    ).toBe(false);
+    await click("Repeat Apple 0 to another day or meal");
+    invoke(confirm);
+    await hooks.settle();
+    expect(field("Repeat date").props.value).toBe("2026-08-20");
+    expect(fetch).toHaveBeenCalledTimes(count);
+  });
+
+  it("reloads authoritative source-day totals after repeating into that same day", async () => {
+    const updatedNutrient = { ...nutrient, knownAmount: "377.250000000000" };
+    const base = fetcher();
+    let reads = 0;
+    const writes: CapturedRepeat[] = [];
+    const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith("/api/diary?")) {
+        reads += 1;
+        const value = page();
+        if (reads > 1) {
+          value.data.revision = "9";
+          value.data.totals = [updatedNutrient];
+        }
+        return Response.json(value);
+      }
+      if (init?.method === "POST" && url.includes("/repeat?")) {
+        const request = captureRepeat(url, init);
+        writes.push(request);
+        return Response.json(repeatReceipt(request));
+      }
+      return base(url, init);
+    });
+    await mount(fetch);
+    await click("Repeat Apple 0 to another day or meal");
+    await change("Repeat date", "2026-08-15");
+    await change("Repeat meal", "lunch");
+    await click("Confirm repeat destination");
+    expect(reads).toBe(2);
+    expect(writes[0]?.body).toBe(
+      JSON.stringify({ occurredAt: "2026-08-15T17:00:00.000Z", mealSlot: "lunch" }),
+    );
+    expect(text()).toContain(
+      "Pinned entry version repeated in Lunch with fresh authoritative totals.",
+    );
+    const summary = elements().find(
+      (node) => node.props["aria-labelledby"] === "nutrition-summary-title",
+    );
+    expect(text(summary)).toContain("≥ 377.250000000000 kcal");
+  });
+
+  it("fences an explicit retry while its meal is collapsed and reuses it after expansion", async () => {
+    const writes: CapturedRepeat[] = [];
+    const base = fetcher();
+    await mount(
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST" && url.includes("/repeat?")) {
+          writes.push(captureRepeat(url, init));
+          return Response.json({ error: "Response lost" }, { status: 503 });
+        }
+        return base(url, init);
+      }),
+    );
+    await click("Repeat Apple 0 to another day or meal");
+    await change("Repeat date", "2026-08-21");
+    await click("Confirm repeat destination");
+    const retry = button("Retry repeat for Apple 0");
+    invoke(button("Collapse Breakfast"));
+    invoke(retry);
+    await hooks.settle();
+    expect(writes).toHaveLength(1);
+    await click("Expand Breakfast");
+    await click("Retry repeat for Apple 0");
+    expect(writes).toHaveLength(2);
+    expect(writes[1]).toEqual(writes[0]);
+  });
+
+  it("retires a destination when route dates change and return before effects", async () => {
+    const fetch = await mount();
+    const count = fetch.mock.calls.length;
+    await click("Repeat Apple 0 to another day or meal");
+    const confirm = button("Confirm repeat destination");
+    route.date = "2026-08-16";
+    hooks.renderWithoutEffects();
+    route.date = "2026-08-15";
+    hooks.renderWithoutEffects();
+    expect(
+      elements().some((node) => node.props["aria-label"] === "Repeat destination for Apple 0"),
+    ).toBe(false);
+    invoke(confirm);
+    await hooks.settle();
+    expect(fetch).toHaveBeenCalledTimes(count);
   });
 });

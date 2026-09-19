@@ -1,6 +1,6 @@
 # ADR 0098: Choose web activity time occurrences explicitly
 
-Status: Source complete and reviewed; final canonical and exact-commit automatic evidence pending.
+Status: Implemented at `2a22a0f`; local and exact-commit automatic evidence passed. Browser/release acceptance remains separate.
 
 ## Context
 
@@ -54,11 +54,24 @@ callbacks and exact retries. Web types and scoped Biome passed on the reviewed
 three-file source. Two intended baseline regressions and an initial outdated
 automatic-earlier test expectation remain recorded.
 
-Final canonical `pnpm check` and `pnpm build`, and exact-commit automatic evidence,
-remain pending in the dated outside-Git record. Delivery requires all three actual
-CI jobs and all nine actual container jobs at the resulting commit.
+Final canonical and automatic evidence was pending at the source checkpoint.
+The delivery evidence below closes that dated state.
 
 Deterministic hook and build evidence does not prove concurrent React, real-browser
 TZDB or layout behavior, assistive-technology, physical-device, hosted or release
 acceptance. This slice does not authorize browser/services, installation, audit,
 device actions or paid review. All existing release and approval gates remain.
+
+## Delivery evidence
+
+Delivered at `2a22a0f6115528cbcc841e1cb21d46444065cd94`. September 19 canonical
+check passed 1,299 fresh cases and 3,213 cached cases, with 93 cached opt-in skips.
+Build passed 11 tasks, ten cached, with a fresh web build; native exports were
+cached. At 20:37:34 UTC, official evidence confirmed all three actual jobs in
+[CI 35463394316](https://github.com/liangzixuan/cronometer-gold/actions/runs/35463394316)
+and all nine actual jobs in
+[container run 35463394427](https://github.com/liangzixuan/cronometer-gold/actions/runs/35463394427)
+completed successfully at the exact commit, both on attempt one. Clean matching
+local, tracking and live heads and eight reviewed working-tree/committed hashes
+were verified at 20:38:16 UTC. All earlier pending observations remain recorded.
+This does not establish browser, assistive-technology or release acceptance.

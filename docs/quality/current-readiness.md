@@ -154,11 +154,20 @@ audit failure; successful database/secrets were carried forward and containers
 passed on attempt one. The original failure remains recorded. Clean matching
 local/tracking/live heads and seven reviewed hashes were verified at 18:47:24 UTC.
 
-Active work is [ADR 0098](../adr/0098-web-activity-time-occurrence.md): explicit
-web activity Earlier/Later UTC-offset choices for Add and time corrections,
-including the same displayed minute. Preserve exact untouched default and
-metadata-only timestamps, reuse, private guards and exact retries.
-Independent source review, 86 focused cases (28 new), web types and scoped
+[ADR 0098](../adr/0098-web-activity-time-occurrence.md) is delivered at
+`2a22a0f6115528cbcc841e1cb21d46444065cd94`: independent review, 86 focused cases,
+web types, scoped Biome and canonical check/build passed. Canonical check recorded
+1,299 fresh and 3,213 cached passes, with 93 cached opt-in skips. Web build was
+fresh and native exports cached. September 19 20:37:34 UTC official evidence
+confirms all three CI35463394316 and nine actual container35463394427 jobs passed
+on attempt one. Clean matching local/tracking/live heads and eight reviewed
+working-tree/committed hashes were verified at 20:38:16 UTC.
+
+Active work is [ADR 0099](../adr/0099-web-diary-repeat-destination.md): repeat a
+pinned logged food or recipe to a chosen date and configured meal group on web.
+Keep Repeat today and visibly preserve the original destination of uncertain
+requests with exact retry identity, private guards and authoritative totals.
+Independent source review, 115 focused cases (24 new), web types and scoped
 Biome passed on the reviewed source. Final canonical and exact-commit automatic
 evidence remains pending. No API, dependency, installation, local audit,
 service/browser/device or paid review action is part of this slice.

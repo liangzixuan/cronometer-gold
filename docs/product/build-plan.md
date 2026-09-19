@@ -102,7 +102,8 @@ retains earlier boundaries. A successful successor never changes an older result
 
 | Order | Work | Concrete exit |
 | --- | --- | --- |
-| Active source milestone | Web activity time occurrence choices (ADR 0098) | Explicit repeated-minute choices for Add and time corrections; preserve exact untouched timestamps, private guards, reuse and retries, with reviewed local and automatic evidence. |
+| Active source milestone | Web diary repeat destination (ADR 0099) | Choose a destination date and configured meal for one pinned logged portion; retain Repeat today, exact pending retries and private guards, with reviewed local and automatic evidence. |
+| Completed source milestone | Web activity time occurrence choices (ADR 0098) | Delivered at `2a22a0f`: explicit repeated-minute choices with exact untouched timestamps and retries; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Web report day inspector (ADR 0097) | Delivered at `7a104ea`: all 15 nutrients for one report day; local gates and all three CI/nine actual container jobs passed after one approved quality retry. |
 | Completed source milestone | Native activity time occurrence choice (ADR 0096) | Delivered at `e3eb556`: explicit repeated-minute choices with preserved precise defaults and exact retries; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Native report day inspector (ADR 0095) | Delivered at `bae63da`: all 15 nutrients for one day from the same private snapshot; local gates and all three CI/nine actual container jobs passed. |
@@ -127,20 +128,19 @@ retains earlier boundaries. A successful successor never changes an older result
 | Completed external review | Scoped Claude review at `805b937` | The supplied report found no ADR 0077 blockers. Its recommendations were addressed in the delivered follow-up; the report remains limited to its original scope. Routine product work does not require another paid review. |
 | Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Advance only under applicable existing authorization and unchanged release gates. |
 
-### Active bounded milestone: web activity time occurrence choices
+### Active bounded milestone: web diary repeat destination
 
-[ADR 0098](../adr/0098-web-activity-time-occurrence.md) addresses the web activity
-form's silent earlier-occurrence selection and inability to correct between two
-occurrences of the same displayed minute. Offer explicit UTC-offset choices for
-Add and time corrections with the existing resolver. Preserve exact untouched
-defaults and metadata-only edits, reuse, private guards and exact retries.
+[ADR 0099](../adr/0099-web-diary-repeat-destination.md) lets web users repeat an
+exact logged food or recipe directly to a chosen date and configured meal group.
+Keep Repeat today, source revisions, current profile-zone guards, validated
+receipts and authoritative totals. Show and safely retry the original destination
+of uncertain operations instead of replacing their exact request identity.
 
-The prior [web report day inspector](../adr/0097-web-report-day-inspector.md) is
-delivered at `7a104ea`, with local and exact-commit automatic evidence complete.
-The initial registry-report audit failure and one approved quality rerun remain
-recorded. No API, schema, dependency, installation, local audit, browser/service/
-device action or paid review is part of ADR 0098. Prior rerun and audit approvals
-are consumed. Follow the [proportionate review policy](../quality/development-workflow.md#proportionate-independent-review).
+The prior [web activity time occurrence choices](../adr/0098-web-activity-time-occurrence.md)
+are delivered at `2a22a0f`, with local and exact-commit automatic evidence complete.
+No API, schema, dependency, installation, local audit, browser/service/device or
+paid review action is part of ADR 0099. Prior rerun and audit approvals are
+consumed. Follow the [proportionate review policy](../quality/development-workflow.md#proportionate-independent-review).
 Real-browser, assistive-technology and release acceptance remain separate.
 
 ### Milestone and external-decision boundaries

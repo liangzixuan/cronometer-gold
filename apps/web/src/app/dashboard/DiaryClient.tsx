@@ -55,6 +55,7 @@ import {
   parseSession,
   prepareDiaryDayReorderOperation,
   prepareDiaryEntryNotePatch,
+  quickAddOccurredAt,
   quoteRevision,
   resolveDiaryRouteDate,
   type SessionSummary,
@@ -83,7 +84,21 @@ interface EntryEditor extends DiaryEditorOrigin {
   readonly originalLocalTime: string;
 }
 
+interface RepeatDestination {
+  readonly explicitDate: string | null;
+  readonly entry: DiaryEntry;
+  readonly sourcePage: DiaryPage;
+  readonly session: SessionSummary;
+  readonly targetDate: string;
+  readonly mealSlot: string;
+  readonly viewEpoch: number;
+  readonly requestGeneration: number;
+  readonly privateGeneration: number;
+  readonly lifecycleEpoch: number;
+}
+
 interface RepeatOperation {
+  readonly customDestination: boolean;
   readonly sourceEntryId: string;
   readonly sourceRevision: string;
   readonly sourceDate: string;
@@ -194,6 +209,14 @@ export function DiaryClient() {
   const [pageState, setPageState] = useState<PageLoadState>("idle");
   const [message, setMessage] = useState("Opening your private diary…");
   const [editor, setEditorState] = useState<EntryEditor | null>(null);
+  const [repeatDestination, setRepeatDestination] = useState<RepeatDestination | null>(null);
+  const repeatDestinationRef = useRef(repeatDestination);
+  const repeatDestinationGeneration = useRef(0);
+  const closeRepeatDestination = useCallback(() => {
+    repeatDestinationGeneration.current += 1;
+    repeatDestinationRef.current = null;
+    setRepeatDestination(null);
+  }, []);
   const [mealVisibility, setMealVisibility] = useState<{
     readonly scope: string;
     readonly collapsed: ReadonlySet<MealSlot>;
@@ -228,6 +251,7 @@ export function DiaryClient() {
   explicitDateRef.current = explicitDate;
   const operationIds = useRef(new Map<string, string>());
   const repeatOperations = useRef(new Map<string, RepeatOperation>());
+  const renderedRepeatOperations = new Map(repeatOperations.current);
   const loadController = useRef<AbortController | null>(null);
   const hydrationOverviewController = useRef<AbortController | null>(null);
   const activityOverviewController = useRef<AbortController | null>(null);
@@ -280,12 +304,27 @@ export function DiaryClient() {
     }
   }
   const renderedNutrientEpoch = entryNutrientEpoch.current;
+  if (
+    repeatDestinationRef.current &&
+    (repeatDestinationRef.current.explicitDate !== explicitDate ||
+      repeatDestinationRef.current.sourcePage !== diaryPage ||
+      repeatDestinationRef.current.session !== session ||
+      repeatDestinationRef.current.viewEpoch !== mealViewEpoch ||
+      repeatDestinationRef.current.requestGeneration !== mealRequestGeneration ||
+      repeatDestinationRef.current.privateGeneration !== mealPrivateGeneration ||
+      repeatDestinationRef.current.lifecycleEpoch !== renderedNutrientEpoch)
+  ) {
+    repeatDestinationRef.current = null;
+    repeatDestinationGeneration.current += 1;
+  }
+  const renderedRepeatDestinationGeneration = repeatDestinationGeneration.current;
   const closeEntryNutrients = useCallback(() => {
+    closeRepeatDestination();
     entryNutrientEpoch.current += 1;
     const next = new Map<DiaryEntry, { readonly open: boolean }>();
     entryNutrientChoicesRef.current = next;
     setEntryNutrientChoices(next);
-  }, []);
+  }, [closeRepeatDestination]);
 
   function canInspectEntryNutrients(entry: DiaryEntry) {
     const currentPage = diaryPageRef.current;
@@ -352,6 +391,8 @@ export function DiaryClient() {
     window.addEventListener("pageshow", visibilityChanged);
     return () => {
       entryNutrientActive.current = false;
+      repeatDestinationRef.current = null;
+      repeatDestinationGeneration.current += 1;
       entryNutrientEpoch.current += 1;
       entryNutrientChoicesRef.current = new Map();
       document.removeEventListener("visibilitychange", visibilityChanged);
@@ -360,10 +401,14 @@ export function DiaryClient() {
     };
   }, [closeEntryNutrients]);
 
-  const setEditor = useCallback((next: EntryEditor | null) => {
-    editorRef.current = next;
-    setEditorState(next);
-  }, []);
+  const setEditor = useCallback(
+    (next: EntryEditor | null) => {
+      closeRepeatDestination();
+      editorRef.current = next;
+      setEditorState(next);
+    },
+    [closeRepeatDestination],
+  );
 
   function canUseMealControls() {
     return (
@@ -395,6 +440,7 @@ export function DiaryClient() {
       )
     )
       return;
+    closeRepeatDestination();
     const collapsed = new Set(collapsedMeals);
     if (collapsed.has(mealSlot)) collapsed.delete(mealSlot);
     else collapsed.add(mealSlot);
@@ -877,6 +923,7 @@ export function DiaryClient() {
   }
 
   function beginMutation(sourceDate: string, busyKey: string): MutationOwner {
+    closeRepeatDestination();
     const token = mutationSequence.current + 1;
     mutationSequence.current = token;
     activeMutation.current = token;
@@ -1163,8 +1210,8 @@ export function DiaryClient() {
     }
   }
 
-  async function repeatEntry(entry: DiaryEntry) {
-    if (
+  function canRepeatEntry(entry: DiaryEntry) {
+    return !(
       !session ||
       !diary ||
       privateUiClosed.current ||
@@ -1186,24 +1233,120 @@ export function DiaryClient() {
       profileController.current !== null ||
       timeZoneRefreshController.current !== null ||
       profileBusy
+    );
+  }
+
+  function pendingRepeat(entry: DiaryEntry) {
+    return session
+      ? repeatOperations.current.get(JSON.stringify([session.user.id, entry.id]))
+      : undefined;
+  }
+
+  function renderedPendingRepeat(entry: DiaryEntry) {
+    return session
+      ? renderedRepeatOperations.get(JSON.stringify([session.user.id, entry.id]))
+      : undefined;
+  }
+
+  function currentRepeatDestination(choice: RepeatDestination) {
+    return (
+      repeatDestinationRef.current === choice &&
+      choice.explicitDate === explicitDateRef.current &&
+      choice.sourcePage === diaryPageRef.current &&
+      choice.session === sessionRef.current &&
+      choice.viewEpoch === viewEpoch.current &&
+      choice.requestGeneration === requestGeneration.current &&
+      choice.privateGeneration === privateUiGeneration.current &&
+      choice.lifecycleEpoch === entryNutrientEpoch.current &&
+      editorRef.current === null &&
+      canRepeatEntry(choice.entry) &&
+      canInspectEntryNutrients(choice.entry)
+    );
+  }
+
+  function openRepeatDestination(entry: DiaryEntry) {
+    if (
+      !session ||
+      !diaryPage ||
+      !canRepeatEntry(entry) ||
+      !canInspectEntryNutrients(entry) ||
+      editorRef.current !== null ||
+      pendingRepeat(entry) ||
+      repeatDestinationGeneration.current !== renderedRepeatDestinationGeneration ||
+      mealVisibilityGeneration.current !== renderedMealVisibilityGeneration
     )
       return;
+    const next: RepeatDestination = {
+      explicitDate,
+      entry,
+      sourcePage: diaryPage,
+      session,
+      targetDate: localDateInTimeZone(new Date(), session.profile.timeZone),
+      mealSlot: entry.mealSlot,
+      viewEpoch: mealViewEpoch,
+      requestGeneration: mealRequestGeneration,
+      privateGeneration: mealPrivateGeneration,
+      lifecycleEpoch: renderedNutrientEpoch,
+    };
+    repeatDestinationGeneration.current += 1;
+    repeatDestinationRef.current = next;
+    setRepeatDestination(next);
+  }
 
+  function changeRepeatDestination(
+    choice: RepeatDestination,
+    field: "targetDate" | "mealSlot",
+    value: string,
+  ) {
+    if (!currentRepeatDestination(choice) || choice[field] === value) return;
+    const next = { ...choice, [field]: value };
+    repeatDestinationGeneration.current += 1;
+    repeatDestinationRef.current = next;
+    setRepeatDestination(next);
+  }
+
+  async function repeatEntry(
+    entry: DiaryEntry,
+    destination?: RepeatDestination,
+    retry?: RepeatOperation,
+  ) {
+    if (!session || !diary || !canRepeatEntry(entry)) return;
+    if (destination && !currentRepeatDestination(destination)) return;
     const ownerUserId = session.user.id;
     const privateGeneration = privateUiGeneration.current;
     const slot = JSON.stringify([ownerUserId, entry.id]);
     let pending = repeatOperations.current.get(slot);
+    if (retry && (pending !== retry || !canInspectEntryNutrients(entry))) return;
+    if (pending && (destination || (pending.customDestination && !retry))) return;
     if (!pending) {
       const now = new Date();
-      const targetDate = localDateInTimeZone(now, session.profile.timeZone);
-      const targetTime = localTimeInTimeZone(now, session.profile.timeZone).slice(0, 5);
-      const body = {
-        occurredAt: localDateTimeToInstant(targetDate, targetTime, session.profile.timeZone),
-        mealSlot: entry.mealSlot,
-      };
+      const targetDate =
+        destination?.targetDate ?? localDateInTimeZone(now, session.profile.timeZone);
+      const targetMeal = diaryGroups.find((group) => group.mealSlot === destination?.mealSlot);
+      if (destination && (!isLocalDate(targetDate) || !targetMeal)) {
+        setMessage("Choose a valid repeat date and one of your configured meals.");
+        return;
+      }
+      let occurredAt: string;
+      try {
+        occurredAt = destination
+          ? quickAddOccurredAt(targetDate, session.profile.timeZone, now)
+          : localDateTimeToInstant(
+              targetDate,
+              localTimeInTimeZone(now, session.profile.timeZone).slice(0, 5),
+              session.profile.timeZone,
+            );
+      } catch {
+        setMessage(
+          "That repeat date has no usable time in your profile time zone. Choose another date.",
+        );
+        return;
+      }
+      const body = { occurredAt, mealSlot: targetMeal?.mealSlot ?? entry.mealSlot };
       const key = diaryRepeatOperationKey(entry.id, entry.revision, session.profile.timeZone, body);
       const requestOperationId = operationId(key);
       pending = {
+        customDestination: destination !== undefined,
         sourceEntryId: entry.id,
         sourceRevision: entry.revision,
         sourceDate: diary.localDate,
@@ -2158,12 +2301,40 @@ export function DiaryClient() {
                                       Edit
                                     </button>
                                     <button
-                                      aria-label={`Repeat ${entryName(entry)} today`}
+                                      aria-label={
+                                        renderedPendingRepeat(entry)?.customDestination
+                                          ? `Retry repeat for ${entryName(entry)}`
+                                          : `Repeat ${entryName(entry)} today`
+                                      }
                                       disabled={mutationBusy !== null}
-                                      onClick={() => void repeatEntry(entry)}
+                                      onClick={() =>
+                                        void repeatEntry(
+                                          entry,
+                                          undefined,
+                                          renderedPendingRepeat(entry)?.customDestination
+                                            ? renderedPendingRepeat(entry)
+                                            : undefined,
+                                        )
+                                      }
                                       type="button"
                                     >
-                                      {mutationBusy === entry.id ? "Working…" : "Repeat today"}
+                                      {mutationBusy === entry.id
+                                        ? "Working…"
+                                        : renderedPendingRepeat(entry)?.customDestination
+                                          ? "Retry pinned repeat"
+                                          : "Repeat today"}
+                                    </button>
+                                    <button
+                                      aria-label={`Repeat ${entryName(entry)} to another day or meal`}
+                                      disabled={
+                                        mutationBusy !== null ||
+                                        editor !== null ||
+                                        renderedPendingRepeat(entry) !== undefined
+                                      }
+                                      onClick={() => openRepeatDestination(entry)}
+                                      type="button"
+                                    >
+                                      Repeat to…
                                     </button>
                                     <button
                                       aria-label={`Delete ${entryName(entry)}`}
@@ -2177,6 +2348,99 @@ export function DiaryClient() {
                                   </div>
                                 </article>
                               )}
+                              {canInspectEntryNutrients(entry) && renderedPendingRepeat(entry) ? (
+                                <section aria-label={`Pending repeat for ${entryName(entry)}`}>
+                                  <p className="fieldHelp">
+                                    Pending repeat: {renderedPendingRepeat(entry)?.targetDate} ·{" "}
+                                    {diaryGroupLabel(
+                                      diaryGroups,
+                                      renderedPendingRepeat(entry)?.body.mealSlot ?? entry.mealSlot,
+                                    )}{" "}
+                                    · {renderedPendingRepeat(entry)?.expectedTimeZone}. The
+                                    destination and pinned source version stay fixed until this
+                                    operation is resolved.
+                                  </p>
+                                  {!renderedPendingRepeat(entry)?.customDestination ? (
+                                    <button
+                                      type="button"
+                                      disabled={mutationBusy !== null}
+                                      onClick={() =>
+                                        void repeatEntry(
+                                          entry,
+                                          undefined,
+                                          renderedPendingRepeat(entry),
+                                        )
+                                      }
+                                    >
+                                      Retry pinned repeat
+                                    </button>
+                                  ) : null}
+                                </section>
+                              ) : null}
+                              {repeatDestination?.entry === entry &&
+                              currentRepeatDestination(repeatDestination) ? (
+                                <section
+                                  className="entryEditor"
+                                  aria-label={`Repeat destination for ${entryName(entry)}`}
+                                >
+                                  <h3>Repeat {entryName(entry)} to…</h3>
+                                  <label>
+                                    Repeat date
+                                    <input
+                                      type="date"
+                                      value={repeatDestination.targetDate}
+                                      onChange={(event) =>
+                                        changeRepeatDestination(
+                                          repeatDestination,
+                                          "targetDate",
+                                          event.target.value,
+                                        )
+                                      }
+                                    />
+                                  </label>
+                                  <label>
+                                    Repeat meal
+                                    <select
+                                      value={repeatDestination.mealSlot}
+                                      onChange={(event) =>
+                                        changeRepeatDestination(
+                                          repeatDestination,
+                                          "mealSlot",
+                                          event.target.value,
+                                        )
+                                      }
+                                    >
+                                      {diaryGroups.map((group) => (
+                                        <option key={group.mealSlot} value={group.mealSlot}>
+                                          {group.label}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                  <p className="fieldHelp">
+                                    Today uses the current time; another date uses noon in{" "}
+                                    {session?.profile.timeZone}. The logged quantity, note and
+                                    nutrient snapshot are repeated unchanged.
+                                  </p>
+                                  <div className="entryActions">
+                                    <button
+                                      type="button"
+                                      onClick={() => void repeatEntry(entry, repeatDestination)}
+                                    >
+                                      Confirm repeat destination
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (currentRepeatDestination(repeatDestination))
+                                          closeRepeatDestination();
+                                      }}
+                                    >
+                                      Cancel repeat destination
+                                    </button>
+                                  </div>
+                                </section>
+                              ) : null}
                               {canInspectEntryNutrients(entry) ? (
                                 <section
                                   aria-label={`Logged nutrients for ${entryName(entry)}, ${entryPortionLabel(entry)} at ${entry.localTime.slice(0, 5)}`}
