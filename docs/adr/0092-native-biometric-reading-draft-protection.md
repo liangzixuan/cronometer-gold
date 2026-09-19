@@ -1,6 +1,6 @@
 # ADR 0092: Protect native biometric reading drafts
 
-Status: Source complete and reviewed; final canonical and exact-commit automatic evidence pending.
+Status: Implemented at `6d8189b`; local and exact-commit automatic evidence passed. Device/release acceptance remains separate.
 
 ## Context
 
@@ -69,5 +69,22 @@ review corrected an obsolete hidden decision after history/filter/read/delete
 transitions and aligned field availability with request guards; the draft remains
 intact when those decisions retire. The existing date-shortcut regression now
 uses explicit discard while retaining its stale-callback assertions. No open
-source finding remains. Final canonical and exact-commit automatic evidence is
-pending in the dated outside-Git readiness record.
+source finding remained. Final canonical and automatic results, pending at the
+source snapshot, subsequently passed as recorded below.
+
+
+## Delivery evidence
+
+Delivered at `6d8189bfb6ff2d1084bf9fbfaba79d646c1aac0c`. The final reviewed
+source passed canonical `pnpm check` on September 19, 2026 at 07:21:50–07:22:15 UTC:
+2,046 fresh cases, 2,327 cached passes and 93 cached opt-in skips. Canonical
+`pnpm build` passed at 07:22:36–52 UTC, with eleven successful tasks, ten cached
+and fresh native exports. Cached/skipped cases are not fresh service evidence.
+
+The 09:08:09 UTC official exact-commit observation confirmed all three actual
+[CI jobs](https://github.com/liangzixuan/cronometer-gold/actions/runs/35429227459)
+and all nine actual
+[container jobs](https://github.com/liangzixuan/cronometer-gold/actions/runs/35429227472)
+completed successfully on attempt one. The 09:09:05 UTC completion verifier found
+clean matching local/tracking/live heads and all seven reviewed working-tree and
+committed hashes. This closes source delivery, not signed-device or release gates.

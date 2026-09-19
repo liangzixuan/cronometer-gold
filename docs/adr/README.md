@@ -97,7 +97,8 @@ ADR with a new ADR instead of rewriting its decision.
 | [0089](./0089-native-custom-food-revision-conflict.md) | Explicit recovery from native custom-food revision conflicts | Implemented at 956ccf1; local and exact-commit automatic evidence passed; device/release acceptance separate |
 | [0090](./0090-native-activity-edit-draft-protection.md) | Protect native activity edits during local navigation | Implemented at d5b3d93; local and exact-commit automatic evidence passed; device/release acceptance separate |
 | [0091](./0091-native-hydration-correction-draft-protection.md) | Preserve native hydration correction drafts | Implemented at 58a48f9; local and exact-commit automatic evidence passed; device/release acceptance separate |
-| [0092](./0092-native-biometric-reading-draft-protection.md) | Protect native biometric reading drafts | Source complete and reviewed; final canonical/automatic evidence pending; device/release acceptance separate |
+| [0092](./0092-native-biometric-reading-draft-protection.md) | Protect native biometric reading drafts | Implemented at 6d8189b; local and exact-commit automatic evidence passed; device/release acceptance separate |
+| [0093](./0093-native-definition-reminder-draft-protection.md) | Protect native definition and reminder drafts | Source complete and reviewed; final canonical/automatic evidence pending; device/release acceptance separate |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

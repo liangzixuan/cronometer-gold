@@ -104,13 +104,21 @@ and nine actual container35414271110 jobs passed on attempt one; September 19
 03:38 UTC official evidence records complete results. Clean equal local/tracking/
 live heads and all seven reviewed file hashes were reverified at 03:39:12 UTC.
 
-Active work is [ADR 0092](../adr/0092-native-biometric-reading-draft-protection.md):
-protect exact native biometric reading drafts from silent replacement by Edit or
-Cancel. Dirty drafts require Keep/Discard; pristine transitions remain direct.
-Retain original metric/revision/timestamp precision, exact retries and existing
-private/request guards. Independent source review, 504 focused cases, native
-types and scoped Biome passed. Final canonical and exact-commit automatic evidence
-remain pending in the dated outside-Git readiness record. No dependency,
+[ADR 0092](../adr/0092-native-biometric-reading-draft-protection.md) is delivered at
+`6d8189bfb6ff2d1084bf9fbfaba79d646c1aac0c`: 504 focused cases, independent review,
+canonical check/build and fresh native exports passed. All three CI35429227459
+and nine actual container35429227472 jobs passed on attempt one; September 19
+09:08 UTC official evidence records complete results. Clean equal local/tracking/
+live heads and all seven reviewed file hashes were reverified at 09:09:05 UTC.
+
+Active work is [ADR 0093](../adr/0093-native-definition-reminder-draft-protection.md):
+protect unsaved native definition and reminder fields during local replacement,
+and retain newer definition work when an earlier save completes. Dirty drafts
+require Keep/Discard; pristine transitions remain direct. Preserve exact retries,
+saved identity/revision, immutable units, notification consent/scheduling and
+existing private/request guards. Independent source review, 528 focused cases,
+native types and scoped Biome passed. Final canonical and exact-commit automatic
+evidence remain pending in the dated outside-Git readiness record. No dependency,
 installation or audit is part of this slice. Device/release acceptance remains
 separate.
 

@@ -203,6 +203,21 @@ function composerNutrientDraft(composer: NutrientComposer): CustomFoodNutrientDr
   return candidate;
 }
 
+interface DefinitionDraft {
+  readonly definition: BiometricDefinition | null;
+  readonly name: string;
+  readonly dimension: BiometricDefinition["dimension"];
+  readonly unit: string;
+  readonly notes: string;
+}
+
+interface MetadataReplacement<Draft, Target> {
+  readonly draft: Draft;
+  readonly target: Target | null;
+  readonly scope: object;
+  readonly epoch: number;
+}
+
 interface EventDraft {
   readonly event: BiometricEvent | null;
   readonly definitionId: string;
@@ -367,6 +382,10 @@ function initialEvent(profileTimeZone: string): EventDraft {
   };
 }
 
+function initialDefinition(): DefinitionDraft {
+  return { definition: null, name: "Weight", dimension: "mass", unit: "kg", notes: "" };
+}
+
 function initialReminder(): ReminderDraft {
   return {
     reminder: null,
@@ -457,12 +476,43 @@ export function RetentionScreen({
     savedFoodFilterRef.current = next;
     setSavedFoodFilter(next);
   }, []);
+  const [definitionChoice, setDefinitionChoice] = useState<MetadataReplacement<
+    DefinitionDraft,
+    BiometricDefinition
+  > | null>(null);
+  const definitionChoiceRef = useRef(definitionChoice);
+  const definitionGeneration = useRef(0);
+  const [, setDefinitionGeneration] = useState(0);
+  const clearDefinitionChoice = useCallback(() => {
+    definitionGeneration.current += 1;
+    setDefinitionGeneration(definitionGeneration.current);
+    definitionChoiceRef.current = null;
+    setDefinitionChoice(null);
+  }, []);
+  const [reminderChoice, setReminderChoice] = useState<MetadataReplacement<
+    ReminderDraft,
+    Reminder
+  > | null>(null);
+  const reminderChoiceRef = useRef(reminderChoice);
+  const reminderGeneration = useRef(0);
+  const [, setReminderGeneration] = useState(0);
+  const reminderEditorOffset = useRef(0);
+  const clearReminderChoice = useCallback(() => {
+    reminderGeneration.current += 1;
+    setReminderGeneration(reminderGeneration.current);
+    reminderChoiceRef.current = null;
+    setReminderChoice(null);
+  }, []);
   const [definitions, setDefinitionsState] = useState<readonly BiometricDefinition[]>([]);
   const definitionsRef = useRef(definitions);
-  const setDefinitions = useCallback((items: readonly BiometricDefinition[]) => {
-    definitionsRef.current = items;
-    setDefinitionsState(items);
-  }, []);
+  const setDefinitions = useCallback(
+    (items: readonly BiometricDefinition[]) => {
+      clearDefinitionChoice();
+      definitionsRef.current = items;
+      setDefinitionsState(items);
+    },
+    [clearDefinitionChoice],
+  );
   const [history, setHistoryState] = useState<ReadingHistory>(() => ({
     range: recentHistoryRange(),
     items: [],
@@ -493,10 +543,14 @@ export function RetentionScreen({
   }, []);
   const [reminders, setRemindersState] = useState<readonly Reminder[]>([]);
   const remindersRef = useRef(reminders);
-  const setReminders = useCallback((items: readonly Reminder[]) => {
-    remindersRef.current = items;
-    setRemindersState(items);
-  }, []);
+  const setReminders = useCallback(
+    (items: readonly Reminder[]) => {
+      clearReminderChoice();
+      remindersRef.current = items;
+      setRemindersState(items);
+    },
+    [clearReminderChoice],
+  );
   const [integrations, setIntegrations] = useState<readonly PlatformIntegration[]>([]);
   const [custom, setCustomState] = useState<CustomDraft>(blankCustom);
   const customRef = useRef(custom);
@@ -729,12 +783,49 @@ export function RetentionScreen({
     if (value === null) customLogOrigin.current = null;
     setCustomLogState(value);
   }, []);
-  const [definitionName, setDefinitionName] = useState("Weight");
-  const [definitionDimension, setDefinitionDimension] =
-    useState<BiometricDefinition["dimension"]>("mass");
-  const [definitionUnit, setDefinitionUnit] = useState("kg");
-  const [definitionNotes, setDefinitionNotes] = useState("");
-  const [editingDefinition, setEditingDefinition] = useState<BiometricDefinition | null>(null);
+  const [definitionDraft, setDefinitionDraft] = useState<DefinitionDraft>(initialDefinition);
+  const definitionDraftRef = useRef(definitionDraft);
+  const definitionBaseline = useRef(definitionDraft);
+  const definitionInstalled = useRef<typeof historyScope | null>(null);
+  const definitionPrivate = useRef(customScope);
+  const definitionWrite = useRef<object | null>(null);
+  const [definitionWriting, setDefinitionWriting] = useState(false);
+  const installDefinitionDraft = useCallback(
+    (draft: DefinitionDraft, baseline = false) => {
+      clearDefinitionChoice();
+      if (baseline) definitionBaseline.current = draft;
+      definitionDraftRef.current = draft;
+      setDefinitionDraft(draft);
+    },
+    [clearDefinitionChoice],
+  );
+  const {
+    definition: editingDefinition,
+    name: definitionName,
+    dimension: definitionDimension,
+    unit: definitionUnit,
+    notes: definitionNotes,
+  } = definitionDraft;
+  const renderedDefinitionGeneration = definitionGeneration.current;
+  useEffect(() => {
+    if (definitionPrivate.current !== customScope) {
+      definitionPrivate.current = customScope;
+      definitionWrite.current = null;
+      setDefinitionWriting(false);
+      if (busyRef.current === "definition") setBusy(null);
+      installDefinitionDraft(initialDefinition(), true);
+    }
+    clearDefinitionChoice();
+    definitionInstalled.current = historyScope;
+    const subscription = AppState.addEventListener("change", (next) => {
+      if (customScopeRef.current === customScope && next !== "active") clearDefinitionChoice();
+    });
+    return () => {
+      subscription.remove();
+      definitionInstalled.current = null;
+      definitionChoiceRef.current = null;
+    };
+  }, [clearDefinitionChoice, customScope, historyScope, installDefinitionDraft, setBusy]);
   const [eventDraft, setEventDraftState] = useState(() => initialEvent(profileTimeZone));
   const eventDraftRef = useRef(eventDraft);
   const eventBaseline = useRef(eventDraft);
@@ -831,10 +922,17 @@ export function RetentionScreen({
   ]);
   const [reminderDraft, setReminderDraftState] = useState<ReminderDraft>(initialReminder);
   const reminderDraftRef = useRef(reminderDraft);
-  const installReminderDraft = useCallback((draft: ReminderDraft) => {
-    reminderDraftRef.current = draft;
-    setReminderDraftState(draft);
-  }, []);
+  const reminderBaseline = useRef(reminderDraft);
+  const renderedReminderGeneration = reminderGeneration.current;
+  const installReminderDraft = useCallback(
+    (draft: ReminderDraft, baseline = false) => {
+      clearReminderChoice();
+      if (baseline) reminderBaseline.current = draft;
+      reminderDraftRef.current = draft;
+      setReminderDraftState(draft);
+    },
+    [clearReminderChoice],
+  );
   const reminderScopeRef = useRef({ privateScope: customScope, profileTimeZone });
   if (
     reminderScopeRef.current.privateScope !== customScope ||
@@ -852,14 +950,27 @@ export function RetentionScreen({
       reminderWrite.current = null;
       setReminderWriting(false);
       if (busyRef.current === "reminder") setBusy(null);
-      installReminderDraft(initialReminder());
+      installReminderDraft(initialReminder(), true);
       setReminders([]);
     }
+    clearReminderChoice();
     reminderInstalled.current = reminderScope;
+    const subscription = AppState.addEventListener("change", (next) => {
+      if (customScopeRef.current === customScope && next !== "active") clearReminderChoice();
+    });
     return () => {
+      subscription.remove();
       reminderInstalled.current = null;
+      reminderChoiceRef.current = null;
     };
-  }, [customScope, installReminderDraft, reminderScope, setBusy, setReminders]);
+  }, [
+    clearReminderChoice,
+    customScope,
+    installReminderDraft,
+    reminderScope,
+    setBusy,
+    setReminders,
+  ]);
   const [trendInputs, setTrendInputsState] = useState(() => ({
     from: shiftLocalDate(today, -13),
     to: today,
@@ -1052,6 +1163,8 @@ export function RetentionScreen({
     const epoch = customEpoch.current;
     if (!currentCustomScope(epoch) || eventWrite.current !== null) return;
     clearReadingReplacement();
+    clearDefinitionChoice();
+    clearReminderChoice();
     clearCustomCopyChoice();
     setVerifiedFoodListScope(null);
     abortTrendRead();
@@ -1200,7 +1313,9 @@ export function RetentionScreen({
     accessToken,
     apiBase,
     clearCustomCopyChoice,
+    clearDefinitionChoice,
     clearReadingReplacement,
+    clearReminderChoice,
     installHistory,
     setEventDraft,
     closeCustom,
@@ -2167,7 +2282,98 @@ export function RetentionScreen({
     return true;
   }
 
+  function currentDefinitionDraft() {
+    return (
+      currentCustomScope(renderedCustomEpoch) &&
+      definitionInstalled.current === historyScope &&
+      historyScopeRef.current === historyScope &&
+      definitionDraftRef.current === definitionDraft &&
+      definitionGeneration.current === renderedDefinitionGeneration
+    );
+  }
+  function changeDefinitionDraft(changes: Partial<Omit<DefinitionDraft, "definition">>) {
+    if (!currentDefinitionDraft()) return;
+    if (
+      Object.entries(changes).every(
+        ([key, value]) => definitionDraft[key as keyof DefinitionDraft] === value,
+      )
+    )
+      return;
+    installDefinitionDraft({ ...definitionDraft, ...changes });
+  }
+  function installDefinitionReplacement(target: BiometricDefinition | null) {
+    installDefinitionDraft(
+      target
+        ? {
+            definition: target,
+            name: target.name,
+            dimension: target.dimension,
+            unit: target.canonicalUnit,
+            notes: target.notes ?? "",
+          }
+        : initialDefinition(),
+      true,
+    );
+  }
+  function requestDefinitionReplacement(target: BiometricDefinition | null) {
+    if (
+      !currentDefinitionDraft() ||
+      definitionChoiceRef.current !== null ||
+      (target ? !definitionsRef.current.includes(target) : !editingDefinition)
+    )
+      return;
+    const baseline = definitionBaseline.current;
+    if (
+      definitionDraft.name === baseline.name &&
+      definitionDraft.dimension === baseline.dimension &&
+      definitionDraft.unit === baseline.unit &&
+      definitionDraft.notes === baseline.notes
+    ) {
+      installDefinitionReplacement(target);
+      return;
+    }
+    const choice = {
+      draft: definitionDraft,
+      target,
+      scope: historyScope,
+      epoch: customEpoch.current,
+    };
+    definitionGeneration.current += 1;
+    setDefinitionGeneration(definitionGeneration.current);
+    definitionChoiceRef.current = choice;
+    setDefinitionChoice(choice);
+    workspaceScroll.current?.scrollTo({ y: biometricSectionOffset.current, animated: true });
+    AccessibilityInfo.announceForAccessibility(
+      "Replace unsaved definition? Keep editing definition, or discard this draft.",
+    );
+  }
+  function definitionChoiceIsCurrent(
+    choice: MetadataReplacement<DefinitionDraft, BiometricDefinition>,
+  ) {
+    return (
+      currentDefinitionDraft() &&
+      definitionChoiceRef.current === choice &&
+      choice.draft === definitionDraftRef.current &&
+      choice.scope === historyScopeRef.current &&
+      choice.epoch === customEpoch.current &&
+      (choice.target === null || definitionsRef.current.includes(choice.target))
+    );
+  }
+  function resolveDefinitionChoice(
+    choice: MetadataReplacement<DefinitionDraft, BiometricDefinition>,
+    discard: boolean,
+  ) {
+    if (!definitionChoiceIsCurrent(choice)) return;
+    if (discard) installDefinitionReplacement(choice.target);
+    else clearDefinitionChoice();
+  }
   async function saveDefinition() {
+    if (
+      !currentDefinitionDraft() ||
+      definitionChoiceRef.current !== null ||
+      definitionWrite.current !== null
+    )
+      return;
     if (!definitionName.trim() || !definitionUnit.trim())
       return setMessage("Metric name and unit are required.");
     const body = editingDefinition
@@ -2182,6 +2388,15 @@ export function RetentionScreen({
       ? `/v1/biometrics/definitions/${editingDefinition.id}`
       : "/v1/biometrics/definitions";
     const key = `definition:${editingDefinition?.id ?? "new"}:${editingDefinition?.revision ?? "0"}:${JSON.stringify(body)}`;
+    const write = {};
+    definitionWrite.current = write;
+    setDefinitionWriting(true);
+    const accepted = () =>
+      customMounted.current &&
+      customScopeRef.current === customScope &&
+      customInstalled.current === customScope &&
+      customClosed.current !== customScope &&
+      definitionWrite.current === write;
     setBusy("definition");
     try {
       const saved = parseDefinitionResponse(
@@ -2192,21 +2407,27 @@ export function RetentionScreen({
           ...(editingDefinition ? { revision: editingDefinition.revision } : {}),
         }),
       );
-      if (!installDefinitionReceipt(saved)) return;
-      setEditingDefinition(null);
-      setDefinitionName("Weight");
-      setDefinitionDimension("mass");
-      setDefinitionUnit("kg");
-      setDefinitionNotes("");
+      if (!accepted() || !installDefinitionReceipt(saved)) return;
+      if (definitionDraftRef.current === definitionDraft)
+        installDefinitionDraft(initialDefinition(), true);
       setMessage("Biometric definition saved; its dimension and unit are immutable history.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Metric definition failed.");
+      if (accepted())
+        setMessage(error instanceof Error ? error.message : "Metric definition failed.");
     } finally {
-      setBusy(null);
+      if (definitionWrite.current === write) {
+        if (accepted()) {
+          setDefinitionWriting(false);
+          if (busyRef.current === "definition") setBusy(null);
+        }
+        definitionWrite.current = null;
+      }
     }
   }
 
   async function archiveDefinition(definition: BiometricDefinition) {
+    if (!currentDefinitionDraft() || !definitionsRef.current.includes(definition)) return;
+    clearDefinitionChoice();
     const key = `definition-archive:${definition.id}:${definition.revision}`;
     setBusy(`definition:${definition.id}`);
     try {
@@ -2511,6 +2732,7 @@ export function RetentionScreen({
       reminderScopeRef.current === reminderScope &&
       reminderInstalled.current === reminderScope &&
       reminderDraftRef.current === reminderDraft &&
+      reminderGeneration.current === renderedReminderGeneration &&
       reminderWrite.current === null
     );
   }
@@ -2530,11 +2752,78 @@ export function RetentionScreen({
     if (!preset || sameReminderDays(reminderDraft.days, preset.days)) return;
     installReminderDraft({ ...reminderDraft, days: preset.days });
   }
+  function installReminderReplacement(target: Reminder | null) {
+    installReminderDraft(
+      target
+        ? {
+            reminder: target,
+            label: target.label,
+            localTime: target.localTime,
+            days: target.daysOfWeek,
+            status: target.status === "paused" ? "paused" : "active",
+          }
+        : initialReminder(),
+      true,
+    );
+  }
+  function requestReminderReplacement(target: Reminder | null) {
+    if (
+      !currentReminderDraft() ||
+      reminderChoiceRef.current !== null ||
+      (target
+        ? !remindersRef.current.includes(target) || target.status === "revoked"
+        : !reminderDraft.reminder)
+    )
+      return;
+    const baseline = reminderBaseline.current;
+    if (
+      reminderDraft.label === baseline.label &&
+      reminderDraft.localTime === baseline.localTime &&
+      sameReminderDays(reminderDraft.days, baseline.days) &&
+      reminderDraft.status === baseline.status
+    ) {
+      installReminderReplacement(target);
+      return;
+    }
+    const choice = {
+      draft: reminderDraft,
+      target,
+      scope: reminderScope,
+      epoch: customEpoch.current,
+    };
+    reminderGeneration.current += 1;
+    setReminderGeneration(reminderGeneration.current);
+    reminderChoiceRef.current = choice;
+    setReminderChoice(choice);
+    workspaceScroll.current?.scrollTo({ y: reminderEditorOffset.current, animated: true });
+    AccessibilityInfo.announceForAccessibility(
+      "Replace unsaved reminder? Keep editing reminder, or discard this draft.",
+    );
+  }
+  function reminderChoiceIsCurrent(choice: MetadataReplacement<ReminderDraft, Reminder>) {
+    return (
+      currentReminderDraft() &&
+      reminderChoiceRef.current === choice &&
+      choice.draft === reminderDraftRef.current &&
+      choice.scope === reminderScopeRef.current &&
+      choice.epoch === customEpoch.current &&
+      (choice.target === null ||
+        (remindersRef.current.includes(choice.target) && choice.target.status !== "revoked"))
+    );
+  }
+  function resolveReminderChoice(
+    choice: MetadataReplacement<ReminderDraft, Reminder>,
+    discard: boolean,
+  ) {
+    if (!reminderChoiceIsCurrent(choice)) return;
+    if (discard) installReminderReplacement(choice.target);
+    else clearReminderChoice();
+  }
   function cancelReminder() {
-    if (currentReminderDraft()) installReminderDraft(initialReminder());
+    requestReminderReplacement(null);
   }
   async function saveReminder() {
-    if (!currentReminderDraft()) return;
+    if (!currentReminderDraft() || reminderChoiceRef.current !== null) return;
     if (
       !reminderDraft.label.trim() ||
       !/^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/u.test(reminderDraft.localTime) ||
@@ -2620,7 +2909,7 @@ export function RetentionScreen({
       setReminders(next);
       await reconcileReminders(next, accepted);
       if (!accepted()) return;
-      if (reminderDraftRef.current === reminderDraft) installReminderDraft(initialReminder());
+      if (reminderDraftRef.current === reminderDraft) installReminderDraft(initialReminder(), true);
       setMessage("Reminder saved. Lock-screen copy contains no meal, goal, or health details.");
     } catch (error) {
       if (accepted())
@@ -2641,6 +2930,8 @@ export function RetentionScreen({
   }
 
   async function revokeReminder(reminder: Reminder) {
+    if (!currentReminderDraft() || !remindersRef.current.includes(reminder)) return;
+    clearReminderChoice();
     const key = `reminder-revoke:${reminder.id}:${reminder.revision}`;
     setBusy(`reminder:${reminder.id}`);
     try {
@@ -3178,19 +3469,7 @@ export function RetentionScreen({
   }
 
   function editReminder(reminder: Reminder) {
-    if (
-      !currentReminderDraft() ||
-      !remindersRef.current.includes(reminder) ||
-      reminder.status === "revoked"
-    )
-      return;
-    installReminderDraft({
-      reminder,
-      label: reminder.label,
-      localTime: reminder.localTime,
-      days: reminder.daysOfWeek,
-      status: reminder.status === "paused" ? "paused" : "active",
-    });
+    requestReminderReplacement(reminder);
   }
 
   const historyVisible = currentHistoryScope(customEpoch.current);
@@ -3232,6 +3511,11 @@ export function RetentionScreen({
   const isRecentHistory =
     history.range.from === recentHistory.current.range.from &&
     history.range.to === recentHistory.current.range.to;
+  const definitionVisible =
+    currentCustomScope(customEpoch.current) &&
+    definitionInstalled.current === historyScope &&
+    historyScopeRef.current === historyScope;
+  const visibleDefinition = definitionVisible ? definitionDraft : initialDefinition();
   const reminderVisible =
     currentCustomScope(customEpoch.current) &&
     reminderScopeRef.current === reminderScope &&
@@ -4036,59 +4320,88 @@ export function RetentionScreen({
             biometricSectionOffset.current = event.nativeEvent.layout.y;
           }}
         >
+          {definitionChoice && definitionChoiceIsCurrent(definitionChoice) ? (
+            <View style={styles.editor}>
+              <Text style={styles.cardTitle} accessibilityLiveRegion="polite">
+                Replace unsaved definition?
+              </Text>
+              <Text style={styles.help}>
+                Keep your metric fields, or discard them to{" "}
+                {definitionChoice.target ? "revise the selected definition." : "cancel this edit."}
+              </Text>
+              <Button
+                label="Keep editing definition"
+                onPress={() => resolveDefinitionChoice(definitionChoice, false)}
+                secondary
+              />
+              <Button
+                label={
+                  definitionChoice.target
+                    ? "Discard draft and revise definition"
+                    : "Discard draft and cancel definition edit"
+                }
+                onPress={() => resolveDefinitionChoice(definitionChoice, true)}
+                secondary
+              />
+            </View>
+          ) : null}
           <LabeledInput
             label="Metric name"
-            value={definitionName}
-            onChangeText={setDefinitionName}
+            value={visibleDefinition.name}
+            disabled={!definitionVisible}
+            onChangeText={(name) => changeDefinitionDraft({ name })}
             maxLength={120}
           />
-          {!editingDefinition ? (
+          {!visibleDefinition.definition ? (
             <>
               <Text style={styles.label}>Dimension</Text>
               <ChipRow
                 items={["mass", "length", "temperature", "duration", "count", "other"].map(
                   (key) => ({ key, label: key }),
                 )}
-                selected={definitionDimension}
+                selected={visibleDefinition.dimension}
+                disabled={!definitionVisible}
                 onSelect={(dimension) =>
-                  setDefinitionDimension(dimension as BiometricDefinition["dimension"])
+                  changeDefinitionDraft({
+                    dimension: dimension as BiometricDefinition["dimension"],
+                  })
                 }
               />
               <LabeledInput
                 label="Canonical unit"
-                value={definitionUnit}
-                onChangeText={setDefinitionUnit}
+                value={visibleDefinition.unit}
+                disabled={!definitionVisible}
+                onChangeText={(unit) => changeDefinitionDraft({ unit })}
                 maxLength={32}
               />
             </>
           ) : (
             <Text style={styles.help}>
-              Dimension and canonical unit remain {editingDefinition.dimension} /{" "}
-              {editingDefinition.canonicalUnit} for historical consistency.
+              Dimension and canonical unit remain {visibleDefinition.definition.dimension} /{" "}
+              {visibleDefinition.definition.canonicalUnit} for historical consistency.
             </Text>
           )}
           <LabeledInput
             label="Definition notes"
-            value={definitionNotes}
-            onChangeText={setDefinitionNotes}
+            value={visibleDefinition.notes}
+            disabled={!definitionVisible}
+            onChangeText={(notes) => changeDefinitionDraft({ notes })}
             multiline
             maxLength={1_000}
           />
           <View style={styles.actions}>
             <Button
-              label={editingDefinition ? "Save definition revision" : "Create definition"}
+              label={
+                visibleDefinition.definition ? "Save definition revision" : "Create definition"
+              }
+              disabled={!definitionVisible || definitionWriting || definitionChoice !== null}
               onPress={() => void saveDefinition()}
             />
-            {editingDefinition ? (
+            {visibleDefinition.definition ? (
               <Button
                 label="Cancel"
-                onPress={() => {
-                  setEditingDefinition(null);
-                  setDefinitionName("Weight");
-                  setDefinitionUnit("kg");
-                  setDefinitionDimension("mass");
-                  setDefinitionNotes("");
-                }}
+                disabled={!definitionVisible || definitionChoice !== null}
+                onPress={() => requestDefinitionReplacement(null)}
                 secondary
               />
             ) : null}
@@ -4110,18 +4423,14 @@ export function RetentionScreen({
                 />
                 <Button
                   label="Revise"
-                  onPress={() => {
-                    setEditingDefinition(definition);
-                    setDefinitionName(definition.name);
-                    setDefinitionDimension(definition.dimension);
-                    setDefinitionUnit(definition.canonicalUnit);
-                    setDefinitionNotes(definition.notes ?? "");
-                  }}
+                  disabled={!definitionVisible || definitionChoice !== null}
+                  onPress={() => requestDefinitionReplacement(definition)}
                   secondary
                 />
                 {definition.status === "active" ? (
                   <Button
                     label="Archive"
+                    disabled={!definitionVisible}
                     onPress={() => void archiveDefinition(definition)}
                     danger
                   />
@@ -4360,7 +4669,35 @@ export function RetentionScreen({
         <Section
           title="Private local reminders"
           subtitle="The OS receives only “Nutrition Tracker” and “Time to check in.” Labels stay inside the authenticated app."
+          onLayout={(event) => {
+            reminderEditorOffset.current = event.nativeEvent.layout.y;
+          }}
         >
+          {reminderChoice && reminderChoiceIsCurrent(reminderChoice) ? (
+            <View style={styles.editor}>
+              <Text style={styles.cardTitle} accessibilityLiveRegion="polite">
+                Replace unsaved reminder?
+              </Text>
+              <Text style={styles.help}>
+                Keep your label, time, days and status, or discard them to{" "}
+                {reminderChoice.target ? "edit the selected reminder." : "cancel this edit."}
+              </Text>
+              <Button
+                label="Keep editing reminder"
+                onPress={() => resolveReminderChoice(reminderChoice, false)}
+                secondary
+              />
+              <Button
+                label={
+                  reminderChoice.target
+                    ? "Discard draft and edit reminder"
+                    : "Discard draft and cancel reminder edit"
+                }
+                onPress={() => resolveReminderChoice(reminderChoice, true)}
+                secondary
+              />
+            </View>
+          ) : null}
           <LabeledInput
             label="Private in-app label"
             value={reminderVisible ? reminderDraft.label : ""}
@@ -4420,13 +4757,13 @@ export function RetentionScreen({
             <Button
               label={visibleReminder.reminder ? "Save reminder" : "Grant access and create"}
               onPress={() => void saveReminder()}
-              disabled={reminderDisabled}
+              disabled={reminderDisabled || reminderChoice !== null}
             />
             {visibleReminder.reminder ? (
               <Button
                 label="Cancel"
                 onPress={cancelReminder}
-                disabled={reminderDisabled}
+                disabled={reminderDisabled || reminderChoice !== null}
                 secondary
               />
             ) : null}
@@ -4447,10 +4784,15 @@ export function RetentionScreen({
                     <Button
                       label="Edit / pause"
                       onPress={() => editReminder(reminder)}
-                      disabled={reminderDisabled}
+                      disabled={reminderDisabled || reminderChoice !== null}
                       secondary
                     />
-                    <Button label="Revoke" onPress={() => void revokeReminder(reminder)} danger />
+                    <Button
+                      label="Revoke"
+                      disabled={reminderDisabled}
+                      onPress={() => void revokeReminder(reminder)}
+                      danger
+                    />
                   </>
                 ) : null}
               </View>

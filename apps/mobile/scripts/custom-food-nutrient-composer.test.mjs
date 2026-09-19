@@ -5295,6 +5295,8 @@ describe("native reminder day presets", () => {
     await pressReminder(harness, "Edit / pause", true);
     await pressReminder(harness, "Weekends");
     tree = await pressReminder(harness, "Cancel");
+    expect(reminderDays(tree)).toEqual([6, 7]);
+    tree = await pressReminder(harness, "Discard draft and cancel reminder edit");
     expect(input(tree, "Private in-app label").props.value).toBe("Daily check-in");
     expect(reminderDays(tree)).toEqual([1, 2, 3, 4, 5, 6, 7]);
     harness.unmount();
@@ -5355,6 +5357,9 @@ describe("native reminder day presets", () => {
     expect(reminderDays(tree)).toEqual([1, 2, 3, 4, 5]);
     const oldAfterCancel = button(reminderSection(tree), "Weekends").props.onPress;
     await pressReminder(harness, "Cancel");
+    oldAfterCancel();
+    expect(reminderDays(await harness.settle())).toEqual([1, 2, 3, 4, 5]);
+    await pressReminder(harness, "Discard draft and cancel reminder edit");
     oldAfterCancel();
     expect(reminderDays(await harness.settle())).toEqual([1, 2, 3, 4, 5, 6, 7]);
     expect(reminderWrites(requests)).toHaveLength(0);
@@ -10398,4 +10403,388 @@ describe("native biometric reading draft replacement protection", () => {
     expect(title.props.accessibilityLiveRegion).toBe("polite");
     harness.unmount();
   });
+});
+
+describe("native definition and reminder draft protection", () => {
+  for (const origin of ["new", "saved"])
+    it(`keeps exact ${origin} definition fields before Revise replaces the form`, async () => {
+      const { harness, requests } = setupTrends();
+      if (origin === "saved") await pressBiometric(harness, "Revise", trendDefinition.id);
+      await type(harness, "Metric name", "  Unsaved metric  ");
+      await type(harness, "Definition notes", "exact\nnotes  ");
+      let tree = await pressBiometric(harness, "Revise", otherTrendDefinition.id);
+      expect(input(tree, "Metric name").props.value).toBe("  Unsaved metric  ");
+      expect(input(tree, "Definition notes").props.value).toBe("exact\nnotes  ");
+      tree = await pressBiometric(harness, "Keep editing definition");
+      expect(input(tree, "Metric name").props.value).toBe("  Unsaved metric  ");
+      tree = await pressBiometric(harness, "Revise", otherTrendDefinition.id);
+      tree = await pressBiometric(harness, "Discard draft and revise definition");
+      expect(input(tree, "Metric name").props.value).toBe(otherTrendDefinition.name);
+      expect(writes(requests)).toHaveLength(0);
+      harness.unmount();
+    });
+  it("protects dirty definition Cancel", async () => {
+    const { harness, requests } = setupTrends();
+    await pressBiometric(harness, "Revise", trendDefinition.id);
+    await type(harness, "Definition notes", "not saved");
+    let tree = await pressBiometric(harness, "Cancel");
+    expect(input(tree, "Definition notes").props.value).toBe("not saved");
+    tree = await pressBiometric(harness, "Discard draft and cancel definition edit");
+    expect(input(tree, "Definition notes").props.value).toBe("");
+    expect(writes(requests)).toHaveLength(0);
+    harness.unmount();
+  });
+  for (const origin of ["new", "saved"])
+    it(`keeps exact ${origin} reminder fields before Edit replaces the form without notification effects`, async () => {
+      const { harness, requests } = setupReminders();
+      if (origin === "saved") await pressReminder(harness, "Edit / pause", true);
+      await type(harness, "Private in-app label", "  Unsaved reminder  ");
+      await type(harness, "Local time in America/Chicago", "invalid");
+      await pressReminder(harness, "Weekdays");
+      const effects = reminderEffects(requests);
+      let tree = await pressReminder(harness, "Edit / pause", true);
+      expect(input(tree, "Private in-app label").props.value).toBe("  Unsaved reminder  ");
+      expect(input(tree, "Local time in America/Chicago").props.value).toBe("invalid");
+      expect(reminderDays(tree)).toEqual([1, 2, 3, 4, 5]);
+      tree = await pressReminder(harness, "Keep editing reminder");
+      tree = await pressReminder(harness, "Edit / pause", true);
+      tree = await pressReminder(harness, "Discard draft and edit reminder");
+      expect(input(tree, "Private in-app label").props.value).toBe(savedReminder.label);
+      expect(reminderEffects(requests)).toEqual(effects);
+      harness.unmount();
+    });
+  it("protects dirty reminder Cancel without notification effects", async () => {
+    const { harness, requests } = setupReminders();
+    await pressReminder(harness, "Edit / pause", true);
+    await type(harness, "Private in-app label", "exact unsaved label");
+    const effects = reminderEffects(requests);
+    let tree = await pressReminder(harness, "Cancel");
+    expect(input(tree, "Private in-app label").props.value).toBe("exact unsaved label");
+    tree = await pressReminder(harness, "Discard draft and cancel reminder edit");
+    expect(input(tree, "Private in-app label").props.value).toBe("Daily check-in");
+    expect(reminderEffects(requests)).toEqual(effects);
+    harness.unmount();
+  });
+  for (const field of ["Metric name", "Definition notes"])
+    it(`accepted definition save preserves newer ${field} typed while awaiting the receipt`, async () => {
+      const held = deferred();
+      const { harness, requests } = setupTrends((request) =>
+        request.method === "POST" && request.url.pathname === "/v1/biometrics/definitions"
+          ? held.promise
+          : undefined,
+      );
+      await type(harness, "Metric name", "Submitted name");
+      await click(harness, "Create definition");
+      await type(harness, field, "Newer unsaved work");
+      held.resolve(
+        response({
+          data: {
+            definition: {
+              ...trendDefinition,
+              id: "2bcfa2bf-4950-43f7-9f24-b983ac803012",
+              name: "Submitted name",
+            },
+          },
+        }),
+      );
+      const tree = await harness.settle();
+      expect(input(tree, field).props.value).toBe("Newer unsaved work");
+      expect(text(biometricCard(tree, "2bcfa2bf-4950-43f7-9f24-b983ac803012"))).toContain(
+        "Submitted name",
+      );
+      expect(writes(requests)).toHaveLength(1);
+      harness.unmount();
+    });
+
+  it("keeps pristine/reverted definitions direct while preserving immutable units", async () => {
+    const { harness, requests } = setupTrends();
+    let tree = await pressBiometric(harness, "Revise", trendDefinition.id);
+    await type(harness, "Definition notes", "changed");
+    await type(harness, "Definition notes", trendDefinition.notes ?? "");
+    tree = await pressBiometric(harness, "Revise", otherTrendDefinition.id);
+    expect(input(tree, "Metric name").props.value).toBe(otherTrendDefinition.name);
+    expect(text(biometricSection(tree))).not.toContain("Replace unsaved definition?");
+    expect(
+      nodes(
+        biometricSection(tree),
+        (node) => node.type === "TextInput" && node.props.accessibilityLabel === "Canonical unit",
+      ),
+    ).toHaveLength(0);
+    tree = await pressBiometric(harness, "Cancel");
+    expect(input(tree, "Canonical unit").props.value).toBe("kg");
+    await type(harness, "Canonical unit", "custom-unit");
+    tree = await pressBiometric(harness, "Revise", trendDefinition.id);
+    expect(input(tree, "Canonical unit").props.value).toBe("custom-unit");
+    expect(text(biometricSection(tree))).toContain("Replace unsaved definition?");
+    expect(writes(requests)).toHaveLength(0);
+    harness.unmount();
+  });
+  it("keeps pristine/reverted reminder fields direct and preserves exact saved day order", async () => {
+    const { harness, requests } = setupReminders();
+    await pressReminder(harness, "Edit / pause", true);
+    await type(harness, "Private in-app label", "changed");
+    await type(harness, "Private in-app label", savedReminder.label);
+    await pressReminder(harness, "Weekdays");
+    await pressReminder(harness, "Weekends");
+    let tree = await pressReminder(harness, "Cancel");
+    expect(input(tree, "Private in-app label").props.value).toBe("Daily check-in");
+    expect(text(reminderSection(tree))).not.toContain("Replace unsaved reminder?");
+    tree = await pressReminder(harness, "Edit / pause", true);
+    expect(reminderDays(tree)).toEqual([6, 7]);
+    tree = await pressReminder(harness, "Active");
+    tree = await pressReminder(harness, "Cancel");
+    expect(text(reminderSection(tree))).toContain("Replace unsaved reminder?");
+    expect(button(reminderSection(tree), "Active").props.accessibilityState.selected).toBe(true);
+    expect(reminderWrites(requests)).toHaveLength(0);
+    harness.unmount();
+  });
+  for (const editor of ["definition", "reminder"])
+    it(`preserves exact ${editor} retries through Keep without allocating a new operation`, async () => {
+      const setupEditor = editor === "definition" ? setupTrends : setupReminders;
+      const { harness, requests } = setupEditor((request) =>
+        request.method === "PATCH" ? response({}, 503) : undefined,
+      );
+      const press =
+        editor === "definition"
+          ? (label) => pressBiometric(harness, label)
+          : (label) => pressReminder(harness, label);
+      if (editor === "definition") await pressBiometric(harness, "Revise", trendDefinition.id);
+      else await pressReminder(harness, "Edit / pause", true);
+      await type(
+        harness,
+        editor === "definition" ? "Metric name" : "Private in-app label",
+        "  Exact pending text  ",
+      );
+      await press(editor === "definition" ? "Save definition revision" : "Save reminder");
+      const first = writes(requests)[0],
+        allocated = hooks.operation;
+      await press("Cancel");
+      await press(`Keep editing ${editor}`);
+      expect(hooks.operation).toBe(allocated);
+      await press(editor === "definition" ? "Save definition revision" : "Save reminder");
+      const retry = writes(requests)[1];
+      expect(retry.body).toBe(first.body);
+      expect(retry.headers["idempotency-key"]).toBe(first.headers["idempotency-key"]);
+      expect(retry.headers["if-match"]).toBe(first.headers["if-match"]);
+      expect(hooks.notificationPermission).not.toHaveBeenCalled();
+      harness.unmount();
+    });
+  for (const editor of ["definition", "reminder"])
+    it(`fences pre-render ${editor} replacement/save/input and consumes each decision once`, async () => {
+      const { harness, requests } = editor === "definition" ? setupTrends() : setupReminders();
+      if (editor === "definition") await pressBiometric(harness, "Revise", trendDefinition.id);
+      else await pressReminder(harness, "Edit / pause", true);
+      const field = editor === "definition" ? "Metric name" : "Private in-app label";
+      let tree = await type(harness, field, "  Raw draft  ");
+      const section = editor === "definition" ? biometricSection : reminderSection;
+      const save = button(
+        section(tree),
+        editor === "definition" ? "Save definition revision" : "Save reminder",
+      ).props.onPress;
+      const cancel = button(section(tree), "Cancel").props.onPress;
+      const inputChange = input(tree, field).props.onChangeText;
+      const before = reminderEffects(requests);
+      cancel();
+      save();
+      cancel();
+      inputChange("obsolete");
+      tree = await harness.settle();
+      expect(input(tree, field).props.value).toBe("  Raw draft  ");
+      const keep = button(section(tree), `Keep editing ${editor}`).props.onPress;
+      const discard = button(section(tree), `Discard draft and cancel ${editor} edit`).props
+        .onPress;
+      keep();
+      discard();
+      cancel();
+      keep();
+      tree = await harness.settle();
+      expect(input(tree, field).props.value).toBe("  Raw draft  ");
+      expect(text(section(tree))).not.toContain(`Replace unsaved ${editor}?`);
+      button(section(tree), "Cancel").props.onPress();
+      tree = await harness.settle();
+      const confirm = button(section(tree), `Discard draft and cancel ${editor} edit`).props
+        .onPress;
+      confirm();
+      confirm();
+      tree = await harness.settle();
+      expect(input(tree, field).props.value).toBe(
+        editor === "definition" ? "Weight" : "Daily check-in",
+      );
+      tree = await type(harness, field, "Newer");
+      confirm();
+      tree = await harness.settle();
+      expect(input(tree, field).props.value).toBe("Newer");
+      expect(reminderEffects(requests)).toEqual(before);
+      harness.unmount();
+    });
+  for (const editor of ["definition", "reminder"])
+    it(`retires ${editor} choices on raw edits and target Refresh without a hidden disabled editor`, async () => {
+      const { harness } = editor === "definition" ? setupTrends() : setupReminders();
+      if (editor === "definition") await pressBiometric(harness, "Revise", trendDefinition.id);
+      else await pressReminder(harness, "Edit / pause", true);
+      const field = editor === "definition" ? "Definition notes" : "Private in-app label";
+      const section = editor === "definition" ? biometricSection : reminderSection;
+      let tree = await type(harness, field, "Draft A");
+      button(section(tree), "Cancel").props.onPress();
+      tree = await harness.settle();
+      const oldDiscard = button(section(tree), `Discard draft and cancel ${editor} edit`).props
+        .onPress;
+      input(tree, field).props.onChangeText("Draft B");
+      oldDiscard();
+      tree = await harness.settle();
+      expect(input(tree, field).props.value).toBe("Draft B");
+      expect(text(section(tree))).not.toContain(`Replace unsaved ${editor}?`);
+      button(section(tree), "Cancel").props.onPress();
+      tree = await harness.settle();
+      const stale = button(section(tree), `Discard draft and cancel ${editor} edit`).props.onPress;
+      button(tree, "Refresh private data").props.onPress();
+      stale();
+      tree = await harness.settle();
+      expect(input(tree, field).props.value).toBe("Draft B");
+      expect(
+        button(
+          section(tree),
+          editor === "definition" ? "Save definition revision" : "Save reminder",
+        ).props.disabled,
+      ).toBe(false);
+      button(section(tree), "Cancel").props.onPress();
+      tree = await harness.settle();
+      expect(text(section(tree))).toContain(`Replace unsaved ${editor}?`);
+      harness.unmount();
+    });
+  it("keeps a replacement definition draft when an older save is accepted and permits concurrent archive", async () => {
+    const held = deferred();
+    const { harness, requests } = setupTrends((request) => {
+      if (request.method === "POST" && request.url.pathname === "/v1/biometrics/definitions")
+        return held.promise;
+      if (request.method === "DELETE")
+        return response({
+          data: { definition: { ...trendDefinition, status: "archived", revision: "2" } },
+        });
+    });
+    await type(harness, "Metric name", "Submitted name");
+    let tree = await harness.settle();
+    const save = button(tree, "Create definition").props.onPress;
+    save();
+    save();
+    tree = await harness.settle();
+    expect(button(tree, "Create definition").props.disabled).toBe(true);
+    expect(input(tree, "Definition notes").props.editable).not.toBe(false);
+    tree = await pressBiometric(harness, "Revise", otherTrendDefinition.id);
+    tree = await pressBiometric(harness, "Discard draft and revise definition");
+    await type(harness, "Definition notes", "New revision draft");
+    await pressBiometric(harness, "Archive", trendDefinition.id);
+    held.resolve(
+      response({
+        data: {
+          definition: {
+            ...trendDefinition,
+            id: "2bcfa2bf-4950-43f7-9f24-b983ac803012",
+            name: "Submitted name",
+          },
+        },
+      }),
+    );
+    tree = await harness.settle();
+    expect(input(tree, "Metric name").props.value).toBe(otherTrendDefinition.name);
+    expect(input(tree, "Definition notes").props.value).toBe("New revision draft");
+    expect(text(biometricCard(tree, trendDefinition.id))).toContain("archived");
+    expect(button(tree, "Save definition revision").props.disabled).toBe(false);
+    expect(writes(requests)).toHaveLength(2);
+    harness.unmount();
+  });
+  for (const editor of ["definition", "reminder"])
+    for (const boundary of ["owner", "profile", "background", "unmount"])
+      it(`retires ${editor} decisions across ${boundary} with no stale action`, async () => {
+        const { harness, requests } = editor === "definition" ? setupTrends() : setupReminders();
+        if (editor === "definition") await pressBiometric(harness, "Revise", trendDefinition.id);
+        else await pressReminder(harness, "Edit / pause", true);
+        const field = editor === "definition" ? "Metric name" : "Private in-app label",
+          section = editor === "definition" ? biometricSection : reminderSection;
+        let tree = await type(harness, field, "Private changed draft");
+        button(section(tree), "Cancel").props.onPress();
+        tree = await harness.settle();
+        const keep = button(section(tree), `Keep editing ${editor}`).props.onPress;
+        const discard = button(section(tree), `Discard draft and cancel ${editor} edit`).props
+          .onPress;
+        const oldSave = button(
+          section(tree),
+          editor === "definition" ? "Save definition revision" : "Save reminder",
+        ).props.onPress;
+        if (boundary === "unmount") harness.unmount();
+        else if (boundary === "background") state("background");
+        else {
+          harness.updateProps(
+            boundary === "owner"
+              ? { ownerUserId: otherOwner, sessionEpoch: 2 }
+              : { profileTimeZone: "Asia/Tokyo" },
+          );
+          tree = harness.renderWithoutEffects();
+          expect(text(section(tree))).not.toContain(`Replace unsaved ${editor}?`);
+          expect(input(tree, field).props.value).not.toBe("Private changed draft");
+        }
+        const before = reminderEffects(requests),
+          writesBefore = harness.stateWrites;
+        keep();
+        discard();
+        oldSave();
+        expect(harness.stateWrites).toBe(writesBefore);
+        expect(reminderEffects(requests)).toEqual(before);
+        if (boundary !== "unmount") {
+          harness.flushEffects();
+          tree = await harness.settle();
+          if (boundary === "background") {
+            state("active");
+            tree = await harness.settle();
+          }
+          expect(text(section(tree))).not.toContain(`Replace unsaved ${editor}?`);
+          if (boundary !== "owner")
+            expect(input(tree, field).props.value).toBe("Private changed draft");
+          harness.unmount();
+        }
+        expect(harness.writesAfterUnmount).toBe(0);
+      });
+  it("disables Revoke and rejects retained Edit/Cancel while reminder permission is pending", async () => {
+    const held = deferred();
+    const { harness, requests } = setupReminders();
+    hooks.notificationPermission.mockImplementation(() => held.promise);
+    await type(harness, "Private in-app label", "New pending reminder");
+    let tree = await harness.settle();
+    const edit = button(reminderCard(tree), "Edit / pause").props.onPress,
+      revoke = button(reminderCard(tree), "Revoke").props.onPress;
+    button(tree, "Grant access and create").props.onPress();
+    edit();
+    revoke();
+    tree = await harness.settle();
+    expect(button(reminderCard(tree), "Revoke").props.disabled).toBe(true);
+    expect(input(tree, "Private in-app label").props.value).toBe("New pending reminder");
+    expect(text(reminderSection(tree))).not.toContain("Replace unsaved reminder?");
+    expect(reminderWrites(requests)).toHaveLength(0);
+    held.resolve("denied");
+    tree = await harness.settle();
+    expect(button(reminderCard(tree), "Revoke").props.disabled).toBe(false);
+    harness.unmount();
+  });
+  for (const editor of ["definition", "reminder"])
+    it(`announces and scrolls to the measured ${editor} editor for an offscreen replacement`, async () => {
+      const { harness } = editor === "definition" ? setupTrends() : setupReminders();
+      const tree = await harness.settle();
+      const scroll = vi.fn();
+      nodes(tree, (node) => node.type === "ScrollView")[0].props.ref.current = { scrollTo: scroll };
+      (editor === "definition" ? biometricSection : reminderSection)(tree).props.onLayout({
+        nativeEvent: { layout: { y: 940 } },
+      });
+      await type(
+        harness,
+        editor === "definition" ? "Metric name" : "Private in-app label",
+        "Changed",
+      );
+      if (editor === "definition") await pressBiometric(harness, "Revise", trendDefinition.id);
+      else await pressReminder(harness, "Edit / pause", true);
+      expect(scroll).toHaveBeenCalledWith({ y: 940, animated: true });
+      expect(AccessibilityInfo.announceForAccessibility).toHaveBeenCalledWith(
+        `Replace unsaved ${editor}? Keep editing ${editor}, or discard this draft.`,
+      );
+      harness.unmount();
+    });
 });
