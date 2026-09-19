@@ -63,9 +63,9 @@ describe("web activity client request semantics", () => {
       },
       expectedTimeZone: "America/Chicago",
     });
-    expect(
+    expect(() =>
       prepareActivityCreate("Run", "35", "250", "2026-11-01", "01:30", loadedDay),
-    ).toMatchObject({ body: { occurredAt: "2026-11-01T06:30:00.000Z" } });
+    ).toThrow("Choose the earlier or later occurrence");
   });
 
   it("updates only manual activity fields and never goal or balance fields", () => {
@@ -98,5 +98,140 @@ describe("web activity client request semantics", () => {
 
   it("rejects raw control characters in an activity name", () => {
     expect(() => activityUpdateBody("Trail\trun", "35", "250")).toThrow("control characters");
+  });
+});
+
+describe("explicit web activity occurrences", () => {
+  const foldDay = { localDate: "2026-11-01", timeZone: "America/Chicago" };
+  it("requires an explicit occurrence for deliberate repeated-minute input", () => {
+    expect(() =>
+      prepareActivityCreate("Walk", "30", "", foldDay.localDate, "01:30", foldDay),
+    ).toThrow("Choose the earlier or later occurrence");
+  });
+  it("permits an explicit correction to the other occurrence of the same displayed minute", () => {
+    const first = {
+      ...entry,
+      occurredAt: "2026-11-01T06:30:45.123Z",
+      localDate: foldDay.localDate,
+      localTime: "01:30:45.123",
+    };
+    expect(
+      prepareActivityUpdate(
+        first.name,
+        "35",
+        "248.5",
+        foldDay.localDate,
+        "01:30",
+        first,
+        foldDay,
+        "2026-11-01T07:30:00.000Z",
+      ),
+    ).toEqual({
+      body: { occurredAt: "2026-11-01T07:30:00.000Z" },
+      expectedTimeZone: "America/Chicago",
+    });
+  });
+});
+
+describe("web activity occurrence precision and validation", () => {
+  const foldDay = { localDate: "2026-11-01", timeZone: "America/Chicago" };
+  it.each(["2026-11-01T06:30:00.000Z", "2026-11-01T07:30:00.000Z"])(
+    "uses the explicitly selected instant %s",
+    (selected) => {
+      expect(
+        prepareActivityCreate(
+          "Walk",
+          "30",
+          "",
+          foldDay.localDate,
+          "01:30",
+          foldDay,
+          "2026-11-01T07:30:45.123Z",
+          selected,
+        ),
+      ).toEqual({
+        body: {
+          name: "Walk",
+          durationMinutes: 30,
+          selfReportedEnergyKilocalories: null,
+          occurredAt: selected,
+        },
+        expectedTimeZone: foldDay.timeZone,
+      });
+    },
+  );
+  it("supports both occurrences of a non-hour fold", () => {
+    const loaded = { localDate: "2026-04-05", timeZone: "Australia/Lord_Howe" };
+    for (const selected of ["2026-04-04T14:45:00.000Z", "2026-04-04T15:15:00.000Z"]) {
+      expect(
+        prepareActivityCreate(
+          "Walk",
+          "30",
+          "",
+          loaded.localDate,
+          "01:45",
+          loaded,
+          undefined,
+          selected,
+        ).body.occurredAt,
+      ).toBe(selected);
+    }
+  });
+  it.each(["2026-11-01T07:31:00.000Z", "2026-11-01T07:30:45.123Z", "invalid"])(
+    "rejects off-candidate occurrence %s even with a usable captured default",
+    (selected) => {
+      expect(() =>
+        prepareActivityCreate(
+          "Walk",
+          "30",
+          "",
+          foldDay.localDate,
+          "01:30",
+          foldDay,
+          "2026-11-01T07:30:45.123Z",
+          selected,
+        ),
+      ).toThrow("choice is no longer current");
+    },
+  );
+  it("rejects a stale selected instant after moving to a unique minute and rejects a gap", () => {
+    expect(() =>
+      prepareActivityCreate(
+        "Walk",
+        "30",
+        "",
+        foldDay.localDate,
+        "03:00",
+        foldDay,
+        undefined,
+        "2026-11-01T07:30:00.000Z",
+      ),
+    ).toThrow("choice is no longer current");
+    expect(() =>
+      prepareActivityUpdate(
+        entry.name,
+        "35",
+        "248.5",
+        "2026-03-08",
+        "02:30",
+        entry,
+        { localDate: entry.localDate, timeZone: "America/Chicago" },
+        "2026-03-08T08:30:00.000Z",
+      ),
+    ).toThrow("does not exist");
+  });
+  it("preserves precise saved time and original zone for metadata-only corrections", () => {
+    const original = {
+      ...entry,
+      occurredAt: "2026-11-01T07:30:45.123Z",
+      localDate: foldDay.localDate,
+      localTime: "01:30:45.123",
+    };
+    expect(
+      prepareActivityUpdate(original.name, "36", "248.5", original.localDate, "01:30", original, {
+        localDate: original.localDate,
+        timeZone: "America/New_York",
+      }),
+    ).toEqual({ body: { durationMinutes: 36 } });
   });
 });

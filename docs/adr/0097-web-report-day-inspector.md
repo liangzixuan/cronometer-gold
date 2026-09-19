@@ -1,6 +1,6 @@
 # ADR 0097: Inspect every nutrient for one web report day
 
-Status: Source complete and reviewed; final canonical and exact-commit automatic evidence pending.
+Status: Implemented at `7a104ea`; local and exact-commit automatic evidence passed. Browser/release acceptance remains separate.
 
 ## Context
 
@@ -73,4 +73,25 @@ preserved chart/print selection and guarded diary links.
 The initial missing-capability failure remains recorded. Component state tests
 are deterministic hook evidence; browser layout, concurrent React and assistive-
 technology acceptance remain unexecuted for this slice. Final canonical and
-exact-commit automatic evidence remains pending in the dated outside-Git record.
+exact-commit automatic evidence was pending at the source checkpoint; the following
+delivery record closes that dated state.
+
+## Delivery evidence
+
+Delivered at `7a104eaf19b126fe8bc3bf7d0bfeded3ec0f528b`. Canonical check on
+September 19 passed 1,271 fresh cases plus 3,213 cached cases, with 93 cached
+opt-in skips. Build passed 11 tasks, ten cached, with a fresh web build; native
+exports were cached. The 18:46:49 UTC official observation records all three
+actual jobs in [CI 35457517628](https://github.com/liangzixuan/cronometer-gold/actions/runs/35457517628)
+and all nine actual jobs in
+[container run 35457517652](https://github.com/liangzixuan/cronometer-gold/actions/runs/35457517652)
+completed successfully at that exact commit.
+
+CI attempt one passed checks, build and mobile release-state checks, but the audit
+could not obtain a valid registry advisory report and license checking was skipped.
+The user explicitly approved one quality-only rerun. Quality attempt two passed,
+with the earlier successful database and secrets executions carried forward by
+GitHub. The failed attempt remains recorded; it is not a passed audit. Container
+jobs passed on attempt one. At 18:47:24 UTC, clean local, tracking and live heads
+and seven reviewed working-tree/committed hashes matched. These results do not
+establish browser, assistive-technology or release acceptance.

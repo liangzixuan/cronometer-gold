@@ -143,14 +143,26 @@ September 19 16:48:41 UTC official evidence records complete results. Clean equa
 local, tracking and live heads and nine reviewed hashes were reverified at
 16:49:22 UTC.
 
-Active work is [ADR 0097](../adr/0097-web-report-day-inspector.md): all 15 nutrients
-for one web report day from the loaded private snapshot. Preserve exact evidence,
-chart/print selection, current-diary links and private lifecycle guards.
-Independent source review, 163 focused cases, web types and scoped Biome passed.
-Final canonical and exact-commit automatic evidence remains pending. No API,
-dependency, installation, audit, service/browser/device or paid review action is
-part of this slice. Real-browser, assistive-technology and release acceptance
-remain separate.
+[ADR 0097](../adr/0097-web-report-day-inspector.md) is delivered at
+`7a104eaf19b126fe8bc3bf7d0bfeded3ec0f528b`: 163 focused cases, independent review,
+canonical check/build and a fresh web build passed. Canonical check recorded
+1,271 fresh and 3,213 cached passes, with 93 cached opt-in skips; native exports
+were cached. September 19 18:46:49 UTC official evidence confirms all three
+CI35457517628 and nine actual container35457517652 jobs passed. Quality passed
+on attempt two after one explicitly approved rerun of an invalid registry-report
+audit failure; successful database/secrets were carried forward and containers
+passed on attempt one. The original failure remains recorded. Clean matching
+local/tracking/live heads and seven reviewed hashes were verified at 18:47:24 UTC.
+
+Active work is [ADR 0098](../adr/0098-web-activity-time-occurrence.md): explicit
+web activity Earlier/Later UTC-offset choices for Add and time corrections,
+including the same displayed minute. Preserve exact untouched default and
+metadata-only timestamps, reuse, private guards and exact retries.
+Independent source review, 86 focused cases (28 new), web types and scoped
+Biome passed on the reviewed source. Final canonical and exact-commit automatic
+evidence remains pending. No API, dependency, installation, local audit,
+service/browser/device or paid review action is part of this slice.
+Real-browser, assistive-technology and release acceptance remain separate.
 
 Use the [build plan](../product/build-plan.md) for priorities and the
 [release gates](release-gates.md) for authoritative acceptance. The

@@ -1030,7 +1030,12 @@ describe("Activity Add duration presets", () => {
       await change("Activity name", "Fold walk");
       await click("15 min");
       await click("60 min");
-      if (editTime) await change("Local time", "01:30");
+      if (editTime) {
+        await change("Local time", "01:30");
+        await submit();
+        expect(writes).toHaveLength(0);
+        await click("Add activity Earlier occurrence · UTC−05:00");
+      }
       await submit();
       expect(writes).toHaveLength(1);
       expect(JSON.parse(String(writes[0]?.body)).occurredAt).toBe(
@@ -1137,5 +1142,298 @@ describe("Activity Add duration presets", () => {
     await click("Retry day view");
     expect(button("15 min").props.disabled).toBe(false);
     expect(writes).toHaveLength(1);
+  });
+});
+
+const foldEntry = {
+  ...original,
+  occurredAt: "2026-11-01T06:30:45.123Z",
+  localDate: "2026-11-01",
+  localTime: "01:30:45.123",
+  createdAt: "2026-11-01T06:30:46.000Z",
+};
+function editor() {
+  const found = elements().find(
+    (node) => node.type === "form" && node.props.className === "activityEditor",
+  );
+  if (!found) throw new Error("Missing activity editor");
+  return found;
+}
+async function submitEdit() {
+  invoke(editor(), "onSubmit", { preventDefault() {} });
+  await hooks.settle();
+}
+function occurrenceFetcher(fixture = day([foldEntry], "2026-11-01")) {
+  const writes: RequestInit[] = [];
+  const fetch = vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === "POST" || init?.method === "PATCH") {
+      writes.push(init);
+      return Response.json({ error: "Response uncertain" }, { status: 503 });
+    }
+    if (url === "/api/auth/me") return Response.json(session(owner, fixture.data.timeZone));
+    const date = new URL(url, "https://app.example.test").searchParams.get("date");
+    return Response.json(
+      date === fixture.data.localDate ? fixture : day([], date ?? routeDate, fixture.data.timeZone),
+    );
+  });
+  return { fetch, writes };
+}
+async function fillFoldAdd() {
+  await change("Activity name", "Fold walk");
+  await change("Duration (minutes)", "30");
+  await change("Local time", "01:30");
+}
+
+describe("web activity explicit time choices", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-01T18:00:45.123Z"));
+    routeDate = "2026-11-01";
+  });
+  it.each([
+    ["Earlier", "UTC−05:00", "2026-11-01T06:30:00.000Z"],
+    ["Later", "UTC−06:00", "2026-11-01T07:30:00.000Z"],
+  ] as const)(
+    "requires then submits the %s Add occurrence with the current profile guard",
+    async (label, offset, instant) => {
+      const { fetch, writes } = occurrenceFetcher();
+      await mount(fetch);
+      await fillFoldAdd();
+      await submit();
+      expect(writes).toHaveLength(0);
+      expect(text()).toContain("Choose the earlier or later occurrence");
+      expect(text()).toContain("seconds become zero");
+      await click(`Add activity ${label} occurrence · ${offset}`);
+      expect(button(`Add activity ${label} occurrence · ${offset}`).props["aria-pressed"]).toBe(
+        true,
+      );
+      await submit();
+      expect(writes).toHaveLength(1);
+      expect(JSON.parse(String(writes[0]?.body)).occurredAt).toBe(instant);
+      expect(writes[0]?.headers).toMatchObject({
+        "x-expected-profile-time-zone": "America/Chicago",
+        "x-expected-owner-user-id": owner,
+      });
+    },
+  );
+
+  it("offers non-hour offsets and rejects nonexistent minutes before any request", async () => {
+    routeDate = "2026-04-05";
+    const { fetch, writes } = occurrenceFetcher(day([], routeDate, "Australia/Lord_Howe"));
+    await mount(fetch);
+    await change("Activity name", "Island walk");
+    await change("Duration (minutes)", "30");
+    await change("Local time", "01:45");
+    expect(button("Add activity Earlier occurrence · UTC+11:00").props["aria-pressed"]).toBe(false);
+    await click("Add activity Later occurrence · UTC+10:30");
+    await submit();
+    expect(JSON.parse(String(writes[0]?.body)).occurredAt).toBe("2026-04-04T15:15:00.000Z");
+    hooks.unmount();
+    routeDate = "2026-03-08";
+    const gap = occurrenceFetcher(day([], routeDate));
+    await mount(gap.fetch);
+    await change("Activity name", "Gap walk");
+    await change("Duration (minutes)", "30");
+    await change("Local time", "02:30");
+    await submit();
+    expect(gap.writes).toHaveLength(0);
+    expect(text()).toContain("does not exist");
+  });
+
+  it("corrects to the later occurrence of the same minute with exact original revision", async () => {
+    const { fetch, writes } = occurrenceFetcher();
+    await mount(fetch);
+    await click("Edit activity");
+    await click("Edit activity Later occurrence · UTC−06:00");
+    await submitEdit();
+    expect(writes).toHaveLength(1);
+    expect(JSON.parse(String(writes[0]?.body))).toEqual({ occurredAt: "2026-11-01T07:30:00.000Z" });
+    expect(writes[0]?.headers).toMatchObject({
+      "if-match": '"2"',
+      "x-expected-profile-time-zone": "America/Chicago",
+    });
+  });
+
+  it("preserves saved fractional precision and its original zone for metadata-only edits", async () => {
+    const { fetch, writes } = occurrenceFetcher(day([foldEntry], routeDate, "America/New_York"));
+    await mount(fetch);
+    await click("Edit activity");
+    await change("Duration (minutes)", "36", editor());
+    await submitEdit();
+    expect(JSON.parse(String(writes[0]?.body))).toEqual({ durationMinutes: 36 });
+    expect(writes[0]?.headers).not.toHaveProperty("x-expected-profile-time-zone");
+    expect(foldEntry.occurredAt).toBe("2026-11-01T06:30:45.123Z");
+  });
+
+  it("retains Add choice through reuse and ignores superseded choice callbacks before render", async () => {
+    const { fetch, writes } = occurrenceFetcher();
+    await mount(fetch);
+    await change("Local time", "01:30");
+    const earlier = button("Add activity Earlier occurrence · UTC−05:00");
+    const later = button("Add activity Later occurrence · UTC−06:00");
+    invoke(later);
+    invoke(earlier);
+    invoke(later);
+    await hooks.settle();
+    expect(button("Add activity Later occurrence · UTC−06:00").props["aria-pressed"]).toBe(true);
+    await click("Reuse details from Café walk");
+    expect(button("Add activity Later occurrence · UTC−06:00").props["aria-pressed"]).toBe(true);
+    await submit();
+    expect(JSON.parse(String(writes[0]?.body))).toMatchObject({
+      name: "Café walk",
+      occurredAt: "2026-11-01T07:30:00.000Z",
+    });
+  });
+
+  it.each(["Add", "Edit"] as const)(
+    "clears %s choices on coordinate edits and rejects stale callbacks after reverting",
+    async (mode) => {
+      const { fetch, writes } = occurrenceFetcher();
+      await mount(fetch);
+      if (mode === "Add") await fillFoldAdd();
+      else await click("Edit activity");
+      const scope = () => (mode === "Add" ? addForm() : editor());
+      const label = `${mode} activity Later occurrence · UTC−06:00`;
+      await click(label);
+      const stale = button(label);
+      await change("Local time", "01:45", scope());
+      invoke(stale);
+      await hooks.settle();
+      expect(button(label).props["aria-pressed"]).toBe(false);
+      await change("Local time", "01:30", scope());
+      invoke(stale);
+      await hooks.settle();
+      expect(button(label).props["aria-pressed"]).toBe(false);
+      if (mode === "Add") await submit();
+      else await submitEdit();
+      expect(writes).toHaveLength(0);
+    },
+  );
+
+  it.each(["Add", "Edit"] as const)(
+    "keeps the exact %s occurrence body and operation identity through an uncertain response and same-context reload",
+    async (mode) => {
+      const { fetch, writes } = occurrenceFetcher();
+      await mount(fetch);
+      if (mode === "Add") await fillFoldAdd();
+      else await click("Edit activity");
+      await click(`${mode} activity Later occurrence · UTC−06:00`);
+      if (mode === "Add") await submit();
+      else await submitEdit();
+      expect(writes).toHaveLength(1);
+      await click("Retry day view");
+      expect(button(`${mode} activity Later occurrence · UTC−06:00`).props["aria-pressed"]).toBe(
+        true,
+      );
+      if (mode === "Add") await submit();
+      else await submitEdit();
+      expect(writes).toHaveLength(2);
+      expect(writes[1]?.body).toBe(writes[0]?.body);
+      expect(writes[1]?.headers).toEqual(writes[0]?.headers);
+    },
+  );
+
+  it.each(["date", "route", "logout", "unmount", "effect-replay"] as const)(
+    "fences a retained Add choice across %s",
+    async (transition) => {
+      const { fetch, writes } = occurrenceFetcher();
+      await mount(fetch);
+      await fillFoldAdd();
+      const stale = button("Add activity Later occurrence · UTC−06:00");
+      if (transition === "date") invoke(button("Next day"));
+      if (transition === "route") {
+        routeDate = "2026-11-02";
+        hooks.renderWithoutEffects();
+      }
+      if (transition === "logout") {
+        fetch.mockImplementationOnce(async () => new Response(null, { status: 204 }));
+        invoke(button("Sign out"));
+      }
+      if (transition === "unmount") hooks.unmount();
+      if (transition === "effect-replay") hooks.replayEffects();
+      invoke(stale);
+      await hooks.settle();
+      expect(writes).toHaveLength(0);
+      expect(hooks.afterClose()).toBe(0);
+      expect(
+        elements()
+          .filter(
+            (node) => node.props["aria-label"] === "Add activity Later occurrence · UTC−06:00",
+          )
+          .every((node) => node.props["aria-pressed"] !== true),
+      ).toBe(true);
+    },
+  );
+
+  it("retires selected occurrences on loaded-zone conflict refresh", async () => {
+    const { fetch, writes } = occurrenceFetcher();
+    const base = fetch.getMockImplementation();
+    let changed = false;
+    fetch.mockImplementation(async (url, init) => {
+      if (init?.method === "POST") {
+        writes.push(init);
+        changed = true;
+        return Response.json({ code: "ACTIVITY_TIME_ZONE_CHANGED" }, { status: 409 });
+      }
+      if (changed && url.startsWith("/api/activities?"))
+        return Response.json(day([foldEntry], routeDate, "America/New_York"));
+      if (!base) throw new Error("Missing fixture implementation");
+      return base(url, init);
+    });
+    await mount(fetch);
+    await fillFoldAdd();
+    await click("Add activity Later occurrence · UTC−06:00");
+    const old = button("Add activity Later occurrence · UTC−06:00");
+    await submit();
+    invoke(old);
+    await hooks.settle();
+    expect(text()).toContain("Your profile time zone changed");
+    await change("Local time", "01:30");
+    expect(button("Add activity Earlier occurrence · UTC−04:00").props["aria-pressed"]).toBe(false);
+    expect(button("Add activity Later occurrence · UTC−05:00").props["aria-pressed"]).toBe(false);
+    await submit();
+    expect(writes).toHaveLength(1);
+  });
+
+  it("retires an edit choice after a date change or Cancel without allowing old callbacks to modify the reopened edit", async () => {
+    const { fetch, writes } = occurrenceFetcher();
+    await mount(fetch);
+    await click("Edit activity");
+    await click("Edit activity Later occurrence · UTC−06:00");
+    const oldDateChoice = button("Edit activity Later occurrence · UTC−06:00");
+    await change("Local date", "2026-11-02", editor());
+    invoke(oldDateChoice);
+    await hooks.settle();
+    await change("Local date", "2026-11-01", editor());
+    invoke(oldDateChoice);
+    await hooks.settle();
+    expect(button("Edit activity Later occurrence · UTC−06:00").props["aria-pressed"]).toBe(false);
+    const oldCancelChoice = button("Edit activity Later occurrence · UTC−06:00");
+    invoke(button("Cancel"));
+    invoke(oldCancelChoice);
+    await hooks.settle();
+    await click("Edit activity");
+    invoke(oldCancelChoice);
+    await hooks.settle();
+    expect(button("Edit activity Later occurrence · UTC−06:00").props["aria-pressed"]).toBe(false);
+    await submitEdit();
+    expect(writes).toHaveLength(0);
+    await click("Edit activity Later occurrence · UTC−06:00");
+    await submitEdit();
+    expect(JSON.parse(String(writes[0]?.body))).toEqual({ occurredAt: "2026-11-01T07:30:00.000Z" });
+  });
+
+  it("keeps controls live when the current occurrence is reselected", async () => {
+    const { fetch, writes } = occurrenceFetcher();
+    await mount(fetch);
+    await fillFoldAdd();
+    await click("Add activity Later occurrence · UTC−06:00");
+    const current = button("Add activity Later occurrence · UTC−06:00");
+    const earlier = button("Add activity Earlier occurrence · UTC−05:00");
+    invoke(current);
+    invoke(earlier);
+    await hooks.settle();
+    await submit();
+    expect(JSON.parse(String(writes[0]?.body)).occurredAt).toBe("2026-11-01T06:30:00.000Z");
   });
 });

@@ -1,8 +1,9 @@
 "use client";
 
+import { resolveHydrationLocalMinute } from "@nutrition-tracker/contracts";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   type ActivityCreateBody,
   type ActivityDay,
@@ -20,7 +21,6 @@ import {
 import {
   isLocalDate,
   localDateInTimeZone,
-  localDateTimeToInstant,
   localTimeInTimeZone,
   parseSession,
   quoteRevision,
@@ -40,6 +40,7 @@ interface ActivityAddDraft {
   readonly duration: string;
   readonly energy: string;
   readonly localTime: string;
+  readonly selectedOccurredAt?: string | null;
 }
 
 interface ActivityReuseChoice {
@@ -55,6 +56,7 @@ interface ActivityEdit {
   readonly energy: string;
   readonly localDate: string;
   readonly localTime: string;
+  readonly selectedOccurredAt?: string | null;
 }
 
 async function json(response: Response): Promise<unknown> {
@@ -95,6 +97,31 @@ function retainedDefaultOccurredAt(
   return captured.toISOString();
 }
 
+function activityTimeOccurrence(
+  localDate: string,
+  localTime: string,
+  timeZone: string,
+  selectedOccurredAt?: string | null,
+): string {
+  const resolution = resolveHydrationLocalMinute(localDate, localTime, timeZone);
+  if (resolution.kind === "invalid") {
+    throw new RangeError("Enter a valid activity date, 24-hour time, and profile time zone.");
+  }
+  if (resolution.kind === "gap") {
+    throw new RangeError("That local time does not exist in this time zone. Choose another time.");
+  }
+  const candidate =
+    selectedOccurredAt == null && resolution.kind === "unique"
+      ? resolution.candidates[0]
+      : resolution.candidates.find((item) => item.occurredAt === selectedOccurredAt);
+  if (!candidate) {
+    throw new RangeError(
+      "This time occurs more than once or its choice is no longer current. Choose the earlier or later occurrence.",
+    );
+  }
+  return candidate.occurredAt;
+}
+
 export function prepareActivityCreate(
   nameDraft: string,
   durationDraft: string,
@@ -103,6 +130,7 @@ export function prepareActivityCreate(
   localTime: string,
   loadedDay: Pick<ActivityDay, "localDate" | "timeZone">,
   untouchedDefaultOccurredAt?: string,
+  selectedOccurredAt?: string | null,
 ): {
   readonly body: ActivityCreateBody;
   readonly expectedTimeZone: string;
@@ -111,7 +139,7 @@ export function prepareActivityCreate(
     throw new TypeError("Load the selected activity day before adding an entry.");
   }
   const retainedOccurredAt = retainedDefaultOccurredAt(
-    untouchedDefaultOccurredAt,
+    selectedOccurredAt == null ? untouchedDefaultOccurredAt : undefined,
     selectedLocalDate,
     localTime,
     loadedDay.timeZone,
@@ -123,7 +151,12 @@ export function prepareActivityCreate(
       selfReportedEnergyKilocalories: activityEnergyFromDraft(energyDraft),
       occurredAt:
         retainedOccurredAt ??
-        localDateTimeToInstant(selectedLocalDate, localTime, loadedDay.timeZone),
+        activityTimeOccurrence(
+          selectedLocalDate,
+          localTime,
+          loadedDay.timeZone,
+          selectedOccurredAt,
+        ),
     },
     expectedTimeZone: loadedDay.timeZone,
   };
@@ -145,6 +178,7 @@ export function prepareActivityUpdate(
   localTime: string,
   entry: ActivityEntry,
   loadedDay: Pick<ActivityDay, "localDate" | "timeZone">,
+  selectedOccurredAt?: string | null,
 ): { readonly body: ActivityUpdateBody; readonly expectedTimeZone?: string } {
   if (loadedDay.localDate !== entry.localDate) {
     throw new TypeError("Reload the activity entry before editing it.");
@@ -152,7 +186,9 @@ export function prepareActivityUpdate(
   if (!isLocalDate(selectedLocalDate)) throw new TypeError("Choose a valid activity date.");
   const fields = activityUpdateBody(nameDraft, durationDraft, energyDraft);
   const timeChanged =
-    selectedLocalDate !== entry.localDate || localTime !== entry.localTime.slice(0, 5);
+    selectedLocalDate !== entry.localDate ||
+    localTime !== entry.localTime.slice(0, 5) ||
+    selectedOccurredAt != null;
   const body: ActivityUpdateBody = {
     ...(fields.name === entry.name ? {} : { name: fields.name }),
     ...(fields.durationMinutes === entry.durationMinutes
@@ -162,7 +198,14 @@ export function prepareActivityUpdate(
       ? {}
       : { selfReportedEnergyKilocalories: fields.selfReportedEnergyKilocalories }),
     ...(timeChanged
-      ? { occurredAt: localDateTimeToInstant(selectedLocalDate, localTime, loadedDay.timeZone) }
+      ? {
+          occurredAt: activityTimeOccurrence(
+            selectedLocalDate,
+            localTime,
+            loadedDay.timeZone,
+            selectedOccurredAt,
+          ),
+        }
       : {}),
   };
   if (Object.keys(body).length === 0) throw new RangeError("Change at least one activity field.");
@@ -339,6 +382,7 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
             {
               ...draftRef.current,
               localTime: localTimeInTimeZone(capturedNow, next.timeZone).slice(0, 5),
+              selectedOccurredAt: null,
             },
             "clock",
           );
@@ -421,6 +465,7 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
           {
             ...draftRef.current,
             localTime: localTimeInTimeZone(new Date(), nextSession.profile.timeZone).slice(0, 5),
+            selectedOccurredAt: null,
           },
           "clock",
         );
@@ -483,7 +528,11 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
     if (!canUseDraft()) return;
     if (field === "duration" && draftRef.current.duration === value) return;
     if (field === "localTime") untouchedDefaultOccurredAt.current = null;
-    replaceDraft({ ...draftRef.current, [field]: value });
+    replaceDraft({
+      ...draftRef.current,
+      [field]: value,
+      ...(field === "localTime" ? { selectedOccurredAt: null } : {}),
+    });
   }
   function selectDate(next: string) {
     if (!canUseControls() || !isLocalDate(next) || next === dateRef.current) return;
@@ -492,6 +541,8 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
     loadController.current?.abort();
     dateRef.current = next;
     dayRef.current = null;
+    untouchedDefaultOccurredAt.current = null;
+    replaceDraft({ ...draftRef.current, selectedOccurredAt: null });
     invalidateReuse();
     setEdit(null);
     setDay(null);
@@ -511,8 +562,51 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
   }
   function changeEdit(field: keyof Omit<ActivityEdit, "entry">, value: string) {
     if (!canUseControls() || !edit || editRef.current !== edit) return;
-    setEdit({ ...edit, [field]: value });
+    setEdit({
+      ...edit,
+      [field]: value,
+      ...(field === "localDate" || field === "localTime" ? { selectedOccurredAt: null } : {}),
+    });
   }
+  const addTimeResolution = useMemo(
+    () => resolveHydrationLocalMinute(date, localTime, day?.timeZone ?? ""),
+    [date, localTime, day?.timeZone],
+  );
+  const editTimeResolution = useMemo(
+    () =>
+      resolveHydrationLocalMinute(
+        edit?.localDate ?? "",
+        edit?.localTime ?? "",
+        day?.timeZone ?? "",
+      ),
+    [edit?.localDate, edit?.localTime, day?.timeZone],
+  );
+  function selectAddOccurrence(occurredAt: string) {
+    if (
+      !canUseDraft() ||
+      addTimeResolution.kind !== "ambiguous" ||
+      !addTimeResolution.candidates.some((candidate) => candidate.occurredAt === occurredAt) ||
+      draftRef.current.selectedOccurredAt === occurredAt
+    )
+      return;
+    untouchedDefaultOccurredAt.current = null;
+    replaceDraft({ ...draftRef.current, selectedOccurredAt: occurredAt });
+  }
+  function selectEditOccurrence(occurredAt: string) {
+    if (
+      !canUseControls() ||
+      !edit ||
+      editRef.current !== edit ||
+      !day ||
+      dayRef.current !== day ||
+      editTimeResolution.kind !== "ambiguous" ||
+      !editTimeResolution.candidates.some((candidate) => candidate.occurredAt === occurredAt) ||
+      edit.selectedOccurredAt === occurredAt
+    )
+      return;
+    setEdit({ ...edit, selectedOccurredAt: occurredAt });
+  }
+
   function installReuse(entry: ActivityEntry) {
     createIntentGeneration.current += 1;
     replaceDraft({
@@ -701,6 +795,7 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
         localTime,
         day,
         untouchedDefaultOccurredAt.current ?? undefined,
+        draft.selectedOccurredAt,
       );
       const initiatingOwnerUserId = session.user.id;
       const intentKey = `create:${capturedIntent}:${initiatingOwnerUserId}:${prepared.expectedTimeZone}:${JSON.stringify(prepared.body)}`;
@@ -752,6 +847,7 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
         edit.localTime,
         edit.entry,
         day,
+        edit.selectedOccurredAt,
       );
       const initiatingOwnerUserId = session.user.id;
       const intentKey = `update:${initiatingOwnerUserId}:${edit.entry.id}:${edit.entry.revision}:${prepared.expectedTimeZone ?? "no-zone-guard"}:${JSON.stringify(prepared.body)}`;
@@ -1097,6 +1193,30 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
                   value={session ? localTime : ""}
                 />
               </label>
+              {addTimeResolution.kind === "ambiguous" ? (
+                <fieldset className="entryActions" disabled={createDisabled}>
+                  <legend>Repeated Add time</legend>
+                  <small className="fieldHelp" id="activity-add-occurrence-help">
+                    This local minute occurs twice. After changing the date or time, choose an
+                    occurrence. An untouched captured time keeps its exact instant. Choosing an
+                    occurrence saves at minute precision (seconds become zero).
+                  </small>
+                  {addTimeResolution.candidates.map((candidate, index) => (
+                    <button
+                      aria-label={`Add activity ${index === 0 ? "Earlier" : "Later"} occurrence · ${candidate.utcOffsetLabel}`}
+                      aria-describedby="activity-add-occurrence-help"
+                      aria-pressed={draft.selectedOccurredAt === candidate.occurredAt}
+                      className="buttonQuiet"
+                      disabled={createDisabled}
+                      key={candidate.occurredAt}
+                      onClick={() => selectAddOccurrence(candidate.occurredAt)}
+                      type="button"
+                    >
+                      {index === 0 ? "Earlier" : "Later"} occurrence · {candidate.utcOffsetLabel}
+                    </button>
+                  ))}
+                </fieldset>
+              ) : null}
               <button className="buttonPrimary" disabled={createDisabled} type="submit">
                 {busy?.startsWith("create:") ? "Adding…" : "Add entry"}
               </button>
@@ -1185,6 +1305,35 @@ export function ActivityClient({ initialDate }: ActivityClientProps) {
                       <small className="fieldHelp">
                         Moving an entry uses the profile time zone shown at the top of this page.
                       </small>
+                      {editTimeResolution.kind === "ambiguous" ? (
+                        <fieldset className="entryActions" disabled={controlsDisabled}>
+                          <legend>Repeated correction time</legend>
+                          <small
+                            className="fieldHelp"
+                            id={`activity-edit-occurrence-help-${entry.id}`}
+                          >
+                            Choose an occurrence to correct this repeated minute, including the
+                            other occurrence of the same displayed time. Choosing saves at minute
+                            precision (seconds become zero). Other edits keep the original exact
+                            time and zone.
+                          </small>
+                          {editTimeResolution.candidates.map((candidate, index) => (
+                            <button
+                              aria-label={`Edit activity ${index === 0 ? "Earlier" : "Later"} occurrence · ${candidate.utcOffsetLabel}`}
+                              aria-describedby={`activity-edit-occurrence-help-${entry.id}`}
+                              aria-pressed={edit.selectedOccurredAt === candidate.occurredAt}
+                              className="buttonQuiet"
+                              disabled={controlsDisabled}
+                              key={candidate.occurredAt}
+                              onClick={() => selectEditOccurrence(candidate.occurredAt)}
+                              type="button"
+                            >
+                              {index === 0 ? "Earlier" : "Later"} occurrence ·{" "}
+                              {candidate.utcOffsetLabel}
+                            </button>
+                          ))}
+                        </fieldset>
+                      ) : null}
                       <div className="entryActions">
                         <button className="buttonPrimary" disabled={controlsDisabled} type="submit">
                           Save activity
