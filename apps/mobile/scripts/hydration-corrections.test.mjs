@@ -472,6 +472,9 @@ describe("mobile hydration correction screen", () => {
         ).toHaveLength(0);
         pressable(tree, "Reload before correcting").props.onPress();
         tree = await harness.settle();
+        expect(input(tree, "Edit milliliters at 01:30").props.value).toBe("500");
+        pressable(tree, "Discard edits and reload").props.onPress();
+        tree = await harness.settle();
         expect(pressable(tree, "Edit amount").props.disabled).toBe(false);
         expect(requests.filter((request) => request.method === "PATCH")).toHaveLength(1);
       } finally {
@@ -1062,5 +1065,550 @@ describe("native HydrationRoute identity boundary", () => {
       expect(context.renderRoute(changed).key).not.toBe(original.key);
     date = "2026-11-02";
     expect(context.renderRoute(props).key).not.toBe(original.key);
+  });
+});
+
+const correctionAmount = (tree) => input(tree, "Edit milliliters at 01:30");
+const otherEntry = {
+  ...initialEntry,
+  id: "5bcfa2bf-4950-43f7-9f24-b983ac803012",
+  occurredAt: "2026-11-01T08:30:00.000Z",
+  localTime: "02:30:00",
+};
+const correctionChoices = (tree) =>
+  nodes(tree, (item) => item.props?.accessibilityLabel === "Unsaved hydration correction");
+const labeledButton = (tree, label) =>
+  nodes(tree, (item) => item.type === "Pressable" && item.props.accessibilityLabel === label)[0];
+function draftSetup(responder = () => undefined) {
+  return setup(
+    async (request, requests) =>
+      (await responder(request, requests)) ?? dayResponse(request.url.searchParams.get("date")),
+  );
+}
+async function foldedDraft(harness) {
+  await editAmount(harness, "500");
+  await click(harness, "Change time");
+  const tree = await harness.settle();
+  nodes(tree, (item) => item.props?.accessibilityRole === "radio")[1].props.onPress();
+  return harness.settle();
+}
+function expectFoldedDraft(tree, amount = "500") {
+  expect(correctionAmount(tree).props.value).toBe(amount);
+  expect(input(tree, "Correction date YYYY-MM-DD").props.value).toBe(initialEntry.localDate);
+  expect(input(tree, "Correction local time HH:MM").props.value).toBe("01:30");
+  expect(
+    nodes(tree, (item) => item.props?.accessibilityRole === "radio")[1].props.accessibilityState
+      .checked,
+  ).toBe(true);
+}
+
+describe("native hydration correction draft protection", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-02T12:00:00.000Z"));
+  });
+  it.each(["Cancel", "Previous day", "Next day", "Jump to today", "typed day", "another row"])(
+    "keeps exact correction fields and selected day before explicit %s discard",
+    async (action) => {
+      const { harness, requests } = draftSetup((request) =>
+        dayResponse(request.url.searchParams.get("date"), [initialEntry, otherEntry]),
+      );
+      try {
+        let tree = await harness.settle();
+        nodes(
+          tree,
+          (item) => item.type === "Pressable" && screenText(item) === "Edit amount",
+        )[0].props.onPress();
+        correctionAmount(await harness.settle()).props.onChangeText("00500");
+        tree = await click(harness, "Change time");
+        nodes(tree, (item) => item.props?.accessibilityRole === "radio")[1].props.onPress();
+        tree = await harness.settle();
+        const count = requests.length;
+        if (action === "Previous day" || action === "Next day")
+          labeledButton(tree, action).props.onPress();
+        else if (action === "typed day") {
+          dateInput(tree).props.onChangeText("2026-11-03");
+          tree = await harness.settle();
+          dateInput(tree).props.onSubmitEditing({ nativeEvent: { text: "2026-11-03" } });
+        } else if (action === "another row") pressable(tree, "Edit amount").props.onPress();
+        else pressable(tree, action).props.onPress();
+        tree = await harness.settle();
+        expect(correctionChoices(tree)).toHaveLength(1);
+        expectFoldedDraft(tree, "00500");
+        expect(requests).toHaveLength(count);
+        tree = await click(harness, "Keep editing");
+        expectFoldedDraft(tree, "00500");
+        expect(dateInput(tree).props.value).toBe(initialEntry.localDate);
+        expect(correctionChoices(tree)).toHaveLength(0);
+        expect(requests).toHaveLength(count);
+        if (action === "Previous day" || action === "Next day")
+          labeledButton(tree, action).props.onPress();
+        else if (action === "typed day")
+          dateInput(tree).props.onSubmitEditing({ nativeEvent: { text: "2026-11-03" } });
+        else if (action === "another row") pressable(tree, "Edit amount").props.onPress();
+        else pressable(tree, action).props.onPress();
+        tree = await harness.settle();
+        const label =
+          action === "Cancel"
+            ? "Discard edits"
+            : action === "another row"
+              ? "Discard edits and open entry"
+              : "Discard edits and change day";
+        const discard = pressable(tree, label).props.onPress;
+        discard();
+        discard();
+        tree = await harness.settle();
+        expect(correctionChoices(tree)).toHaveLength(0);
+        if (action === "another row") {
+          expect(input(tree, "Edit milliliters at 02:30").props.value).toBe("375");
+          expect(requests).toHaveLength(count);
+        } else {
+          expect(
+            nodes(tree, (item) => item.props?.accessibilityLabel === "Edit milliliters at 01:30"),
+          ).toHaveLength(0);
+          expect(requests).toHaveLength(action === "Cancel" ? count : count + 1);
+        }
+        expect(requests.every((request) => !request.method)).toBe(true);
+      } finally {
+        harness.unmount();
+      }
+    },
+  );
+  it.each(["add", "delete"])(
+    "preserves a correction through unrelated accepted %s and pins its revision",
+    async (kind) => {
+      let accepted = false;
+      const { harness, requests } = draftSetup((request) => {
+        if (request.method === "POST") {
+          accepted = true;
+          return addReceipt(request);
+        }
+        if (request.method === "DELETE") {
+          accepted = true;
+          return receipt(null);
+        }
+        if (request.method === "PATCH") return response({}, 412);
+        return dayResponse(request.url.searchParams.get("date"), [
+          accepted ? { ...initialEntry, revision: "3", amountMilliliters: 999 } : initialEntry,
+          ...(kind === "delete" && !accepted ? [otherEntry] : []),
+        ]);
+      });
+      try {
+        let tree = await harness.settle();
+        nodes(
+          tree,
+          (item) => item.type === "Pressable" && screenText(item) === "Edit amount",
+        )[0].props.onPress();
+        correctionAmount(await harness.settle()).props.onChangeText("500");
+        tree = await click(harness, "Change time");
+        nodes(tree, (item) => item.props?.accessibilityRole === "radio")[1].props.onPress();
+        tree = await harness.settle();
+        if (kind === "add") {
+          timeInput(tree).props.onChangeText("12:00");
+          tree = await click(harness, "250 mL");
+          pressable(tree, "Add entry").props.onPress();
+        } else {
+          pressable(tree, "Delete").props.onPress();
+          Alert.alert.mock.calls
+            .at(-1)[2]
+            .find((item) => item.text === "Delete")
+            .onPress();
+        }
+        tree = await harness.settle();
+        expectFoldedDraft(tree);
+        pressable(tree, "Save correction").props.onPress();
+        await harness.settle();
+        expect(requests.find((item) => item.method === "PATCH").headers["if-match"]).toBe('"2"');
+      } finally {
+        harness.unmount();
+      }
+    },
+  );
+  it.each([409, 412])(
+    "retains the conflicted draft until explicit successful reload after %s",
+    async (status) => {
+      let rejectRead = false;
+      const { harness, requests } = draftSetup((request) => {
+        if (request.method === "PATCH") return response({}, status);
+        if (rejectRead) return response({}, 503);
+        return dayResponse(request.url.searchParams.get("date"));
+      });
+      try {
+        let tree = await foldedDraft(harness);
+        pressable(tree, "Save correction").props.onPress();
+        tree = await harness.settle();
+        const count = requests.length;
+        pressable(tree, "Reload before correcting").props.onPress();
+        tree = await harness.settle();
+        expect(correctionChoices(tree)).toHaveLength(1);
+        expectFoldedDraft(tree);
+        expect(requests).toHaveLength(count);
+        tree = await click(harness, "Keep editing");
+        expectFoldedDraft(tree);
+        expect(pressable(tree, "Save correction").props.disabled).toBe(true);
+        await click(harness, "Reload before correcting");
+        rejectRead = true;
+        tree = await click(harness, "Discard edits and reload");
+        expectFoldedDraft(tree);
+        expect(pressable(tree, "Save correction").props.disabled).toBe(true);
+        rejectRead = false;
+        tree = await click(harness, "Retry day view");
+        expectFoldedDraft(tree);
+        expect(pressable(tree, "Save correction").props.disabled).toBe(true);
+        await click(harness, "Reload before correcting");
+        tree = await click(harness, "Discard edits and reload");
+        expect(
+          nodes(tree, (item) => item.props?.accessibilityLabel === "Edit milliliters at 01:30"),
+        ).toHaveLength(0);
+        expect(pressable(tree, "Edit amount").props.disabled).toBe(false);
+        expect(requests.filter((item) => item.method === "PATCH")).toHaveLength(1);
+      } finally {
+        harness.unmount();
+      }
+    },
+  );
+});
+
+describe("native hydration draft boundary regressions", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-11-02T12:00:00.000Z"));
+  });
+  it("keeps pristine transitions direct and treats entering time mode as a dirty correction", async () => {
+    const { harness, requests } = draftSetup();
+    try {
+      let tree = await click(harness, "Edit amount");
+      tree = await click(harness, "Cancel");
+      expect(correctionChoices(tree)).toHaveLength(0);
+      await click(harness, "Edit amount");
+      tree = await click(harness, "Change time");
+      tree = await click(harness, "Cancel");
+      expect(correctionChoices(tree)).toHaveLength(1);
+      await click(harness, "Keep editing");
+      await click(harness, "Keep original time");
+      tree = await click(harness, "Cancel");
+      expect(correctionChoices(tree)).toHaveLength(0);
+      await click(harness, "Edit amount");
+      labeledButton(await harness.settle(), "Next day").props.onPress();
+      tree = await harness.settle();
+      expect(correctionChoices(tree)).toHaveLength(0);
+      expect(dateInput(tree).props.value).toBe("2026-11-02");
+      expect(requests).toHaveLength(2);
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("preserves a dirty correction across same-day and invalid date submission", async () => {
+    const { harness, requests } = draftSetup();
+    try {
+      let tree = await foldedDraft(harness);
+      dateInput(tree).props.onEndEditing({ nativeEvent: { text: initialEntry.localDate } });
+      tree = await harness.settle();
+      dateInput(tree).props.onChangeText("not-a-day");
+      tree = await harness.settle();
+      dateInput(tree).props.onSubmitEditing({ nativeEvent: { text: "not-a-day" } });
+      tree = await harness.settle();
+      expectFoldedDraft(tree);
+      expect(correctionChoices(tree)).toHaveLength(0);
+      expect(dateInput(tree).props.value).toBe(initialEntry.localDate);
+      expect(requests).toHaveLength(1);
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("fences retained Save, Cancel, date and choice callbacks synchronously when an edit changes", async () => {
+    const { harness, requests } = draftSetup();
+    try {
+      let tree = await editAmount(harness);
+      const save = pressable(tree, "Save amount").props.onPress;
+      const cancel = pressable(tree, "Cancel").props.onPress;
+      const next = labeledButton(tree, "Next day").props.onPress;
+      correctionAmount(tree).props.onChangeText("501");
+      save();
+      cancel();
+      next();
+      tree = await harness.settle();
+      expect(correctionAmount(tree).props.value).toBe("501");
+      expect(correctionChoices(tree)).toHaveLength(0);
+      tree = await click(harness, "Cancel");
+      const keep = pressable(tree, "Keep editing").props.onPress;
+      const discard = pressable(tree, "Discard edits").props.onPress;
+      correctionAmount(tree).props.onChangeText("502");
+      keep();
+      discard();
+      tree = await harness.settle();
+      expect(correctionAmount(tree).props.value).toBe("502");
+      expect(correctionChoices(tree)).toHaveLength(0);
+      expect(requests).toHaveLength(1);
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("makes choices reachable at their measured anchor and announces them", async () => {
+    const { harness } = draftSetup();
+    try {
+      const tree = await editAmount(harness);
+      const scroll = nodes(tree, (item) => item.type === "ScrollView")[0];
+      const scrollTo = vi.fn();
+      scroll.props.ref.current = { scrollTo };
+      const anchor = nodes(
+        tree,
+        (item) => item.type === "View" && typeof item.props.onLayout === "function",
+      )[0];
+      anchor.props.onLayout({ nativeEvent: { layout: { y: 321 } } });
+      pressable(tree, "Cancel").props.onPress();
+      expect(scrollTo).toHaveBeenCalledWith({ y: 321, animated: true });
+      expect(AccessibilityInfo.announceForAccessibility).toHaveBeenLastCalledWith(
+        "Your hydration correction has unsaved edits. Keep editing or explicitly discard edits to continue.",
+      );
+    } finally {
+      harness.unmount();
+    }
+  });
+  it.each([
+    { accessToken: "replacement-session" },
+    { apiBase: new URL("http://127.0.0.1:4001") },
+    { profileTimeZone: "America/New_York" },
+    { requestedDate: "2026-11-02" },
+  ])(
+    "hides retained correction and choices before effects after scope replacement %j",
+    async (changed) => {
+      const { harness, requests } = draftSetup();
+      try {
+        await foldedDraft(harness);
+        const tree = await click(harness, "Cancel");
+        const oldDiscard = pressable(tree, "Discard edits").props.onPress;
+        const oldSave = pressable(tree, "Save correction").props.onPress;
+        const count = requests.length;
+        harness.updateProps(changed);
+        const hidden = harness.renderWithoutEffects();
+        expect(correctionChoices(hidden)).toHaveLength(0);
+        expect(
+          nodes(hidden, (item) => item.props?.accessibilityLabel === "Edit milliliters at 01:30"),
+        ).toHaveLength(0);
+        oldDiscard();
+        oldSave();
+        expect(requests).toHaveLength(count);
+        harness.flushEffects();
+        await harness.settle();
+      } finally {
+        harness.unmount();
+      }
+    },
+  );
+  it("invalidates background and unmounted choices without losing the current-scope foreground draft", async () => {
+    const { harness, requests } = draftSetup();
+    try {
+      await foldedDraft(harness);
+      let tree = await click(harness, "Cancel");
+      const discard = pressable(tree, "Discard edits").props.onPress;
+      setAppState("background");
+      discard();
+      tree = await harness.settle();
+      expect(correctionChoices(tree)).toHaveLength(0);
+      expect(
+        nodes(tree, (item) => item.props?.accessibilityLabel === "Edit milliliters at 01:30"),
+      ).toHaveLength(0);
+      setAppState("active");
+      tree = await harness.settle();
+      expectFoldedDraft(tree);
+      discard();
+      expectFoldedDraft(await harness.settle());
+      tree = await click(harness, "Cancel");
+      const latestDiscard = pressable(tree, "Discard edits").props.onPress;
+      const count = requests.length;
+      harness.unmount();
+      latestDiscard();
+      expect(requests).toHaveLength(count);
+      expect(harness.writesAfterUnmount).toBe(0);
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("retains an orphan correction after unrelated Add without adding it to the authoritative day total", async () => {
+    let accepted = false;
+    const { harness, requests } = draftSetup((request) => {
+      if (request.method === "POST") {
+        accepted = true;
+        return addReceipt(request);
+      }
+      if (request.method === "PATCH") return response({}, 412);
+      return dayResponse(request.url.searchParams.get("date"), accepted ? [] : [initialEntry]);
+    });
+    try {
+      await foldedDraft(harness);
+      await click(harness, "250 mL");
+      timeInput(await harness.settle()).props.onChangeText("12:00");
+      let tree = await click(harness, "Add entry");
+      expectFoldedDraft(tree);
+      expect(
+        screenText(
+          nodes(
+            tree,
+            (item) => item.props?.accessibilityLabel === "Exact local-day hydration total",
+          )[0],
+        ),
+      ).toContain("0 mL");
+      expect(screenText(tree)).toContain("0 of 64 maximum");
+      expect(screenText(tree)).toContain("this entry is not in the loaded day");
+      expect(pressable(tree, "Save correction").props.disabled).toBe(true);
+      pressable(tree, "Save correction").props.onPress();
+      await harness.settle();
+      expect(requests.filter((item) => item.method === "PATCH")).toHaveLength(0);
+      await click(harness, "Reload before correcting");
+      tree = await click(harness, "Discard edits and reload");
+      expect(
+        nodes(tree, (item) => item.props?.accessibilityLabel === "Edit milliliters at 01:30"),
+      ).toHaveLength(0);
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("shows the retained correction after failed unrelated-delete refresh and retries only the day", async () => {
+    let accepted = false;
+    let failRead = false;
+    const { harness, requests } = draftSetup((request) => {
+      if (request.method === "DELETE") {
+        accepted = true;
+        failRead = true;
+        return receipt(null);
+      }
+      if (failRead) return response({}, 503);
+      return dayResponse(request.url.searchParams.get("date"), [
+        initialEntry,
+        ...(!accepted ? [otherEntry] : []),
+      ]);
+    });
+    try {
+      let tree = await harness.settle();
+      nodes(
+        tree,
+        (item) => item.type === "Pressable" && screenText(item) === "Edit amount",
+      )[0].props.onPress();
+      correctionAmount(await harness.settle()).props.onChangeText("500");
+      tree = await click(harness, "Change time");
+      nodes(tree, (item) => item.props?.accessibilityRole === "radio")[1].props.onPress();
+      tree = await harness.settle();
+      pressable(tree, "Delete").props.onPress();
+      Alert.alert.mock.calls
+        .at(-1)[2]
+        .find((item) => item.text === "Delete")
+        .onPress();
+      tree = await harness.settle();
+      expectFoldedDraft(tree);
+      expect(pressable(tree, "Save correction").props.disabled).toBe(true);
+      failRead = false;
+      tree = await click(harness, "Retry day view");
+      expectFoldedDraft(tree);
+      expect(pressable(tree, "Save correction").props.disabled).toBe(false);
+      expect(requests.filter((item) => item.method === "DELETE")).toHaveLength(1);
+    } finally {
+      harness.unmount();
+    }
+  });
+  it("keeps the captured time zone through ordinary refresh and clears it only after successful explicit recovery", async () => {
+    let zone = "America/Chicago";
+    let failRead = false;
+    const { harness, requests } = draftSetup((request) => {
+      if (request.method === "POST") {
+        zone = "America/New_York";
+        return addReceipt(request);
+      }
+      if (request.method === "PATCH") return response({}, 409);
+      if (failRead) return response({}, 503);
+      return dayResponse(request.url.searchParams.get("date"), [initialEntry], zone);
+    });
+    try {
+      await foldedDraft(harness);
+      await click(harness, "250 mL");
+      timeInput(await harness.settle()).props.onChangeText("12:00");
+      let tree = await click(harness, "Add entry");
+      expectFoldedDraft(tree);
+      expect(screenText(tree)).toContain("Change time in America/Chicago");
+      tree = await click(harness, "Save correction");
+      expect(screenText(tree)).toContain("profile time zone changed");
+      expect(requests.filter((item) => item.method === "PATCH")).toHaveLength(0);
+      expect(pressable(tree, "Save correction").props.disabled).toBe(true);
+      await click(harness, "Reload before correcting");
+      tree = await click(harness, "Keep editing");
+      expectFoldedDraft(tree);
+      await click(harness, "Reload before correcting");
+      failRead = true;
+      tree = await click(harness, "Discard edits and reload");
+      expectFoldedDraft(tree);
+      expect(pressable(tree, "Save correction").props.disabled).toBe(true);
+      failRead = false;
+      await click(harness, "Reload before correcting");
+      tree = await click(harness, "Discard edits and reload");
+      expect(pressable(tree, "Edit amount").props.disabled).toBe(false);
+      tree = await click(harness, "Edit amount");
+      tree = await click(harness, "Change time");
+      expect(screenText(tree)).toContain("Change time in America/New_York");
+    } finally {
+      harness.unmount();
+    }
+  });
+  it.each(["wrong day", "malformed"])(
+    "retains the conflict guard after a %s recovery response",
+    async (failure) => {
+      let conflicting = false;
+      const { harness } = draftSetup((request) => {
+        if (request.method === "PATCH") {
+          conflicting = true;
+          return response({}, 412);
+        }
+        if (conflicting)
+          return failure === "wrong day" ? dayResponse("2026-11-02") : response({ data: {} });
+        return dayResponse(request.url.searchParams.get("date"));
+      });
+      try {
+        await foldedDraft(harness);
+        await click(harness, "Save correction");
+        await click(harness, "Reload before correcting");
+        const tree = await click(harness, "Discard edits and reload");
+        expectFoldedDraft(tree);
+        expect(pressable(tree, "Save correction").props.disabled).toBe(true);
+        expect(pressable(tree, "Reload before correcting")).toBeDefined();
+      } finally {
+        harness.unmount();
+      }
+    },
+  );
+  it("rejects stale conflict-choice callbacks and late recovery after session change", async () => {
+    let conflict = false;
+    const held = pendingResponse();
+    const { harness, requests } = draftSetup((request) => {
+      if (request.method === "PATCH") {
+        conflict = true;
+        return response({}, 412);
+      }
+      if (conflict) return held.promise;
+      return dayResponse(request.url.searchParams.get("date"));
+    });
+    try {
+      await foldedDraft(harness);
+      await click(harness, "Save correction");
+      let tree = await click(harness, "Reload before correcting");
+      const discard = pressable(tree, "Discard edits and reload").props.onPress;
+      const oldSave = pressable(tree, "Save correction").props.onPress;
+      discard();
+      discard();
+      oldSave();
+      tree = await harness.settle();
+      expectFoldedDraft(tree);
+      expect(pressable(tree, "Save correction").props.disabled).toBe(true);
+      expect(requests).toHaveLength(3);
+      harness.updateProps({ accessToken: "replacement" });
+      harness.renderWithoutEffects();
+      held.resolve(dayResponse(initialEntry.localDate));
+      harness.flushEffects();
+      tree = await harness.settle();
+      expect(
+        nodes(tree, (item) => item.props?.accessibilityLabel === "Edit milliliters at 01:30"),
+      ).toHaveLength(0);
+      expect(requests.filter((item) => item.method === "PATCH")).toHaveLength(1);
+    } finally {
+      harness.unmount();
+    }
   });
 });

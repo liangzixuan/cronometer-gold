@@ -54,8 +54,28 @@ interface HydrationEdit {
   readonly time?: HydrationTimeEdit;
 }
 
+type EditReplacementAction =
+  | { readonly kind: "cancel" }
+  | { readonly kind: "entry"; readonly entry: HydrationEntry }
+  | { readonly kind: "date"; readonly date: string }
+  | { readonly kind: "reload" };
+interface EditReplacementChoice {
+  readonly action: EditReplacementAction;
+  readonly draft: HydrationEdit;
+  readonly day: HydrationDay | null;
+  readonly dateDraft: string;
+  readonly generation: number;
+  readonly lifecycle: number;
+}
+
+function hasHydrationEdits(draft: HydrationEdit): boolean {
+  // Opting into time editing is itself a change: it chooses minute precision.
+  return draft.amount !== String(draft.entry.amountMilliliters) || draft.time !== undefined;
+}
+
 interface MutationInput {
   readonly intentKey: string;
+  readonly entryId?: string;
   readonly path: string;
   readonly method: "DELETE" | "PATCH" | "POST";
   readonly body?: unknown;
@@ -87,6 +107,8 @@ export function HydrationScreen({
   onUnauthorized,
 }: HydrationScreenProps) {
   const initialNow = useRef(new Date()).current;
+  const scrollView = useRef<ScrollView | null>(null);
+  const replacementY = useRef(0);
   const initialDate = todayDetailDate(requestedDate, profileTimeZone, initialNow);
   const [date, setDate] = useState(initialDate);
   const [dateDraft, setDateDraft] = useState(initialDate);
@@ -98,7 +120,10 @@ export function HydrationScreen({
   const [localTime, setLocalTime] = useState(
     localTimeInTimeZone(initialNow, profileTimeZone).slice(0, 5),
   );
-  const [edit, setEdit] = useState<HydrationEdit | null>(null);
+  const [edit, setEditState] = useState<HydrationEdit | null>(null);
+  const editRef = useRef<HydrationEdit | null>(null);
+  const [replacement, setReplacement] = useState<EditReplacementChoice | null>(null);
+  const replacementRef = useRef<EditReplacementChoice | null>(null);
   const amountRef = useRef(amount);
   const timeRef = useRef(localTime);
   const dateDraftRef = useRef(dateDraft);
@@ -137,6 +162,20 @@ export function HydrationScreen({
   const loadedTimeZone = useRef<string | null>(null);
   const untouchedDefaultOccurredAt = useRef<string | null>(null);
 
+  const clearReplacement = useCallback(() => {
+    replacementRef.current = null;
+    setReplacement(null);
+  }, []);
+  const setEdit = useCallback(
+    (next: HydrationEdit | null) => {
+      editRef.current = next;
+      draftVersion.current += 1;
+      setEditState(next);
+      clearReplacement();
+    },
+    [clearReplacement],
+  );
+
   const privateCurrent = useCallback(
     () =>
       mounted.current &&
@@ -171,7 +210,7 @@ export function HydrationScreen({
     setMessageIsError(true);
     setMessage("Your hydration session has closed.");
     await onUnauthorizedRef.current();
-  }, [clearDay, privateCurrent, scopeKey]);
+  }, [clearDay, privateCurrent, scopeKey, setEdit]);
   const day =
     privateCurrent() && loadedScope.current === scopeKey && dayRef.current === loadedDay
       ? loadedDay
@@ -180,6 +219,7 @@ export function HydrationScreen({
   const loadDay = useCallback(
     async (requestedDate: string, successMessage?: string) => {
       if (!privateCurrent() || selectedDate.current !== requestedDate) return false;
+      clearReplacement();
       loadController.current?.abort();
       const controller = new AbortController();
       loadController.current = controller;
@@ -223,12 +263,20 @@ export function HydrationScreen({
           throw new TypeError("The hydration service returned another local day.");
         }
         if (loadedTimeZone.current !== next.timeZone) {
-          setEdit(null);
           const capturedNow = new Date();
           timeRef.current = localTimeInTimeZone(capturedNow, next.timeZone).slice(0, 5);
           setLocalTime(timeRef.current);
           untouchedDefaultOccurredAt.current = capturedNow.toISOString();
           loadedTimeZone.current = next.timeZone;
+        }
+        const retained = editRef.current;
+        if (
+          retained &&
+          !pendingRef.current &&
+          !next.entries.some((entry) => entry.id === retained.entry.id)
+        ) {
+          requiresReloadRef.current = true;
+          setRequiresReload(true);
         }
         dayRef.current = next;
         loadedScope.current = scopeKey;
@@ -248,7 +296,16 @@ export function HydrationScreen({
         return false;
       }
     },
-    [accessToken, apiBase, clearDay, closePrivate, privateCurrent, profileTimeZone, scopeKey],
+    [
+      accessToken,
+      apiBase,
+      clearDay,
+      clearReplacement,
+      closePrivate,
+      privateCurrent,
+      profileTimeZone,
+      scopeKey,
+    ],
   );
 
   useEffect(() => {
@@ -286,13 +343,14 @@ export function HydrationScreen({
       mutationController.current?.abort();
       mutationController.current = null;
     };
-  }, [date, loadDay, profileTimeZone, scopeKey]);
+  }, [date, loadDay, profileTimeZone, scopeKey, setEdit]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (next) => {
       const active = next !== "background" && next !== "inactive";
       if (!mounted.current || foreground.current === active) return;
       foreground.current = active;
+      clearReplacement();
       lifecycle.current += 1;
       loadGeneration.current += 1;
       loadController.current?.abort();
@@ -306,7 +364,7 @@ export function HydrationScreen({
       if (active) void loadDay(selectedDate.current);
     });
     return () => subscription.remove();
-  }, [clearDay, loadDay, scopeKey]);
+  }, [clearDay, clearReplacement, loadDay, scopeKey]);
 
   const renderedLifecycle = lifecycle.current;
   const renderedLoad = loadGeneration.current;
@@ -337,6 +395,7 @@ export function HydrationScreen({
   function changeAmount(value: string, announce = false) {
     if (!canEditAdd()) return;
     if (amountRef.current !== value) {
+      clearReplacement();
       amountRef.current = value;
       draftVersion.current += 1;
       setAmount(value);
@@ -350,6 +409,7 @@ export function HydrationScreen({
   function changeTime(value: string) {
     if (!canEditAdd()) return;
     if (timeRef.current !== value || untouchedDefaultOccurredAt.current !== null) {
+      clearReplacement();
       timeRef.current = value;
       untouchedDefaultOccurredAt.current = null;
       draftVersion.current += 1;
@@ -367,6 +427,7 @@ export function HydrationScreen({
     )
       return;
     if (dateDraftRef.current !== value) {
+      clearReplacement();
       dateDraftRef.current = value;
       draftVersion.current += 1;
       refreshDraftVersion(draftVersion.current);
@@ -399,17 +460,126 @@ export function HydrationScreen({
       setDateDraft(value);
       return;
     }
-    selectedDate.current = value;
-    dateDraftRef.current = value;
+    requestEditReplacement({ kind: "date", date: value });
+  }
+
+  function canChangeCorrection() {
+    return (
+      currentControls() &&
+      !pendingRef.current &&
+      !mutationController.current &&
+      !requiresReloadRef.current &&
+      state === "ready" &&
+      day !== null &&
+      dayRef.current === day
+    );
+  }
+  function changeEdit(update: (draft: HydrationEdit) => HydrationEdit) {
+    if (!canChangeCorrection() || !edit || editRef.current !== edit) return;
+    const next = update(edit);
+    if (next !== edit) setEdit(next);
+  }
+  function beginEdit(entry: HydrationEntry) {
+    if (!canChangeCorrection() || !day?.entries.includes(entry)) return;
+    requestEditReplacement({ kind: "entry", entry });
+  }
+  function cancelEdit() {
+    if (
+      !currentControls() ||
+      pendingRef.current ||
+      mutationController.current ||
+      state === "loading"
+    )
+      return;
+    requestEditReplacement({ kind: "cancel" });
+  }
+  function applyEditReplacement(action: EditReplacementAction) {
+    draftVersion.current += 1;
+    refreshDraftVersion(draftVersion.current);
+    clearReplacement();
+    if (action.kind === "reload") {
+      const retained = editRef.current;
+      const initiatingLifecycle = lifecycle.current;
+      void loadDay(date).then((loaded) => {
+        if (
+          !loaded ||
+          !privateCurrent() ||
+          lifecycle.current !== initiatingLifecycle ||
+          selectedDate.current !== date ||
+          editRef.current !== retained
+        )
+          return;
+        setEdit(null);
+        requiresReloadRef.current = false;
+        setRequiresReload(false);
+      });
+      return;
+    }
+    setEdit(
+      action.kind === "entry"
+        ? { entry: action.entry, amount: String(action.entry.amountMilliliters) }
+        : null,
+    );
+    if (action.kind !== "date") return;
+    selectedDate.current = action.date;
+    dateDraftRef.current = action.date;
     lifecycle.current += 1;
     loadGeneration.current += 1;
     loadController.current?.abort();
-    setEdit(null);
     clearDay();
     setDestinationDate(null);
+    requiresReloadRef.current = false;
     setRequiresReload(false);
-    setDateDraft(value);
-    setDate(value);
+    setDateDraft(action.date);
+    setState("loading");
+    setDate(action.date);
+  }
+  function requestEditReplacement(action: EditReplacementAction) {
+    const draft = editRef.current;
+    if (!draft || !hasHydrationEdits(draft)) {
+      applyEditReplacement(action);
+      return;
+    }
+    draftVersion.current += 1;
+    refreshDraftVersion(draftVersion.current);
+    const choice: EditReplacementChoice = {
+      action,
+      draft,
+      day: dayRef.current,
+      dateDraft: dateDraftRef.current,
+      generation: draftVersion.current,
+      lifecycle: lifecycle.current,
+    };
+    replacementRef.current = choice;
+    setReplacement(choice);
+    scrollView.current?.scrollTo({ y: replacementY.current, animated: true });
+    AccessibilityInfo.announceForAccessibility(
+      "Your hydration correction has unsaved edits. Keep editing or explicitly discard edits to continue.",
+    );
+  }
+  function resolveEditReplacement(choice: EditReplacementChoice, discard: boolean) {
+    if (
+      !currentControls() ||
+      replacementRef.current !== choice ||
+      editRef.current !== choice.draft ||
+      dayRef.current !== choice.day ||
+      dateDraftRef.current !== choice.dateDraft ||
+      draftVersion.current !== choice.generation ||
+      lifecycle.current !== choice.lifecycle ||
+      pendingRef.current ||
+      mutationController.current ||
+      state === "loading" ||
+      (choice.action.kind === "entry" && !choice.day?.entries.includes(choice.action.entry))
+    )
+      return;
+    if (discard) applyEditReplacement(choice.action);
+    else {
+      draftVersion.current += 1;
+      refreshDraftVersion(draftVersion.current);
+      clearReplacement();
+      dateDraftRef.current = date;
+      setDateDraft(date);
+    }
   }
 
   function clearPending() {
@@ -493,7 +663,7 @@ export function HydrationScreen({
       const receipt = parseHydrationMutation(body);
       input.validate(receipt);
       clearPending();
-      setEdit(null);
+      if (input.entryId !== undefined && editRef.current?.entry.id === input.entryId) setEdit(null);
       if (input.method === "POST") {
         amountRef.current = "";
         draftVersion.current += 1;
@@ -540,6 +710,9 @@ export function HydrationScreen({
       day.localDate !== date
     )
       return;
+    draftVersion.current += 1;
+    refreshDraftVersion(draftVersion.current);
+    clearReplacement();
     const operation: PendingMutation = {
       input,
       operationId: newOperationId(),
@@ -592,14 +765,19 @@ export function HydrationScreen({
   }
 
   function updateEntry() {
-    if (!edit || !day) return;
+    if (!canChangeCorrection() || !edit || editRef.current !== edit || !day) return;
     try {
       if (edit.time && edit.time.timeZone !== day.timeZone) {
-        throw new Error("The profile time zone changed. Reload and confirm the correction again.");
+        requiresReloadRef.current = true;
+        setRequiresReload(true);
+        throw new Error(
+          "The profile time zone changed. Your correction is kept. Choose Reload before correcting to review explicit discard and reload.",
+        );
       }
       const prepared = prepareHydrationUpdate(edit.entry, edit.amount, edit.time);
       const moved = prepared.destinationLocalDate !== edit.entry.localDate;
       beginMutation({
+        entryId: edit.entry.id,
         intentKey: `update:${edit.entry.id}:${edit.entry.revision}:${JSON.stringify(prepared.body)}:${prepared.expectedTimeZone ?? ""}`,
         path: `/v1/hydration/entries/${encodeURIComponent(edit.entry.id)}${prepared.expectedTimeZone ? "?profileTimeZonePrecondition=v1" : ""}`,
         method: "PATCH",
@@ -620,6 +798,7 @@ export function HydrationScreen({
 
   function deleteEntry(entry: HydrationEntry) {
     beginMutation({
+      entryId: entry.id,
       intentKey: `delete:${entry.id}:${entry.revision}`,
       path: `/v1/hydration/entries/${encodeURIComponent(entry.id)}`,
       method: "DELETE",
@@ -638,13 +817,20 @@ export function HydrationScreen({
   }
 
   function reloadForCorrection() {
-    if (!currentControls() || mutationController.current || busy || pendingRef.current) return;
-    setEdit(null);
-    setRequiresReload(false);
-    void loadDay(date);
+    if (
+      !currentControls() ||
+      mutationController.current ||
+      busy ||
+      pendingRef.current ||
+      state === "loading" ||
+      !requiresReloadRef.current
+    )
+      return;
+    requestEditReplacement({ kind: "reload" });
   }
 
   function confirmDelete(entry: HydrationEntry) {
+    if (!canChangeCorrection() || !day?.entries.includes(entry)) return;
     const generation = loadGeneration.current;
     Alert.alert(
       "Delete hydration entry?",
@@ -655,7 +841,12 @@ export function HydrationScreen({
           text: "Delete",
           style: "destructive",
           onPress: () => {
-            if (mounted.current && generation === loadGeneration.current) deleteEntry(entry);
+            if (
+              canChangeCorrection() &&
+              generation === loadGeneration.current &&
+              dayRef.current?.entries.includes(entry)
+            )
+              deleteEntry(entry);
           },
         },
       ],
@@ -678,9 +869,32 @@ export function HydrationScreen({
   const createDisabled =
     editDisabled || day === null || day.localDate !== date || dateDraft !== date;
 
+  const visibleEdit = privateCurrent() && editRef.current === edit ? edit : null;
+  const entries = day?.entries ?? [];
+  const displayedEntries =
+    visibleEdit && !entries.some((entry) => entry.id === visibleEdit.entry.id)
+      ? [visibleEdit.entry, ...entries]
+      : entries;
+  const visibleReplacement =
+    privateCurrent() &&
+    replacementRef.current === replacement &&
+    replacement?.draft === visibleEdit &&
+    replacement.generation === draftVersion.current
+      ? replacement
+      : null;
+  const discardLabel =
+    visibleReplacement?.action.kind === "date"
+      ? "Discard edits and change day"
+      : visibleReplacement?.action.kind === "entry"
+        ? "Discard edits and open entry"
+        : visibleReplacement?.action.kind === "reload"
+          ? "Discard edits and reload"
+          : "Discard edits";
+
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
       <ScrollView
+        ref={scrollView}
         automaticallyAdjustKeyboardInsets
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
@@ -764,6 +978,44 @@ export function HydrationScreen({
             <Text style={styles.secondaryText}>Retry day view</Text>
           </Pressable>
         ) : null}
+
+        <View
+          onLayout={(event) => {
+            replacementY.current = event.nativeEvent.layout.y;
+          }}
+        >
+          {visibleReplacement ? (
+            <View
+              accessibilityLabel="Unsaved hydration correction"
+              accessibilityLiveRegion="polite"
+              style={styles.card}
+            >
+              <Text accessibilityRole="header" style={styles.sectionTitle}>
+                Keep your correction?
+              </Text>
+              <Text style={styles.entryMeta}>
+                Your hydration correction has unsaved edits. Keep editing or discard them to
+                continue.
+              </Text>
+              <View style={styles.actionRow}>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => resolveEditReplacement(visibleReplacement, false)}
+                  style={styles.secondarySmall}
+                >
+                  <Text style={styles.secondaryText}>Keep editing</Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => resolveEditReplacement(visibleReplacement, true)}
+                  style={styles.deleteSmall}
+                >
+                  <Text style={styles.deleteText}>{discardLabel}</Text>
+                </Pressable>
+              </View>
+            </View>
+          ) : null}
+        </View>
 
         {pending && !busy ? (
           <Pressable
@@ -882,23 +1134,32 @@ export function HydrationScreen({
             {day ? `${day.entries.length} of 64 maximum` : "64 maximum"}
           </Text>
         </View>
-        {day?.entries.length ? (
-          day.entries.map((entry) => (
+        {displayedEntries.length ? (
+          displayedEntries.map((entry) => (
             <View key={entry.id} style={styles.entryCard}>
-              {edit?.entry.id === entry.id ? (
+              {visibleEdit?.entry.id === entry.id && edit ? (
                 <>
+                  {!day?.entries.some((saved) => saved.id === edit.entry.id) ? (
+                    <Text accessibilityRole="alert" style={styles.entryMeta}>
+                      {day
+                        ? "Unsaved correction — this entry is not in the loaded day. Discard and reload to continue."
+                        : "Unsaved correction kept while the day view is unavailable."}
+                    </Text>
+                  ) : null}
                   <Text style={styles.entryMeta}>
                     Originally {edit.entry.localDate} at {edit.entry.localTime} ·{" "}
                     {edit.entry.timeZone}
                   </Text>
                   <Text style={styles.label}>MILLILITERS</Text>
                   <TextInput
-                    accessibilityLabel={`Edit milliliters at ${entry.localTime.slice(0, 5)}`}
+                    accessibilityLabel={`Edit milliliters at ${edit.entry.localTime.slice(0, 5)}`}
                     editable={!editDisabled}
                     keyboardType="number-pad"
                     maxLength={5}
                     onChangeText={(value) =>
-                      setEdit((current) => (current ? { ...current, amount: value } : current))
+                      changeEdit((current) =>
+                        current.amount === value ? current : { ...current, amount: value },
+                      )
                     }
                     style={styles.input}
                     value={edit.amount}
@@ -918,7 +1179,7 @@ export function HydrationScreen({
                         style={styles.input}
                         value={edit.time.localDate}
                         onChangeText={(value) =>
-                          setEdit((current) =>
+                          changeEdit((current) =>
                             current?.time
                               ? {
                                   ...current,
@@ -942,7 +1203,7 @@ export function HydrationScreen({
                         style={styles.input}
                         value={edit.time.localTime}
                         onChangeText={(value) =>
-                          setEdit((current) =>
+                          changeEdit((current) =>
                             current?.time
                               ? {
                                   ...current,
@@ -985,7 +1246,7 @@ export function HydrationScreen({
                               disabled={editDisabled}
                               style={styles.secondarySmall}
                               onPress={() =>
-                                setEdit((current) =>
+                                changeEdit((current) =>
                                   current?.time
                                     ? {
                                         ...current,
@@ -1015,7 +1276,7 @@ export function HydrationScreen({
                         accessibilityState={{ disabled: editDisabled }}
                         style={styles.secondarySmall}
                         onPress={() =>
-                          setEdit((current) =>
+                          changeEdit((current) =>
                             current ? { entry: current.entry, amount: current.amount } : current,
                           )
                         }
@@ -1030,7 +1291,7 @@ export function HydrationScreen({
                       accessibilityState={{ disabled: editDisabled }}
                       style={styles.secondarySmall}
                       onPress={() =>
-                        setEdit((current) =>
+                        changeEdit((current) =>
                           current && day
                             ? { ...current, time: hydrationTimeEdit(current.entry, day.timeZone) }
                             : current,
@@ -1056,7 +1317,7 @@ export function HydrationScreen({
                       accessibilityRole="button"
                       accessibilityState={{ disabled: editDisabled }}
                       disabled={editDisabled}
-                      onPress={() => setEdit(null)}
+                      onPress={cancelEdit}
                       style={styles.secondarySmall}
                     >
                       <Text style={styles.secondaryText}>Cancel</Text>
@@ -1079,11 +1340,7 @@ export function HydrationScreen({
                       accessibilityRole="button"
                       accessibilityState={{ disabled: editDisabled }}
                       disabled={editDisabled}
-                      onPress={() => {
-                        if (!currentControls() || pendingRef.current || mutationController.current)
-                          return;
-                        setEdit({ entry, amount: String(entry.amountMilliliters) });
-                      }}
+                      onPress={() => beginEdit(entry)}
                       style={styles.secondarySmall}
                     >
                       <Text style={styles.secondaryText}>Edit amount</Text>

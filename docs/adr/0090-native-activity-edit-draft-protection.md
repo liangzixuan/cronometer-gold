@@ -1,6 +1,6 @@
 # ADR 0090: Protect native activity edits during local navigation
 
-Status: Source complete and reviewed; final canonical and exact-commit automatic evidence pending.
+Status: Implemented at `d5b3d93`; local and exact-commit automatic evidence passed. Device/release acceptance remains separate.
 
 ## Context
 
@@ -73,5 +73,20 @@ filtered). Independent review found and corrected pre-effect prompt visibility
 and offscreen-choice presentation; six review regressions failed before those
 corrections. Final focused validation passed 111 cases (95 screen, 16 helper),
 zero skips, plus native types and scoped Biome. Independent source review found
-no open issue. Final canonical and exact-commit automatic results remain pending
-in the dated outside-Git readiness record.
+no open issue. At that source-review checkpoint, final canonical and exact-commit
+automatic results were pending. Their completed delivery evidence follows.
+
+## Delivery evidence
+
+Delivered at `d5b3d93871f908f22f4dbf2227bbabb72d39868c`. The final reviewed
+source passed canonical `pnpm check` on September 18, 2026 at 23:51:08–33 UTC:
+1,990 fresh cases, 2,327 cached passes and 93 cached opt-in skips. Canonical
+`pnpm build` passed at 23:51:57–23:52:14 UTC, with eleven successful tasks,
+ten cached and fresh native exports. Cached/skipped cases are not fresh services.
+
+September 19 at 01:36 UTC, official exact-commit observations confirmed all three
+actual [CI jobs](https://github.com/liangzixuan/cronometer-gold/actions/runs/35407392345)
+and all nine actual [container jobs](https://github.com/liangzixuan/cronometer-gold/actions/runs/35407392304)
+completed successfully on attempt one. The final verifier at 01:36:54 UTC found
+clean matching local/tracking/live heads and all seven reviewed working-tree and
+committed hashes. This closes source delivery, not signed-device or release gates.
