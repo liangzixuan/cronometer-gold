@@ -163,15 +163,23 @@ confirms all three CI35463394316 and nine actual container35463394427 jobs passe
 on attempt one. Clean matching local/tracking/live heads and eight reviewed
 working-tree/committed hashes were verified at 20:38:16 UTC.
 
-Active work is [ADR 0099](../adr/0099-web-diary-repeat-destination.md): repeat a
-pinned logged food or recipe to a chosen date and configured meal group on web.
-Keep Repeat today and visibly preserve the original destination of uncertain
-requests with exact retry identity, private guards and authoritative totals.
-Independent source review, 115 focused cases (24 new), web types and scoped
-Biome passed on the reviewed source. Final canonical and exact-commit automatic
-evidence remains pending. No API, dependency, installation, local audit,
-service/browser/device or paid review action is part of this slice.
-Real-browser, assistive-technology and release acceptance remain separate.
+[ADR 0099](../adr/0099-web-diary-repeat-destination.md) is delivered at
+`57f0979e5f8782f2147b5b30488290b90b837b2d`: 115 focused cases, web types,
+scoped Biome, independent review and canonical check/build passed. Canonical check
+recorded 1,323 fresh and 3,213 cached passes with 93 cached opt-in skips. September
+19 22:42:17 UTC official observation verified all three CI35469474583 and nine
+actual container35469474578 jobs completed successfully on attempt one. The last
+container completed at 22:32:31 UTC, after the 5 PM handoff. Clean matching
+local/tracking/live heads and seven reviewed hashes were verified at 22:42:59 UTC.
+
+The user then approved the [finite beta exit checklist](../product/beta-exit-checklist.md).
+Active source work is [ADR 0100](../adr/0100-fdc-csv-normalized-record-export.md),
+a bounded verified full-CSV normalized-record export for checklist C1. Independent
+review, 85 focused cases (39 parser, nine CLI, 37 publisher), both affected types
+and scoped Biome passed. Final canonical and exact-commit automatic evidence are
+pending at this source checkpoint. It opens no database and does not close live
+staging, authority, real-data scale or beta acceptance. The prior
+autonomous window has ended; the checklist does not infer a new timed automation.
 
 Use the [build plan](../product/build-plan.md) for priorities and the
 [release gates](release-gates.md) for authoritative acceptance. The
@@ -220,7 +228,7 @@ authorizations within their original scope.
 | Lane | Owner and next evidence | Exit |
 | --- | --- | --- |
 | Automatic delivery evidence | Delivery owner re-reads the exact commit's CI and actual container jobs. | Both applicable workflows complete successfully with required jobs executed; release artifact/digest/provenance requirements remain separate. [Supply chain](container-supply-chain.md#required-github-configuration). |
-| Native activity edit-draft protection | Implementation owner and independent in-task reviewer validate exact dirty/pristine fields, Keep/Discard across local transitions, typed dates, stale/private guards, independent Add state and exact retries. | Focused native checks, canonical gates and exact-commit automatic jobs; physical-device and assistive evidence remain separate. [ADR 0090](../adr/0090-native-activity-edit-draft-protection.md). |
+| Beta engineering prerequisites | Source integrator and independent in-task reviewer advance the finite checklist, starting with the full-CSV normalized-record handoff. | Applicable source/local/automatic proof; C1 remains open for database staging, authority and target scale evidence. [Beta checklist](../product/beta-exit-checklist.md). |
 | Signed device and accessibility | Release owner confirms identifier history and numbering; device operators and reviewers prepare approved Windows relay/capture prerequisites and the physical iOS/Android matrix. | Exact signed artifacts, protected-storage/OS-kill, notification, cross-client and accessibility evidence with required attestations. Exports do not substitute. [Windows boundary](../../infra/runbooks/physical-device-windows-wsl2-private-https.md), [release matrix](../../infra/runbooks/platform-health-release.md). |
 | Hosted beta and mail/privacy operations | Deployment/security, database/privacy and mail owners review target/budget, seven-image deployment, TLS/access/readiness, off-host restore and production delivery operations. | Hosted restore/erasure replay and access evidence, approved provider/sender and abuse/retry/suppression operations, independent review and rollout decisions. [Release](../../infra/runbooks/platform-health-release.md), [restore](../../infra/runbooks/postgres-backup-and-restore.md), [mail/privacy gates](release-gates.md). |
 | Live catalogue and database authority | Acquisition/storage operators, data-quality/rights reviewers and database authority owner provide authenticated dual acquisition, immutable retention, manifest-v4 review bundle, mapping/scale evidence and caller cutover. | Approved numeric catalogue/search/resource thresholds, three distinct role approvals and separate activation decision. The 363-food pilot and synthetic fixtures are insufficient. [Source runbook](../../infra/runbooks/food-source-release.md), [catalogue boundary](../product/build-plan.md#parallel-release-acceptance-target--live-catalogue-evidence). |
@@ -243,12 +251,12 @@ be reintroduced as missing source work from an older summary.
 
 ## Active milestone and successor
 
-Complete [ADR 0090](../adr/0090-native-activity-edit-draft-protection.md) with native
-behavioral proof, independent in-task review, canonical validation and the new
-commit's automatic results. ADRs 0077 through 0089 are delivered baselines, not
-pending source tasks. Record the successor
-in the dated Windows readiness record and reconcile it with the next coherent
-source change; avoid a status-only commit/build cycle.
+Complete [ADR 0100](../adr/0100-fdc-csv-normalized-record-export.md) with focused
+parser/CLI proof, independent review, canonical validation and exact-commit
+automatic results. ADRs 0077 through 0099 are delivered baselines. Subsequent work
+must advance the [beta checklist](../product/beta-exit-checklist.md), with one
+source package active and action-specific execution approvals preserved. Record
+interruptions in the outside-Git checkpoint; avoid status-only commit/build cycles.
 
 The scoped external report is complete at `805b937`. Another paid review needs
 explicit scope/spending approval. Audit authorization is consumed. Source,

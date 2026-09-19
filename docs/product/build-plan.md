@@ -65,8 +65,9 @@ reviewer, or production-release acceptance.
    reference-target expiry, quantified zero, trace, partial, unknown, and
    completely missing days. This closes M3A's local source slice only; it does
    not claim clinical interpretation, signed-device acceptance, hosted
-   availability, printable/PDF output, scheduled delivery, or full premium
-   parity.
+   availability, scheduled delivery or full premium parity. Bounded web printing
+   has separate source and dated local evidence under ADR 0028; saved/physical
+   output and broader print/accessibility acceptance are not implied.
 8. **Durable diary corrections and ordering (implemented; release-gated):** the
    native protected FIFO now covers repeat, edit, delete, and one complete-day
    within-meal reorder in addition to food, recipe, and custom-food logging.
@@ -84,14 +85,13 @@ reviewer, or production-release acceptance.
 
 ## Forward milestones
 
-Roadmap priority is user-visible product parity and a provable release path, not
-depth in any one infrastructure lane. While live catalogue, hosting, device, or
-external-identity work awaits its separate approval or external evidence, the
-default next work is the smallest safe user-visible source milestone. Only a
-demonstrated P0/P1 correctness, privacy, security, data-loss, cross-owner, or
-release-authority defect—or work required by the next beta exit gate—interrupts
-that order. This is scheduling, not a waiver: every M0 and M2 acceptance gate
-remains fail-closed.
+The September 19 user-approved priority is the finite
+[controlled-beta exit checklist](beta-exit-checklist.md). Advance its catalogue,
+account delivery, hosted recovery and actual-client prerequisites before selecting
+further incremental features. Prepare reviewable external decision packages while
+authorized source work proceeds; an unresolved external decision does not make a
+release gate pass. Demonstrated P0/P1 defects still interrupt the active package.
+The full M0/M1/M2 scope and every action-specific approval remain unchanged.
 
 ### Execution queue
 
@@ -102,7 +102,8 @@ retains earlier boundaries. A successful successor never changes an older result
 
 | Order | Work | Concrete exit |
 | --- | --- | --- |
-| Active source milestone | Web diary repeat destination (ADR 0099) | Choose a destination date and configured meal for one pinned logged portion; retain Repeat today, exact pending retries and private guards, with reviewed local and automatic evidence. |
+| Active beta prerequisite | Full-FDC normalized-record export (ADR 0100), checklist C1 | Retain exact accepted records through bounded private writes; publish only after full parser/baseline/digest verification. Database staging and live catalogue acceptance remain open. |
+| Completed source milestone | Web diary repeat destination (ADR 0099) | Delivered at `57f0979`: chosen date/meal and exact retry destination; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Web activity time occurrence choices (ADR 0098) | Delivered at `2a22a0f`: explicit repeated-minute choices with exact untouched timestamps and retries; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Web report day inspector (ADR 0097) | Delivered at `7a104ea`: all 15 nutrients for one report day; local gates and all three CI/nine actual container jobs passed after one approved quality retry. |
 | Completed source milestone | Native activity time occurrence choice (ADR 0096) | Delivered at `e3eb556`: explicit repeated-minute choices with preserved precise defaults and exact retries; local gates and all three CI/nine actual container jobs passed. |
@@ -128,20 +129,20 @@ retains earlier boundaries. A successful successor never changes an older result
 | Completed external review | Scoped Claude review at `805b937` | The supplied report found no ADR 0077 blockers. Its recommendations were addressed in the delivered follow-up; the report remains limited to its original scope. Routine product work does not require another paid review. |
 | Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Advance only under applicable existing authorization and unchanged release gates. |
 
-### Active bounded milestone: web diary repeat destination
+### Active bounded beta prerequisite: full-FDC normalized-record export
 
-[ADR 0099](../adr/0099-web-diary-repeat-destination.md) lets web users repeat an
-exact logged food or recipe directly to a chosen date and configured meal group.
-Keep Repeat today, source revisions, current profile-zone guards, validated
-receipts and authoritative totals. Show and safely retry the original destination
-of uncertain operations instead of replacing their exact request identity.
+[ADR 0100](../adr/0100-fdc-csv-normalized-record-export.md) adds an opt-in,
+bounded normalized-record handoff to the full-CSV inspector. Provisional records
+remain private until complete parser identity/cleanup checks, the reviewed
+manifest baseline and count/digest reconciliation pass. Default inspection
+evidence stays unchanged. This is the first C1 implementation step; full-CSV
+database staging, authority cutover and representative scale proof remain open.
 
-The prior [web activity time occurrence choices](../adr/0098-web-activity-time-occurrence.md)
-are delivered at `2a22a0f`, with local and exact-commit automatic evidence complete.
-No API, schema, dependency, installation, local audit, browser/service/device or
-paid review action is part of ADR 0099. Prior rerun and audit approvals are
-consumed. Follow the [proportionate review policy](../quality/development-workflow.md#proportionate-independent-review).
-Real-browser, assistive-technology and release acceptance remain separate.
+The [beta checklist](beta-exit-checklist.md) fixes the required exits and external
+decision packages. No database, live source, dependency, installation, production
+audit, service/device/hosting or paid-review action is part of ADR 0100. Apply
+the [development workflow](../quality/development-workflow.md) and preserve
+formal source, local, automatic and release evidence boundaries.
 
 ### Milestone and external-decision boundaries
 
@@ -197,11 +198,11 @@ work is available. M2 still requires both M0 and M1 acceptance.
 
 Remaining database writer closure, runtime-identity cutover,
 external-principal binding, target canaries, and CONTRACT revocation remain
-mandatory before live staging, promotion, rollback, or activation. They do not
-preempt safe M1 source work while the affected capabilities remain
-`NOLOGIN` and unassigned unless a concrete high-severity defect is
-demonstrated. Hardening without a named release gate, observed defect, owner,
-and testable exit condition stays queued.
+mandatory before live staging, promotion, rollback, or activation. Their source
+prerequisites now follow the approved [beta checklist](beta-exit-checklist.md),
+while target capabilities remain `NOLOGIN` and unassigned until separately
+authorized cutover. Hardening without a named release gate, observed defect,
+owner and testable exit condition stays queued.
 
 No OCI retry automation, live acquisition/staging/activation, cloud cost or paid
 fallback, Azure/OCI Terraform plan/apply, Name.com DNS change, workflow
@@ -313,7 +314,7 @@ Each retains its separate explicit-approval gate.
    database or role residue. The policy carries no credentials or private
    identity claims. Live login provisioning, membership mutation, credentials,
    external-principal binding, DEPLOY, and CONTRACT remain blocked.
-2. **M1 — user-visible daily loop (current source priority):** activity/exercise,
+2. **M1 — user-visible daily loop (required beta acceptance):** activity/exercise,
    private diary notes, configurable groups, durable offline retry/reorder,
    email-verification release acceptance
    and password recovery, a source-verified reference-target candidate, and
@@ -540,8 +541,9 @@ Each retains its separate explicit-approval gate.
    must preserve timezone and target-version boundaries and provide selectable
    nutrient charts without medical interpretation. Hosted and signed-device
    acceptance remain open. M3B printable output has source and dated local evidence
-   under [ADR 0028](../adr/0028-print-current-nutrition-report.md); repeat-print and
-   direct-Ctrl+P manual acceptance remain open. Scheduled reports, nutrition
+   under [ADR 0028](../adr/0028-print-current-nutrition-report.md); bounded repeated
+   preview/Cancel and direct-Ctrl+P checks passed September 16. Saved/physical output
+   and broader layout/accessibility acceptance remain open. Scheduled reports, nutrition
    scores/balance meters, macro scheduling,
    fasting, sharing, and production or signed-device acceptance remain later
    work. This source sequencing does not waive M0, M1, or M2 release gates.
@@ -885,8 +887,9 @@ Exact inventory, headers, raw values, type/market semantics, real-scale
 footprint/runtime, thresholds, staging, reconciliation, search, rights,
 approvals, and activation all remain open.
 
-The real API/worker privacy drill now populates and independently enumerates all
-65 retained export entity families. Exact IDs and counts reconcile across the
+The earlier real API/worker privacy drill populated and independently enumerated
+65 retained export entity families; the newer 68-family evidence is recorded in
+the delivery summary and current readiness above. Exact IDs and counts reconcile across the
 source snapshot, JSON, and decompressed CSV; forbidden field-name checks and
 independent sentinels prove audit-field redaction; artifact lifecycle rows omit
 object locators, encryption identifiers, and ciphertext-byte metadata; the

@@ -15,9 +15,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertFdcCsvSpoolIdentityContinuity,
+  canonicalJson,
+  type FdcCsvArchiveParseInput,
   type FdcCsvFileContract,
   IngestionError,
   parseFdcCsvArchive,
+  type StagedFoodRecord,
   sha256CanonicalJson,
 } from "../src/index.js";
 
@@ -1056,6 +1059,165 @@ describe("full FDC CSV archive inspection", () => {
     expect(readdirSync(destination).filter((name) => name.startsWith(".fdc"))).toEqual([]);
   });
 
+  it("streams provisional records without changing semantic or processing evidence", async () => {
+    const root = await temporaryDirectory();
+    const archive = join(root, "provisional-records.zip");
+    await writeFixtureZip(archive);
+    const plain = await inspect(archive, join(root, "plain"));
+    const records: StagedFoodRecord[] = [];
+    const streamed = await inspect(archive, join(root, "streamed"), CONTRACTS, Object.keys(CSV), {
+      onAcceptedRecord: async (record) => {
+        records.push(record);
+      },
+    });
+    expect(streamed).toEqual(plain);
+    expect(records).toHaveLength(2);
+    expect(records.map((record) => record.source.sourceRecordId)).toEqual(
+      ["100", "200"].sort((left, right) => {
+        const partition = (id: string) =>
+          createHash("sha256").update(id).digest().readUInt32BE(0) % 2;
+        return partition(left) - partition(right) || (left < right ? -1 : 1);
+      }),
+    );
+    const bytes = records.map((record) => `${canonicalJson(record)}\n`).join("");
+    expect(streamed.semanticEvidence.canonicalAcceptedRecords).toEqual({
+      count: records.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+    });
+    expect(
+      records.find((record) => record.source.sourceRecordId === "100")?.nutrients[0]?.value,
+    ).toMatchObject({ state: "known", amount: "0" });
+    expect(
+      records.find((record) => record.source.sourceRecordId === "200")?.nutrients[0]?.value,
+    ).toMatchObject({ state: "trace", detectionLimit: "0.05" });
+    expect(streamed.metrics.quarantinedFoodCount).toBe(1);
+  });
+
+  it("awaits a slow provisional sink without emitting another record", async () => {
+    const root = await temporaryDirectory();
+    const archive = join(root, "slow-sink.zip");
+    await writeFixtureZip(archive);
+    let notifyStarted = () => {};
+    let releaseFirst = () => {};
+    const started = new Promise<void>((resolve) => {
+      notifyStarted = resolve;
+    });
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let calls = 0;
+    let active = 0;
+    let maximumActive = 0;
+    const parsing = inspect(archive, join(root, "out"), CONTRACTS, Object.keys(CSV), {
+      onAcceptedRecord: async () => {
+        calls += 1;
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        if (calls === 1) {
+          notifyStarted();
+          await gate;
+        }
+        active -= 1;
+      },
+    });
+    await started;
+    await Promise.resolve();
+    expect(calls).toBe(1);
+    releaseFirst();
+    const result = await parsing;
+    expect(calls).toBe(result.metrics.acceptedFoodCount);
+    expect(maximumActive).toBe(1);
+  });
+
+  it.each(["INVALID_RECORD", "DUPLICATE_KEY"] as const)(
+    "fails the whole parse for a %s sink error instead of quarantining the food",
+    async (code) => {
+      const root = await temporaryDirectory();
+      const archive = join(root, "sink-error.zip");
+      await writeFixtureZip(archive);
+      const failure = new IngestionError(code, "synthetic sink failure");
+      const sink = vi.fn(async () => {
+        throw failure;
+      });
+      await expect(
+        inspect(archive, join(root, "out"), CONTRACTS, Object.keys(CSV), {
+          onAcceptedRecord: sink,
+        }),
+      ).rejects.toMatchObject({
+        code: "INVALID_ARCHIVE_ENTRY",
+        message: "FDC provisional accepted-record sink failed",
+        cause: failure,
+      });
+      expect(sink).toHaveBeenCalledTimes(1);
+      expect(readdirSync(join(root, "out")).filter((name) => name.startsWith(".fdc"))).toEqual([]);
+    },
+  );
+
+  it("rejects an abort requested by the provisional sink, including after the last accepted record", async () => {
+    const root = await temporaryDirectory();
+    const archive = join(root, "sink-abort.zip");
+    await writeFixtureZip(archive);
+    const controller = new AbortController();
+    let calls = 0;
+    await expect(
+      inspect(archive, join(root, "out"), CONTRACTS, Object.keys(CSV), {
+        signal: controller.signal,
+        onAcceptedRecord: async () => {
+          calls += 1;
+          if (calls === 2) controller.abort();
+        },
+      }),
+    ).rejects.toMatchObject({ code: "ABORTED" });
+    expect(calls).toBe(2);
+  });
+
+  it("retains the provisional boundary when a later partition is invalid", async () => {
+    const root = await temporaryDirectory();
+    const archive = join(root, "late-orphan.zip");
+    const idFor = (partition: number) => {
+      for (let id = 1; id < 1000; id += 1) {
+        if (createHash("sha256").update(String(id)).digest().readUInt32BE(0) % 2 === partition)
+          return String(id);
+      }
+      throw new Error("No fixture identifier");
+    };
+    const first = idFor(0);
+    const orphan = idFor(1);
+    await writeFixtureZip(archive, {
+      [PATHS.food]: `fdc_id,data_type,description,publication_date\n${first},source_foundation,First,2026-04-30\n`,
+      [PATHS.branded]:
+        "fdc_id,brand_owner,gtin_upc,serving_size,serving_size_unit,household_serving_fulltext,market_country\n",
+      [PATHS.foodNutrient]: `id,fdc_id,nutrient_id,amount,data_points,derivation_id,loq\n1,${orphan},1008,1,1,49,\n`,
+      [PATHS.portion]:
+        "id,fdc_id,amount,measure_unit_id,portion_description,modifier,gram_weight\n",
+    });
+    const sink = vi.fn(async () => {});
+    await expect(
+      inspect(archive, join(root, "out"), CONTRACTS, Object.keys(CSV), {
+        onAcceptedRecord: sink,
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_RECORD" });
+    expect(sink).toHaveBeenCalledTimes(1);
+  });
+
+  it("still checks extracted identities after provisional records have been emitted", async () => {
+    const root = await temporaryDirectory();
+    const archive = join(root, "late-identity.zip");
+    const destination = join(root, "out");
+    await writeFixtureZip(archive);
+    let calls = 0;
+    await expect(
+      inspect(archive, destination, CONTRACTS, Object.keys(CSV), {
+        onAcceptedRecord: async () => {
+          calls += 1;
+          if (calls === 2)
+            await writeFile(join(destination, PATHS.food), "changed after parsing\n");
+        },
+      }),
+    ).rejects.toThrow();
+    expect(calls).toBe(2);
+  });
+
   it("binds parsing to the caller's exact archive expectation", async () => {
     const root = await temporaryDirectory();
     const archive = join(root, "release.zip");
@@ -1080,6 +1242,7 @@ async function inspect(
   destinationDirectory: string,
   contracts: readonly FdcCsvFileContract[] = CONTRACTS,
   expectedFiles: readonly string[] = Object.keys(CSV),
+  extra: Pick<FdcCsvArchiveParseInput, "onAcceptedRecord" | "signal"> = {},
 ) {
   const bytes = await readFile(archive);
   return parseFdcCsvArchive({
@@ -1090,6 +1253,7 @@ async function inspect(
     expectedFiles,
     fileContracts: contracts,
     processingLimits: { partitionCount: 2 },
+    ...extra,
   });
 }
 

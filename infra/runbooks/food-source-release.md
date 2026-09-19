@@ -274,6 +274,37 @@ database-staging design. Do not use this inspector's retained CSV files or outpu
 as an acquisition attestation, and do not retrofit the Foundation JSON staging
 command to consume them during an operator run.
 
+
+### Optional full-CSV normalized-record handoff
+
+[ADR 0100](../../docs/adr/0100-fdc-csv-normalized-record-export.md) adds an optional
+`--records-out .local-data/evidence/fdc-csv-records/<name>.ndjson` to the existing
+`fdc inspect-csv` command. Replace the placeholder and use a new destination. This
+is a source preparation step in the [beta exit checklist](../../docs/product/beta-exit-checklist.md),
+not a new live-data or database permission.
+
+The export contains a versioned identity/non-authority header, canonical accepted
+record lines in the parser's existing order and a final evidence footer. Each
+write is awaited; a separate hard 6,000,000,000-byte limit includes header/footer
+and has no CLI override. Use a single `.ndjson` basename, not a nested directory. The record count and
+digest match `semanticEvidence.canonicalAcceptedRecords`; the complete-file digest
+also covers the header/footer. Known-zero, trace, unknown, exclusions and
+quarantine semantics remain those of the reviewed adapter.
+
+A baseline proposal never publishes this export. The temporary file remains
+private until the entire parser, identity and required-cleanup path succeeds,
+the manifest baseline matches, and count/digest reconciliation passes. Publication
+must not overwrite an existing path. Keep the original failed attempt evidence;
+do not use a leftover temporary artifact as a successful handoff.
+
+The default command without `--records-out` retains its previous output and
+baseline. No database opens, no stage batch is created, no manifest becomes
+import-ready and no acquisition/review/activation authority is granted. A future
+stager must independently validate the complete artifact and all existing release
+authority. Streaming database staging and representative real-scale acceptance
+remain pending. Use synthetic archives for local source tests unless the exact
+live acquisition/inspection is separately authorized.
+
 ### Health Canada CNF inventory and baseline
 
 The CNF nine-CSV parser contract is not the archive inventory. Before changing a

@@ -13,6 +13,7 @@ import {
   type FdcAdapterContext,
   stageFdcCsvRecordDetailed,
 } from "./fdc.js";
+import type { StagedFoodRecord } from "./model.js";
 import {
   type ExactArchiveExpectation,
   type ExtractedZipFile,
@@ -83,6 +84,13 @@ export interface FdcCsvArchiveParseInput {
   readonly destinationDirectory: string;
   readonly expectedFiles: readonly string[];
   readonly fileContracts: readonly FdcCsvFileContract[];
+  /**
+   * Provisional records, in semantic-evidence order, with awaited backpressure.
+   * A callback does not prove successful parsing, input identity, cleanup, baseline
+   * review or release authority. Do not publish its output until this operation
+   * resolves and the caller's complete manifest baseline has been verified.
+   */
+  readonly onAcceptedRecord?: (record: StagedFoodRecord) => Promise<void>;
   readonly processingLimits?: FdcCsvProcessingLimits;
   readonly signal?: AbortSignal;
 }
@@ -491,6 +499,7 @@ async function parseExtractedArchive(input: {
   readonly expectedFiles: readonly string[];
   readonly extracted: readonly ExtractedZipFile[];
   readonly identities: ReadonlyMap<string, ExtractedZipFileIdentity>;
+  readonly onAcceptedRecord?: (record: StagedFoodRecord) => Promise<void>;
   readonly processingLimits: Required<FdcCsvProcessingLimits>;
   readonly signal?: AbortSignal;
   readonly spool: SpoolWorkspace;
@@ -826,6 +835,21 @@ async function parseExtractedArchive(input: {
         incrementReason(acceptedDataTypeCounts, staged.record.source.sourceDataType);
         incrementReason(acceptedMarketCounts, staged.record.source.marketCode);
         accepted.add(staged.record);
+        if (input.onAcceptedRecord) {
+          try {
+            await input.onAcceptedRecord(staged.record);
+          } catch (error) {
+            // A sink is operational. Even a disposition-shaped error must abort
+            // the complete parse rather than quarantine this already accepted food.
+            throw new IngestionError(
+              "INVALID_ARCHIVE_ENTRY",
+              "FDC provisional accepted-record sink failed",
+              {},
+              { cause: error },
+            );
+          }
+          throwIfAborted(input.signal);
+        }
         addDispositions(excludedNutrients, allExcludedNutrients, reasonCounts);
         addDispositions(excludedPortions, allExcludedPortions, reasonCounts);
         addDispositions(excludedAttributes, staged.excludedAttributes, reasonCounts);

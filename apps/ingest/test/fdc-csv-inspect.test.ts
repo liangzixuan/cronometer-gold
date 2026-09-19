@@ -1,7 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { lstat, mkdir, readdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
-import type { FoodSourceManifestV4 } from "@nutrition-tracker/ingestion";
+import {
+  canonicalJson,
+  type FoodSourceManifestV4,
+  type StagedFoodRecord,
+} from "@nutrition-tracker/ingestion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveFdcCsvInspectionPaths, runCommand } from "../src/run.js";
 
@@ -234,6 +239,231 @@ describe("fdc inspect-csv", () => {
     expect(databaseOpenAttempt).not.toHaveBeenCalled();
   });
 
+  it("exports matched canonical records with distinct payload and complete-file digests", async () => {
+    const fixture = await createFixture();
+    const proposalIo = captureIo();
+    expect(await runCommand(command(fixture, "proposal"), proposalIo.io)).toBe(1);
+    const manifest = await readManifest(fixture.manifestPath);
+    manifest.validation.releaseSpecificExpectations = {
+      ...manifest.validation.releaseSpecificExpectations,
+      ...(proposalIo.outputs[0] as InspectionOutput).baseline,
+    };
+    await writeFile(fixture.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+    const plain = captureIo();
+    expect(await runCommand(command(fixture, "plain"), plain.io)).toBe(0);
+    const recordsOut = recordOutputPath();
+    const exported = captureIo();
+    const exportExit = await runCommand(
+      [...command(fixture, "export"), "--records-out", recordsOut],
+      exported.io,
+    );
+    expect(exported.errors).toEqual([]);
+    expect(exportExit).toBe(0);
+    const result = exported.outputs[0] as InspectionOutput & {
+      recordsExport: {
+        path: string;
+        byteSize: number;
+        sha256: string;
+        recordCount: number;
+        recordsSha256: string;
+      };
+    };
+    const { recordsExport, ...inspection } = result;
+    expect(inspection).toEqual(plain.outputs[0]);
+    const bytes = await readFile(join(WORKSPACE_ROOT, recordsOut));
+    const lines = bytes.toString("utf8").trimEnd().split("\n");
+    const header = JSON.parse(lines[0] ?? "null");
+    const footer = JSON.parse(lines.at(-1) ?? "null");
+    const records = lines.slice(1, -1).map((line) => JSON.parse(line) as StagedFoodRecord);
+    expect(header).toMatchObject({
+      recordType: "header",
+      schemaVersion: 1,
+      format: "usda-fdc-csv-normalized-record-export-v1",
+      authority: {
+        acquisition: false,
+        review: false,
+        staging: false,
+        promotion: false,
+        activation: false,
+      },
+      manifestSha256: inspection.manifestSha256,
+      artifactSha256: manifest.artifact.sha256,
+      parserBuildSha256: "b".repeat(64),
+    });
+    expect(footer).toEqual({
+      recordType: "footer",
+      schemaVersion: 1,
+      format: header.format,
+      inspection,
+    });
+    const payload = records.map((record) => `${canonicalJson(record)}\n`).join("");
+    const recordsSha256 = createHash("sha256").update(payload).digest("hex");
+    expect(recordsExport).toEqual({
+      path: join(WORKSPACE_ROOT, recordsOut),
+      byteSize: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      recordCount: 2,
+      recordsSha256,
+    });
+    expect(inspection.semanticEvidence).toMatchObject({
+      canonicalAcceptedRecords: { count: 2, sha256: recordsSha256 },
+    });
+    expect(
+      records.find((record) => record.source.sourceRecordId === "100")?.nutrients[0]?.value,
+    ).toMatchObject({ state: "known", amount: "0" });
+    expect(
+      records.find((record) => record.source.sourceRecordId === "200")?.nutrients[0]?.value,
+    ).toMatchObject({ state: "trace", detectionLimit: "0.05" });
+    expect((await lstat(recordsExport.path)).mode & 0o777).toBe(0o600);
+    expect(databaseOpenAttempt).not.toHaveBeenCalled();
+  });
+
+  it("does not publish provisional output for an unmatched baseline", async () => {
+    const fixture = await createFixture();
+    const recordsOut = recordOutputPath();
+    const temporaryNamesBefore = await exportTemporaryNames();
+    const captured = captureIo();
+    expect(
+      await runCommand(
+        [...command(fixture, "mismatch-export"), "--records-out", recordsOut],
+        captured.io,
+      ),
+    ).toBe(1);
+    expect(captured.outputs).toHaveLength(1);
+    expect(captured.outputs[0]).not.toHaveProperty("recordsExport");
+    await expect(readFile(join(WORKSPACE_ROOT, recordsOut))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(await exportTemporaryNames()).toEqual(temporaryNamesBefore);
+    expect(databaseOpenAttempt).not.toHaveBeenCalled();
+  });
+
+  it("keeps a pre-existing output unchanged and rejects output path escapes", async () => {
+    const fixture = await createFixture();
+    const recordsOut = recordOutputPath();
+    await mkdir(join(WORKSPACE_ROOT, ".local-data/evidence/fdc-csv-records"), {
+      recursive: true,
+      mode: 0o700,
+    });
+    await writeFile(join(WORKSPACE_ROOT, recordsOut), "keep\n", { mode: 0o600 });
+    const existing = captureIo();
+    expect(
+      await runCommand([...command(fixture, "existing"), "--records-out", recordsOut], existing.io),
+    ).toBe(1);
+    await expect(readFile(join(WORKSPACE_ROOT, recordsOut), "utf8")).resolves.toBe("keep\n");
+    for (const invalid of [
+      "/tmp/output.ndjson",
+      ".local-data/evidence/fdc-csv-records/../escape.ndjson",
+      "C:\\output.ndjson",
+      ".local-data/evidence/fdc-csv-records/output.json",
+      ".local-data/evidence/fdc-csv-records/nested/output.ndjson",
+    ]) {
+      const attempt = captureIo();
+      expect(
+        await runCommand([...command(fixture, "invalid"), "--records-out", invalid], attempt.io),
+      ).toBe(1);
+      expect(attempt.errors.join("\n")).toContain("--records-out must name");
+    }
+    const missingValue = captureIo();
+    expect(
+      await runCommand([...command(fixture, "missing"), "--records-out"], missingValue.io),
+    ).toBe(1);
+    expect(missingValue.errors.join("\n")).toContain("--records-out requires a non-blank value");
+    expect(databaseOpenAttempt).not.toHaveBeenCalled();
+  });
+
+  it("leaves no completed export after late parser failure or cancellation", async () => {
+    const idFor = (partition: number) => {
+      for (let id = 1; id < 100000; id += 1) {
+        if (createHash("sha256").update(String(id)).digest().readUInt32BE(0) % 128 === partition)
+          return String(id);
+      }
+      throw new Error("No fixture identifier");
+    };
+    const fixture = await createFixture({
+      [PATHS.food]: `fdc_id,data_type,description,publication_date\n${idFor(0)},source_foundation,First,2026-04-30\n`,
+      [PATHS.branded]:
+        "fdc_id,brand_owner,gtin_upc,serving_size,serving_size_unit,household_serving_fulltext,market_country\n",
+      [PATHS.foodNutrient]: `id,fdc_id,nutrient_id,amount,data_points,derivation_id,loq\n1,${idFor(127)},1008,1,1,49,\n`,
+      [PATHS.portion]:
+        "id,fdc_id,amount,measure_unit_id,portion_description,modifier,gram_weight\n",
+    });
+    const recordsOut = recordOutputPath();
+    const temporaryNamesBefore = await exportTemporaryNames();
+    const failed = captureIo();
+    expect(
+      await runCommand([...command(fixture, "late"), "--records-out", recordsOut], failed.io),
+    ).toBe(1);
+    expect(failed.outputs).toEqual([]);
+    await expect(readFile(join(WORKSPACE_ROOT, recordsOut))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(await exportTemporaryNames()).toEqual(temporaryNamesBefore);
+    const controller = new AbortController();
+    controller.abort();
+    const aborted = captureIo();
+    expect(
+      await runCommand([...command(fixture, "aborted"), "--records-out", recordsOut], {
+        ...aborted.io,
+        signal: controller.signal,
+      }),
+    ).toBe(1);
+    expect(aborted.outputs).toEqual([]);
+    await expect(readFile(join(WORKSPACE_ROOT, recordsOut))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(databaseOpenAttempt).not.toHaveBeenCalled();
+  });
+
+  it("does not publish when required parser cleanup fails after records were emitted", async () => {
+    const fixture = await createFixture();
+    const recordsOut = recordOutputPath();
+    const temporaryNamesBefore = await exportTemporaryNames();
+    const exportRoot = join(WORKSPACE_ROOT, ".local-data/evidence/fdc-csv-records");
+    const extraction = join(WORKSPACE_ROOT, fixture.rootRelative, "extract-cleanup-failure");
+    const signal = new AbortController().signal;
+    let sentinel: string | undefined;
+    Object.defineProperty(signal, "aborted", {
+      get: () => {
+        if (sentinel !== undefined || !existsSync(extraction) || !existsSync(exportRoot))
+          return false;
+        const spoolName = readdirSync(extraction).find((name) =>
+          name.startsWith(".fdc-csv-spool-"),
+        );
+        if (!spoolName) return false;
+        const pendingOutput = readdirSync(exportRoot).find(
+          (name) => name.startsWith(".fdc-record-export-") && !temporaryNamesBefore.includes(name),
+        );
+        if (
+          !pendingOutput ||
+          readFileSync(join(exportRoot, pendingOutput), "utf8").split("\n").length < 3
+        )
+          return false;
+        // At least one canonical record has reached the private sink. A new,
+        // unrelated spool entry makes the parser's required cleanup fail closed.
+        sentinel = join(extraction, spoolName, "synthetic-unexpected-entry");
+        writeFileSync(sentinel, "keep\n", { mode: 0o600 });
+        return false;
+      },
+    });
+    const captured = captureIo();
+    expect(
+      await runCommand([...command(fixture, "cleanup-failure"), "--records-out", recordsOut], {
+        ...captured.io,
+        signal,
+      }),
+    ).toBe(1);
+    expect(sentinel).toBeDefined();
+    expect(captured.errors.join("\n")).toContain("cleanup");
+    expect(captured.outputs).toEqual([]);
+    await expect(readFile(join(WORKSPACE_ROOT, recordsOut))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(await exportTemporaryNames()).toEqual(temporaryNamesBefore);
+    if (sentinel !== undefined) await expect(readFile(sentinel, "utf8")).resolves.toBe("keep\n");
+    expect(databaseOpenAttempt).not.toHaveBeenCalled();
+  });
+
   it("rejects symlinked manifest and local-data authority roots", async () => {
     const options = Object.freeze({
       artifact: ".local-data/release.zip",
@@ -318,7 +548,9 @@ interface Fixture {
   readonly rootRelative: string;
 }
 
-async function createFixture(): Promise<Fixture> {
+async function createFixture(
+  overrides: Readonly<Record<string, string | Buffer>> = {},
+): Promise<Fixture> {
   const identifier = `${process.pid}-${randomUUID()}`;
   const rootRelative = `.local-data/fdc-csv-cli-test-${identifier}`;
   const root = join(WORKSPACE_ROOT, rootRelative);
@@ -327,7 +559,7 @@ async function createFixture(): Promise<Fixture> {
   const artifactRelative = `${rootRelative}/release.zip`;
   const artifactPath = join(WORKSPACE_ROOT, artifactRelative);
   const bytes = makeStoredZip(
-    Object.entries(CSV).map(([name, value]) => ({
+    Object.entries({ ...CSV, ...overrides }).map(([name, value]) => ({
       name,
       data: Buffer.isBuffer(value) ? value : Buffer.from(value),
     })),
@@ -395,6 +627,24 @@ function command(fixture: Fixture, label: string): string[] {
     "--extract-dir",
     `${fixture.rootRelative}/extract-${label}`,
   ];
+}
+
+function recordOutputPath(): string {
+  const relativePath = `.local-data/evidence/fdc-csv-records/test-${process.pid}-${randomUUID()}.ndjson`;
+  cleanupPaths.push(join(WORKSPACE_ROOT, relativePath));
+  return relativePath;
+}
+
+async function exportTemporaryNames(): Promise<string[]> {
+  try {
+    return (await readdir(join(WORKSPACE_ROOT, ".local-data/evidence/fdc-csv-records")))
+      .filter((name) => name.startsWith(".fdc-record-export-"))
+      .sort();
+  } catch (error) {
+    if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")
+      return [];
+    throw error;
+  }
 }
 
 function captureIo() {

@@ -104,7 +104,8 @@ ADR with a new ADR instead of rewriting its decision.
 | [0096](./0096-native-activity-time-occurrence.md) | Choose native activity time occurrences explicitly | Implemented at e3eb556; local and exact-commit automatic evidence passed; device/release acceptance separate |
 | [0097](./0097-web-report-day-inspector.md) | Inspect every nutrient for one web report day | Implemented at 7a104ea; local and exact-commit automatic evidence passed after one approved quality retry; browser/release acceptance separate |
 | [0098](./0098-web-activity-time-occurrence.md) | Choose web activity time occurrences explicitly | Implemented at 2a22a0f; local and exact-commit automatic evidence passed; browser/release acceptance separate |
-| [0099](./0099-web-diary-repeat-destination.md) | Choose the web diary repeat destination | Source complete and reviewed; final canonical/automatic evidence pending; browser/release acceptance separate |
+| [0099](./0099-web-diary-repeat-destination.md) | Choose the web diary repeat destination | Delivered at `57f0979`; reviewed local and all 3 CI/9 container jobs passed; release acceptance remains separate |
+| [0100](./0100-fdc-csv-normalized-record-export.md) | Bounded verified full-FDC normalized-record export and finite beta exit priority | Source complete and reviewed; 85 focused cases/types/Biome passed; final canonical/automatic evidence pending |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

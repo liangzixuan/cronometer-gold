@@ -53,10 +53,12 @@ import {
 } from "@nutrition-tracker/ingestion";
 
 import { flagOption, optionalOption, parseArguments, requiredOption } from "./arguments.js";
+import { createFdcRecordExport } from "./fdc-record-export.js";
 
 export interface CommandIo {
   readonly environment: NodeJS.ProcessEnv;
   readonly now?: () => Date;
+  readonly signal?: AbortSignal;
   readonly writeError: (value: string) => void;
   readonly writeOutput: (value: string) => void;
 }
@@ -119,7 +121,8 @@ const MANIFEST_VALIDATE_OPTIONS = Object.freeze(["evidence-bundle", "import-read
 const REGISTER_SOURCE_OPTIONS = Object.freeze(["evidence-bundle"]);
 const MAX_RELEASE_EVIDENCE_BYTES = 2 * 1024 * 1024;
 const INSPECT_FDC_OPTIONS = Object.freeze(["artifact", "cache-dir", "extract-dir"]);
-const INSPECT_FDC_CSV_OPTIONS = Object.freeze(["artifact", "cache-dir", "extract-dir"]);
+const INSPECT_FDC_CSV_REQUIRED_OPTIONS = Object.freeze(["artifact", "cache-dir", "extract-dir"]);
+const INSPECT_FDC_CSV_OPTIONS = Object.freeze([...INSPECT_FDC_CSV_REQUIRED_OPTIONS, "records-out"]);
 const INSPECT_CNF_OPTIONS = Object.freeze(["artifact", "cache-dir", "extract-dir"]);
 const CNF_ARCHIVE_LIMITS = Object.freeze({
   maxCompressionRatio: 250,
@@ -604,7 +607,19 @@ async function inspectFdcCsvCommand(
   io: CommandIo,
 ): Promise<void> {
   assertExactFdcCsvInspectArguments(argv, positionals, options);
+  const recordsOut = optionalOption(options, "records-out");
+  const recordsPath = recordsOut === undefined ? undefined : fdcRecordsOutputPath(recordsOut);
   const paths = await resolveFdcCsvInspectionPaths(positionals, options);
+  if (
+    recordsPath !== undefined &&
+    [paths.manifest, paths.artifact, paths.cacheDirectory, paths.extractionDirectory].some((path) =>
+      pathsOverlap(recordsPath, path),
+    )
+  ) {
+    throw new Error(
+      "FDC record output and manifest/artifact/cache/extraction paths must be disjoint",
+    );
+  }
   const manifestBytes = await readFile(paths.manifest);
   const manifest = parseFoodSourceManifest(JSON.parse(manifestBytes.toString("utf8")));
   const manifestSha256 = hashBytes(manifestBytes);
@@ -618,6 +633,10 @@ async function inspectFdcCsvCommand(
     manifest.artifact.byteSize,
     "artifact.byteSize",
   );
+  const parserVersion = requiredManifestValue(
+    manifest.ingestion.parserVersion,
+    "ingestion.parserVersion",
+  );
   const artifact = await acquireArtifact({
     cacheDirectory: paths.cacheDirectory,
     maxBytes: FDC_CSV_MAX_ARTIFACT_BYTES,
@@ -626,6 +645,7 @@ async function inspectFdcCsvCommand(
     sourceReadMode: "require-source-read",
     sourceMode: "local-test",
     tool: "nutrition-tracker-ingest/0.1.0",
+    ...(io.signal === undefined ? {} : { signal: io.signal }),
     verification: {
       mode: "verified",
       expected: {
@@ -635,62 +655,134 @@ async function inspectFdcCsvCommand(
       },
     },
   });
-  const parsed = await parseFdcCsvArchive({
-    archiveExpectation: { byteSize: artifactByteSize, sha256: artifactSha256 },
-    archiveLimits: FDC_CSV_ARCHIVE_LIMITS,
-    archivePath: artifact.path,
-    context: contract.context,
-    destinationDirectory: paths.extractionDirectory,
-    expectedFiles: manifest.validation.expectedFiles,
-    fileContracts: contract.fileContracts,
-  });
-  const baseline = fdcCsvParserBaselineEvidence(parsed);
-  const baselineMismatches = fdcCsvParserBaselineMismatches(manifest, baseline);
-  const inspection = {
-    archive: parsed.archive,
-    baseline,
-    baselineReview: {
-      kind: "non-qualifying-local-baseline-comparison-v1",
-      manifestExpectationsMatched: baselineMismatches.length === 0,
-      mismatches: baselineMismatches,
-      qualifiesAsAcquisitionOrApprovalEvidence: false,
-      status: baselineMismatches.length === 0 ? "matched-manifest-expectations" : "review-required",
-    },
-    conservation: parsed.conservation,
-    exclusionReasonCounts: parsed.exclusionReasonCounts,
-    gtinEvidence: parsed.gtinEvidence,
-    localVerification: {
-      artifactByteSize,
-      artifactSha256,
-      kind: "non-qualifying-local-artifact-verification-v1",
-      qualifiesAsAcquisitionObservation: false,
-      status: "verified-against-manifest-pins",
-    },
-    manifestSha256,
-    metrics: parsed.metrics,
-    parserBuildSha256,
-    parserPackage: manifest.ingestion.parserPackage,
-    parserVersion: requiredManifestValue(
-      manifest.ingestion.parserVersion,
-      "ingestion.parserVersion",
-    ),
-    processing: parsed.processing,
-    releaseKey: manifest.release.releaseKey,
-    reportKind: "usda-fdc-full-csv-inspection-v1",
-    schemaVersion: 1,
-    semanticEvidence: parsed.semanticEvidence,
-    sourceMixEvidence: parsed.sourceMixEvidence,
-    tableEvidenceSha256: parsed.tableEvidenceSha256,
-    tables: parsed.tables,
-  };
-  output(io, inspection);
-  if (baselineMismatches.length > 0) {
+  const format = "usda-fdc-csv-normalized-record-export-v1";
+  const recordExport =
+    recordsPath === undefined
+      ? undefined
+      : await createFdcRecordExport({
+          outputPath: recordsPath,
+          workspaceRoot: WORKSPACE_ROOT,
+          ...(io.signal === undefined ? {} : { signal: io.signal }),
+          header: {
+            recordType: "header",
+            format,
+            schemaVersion: 1,
+            authority: {
+              acquisition: false,
+              review: false,
+              staging: false,
+              promotion: false,
+              activation: false,
+            },
+            artifactByteSize,
+            artifactSha256,
+            manifestSha256,
+            parserBuildSha256,
+            parserPackage: manifest.ingestion.parserPackage,
+            parserVersion,
+            releaseKey: manifest.release.releaseKey,
+            sourceCode: manifest.source.code,
+            ordering: "sha256-partition-then-fdc-id-v1",
+          },
+        });
+  try {
+    const parsed = await parseFdcCsvArchive({
+      archiveExpectation: { byteSize: artifactByteSize, sha256: artifactSha256 },
+      archiveLimits: FDC_CSV_ARCHIVE_LIMITS,
+      archivePath: artifact.path,
+      context: contract.context,
+      destinationDirectory: paths.extractionDirectory,
+      expectedFiles: manifest.validation.expectedFiles,
+      fileContracts: contract.fileContracts,
+      ...(io.signal === undefined ? {} : { signal: io.signal }),
+      ...(recordExport === undefined ? {} : { onAcceptedRecord: recordExport.append }),
+    });
+    const baseline = fdcCsvParserBaselineEvidence(parsed);
+    const baselineMismatches = fdcCsvParserBaselineMismatches(manifest, baseline);
+    const inspection = {
+      archive: parsed.archive,
+      baseline,
+      baselineReview: {
+        kind: "non-qualifying-local-baseline-comparison-v1",
+        manifestExpectationsMatched: baselineMismatches.length === 0,
+        mismatches: baselineMismatches,
+        qualifiesAsAcquisitionOrApprovalEvidence: false,
+        status:
+          baselineMismatches.length === 0 ? "matched-manifest-expectations" : "review-required",
+      },
+      conservation: parsed.conservation,
+      exclusionReasonCounts: parsed.exclusionReasonCounts,
+      gtinEvidence: parsed.gtinEvidence,
+      localVerification: {
+        artifactByteSize,
+        artifactSha256,
+        kind: "non-qualifying-local-artifact-verification-v1",
+        qualifiesAsAcquisitionObservation: false,
+        status: "verified-against-manifest-pins",
+      },
+      manifestSha256,
+      metrics: parsed.metrics,
+      parserBuildSha256,
+      parserPackage: manifest.ingestion.parserPackage,
+      parserVersion,
+      processing: parsed.processing,
+      releaseKey: manifest.release.releaseKey,
+      reportKind: "usda-fdc-full-csv-inspection-v1",
+      schemaVersion: 1,
+      semanticEvidence: parsed.semanticEvidence,
+      sourceMixEvidence: parsed.sourceMixEvidence,
+      tableEvidenceSha256: parsed.tableEvidenceSha256,
+      tables: parsed.tables,
+    };
+    if (baselineMismatches.length > 0) {
+      output(io, inspection);
+      throw new Error(
+        `FDC CSV inspection produced a non-qualifying baseline proposal for: ${baselineMismatches
+          .map((mismatch) => mismatch.key)
+          .join(", ")}`,
+      );
+    }
+    io.signal?.throwIfAborted();
+    if (recordExport) {
+      const recordsExport = await recordExport.publish({
+        footer: {
+          recordType: "footer",
+          format,
+          schemaVersion: 1,
+          inspection,
+        } as unknown as JsonValue,
+        expectedRecordCount: parsed.semanticEvidence.canonicalAcceptedRecords.count,
+        expectedRecordSha256: parsed.semanticEvidence.canonicalAcceptedRecords.sha256,
+      });
+      output(io, { ...inspection, recordsExport });
+    } else {
+      output(io, inspection);
+    }
+  } catch (error) {
+    if (recordExport) {
+      try {
+        await recordExport.abort();
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "FDC inspection and record-export cleanup failed; no completed export is confirmed and retained output may require inspection",
+          { cause: error },
+        );
+      }
+    }
+    throw error;
+  }
+}
+
+function fdcRecordsOutputPath(value: string): string {
+  if (
+    !/^\.local-data\/evidence\/fdc-csv-records\/[A-Za-z0-9][A-Za-z0-9._-]*\.ndjson$/u.test(value)
+  ) {
     throw new Error(
-      `FDC CSV inspection produced a non-qualifying baseline proposal for: ${baselineMismatches
-        .map((mismatch) => mismatch.key)
-        .join(", ")}`,
+      "--records-out must name a relative .ndjson file beneath .local-data/evidence/fdc-csv-records",
     );
   }
+  return resolve(WORKSPACE_ROOT, value);
 }
 
 async function inspectCnfCommand(
@@ -2942,7 +3034,8 @@ function assertExactFdcCsvInspectArguments(
       throw new Error(`Unknown fdc inspect-csv option: --${name ?? ""}`);
     }
   }
-  for (const name of INSPECT_FDC_CSV_OPTIONS) requiredOption(options, name);
+  for (const name of INSPECT_FDC_CSV_REQUIRED_OPTIONS) requiredOption(options, name);
+  optionalOption(options, "records-out");
 }
 
 function assertExactStageFdcArguments(
@@ -3237,7 +3330,7 @@ function usage(): string {
     "  ingest manifest validate <manifest> [--import-ready --evidence-bundle <bundle.json>]",
     "  ingest artifact observe <manifest> --cache-dir <path> --observation-out <path>",
     "  ingest fdc inspect <manifest> --artifact <zip> --cache-dir <path> --extract-dir <path>",
-    "  ingest fdc inspect-csv <manifest> --artifact <zip> --cache-dir <path> --extract-dir <path>",
+    "  ingest fdc inspect-csv <manifest> --artifact <zip> --cache-dir <path> --extract-dir <path> [--records-out .local-data/evidence/fdc-csv-records/<name>.ndjson]",
     "  ingest cnf inspect <manifest> --artifact <zip> --cache-dir <path> --extract-dir <path>",
     "  ingest catalogue stage-fdc <manifest> --artifact <zip> --cache-dir <path> --evidence-bundle <bundle.json> --extract-dir <path> --manifest-object-uri <s3-uri>",
     "  ingest catalogue stage-cnf <manifest> --artifact <zip> --cache-dir <path> --evidence-bundle <bundle.json> --extract-dir <path> --manifest-object-uri <s3-uri>",
