@@ -1,6 +1,6 @@
 # ADR 0093: Protect native definition and reminder drafts
 
-Status: Source complete and reviewed; final canonical and exact-commit automatic evidence pending.
+Status: Implemented at `bd89fd08f4020529441146715817e09988a1bb1f`; local and exact-commit automatic evidence passed. Device and release acceptance remain separate.
 
 ## Context
 
@@ -66,6 +66,17 @@ on original source. Final focused validation passed 528 cases in three files:
 foreground helper cases. Native types and scoped Biome passed. Independent review
 aligned Archive/Revoke availability with the new guards while retaining concurrent
 definition save/archive. Two existing reminder tests now use explicit discard and
-retain their stale-callback assertions. No open source finding remains. Final
-canonical and exact-commit automatic evidence is pending in the dated outside-Git
-readiness record.
+retain their stale-callback assertions. No open source finding remains.
+
+Delivery evidence at `bd89fd08f4020529441146715817e09988a1bb1f`: canonical
+`pnpm check` passed September 19 at 09:28:59–09:29:25 UTC, with 2,074 fresh
+passes and 2,327 cached passes; 93 cached opt-in skips are not fresh service
+evidence. `pnpm build` passed at 09:29:41–09:29:58 UTC, with eleven successful
+tasks, ten cached and fresh native exports. All three actual jobs in
+[CI 35434908419](https://github.com/liangzixuan/cronometer-gold/actions/runs/35434908419)
+and all nine actual jobs in
+[container run 35434908408](https://github.com/liangzixuan/cronometer-gold/actions/runs/35434908408)
+completed successfully on attempt one. The 10:56:44 UTC official observation
+records every job; the 10:57:29 UTC verifier confirms clean matching local,
+tracking and live heads and all seven reviewed working-tree/committed hashes.
+These results cover this commit only and do not establish release acceptance.

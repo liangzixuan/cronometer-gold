@@ -1,9 +1,13 @@
 import * as React from "react";
-import { Alert, AppState } from "react-native";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { AccessibilityInfo, Alert, AppState } from "react-native";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DiaryDayNote } from "../src/diary/DiaryDayNote";
 import { DiaryScreen } from "../src/diary/DiaryScreen";
 import { resetDiaryGroups } from "../src/diary/diary";
+import {
+  DiaryOutboxDependencyError,
+  QuickAddEnqueueAmbiguousError,
+} from "../src/diary/quick-add-outbox";
 
 const hooks = vi.hoisted(() => ({ current: null, appListeners: new Set() }));
 vi.mock("react", async (importOriginal) => ({
@@ -401,6 +405,8 @@ afterEach(() => {
   hooks.appListeners.clear();
   AppState.currentState = "active";
   vi.unstubAllGlobals();
+  vi.useRealTimers();
+  vi.clearAllMocks();
 });
 
 describe("native diary meal group collapse", () => {
@@ -1835,4 +1841,457 @@ describe("native saved entry note previews", () => {
       expect(requests).toHaveLength(count);
     },
   );
+});
+
+describe("native diary repeat destination", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-19T12:00:00.000Z"));
+  });
+  const openLabel = (name) => `Repeat the pinned ${name} version to another date or meal`;
+  const confirmLabel = (name) => `Confirm repeat of ${name}`;
+  const cancelLabel = (name) => `Cancel repeat of ${name}`;
+  const dateLabel = (name) => `Repeat date for ${name}`;
+
+  for (const [name, source] of [
+    ["Apple", entry],
+    ["Bean stew", recipeEntry],
+  ]) {
+    it(`repeats the pinned ${name} to an explicit date and configured meal`, async () => {
+      const groups = resetDiaryGroups().map((group) =>
+        group.mealSlot === "lunch" ? { ...group, label: "Midday meal" } : group,
+      );
+      const { harness, controller } = setup(() => response(page(selectedDate, [source])), {
+        diaryGroups: groups,
+      });
+      let tree = await harness.settle();
+      byLabel(tree, openLabel(name)).props.onPress();
+      tree = await harness.settle();
+      expect(controller.enqueueOperation).not.toHaveBeenCalled();
+      byLabel(tree, dateLabel(name), "TextInput").props.onChangeText("2026-10-04");
+      tree = await harness.settle();
+      byLabel(tree, `Repeat ${name} at Midday meal`).props.onPress();
+      tree = await harness.settle();
+      expect(screenText(tree)).toContain("2026-10-04 · Midday meal");
+      byLabel(tree, confirmLabel(name)).props.onPress();
+      tree = await harness.settle();
+      expect(controller.enqueueOperation).toHaveBeenCalledExactlyOnceWith({
+        operationKind: "repeat",
+        entryId: source.id,
+        expectedEntryRevision: source.revision,
+        entryName: name,
+        portionLabel: source.entryKind === "food" ? "1.5 medium apple" : "1 bowl",
+        localDate: "2026-10-04",
+        sourceLocalDate: selectedDate,
+        mealSlot: source.mealSlot,
+        occurredAt: "2026-10-04T17:00:00.000Z",
+        targetMealSlot: "lunch",
+      });
+      expect(controller.requestDrain).toHaveBeenCalledExactlyOnceWith("operation-1");
+      expect(
+        nodes(tree, (node) => node.props.accessibilityLabel === confirmLabel(name)),
+      ).toHaveLength(0);
+      expect(screenText(tree)).toContain("not counted until the server confirms");
+    });
+  }
+
+  it("validates the repeat date and cancels without allocating an operation", async () => {
+    const { harness, controller } = setup();
+    let tree = await harness.settle();
+    byLabel(tree, openLabel("Apple")).props.onPress();
+    tree = await harness.settle();
+    byLabel(tree, dateLabel("Apple"), "TextInput").props.onChangeText("2026-02-30");
+    tree = await harness.settle();
+    byLabel(tree, confirmLabel("Apple")).props.onPress();
+    tree = await harness.settle();
+    expect(screenText(tree)).toContain("real calendar day");
+    expect(AccessibilityInfo.announceForAccessibility).toHaveBeenCalledWith(
+      expect.stringContaining("real calendar day"),
+    );
+    expect(byLabel(tree, dateLabel("Apple"), "TextInput").props.value).toBe("2026-02-30");
+    byLabel(tree, cancelLabel("Apple")).props.onPress();
+    tree = await harness.settle();
+    expect(
+      nodes(tree, (node) => node.props.accessibilityLabel === dateLabel("Apple")),
+    ).toHaveLength(0);
+    expect(controller.enqueueOperation).not.toHaveBeenCalled();
+    expect(controller.requestDrain).not.toHaveBeenCalled();
+  });
+
+  it("retains an explicit destination after a known failed enqueue", async () => {
+    const { harness, controller } = setup();
+    controller.enqueueOperation.mockRejectedValueOnce(new Error("Storage write failed"));
+    let tree = await harness.settle();
+    byLabel(tree, openLabel("Apple")).props.onPress();
+    tree = await harness.settle();
+    byLabel(tree, dateLabel("Apple"), "TextInput").props.onChangeText("2026-10-04");
+    tree = await harness.settle();
+    byLabel(tree, "Repeat Apple at Dinner").props.onPress();
+    tree = await harness.settle();
+    byLabel(tree, confirmLabel("Apple")).props.onPress();
+    tree = await harness.settle();
+    expect(byLabel(tree, dateLabel("Apple"), "TextInput").props.value).toBe("2026-10-04");
+    expect(byLabel(tree, "Repeat Apple at Dinner").props.accessibilityState.checked).toBe(true);
+    expect(screenText(tree)).toContain("Storage write failed");
+    expect(AccessibilityInfo.announceForAccessibility).toHaveBeenCalledWith("Storage write failed");
+    expect(controller.requestDrain).not.toHaveBeenCalled();
+  });
+
+  it("preserves one-tap today and its exact current instant across the DST fold", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-01T07:30:45.123Z"));
+    const { harness, controller } = setup();
+    const tree = await harness.settle();
+    const repeatToday = byLabel(tree, "Repeat the pinned Apple version today").props.onPress;
+    repeatToday();
+    repeatToday();
+    await harness.settle();
+    expect(controller.enqueueOperation).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        entryId: entry.id,
+        expectedEntryRevision: "3",
+        sourceLocalDate: selectedDate,
+        localDate: "2026-11-01",
+        targetMealSlot: "breakfast",
+        occurredAt: "2026-11-01T07:30:45.123Z",
+      }),
+    );
+  });
+
+  it("keeps the source group expanded and rejects retained local actions while composing", async () => {
+    const { harness, controller } = setup();
+    let tree = await harness.settle();
+    const oldCollapse = toggle(tree, "Breakfast").props.onPress;
+    const oldEdit = byLabel(tree, "Edit Apple entry and private note").props.onPress;
+    const oldDelete = byLabel(tree, "Delete Apple").props.onPress;
+    const oldToday = byLabel(tree, "Repeat the pinned Apple version today").props.onPress;
+    const oldOpenOther = byLabel(tree, openLabel("Bean stew")).props.onPress;
+    byLabel(tree, openLabel("Apple")).props.onPress();
+    oldCollapse();
+    oldEdit();
+    oldDelete();
+    oldToday();
+    oldOpenOther();
+    tree = await harness.settle();
+    expect(toggle(tree, "Breakfast").props.accessibilityState.expanded).toBe(true);
+    expect(toggle(tree, "Breakfast").props.disabled).toBe(true);
+    expect(byLabel(tree, dateLabel("Apple"), "TextInput")).toBeDefined();
+    expect(nodes(tree, (node) => node.props.accessibilityLabel === "Quantity")).toHaveLength(0);
+    expect(controller.enqueueOperation).not.toHaveBeenCalled();
+    expect(screenText(tree)).toContain("another date uses noon in America/Chicago");
+    expect(AccessibilityInfo.announceForAccessibility).toHaveBeenCalledWith(
+      expect.stringContaining("Choose a date and meal"),
+    );
+  });
+
+  it("rejects pre-render stale confirms after destination edits and Cancel", async () => {
+    const { harness, controller } = setup();
+    let tree = await harness.settle();
+    byLabel(tree, openLabel("Apple")).props.onPress();
+    tree = await harness.settle();
+    const oldConfirm = byLabel(tree, confirmLabel("Apple")).props.onPress;
+    const oldGroup = byLabel(tree, "Repeat Apple at Dinner").props.onPress;
+    byLabel(tree, dateLabel("Apple"), "TextInput").props.onChangeText("2026-10-04");
+    oldConfirm();
+    oldGroup();
+    tree = await harness.settle();
+    expect(byLabel(tree, "Repeat Apple at Breakfast").props.accessibilityState.checked).toBe(true);
+    const heldConfirm = byLabel(tree, confirmLabel("Apple")).props.onPress;
+    byLabel(tree, cancelLabel("Apple")).props.onPress();
+    heldConfirm();
+    tree = await harness.settle();
+    expect(controller.enqueueOperation).not.toHaveBeenCalled();
+    expect(toggle(tree, "Breakfast").props.disabled).toBe(false);
+  });
+
+  it("single-flights enqueue and retires accepted composer callbacks without optimistic totals", async () => {
+    const pending = deferred();
+    const { harness, controller } = setup();
+    controller.enqueueOperation.mockReturnValueOnce(pending.promise);
+    let tree = await harness.settle();
+    byLabel(tree, openLabel("Apple")).props.onPress();
+    tree = await harness.settle();
+    const confirm = byLabel(tree, confirmLabel("Apple")).props.onPress;
+    const oldDate = byLabel(tree, dateLabel("Apple"), "TextInput").props.onChangeText;
+    const cancel = byLabel(tree, cancelLabel("Apple")).props.onPress;
+    confirm();
+    confirm();
+    oldDate("2026-12-15");
+    cancel();
+    tree = await harness.settle();
+    expect(controller.enqueueOperation).toHaveBeenCalledTimes(1);
+    expect(byLabel(tree, dateLabel("Apple"), "TextInput").props.editable).toBe(false);
+    expect(byLabel(tree, confirmLabel("Apple")).props.disabled).toBe(true);
+    expect(byLabel(tree, cancelLabel("Apple")).props.disabled).toBe(true);
+    const before = screenText(tree);
+    pending.resolve({ operationId: "confirmed-operation" });
+    tree = await harness.settle();
+    confirm();
+    expect(controller.enqueueOperation).toHaveBeenCalledTimes(1);
+    expect(controller.requestDrain).toHaveBeenCalledExactlyOnceWith("confirmed-operation");
+    expect(
+      nodes(tree, (node) => node.props.accessibilityLabel === confirmLabel("Apple")),
+    ).toHaveLength(0);
+    expect(screenText(tree)).toContain("95.25");
+    expect(before).toContain("95.25");
+  });
+
+  it("retires an ambiguous enqueue and drains only its retained operation", async () => {
+    const { harness, controller } = setup();
+    controller.enqueueOperation.mockRejectedValueOnce(
+      new QuickAddEnqueueAmbiguousError("ambiguous-operation", new Error("storage response lost")),
+    );
+    let tree = await harness.settle();
+    byLabel(tree, openLabel("Apple")).props.onPress();
+    tree = await harness.settle();
+    const confirm = byLabel(tree, confirmLabel("Apple")).props.onPress;
+    confirm();
+    tree = await harness.settle();
+    confirm();
+    expect(controller.enqueueOperation).toHaveBeenCalledTimes(1);
+    expect(controller.requestDrain).toHaveBeenCalledExactlyOnceWith("ambiguous-operation");
+    expect(
+      nodes(tree, (node) => node.props.accessibilityLabel === dateLabel("Apple")),
+    ).toHaveLength(0);
+    expect(screenText(tree)).toContain("Do not repeat it again until queue status recovers");
+  });
+
+  for (const blocked of ["source correction", "source reorder", "destination reorder"]) {
+    it(`respects an outstanding ${blocked} while leaving destination editing and Cancel available`, async () => {
+      const { harness, controller, setQueue } = setup();
+      let tree = await harness.settle();
+      byLabel(tree, openLabel("Apple")).props.onPress();
+      tree = await harness.settle();
+      byLabel(tree, dateLabel("Apple"), "TextInput").props.onChangeText("2026-10-04");
+      tree = await harness.settle();
+      const retainedConfirm = byLabel(tree, confirmLabel("Apple")).props.onPress;
+      setQueue(
+        { status: "pending", pendingCount: 1 },
+        {
+          correctedEntryIds: blocked === "source correction" ? [entry.id] : [],
+          reorderedLocalDates:
+            blocked === "source reorder"
+              ? [selectedDate]
+              : blocked === "destination reorder"
+                ? ["2026-10-04"]
+                : [],
+          pendingLocalDates: [],
+        },
+      );
+      tree = await harness.settle();
+      expect(byLabel(tree, confirmLabel("Apple")).props.disabled).toBe(true);
+      expect(byLabel(tree, cancelLabel("Apple")).props.disabled).toBe(false);
+      retainedConfirm();
+      expect(controller.enqueueOperation).not.toHaveBeenCalled();
+      if (blocked === "destination reorder") {
+        byLabel(tree, dateLabel("Apple"), "TextInput").props.onChangeText("2026-10-05");
+        tree = await harness.settle();
+        expect(byLabel(tree, confirmLabel("Apple")).props.disabled).toBe(false);
+      }
+      byLabel(tree, cancelLabel("Apple")).props.onPress();
+      await harness.settle();
+    });
+  }
+
+  it("retains the destination on an authoritative queue dependency rejection and retries explicitly", async () => {
+    const { harness, controller } = setup();
+    controller.enqueueOperation.mockRejectedValueOnce(
+      new DiaryOutboxDependencyError("day_reorder_pending"),
+    );
+    let tree = await harness.settle();
+    byLabel(tree, openLabel("Apple")).props.onPress();
+    tree = await harness.settle();
+    byLabel(tree, dateLabel("Apple"), "TextInput").props.onChangeText("2026-10-04");
+    tree = await harness.settle();
+    byLabel(tree, confirmLabel("Apple")).props.onPress();
+    tree = await harness.settle();
+    expect(screenText(tree)).toContain("Wait for it to finish");
+    expect(byLabel(tree, dateLabel("Apple"), "TextInput").props.value).toBe("2026-10-04");
+    byLabel(tree, confirmLabel("Apple")).props.onPress();
+    await harness.settle();
+    expect(controller.enqueueOperation).toHaveBeenCalledTimes(2);
+    expect(controller.enqueueOperation.mock.calls[1][0]).toEqual(
+      controller.enqueueOperation.mock.calls[0][0],
+    );
+  });
+
+  it("checks live queue availability before any rerender", async () => {
+    const { harness, controller, setQueue } = setup();
+    let tree = await harness.settle();
+    byLabel(tree, openLabel("Apple")).props.onPress();
+    tree = await harness.settle();
+    const confirm = byLabel(tree, confirmLabel("Apple")).props.onPress;
+    setQueue({ status: "unavailable", reason: "storage", pendingCount: 0 }, undefined, false);
+    confirm();
+    expect(controller.enqueueOperation).not.toHaveBeenCalled();
+  });
+
+  for (const transition of ["receipt", "day", "route"]) {
+    it(`retires the destination on ${transition} transition before stale confirm can enqueue`, async () => {
+      const { harness, controller, receive } = setup();
+      let tree = await harness.settle();
+      byLabel(tree, openLabel("Apple")).props.onPress();
+      tree = await harness.settle();
+      const confirm = byLabel(tree, confirmLabel("Apple")).props.onPress;
+      if (transition === "receipt") receive();
+      else if (transition === "day") byLabel(tree, "Next day").props.onPress();
+      else {
+        harness.updateProps({ requestedDate: "2026-08-16", refreshKey: "repeat-route" });
+        harness.renderWithoutEffects();
+      }
+      confirm();
+      tree = await harness.settle();
+      expect(controller.enqueueOperation).not.toHaveBeenCalled();
+      expect(
+        nodes(tree, (node) => node.props.accessibilityLabel === confirmLabel("Apple")),
+      ).toHaveLength(0);
+    });
+  }
+
+  it("retires the original entry snapshot when another diary page loads", async () => {
+    const rows = Array.from({ length: 21 }, (_, index) => ({
+      ...entry,
+      id: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+      food: { ...entry.food, name: index === 0 ? "Apple" : `Apple ${index}` },
+      position: index,
+    }));
+    const { harness, controller } = setup((request) =>
+      response(
+        request.url.searchParams.has("cursor")
+          ? page(selectedDate, rows.slice(20), null, 21)
+          : page(selectedDate, rows.slice(0, 20), "d1.next", 21),
+      ),
+    );
+    let tree = await harness.settle();
+    byLabel(tree, openLabel("Apple")).props.onPress();
+    tree = await harness.settle();
+    const confirm = byLabel(tree, confirmLabel("Apple")).props.onPress;
+    const loadMore = byLabel(tree, "Load more diary entries");
+    loadMore.props.onPress();
+    confirm();
+    tree = await harness.settle();
+    expect(controller.enqueueOperation).not.toHaveBeenCalled();
+    expect(
+      nodes(tree, (node) => node.props.accessibilityLabel === confirmLabel("Apple")),
+    ).toHaveLength(0);
+  });
+
+  for (const update of [
+    { expectedOwnerUserId: "other-private-owner" },
+    { profileRevision: "13" },
+    { profileTimeZone: "UTC" },
+    { diaryGroups: resetDiaryGroups().map((group) => ({ ...group, label: `New ${group.label}` })) },
+  ]) {
+    it(`hides stale repeat controls on ${Object.keys(update)[0]} change before effects`, async () => {
+      const { harness, controller } = setup();
+      let tree = await harness.settle();
+      byLabel(tree, openLabel("Apple")).props.onPress();
+      tree = await harness.settle();
+      const confirm = byLabel(tree, confirmLabel("Apple")).props.onPress;
+      const change = byLabel(tree, dateLabel("Apple"), "TextInput").props.onChangeText;
+      harness.updateProps(update);
+      tree = harness.renderWithoutEffects();
+      confirm();
+      change("2026-10-04");
+      expect(controller.enqueueOperation).not.toHaveBeenCalled();
+      expect(
+        nodes(tree, (node) => node.props.accessibilityLabel === dateLabel("Apple")),
+      ).toHaveLength(0);
+    });
+  }
+
+  it("invalidates background and unmounted callbacks synchronously", async () => {
+    const { harness, controller } = setup();
+    let tree = await harness.settle();
+    byLabel(tree, openLabel("Apple")).props.onPress();
+    tree = await harness.settle();
+    const confirm = byLabel(tree, confirmLabel("Apple")).props.onPress;
+    appState("background");
+    confirm();
+    appState("active");
+    confirm();
+    tree = await harness.settle();
+    expect(
+      nodes(tree, (node) => node.props.accessibilityLabel === dateLabel("Apple")),
+    ).toHaveLength(0);
+    byLabel(tree, openLabel("Apple")).props.onPress();
+    tree = await harness.settle();
+    const lastConfirm = byLabel(tree, confirmLabel("Apple")).props.onPress;
+    harness.unmount();
+    lastConfirm();
+    expect(controller.enqueueOperation).not.toHaveBeenCalled();
+    expect(harness.writesAfterUnmount).toBe(0);
+  });
+
+  for (const outcome of ["success", "failure"]) {
+    it(`does not resurrect a retired destination after late enqueue ${outcome}`, async () => {
+      const pending = deferred();
+      const { harness, controller, receive } = setup();
+      controller.enqueueOperation.mockReturnValueOnce(
+        pending.promise.then(() => {
+          if (outcome === "failure") throw new Error("Retired repeat failure");
+          return { operationId: "late-repeat" };
+        }),
+      );
+      let tree = await harness.settle();
+      byLabel(tree, openLabel("Apple")).props.onPress();
+      tree = await harness.settle();
+      byLabel(tree, dateLabel("Apple"), "TextInput").props.onChangeText("2026-10-04");
+      tree = await harness.settle();
+      byLabel(tree, confirmLabel("Apple")).props.onPress();
+      receive();
+      tree = await harness.settle();
+      pending.resolve();
+      tree = await harness.settle();
+      expect(
+        nodes(tree, (node) => node.props.accessibilityLabel === dateLabel("Apple")),
+      ).toHaveLength(0);
+      expect(screenText(tree)).not.toContain("2026-10-04");
+      expect(screenText(tree)).not.toContain("Retired repeat failure");
+      if (outcome === "success")
+        expect(controller.requestDrain).toHaveBeenCalledExactlyOnceWith("late-repeat");
+      else expect(controller.requestDrain).not.toHaveBeenCalled();
+    });
+  }
+
+  it("invalidates retained confirm when the private queue controller is replaced", async () => {
+    const { harness, controller } = setup();
+    let tree = await harness.settle();
+    byLabel(tree, openLabel("Apple")).props.onPress();
+    tree = await harness.settle();
+    const oldConfirm = byLabel(tree, confirmLabel("Apple")).props.onPress;
+    const replacement = {
+      ...controller,
+      enqueueOperation: vi.fn(async () => ({ operationId: "new-controller" })),
+    };
+    harness.updateProps({ quickAddOutboxController: replacement });
+    tree = harness.renderWithoutEffects();
+    oldConfirm();
+    expect(controller.enqueueOperation).not.toHaveBeenCalled();
+    expect(replacement.enqueueOperation).not.toHaveBeenCalled();
+    expect(
+      nodes(tree, (node) => node.props.accessibilityLabel === dateLabel("Apple")),
+    ).toHaveLength(0);
+    tree = await harness.settle();
+    byLabel(tree, openLabel("Apple")).props.onPress();
+    tree = await harness.settle();
+    byLabel(tree, confirmLabel("Apple")).props.onPress();
+    await harness.settle();
+    expect(replacement.enqueueOperation).toHaveBeenCalledTimes(1);
+    expect(controller.enqueueOperation).not.toHaveBeenCalled();
+  });
+
+  it("allows repeating a pinned entry from a locked source day", async () => {
+    const locked = page(selectedDate);
+    locked.data.status = "locked";
+    const { harness, controller } = setup(() => response(locked));
+    let tree = await harness.settle();
+    expect(byLabel(tree, "Repeat the pinned Apple version today").props.disabled).toBe(false);
+    expect(byLabel(tree, openLabel("Apple")).props.disabled).toBe(false);
+    byLabel(tree, openLabel("Apple")).props.onPress();
+    tree = await harness.settle();
+    byLabel(tree, confirmLabel("Apple")).props.onPress();
+    await harness.settle();
+    expect(controller.enqueueOperation).toHaveBeenCalledTimes(1);
+  });
 });

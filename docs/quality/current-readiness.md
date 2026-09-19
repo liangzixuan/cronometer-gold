@@ -111,14 +111,19 @@ and nine actual container35429227472 jobs passed on attempt one; September 19
 09:08 UTC official evidence records complete results. Clean equal local/tracking/
 live heads and all seven reviewed file hashes were reverified at 09:09:05 UTC.
 
-Active work is [ADR 0093](../adr/0093-native-definition-reminder-draft-protection.md):
-protect unsaved native definition and reminder fields during local replacement,
-and retain newer definition work when an earlier save completes. Dirty drafts
-require Keep/Discard; pristine transitions remain direct. Preserve exact retries,
-saved identity/revision, immutable units, notification consent/scheduling and
-existing private/request guards. Independent source review, 528 focused cases,
-native types and scoped Biome passed. Final canonical and exact-commit automatic
-evidence remain pending in the dated outside-Git readiness record. No dependency,
+[ADR 0093](../adr/0093-native-definition-reminder-draft-protection.md) is delivered at
+`bd89fd08f4020529441146715817e09988a1bb1f`: 528 focused cases, independent review,
+canonical check/build and fresh native exports passed. All three CI35434908419
+and nine actual container35434908408 jobs passed on attempt one; September 19
+10:56:44 UTC official evidence records complete results. Clean equal local,
+tracking and live heads and seven reviewed hashes were reverified at 10:57:29 UTC.
+
+Active work is [ADR 0094](../adr/0094-native-diary-repeat-destination.md): repeat a
+pinned native diary entry to a chosen date and configured meal group, retaining
+the one-tap today action, protected FIFO, exact source revision and confirmed-only
+totals. Opening or cancelling the composer creates no operation. Independent
+source review, 184 focused cases, native types and scoped Biome passed. Final
+canonical and exact-commit automatic evidence remains pending. No dependency,
 installation or audit is part of this slice. Device/release acceptance remains
 separate.
 

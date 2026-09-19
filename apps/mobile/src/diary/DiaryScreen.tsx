@@ -100,6 +100,16 @@ interface Editor extends DiaryEditorOrigin {
   readonly note: string;
 }
 
+interface RepeatDraft {
+  readonly entry: DiaryEntry;
+  readonly source: DiaryPage;
+  readonly scope: string;
+  readonly viewEpoch: number;
+  readonly requestGeneration: number;
+  readonly localDate: string;
+  readonly mealSlot: MealSlot;
+}
+
 interface MutationOwner {
   readonly sourceDate: string;
   readonly token: number;
@@ -338,10 +348,64 @@ export function DiaryScreen({
   ]);
   const diary = diaryPage?.data.localDate === date ? diaryPage.data : null;
   const queuedMessage = queuedQuickAddMessage(quickAddOutboxState);
+  const [repeatDraft, setRepeatDraft] = useState<RepeatDraft | null>(null);
+  const repeatDraftRef = useRef<RepeatDraft | null>(null);
+  const repeatScope = JSON.stringify([
+    mealScopeKey,
+    profileRevision,
+    diaryGroups,
+    requestedMealRoute,
+  ]);
+  const repeatLifecycle = useRef({
+    scope: repeatScope,
+    controller: quickAddOutboxController,
+    generation: 0,
+    mounted: false,
+    active: AppState.currentState === "active",
+  });
+  if (
+    repeatLifecycle.current.scope !== repeatScope ||
+    repeatLifecycle.current.controller !== quickAddOutboxController
+  ) {
+    repeatLifecycle.current.scope = repeatScope;
+    repeatLifecycle.current.controller = quickAddOutboxController;
+    repeatLifecycle.current.generation += 1;
+    repeatDraftRef.current = null;
+  }
+  const repeatGeneration = repeatLifecycle.current.generation;
+  const clearRepeatDraft = useCallback(() => {
+    repeatLifecycle.current.generation += 1;
+    repeatDraftRef.current = null;
+    setRepeatDraft(null);
+  }, []);
+  const visibleRepeatDraft =
+    repeatDraft === repeatDraftRef.current && repeatDraft?.scope === repeatScope
+      ? repeatDraft
+      : null;
+  const repeatDependencies = useRef({ pendingCorrectionEntries, pendingReorderDates });
+  repeatDependencies.current = { pendingCorrectionEntries, pendingReorderDates };
+
+  useEffect(() => {
+    const lifecycle = repeatLifecycle.current;
+    lifecycle.mounted = true;
+    const subscription = AppState.addEventListener("change", (next) => {
+      const active = next === "active";
+      if (lifecycle.active === active) return;
+      lifecycle.active = active;
+      clearRepeatDraft();
+    });
+    return () => {
+      lifecycle.mounted = false;
+      lifecycle.generation += 1;
+      repeatDraftRef.current = null;
+      subscription.remove();
+    };
+  }, [clearRepeatDraft]);
 
   const closeForUnauthorized = useCallback(() => {
     unauthorizedFlight.current ??= createDiaryUnauthorizedSingleFlight();
     if (!privateUiClosed.current) {
+      clearRepeatDraft();
       clearEntryDetails();
       privateUiClosed.current = true;
       viewEpoch.current += 1;
@@ -370,11 +434,12 @@ export function DiaryScreen({
       setDate("");
     }
     return unauthorizedFlight.current.run(onUnauthorized);
-  }, [clearEntryDetails, onUnauthorized]);
+  }, [clearEntryDetails, clearRepeatDraft, onUnauthorized]);
 
   const load = useCallback(
     async (requested: string, refreshedAfterStalePage = false) => {
       if (privateUiClosed.current || dateRef.current !== requested) return false;
+      clearRepeatDraft();
       clearEntryDetails();
       const loadedMealScope = mealPresentation.current.scope;
       const generation = requestGeneration.current + 1;
@@ -427,7 +492,7 @@ export function DiaryScreen({
         return false;
       }
     },
-    [accessToken, apiBase, clearEntryDetails, closeForUnauthorized],
+    [accessToken, apiBase, clearEntryDetails, clearRepeatDraft, closeForUnauthorized],
   );
 
   const loadSupportingSummary = useCallback(
@@ -567,6 +632,7 @@ export function DiaryScreen({
       setDateDraft(next);
       const dateChanged = next !== dateRef.current;
       if (!dateChanged && !forceReload) return;
+      clearRepeatDraft();
       clearEntryDetails();
       viewEpoch.current += 1;
       activeMutation.current = null;
@@ -588,7 +654,7 @@ export function DiaryScreen({
       if (dateChanged) setDate(next);
       else setRouteReloadGeneration((generation) => generation + 1);
     },
-    [clearEntryDetails],
+    [clearEntryDetails, clearRepeatDraft],
   );
 
   useEffect(() => {
@@ -784,6 +850,7 @@ export function DiaryScreen({
     ) {
       return;
     }
+    clearRepeatDraft();
     const requested = date;
     const generation = requestGeneration.current + 1;
     requestGeneration.current = generation;
@@ -840,7 +907,7 @@ export function DiaryScreen({
   }
 
   async function save() {
-    if (privateUiClosed.current || !editor || !diary) return;
+    if (privateUiClosed.current || repeatDraftRef.current !== null || !editor || !diary) return;
     if (!isPositiveDecimal(editor.quantity)) {
       setMessage("Quantity must be a positive decimal number.");
       return;
@@ -938,7 +1005,7 @@ export function DiaryScreen({
   }
 
   async function remove(entry: DiaryEntry) {
-    if (privateUiClosed.current || !diary) return;
+    if (privateUiClosed.current || repeatDraftRef.current !== null || !diary) return;
     const owner = beginMutation(diary.localDate, entry.id);
     setMessage("Securing this deletion on your device before sending…");
     try {
@@ -975,13 +1042,137 @@ export function DiaryScreen({
     }
   }
 
-  async function repeat(entry: DiaryEntry) {
-    if (privateUiClosed.current || !diary) return;
+  function repeatSourceCurrent(entry: DiaryEntry): boolean {
+    const lifecycle = repeatLifecycle.current;
+    return (
+      lifecycle.mounted &&
+      lifecycle.active &&
+      lifecycle.scope === repeatScope &&
+      lifecycle.controller === quickAddOutboxController &&
+      lifecycle.generation === repeatGeneration &&
+      !privateUiClosed.current &&
+      state === "ready" &&
+      pageState !== "loading" &&
+      !pageRequestBusy.current &&
+      diaryPage !== null &&
+      diary !== null &&
+      dateRef.current === diary.localDate &&
+      mealSnapshotScope.current === mealScopeKey &&
+      mealGuard.current.diaryPage === diaryPage &&
+      currentMealRoute.current === requestedMealRoute &&
+      currentMealRoute.current === appliedRouteGeneration.current &&
+      viewEpoch.current === mealViewEpoch &&
+      requestGeneration.current === mealRequestGeneration &&
+      diary.entries.includes(entry)
+    );
+  }
+
+  function repeatQueueAvailable(entry: DiaryEntry, targetDate?: string): boolean {
+    const queue = quickAddOutboxController.getState();
+    const dependencies = repeatDependencies.current;
+    return (
+      activeMutation.current === null &&
+      editorRef.current === null &&
+      queue.pendingCount < MAX_QUICK_ADD_OUTBOX_ITEMS &&
+      queue.status !== "closed" &&
+      queue.status !== "owner_mismatch" &&
+      !(
+        queue.status === "unavailable" &&
+        (queue.reason === "storage" || queue.reason === "credential")
+      ) &&
+      !dependencies.pendingCorrectionEntries.has(entry.id) &&
+      !dependencies.pendingReorderDates.has(entry.localDate) &&
+      (targetDate === undefined || !dependencies.pendingReorderDates.has(targetDate))
+    );
+  }
+
+  function currentRepeatDraft(draft: RepeatDraft): boolean {
+    return (
+      repeatDraftRef.current === draft &&
+      draft.scope === repeatScope &&
+      draft.source === diaryPage &&
+      draft.viewEpoch === viewEpoch.current &&
+      draft.requestGeneration === requestGeneration.current &&
+      repeatSourceCurrent(draft.entry)
+    );
+  }
+
+  function openRepeatDraft(entry: DiaryEntry) {
+    if (
+      !repeatSourceCurrent(entry) ||
+      !repeatQueueAvailable(entry) ||
+      repeatDraftRef.current !== null ||
+      !diaryPage
+    )
+      return;
+    const next: RepeatDraft = {
+      entry,
+      source: diaryPage,
+      scope: repeatScope,
+      viewEpoch: viewEpoch.current,
+      requestGeneration: requestGeneration.current,
+      localDate: localDateInTimeZone(new Date(), profileTimeZone),
+      mealSlot: entry.mealSlot,
+    };
+    repeatLifecycle.current.generation += 1;
+    repeatDraftRef.current = next;
+    setRepeatDraft(next);
+    AccessibilityInfo.announceForAccessibility(
+      `Repeat ${entryName(entry)}. Choose a date and meal. Destination ${next.localDate}, ${diaryGroupLabel(diaryGroups, next.mealSlot)}.`,
+    );
+  }
+
+  function changeRepeatDraft(
+    draft: RepeatDraft,
+    update: Partial<Pick<RepeatDraft, "localDate" | "mealSlot">>,
+  ) {
+    if (!currentRepeatDraft(draft) || activeMutation.current !== null) return;
+    const next = { ...draft, ...update };
+    if (!diaryGroups.some((group) => group.mealSlot === next.mealSlot)) return;
+    repeatLifecycle.current.generation += 1;
+    repeatDraftRef.current = next;
+    setRepeatDraft(next);
+  }
+
+  function cancelRepeatDraft(draft: RepeatDraft) {
+    if (!currentRepeatDraft(draft) || activeMutation.current !== null) return;
+    clearRepeatDraft();
+    AccessibilityInfo.announceForAccessibility("Repeat cancelled. Nothing was queued.");
+  }
+
+  async function repeat(entry: DiaryEntry, draft?: RepeatDraft) {
+    if (
+      !repeatSourceCurrent(entry) ||
+      (draft ? !currentRepeatDraft(draft) : repeatDraftRef.current !== null)
+    )
+      return;
     const now = new Date();
-    const targetDate = localDateInTimeZone(now, profileTimeZone);
-    const occurredAt = quickAddOccurredAt(targetDate, profileTimeZone, now);
-    const owner = beginMutation(diary.localDate, entry.id);
-    setMessage(`Securing a repeat of the pinned ${entryName(entry)} version…`);
+    const targetDate = draft?.localDate ?? localDateInTimeZone(now, profileTimeZone);
+    const targetMealSlot = draft?.mealSlot ?? entry.mealSlot;
+    if (!repeatQueueAvailable(entry, targetDate)) return;
+    if (!isLocalDate(targetDate)) {
+      const nextMessage = "Repeat date must use YYYY-MM-DD and be a real calendar day.";
+      setMessage(nextMessage);
+      AccessibilityInfo.announceForAccessibility(nextMessage);
+      return;
+    }
+    if (!diaryGroups.some((group) => group.mealSlot === targetMealSlot)) return;
+    let occurredAt: string;
+    try {
+      occurredAt = quickAddOccurredAt(targetDate, profileTimeZone, now);
+    } catch (caught) {
+      const nextMessage = caught instanceof Error ? caught.message : "The repeat date is invalid.";
+      setMessage(nextMessage);
+      AccessibilityInfo.announceForAccessibility(nextMessage);
+      return;
+    }
+    const owner = beginMutation(entry.localDate, entry.id);
+    const canReport = () =>
+      activeMutation.current === owner.token &&
+      repeatSourceCurrent(entry) &&
+      (!draft || repeatDraftRef.current === draft);
+    const destination = `${targetDate} · ${diaryGroupLabel(diaryGroups, targetMealSlot)}`;
+    setMessage(`Securing a repeat of the pinned ${entryName(entry)} version for ${destination}…`);
     try {
       const item = await quickAddOutboxController.enqueueOperation({
         operationKind: "repeat",
@@ -990,29 +1181,37 @@ export function DiaryScreen({
         entryName: entryName(entry),
         portionLabel: entryPortionLabel(entry),
         localDate: targetDate,
-        sourceLocalDate: diary.localDate,
+        sourceLocalDate: entry.localDate,
         mealSlot: entry.mealSlot,
         occurredAt,
-        targetMealSlot: entry.mealSlot,
+        targetMealSlot,
       });
-      setMessage(
-        `${entryName(entry)} is queued securely for ${targetDate}. It is not counted until the server confirms the pinned source revision.`,
-      );
+      if (canReport()) {
+        clearRepeatDraft();
+        const nextMessage = `${entryName(entry)} is queued securely for ${destination}. It is not counted until the server confirms the pinned source revision.`;
+        setMessage(nextMessage);
+        AccessibilityInfo.announceForAccessibility(nextMessage);
+      }
       void quickAddOutboxController.requestDrain(item.operationId);
     } catch (caught) {
       if (caught instanceof QuickAddEnqueueAmbiguousError) {
+        if (canReport()) {
+          clearRepeatDraft();
+          const nextMessage =
+            "Secure storage could not confirm whether the repeat was queued. Do not repeat it again until queue status recovers.";
+          setMessage(nextMessage);
+          AccessibilityInfo.announceForAccessibility(nextMessage);
+        }
         void quickAddOutboxController.requestDrain(caught.operationId);
-        setMessage(
-          "Secure storage could not confirm whether the repeat was queued. Do not repeat it again until queue status recovers.",
-        );
-      } else if (caught instanceof DiaryOutboxDependencyError) {
-        setMessage(`${caught.message} Wait for it to finish or resolve the blocked queue head.`);
-      } else {
-        setMessage(
-          caught instanceof Error
-            ? caught.message
-            : "The repeat was not queued. Refresh this diary and try again.",
-        );
+      } else if (canReport()) {
+        const nextMessage =
+          caught instanceof DiaryOutboxDependencyError
+            ? `${caught.message} Wait for it to finish or resolve the blocked queue head.`
+            : caught instanceof Error
+              ? caught.message
+              : "The repeat was not queued. Refresh this diary and try again.";
+        setMessage(nextMessage);
+        AccessibilityInfo.announceForAccessibility(nextMessage);
       }
     } finally {
       finishMutation(owner);
@@ -1020,6 +1219,7 @@ export function DiaryScreen({
   }
 
   async function reorder(entry: DiaryEntry, direction: "up" | "down") {
+    if (repeatDraftRef.current !== null) return;
     if (
       privateUiClosed.current ||
       !diary ||
@@ -1352,6 +1552,7 @@ export function DiaryScreen({
   const repeatTargetDate = localDateInTimeZone(new Date(), profileTimeZone);
   // Keep work visible even after enqueue finishes and the protected queue owns it.
   const holdMealGroupsOpen =
+    visibleRepeatDraft !== null ||
     editor !== null ||
     busyEntry !== null ||
     activeMutation.current !== null ||
@@ -1482,6 +1683,7 @@ export function DiaryScreen({
       mealGuard.current.diaryPage !== diaryPage ||
       mealGuard.current.hold ||
       editorRef.current !== null ||
+      repeatDraftRef.current !== null ||
       activeMutation.current !== null ||
       mealToggleUnavailable
     )
@@ -2066,6 +2268,91 @@ export function DiaryScreen({
                             ) : null}
                           </View>
                         ) : null}
+                        {visibleRepeatDraft?.entry === entry ? (
+                          <View style={styles.editor}>
+                            <Text style={styles.entryTitle}>Repeat to</Text>
+                            <Text style={styles.entrySource}>
+                              Repeat this saved portion and pinned version. Today uses the current
+                              time; another date uses noon in {profileTimeZone}.
+                            </Text>
+                            <Text style={styles.label}>Local date</Text>
+                            <TextInput
+                              accessibilityLabel={`Repeat date for ${entryName(entry)}`}
+                              editable={activeMutation.current === null}
+                              maxLength={10}
+                              onChangeText={(localDate) =>
+                                changeRepeatDraft(visibleRepeatDraft, { localDate })
+                              }
+                              style={styles.input}
+                              value={visibleRepeatDraft.localDate}
+                            />
+                            <Text style={styles.label}>Meal</Text>
+                            <View accessibilityRole="radiogroup" style={styles.chips}>
+                              {diaryGroups.map(({ mealSlot, label: destinationLabel }) => (
+                                <Pressable
+                                  accessibilityLabel={`Repeat ${entryName(entry)} at ${destinationLabel}`}
+                                  accessibilityRole="radio"
+                                  accessibilityState={{
+                                    checked: visibleRepeatDraft.mealSlot === mealSlot,
+                                    disabled: activeMutation.current !== null,
+                                  }}
+                                  disabled={activeMutation.current !== null}
+                                  key={mealSlot}
+                                  onPress={() =>
+                                    changeRepeatDraft(visibleRepeatDraft, { mealSlot })
+                                  }
+                                  style={[
+                                    styles.chip,
+                                    visibleRepeatDraft.mealSlot === mealSlot && styles.chipActive,
+                                  ]}
+                                >
+                                  <Text
+                                    style={[
+                                      styles.chipText,
+                                      visibleRepeatDraft.mealSlot === mealSlot &&
+                                        styles.chipTextActive,
+                                    ]}
+                                  >
+                                    {destinationLabel}
+                                  </Text>
+                                </Pressable>
+                              ))}
+                            </View>
+                            <Text accessibilityLiveRegion="polite" style={styles.entryMeta}>
+                              {visibleRepeatDraft.localDate} ·{" "}
+                              {diaryGroupLabel(diaryGroups, visibleRepeatDraft.mealSlot)}
+                            </Text>
+                            <View style={styles.actionRow}>
+                              <Pressable
+                                accessibilityLabel={`Confirm repeat of ${entryName(entry)}`}
+                                accessibilityRole="button"
+                                accessibilityState={{
+                                  disabled:
+                                    !repeatSourceCurrent(entry) ||
+                                    !repeatQueueAvailable(entry, visibleRepeatDraft.localDate),
+                                }}
+                                disabled={
+                                  !repeatSourceCurrent(entry) ||
+                                  !repeatQueueAvailable(entry, visibleRepeatDraft.localDate)
+                                }
+                                onPress={() => void repeat(entry, visibleRepeatDraft)}
+                                style={styles.primarySmall}
+                              >
+                                <Text style={styles.primaryText}>Confirm repeat</Text>
+                              </Pressable>
+                              <Pressable
+                                accessibilityLabel={`Cancel repeat of ${entryName(entry)}`}
+                                accessibilityRole="button"
+                                accessibilityState={{ disabled: activeMutation.current !== null }}
+                                disabled={activeMutation.current !== null}
+                                onPress={() => cancelRepeatDraft(visibleRepeatDraft)}
+                                style={styles.secondarySmall}
+                              >
+                                <Text style={styles.secondaryText}>Cancel</Text>
+                              </Pressable>
+                            </View>
+                          </View>
+                        ) : null}
                         {editor?.entryId === entry.id ? (
                           <View style={styles.editor}>
                             <Text style={styles.label}>Quantity</Text>
@@ -2184,7 +2471,7 @@ export function DiaryScreen({
                               </Pressable>
                             </View>
                           </View>
-                        ) : (
+                        ) : visibleRepeatDraft === null ? (
                           <View style={styles.actionRow}>
                             <Pressable
                               accessibilityLabel={`Move ${entryName(entry)} up within ${label}`}
@@ -2241,23 +2528,30 @@ export function DiaryScreen({
                               accessibilityRole="button"
                               accessibilityState={{
                                 disabled:
-                                  busyEntry !== null ||
-                                  durableQueueUnavailable ||
-                                  pendingCorrectionEntries.has(entry.id) ||
-                                  pendingReorderDates.has(diary.localDate) ||
-                                  pendingReorderDates.has(repeatTargetDate),
+                                  !repeatSourceCurrent(entry) ||
+                                  !repeatQueueAvailable(entry, repeatTargetDate),
                               }}
                               disabled={
-                                busyEntry !== null ||
-                                durableQueueUnavailable ||
-                                pendingCorrectionEntries.has(entry.id) ||
-                                pendingReorderDates.has(diary.localDate) ||
-                                pendingReorderDates.has(repeatTargetDate)
+                                !repeatSourceCurrent(entry) ||
+                                !repeatQueueAvailable(entry, repeatTargetDate)
                               }
                               onPress={() => void repeat(entry)}
                               style={styles.secondarySmall}
                             >
                               <Text style={styles.secondaryText}>Repeat today</Text>
+                            </Pressable>
+                            <Pressable
+                              accessibilityLabel={`Repeat the pinned ${entryName(entry)} version to another date or meal`}
+                              accessibilityRole="button"
+                              accessibilityState={{
+                                disabled:
+                                  !repeatSourceCurrent(entry) || !repeatQueueAvailable(entry),
+                              }}
+                              disabled={!repeatSourceCurrent(entry) || !repeatQueueAvailable(entry)}
+                              onPress={() => openRepeatDraft(entry)}
+                              style={styles.secondarySmall}
+                            >
+                              <Text style={styles.secondaryText}>Repeat to…</Text>
                             </Pressable>
                             <Pressable
                               accessibilityLabel={`Edit ${entryName(entry)} entry and private note`}
@@ -2270,6 +2564,7 @@ export function DiaryScreen({
                                 pendingReorderDates.has(diary.localDate)
                               }
                               onPress={() => {
+                                if (repeatDraftRef.current !== null) return;
                                 const nextEditor = editorFor(entry, diary, profileTimeZone);
                                 editorRef.current = nextEditor;
                                 setEditor(nextEditor);
@@ -2296,7 +2591,7 @@ export function DiaryScreen({
                               </Text>
                             </Pressable>
                           </View>
-                        )}
+                        ) : null}
                       </View>
                     ))
                   )}
