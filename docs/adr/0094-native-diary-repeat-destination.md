@@ -1,6 +1,6 @@
 # ADR 0094: Choose the native diary repeat destination
 
-Status: Source complete and reviewed; final canonical and exact-commit automatic evidence pending.
+Status: Implemented at `8e0db9e`; local and exact-commit automatic evidence passed. Device/release acceptance remains separate.
 
 ## Context
 
@@ -66,5 +66,19 @@ durable-outbox cases. Native types and scoped Biome passed. Independent review
 added controller-identity fencing and explicit validation announcements and made
 the new tests' clock deterministic. A malformed pagination test fixture was
 corrected to the existing 20-entry page contract; production parsers and gates
-were unchanged. Existing assertions remain intact. Final canonical and
-exact-commit automatic evidence remains pending in the dated outside-Git record.
+were unchanged. Existing assertions remain intact. At that development checkpoint,
+final canonical and exact-commit automatic evidence was still pending.
+
+## Delivery evidence
+
+Delivered at `8e0db9e71381e19fa813bba9ed8ae4b02194db69`. Canonical check on
+September 19 passed 2,101 fresh cases plus 2,327 cached cases, with 93 cached
+opt-in skips. Build passed 11 tasks, ten cached, with fresh native exports.
+The 12:57:16 UTC official observation records all three actual jobs in
+[CI 35440114966](https://github.com/liangzixuan/cronometer-gold/actions/runs/35440114966)
+and all nine actual jobs in
+[container run 35440114959](https://github.com/liangzixuan/cronometer-gold/actions/runs/35440114959)
+completed successfully on attempt one at that exact commit. At 12:57:58 UTC,
+clean local, tracking and live heads and seven reviewed working-tree/committed
+hashes matched. Prior pending observations remain dated history; these results
+do not establish physical-device or release acceptance.

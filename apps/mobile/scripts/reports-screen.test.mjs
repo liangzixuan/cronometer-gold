@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { createContext, Script } from "node:vm";
 import { NUTRITION_REPORT_NOTICE } from "@nutrition-tracker/contracts";
 import * as React from "react";
-import { AppState } from "react-native";
+import { AccessibilityInfo, AppState } from "react-native";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { authenticatedRoutes } from "../src/navigation/routes";
@@ -897,5 +897,378 @@ describe("native ReportsRoute diary wiring", () => {
     expect(params.date).toBe("0001-12-31");
     expect(Number(params.refreshKey)).toBeGreaterThanOrEqual(before);
     expect(Number(params.refreshKey)).toBeLessThanOrEqual(Date.now());
+  });
+});
+
+const inspectorButton = (tree, date, expanded = false) => {
+  const label = `${expanded ? "Hide" : "View"} all nutrients for ${date}`;
+  const matches = nodes(
+    tree,
+    (node) => node.type === "Pressable" && node.props.accessibilityLabel === label,
+  );
+  expect(matches, label).toHaveLength(1);
+  return matches[0];
+};
+const inspector = (tree, date) => {
+  const matches = nodes(
+    tree,
+    (node) => node.type === "View" && node.props.accessibilityLabel === `All nutrients for ${date}`,
+  );
+  expect(matches).toHaveLength(1);
+  return matches[0];
+};
+
+describe("native report day inspector", () => {
+  it("shows all 15 exact nutrient rows from the current snapshot without another request", async () => {
+    const { harness, requests } = setup((request, current) =>
+      response(
+        sourceFixture(
+          request.url.searchParams.get("from"),
+          request.url.searchParams.get("to"),
+          current,
+          ["2026-09-02"],
+        ),
+      ),
+    );
+    let tree = await applyRange(harness, "2026-09-02", "2026-09-03");
+    const before = requests.length;
+    inspectorButton(tree, "2026-09-02").props.onPress();
+    tree = await harness.settle();
+    const details = inspector(tree, "2026-09-02");
+    const rows = nodes(
+      details,
+      (node) => node.type === "View" && node.props.accessibilityRole === "summary",
+    );
+    expect(rows).toHaveLength(15);
+    for (let index = 0; index < definitions.length; index += 1) {
+      const [, name, unit] = definitions[index];
+      expect(rows[index].props.accessibilityLabel).toContain(
+        `${name} (${unit}) on 2026-09-02. 0 ${unit}.`,
+      );
+      expect(screenText(rows[index])).toContain(`0 ${unit}`);
+      expect(screenText(rows[index])).toContain("Complete coverage · quantified amount");
+      expect(screenText(rows[index])).toContain("No saved target applied");
+    }
+    expect(inspectorButton(tree, "2026-09-02", true).props.accessibilityState.expanded).toBe(true);
+    expect(screenText(details)).toContain("2026-09-02 · UTC");
+    expect(requests).toHaveLength(before);
+  });
+});
+
+const inspectors = (tree) =>
+  nodes(
+    tree,
+    (node) =>
+      node.type === "View" && node.props.accessibilityLabel?.startsWith("All nutrients for "),
+  );
+const inspectionRows = (tree, date) =>
+  nodes(
+    inspector(tree, date),
+    (node) => node.type === "View" && node.props.accessibilityRole === "summary",
+  );
+async function inspectDay(harness, date) {
+  const tree = await harness.settle();
+  inspectorButton(tree, date).props.onPress();
+  return harness.settle();
+}
+
+describe("native report day inspector behavior", () => {
+  for (const [mode, amount, coverage] of [
+    ["unknown", "Unknown", "Unknown coverage · 0/2 contributions quantified"],
+    ["partial", "≥ 0 kcal", "Partial coverage"],
+    ["trace", "≥ 0 kcal", "Complete coverage · 1 trace contribution"],
+  ]) {
+    it(`retains ${mode} coverage and announces nutrient units without fabricating measured values`, async () => {
+      const { harness } = setup((request, current) =>
+        response(
+          sourceFixture(
+            request.url.searchParams.get("from"),
+            request.url.searchParams.get("to"),
+            current,
+            ["2026-09-02", "2026-09-03"],
+            mode,
+          ),
+        ),
+      );
+      await applyRange(harness, "2026-09-02", "2026-09-03");
+      const tree = await inspectDay(harness, "2026-09-02");
+      const rows = inspectionRows(tree, "2026-09-02");
+      expect(rows).toHaveLength(15);
+      expect(rows[0].props.accessibilityLabel).toContain(`Energy (kcal) on 2026-09-02. ${amount}.`);
+      expect(screenText(rows[0])).toContain(coverage);
+      expect(screenText(rows[0])).not.toContain("Complete coverage · quantified amount");
+      for (let index = 0; index < definitions.length; index += 1) {
+        const [, name, unit] = definitions[index];
+        expect(rows[index].props.accessibilityLabel).toContain(`${name} (${unit})`);
+      }
+    });
+  }
+
+  it("distinguishes a missing day from zero and preserves a long exact decimal on a populated day", async () => {
+    const exact = "123456789012345678901234567890.1234567890123456789";
+    const { harness } = setup((request, current) => {
+      const body = sourceFixture(
+        request.url.searchParams.get("from"),
+        request.url.searchParams.get("to"),
+        current,
+        ["2026-09-02"],
+      );
+      const energy = body.data.series[0];
+      energy.points[0].aggregate.knownAmount = exact;
+      energy.scaleMaximum = exact;
+      energy.points[0].knownPercentOfScale = "100";
+      return response(body);
+    });
+    await applyRange(harness, "2026-09-02", "2026-09-03");
+    let tree = await inspectDay(harness, "2026-09-02");
+    expect(screenText(inspectionRows(tree, "2026-09-02")[0])).toContain(`${exact} kcal`);
+    tree = await inspectDay(harness, "2026-09-03");
+    const rows = inspectionRows(tree, "2026-09-03");
+    expect(rows).toHaveLength(15);
+    for (const row of rows) {
+      expect(screenText(row)).toContain("No diary entries");
+      expect(screenText(row)).toContain("Missing day; this is not a measured zero.");
+      expect(screenText(row)).not.toContain("quantified amount");
+    }
+    expect(rows[14].props.accessibilityLabel).toContain(
+      "Vitamin A RAE (ug_RAE) on 2026-09-03. No diary entries.",
+    );
+  });
+
+  for (const target of ["20", "0"]) {
+    it(`preserves saved ${target === "0" ? "zero-target" : "target and no-threshold"} comparison semantics`, async () => {
+      const { harness } = setup((request, current) => {
+        const from = request.url.searchParams.get("from");
+        const to = request.url.searchParams.get("to");
+        const body = sourceFixture(from, to, current, ["2026-09-02"]);
+        const versionId = "5343e5c9-3a61-4a3e-a6aa-2302f29829f4";
+        body.data.goalVersions = [
+          {
+            effectiveFrom: "2026-01-01",
+            effectiveTo: null,
+            goalId: "820e5ef5-2af4-48f8-ae6f-c0d5f53b1507",
+            versionId,
+            reference: null,
+            revision: "3",
+            targets: [
+              {
+                nutrientId: "1",
+                snapshot: {
+                  maximumAmount: null,
+                  minimumAmount: null,
+                  rationale: "My saved daily energy target.",
+                  source: { label: "user_fixed", version: "1" },
+                  targetAmount: target,
+                },
+              },
+            ],
+          },
+        ];
+        body.data.targetSegments = [{ from, to, goalVersionId: versionId }];
+        for (const series of body.data.series)
+          for (const point of series.points) point.goalVersionId = versionId;
+        const energy = body.data.series[0];
+        energy.scaleMaximum = "100";
+        energy.points[0].aggregate.knownAmount = "10";
+        energy.points[0].knownPercentOfScale = "10";
+        for (const point of energy.points) point.targetPercentOfScale = target;
+        energy.points[0].comparison = {
+          maximumState: null,
+          minimumState: null,
+          targetLowerBoundPercent: target === "0" ? null : "50",
+          targetPercentIsExact: true,
+        };
+        return response(body);
+      });
+      await applyRange(harness, "2026-09-02", "2026-09-03");
+      let tree = await inspectDay(harness, "2026-09-02");
+      const rows = inspectionRows(tree, "2026-09-02");
+      expect(screenText(rows[0])).toContain(
+        target === "0"
+          ? "target percentage unavailable because the saved target is zero"
+          : "50% of saved target",
+      );
+      expect(screenText(rows[1])).toContain("No saved threshold exists for this nutrient.");
+      tree = await inspectDay(harness, "2026-09-03");
+      expect(screenText(inspectionRows(tree, "2026-09-03")[0])).toContain(
+        "A saved target applied, but there is no diary amount to compare.",
+      );
+    });
+  }
+
+  it("shows one day, retains the chart selection and fences repeated or superseded open/close actions", async () => {
+    const { harness, requests } = setup();
+    let tree = await applyRange(harness, "2026-09-02", "2026-09-03");
+    tree = await click(harness, "Protein");
+    const before = requests.length;
+    const openFirst = inspectorButton(tree, "2026-09-02").props.onPress;
+    const oldOther = inspectorButton(tree, "2026-09-03").props.onPress;
+    openFirst();
+    openFirst();
+    oldOther();
+    tree = await harness.settle();
+    expect(inspectors(tree)).toHaveLength(1);
+    inspector(tree, "2026-09-02");
+    const oldHide = inspectorButton(tree, "2026-09-02", true).props.onPress;
+    tree = await click(harness, "Vitamin A RAE");
+    inspector(tree, "2026-09-02");
+    inspectorButton(tree, "2026-09-03").props.onPress();
+    oldHide();
+    openFirst();
+    tree = await harness.settle();
+    expect(inspectors(tree)).toHaveLength(1);
+    inspector(tree, "2026-09-03");
+    expect(pressable(tree, "Vitamin A RAE").props.accessibilityState.selected).toBe(true);
+    const hide = inspectorButton(tree, "2026-09-03", true).props.onPress;
+    hide();
+    hide();
+    oldOther();
+    tree = await harness.settle();
+    expect(inspectors(tree)).toHaveLength(0);
+    expect(inspectorButton(tree, "2026-09-03").props.accessibilityState.expanded).toBe(false);
+    expect(AccessibilityInfo.announceForAccessibility).toHaveBeenLastCalledWith(
+      "Nutrient details for 2026-09-03 hidden.",
+    );
+    expect(requests).toHaveLength(before);
+  });
+
+  it("closes on a date edit even if reverted and rejects retained actions before rerender", async () => {
+    const { harness, requests } = setup();
+    await applyRange(harness, "2026-09-02", "2026-09-03");
+    let tree = await inspectDay(harness, "2026-09-02");
+    const stale = inspectorButton(tree, "2026-09-03").props.onPress;
+    const before = requests.length;
+    startInput(tree).props.onChangeText("invalid");
+    stale();
+    tree = await harness.settle();
+    expect(inspectors(tree)).toHaveLength(0);
+    expect(inspectorButton(tree, "2026-09-02").props.disabled).toBe(true);
+    startInput(tree).props.onChangeText("2026-09-02");
+    stale();
+    tree = await harness.settle();
+    expect(inspectors(tree)).toHaveLength(0);
+    expect(inspectorButton(tree, "2026-09-02").props.disabled).toBe(false);
+    tree = await inspectDay(harness, "2026-09-03");
+    inspector(tree, "2026-09-03");
+    expect(requests).toHaveLength(before);
+  });
+
+  it("closes synchronously for reload and displays only the new snapshot after completion", async () => {
+    let delay = false;
+    const pending = deferred();
+    const { harness, props, requests } = setup(() => (delay ? pending.promise : undefined));
+    await applyRange(harness, "2026-09-02", "2026-09-03");
+    let tree = await inspectDay(harness, "2026-09-02");
+    const old = inspectorButton(tree, "2026-09-03").props.onPress;
+    const before = requests.length;
+    delay = true;
+    pressable(tree, "Update report").props.onPress();
+    old();
+    tree = harness.renderWithoutEffects();
+    expect(inspectors(tree)).toHaveLength(0);
+    harness.flushEffects();
+    await harness.settle();
+    const body = sourceFixture("2026-09-02", "2026-09-03", props, ["2026-09-02"]);
+    body.data.snapshotAt = "2026-09-11T12:00:00.000Z";
+    body.data.watermarkRevision = "10";
+    pending.resolve(response(body));
+    tree = await harness.settle();
+    old();
+    tree = await harness.settle();
+    expect(inspectors(tree)).toHaveLength(0);
+    tree = await inspectDay(harness, "2026-09-02");
+    expect(screenText(inspector(tree, "2026-09-02"))).toContain("2026-09-11T12:00:00.000Z");
+    expect(screenText(inspectionRows(tree, "2026-09-02")[0])).toContain("0 kcal");
+    expect(requests).toHaveLength(before + 1);
+  });
+
+  for (const action of ["Next period", "7 days"]) {
+    it(`closes after ${action} and cannot revive an old report day`, async () => {
+      const { harness } = setup();
+      await applyRange(harness, "2026-09-02", "2026-09-03");
+      let tree = await inspectDay(harness, "2026-09-02");
+      const old = inspectorButton(tree, "2026-09-03").props.onPress;
+      tree = await click(harness, action);
+      old();
+      tree = await harness.settle();
+      expect(inspectors(tree)).toHaveLength(0);
+      expect(rangeValues(tree)).not.toEqual(["2026-09-02", "2026-09-03"]);
+    });
+  }
+
+  for (const [boundary, next] of [
+    ["private owner", { expectedOwnerUserId: "049eb964-1327-49a1-ab4f-5c7c41a6b68a" }],
+    ["profile", { profileRevision: "5" }],
+    ["focus", { isFocused: false }],
+  ]) {
+    it(`hides on ${boundary} replacement before effects and fences former callbacks`, async () => {
+      const { harness, updateProps } = setup();
+      await applyRange(harness, "2026-09-02", "2026-09-03");
+      let tree = await inspectDay(harness, "2026-09-02");
+      const old = inspectorButton(tree, "2026-09-03").props.onPress;
+      updateProps(next);
+      tree = harness.renderWithoutEffects();
+      old();
+      expect(inspectors(tree)).toHaveLength(0);
+      harness.flushEffects();
+      await harness.settle();
+      if (boundary === "focus") updateProps({ isFocused: true });
+      tree = await harness.settle();
+      old();
+      tree = await harness.settle();
+      expect(inspectors(tree)).toHaveLength(0);
+      tree = await inspectDay(harness, "2026-09-02");
+      inspector(tree, "2026-09-02");
+    });
+  }
+
+  it("retires disclosure on background, effect replay and unmount without stale writes", async () => {
+    const { harness } = setup();
+    await applyRange(harness, "2026-09-02", "2026-09-03");
+    let tree = await inspectDay(harness, "2026-09-02");
+    let old = inspectorButton(tree, "2026-09-03").props.onPress;
+    background();
+    old();
+    tree = await harness.settle();
+    expect(inspectors(tree)).toHaveLength(0);
+    foreground();
+    await harness.settle();
+    old();
+    tree = await harness.settle();
+    expect(inspectors(tree)).toHaveLength(0);
+    tree = await inspectDay(harness, "2026-09-02");
+    old = inspectorButton(tree, "2026-09-03").props.onPress;
+    harness.replayEffects();
+    old();
+    tree = await harness.settle();
+    expect(inspectors(tree)).toHaveLength(0);
+    tree = await inspectDay(harness, "2026-09-02");
+    old = inspectorButton(tree, "2026-09-03").props.onPress;
+    harness.unmount();
+    old();
+    expect(harness.writesAfterUnmount).toBe(0);
+  });
+
+  it("preserves current source-diary navigation and closes its disclosure on departure", async () => {
+    const { harness, props, requests } = setup((request, current) =>
+      response(
+        sourceFixture(
+          request.url.searchParams.get("from"),
+          request.url.searchParams.get("to"),
+          current,
+          ["2026-09-01"],
+        ),
+      ),
+    );
+    await applyRange(harness, "2026-09-02", "2026-09-03");
+    let tree = await inspectDay(harness, "2026-09-02");
+    const old = inspectorButton(tree, "2026-09-03").props.onPress;
+    const before = requests.length;
+    diaryButton(tree, "2026-09-01").props.onPress();
+    old();
+    tree = await harness.settle();
+    expect(inspectors(tree)).toHaveLength(0);
+    expect(props.onDiary).toHaveBeenCalledExactlyOnceWith("2026-09-01");
+    expect(requests).toHaveLength(before);
   });
 });

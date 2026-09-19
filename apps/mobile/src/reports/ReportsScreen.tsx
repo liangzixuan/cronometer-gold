@@ -5,6 +5,7 @@ import type {
 } from "@nutrition-tracker/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   AppState,
   Pressable,
@@ -47,6 +48,11 @@ interface ReportsScreenProps {
   readonly isFocused: boolean;
   readonly onDiary: (date: string) => void;
   readonly onUnauthorized: () => Promise<void>;
+}
+
+interface DayInspection {
+  readonly report: NutritionReportResponse["data"];
+  readonly day: NutritionReportDay;
 }
 
 interface ReportQuery {
@@ -142,6 +148,23 @@ export function ReportsScreen({
       sessionEpoch,
     };
   const scope = scopeRef.current;
+  const [dayInspection, setDayInspection] = useState<DayInspection | null>(null);
+  const dayInspectionRef = useRef<DayInspection | null>(null);
+  const dayInspectionGeneration = useRef(0);
+  const dayInspectionScope = useRef({ scope, isFocused });
+  if (
+    dayInspectionScope.current.scope !== scope ||
+    dayInspectionScope.current.isFocused !== isFocused
+  ) {
+    dayInspectionScope.current = { scope, isFocused };
+    dayInspectionRef.current = null;
+    dayInspectionGeneration.current += 1;
+  }
+  const clearDayInspection = useCallback(() => {
+    dayInspectionRef.current = null;
+    dayInspectionGeneration.current += 1;
+    setDayInspection(null);
+  }, []);
   const installedScope = useRef<typeof scope | null>(null);
   const closedScope = useRef<typeof scope | null>(null);
   const departingScope = useRef<typeof scope | null>(null);
@@ -170,10 +193,11 @@ export function ReportsScreen({
     setState(next);
   }, []);
   const clearSnapshot = useCallback(() => {
+    clearDayInspection();
     reportRef.current = null;
     reportScope.current = null;
     setReport(null);
-  }, []);
+  }, [clearDayInspection]);
   const load = useCallback(
     async (requested: ReportQuery) => {
       if (!scopeIsCurrent() || queryRef.current !== requested) return;
@@ -348,6 +372,7 @@ export function ReportsScreen({
   function setDraftDate(field: "from" | "to", value: string) {
     if (!canAct()) return;
     if (draftRef.current[field] === value) return;
+    clearDayInspection();
     draftRef.current = { ...draftRef.current, [field]: value };
     draftGeneration.current += 1;
     if (field === "from") setFromDraft(value);
@@ -401,6 +426,37 @@ export function ReportsScreen({
       ? loadedReport
       : null;
   const datesDirty = fromDraft !== query.from || toDraft !== query.to;
+  const visibleDayInspection =
+    report &&
+    !datesDirty &&
+    dayInspection === dayInspectionRef.current &&
+    dayInspection?.report === report
+      ? dayInspection
+      : null;
+  const renderedDayInspectionGeneration = dayInspectionGeneration.current;
+
+  function toggleDayInspection(day: NutritionReportDay) {
+    if (
+      !currentDraftAction() ||
+      stateRef.current !== "ready" ||
+      !report ||
+      reportRef.current !== report ||
+      draftRef.current.from !== query.from ||
+      draftRef.current.to !== query.to ||
+      dayInspectionGeneration.current !== renderedDayInspectionGeneration ||
+      !report.days.includes(day)
+    )
+      return;
+    const next = dayInspectionRef.current?.day === day ? null : { report, day };
+    dayInspectionGeneration.current += 1;
+    dayInspectionRef.current = next;
+    setDayInspection(next);
+    AccessibilityInfo.announceForAccessibility(
+      next
+        ? `All ${report.series.length} nutrients for ${day.localDate} in ${report.timeZone}. Values use the current report snapshot.`
+        : `Nutrient details for ${day.localDate} hidden.`,
+    );
+  }
   const previousPeriod = report
     ? nutritionReportAdjacentRange(report.from, report.to, "previous")
     : null;
@@ -728,6 +784,65 @@ export function ReportsScreen({
                     {boundary ? <Text style={styles.boundary}>{boundary}</Text> : null}
                     <Text style={styles.coverage}>{display.coverage}</Text>
                     <Text style={styles.comparison}>{display.comparison}</Text>
+                    {day ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`${visibleDayInspection?.day === day ? "Hide" : "View"} all nutrients for ${day.localDate}`}
+                        accessibilityState={{
+                          expanded: visibleDayInspection?.day === day,
+                          disabled: datesDirty,
+                        }}
+                        disabled={datesDirty}
+                        onPress={() => toggleDayInspection(day)}
+                        style={[styles.secondaryButton, datesDirty && styles.disabled]}
+                      >
+                        <Text style={styles.secondaryText}>
+                          {visibleDayInspection?.day === day
+                            ? "Hide all nutrients"
+                            : "View all nutrients"}
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                    {day && visibleDayInspection?.day === day ? (
+                      <View
+                        accessibilityLabel={`All nutrients for ${day.localDate}`}
+                        style={styles.dayInspection}
+                      >
+                        <Text accessibilityRole="header" style={styles.inspectionTitle}>
+                          {day.localDate} · {report.timeZone}
+                        </Text>
+                        <Text style={styles.summaryText}>
+                          All {report.series.length} nutrients from the same snapshot captured{" "}
+                          {report.snapshotAt}.
+                        </Text>
+                        {report.series.map((series) => {
+                          const detailPoint = series.points.find(
+                            (item) => item.localDate === day.localDate,
+                          );
+                          if (!detailPoint) return null;
+                          const detail = nutritionReportPointDisplay(
+                            detailPoint,
+                            series.nutrient.unit,
+                          );
+                          return (
+                            <View
+                              accessible
+                              accessibilityRole="summary"
+                              accessibilityLabel={`${series.nutrient.name} (${series.nutrient.unit}) on ${day.localDate}. ${detail.amount}. ${detail.coverage}. ${detail.comparison}`}
+                              key={series.nutrient.id}
+                              style={styles.inspectionRow}
+                            >
+                              <Text style={styles.inspectionNutrient}>
+                                {series.nutrient.name} ({series.nutrient.unit})
+                              </Text>
+                              <Text style={styles.inspectionAmount}>{detail.amount}</Text>
+                              <Text style={styles.coverage}>{detail.coverage}</Text>
+                              <Text style={styles.comparison}>{detail.comparison}</Text>
+                            </View>
+                          );
+                        })}
+                      </View>
+                    ) : null}
                     {day
                       ? nutritionReportDiaryDates(day).map((date) => (
                           <Pressable
@@ -875,6 +990,17 @@ const styles = StyleSheet.create({
   segmentDates: { color: palette.ink, fontSize: 14, fontWeight: "800" },
   segmentGoal: { color: palette.muted, fontSize: 13 },
   caution: { color: palette.muted, fontSize: 12, fontStyle: "italic", lineHeight: 18 },
+  dayInspection: { gap: 10, minWidth: 0, paddingTop: 8 },
+  inspectionTitle: { color: palette.ink, fontSize: 17, fontWeight: "800" },
+  inspectionRow: {
+    gap: 5,
+    minWidth: 0,
+    borderTopColor: palette.line,
+    borderTopWidth: 1,
+    paddingTop: 10,
+  },
+  inspectionNutrient: { color: palette.ink, fontSize: 15, fontWeight: "700", flexShrink: 1 },
+  inspectionAmount: { color: palette.ink, fontSize: 15, lineHeight: 22, flexShrink: 1 },
   dayCard: {
     backgroundColor: palette.white,
     borderColor: palette.line,

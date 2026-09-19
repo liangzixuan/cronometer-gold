@@ -99,7 +99,8 @@ ADR with a new ADR instead of rewriting its decision.
 | [0091](./0091-native-hydration-correction-draft-protection.md) | Preserve native hydration correction drafts | Implemented at 58a48f9; local and exact-commit automatic evidence passed; device/release acceptance separate |
 | [0092](./0092-native-biometric-reading-draft-protection.md) | Protect native biometric reading drafts | Implemented at 6d8189b; local and exact-commit automatic evidence passed; device/release acceptance separate |
 | [0093](./0093-native-definition-reminder-draft-protection.md) | Protect native definition and reminder drafts | Implemented at bd89fd0; local and exact-commit automatic evidence passed; device/release acceptance separate |
-| [0094](./0094-native-diary-repeat-destination.md) | Choose the native diary repeat destination | Source complete and reviewed; final canonical/automatic evidence pending; device/release acceptance separate |
+| [0094](./0094-native-diary-repeat-destination.md) | Choose the native diary repeat destination | Implemented at 8e0db9e; local and exact-commit automatic evidence passed; device/release acceptance separate |
+| [0095](./0095-native-report-day-inspector.md) | Inspect every nutrient for one native report day | Source complete and reviewed; final canonical/automatic evidence pending; device/release acceptance separate |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

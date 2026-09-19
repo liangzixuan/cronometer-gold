@@ -118,14 +118,20 @@ and nine actual container35434908408 jobs passed on attempt one; September 19
 10:56:44 UTC official evidence records complete results. Clean equal local,
 tracking and live heads and seven reviewed hashes were reverified at 10:57:29 UTC.
 
-Active work is [ADR 0094](../adr/0094-native-diary-repeat-destination.md): repeat a
-pinned native diary entry to a chosen date and configured meal group, retaining
-the one-tap today action, protected FIFO, exact source revision and confirmed-only
-totals. Opening or cancelling the composer creates no operation. Independent
-source review, 184 focused cases, native types and scoped Biome passed. Final
-canonical and exact-commit automatic evidence remains pending. No dependency,
-installation or audit is part of this slice. Device/release acceptance remains
-separate.
+[ADR 0094](../adr/0094-native-diary-repeat-destination.md) is delivered at
+`8e0db9e71381e19fa813bba9ed8ae4b02194db69`: 184 focused cases, independent review,
+canonical check/build and fresh native exports passed. All three CI35440114966
+and nine actual container35440114959 jobs passed on attempt one; September 19
+12:57:16 UTC official evidence records complete results. Clean equal local,
+tracking and live heads and seven reviewed hashes were reverified at 12:57:58 UTC.
+
+Active work is [ADR 0095](../adr/0095-native-report-day-inspector.md): inspect all
+15 nutrients for one native report day from the same private snapshot, preserving
+exact amounts, coverage and saved-target comparisons. Independent source review,
+100 focused cases, native types and scoped Biome passed. Final canonical and
+exact-commit automatic evidence remains pending. No request, mutation, new math,
+dependency, installation or audit is part of this slice. Device/release acceptance
+remains separate.
 
 Use the [build plan](../product/build-plan.md) for priorities and the
 [release gates](release-gates.md) for authoritative acceptance. The
