@@ -1,6 +1,6 @@
 # ADR 0095: Inspect every nutrient for one native report day
 
-Status: Source complete and reviewed; final canonical and exact-commit automatic evidence pending.
+Status: Implemented at `bae63da`; local and exact-commit automatic evidence passed. Device/release acceptance remains separate.
 
 ## Context
 
@@ -67,4 +67,20 @@ Independent review required units in accessible row labels even for unknown or
 missing amounts. One expanded-test failure was an expectation missing the word
 “the” from the existing zero-target explanation; the expectation was corrected
 without changing the formatter or weakening its assertion. Final canonical and
-exact-commit automatic evidence remains pending in the dated outside-Git record.
+exact-commit automatic evidence was pending at the source checkpoint; delivery
+results below close that dated state.
+
+
+## Delivery evidence
+
+Delivered at `bae63da2e8ee50b4c1323361a85c7cab9d0fd775`. Canonical check on
+September 19 passed 2,118 fresh cases plus 2,327 cached cases, with 93 cached
+opt-in skips. Build passed 11 tasks, ten cached, with fresh native exports.
+The 14:51:23 UTC official observation records all three actual jobs in
+[CI 35445576918](https://github.com/liangzixuan/cronometer-gold/actions/runs/35445576918)
+and all nine actual jobs in
+[container run 35445576938](https://github.com/liangzixuan/cronometer-gold/actions/runs/35445576938)
+completed successfully on attempt one at that exact commit. At 14:52:01 UTC,
+clean local, tracking and live heads and seven reviewed working-tree/committed
+hashes matched. Earlier pending observations remain dated history. These results
+do not establish physical-device, assistive-technology or release acceptance.

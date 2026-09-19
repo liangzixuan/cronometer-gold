@@ -13,6 +13,7 @@ vi.mock("react", async (original) => ({
   useState: (...args) => hooks.current.useState(...args),
   useRef: (...args) => hooks.current.useRef(...args),
   useCallback: (...args) => hooks.current.useCallback(...args),
+  useMemo: (...args) => hooks.current.useMemo(...args),
   useEffect: (...args) => hooks.current.useEffect(...args),
 }));
 vi.mock("../src/auth/operation-id", () => ({
@@ -883,6 +884,9 @@ describe("native Activity Add duration presets", () => {
     tree = await fill(harness, { time: sameMinute });
     await press(harness, presetLabel(15));
     await press(harness, "Add activity");
+    expect(writes()).toHaveLength(0);
+    await press(harness, "Add activity Earlier occurrence · UTC−05:00");
+    await press(harness, "Add activity");
     expect(JSON.parse(writes()[0].body).occurredAt).toBe("2026-11-01T06:30:00.000Z");
   });
 
@@ -1457,5 +1461,268 @@ describe("native activity edit-draft protection", () => {
       "Your activity has unsaved edits. Keep editing or explicitly discard edits to continue.",
     );
     expect(requests).toHaveLength(count);
+  });
+});
+
+describe("native activity explicit time occurrences", () => {
+  it("offers both offset-labelled occurrences after a deliberate Add time edit", async () => {
+    const { harness, writes } = setup();
+    const tree = await fill(harness, { name: "Walk", duration: "30", time: "01:30" });
+    expect(
+      button(tree, "Add activity Earlier occurrence · UTC−05:00").props.accessibilityState.selected,
+    ).toBe(false);
+    expect(
+      button(tree, "Add activity Later occurrence · UTC−06:00").props.accessibilityState.selected,
+    ).toBe(false);
+    await press(harness, "Add activity");
+    expect(writes()).toHaveLength(0);
+  });
+});
+
+const earlierAdd = "Add activity Earlier occurrence · UTC−05:00";
+const laterAdd = "Add activity Later occurrence · UTC−06:00";
+const earlierEdit = "Edit activity Earlier occurrence · UTC−05:00";
+const laterEdit = "Edit activity Later occurrence · UTC−06:00";
+const foldSource = { ...source, occurredAt: "2026-11-01T07:30:45.123Z", localTime: "01:30:45.123" };
+async function patchReceipt(request, original = foldSource) {
+  const patch = JSON.parse(request.body);
+  const body = await receipt({
+    ...request,
+    body: JSON.stringify({ ...original, ...patch }),
+  }).json();
+  body.data.entry.id = original.id;
+  body.data.entry.revision = "3";
+  return response(body);
+}
+
+describe("native activity occurrence integration", () => {
+  for (const [label, instant] of [
+    [earlierAdd, "2026-11-01T06:30:00.000Z"],
+    [laterAdd, "2026-11-01T07:30:00.000Z"],
+  ]) {
+    it(`saves the chosen Add occurrence ${instant} with the existing zone and operation guards`, async () => {
+      const { harness, writes } = setup();
+      await press(harness, `Use details from ${source.name}`);
+      let tree = await fill(harness, { time: "01:30" });
+      const staleAdd = button(tree, "Add activity").props.onPress;
+      tree = await press(harness, label);
+      expect(button(tree, label).props.accessibilityState.selected).toBe(true);
+      expect(text(tree)).toContain("minute precision");
+      expect(writes()).toHaveLength(0);
+      staleAdd();
+      await harness.settle();
+      expect(writes()).toHaveLength(0);
+      const currentAdd = button(tree, "Add activity").props.onPress;
+      button(tree, label).props.onPress();
+      input(tree, names.name).props.onChangeText(source.name);
+      input(tree, names.energy).props.onChangeText(source.selfReportedEnergyKilocalories);
+      input(tree, names.date).props.onChangeText(selectedDate);
+      currentAdd();
+      await harness.settle();
+      expect(writes()).toHaveLength(1);
+      const request = writes()[0];
+      expect(JSON.parse(request.body)).toEqual({
+        name: source.name,
+        durationMinutes: 45,
+        selfReportedEnergyKilocalories: "0.001",
+        occurredAt: instant,
+      });
+      expect(request.headers["x-expected-profile-time-zone"]).toBe(zone);
+      expect(request.headers["idempotency-key"]).toMatch(/^00000000-/);
+    });
+  }
+
+  it("changes the same saved minute to another occurrence and protects that unsaved choice", async () => {
+    const { harness, writes } = setup(
+      (request) => (request.method === "PATCH" ? patchReceipt(request) : undefined),
+      [foldSource],
+    );
+    await press(harness, "Edit activity");
+    let tree = await press(harness, earlierEdit);
+    tree = await press(harness, "Cancel");
+    expect(hasButton(tree, "Keep editing")).toBe(true);
+    tree = await press(harness, "Keep editing");
+    expect(button(tree, earlierEdit).props.accessibilityState.selected).toBe(true);
+    tree = await press(harness, "Next activity day");
+    expect(hasButton(tree, "Keep editing")).toBe(true);
+    tree = await press(harness, "Keep editing");
+    expect(button(tree, earlierEdit).props.accessibilityState.selected).toBe(true);
+    expect(input(tree, names.date).props.value).toBe(selectedDate);
+    await press(harness, "Save activity");
+    expect(writes()).toHaveLength(1);
+    expect(JSON.parse(writes()[0].body)).toEqual({ occurredAt: "2026-11-01T06:30:00.000Z" });
+    expect(writes()[0].headers["if-match"]).toBe('"2"');
+    expect(writes()[0].headers["x-expected-profile-time-zone"]).toBe(zone);
+  });
+
+  it("leaves a precise saved fold untouched when only metadata changes", async () => {
+    const { harness, writes } = setup(
+      (request) => (request.method === "PATCH" ? patchReceipt(request) : undefined),
+      [foldSource],
+    );
+    await press(harness, "Edit activity");
+    const tree = await fillEdit(harness, { duration: "46" });
+    expect(button(tree, earlierEdit).props.accessibilityState.selected).toBe(false);
+    expect(button(tree, laterEdit).props.accessibilityState.selected).toBe(false);
+    await press(harness, "Save activity");
+    expect(JSON.parse(writes()[0].body)).toEqual({ durationMinutes: 46 });
+    expect(writes()[0].headers["x-expected-profile-time-zone"]).toBeUndefined();
+    expect(writes()[0].url.search).toBe("");
+  });
+
+  it("requires a new edit occurrence after coordinate changes and rejects a held selection before paint", async () => {
+    const { harness, writes } = setup(
+      (request) => (request.method === "PATCH" ? patchReceipt(request) : undefined),
+      [foldSource],
+    );
+    await press(harness, "Edit activity");
+    let tree = await press(harness, earlierEdit);
+    const old = button(tree, laterEdit).props.onPress;
+    input(tree, editNames.time).props.onChangeText("01:31");
+    old();
+    tree = await harness.settle();
+    expect(button(tree, earlierEdit).props.accessibilityState.selected).toBe(false);
+    expect(button(tree, laterEdit).props.accessibilityState.selected).toBe(false);
+    await press(harness, "Save activity");
+    expect(writes()).toHaveLength(0);
+    await press(harness, laterEdit);
+    await press(harness, "Save activity");
+    expect(JSON.parse(writes()[0].body).occurredAt).toBe("2026-11-01T07:31:00.000Z");
+  });
+
+  it("fences Add occurrence callbacks after another field edit, date draft round trip and same-render choice", async () => {
+    const { harness, writes } = setup();
+    let tree = await fill(harness, { name: "Walk", duration: "30", time: "01:30" });
+    let old = button(tree, earlierAdd).props.onPress;
+    input(tree, names.name).props.onChangeText("New name");
+    old();
+    tree = await harness.settle();
+    expect(button(tree, earlierAdd).props.accessibilityState.selected).toBe(false);
+    const earlier = button(tree, earlierAdd).props.onPress;
+    const later = button(tree, laterAdd).props.onPress;
+    earlier();
+    later();
+    tree = await harness.settle();
+    expect(button(tree, earlierAdd).props.accessibilityState.selected).toBe(true);
+    old = button(tree, laterAdd).props.onPress;
+    input(tree, names.date).props.onChangeText("invalid");
+    old();
+    tree = await harness.settle();
+    input(tree, names.date).props.onChangeText(selectedDate);
+    old();
+    tree = await harness.settle();
+    expect(button(tree, earlierAdd).props.accessibilityState.selected).toBe(false);
+    await press(harness, "Add activity");
+    expect(writes()).toHaveLength(0);
+    await press(harness, laterAdd);
+    await press(harness, "Add activity");
+    expect(JSON.parse(writes()[0].body).occurredAt).toBe("2026-11-01T07:30:00.000Z");
+  });
+
+  it("retires explicit Add choices on date-away/back while preserving reuse of the selected minute", async () => {
+    const { harness, writes } = setup();
+    await fill(harness, { name: "Walk", duration: "30", time: "01:30" });
+    await press(harness, laterAdd);
+    await press(harness, "Next activity day");
+    let tree = await press(harness, "Previous activity day");
+    expect(button(tree, laterAdd).props.accessibilityState.selected).toBe(false);
+    await press(harness, "Add activity");
+    expect(writes()).toHaveLength(0);
+    await press(harness, laterAdd);
+    await press(harness, `Use details from ${source.name}`);
+    tree = await press(harness, "Replace details");
+    expect(button(tree, laterAdd).props.accessibilityState.selected).toBe(true);
+    await press(harness, "Add activity");
+    expect(JSON.parse(writes()[0].body).occurredAt).toBe("2026-11-01T07:30:00.000Z");
+  });
+
+  for (const kind of ["Add", "edit"]) {
+    it(`preserves the exact ${kind} occurrence body and operation for an uncertain retry`, async () => {
+      const { harness, writes } = setup(
+        (request) => (request.method !== "GET" ? response({}, 503) : undefined),
+        [foldSource],
+      );
+      if (kind === "Add") {
+        await fill(harness, { name: "Walk", duration: "30", time: "01:30" });
+        await press(harness, laterAdd);
+      } else {
+        await press(harness, "Edit activity");
+        await press(harness, earlierEdit);
+      }
+      const action = kind === "Add" ? "Add activity" : "Save activity";
+      await press(harness, action);
+      await press(harness, "Retry day view");
+      await press(harness, action);
+      expect(writes()).toHaveLength(2);
+      expect(writes()[1].body).toBe(writes()[0].body);
+      expect(writes()[1].headers["idempotency-key"]).toBe(writes()[0].headers["idempotency-key"]);
+    });
+  }
+
+  it("rejects stale choices across background and private replacement without reviving private fields", async () => {
+    const { harness, writes } = setup();
+    let tree = await fill(harness, { name: "Private walk", duration: "30", time: "01:30" });
+    const old = button(tree, laterAdd).props.onPress;
+    appState("background");
+    old();
+    tree = await harness.settle();
+    expect(nodes(tree, (node) => node.props?.accessibilityLabel === laterAdd)).toHaveLength(0);
+    appState("active");
+    tree = await harness.settle();
+    old();
+    tree = await harness.settle();
+    expect(button(tree, laterAdd).props.accessibilityState.selected).toBe(false);
+    const replacementStale = button(tree, laterAdd).props.onPress;
+    harness.updateProps({ expectedOwnerUserId: "5afda2f8-e150-40ed-88f1-a327cd5e2430" });
+    tree = harness.renderWithoutEffects();
+    replacementStale();
+    expect(nodes(tree, (node) => node.props?.accessibilityLabel === laterAdd)).toHaveLength(0);
+    harness.flushEffects();
+    tree = await harness.settle();
+    expect(input(tree, names.name).props.value).toBe("");
+    expect(writes()).toHaveLength(0);
+  });
+
+  it("retires both selected candidates if the loaded profile zone changes after a failed write", async () => {
+    let nextZone = zone;
+    const { harness, writes } = setup(
+      (request) => {
+        if (request.method !== "GET") return response({}, 503);
+        const body = dayBody(request.url.searchParams.get("date"), [foldSource]);
+        body.data.timeZone = nextZone;
+        return response(body);
+      },
+      [foldSource],
+    );
+    await fill(harness, { name: "Walk", duration: "30", time: "01:30" });
+    await press(harness, laterAdd);
+    await press(harness, "Edit activity");
+    await press(harness, earlierEdit);
+    await press(harness, "Save activity");
+    nextZone = "America/Winnipeg";
+    const tree = await press(harness, "Retry day view");
+    expect(button(tree, laterAdd).props.accessibilityState.selected).toBe(false);
+    expect(button(tree, earlierEdit).props.accessibilityState.selected).toBe(false);
+    await press(harness, "Save activity");
+    expect(writes()).toHaveLength(1);
+  });
+
+  it("keeps a spring gap unsavable without an occurrence button", async () => {
+    const { harness, writes } = setup((request) => {
+      if (request.method !== "GET") return undefined;
+      return response(dayBody(request.url.searchParams.get("date"), []));
+    }, []);
+    harness.updateProps({ requestedDate: "2026-03-08" });
+    let tree = await fill(harness, { name: "Walk", duration: "30", time: "02:30" });
+    expect(
+      nodes(
+        tree,
+        (node) =>
+          node.type === "Pressable" && node.props.accessibilityLabel?.includes("occurrence"),
+      ),
+    ).toHaveLength(0);
+    tree = await press(harness, "Add activity");
+    expect(text(tree)).toContain("does not exist");
+    expect(writes()).toHaveLength(0);
   });
 });

@@ -358,3 +358,121 @@ describe("mobile activity presentation policy", () => {
     expect(ACTIVITY_ONLINE_POLICY_COPY).toMatch(/not queued for later/iu);
   });
 });
+
+describe("explicit activity time occurrences", () => {
+  it("requires an explicit choice for a manually entered repeated minute", () => {
+    expect(() =>
+      prepareActivityCreate("Walk", "30", "", "2026-11-01", "01:30", {
+        localDate: "2026-11-01",
+        timeZone: "America/Chicago",
+      }),
+    ).toThrow("Choose the earlier or later occurrence");
+  });
+  it("corrects to another occurrence of the same displayed minute", () => {
+    const draft = {
+      entry,
+      name: entry.name,
+      durationMinutes: String(entry.durationMinutes),
+      selfReportedEnergyKilocalories: entry.selfReportedEnergyKilocalories ?? "",
+      localDate: entry.localDate,
+      localTime: entry.localTime.slice(0, 5),
+      selectedOccurredAt: "2026-11-01T06:30:00.000Z",
+    };
+    expect(prepareActivityUpdate(draft, "America/Chicago")).toEqual({
+      body: { occurredAt: "2026-11-01T06:30:00.000Z" },
+      expectedTimeZone: "America/Chicago",
+    });
+  });
+});
+
+describe("activity occurrence precision and candidate ownership", () => {
+  it("uses either explicit Chicago occurrence and lets a choice override the captured default", () => {
+    for (const instant of ["2026-11-01T06:30:00.000Z", "2026-11-01T07:30:00.000Z"]) {
+      expect(
+        prepareActivityCreate(
+          "Walk",
+          "30",
+          "",
+          "2026-11-01",
+          "01:30",
+          { localDate: "2026-11-01", timeZone: "America/Chicago" },
+          entry.occurredAt,
+          instant,
+        ).body.occurredAt,
+      ).toBe(instant);
+    }
+  });
+  it("resolves both halves of a non-hour fold without adding fixed DST math", () => {
+    const loaded = { localDate: "2026-04-05", timeZone: "Australia/Lord_Howe" };
+    expect(() =>
+      prepareActivityCreate("Walk", "30", "", loaded.localDate, "01:45", loaded),
+    ).toThrow("Choose the earlier or later occurrence");
+    for (const instant of ["2026-04-04T14:45:00.000Z", "2026-04-04T15:15:00.000Z"]) {
+      expect(
+        prepareActivityCreate(
+          "Walk",
+          "30",
+          "",
+          loaded.localDate,
+          "01:45",
+          loaded,
+          undefined,
+          instant,
+        ).body.occurredAt,
+      ).toBe(instant);
+    }
+  });
+  it("rejects retired or foreign candidates and missing correction choices", () => {
+    const loaded = { localDate: "2026-11-01", timeZone: "America/Chicago" };
+    for (const stale of [
+      "2026-11-01T06:31:00.000Z",
+      entry.occurredAt,
+      "2026-11-02T07:30:00.000Z",
+    ]) {
+      expect(() =>
+        prepareActivityCreate(
+          "Walk",
+          "30",
+          "",
+          loaded.localDate,
+          "01:30",
+          loaded,
+          undefined,
+          stale,
+        ),
+      ).toThrow("no longer current");
+    }
+    const draft = {
+      entry,
+      name: entry.name,
+      durationMinutes: "45",
+      selfReportedEnergyKilocalories: "125.5",
+      localDate: "2026-11-01",
+      localTime: "01:31",
+    };
+    expect(() => prepareActivityUpdate(draft, "America/Chicago")).toThrow(
+      "Choose the earlier or later occurrence",
+    );
+    expect(() =>
+      prepareActivityUpdate(
+        { ...draft, selectedOccurredAt: "2026-11-01T06:30:00.000Z" },
+        "America/Chicago",
+      ),
+    ).toThrow("no longer current");
+  });
+  it("does not reinterpret metadata-only edits in a changed current profile zone", () => {
+    const draft = {
+      entry,
+      name: entry.name,
+      durationMinutes: "46",
+      selfReportedEnergyKilocalories: "125.5",
+      localDate: entry.localDate,
+      localTime: entry.localTime.slice(0, 5),
+    };
+    expect(prepareActivityUpdate(draft, "America/Los_Angeles")).toEqual({
+      body: { durationMinutes: 46 },
+      expectedTimeZone: null,
+    });
+    expect(entry.occurredAt).toBe("2026-11-01T07:30:45.123Z");
+  });
+});

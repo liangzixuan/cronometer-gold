@@ -5,13 +5,9 @@ import type {
   CreateActivityEntryRequest,
   UpdateActivityEntryRequest,
 } from "@nutrition-tracker/contracts";
+import { resolveHydrationLocalMinute } from "@nutrition-tracker/contracts";
 
-import {
-  isLocalDate,
-  localDateInTimeZone,
-  localDateTimeToInstant,
-  localTimeInTimeZone,
-} from "../diary/diary";
+import { isLocalDate, localDateInTimeZone, localTimeInTimeZone } from "../diary/diary";
 
 export const ACTIVITY_NAME_MAX_CODE_POINTS = 120;
 export const ACTIVITY_NAME_MAX_UTF8_BYTES = 480;
@@ -39,6 +35,7 @@ export interface ActivityEditDraft {
   readonly selfReportedEnergyKilocalories: string;
   readonly localDate: string;
   readonly localTime: string;
+  readonly selectedOccurredAt?: string | null;
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
@@ -378,6 +375,31 @@ function retainedDefaultOccurredAt(
   return captured.toISOString();
 }
 
+function activityTimeOccurrence(
+  localDate: string,
+  localTime: string,
+  timeZone: string,
+  selectedOccurredAt?: string | null,
+): string {
+  const resolution = resolveHydrationLocalMinute(localDate, localTime, timeZone);
+  if (resolution.kind === "invalid") {
+    throw new RangeError("Enter a valid activity date, 24-hour time, and profile time zone.");
+  }
+  if (resolution.kind === "gap") {
+    throw new RangeError("That local time does not exist in this time zone. Choose another time.");
+  }
+  const candidate =
+    selectedOccurredAt == null && resolution.kind === "unique"
+      ? resolution.candidates[0]
+      : resolution.candidates.find((item) => item.occurredAt === selectedOccurredAt);
+  if (!candidate) {
+    throw new RangeError(
+      "This time occurs more than once or its choice is no longer current. Choose the earlier or later occurrence.",
+    );
+  }
+  return candidate.occurredAt;
+}
+
 export function prepareActivityCreate(
   nameDraft: string,
   durationDraft: string,
@@ -386,12 +408,13 @@ export function prepareActivityCreate(
   localTime: string,
   loadedDay: Pick<ActivityDay, "localDate" | "timeZone">,
   untouchedDefaultOccurredAt?: string,
+  selectedOccurredAt?: string | null,
 ): { readonly body: CreateActivityEntryRequest; readonly expectedTimeZone: string } {
   if (loadedDay.localDate !== selectedLocalDate) {
     throw new TypeError("Load the selected activity day before adding an entry.");
   }
   const retainedOccurredAt = retainedDefaultOccurredAt(
-    untouchedDefaultOccurredAt,
+    selectedOccurredAt == null ? untouchedDefaultOccurredAt : undefined,
     selectedLocalDate,
     localTime,
     loadedDay.timeZone,
@@ -403,7 +426,12 @@ export function prepareActivityCreate(
       selfReportedEnergyKilocalories: activityEnergyFromDraft(energyDraft),
       occurredAt:
         retainedOccurredAt ??
-        localDateTimeToInstant(selectedLocalDate, localTime, loadedDay.timeZone),
+        activityTimeOccurrence(
+          selectedLocalDate,
+          localTime,
+          loadedDay.timeZone,
+          selectedOccurredAt,
+        ),
     },
     expectedTimeZone: loadedDay.timeZone,
   };
@@ -440,12 +468,14 @@ export function prepareActivityUpdate(
   }
   const timeChanged =
     draft.localDate !== draft.entry.localDate ||
-    draft.localTime !== draft.entry.localTime.slice(0, 5);
+    draft.localTime !== draft.entry.localTime.slice(0, 5) ||
+    draft.selectedOccurredAt != null;
   if (timeChanged) {
-    body.occurredAt = localDateTimeToInstant(
+    body.occurredAt = activityTimeOccurrence(
       draft.localDate,
       draft.localTime,
       currentProfileTimeZone,
+      draft.selectedOccurredAt,
     );
   }
   if (Object.keys(body).length === 0) throw new RangeError("Change at least one activity field.");

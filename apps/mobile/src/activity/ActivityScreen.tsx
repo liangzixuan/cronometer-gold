@@ -1,5 +1,5 @@
-import type { ActivityEntry } from "@nutrition-tracker/contracts";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ActivityEntry, resolveHydrationLocalMinute } from "@nutrition-tracker/contracts";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AccessibilityInfo,
   ActivityIndicator,
@@ -45,6 +45,7 @@ type AddFields = {
   durationMinutes: string;
   selfReportedEnergyKilocalories: string;
   localTime: string;
+  selectedOccurredAt: string | null;
 };
 type ReuseChoice = {
   readonly entry: ActivityEntry;
@@ -89,6 +90,7 @@ function editDraft(entry: ActivityEntry): ActivityEditDraft {
     selfReportedEnergyKilocalories: entry.selfReportedEnergyKilocalories ?? "",
     localDate: entry.localDate,
     localTime: entry.localTime.slice(0, 5),
+    selectedOccurredAt: null,
   };
 }
 
@@ -99,7 +101,8 @@ function hasActivityEdits(draft: ActivityEditDraft): boolean {
     draft.durationMinutes !== baseline.durationMinutes ||
     draft.selfReportedEnergyKilocalories !== baseline.selfReportedEnergyKilocalories ||
     draft.localDate !== baseline.localDate ||
-    draft.localTime !== baseline.localTime
+    draft.localTime !== baseline.localTime ||
+    draft.selectedOccurredAt != null
   );
 }
 
@@ -136,6 +139,8 @@ export function ActivityScreen({
   const [durationMinutes, setDurationMinutes] = useState("");
   const [selfReportedEnergyKilocalories, setSelfReportedEnergyKilocalories] = useState("");
   const [localTime, setLocalTime] = useState(localTimeInTimeZone(initialNow, profileTimeZone));
+  const [selectedOccurredAt, setSelectedOccurredAt] = useState<string | null>(null);
+  const [, renderTimeEdit] = useState(0);
   const [edit, setEdit] = useState<ActivityEditDraft | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [reuseChoice, setReuseChoice] = useState<ReuseChoice | null>(null);
@@ -149,6 +154,7 @@ export function ActivityScreen({
     durationMinutes,
     selfReportedEnergyKilocalories,
     localTime,
+    selectedOccurredAt,
   });
   const draftGeneration = useRef(0);
   const createIntent = useRef(0);
@@ -228,6 +234,7 @@ export function ActivityScreen({
     if (fields.selfReportedEnergyKilocalories !== undefined)
       setSelfReportedEnergyKilocalories(fields.selfReportedEnergyKilocalories);
     if (fields.localTime !== undefined) setLocalTime(fields.localTime);
+    if (fields.selectedOccurredAt !== undefined) setSelectedOccurredAt(fields.selectedOccurredAt);
   }, []);
   const closePrivate = useCallback(async () => {
     if (!scopeIsCurrent()) return;
@@ -241,7 +248,12 @@ export function ActivityScreen({
     setBusy(null);
     clearChoice();
     clearDay();
-    installFields({ name: "", durationMinutes: "", selfReportedEnergyKilocalories: "" });
+    installFields({
+      name: "",
+      durationMinutes: "",
+      selfReportedEnergyKilocalories: "",
+      selectedOccurredAt: null,
+    });
     setState("error");
     setMessageIsError(true);
     setMessage("Your activity session has closed.");
@@ -260,7 +272,12 @@ export function ActivityScreen({
       clearChoice();
       clearDay();
       operations.current.clear();
-      installFields({ name: "", durationMinutes: "", selfReportedEnergyKilocalories: "" });
+      installFields({
+        name: "",
+        durationMinutes: "",
+        selfReportedEnergyKilocalories: "",
+        selectedOccurredAt: null,
+      });
       editRef.current = null;
       setEdit(null);
       busyRef.current = null;
@@ -336,9 +353,16 @@ export function ActivityScreen({
         }
         if (loadedTimeZone.current !== next.timeZone) {
           const capturedNow = new Date();
-          installFields({ localTime: localTimeInTimeZone(capturedNow, next.timeZone) });
+          installFields({
+            localTime: localTimeInTimeZone(capturedNow, next.timeZone),
+            selectedOccurredAt: null,
+          });
           untouchedDefaultOccurredAt.current = capturedNow.toISOString();
           loadedTimeZone.current = next.timeZone;
+          if (editRef.current?.selectedOccurredAt != null) {
+            editRef.current = { ...editRef.current, selectedOccurredAt: null };
+            setEdit(editRef.current);
+          }
         }
         if (!current()) return false;
         dayRef.current = next;
@@ -414,22 +438,29 @@ export function ActivityScreen({
           dateDraftRef.current === date))
     );
   }
-  function changeAdd(field: keyof AddFields, value: string) {
+  function changeAdd(field: keyof Omit<AddFields, "selectedOccurredAt">, value: string) {
     if (!currentAction()) return;
-    if (field === "durationMinutes") {
-      if (draftRef.current.durationMinutes === value) return;
-      actionGeneration.current += 1;
-    }
+    if (field !== "localTime" && draftRef.current[field] === value) return;
+    if (field === "durationMinutes") actionGeneration.current += 1;
     clearChoice();
-    if (field === "localTime") untouchedDefaultOccurredAt.current = null;
-    installFields({ [field]: value });
+    if (field === "localTime") {
+      actionGeneration.current += 1;
+      untouchedDefaultOccurredAt.current = null;
+      installFields({ localTime: value, selectedOccurredAt: null });
+      // Retyping the same minute still retires its precise default and old callbacks.
+      renderTimeEdit((revision) => revision + 1);
+    } else installFields({ [field]: value });
   }
   function changeEdit(field: keyof Omit<ActivityEditDraft, "entry">, value: string) {
     if (!currentAction() || !edit || editRef.current !== edit) return;
     if (editRef.current[field] === value) return;
     actionGeneration.current += 1;
     clearChoice();
-    editRef.current = { ...editRef.current, [field]: value };
+    editRef.current = {
+      ...editRef.current,
+      [field]: value,
+      ...(field === "localDate" || field === "localTime" ? { selectedOccurredAt: null } : {}),
+    };
     setEdit(editRef.current);
   }
   function showAdd(message: string) {
@@ -442,6 +473,7 @@ export function ActivityScreen({
     editRef.current = action.kind === "entry" ? editDraft(action.entry) : null;
     setEdit(editRef.current);
     if (action.kind !== "date") return;
+    installFields({ selectedOccurredAt: null });
     draftGeneration.current += 1;
     dateRef.current = action.date;
     dateDraftRef.current = action.date;
@@ -710,6 +742,7 @@ export function ActivityScreen({
         draftRef.current.localTime,
         day,
         untouchedDefaultOccurredAt.current ?? undefined,
+        draftRef.current.selectedOccurredAt,
       );
       const intentKey = `create:${createIntent.current}:${expectedOwnerUserId}:${prepared.expectedTimeZone}:${JSON.stringify(prepared.body)}`;
       await mutate({
@@ -729,7 +762,12 @@ export function ActivityScreen({
           ) {
             createIntent.current += 1;
             actionGeneration.current += 1;
-            installFields({ name: "", durationMinutes: "", selfReportedEnergyKilocalories: "" });
+            installFields({
+              name: "",
+              durationMinutes: "",
+              selfReportedEnergyKilocalories: "",
+              selectedOccurredAt: null,
+            });
             const capturedNow = new Date();
             const activeZone = day.timeZone;
             installFields({ localTime: localTimeInTimeZone(capturedNow, activeZone) });
@@ -829,6 +867,52 @@ export function ActivityScreen({
     day.localDate !== date ||
     dateDraft !== date;
   const reuseDisabled = createDisabled || edit !== null;
+  const currentTimeZone = day?.timeZone;
+  const addTimeResolution = useMemo(
+    () => (currentTimeZone ? resolveHydrationLocalMinute(date, localTime, currentTimeZone) : null),
+    [currentTimeZone, date, localTime],
+  );
+  const editDate = edit?.localDate;
+  const editTime = edit?.localTime;
+  const editTimeResolution = useMemo(
+    () =>
+      currentTimeZone && editDate && editTime
+        ? resolveHydrationLocalMinute(editDate, editTime, currentTimeZone)
+        : null,
+    [currentTimeZone, editDate, editTime],
+  );
+  const renderedDraftGeneration = draftGeneration.current;
+  function selectAddOccurrence(occurredAt: string) {
+    if (
+      !currentAction() ||
+      draftGeneration.current !== renderedDraftGeneration ||
+      addTimeResolution?.kind !== "ambiguous" ||
+      !addTimeResolution.candidates.some((candidate) => candidate.occurredAt === occurredAt)
+    )
+      return;
+    if (draftRef.current.selectedOccurredAt === occurredAt) return;
+    actionGeneration.current += 1;
+    clearChoice();
+    untouchedDefaultOccurredAt.current = null;
+    installFields({ selectedOccurredAt: occurredAt });
+    AccessibilityInfo.announceForAccessibility(
+      "Activity start occurrence selected at minute precision. Choose Add activity to save.",
+    );
+  }
+  function selectEditOccurrence(occurredAt: string) {
+    if (
+      !currentAction() ||
+      !edit ||
+      editRef.current !== edit ||
+      editTimeResolution?.kind !== "ambiguous" ||
+      !editTimeResolution.candidates.some((candidate) => candidate.occurredAt === occurredAt)
+    )
+      return;
+    changeEdit("selectedOccurredAt", occurredAt);
+    AccessibilityInfo.announceForAccessibility(
+      "Activity start occurrence selected at minute precision. Choose Save activity to apply it.",
+    );
+  }
 
   return (
     <SafeAreaView edges={["left", "right", "bottom"]} style={styles.screen}>
@@ -861,8 +945,9 @@ export function ActivityScreen({
             editable={!controlsDisabled}
             maxLength={10}
             onChangeText={(value) => {
-              if (!currentAction(false)) return;
+              if (!currentAction(false) || dateDraftRef.current === value) return;
               clearChoice();
+              installFields({ selectedOccurredAt: null });
               draftGeneration.current += 1;
               dateDraftRef.current = value;
               setDateDraft(value);
@@ -1107,6 +1192,38 @@ export function ActivityScreen({
             style={styles.input}
             value={scopeIsCurrent() ? localTime : ""}
           />
+          {addTimeResolution?.kind === "ambiguous" ? (
+            <View style={styles.card}>
+              <Text style={styles.editorNote}>
+                This local time repeats in {day?.timeZone}. An untouched default keeps its exact
+                captured instant. For another date or an edited time, choose an occurrence. Explicit
+                choices use minute precision and reset seconds to zero.
+              </Text>
+              <View style={styles.actionRow}>
+                {addTimeResolution.candidates.map((candidate, index) => (
+                  <Pressable
+                    key={candidate.occurredAt}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Add activity ${index === 0 ? "Earlier" : "Later"} occurrence · ${candidate.utcOffsetLabel}`}
+                    accessibilityState={{
+                      disabled: createDisabled,
+                      selected: selectedOccurredAt === candidate.occurredAt,
+                    }}
+                    disabled={createDisabled}
+                    onPress={() => selectAddOccurrence(candidate.occurredAt)}
+                    style={[
+                      styles.secondarySmall,
+                      selectedOccurredAt === candidate.occurredAt && styles.durationPresetSelected,
+                    ]}
+                  >
+                    <Text style={styles.secondaryText}>
+                      {index === 0 ? "Earlier" : "Later"} occurrence · {candidate.utcOffsetLabel}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          ) : null}
           <Pressable
             accessibilityRole="button"
             accessibilityState={{ disabled: createDisabled }}
@@ -1186,6 +1303,40 @@ export function ActivityScreen({
                     style={styles.input}
                     value={edit.localTime}
                   />
+                  {editTimeResolution?.kind === "ambiguous" ? (
+                    <View style={styles.card}>
+                      <Text style={styles.editorNote}>
+                        This local time repeats in {day.timeZone}. Other field changes keep the
+                        saved instant. Explicitly choosing an occurrence uses minute precision and
+                        resets seconds to zero, even for the same displayed minute.
+                      </Text>
+                      <View style={styles.actionRow}>
+                        {editTimeResolution.candidates.map((candidate, index) => (
+                          <Pressable
+                            key={candidate.occurredAt}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Edit activity ${index === 0 ? "Earlier" : "Later"} occurrence · ${candidate.utcOffsetLabel}`}
+                            accessibilityState={{
+                              disabled: controlsDisabled,
+                              selected: edit.selectedOccurredAt === candidate.occurredAt,
+                            }}
+                            disabled={controlsDisabled}
+                            onPress={() => selectEditOccurrence(candidate.occurredAt)}
+                            style={[
+                              styles.secondarySmall,
+                              edit.selectedOccurredAt === candidate.occurredAt &&
+                                styles.durationPresetSelected,
+                            ]}
+                          >
+                            <Text style={styles.secondaryText}>
+                              {index === 0 ? "Earlier" : "Later"} occurrence ·{" "}
+                              {candidate.utcOffsetLabel}
+                            </Text>
+                          </Pressable>
+                        ))}
+                      </View>
+                    </View>
+                  ) : null}
                   <Text style={styles.editorNote}>
                     Changing the start date or time uses the current profile time zone:{" "}
                     {day.timeZone}.

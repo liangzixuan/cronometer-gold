@@ -102,7 +102,8 @@ retains earlier boundaries. A successful successor never changes an older result
 
 | Order | Work | Concrete exit |
 | --- | --- | --- |
-| Active source milestone | Native report day inspector (ADR 0095) | Inspect all 15 nutrients for one report day from the same snapshot; preserve coverage, saved-target comparisons and private lifecycle boundaries, with review and canonical/automatic evidence. |
+| Active source milestone | Native activity time occurrence choice (ADR 0096) | Explicit repeated-minute choices for Add and time corrections; retain precise untouched instants, private guards and exact retries, with review and canonical/automatic evidence. |
+| Completed source milestone | Native report day inspector (ADR 0095) | Delivered at `bae63da`: all 15 nutrients for one day from the same private snapshot; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Native diary repeat destination (ADR 0094) | Delivered at `8e0db9e`: chosen repeat date and configured meal group; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Native definition and reminder draft protection (ADR 0093) | Delivered at `bd89fd0`: protected metadata drafts and delayed definition receipts; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Native biometric reading draft protection (ADR 0092) | Delivered at `6d8189b`: exact reading edits and explicit Keep/Discard; local gates and all three CI/nine actual container jobs passed. |
@@ -124,18 +125,18 @@ retains earlier boundaries. A successful successor never changes an older result
 | Completed external review | Scoped Claude review at `805b937` | The supplied report found no ADR 0077 blockers. Its recommendations were addressed in the delivered follow-up; the report remains limited to its original scope. Routine product work does not require another paid review. |
 | Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Advance only under applicable existing authorization and unchanged release gates. |
 
-### Active bounded milestone: native report day inspector
+### Active bounded milestone: native activity time occurrence choice
 
-[ADR 0095](../adr/0095-native-report-day-inspector.md) lets a native report user
-inspect all 15 nutrients for one date without repeatedly switching the chart.
-One explicit disclosure uses the same validated snapshot and exact display rules,
-with coverage and saved-target comparisons intact. Preserve chart selection and
-diary links; close stale/private disclosures on date, snapshot or context changes.
+[ADR 0096](../adr/0096-native-activity-time-occurrence.md) lets native activity
+users explicitly choose which occurrence of a repeated local minute they mean.
+Cover Add and time corrections, including the same displayed minute, while
+preserving precise untouched defaults, non-time edits, private guards and exact
+retries. Use the existing shared resolver; change no activity or nutrition policy.
 
-The prior [diary repeat destination](../adr/0094-native-diary-repeat-destination.md)
-is delivered at `8e0db9e`, with local and exact-commit automatic evidence complete.
+The prior [report day inspector](../adr/0095-native-report-day-inspector.md) is
+delivered at `bae63da`, with local and exact-commit automatic evidence complete.
 No API, schema, dependency, installation, audit, browser/service/device action or
-paid review is part of ADR 0095. Prior audit authorization is consumed. Follow the
+paid review is part of ADR 0096. Prior audit authorization is consumed. Follow the
 [proportionate review policy](../quality/development-workflow.md#proportionate-independent-review).
 Required signed-device and release acceptance remain separate.
 
