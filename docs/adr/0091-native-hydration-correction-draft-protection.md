@@ -1,6 +1,6 @@
 # ADR 0091: Preserve native hydration correction drafts
 
-Status: Source complete and reviewed; final canonical and exact-commit automatic evidence pending.
+Status: Implemented at `58a48f9`; local and exact-commit automatic evidence passed. Device/release acceptance remains separate.
 
 ## Context
 
@@ -73,5 +73,22 @@ The final focused suites passed 77 cases (66 screen, eleven helper), zero skips,
 plus native types and scoped Biome. Independent review corrected the retained
 absent-row presentation and its save guard, and made a captured-zone mismatch
 expose explicit recovery. The retained row does not enter the authoritative day
-count or total. No open source finding remains. Final canonical and exact-commit
-automatic results are pending in the dated outside-Git readiness record.
+count or total. No open source finding remained. Final canonical and automatic
+results, pending at the source snapshot, subsequently passed as recorded below.
+
+
+## Delivery evidence
+
+Delivered at `58a48f945c04fffebda8dcbd4b90658de04f5110`. The final reviewed
+source passed canonical `pnpm check` on September 19, 2026 at 01:56:14–40 UTC:
+2,015 fresh cases, 2,327 cached passes and 93 cached opt-in skips. Canonical
+`pnpm build` passed at 01:56:59–01:57:18 UTC, with eleven successful tasks,
+ten cached and fresh native exports. Cached/skipped cases are not fresh services.
+
+At 03:38 UTC, official exact-commit observations confirmed all three actual
+[CI jobs](https://github.com/liangzixuan/cronometer-gold/actions/runs/35414271122)
+and all nine actual
+[container jobs](https://github.com/liangzixuan/cronometer-gold/actions/runs/35414271110)
+completed successfully on attempt one. The 03:39:12 UTC completion verifier found
+clean matching local/tracking/live heads and all seven reviewed working-tree and
+committed hashes. This closes source delivery, not signed-device or release gates.

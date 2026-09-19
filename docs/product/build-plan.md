@@ -102,7 +102,8 @@ retains earlier boundaries. A successful successor never changes an older result
 
 | Order | Work | Concrete exit |
 | --- | --- | --- |
-| Active source milestone | Native hydration correction-draft protection (ADR 0091) | Preserve exact corrections across local replacement, unrelated accepted mutations and failed conflict recovery; explicit Keep/Discard, behavioral proof, review and canonical/automatic evidence. |
+| Active source milestone | Native biometric reading draft protection (ADR 0092) | Protect unsaved reading value/date/time before Edit or Cancel replaces it; explicit Keep/Discard, behavioral proof, review and canonical/automatic evidence. |
+| Completed source milestone | Native hydration correction-draft protection (ADR 0091) | Delivered at `58a48f9`: preserved corrections across replacement, unrelated mutations and failed recovery; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Native activity edit-draft protection (ADR 0090) | Delivered at `d5b3d93`: protected corrections and explicit Keep/Discard; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Native custom-food revision-conflict recovery (ADR 0089) | Delivered at `956ccf1`: retained edits and explicit verified recovery; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Protected native New custom food (ADR 0088) | Delivered at `be1390e`: guarded blank drafts and exact Keep/Discard; local gates and all three CI/nine actual container jobs passed. |
@@ -120,19 +121,19 @@ retains earlier boundaries. A successful successor never changes an older result
 | Completed external review | Scoped Claude review at `805b937` | The supplied report found no ADR 0077 blockers. Its recommendations were addressed in the delivered follow-up; the report remains limited to its original scope. Routine product work does not require another paid review. |
 | Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Advance only under applicable existing authorization and unchanged release gates. |
 
-### Active bounded milestone: native hydration correction-draft protection
+### Active bounded milestone: native biometric reading draft protection
 
-[ADR 0091](../adr/0091-native-hydration-correction-draft-protection.md) preserves
-unsaved hydration corrections, including the explicit date/time and repeated-hour
-choice. Local replacement requires Keep/Discard for dirty work; adding a drink
-or deleting another row keeps the correction. Failed conflict recovery retains
-the draft and original revision until explicit successful discard/reload.
-Preserve exact retries and existing private/request guards.
+[ADR 0092](../adr/0092-native-biometric-reading-draft-protection.md) protects
+unsaved reading value/date/time before same/other-row Edit or Cancel replaces the
+form. Dirty replacements require Keep/Discard, while pristine actions stay direct.
+Keep retains the exact draft and original event revision/timestamp precision.
+Preserve deliberate metric choices, history/filter behavior, exact retries and
+existing private/request guards.
 
-The prior [activity draft protection](../adr/0090-native-activity-edit-draft-protection.md)
-is delivered at `d5b3d93`, with local and exact-commit automatic evidence complete.
+The prior [hydration draft protection](../adr/0091-native-hydration-correction-draft-protection.md)
+is delivered at `58a48f9`, with local and exact-commit automatic evidence complete.
 No dependency change, installation, audit, browser/service/device action or paid
-review is part of ADR 0091. Prior audit authorization is consumed. Follow the
+review is part of ADR 0092. Prior audit authorization is consumed. Follow the
 [proportionate review policy](../quality/development-workflow.md#proportionate-independent-review).
 Required signed-device and release acceptance remain separate.
 

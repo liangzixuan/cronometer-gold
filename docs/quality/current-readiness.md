@@ -97,15 +97,22 @@ and nine actual container35407392304 jobs passed on attempt one; September 19
 01:36 UTC official evidence records complete results. Clean equal local/tracking/
 live heads and all seven reviewed file hashes were reverified at 01:36:54 UTC.
 
-Active work is [ADR 0091](../adr/0091-native-hydration-correction-draft-protection.md):
-preserve exact native hydration corrections across local replacement, unrelated
-accepted Add/Delete and failed conflict recovery. Dirty replacement requires
-explicit Keep/Discard while pristine actions remain direct. Preserve the original
-entry revision, exact retries and existing private/lifecycle guards. Independent
-source review, all 77 focused cases, native types and scoped Biome passed. Final
-canonical and exact-commit automatic results remain pending in the dated
-outside-Git readiness record. No dependency, installation or audit is part of
-this slice. Device/release acceptance remains separate.
+[ADR 0091](../adr/0091-native-hydration-correction-draft-protection.md) is delivered at
+`58a48f945c04fffebda8dcbd4b90658de04f5110`: 77 focused cases, independent review,
+canonical check/build and fresh native exports passed. All three CI35414271122
+and nine actual container35414271110 jobs passed on attempt one; September 19
+03:38 UTC official evidence records complete results. Clean equal local/tracking/
+live heads and all seven reviewed file hashes were reverified at 03:39:12 UTC.
+
+Active work is [ADR 0092](../adr/0092-native-biometric-reading-draft-protection.md):
+protect exact native biometric reading drafts from silent replacement by Edit or
+Cancel. Dirty drafts require Keep/Discard; pristine transitions remain direct.
+Retain original metric/revision/timestamp precision, exact retries and existing
+private/request guards. Independent source review, 504 focused cases, native
+types and scoped Biome passed. Final canonical and exact-commit automatic evidence
+remain pending in the dated outside-Git readiness record. No dependency,
+installation or audit is part of this slice. Device/release acceptance remains
+separate.
 
 Use the [build plan](../product/build-plan.md) for priorities and the
 [release gates](release-gates.md) for authoritative acceptance. The

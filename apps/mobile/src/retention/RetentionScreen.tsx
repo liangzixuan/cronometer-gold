@@ -12,6 +12,7 @@ import type {
 } from "@nutrition-tracker/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Alert,
   AppState,
@@ -210,6 +211,15 @@ interface EventDraft {
   readonly localTime: string;
   readonly originalLocalDate: string;
   readonly originalLocalTime: string;
+}
+
+interface ReadingReplacement {
+  readonly event: BiometricEvent | null;
+  readonly draft: EventDraft;
+  readonly scope: object;
+  readonly epoch: number;
+  readonly history: ReadingHistory;
+  readonly filter: object;
 }
 
 interface ReminderDraft {
@@ -727,11 +737,37 @@ export function RetentionScreen({
   const [editingDefinition, setEditingDefinition] = useState<BiometricDefinition | null>(null);
   const [eventDraft, setEventDraftState] = useState(() => initialEvent(profileTimeZone));
   const eventDraftRef = useRef(eventDraft);
-  const setEventDraft = useCallback((value: EventDraft | ((draft: EventDraft) => EventDraft)) => {
-    const next = typeof value === "function" ? value(eventDraftRef.current) : value;
-    eventDraftRef.current = next;
-    setEventDraftState(next);
+  const eventBaseline = useRef(eventDraft);
+  const [readingReplacement, setReadingReplacement] = useState<ReadingReplacement | null>(null);
+  const readingReplacementRef = useRef(readingReplacement);
+  const readingChoiceGeneration = useRef(0);
+  const [, setReadingChoiceGeneration] = useState(0);
+  const biometricSectionOffset = useRef(0);
+  const readingEditorOffset = useRef(0);
+  const clearReadingReplacement = useCallback(() => {
+    readingChoiceGeneration.current += 1;
+    setReadingChoiceGeneration(readingChoiceGeneration.current);
+    readingReplacementRef.current = null;
+    setReadingReplacement(null);
   }, []);
+  const setEventDraft = useCallback(
+    (value: EventDraft | ((draft: EventDraft) => EventDraft)) => {
+      const next = typeof value === "function" ? value(eventDraftRef.current) : value;
+      if (next === eventDraftRef.current) return;
+      clearReadingReplacement();
+      eventDraftRef.current = next;
+      setEventDraftState(next);
+    },
+    [clearReadingReplacement],
+  );
+  const installEventDraft = useCallback(
+    (draft: EventDraft) => {
+      eventBaseline.current = draft;
+      setEventDraft(draft);
+    },
+    [setEventDraft],
+  );
+  const renderedReadingChoiceGeneration = readingChoiceGeneration.current;
   const currentHistoryScope = useCallback(
     (epoch: number) =>
       currentCustomScope(epoch) &&
@@ -752,8 +788,9 @@ export function RetentionScreen({
         if (busyRef.current === "event" || busyRef.current?.startsWith("event:")) setBusy(null);
       }
       recentHistory.current = { privateScope: customScope, range: recentHistoryRange() };
-      setEventDraft(initialEvent(profileTimeZone));
+      installEventDraft(initialEvent(profileTimeZone));
     }
+    clearReadingReplacement();
     historyInstalled.current = historyScope;
     abortHistoryRead();
     installHistory({
@@ -765,6 +802,7 @@ export function RetentionScreen({
     const subscription = AppState.addEventListener("change", (next) => {
       if (historyScopeRef.current !== historyScope || !customMounted.current || next === "active")
         return;
+      clearReadingReplacement();
       abortHistoryRead();
       installHistory({
         ...historyRef.current,
@@ -778,16 +816,18 @@ export function RetentionScreen({
       if (historyRequest.current?.own) historyRequest.current.controller.abort();
       historyRequest.current = null;
       historyInstalled.current = null;
+      readingReplacementRef.current = null;
     };
   }, [
     abortHistoryRead,
+    clearReadingReplacement,
     customScope,
     historyScope,
+    installEventDraft,
     installHistory,
     profileTimeZone,
     resetHistoryFilter,
     setBusy,
-    setEventDraft,
   ]);
   const [reminderDraft, setReminderDraftState] = useState<ReminderDraft>(initialReminder);
   const reminderDraftRef = useRef(reminderDraft);
@@ -1011,6 +1051,7 @@ export function RetentionScreen({
   const loadAll = useCallback(async () => {
     const epoch = customEpoch.current;
     if (!currentCustomScope(epoch) || eventWrite.current !== null) return;
+    clearReadingReplacement();
     clearCustomCopyChoice();
     setVerifiedFoodListScope(null);
     abortTrendRead();
@@ -1159,6 +1200,7 @@ export function RetentionScreen({
     accessToken,
     apiBase,
     clearCustomCopyChoice,
+    clearReadingReplacement,
     installHistory,
     setEventDraft,
     closeCustom,
@@ -2203,6 +2245,7 @@ export function RetentionScreen({
     )
       return;
     if (value === historyFilter.value) return;
+    clearReadingReplacement();
     const next = { value };
     historyFilterRef.current = next;
     setHistoryFilter(next);
@@ -2219,10 +2262,16 @@ export function RetentionScreen({
     return (
       currentHistoryScope(renderedCustomEpoch) &&
       eventDraftRef.current === eventDraft &&
+      readingChoiceGeneration.current === renderedReadingChoiceGeneration &&
       !loadingRef.current &&
       historyRequest.current === null &&
       eventWrite.current === null
     );
+  }
+  function changeReadingDraft(
+    patch: Partial<Pick<EventDraft, "value" | "localDate" | "localTime">>,
+  ) {
+    if (canEditReading()) setEventDraft({ ...eventDraft, ...patch });
   }
   function chooseReadingDate(offset: 0 | -1) {
     if (readingDateDisabled || !canEditReading()) return;
@@ -2275,6 +2324,7 @@ export function RetentionScreen({
     if (!canReadHistory()) return;
     const cursor = append ? history.cursor : null;
     if (append && (!cursor || !API_CURSOR.test(cursor) || history.range !== range)) return;
+    clearReadingReplacement();
     const controller = new AbortController();
     const read = { controller, own: true };
     historyRequest.current = read;
@@ -2349,7 +2399,7 @@ export function RetentionScreen({
   }
 
   async function saveEvent() {
-    if (!canEditReading()) return;
+    if (!canEditReading() || readingReplacementRef.current !== null) return;
     if (!eventDraft.definitionId || !EXACT_DECIMAL.test(eventDraft.value)) {
       return setMessage("Choose a metric and enter an exact decimal value.");
     }
@@ -2397,10 +2447,10 @@ export function RetentionScreen({
         });
       }
       if (eventDraftRef.current === eventDraft)
-        setEventDraft((value) => ({
+        installEventDraft({
           ...initialEvent(profileTimeZone),
-          definitionId: value.definitionId,
-        }));
+          definitionId: eventDraft.definitionId,
+        });
       setMessage("Biometric event saved without rounding its entered decimal.");
     } catch (error) {
       if (!acceptedReadingIsCurrent()) return;
@@ -2418,6 +2468,7 @@ export function RetentionScreen({
 
   async function deleteEvent(event: BiometricEvent) {
     if (!currentHistoryRow(event)) return;
+    clearReadingReplacement();
     const write = {};
     eventWrite.current = write;
     setEventWriting(true);
@@ -3041,6 +3092,7 @@ export function RetentionScreen({
   const readingDefinition = definitions.find((item) => item.id === readingDefinitionId);
 
   function selectReadingDefinition(definitionId: string) {
+    if (!canEditReading()) return;
     setEventDraft((current) =>
       current !== eventDraft || current.event || current.definitionId === definitionId
         ? current
@@ -3048,10 +3100,16 @@ export function RetentionScreen({
     );
   }
 
-  function editEvent(event: BiometricEvent) {
-    if (!currentHistoryRow(event)) return;
+  function installReadingReplacement(event: BiometricEvent | null) {
+    if (!event) {
+      installEventDraft({
+        ...initialEvent(profileTimeZone),
+        definitionId: eventDraft.definitionId,
+      });
+      return;
+    }
     const localTime = localTimeInTimeZone(new Date(event.measuredAt), event.timeZone).slice(0, 5);
-    setEventDraft({
+    installEventDraft({
       event,
       definitionId: event.definitionId,
       value: event.value,
@@ -3060,6 +3118,63 @@ export function RetentionScreen({
       originalLocalDate: event.localDate,
       originalLocalTime: localTime,
     });
+  }
+  function requestReadingReplacement(event: BiometricEvent | null) {
+    if (
+      !canEditReading() ||
+      readingReplacementRef.current !== null ||
+      (event ? event.source.kind !== "manual" || !currentHistoryRow(event) : !eventDraft.event)
+    )
+      return;
+    const baseline = eventBaseline.current;
+    if (
+      eventDraft.value === baseline.value &&
+      eventDraft.localDate === baseline.localDate &&
+      eventDraft.localTime === baseline.localTime
+    ) {
+      installReadingReplacement(event);
+      return;
+    }
+    const choice: ReadingReplacement = {
+      event,
+      draft: eventDraft,
+      scope: historyScope,
+      epoch: customEpoch.current,
+      history,
+      filter: historyFilter,
+    };
+    readingChoiceGeneration.current += 1;
+    setReadingChoiceGeneration(readingChoiceGeneration.current);
+    readingReplacementRef.current = choice;
+    setReadingReplacement(choice);
+    workspaceScroll.current?.scrollTo({
+      y: biometricSectionOffset.current + readingEditorOffset.current,
+      animated: true,
+    });
+    AccessibilityInfo.announceForAccessibility(
+      "Replace unsaved reading? Keep editing reading, or discard this draft.",
+    );
+  }
+  function readingReplacementIsCurrent(choice: ReadingReplacement) {
+    return (
+      canEditReading() &&
+      readingReplacementRef.current === choice &&
+      choice.draft === eventDraftRef.current &&
+      choice.scope === historyScopeRef.current &&
+      choice.epoch === customEpoch.current &&
+      choice.history === historyRef.current &&
+      choice.filter === historyFilterRef.current &&
+      (choice.event === null || currentHistoryRow(choice.event))
+    );
+  }
+  function keepReadingDraft(choice: ReadingReplacement) {
+    if (readingReplacementIsCurrent(choice)) clearReadingReplacement();
+  }
+  function discardReadingDraft(choice: ReadingReplacement) {
+    if (readingReplacementIsCurrent(choice)) installReadingReplacement(choice.event);
+  }
+  function editEvent(event: BiometricEvent) {
+    requestReadingReplacement(event);
   }
 
   function editReminder(reminder: Reminder) {
@@ -3917,6 +4032,9 @@ export function RetentionScreen({
         <Section
           title="Biometrics"
           subtitle="Create custom metric definitions, keep exact decimals, and preserve timestamps unless you explicitly change them."
+          onLayout={(event) => {
+            biometricSectionOffset.current = event.nativeEvent.layout.y;
+          }}
         >
           <LabeledInput
             label="Metric name"
@@ -4011,11 +4129,44 @@ export function RetentionScreen({
               </View>
             </View>
           ))}
-          <Text accessibilityRole="header" style={styles.subheading}>
-            {eventDraft.event ? "Edit reading" : "Log reading"}
-          </Text>
+          <View
+            onLayout={(event) => {
+              readingEditorOffset.current = event.nativeEvent.layout.y;
+            }}
+          >
+            <Text accessibilityRole="header" style={styles.subheading}>
+              {eventDraft.event ? "Edit reading" : "Log reading"}
+            </Text>
+          </View>
+          {readingReplacement && readingReplacementIsCurrent(readingReplacement) ? (
+            <View style={styles.editor}>
+              <Text accessibilityLiveRegion="polite" style={styles.cardTitle}>
+                Replace unsaved reading?
+              </Text>
+              <Text style={styles.help}>
+                Keep the exact value, date and time you entered, or discard them to{" "}
+                {readingReplacement.event
+                  ? "edit the selected saved reading."
+                  : "cancel this edit."}
+              </Text>
+              <Button
+                label="Keep editing reading"
+                onPress={() => keepReadingDraft(readingReplacement)}
+                secondary
+              />
+              <Button
+                label={
+                  readingReplacement.event
+                    ? "Discard draft and edit reading"
+                    : "Discard draft and cancel reading edit"
+                }
+                onPress={() => discardReadingDraft(readingReplacement)}
+                secondary
+              />
+            </View>
+          ) : null}
           <ChipRow
-            disabled={eventDraft.event !== null}
+            disabled={eventDraft.event !== null || readingDateDisabled}
             wrapLabels
             items={definitions
               .filter((item) => item.status === "active" || item.id === readingDefinitionId)
@@ -4040,14 +4191,16 @@ export function RetentionScreen({
                   : "Exact value"
             }
             value={eventDraft.value}
-            onChangeText={(value) => setEventDraft({ ...eventDraft, value })}
+            disabled={readingDateDisabled}
+            onChangeText={(value) => changeReadingDraft({ value })}
             maxLength={160}
             keyboardType="numbers-and-punctuation"
           />
           <LabeledInput
             label="Local date"
             value={eventDraft.localDate}
-            onChangeText={(localDate) => setEventDraft({ ...eventDraft, localDate })}
+            disabled={readingDateDisabled}
+            onChangeText={(localDate) => changeReadingDraft({ localDate })}
             maxLength={10}
           />
           <View style={styles.actions}>
@@ -4067,24 +4220,21 @@ export function RetentionScreen({
           <LabeledInput
             label="Local time"
             value={eventDraft.localTime}
-            onChangeText={(localTime) => setEventDraft({ ...eventDraft, localTime })}
+            disabled={readingDateDisabled}
+            onChangeText={(localTime) => changeReadingDraft({ localTime })}
             maxLength={5}
           />
           <View style={styles.actions}>
             <Button
-              disabled={historyDisabled}
+              disabled={historyDisabled || readingReplacement !== null}
               label={eventDraft.event ? "Save reading" : "Log reading"}
               onPress={() => void saveEvent()}
             />
             {eventDraft.event ? (
               <Button
                 label="Cancel"
-                onPress={() =>
-                  setEventDraft((value) => ({
-                    ...initialEvent(profileTimeZone),
-                    definitionId: value.definitionId,
-                  }))
-                }
+                disabled={historyDisabled || readingReplacement !== null}
+                onPress={() => requestReadingReplacement(null)}
                 secondary
               />
             ) : null}

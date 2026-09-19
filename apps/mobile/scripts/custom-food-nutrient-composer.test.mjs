@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { createContext, Script } from "node:vm";
 import * as React from "react";
-import { AppState } from "react-native";
+import { AccessibilityInfo, AppState } from "react-native";
 import ts from "typescript";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createQuickAddOutboxController } from "../src/diary/quick-add-outbox";
@@ -9060,6 +9060,11 @@ describe("native biometric reading date shortcuts", () => {
       button(biometricCard(tree, readingEvent.id), "Edit").props.onPress();
       beforeEdit();
       tree = await harness.settle();
+      expect(input(biometricSection(tree), "Local date").props.value).toBe("2026-09-01");
+      const beforeDiscard = readingDateButton(tree, "Yesterday").props.onPress;
+      button(biometricSection(tree), "Discard draft and edit reading").props.onPress();
+      beforeDiscard();
+      tree = await harness.settle();
       expect(input(biometricSection(tree), "Local date").props.value).toBe(readingEvent.localDate);
       const beforeCancel = readingDateButton(tree, "Yesterday").props.onPress;
       button(biometricSection(tree), "Cancel").props.onPress();
@@ -10031,5 +10036,366 @@ describe("native custom-food conflict recovery boundaries", () => {
     } finally {
       harness.unmount();
     }
+  });
+});
+
+describe("native biometric reading draft replacement protection", () => {
+  const other = {
+    ...readingEvent,
+    id: "22cfa2bf-4950-43f7-9f24-b983ac803012",
+    value: "81.00000900",
+  };
+  for (const origin of ["new", "edit"])
+    for (const target of ["same", "other"])
+      it(`keeps exact ${origin} reading draft when opening ${target} row until explicit discard`, async () => {
+        historyClock();
+        const { harness, requests } = setupReadings(undefined, { entries: [readingEvent, other] });
+        await harness.settle();
+        if (origin === "edit") await pressBiometric(harness, "Edit", readingEvent.id);
+        await type(harness, readingValueLabel(), "-70.000000100");
+        await type(harness, "Local date", "2026-09-08");
+        await type(harness, "Local time", "06:59");
+        const before = requests.length;
+        const allocated = hooks.operation;
+        let tree = await pressBiometric(
+          harness,
+          "Edit",
+          target === "same" ? readingEvent.id : other.id,
+        );
+        expect(input(tree, readingValueLabel()).props.value).toBe("-70.000000100");
+        expect(input(tree, "Local date").props.value).toBe("2026-09-08");
+        expect(input(tree, "Local time").props.value).toBe("06:59");
+        expect(text(biometricSection(tree))).toContain("Replace unsaved reading?");
+        tree = await pressBiometric(harness, "Keep editing reading");
+        expect(input(tree, readingValueLabel()).props.value).toBe("-70.000000100");
+        tree = await pressBiometric(
+          harness,
+          "Edit",
+          target === "same" ? readingEvent.id : other.id,
+        );
+        tree = await pressBiometric(harness, "Discard draft and edit reading");
+        expect(input(tree, readingValueLabel()).props.value).toBe(
+          target === "same" ? readingEvent.value : other.value,
+        );
+        expect(requests).toHaveLength(before);
+        expect(hooks.operation).toBe(allocated);
+        harness.unmount();
+      });
+  for (const [field, raw] of [
+    ["value", "70.000001000"],
+    ["date", "invalid"],
+    ["time", "25:99"],
+  ])
+    it(`guards reading Cancel for raw ${field} edits and keeps them until discard`, async () => {
+      const { harness, requests } = setupReadings();
+      await pressBiometric(harness, "Edit", readingEvent.id);
+      const label =
+        field === "value" ? readingValueLabel() : field === "date" ? "Local date" : "Local time";
+      await type(harness, label, raw);
+      let tree = await pressBiometric(harness, "Cancel");
+      expect(input(tree, label).props.value).toBe(raw);
+      tree = await pressBiometric(harness, "Keep editing reading");
+      expect(input(tree, label).props.value).toBe(raw);
+      tree = await pressBiometric(harness, "Cancel");
+      tree = await pressBiometric(harness, "Discard draft and cancel reading edit");
+      expect(input(tree, readingValueLabel()).props.value).toBe("");
+      expect(writes(requests)).toHaveLength(0);
+      harness.unmount();
+    });
+
+  it("keeps pristine replacements direct, captures each new baseline and treats raw restoration as pristine", async () => {
+    historyClock();
+    const { harness, requests } = setupReadings(undefined, { entries: [readingEvent, other] });
+    let tree = await pressBiometric(harness, "Edit", readingEvent.id);
+    expect(text(biometricSection(tree))).not.toContain("Replace unsaved reading?");
+    tree = await pressBiometric(harness, "Edit", other.id);
+    expect(input(tree, readingValueLabel()).props.value).toBe(other.value);
+    await type(harness, readingValueLabel(), "99");
+    await type(harness, readingValueLabel(), other.value);
+    tree = await pressBiometric(harness, "Cancel");
+    expect(input(tree, readingValueLabel()).props.value).toBe("");
+    expect(text(biometricSection(tree))).not.toContain("Replace unsaved reading?");
+    tree = await pressBiometric(harness, "Edit", readingEvent.id);
+    expect(input(tree, readingValueLabel()).props.value).toBe(readingEvent.value);
+    expect(writes(requests)).toHaveLength(0);
+    harness.unmount();
+  });
+  for (const label of ["Local date", "Local time"])
+    it(`protects a new draft's changed ${label} even before entering a value`, async () => {
+      const { harness } = setupReadings();
+      await type(harness, label, "invalid");
+      let tree = await pressBiometric(harness, "Edit", readingEvent.id);
+      expect(input(tree, label).props.value).toBe("invalid");
+      tree = await pressBiometric(harness, "Keep editing reading");
+      expect(input(tree, label).props.value).toBe("invalid");
+      harness.unmount();
+    });
+  it("keeps metric selection and independent drafts while explicitly replacing a dirty new reading", async () => {
+    const { harness, requests } = setupReadings();
+    await type(harness, readingValueLabel(), "-1.0000100");
+    await type(harness, "Name", "Unrelated food");
+    await type(harness, "Definition notes", "Unrelated metric");
+    await type(harness, "From (YYYY-MM-DD)", "2026-08-01");
+    let tree = await pressReadingMetric(harness, `${otherTrendDefinition.name} (kg)`);
+    expect(input(tree, readingValueLabel(otherTrendDefinition)).props.value).toBe("-1.0000100");
+    expect(text(biometricSection(tree))).not.toContain("Replace unsaved reading?");
+    tree = await pressBiometric(harness, "Edit", readingEvent.id);
+    tree = await pressBiometric(harness, "Keep editing reading");
+    expect(input(tree, readingValueLabel(otherTrendDefinition)).props.value).toBe("-1.0000100");
+    expect(input(tree, "Name").props.value).toBe("Unrelated food");
+    expect(input(tree, "Definition notes").props.value).toBe("Unrelated metric");
+    expect(input(tree, "From (YYYY-MM-DD)").props.value).toBe("2026-08-01");
+    expect(writes(requests)).toHaveLength(0);
+    harness.unmount();
+  });
+  it("keeps an ambiguous edit retry's body, operation and original timestamp/revision after Keep", async () => {
+    const original = { ...readingEvent, measuredAt: "2026-09-09T12:00:45.123Z" };
+    let attempts = 0;
+    const { harness, requests } = setupReadings(
+      (request) => {
+        if (request.method !== "PATCH") return;
+        if (++attempts === 1) throw new Error("Synthetic lost receipt");
+        return response({
+          data: { replayed: true, event: { ...original, value: "-71.00000010", revision: "10" } },
+        });
+      },
+      { entries: [original] },
+    );
+    await pressBiometric(harness, "Edit", original.id);
+    await type(harness, readingValueLabel(), "-71.00000010");
+    await pressBiometric(harness, "Save reading");
+    const first = writes(requests)[0];
+    let tree = await pressBiometric(harness, "Cancel");
+    const before = hooks.operation;
+    tree = await pressBiometric(harness, "Keep editing reading");
+    expect(hooks.operation).toBe(before);
+    tree = await pressBiometric(harness, "Save reading");
+    const second = writes(requests)[1];
+    expect(second.body).toBe(first.body);
+    expect(second.headers["idempotency-key"]).toBe(first.headers["idempotency-key"]);
+    expect(second.headers["if-match"]).toBe(`"${original.revision}"`);
+    expect(JSON.parse(second.body)).toEqual({ value: "-71.00000010" });
+    expect(input(tree, readingValueLabel()).props.value).toBe("");
+    tree = await pressBiometric(harness, "Edit", original.id);
+    expect(text(biometricSection(tree))).not.toContain("Replace unsaved reading?");
+    tree = await pressBiometric(harness, "Cancel");
+    expect(text(biometricSection(tree))).not.toContain("Replace unsaved reading?");
+    harness.unmount();
+  });
+  it("fences stale pre-prompt callbacks and consumes Keep/Discard exactly once before render", async () => {
+    const { harness, requests } = setupReadings(undefined, { entries: [readingEvent, other] });
+    await pressBiometric(harness, "Edit", readingEvent.id);
+    let tree = await type(harness, readingValueLabel(), "-5.0000");
+    const oldSave = button(biometricSection(tree), "Save reading").props.onPress;
+    const oldCancel = button(biometricSection(tree), "Cancel").props.onPress;
+    const oldEdit = button(biometricCard(tree, other.id), "Edit").props.onPress;
+    const oldInput = input(tree, readingValueLabel()).props.onChangeText;
+    const before = hooks.operation;
+    oldEdit();
+    oldSave();
+    oldCancel();
+    oldEdit();
+    oldInput("999");
+    tree = await harness.settle();
+    expect(input(tree, readingValueLabel()).props.value).toBe("-5.0000");
+    expect(writes(requests)).toHaveLength(0);
+    expect(hooks.operation).toBe(before);
+    const keep = button(biometricSection(tree), "Keep editing reading").props.onPress;
+    const discard = button(biometricSection(tree), "Discard draft and edit reading").props.onPress;
+    keep();
+    discard();
+    oldEdit();
+    keep();
+    tree = await harness.settle();
+    expect(input(tree, readingValueLabel()).props.value).toBe("-5.0000");
+    expect(text(biometricSection(tree))).not.toContain("Replace unsaved reading?");
+    tree = await pressBiometric(harness, "Edit", other.id);
+    const confirm = button(biometricSection(tree), "Discard draft and edit reading").props.onPress;
+    confirm();
+    confirm();
+    tree = await harness.settle();
+    expect(input(tree, readingValueLabel()).props.value).toBe(other.value);
+    await type(harness, readingValueLabel(), "88");
+    confirm();
+    tree = await harness.settle();
+    expect(input(tree, readingValueLabel()).props.value).toBe("88");
+    harness.unmount();
+  });
+  for (const label of ["value", "date", "time"])
+    it(`retires held Discard when ${label} changes before rerender, including edit-and-restore`, async () => {
+      const { harness } = setupReadings();
+      await pressBiometric(harness, "Edit", readingEvent.id);
+      await type(harness, readingValueLabel(), "-5.0000");
+      let tree = await pressBiometric(harness, "Cancel");
+      const discard = button(biometricSection(tree), "Discard draft and cancel reading edit").props
+        .onPress;
+      for (const label of [readingValueLabel(), "Local date", "Local time"])
+        expect(input(tree, label).props.editable).not.toBe(false);
+      const field =
+        label === "value" ? readingValueLabel() : label === "date" ? "Local date" : "Local time";
+      const previous = input(tree, field).props.value;
+      input(tree, field).props.onChangeText("changed");
+      discard();
+      tree = await harness.settle();
+      expect(input(tree, field).props.value).toBe("changed");
+      expect(text(biometricSection(tree))).not.toContain("Replace unsaved reading?");
+      tree = await type(harness, field, previous);
+      discard();
+      tree = await harness.settle();
+      expect(input(tree, field).props.value).toBe(previous);
+      expect(button(biometricSection(tree), "Save reading").props.disabled).toBe(false);
+      harness.unmount();
+    });
+  for (const action of [
+    "Reload history",
+    "Earlier window",
+    "Refresh private data",
+    "filter",
+    "delete",
+  ])
+    it(`retires an open choice on ${action} without trapping or changing its draft`, async () => {
+      const { harness, requests } = setupReadings(
+        (request) =>
+          request.method === "DELETE"
+            ? response({ data: { replayed: false, event: null } })
+            : undefined,
+        { entries: [readingEvent, other] },
+      );
+      await pressBiometric(harness, "Edit", readingEvent.id);
+      await type(harness, readingValueLabel(), "-5.0000");
+      let tree = await pressBiometric(harness, "Edit", other.id);
+      const discard = button(biometricSection(tree), "Discard draft and edit reading").props
+        .onPress;
+      if (action === "filter") {
+        const group = nodes(
+          biometricSection(tree),
+          (node) => node.props.accessibilityLabel === "History metric",
+        )[0];
+        button(group, `${trendDefinition.name} (${trendDefinition.canonicalUnit})`).props.onPress();
+      } else if (action === "delete")
+        button(biometricCard(tree, other.id), "Delete").props.onPress();
+      else button(tree, action).props.onPress();
+      discard();
+      tree = await harness.settle();
+      expect(input(tree, readingValueLabel()).props.value).toBe("-5.0000");
+      expect(text(biometricSection(tree))).not.toContain("Replace unsaved reading?");
+      expect(button(biometricSection(tree), "Save reading").props.disabled).toBe(false);
+      tree = await pressBiometric(harness, "Cancel");
+      expect(text(biometricSection(tree))).toContain("Replace unsaved reading?");
+      tree = await pressBiometric(harness, "Keep editing reading");
+      expect(input(tree, readingValueLabel()).props.value).toBe("-5.0000");
+      expect(writes(requests)).toHaveLength(action === "delete" ? 1 : 0);
+      harness.unmount();
+    });
+  for (const requestKind of ["history", "save"])
+    it(`keeps replacement callbacks inert while a ${requestKind} request is pending`, async () => {
+      const held = deferred();
+      let reads = 0;
+      const { harness, requests } = setupReadings((request) => {
+        if (requestKind === "save" && request.method === "PATCH") return held.promise;
+        if (
+          requestKind === "history" &&
+          request.url.pathname === "/v1/biometrics/events" &&
+          ++reads > 1
+        )
+          return held.promise;
+      });
+      await pressBiometric(harness, "Edit", readingEvent.id);
+      let tree = await type(harness, readingValueLabel(), "-5.0000");
+      const cancel = button(biometricSection(tree), "Cancel").props.onPress;
+      const edit = button(biometricCard(tree, readingEvent.id), "Edit").props.onPress;
+      button(tree, requestKind === "save" ? "Save reading" : "Reload history").props.onPress();
+      cancel();
+      edit();
+      tree = await harness.settle();
+      expect(input(tree, readingValueLabel()).props.value).toBe("-5.0000");
+      expect(text(biometricSection(tree))).not.toContain("Replace unsaved reading?");
+      for (const label of [readingValueLabel(), "Local date", "Local time"])
+        expect(input(tree, label).props.editable).toBe(false);
+      expect(readingMetricChoice(tree, `${trendDefinition.name} (kg)`).props.disabled).toBe(true);
+      held.resolve(
+        requestKind === "save"
+          ? response({ error: { message: "Synthetic failed save" } }, 503)
+          : historyPage([readingEvent]),
+      );
+      tree = await harness.settle();
+      expect(input(tree, readingValueLabel()).props.value).toBe("-5.0000");
+      tree = await pressBiometric(harness, "Cancel");
+      expect(text(biometricSection(tree))).toContain("Replace unsaved reading?");
+      expect(writes(requests)).toHaveLength(requestKind === "save" ? 1 : 0);
+      harness.unmount();
+    });
+  for (const boundary of ["owner", "session", "token", "base", "profile", "background", "unmount"])
+    it(`hides choices and rejects stale callbacks through ${boundary}`, async () => {
+      const { harness, requests } = setupReadings();
+      await pressBiometric(harness, "Edit", readingEvent.id);
+      await type(harness, readingValueLabel(), "-5.0000");
+      let tree = await pressBiometric(harness, "Cancel");
+      const keep = button(biometricSection(tree), "Keep editing reading").props.onPress;
+      const discard = button(biometricSection(tree), "Discard draft and cancel reading edit").props
+        .onPress;
+      const count = requests.length;
+      if (boundary === "unmount") harness.unmount();
+      else if (boundary === "background") state("background");
+      else {
+        harness.updateProps(
+          boundary === "owner"
+            ? { ownerUserId: otherOwner }
+            : boundary === "session"
+              ? { sessionEpoch: 2 }
+              : boundary === "token"
+                ? { accessToken: "replacement" }
+                : boundary === "base"
+                  ? { apiBase: new URL("http://127.0.0.1:4001") }
+                  : { profileTimeZone: "Asia/Tokyo" },
+        );
+        tree = harness.renderWithoutEffects();
+        expect(text(biometricSection(tree))).not.toContain("Replace unsaved reading?");
+      }
+      const stateWrites = harness.stateWrites;
+      keep();
+      discard();
+      expect(harness.stateWrites).toBe(stateWrites);
+      expect(requests).toHaveLength(count);
+      if (boundary !== "unmount") {
+        harness.flushEffects();
+        tree = await harness.settle();
+        expect(text(biometricSection(tree))).not.toContain("Replace unsaved reading?");
+        if (boundary === "background") {
+          state("active");
+          tree = await harness.settle();
+          expect(input(tree, readingValueLabel()).props.value).toBe("-5.0000");
+        }
+        harness.unmount();
+      }
+      expect(harness.writesAfterUnmount).toBe(0);
+    });
+  it("scrolls to the measured reading editor and announces the choice from an offscreen row", async () => {
+    const { harness } = setupReadings();
+    let tree = await harness.settle();
+    const scroll = vi.fn();
+    nodes(tree, (node) => node.type === "ScrollView")[0].props.ref.current = { scrollTo: scroll };
+    biometricSection(tree).props.onLayout({ nativeEvent: { layout: { y: 600 } } });
+    const anchor = nodes(
+      biometricSection(tree),
+      (node) =>
+        node.type === "View" &&
+        typeof node.props.onLayout === "function" &&
+        text(node) === "Log reading",
+    );
+    expect(anchor).toHaveLength(1);
+    anchor[0].props.onLayout({ nativeEvent: { layout: { y: 330 } } });
+    await type(harness, readingValueLabel(), "-5.0000");
+    tree = await pressBiometric(harness, "Edit", readingEvent.id);
+    expect(scroll).toHaveBeenCalledWith({ y: 930, animated: true });
+    expect(AccessibilityInfo.announceForAccessibility).toHaveBeenCalledWith(
+      "Replace unsaved reading? Keep editing reading, or discard this draft.",
+    );
+    const title = nodes(
+      biometricSection(tree),
+      (node) => node.type === "Text" && text(node) === "Replace unsaved reading?",
+    )[0];
+    expect(title.props.accessibilityLiveRegion).toBe("polite");
+    harness.unmount();
   });
 });
