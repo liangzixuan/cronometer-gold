@@ -331,6 +331,7 @@ const fields = (tree) =>
     ).map((node) => [node.props.accessibilityLabel, node.props.value]),
   );
 afterEach(() => {
+  vi.useRealTimers();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
   hooks.appListeners.clear();
@@ -931,23 +932,31 @@ describe("native saved manual goal copy", () => {
     expect(hasButton(tree, discardLabel)).toBe(false);
   });
 
-  it("rejects progress-date ABA before blur, then recovers only from a complete fresh load", async () => {
-    const { harness } = setupCopy();
-    let tree = await dirtyChoice(harness);
-    const discard = button(tree, discardLabel).props.onPress;
-    const copy = button(tree, copyLabel).props.onPress;
-    const date = input(tree, "Progress date YYYY-MM-DD");
-    date.props.onChangeText("2026-09-10");
-    date.props.onChangeText(date.props.value);
-    const before = harness.stateWrites;
-    discard();
-    copy();
-    expect(harness.stateWrites).toBe(before);
-    tree = await harness.settle();
-    expect(hasButton(tree, copyLabel)).toBe(false);
-    tree = await click(harness, "Refresh goals and progress");
-    expect(button(tree, copyLabel).props.disabled).toBe(false);
-  });
+  it.each(["2026-09-09", "2026-09-10", "2026-09-11"])(
+    "rejects progress-date ABA before blur, then recovers only from a complete fresh load (%s)",
+    async (currentDate) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(`${currentDate}T12:00:00.000Z`));
+      const { harness } = setupCopy();
+      let tree = await dirtyChoice(harness);
+      const discard = button(tree, discardLabel).props.onPress;
+      const copy = button(tree, copyLabel).props.onPress;
+      const date = input(tree, "Progress date YYYY-MM-DD");
+      expect(date.props.value).toBe(currentDate);
+      const changedDate = currentDate === "2026-09-10" ? "2026-09-11" : "2026-09-10";
+      expect(changedDate).not.toBe(date.props.value);
+      date.props.onChangeText(changedDate);
+      date.props.onChangeText(date.props.value);
+      const before = harness.stateWrites;
+      discard();
+      copy();
+      expect(harness.stateWrites).toBe(before);
+      tree = await harness.settle();
+      expect(hasButton(tree, copyLabel)).toBe(false);
+      tree = await click(harness, "Refresh goals and progress");
+      expect(button(tree, copyLabel).props.disabled).toBe(false);
+    },
+  );
 
   for (const props of [
     { expectedOwnerUserId: "22222222-2222-4222-8222-222222222222" },
@@ -1548,36 +1557,46 @@ describe("native New goal draft protection", () => {
       harness.unmount();
     });
 
-  it("retires progress-date ABA and failed loads, recovering only from a fresh load", async () => {
-    let fail = false;
-    const { harness } = setupNew("manual", {
-      handler: (request) =>
-        fail && request.url.pathname === "/v1/nutrients/targetable" ? response({}, 503) : undefined,
-    });
-    let tree = await newChoice(harness);
-    const old = [newLabel, newDiscardLabel].map((label) => button(tree, label).props.onPress);
-    const date = input(tree, "Progress date YYYY-MM-DD");
-    date.props.onChangeText("2026-09-20");
-    date.props.onChangeText(date.props.value);
-    let count = harness.stateWrites;
-    old.forEach((action) => {
-      action();
-    });
-    expect(harness.stateWrites).toBe(count);
-    tree = await harness.settle();
-    expect(button(tree, newLabel).props.accessibilityState).toEqual({ disabled: true });
-    fail = true;
-    tree = await click(harness, "Refresh goals and progress");
-    expect(button(tree, newLabel).props.disabled).toBe(true);
-    fail = false;
-    tree = await click(harness, "Refresh goals and progress");
-    expect(button(tree, newLabel).props.disabled).toBe(false);
-    count = harness.stateWrites;
-    old.forEach((action) => {
-      action();
-    });
-    expect(harness.stateWrites).toBe(count);
-  });
+  it.each(["2026-09-19", "2026-09-20", "2026-09-21"])(
+    "retires progress-date ABA and failed loads, recovering only from a fresh load (%s)",
+    async (currentDate) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(`${currentDate}T12:00:00.000Z`));
+      let fail = false;
+      const { harness } = setupNew("manual", {
+        handler: (request) =>
+          fail && request.url.pathname === "/v1/nutrients/targetable"
+            ? response({}, 503)
+            : undefined,
+      });
+      let tree = await newChoice(harness);
+      const old = [newLabel, newDiscardLabel].map((label) => button(tree, label).props.onPress);
+      const date = input(tree, "Progress date YYYY-MM-DD");
+      expect(date.props.value).toBe(currentDate);
+      const changedDate = currentDate === "2026-09-20" ? "2026-09-21" : "2026-09-20";
+      expect(changedDate).not.toBe(date.props.value);
+      date.props.onChangeText(changedDate);
+      date.props.onChangeText(date.props.value);
+      let count = harness.stateWrites;
+      old.forEach((action) => {
+        action();
+      });
+      expect(harness.stateWrites).toBe(count);
+      tree = await harness.settle();
+      expect(button(tree, newLabel).props.accessibilityState).toEqual({ disabled: true });
+      fail = true;
+      tree = await click(harness, "Refresh goals and progress");
+      expect(button(tree, newLabel).props.disabled).toBe(true);
+      fail = false;
+      tree = await click(harness, "Refresh goals and progress");
+      expect(button(tree, newLabel).props.disabled).toBe(false);
+      count = harness.stateWrites;
+      old.forEach((action) => {
+        action();
+      });
+      expect(harness.stateWrites).toBe(count);
+    },
+  );
 
   for (const work of ["goal", "profile", "candidate"])
     it(`retires retained New actions through ${work} requests, including completion`, async () => {
@@ -1815,21 +1834,29 @@ describe("native goal revision conflict draft preservation", () => {
     expect(requests.length).toBeGreaterThan(count);
   });
 
-  it("retires recovery after progress-date ABA without disabling a current explicit reload", async () => {
-    const { harness, requests } = setupConflict();
-    let tree = await createConflict(harness);
-    const old = button(tree, reloadConflictLabel).props.onPress;
-    const date = input(tree, "Progress date YYYY-MM-DD");
-    date.props.onChangeText("2026-09-20");
-    date.props.onChangeText(date.props.value);
-    const count = requests.length;
-    old();
-    expect(requests).toHaveLength(count);
-    tree = await harness.settle();
-    expect(button(tree, reloadConflictLabel).props.disabled).toBe(false);
-    await click(harness, reloadConflictLabel);
-    expect(hasButton(await harness.settle(), reloadConflictLabel)).toBe(false);
-  });
+  it.each(["2026-09-19", "2026-09-20", "2026-09-21"])(
+    "retires recovery after progress-date ABA without disabling a current explicit reload (%s)",
+    async (currentDate) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(`${currentDate}T12:00:00.000Z`));
+      const { harness, requests } = setupConflict();
+      let tree = await createConflict(harness);
+      const old = button(tree, reloadConflictLabel).props.onPress;
+      const date = input(tree, "Progress date YYYY-MM-DD");
+      expect(date.props.value).toBe(currentDate);
+      const changedDate = currentDate === "2026-09-20" ? "2026-09-21" : "2026-09-20";
+      expect(changedDate).not.toBe(date.props.value);
+      date.props.onChangeText(changedDate);
+      date.props.onChangeText(date.props.value);
+      const count = requests.length;
+      old();
+      expect(requests).toHaveLength(count);
+      tree = await harness.settle();
+      expect(button(tree, reloadConflictLabel).props.disabled).toBe(false);
+      await click(harness, reloadConflictLabel);
+      expect(hasButton(await harness.settle(), reloadConflictLabel)).toBe(false);
+    },
+  );
 
   for (const work of ["goal", "profile", "candidate"])
     it(`retires old recovery through ${work} work and failed completion`, async () => {
