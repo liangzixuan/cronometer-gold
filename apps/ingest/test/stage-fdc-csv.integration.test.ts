@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { lstat, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { lstat, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 
 import {
   createDatabase,
@@ -62,6 +63,32 @@ interface Fixture {
 }
 
 describe("synthetic full-FDC CSV integration fixture", () => {
+  it("initializes an absent fixture parent and preserves shared files on reuse and cleanup", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "fdc-fixture-parent-"));
+    const parent = join(workspace, ".local-data");
+    const root = join(parent, "owned-fixture");
+    const secondRoot = join(parent, "second-fixture");
+    const sentinel = join(parent, "unrelated.txt");
+    const cleanup: string[] = [];
+    try {
+      await expect(lstat(parent)).rejects.toMatchObject({ code: "ENOENT" });
+      await createFixtureRoot(root, cleanup);
+      expect((await lstat(parent)).mode & 0o777).toBe(0o700);
+      expect((await lstat(root)).mode & 0o777).toBe(0o700);
+      await writeFile(sentinel, "preserved", { flag: "wx", mode: 0o600 });
+      await createFixtureRoot(secondRoot, cleanup);
+      await expect(createFixtureRoot(root, cleanup)).rejects.toMatchObject({ code: "EEXIST" });
+      expect(cleanup).toEqual([root, secondRoot]);
+      for (const path of cleanup.reverse()) await rm(path, { recursive: true });
+      expect((await lstat(parent)).isDirectory()).toBe(true);
+      expect(await readFile(sentinel, "utf8")).toBe("preserved");
+      await expect(lstat(root)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(lstat(secondRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("prepares the verified 251-record export without PostgreSQL or network access", async () => {
     const cleanupPaths: string[] = [];
     const deniedFetch = vi.fn(() =>
@@ -456,11 +483,16 @@ describeDatabase("synthetic full-FDC CSV capability CLI PostgreSQL integration",
   }, 180_000);
 });
 
+async function createFixtureRoot(root: string, cleanup: string[]): Promise<void> {
+  await mkdir(dirname(root), { recursive: true, mode: 0o700 });
+  await mkdir(root, { mode: 0o700 });
+  cleanup.push(root);
+}
+
 async function createFixture(suffix: string, cleanup: string[]): Promise<Fixture> {
   const rootRelative = `.local-data/fdc-csv-stage-cli-${suffix}`;
   const root = join(WORKSPACE_ROOT, rootRelative);
-  await mkdir(root, { mode: 0o700 });
-  cleanup.push(root);
+  await createFixtureRoot(root, cleanup);
   const prefix = "synthetic-full-fdc";
   const files = {
     [`${prefix}/food.csv`]: `fdc_id,data_type,description,publication_date\n${Array.from({ length: RECORD_COUNT }, (_, index) => `${1000 + index},source_foundation,Synthetic food ${index},2026-04-30`).join("\n")}\n`,
