@@ -185,6 +185,17 @@ export {
   verifyCatalogueReconciliationDocument,
 } from "./catalogue-reconciliation.js";
 export {
+  appendCatalogueStageChunk,
+  assertCatalogueStagePrincipal,
+  type CatalogueStageBatchResult,
+  type CatalogueStageChunkResult,
+  type CatalogueStagePrincipal,
+  type CatalogueStageSealResult,
+  createOrResumeCatalogueStage,
+  encodeCatalogueStageParserReport,
+  sealCatalogueStageParserReport,
+} from "./catalogue-stage.js";
+export {
   type CatalogueBarcodeEvidence,
   type CatalogueRecordValidationContext,
   type CatalogueRecordValidationResult,

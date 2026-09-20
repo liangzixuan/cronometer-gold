@@ -6,9 +6,11 @@ import { TextDecoder } from "node:util";
 
 import {
   approveBatch,
+  assertCatalogueStagePrincipal,
   type BatchCheckpoint,
   canonicalJsonChunks,
   createDatabaseFromEnvironment,
+  encodeCatalogueStageParserReport,
   getBatchCheckpoint,
   getSourceNutrientMappingDigest,
   type JsonObject,
@@ -53,7 +55,9 @@ import {
 } from "@nutrition-tracker/ingestion";
 
 import { flagOption, optionalOption, parseArguments, requiredOption } from "./arguments.js";
+import { buildFdcCsvStageParserReport, stageVerifiedFdcCsvExport } from "./fdc-csv-stage.js";
 import { createFdcRecordExport } from "./fdc-record-export.js";
+import { openVerifiedFdcRecordExport } from "./fdc-record-reader.js";
 
 export interface CommandIo {
   readonly environment: NodeJS.ProcessEnv;
@@ -109,6 +113,14 @@ const STAGE_FDC_OPTIONS = Object.freeze([
   "manifest-object-uri",
 ]);
 const STAGE_FDC_REQUIRED_OPTIONS = STAGE_FDC_OPTIONS;
+const STAGE_FDC_CSV_OPTIONS = Object.freeze([
+  "records",
+  "records-sha256",
+  "records-bytes",
+  "nutrient-mapping-sha256",
+  "evidence-bundle",
+  "manifest-object-uri",
+]);
 const STAGE_CNF_OPTIONS = Object.freeze([
   "artifact",
   "cache-dir",
@@ -161,6 +173,9 @@ export async function runCommand(argv: readonly string[], io: CommandIo): Promis
         return 0;
       case "cnf inspect":
         await inspectCnfCommand(argv, arguments_.positionals, arguments_.options, io);
+        return 0;
+      case "catalogue stage-fdc-csv":
+        await stageFdcCsvCommand(argv, arguments_.positionals, arguments_.options, io);
         return 0;
       case "catalogue stage-fdc":
         await stageFdcCommand(argv, arguments_.positionals, arguments_.options, io);
@@ -774,12 +789,12 @@ async function inspectFdcCsvCommand(
   }
 }
 
-function fdcRecordsOutputPath(value: string): string {
+function fdcRecordsOutputPath(value: string, optionName = "records-out"): string {
   if (
     !/^\.local-data\/evidence\/fdc-csv-records\/[A-Za-z0-9][A-Za-z0-9._-]*\.ndjson$/u.test(value)
   ) {
     throw new Error(
-      "--records-out must name a relative .ndjson file beneath .local-data/evidence/fdc-csv-records",
+      `--${optionName} must name a relative .ndjson file beneath .local-data/evidence/fdc-csv-records`,
     );
   }
   return resolve(WORKSPACE_ROOT, value);
@@ -844,6 +859,232 @@ async function inspectCnfCommand(
     rowDispositions: evidence.rowDispositions,
     tables: parsed.tables,
   });
+}
+
+async function stageFdcCsvCommand(
+  argv: readonly string[],
+  positionals: readonly string[],
+  options: Readonly<Record<string, string | true>>,
+  io: CommandIo,
+): Promise<void> {
+  assertExactSingleManifestCommandArguments(
+    argv,
+    positionals,
+    options,
+    STAGE_FDC_CSV_OPTIONS,
+    "catalogue stage-fdc-csv",
+  );
+  for (const name of STAGE_FDC_CSV_OPTIONS) requiredOption(options, name);
+  const recordsPath = fdcRecordsOutputPath(requiredOption(options, "records"), "records");
+  const exportSha256 = requiredSha256Option(options, "records-sha256");
+  const nutrientMappingDigest = requiredSha256Option(options, "nutrient-mapping-sha256");
+  const byteSizeText = requiredOption(options, "records-bytes");
+  if (!/^[1-9][0-9]*$/u.test(byteSizeText)) {
+    throw new Error("--records-bytes must be a canonical positive safe integer");
+  }
+  const exportByteSize = requiredPositiveSafeInteger(
+    Number(byteSizeText),
+    "records export byte size",
+  );
+  const actor = trustedRunnerActor(io.environment);
+  const manifestBytes = await readFile(
+    workspacePath(singlePositional(positionals, "manifest path")),
+  );
+  const manifestSha256 = hashBytes(manifestBytes);
+  const manifest = parseFoodSourceManifest(JSON.parse(manifestBytes.toString("utf8")));
+  assertImportReadyManifest(manifest);
+  assertManifestParserIdentity(manifest);
+  const contract = requireFdcCsvManifest(manifest);
+  const parserBuildSha256 = trustedParserBuildSha256(manifest, io.environment);
+  const parserVersion = requiredManifestValue(
+    manifest.ingestion.parserVersion,
+    "ingestion.parserVersion",
+  );
+  const artifactSha256 = requiredManifestValue(manifest.artifact.sha256, "artifact.sha256");
+  const artifactByteSize = requiredPositiveSafeInteger(
+    manifest.artifact.byteSize,
+    "artifact.byteSize",
+  );
+  const releaseEvidence = await readBoundReleaseEvidence(
+    manifest,
+    requiredOption(options, "evidence-bundle"),
+    currentTimeIso(io),
+  );
+  assertEvidenceDecisionRunner(actor, releaseEvidence.bundle);
+  const manifestObjectUri = immutableManifestObjectUri(
+    requiredOption(options, "manifest-object-uri"),
+    manifestSha256,
+  );
+  const expectedBaseline: Record<string, number | string> = {};
+  for (const [key, value] of Object.entries(manifest.validation.releaseSpecificExpectations)) {
+    if (!key.startsWith("parserBaselineCsv")) continue;
+    if (typeof value !== "number" && typeof value !== "string") {
+      throw new Error(`FDC CSV reviewed baseline ${key} must be a number or string`);
+    }
+    expectedBaseline[key] = value;
+  }
+  const records = await openVerifiedFdcRecordExport({
+    inputPath: recordsPath,
+    workspaceRoot: WORKSPACE_ROOT,
+    expectedExport: { sha256: exportSha256, byteSize: exportByteSize },
+    expectedHeader: {
+      recordType: "header",
+      format: "usda-fdc-csv-normalized-record-export-v1",
+      schemaVersion: 1,
+      authority: {
+        acquisition: false,
+        review: false,
+        staging: false,
+        promotion: false,
+        activation: false,
+      },
+      artifactByteSize,
+      artifactSha256,
+      manifestSha256,
+      parserBuildSha256,
+      parserPackage: manifest.ingestion.parserPackage,
+      parserVersion,
+      releaseKey: manifest.release.releaseKey,
+      sourceCode: manifest.source.code,
+      ordering: "sha256-partition-then-fdc-id-v1",
+    },
+    expectedBaseline,
+    verifyInspection: (inspection) =>
+      verifyFdcCsvStageInspection(manifest, contract.context, inspection),
+    ...(io.signal === undefined ? {} : { signal: io.signal }),
+  });
+  let database: ReturnType<typeof createDatabaseFromEnvironment> | undefined;
+  await runAfterRequiredCleanup(
+    async () => {
+      const parserEvidence = buildFdcCsvStageParserReport({
+        records,
+        artifactSha256,
+        nutrientMappingDigest,
+        parserBuildSha256,
+        parserPackage: manifest.ingestion.parserPackage,
+        parserVersion,
+        releaseKey: manifest.release.releaseKey,
+        sourceCode: manifest.source.code,
+      });
+      // A UUID has fixed encoded length. Validate the exact report and escaped
+      // request limits before opening a database or creating a staging attempt.
+      encodeCatalogueStageParserReport({
+        ...parserEvidence,
+        batchId: "00000000-0000-4000-8000-000000000000",
+      });
+      io.signal?.throwIfAborted();
+      database = createDatabaseFromEnvironment(io.environment);
+      const principal = await assertCatalogueStagePrincipal(database);
+      const result = await stageVerifiedFdcCsvExport(database, {
+        batch: {
+          acquiredAt: requiredManifestValue(manifest.release.acquiredAt, "release.acquiredAt"),
+          artifactBytes: artifactByteSize,
+          artifactSha256,
+          artifactUri: manifest.artifact.objectUri,
+          evidenceBundleSha256: releaseEvidence.bundleSha256,
+          evidenceBundleUri: manifest.evidenceBundle.objectUri,
+          evidenceDecisionSha256: releaseEvidence.decisionSha256,
+          evidenceObjectVersionId: releaseEvidence.bundle.candidate.artifact.objectVersionId,
+          evidenceValidUntil: releaseEvidence.bundle.currentRetention.validUntil,
+          mediaType: manifest.artifact.mediaType,
+          parserVersion: `${parserVersion}+build.${parserBuildSha256}+mapping.${nutrientMappingDigest}`,
+          publishedOn: manifest.release.publishedOn,
+          releaseKey: manifest.release.releaseKey,
+          releaseClass: manifest.releaseClass,
+          rightsManifestSha256: manifestSha256,
+          rightsManifestUri: manifestObjectUri,
+          sourceCode: manifest.source.code,
+          upstreamSchemaVersion: manifest.release.upstreamSchemaVersion,
+        },
+        records,
+        parserReport: parserEvidence,
+        ...(io.signal === undefined ? {} : { signal: io.signal }),
+      });
+      return {
+        actor: actor.principalId,
+        ...principal,
+        ...result,
+        parserBuildSha256,
+        nutrientMappingDigest,
+        recordsExport: records.evidence,
+      };
+    },
+    async () => {
+      const failures: unknown[] = [];
+      try {
+        await database?.destroy();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await records.close();
+      } catch (error) {
+        failures.push(error);
+      }
+      if (failures.length > 0) {
+        throw new AggregateError(
+          failures,
+          "FDC CSV stage cleanup failed; no successful completion is confirmed",
+        );
+      }
+    },
+    async (result) => output(io, result),
+  );
+}
+
+function requiredSha256Option(
+  options: Readonly<Record<string, string | true>>,
+  name: string,
+): string {
+  const value = requiredOption(options, name);
+  if (!SHA256_PATTERN.test(value)) throw new Error(`--${name} must be a lowercase SHA-256 digest`);
+  return value;
+}
+
+function verifyFdcCsvStageInspection(
+  manifest: FoodSourceManifestV4,
+  context: FdcCsvArchiveContext,
+  inspection: JsonObject,
+): void {
+  if (
+    inspection.reportKind !== "usda-fdc-full-csv-inspection-v1" ||
+    inspection.schemaVersion !== 1
+  ) {
+    throw new Error("FDC CSV export requires the complete version-1 inspection report");
+  }
+  const contextSha256 = sha256CanonicalJson({
+    allowedDataTypes: [...context.allowedDataTypes],
+    allowedMarketCodes: [...context.allowedMarketCodes],
+    dataTypeMappings: { ...context.dataTypeMappings },
+    defaultMarketCode: context.defaultMarketCode,
+    marketMappings: { ...context.marketMappings },
+    releaseKey: context.releaseKey,
+  });
+  // The inspector omits the duplicate context object from its report; derive its
+  // hash from the reviewed manifest instead of trusting a supplied baseline value.
+  const baseline = fdcCsvParserBaselineEvidence({
+    ...inspection,
+    contextSha256,
+  } as unknown as FdcCsvArchiveParseResult);
+  if (
+    canonicalJson(baseline) !== canonicalJson(inspection.baseline) ||
+    fdcCsvParserBaselineMismatches(manifest, baseline).length !== 0 ||
+    sha256CanonicalJson(inspection.tables ?? null) !== inspection.tableEvidenceSha256
+  ) {
+    throw new Error(
+      "FDC CSV export inspection differs from the complete reviewed manifest baseline",
+    );
+  }
+  for (const field of ["semanticEvidence", "sourceMixEvidence"] as const) {
+    const value = inspection[field];
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`FDC CSV inspection ${field} must be an object`);
+    }
+    const { sha256, ...core } = value as JsonObject;
+    if (sha256CanonicalJson(core) !== sha256) {
+      throw new Error(`FDC CSV inspection ${field} digest differs from its canonical evidence`);
+    }
+  }
 }
 
 async function stageFdcCommand(
@@ -3333,6 +3574,7 @@ function usage(): string {
     "  ingest fdc inspect-csv <manifest> --artifact <zip> --cache-dir <path> --extract-dir <path> [--records-out .local-data/evidence/fdc-csv-records/<name>.ndjson]",
     "  ingest cnf inspect <manifest> --artifact <zip> --cache-dir <path> --extract-dir <path>",
     "  ingest catalogue stage-fdc <manifest> --artifact <zip> --cache-dir <path> --evidence-bundle <bundle.json> --extract-dir <path> --manifest-object-uri <s3-uri>",
+    "  ingest catalogue stage-fdc-csv <manifest> --records .local-data/evidence/fdc-csv-records/<name>.ndjson --records-sha256 <sha256> --records-bytes <bytes> --nutrient-mapping-sha256 <sha256> --evidence-bundle <bundle.json> --manifest-object-uri <s3-uri>",
     "  ingest catalogue stage-cnf <manifest> --artifact <zip> --cache-dir <path> --evidence-bundle <bundle.json> --extract-dir <path> --manifest-object-uri <s3-uri>",
     "  ingest catalogue mappings <reviewed-mapping.json>",
     "  ingest catalogue register-source <import-ready-manifest> --evidence-bundle <bundle.json>",

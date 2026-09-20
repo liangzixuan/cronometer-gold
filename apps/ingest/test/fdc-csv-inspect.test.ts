@@ -10,6 +10,21 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveFdcCsvInspectionPaths, runCommand } from "../src/run.js";
 
+// Preserve real UUIDs, while identifying this worker's exporter temporaries.
+// Other test workers legitimately export into the same guarded directory.
+const ownedExportTemporaryNames = vi.hoisted(() => new Set<string>());
+vi.mock("node:crypto", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:crypto")>();
+  return {
+    ...actual,
+    randomUUID: () => {
+      const uuid = actual.randomUUID();
+      ownedExportTemporaryNames.add(`.fdc-record-export-${uuid}.tmp`);
+      return uuid;
+    },
+  };
+});
+
 const databaseOpenAttempt = vi.hoisted(() =>
   vi.fn(() => {
     throw new Error("DATABASE_OPEN_CALLED");
@@ -422,17 +437,26 @@ describe("fdc inspect-csv", () => {
     const exportRoot = join(WORKSPACE_ROOT, ".local-data/evidence/fdc-csv-records");
     const extraction = join(WORKSPACE_ROOT, fixture.rootRelative, "extract-cleanup-failure");
     const signal = new AbortController().signal;
+    const actualCrypto = await vi.importActual<typeof import("node:crypto")>("node:crypto");
+    const parallelOutput = join(exportRoot, `.fdc-record-export-${actualCrypto.randomUUID()}.tmp`);
+    const parallelBytes = "parallel header\nparallel record\n";
+    let parallelCreated = false;
     let sentinel: string | undefined;
     Object.defineProperty(signal, "aborted", {
       get: () => {
         if (sentinel !== undefined || !existsSync(extraction) || !existsSync(exportRoot))
           return false;
+        if (!parallelCreated) {
+          writeFileSync(parallelOutput, parallelBytes, { flag: "wx", mode: 0o600 });
+          cleanupPaths.push(parallelOutput);
+          parallelCreated = true;
+        }
         const spoolName = readdirSync(extraction).find((name) =>
           name.startsWith(".fdc-csv-spool-"),
         );
         if (!spoolName) return false;
         const pendingOutput = readdirSync(exportRoot).find(
-          (name) => name.startsWith(".fdc-record-export-") && !temporaryNamesBefore.includes(name),
+          (name) => ownedExportTemporaryNames.has(name) && !temporaryNamesBefore.includes(name),
         );
         if (
           !pendingOutput ||
@@ -454,6 +478,8 @@ describe("fdc inspect-csv", () => {
       }),
     ).toBe(1);
     expect(sentinel).toBeDefined();
+    expect(parallelCreated).toBe(true);
+    await expect(readFile(parallelOutput, "utf8")).resolves.toBe(parallelBytes);
     expect(captured.errors.join("\n")).toContain("cleanup");
     expect(captured.outputs).toEqual([]);
     await expect(readFile(join(WORKSPACE_ROOT, recordsOut))).rejects.toMatchObject({
@@ -638,7 +664,7 @@ function recordOutputPath(): string {
 async function exportTemporaryNames(): Promise<string[]> {
   try {
     return (await readdir(join(WORKSPACE_ROOT, ".local-data/evidence/fdc-csv-records")))
-      .filter((name) => name.startsWith(".fdc-record-export-"))
+      .filter((name) => ownedExportTemporaryNames.has(name))
       .sort();
   } catch (error) {
     if (typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT")

@@ -305,6 +305,47 @@ authority. Streaming database staging and representative real-scale acceptance
 remain pending. Use synthetic archives for local source tests unless the exact
 live acquisition/inspection is separately authorized.
 
+### Bounded full-CSV capability staging (ADR 0101)
+
+The approved synthetic PostgreSQL rehearsal passed on September 20, 2026.
+Final canonical and exact-commit automatic delivery outcomes are recorded
+separately. Execute against a target only after its separate approved package.
+The earlier export supplies no authority. Require the current import-ready
+manifest-v4 bundle, authenticated runner configuration, reviewed parser-build and
+nutrient-mapping digest, immutable manifest URI and exact exported SHA/bytes.
+Source/mappings must already be provisioned by the appropriate operator. Supply
+an actual restricted stage-only database login through the existing credential
+boundary; never substitute owner credentials or `SET ROLE`.
+
+```sh
+pnpm --filter @nutrition-tracker/ingest cli -- catalogue stage-fdc-csv \
+  data/manifests/<full-csv-release>.json \
+  --records .local-data/evidence/fdc-csv-records/<name>.ndjson \
+  --records-sha256 <complete-export-sha256> --records-bytes <exact-byte-size> \
+  --nutrient-mapping-sha256 <reviewed-mapping-sha256> \
+  --evidence-bundle .local-data/evidence/<release>-bundle.json \
+  --manifest-object-uri s3://<object-locked-bucket>/sha256/<manifest-sha256>/manifest.json
+```
+
+The command verifies the complete canonical file and reviewed baseline before
+opening PostgreSQL, including all existing record/byte caps and escaped seal
+request size. It consumes a private anonymous snapshot in deterministic pages,
+using only the existing stage batch/chunk/parser-report functions. Retain exact
+arguments and evidence after an uncertain result. Explicit retry revalidates all
+input, resumes at the verified checkpoint, and replays only the last committed
+page permitted by SQL. A full checkpoint retries the immutable seal directly.
+Do not modify a manifest, mapping, artifact or parser pin to reuse a batch.
+Whole-export SHA/bytes bind the final report, not a new initial batch column.
+
+Success is `status: staging` with `validationPending: true`; no validation,
+approval, promotion or activation occurred. Failures retain non-current staging
+state for an identical continuation; the CLI does not remove database rows.
+Existing limits are 10,000 records and 64 MiB PostgreSQL payload text per batch,
+250 records/16 MiB per request, and 1 MiB per canonical record. The conservative
+preflight may reject input before SQL's independent cap. Do not split a release
+or raise limits to bypass the unfinished scale/validator/authority work. See
+[ADR 0101](../../docs/adr/0101-fdc-csv-capability-staging.md) and the six beta exits.
+
 ### Health Canada CNF inventory and baseline
 
 The CNF nine-CSV parser contract is not the archive inventory. Before changing a

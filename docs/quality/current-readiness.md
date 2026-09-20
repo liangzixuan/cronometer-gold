@@ -173,13 +173,33 @@ container completed at 22:32:31 UTC, after the 5 PM handoff. Clean matching
 local/tracking/live heads and seven reviewed hashes were verified at 22:42:59 UTC.
 
 The user then approved the [finite beta exit checklist](../product/beta-exit-checklist.md).
-Active source work is [ADR 0100](../adr/0100-fdc-csv-normalized-record-export.md),
-a bounded verified full-CSV normalized-record export for checklist C1. Independent
-review, 85 focused cases (39 parser, nine CLI, 37 publisher), both affected types
-and scoped Biome passed. Final canonical and exact-commit automatic evidence are
-pending at this source checkpoint. It opens no database and does not close live
-staging, authority, real-data scale or beta acceptance. The prior
-autonomous window has ended; the checklist does not infer a new timed automation.
+[ADR 0100](../adr/0100-fdc-csv-normalized-record-export.md) is delivered at
+`ece0bbe`: 85 focused cases, affected types/Biome, canonical check (441 fresh and
+4,144 cached passes; 93 opt-in skips) and build passed. Exact CI35477416130 and
+container35477416138 passed all three/nine actual jobs, attempt one, observed
+September 20 at 01:57:04 UTC; matching heads/12 reviewed hashes were verified at
+01:58:03 UTC. It opens no database and does not close C1/C2.
+
+Active [ADR 0101](../adr/0101-fdc-csv-capability-staging.md) provides a capped
+restricted-login consumer that stages and seals that export without validation.
+Independent source review, 117 focused offline cases (49 reader, 37 wrapper,
+31 CLI), affected types and scoped Biome passed before the service rehearsal.
+The corrected fixture adds one passing always-on offline regression: 118 focused
+offline cases in total. Earlier fixture failures remain recorded.
+
+The approved PostgreSQL rehearsal passed September 20, 2026 at
+07:49:49.522864–07:49:56.454845 UTC: two tests, the fixture regression and actual
+251-record database integration. Native Engine 29.8.1 passed its normal restart
+check and used the exact checked-in PostgreSQL 17.6 digest. Owned-container and
+credential cleanup passed; all three native service/socket units ended inactive
+and disabled. This does not establish Docker Desktop recovery.
+
+The outside-Git checkpoint retains `native-postgres-20260920T074949Z.log`, SHA-256
+`8ef13693b74e73be26bd5bf72f2925ca83e972e340cbe84d3300990de0fd0f6a`, prior failures and
+runtime/cleanup records. Final canonical check/build after the fixture correction
+remain pending; record actual outcomes there. No commit or exact-commit automatic
+evidence is claimed yet. C1/C2, full-catalogue scale, authority cutover and beta
+acceptance remain open. No new timed automation is inferred.
 
 Use the [build plan](../product/build-plan.md) for priorities and the
 [release gates](release-gates.md) for authoritative acceptance. The
@@ -228,7 +248,7 @@ authorizations within their original scope.
 | Lane | Owner and next evidence | Exit |
 | --- | --- | --- |
 | Automatic delivery evidence | Delivery owner re-reads the exact commit's CI and actual container jobs. | Both applicable workflows complete successfully with required jobs executed; release artifact/digest/provenance requirements remain separate. [Supply chain](container-supply-chain.md#required-github-configuration). |
-| Beta engineering prerequisites | Source integrator and independent in-task reviewer advance the finite checklist, starting with the full-CSV normalized-record handoff. | Applicable source/local/automatic proof; C1 remains open for database staging, authority and target scale evidence. [Beta checklist](../product/beta-exit-checklist.md). |
+| Beta engineering prerequisites | Source integrator and independent in-task reviewer complete ADR 0101 final canonical and delivery gates using its approved bounded PostgreSQL proof. | Applicable source/local/automatic proof; C1 remains open for full-catalogue staging/validation, authority cutover and target scale evidence. [Beta checklist](../product/beta-exit-checklist.md). |
 | Signed device and accessibility | Release owner confirms identifier history and numbering; device operators and reviewers prepare approved Windows relay/capture prerequisites and the physical iOS/Android matrix. | Exact signed artifacts, protected-storage/OS-kill, notification, cross-client and accessibility evidence with required attestations. Exports do not substitute. [Windows boundary](../../infra/runbooks/physical-device-windows-wsl2-private-https.md), [release matrix](../../infra/runbooks/platform-health-release.md). |
 | Hosted beta and mail/privacy operations | Deployment/security, database/privacy and mail owners review target/budget, seven-image deployment, TLS/access/readiness, off-host restore and production delivery operations. | Hosted restore/erasure replay and access evidence, approved provider/sender and abuse/retry/suppression operations, independent review and rollout decisions. [Release](../../infra/runbooks/platform-health-release.md), [restore](../../infra/runbooks/postgres-backup-and-restore.md), [mail/privacy gates](release-gates.md). |
 | Live catalogue and database authority | Acquisition/storage operators, data-quality/rights reviewers and database authority owner provide authenticated dual acquisition, immutable retention, manifest-v4 review bundle, mapping/scale evidence and caller cutover. | Approved numeric catalogue/search/resource thresholds, three distinct role approvals and separate activation decision. The 363-food pilot and synthetic fixtures are insufficient. [Source runbook](../../infra/runbooks/food-source-release.md), [catalogue boundary](../product/build-plan.md#parallel-release-acceptance-target--live-catalogue-evidence). |
@@ -251,9 +271,11 @@ be reintroduced as missing source work from an older summary.
 
 ## Active milestone and successor
 
-Complete [ADR 0100](../adr/0100-fdc-csv-normalized-record-export.md) with focused
-parser/CLI proof, independent review, canonical validation and exact-commit
-automatic results. ADRs 0077 through 0099 are delivered baselines. Subsequent work
+Complete final canonical validation, commit/push and exact-commit automatic
+results for [ADR 0101](../adr/0101-fdc-csv-capability-staging.md). Scoped
+reader/CLI/capability proof, independent review, the corrected offline fixture and
+the approved real PostgreSQL rehearsal have passed; they do not close C1/C2.
+ADRs 0077 through 0100 are delivered baselines. Subsequent work
 must advance the [beta checklist](../product/beta-exit-checklist.md), with one
 source package active and action-specific execution approvals preserved. Record
 interruptions in the outside-Git checkpoint; avoid status-only commit/build cycles.

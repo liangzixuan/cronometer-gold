@@ -102,7 +102,8 @@ retains earlier boundaries. A successful successor never changes an older result
 
 | Order | Work | Concrete exit |
 | --- | --- | --- |
-| Active beta prerequisite | Full-FDC normalized-record export (ADR 0100), checklist C1 | Retain exact accepted records through bounded private writes; publish only after full parser/baseline/digest verification. Database staging and live catalogue acceptance remain open. |
+| Active beta prerequisite | Capped full-CSV capability staging (ADR 0101), checklist C1 | Bounded export verification, restricted-login staging and sealing passed real PostgreSQL proof. Final canonical validation and delivery remain pending; full-scale authority/validation and live acceptance remain open. |
+| Completed beta prerequisite | Full-FDC normalized-record export (ADR 0100) | Delivered at `ece0bbe`: bounded private verified export; local and all three CI/nine container jobs passed. |
 | Completed source milestone | Web diary repeat destination (ADR 0099) | Delivered at `57f0979`: chosen date/meal and exact retry destination; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Web activity time occurrence choices (ADR 0098) | Delivered at `2a22a0f`: explicit repeated-minute choices with exact untouched timestamps and retries; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Web report day inspector (ADR 0097) | Delivered at `7a104ea`: all 15 nutrients for one report day; local gates and all three CI/nine actual container jobs passed after one approved quality retry. |
@@ -129,20 +130,26 @@ retains earlier boundaries. A successful successor never changes an older result
 | Completed external review | Scoped Claude review at `805b937` | The supplied report found no ADR 0077 blockers. Its recommendations were addressed in the delivered follow-up; the report remains limited to its original scope. Routine product work does not require another paid review. |
 | Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Advance only under applicable existing authorization and unchanged release gates. |
 
-### Active bounded beta prerequisite: full-FDC normalized-record export
+### Active bounded beta prerequisite: restricted full-CSV staging
 
-[ADR 0100](../adr/0100-fdc-csv-normalized-record-export.md) adds an opt-in,
-bounded normalized-record handoff to the full-CSV inspector. Provisional records
-remain private until complete parser identity/cleanup checks, the reviewed
-manifest baseline and count/digest reconciliation pass. Default inspection
-evidence stays unchanged. This is the first C1 implementation step; full-CSV
-database staging, authority cutover and representative scale proof remain open.
+[ADR 0100](../adr/0100-fdc-csv-normalized-record-export.md) is delivered at
+`ece0bbe`, including local and all required automatic evidence. Its verified
+export is the input to [ADR 0101](../adr/0101-fdc-csv-capability-staging.md): a
+restricted-login consumer with complete preflight, bounded pages, atomic
+checkpoints, last-page replay and an immutable parser seal. It stops before
+validation, approval or activation. Scoped offline proof and the separately
+approved 251-record PostgreSQL rehearsal passed on September 20, 2026. The
+always-on fixture regression also passed; final canonical validation after its
+correction, commit/push and exact-commit automatic evidence remain pending.
 
-The [beta checklist](beta-exit-checklist.md) fixes the required exits and external
-decision packages. No database, live source, dependency, installation, production
-audit, service/device/hosting or paid-review action is part of ADR 0100. Apply
-the [development workflow](../quality/development-workflow.md) and preserve
-formal source, local, automatic and release evidence boundaries.
+Existing SQL limits remain 10,000 records, 64 MiB of PostgreSQL payload text,
+250 records/16 MiB per request and 1 MiB per payload. Accumulated-row scans,
+aggregate seal construction and full-batch validation still need coherent scale
+work. Do not split a release or raise caps to call this consumer-scale readiness.
+The [beta checklist](beta-exit-checklist.md) retains all six open exits. Apply the
+[development workflow](../quality/development-workflow.md), required integration
+and formal source/local/automatic/release boundaries; no new timed automation is
+inferred from this source work.
 
 ### Milestone and external-decision boundaries
 

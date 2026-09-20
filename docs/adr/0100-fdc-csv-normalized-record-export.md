@@ -1,7 +1,7 @@
 # ADR 0100: Export verified full-FDC normalized records with bounded writes
 
-Status: Implemented and independently reviewed; focused validation passed.
-Final canonical and exact-commit automatic evidence pending at source freeze.
+Status: Delivered at `ece0bbe`; reviewed focused/types/formatting and canonical
+check/build passed. All three CI and nine container jobs passed on attempt one.
 
 ## Context
 
@@ -69,8 +69,13 @@ errors, late parsing and final parser-cleanup failure, injected AbortSignal,
 byte limits, stale baselines, no-overwrite/path guards, replacement preservation
 and post-link cleanup/sync/close failures. CLI cases prove zero database openings.
 Both affected type checks and six-file scoped Biome passed. Final canonical
-`pnpm check`/`pnpm build` and exact-commit three CI/nine actual container jobs remain
-required; the outside-Git checkpoint records their outcomes.
+`pnpm check` passed with 441 fresh and 4,144 cached cases, plus 93 opt-in skips;
+`pnpm build` passed 11 tasks, ten cached, with a fresh ingest build. Exact-commit
+[CI 35477416130](https://github.com/liangzixuan/cronometer-gold/actions/runs/35477416130)
+and [container 35477416138](https://github.com/liangzixuan/cronometer-gold/actions/runs/35477416138)
+passed all three/nine actual jobs on attempt one, observed September 20 at
+01:57:04 UTC. Clean matching local/tracking/live heads and 12 reviewed hashes were
+verified at 01:58:03 UTC. Raw job/attempt evidence stays in the outside-Git checkpoint.
 
 AbortSignal evidence is not operating-system kill recovery. The CLI entry point
 has no new signal handler, and process death may leave private unpublished files.

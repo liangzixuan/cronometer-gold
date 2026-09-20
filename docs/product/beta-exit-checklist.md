@@ -29,7 +29,7 @@ candidate; do not turn a unit test or an assigned role into a release approval.
 
 | ID | Required exit | Engineering and evidence remaining | Responsible roles and dependencies |
 | --- | --- | --- | --- |
-| C1 | Catalogue can be prepared at the intended scale under the correct authority | Bounded normalized-record handoff; resumable paged full-CSV staging/validation; remaining full-snapshot consumers and measured resource/lock budgets; authenticated external principal and runtime credential/caller cutover; independent validator; remaining shared writers, direct-DML revocation and target canaries | Source integrator and independent in-task reviewer for code; database/release operators for target proof. First source step is ADR 0100; target execution requires its own reviewed package. |
+| C1 | Catalogue can be prepared at the intended scale under the correct authority | Full-scale paged full-CSV staging/validation beyond the bounded ADR 0101 proof; remaining full-snapshot consumers and measured resource/lock budgets; authenticated external principal and runtime credential/caller cutover; independent validator; remaining shared writers, direct-DML revocation and target canaries | Source integrator and independent in-task reviewer for code; database/release operators for target proof. ADR 0100 is delivered; ADR 0101 has approved local PostgreSQL proof for capped capability integration, with final canonical and delivery gates pending. Target execution requires its own reviewed package. |
 | C2 | Consumer-usable catalogue is reviewed and ready for a separate activation decision | Exact candidate/market; two independent authenticated acquisitions; retained immutable object and current retention; rights/mapping review; approved numeric food/branded/GTIN, completeness, search and resource thresholds; non-current staging, reconciliation, index/relevance/barcode/rollback evidence and three required role approvals | User selects acquisition/storage operators and named data/rights reviewers. Requires C1 and approved acquisition/storage actions. The 363-food pilot is insufficient; activation remains separate. |
 | C3 | Account verification/recovery can operate safely in the beta | Durable or provider-idempotent transactional delivery; shared source/target abuse admission and timing review; authenticated TLS provider/sender/domain; retry, bounce/suppression/support handling; accepted enforcement policy and integrated proof | Source integrator plus mail/security operators. Provider, domain, budget and actual DNS/account operations need a concrete decision package. Local Mailpit proof does not close this row. |
 | C4 | Exact hosted candidate has accepted access, privacy and recovery | Approved target/budget; seven pinned application/service image digests and provenance; HTTPS/readiness/access checks; current retained-data inventory; hosted/off-host restoration, deletion-ledger replay, cross-owner checks and measured RPO/RTO; operational ownership and rollback | Deployment/security and database/privacy operators, with independent acceptance. Requires applicable C1/C3 changes and authorization for exact infrastructure/access actions. Published images alone are insufficient. |
@@ -38,9 +38,14 @@ candidate; do not turn a unit test or an assigned role into a release approval.
 
 ## Work order and ownership
 
-1. Advance C1's first source prerequisite: [ADR 0100](../adr/0100-fdc-csv-normalized-record-export.md)
-   makes the full-CSV inspector's accepted records available through a bounded,
-   verified export. It does not implement database staging or close C1/C2.
+1. ADR 0100 is delivered at `ece0bbe`: bounded verified normalized-record export,
+   with local and all required automatic jobs passed. Complete final canonical
+   validation and delivery for
+   [ADR 0101](../adr/0101-fdc-csv-capability-staging.md), a capped restricted-login
+   consumer that stops at parser seal. Its separately approved real PostgreSQL
+   rehearsal passed September 20, 2026. Existing SQL record/byte caps and
+   accumulated-row/validator work still prevent full-scale readiness; neither
+   prerequisite closes C1/C2.
 2. Finish the rest of C1 and C3 as coherent engineering packages. Before edits,
    identify required integration/service evidence and prepare any missing exact
    action approval. Do not choose easy UI work simply because an external gate is
