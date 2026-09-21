@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import {
+  type CatalogueReconciliationDocument,
   type CatalogueValidationReceipt,
   canonicalJson,
   createDatabase,
@@ -13,11 +14,18 @@ import {
   type PreparedCatalogueValidationRequest,
   parsePreparedCatalogueValidationRequest,
   runMigrations,
+  verifyCatalogueReconciliationDocument,
 } from "@nutrition-tracker/db";
-import type { FoodSourceManifestV4, StagedFoodRecord } from "@nutrition-tracker/ingestion";
+import {
+  assertAuthenticatedReleaseEvidenceBundle,
+  type FoodSourceManifestV4,
+  parseAuthenticatedReleaseEvidenceBundle,
+  type StagedFoodRecord,
+} from "@nutrition-tracker/ingestion";
 import { describe, expect, it, vi } from "vitest";
 
 import { type CommandIo, runCommand } from "../src/run.js";
+import { bindSyntheticLiveReview } from "./synthetic-live-release-evidence.js";
 import {
   bindSyntheticReleaseEvidence,
   SYNTHETIC_EVIDENCE_EVALUATED_AT,
@@ -121,6 +129,7 @@ describe("synthetic full-FDC CSV integration fixture", () => {
     try {
       vi.stubGlobal("fetch", deniedFetch);
       const fixture = await createFixture(randomBytes(8).toString("hex"), cleanupPaths);
+      expect(fixture.manifest.releaseClass).toBe("fixture-nonrelease");
       const bytes = await readFile(join(WORKSPACE_ROOT, fixture.recordsRelative));
       expect(bytes.byteLength).toBe(fixture.recordsBytes);
       expect(hash(bytes)).toBe(fixture.recordsSha256);
@@ -173,8 +182,46 @@ describe("synthetic validation policy fixture", () => {
   });
 });
 
+describe("synthetic reviewed release fixture", () => {
+  it("binds a separate synthetic authority decision through normal evidence acceptance", async () => {
+    const cleanupPaths: string[] = [];
+    const deniedFetch = vi.fn(() =>
+      Promise.reject(new Error("Synthetic fixture forbids network fetch")),
+    );
+    try {
+      vi.stubGlobal("fetch", deniedFetch);
+      const fixture = await createFixture(randomBytes(8).toString("hex"), cleanupPaths, {
+        recordCount: 1,
+        syntheticLiveReview: true,
+      });
+      const bundle = parseAuthenticatedReleaseEvidenceBundle(
+        JSON.parse(await readFile(fixture.evidencePath, "utf8")),
+      );
+      expect(fixture.manifest.releaseClass).toBe("live-reviewed");
+      expect(bundle.authorityDecision).toMatchObject({
+        releaseClass: "live-reviewed",
+        decision: "approved-for-live-staging",
+      });
+      expect(() =>
+        assertAuthenticatedReleaseEvidenceBundle(
+          fixture.manifest,
+          bundle,
+          SYNTHETIC_EVIDENCE_EVALUATED_AT,
+        ),
+      ).not.toThrow();
+      expect(() =>
+        assertAuthenticatedReleaseEvidenceBundle(fixture.manifest, bundle),
+      ).not.toThrow();
+      expect(deniedFetch).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      for (const path of cleanupPaths.reverse()) await rm(path, { force: true, recursive: true });
+    }
+  });
+});
+
 describeDatabase("synthetic full-FDC CSV capability CLI PostgreSQL integration", () => {
-  it("stages through page recovery, then validates independently with exact retained retries", async () => {
+  it("stages, validates, reconciles and reviews with exact retained retries", async () => {
     if (!adminDatabaseUrl) throw new Error("FDC_CSV_CLI_TEST_DATABASE_ADMIN_URL is required");
     const adminUrl = localAdminUrl(adminDatabaseUrl);
     const suffix = randomBytes(8).toString("hex");
@@ -184,13 +231,23 @@ describeDatabase("synthetic full-FDC CSV capability CLI PostgreSQL integration",
       { name: `fdc_csv_wrong_${suffix}`, capabilities: [] },
       {
         name: `fdc_csv_multi_${suffix}`,
-        capabilities: ["nutrition_catalogue_stage", "nutrition_catalogue_validate"],
+        capabilities: [
+          "nutrition_catalogue_stage",
+          "nutrition_catalogue_validate",
+          "nutrition_catalogue_approve_data",
+        ],
       },
       { name: `fdc_csv_validate_${suffix}`, capabilities: ["nutrition_catalogue_validate"] },
+      { name: `fdc_csv_data_${suffix}`, capabilities: ["nutrition_catalogue_approve_data"] },
+      { name: `fdc_csv_quality_${suffix}`, capabilities: ["nutrition_catalogue_approve_quality"] },
+      { name: `fdc_csv_rights_${suffix}`, capabilities: ["nutrition_catalogue_approve_rights"] },
+      { name: `fdc_csv_promote_${suffix}`, capabilities: ["nutrition_catalogue_promote_activate"] },
     ].map((role) => ({ ...role, password: randomBytes(24).toString("hex") }));
     const stageRole = roles[0];
     const validateRole = roles[3];
-    if (!stageRole || !validateRole) throw new Error("Synthetic stage or validate role is missing");
+    const promoteRole = roles[7];
+    if (!stageRole || !validateRole || !promoteRole)
+      throw new Error("Synthetic stage or validate role is missing");
     const cleanupPaths: string[] = [];
     const createdRoles: string[] = [];
     let databaseCreated = false;
@@ -247,7 +304,11 @@ describeDatabase("synthetic full-FDC CSV capability CLI PostgreSQL integration",
           ),
         );
         for (const capability of role.capabilities) {
-          if (!/^nutrition_catalogue_(?:stage|validate)$/u.test(capability))
+          if (
+            !/^nutrition_catalogue_(?:stage|validate|approve_data|approve_quality|approve_rights|promote_activate)$/u.test(
+              capability,
+            )
+          )
             throw new Error("Unexpected fixture capability");
           await admin.executeQuery(
             query(
@@ -488,7 +549,7 @@ describeDatabase("synthetic full-FDC CSV capability CLI PostgreSQL integration",
       const after = await catalogueSnapshot(owner);
       expect(after.releaseState).toEqual(before.releaseState);
       expect(after.authorityState).toEqual(before.authorityState);
-      await exerciseIndependentValidation({
+      const preparation = await exerciseIndependentValidation({
         owner,
         ownerUrl,
         stageUrl,
@@ -501,6 +562,32 @@ describeDatabase("synthetic full-FDC CSV capability CLI PostgreSQL integration",
           ...roles.slice(1, 3).map((role) => databaseUrl(adminUrl, databaseName, role)),
         ],
         staged: result,
+        mappingSha256,
+        suffix,
+        cleanupPaths,
+      });
+      const reviewers: ReviewLogin[] = (["data", "quality", "rights"] as const).map(
+        (role, index) => {
+          const login = roles[index + 4];
+          if (!login) throw new Error("Synthetic reviewer login is missing");
+          return { role, principal: login.name, url: databaseUrl(adminUrl, databaseName, login) };
+        },
+      );
+      await exerciseCatalogueReviewHandoff({
+        owner,
+        ownerUrl,
+        stageUrl,
+        validateUrl: databaseUrl(adminUrl, databaseName, validateRole),
+        promoteUrl: databaseUrl(adminUrl, databaseName, promoteRole),
+        promotePrincipal: promoteRole.name,
+        reviewers,
+        rejectedUrls: [
+          ownerUrl,
+          stageUrl,
+          ...roles.slice(1, 4).map((role) => databaseUrl(adminUrl, databaseName, role)),
+        ],
+        fixture,
+        preparation,
         mappingSha256,
         suffix,
         cleanupPaths,
@@ -576,7 +663,7 @@ async function exerciseIndependentValidation(input: {
   readonly mappingSha256: string;
   readonly suffix: string;
   readonly cleanupPaths: string[];
-}): Promise<void> {
+}): Promise<PrepareValidationOutput> {
   const { owner, staged, cleanupPaths, mappingSha256 } = input;
   const environment = validationEnvironment(input.validateUrl);
   const before = await catalogueSnapshot(owner);
@@ -890,6 +977,426 @@ async function exerciseIndependentValidation(input: {
   const afterQuarantine = await catalogueSnapshot(owner);
   expect(afterQuarantine.releaseState).toEqual(beforeQuarantine.releaseState);
   expect(afterQuarantine.authorityState).toEqual(beforeQuarantine.authorityState);
+  return preparation;
+}
+
+interface ReviewLogin {
+  readonly role: "data" | "quality" | "rights";
+  readonly principal: string;
+  readonly url: string;
+}
+
+async function exerciseCatalogueReviewHandoff(input: {
+  readonly owner: DatabaseClient;
+  readonly ownerUrl: string;
+  readonly stageUrl: string;
+  readonly validateUrl: string;
+  readonly promoteUrl: string;
+  readonly promotePrincipal: string;
+  readonly reviewers: readonly ReviewLogin[];
+  readonly rejectedUrls: readonly string[];
+  readonly fixture: Fixture;
+  readonly preparation: PrepareValidationOutput;
+  readonly mappingSha256: string;
+  readonly suffix: string;
+  readonly cleanupPaths: string[];
+}): Promise<void> {
+  const { owner, suffix } = input;
+  const dataReviewer = input.reviewers.find((entry) => entry.role === "data");
+  if (!dataReviewer) throw new Error("Synthetic data reviewer is missing");
+
+  // The original fixture keeps its nonrelease authority. Neither review nor a
+  // protected promotion call can turn that fixture into an active catalogue.
+  const beforeNonrelease = await catalogueSnapshot(owner);
+  const nonreleaseApproval = capture(validationEnvironment(dataReviewer.url));
+  expect(
+    await runCommand(
+      approvalArguments(input.preparation, input.fixture, dataReviewer),
+      nonreleaseApproval.io,
+    ),
+  ).toBe(1);
+  expect(nonreleaseApproval.output).toEqual([]);
+  expect(nonreleaseApproval.errors.join("\n")).toContain("live-reviewed");
+  await expect(
+    promoteSyntheticBatch(input.promoteUrl, input.promotePrincipal, input.preparation.batchId),
+  ).rejects.toThrow("live-reviewed");
+  expect(await catalogueSnapshot(owner)).toEqual(beforeNonrelease);
+
+  await exerciseRetainedReconciliation({
+    ...input,
+    preparation: input.preparation,
+    currentReleaseId: null,
+    label: "nonrelease",
+  });
+
+  // This is a separate synthetic live-reviewed authority fixture, assembled by
+  // the normal manifest/bundle parsers. No staged row is relabelled or rewritten.
+  const baseline = await stageValidatedReviewFixture(input, "baseline");
+  const beforeApprovals = await catalogueSnapshot(owner);
+  const rejectApproval = async (args: readonly string[], url: string) => {
+    const before = await catalogueSnapshot(owner);
+    const rejected = capture(validationEnvironment(url));
+    expect(await runCommand(args, rejected.io)).toBe(1);
+    expect(rejected.output).toEqual([]);
+    expect(rejected.errors.length).toBeGreaterThan(0);
+    expect(await catalogueSnapshot(owner)).toEqual(before);
+  };
+  const dataArgs = approvalArguments(baseline.preparation, baseline.fixture, dataReviewer);
+  for (const url of input.rejectedUrls) {
+    await rejectApproval(
+      replaceOption(dataArgs, "--external-principal-id", decodeURIComponent(new URL(url).username)),
+      url,
+    );
+  }
+  await rejectApproval(
+    replaceOption(dataArgs, "--external-principal-id", "principal:spoofed-reviewer"),
+    dataReviewer.url,
+  );
+  await rejectApproval(replaceOption(dataArgs, "--role", "quality"), dataReviewer.url);
+  await rejectApproval(
+    replaceOption(dataArgs, "--manifest-sha256", "0".repeat(64)),
+    dataReviewer.url,
+  );
+  await rejectApproval(
+    replaceOption(dataArgs, "--validation-digest", "0".repeat(64)),
+    dataReviewer.url,
+  );
+
+  for (const reviewer of input.reviewers) {
+    const client = createDatabase({ connectionString: reviewer.url, maxConnections: 1 });
+    try {
+      const identity = await client.executeQuery<{ readonly principal: string }>(
+        query("select session_user::text as principal"),
+      );
+      expect(identity.rows[0]?.principal).toBe(reviewer.principal);
+      for (const statement of [
+        "select id from public.food_import_batch limit 1",
+        "select id from public.food_import_approval limit 1",
+        "update public.food_import_approval set approval_reference = approval_reference where false",
+      ])
+        await expect(client.executeQuery(query(statement))).rejects.toMatchObject({
+          code: "42501",
+        });
+    } finally {
+      await client.destroy();
+    }
+    const args = approvalArguments(baseline.preparation, baseline.fixture, reviewer);
+    const first = capture(validationEnvironment(reviewer.url));
+    if (reviewer.role === "data") {
+      let lostReceipt: unknown;
+      expect(
+        await runCommand(args, {
+          ...first.io,
+          writeOutput: (value) => {
+            lostReceipt = JSON.parse(value);
+            throw new Error("synthetic approval acknowledgement lost after commit");
+          },
+        }),
+      ).toBe(1);
+      expect(first.errors.join("\n")).toContain("approval acknowledgement lost after commit");
+      expect(lostReceipt).toMatchObject({
+        batchId: baseline.preparation.batchId,
+        approvalRole: reviewer.role,
+        wasAlreadyApproved: false,
+      });
+    } else {
+      expect(await runCommand(args, first.io)).toBe(0);
+      expect(oneOutput(first)).toMatchObject({
+        batchId: baseline.preparation.batchId,
+        approvalRole: reviewer.role,
+        wasAlreadyApproved: false,
+      });
+    }
+    const beforeReplay = await catalogueSnapshot(owner);
+    const replay = capture(validationEnvironment(reviewer.url));
+    expect(await runCommand(args, replay.io)).toBe(0);
+    expect(oneOutput(replay)).toMatchObject({
+      batchId: baseline.preparation.batchId,
+      approvalRole: reviewer.role,
+      wasAlreadyApproved: true,
+    });
+    expect(await catalogueSnapshot(owner)).toEqual(beforeReplay);
+    await rejectApproval(
+      replaceOption(
+        args,
+        "--approval-reference",
+        `review://synthetic-adr0103/${suffix}/${reviewer.role}/changed`,
+      ),
+      reviewer.url,
+    );
+  }
+  const approvals = await owner
+    .selectFrom("food_import_approval")
+    .selectAll()
+    .where("batch_id", "=", baseline.preparation.batchId)
+    .orderBy("approval_role")
+    .execute();
+  expect(approvals).toHaveLength(3);
+  expect(new Set(approvals.map((row) => row.database_principal)).size).toBe(3);
+  for (const reviewer of input.reviewers) {
+    expect(approvals.find((row) => row.approval_role === reviewer.role)).toMatchObject({
+      database_principal: reviewer.principal,
+      principal_id: reviewer.principal,
+      database_capability_role: `nutrition_catalogue_approve_${reviewer.role}`,
+      validation_digest: baseline.preparation.validationDigest,
+      rights_manifest_sha256: baseline.fixture.manifestSha256,
+    });
+  }
+  const afterApprovals = await catalogueSnapshot(owner);
+  expect(afterApprovals.releaseState).toEqual(beforeApprovals.releaseState);
+  expect(afterApprovals.stagingState).toEqual(beforeApprovals.stagingState);
+  expect((afterApprovals.authorityState as { readonly outbox: unknown }).outbox).toEqual(
+    (beforeApprovals.authorityState as { readonly outbox: unknown }).outbox,
+  );
+  await exerciseRetainedReconciliation({
+    ...input,
+    preparation: baseline.preparation,
+    currentReleaseId: null,
+    label: "reviewed-baseline",
+  });
+
+  // Promotion is an explicit synthetic setup step after proving approvals alone
+  // changed neither the active release nor materialized/index state.
+  const promoted = await promoteSyntheticBatch(
+    input.promoteUrl,
+    input.promotePrincipal,
+    baseline.preparation.batchId,
+  );
+  expect(promoted).toMatchObject({
+    previousReleaseId: null,
+    materializedCount: 1,
+    wasAlreadyCompleted: false,
+  });
+  expect(promoted.activatedReleaseId).toMatch(/^[0-9a-f-]{36}$/u);
+  const completed = await owner
+    .selectFrom("food_import_batch")
+    .select(["status", "release_id", "validation_digest"])
+    .where("id", "=", baseline.preparation.batchId)
+    .executeTakeFirstOrThrow();
+  expect(completed).toEqual({
+    status: "completed",
+    release_id: promoted.activatedReleaseId,
+    validation_digest: baseline.preparation.validationDigest,
+  });
+  const next = await stageValidatedReviewFixture(input, "next-candidate");
+  const reconciled = await exerciseRetainedReconciliation({
+    ...input,
+    preparation: next.preparation,
+    currentReleaseId: promoted.activatedReleaseId,
+    label: "current-baseline",
+  });
+  expect(reconciled.evidence.baseline).toMatchObject({
+    batchId: baseline.preparation.batchId,
+    releaseId: promoted.activatedReleaseId,
+    validationDigest: baseline.preparation.validationDigest,
+  });
+  expect(reconciled.evidence.candidate).toMatchObject({
+    batchId: next.preparation.batchId,
+    validationDigest: next.preparation.validationDigest,
+  });
+  const active = await owner
+    .selectFrom("food_source")
+    .select("active_release_id")
+    .where("code", "=", "USDA_FDC")
+    .executeTakeFirstOrThrow();
+  expect(active.active_release_id).toBe(promoted.activatedReleaseId);
+  expect(
+    await owner
+      .selectFrom("food_import_approval")
+      .select("id")
+      .where("batch_id", "=", next.preparation.batchId)
+      .execute(),
+  ).toEqual([]);
+}
+
+async function stageValidatedReviewFixture(
+  input: {
+    readonly ownerUrl: string;
+    readonly stageUrl: string;
+    readonly validateUrl: string;
+    readonly mappingSha256: string;
+    readonly suffix: string;
+    readonly cleanupPaths: string[];
+  },
+  label: string,
+) {
+  const fixture = await createFixture(randomBytes(8).toString("hex"), input.cleanupPaths, {
+    recordCount: 1,
+    syntheticLiveReview: true,
+  });
+  const registration = capture(runnerEnvironment(input.ownerUrl));
+  expect(
+    await runCommand(
+      [
+        "catalogue",
+        "register-source",
+        fixture.manifestRelative,
+        "--evidence-bundle",
+        fixture.evidencePath,
+      ],
+      registration.io,
+    ),
+  ).toBe(0);
+  oneOutput(registration);
+  const stage = capture(runnerEnvironment(input.stageUrl));
+  expect(await runCommand(stageArguments(fixture, input.mappingSha256), stage.io)).toBe(0);
+  const staged = oneOutput<StageOutput>(stage);
+  const path = validationRequestPath(input.suffix, label);
+  await expect(lstat(join(WORKSPACE_ROOT, path))).rejects.toMatchObject({ code: "ENOENT" });
+  input.cleanupPaths.push(join(WORKSPACE_ROOT, path));
+  const prepare = capture(validationEnvironment(input.validateUrl));
+  expect(
+    await runCommand(prepareValidationArguments(staged, input.mappingSha256, path), prepare.io),
+  ).toBe(0);
+  const preparation = oneOutput<PrepareValidationOutput>(prepare);
+  const submit = capture(validationEnvironment(input.validateUrl));
+  expect(await runCommand(submitValidationArguments(preparation), submit.io)).toBe(0);
+  expect(oneOutput<SubmitValidationOutput>(submit)).toMatchObject({
+    validation: { promotionEligible: true, validCount: 1, wasAlreadyValidated: false },
+  });
+  return { fixture, preparation };
+}
+
+async function exerciseRetainedReconciliation(input: {
+  readonly owner: DatabaseClient;
+  readonly ownerUrl: string;
+  readonly preparation: PrepareValidationOutput;
+  readonly currentReleaseId: string | null;
+  readonly suffix: string;
+  readonly label: string;
+  readonly cleanupPaths: string[];
+}): Promise<CatalogueReconciliationDocument> {
+  const { preparation } = input;
+  const path = `.local-data/evidence/catalogue-reconciliation/adr0103-${input.suffix}-${input.label}.json`;
+  await expect(lstat(join(WORKSPACE_ROOT, path))).rejects.toMatchObject({ code: "ENOENT" });
+  input.cleanupPaths.push(join(WORKSPACE_ROOT, path));
+  const base = [
+    "catalogue",
+    "reconcile",
+    "--batch-id",
+    preparation.batchId,
+    "--expected-current-release-id",
+    input.currentReleaseId ?? "none",
+    "--expected-validation-digest",
+    preparation.validationDigest,
+    "--report-out",
+    path,
+  ];
+  const args = [
+    ...base,
+    "--validation-request",
+    preparation.request.path,
+    "--validation-request-sha256",
+    preparation.request.sha256,
+    "--validation-request-bytes",
+    String(preparation.request.byteSize),
+  ];
+  const before = await catalogueSnapshot(input.owner);
+  const reject = async (rejectedArgs: readonly string[]) => {
+    const command = capture(validationEnvironment(input.ownerUrl));
+    expect(await runCommand(rejectedArgs, command.io)).toBe(1);
+    expect(command.output).toEqual([]);
+    expect(command.errors.length).toBeGreaterThan(0);
+    await expect(lstat(join(WORKSPACE_ROOT, path))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await catalogueSnapshot(input.owner)).toEqual(before);
+  };
+  await reject(base);
+  await reject([...base, "--validation-request", preparation.request.path]);
+  await reject(replaceOption(args, "--validation-request-sha256", "0".repeat(64)));
+  await reject(
+    replaceOption(args, "--validation-request-bytes", String(preparation.request.byteSize + 1)),
+  );
+  await reject(replaceOption(args, "--expected-validation-digest", "0".repeat(64)));
+  await reject(replaceOption(args, "--expected-current-release-id", randomUUID()));
+  const request = JSON.parse(
+    await readFile(join(WORKSPACE_ROOT, preparation.request.path), "utf8"),
+  ) as PreparedCatalogueValidationRequest;
+  const tampered = { ...request, expectedStagingSealSha256: "0".repeat(64) };
+  const tamperedPath = validationRequestPath(input.suffix, `${input.label}-seal-tamper`);
+  const bytes = Buffer.from(`${canonicalJson(tampered as unknown as JsonObject)}\n`);
+  await privateFile(join(WORKSPACE_ROOT, tamperedPath), bytes);
+  input.cleanupPaths.push(join(WORKSPACE_ROOT, tamperedPath));
+  await reject(
+    replaceOption(
+      replaceOption(
+        replaceOption(args, "--validation-request", tamperedPath),
+        "--validation-request-sha256",
+        hash(bytes),
+      ),
+      "--validation-request-bytes",
+      String(bytes.length),
+    ),
+  );
+  const command = capture(validationEnvironment(input.ownerUrl));
+  expect(await runCommand(args, command.io)).toBe(0);
+  const receipt = oneOutput<{ readonly reconciliationSha256: string }>(command);
+  const document: unknown = JSON.parse(await readFile(join(WORKSPACE_ROOT, path), "utf8"));
+  verifyCatalogueReconciliationDocument(document);
+  expect(document.reconciliationSha256).toBe(receipt.reconciliationSha256);
+  expect(document.evidence.candidate).toMatchObject({
+    batchId: preparation.batchId,
+    validationDigest: preparation.validationDigest,
+  });
+  if (input.currentReleaseId === null) expect(document.evidence.baseline).toBeNull();
+  else expect(document.evidence.baseline).toMatchObject({ releaseId: input.currentReleaseId });
+  expect(await catalogueSnapshot(input.owner)).toEqual(before);
+  return document;
+}
+
+function approvalArguments(
+  preparation: PrepareValidationOutput,
+  fixture: Fixture,
+  reviewer: ReviewLogin,
+): string[] {
+  return [
+    "catalogue",
+    "submit-approval",
+    "--batch-id",
+    preparation.batchId,
+    "--role",
+    reviewer.role,
+    "--manifest-sha256",
+    fixture.manifestSha256,
+    "--validation-digest",
+    preparation.validationDigest,
+    "--external-principal-id",
+    reviewer.principal,
+    "--approval-reference",
+    `review://synthetic-adr0103/${preparation.batchId}/${reviewer.role}`,
+  ];
+}
+
+async function promoteSyntheticBatch(
+  url: string,
+  principal: string,
+  batchId: string,
+): Promise<{
+  readonly activatedReleaseId: string;
+  readonly previousReleaseId: string | null;
+  readonly materializedCount: number;
+  readonly wasAlreadyCompleted: boolean;
+}> {
+  const database = createDatabase({ connectionString: url, maxConnections: 1 });
+  try {
+    const result = await database.executeQuery<{
+      readonly result: {
+        readonly activatedReleaseId: string;
+        readonly previousReleaseId: string | null;
+        readonly materializedCount: number;
+        readonly wasAlreadyCompleted: boolean;
+      };
+    }>(
+      query(
+        "select public.catalogue_promote_import_batch($1::uuid, $2::text, $3::text) as result",
+        [batchId, principal, "Synthetic ADR0103 baseline for isolated reconciliation test"],
+      ),
+    );
+    const row = result.rows[0]?.result;
+    if (!row) throw new Error("Synthetic promotion returned no receipt");
+    return row;
+  } finally {
+    await database.destroy();
+  }
 }
 
 function validationRequestPath(suffix: string, label: string): string {
@@ -958,7 +1465,11 @@ async function createFixtureRoot(root: string, cleanup: string[]): Promise<void>
 async function createFixture(
   suffix: string,
   cleanup: string[],
-  options: { readonly recordCount?: number; readonly unmappedNutrient?: boolean } = {},
+  options: {
+    readonly recordCount?: number;
+    readonly unmappedNutrient?: boolean;
+    readonly syntheticLiveReview?: boolean;
+  } = {},
 ): Promise<Fixture> {
   const recordCount = options.recordCount ?? RECORD_COUNT;
   const rootRelative = `.local-data/fdc-csv-stage-cli-${suffix}`;
@@ -1085,7 +1596,10 @@ async function createFixture(
       },
     },
   };
-  const bound = bindSyntheticReleaseEvidence(manifest, RUNNER);
+  const fixtureEvidence = bindSyntheticReleaseEvidence(manifest, RUNNER);
+  const bound = options.syntheticLiveReview
+    ? bindSyntheticLiveReview(fixtureEvidence)
+    : fixtureEvidence;
   manifest = bound.manifest;
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
   const manifestSha256 = hash(await readFile(manifestPath));
@@ -1252,7 +1766,11 @@ function databaseUrl(
   return url.href;
 }
 function identifier(value: string): string {
-  if (!/^fdc_csv_(?:cli|stage|validate|wrong|multi)_[0-9a-f]{16}$/u.test(value))
+  if (
+    !/^fdc_csv_(?:cli|stage|validate|wrong|multi|data|quality|rights|promote)_[0-9a-f]{16}$/u.test(
+      value,
+    )
+  )
     throw new Error("Invalid generated full-CSV resource identifier");
   return `"${value}"`;
 }

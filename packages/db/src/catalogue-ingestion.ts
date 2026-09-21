@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-
 import type { Kysely, Selectable, Transaction } from "kysely";
 import { sql } from "kysely";
+import type { PreparedCatalogueValidationRequest } from "./catalogue-capability-validation.js";
 import {
   buildCatalogueReconciliationDocument,
   type CatalogueReconciliationBuildInput,
@@ -15,6 +15,7 @@ import {
   type CatalogueReconciliationReleaseEvidence,
   type CatalogueReconciliationServingSnapshot,
 } from "./catalogue-reconciliation.js";
+import { verifyCatalogueReconciliationValidationRequest } from "./catalogue-reconciliation-validation.js";
 import {
   type CatalogueRecordValidationResult,
   type CatalogueValidationIssue,
@@ -351,6 +352,8 @@ export interface ReconcileCatalogueBatchInput {
   readonly batchId: string;
   readonly expectedCurrentReleaseId: string | null;
   readonly expectedValidationDigest: string;
+  /** Original retained request for a capability-validated candidate; never re-observed. */
+  readonly validationRequest?: PreparedCatalogueValidationRequest;
 }
 
 export interface PromoteBatchOptions {
@@ -1111,8 +1114,20 @@ export async function reconcileCatalogueBatch(
           "Candidate nutrient-mapping digest does not match active reviewed mappings",
         );
       }
-      const summary = candidateObservation.summary;
-      if (summary.validationDigest !== input.expectedValidationDigest) {
+      const summary = input.validationRequest
+        ? await verifyCatalogueReconciliationValidationRequest({
+            request: input.validationRequest,
+            batch,
+            parser: candidateParser.report,
+            sourceCode: source.code,
+            summary: candidateObservation.summary,
+            records: candidateObservation.entries.map((entry) => entry.record),
+          })
+        : candidateObservation.summary;
+      if (
+        summary.validationDigest !== input.expectedValidationDigest ||
+        summary.validationDigest !== batch.validation_digest
+      ) {
         throw new Error("Candidate validation digest does not match expectedValidationDigest");
       }
       const validatedCandidate = loadAndVerifyCandidateRows(
@@ -2645,6 +2660,9 @@ async function assertBaselineReleaseProvenance(
     validationSummary.validationDigest,
     "release validationSummary.validationDigest",
   );
+  if (validationDigest !== batch.validation_digest) {
+    throw new Error("Current release validation digest differs from its completed import batch");
+  }
   const nutrientMappingRevisionIds = jsonUuidArray(
     validationSummary.nutrientMappingRevisionIds,
     "release validationSummary.nutrientMappingRevisionIds",

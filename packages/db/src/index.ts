@@ -128,6 +128,12 @@ export {
   runCatalogueReviewerCanaries,
 } from "./catalogue-authority-deployment-runtime.js";
 export {
+  type CatalogueApprovalReceipt,
+  type CatalogueApprovalRole,
+  type SubmitCatalogueApprovalInput,
+  submitCatalogueApproval,
+} from "./catalogue-capability-approval.js";
+export {
   assertCatalogueValidatePrincipal,
   type CatalogueValidatePrincipal,
   type CatalogueValidationReceipt,

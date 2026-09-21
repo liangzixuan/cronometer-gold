@@ -102,7 +102,8 @@ retains earlier boundaries. A successful successor never changes an older result
 
 | Order | Work | Concrete exit |
 | --- | --- | --- |
-| Active beta prerequisite | Independent bounded full-CSV validation (ADR 0102), checklist C1 | Separate validate-only login, persisted exact prepare/submit request and semantic recheck. Focused checks, independent review, canonical gates and approved bounded PostgreSQL proof passed; exact-commit delivery remains pending. C1 scale/cutover and live acceptance stay open. |
+| Active beta prerequisite | Catalogue review handoff (ADR 0103), checklist C1 | Reconcile retained validation and submit decisions through restricted reviewer logins. Independent review, focused checks, pre-service canonical gates and approved synthetic PostgreSQL proof passed; delivery requires final canonical gates and exact-commit automatic proof. C1 scale/cutover and live acceptance stay open. |
+| Completed beta prerequisite | Independent bounded full-CSV validation (ADR 0102) | Delivered at `af65b98`: retained exact prepare/submit request, semantic recheck, approved synthetic PostgreSQL proof and all three CI/nine actual container jobs passed. |
 | Completed beta prerequisite | Capped full-CSV capability staging (ADR 0101) | Delivered at `772e10d`: bounded export verification, restricted-login staging/sealing, approved PostgreSQL proof, final local and all three CI/nine container jobs passed. |
 | Completed beta prerequisite | Full-FDC normalized-record export (ADR 0100) | Delivered at `ece0bbe`: bounded private verified export; local and all three CI/nine container jobs passed. |
 | Completed source milestone | Web diary repeat destination (ADR 0099) | Delivered at `57f0979`: chosen date/meal and exact retry destination; local gates and all three CI/nine actual container jobs passed. |
@@ -131,19 +132,22 @@ retains earlier boundaries. A successful successor never changes an older result
 | Completed external review | Scoped Claude review at `805b937` | The supplied report found no ADR 0077 blockers. Its recommendations were addressed in the delivered follow-up; the report remains limited to its original scope. Routine product work does not require another paid review. |
 | Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Advance only under applicable existing authorization and unchanged release gates. |
 
-### Active bounded beta prerequisite: independent full-CSV validation
+### Active bounded beta prerequisite: catalogue review handoff
 
 [ADR 0100](../adr/0100-fdc-csv-normalized-record-export.md) is delivered at
 `ece0bbe`, and [ADR 0101](../adr/0101-fdc-csv-capability-staging.md) at `772e10d`,
 each with required local and exact automatic evidence. Together they export,
 stage and seal a bounded verified batch under restricted staging authority.
-[ADR 0102](../adr/0102-fdc-csv-independent-validation.md) adds a separate
-validate-only consumer, an exact private prepared request and replay-safe
-submission through the existing semantic-recheck capability. Independent review,
-115 offline cases, affected types/Biome and canonical check/build passed. The
-separately approved PostgreSQL rehearsal passed on September 21 at 00:15 UTC,
-including the actual database case; owned cleanup and service shutdown passed.
-Exact-commit automatic delivery remains pending.
+[ADR 0102](../adr/0102-fdc-csv-independent-validation.md) is delivered at
+`af65b98`, including its approved PostgreSQL rehearsal and all three CI/nine
+actual container jobs. Its separate validator retains an exact private request
+for replay-safe submission through the existing semantic-recheck capability.
+[ADR 0103](../adr/0103-catalogue-review-handoff.md) connects that validation to
+reconciliation and restricted reviewer decisions. Independent review, 244 focused
+offline cases, affected types/Biome, pre-service canonical check/build and the
+approved bounded PostgreSQL rehearsal passed. The rehearsal executed five cases,
+zero skipped, on September 21 at 03:23 UTC; owned cleanup and service shutdown
+passed. Delivery requires final canonical gates and exact-commit automatic proof.
 
 Existing SQL limits remain 10,000 records, 64 MiB of PostgreSQL payload text,
 250 records/16 MiB per stage request and 1 MiB per payload. Accumulated-row scans,

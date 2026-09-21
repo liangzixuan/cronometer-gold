@@ -206,8 +206,8 @@ all three/nine actual jobs completed/success on attempt one at the final commit.
 At 23:26:47, local/tracking/live heads and all 18 reviewed working-tree/committed
 hashes matched cleanly. No unchanged service evidence was relabelled as fresh.
 
-[ADR 0102](../adr/0102-fdc-csv-independent-validation.md) is source/local complete,
-with exact-commit automatic delivery pending. A separate validate-only consumer
+[ADR 0102](../adr/0102-fdc-csv-independent-validation.md) is delivered at
+`af65b98b778f2bf539d81c81de9c00cb6ba1f381`. A separate validate-only consumer
 prepares and submits sealed bounded FDC validation while retaining the exact
 private request for uncertain retries. Independent review, 115 focused offline
 cases, affected types/Biome and canonical check/build passed. The latter recorded
@@ -231,9 +231,47 @@ were inactive/disabled, the Unix socket unavailable and group membership unchang
 No corrective retry was needed. Failed development attempts and earlier skips
 remain historical evidence. This does not establish Docker Desktop recovery.
 
-C1/C2, full-catalogue scale, authority cutover and all six beta exits remain open.
-Final delivery requires the frozen reviewed files, normal commit/push and all
-three CI/nine actual container jobs. No new timed automation is inferred.
+Final ADR0102 canonical check passed 157 fresh static and 4,656 cached cases,
+with 94 cached opt-in skips; build passed 11 cached tasks. The September 21
+01:54 UTC official observation confirms all three CI `35547454250` and nine actual
+container `35547454225` jobs completed successfully on attempt one. The final
+01:54:36 UTC verifier confirmed clean equal local/tracking/live heads and all
+17 reviewed working-tree/committed hashes. Outside-Git proof retains the raw
+observation and final verifier, with SHA-256 values
+`8cfe28d41da77af6f32d60023230ad4b079ca83023e043beed1635b32969915c` and
+`79e2fa4eb3915e5c6950bbe9048d2a15ac2cb1f5f2cdcd18ef794eb6cc2de056`.
+The delivery monitor is paused. Earlier fresh, cached and skipped evidence keeps
+its original scope.
+
+[ADR 0103](../adr/0103-catalogue-review-handoff.md) is the active bounded C1
+prerequisite: reconcile an independent validator's retained exact request and
+submit explicit reviewer decisions through restricted logins. Independent review,
+244 focused offline cases, affected types and scoped Biome passed. Pre-service
+canonical check/build passed. Delivery requires final canonical gates and
+exact-commit automatic proof.
+
+The specifically approved PostgreSQL rehearsal passed on its first attempt,
+September 21, 2026 at 03:23:17.239362-03:23:32.328412 UTC: five cases executed,
+zero skipped, comprising four repeated offline fixture cases and one actual
+database case. The bounded stage/validate/reconcile/three-reviewer handoff,
+authority and tamper rejection, exact uncertain-response replay and unchanged
+active state after approval passed. Separate synthetic live-reviewed evidence
+supported the explicitly approved disposable-database promotion and subsequent
+candidate reconciliation against that capability baseline. The fixture-nonrelease
+rejection remained intact; no SQL check was bypassed.
+
+Outside-Git proof retains `approved-postgres-20260921T032317Z.log`, SHA-256
+`cf0d85f6375cd91074ed736ec7259c966b95383a6ae7d5967cb8a4aac91cd9df`, and
+`service-rehearsal-fb3rwnm8/result.json`. At 03:23:32.634670 UTC, the lifecycle
+result recorded success without cleanup failures: owned container and credentials
+removed, empty engine, Docker service/socket and containerd inactive/disabled,
+socket unavailable and permanent group membership unchanged. The frozen source
+bytes remained unchanged. This completed session authorizes no further service
+run; prior failed attempts and opt-in skips retain their original status.
+
+Full-scale paging, restricted reconciliation access, external identity/caller
+cutover and all six beta exits remain open. Synthetic rehearsal evidence does not
+establish live catalogue, target or release acceptance.
 
 Use the [build plan](../product/build-plan.md) for priorities and the
 [release gates](release-gates.md) for authoritative acceptance. The
@@ -282,7 +320,7 @@ authorizations within their original scope.
 | Lane | Owner and next evidence | Exit |
 | --- | --- | --- |
 | Automatic delivery evidence | Delivery owner re-reads the exact commit's CI and actual container jobs. | Both applicable workflows complete successfully with required jobs executed; release artifact/digest/provenance requirements remain separate. [Supply chain](container-supply-chain.md#required-github-configuration). |
-| Beta engineering prerequisites | ADR 0102 source, independent review, focused/canonical checks and approved bounded PostgreSQL proof passed; final frozen-source delivery and exact automatic evidence remain. ADR 0101 is delivered. | Applicable source/local/automatic proof; C1 remains open for full-catalogue staging/validation, authority cutover and target scale evidence. [Beta checklist](../product/beta-exit-checklist.md). |
+| Beta engineering prerequisites | ADRs 0100 through 0102 are delivered. ADR 0103 independent review, focused checks, pre-service canonical gates and approved bounded PostgreSQL proof passed; delivery requires final canonical gates and exact-commit automatic proof. | Applicable source/local/automatic proof; C1 remains open for full-catalogue staging/validation, authority cutover and target scale evidence. [Beta checklist](../product/beta-exit-checklist.md). |
 | Signed device and accessibility | Release owner confirms identifier history and numbering; device operators and reviewers prepare approved Windows relay/capture prerequisites and the physical iOS/Android matrix. | Exact signed artifacts, protected-storage/OS-kill, notification, cross-client and accessibility evidence with required attestations. Exports do not substitute. [Windows boundary](../../infra/runbooks/physical-device-windows-wsl2-private-https.md), [release matrix](../../infra/runbooks/platform-health-release.md). |
 | Hosted beta and mail/privacy operations | Deployment/security, database/privacy and mail owners review target/budget, seven-image deployment, TLS/access/readiness, off-host restore and production delivery operations. | Hosted restore/erasure replay and access evidence, approved provider/sender and abuse/retry/suppression operations, independent review and rollout decisions. [Release](../../infra/runbooks/platform-health-release.md), [restore](../../infra/runbooks/postgres-backup-and-restore.md), [mail/privacy gates](release-gates.md). |
 | Live catalogue and database authority | Acquisition/storage operators, data-quality/rights reviewers and database authority owner provide authenticated dual acquisition, immutable retention, manifest-v4 review bundle, mapping/scale evidence and caller cutover. | Approved numeric catalogue/search/resource thresholds, three distinct role approvals and separate activation decision. The 363-food pilot and synthetic fixtures are insufficient. [Source runbook](../../infra/runbooks/food-source-release.md), [catalogue boundary](../product/build-plan.md#parallel-release-acceptance-target--live-catalogue-evidence). |
@@ -305,11 +343,12 @@ be reintroduced as missing source work from an older summary.
 
 ## Active milestone and successor
 
-Complete [ADR 0102](../adr/0102-fdc-csv-independent-validation.md) as one coherent
-independent-validator package: reviewed source, focused and canonical gates,
-approved actual PostgreSQL prepare/submit/retry proof (passed), and exact-commit
-automatic jobs. It does not close C1/C2 or authorize live validation/activation.
-ADRs 0077 through 0101 are delivered baselines. Subsequent work
+Complete [ADR 0103](../adr/0103-catalogue-review-handoff.md) as one coherent
+catalogue review handoff. Independent review, focused checks, pre-service canonical
+gates and the approved actual PostgreSQL rehearsal passed. Delivery requires final
+canonical gates and exact-commit automatic proof. It does not close C1/C2 or
+authorize live review/activation. ADRs 0077 through 0102 are delivered baselines.
+Subsequent work
 must advance the [beta checklist](../product/beta-exit-checklist.md), with one
 source package active and action-specific execution approvals preserved. Record
 interruptions in the outside-Git checkpoint; avoid status-only commit/build cycles.

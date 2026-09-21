@@ -1,8 +1,8 @@
 # ADR 0102: Prepare and submit bounded full-FDC validation as a separate login
 
-Status: Source and bounded local proof complete; exact-commit automatic delivery
-pending. Independent review, focused checks, canonical check/build and the approved
-PostgreSQL rehearsal passed. C1 and release acceptance remain open.
+Status: Delivered at `af65b98b778f2bf539d81c81de9c00cb6ba1f381`. Independent
+review, focused checks, canonical check/build, the approved PostgreSQL rehearsal
+and all three CI/nine actual container jobs passed. C1 and release acceptance remain open.
 
 ## Context
 
@@ -125,3 +125,9 @@ exact log and hash; earlier failed development attempts remain outside Git.
 
 Revisit for format expansion, policy changes, new limits, paging, authority
 cutover, multi-validator handoff or any change to the persisted retry contract.
+
+Automatic delivery completed on September 21, 2026: CI `35547454250` and container
+`35547454225` passed every required actual job on attempt one. The 01:54 UTC
+official observation and final verifier confirmed clean matching local, tracking
+and live heads and all 17 reviewed working-tree/committed hashes. This evidence
+applies to ADR0102's exact commit; successor work requires its own checks.

@@ -15,6 +15,8 @@ import {
   getSourceNutrientMappingDigest,
   type JsonObject,
   type JsonValue,
+  type PreparedCatalogueValidationRequest,
+  parsePreparedCatalogueValidationRequest,
   promoteBatch,
   reconcileCatalogueBatch,
   recordBatchParserReportAndValidate,
@@ -25,6 +27,7 @@ import {
   sha256CanonicalJson,
   stageBatch,
   stageBatchRecords,
+  submitCatalogueApproval,
   validateBatch,
 } from "@nutrition-tracker/db";
 import {
@@ -56,6 +59,7 @@ import {
 
 import { flagOption, optionalOption, parseArguments, requiredOption } from "./arguments.js";
 import { runCatalogueValidationCommand } from "./catalogue-validation-command.js";
+import { readCatalogueValidationRequest } from "./catalogue-validation-request.js";
 import { buildFdcCsvStageParserReport, stageVerifiedFdcCsvExport } from "./fdc-csv-stage.js";
 import { createFdcRecordExport } from "./fdc-record-export.js";
 import { openVerifiedFdcRecordExport } from "./fdc-record-reader.js";
@@ -105,6 +109,17 @@ const CATALOGUE_RECONCILE_OPTIONS = Object.freeze([
   "expected-current-release-id",
   "expected-validation-digest",
   "report-out",
+  "validation-request",
+  "validation-request-sha256",
+  "validation-request-bytes",
+]);
+const CATALOGUE_APPROVAL_OPTIONS = Object.freeze([
+  "batch-id",
+  "role",
+  "manifest-sha256",
+  "validation-digest",
+  "approval-reference",
+  "external-principal-id",
 ]);
 const STAGE_FDC_OPTIONS = Object.freeze([
   "artifact",
@@ -202,7 +217,10 @@ export async function runCommand(argv: readonly string[], io: CommandIo): Promis
         await registerSourceCommand(argv, arguments_.positionals, arguments_.options, io);
         return 0;
       case "catalogue reconcile":
-        await reconcileCommand(argv, arguments_.positionals, arguments_.options, io);
+        await runCatalogueReconcileCommand(argv, arguments_.positionals, arguments_.options, io);
+        return 0;
+      case "catalogue submit-approval":
+        await runCatalogueApprovalCommand(argv, arguments_.positionals, arguments_.options, io);
         return 0;
       case "catalogue approve":
         await approveCommand(arguments_.options, io);
@@ -299,13 +317,20 @@ function safeCommandErrorMessage(error: unknown): string {
     : `${message.slice(0, MAX_COMMAND_ERROR_MESSAGE_LENGTH - 1)}…`;
 }
 
-async function reconcileCommand(
+export async function runCatalogueReconcileCommand(
   argv: readonly string[],
   positionals: readonly string[],
   options: Readonly<Record<string, string | true>>,
   io: CommandIo,
+  workspaceRoot = WORKSPACE_ROOT,
 ): Promise<void> {
-  assertExactCatalogueReconcileArguments(argv, positionals, options);
+  assertExactCatalogueReviewArguments(
+    "reconcile",
+    CATALOGUE_RECONCILE_OPTIONS,
+    argv,
+    positionals,
+    options,
+  );
   const batchId = uuidInput(requiredOption(options, "batch-id"), "--batch-id");
   const expectedCurrentReleaseValue = requiredOption(options, "expected-current-release-id");
   const expectedCurrentReleaseId =
@@ -317,8 +342,38 @@ async function reconcileCommand(
     "--expected-validation-digest",
   );
   const reportOut = requiredOption(options, "report-out");
-  const reportPath = resolveCatalogueReconciliationReportPath(reportOut);
-
+  const reportPath = resolveCatalogueReconciliationReportPath(reportOut, workspaceRoot);
+  const requestOptions = [
+    "validation-request",
+    "validation-request-sha256",
+    "validation-request-bytes",
+  ];
+  let validationRequest: PreparedCatalogueValidationRequest | undefined;
+  if (requestOptions.some((name) => Object.hasOwn(options, name))) {
+    const path = requiredOption(options, "validation-request");
+    const sha256 = sha256Input(
+      requiredOption(options, "validation-request-sha256"),
+      "--validation-request-sha256",
+    );
+    const bytes = requiredOption(options, "validation-request-bytes");
+    const byteSize = Number(bytes);
+    if (!/^[1-9][0-9]*$/u.test(bytes) || !Number.isSafeInteger(byteSize)) {
+      throw new Error("--validation-request-bytes must be a canonical positive safe integer");
+    }
+    io.signal?.throwIfAborted();
+    validationRequest = parsePreparedCatalogueValidationRequest(
+      await readCatalogueValidationRequest(path, { sha256, byteSize }, workspaceRoot),
+    );
+    if (
+      validationRequest.batchId !== batchId ||
+      validationRequest.validationDigest !== expectedValidationDigest
+    ) {
+      throw new Error(
+        "Validation request does not match the pinned reconciliation batch and digest",
+      );
+    }
+  }
+  io.signal?.throwIfAborted();
   const database = createDatabaseFromEnvironment(io.environment);
   await runAfterRequiredCleanup(
     () =>
@@ -326,13 +381,15 @@ async function reconcileCommand(
         batchId,
         expectedCurrentReleaseId,
         expectedValidationDigest,
+        ...(validationRequest ? { validationRequest } : {}),
       }),
     () => database.destroy(),
     async (document) => {
+      io.signal?.throwIfAborted();
       await writeCatalogueReconciliationReportAtPath(
         reportPath,
         document as unknown as JsonValue,
-        WORKSPACE_ROOT,
+        workspaceRoot,
       );
       output(io, {
         batchId,
@@ -340,6 +397,70 @@ async function reconcileCommand(
         reconciliationSha256: document.reconciliationSha256,
         reportPath,
       });
+    },
+  );
+}
+
+export async function runCatalogueApprovalCommand(
+  argv: readonly string[],
+  positionals: readonly string[],
+  options: Readonly<Record<string, string | true>>,
+  io: CommandIo,
+): Promise<void> {
+  assertExactCatalogueReviewArguments(
+    "submit-approval",
+    CATALOGUE_APPROVAL_OPTIONS,
+    argv,
+    positionals,
+    options,
+  );
+  const batchId = uuidInput(requiredOption(options, "batch-id"), "--batch-id");
+  const approvalRole = requiredOption(options, "role");
+  if (approvalRole !== "data" && approvalRole !== "quality" && approvalRole !== "rights") {
+    throw new Error("--role must be data, quality, or rights");
+  }
+  const rightsManifestSha256 = sha256Input(
+    requiredOption(options, "manifest-sha256"),
+    "--manifest-sha256",
+  );
+  const validationDigest = sha256Input(
+    requiredOption(options, "validation-digest"),
+    "--validation-digest",
+  );
+  const principalId = requiredOption(options, "external-principal-id");
+  if (!PRINCIPAL_ID_PATTERN.test(principalId) || Buffer.byteLength(principalId) > 63) {
+    throw new Error(
+      "--external-principal-id must be a canonical principal matching the reviewer database login",
+    );
+  }
+  const approvalReference = requiredOption(options, "approval-reference");
+  if (
+    Buffer.byteLength(approvalReference) > 2048 ||
+    [...approvalReference].some((character) => {
+      const code = character.charCodeAt(0);
+      return code < 32 || code === 127;
+    })
+  ) {
+    throw new Error(
+      "--approval-reference must be at most 2048 UTF-8 bytes without control characters",
+    );
+  }
+  io.signal?.throwIfAborted();
+  const database = createDatabaseFromEnvironment(io.environment);
+  await runAfterRequiredCleanup(
+    () =>
+      submitCatalogueApproval(database, {
+        batchId,
+        approvalRole,
+        rightsManifestSha256,
+        validationDigest,
+        principalId,
+        approvalReference,
+      }),
+    () => database.destroy(),
+    async (receipt) => {
+      io.signal?.throwIfAborted();
+      output(io, { batchId, ...receipt });
     },
   );
 }
@@ -3187,17 +3308,19 @@ function hasErrorCode(error: unknown, code: string): boolean {
   );
 }
 
-function assertExactCatalogueReconcileArguments(
+function assertExactCatalogueReviewArguments(
+  command: "reconcile" | "submit-approval",
+  allowedOptions: readonly string[],
   argv: readonly string[],
   positionals: readonly string[],
   options: Readonly<Record<string, string | true>>,
 ): void {
   if (positionals.length !== 0) {
-    throw new Error("catalogue reconcile does not accept positional arguments");
+    throw new Error(`catalogue ${command} does not accept positional arguments`);
   }
-  const allowed = new Set(CATALOGUE_RECONCILE_OPTIONS);
+  const allowed = new Set(allowedOptions);
   for (const name of Object.keys(options)) {
-    if (!allowed.has(name)) throw new Error(`Unknown catalogue reconcile option: --${name}`);
+    if (!allowed.has(name)) throw new Error(`Unknown catalogue ${command} option: --${name}`);
   }
 
   // parseArguments intentionally uses a plain object. Inspect raw option names too
@@ -3208,7 +3331,7 @@ function assertExactCatalogueReconcileArguments(
     if (!token.startsWith("--")) continue;
     const name = token.slice(2).split("=", 1)[0];
     if (!name || !allowed.has(name)) {
-      throw new Error(`Unknown catalogue reconcile option: --${name ?? ""}`);
+      throw new Error(`Unknown catalogue ${command} option: --${name ?? ""}`);
     }
   }
 }
@@ -3592,11 +3715,12 @@ function usage(): string {
     "  ingest catalogue submit-validation <batch-id> --request .local-data/evidence/catalogue-validation/<name>.json --request-sha256 <sha256> --request-bytes <bytes>",
     "  ingest catalogue mappings <reviewed-mapping.json>",
     "  ingest catalogue register-source <import-ready-manifest> --evidence-bundle <bundle.json>",
-    "  ingest catalogue reconcile --batch-id <uuid> --expected-current-release-id <uuid|none> --expected-validation-digest <lowercase-sha256> --report-out .local-data/evidence/catalogue-reconciliation/<file>",
+    "  ingest catalogue reconcile --batch-id <uuid> --expected-current-release-id <uuid|none> --expected-validation-digest <lowercase-sha256> --report-out .local-data/evidence/catalogue-reconciliation/<file> [--validation-request .local-data/evidence/catalogue-validation/<name>.json --validation-request-sha256 <sha256> --validation-request-bytes <bytes>]",
+    "  ingest catalogue submit-approval --batch-id <uuid> --role <data|quality|rights> --manifest-sha256 <sha256> --validation-digest <sha256> --approval-reference <reference> --external-principal-id <reviewer-database-principal>",
     "  ingest catalogue approve --batch-id <id> --role <role> --manifest-sha256 <sha> --validation-digest <sha>",
     "  ingest catalogue promote --batch-id <id> [--reason <text>]",
     "  ingest catalogue rollback --source-code <code> --reason <text> (--target-release-id <id>|--deactivate)",
     "",
-    "Authority-changing release commands derive actor identity from the trusted runner environment; command-line principal overrides are not accepted. FDC inspection is database-free and non-authority-changing but writes only the caller-selected local cache/extraction paths. Catalogue reconciliation reads PostgreSQL and writes one local evidence report; neither command grants authority or accepts an actor.",
+    "Legacy authority-changing release commands derive actor identity from the trusted runner environment. Submit-approval requires a separate restricted reviewer database login and an explicit principal matching that authenticated session; the flag cannot grant authority. FDC inspection is database-free and non-authority-changing but writes only the caller-selected local cache/extraction paths. Catalogue reconciliation reads PostgreSQL and writes one local evidence report; neither command grants authority or accepts an actor.",
   ].join("\n");
 }

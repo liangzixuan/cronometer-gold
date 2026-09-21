@@ -346,6 +346,55 @@ preflight may reject input before SQL's independent cap. Do not split a release
 or raise limits to bypass the unfinished scale/validator/authority work. See
 [ADR 0101](../../docs/adr/0101-fdc-csv-capability-staging.md) and the six beta exits.
 
+### Review handoff for capability-validated batches (ADR 0103)
+
+The approved bounded synthetic PostgreSQL rehearsal passed on September 21, 2026.
+Delivery requires final canonical gates and exact-commit automatic proof. Follow
+the exact status in current readiness before target use; target execution still
+requires its own approved package.
+
+Keep the original private ADR0102 validation request after successful submission.
+For `catalogue reconcile`, add all three options to the existing batch/current-
+release/validation-digest/report-output pins:
+
+```sh
+--validation-request .local-data/evidence/catalogue-validation/<name>.json \
+--validation-request-sha256 <retained-whole-file-sha256> \
+--validation-request-bytes <retained-whole-file-byte-count>
+```
+
+Reconciliation verifies that request against the frozen batch and current semantic
+results. Never recompute a replacement observation or pass an owner-format digest
+to make a capability batch reconcile. Existing legacy candidates retain their
+original command. The read-only reconciliation connection still needs its existing
+table-read authority; a validate-only or reviewer login does not gain that access.
+
+After the named reviewer has inspected the pinned report and approved their own
+scope, use their actual restricted database login for one explicit decision:
+
+```sh
+pnpm --filter @nutrition-tracker/ingest cli -- catalogue submit-approval \
+  --batch-id <uuid> --role <data|quality|rights> \
+  --manifest-sha256 <reviewed-rights-manifest-sha256> \
+  --validation-digest <reviewed-validation-digest> \
+  --external-principal-id <exact-database-login> \
+  --approval-reference <reviewed-decision-reference>
+```
+
+The login must hold only the matching catalogue reviewer capability, with no owner
+membership, elevated role attributes or effective-role switch. Its database name
+must exactly match the explicit principal. The reference is exact, nonblank,
+trimmed, at most 2048 UTF-8 bytes and contains no ASCII controls. The SQL authority
+still requires current live-reviewed evidence and matching semantic/digest pins.
+Each of the three review scopes needs its own real authorized principal. This
+command does not appoint reviewers, grant roles or activate the catalogue.
+
+If the response is uncertain, preserve and repeat the exact command. An identical
+committed decision returns `wasAlreadyApproved: true`; a changed reference, digest
+or identity cannot overwrite it. Target credentials, independent review evidence
+and activation remain separately approved actions. Synthetic fixture proof does
+not satisfy those requirements.
+
 ### Independent bounded full-CSV validation (ADR 0102)
 
 Execute only after the exact local/target service package is approved. Use a

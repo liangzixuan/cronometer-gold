@@ -29,7 +29,7 @@ candidate; do not turn a unit test or an assigned role into a release approval.
 
 | ID | Required exit | Engineering and evidence remaining | Responsible roles and dependencies |
 | --- | --- | --- | --- |
-| C1 | Catalogue can be prepared at the intended scale under the correct authority | Full-scale paged full-CSV staging/validation beyond the bounded ADR 0101 proof; remaining full-snapshot consumers and measured resource/lock budgets; authenticated external principal and runtime credential/caller cutover; independent validator; remaining shared writers, direct-DML revocation and target canaries | Source integrator and independent in-task reviewer for code; database/release operators for target proof. ADRs 0100/0101 are delivered; ADR 0102 has reviewed source and passing bounded synthetic PostgreSQL validation, with exact-commit automatic delivery pending. Full-scale paging, authority cutover and target execution still require their own reviewed proof and approved packages. |
+| C1 | Catalogue can be prepared at the intended scale under the correct authority | Full-scale paged full-CSV staging/validation beyond the bounded ADR 0101 proof; remaining full-snapshot consumers and measured resource/lock budgets; authenticated external principal and runtime credential/caller cutover; retained-validation reconciliation and restricted reviewer consumer; remaining shared writers, direct-DML revocation and target canaries | Source integrator and independent in-task reviewer for code; database/release operators for target proof. ADRs 0100/0101/0102 are delivered, including bounded synthetic PostgreSQL validation and exact-commit automatic proof. ADR 0103 addresses the downstream reconciliation/reviewer handoff. Full-scale paging, authority cutover and target execution still require their own reviewed proof and approved packages. |
 | C2 | Consumer-usable catalogue is reviewed and ready for a separate activation decision | Exact candidate/market; two independent authenticated acquisitions; retained immutable object and current retention; rights/mapping review; approved numeric food/branded/GTIN, completeness, search and resource thresholds; non-current staging, reconciliation, index/relevance/barcode/rollback evidence and three required role approvals | User selects acquisition/storage operators and named data/rights reviewers. Requires C1 and approved acquisition/storage actions. The 363-food pilot is insufficient; activation remains separate. |
 | C3 | Account verification/recovery can operate safely in the beta | Durable or provider-idempotent transactional delivery; shared source/target abuse admission and timing review; authenticated TLS provider/sender/domain; retry, bounce/suppression/support handling; accepted enforcement policy and integrated proof | Source integrator plus mail/security operators. Provider, domain, budget and actual DNS/account operations need a concrete decision package. Local Mailpit proof does not close this row. |
 | C4 | Exact hosted candidate has accepted access, privacy and recovery | Approved target/budget; seven pinned application/service image digests and provenance; HTTPS/readiness/access checks; current retained-data inventory; hosted/off-host restoration, deletion-ledger replay, cross-owner checks and measured RPO/RTO; operational ownership and rollback | Deployment/security and database/privacy operators, with independent acceptance. Requires applicable C1/C3 changes and authorization for exact infrastructure/access actions. Published images alone are insufficient. |
@@ -42,9 +42,11 @@ candidate; do not turn a unit test or an assigned role into a release approval.
    with local and all required automatic jobs passed.
    [ADR 0101](../adr/0101-fdc-csv-capability-staging.md) is delivered at `772e10d`:
    capped restricted-login staging/parser seal, approved PostgreSQL proof and all
-   final local/automatic gates passed. Continue
-   [ADR 0102](../adr/0102-fdc-csv-independent-validation.md), an independent
-   bounded validator with retained exact prepare/submit requests. Existing SQL
+   final local/automatic gates passed.
+   [ADR 0102](../adr/0102-fdc-csv-independent-validation.md) is delivered at
+   `af65b98`, with independent bounded validation and retained exact requests.
+   Continue [ADR 0103](../adr/0103-catalogue-review-handoff.md), which connects
+   that validation to reconciliation and restricted reviewer decisions. Existing SQL
    caps, whole-batch observation and authority cutover still prevent full-scale
    readiness; none of these source prerequisites closes C1/C2.
 2. Finish the rest of C1 and C3 as coherent engineering packages. Before edits,
