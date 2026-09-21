@@ -102,7 +102,8 @@ retains earlier boundaries. A successful successor never changes an older result
 
 | Order | Work | Concrete exit |
 | --- | --- | --- |
-| Active beta prerequisite | Capped full-CSV capability staging (ADR 0101), checklist C1 | Bounded export verification, restricted-login staging and sealing passed real PostgreSQL proof. Final canonical validation and delivery remain pending; full-scale authority/validation and live acceptance remain open. |
+| Active beta prerequisite | Independent bounded full-CSV validation (ADR 0102), checklist C1 | Separate validate-only login, persisted exact prepare/submit request and semantic recheck. Focused checks, independent review, canonical gates and approved bounded PostgreSQL proof passed; exact-commit delivery remains pending. C1 scale/cutover and live acceptance stay open. |
+| Completed beta prerequisite | Capped full-CSV capability staging (ADR 0101) | Delivered at `772e10d`: bounded export verification, restricted-login staging/sealing, approved PostgreSQL proof, final local and all three CI/nine container jobs passed. |
 | Completed beta prerequisite | Full-FDC normalized-record export (ADR 0100) | Delivered at `ece0bbe`: bounded private verified export; local and all three CI/nine container jobs passed. |
 | Completed source milestone | Web diary repeat destination (ADR 0099) | Delivered at `57f0979`: chosen date/meal and exact retry destination; local gates and all three CI/nine actual container jobs passed. |
 | Completed source milestone | Web activity time occurrence choices (ADR 0098) | Delivered at `2a22a0f`: explicit repeated-minute choices with exact untouched timestamps and retries; local gates and all three CI/nine actual container jobs passed. |
@@ -130,21 +131,23 @@ retains earlier boundaries. A successful successor never changes an older result
 | Completed external review | Scoped Claude review at `805b937` | The supplied report found no ADR 0077 blockers. Its recommendations were addressed in the delivered follow-up; the report remains limited to its original scope. Routine product work does not require another paid review. |
 | Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Advance only under applicable existing authorization and unchanged release gates. |
 
-### Active bounded beta prerequisite: restricted full-CSV staging
+### Active bounded beta prerequisite: independent full-CSV validation
 
 [ADR 0100](../adr/0100-fdc-csv-normalized-record-export.md) is delivered at
-`ece0bbe`, including local and all required automatic evidence. Its verified
-export is the input to [ADR 0101](../adr/0101-fdc-csv-capability-staging.md): a
-restricted-login consumer with complete preflight, bounded pages, atomic
-checkpoints, last-page replay and an immutable parser seal. It stops before
-validation, approval or activation. Scoped offline proof and the separately
-approved 251-record PostgreSQL rehearsal passed on September 20, 2026. The
-always-on fixture regression also passed; final canonical validation after its
-correction, commit/push and exact-commit automatic evidence remain pending.
+`ece0bbe`, and [ADR 0101](../adr/0101-fdc-csv-capability-staging.md) at `772e10d`,
+each with required local and exact automatic evidence. Together they export,
+stage and seal a bounded verified batch under restricted staging authority.
+[ADR 0102](../adr/0102-fdc-csv-independent-validation.md) adds a separate
+validate-only consumer, an exact private prepared request and replay-safe
+submission through the existing semantic-recheck capability. Independent review,
+115 offline cases, affected types/Biome and canonical check/build passed. The
+separately approved PostgreSQL rehearsal passed on September 21 at 00:15 UTC,
+including the actual database case; owned cleanup and service shutdown passed.
+Exact-commit automatic delivery remains pending.
 
 Existing SQL limits remain 10,000 records, 64 MiB of PostgreSQL payload text,
-250 records/16 MiB per request and 1 MiB per payload. Accumulated-row scans,
-aggregate seal construction and full-batch validation still need coherent scale
+250 records/16 MiB per stage request and 1 MiB per payload. Accumulated-row scans,
+aggregate seal construction and whole-batch validation still need coherent scale
 work. Do not split a release or raise caps to call this consumer-scale readiness.
 The [beta checklist](beta-exit-checklist.md) retains all six open exits. Apply the
 [development workflow](../quality/development-workflow.md), required integration

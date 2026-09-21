@@ -1,9 +1,10 @@
 # ADR 0101: Stage and seal a bounded full-FDC CSV export through a restricted login
 
-Status: Source independently reviewed; 117 focused offline cases, the added
-always-on fixture regression and the approved real PostgreSQL rehearsal passed.
-Final canonical validation, commit/push and exact-commit automatic evidence remain
-pending.
+Status: Delivered at `772e10d92913b41307e46ff8977834c47ddbe167` after reviewed
+source and test corrections, local canonical gates and the approved bounded
+PostgreSQL rehearsal. All three CI and nine actual container jobs passed at that
+exact commit, observed September 20, 2026 at 23:26 UTC. C1 and release acceptance
+remain open.
 
 ## Context
 
@@ -103,10 +104,14 @@ failure, checkpoint/resume, immutable seal retry, denied direct DML and unchange
 activation/approval/outbox state. Its owner setup and temporary roles existed only
 in the disposable test cluster; owned-resource cleanup passed.
 
-Final canonical check/build after the fixture correction remain pending before
-normal commit/push and exact three CI/nine container job acceptance. Record actual
-outcomes in [current readiness](../quality/current-readiness.md) and the
-outside-Git checkpoint; skipped or cached results are not new service proof. The
+The final reviewed clean-checkout fixture correction passed canonical check/build
+and was normally pushed at `772e10d`. All three actual CI35534927910 jobs and all
+nine actual container35534927970 jobs passed on attempt one. Final 23:26 UTC
+verification recorded clean matching local/tracking/live heads and all 18 reviewed
+working-tree/committed hashes. Earlier commits' calendar-dependent test failure
+and missing-parent fixture failure remain recorded, alongside their corrections.
+See [current readiness](../quality/current-readiness.md) and the outside-Git
+checkpoint; skipped or cached results are not new service proof. The
 consumed installation/service approval covered this isolated rehearsal only. No
 live archive, target cutover, production audit, signed-client or deployment
 authority follows from it. Revisit this decision for new caps,

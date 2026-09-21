@@ -3442,7 +3442,7 @@ interface NutrientMappingDigestRow {
   readonly sourceUnit: string;
 }
 
-function nutrientMappingRevisionDigest(rows: readonly NutrientMappingDigestRow[]): string {
+export function nutrientMappingRevisionDigest(rows: readonly NutrientMappingDigestRow[]): string {
   const sorted = [...rows].sort((left, right) =>
     compareCodePoints(left.sourceNutrientKey, right.sourceNutrientKey),
   );

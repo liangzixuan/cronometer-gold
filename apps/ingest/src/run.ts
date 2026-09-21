@@ -55,6 +55,7 @@ import {
 } from "@nutrition-tracker/ingestion";
 
 import { flagOption, optionalOption, parseArguments, requiredOption } from "./arguments.js";
+import { runCatalogueValidationCommand } from "./catalogue-validation-command.js";
 import { buildFdcCsvStageParserReport, stageVerifiedFdcCsvExport } from "./fdc-csv-stage.js";
 import { createFdcRecordExport } from "./fdc-record-export.js";
 import { openVerifiedFdcRecordExport } from "./fdc-record-reader.js";
@@ -173,6 +174,17 @@ export async function runCommand(argv: readonly string[], io: CommandIo): Promis
         return 0;
       case "cnf inspect":
         await inspectCnfCommand(argv, arguments_.positionals, arguments_.options, io);
+        return 0;
+      case "catalogue prepare-validation":
+      case "catalogue submit-validation":
+        await runCatalogueValidationCommand(
+          command === "catalogue prepare-validation" ? "prepare-validation" : "submit-validation",
+          argv,
+          arguments_.positionals,
+          arguments_.options,
+          io,
+          WORKSPACE_ROOT,
+        );
         return 0;
       case "catalogue stage-fdc-csv":
         await stageFdcCsvCommand(argv, arguments_.positionals, arguments_.options, io);
@@ -3576,6 +3588,8 @@ function usage(): string {
     "  ingest catalogue stage-fdc <manifest> --artifact <zip> --cache-dir <path> --evidence-bundle <bundle.json> --extract-dir <path> --manifest-object-uri <s3-uri>",
     "  ingest catalogue stage-fdc-csv <manifest> --records .local-data/evidence/fdc-csv-records/<name>.ndjson --records-sha256 <sha256> --records-bytes <bytes> --nutrient-mapping-sha256 <sha256> --evidence-bundle <bundle.json> --manifest-object-uri <s3-uri>",
     "  ingest catalogue stage-cnf <manifest> --artifact <zip> --cache-dir <path> --evidence-bundle <bundle.json> --extract-dir <path> --manifest-object-uri <s3-uri>",
+    "  ingest catalogue prepare-validation <batch-id> --staging-seal-sha256 <sha256> --nutrient-mapping-sha256 <sha256> --maximum-excluded-nutrient-fraction <0..1> --maximum-quarantine-fraction <0..1> --maximum-quarantined-records <count> --require-distinct-approval-principals true --require-at-least-one-valid-record true --require-materialized-nutrient-per-valid-record true --request-out .local-data/evidence/catalogue-validation/<name>.json",
+    "  ingest catalogue submit-validation <batch-id> --request .local-data/evidence/catalogue-validation/<name>.json --request-sha256 <sha256> --request-bytes <bytes>",
     "  ingest catalogue mappings <reviewed-mapping.json>",
     "  ingest catalogue register-source <import-ready-manifest> --evidence-bundle <bundle.json>",
     "  ingest catalogue reconcile --batch-id <uuid> --expected-current-release-id <uuid|none> --expected-validation-digest <lowercase-sha256> --report-out .local-data/evidence/catalogue-reconciliation/<file>",

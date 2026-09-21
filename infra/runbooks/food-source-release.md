@@ -346,6 +346,59 @@ preflight may reject input before SQL's independent cap. Do not split a release
 or raise limits to bypass the unfinished scale/validator/authority work. See
 [ADR 0101](../../docs/adr/0101-fdc-csv-capability-staging.md) and the six beta exits.
 
+### Independent bounded full-CSV validation (ADR 0102)
+
+Execute only after the exact local/target service package is approved. Use a
+separate short-lived validate-only database login through the existing credential
+boundary, distinct from the stager. Do not use owner credentials or `SET ROLE`.
+This consumer supports ADR0101's sealed USDA_FDC full-CSV report, not a live
+acquisition or a general full-catalogue scale claim. Preserve all existing caps.
+
+Review the batch, seal, mapping and complete policy first. The numeric values
+below are placeholders for approved thresholds, not defaults or release policy.
+All three boolean safeguards must remain true. Use a new private filename:
+
+```sh
+pnpm --filter @nutrition-tracker/ingest cli -- catalogue prepare-validation <batch-uuid> \
+  --staging-seal-sha256 <recorded-seal-sha256> \
+  --nutrient-mapping-sha256 <reviewed-mapping-sha256> \
+  --maximum-excluded-nutrient-fraction <approved-fraction> \
+  --maximum-quarantine-fraction <approved-fraction> \
+  --maximum-quarantined-records <approved-count> \
+  --require-distinct-approval-principals true \
+  --require-at-least-one-valid-record true \
+  --require-materialized-nutrient-per-valid-record true \
+  --request-out .local-data/evidence/catalogue-validation/<name>.json
+```
+
+Preparation writes no catalogue rows. It publishes an exact private request only
+after database cleanup and returns its path, SHA-256 and byte size. Keep the file
+and those pins together with the reviewed inputs. Do not edit or overwrite it.
+The saved request includes private source records; do not paste it into public
+issues, email or command output.
+
+```sh
+pnpm --filter @nutrition-tracker/ingest cli -- catalogue submit-validation <batch-uuid> \
+  --request .local-data/evidence/catalogue-validation/<name>.json \
+  --request-sha256 <prepared-file-sha256> --request-bytes <prepared-file-byte-size>
+```
+
+Submission checks the complete pinned file before database access and submits
+only the retained document through the public semantic-rechecking capability.
+After a lost acknowledgement, receipt or cleanup failure, preserve the file and
+repeat exactly this submit command. Do not prepare a replacement from changed
+database state. An existing output file is never automatically replaced; inspect
+it after a publication failure. Changed mapping/seal/observation/policy requires
+reconciliation, not invented retry pins or relaxed checks.
+
+Read the receipt's `promotionEligible` and `wasAlreadyValidated` independently.
+A valid policy failure can quarantine the batch. A valid semantic receipt is not
+an approval, target identity acceptance or activation decision. The three role
+approvals and existing activation/release gates remain intact. Full-scale
+validation, external identity cutover and representative resource/lock evidence
+remain open under [ADR 0102](../../docs/adr/0102-fdc-csv-independent-validation.md).
+
+
 ### Health Canada CNF inventory and baseline
 
 The CNF nine-CSV parser contract is not the archive inventory. Before changing a

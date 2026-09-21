@@ -106,7 +106,8 @@ ADR with a new ADR instead of rewriting its decision.
 | [0098](./0098-web-activity-time-occurrence.md) | Choose web activity time occurrences explicitly | Implemented at 2a22a0f; local and exact-commit automatic evidence passed; browser/release acceptance separate |
 | [0099](./0099-web-diary-repeat-destination.md) | Choose the web diary repeat destination | Delivered at `57f0979`; reviewed local and all 3 CI/9 container jobs passed; release acceptance remains separate |
 | [0100](./0100-fdc-csv-normalized-record-export.md) | Bounded verified full-FDC normalized-record export and finite beta exit priority | Delivered at `ece0bbe`; local and all three CI/nine container jobs passed on attempt one |
-| [0101](./0101-fdc-csv-capability-staging.md) | Restricted full-CSV-format staging and parser seal within existing caps | Reviewed source and approved real PostgreSQL rehearsal passed; final canonical and exact-commit automatic outcomes recorded separately; C1 scale and release acceptance remain open |
+| [0101](./0101-fdc-csv-capability-staging.md) | Restricted full-CSV-format staging and parser seal within existing caps | Delivered at `772e10d`; approved bounded PostgreSQL proof, final local and all three CI/nine container jobs passed; C1 scale and release acceptance remain open |
+| [0102](./0102-fdc-csv-independent-validation.md) | Prepare and submit bounded full-CSV validation as a separate login | Source/local complete, including approved bounded PostgreSQL proof; exact-commit automatic delivery pending; C1 and release acceptance remain open |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

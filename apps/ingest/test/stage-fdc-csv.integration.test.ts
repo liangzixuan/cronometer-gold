@@ -4,12 +4,17 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import {
+  type CatalogueValidationReceipt,
+  canonicalJson,
   createDatabase,
   getBatchCheckpoint,
   getSourceNutrientMappingDigest,
+  type JsonObject,
+  type PreparedCatalogueValidationRequest,
+  parsePreparedCatalogueValidationRequest,
   runMigrations,
 } from "@nutrition-tracker/db";
-import type { FoodSourceManifestV4 } from "@nutrition-tracker/ingestion";
+import type { FoodSourceManifestV4, StagedFoodRecord } from "@nutrition-tracker/ingestion";
 import { describe, expect, it, vi } from "vitest";
 
 import { type CommandIo, runCommand } from "../src/run.js";
@@ -43,6 +48,25 @@ interface StageOutput {
     readonly recordCount: number;
     readonly recordsSha256: string;
   };
+}
+interface PrepareValidationOutput {
+  readonly batchId: string;
+  readonly request: { readonly path: string; readonly sha256: string; readonly byteSize: number };
+  readonly validationDigest: string;
+  readonly validatorDatabasePrincipal: string;
+}
+interface SubmitValidationOutput {
+  readonly batchId: string;
+  readonly requestSha256: string;
+  readonly validation: CatalogueValidationReceipt;
+}
+type MutableJsonObject = { -readonly [Key in keyof JsonObject]: JsonObject[Key] };
+interface ValidationDocument extends MutableJsonObject {
+  digestDocument: string;
+  records: MutableJsonObject[];
+}
+interface ValidationDigestDocument extends MutableJsonObject {
+  records: MutableJsonObject[];
 }
 interface InspectionOutput {
   readonly baseline: Record<string, boolean | number | string>;
@@ -111,8 +135,46 @@ describe("synthetic full-FDC CSV integration fixture", () => {
   });
 });
 
+describe("synthetic validation policy fixture", () => {
+  it("exports one valid food with an unmapped nutrient without PostgreSQL", async () => {
+    const cleanupPaths: string[] = [];
+    const deniedFetch = vi.fn(() =>
+      Promise.reject(new Error("Synthetic fixture forbids network fetch")),
+    );
+    try {
+      vi.stubGlobal("fetch", deniedFetch);
+      const fixture = await createFixture(randomBytes(8).toString("hex"), cleanupPaths, {
+        recordCount: 1,
+        unmappedNutrient: true,
+      });
+      const bytes = await readFile(join(WORKSPACE_ROOT, fixture.recordsRelative));
+      expect(bytes.byteLength).toBe(fixture.recordsBytes);
+      expect(hash(bytes)).toBe(fixture.recordsSha256);
+      const lines = bytes.toString("utf8").trimEnd().split("\n");
+      expect(lines).toHaveLength(3);
+      const record = JSON.parse(lines[1] ?? "null") as StagedFoodRecord;
+      expect(record.source.sourceRecordId).toBe("1000");
+      expect(record.nutrients).toHaveLength(2);
+      expect(record.nutrients).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ sourceNutrientId: "1008", originalUnit: "KCAL" }),
+          expect.objectContaining({
+            sourceNutrientId: "9999",
+            originalUnit: "MG",
+            value: expect.objectContaining({ state: "known", amount: "1" }),
+          }),
+        ]),
+      );
+      expect(deniedFetch).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+      for (const path of cleanupPaths.reverse()) await rm(path, { force: true, recursive: true });
+    }
+  });
+});
+
 describeDatabase("synthetic full-FDC CSV capability CLI PostgreSQL integration", () => {
-  it("rejects invalid input and authority, resumes one committed page and seals without validation", async () => {
+  it("stages through page recovery, then validates independently with exact retained retries", async () => {
     if (!adminDatabaseUrl) throw new Error("FDC_CSV_CLI_TEST_DATABASE_ADMIN_URL is required");
     const adminUrl = localAdminUrl(adminDatabaseUrl);
     const suffix = randomBytes(8).toString("hex");
@@ -124,9 +186,11 @@ describeDatabase("synthetic full-FDC CSV capability CLI PostgreSQL integration",
         name: `fdc_csv_multi_${suffix}`,
         capabilities: ["nutrition_catalogue_stage", "nutrition_catalogue_validate"],
       },
+      { name: `fdc_csv_validate_${suffix}`, capabilities: ["nutrition_catalogue_validate"] },
     ].map((role) => ({ ...role, password: randomBytes(24).toString("hex") }));
     const stageRole = roles[0];
-    if (!stageRole) throw new Error("Synthetic stage role is missing");
+    const validateRole = roles[3];
+    if (!stageRole || !validateRole) throw new Error("Synthetic stage or validate role is missing");
     const cleanupPaths: string[] = [];
     const createdRoles: string[] = [];
     let databaseCreated = false;
@@ -222,7 +286,7 @@ describeDatabase("synthetic full-FDC CSV capability CLI PostgreSQL integration",
             },
             sourceName: "Energy",
             sourceNutrientKey: "1008",
-            sourceUnit: "kcal",
+            sourceUnit: "KCAL",
           },
         ],
         reviewedAt: SYNTHETIC_EVIDENCE_EVALUATED_AT,
@@ -424,6 +488,23 @@ describeDatabase("synthetic full-FDC CSV capability CLI PostgreSQL integration",
       const after = await catalogueSnapshot(owner);
       expect(after.releaseState).toEqual(before.releaseState);
       expect(after.authorityState).toEqual(before.authorityState);
+      await exerciseIndependentValidation({
+        owner,
+        ownerUrl,
+        stageUrl,
+        stagePrincipal: stageRole.name,
+        validateUrl: databaseUrl(adminUrl, databaseName, validateRole),
+        validatePrincipal: validateRole.name,
+        rejectedUrls: [
+          ownerUrl,
+          stageUrl,
+          ...roles.slice(1, 3).map((role) => databaseUrl(adminUrl, databaseName, role)),
+        ],
+        staged: result,
+        mappingSha256,
+        suffix,
+        cleanupPaths,
+      });
       expect(deniedFetch).not.toHaveBeenCalled();
     } catch (error) {
       primaryError = sanitizedError(error, [adminUrl, ...roles.map((role) => role.password)]);
@@ -483,29 +564,422 @@ describeDatabase("synthetic full-FDC CSV capability CLI PostgreSQL integration",
   }, 180_000);
 });
 
+async function exerciseIndependentValidation(input: {
+  readonly owner: DatabaseClient;
+  readonly ownerUrl: string;
+  readonly stageUrl: string;
+  readonly stagePrincipal: string;
+  readonly validateUrl: string;
+  readonly validatePrincipal: string;
+  readonly rejectedUrls: readonly string[];
+  readonly staged: StageOutput;
+  readonly mappingSha256: string;
+  readonly suffix: string;
+  readonly cleanupPaths: string[];
+}): Promise<void> {
+  const { owner, staged, cleanupPaths, mappingSha256 } = input;
+  const environment = validationEnvironment(input.validateUrl);
+  const before = await catalogueSnapshot(owner);
+  const requestPath = validationRequestPath(input.suffix, "retained");
+  await expect(lstat(join(WORKSPACE_ROOT, requestPath))).rejects.toMatchObject({ code: "ENOENT" });
+  cleanupPaths.push(join(WORKSPACE_ROOT, requestPath));
+  const prepareArgs = prepareValidationArguments(staged, mappingSha256, requestPath);
+  for (const url of input.rejectedUrls) {
+    const denied = capture(validationEnvironment(url));
+    expect(await runCommand(prepareArgs, denied.io)).toBe(1);
+    expect(denied.output).toEqual([]);
+    await expect(lstat(join(WORKSPACE_ROOT, requestPath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(await catalogueSnapshot(owner)).toEqual(before);
+  }
+  for (const option of ["--staging-seal-sha256", "--nutrient-mapping-sha256"]) {
+    const stale = capture(environment);
+    expect(await runCommand(replaceOption(prepareArgs, option, "0".repeat(64)), stale.io)).toBe(1);
+    expect(stale.output).toEqual([]);
+    expect(await catalogueSnapshot(owner)).toEqual(before);
+  }
+  const prepared = capture(environment);
+  expect(await runCommand(prepareArgs, prepared.io)).toBe(0);
+  const preparation = oneOutput<PrepareValidationOutput>(prepared);
+  expect(preparation).toMatchObject({
+    batchId: staged.batchId,
+    validatorDatabasePrincipal: input.validatePrincipal,
+    request: { path: requestPath },
+  });
+  const requestBytes = await readFile(join(WORKSPACE_ROOT, requestPath));
+  expect(preparation.request).toMatchObject({
+    sha256: hash(requestBytes),
+    byteSize: requestBytes.length,
+  });
+  expect((await lstat(join(WORKSPACE_ROOT, requestPath))).mode & 0o777).toBe(0o600);
+  const retained = parsePreparedCatalogueValidationRequest(
+    JSON.parse(requestBytes.toString("utf8")),
+  );
+  expect(requestBytes.toString("utf8")).toBe(
+    `${canonicalJson(retained as unknown as JsonObject)}\n`,
+  );
+  expect(retained).toMatchObject({
+    batchId: staged.batchId,
+    validatorDatabasePrincipal: input.validatePrincipal,
+    expectedStagingSealSha256: staged.stagingSealSha256,
+    nutrientMappingDigest: mappingSha256,
+    parserReportSha256: staged.parserReportSha256,
+    validationDigest: preparation.validationDigest,
+  });
+  expect(retained.policy).toEqual({
+    maximumExcludedNutrientFraction: 0,
+    maximumQuarantineFraction: 0,
+    maximumQuarantinedRecords: 0,
+    requireDistinctApprovalPrincipals: true,
+    requireAtLeastOneValidRecord: true,
+    requireMaterializedNutrientPerValidRecord: true,
+  });
+  expect(retained.observationSha256).toMatch(/^[0-9a-f]{64}$/u);
+  expect(await catalogueSnapshot(owner)).toEqual(before);
+  const noOverwrite = capture(environment);
+  expect(await runCommand(prepareArgs, noOverwrite.io)).toBe(1);
+  expect(await readFile(join(WORKSPACE_ROOT, requestPath))).toEqual(requestBytes);
+  expect(await catalogueSnapshot(owner)).toEqual(before);
+
+  const validator = createDatabase({ connectionString: input.validateUrl, maxConnections: 1 });
+  try {
+    const identity = await validator.executeQuery<{ readonly principal: string }>(
+      query("select session_user::text as principal"),
+    );
+    expect(identity.rows[0]?.principal).toBe(input.validatePrincipal);
+    for (const statement of [
+      "update public.food_import_batch set validation_digest = validation_digest where false",
+      "update public.food_import_record set validation_status = validation_status where false",
+    ])
+      await expect(validator.executeQuery(query(statement))).rejects.toMatchObject({
+        code: "42501",
+      });
+  } finally {
+    await validator.destroy();
+  }
+
+  const submitArgs = submitValidationArguments(preparation);
+  const rejectSubmission = async (args: readonly string[], url = input.validateUrl) => {
+    const rejected = capture(validationEnvironment(url));
+    expect(await runCommand(args, rejected.io)).toBe(1);
+    expect(rejected.output).toEqual([]);
+    expect(rejected.errors.length).toBeGreaterThan(0);
+    expect(await catalogueSnapshot(owner)).toEqual(before);
+    return rejected;
+  };
+  for (const url of input.rejectedUrls) await rejectSubmission(submitArgs, url);
+  await rejectSubmission(replaceOption(submitArgs, "--request-sha256", "0".repeat(64)));
+  await rejectSubmission(
+    replaceOption(submitArgs, "--request-bytes", String(requestBytes.length + 1)),
+  );
+  const tamperedPath = validationRequestPath(input.suffix, "tampered-file");
+  await privateFile(
+    join(WORKSPACE_ROOT, tamperedPath),
+    Buffer.concat([requestBytes, Buffer.from("\n")]),
+  );
+  cleanupPaths.push(join(WORKSPACE_ROOT, tamperedPath));
+  await rejectSubmission(replaceOption(submitArgs, "--request", tamperedPath));
+
+  const rewrittenRequest = (
+    mutate: (document: ValidationDocument, digest: ValidationDigestDocument) => void,
+    overrides: Partial<PreparedCatalogueValidationRequest> = {},
+  ): PreparedCatalogueValidationRequest => {
+    const document = JSON.parse(retained.validationDocument) as ValidationDocument;
+    const digest = JSON.parse(document.digestDocument) as ValidationDigestDocument;
+    mutate(document, digest);
+    document.digestDocument = canonicalJson(digest);
+    const validationDocument = canonicalJson(document);
+    return parsePreparedCatalogueValidationRequest({
+      ...retained,
+      ...overrides,
+      validationDocument,
+      validationDocumentByteSize: Buffer.byteLength(validationDocument),
+      validationDocumentSha256: hash(Buffer.from(validationDocument)),
+      validationDigest: hash(Buffer.from(document.digestDocument)),
+    });
+  };
+  const saveRewritten = async (label: string, request: PreparedCatalogueValidationRequest) => {
+    const path = validationRequestPath(input.suffix, label);
+    const bytes = Buffer.from(`${canonicalJson(request as unknown as JsonObject)}\n`);
+    await privateFile(join(WORKSPACE_ROOT, path), bytes);
+    cleanupPaths.push(join(WORKSPACE_ROOT, path));
+    return submitValidationArguments({
+      batchId: staged.batchId,
+      request: { path, sha256: hash(bytes), byteSize: bytes.length },
+      validationDigest: request.validationDigest,
+      validatorDatabasePrincipal: input.validatePrincipal,
+    });
+  };
+  const wrongSeal = rewrittenRequest(() => {}, { expectedStagingSealSha256: "0".repeat(64) });
+  await rejectSubmission(await saveRewritten("stale-seal", wrongSeal));
+  const wrongMapping = rewrittenRequest(
+    (_document, digest) => {
+      digest.nutrientMappingDigest = "0".repeat(64);
+    },
+    { nutrientMappingDigest: "0".repeat(64) },
+  );
+  await rejectSubmission(await saveRewritten("stale-mapping", wrongMapping));
+  const staleObservation = rewrittenRequest(
+    (_document, digest) => {
+      digest.observationSha256 = "0".repeat(64);
+    },
+    { observationSha256: "0".repeat(64) },
+  );
+  const stale = await rejectSubmission(await saveRewritten("stale-observation", staleObservation));
+  expect(stale.errors.join("\n")).toContain("observation");
+
+  // Rehash every envelope so the public SQL semantic recheck, rather than a
+  // mismatched file/document digest, must reject the fabricated nutrient value.
+  const wrongNutrition = rewrittenRequest((document, digest) => {
+    const record = document.records[0];
+    const digestRecord = digest.records[0];
+    if (!record || !digestRecord || typeof record.validatedFoodDocument !== "string")
+      throw new Error("Synthetic validated food is missing");
+    const food = JSON.parse(record.validatedFoodDocument) as MutableJsonObject;
+    const nutrients = food.nutrients as MutableJsonObject[];
+    const nutrient = nutrients[0];
+    if (!nutrient) throw new Error("Synthetic validated nutrient is missing");
+    nutrient.amount = nutrient.amount === "0" ? "1" : "0";
+    record.validatedFoodDocument = canonicalJson(food);
+    digestRecord.validatedFoodSha256 = hash(Buffer.from(record.validatedFoodDocument));
+  });
+  const semantic = await rejectSubmission(await saveRewritten("wrong-nutrition", wrongNutrition));
+  expect(semantic.errors.join("\n")).toMatch(/semantic|nutrient|nutrition/iu);
+
+  // The database commits before the CLI output transport fails. The operator
+  // retries the identical private file; no fresh observation/document replaces it.
+  const lost = capture(environment);
+  let discardedAcknowledgement: SubmitValidationOutput | undefined;
+  expect(
+    await runCommand(submitArgs, {
+      ...lost.io,
+      writeOutput: (value) => {
+        discardedAcknowledgement = JSON.parse(value) as SubmitValidationOutput;
+        throw new Error("synthetic validation acknowledgement lost after commit");
+      },
+    }),
+  ).toBe(1);
+  expect(lost.errors.join("\n")).toContain(
+    "synthetic validation acknowledgement lost after commit",
+  );
+  expect(discardedAcknowledgement).toMatchObject({
+    batchId: staged.batchId,
+    requestSha256: preparation.request.sha256,
+    validation: {
+      wasAlreadyValidated: false,
+      stagedCount: RECORD_COUNT,
+      validCount: RECORD_COUNT,
+      quarantinedCount: 0,
+      promotionEligible: true,
+      validationDigest: preparation.validationDigest,
+      nutritionSemanticContractVersion: 1,
+    },
+  });
+  const validated = await owner
+    .selectFrom("food_import_batch")
+    .selectAll()
+    .where("id", "=", staged.batchId)
+    .executeTakeFirstOrThrow();
+  expect(validated).toMatchObject({
+    status: "ready",
+    staged_database_principal: input.stagePrincipal,
+    validated_database_principal: input.validatePrincipal,
+    validated_database_capability_role: "nutrition_catalogue_validate",
+    validation_digest: preparation.validationDigest,
+  });
+  expect(input.validatePrincipal).not.toBe(input.stagePrincipal);
+  expect(validated.validated_at).not.toBeNull();
+  const afterCommit = await catalogueSnapshot(owner);
+  expect(afterCommit.releaseState).toEqual(before.releaseState);
+  expect(afterCommit.authorityState).toEqual(before.authorityState);
+  expect(discardedAcknowledgement?.validation.nutritionSemanticSha256).toMatch(/^[0-9a-f]{64}$/u);
+  expect(discardedAcknowledgement?.validation.nutritionSemanticSha256).toBe(
+    validated.nutrition_semantic_sha256,
+  );
+  const changedPolicy = { ...retained.policy, maximumQuarantinedRecords: 1 };
+  const changedRetry = rewrittenRequest(
+    (_document, digest) => {
+      digest.policy = changedPolicy;
+    },
+    { policy: changedPolicy },
+  );
+  expect(changedRetry.validationDigest).not.toBe(retained.validationDigest);
+  const changed = capture(environment);
+  expect(
+    await runCommand(await saveRewritten("changed-policy-retry", changedRetry), changed.io),
+  ).toBe(1);
+  expect(changed.output).toEqual([]);
+  expect(changed.errors.join("\n")).toContain("replay differs from immutable validation evidence");
+  expect(await catalogueSnapshot(owner)).toEqual(afterCommit);
+  const retry = capture(environment);
+  expect(await runCommand(submitArgs, retry.io)).toBe(0);
+  expect(oneOutput<SubmitValidationOutput>(retry)).toMatchObject({
+    batchId: staged.batchId,
+    requestSha256: preparation.request.sha256,
+    validation: {
+      wasAlreadyValidated: true,
+      validationDigest: preparation.validationDigest,
+      nutrientMappingDigest: mappingSha256,
+      nutritionSemanticContractVersion: 1,
+      nutritionSemanticSha256: validated.nutrition_semantic_sha256,
+      stagedCount: RECORD_COUNT,
+      validCount: RECORD_COUNT,
+      promotionEligible: true,
+    },
+  });
+  expect(await catalogueSnapshot(owner)).toEqual(afterCommit);
+  expect(await readFile(join(WORKSPACE_ROOT, requestPath))).toEqual(requestBytes);
+
+  const quarantine = await createFixture(randomBytes(8).toString("hex"), cleanupPaths, {
+    recordCount: 1,
+    unmappedNutrient: true,
+  });
+  const registration = capture(runnerEnvironment(input.ownerUrl));
+  expect(
+    await runCommand(
+      [
+        "catalogue",
+        "register-source",
+        quarantine.manifestRelative,
+        "--evidence-bundle",
+        quarantine.evidencePath,
+      ],
+      registration.io,
+    ),
+  ).toBe(0);
+  oneOutput(registration);
+  const quarantineStage = capture(runnerEnvironment(input.stageUrl));
+  expect(await runCommand(stageArguments(quarantine, mappingSha256), quarantineStage.io)).toBe(0);
+  const quarantineBatch = oneOutput<StageOutput>(quarantineStage);
+  const beforeQuarantine = await catalogueSnapshot(owner);
+  const quarantinePath = validationRequestPath(input.suffix, "quarantine");
+  const prepareQuarantine = capture(environment);
+  expect(
+    await runCommand(
+      prepareValidationArguments(quarantineBatch, mappingSha256, quarantinePath),
+      prepareQuarantine.io,
+    ),
+  ).toBe(0);
+  cleanupPaths.push(join(WORKSPACE_ROOT, quarantinePath));
+  const quarantineRequest = oneOutput<PrepareValidationOutput>(prepareQuarantine);
+  expect(await catalogueSnapshot(owner)).toEqual(beforeQuarantine);
+  const submitQuarantine = capture(environment);
+  expect(await runCommand(submitValidationArguments(quarantineRequest), submitQuarantine.io)).toBe(
+    0,
+  );
+  expect(oneOutput<SubmitValidationOutput>(submitQuarantine)).toMatchObject({
+    batchId: quarantineBatch.batchId,
+    validation: {
+      wasAlreadyValidated: false,
+      stagedCount: 1,
+      validCount: 1,
+      quarantinedCount: 0,
+      excludedNutrientCount: 1,
+      promotionEligible: false,
+      nutritionSemanticContractVersion: 1,
+    },
+  });
+  const quarantined = await owner
+    .selectFrom("food_import_batch")
+    .select(["status", "unresolved_error_count"])
+    .where("id", "=", quarantineBatch.batchId)
+    .executeTakeFirstOrThrow();
+  expect(quarantined.status).toBe("quarantined");
+  expect(Number(quarantined.unresolved_error_count)).toBeGreaterThan(0);
+  const afterQuarantine = await catalogueSnapshot(owner);
+  expect(afterQuarantine.releaseState).toEqual(beforeQuarantine.releaseState);
+  expect(afterQuarantine.authorityState).toEqual(beforeQuarantine.authorityState);
+}
+
+function validationRequestPath(suffix: string, label: string): string {
+  return `.local-data/evidence/catalogue-validation/adr0102-${suffix}-${label}.json`;
+}
+function prepareValidationArguments(
+  staged: StageOutput,
+  mappingSha256: string,
+  path: string,
+): string[] {
+  return [
+    "catalogue",
+    "prepare-validation",
+    staged.batchId,
+    "--staging-seal-sha256",
+    staged.stagingSealSha256,
+    "--nutrient-mapping-sha256",
+    mappingSha256,
+    "--maximum-excluded-nutrient-fraction",
+    "0",
+    "--maximum-quarantine-fraction",
+    "0",
+    "--maximum-quarantined-records",
+    "0",
+    "--require-distinct-approval-principals",
+    "true",
+    "--require-at-least-one-valid-record",
+    "true",
+    "--require-materialized-nutrient-per-valid-record",
+    "true",
+    "--request-out",
+    path,
+  ];
+}
+function submitValidationArguments(prepared: PrepareValidationOutput): string[] {
+  return [
+    "catalogue",
+    "submit-validation",
+    prepared.batchId,
+    "--request",
+    prepared.request.path,
+    "--request-sha256",
+    prepared.request.sha256,
+    "--request-bytes",
+    String(prepared.request.byteSize),
+  ];
+}
+function validationEnvironment(url: string): NodeJS.ProcessEnv {
+  return {
+    DATABASE_URL: url,
+    DATABASE_APPLICATION_NAME: "nutrition-fdc-csv-independent-validator",
+    DATABASE_POOL_MAX: "1",
+    DATABASE_CONNECTION_TIMEOUT_MS: "5000",
+    DATABASE_STATEMENT_TIMEOUT_MS: "30000",
+    DATABASE_SSL_MODE: "disable",
+    NODE_ENV: "test",
+  };
+}
+
 async function createFixtureRoot(root: string, cleanup: string[]): Promise<void> {
   await mkdir(dirname(root), { recursive: true, mode: 0o700 });
   await mkdir(root, { mode: 0o700 });
   cleanup.push(root);
 }
 
-async function createFixture(suffix: string, cleanup: string[]): Promise<Fixture> {
+async function createFixture(
+  suffix: string,
+  cleanup: string[],
+  options: { readonly recordCount?: number; readonly unmappedNutrient?: boolean } = {},
+): Promise<Fixture> {
+  const recordCount = options.recordCount ?? RECORD_COUNT;
   const rootRelative = `.local-data/fdc-csv-stage-cli-${suffix}`;
   const root = join(WORKSPACE_ROOT, rootRelative);
   await createFixtureRoot(root, cleanup);
   const prefix = "synthetic-full-fdc";
   const files = {
-    [`${prefix}/food.csv`]: `fdc_id,data_type,description,publication_date\n${Array.from({ length: RECORD_COUNT }, (_, index) => `${1000 + index},source_foundation,Synthetic food ${index},2026-04-30`).join("\n")}\n`,
+    [`${prefix}/food.csv`]: `fdc_id,data_type,description,publication_date\n${Array.from({ length: recordCount }, (_, index) => `${1000 + index},source_foundation,Synthetic food ${index},2026-04-30`).join("\n")}\n`,
     [`${prefix}/branded_food.csv`]:
       "fdc_id,brand_owner,gtin_upc,serving_size,serving_size_unit,household_serving_fulltext,market_country\n",
-    [`${prefix}/food_nutrient.csv`]: `id,fdc_id,nutrient_id,amount,data_points,derivation_id,loq\n${Array.from({ length: RECORD_COUNT }, (_, index) => `${index + 1},${1000 + index},1008,${index % 7},3,49,`).join("\n")}\n`,
-    [`${prefix}/nutrient.csv`]: "id,name,unit_name\n1008,Energy,KCAL\n",
+    [`${prefix}/food_nutrient.csv`]: `id,fdc_id,nutrient_id,amount,data_points,derivation_id,loq\n${Array.from({ length: recordCount }, (_, index) => `${index + 1},${1000 + index},1008,${index % 7},3,49,`).join("\n")}\n`,
+    [`${prefix}/nutrient.csv`]: `id,name,unit_name\n1008,Energy,KCAL\n${options.unmappedNutrient ? "9999,Synthetic unmapped nutrient,MG\n" : ""}`,
     [`${prefix}/food_nutrient_derivation.csv`]:
       "id,code,description,source_id\n49,A,Analytical,1\n",
     [`${prefix}/food_portion.csv`]:
       "id,fdc_id,amount,measure_unit_id,portion_description,modifier,gram_weight\n",
     [`${prefix}/measure_unit.csv`]: "id,name\n1,gram\n",
   };
+  if (options.unmappedNutrient) {
+    files[`${prefix}/food_nutrient.csv`] += `${recordCount + 1},1000,9999,1,3,49,\n`;
+  }
   const zip = makeStoredZip(
     Object.entries(files).map(([name, data]) => ({ name, data: Buffer.from(data) })),
   );
@@ -705,7 +1179,9 @@ async function catalogueSnapshot(database: DatabaseClient) {
     jsonb_build_object(
       'sources', (select coalesce(jsonb_agg(to_jsonb(s) order by s.id), '[]') from food_source s),
       'releases', (select coalesce(jsonb_agg(to_jsonb(r) order by r.id), '[]') from food_source_release r),
-      'activations', (select coalesce(jsonb_agg(to_jsonb(a) order by a.id), '[]') from food_source_release_activation a)
+      'activations', (select coalesce(jsonb_agg(to_jsonb(a) order by a.id), '[]') from food_source_release_activation a),
+      'foods', (select coalesce(jsonb_agg(to_jsonb(f) order by f.id), '[]') from food f),
+      'foodVersions', (select coalesce(jsonb_agg(to_jsonb(v) order by v.id), '[]') from food_version v)
     ) as "releaseState",
     jsonb_build_object(
       'approvals', (select coalesce(jsonb_agg(to_jsonb(a) order by a.id), '[]') from food_import_approval a),
@@ -776,7 +1252,7 @@ function databaseUrl(
   return url.href;
 }
 function identifier(value: string): string {
-  if (!/^fdc_csv_(?:cli|stage|wrong|multi)_[0-9a-f]{16}$/u.test(value))
+  if (!/^fdc_csv_(?:cli|stage|validate|wrong|multi)_[0-9a-f]{16}$/u.test(value))
     throw new Error("Invalid generated full-CSV resource identifier");
   return `"${value}"`;
 }
