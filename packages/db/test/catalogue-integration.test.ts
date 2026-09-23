@@ -1224,6 +1224,7 @@ describeDatabase("catalogue ingestion PostgreSQL integration", () => {
           (like ${sql.id("public", "food_import_approval")} including all)
         `.execute(database);
         for (const tableName of [
+          "catalogue_preparation_v2",
           "food_import_parser_report",
           "food_import_record",
           "food_source",
@@ -3722,6 +3723,16 @@ interface ApprovalAuthorityDependency {
 }
 
 const APPROVAL_AUTHORITY_DEPENDENCIES: readonly ApprovalAuthorityDependency[] = [
+  {
+    argumentTypes: "uuid",
+    functionName: "catalogue_reject_legacy_batch_v2",
+    identityArguments: "p_batch_id uuid",
+  },
+  {
+    argumentTypes: "bigint",
+    functionName: "catalogue_reject_legacy_record_v2",
+    identityArguments: "p_record_id bigint",
+  },
   {
     argumentTypes: "",
     functionName: "lock_active_nutrient_registry_for_read",

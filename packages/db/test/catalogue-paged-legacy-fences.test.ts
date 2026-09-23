@@ -187,6 +187,42 @@ describe("V2 legacy consumer fences", () => {
       await f.database.destroy();
     }
   });
+  it("clones the transitive V2 fences and relations used by the isolated approval fixture", () => {
+    const integrationSource = readFileSync(
+      new URL("./catalogue-integration.test.ts", import.meta.url),
+      "utf8",
+    );
+    const dependencySource = integrationSource
+      .split("const APPROVAL_AUTHORITY_DEPENDENCIES:")[1]
+      ?.split("async function cloneApprovalAuthorityDependencies(")[0];
+    if (dependencySource === undefined) throw new Error("Missing approval dependency fixture");
+    const functions = new Set([
+      "catalogue_record_import_approval",
+      ...[...dependencySource.matchAll(/functionName: "(\w+)"/gu)].map((match) => match[1]),
+    ]);
+    const views = [
+      ...integrationSource.matchAll(/for \(const tableName of \[([\s\S]*?)\]\) \{/gu),
+    ].find((match) => match[1]?.includes('"food_import_parser_report"'))?.[1];
+    if (views === undefined) throw new Error("Missing isolated approval relation fixture");
+    const relations = new Set([...views.matchAll(/"(\w+)"/gu)].map((match) => match[1]));
+    const bodies = new Map(
+      [...fence.matchAll(/create function\s+(\w+)\([\s\S]*?\bas \$\$([\s\S]*?)\$\$;/gu)].map(
+        (match) => [match[1], match[2]],
+      ),
+    );
+    const guardedFunctions = entries.filter((entry) => functions.has(entry.identity.split("(")[0]));
+    expect(guardedFunctions.length).toBeGreaterThan(0);
+    for (const entry of guardedFunctions) {
+      const guard = /perform (\w+)\(/u.exec(entry.prelude)?.[1];
+      if (guard === undefined) throw new Error(`Missing fence for ${entry.identity}`);
+      expect(functions, `Missing transitive fence for ${entry.identity}`).toContain(guard);
+      const body = bodies.get(guard);
+      if (body === undefined) throw new Error(`Missing fence body for ${guard}`);
+      for (const relation of body.matchAll(/\b(?:from|join)\s+(\w+)/gu)) {
+        expect(relations, `Missing ${guard} relation`).toContain(relation[1]);
+      }
+    }
+  });
   it("covers public wrappers, owner aliases, seals and semantic helpers without changing V1 identifiers", () => {
     const names = entries.map((entry) => entry.identity.split("(")[0]);
     for (const name of [
