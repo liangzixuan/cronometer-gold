@@ -13,6 +13,7 @@ import {
 } from "kysely";
 import { describe, expect, it } from "vitest";
 import {
+  approveBatch,
   previewBatchValidation,
   reconcileCatalogueBatch,
   stageBatchRecords,
@@ -71,13 +72,28 @@ const entries = [...fence.matchAll(/\('([^']+\([^']*\))','([0-9a-f]{64})',E'([^'
   }),
 );
 const sha = (value: string) => createHash("sha256").update(value).digest("hex");
-function fixture() {
+function fixture(approvalSourceSha256?: string) {
   const queries: CompiledQuery[] = [];
   class Driver extends DummyDriver {
     override async acquireConnection(): Promise<DatabaseConnection> {
       return {
         async executeQuery<R>(query: CompiledQuery): Promise<QueryResult<R>> {
           queries.push(query);
+          if (approvalSourceSha256 !== undefined) {
+            if (query.sql.includes('as "authorityPolicyAttested"')) {
+              return {
+                rows: [
+                  {
+                    authorityPolicyAttested: query.parameters.includes(approvalSourceSha256),
+                    ownersMatch: true,
+                    resolvedBatchOid: "123",
+                    trustedBatchOid: "123",
+                  } as R,
+                ],
+              };
+            }
+            throw new Error("Approval passed exact fenced-body attestation");
+          }
           if (query.sql.includes("catalogue_reject_legacy_batch_v2"))
             throw new Error("V2 preparation requires its versioned consumer");
           throw new Error("Unexpected query before V2 legacy guard");
@@ -117,6 +133,58 @@ describe("V2 legacy consumer fences", () => {
       expect(entry.prelude, entry.identity).toMatch(
         /^ {2}perform catalogue_reject_legacy_\w+\(p_\w+\);\n$/u,
       );
+    }
+  });
+  it.each(["public", "user-approval-fixture"])(
+    "attests the current fenced approval body in trusted schema %s",
+    async (trustedSchema) => {
+      const source = historicalBodies().get("catalogue_record_import_approval");
+      const entry = entries.find((value) =>
+        value.identity.startsWith("catalogue_record_import_approval("),
+      );
+      if (source === undefined || entry === undefined) throw new Error("Missing approval body");
+      const location = source.indexOf("\nbegin\n") + 7;
+      const fencedSha256 = sha(source.slice(0, location) + entry.prelude + source.slice(location));
+      const f = fixture(fencedSha256);
+      try {
+        await expect(
+          approveBatch(f.database, {
+            approvalReference: "review://data/legacy-fixture",
+            approvalRole: "data",
+            batchId: "12345678-1234-4234-8234-123456789abc",
+            principalId: "principal:data-review",
+            rightsManifestSha256: "b".repeat(64),
+            trustedSchema,
+            validationDigest: "a".repeat(64),
+          }),
+        ).rejects.toThrow("Approval passed exact fenced-body attestation");
+        expect(f.queries).toHaveLength(2);
+        expect(f.queries[0]?.parameters).toContain(fencedSha256);
+        expect(f.queries[0]?.parameters).not.toContain(sha(source));
+        expect(f.queries[0]?.parameters).toContain(trustedSchema);
+      } finally {
+        await f.database.destroy();
+      }
+    },
+  );
+  it("rejects the unfenced historical approval body before reading batch evidence", async () => {
+    const source = historicalBodies().get("catalogue_record_import_approval");
+    if (source === undefined) throw new Error("Missing approval body");
+    const f = fixture(sha(source));
+    try {
+      await expect(
+        approveBatch(f.database, {
+          approvalReference: "review://data/legacy-fixture",
+          approvalRole: "data",
+          batchId: "12345678-1234-4234-8234-123456789abc",
+          principalId: "principal:data-review",
+          rightsManifestSha256: "b".repeat(64),
+          validationDigest: "a".repeat(64),
+        }),
+      ).rejects.toThrow("failed attestation");
+      expect(f.queries).toHaveLength(1);
+    } finally {
+      await f.database.destroy();
     }
   });
   it("covers public wrappers, owner aliases, seals and semantic helpers without changing V1 identifiers", () => {

@@ -7315,6 +7315,8 @@ const USER_LINKED_EXPORT_EXCLUSIONS = new Set([
   "account_erasure_job", // pseudonymous lifecycle/status capability; never in account export
   "account_erasure_receipt", // deliberately non-identifying post-erasure evidence
   "auth_action_token", // single-use credential and current-email digests
+  "catalogue_preparation_record_v2", // public-source payload evidence; inherits food_import_record exclusion
+  "catalogue_validation_record_v2", // public-source validation evidence; inherits food_import_record exclusion
   "food_import_record", // public-source ingestion evidence; custom foods cannot reference it
   "privacy_export_entity_snapshot", // transient DB spool manifest
   "privacy_export_record", // transient canonical DB spool rows
@@ -7339,7 +7341,7 @@ type ErasureTableSpec =
       readonly strategy: "empty" | "retain";
       readonly parentTable: string;
       readonly constraintName: string;
-      readonly deleteAction: "n" | "r";
+      readonly deleteAction: "a" | "n" | "r";
       readonly allColumnsNotNull: boolean;
     }
   | {
@@ -7411,6 +7413,24 @@ const ERASURE_TABLE_SPECS: readonly ErasureTableSpec[] = [
     parentTable: "food_version",
     strategy: "empty",
     table: "food_import_record",
+  },
+  // These non-null descendants cannot contain private records when the shared
+  // food_import_record ownership check passes. Preserve their catalogue evidence.
+  {
+    allColumnsNotNull: true,
+    constraintName: "catalogue_preparation_record_v2_batch_id_sequence_number_fkey",
+    deleteAction: "r",
+    parentTable: "food_import_record",
+    strategy: "empty",
+    table: "catalogue_preparation_record_v2",
+  },
+  {
+    allColumnsNotNull: true,
+    constraintName: "catalogue_validation_record_v2_batch_id_sequence_number_fkey",
+    deleteAction: "a",
+    parentTable: "food_import_record",
+    strategy: "empty",
+    table: "catalogue_validation_record_v2",
   },
   eraseByCascade("activity_day", "app_user", "activity_day_user_fk"),
   eraseByCascade("activity_entry", "activity_day", "activity_entry_day_owner_fk"),

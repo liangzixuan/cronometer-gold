@@ -66,7 +66,7 @@ describe("retained catalogue validation request", () => {
 
     const file = await writeCatalogueValidationRequest(PATH, document, root);
     expect(file).toEqual({ path: PATH, ...pins(expectedBytes) });
-    expect(await readFile(join(root, PATH))).toEqual(expectedBytes);
+    expect((await readFile(join(root, PATH))).equals(expectedBytes)).toBe(true);
     expect(await readCatalogueValidationRequest(PATH, file, root)).toEqual(document);
     expect((await lstat(join(root, PATH))).mode & 0o777).toBe(0o600);
     expect(await readdir(join(root, dirname(PATH)))).toEqual(["request.json"]);

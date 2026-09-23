@@ -69,6 +69,18 @@ Restoration must satisfy the source-defined policy; observed database objects
 cannot redefine that policy. Existing capability roles remain restricted and
 unassigned outside specifically authorized synthetic fixtures or target cutover.
 
+Legacy approval attestation pins the function body after migration 0030 adds
+its version-2 rejection guard. The legacy caller must use that same body pin as
+deployment and restore verification; retaining the pre-migration pin rejects
+healthy version-1 approvals.
+
+The preparation and validation record tables are reverse-foreign-key descendants
+of `food_import_record`, so the privacy schema inventory classifies both explicitly.
+They are catalogue metadata excluded from personal exports. Erasure attests their
+exact parent keys and delete actions, and still rejects any catalogue ingestion
+record linked to a privately owned food. Unknown user-linked tables and changed
+relationships continue to block export or erasure.
+
 ## Validation and limits
 
 The acceptance package requires focused protocol, reader, journal, command,
