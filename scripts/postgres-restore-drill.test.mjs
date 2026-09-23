@@ -25,6 +25,7 @@ import {
   RESTORE_AUTHORITY_POLICY_SHA256,
   removeDumpArtifact,
   retainRestoreAuthorityConstraintMismatch,
+  runCommand,
   runPostgresRestoreDrill,
   TRACKED_MIGRATION_LEDGER_JSON,
   validateDumpArtifactAttestation,
@@ -1263,6 +1264,99 @@ test("orchestration rejects explicit public column ACL state before dump creatio
       .find((sql) => sql.includes("explicit_column_acl_attribute_count"));
     assert.match(countQuery ?? "", /attribute_row\.attacl is not null/);
   }
+});
+
+test("restore commands stream exact SQL through stdin with owner and transaction policy intact", () => {
+  const policy = readFileSync(
+    new URL("../packages/db/restore/0014_catalogue_authority_policy.sql", import.meta.url),
+    "utf8",
+  );
+  const policyError = new Error("stop after policy input capture");
+  const fixture = authorityEvidenceRunner(validAuthorityEvidence(), { policyError });
+  const invocations = [];
+  const run = (command, arguments_, options = {}) => {
+    invocations.push({ arguments_, command, options });
+    return fixture.run(command, arguments_, options);
+  };
+  assert.throws(
+    () => runPostgresRestoreDrill(restoreOptions(), { run }),
+    (error) => error === policyError,
+  );
+  const statements = invocations.filter((call) => call.arguments_.includes("ON_ERROR_STOP=1"));
+  assert.equal(statements.length, 2);
+  const expectedSql = [
+    'revoke connect on database "nutrition_restore_ci_orchestration" from public',
+    `set role "${expectedOwner}"; ${policy}`,
+  ];
+  assert.ok(Buffer.byteLength(expectedSql[1]) > 128 * 1024);
+  assert.match(policy, /\nbegin;\n/);
+  assert.match(policy, /\ncommit;\n$/);
+  for (const [index, call] of statements.entries()) {
+    assert.equal(call.command, "docker");
+    assert.deepEqual(call.arguments_, [
+      "exec",
+      "--interactive",
+      "postgres-test-1",
+      ...(index === 0
+        ? []
+        : ["env", `PGOPTIONS=-c nutrition.expected_restore_owner=${expectedOwner}`]),
+      "psql",
+      "--username",
+      "nutrition",
+      "--dbname",
+      index === 0 ? "postgres" : "nutrition_restore_ci_orchestration",
+      "--set",
+      "ON_ERROR_STOP=1",
+      "--file",
+      "-",
+    ]);
+    assert.equal(call.options.input, expectedSql[index]);
+    assert.ok(call.arguments_.every((argument) => Buffer.byteLength(argument) < 1024));
+  }
+  assert.ok(fixture.calls.some((arguments_) => arguments_.includes("restore-dump-cleanup")));
+});
+
+test("command transport preserves large UTF-8 input and its exact newline bytes", () => {
+  const input = `-- ${"caf\u00e9 \u03bb\n".repeat(25_000)}\r\nselect 'done';`;
+  assert.ok(Buffer.byteLength(input) > 128 * 1024);
+  const output = runCommand(process.execPath, ["-e", "process.stdin.pipe(process.stdout)"], {
+    input,
+  });
+  assert.equal(output, input);
+});
+
+test("command transport retains nonzero-exit failure and first stderr line", () => {
+  assert.throws(
+    () =>
+      runCommand(
+        process.execPath,
+        ["-e", "process.stderr.write('policy failed\\nprivate detail\\n'); process.exit(3)"],
+        { input: "begin;\n" },
+      ),
+    (error) => error.message === `${process.execPath} exited 3: policy failed`,
+  );
+});
+
+test("command transport preserves explicitly allowed failure stdout", () => {
+  assert.equal(
+    runCommand(
+      process.execPath,
+      ["-e", "process.stdout.write('retained\\n'); process.exitCode = 4"],
+      { allowFailure: true, input: "" },
+    ),
+    "retained\n",
+  );
+});
+
+test("command transport still throws launch errors even when exit failure is allowed", () => {
+  assert.throws(
+    () =>
+      runCommand(join(tmpdir(), "missing-nourishing-restore-command", "missing"), [], {
+        allowFailure: true,
+        input: "",
+      }),
+    (error) => error.code === "ENOENT",
+  );
 });
 
 test("orchestration makes cleanup failure-terminal after a post-dump policy failure", () => {
@@ -2661,10 +2755,10 @@ function authorityEvidenceRunner(evidence, failures = {}) {
   const calls = [];
   const dumpPath = "/dev/shm/nutrition_restore_ci_orchestration.dump";
   const boundary = validDatabaseBoundary();
-  const run = (_command, arguments_) => {
+  const run = (_command, arguments_, options = {}) => {
     calls.push(arguments_);
     const commandText = arguments_.join(" ");
-    const sql = arguments_.at(-1) ?? "";
+    const sql = options.input ?? arguments_.at(-1) ?? "";
 
     if (arguments_.includes("restore-dump-preflight")) return "/dev/shm\n";
     if (arguments_.includes("restore-dump-artifact")) {

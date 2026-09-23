@@ -2752,11 +2752,12 @@ function psqlCommand(run, options, database, sqlParts, environment = []) {
     database,
     "--set",
     "ON_ERROR_STOP=1",
-    "--command",
-    sqlParts.join(" "),
+    "--file",
+    "-",
   ];
   prependEnvironment(command, environment);
-  docker(run, options.container, command);
+  // The policy carries its own BEGIN/COMMIT; keep its exact bytes out of argv.
+  docker(run, options.container, command, { input: sqlParts.join(" ") });
 }
 
 function prependEnvironment(command, environment) {
@@ -2766,12 +2767,17 @@ function prependEnvironment(command, environment) {
 }
 
 function docker(run, container, command, options = {}) {
-  return run("docker", ["exec", container, ...command], options);
+  return run(
+    "docker",
+    ["exec", ...(options.input === undefined ? [] : ["--interactive"]), container, ...command],
+    options,
+  );
 }
 
-function runCommand(command, arguments_, options = {}) {
+export function runCommand(command, arguments_, options = {}) {
   const result = spawnSync(command, arguments_, {
     encoding: "utf8",
+    input: options.input,
     maxBuffer: 10_000_000,
   });
   if (result.error) throw result.error;
