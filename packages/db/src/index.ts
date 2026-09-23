@@ -185,6 +185,10 @@ export {
   validateBatch,
   verifyCnfParserReport,
 } from "./catalogue-ingestion.js";
+export * from "./catalogue-paged-protocol.js";
+export * from "./catalogue-paged-reconciliation.js";
+export * from "./catalogue-paged-stage.js";
+export * from "./catalogue-paged-validation.js";
 export {
   buildCatalogueReconciliationDocument,
   type CatalogueReconciliationBuildInput,

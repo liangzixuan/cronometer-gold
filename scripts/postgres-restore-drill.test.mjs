@@ -1,4 +1,17 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import {
+  chmodSync,
+  lstatSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 import {
@@ -11,12 +24,20 @@ import {
   parseRestoreDrillArguments,
   RESTORE_AUTHORITY_POLICY_SHA256,
   removeDumpArtifact,
+  retainRestoreAuthorityConstraintMismatch,
   runPostgresRestoreDrill,
   TRACKED_MIGRATION_LEDGER_JSON,
   validateDumpArtifactAttestation,
   validateRestoreAuthorityEvidence,
   validateTargetDatabaseBoundary,
 } from "./postgres-restore-drill.mjs";
+
+const pagedAuthorityPolicy = JSON.parse(
+  readFileSync(
+    new URL("../packages/db/src/catalogue-paged-authority-policy.json", import.meta.url),
+    "utf8",
+  ),
+);
 
 const capabilityRoles = [
   "nutrition_catalogue_stage",
@@ -370,19 +391,46 @@ test("rejects an incomplete public ledger despite a complete owner-schema shadow
   assert.doesNotMatch(calls[0].at(-1) ?? "", /from app_schema_migration/);
 });
 
-test("tracks migrations 0025 and 0026 in the exact restore ledger", () => {
+test("tracks migrations through the four paged preparation migrations in the exact restore ledger", () => {
   const migrationLedger = JSON.parse(TRACKED_MIGRATION_LEDGER_JSON);
 
-  assert.equal(migrationLedger.length, 26);
-  assert.equal(migrationLedger.at(-2)?.name, "0025_manual_activity_ledger.sql");
+  assert.equal(migrationLedger.length, 30);
   assert.equal(
-    migrationLedger.at(-2)?.checksum,
+    migrationLedger.find((entry) => entry.name === "0025_manual_activity_ledger.sql")?.name,
+    "0025_manual_activity_ledger.sql",
+  );
+  assert.equal(
+    migrationLedger.find((entry) => entry.name === "0025_manual_activity_ledger.sql")?.checksum,
     "86619894aeb5951b39d667a7bb2c7ff0133a09c59d94bcbaa0a58221d022b40f",
   );
-  assert.equal(migrationLedger.at(-1)?.name, "0026_standalone_private_day_notes.sql");
   assert.equal(
-    migrationLedger.at(-1)?.checksum,
+    migrationLedger.find((entry) => entry.name === "0026_standalone_private_day_notes.sql")?.name,
+    "0026_standalone_private_day_notes.sql",
+  );
+  assert.equal(
+    migrationLedger.find((entry) => entry.name === "0026_standalone_private_day_notes.sql")
+      ?.checksum,
     "3b1c2269843f02996bd7887de597837c69bd9d1d9442d0d5875f065660846167",
+  );
+});
+
+test("pins each new paged migration checksum independently", () => {
+  const ledger = JSON.parse(TRACKED_MIGRATION_LEDGER_JSON);
+  assert.equal(
+    ledger.find((entry) => entry.name === "0027_catalogue_paged_staging.sql")?.checksum,
+    "47e2a7db2345970b92a0c8b1e825605f384035727c2197253b68c907361fcab0",
+  );
+  assert.equal(
+    ledger.find((entry) => entry.name === "0028_catalogue_paged_validation.sql")?.checksum,
+    "3da53727cd765096671f19609e9d0a5ef112d27577bdbc242fe5b0056a0b421b",
+  );
+  assert.equal(
+    ledger.find((entry) => entry.name === "0029_catalogue_paged_reconciliation.sql")?.checksum,
+    "92a2f11aaf9e3862d0b5e3eceacdb84d8743c845c1568340a8886c8b043845e1",
+  );
+  assert.equal(
+    ledger.find((entry) => entry.name === "0030_catalogue_paged_legacy_fences.sql")?.checksum,
+    "2c0eafb74076c4cf1dea7a5d930fc3e26cc1282fbaa123cbba478536d749be49",
   );
 });
 
@@ -709,7 +757,9 @@ test("requires pg_database_owner as the exact public schema ACL grantor", () => 
 test("rejects unexpected table or sequence DML authority", () => {
   for (const kind of ["r", "S"]) {
     const evidence = validAuthorityEvidence();
-    const relation = evidence.relations.find((entry) => entry.kind === kind);
+    const relation = evidence.relations.find(
+      (entry) => entry.kind === kind && !pagedAuthorityPolicy.tables.includes(entry.name),
+    );
     relation.acl_is_default = false;
     relation.acl.push({
       grantee: "nutrition_catalogue_stage",
@@ -727,9 +777,9 @@ test("rejects unexpected table or sequence DML authority", () => {
 test("pins every reviewed authority function and trigger", () => {
   assert.equal(
     validAuthorityFunctions().filter((entry) => entry.name !== "ordinary_function").length,
-    55,
+    104,
   );
-  assert.equal(validAuthorityTriggers().length, 56);
+  assert.equal(validAuthorityTriggers().length, 110);
 
   for (const [property, value] of [
     ["source_sha256", "0".repeat(64)],
@@ -1248,16 +1298,354 @@ test("pins the exact versioned policy bytes", () => {
   );
 });
 
+test("pins the complete 139-row PostgreSQL constraint digest captured by the schema diagnostic", () => {
+  const evidence = validAuthorityEvidence();
+  // PostgreSQL 17.6, ADR0104 schema-only diagnostic, 2026-09-21. This digest
+  // covers every name, definition, type and validated flag, in collector order.
+  const canonicalRows = evidence.authorityConstraints.map((entry) => ({
+    constraint_type: entry.constraint_type,
+    definition: entry.definition,
+    name: entry.name,
+    table_name: entry.table_name,
+    validated: entry.validated,
+  }));
+  assert.equal(canonicalRows.length, 139);
+  assert.equal(
+    createHash("sha256").update(JSON.stringify(canonicalRows)).digest("hex"),
+    "b48b3ba4782856d7518260928bab8640d5524a3c7c5206d7e29f6e796a4da94a",
+  );
+  assert.doesNotThrow(() => validateRestoreAuthorityEvidence(evidence, expectedOwner));
+});
+
+for (const drift of ["old-name", "missing", "changed"]) {
+  test(`restore rejects ${drift} drift in the captured multi-column stage page check`, () => {
+    const evidence = validAuthorityEvidence();
+    const name = "catalogue_preparation_stage_page_v2_check";
+    evidence.authorityConstraints =
+      drift === "missing"
+        ? evidence.authorityConstraints.filter((entry) => entry.name !== name)
+        : evidence.authorityConstraints.map((entry) =>
+            entry.name !== name
+              ? entry
+              : {
+                  ...entry,
+                  ...(drift === "old-name"
+                    ? { name: "catalogue_preparation_stage_page_total_payload_text_bytes_check" }
+                    : { definition: "CHECK ((total_payload_text_bytes > payload_text_bytes))" }),
+                },
+          );
+    assert.throws(
+      () => validateRestoreAuthorityEvidence(evidence, expectedOwner),
+      /constraint differs from policy/,
+    );
+  });
+}
+
+function constraintDiagnosticDirectory(t) {
+  const directory = mkdtempSync(join(tmpdir(), "catalogue-constraint-diagnostic-"));
+  chmodSync(directory, 0o700);
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  return directory;
+}
+
+function constraintMismatch(change) {
+  const evidence = validAuthorityEvidence();
+  change(evidence);
+  let failure;
+  try {
+    validateRestoreAuthorityEvidence(evidence, expectedOwner);
+  } catch (error) {
+    failure = error;
+  }
+  assert.match(failure?.message ?? "", /constraint differs from policy/);
+  return failure;
+}
+
+async function retainedConstraintDiagnostic(t, failure) {
+  const directory = constraintDiagnosticDirectory(t);
+  await assert.rejects(
+    retainRestoreAuthorityConstraintMismatch(() => {
+      throw failure;
+    }, directory),
+    (error) => error === failure,
+  );
+  const path = join(directory, "source-authority-constraint-mismatch.json");
+  assert.equal(lstatSync(path).mode & 0o777, 0o600);
+  const bytes = readFileSync(path);
+  assert.ok(bytes.length <= 65536);
+  return { diagnostic: JSON.parse(bytes), bytes, directory };
+}
+
+test("constraint diagnostic leaves valid authority acceptance and filesystem unchanged", async (t) => {
+  const directory = constraintDiagnosticDirectory(t);
+  const value = await retainRestoreAuthorityConstraintMismatch(() => {
+    validateRestoreAuthorityEvidence(validAuthorityEvidence(), expectedOwner);
+    return "accepted";
+  }, directory);
+  assert.equal(value, "accepted");
+  assert.deepEqual(readdirSync(directory), []);
+});
+
+test("constraint diagnostic retains private changed fields and rethrows the original rejection", async (t) => {
+  const definition = "CHECK ((rehearsal_count > 123456))";
+  const failure = constraintMismatch((evidence) => {
+    Object.assign(evidence.authorityConstraints[0], {
+      definition,
+      constraint_type: "u",
+      validated: false,
+    });
+  });
+  const { diagnostic } = await retainedConstraintDiagnostic(t, failure);
+  assert.equal(diagnostic.kind, "synthetic-source-authority-constraint-mismatch");
+  assert.equal(diagnostic.orderOnly, false);
+  assert.equal(diagnostic.differences.length, 1);
+  assert.equal(diagnostic.differences[0].actual.constraintType, "u");
+  assert.equal(diagnostic.differences[0].actual.validated, false);
+  assert.equal(diagnostic.differences[0].actual.definition.text, definition);
+  assert.equal(
+    diagnostic.differences[0].actual.definition.sha256,
+    createHash("sha256").update(definition).digest("hex"),
+  );
+});
+
+test("constraint diagnostic identifies ordering-only rejection without accepting reordered evidence", async (t) => {
+  const failure = constraintMismatch((evidence) => {
+    [evidence.authorityConstraints[0], evidence.authorityConstraints[1]] = [
+      evidence.authorityConstraints[1],
+      evidence.authorityConstraints[0],
+    ];
+  });
+  const { diagnostic } = await retainedConstraintDiagnostic(t, failure);
+  assert.equal(diagnostic.orderOnly, true);
+  assert.equal(diagnostic.firstIdentityDifference.index, 0);
+  assert.notEqual(
+    diagnostic.firstIdentityDifference.expected.name,
+    diagnostic.firstIdentityDifference.actual.name,
+  );
+  assert.deepEqual(diagnostic.differences, []);
+  assert.notEqual(diagnostic.actualArraySha256, diagnostic.expectedArraySha256);
+});
+
+test("constraint diagnostic identifies missing and duplicate allowlisted constraints", async (t) => {
+  const missing = constraintMismatch((evidence) => evidence.authorityConstraints.shift());
+  const { diagnostic } = await retainedConstraintDiagnostic(t, missing);
+  assert.equal(diagnostic.differences[0].actualMatches, 0);
+  assert.equal(diagnostic.differences[0].actual, null);
+  const duplicate = constraintMismatch((evidence) =>
+    evidence.authorityConstraints.push(evidence.authorityConstraints[0]),
+  );
+  const second = await retainedConstraintDiagnostic(t, duplicate);
+  assert.equal(second.diagnostic.differences[0].actualMatches, 2);
+  assert.equal(second.diagnostic.orderOnly, false);
+});
+
+test("constraint diagnostic excludes unknown identities, other authority sections and unexpected literals", async (t) => {
+  const secret = "synthetic-secret-must-not-persist";
+  const failure = constraintMismatch((evidence) => {
+    evidence.roles = [{ password: secret, url: `postgresql://user:${secret}@127.0.0.1/db` }];
+    evidence.authorityConstraints[0].definition = `CHECK ((approval_role = '${secret}'))`;
+    evidence.authorityConstraints[0].privateRow = { value: secret };
+    evidence.authorityConstraints.push({
+      name: secret,
+      table_name: secret,
+      definition: `CHECK ('${secret}')`,
+    });
+  });
+  const { diagnostic, bytes } = await retainedConstraintDiagnostic(t, failure);
+  assert.equal(diagnostic.unknownIdentityCount, 1);
+  assert.equal(diagnostic.differences[0].actual.unexpectedFieldCount, 1);
+  assert.equal(diagnostic.differences[0].actual.definition.redacted, true);
+  assert.equal(bytes.includes(Buffer.from(secret)), false);
+  assert.equal(bytes.includes(Buffer.from("postgresql://")), false);
+  assert.equal(bytes.includes(Buffer.from("privateRow")), false);
+  assert.equal(bytes.includes(Buffer.from('"roles"')), false);
+});
+
+test("constraint diagnostic rejects malformed fields without echoing arbitrary values", async (t) => {
+  const failure = constraintMismatch((evidence) => {
+    Object.assign(evidence.authorityConstraints[0], {
+      definition: null,
+      constraint_type: "not-a-real-type",
+      validated: "not-a-boolean",
+    });
+  });
+  const { diagnostic, bytes } = await retainedConstraintDiagnostic(t, failure);
+  assert.equal(diagnostic.differences[0].actual.constraintType, null);
+  assert.equal(diagnostic.differences[0].actual.validated, null);
+  assert.deepEqual(diagnostic.differences[0].actual.definition, { malformed: true });
+  assert.equal(bytes.includes(Buffer.from("not-a-real-type")), false);
+});
+
+test("constraint diagnostic bounds UTF-8 detail and total output deterministically", async (t) => {
+  const definition = `CHECK (${"é".repeat(10000)})`;
+  const failure = constraintMismatch((evidence) => {
+    for (const entry of evidence.authorityConstraints) entry.definition = definition;
+  });
+  const first = await retainedConstraintDiagnostic(t, failure);
+  const second = await retainedConstraintDiagnostic(t, failure);
+  assert.deepEqual(first.bytes, second.bytes);
+  assert.ok(first.diagnostic.differences.length <= 16);
+  assert.ok(first.diagnostic.omittedDifferences > 0);
+  for (const entry of first.diagnostic.differences) {
+    assert.ok(Buffer.byteLength(entry.actual.definition.text, "utf8") <= 4096);
+    assert.equal(entry.actual.definition.text.includes("\uFFFD"), false);
+    assert.equal(entry.actual.definition.truncated, true);
+    assert.equal(entry.actual.definition.originalBytes, Buffer.byteLength(definition));
+    assert.equal(
+      entry.actual.definition.sha256,
+      createHash("sha256").update(definition).digest("hex"),
+    );
+  }
+});
+
+test("constraint diagnostic ignores forged diagnostic properties on unrelated failures", async (t) => {
+  const directory = constraintDiagnosticDirectory(t);
+  const failure = Object.assign(new Error("unrelated rejection"), {
+    constraintMismatchEvidence: { password: "synthetic-secret" },
+  });
+  await assert.rejects(
+    retainRestoreAuthorityConstraintMismatch(() => {
+      throw failure;
+    }, directory),
+    (error) => error === failure,
+  );
+  assert.deepEqual(readdirSync(directory), []);
+});
+
+test("constraint diagnostic preserves an existing artifact and both errors", async (t) => {
+  const directory = constraintDiagnosticDirectory(t);
+  const path = join(directory, "source-authority-constraint-mismatch.json");
+  writeFileSync(path, "existing artifact", { mode: 0o600 });
+  const failure = constraintMismatch((evidence) => evidence.authorityConstraints.pop());
+  await assert.rejects(
+    retainRestoreAuthorityConstraintMismatch(() => {
+      throw failure;
+    }, directory),
+    (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.equal(error.errors[0], failure);
+      assert.equal(error.errors[1].code, "EEXIST");
+      return true;
+    },
+  );
+  assert.equal(readFileSync(path, "utf8"), "existing artifact");
+});
+
+test("constraint diagnostic rejects a symlink target without overwriting its destination", async (t) => {
+  const directory = constraintDiagnosticDirectory(t);
+  const destination = join(directory, "replacement");
+  writeFileSync(destination, "preserve me");
+  symlinkSync(destination, join(directory, "source-authority-constraint-mismatch.json"));
+  const failure = constraintMismatch((evidence) => evidence.authorityConstraints.pop());
+  await assert.rejects(
+    retainRestoreAuthorityConstraintMismatch(() => {
+      throw failure;
+    }, directory),
+    AggregateError,
+  );
+  assert.equal(readFileSync(destination, "utf8"), "preserve me");
+});
+
+test("constraint diagnostic requires a private nonsymlink directory", async (t) => {
+  const directory = constraintDiagnosticDirectory(t);
+  const failure = constraintMismatch((evidence) => evidence.authorityConstraints.pop());
+  chmodSync(directory, 0o755);
+  await assert.rejects(
+    retainRestoreAuthorityConstraintMismatch(() => {
+      throw failure;
+    }, directory),
+    AggregateError,
+  );
+  assert.deepEqual(readdirSync(directory), []);
+  chmodSync(directory, 0o700);
+  const parent = constraintDiagnosticDirectory(t);
+  const link = join(parent, "directory-link");
+  symlinkSync(directory, link);
+  await assert.rejects(
+    retainRestoreAuthorityConstraintMismatch(() => {
+      throw failure;
+    }, link),
+    AggregateError,
+  );
+  assert.deepEqual(readdirSync(directory), []);
+});
+
 function validAuthorityEvidence() {
   return {
-    authorityConstraints: structuredClone(authorityConstraints),
-    authorityFrozenColumns: structuredClone(authorityFrozenColumns),
-    authorityIndexes: structuredClone(authorityIndexes),
+    authorityConstraints: structuredClone([
+      ...authorityConstraints,
+      ...pagedAuthorityPolicy.constraints.map((entry) => ({
+        constraint_type: entry.constraintType,
+        definition: entry.definition,
+        name: entry.name,
+        table_name: entry.tableName,
+        validated: entry.validated,
+      })),
+    ]).sort((left, right) => (left.name < right.name ? -1 : left.name === right.name ? 0 : 1)),
+    authorityFrozenColumns: structuredClone([
+      ...authorityFrozenColumns.map((column) => ({
+        identity_kind: "",
+        generated_kind: "",
+        ...column,
+      })),
+      ...pagedAuthorityPolicy.columns.map((entry) => ({
+        identity_kind: entry.identityKind,
+        generated_kind: entry.generatedKind,
+        column_name: entry.columnName,
+        data_type: entry.dataType,
+        default_expression: entry.defaultExpression,
+        not_null: entry.notNull,
+        schema_name: entry.schemaName,
+        table_name: entry.tableName,
+      })),
+    ]).sort(
+      (left, right) =>
+        left.table_name.localeCompare(right.table_name) ||
+        left.column_name.localeCompare(right.column_name),
+    ),
+    authorityIndexes: structuredClone([
+      ...authorityIndexes,
+      ...pagedAuthorityPolicy.indexes.map((entry) => ({
+        access_method: entry.accessMethod,
+        definition: entry.definition,
+        is_primary: entry.isPrimary,
+        is_ready: entry.isReady,
+        is_unique: entry.isUnique,
+        is_valid: entry.isValid,
+        key_attribute_count: entry.keyAttributeCount,
+        key_expression: entry.keyExpression,
+        name: entry.name,
+        owner: expectedOwner,
+        predicate: entry.predicate,
+        schema_name: entry.schemaName,
+        table_name: entry.tableName,
+        total_attribute_count: entry.totalAttributeCount,
+      })),
+    ]).sort(
+      (left, right) =>
+        left.table_name.localeCompare(right.table_name) || left.name.localeCompare(right.name),
+    ),
     columnAcls: [],
     defaultAcls: [],
     explicitColumnAclAttributeCount: "0",
     functions: validAuthorityFunctions(),
     relations: [
+      ...pagedAuthorityPolicy.tables.map((name) => ({
+        acl: [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE",
+        ].map((privilege) => acl(expectedOwner, privilege)),
+        acl_is_default: false,
+        kind: "r",
+        name,
+        owner: expectedOwner,
+      })),
       {
         acl: [acl(expectedOwner, "SELECT")],
         acl_is_default: true,
@@ -1313,7 +1701,7 @@ function validAuthorityEvidence() {
         owner: expectedOwner,
       },
     ],
-    version: 14,
+    version: 15,
   };
 }
 
@@ -1482,6 +1870,32 @@ function validAuthorityFunctions() {
     security_definer: false,
   }));
   return [
+    ...pagedAuthorityPolicy.functions.map((entry) => ({
+      language: entry.language,
+      leakproof: entry.leakproof,
+      parallel: entry.parallel,
+      result_type: entry.resultType,
+      source_sha256: entry.sourceSha256,
+      strict: entry.strict,
+      volatility: entry.volatility,
+      acl: [
+        expectedOwner,
+        ...(entry.executeGrantees === "owner-only"
+          ? []
+          : entry.executeGrantees === "default"
+            ? ["PUBLIC"]
+            : entry.executeGrantees),
+      ].map((grantee) => acl(grantee, "EXECUTE")),
+      acl_is_default: entry.executeGrantees === "default",
+      arguments: entry.arguments,
+      config:
+        entry.configuration === "application-schema"
+          ? ["search_path=pg_catalog, public, pg_temp"]
+          : [],
+      name: entry.name,
+      owner: expectedOwner,
+      security_definer: entry.securityDefiner,
+    })),
     {
       ...functionSemantics(
         "d1e4a8a27203104c6339f045a31a4dfdd2aee3c78cdd94e06bfd3db2c9ac2108",
@@ -1497,7 +1911,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "e2c35dfabb653636a9640475227104a485a24129558b11511175831ef9bc5b8b",
+        "3b6b5d6de655e09c4935379fbaa356429961dedb39264cb25913e16c3a2c2e59",
         "jsonb",
       ),
       acl: [acl(expectedOwner, "EXECUTE")],
@@ -1526,7 +1940,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "399d40c2913c2022c0a2921d5870a2d26a5dcd9949d81715882f70899db4f5f8",
+        "e7dbe4dc44ca8cef1183b966384000a3a252e4f92cc644091d46281e04d91822",
         "text",
       ),
       acl: [acl(expectedOwner, "EXECUTE")],
@@ -1539,7 +1953,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "41f048090dce80b794615f135f5368f7f501eaecfc3513471eb6d1f36c022783",
+        "b0e547a757ad01f0a2c2360beea10607b5bfec9770fbbeb571598db7cf9ead69",
         "jsonb",
       ),
       acl: [acl(expectedOwner, "EXECUTE")],
@@ -1552,7 +1966,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "bd8f0714717baf626507a2d40799cea75085f20e9df7295b77fb5899529f2142",
+        "feb716548ef14da6dace4c12fd18b98d462766a9a59de0d71aff1b5b9c606ae3",
         "jsonb",
       ),
       acl: [acl(expectedOwner, "EXECUTE"), acl("nutrition_catalogue_promote_activate", "EXECUTE")],
@@ -1565,7 +1979,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "115fdc3ed1943dd77ce70d3a694495da3d2c62ade9c7b82812a89cef82b39f17",
+        "2d5733cf34f2119db2e18564469fc76adf892172a936b1bfcbd21b3899629c96",
         "jsonb",
       ),
       acl: [acl(expectedOwner, "EXECUTE")],
@@ -1578,7 +1992,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "0a87bc99f5df97282c48b6202799bcc75cdb914e7473c0c38e092aaf4a132acf",
+        "84179971a6b8f171436efc1807e4e89c0f4b19bd3778b56bf3dea896aab009a2",
         "jsonb",
       ),
       acl: [acl(expectedOwner, "EXECUTE"), acl("nutrition_catalogue_validate", "EXECUTE")],
@@ -1591,7 +2005,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "73314f5d97251a648093a82d8d9f6d3575a8f3b571d16349ca60a9795de04719",
+        "9dfaa30970c3acfaaff6a1c1c4211cfd0b42c87824998841172429c4dcd5138f",
         "boolean",
       ),
       acl: [
@@ -1610,7 +2024,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac",
+        "57a131aea73ba58d76f8d7cd867ea2cb2485567f65dc4c28c5a9ffe8963ca198",
         "boolean",
       ),
       acl: [acl(expectedOwner, "EXECUTE")],
@@ -1640,7 +2054,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "a6b7cce658727edcfc889eac7272e65b094592361459130c815436c8f1cc14d7",
+        "8946f31585a418f750601e35621b06ac938a8c466f26fddc1a123cd6c2df4ffd",
         "jsonb",
       ),
       acl: [acl(expectedOwner, "EXECUTE"), acl("nutrition_catalogue_rollback", "EXECUTE")],
@@ -1654,7 +2068,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "3fe493ee5e0b27e43cc881854dddfe4dc12f862a1c4a242bf712c843b2792ff1",
+        "a2cf554f00f20d13720e268e3778eca9e26064da34291befa9b75f3dbe55b915",
         "jsonb",
       ),
       acl: [acl(expectedOwner, "EXECUTE")],
@@ -1668,7 +2082,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "11b0a983c9cf3d4a7451978d37e5fe997a40290a10e741ba0626b89bfd2611c4",
+        "e35607a581873d4b7c3b092be4c60a63026b71db21e447c87c79aebb42e21445",
         "jsonb",
       ),
       acl: [acl(expectedOwner, "EXECUTE"), acl("nutrition_catalogue_stage", "EXECUTE")],
@@ -1681,7 +2095,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "d89defb335e21228c38968ef69b2ed7342f5a5440762ae31f170969fbcc9c9e8",
+        "111c05a916f5fdce9be9ec6117d8220a239fff749efd628afb4164b3dc89f6a5",
         "jsonb",
       ),
       acl: [acl(expectedOwner, "EXECUTE"), acl("nutrition_catalogue_stage", "EXECUTE")],
@@ -1694,7 +2108,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "4cc2b310ba6fda051a125bb203c0cf2c6a5fbe227a55daf517a0376ab79e4c7f",
+        "d8e8d2354606768fdcaacd280fd2255359ace98758b3d8377f90a94e802541a2",
         "jsonb",
       ),
       acl: [acl(expectedOwner, "EXECUTE"), acl("nutrition_catalogue_stage", "EXECUTE")],
@@ -1724,7 +2138,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "10c59084d8e5c7debb581c6e749f6779dbc3f5867fc4cb18ffc009293f9f50a5",
+        "e57096da8349e9efa58cdcc7293b36a895731a35ce7c8ad1dc55c1f4b4db9b66",
         "jsonb",
       ),
       acl: [acl(expectedOwner, "EXECUTE"), acl("nutrition_catalogue_validate", "EXECUTE")],
@@ -1738,7 +2152,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "5b7ae15625fb0ae0d88a9512fe82fca69a9d0dd9e179af8bc1b2f42d1e85ac8a",
+        "0c14bff909d45e0fc0082962484db94af8853761d82e7654dc4494fc78f0d294",
         "jsonb",
       ),
       acl: [acl(expectedOwner, "EXECUTE")],
@@ -1832,6 +2246,12 @@ function validAuthorityFunctions() {
 
 function validAuthorityTriggers() {
   return [
+    ...pagedAuthorityPolicy.triggers.map((entry) => [
+      entry.name,
+      entry.tableName,
+      entry.functionName,
+      entry.definition,
+    ]),
     [
       "custom_food_nutrient_guard_delete_v3",
       "food_nutrient_value",
@@ -2327,3 +2747,203 @@ function authorityFunctionNamed(evidence, functionName) {
 function acl(grantee, privilege, grantor = expectedOwner) {
   return { grantee, grantor, grantable: false, privilege };
 }
+
+test("paged authority fixture covers all versioned companions, functions, and triggers", () => {
+  assert.equal(pagedAuthorityPolicy.tables.length, 14);
+  assert.equal(pagedAuthorityPolicy.functions.length, 49);
+  assert.equal(pagedAuthorityPolicy.triggers.length, 54);
+  validateRestoreAuthorityEvidence(validAuthorityEvidence(), expectedOwner);
+});
+
+for (const name of pagedAuthorityPolicy.functions.map((entry) => entry.name)) {
+  test(`rejects missing, overloaded, changed, or publicly executable paged function ${name}`, () => {
+    for (const mutate of [
+      (evidence, entry) => {
+        evidence.functions = evidence.functions.filter((row) => row !== entry);
+      },
+      (evidence, entry) => {
+        evidence.functions.push({ ...entry, arguments: `${entry.arguments}, p_extra text` });
+      },
+      (_evidence, entry) => {
+        entry.source_sha256 = "0".repeat(64);
+      },
+      (_evidence, entry) => {
+        entry.config = entry.config.length === 0 ? ["search_path=public"] : [];
+      },
+      (_evidence, entry) => {
+        entry.acl.push(acl("PUBLIC", "EXECUTE"));
+      },
+    ]) {
+      const evidence = validAuthorityEvidence();
+      mutate(evidence, authorityFunctionNamed(evidence, name));
+      assert.throws(
+        () => validateRestoreAuthorityEvidence(evidence, expectedOwner),
+        /authority function/i,
+      );
+    }
+  });
+}
+
+for (const name of pagedAuthorityPolicy.triggers.map((entry) => entry.name)) {
+  test(`rejects missing, additional, disabled, or altered paged trigger ${name}`, () => {
+    for (const mutate of [
+      (evidence, entry) => {
+        evidence.triggers = evidence.triggers.filter((row) => row !== entry);
+      },
+      (evidence, entry) => {
+        evidence.triggers.push({ ...entry, name: `${name}_extra` });
+      },
+      (_evidence, entry) => {
+        entry.enabled = "D";
+      },
+      (_evidence, entry) => {
+        entry.definition += " -- altered";
+      },
+      (_evidence, entry) => {
+        entry.function_schema = "pg_temp_3";
+      },
+    ]) {
+      const evidence = validAuthorityEvidence(),
+        entry = evidence.triggers.find((row) => row.name === name);
+      assert.ok(entry);
+      mutate(evidence, entry);
+      assert.throws(
+        () => validateRestoreAuthorityEvidence(evidence, expectedOwner),
+        /authority trigger/i,
+      );
+    }
+  });
+}
+
+for (const name of pagedAuthorityPolicy.tables) {
+  test(`requires exact owner-only companion relation ${name}`, () => {
+    for (const mutate of [
+      (evidence, entry) => {
+        evidence.relations = evidence.relations.filter((row) => row !== entry);
+      },
+      (evidence, entry) => {
+        evidence.relations.push({ ...entry });
+      },
+      (_evidence, entry) => {
+        entry.kind = "v";
+      },
+      (_evidence, entry) => {
+        entry.acl_is_default = true;
+      },
+      (_evidence, entry) => {
+        entry.owner = "unreviewed_owner";
+      },
+      (_evidence, entry) => {
+        entry.acl.push(acl("nutrition_catalogue_stage", "INSERT"));
+      },
+    ]) {
+      const evidence = validAuthorityEvidence(),
+        entry = evidence.relations.find((row) => row.name === name);
+      assert.ok(entry);
+      assert.equal(entry.acl_is_default, false);
+      mutate(evidence, entry);
+      assert.throws(() => validateRestoreAuthorityEvidence(evidence, expectedOwner), /relation/i);
+    }
+  });
+}
+
+test("pins missing, extra, and changed companion columns, constraints, and indexes", () => {
+  for (const field of ["authorityConstraints", "authorityFrozenColumns", "authorityIndexes"]) {
+    const base = validAuthorityEvidence();
+    const rows = base[field].filter((entry) =>
+      pagedAuthorityPolicy.tables.includes(entry.table_name),
+    );
+    assert.ok(rows.length > 0, field);
+    for (const row of rows) {
+      const missing = { ...base, [field]: base[field].filter((entry) => entry !== row) };
+      assert.throws(
+        () => validateRestoreAuthorityEvidence(missing, expectedOwner),
+        undefined,
+        `${field}:${row.name ?? row.column_name}`,
+      );
+      const changed =
+        field === "authorityFrozenColumns"
+          ? { ...row, data_type: "unreviewed_type" }
+          : { ...row, definition: "unreviewed replacement" };
+      assert.throws(() =>
+        validateRestoreAuthorityEvidence(
+          { ...base, [field]: base[field].map((entry) => (entry === row ? changed : entry)) },
+          expectedOwner,
+        ),
+      );
+    }
+    const first = rows[0],
+      extra =
+        field === "authorityFrozenColumns"
+          ? { ...first, column_name: "unreviewed_column" }
+          : { ...first, name: "unreviewed_structure" };
+    assert.throws(() =>
+      validateRestoreAuthorityEvidence(
+        { ...base, [field]: [...base[field], extra] },
+        expectedOwner,
+      ),
+    );
+  }
+});
+
+for (const name of pagedAuthorityPolicy.tables) {
+  test(`rejects incomplete or modified PostgreSQL17 owner ACL for ${name}`, () => {
+    for (const mutate of [
+      () => [],
+      (permissions) => permissions.filter((entry) => entry.privilege !== "MAINTAIN"),
+      (permissions) => [...permissions, permissions[0]],
+      (permissions) => permissions.map((entry) => ({ ...entry, grantor: "unreviewed_owner" })),
+      (permissions) => permissions.map((entry) => ({ ...entry, grantable: true })),
+    ]) {
+      const evidence = validAuthorityEvidence();
+      const relation = evidence.relations.find((entry) => entry.name === name);
+      relation.acl = mutate(relation.acl);
+      assert.throws(() => validateRestoreAuthorityEvidence(evidence, expectedOwner), /relation/i);
+    }
+  });
+}
+for (const field of ["identity_kind", "generated_kind"]) {
+  test(`rejects altered companion ${field}`, () => {
+    const evidence = validAuthorityEvidence();
+    const column = evidence.authorityFrozenColumns.find(
+      (entry) =>
+        entry.table_name === "catalogue_preparation_record_v2" &&
+        entry.column_name === "sequence_number",
+    );
+    column[field] = field === "identity_kind" ? "a" : "s";
+    assert.throws(() => validateRestoreAuthorityEvidence(evidence, expectedOwner), /column/i);
+  });
+}
+for (const table of ["nutrient", "source_nutrient_map", "source_nutrient_map_revision"]) {
+  test(`rejects unreviewed trigger on dependency ${table}`, () => {
+    const evidence = validAuthorityEvidence();
+    evidence.triggers.push({
+      ...evidence.triggers[0],
+      name: "unreviewed_dependency_trigger",
+      table_name: table,
+      table_schema: "public",
+      function_name: "unreviewed_invoker_function",
+    });
+    assert.throws(() => validateRestoreAuthorityEvidence(evidence, expectedOwner), /trigger/i);
+  });
+}
+
+test("restore preflight permits only fixed companion tables with exact owner ACLs", () => {
+  const policy = readFileSync(
+    new URL("../packages/db/restore/0014_catalogue_authority_policy.sql", import.meta.url),
+    "utf8",
+  );
+  const clause = policy.match(
+    /and class_row\.relacl is not null\s+and not \(([\s\S]*?)\n {6}\)/u,
+  )?.[1];
+  assert.ok(clause, "exact owner-only companion ACL exception is required");
+  assert.match(clause, /class_row\.relkind = 'r'/u);
+  assert.match(clause, /class_row\.relacl = pg_catalog\.acldefault\('r', expected_owner_oid\)/u);
+  const names = clause.match(/class_row\.relname in \(([\s\S]*?)\)/u)?.[1];
+  assert.ok(names);
+  assert.deepEqual(
+    [...names.matchAll(/'([a-z0-9_]+)'/gu)].map((match) => match[1]).sort(),
+    [...pagedAuthorityPolicy.tables].sort(),
+  );
+  assert.doesNotMatch(clause, /\bor\b|\blike\b|aclexplode/u);
+});

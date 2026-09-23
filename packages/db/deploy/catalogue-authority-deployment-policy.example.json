@@ -2,7 +2,7 @@
   "activationGuardSourceSha256": "d46f53aeffa6469eada5461ab59bd9c23d43bf9aab77704c61b21c44291ae028",
   "applicationSchema": "public",
   "applicationSchemaOwner": "pg_database_owner",
-  "approvalFunctionSourceSha256": "73314f5d97251a648093a82d8d9f6d3575a8f3b571d16349ca60a9795de04719",
+  "approvalFunctionSourceSha256": "9dfaa30970c3acfaaff6a1c1c4211cfd0b42c87824998841172429c4dcd5138f",
   "approvalGuardSourceSha256": "f96feb298d900165172c56a3fa1e99e91aaca010657155e5a996ee04015fdbbd",
   "databaseName": "nutrition_tracker",
   "databaseOwner": "nutrition_app",
@@ -20,19 +20,19 @@
     "unassigned": "nutrition_catalogue_unassigned_canary",
     "worker": "nutrition_worker"
   },
-  "observeValidationFunctionSourceSha256": "0a87bc99f5df97282c48b6202799bcc75cdb914e7473c0c38e092aaf4a132acf",
+  "observeValidationFunctionSourceSha256": "84179971a6b8f171436efc1807e4e89c0f4b19bd3778b56bf3dea896aab009a2",
   "policyKind": "catalogue-authority-deployment",
-  "promotionFunctionSourceSha256": "bd8f0714717baf626507a2d40799cea75085f20e9df7295b77fb5899529f2142",
+  "promotionFunctionSourceSha256": "feb716548ef14da6dace4c12fd18b98d462766a9a59de0d71aff1b5b9c606ae3",
   "reviewerLogins": {
     "data": "nutrition_catalogue_data_reviewer",
     "quality": "nutrition_catalogue_quality_reviewer",
     "rights": "nutrition_catalogue_rights_reviewer"
   },
-  "rollbackFunctionSourceSha256": "a6b7cce658727edcfc889eac7272e65b094592361459130c815436c8f1cc14d7",
-  "schemaVersion": 6,
-  "stageBatchFunctionSourceSha256": "11b0a983c9cf3d4a7451978d37e5fe997a40290a10e741ba0626b89bfd2611c4",
-  "stageParserReportFunctionSourceSha256": "d89defb335e21228c38968ef69b2ed7342f5a5440762ae31f170969fbcc9c9e8",
-  "stageRecordChunkFunctionSourceSha256": "4cc2b310ba6fda051a125bb203c0cf2c6a5fbe227a55daf517a0376ab79e4c7f",
+  "rollbackFunctionSourceSha256": "8946f31585a418f750601e35621b06ac938a8c466f26fddc1a123cd6c2df4ffd",
+  "schemaVersion": 7,
+  "stageBatchFunctionSourceSha256": "e35607a581873d4b7c3b092be4c60a63026b71db21e447c87c79aebb42e21445",
+  "stageParserReportFunctionSourceSha256": "111c05a916f5fdce9be9ec6117d8220a239fff749efd628afb4164b3dc89f6a5",
+  "stageRecordChunkFunctionSourceSha256": "d8e8d2354606768fdcaacd280fd2255359ace98758b3d8377f90a94e802541a2",
   "stageValidateGuardSourceSha256": "f21dfa9d5455a40ab9f50bdbace02ffc19f53ab252e0eab99a4f50769f678eda",
-  "validateBatchFunctionSourceSha256": "10c59084d8e5c7debb581c6e749f6779dbc3f5867fc4cb18ffc009293f9f50a5"
+  "validateBatchFunctionSourceSha256": "e57096da8349e9efa58cdcc7293b36a895731a35ce7c8ad1dc55c1f4b4db9b66"
 }

@@ -1,5 +1,14 @@
 import { createHash } from "node:crypto";
 
+import {
+  CATALOGUE_PAGED_COLUMN_POLICY,
+  CATALOGUE_PAGED_CONSTRAINT_POLICY,
+  CATALOGUE_PAGED_FUNCTION_POLICY,
+  CATALOGUE_PAGED_INDEX_POLICY,
+  CATALOGUE_PAGED_TABLES,
+  CATALOGUE_PAGED_TRIGGER_POLICY,
+} from "./catalogue-paged-authority-policy.js";
+
 import { canonicalJson } from "./catalogue-validation.js";
 import type { JsonValue } from "./types.js";
 
@@ -27,43 +36,43 @@ export type CatalogueFunctionExecuteGrantees =
   | readonly CatalogueCapabilityRole[];
 
 export const CATALOGUE_APPROVAL_FUNCTION_SOURCE_SHA256 =
-  "73314f5d97251a648093a82d8d9f6d3575a8f3b571d16349ca60a9795de04719";
+  "9dfaa30970c3acfaaff6a1c1c4211cfd0b42c87824998841172429c4dcd5138f";
 export const CATALOGUE_APPROVAL_V1_FUNCTION_SOURCE_SHA256 =
-  "89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac";
+  "57a131aea73ba58d76f8d7cd867ea2cb2485567f65dc4c28c5a9ffe8963ca198";
 export const CATALOGUE_APPROVAL_GUARD_SOURCE_SHA256 =
   "f96feb298d900165172c56a3fa1e99e91aaca010657155e5a996ee04015fdbbd";
 export const CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256 =
-  "bd8f0714717baf626507a2d40799cea75085f20e9df7295b77fb5899529f2142";
+  "feb716548ef14da6dace4c12fd18b98d462766a9a59de0d71aff1b5b9c606ae3";
 export const CATALOGUE_PROMOTION_V1_FUNCTION_SOURCE_SHA256 =
-  "115fdc3ed1943dd77ce70d3a694495da3d2c62ade9c7b82812a89cef82b39f17";
+  "2d5733cf34f2119db2e18564469fc76adf892172a936b1bfcbd21b3899629c96";
 export const CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256 =
-  "a6b7cce658727edcfc889eac7272e65b094592361459130c815436c8f1cc14d7";
+  "8946f31585a418f750601e35621b06ac938a8c466f26fddc1a123cd6c2df4ffd";
 export const CATALOGUE_ROLLBACK_V1_FUNCTION_SOURCE_SHA256 =
-  "3fe493ee5e0b27e43cc881854dddfe4dc12f862a1c4a242bf712c843b2792ff1";
+  "a2cf554f00f20d13720e268e3778eca9e26064da34291befa9b75f3dbe55b915";
 export const CATALOGUE_ACTIVATION_GUARD_SOURCE_SHA256 =
   "d46f53aeffa6469eada5461ab59bd9c23d43bf9aab77704c61b21c44291ae028";
 export const CATALOGUE_COMPUTE_STAGING_SEAL_FUNCTION_SOURCE_SHA256 =
-  "399d40c2913c2022c0a2921d5870a2d26a5dcd9949d81715882f70899db4f5f8";
+  "e7dbe4dc44ca8cef1183b966384000a3a252e4f92cc644091d46281e04d91822";
 export const CATALOGUE_OBSERVE_VALIDATION_FUNCTION_SOURCE_SHA256 =
-  "0a87bc99f5df97282c48b6202799bcc75cdb914e7473c0c38e092aaf4a132acf";
+  "84179971a6b8f171436efc1807e4e89c0f4b19bd3778b56bf3dea896aab009a2";
 export const CATALOGUE_STAGE_BATCH_FUNCTION_SOURCE_SHA256 =
-  "11b0a983c9cf3d4a7451978d37e5fe997a40290a10e741ba0626b89bfd2611c4";
+  "e35607a581873d4b7c3b092be4c60a63026b71db21e447c87c79aebb42e21445";
 export const CATALOGUE_STAGE_PARSER_REPORT_FUNCTION_SOURCE_SHA256 =
-  "d89defb335e21228c38968ef69b2ed7342f5a5440762ae31f170969fbcc9c9e8";
+  "111c05a916f5fdce9be9ec6117d8220a239fff749efd628afb4164b3dc89f6a5";
 export const CATALOGUE_STAGE_RECORD_CHUNK_FUNCTION_SOURCE_SHA256 =
-  "4cc2b310ba6fda051a125bb203c0cf2c6a5fbe227a55daf517a0376ab79e4c7f";
+  "d8e8d2354606768fdcaacd280fd2255359ace98758b3d8377f90a94e802541a2";
 export const CATALOGUE_VALIDATE_BATCH_FUNCTION_SOURCE_SHA256 =
-  "10c59084d8e5c7debb581c6e749f6779dbc3f5867fc4cb18ffc009293f9f50a5";
+  "e57096da8349e9efa58cdcc7293b36a895731a35ce7c8ad1dc55c1f4b4db9b66";
 export const CATALOGUE_VALIDATE_BATCH_V1_FUNCTION_SOURCE_SHA256 =
-  "5b7ae15625fb0ae0d88a9512fe82fca69a9d0dd9e179af8bc1b2f42d1e85ac8a";
+  "0c14bff909d45e0fc0082962484db94af8853761d82e7654dc4494fc78f0d294";
 export const CATALOGUE_NUTRITION_ATTESTATION_FUNCTION_SOURCE_SHA256 =
-  "e2c35dfabb653636a9640475227104a485a24129558b11511175831ef9bc5b8b";
+  "3b6b5d6de655e09c4935379fbaa356429961dedb39264cb25913e16c3a2c2e59";
 export const CATALOGUE_NUTRITION_DECIMAL_PRODUCT_FUNCTION_SOURCE_SHA256 =
   "299a2c88226123f167fe2d7001fdaf6a2e02425007f2426c8def9d0bb83a46c0";
 export const CATALOGUE_NUTRITION_UTF16_LENGTH_FUNCTION_SOURCE_SHA256 =
   "3a1759986b190b3ccac086e5da943ada91f3cc8c3a94ce6942657faae389ef39";
 export const CATALOGUE_NUTRITION_COMPUTE_RECORD_FUNCTION_SOURCE_SHA256 =
-  "41f048090dce80b794615f135f5368f7f501eaecfc3513471eb6d1f36c022783";
+  "b0e547a757ad01f0a2c2360beea10607b5bfec9770fbbeb571598db7cf9ead69";
 export const CATALOGUE_RECORD_NUTRITION_SEMANTIC_GUARD_SOURCE_SHA256 =
   "489c1c4b970c6ba369503854701c980ebcb1510c754050e78355fed94647e0e8";
 export const CATALOGUE_BATCH_NUTRITION_SEMANTIC_GUARD_SOURCE_SHA256 =
@@ -88,6 +97,7 @@ export const CATALOGUE_RECORD_NUTRITION_SEMANTIC_CONSTRAINT_DEFINITION =
   "CHECK ((nutrition_semantic_contract_version IS NULL AND nutrition_semantic_sha256 IS NULL OR nutrition_semantic_contract_version = 1 AND nutrition_semantic_sha256 ~ '^[0-9a-f]{64}$'::text AND validated_at IS NOT NULL AND (validation_status = ANY (ARRAY['quarantined'::text, 'valid'::text, 'materialized'::text]))) IS TRUE)";
 
 export const CATALOGUE_AUTHORITY_CONSTRAINT_POLICY = [
+  ...CATALOGUE_PAGED_CONSTRAINT_POLICY,
   {
     constraintType: "c",
     definition: CATALOGUE_APPROVAL_AUTHORITY_CONSTRAINT_DEFINITION,
@@ -157,6 +167,7 @@ export const CATALOGUE_AUTHORITY_CONSTRAINT_POLICY = [
 ] as const;
 
 export const CATALOGUE_AUTHORITY_FROZEN_COLUMN_POLICY = [
+  ...CATALOGUE_PAGED_COLUMN_POLICY,
   {
     columnName: "nutrient_mapping_digest",
     dataType: "text",
@@ -285,9 +296,10 @@ export const CATALOGUE_AUTHORITY_FROZEN_COLUMN_POLICY = [
     schemaName: "public",
     tableName: "food_import_record",
   },
-] as const;
+].map((column) => ({ identityKind: "", generatedKind: "", ...column }));
 
 export const CATALOGUE_AUTHORITY_INDEX_POLICY = [
+  ...CATALOGUE_PAGED_INDEX_POLICY,
   {
     accessMethod: "btree",
     definition:
@@ -335,6 +347,7 @@ const TRIGGER_FUNCTION_POLICY = {
 } as const;
 
 export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFunctionPolicy[] = [
+  ...CATALOGUE_PAGED_FUNCTION_POLICY,
   {
     arguments: "",
     configuration: "application-schema",
@@ -806,6 +819,10 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
 ];
 
 export const CATALOGUE_AUTHORITY_PROTECTED_TABLES = [
+  ...CATALOGUE_PAGED_TABLES,
+  "nutrient",
+  "source_nutrient_map",
+  "source_nutrient_map_revision",
   "food",
   "food_barcode",
   "food_import_approval",
@@ -831,6 +848,7 @@ export interface CatalogueAuthorityTriggerPolicy {
 }
 
 export const CATALOGUE_AUTHORITY_TRIGGER_POLICY: readonly CatalogueAuthorityTriggerPolicy[] = [
+  ...CATALOGUE_PAGED_TRIGGER_POLICY,
   {
     definition:
       "CREATE TRIGGER custom_food_nutrient_guard_delete_v3 BEFORE DELETE ON food_nutrient_value FOR EACH ROW EXECUTE FUNCTION guard_custom_food_immutable_evidence_v3()",
@@ -1234,7 +1252,7 @@ export interface CatalogueAuthorityDeploymentPolicy {
   readonly promotionFunctionSourceSha256: string;
   readonly reviewerLogins: Readonly<Record<CatalogueReviewerClass, string>>;
   readonly rollbackFunctionSourceSha256: string;
-  readonly schemaVersion: 6;
+  readonly schemaVersion: 7;
   readonly stageBatchFunctionSourceSha256: string;
   readonly stageParserReportFunctionSourceSha256: string;
   readonly stageRecordChunkFunctionSourceSha256: string;
@@ -1359,6 +1377,8 @@ export interface CatalogueAuthorityFrozenColumnEvidence {
   readonly columnName: string;
   readonly dataType: string;
   readonly defaultExpression: string | null;
+  readonly identityKind: string;
+  readonly generatedKind: string;
   readonly notNull: boolean;
   readonly schemaName: string;
   readonly tableName: string;
@@ -1415,7 +1435,7 @@ export interface CatalogueAuthorityDeploymentEvidence {
   readonly nonSystemSchemas: readonly string[];
   readonly policySha256: string;
   readonly relations: readonly CatalogueRelationEvidence[];
-  readonly schemaVersion: 6;
+  readonly schemaVersion: 7;
   readonly types: readonly CatalogueTypeEvidence[];
 }
 
@@ -1453,7 +1473,7 @@ export interface CatalogueAuthorityCanaryEvidence {
     readonly canary: CatalogueAuthorityCanaryName;
     readonly sqlstate: "23503" | "42501";
   }[];
-  readonly schemaVersion: 6;
+  readonly schemaVersion: 7;
   readonly structure: CatalogueAuthorityDeploymentStructureEvidence;
 }
 
@@ -1482,7 +1502,7 @@ export function parseCatalogueAuthorityDeploymentPolicy(
     "stageValidateGuardSourceSha256",
     "validateBatchFunctionSourceSha256",
   ]);
-  if (policy.policyKind !== "catalogue-authority-deployment" || policy.schemaVersion !== 6) {
+  if (policy.policyKind !== "catalogue-authority-deployment" || policy.schemaVersion !== 7) {
     throw new Error("Catalogue authority deployment policy identity is unsupported");
   }
   if (
@@ -1592,7 +1612,7 @@ export function parseCatalogueAuthorityDeploymentPolicy(
     promotionFunctionSourceSha256,
     reviewerLogins,
     rollbackFunctionSourceSha256,
-    schemaVersion: 6,
+    schemaVersion: 7,
     stageBatchFunctionSourceSha256,
     stageParserReportFunctionSourceSha256,
     stageRecordChunkFunctionSourceSha256,
@@ -1660,7 +1680,7 @@ export function assertCatalogueAuthorityDeploymentEvidence(
   evidence: CatalogueAuthorityDeploymentEvidence,
 ): void {
   if (
-    evidence.schemaVersion !== 6 ||
+    evidence.schemaVersion !== 7 ||
     evidence.policySha256 !== catalogueAuthorityDeploymentPolicySha256(policy)
   ) {
     throw new Error("Catalogue authority deployment evidence identity differs");
@@ -1831,7 +1851,7 @@ export function assertCatalogueAuthorityCanaryEvidence(
   evidence: CatalogueAuthorityCanaryEvidence,
 ): void {
   if (
-    evidence.schemaVersion !== 6 ||
+    evidence.schemaVersion !== 7 ||
     evidence.policySha256 !== catalogueAuthorityDeploymentPolicySha256(policy)
   ) {
     throw new Error("Catalogue authority canary evidence identity differs");
@@ -1951,10 +1971,14 @@ function assertCatalogueAuthorityStructure(
       throw new Error(`Catalogue authority relation ${name} is unavailable`);
     }
   }
+  for (const name of CATALOGUE_PAGED_TABLES) {
+    if (relationByName.get(name)?.kind !== "r")
+      throw new Error(`Paged catalogue relation ${name} is unavailable`);
+  }
   for (const relation of evidence.relations) {
     if (
       relation.owner !== policy.databaseOwner ||
-      !relation.aclIsDefault ||
+      relation.aclIsDefault !== !CATALOGUE_PAGED_TABLES.includes(relation.name) ||
       relation.acl.some(
         (entry) =>
           entry.grantee !== policy.databaseOwner ||
@@ -1963,6 +1987,22 @@ function assertCatalogueAuthorityStructure(
       )
     ) {
       throw new Error(`Catalogue relation ${relation.name} owner or ACL differs from policy`);
+    }
+    if (CATALOGUE_PAGED_TABLES.includes(relation.name)) {
+      assertExactAcl(
+        relation.acl,
+        [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE",
+        ].map((privilege) => expectedAcl(policy.databaseOwner, policy.databaseOwner, privilege)),
+        `Catalogue relation ${relation.name} ACL`,
+      );
     }
   }
 

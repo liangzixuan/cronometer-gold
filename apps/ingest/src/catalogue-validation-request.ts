@@ -4,7 +4,7 @@ import { link, lstat, mkdir, open, realpath, unlink } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { TextDecoder } from "node:util";
 
-import { canonicalJsonChunks, type JsonValue } from "@nutrition-tracker/db";
+import { canonicalJsonChunks, type JsonValue } from "@nutrition-tracker/db/canonical-json";
 
 // The request includes a JSON-escaped copy of the separately capped SQL document.
 // This transport limit does not increase the SQL observation/document or stage caps.

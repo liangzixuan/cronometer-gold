@@ -243,12 +243,17 @@ observation and final verifier, with SHA-256 values
 The delivery monitor is paused. Earlier fresh, cached and skipped evidence keeps
 its original scope.
 
-[ADR 0103](../adr/0103-catalogue-review-handoff.md) is the active bounded C1
-prerequisite: reconcile an independent validator's retained exact request and
-submit explicit reviewer decisions through restricted logins. Independent review,
-244 focused offline cases, affected types and scoped Biome passed. Pre-service
-canonical check/build passed. Delivery requires final canonical gates and
-exact-commit automatic proof.
+[ADR 0103](../adr/0103-catalogue-review-handoff.md) is delivered at
+`007a17db9afe9a334543adafbdd103c9e71d2577`: retained validation reconciliation and
+restricted reviewer decisions, independent review and 244 focused offline cases
+passed. Final canonical check recorded 157 fresh static and 4,789 cached cases,
+with 94 cached opt-in skips; build passed 11 cached tasks. September 21 at
+05:39:52 UTC, official evidence verified all three CI35557849580 jobs on attempt
+one and all nine actual container35557849594 jobs on attempt two. One separately
+approved web-only retry passed; the original registry lookup failure remains
+recorded with its cause unproven, and the other eight successful jobs were carried
+forward. At 05:40:56 UTC, verification confirmed clean matching local/tracking/live
+heads and all 17 reviewed working-tree/committed hashes.
 
 The specifically approved PostgreSQL rehearsal passed on its first attempt,
 September 21, 2026 at 03:23:17.239362-03:23:32.328412 UTC: five cases executed,
@@ -269,9 +274,26 @@ socket unavailable and permanent group membership unchanged. The frozen source
 bytes remained unchanged. This completed session authorizes no further service
 run; prior failed attempts and opt-in skips retain their original status.
 
-Full-scale paging, restricted reconciliation access, external identity/caller
-cutover and all six beta exits remain open. Synthetic rehearsal evidence does not
-establish live catalogue, target or release acceptance.
+[ADR 0104](../adr/0104-paged-catalogue-preparation.md) is the active C1 source
+package: admission-budgeted paged staging/sealing, independent validation with
+retained requests, streamed reconciliation and restricted reviewer commitments.
+The user approved this source work and selected the U.S.-first April 2026 full
+USDA CSV catalogue target. Source review, focused checks and canonical check/build
+passed. On September 23, the 12,500/25,000-record synthetic workloads passed at
+253.35546875/250.9609375 MiB, within the unchanged 256 MiB peak/32 MiB growth limits.
+Each ran 55 cases with zero skips, including one actual database case, and restored
+107 tables through owned cleanup. Original memory proof retains its source
+identity and includes test-process RSS through restore/cleanup, not runner
+teardown or child-process memory. The final canary session at 18:42:43–18:42:51 UTC
+passed two actual database cases and nine endpoint fixtures, zero skips. It
+confirmed the full authority tamper sequence and repeatable restore policy after
+reviewed corrections. All prior failed attempts remain recorded; no fresh memory
+measurement is claimed for those corrections. Cleanup removed owned containers
+and credentials; Docker service/socket and containerd are inactive/disabled.
+Exact-commit automatic delivery evidence remains pending. Version-2 promotion and
+activation remain fenced. The synthetic fixtures do not qualify a full upstream candidate. All six beta exits, compatible
+publication, actual scale, external identity/caller cutover and target acceptance
+remain open. The source approval does not authorize another service session.
 
 Use the [build plan](../product/build-plan.md) for priorities and the
 [release gates](release-gates.md) for authoritative acceptance. The

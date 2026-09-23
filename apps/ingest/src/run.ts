@@ -5,11 +5,13 @@ import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { TextDecoder } from "node:util";
 
 import {
+  admitCataloguePreparationV2,
   approveBatch,
   assertCatalogueStagePrincipal,
   type BatchCheckpoint,
   canonicalJsonChunks,
   createDatabaseFromEnvironment,
+  encodeCataloguePreparationAdmissionV2,
   encodeCatalogueStageParserReport,
   getBatchCheckpoint,
   getSourceNutrientMappingDigest,
@@ -18,6 +20,7 @@ import {
   type PreparedCatalogueValidationRequest,
   parsePreparedCatalogueValidationRequest,
   promoteBatch,
+  readCataloguePreparationAdmissionV2,
   reconcileCatalogueBatch,
   recordBatchParserReportAndValidate,
   registerFoodSourceFromReviewedManifest,
@@ -58,11 +61,22 @@ import {
 } from "@nutrition-tracker/ingestion";
 
 import { flagOption, optionalOption, parseArguments, requiredOption } from "./arguments.js";
+import { type CataloguePagedCommand, runCataloguePagedCommand } from "./catalogue-paged-command.js";
 import { runCatalogueValidationCommand } from "./catalogue-validation-command.js";
-import { readCatalogueValidationRequest } from "./catalogue-validation-request.js";
+import {
+  assertCatalogueValidationRequestDestination,
+  readCatalogueValidationRequest,
+  writeCatalogueValidationRequest,
+} from "./catalogue-validation-request.js";
+import {
+  fdcPagedStageAdmissionLimits,
+  prepareFdcCsvPagedStageIdentity,
+  stageVerifiedFdcCsvExportV2,
+} from "./fdc-csv-paged-stage.js";
 import { buildFdcCsvStageParserReport, stageVerifiedFdcCsvExport } from "./fdc-csv-stage.js";
 import { createFdcRecordExport } from "./fdc-record-export.js";
 import { openVerifiedFdcRecordExport } from "./fdc-record-reader.js";
+import { openVerifiedFdcRecordExportV2 } from "./fdc-record-reader-v2.js";
 
 export interface CommandIo {
   readonly environment: NodeJS.ProcessEnv;
@@ -190,6 +204,21 @@ export async function runCommand(argv: readonly string[], io: CommandIo): Promis
       case "cnf inspect":
         await inspectCnfCommand(argv, arguments_.positionals, arguments_.options, io);
         return 0;
+      case "catalogue validate-paged":
+      case "catalogue retry-paged-validation":
+      case "catalogue reconcile-paged":
+      case "catalogue prepare-paged-approval":
+      case "catalogue submit-paged-approval":
+      case "catalogue read-paged-report":
+        await runCataloguePagedCommand(
+          command.slice("catalogue ".length) as CataloguePagedCommand,
+          argv,
+          arguments_.positionals,
+          arguments_.options,
+          io,
+          WORKSPACE_ROOT,
+        );
+        return 0;
       case "catalogue prepare-validation":
       case "catalogue submit-validation":
         await runCatalogueValidationCommand(
@@ -199,6 +228,20 @@ export async function runCommand(argv: readonly string[], io: CommandIo): Promis
           arguments_.options,
           io,
           WORKSPACE_ROOT,
+        );
+        return 0;
+      case "catalogue prepare-paged-admission":
+      case "catalogue admit-paged":
+      case "catalogue stage-fdc-csv-paged":
+        await runFdcCsvPagedCommand(
+          command.slice("catalogue ".length) as
+            | "prepare-paged-admission"
+            | "admit-paged"
+            | "stage-fdc-csv-paged",
+          argv,
+          arguments_.positionals,
+          arguments_.options,
+          io,
         );
         return 0;
       case "catalogue stage-fdc-csv":
@@ -992,6 +1035,218 @@ async function inspectCnfCommand(
     rowDispositions: evidence.rowDispositions,
     tables: parsed.tables,
   });
+}
+
+export async function runFdcCsvPagedCommand(
+  command: "prepare-paged-admission" | "admit-paged" | "stage-fdc-csv-paged",
+  argv: readonly string[],
+  positionals: readonly string[],
+  options: Readonly<Record<string, string | true>>,
+  io: CommandIo,
+): Promise<void> {
+  if (command === "admit-paged") {
+    const allowed = ["request", "request-sha256", "request-bytes"];
+    assertExactCatalogueReviewArguments(command, allowed, argv, positionals, options);
+    if (positionals.length !== 0)
+      throw new Error("catalogue admit-paged takes no positional arguments");
+    const path = requiredOption(options, "request");
+    const sha256 = requiredSha256Option(options, "request-sha256");
+    const text = requiredOption(options, "request-bytes");
+    if (!/^[1-9][0-9]*$/u.test(text)) throw new Error("Admission request requires exact byte size");
+    const byteSize = requiredPositiveSafeInteger(Number(text), "admission request byte size");
+    if (byteSize > 2 * 131072 + 4096)
+      throw new Error("Admission request exceeds its bounded wrapper size");
+    const envelope = await readCatalogueValidationRequest(
+      path,
+      { sha256, byteSize },
+      WORKSPACE_ROOT,
+    );
+    if (
+      envelope === null ||
+      typeof envelope !== "object" ||
+      Array.isArray(envelope) ||
+      Object.keys(envelope).sort().join() !== ["schemaVersion", "requestDocument"].sort().join() ||
+      !("schemaVersion" in envelope) ||
+      envelope.schemaVersion !== 2 ||
+      !("requestDocument" in envelope) ||
+      typeof envelope.requestDocument !== "string"
+    )
+      throw new Error("Invalid retained admission request envelope");
+    const document = envelope.requestDocument;
+    const parsed = JSON.parse(document);
+    if (encodeCataloguePreparationAdmissionV2(parsed) !== document)
+      throw new Error("Admission request differs from exact canonical versioned fields");
+    io.signal?.throwIfAborted();
+    const database = createDatabaseFromEnvironment(io.environment);
+    await runAfterRequiredCleanup(
+      () => admitCataloguePreparationV2(database, document),
+      () => database.destroy(),
+      async (receipt) => output(io, { request: { path, sha256, byteSize }, receipt }),
+    );
+    return;
+  }
+  const budgetOptions = [
+    "stage-principal",
+    "max-records",
+    "max-payload-text-bytes",
+    "max-intermediate-bytes",
+    "max-validation-evidence-bytes",
+    "max-reconciliation-evidence-bytes",
+    "max-baseline-records",
+    "max-baseline-payload-bytes",
+    "review-reference",
+    "request-out",
+  ];
+  const allowed = [
+    ...STAGE_FDC_CSV_OPTIONS,
+    ...(command === "prepare-paged-admission" ? budgetOptions : ["admission-sha256"]),
+  ];
+  assertExactSingleManifestCommandArguments(
+    argv,
+    positionals,
+    options,
+    allowed,
+    `catalogue ${command}`,
+  );
+  for (const name of allowed) requiredOption(options, name);
+  const recordsPath = fdcRecordsOutputPath(requiredOption(options, "records"), "records");
+  const exportSha256 = requiredSha256Option(options, "records-sha256");
+  const nutrientMappingDigest = requiredSha256Option(options, "nutrient-mapping-sha256");
+  const bytesText = requiredOption(options, "records-bytes");
+  if (!/^[1-9][0-9]*$/u.test(bytesText))
+    throw new Error("--records-bytes requires exact positive bytes");
+  const exportByteSize = requiredPositiveSafeInteger(Number(bytesText), "record export byte size");
+  const actor = trustedRunnerActor(io.environment);
+  const manifestBytes = await readFile(
+    workspacePath(singlePositional(positionals, "manifest path")),
+  );
+  const manifestSha256 = hashBytes(manifestBytes);
+  const manifest = parseFoodSourceManifest(JSON.parse(manifestBytes.toString("utf8")));
+  assertImportReadyManifest(manifest);
+  assertManifestParserIdentity(manifest);
+  const contract = requireFdcCsvManifest(manifest);
+  const parserBuildSha256 = trustedParserBuildSha256(manifest, io.environment);
+  const evaluatedAt = currentTimeIso(io);
+  const releaseEvidence = await readBoundReleaseEvidence(
+    manifest,
+    requiredOption(options, "evidence-bundle"),
+    evaluatedAt,
+  );
+  assertEvidenceDecisionRunner(actor, releaseEvidence.bundle);
+  const manifestObjectUri = immutableManifestObjectUri(
+    requiredOption(options, "manifest-object-uri"),
+    manifestSha256,
+  );
+  const identity = prepareFdcCsvPagedStageIdentity({
+    manifest,
+    manifestSha256,
+    manifestObjectUri,
+    parserBuildSha256,
+    nutrientMappingDigest,
+    releaseEvidence,
+    evaluatedAt,
+  });
+  if (command === "prepare-paged-admission") {
+    const counts: Record<string, string> = {};
+    for (const name of budgetOptions.filter((key) => key.startsWith("max-"))) {
+      const value = requiredOption(options, name);
+      if (
+        !/^(?:0|[1-9][0-9]*)$/u.test(value) ||
+        !Number.isSafeInteger(Number(value)) ||
+        (!name.startsWith("max-baseline-") && Number(value) < 1)
+      )
+        throw new Error(`--${name} requires an exact reviewed resource limit`);
+      counts[name] = value;
+    }
+    const requestDocument = encodeCataloguePreparationAdmissionV2({
+      stageDocument: identity.stageDocument,
+      manifestSha256,
+      exportSha256,
+      exportBytes: exportByteSize,
+      stagePrincipal: requiredOption(options, "stage-principal"),
+      maxRecords: counts["max-records"] ?? "",
+      maxPayloadTextBytes: counts["max-payload-text-bytes"] ?? "",
+      maxIntermediateBytes: counts["max-intermediate-bytes"] ?? "",
+      maxValidationEvidenceBytes: counts["max-validation-evidence-bytes"] ?? "",
+      maxReconciliationEvidenceBytes: counts["max-reconciliation-evidence-bytes"] ?? "",
+      maxBaselineRecords: counts["max-baseline-records"] ?? "",
+      maxBaselinePayloadBytes: counts["max-baseline-payload-bytes"] ?? "",
+      reviewReference: requiredOption(options, "review-reference"),
+    });
+    const requestOut = requiredOption(options, "request-out");
+    await assertCatalogueValidationRequestDestination(requestOut, WORKSPACE_ROOT);
+    io.signal?.throwIfAborted();
+    const request = await writeCatalogueValidationRequest(
+      requestOut,
+      { schemaVersion: 2, requestDocument },
+      WORKSPACE_ROOT,
+    );
+    output(io, {
+      kind: "prepared-catalogue-admission-v2",
+      request,
+      manifestSha256,
+      recordsExport: { sha256: exportSha256, byteSize: exportByteSize },
+      admissionSubmitted: false,
+    });
+    return;
+  }
+  const admissionSha256 = requiredSha256Option(options, "admission-sha256");
+  io.signal?.throwIfAborted();
+  const database = createDatabaseFromEnvironment(io.environment);
+  let records: Awaited<ReturnType<typeof openVerifiedFdcRecordExportV2>> | undefined;
+  await runAfterRequiredCleanup(
+    async () => {
+      const admission = await readCataloguePreparationAdmissionV2(database, admissionSha256);
+      const accepted = JSON.parse(admission.requestDocument);
+      if (
+        accepted.stageDocument !== identity.stageDocument ||
+        accepted.manifestSha256 !== manifestSha256 ||
+        accepted.exportSha256 !== exportSha256 ||
+        accepted.exportBytes !== String(exportByteSize)
+      )
+        throw new Error("Prepared identity differs from the actual approved admission");
+      records = await openVerifiedFdcRecordExportV2({
+        inputPath: recordsPath,
+        workspaceRoot: WORKSPACE_ROOT,
+        expectedExport: { sha256: exportSha256, byteSize: exportByteSize },
+        expectedHeader: identity.expectedHeader,
+        expectedBaseline: identity.expectedBaseline,
+        admission: fdcPagedStageAdmissionLimits(admission),
+        verifyInspection: (inspection) =>
+          verifyFdcCsvStageInspection(manifest, contract.context, inspection),
+        ...(io.signal ? { signal: io.signal } : {}),
+      });
+      const result = await stageVerifiedFdcCsvExportV2(database, {
+        admission,
+        batch: identity.batch,
+        records,
+        ...(io.signal ? { signal: io.signal } : {}),
+      });
+      return {
+        actor: actor.principalId,
+        ...result,
+        parserBuildSha256,
+        nutrientMappingDigest,
+        recordsExport: records.evidence,
+      };
+    },
+    async () => {
+      const failures: unknown[] = [];
+      try {
+        await database.destroy();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await records?.close();
+      } catch (error) {
+        failures.push(error);
+      }
+      if (failures.length)
+        throw new AggregateError(failures, "Paged stage cleanup failed; completion is unconfirmed");
+    },
+    async (result) => output(io, result),
+  );
 }
 
 async function stageFdcCsvCommand(
@@ -3309,7 +3564,7 @@ function hasErrorCode(error: unknown, code: string): boolean {
 }
 
 function assertExactCatalogueReviewArguments(
-  command: "reconcile" | "submit-approval",
+  command: "reconcile" | "submit-approval" | "admit-paged",
   allowedOptions: readonly string[],
   argv: readonly string[],
   positionals: readonly string[],
@@ -3713,6 +3968,15 @@ function usage(): string {
     "  ingest catalogue stage-cnf <manifest> --artifact <zip> --cache-dir <path> --evidence-bundle <bundle.json> --extract-dir <path> --manifest-object-uri <s3-uri>",
     "  ingest catalogue prepare-validation <batch-id> --staging-seal-sha256 <sha256> --nutrient-mapping-sha256 <sha256> --maximum-excluded-nutrient-fraction <0..1> --maximum-quarantine-fraction <0..1> --maximum-quarantined-records <count> --require-distinct-approval-principals true --require-at-least-one-valid-record true --require-materialized-nutrient-per-valid-record true --request-out .local-data/evidence/catalogue-validation/<name>.json",
     "  ingest catalogue submit-validation <batch-id> --request .local-data/evidence/catalogue-validation/<name>.json --request-sha256 <sha256> --request-bytes <bytes>",
+    "  ingest catalogue prepare-paged-admission <manifest> <stage-fdc-csv options> --stage-principal <login> --max-records <count> --max-payload-text-bytes <bytes> --max-intermediate-bytes <bytes> --max-validation-evidence-bytes <bytes> --max-reconciliation-evidence-bytes <bytes> --max-baseline-records <count> --max-baseline-payload-bytes <bytes> --review-reference <reference> --request-out <private-json>",
+    "  ingest catalogue admit-paged --request <private-json> --request-sha256 <sha256> --request-bytes <bytes>",
+    "  ingest catalogue stage-fdc-csv-paged <manifest> <stage-fdc-csv options> --admission-sha256 <sha256>",
+    "  ingest catalogue validate-paged <batch-id> --staging-seal-sha256 <sha256> <explicit prepare-validation policy options>",
+    "  ingest catalogue retry-paged-validation <batch-id> --request <retained-checkpoint> --request-sha256 <sha256> --request-bytes <bytes>",
+    "  ingest catalogue reconcile-paged <batch-id> --request <validation-journal> --request-sha256 <sha256> --request-bytes <bytes> --validation-terminal-sha256 <sha256> --expected-current-release-id <uuid|none> --external-principal-id <validator-login>",
+    "  ingest catalogue prepare-paged-approval <batch-id> --role <data|quality|rights> --external-principal-id <reviewer-login> --manifest-sha256 <sha256> --validation-terminal-sha256 <sha256> --report-sha256 <sha256> --context-sha256 <sha256> --approval-reference <reference> --request-out <private-json>",
+    "  ingest catalogue submit-paged-approval <batch-id> --request <private-json> --request-sha256 <sha256> --request-bytes <bytes>",
+    "  ingest catalogue read-paged-report <batch-id> --role <data|quality|rights> --external-principal-id <reviewer-login> --report-sha256 <sha256> --page-number <positive-count> --page-out <private-json>",
     "  ingest catalogue mappings <reviewed-mapping.json>",
     "  ingest catalogue register-source <import-ready-manifest> --evidence-bundle <bundle.json>",
     "  ingest catalogue reconcile --batch-id <uuid> --expected-current-release-id <uuid|none> --expected-validation-digest <lowercase-sha256> --report-out .local-data/evidence/catalogue-reconciliation/<file> [--validation-request .local-data/evidence/catalogue-validation/<name>.json --validation-request-sha256 <sha256> --validation-request-bytes <bytes>]",

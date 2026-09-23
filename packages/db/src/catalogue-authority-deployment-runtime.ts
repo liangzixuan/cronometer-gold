@@ -514,14 +514,14 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
         class_row.relname as table_name,
         constraint_row.contype::text as constraint_type,
         constraint_row.convalidated as validated,
-        pg_catalog.pg_get_constraintdef(constraint_row.oid, true) as definition
+        pg_catalog.pg_get_constraintdef(constraint_row.oid, class_row.relname not in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2')) as definition
       from pg_catalog.pg_constraint as constraint_row
       join pg_catalog.pg_class as class_row
         on class_row.oid = constraint_row.conrelid
       join pg_catalog.pg_namespace as namespace_row
         on namespace_row.oid = class_row.relnamespace
       where namespace_row.nspname = ${policy.applicationSchema}
-        and constraint_row.conname in (
+        and (class_row.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or constraint_row.conname in (
           'food_import_approval_database_authority_check',
           'food_import_batch_materialization_contract_check',
           'food_import_batch_nutrition_semantic_contract_check',
@@ -531,7 +531,7 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
           'food_import_record_validated_food_contract_check',
           'food_import_record_nutrition_semantic_contract_check',
           'food_source_release_activation_database_authority_check'
-        )
+        ))
       order by class_row.relname, constraint_row.conname
     `.execute(database)
   ).rows.map((row) => ({
@@ -548,6 +548,8 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
       readonly data_type: string;
       readonly default_expression: string | null;
       readonly not_null: boolean;
+      readonly identity_kind: string;
+      readonly generated_kind: string;
       readonly schema_name: string;
       readonly table_name: string;
     }>`
@@ -557,6 +559,8 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
         attribute_row.attname as column_name,
         pg_catalog.format_type(attribute_row.atttypid, attribute_row.atttypmod) as data_type,
         attribute_row.attnotnull as not_null,
+        attribute_row.attidentity::text as identity_kind,
+        attribute_row.attgenerated::text as generated_kind,
         pg_catalog.pg_get_expr(default_row.adbin, default_row.adrelid, true) as default_expression
       from pg_catalog.pg_attribute as attribute_row
       join pg_catalog.pg_class as class_row
@@ -567,7 +571,9 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
         on default_row.adrelid = attribute_row.attrelid
         and default_row.adnum = attribute_row.attnum
       where namespace_row.nspname = ${policy.applicationSchema}
+        and attribute_row.attnum > 0 and not attribute_row.attisdropped
         and (
+          class_row.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or
           (class_row.relname = 'food_import_batch' and attribute_row.attname in (
             'nutrient_mapping_digest',
             'nutrient_mapping_revision_ids',
@@ -596,6 +602,8 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
     dataType: row.data_type,
     defaultExpression: row.default_expression,
     notNull: row.not_null,
+    identityKind: row.identity_kind,
+    generatedKind: row.generated_kind,
     schemaName: row.schema_name,
     tableName: row.table_name,
   }));
@@ -633,7 +641,7 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
         pg_catalog.pg_get_expr(
           index_metadata.indpred,
           index_metadata.indrelid,
-          true
+          index_row.relname = 'food_source_release_activation_import_batch_unique'
         ) as predicate,
         pg_catalog.pg_get_indexdef(index_metadata.indexrelid) as definition
       from pg_catalog.pg_index as index_metadata
@@ -646,7 +654,7 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
       join pg_catalog.pg_am as access_method
         on access_method.oid = index_row.relam
       where namespace_row.nspname = ${policy.applicationSchema}
-        and index_row.relname = 'food_source_release_activation_import_batch_unique'
+        and (table_row.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or index_row.relname in ('food_source_release_activation_import_batch_unique','catalogue_legacy_release_batch_v2_idx'))
       order by namespace_row.nspname, table_row.relname, index_row.relname
     `.execute(database)
   ).rows.map((row) => ({
@@ -1075,7 +1083,7 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
     nonSystemSchemas,
     policySha256: catalogueAuthorityDeploymentPolicySha256(policy),
     relations,
-    schemaVersion: 6,
+    schemaVersion: 7,
     triggers,
     types,
   };
@@ -1186,7 +1194,7 @@ export async function runCatalogueReviewerCanaries(
     beforeStructureSha256: catalogueAuthorityDeploymentStructureSha256(before),
     policySha256: catalogueAuthorityDeploymentPolicySha256(policy),
     results,
-    schemaVersion: 6,
+    schemaVersion: 7,
     structure,
   };
   assertCatalogueAuthorityCanaryEvidence(policy, evidence);

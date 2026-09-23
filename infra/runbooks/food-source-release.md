@@ -448,6 +448,54 @@ validation, external identity cutover and representative resource/lock evidence
 remain open under [ADR 0102](../../docs/adr/0102-fdc-csv-independent-validation.md).
 
 
+### Paged preparation through review (ADR 0104)
+
+This versioned path has reviewed source and bounded synthetic PostgreSQL proof,
+including memory workloads and authority/restore canaries. Exact-commit automatic
+delivery evidence remains pending. Use an approved execution package before any service or
+live action. The current target is U.S. first, full April 2026 USDA CSV. Source
+selection grants no download, storage, deployment or activation permission.
+
+The command family uses `ingest catalogue` and the existing private manifest,
+evidence-bundle, export and credential boundaries:
+
+1. `prepare-paged-admission` creates an exact private request with the reviewed
+   intended stage login and all seven record/byte budgets. A distinct restricted
+   quality reviewer uses `admit-paged` with explicit request hash and byte pins.
+2. The stage login calls `stage-fdc-csv-paged` with the returned admission digest.
+   The verified export is read under those SQL-approved limits. Ordered pages and
+   the independent sealing pass retain exact receipts. An uncertain response
+   stops; rerun the same pinned input explicitly to replay unchanged pages.
+3. A separate restricted validation login runs `validate-paged`. Its private
+   journal retains exact request bytes before each SQL mutation. Use
+   `retry-paged-validation` with the original pinned request for uncertain results.
+   Retained files, context and the complete page chain must agree before recovery.
+4. `reconcile-paged` verifies the retained validation chain before mutation, then
+   streams the version-3 report against the current verified baseline. Keep its
+   private report pages and terminal together. `read-paged-report` is restricted
+   to the relevant singleton reviewer or validation capability.
+5. Each independent data, quality and rights reviewer uses
+   `prepare-paged-approval` and `submit-paged-approval` with exact batch, context,
+   validation terminal, report and manifest pins. Preserve the exact request for
+   explicit uncertain-result replay. Connection cleanup precedes success output.
+
+Consult the CLI's usage for the complete required options; missing or unknown
+options and absent identity/resource pins fail before database work. Never put
+credentials in command arguments or evidence logs. Journal and report artifacts
+are owner-private local evidence, not production backups or external attestations.
+
+A dependency generation change, including a change away and back, invalidates a
+validation context permanently. No reset/restart or budget refund is provided.
+Stop and retain evidence; do not edit companion tables or mint a replacement
+request to evade the conflict. Baselines without the required frozen semantic
+evidence also fail closed.
+
+This path ends at review. Existing promotion/activation consumers explicitly
+reject version-2 batches. Do not substitute their digests or statuses into legacy
+commands. Actual full-candidate scale, a compatible publication path, authenticated
+external identities, credential/caller cutover, target canaries and every release
+acceptance gate remain pending. See [ADR 0104](../../docs/adr/0104-paged-catalogue-preparation.md).
+
 ### Health Canada CNF inventory and baseline
 
 The CNF nine-CSV parser contract is not the archive inventory. Before changing a

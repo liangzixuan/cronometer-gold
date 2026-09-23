@@ -12,6 +12,7 @@ import {
   CATALOGUE_AUTHORITY_FROZEN_COLUMN_POLICY,
   CATALOGUE_AUTHORITY_FUNCTION_POLICY,
   CATALOGUE_AUTHORITY_INDEX_POLICY,
+  CATALOGUE_AUTHORITY_PROTECTED_TABLES,
   CATALOGUE_AUTHORITY_TRIGGER_POLICY,
   CATALOGUE_CAPABILITY_ROLES,
   CATALOGUE_OBSERVE_VALIDATION_FUNCTION_SOURCE_SHA256,
@@ -30,6 +31,11 @@ import {
   catalogueAuthorityDeploymentStructureSha256,
   parseCatalogueAuthorityDeploymentPolicy,
 } from "../src/catalogue-authority-deployment.js";
+import {
+  CATALOGUE_PAGED_FUNCTION_POLICY,
+  CATALOGUE_PAGED_TABLES,
+  CATALOGUE_PAGED_TRIGGER_POLICY,
+} from "../src/catalogue-paged-authority-policy.js";
 import { canonicalJson } from "../src/catalogue-validation.js";
 import type { JsonValue } from "../src/types.js";
 
@@ -64,7 +70,7 @@ const rawPolicy = {
     rights: "nutrition_catalogue_rights_reviewer",
   },
   rollbackFunctionSourceSha256: CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
-  schemaVersion: 6,
+  schemaVersion: 7,
   stageBatchFunctionSourceSha256: CATALOGUE_STAGE_BATCH_FUNCTION_SOURCE_SHA256,
   stageParserReportFunctionSourceSha256: CATALOGUE_STAGE_PARSER_REPORT_FUNCTION_SOURCE_SHA256,
   stageRecordChunkFunctionSourceSha256: CATALOGUE_STAGE_RECORD_CHUNK_FUNCTION_SOURCE_SHA256,
@@ -100,6 +106,7 @@ function validEvidence(
   const relationAcl = [
     "DELETE",
     "INSERT",
+    "MAINTAIN",
     "REFERENCES",
     "SELECT",
     "TRIGGER",
@@ -248,6 +255,7 @@ function validEvidence(
     nonSystemSchemas: [policy.applicationSchema],
     policySha256: catalogueAuthorityDeploymentPolicySha256(policy),
     relations: [
+      ...CATALOGUE_PAGED_TABLES,
       "food_import_approval",
       "food_import_batch",
       "food_import_record",
@@ -257,7 +265,7 @@ function validEvidence(
     ]
       .map((name) => ({
         acl: relationAcl,
-        aclIsDefault: true,
+        aclIsDefault: !CATALOGUE_PAGED_TABLES.includes(name),
         kind: "r",
         name,
         owner: policy.databaseOwner,
@@ -271,7 +279,7 @@ function validEvidence(
           owner: policy.databaseOwner,
         })),
       ),
-    schemaVersion: 6,
+    schemaVersion: 7,
     types: [
       {
         acl: [
@@ -289,8 +297,24 @@ function validEvidence(
 
 describe("catalogue authority deployment policy", () => {
   it("pins the complete whole-table authority manifest", () => {
-    expect(CATALOGUE_AUTHORITY_FUNCTION_POLICY).toHaveLength(54);
-    expect(CATALOGUE_AUTHORITY_TRIGGER_POLICY).toHaveLength(54);
+    expect(CATALOGUE_PAGED_FUNCTION_POLICY).toHaveLength(49);
+    expect(CATALOGUE_PAGED_TRIGGER_POLICY).toHaveLength(54);
+    expect(CATALOGUE_PAGED_TABLES).toHaveLength(14);
+    expect(CATALOGUE_AUTHORITY_FUNCTION_POLICY).toHaveLength(103);
+    expect(CATALOGUE_AUTHORITY_TRIGGER_POLICY).toHaveLength(108);
+  });
+
+  it("accepts authority constraints in the runtime query's table/name order", () => {
+    const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
+    const evidence = validEvidence(policy);
+    const authorityConstraints = [...evidence.authorityConstraints].sort((left, right) => {
+      const leftIdentity = `${left.tableName}.${left.name}`;
+      const rightIdentity = `${right.tableName}.${right.name}`;
+      return leftIdentity < rightIdentity ? -1 : leftIdentity > rightIdentity ? 1 : 0;
+    });
+    expect(() =>
+      assertCatalogueAuthorityDeploymentEvidence(policy, { ...evidence, authorityConstraints }),
+    ).not.toThrow();
   });
 
   it("keeps frozen-column evidence in the runtime query's canonical order", () => {
@@ -309,7 +333,7 @@ describe("catalogue authority deployment policy", () => {
     expect(() =>
       assertCatalogueAuthorityDeploymentEvidence(policy, {
         ...validEvidence(policy),
-        schemaVersion: 5 as 6,
+        schemaVersion: 6 as 7,
       }),
     ).toThrow(/evidence identity differs/u);
   });
@@ -614,6 +638,63 @@ describe("catalogue authority deployment policy", () => {
     ).toThrow(/ACL/u);
   });
 
+  it("pins the observed PostgreSQL names for both multi-column stage page checks", () => {
+    const names = new Set([
+      "catalogue_preparation_stage_page_v2_check",
+      "catalogue_preparation_stage_page_v2_check1",
+    ]);
+    const observed = CATALOGUE_AUTHORITY_CONSTRAINT_POLICY.filter((entry) => names.has(entry.name));
+    expect([...observed].sort((a, b) => a.name.localeCompare(b.name))).toEqual([
+      {
+        constraintType: "c",
+        definition: "CHECK ((total_payload_text_bytes >= payload_text_bytes))",
+        name: "catalogue_preparation_stage_page_v2_check",
+        tableName: "catalogue_preparation_stage_page_v2",
+        validated: true,
+      },
+      {
+        constraintType: "c",
+        definition: "CHECK ((next_sequence = (first_sequence + record_count)))",
+        name: "catalogue_preparation_stage_page_v2_check1",
+        tableName: "catalogue_preparation_stage_page_v2",
+        validated: true,
+      },
+    ]);
+    expect(
+      CATALOGUE_AUTHORITY_CONSTRAINT_POLICY.some(
+        (entry) => entry.name === "catalogue_preparation_stage_page_total_payload_text_bytes_check",
+      ),
+    ).toBe(false);
+  });
+
+  it.each(["old-name", "missing", "changed"] as const)(
+    "rejects %s drift in the observed multi-column stage page checks",
+    (drift) => {
+      const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
+      const base = validEvidence(policy);
+      const name = "catalogue_preparation_stage_page_v2_check";
+      const constraints =
+        drift === "missing"
+          ? base.authorityConstraints.filter((entry) => entry.name !== name)
+          : base.authorityConstraints.map((entry) =>
+              entry.name !== name
+                ? entry
+                : {
+                    ...entry,
+                    ...(drift === "old-name"
+                      ? { name: "catalogue_preparation_stage_page_total_payload_text_bytes_check" }
+                      : { definition: "CHECK ((total_payload_text_bytes > payload_text_bytes))" }),
+                  },
+            );
+      expect(() =>
+        assertCatalogueAuthorityDeploymentEvidence(policy, {
+          ...base,
+          authorityConstraints: constraints,
+        }),
+      ).toThrow(/constraint differs/u);
+    },
+  );
+
   it("pins all authority constraints, frozen columns, and the activation batch index", () => {
     const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
     for (const expectedConstraint of CATALOGUE_AUTHORITY_CONSTRAINT_POLICY) {
@@ -797,7 +878,7 @@ describe("catalogue authority deployment policy", () => {
         { canary: "worker-execute", sqlstate: "42501" },
         { canary: "data-direct-dml", sqlstate: "42501" },
       ],
-      schemaVersion: 6,
+      schemaVersion: 7,
       structure,
     } as const;
 
@@ -805,7 +886,7 @@ describe("catalogue authority deployment policy", () => {
     expect(() =>
       assertCatalogueAuthorityCanaryEvidence(policy, {
         ...evidence,
-        schemaVersion: 5 as 6,
+        schemaVersion: 6 as 7,
       }),
     ).toThrow(/canary evidence identity differs/u);
     expect(() =>
@@ -884,4 +965,201 @@ describe("catalogue authority deployment policy", () => {
     expect(structure.database.verifierSessions.every((session) => !("pid" in session))).toBe(true);
     expect(JSON.stringify(structure)).not.toMatch(/password|connectionString|DATABASE_URL/u);
   });
+});
+
+describe("paged catalogue deployment authority evidence", () => {
+  it.each(CATALOGUE_PAGED_FUNCTION_POLICY.map((entry) => entry.name))(
+    "rejects missing, overloaded, or changed paged function %s",
+    (name) => {
+      const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
+      const base = validEvidence(policy);
+      const entry = base.functions.find((row) => row.name === name);
+      if (!entry) throw new Error(`Missing fixture function ${name}`);
+      for (const functions of [
+        base.functions.filter((row) => row !== entry),
+        [...base.functions, { ...entry, arguments: `${entry.arguments}, p_extra text` }],
+        base.functions.map((row) =>
+          row === entry ? { ...row, sourceSha256: "0".repeat(64) } : row,
+        ),
+        base.functions.map((row) =>
+          row === entry
+            ? { ...row, searchPath: row.searchPath.length === 0 ? ["search_path=public"] : [] }
+            : row,
+        ),
+        base.functions.map((row) =>
+          row === entry
+            ? {
+                ...row,
+                acl: [
+                  ...row.acl,
+                  {
+                    grantee: "PUBLIC",
+                    grantor: policy.databaseOwner,
+                    privilege: "EXECUTE",
+                    grantable: false,
+                  },
+                ],
+              }
+            : row,
+        ),
+      ]) {
+        expect(
+          () => assertCatalogueAuthorityDeploymentEvidence(policy, { ...base, functions }),
+          name,
+        ).toThrow();
+      }
+    },
+  );
+
+  it.each(CATALOGUE_PAGED_TRIGGER_POLICY.map((entry) => entry.name))(
+    "rejects missing, extra, disabled, or changed paged trigger %s",
+    (name) => {
+      const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
+      const base = validEvidence(policy);
+      const entry = base.triggers.find((row) => row.name === name);
+      if (!entry) throw new Error(`Missing fixture trigger ${name}`);
+      for (const triggers of [
+        base.triggers.filter((row) => row !== entry),
+        [...base.triggers, { ...entry, name: `${name}_extra` }],
+        base.triggers.map((row) => (row === entry ? { ...row, enabled: "D" } : row)),
+        base.triggers.map((row) =>
+          row === entry ? { ...row, definition: `${row.definition} -- altered` } : row,
+        ),
+        base.triggers.map((row) => (row === entry ? { ...row, functionSchema: "pg_temp_3" } : row)),
+      ]) {
+        expect(
+          () => assertCatalogueAuthorityDeploymentEvidence(policy, { ...base, triggers }),
+          name,
+        ).toThrow();
+      }
+    },
+  );
+
+  it.each(CATALOGUE_PAGED_TABLES)("requires exact owner-only companion relation %s", (name) => {
+    const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
+    const base = validEvidence(policy);
+    const entry = base.relations.find((row) => row.name === name);
+    if (!entry) throw new Error(`Missing fixture relation ${name}`);
+    expect(entry.aclIsDefault).toBe(false);
+    for (const relations of [
+      base.relations.filter((row) => row !== entry),
+      [...base.relations, entry],
+      base.relations.map((row) => (row === entry ? { ...row, kind: "v" } : row)),
+      base.relations.map((row) => (row === entry ? { ...row, aclIsDefault: true } : row)),
+      base.relations.map((row) => (row === entry ? { ...row, owner: "unreviewed_owner" } : row)),
+      ...[
+        [],
+        entry.acl.filter((permission) => permission.privilege !== "MAINTAIN"),
+        [...entry.acl, ...entry.acl],
+        entry.acl.map((permission) => ({ ...permission, grantor: "unreviewed_owner" })),
+        entry.acl.map((permission) => ({ ...permission, grantable: true })),
+      ].map((permissions) =>
+        base.relations.map((row) => (row === entry ? { ...row, acl: permissions } : row)),
+      ),
+      base.relations.map((row) =>
+        row === entry
+          ? {
+              ...row,
+              acl: [
+                ...row.acl,
+                {
+                  grantee: "nutrition_catalogue_stage",
+                  grantor: policy.databaseOwner,
+                  privilege: "INSERT",
+                  grantable: false,
+                },
+              ],
+            }
+          : row,
+      ),
+    ]) {
+      expect(
+        () => assertCatalogueAuthorityDeploymentEvidence(policy, { ...base, relations }),
+        name,
+      ).toThrow();
+    }
+  });
+
+  it("requires every companion schema row and rejects unreviewed additional structure", () => {
+    const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
+    const base = validEvidence(policy);
+    for (const field of [
+      "authorityConstraints",
+      "authorityFrozenColumns",
+      "authorityIndexes",
+    ] as const) {
+      const companions = base[field].filter((row) =>
+        CATALOGUE_PAGED_TABLES.includes(row.tableName),
+      );
+      expect(companions.length, field).toBeGreaterThan(0);
+      for (const row of companions) {
+        expect(
+          () =>
+            assertCatalogueAuthorityDeploymentEvidence(policy, {
+              ...base,
+              [field]: base[field].filter((candidate) => candidate !== row),
+            }),
+          field,
+        ).toThrow();
+      }
+      const first = companions[0];
+      if (!first) throw new Error(`Missing companion schema fixtures ${field}`);
+      const extra =
+        "columnName" in first
+          ? { ...first, columnName: "unreviewed_column" }
+          : { ...first, name: "unreviewed_structure" };
+      expect(
+        () =>
+          assertCatalogueAuthorityDeploymentEvidence(policy, {
+            ...base,
+            [field]: [...base[field], extra],
+          }),
+        field,
+      ).toThrow();
+    }
+  });
+});
+
+describe("paged catalogue physical schema boundaries", () => {
+  it.each(["identityKind", "generatedKind"] as const)(
+    "rejects changed %s on a companion column",
+    (field) => {
+      const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
+      const base = validEvidence(policy);
+      const columns = base.authorityFrozenColumns.map((column) =>
+        column.tableName === "catalogue_preparation_record_v2" &&
+        column.columnName === "sequence_number"
+          ? { ...column, [field]: field === "identityKind" ? "a" : "s" }
+          : column,
+      );
+      expect(() =>
+        assertCatalogueAuthorityDeploymentEvidence(policy, {
+          ...base,
+          authorityFrozenColumns: columns,
+        }),
+      ).toThrow(/column/);
+    },
+  );
+  it.each(["nutrient", "source_nutrient_map", "source_nutrient_map_revision"])(
+    "discovers every trigger on dependency %s",
+    (tableName) => {
+      expect(CATALOGUE_AUTHORITY_PROTECTED_TABLES).toContain(tableName);
+      const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
+      const base = validEvidence(policy);
+      const initialTrigger = base.triggers[0];
+      if (!initialTrigger) throw new Error("Missing fixture trigger");
+      const trigger = {
+        ...initialTrigger,
+        name: "unreviewed_dependency_trigger",
+        tableName,
+        functionName: "unreviewed_invoker_function",
+      };
+      expect(() =>
+        assertCatalogueAuthorityDeploymentEvidence(policy, {
+          ...base,
+          triggers: [...base.triggers, trigger],
+        }),
+      ).toThrow(/trigger/);
+    },
+  );
 });

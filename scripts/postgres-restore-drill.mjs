@@ -1,7 +1,20 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
+import { lstat, open, realpath } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+
+const pagedPolicyBytes = readFileSync(
+  new URL("../packages/db/src/catalogue-paged-authority-policy.json", import.meta.url),
+);
+if (
+  createHash("sha256").update(pagedPolicyBytes).digest("hex") !==
+  "fa3f0ba540a8df87799fbf4d6d126dca58ce598ef3ba941151a13180d9ef6f18"
+) {
+  throw new Error("Paged catalogue authority manifest differs from reviewed policy");
+}
+const PAGED_AUTHORITY_POLICY = JSON.parse(pagedPolicyBytes.toString("utf8"));
 
 const SAFE_CONTAINER = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const SAFE_DATABASE = /^[a-z][a-z0-9_]{0,62}$/;
@@ -16,7 +29,7 @@ const AUTHORITY_POLICY_PATH = new URL(
 const MIGRATION_DIRECTORY = new URL("../packages/db/migrations/", import.meta.url);
 const MIGRATION_FILE_PATTERN = /^\d{4}_[a-z0-9_]+\.sql$/;
 const EXPECTED_AUTHORITY_POLICY_SHA256 =
-  "463a4083ae8decac3ad447aefeffecb1f610cc9d419ef7da7cfcd45225dd909d";
+  "24409d50e25073e3b64990937e2d4b8d54de1496c507fef7ebbeda53c0248eb0";
 const CAPABILITY_ROLES = [
   "nutrition_catalogue_stage",
   "nutrition_catalogue_validate",
@@ -40,6 +53,13 @@ const BATCH_NUTRITION_SEMANTIC_CONSTRAINT_DEFINITION =
 const RECORD_NUTRITION_SEMANTIC_CONSTRAINT_DEFINITION =
   "CHECK ((nutrition_semantic_contract_version IS NULL AND nutrition_semantic_sha256 IS NULL OR nutrition_semantic_contract_version = 1 AND nutrition_semantic_sha256 ~ '^[0-9a-f]{64}$'::text AND validated_at IS NOT NULL AND (validation_status = ANY (ARRAY['quarantined'::text, 'valid'::text, 'materialized'::text]))) IS TRUE)";
 const AUTHORITY_CONSTRAINT_POLICY = [
+  ...PAGED_AUTHORITY_POLICY.constraints
+    .map(({ constraintType, tableName, ...entry }) => ({
+      ...entry,
+      constraint_type: constraintType,
+      table_name: tableName,
+    }))
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)),
   {
     constraint_type: "c",
     definition: APPROVAL_AUTHORITY_CONSTRAINT_DEFINITION,
@@ -124,6 +144,16 @@ const REFERENCE_INTEGRITY_CONSTRAINT_POLICY = [
   },
 ];
 const AUTHORITY_FROZEN_COLUMN_POLICY = [
+  ...PAGED_AUTHORITY_POLICY.columns.map(
+    ({ columnName, dataType, defaultExpression, notNull, schemaName, tableName }) => ({
+      column_name: columnName,
+      data_type: dataType,
+      default_expression: defaultExpression,
+      not_null: notNull,
+      schema_name: schemaName,
+      table_name: tableName,
+    }),
+  ),
   {
     column_name: "nutrient_mapping_digest",
     data_type: "text",
@@ -252,8 +282,39 @@ const AUTHORITY_FROZEN_COLUMN_POLICY = [
     schema_name: "public",
     table_name: "food_import_record",
   },
-];
+].map((column) => ({ identity_kind: "", generated_kind: "", ...column }));
 const AUTHORITY_INDEX_POLICY = [
+  ...PAGED_AUTHORITY_POLICY.indexes.map(
+    ({
+      accessMethod,
+      definition,
+      isPrimary,
+      isReady,
+      isUnique,
+      isValid,
+      keyAttributeCount,
+      keyExpression,
+      name,
+      predicate,
+      schemaName,
+      tableName,
+      totalAttributeCount,
+    }) => ({
+      access_method: accessMethod,
+      definition,
+      is_primary: isPrimary,
+      is_ready: isReady,
+      is_unique: isUnique,
+      is_valid: isValid,
+      key_attribute_count: keyAttributeCount,
+      key_expression: keyExpression,
+      name,
+      predicate,
+      schema_name: schemaName,
+      table_name: tableName,
+      total_attribute_count: totalAttributeCount,
+    }),
+  ),
   {
     access_method: "btree",
     definition:
@@ -272,6 +333,10 @@ const AUTHORITY_INDEX_POLICY = [
   },
 ];
 const PROTECTED_CATALOGUE_TABLES = new Set([
+  ...PAGED_AUTHORITY_POLICY.tables,
+  "nutrient",
+  "source_nutrient_map",
+  "source_nutrient_map_revision",
   "food",
   "food_barcode",
   "food_import_approval",
@@ -301,6 +366,13 @@ const DEFAULT_AUTHORITY_FUNCTION_POLICY = {
   volatility: "v",
 };
 const AUTHORITY_FUNCTION_POLICY = new Map([
+  ...PAGED_AUTHORITY_POLICY.functions.map(({ name, configuration, ...entry }) => [
+    name,
+    {
+      ...entry,
+      config: configuration === "application-schema" ? PINNED_AUTHORITY_SEARCH_PATH : [],
+    },
+  ]),
   [
     "advance_food_search_projection_revision",
     {
@@ -328,7 +400,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "e2c35dfabb653636a9640475227104a485a24129558b11511175831ef9bc5b8b",
+      sourceSha256: "3b6b5d6de655e09c4935379fbaa356429961dedb39264cb25913e16c3a2c2e59",
       strict: false,
       volatility: "v",
     },
@@ -360,7 +432,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "text",
       securityDefiner: true,
-      sourceSha256: "399d40c2913c2022c0a2921d5870a2d26a5dcd9949d81715882f70899db4f5f8",
+      sourceSha256: "e7dbe4dc44ca8cef1183b966384000a3a252e4f92cc644091d46281e04d91822",
       strict: false,
       volatility: "v",
     },
@@ -376,7 +448,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "41f048090dce80b794615f135f5368f7f501eaecfc3513471eb6d1f36c022783",
+      sourceSha256: "b0e547a757ad01f0a2c2360beea10607b5bfec9770fbbeb571598db7cf9ead69",
       strict: false,
       volatility: "v",
     },
@@ -408,7 +480,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "0a87bc99f5df97282c48b6202799bcc75cdb914e7473c0c38e092aaf4a132acf",
+      sourceSha256: "84179971a6b8f171436efc1807e4e89c0f4b19bd3778b56bf3dea896aab009a2",
       strict: false,
       volatility: "v",
     },
@@ -424,7 +496,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "bd8f0714717baf626507a2d40799cea75085f20e9df7295b77fb5899529f2142",
+      sourceSha256: "feb716548ef14da6dace4c12fd18b98d462766a9a59de0d71aff1b5b9c606ae3",
       strict: false,
       volatility: "v",
     },
@@ -440,7 +512,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "115fdc3ed1943dd77ce70d3a694495da3d2c62ade9c7b82812a89cef82b39f17",
+      sourceSha256: "2d5733cf34f2119db2e18564469fc76adf892172a936b1bfcbd21b3899629c96",
       strict: false,
       volatility: "v",
     },
@@ -461,7 +533,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "boolean",
       securityDefiner: true,
-      sourceSha256: "73314f5d97251a648093a82d8d9f6d3575a8f3b571d16349ca60a9795de04719",
+      sourceSha256: "9dfaa30970c3acfaaff6a1c1c4211cfd0b42c87824998841172429c4dcd5138f",
       strict: false,
       volatility: "v",
     },
@@ -478,7 +550,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "boolean",
       securityDefiner: true,
-      sourceSha256: "89b10b9f12cee731953c14a80b18fcf5f565eb7a7a80d92be55f1cabdab697ac",
+      sourceSha256: "57a131aea73ba58d76f8d7cd867ea2cb2485567f65dc4c28c5a9ffe8963ca198",
       strict: false,
       volatility: "v",
     },
@@ -495,7 +567,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "a6b7cce658727edcfc889eac7272e65b094592361459130c815436c8f1cc14d7",
+      sourceSha256: "8946f31585a418f750601e35621b06ac938a8c466f26fddc1a123cd6c2df4ffd",
       strict: false,
       volatility: "v",
     },
@@ -512,7 +584,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "3fe493ee5e0b27e43cc881854dddfe4dc12f862a1c4a242bf712c843b2792ff1",
+      sourceSha256: "a2cf554f00f20d13720e268e3778eca9e26064da34291befa9b75f3dbe55b915",
       strict: false,
       volatility: "v",
     },
@@ -528,7 +600,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "11b0a983c9cf3d4a7451978d37e5fe997a40290a10e741ba0626b89bfd2611c4",
+      sourceSha256: "e35607a581873d4b7c3b092be4c60a63026b71db21e447c87c79aebb42e21445",
       strict: false,
       volatility: "v",
     },
@@ -544,7 +616,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "d89defb335e21228c38968ef69b2ed7342f5a5440762ae31f170969fbcc9c9e8",
+      sourceSha256: "111c05a916f5fdce9be9ec6117d8220a239fff749efd628afb4164b3dc89f6a5",
       strict: false,
       volatility: "v",
     },
@@ -560,7 +632,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "4cc2b310ba6fda051a125bb203c0cf2c6a5fbe227a55daf517a0376ab79e4c7f",
+      sourceSha256: "d8e8d2354606768fdcaacd280fd2255359ace98758b3d8377f90a94e802541a2",
       strict: false,
       volatility: "v",
     },
@@ -593,7 +665,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "10c59084d8e5c7debb581c6e749f6779dbc3f5867fc4cb18ffc009293f9f50a5",
+      sourceSha256: "e57096da8349e9efa58cdcc7293b36a895731a35ce7c8ad1dc55c1f4b4db9b66",
       strict: false,
       volatility: "v",
     },
@@ -610,7 +682,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "5b7ae15625fb0ae0d88a9512fe82fca69a9d0dd9e179af8bc1b2f42d1e85ac8a",
+      sourceSha256: "0c14bff909d45e0fc0082962484db94af8853761d82e7654dc4494fc78f0d294",
       strict: false,
       volatility: "v",
     },
@@ -886,6 +958,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
   ],
 ]);
 const AUTHORITY_TRIGGER_POLICY = new Map([
+  ...PAGED_AUTHORITY_POLICY.triggers.map(({ name, ...entry }) => [name, entry]),
   [
     "custom_food_nutrient_guard_delete_v3",
     {
@@ -1701,19 +1774,19 @@ function loadTrackedMigrationLedger() {
   }));
 }
 
-function collectAuthorityFingerprint(run, options, database) {
+export function collectAuthorityFingerprint(run, options, database) {
   const evidence = {
     authorityConstraints: psqlJson(run, options, database, [
       "select coalesce(json_agg(row_to_json(authority_constraint_policy) order by authority_constraint_policy.name)::text, '[]')",
       "from (",
       "select constraint_row.conname as name, class_row.relname as table_name,",
       "constraint_row.contype as constraint_type, constraint_row.convalidated as validated,",
-      "pg_catalog.pg_get_constraintdef(constraint_row.oid, true) as definition",
+      "pg_catalog.pg_get_constraintdef(constraint_row.oid, class_row.relname not in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2')) as definition",
       "from pg_catalog.pg_constraint as constraint_row",
       "join pg_catalog.pg_class as class_row on class_row.oid = constraint_row.conrelid",
       "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = class_row.relnamespace",
       "where namespace_row.nspname = 'public'",
-      "and constraint_row.conname in ('food_import_approval_database_authority_check','food_import_batch_materialization_contract_check','food_import_batch_nutrition_semantic_contract_check','food_import_batch_promotable_contract_check','food_import_batch_stage_validate_database_authority_check','food_import_batch_staging_seal_check','food_import_record_nutrition_semantic_contract_check','food_import_record_validated_food_contract_check','food_source_release_activation_database_authority_check')",
+      "and (class_row.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or constraint_row.conname in ('food_import_approval_database_authority_check','food_import_batch_materialization_contract_check','food_import_batch_nutrition_semantic_contract_check','food_import_batch_promotable_contract_check','food_import_batch_stage_validate_database_authority_check','food_import_batch_staging_seal_check','food_import_record_nutrition_semantic_contract_check','food_import_record_validated_food_contract_check','food_source_release_activation_database_authority_check'))",
       ") authority_constraint_policy",
     ]),
     referenceIntegrityConstraints: psqlJson(run, options, database, [
@@ -1734,14 +1807,14 @@ function collectAuthorityFingerprint(run, options, database) {
       "from (",
       "select namespace_row.nspname as schema_name, class_row.relname as table_name, attribute_row.attname as column_name,",
       "pg_catalog.format_type(attribute_row.atttypid, attribute_row.atttypmod) as data_type,",
-      "attribute_row.attnotnull as not_null,",
+      "attribute_row.attnotnull as not_null, attribute_row.attidentity::text as identity_kind, attribute_row.attgenerated::text as generated_kind,",
       "pg_catalog.pg_get_expr(default_row.adbin, default_row.adrelid, true) as default_expression",
       "from pg_catalog.pg_attribute as attribute_row",
       "join pg_catalog.pg_class as class_row on class_row.oid = attribute_row.attrelid",
       "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = class_row.relnamespace",
       "left join pg_catalog.pg_attrdef as default_row on default_row.adrelid = attribute_row.attrelid and default_row.adnum = attribute_row.attnum",
       "where namespace_row.nspname = 'public'",
-      "and ((class_row.relname = 'food_import_batch' and attribute_row.attname in ('nutrient_mapping_digest','nutrient_mapping_revision_ids','nutrition_semantic_contract_version','nutrition_semantic_sha256','validated_food_contract_version','staged_database_principal','staged_database_capability_role','staging_seal_sha256','staging_sealed_at','validated_database_principal','validated_database_capability_role'))",
+      "and attribute_row.attnum>0 and not attribute_row.attisdropped and (class_row.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or (class_row.relname = 'food_import_batch' and attribute_row.attname in ('nutrient_mapping_digest','nutrient_mapping_revision_ids','nutrition_semantic_contract_version','nutrition_semantic_sha256','validated_food_contract_version','staged_database_principal','staged_database_capability_role','staging_seal_sha256','staging_sealed_at','validated_database_principal','validated_database_capability_role'))",
       "or (class_row.relname = 'food_import_record' and attribute_row.attname in ('nutrition_semantic_contract_version','nutrition_semantic_sha256','validated_food_contract_version','validated_food_document','validated_food_sha256'))) ",
       ") authority_frozen_column_policy",
     ]),
@@ -1754,7 +1827,7 @@ function collectAuthorityFingerprint(run, options, database) {
       "index_metadata.indisvalid as is_valid, index_metadata.indisready as is_ready,",
       "index_metadata.indnkeyatts as key_attribute_count, index_metadata.indnatts as total_attribute_count,",
       "pg_catalog.pg_get_indexdef(index_metadata.indexrelid, 1, true) as key_expression,",
-      "pg_catalog.pg_get_expr(index_metadata.indpred, index_metadata.indrelid, true) as predicate,",
+      "pg_catalog.pg_get_expr(index_metadata.indpred, index_metadata.indrelid, index_row.relname = 'food_source_release_activation_import_batch_unique') as predicate,",
       "pg_catalog.pg_get_indexdef(index_metadata.indexrelid) as definition",
       "from pg_catalog.pg_index as index_metadata",
       "join pg_catalog.pg_class as index_row on index_row.oid = index_metadata.indexrelid",
@@ -1762,7 +1835,7 @@ function collectAuthorityFingerprint(run, options, database) {
       "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = table_row.relnamespace",
       "join pg_catalog.pg_am as access_method on access_method.oid = index_row.relam",
       "where namespace_row.nspname = 'public'",
-      "and index_row.relname = 'food_source_release_activation_import_batch_unique'",
+      "and (table_row.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or index_row.relname in ('food_source_release_activation_import_batch_unique','catalogue_legacy_release_batch_v2_idx'))",
       ") authority_index_policy",
     ]),
     columnAcls: psqlJson(run, options, database, [
@@ -1912,7 +1985,7 @@ function collectAuthorityFingerprint(run, options, database) {
       "where namespace_row.nspname = 'public'",
       ") type_policy",
     ]),
-    version: 14,
+    version: 15,
   };
   validateRestoreAuthorityEvidence(evidence, options.expectedOwner);
   const fingerprint = canonicalJson(evidence);
@@ -1923,9 +1996,190 @@ function collectAuthorityFingerprint(run, options, database) {
   };
 }
 
+const constraintMismatchEvidence = new WeakMap();
+const CONSTRAINT_DIAGNOSTIC_LIMITS = Object.freeze({
+  differences: 16,
+  definitionBytes: 4096,
+  documentBytes: 65536,
+});
+
+function constraintDefinitionEvidence(value, expectedDefinition) {
+  if (typeof value !== "string") return { malformed: true };
+  const literal = /(?:E)?'(?:''|[^'])*'/gu;
+  const allowedLiterals = new Set(expectedDefinition.match(literal) ?? []);
+  let redacted = false;
+  const sanitized = value
+    .replace(literal, (part) => {
+      if (allowedLiterals.has(part)) return part;
+      redacted = true;
+      return "'[redacted-unexpected-literal]'";
+    })
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s"'<>]+/giu, () => {
+      redacted = true;
+      return "[redacted-url]";
+    });
+  const bytes = Buffer.from(sanitized, "utf8");
+  let end = Math.min(bytes.length, CONSTRAINT_DIAGNOSTIC_LIMITS.definitionBytes);
+  while (end > 0 && (bytes[end] & 0xc0) === 0x80) end--;
+  return {
+    text: bytes.subarray(0, end).toString("utf8"),
+    originalBytes: Buffer.byteLength(value, "utf8"),
+    sha256: createHash("sha256").update(value, "utf8").digest("hex"),
+    redacted,
+    truncated: end < bytes.length,
+  };
+}
+
+function describeAuthorityConstraintMismatch(actual) {
+  const expected = AUTHORITY_CONSTRAINT_POLICY;
+  const key = (entry) => `${entry.table_name}\0${entry.name}`;
+  const known = new Map(expected.map((entry) => [key(entry), entry]));
+  const matches = new Map();
+  let unknownIdentityCount = 0;
+  const unknownIdentityDigest = createHash("sha256");
+  for (const entry of actual) {
+    if (
+      entry &&
+      typeof entry === "object" &&
+      typeof entry.table_name === "string" &&
+      typeof entry.name === "string" &&
+      known.has(key(entry))
+    ) {
+      const match = matches.get(key(entry));
+      if (match) match.count++;
+      else matches.set(key(entry), { count: 1, entry });
+    } else {
+      unknownIdentityCount++;
+      // Never retain unknown names, extra properties or other authority sections.
+      unknownIdentityDigest.update(
+        `${JSON.stringify([
+          typeof entry?.table_name === "string" ? entry.table_name : null,
+          typeof entry?.name === "string" ? entry.name : null,
+        ])}\n`,
+      );
+    }
+  }
+  const differences = [];
+  for (const entry of expected) {
+    const match = matches.get(key(entry));
+    if (match?.count === 1 && canonicalJson(match.entry) === canonicalJson(entry)) continue;
+    const observed = match?.entry;
+    differences.push({
+      table: entry.table_name,
+      name: entry.name,
+      actualMatches: match?.count ?? 0,
+      expected: {
+        constraintType: entry.constraint_type,
+        validated: entry.validated,
+        definition: constraintDefinitionEvidence(entry.definition, entry.definition),
+      },
+      actual: observed
+        ? {
+            constraintType: ["c", "f", "p", "u", "t", "x", "n"].includes(observed.constraint_type)
+              ? observed.constraint_type
+              : null,
+            validated: typeof observed.validated === "boolean" ? observed.validated : null,
+            unexpectedFieldCount: Object.keys(observed).filter(
+              (name) => !Object.hasOwn(entry, name),
+            ).length,
+            definition: constraintDefinitionEvidence(observed.definition, entry.definition),
+          }
+        : null,
+    });
+  }
+  const first = expected.findIndex(
+    (entry, index) => !actual[index] || key(entry) !== key(actual[index]),
+  );
+  const observedAtFirst = first < 0 ? null : actual[first];
+  const allowedAtFirst =
+    observedAtFirst && typeof observedAtFirst === "object" ? known.get(key(observedAtFirst)) : null;
+  const summary = {
+    schemaVersion: 1,
+    kind: "synthetic-source-authority-constraint-mismatch",
+    limits: CONSTRAINT_DIAGNOSTIC_LIMITS,
+    expectedCount: expected.length,
+    actualCount: actual.length,
+    expectedArraySha256: createHash("sha256").update(canonicalJson(expected)).digest("hex"),
+    actualArraySha256: createHash("sha256").update(canonicalJson(actual)).digest("hex"),
+    orderOnly:
+      differences.length === 0 && unknownIdentityCount === 0 && actual.length === expected.length,
+    firstIdentityDifference:
+      first < 0
+        ? null
+        : {
+            index: first,
+            expected: { table: expected[first].table_name, name: expected[first].name },
+            actual: allowedAtFirst
+              ? { table: allowedAtFirst.table_name, name: allowedAtFirst.name }
+              : null,
+          },
+    unknownIdentityCount,
+    unknownIdentitySha256: unknownIdentityDigest.digest("hex"),
+    omittedDifferences: differences.length,
+    differences: [],
+  };
+  for (const difference of differences) {
+    if (summary.differences.length >= CONSTRAINT_DIAGNOSTIC_LIMITS.differences) break;
+    summary.differences.push(difference);
+    summary.omittedDifferences--;
+    if (
+      Buffer.byteLength(`${JSON.stringify(summary)}\n`, "utf8") >
+      CONSTRAINT_DIAGNOSTIC_LIMITS.documentBytes
+    ) {
+      summary.differences.pop();
+      summary.omittedDifferences++;
+      break;
+    }
+  }
+  return summary;
+}
+
+// Opt-in synthetic fixture only. The original authority rejection always survives.
+export async function retainRestoreAuthorityConstraintMismatch(operation, directory) {
+  try {
+    return await operation();
+  } catch (error) {
+    const diagnostic = constraintMismatchEvidence.get(error);
+    if (diagnostic) {
+      try {
+        const before = await lstat(directory);
+        if (
+          !before.isDirectory() ||
+          before.isSymbolicLink() ||
+          before.uid !== process.getuid() ||
+          (before.mode & 0o777) !== 0o700 ||
+          (await realpath(directory)) !== resolve(directory)
+        ) {
+          throw new Error("Constraint diagnostic requires an owned private directory");
+        }
+        const document = `${JSON.stringify(diagnostic)}\n`;
+        if (Buffer.byteLength(document) > CONSTRAINT_DIAGNOSTIC_LIMITS.documentBytes)
+          throw new Error("Constraint diagnostic exceeds its byte limit");
+        const target = join(directory, "source-authority-constraint-mismatch.json");
+        const file = await open(target, "wx", 0o600);
+        try {
+          const current = await lstat(directory);
+          if (current.dev !== before.dev || current.ino !== before.ino || current.isSymbolicLink())
+            throw new Error("Constraint diagnostic directory changed");
+          await file.writeFile(document);
+          await file.sync();
+        } finally {
+          await file.close();
+        }
+      } catch (retentionError) {
+        throw new AggregateError(
+          [error, retentionError],
+          "Authority rejection and private constraint diagnostic retention failed",
+        );
+      }
+    }
+    throw error;
+  }
+}
+
 export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
   if (!SAFE_ROLE.test(expectedOwner)) throw new Error("Invalid expected PostgreSQL owner name");
-  if (!evidence || typeof evidence !== "object" || evidence.version !== 14) {
+  if (!evidence || typeof evidence !== "object" || evidence.version !== 15) {
     throw new Error("Database-authority fingerprint has an unsupported version");
   }
 
@@ -1934,9 +2188,14 @@ export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
     "catalogue authority constraints",
   );
   if (canonicalJson(authorityConstraints) !== canonicalJson(AUTHORITY_CONSTRAINT_POLICY)) {
-    throw new Error(
+    const error = new Error(
       "Catalogue materialization, nutrition-semantic, stage/validate, or authenticated-actor constraint differs from policy",
     );
+    constraintMismatchEvidence.set(
+      error,
+      describeAuthorityConstraintMismatch(authorityConstraints),
+    );
+    throw error;
   }
   const referenceIntegrityConstraints = requiredArray(
     evidence.referenceIntegrityConstraints,
@@ -2040,11 +2299,19 @@ export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
   ) {
     throw new Error("Database-authority fingerprint is missing tables or sequences");
   }
+  if (
+    new Set(relations.map((relation) => relation.name)).size !== relations.length ||
+    PAGED_AUTHORITY_POLICY.tables.some(
+      (name) => !relations.some((relation) => relation.name === name && relation.kind === "r"),
+    )
+  ) {
+    throw new Error("Paged catalogue companion relation set is missing or duplicated");
+  }
   for (const relation of relations) {
     if (relation.owner !== expectedOwner) {
       throw new Error(`Restored relation ${relation.name} has the wrong owner`);
     }
-    if (relation.acl_is_default !== true) {
+    if (relation.acl_is_default !== !PAGED_AUTHORITY_POLICY.tables.includes(relation.name)) {
       throw new Error(`Restored relation ${relation.name} has unexpected explicit DML privileges`);
     }
     if (
@@ -2053,6 +2320,24 @@ export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
       )
     ) {
       throw new Error(`Restored relation ${relation.name} exposes an unexpected principal`);
+    }
+    if (PAGED_AUTHORITY_POLICY.tables.includes(relation.name)) {
+      assertExactAcl(
+        relation.acl,
+        [
+          "DELETE",
+          "INSERT",
+          "MAINTAIN",
+          "REFERENCES",
+          "SELECT",
+          "TRIGGER",
+          "TRUNCATE",
+          "UPDATE",
+        ].map((privilege) => [expectedOwner, privilege]),
+        `Restored relation ${relation.name}`,
+      );
+      if (relation.acl.some((entry) => entry.grantor !== expectedOwner))
+        throw new Error(`Restored relation ${relation.name} ACL grantor differs`);
     }
   }
 

@@ -55,6 +55,23 @@ describe("retained catalogue validation request", () => {
     expect(await readCatalogueValidationRequest(PATH, file, root)).toEqual(DOCUMENT);
   });
 
+  it("round-trips a large escaped request with exact native JSON bytes and private-file pins", async () => {
+    const requestDocument = JSON.stringify({
+      payload: 'quote"\\\n\u0000café😀'.repeat(40_000),
+    });
+    // Insertion order here is canonical; native JSON supplies an independent byte oracle.
+    const document = { kind: "retained-request", requestDocument };
+    const expectedBytes = Buffer.from(`${JSON.stringify(document)}\n`);
+    expect(expectedBytes.byteLength).toBeGreaterThan(1024 * 1024);
+
+    const file = await writeCatalogueValidationRequest(PATH, document, root);
+    expect(file).toEqual({ path: PATH, ...pins(expectedBytes) });
+    expect(await readFile(join(root, PATH))).toEqual(expectedBytes);
+    expect(await readCatalogueValidationRequest(PATH, file, root)).toEqual(document);
+    expect((await lstat(join(root, PATH))).mode & 0o777).toBe(0o600);
+    expect(await readdir(join(root, dirname(PATH)))).toEqual(["request.json"]);
+  });
+
   it("never overwrites a retained request or leaves a competing temporary file", async () => {
     const file = await writeCatalogueValidationRequest(PATH, DOCUMENT, root);
     const bytes = await readFile(join(root, PATH));

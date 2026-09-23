@@ -8,6 +8,7 @@ import {
   CATALOGUE_ACTIVATION_GUARD_SOURCE_SHA256,
   CATALOGUE_APPROVAL_FUNCTION_SOURCE_SHA256,
   CATALOGUE_APPROVAL_GUARD_SOURCE_SHA256,
+  CATALOGUE_AUTHORITY_TRIGGER_POLICY,
   CATALOGUE_CAPABILITY_ROLES,
   CATALOGUE_OBSERVE_VALIDATION_FUNCTION_SOURCE_SHA256,
   CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256,
@@ -253,7 +254,7 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
         promotionFunctionSourceSha256: CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256,
         reviewerLogins,
         rollbackFunctionSourceSha256: CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
-        schemaVersion: 6,
+        schemaVersion: 7,
         stageBatchFunctionSourceSha256: CATALOGUE_STAGE_BATCH_FUNCTION_SOURCE_SHA256,
         stageParserReportFunctionSourceSha256: CATALOGUE_STAGE_PARSER_REPORT_FUNCTION_SOURCE_SHA256,
         stageRecordChunkFunctionSourceSha256: CATALOGUE_STAGE_RECORD_CHUNK_FUNCTION_SOURCE_SHA256,
@@ -319,7 +320,9 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
         { canary: "data-direct-dml", sqlstate: "42501" },
       ]);
       const observedTriggerNames = evidence.structure.triggers.map((trigger) => trigger.name);
-      expect(observedTriggerNames).toHaveLength(54);
+      expect([...observedTriggerNames].sort()).toEqual(
+        CATALOGUE_AUTHORITY_TRIGGER_POLICY.map((trigger) => trigger.name).sort(),
+      );
       expect(observedTriggerNames).not.toContain("app_user_set_updated_at");
       expect(observedTriggerNames).toContain("food_version_reject_update");
 
@@ -350,14 +353,24 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
 
       const temporaryTriggerName = "food_import_batch_guard_validation_digest";
       const temporaryTableName = "food_import_batch";
+      const originalSearchPath = (
+        await sql<{ readonly search_path: string }>`
+          select pg_catalog.current_setting('search_path') as search_path
+        `.execute(verifierOwner)
+      ).rows[0];
+      if (!originalSearchPath) throw new Error("Verifier search path is unavailable");
       await sql.raw("begin").execute(verifierOwner);
       try {
+        // Keep public FK targets visible while testing the temporary trigger binding.
+        await sql`
+          set local search_path = pg_catalog, ${sql.id(policy.applicationSchema)}, pg_temp
+        `.execute(verifierOwner);
         await sql`
           create temporary table ${sql.id(temporaryTableName)} (id integer)
         `.execute(verifierOwner);
         await sql`
           create trigger ${sql.id(temporaryTriggerName)}
-          before insert or update on ${sql.id(temporaryTableName)}
+          before insert or update on ${sql.id("pg_temp", temporaryTableName)}
           for each row
           execute function public.guard_food_import_batch_validation_digest()
         `.execute(verifierOwner);
@@ -384,8 +397,15 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
         }
         expect(temporaryTrigger).toEqual({
           ...baselineTrigger,
+          definition: baselineTrigger.definition.replace(
+            ` ON ${temporaryTableName} `,
+            ` ON pg_temp.${temporaryTableName} `,
+          ),
           tableSchema: temporaryTrigger.tableSchema,
         });
+        expect(extraTemporaryBinding.authorityConstraints).toEqual(
+          evidence.structure.authorityConstraints,
+        );
         expect(() =>
           assertCatalogueAuthorityDeploymentEvidence(policy, extraTemporaryBinding),
         ).toThrow(/trigger set/u);
@@ -400,6 +420,9 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
           verifierSessions,
         );
         expect(temporaryReplacement.nonSystemSchemas).toEqual([policy.applicationSchema]);
+        expect(temporaryReplacement.authorityConstraints).toEqual(
+          evidence.structure.authorityConstraints,
+        );
         const replacementTrigger = temporaryReplacement.triggers.filter(
           (trigger) => trigger.name === temporaryTriggerName,
         );
@@ -410,6 +433,13 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
       } finally {
         await sql.raw("rollback").execute(verifierOwner);
       }
+      expect(
+        (
+          await sql<{ readonly search_path: string }>`
+            select pg_catalog.current_setting('search_path') as search_path
+          `.execute(verifierOwner)
+        ).rows[0],
+      ).toEqual(originalSearchPath);
       const postTemporaryEvidence = await collectCatalogueAuthorityDeploymentEvidence(
         verifierOwner,
         policy,

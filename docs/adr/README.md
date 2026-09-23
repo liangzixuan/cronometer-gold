@@ -108,7 +108,8 @@ ADR with a new ADR instead of rewriting its decision.
 | [0100](./0100-fdc-csv-normalized-record-export.md) | Bounded verified full-FDC normalized-record export and finite beta exit priority | Delivered at `ece0bbe`; local and all three CI/nine container jobs passed on attempt one |
 | [0101](./0101-fdc-csv-capability-staging.md) | Restricted full-CSV-format staging and parser seal within existing caps | Delivered at `772e10d`; approved bounded PostgreSQL proof, final local and all three CI/nine container jobs passed; C1 scale and release acceptance remain open |
 | [0102](./0102-fdc-csv-independent-validation.md) | Prepare and submit bounded full-CSV validation as a separate login | Delivered at `af65b98`; approved bounded PostgreSQL proof, final local and all three CI/nine container jobs passed; C1 and release acceptance remain open |
-| [0103](./0103-catalogue-review-handoff.md) | Reconcile retained validation and submit restricted reviewer decisions | Source/local proof complete, including approved bounded PostgreSQL rehearsal; delivery requires final canonical gates and exact-commit automatic proof; all beta exits open |
+| [0103](./0103-catalogue-review-handoff.md) | Reconcile retained validation and submit restricted reviewer decisions | Delivered at `007a17d`; approved bounded PostgreSQL proof and final local/automatic gates passed; one approved web-job retry preserved; all beta exits open |
+| [0104](./0104-paged-catalogue-preparation.md) | Bounded paged catalogue preparation through restricted review | Source review and local gates passed, including synthetic memory and authority/restore proof; exact-commit automatic evidence pending; publication and beta exits remain open |
 
 New ADRs use the next four-digit number and include context, decision,
 consequences, alternatives, and review triggers.

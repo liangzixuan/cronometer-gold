@@ -1,4 +1,6 @@
-import { createHash } from "node:crypto";
+import { sha256CanonicalJson } from "./canonical-json.js";
+
+export { canonicalJson, canonicalJsonChunks, sha256CanonicalJson } from "./canonical-json.js";
 
 import { normalizeGtin14 } from "./food-search.js";
 import type { JsonObject, JsonValue, NutrientValueStatus, ServingUnitKind } from "./types.js";
@@ -116,75 +118,6 @@ export interface CatalogueRecordValidationResult {
  * Deterministic JSON serialization used to bind staged rows, validation
  * approvals, and imported versions to exactly the bytes represented by JSON.
  */
-export function canonicalJson(value: JsonValue): string {
-  return [...canonicalJsonChunks(value)].join("");
-}
-
-/** Iterate canonical JSON bytes without constructing one catalogue-sized string. */
-export function* canonicalJsonChunks(value: JsonValue): IterableIterator<string> {
-  const targetBytes = 64 * 1024;
-  let buffer = "";
-  let bufferBytes = 0;
-  for (const token of canonicalJsonTokens(value)) {
-    const tokenBytes = Buffer.byteLength(token, "utf8");
-    if (bufferBytes > 0 && bufferBytes + tokenBytes > targetBytes) {
-      yield buffer;
-      buffer = "";
-      bufferBytes = 0;
-    }
-    if (tokenBytes > targetBytes && bufferBytes === 0) {
-      yield token;
-      continue;
-    }
-    buffer += token;
-    bufferBytes += tokenBytes;
-  }
-  if (bufferBytes > 0) yield buffer;
-}
-
-function* canonicalJsonTokens(value: JsonValue): IterableIterator<string> {
-  if (value === null || typeof value === "boolean" || typeof value === "string") {
-    yield JSON.stringify(value);
-    return;
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new Error("Canonical JSON rejects non-finite numbers");
-    }
-    yield JSON.stringify(Object.is(value, -0) ? 0 : value);
-    return;
-  }
-  if (Array.isArray(value)) {
-    yield "[";
-    for (let index = 0; index < value.length; index += 1) {
-      if (index > 0) yield ",";
-      const entry = value[index];
-      if (entry === undefined) throw new Error("Canonical JSON array contains an undefined value");
-      yield* canonicalJsonTokens(entry);
-    }
-    yield "]";
-    return;
-  }
-  const object = value as JsonObject;
-  yield "{";
-  const keys = Object.keys(object).sort(compareCodePoints);
-  for (let index = 0; index < keys.length; index += 1) {
-    const key = keys[index];
-    if (key === undefined) throw new Error("Canonical JSON object key is unavailable");
-    if (index > 0) yield ",";
-    yield JSON.stringify(key);
-    yield ":";
-    yield* canonicalJsonTokens(object[key] ?? null);
-  }
-  yield "}";
-}
-
-export function sha256CanonicalJson(value: JsonValue): string {
-  const hash = createHash("sha256");
-  for (const chunk of canonicalJsonChunks(value)) hash.update(chunk, "utf8");
-  return hash.digest("hex");
-}
-
 /** Read the normalized barcode identity through the same path used by validation. */
 export function readCatalogueBarcodeEvidence(payload: JsonValue): CatalogueBarcodeEvidence | null {
   const root = objectValue(payload);
@@ -912,10 +845,6 @@ function isKnownQuality(
 
 function normalizeSearchText(value: string): string {
   return value.normalize("NFKC").toLocaleLowerCase("en-US").replace(/\s+/g, " ").trim();
-}
-
-function compareCodePoints(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function emptyResult(issues: readonly CatalogueValidationIssue[]): CatalogueRecordValidationResult {

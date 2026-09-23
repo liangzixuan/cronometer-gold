@@ -122,6 +122,8 @@ describeDatabase("catalogue restore authority schema identity", { timeout: 120_0
       `.execute(isolated);
 
       await expect(sql.raw(restorePolicySql).execute(isolated)).resolves.toBeDefined();
+      // The exact repaired owner-only ACLs must remain valid on a second application.
+      await expect(sql.raw(restorePolicySql).execute(isolated)).resolves.toBeDefined();
 
       const repairedAuthority = (
         await sql<{
@@ -203,6 +205,18 @@ describeDatabase("catalogue restore authority schema identity", { timeout: 120_0
           await sql.raw("rollback").execute(isolatedDatabase);
         }
       };
+
+      for (const privilegeDrift of [
+        "grant select on table public.catalogue_preparation_v2 to public",
+        "grant select on table public.catalogue_preparation_v2 to nutrition_catalogue_validate",
+        "revoke select on table public.catalogue_preparation_v2 from current_user",
+        "grant all on table public.food_import_batch to current_user",
+      ]) {
+        await assertPolicyRejectsTransactionalDrift(
+          privilegeDrift,
+          "restored tables, sequences, or views contain unexpected explicit privileges",
+        );
+      }
 
       for (const [tableName, constraintName] of [
         ["food_import_approval", "food_import_approval_database_authority_check"],

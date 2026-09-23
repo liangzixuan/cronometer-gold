@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   type BatchRecordValidation,
@@ -588,6 +588,127 @@ describe("CNF immutable parser evidence", () => {
 
     expect(() => verifyCnfParserReport(report, counts)).toThrow(
       "excluded dispositions do not match exclusion evidence",
+    );
+  });
+});
+
+describe("bounded canonical string encoding", () => {
+  const fixtures = [
+    { name: "ASCII", text: "x".repeat(196_609) },
+    { name: "escape-heavy", text: '"\\\0\n\r\t\b\f\u001f'.repeat(16_385) },
+    { name: "multibyte", text: "漢é🫐".repeat(49_153) },
+  ];
+
+  it.each(
+    fixtures.flatMap((fixture) =>
+      (["value", "key"] as const).map((placement) => ({ ...fixture, placement })),
+    ),
+  )("bounds native encoding and output chunks for $name $placement", ({ text, placement }) => {
+    const nativeStringify = JSON.stringify;
+    const value: JsonValue = placement === "value" ? text : { [text]: "small" };
+    const expected =
+      placement === "value" ? nativeStringify(text) : `{${nativeStringify(text)}:"small"}`;
+    const expectedHash = createHash("sha256").update(expected, "utf8").digest("hex");
+    let maximumStringInput = 0;
+    const stringify = vi.spyOn(JSON, "stringify").mockImplementation((input) => {
+      if (typeof input === "string")
+        maximumStringInput = Math.max(maximumStringInput, input.length);
+      return nativeStringify(input);
+    });
+    let chunks: string[];
+    try {
+      chunks = [...canonicalJsonChunks(value)];
+    } finally {
+      stringify.mockRestore();
+    }
+    // Check the native-call boundary as well as output: splitting a completed
+    // JSON.stringify(text) token afterward would still allocate the whole token.
+    expect(maximumStringInput).toBeGreaterThan(0);
+    expect(maximumStringInput).toBeLessThanOrEqual(8192);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(
+      Math.max(...chunks.map((chunk) => Buffer.byteLength(chunk, "utf8"))),
+    ).toBeLessThanOrEqual(64 * 1024);
+    expect(chunks.join("")).toBe(expected);
+    const digest = createHash("sha256");
+    for (const chunk of chunks) digest.update(chunk, "utf8");
+    expect(digest.digest("hex")).toBe(expectedHash);
+    expect(sha256CanonicalJson(value)).toBe(expectedHash);
+  });
+
+  it.each([8191, 8192, 8193])("preserves UTF-16 patterns at boundary %i", (boundary) => {
+    for (const pattern of [
+      "\ud83e\uded0",
+      "\ud800",
+      "\udc00",
+      "\ud800\ud801\udc00",
+      "\udc00\ud800",
+      '"\\\0\r\n\t\b\f\u001f',
+      "漢e\u0301\u2028\u2029",
+    ]) {
+      const text = "x".repeat(boundary) + pattern + "y".repeat(8195);
+      for (const value of [text, { [text]: text }]) {
+        const expected =
+          typeof value === "string"
+            ? JSON.stringify(text)
+            : `{${JSON.stringify(text)}:${JSON.stringify(text)}}`;
+        const chunks = [...canonicalJsonChunks(value)];
+        expect(chunks.join("")).toBe(expected);
+        expect(sha256CanonicalJson(value)).toBe(
+          createHash("sha256").update(expected, "utf8").digest("hex"),
+        );
+        expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= 64 * 1024)).toBe(true);
+      }
+    }
+  });
+
+  it("preserves every UTF-16 code unit in long values and keys", () => {
+    const text = Array.from({ length: 65_536 }, (_, code) => String.fromCharCode(code)).join("");
+    const expected = `{${JSON.stringify(text)}:${JSON.stringify(text)}}`;
+    const value = { [text]: text };
+    const chunks = [...canonicalJsonChunks(value)];
+    expect(chunks.join("")).toBe(expected);
+    expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= 64 * 1024)).toBe(true);
+    expect(sha256CanonicalJson(value)).toBe(
+      createHash("sha256").update(expected, "utf8").digest("hex"),
+    );
+  });
+
+  it.each([0, 8191, 8192])("keeps %i-code-unit strings on one native call", (length) => {
+    const text = "x".repeat(length);
+    const nativeStringify = JSON.stringify;
+    const expected = nativeStringify(text);
+    const stringify = vi.spyOn(JSON, "stringify");
+    let chunks: string[];
+    let calls: number;
+    try {
+      chunks = [...canonicalJsonChunks(text)];
+      calls = stringify.mock.calls.length;
+    } finally {
+      stringify.mockRestore();
+    }
+    expect(calls).toBe(1);
+    expect(chunks.join("")).toBe(expected);
+  });
+
+  it("keeps lexical key order and number/undefined normalization with a long key", () => {
+    const key = "long-".repeat(20_000);
+    const value = { z: null, "2": 2, [key]: ["hi", -0, null, true], "10": 10, a: undefined };
+    const expected = `{"10":10,"2":2,"a":null,${JSON.stringify(key)}:["hi",0,null,true],"z":null}`;
+    expect(canonicalJson(value as unknown as JsonValue)).toBe(expected);
+    expect(sha256CanonicalJson(value as unknown as JsonValue)).toBe(
+      createHash("sha256").update(expected, "utf8").digest("hex"),
+    );
+  });
+
+  it("still rejects non-finite numbers and undefined array entries", () => {
+    for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      expect(() => [...canonicalJsonChunks({ value })]).toThrow(
+        "Canonical JSON rejects non-finite numbers",
+      );
+    }
+    expect(() => [...canonicalJsonChunks([undefined] as unknown as JsonValue)]).toThrow(
+      "Canonical JSON array contains an undefined value",
     );
   });
 });

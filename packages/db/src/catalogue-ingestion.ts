@@ -3735,6 +3735,9 @@ async function selectBatch(database: DatabaseExecutor, batchId: string): Promise
   const batch = await database
     .selectFrom("food_import_batch")
     .selectAll()
+    .select(
+      sql<null>`catalogue_reject_legacy_batch_v2(${batchId}::uuid)`.as("legacy_preparation_guard"),
+    )
     .where("id", "=", batchId)
     .executeTakeFirst();
   if (!batch) throw new Error(`Unknown food import batch ${batchId}`);
@@ -3748,6 +3751,9 @@ async function selectBatchForUpdate(
   const batch = await transaction
     .selectFrom("food_import_batch")
     .selectAll()
+    .select(
+      sql<null>`catalogue_reject_legacy_batch_v2(${batchId}::uuid)`.as("legacy_preparation_guard"),
+    )
     .where("id", "=", batchId)
     .forUpdate()
     .executeTakeFirst();
