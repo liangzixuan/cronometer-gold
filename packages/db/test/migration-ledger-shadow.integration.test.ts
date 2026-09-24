@@ -30,6 +30,16 @@ describeDatabase("migration ledger schema identity", { timeout: 120_000 }, () =>
     const cleanupFailures: unknown[] = [];
 
     try {
+      await runMigrations(bootstrap);
+      const publicPublication = (
+        await sql<{ readonly relation_id: string; readonly owner_name: string }>`
+          select oid::text as relation_id, pg_catalog.pg_get_userbyid(relowner) as owner_name
+          from pg_catalog.pg_class
+          where oid = pg_catalog.to_regclass('public.catalogue_publication_v2')
+        `.execute(bootstrap)
+      ).rows[0];
+      expect(publicPublication).toBeDefined();
+
       await sql`create schema ${sql.id(schemaName)}`.execute(bootstrap);
       const scopedUrl = new URL(databaseUrl);
       scopedUrl.searchParams.set("options", `-csearch_path=${schemaName},public`);
@@ -52,6 +62,29 @@ describeDatabase("migration ledger schema identity", { timeout: 120_000 }, () =>
       const result = await runMigrations(scoped);
       expect(result.applied).toEqual(migrations.map((migration) => migration.name));
       await expect(assertDatabaseMigrationLedgerReady(scoped)).resolves.toBeUndefined();
+      const publicationNamespaces = (
+        await sql<{
+          readonly selected_relation_id: string;
+          readonly public_relation_id: string;
+          readonly selected_owner_name: string;
+          readonly public_owner_name: string;
+        }>`
+          select selected.oid::text as selected_relation_id,
+            fallback.oid::text as public_relation_id,
+            pg_catalog.pg_get_userbyid(selected.relowner) as selected_owner_name,
+            pg_catalog.pg_get_userbyid(fallback.relowner) as public_owner_name
+          from pg_catalog.pg_class as selected
+          cross join pg_catalog.pg_class as fallback
+          where selected.oid = pg_catalog.to_regclass(${`${schemaName}.catalogue_publication_v2`})
+            and fallback.oid = pg_catalog.to_regclass('public.catalogue_publication_v2')
+        `.execute(scoped)
+      ).rows[0];
+      expect(publicationNamespaces).toMatchObject({
+        public_relation_id: publicPublication?.relation_id,
+        public_owner_name: publicPublication?.owner_name,
+        selected_owner_name: publicPublication?.owner_name,
+      });
+      expect(publicationNamespaces?.selected_relation_id).not.toBe(publicPublication?.relation_id);
       expect(
         (
           await sql<{

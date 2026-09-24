@@ -419,7 +419,7 @@ test("pins each new paged migration checksum independently", () => {
   const ledger = JSON.parse(TRACKED_MIGRATION_LEDGER_JSON);
   assert.equal(
     ledger.find((entry) => entry.name === "0031_catalogue_paged_publication.sql")?.checksum,
-    "671849217f6e1596b04d5af3d11153e48a84882d9457e0c7d4ff26531955d64a",
+    "585b43e27ef673605436e57dbcb9461144be189b4d5f207a4659acd913e71c8e",
   );
   assert.equal(
     ledger.find((entry) => entry.name === "0032_catalogue_publication_consumers.sql")?.checksum,

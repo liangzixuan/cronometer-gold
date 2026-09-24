@@ -234,7 +234,7 @@ object `8ec11a4b7e39a5fd00da2fc5cb9b543e31fd7926` resolves to that commit and
 verifies its SSH signature against the repository-pinned Ed25519 signer. The
 source archive is checksum-pinned. Go 1.26.6 is pinned by image index digest,
 and the scratch runtime receives only the static Caddy binary, the exact Alpine
-`ca-certificates-bundle` 20260611-r0 payload, the exact `tzdata` 2026c-r0
+`ca-certificates-bundle` 20260909-r0 payload, the exact `tzdata` 2026c-r0
 payload, and minimal user/directory files. The build explicitly advances the
 four vulnerable release dependencies to `golang.org/x/crypto` v0.55.0,
 `golang.org/x/net` v0.58.0, `golang.org/x/text` v0.41.0, and

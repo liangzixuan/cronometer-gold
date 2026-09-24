@@ -2,11 +2,13 @@
 -- Never rewrite V2 preparation or legacy classification evidence.
 select pg_advisory_xact_lock(hashtext('catalogue-publication-v2'));
 do $migration$
+declare schema_name text:=pg_catalog.current_schema();
 begin
-  if current_user::text is distinct from (select pg_get_userbyid(relowner) from pg_class where oid='food_import_batch'::regclass)
-    or to_regclass('catalogue_publication_v2') is not null
+  if current_user::text is distinct from (select pg_get_userbyid(relowner) from pg_class
+      where oid=pg_catalog.to_regclass(pg_catalog.format('%I.%I',schema_name,'food_import_batch')))
+    or pg_catalog.to_regclass(pg_catalog.format('%I.%I',schema_name,'catalogue_publication_v2')) is not null
     or exists(select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
-      where n.nspname=current_schema() and p.proname like 'catalogue_%publication%_v2') then
+      where n.nspname=schema_name and p.proname like 'catalogue_%publication%_v2') then
     raise exception 'publication owner or empty namespace preflight failed' using errcode='55000';
   end if;
 end;

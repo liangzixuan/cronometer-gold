@@ -25,6 +25,34 @@ function body(name: string) {
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 
 describe("paged publication source authority and compatibility contracts", () => {
+  it.each(["food_import_batch", "catalogue_publication_v2"])(
+    "binds the preflight %s lookup to the selected migration schema",
+    (relation) => {
+      const preflight = migration.slice(0, migration.indexOf("create table"));
+      expect(preflight).toContain("schema_name text:=pg_catalog.current_schema()");
+      expect(preflight).toContain(
+        `pg_catalog.to_regclass(pg_catalog.format('%I.%I',schema_name,'${relation}'))`,
+      );
+      expect(preflight).not.toMatch(/'\w+'::(?:pg_catalog\.)?regclass/u);
+      expect(preflight).not.toMatch(/to_regclass\('[^']+'\)/u);
+    },
+  );
+
+  it("retains owner, selected-namespace collision and function collision rejection", () => {
+    const preflight = migration.slice(0, migration.indexOf("create table"));
+    expect(preflight).toContain("current_user::text is distinct from");
+    expect(preflight).toContain("select pg_get_userbyid(relowner) from pg_class");
+    expect(preflight).toContain(
+      "pg_catalog.to_regclass(pg_catalog.format('%I.%I',schema_name,'catalogue_publication_v2')) is not null",
+    );
+    expect(preflight).toContain(
+      "n.nspname=schema_name and p.proname like 'catalogue_%publication%_v2'",
+    );
+    expect(preflight).toContain(
+      "raise exception 'publication owner or empty namespace preflight failed' using errcode='55000'",
+    );
+  });
+
   it("attests the precise prior activation guard and preserves its legacy branch", () => {
     const original = predecessor.match(
       /create function guard_food_source_release_activation_authority\(\)[\s\S]*?as \$\$([\s\S]*?)\$\$;/u,
