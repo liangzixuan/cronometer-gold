@@ -7317,6 +7317,7 @@ const USER_LINKED_EXPORT_EXCLUSIONS = new Set([
   "auth_action_token", // single-use credential and current-email digests
   "catalogue_preparation_record_v2", // public-source payload evidence; inherits food_import_record exclusion
   "catalogue_validation_record_v2", // public-source validation evidence; inherits food_import_record exclusion
+  "catalogue_publication_record_v2", // public-source materialization evidence; direct private links checked below
   "food_import_record", // public-source ingestion evidence; custom foods cannot reference it
   "privacy_export_entity_snapshot", // transient DB spool manifest
   "privacy_export_record", // transient canonical DB spool rows
@@ -7431,6 +7432,14 @@ const ERASURE_TABLE_SPECS: readonly ErasureTableSpec[] = [
     parentTable: "food_import_record",
     strategy: "empty",
     table: "catalogue_validation_record_v2",
+  },
+  {
+    allColumnsNotNull: true,
+    constraintName: "cat_pub_record_v2_import_record_id_fk",
+    deleteAction: "a",
+    parentTable: "food_import_record",
+    strategy: "empty",
+    table: "catalogue_publication_record_v2",
   },
   eraseByCascade("activity_day", "app_user", "activity_day_user_fk"),
   eraseByCascade("activity_entry", "activity_day", "activity_entry_day_owner_fk"),
@@ -7890,6 +7899,19 @@ async function assertUserLinkedTableInventory(
     where food.owner_user_id is not null
   `.execute(transaction);
   if (customIngestion.rows[0]?.count !== "0") throw notReady();
+  // V2 materialization intentionally leaves the legacy import-record version
+  // pointer empty. Check every direct publication link before excluding evidence.
+  const privatePublication = await sql<{ count: string }>`
+    select count(*)::text count
+    from catalogue_publication_record_v2 publication
+    left join food on food.id=publication.food_id
+    left join food_version version on version.id=publication.food_version_id
+    left join food version_food on version_food.id=version.food_id
+    where food.owner_user_id is not null
+      or version_food.owner_user_id is not null
+      or version.created_by_user_id is not null
+  `.execute(transaction);
+  if (privatePublication.rows[0]?.count !== "0") throw notReady();
   return linked.rows.map((row) => row.table_name);
 }
 

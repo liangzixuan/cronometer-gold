@@ -34,7 +34,7 @@ candidate; do not turn a unit test or an assigned role into a release approval.
 
 | ID | Required exit | Engineering and evidence remaining | Responsible roles and dependencies |
 | --- | --- | --- | --- |
-| C1 | Catalogue can be prepared at the intended scale under the correct authority | Full-scale paged full-CSV staging/validation beyond the bounded ADR 0101 proof; remaining full-snapshot consumers and measured resource/lock budgets; authenticated external principal and runtime credential/caller cutover; retained-validation reconciliation and restricted reviewer consumer; remaining shared writers, direct-DML revocation and target canaries | Source integrator and independent in-task reviewer for code; database/release operators for target proof. ADRs 0100–0103 are delivered with their recorded bounded synthetic and exact-commit automatic proof. ADR 0104 has reviewed source and bounded synthetic PostgreSQL memory/authority/restore proof for the paged path through review; exact-commit automatic delivery evidence is pending. Compatible publication, actual full-candidate scale, authority cutover and target execution still require reviewed proof and approved packages. |
+| C1 | Catalogue can be prepared at the intended scale under the correct authority | Full-scale paged full-CSV staging/validation beyond the bounded ADR 0101 proof; remaining full-snapshot consumers and measured resource/lock budgets; authenticated external principal and runtime credential/caller cutover; retained-validation reconciliation and restricted reviewer consumer; remaining shared writers, direct-DML revocation and target canaries | Source integrator and independent in-task reviewer for code; database/release operators for target proof. ADRs 0100–0104 are delivered with their recorded bounded synthetic and exact-commit automatic proof. ADR 0105 covers compatible publication, atomic visibility, rollback and successor baselines. Source review/offline checks and separately approved 251-record rehearsal 2 passed: all 12 cases executed with no failures or skips, cleanup complete. Attempt 1's authority failure and reviewed transaction-ownership correction remain recorded. Final delivery and exact-commit automatic evidence remain pending. Full-candidate scale, authority cutover and target execution still require reviewed evidence and approved packages. |
 | C2 | Consumer-usable catalogue is reviewed and ready for a separate activation decision | Exact candidate/market; two independent authenticated acquisitions; retained immutable object and current retention; rights/mapping review; approved numeric food/branded/GTIN, completeness, search and resource thresholds; non-current staging, reconciliation, index/relevance/barcode/rollback evidence and three required role approvals | User selects acquisition/storage operators and named data/rights reviewers. Requires C1 and approved acquisition/storage actions. The 363-food pilot is insufficient; activation remains separate. |
 | C3 | Account verification/recovery can operate safely in the beta | Durable or provider-idempotent transactional delivery; shared source/target abuse admission and timing review; authenticated TLS provider/sender/domain; retry, bounce/suppression/support handling; accepted enforcement policy and integrated proof | Source integrator plus mail/security operators. Provider, domain, budget and actual DNS/account operations need a concrete decision package. Local Mailpit proof does not close this row. |
 | C4 | Exact hosted candidate has accepted access, privacy and recovery | Approved target/budget; seven pinned application/service image digests and provenance; HTTPS/readiness/access checks; current retained-data inventory; hosted/off-host restoration, deletion-ledger replay, cross-owner checks and measured RPO/RTO; operational ownership and rollback | Deployment/security and database/privacy operators, with independent acceptance. Requires applicable C1/C3 changes and authorization for exact infrastructure/access actions. Published images alone are insufficient. |
@@ -52,10 +52,18 @@ candidate; do not turn a unit test or an assigned role into a release approval.
    `af65b98`, with independent bounded validation and retained exact requests.
    [ADR 0103](../adr/0103-catalogue-review-handoff.md) is delivered at `007a17d`,
    connecting retained validation to reconciliation and restricted reviewer decisions.
-   Continue the approved [ADR 0104](../adr/0104-paged-catalogue-preparation.md)
-   package for admission-budgeted paging through review. Source review and bounded
-   local database proof passed; exact-commit automatic delivery remains pending. Version-2 publication and actual
-   full-candidate scale remain unavailable; no source prerequisite closes C1/C2.
+   [ADR 0104](../adr/0104-paged-catalogue-preparation.md) is delivered at
+   `3816726`, providing admission-budgeted paging through review. Continue the
+   approved [ADR 0105](../adr/0105-catalogue-paged-publication.md) publication
+   package through final delivery and exact-commit automatic checks. Source review
+   and offline checks passed. Its separately approved second 251-record rehearsal
+   passed publication, authority and restore canaries plus nine endpoint fixtures:
+   12 executed, zero failures or skips, cleanup complete. Preserve attempt 1's
+   authority failure and the reviewed transaction-ownership correction. The
+   completed service approvals are consumed.
+   Full-candidate/resource, Meilisearch rebuild/alias, populated-publication
+   backup/restore and target acceptance remain open; no source prerequisite closes
+   C1/C2.
 2. Finish the rest of C1 and C3 as coherent engineering packages. Before edits,
    identify required integration/service evidence and prepare any missing exact
    action approval. Do not choose easy UI work simply because an external gate is

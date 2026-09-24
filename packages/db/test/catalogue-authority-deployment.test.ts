@@ -70,7 +70,7 @@ const rawPolicy = {
     rights: "nutrition_catalogue_rights_reviewer",
   },
   rollbackFunctionSourceSha256: CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
-  schemaVersion: 7,
+  schemaVersion: 8,
   stageBatchFunctionSourceSha256: CATALOGUE_STAGE_BATCH_FUNCTION_SOURCE_SHA256,
   stageParserReportFunctionSourceSha256: CATALOGUE_STAGE_PARSER_REPORT_FUNCTION_SOURCE_SHA256,
   stageRecordChunkFunctionSourceSha256: CATALOGUE_STAGE_RECORD_CHUNK_FUNCTION_SOURCE_SHA256,
@@ -134,6 +134,14 @@ function validEvidence(
       owner: policy.applicationSchemaOwner,
       publicCreate: false,
     },
+    authorityViews: [
+      {
+        name: "promoted_food_search_catalogue_v1",
+        sourceSha256: "9fc070d1ac2427474187c4a035f77e7e5729ae867d0243202dd7fd1896c20f73",
+        definitionMatches: true,
+        options: [],
+      },
+    ],
     authorityConstraints: CATALOGUE_AUTHORITY_CONSTRAINT_POLICY,
     authorityFrozenColumns: CATALOGUE_AUTHORITY_FROZEN_COLUMN_POLICY,
     authorityIndexes: CATALOGUE_AUTHORITY_INDEX_POLICY.map((index) => ({
@@ -270,6 +278,15 @@ function validEvidence(
         name,
         owner: policy.databaseOwner,
       }))
+      .concat([
+        {
+          acl: relationAcl,
+          aclIsDefault: true,
+          kind: "v",
+          name: "promoted_food_search_catalogue_v1",
+          owner: policy.databaseOwner,
+        },
+      ])
       .concat(
         ["food_import_approval_id_seq", "food_source_release_activation_id_seq"].map((name) => ({
           acl: sequenceAcl,
@@ -279,7 +296,7 @@ function validEvidence(
           owner: policy.databaseOwner,
         })),
       ),
-    schemaVersion: 7,
+    schemaVersion: 8,
     types: [
       {
         acl: [
@@ -296,12 +313,29 @@ function validEvidence(
 }
 
 describe("catalogue authority deployment policy", () => {
+  it("rejects changed, missing, or unreviewed public eligibility view evidence", () => {
+    const policy = parseCatalogueAuthorityDeploymentPolicy(rawPolicy);
+    const base = validEvidence(policy);
+    const expected = base.authorityViews[0];
+    if (!expected) throw new Error("Missing view fixture");
+    for (const authorityViews of [
+      [],
+      [{ ...expected, definitionMatches: false }],
+      [{ ...expected, sourceSha256: "0".repeat(64) }],
+      [{ ...expected, options: ["security_invoker=true"] }],
+      [expected, expected],
+    ]) {
+      expect(() =>
+        assertCatalogueAuthorityDeploymentEvidence(policy, { ...base, authorityViews }),
+      ).toThrow(/public eligibility view/);
+    }
+  });
   it("pins the complete whole-table authority manifest", () => {
-    expect(CATALOGUE_PAGED_FUNCTION_POLICY).toHaveLength(49);
-    expect(CATALOGUE_PAGED_TRIGGER_POLICY).toHaveLength(54);
-    expect(CATALOGUE_PAGED_TABLES).toHaveLength(14);
-    expect(CATALOGUE_AUTHORITY_FUNCTION_POLICY).toHaveLength(103);
-    expect(CATALOGUE_AUTHORITY_TRIGGER_POLICY).toHaveLength(108);
+    expect(CATALOGUE_PAGED_FUNCTION_POLICY).toHaveLength(71);
+    expect(CATALOGUE_PAGED_TRIGGER_POLICY).toHaveLength(64);
+    expect(CATALOGUE_PAGED_TABLES).toHaveLength(19);
+    expect(CATALOGUE_AUTHORITY_FUNCTION_POLICY).toHaveLength(125);
+    expect(CATALOGUE_AUTHORITY_TRIGGER_POLICY).toHaveLength(118);
   });
 
   it("accepts authority constraints in the runtime query's table/name order", () => {
@@ -333,7 +367,7 @@ describe("catalogue authority deployment policy", () => {
     expect(() =>
       assertCatalogueAuthorityDeploymentEvidence(policy, {
         ...validEvidence(policy),
-        schemaVersion: 6 as 7,
+        schemaVersion: 7 as 8,
       }),
     ).toThrow(/evidence identity differs/u);
   });
@@ -878,7 +912,7 @@ describe("catalogue authority deployment policy", () => {
         { canary: "worker-execute", sqlstate: "42501" },
         { canary: "data-direct-dml", sqlstate: "42501" },
       ],
-      schemaVersion: 7,
+      schemaVersion: 8,
       structure,
     } as const;
 
@@ -886,7 +920,7 @@ describe("catalogue authority deployment policy", () => {
     expect(() =>
       assertCatalogueAuthorityCanaryEvidence(policy, {
         ...evidence,
-        schemaVersion: 6 as 7,
+        schemaVersion: 7 as 8,
       }),
     ).toThrow(/canary evidence identity differs/u);
     expect(() =>

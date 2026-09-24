@@ -1,5 +1,5 @@
 {
-  "activationGuardSourceSha256": "d46f53aeffa6469eada5461ab59bd9c23d43bf9aab77704c61b21c44291ae028",
+  "activationGuardSourceSha256": "54f0413a565c93fc6d76846873844a03488594580250ba2bc1c9f4117d3ab68a",
   "applicationSchema": "public",
   "applicationSchemaOwner": "pg_database_owner",
   "approvalFunctionSourceSha256": "9dfaa30970c3acfaaff6a1c1c4211cfd0b42c87824998841172429c4dcd5138f",
@@ -28,8 +28,8 @@
     "quality": "nutrition_catalogue_quality_reviewer",
     "rights": "nutrition_catalogue_rights_reviewer"
   },
-  "rollbackFunctionSourceSha256": "8946f31585a418f750601e35621b06ac938a8c466f26fddc1a123cd6c2df4ffd",
-  "schemaVersion": 7,
+  "rollbackFunctionSourceSha256": "b9bda857bcce39b37ee33728198fe8d15b112792fc9c1cb33c921a6ab1113d21",
+  "schemaVersion": 8,
   "stageBatchFunctionSourceSha256": "e35607a581873d4b7c3b092be4c60a63026b71db21e447c87c79aebb42e21445",
   "stageParserReportFunctionSourceSha256": "111c05a916f5fdce9be9ec6117d8220a239fff749efd628afb4164b3dc89f6a5",
   "stageRecordChunkFunctionSourceSha256": "d8e8d2354606768fdcaacd280fd2255359ace98758b3d8377f90a94e802541a2",

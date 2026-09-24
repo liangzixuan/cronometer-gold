@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
 import { replayExternalErasureLedgerEntry } from "../src/retention.js";
 import type { Database } from "../src/types.js";
 
-// Fixed catalog responses for the post-0030 schema. The test exercises the public
+// Fixed catalog responses for the post-0032 schema. The test exercises the public
 // erasure entry point and stops after classification, before any data mutation.
 // PostgreSQL integration tests remain responsible for discovering the real FKs.
 const LINKED_TABLES = [
@@ -33,6 +33,7 @@ const LINKED_TABLES = [
   "biometric_event_operation",
   "biometric_event_revision",
   "catalogue_preparation_record_v2",
+  "catalogue_publication_record_v2",
   "catalogue_validation_record_v2",
   "custom_food",
   "custom_food_operation",
@@ -97,6 +98,13 @@ const LINKED_TABLES = [
   "user_session",
 ];
 const RELATIONSHIPS: readonly (readonly [string, string, string, string, boolean])[] = [
+  [
+    "catalogue_publication_record_v2",
+    "food_import_record",
+    "cat_pub_record_v2_import_record_id_fk",
+    "a",
+    true,
+  ],
   ["account_erasure_job", "app_user", "account_erasure_job_user_id_fkey", "n", false],
   [
     "account_erasure_receipt",
@@ -346,10 +354,15 @@ interface SchemaFixture {
   tables: string[];
   relationships: Relationship[];
   privateRecordCount: string;
+  privatePublicationCount: string;
 }
 const SCHEMA_ACCEPTED = new Error("Schema accepted; stop before erasure");
 const NOT_READY = "Account-erasure schema inventory is not current";
-const PAGED_TABLES = ["catalogue_preparation_record_v2", "catalogue_validation_record_v2"] as const;
+const PAGED_TABLES = [
+  "catalogue_preparation_record_v2",
+  "catalogue_validation_record_v2",
+  "catalogue_publication_record_v2",
+] as const;
 function schemaFixture(): SchemaFixture {
   return {
     tables: [...LINKED_TABLES],
@@ -363,6 +376,7 @@ function schemaFixture(): SchemaFixture {
       }),
     ),
     privateRecordCount: "0",
+    privatePublicationCount: "0",
   };
 }
 function databaseFixture(schema: SchemaFixture) {
@@ -388,6 +402,18 @@ function databaseFixture(schema: SchemaFixture) {
             expect(statement).toContain("join food on food.id=version.food_id");
             expect(statement).toContain("where food.owner_user_id is not null");
             rows = [{ count: schema.privateRecordCount }];
+          } else if (statement.includes("from catalogue_publication_record_v2 publication")) {
+            expect(statement).toContain("left join food on food.id=publication.food_id");
+            expect(statement).toContain(
+              "left join food_version version on version.id=publication.food_version_id",
+            );
+            expect(statement).toContain(
+              "left join food version_food on version_food.id=version.food_id",
+            );
+            expect(statement).toContain("food.owner_user_id is not null");
+            expect(statement).toContain("version_food.owner_user_id is not null");
+            expect(statement).toContain("version.created_by_user_id is not null");
+            rows = [{ count: schema.privatePublicationCount }];
           } else if (statement.includes("from pg_constraint edge")) {
             const requested = query.parameters[0] as readonly string[];
             rows = schema.relationships.filter((row) => requested.includes(row.constraint_name));
@@ -444,6 +470,7 @@ describe("retention schema classification", () => {
       expect.arrayContaining([
         "catalogue_preparation_record_v2_batch_id_sequence_number_fkey",
         "catalogue_validation_record_v2_batch_id_sequence_number_fkey",
+        "cat_pub_record_v2_import_record_id_fk",
       ]),
     );
   });
@@ -482,6 +509,12 @@ describe("retention schema classification", () => {
       (candidate) => candidate.table_name !== table,
     );
     await checkSchema(schema, NOT_READY);
+  });
+  it.each(["1", "2"])("rejects %s private publication records before erasure", async (count) => {
+    const schema = schemaFixture();
+    schema.privatePublicationCount = count;
+    const queries = await checkSchema(schema, NOT_READY);
+    expect(queries.some((query) => query.sql.includes("edge.conname=any("))).toBe(false);
   });
   it.each(["1", "2"])("rejects %s private food ingestion records", async (count) => {
     const schema = schemaFixture();

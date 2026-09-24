@@ -254,7 +254,7 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
         promotionFunctionSourceSha256: CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256,
         reviewerLogins,
         rollbackFunctionSourceSha256: CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256,
-        schemaVersion: 7,
+        schemaVersion: 8,
         stageBatchFunctionSourceSha256: CATALOGUE_STAGE_BATCH_FUNCTION_SOURCE_SHA256,
         stageParserReportFunctionSourceSha256: CATALOGUE_STAGE_PARSER_REPORT_FUNCTION_SOURCE_SHA256,
         stageRecordChunkFunctionSourceSha256: CATALOGUE_STAGE_RECORD_CHUNK_FUNCTION_SOURCE_SHA256,
@@ -359,24 +359,24 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
         `.execute(verifierOwner)
       ).rows[0];
       if (!originalSearchPath) throw new Error("Verifier search path is unavailable");
-      await sql.raw("begin").execute(verifierOwner);
+      const temporaryTransaction = await verifierOwner.startTransaction().execute();
       try {
         // Keep public FK targets visible while testing the temporary trigger binding.
         await sql`
           set local search_path = pg_catalog, ${sql.id(policy.applicationSchema)}, pg_temp
-        `.execute(verifierOwner);
+        `.execute(temporaryTransaction);
         await sql`
           create temporary table ${sql.id(temporaryTableName)} (id integer)
-        `.execute(verifierOwner);
+        `.execute(temporaryTransaction);
         await sql`
           create trigger ${sql.id(temporaryTriggerName)}
           before insert or update on ${sql.id("pg_temp", temporaryTableName)}
           for each row
           execute function public.guard_food_import_batch_validation_digest()
-        `.execute(verifierOwner);
+        `.execute(temporaryTransaction);
 
         const extraTemporaryBinding = await collectCatalogueAuthorityDeploymentEvidence(
-          verifierOwner,
+          temporaryTransaction,
           policy,
           verifierSessions,
         );
@@ -413,9 +413,9 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
         await sql`
           drop trigger ${sql.id(temporaryTriggerName)}
           on ${sql.id(policy.applicationSchema, temporaryTableName)}
-        `.execute(verifierOwner);
+        `.execute(temporaryTransaction);
         const temporaryReplacement = await collectCatalogueAuthorityDeploymentEvidence(
-          verifierOwner,
+          temporaryTransaction,
           policy,
           verifierSessions,
         );
@@ -431,7 +431,7 @@ describeDatabase("catalogue authority deployment canaries", { timeout: 120_000 }
           assertCatalogueAuthorityDeploymentEvidence(policy, temporaryReplacement),
         ).toThrow(/trigger .* differs/u);
       } finally {
-        await sql.raw("rollback").execute(verifierOwner);
+        await temporaryTransaction.rollback().execute();
       }
       expect(
         (

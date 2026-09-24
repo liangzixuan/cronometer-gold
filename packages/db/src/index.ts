@@ -186,6 +186,7 @@ export {
   verifyCnfParserReport,
 } from "./catalogue-ingestion.js";
 export * from "./catalogue-paged-protocol.js";
+export * from "./catalogue-paged-publication.js";
 export * from "./catalogue-paged-reconciliation.js";
 export * from "./catalogue-paged-stage.js";
 export * from "./catalogue-paged-validation.js";

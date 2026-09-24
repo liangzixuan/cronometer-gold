@@ -547,7 +547,21 @@ function parseInputEvidence(value: unknown): InputEvidence {
   return value as unknown as InputEvidence;
 }
 
+interface BaselineCounts {
+  readonly count: number;
+  readonly valid: number;
+  readonly quarantined: number;
+  readonly nutrients: number;
+  readonly portions: number;
+  readonly materializableNutrients: number;
+  readonly excludedNutrients: number;
+  readonly warnings: number;
+  readonly errors: number;
+}
+
 interface BaselineVerification {
+  readonly protocolVersion: 1 | 2;
+  readonly expectedCounts: BaselineCounts;
   readonly batch: Record<string, unknown>;
   readonly parser: Record<string, unknown>;
   readonly mappings: ReadonlyMap<string, ReviewedCatalogueNutrientMapping>;
@@ -565,9 +579,14 @@ interface BaselineVerification {
 /** Bounded metadata checks run before any reconciliation state is created. */
 export function verifyCataloguePagedBaselineHeader(value: unknown): BaselineVerification | null {
   if (value === null) return null;
-  keys(value, ["batch", "release", "parser", "mappings", "approvals", "sourceCode"]);
-  if (Buffer.byteLength(JSON.stringify(value)) > MAX_PAGE_BYTES || value.sourceCode !== "USDA_FDC")
+  const header = object(value);
+  if (
+    Buffer.byteLength(JSON.stringify(header)) > MAX_PAGE_BYTES ||
+    header.sourceCode !== "USDA_FDC"
+  )
     throw new Error("Unsupported or oversized baseline header");
+  if (header.schemaVersion === 2) return verifyPublishedBaselineHeaderV2(header);
+  keys(value, ["batch", "release", "parser", "mappings", "approvals", "sourceCode"]);
   const batch = object(value.batch);
   const release = object(value.release);
   const parser = object(value.parser);
@@ -748,7 +767,20 @@ export function verifyCataloguePagedBaselineHeader(value: unknown): BaselineVeri
   if (canonicalJson(release.record_counts as JsonValue) !== canonicalJson(expectedCounts))
     throw new Error("Baseline release record counts differ from its completed batch");
   return {
-    batch: { ...batch, expectedRecordErrors: count(summary.recordErrors) },
+    protocolVersion: 1,
+    expectedCounts: {
+      count: count(batch.staged_count),
+      valid: count(batch.valid_count),
+      quarantined: count(batch.quarantined_count) - count(parser.excluded_record_count),
+      nutrients: count(parser.emitted_nutrient_count),
+      portions: count(parser.emitted_portion_count),
+      materializableNutrients: count(batch.nutrient_materializable_count),
+      excludedNutrients:
+        count(batch.nutrient_excluded_count) - count(parser.excluded_nutrient_count),
+      warnings: count(batch.warning_count),
+      errors: count(summary.recordErrors),
+    },
+    batch,
     parser,
     mappings,
     count: 0,
@@ -761,6 +793,551 @@ export function verifyCataloguePagedBaselineHeader(value: unknown): BaselineVeri
     warnings: 0,
     errors: 0,
   };
+}
+
+function verifyPublishedBaselineHeaderV2(value: Record<string, unknown>): BaselineVerification {
+  keys(value, [
+    "schemaVersion",
+    "batch",
+    "release",
+    "parser",
+    "preparation",
+    "validation",
+    "publication",
+    "mappings",
+    "approvals",
+    "sourceCode",
+  ]);
+  const batch = object(value.batch);
+  const release = object(value.release);
+  const parser = object(value.parser);
+  const preparation = object(value.preparation);
+  const validation = object(value.validation);
+  const publication = object(value.publication);
+  uuid(batch.id);
+  uuid(release.id);
+  principal(publication.publisher_principal);
+  if (publication.baseline_release_id !== null) uuid(publication.baseline_release_id);
+  if (
+    batch.status !== "staging" ||
+    batch.release_class !== "live-reviewed" ||
+    canonicalJson(batch.validation_policy as JsonValue) !== "{}" ||
+    release.status !== "promoted" ||
+    !release.promoted_at ||
+    preparation.protocol_version !== 2 ||
+    preparation.phase !== "sealed" ||
+    !preparation.sealed_at ||
+    validation.phase !== "validated" ||
+    publication.phase !== "activated" ||
+    !publication.activated_at ||
+    preparation.batch_id !== batch.id ||
+    validation.batch_id !== batch.id ||
+    publication.batch_id !== batch.id ||
+    publication.release_id !== release.id ||
+    publication.baseline_release_id !== validation.baseline_release_id ||
+    publication.validation_terminal_sha256 !== validation.terminal_sha256 ||
+    validation.staging_seal_sha256 !== preparation.staging_seal_sha256
+  )
+    throw new Error(
+      "V2 baseline requires a complete activated publication and immutable preparation",
+    );
+  for (const field of [
+    "release_id",
+    "validated_at",
+    "completed_at",
+    "validation_digest",
+    "validated_food_contract_version",
+    "nutrition_semantic_contract_version",
+    "nutrition_semantic_sha256",
+    "nutrient_mapping_digest",
+    "nutrient_mapping_revision_ids",
+    "validated_database_principal",
+    "validated_database_capability_role",
+    "staging_seal_sha256",
+    "staging_sealed_at",
+  ])
+    if (batch[field] !== null)
+      throw new Error("V2 baseline contains synthesized legacy validation evidence");
+  for (const field of [
+    "valid_count",
+    "quarantined_count",
+    "unresolved_error_count",
+    "warning_count",
+    "nutrient_input_count",
+    "nutrient_materializable_count",
+    "nutrient_excluded_count",
+    "materialized_count",
+  ])
+    if (count(batch[field]) !== 0)
+      throw new Error("V2 baseline contains synthesized legacy validation counters");
+  for (const field of [
+    "food_source_id",
+    "release_key",
+    "published_on",
+    "acquired_at",
+    "artifact_uri",
+    "artifact_sha256",
+    "artifact_bytes",
+    "media_type",
+    "upstream_schema_version",
+    "parser_version",
+    "rights_manifest_uri",
+    "rights_manifest_sha256",
+    "release_class",
+    "evidence_bundle_sha256",
+    "evidence_bundle_uri",
+    "evidence_decision_sha256",
+    "evidence_object_version_id",
+    "evidence_valid_until",
+  ])
+    if (
+      !(field in batch) ||
+      !(field in release) ||
+      JSON.stringify(batch[field]) !== JSON.stringify(release[field])
+    )
+      throw new Error(`Baseline release provenance differs from its staged batch: ${field}`);
+  for (const digest of [
+    batch.artifact_sha256,
+    batch.rights_manifest_sha256,
+    preparation.admission_sha256,
+    preparation.staging_seal_sha256,
+    validation.context_sha256,
+    validation.terminal_sha256,
+    validation.validation_commitment_sha256,
+    validation.semantic_commitment_sha256,
+    validation.last_page_receipt_sha256,
+    publication.publication_sha256,
+    publication.admission_sha256,
+    publication.context_sha256,
+    publication.report_sha256,
+    publication.mapping_sha256,
+    publication.record_commitment_sha256,
+    publication.verification_commitment_sha256,
+    publication.seal_sha256,
+    publication.last_receipt_sha256,
+  ])
+    sha(digest);
+
+  const report = object(parser.report);
+  const pinned = /^(.+)\+build\.([0-9a-f]{64})\+mapping\.([0-9a-f]{64})$/u.exec(
+    String(batch.parser_version),
+  );
+  if (
+    parser.batch_id !== batch.id ||
+    sha256CanonicalJson(report as JsonObject) !== parser.report_sha256 ||
+    !pinned ||
+    report.schemaVersion !== 2 ||
+    report.reportKind !== "usda-fdc-full-csv-capability-stage-v2" ||
+    report.preparationAdmissionSha256 !== preparation.admission_sha256 ||
+    report.sourceCode !== "USDA_FDC" ||
+    report.releaseKey !== batch.release_key ||
+    report.artifactSha256 !== batch.artifact_sha256 ||
+    report.parserVersion !== pinned[1] ||
+    report.parserBuildSha256 !== pinned[2] ||
+    report.nutrientMappingDigest !== pinned[3] ||
+    publication.mapping_sha256 !== pinned[3]
+  )
+    throw new Error("V2 baseline parser provenance differs from its immutable pins");
+  for (const component of ["record", "nutrient", "portion"])
+    if (
+      count(parser[`source_${component}_count`]) !==
+      count(parser[`emitted_${component}_count`]) + count(parser[`excluded_${component}_count`])
+    )
+      throw new Error("Baseline parser count conservation differs");
+
+  const expectedCounts: BaselineCounts = {
+    count: count(preparation.staged_count),
+    valid: count(validation.valid_count),
+    quarantined: count(validation.quarantined_count),
+    nutrients: count(validation.nutrient_input_count),
+    portions: count(validation.portion_input_count),
+    materializableNutrients: count(validation.nutrient_materializable_count),
+    excludedNutrients: count(validation.excluded_nutrient_count),
+    warnings: count(validation.warning_count),
+    errors: count(validation.record_error_count),
+  };
+  if (
+    expectedCounts.valid === 0 ||
+    expectedCounts.count !== expectedCounts.valid + expectedCounts.quarantined ||
+    expectedCounts.count !== count(batch.staged_count) ||
+    expectedCounts.count !== count(parser.emitted_record_count) ||
+    expectedCounts.count !== count(validation.next_sequence) ||
+    expectedCounts.count !== count(preparation.seal_verified_record_count) ||
+    count(preparation.stage_page_count) !== count(preparation.seal_verified_page_count) ||
+    expectedCounts.nutrients !== count(parser.emitted_nutrient_count) ||
+    expectedCounts.portions !== count(parser.emitted_portion_count) ||
+    expectedCounts.count !== count(publication.next_sequence) ||
+    expectedCounts.count !== count(publication.verified_sequence) ||
+    expectedCounts.valid !== count(publication.materialized_count) ||
+    expectedCounts.valid !== count(publication.verified_materialized_count) ||
+    count(publication.page_count) < 1 ||
+    count(publication.verified_page_count) < 1 ||
+    count(validation.page_count) < 1 ||
+    count(validation.valid_without_nutrients_count) !== 0 ||
+    count(publication.initial_generation) > count(publication.last_generation)
+  )
+    throw new Error("V2 baseline coverage or publication counters differ");
+  if (
+    count(publication.initial_generation) !== count(validation.generation) ||
+    catalogueFramedSha256V2("publication-context", [
+      String(batch.id),
+      String(publication.admission_sha256),
+      String(publication.context_sha256),
+      String(publication.validation_terminal_sha256),
+      String(publication.report_sha256),
+      String(publication.publisher_principal),
+      publication.baseline_release_id === null ? "" : String(publication.baseline_release_id),
+      String(count(publication.initial_generation)),
+      String(publication.mapping_sha256),
+    ]) !== publication.publication_sha256
+  )
+    throw new Error("V2 baseline immutable publication context differs");
+  if (
+    publication.record_commitment_sha256 !== publication.verification_commitment_sha256 ||
+    catalogueFramedSha256V2("publication-seal", [
+      String(publication.publication_sha256),
+      String(publication.record_commitment_sha256),
+      String(expectedCounts.count),
+      String(expectedCounts.valid),
+      String(count(publication.materialization_bytes)),
+      String(count(publication.page_count)),
+      String(count(publication.verified_page_count)),
+    ]) !== publication.seal_sha256
+  )
+    throw new Error("V2 baseline publication seal or verified commitment differs");
+  verifyBaselineValidationTerminalV2(batch, parser, preparation, validation, expectedCounts);
+  verifyBaselinePublicationReceiptV2(publication, "finish");
+  verifyBaselinePublicationReceiptV2(publication, "activate");
+
+  if (
+    !Array.isArray(value.mappings) ||
+    value.mappings.length > 10000 ||
+    Buffer.byteLength(JSON.stringify(value.mappings)) > 4194304 ||
+    canonicalJson(value.mappings as JsonValue) !==
+      canonicalJson(publication.mapping_document as JsonValue)
+  )
+    throw new Error("V2 baseline mapping snapshot differs or exceeds its bound");
+  const mappings = new Map<string, ReviewedCatalogueNutrientMapping>();
+  const mappingRows = value.mappings
+    .map((entry) => {
+      keys(entry, [
+        "canonicalUnit",
+        "conversionMultiplier",
+        "nutrientCode",
+        "nutrientDimension",
+        "nutrientId",
+        "nutrientName",
+        "revisionId",
+        "sourceNutrientKey",
+        "sourceUnit",
+      ]);
+      if (Object.values(entry).some((item) => typeof item !== "string"))
+        throw new Error("V2 baseline mapping values must be strings");
+      uuid(entry.revisionId);
+      positive(entry.nutrientId);
+      const key = String(entry.sourceNutrientKey);
+      if (!key || mappings.has(key))
+        throw new Error("Baseline historical mapping keys are duplicated or empty");
+      const multiplier = decimal(entry.conversionMultiplier);
+      mappings.set(key, {
+        canonicalUnit: String(entry.canonicalUnit),
+        conversionMultiplier: multiplier,
+        mappingRevisionId: entry.revisionId,
+        nutrientCode: String(entry.nutrientCode),
+        nutrientId: String(entry.nutrientId),
+        sourceNutrientId: key,
+        sourceUnit: String(entry.sourceUnit),
+      });
+      return { ...entry, conversionMultiplier: multiplier } as JsonObject;
+    })
+    .sort((left, right) =>
+      String(left.sourceNutrientKey) < String(right.sourceNutrientKey)
+        ? -1
+        : String(left.sourceNutrientKey) > String(right.sourceNutrientKey)
+          ? 1
+          : 0,
+    );
+  if (sha256CanonicalJson(mappingRows) !== publication.mapping_sha256)
+    throw new Error("Baseline historical mapping digest or revisions differ");
+  const expectedSummary = {
+    publicationProtocolVersion: 2,
+    batchId: batch.id,
+    publicationSha256: publication.publication_sha256,
+    contextSha256: publication.context_sha256,
+    validationTerminalSha256: validation.terminal_sha256,
+    reportSha256: publication.report_sha256,
+    nutrientMappingDigest: publication.mapping_sha256,
+    nutrientMappingRevisionIds: mappingRows.map((row) => String(row.revisionId)).sort(),
+    parserReportSha256: parser.report_sha256,
+    validatedFoodContractVersion: 1,
+  };
+  if (
+    canonicalJson(release.validation_summary as JsonValue) !==
+    canonicalJson(expectedSummary as JsonObject)
+  )
+    throw new Error("V2 baseline release validation summary differs from its publication");
+  const releaseCounts = {
+    staged: String(expectedCounts.count),
+    materializable: String(expectedCounts.valid),
+    quarantined: String(expectedCounts.quarantined),
+    nutrientInput: String(expectedCounts.nutrients),
+    nutrientMaterializable: String(expectedCounts.materializableNutrients),
+    nutrientExcluded: String(expectedCounts.excludedNutrients),
+    sourceRecords: String(count(parser.source_record_count)),
+    sourcePortions: String(count(parser.source_portion_count)),
+    parserExcludedRecords: String(count(parser.excluded_record_count)),
+  };
+  if (canonicalJson(release.record_counts as JsonValue) !== canonicalJson(releaseCounts))
+    throw new Error("V2 baseline release record counts differ from its publication");
+  if (!Array.isArray(value.approvals) || value.approvals.length !== 3)
+    throw new Error("Baseline requires all three immutable approvals");
+  const roles = new Set<string>(),
+    principals = new Set<string>();
+  for (const entry of value.approvals) {
+    const approval = object(entry);
+    role(approval.approval_role);
+    principal(approval.database_principal);
+    reference(approval.approval_reference);
+    if (
+      approval.batch_id !== batch.id ||
+      approval.rights_manifest_sha256 !== batch.rights_manifest_sha256 ||
+      approval.validation_terminal_sha256 !== validation.terminal_sha256 ||
+      approval.context_sha256 !== publication.context_sha256 ||
+      approval.report_sha256 !== publication.report_sha256 ||
+      approval.database_principal === validation.validator_principal ||
+      approval.database_principal === publication.publisher_principal ||
+      approval.database_principal === batch.staged_database_principal
+    )
+      throw new Error("Baseline approval differs from immutable evidence");
+    roles.add(String(approval.approval_role));
+    principals.add(approval.database_principal);
+  }
+  if (roles.size !== 3 || principals.size !== 3)
+    throw new Error("Baseline approval roles or principal separation differ");
+  return {
+    protocolVersion: 2,
+    expectedCounts,
+    batch,
+    parser,
+    mappings,
+    count: 0,
+    valid: 0,
+    quarantined: 0,
+    nutrients: 0,
+    portions: 0,
+    materializableNutrients: 0,
+    excludedNutrients: 0,
+    warnings: 0,
+    errors: 0,
+  };
+}
+
+function verifyBaselineValidationTerminalV2(
+  batch: Record<string, unknown>,
+  parser: Record<string, unknown>,
+  preparation: Record<string, unknown>,
+  validation: Record<string, unknown>,
+  expected: BaselineCounts,
+): void {
+  principal(validation.validator_principal);
+  if (validation.validator_principal === batch.staged_database_principal)
+    throw new Error("V2 baseline validation principal is not independent");
+  if (
+    typeof validation.policy_document !== "string" ||
+    canonicalJson(JSON.parse(validation.policy_document) as JsonValue) !==
+      canonicalJson(validation.policy as JsonValue) ||
+    catalogueFramedSha256V2("validation-context", [
+      String(batch.id),
+      String(preparation.staging_seal_sha256),
+      String(preparation.admission_sha256),
+      String(count(validation.generation)),
+      validation.baseline_release_id === null ? "" : String(validation.baseline_release_id),
+      validation.validator_principal,
+      validation.policy_document,
+      String(object(parser.report).nutrientMappingDigest),
+    ]) !== validation.context_sha256
+  )
+    throw new Error("V2 baseline immutable validation context differs");
+  const receipt = object(validation.terminal_receipt);
+  keys(receipt, [
+    "schemaVersion",
+    "kind",
+    "batchId",
+    "contextSha256",
+    "terminalRequestSha256",
+    "summaryDocument",
+    "terminalSha256",
+  ]);
+  exactDocument(validation.terminal_document, receipt.terminalRequestSha256);
+  if (
+    typeof receipt.summaryDocument !== "string" ||
+    Buffer.byteLength(receipt.summaryDocument) > 8192 ||
+    Buffer.byteLength(validation.terminal_document) > 8192
+  )
+    throw new Error("V2 baseline validation terminal exceeds its bound");
+  const request = JSON.parse(validation.terminal_document) as JsonValue;
+  const expectedRequest = {
+    schemaVersion: 2,
+    kind: "catalogue-validation-terminal-request-v2",
+    batchId: batch.id,
+    contextSha256: validation.context_sha256,
+    pageCount: String(count(validation.page_count)),
+    recordCount: String(expected.count),
+    lastPageReceiptSha256: validation.last_page_receipt_sha256,
+    validationCommitmentSha256: validation.validation_commitment_sha256,
+    semanticCommitmentSha256: validation.semantic_commitment_sha256,
+  };
+  const expectedSummary = {
+    schemaVersion: 2,
+    kind: "catalogue-validation-summary-v2",
+    batchId: batch.id,
+    contextSha256: validation.context_sha256,
+    sqlSemanticScope: "nutrition-basis-counts-source-identity-barcode-v2",
+    pageCount: String(count(validation.page_count)),
+    stagedCount: String(expected.count),
+    validCount: String(expected.valid),
+    quarantinedCount: String(expected.quarantined + count(parser.excluded_record_count)),
+    warningCount: String(expected.warnings),
+    recordErrorCount: String(expected.errors),
+    nutrientInputCount: String(count(parser.source_nutrient_count)),
+    nutrientMaterializableCount: String(expected.materializableNutrients),
+    excludedNutrientCount: String(
+      expected.excludedNutrients + count(parser.excluded_nutrient_count),
+    ),
+    portionInputCount: String(count(parser.source_portion_count)),
+    unresolvedErrorCount: "0",
+    policyEligible: true,
+    promotionEligible: false,
+    validationCommitmentSha256: validation.validation_commitment_sha256,
+    semanticCommitmentSha256: validation.semantic_commitment_sha256,
+    lastPageReceiptSha256: validation.last_page_receipt_sha256,
+    terminalRequestSha256: receipt.terminalRequestSha256,
+  };
+  if (
+    canonicalJson(request) !== canonicalJson(expectedRequest as JsonObject) ||
+    canonicalJson(JSON.parse(receipt.summaryDocument) as JsonValue) !==
+      canonicalJson(expectedSummary as JsonObject) ||
+    receipt.schemaVersion !== 2 ||
+    receipt.kind !== "catalogue-validation-terminal-receipt-v2" ||
+    receipt.batchId !== batch.id ||
+    receipt.contextSha256 !== validation.context_sha256 ||
+    receipt.terminalSha256 !== validation.terminal_sha256 ||
+    catalogueFramedSha256V2("validation-terminal", [
+      validation.terminal_document,
+      receipt.summaryDocument,
+    ]) !== validation.terminal_sha256
+  )
+    throw new Error("V2 baseline validation terminal evidence differs");
+}
+
+function verifyBaselinePublicationReceiptV2(
+  publication: Record<string, unknown>,
+  operation: "finish" | "activate",
+): void {
+  const prefix = operation === "finish" ? "finish" : "activation";
+  const receipt = object(publication[`${prefix}_receipt`]);
+  const extra =
+    operation === "activate" ? ["activationId", "previousReleaseId", "activeReleaseId"] : [];
+  keys(receipt, [
+    "schemaVersion",
+    "operation",
+    "batchId",
+    "sourceCode",
+    "requestSha256",
+    "publicationSha256",
+    "admissionSha256",
+    "releaseId",
+    "contextSha256",
+    "validationTerminalSha256",
+    "reportSha256",
+    "baselineReleaseId",
+    "phase",
+    "nextSequence",
+    "pageCount",
+    "materializedCount",
+    "verifiedSequence",
+    "verifiedPageCount",
+    "generation",
+    "sealSha256",
+    ...extra,
+    "receiptDocument",
+    "receiptSha256",
+  ]);
+  const { receiptDocument, receiptSha256, ...core } = receipt;
+  exactDocument(receiptDocument, receiptSha256);
+  if (canonicalJson(JSON.parse(receiptDocument) as JsonValue) !== canonicalJson(core as JsonObject))
+    throw new Error("V2 baseline publication receipt bytes differ from its envelope");
+  const requestDocument = publication[`${prefix}_request_document`];
+  exactDocument(requestDocument, receipt.requestSha256);
+  if (Buffer.byteLength(requestDocument) > 65536 || Buffer.byteLength(receiptDocument) > 65536)
+    throw new Error("V2 baseline publication receipt exceeds its bound");
+  const request = object(JSON.parse(requestDocument));
+  keys(
+    request,
+    operation === "finish"
+      ? ["schemaVersion", "batchId", "publicationSha256", "previousReceiptSha256"]
+      : [
+          "schemaVersion",
+          "batchId",
+          "publicationSha256",
+          "sealSha256",
+          "expectedCurrentReleaseId",
+          "reason",
+        ],
+  );
+  if (
+    request.schemaVersion !== 2 ||
+    request.batchId !== publication.batch_id ||
+    request.publicationSha256 !== publication.publication_sha256
+  )
+    throw new Error("V2 baseline publication request identity differs");
+  const expectedCore = {
+    schemaVersion: 2,
+    operation,
+    batchId: publication.batch_id,
+    sourceCode: "USDA_FDC",
+    requestSha256: receipt.requestSha256,
+    publicationSha256: publication.publication_sha256,
+    admissionSha256: publication.admission_sha256,
+    releaseId: publication.release_id,
+    contextSha256: publication.context_sha256,
+    validationTerminalSha256: publication.validation_terminal_sha256,
+    reportSha256: publication.report_sha256,
+    baselineReleaseId: publication.baseline_release_id,
+    phase: operation === "finish" ? "sealed" : "activated",
+    nextSequence: String(count(publication.next_sequence)),
+    pageCount: String(count(publication.page_count)),
+    materializedCount: String(count(publication.materialized_count)),
+    verifiedSequence: String(count(publication.verified_sequence)),
+    verifiedPageCount: String(count(publication.verified_page_count)),
+    generation: unsigned(receipt.generation),
+    sealSha256: publication.seal_sha256,
+    ...(operation === "activate"
+      ? {
+          activationId: unsigned(receipt.activationId),
+          previousReleaseId: publication.baseline_release_id,
+          activeReleaseId: publication.release_id,
+        }
+      : {}),
+  };
+  if (
+    canonicalJson(core as JsonObject) !== canonicalJson(expectedCore as JsonObject) ||
+    count(receipt.generation) < count(publication.initial_generation) ||
+    count(receipt.generation) > count(publication.last_generation)
+  )
+    throw new Error("V2 baseline publication receipt identity differs");
+  if (operation === "finish") sha(request.previousReceiptSha256);
+  else {
+    positive(receipt.activationId);
+    reference(request.reason);
+    if (
+      request.sealSha256 !== publication.seal_sha256 ||
+      request.expectedCurrentReleaseId !== publication.baseline_release_id ||
+      receiptSha256 !== publication.last_receipt_sha256 ||
+      count(receipt.generation) !== count(publication.last_generation)
+    )
+      throw new Error("V2 baseline activation receipt differs from its immutable publication");
+  }
 }
 
 function verifyBaselineRecord(value: unknown, state: BaselineVerification): void {
@@ -813,7 +1390,7 @@ function verifyBaselineRecord(value: unknown, state: BaselineVerification): void
     canonicalJson(result.issues as JsonValue) !== canonicalJson(value.validationIssues as JsonValue)
   )
     throw new Error("Baseline frozen issues differ from staged meaning");
-  const valid = value.validationStatus === "materialized";
+  const valid = value.validationStatus === (state.protocolVersion === 2 ? "valid" : "materialized");
   if (valid !== result.recordIsValid || (!valid && value.validationStatus !== "quarantined"))
     throw new Error("Baseline record disposition differs from staged meaning");
   if (valid) {
@@ -839,19 +1416,11 @@ function verifyBaselineRecord(value: unknown, state: BaselineVerification): void
 
 function finishBaselineVerification(state: BaselineVerification | null): void {
   if (!state) return;
-  const { batch, parser } = state;
   if (
-    state.count !== count(batch.staged_count) ||
-    state.count !== count(parser.emitted_record_count) ||
-    state.valid !== count(batch.valid_count) ||
-    state.quarantined + count(parser.excluded_record_count) !== count(batch.quarantined_count) ||
-    state.nutrients !== count(parser.emitted_nutrient_count) ||
-    state.portions !== count(parser.emitted_portion_count) ||
-    state.materializableNutrients !== count(batch.nutrient_materializable_count) ||
-    state.excludedNutrients + count(parser.excluded_nutrient_count) !==
-      count(batch.nutrient_excluded_count) ||
-    state.warnings !== count(batch.warning_count) ||
-    state.errors !== count(batch.expectedRecordErrors)
+    state.count !== count(state.parser.emitted_record_count) ||
+    (Object.keys(state.expectedCounts) as (keyof BaselineCounts)[]).some(
+      (key) => state[key] !== state.expectedCounts[key],
+    )
   )
     throw new Error("Complete baseline records do not conserve frozen batch/parser evidence");
 }

@@ -1549,7 +1549,104 @@ export interface RetentionDeadLetterEventTable {
   created_at: CreatedTimestamp;
 }
 
+export interface CataloguePublicationAdmissionTableV2 {
+  batch_id: string;
+  admission_sha256: string;
+  request_document: string;
+  request_sha256: string;
+  publisher_principal: string;
+  admitted_by: string;
+  context_sha256: string;
+  validation_terminal_sha256: string;
+  report_sha256: string;
+  max_records: Int8;
+  max_materialization_bytes: Int8;
+  max_intermediate_bytes: Int8;
+  max_evidence_bytes: Int8;
+  max_cutover_food_rows: Int8;
+  max_cutover_barcode_rows: Int8;
+  max_cutover_bytes: Int8;
+  receipt: JSONColumnType<JsonObject>;
+  created_at: CreatedTimestamp;
+}
+export interface CataloguePublicationTableV2 {
+  batch_id: string;
+  release_id: string;
+  publication_sha256: string;
+  publisher_principal: string;
+  admission_sha256: string;
+  context_sha256: string;
+  validation_terminal_sha256: string;
+  report_sha256: string;
+  baseline_release_id: string | null;
+  mapping_document: JSONColumnType<JsonArray>;
+  mapping_sha256: string;
+  initial_generation: Int8;
+  last_generation: Int8;
+  phase: "materializing" | "verifying" | "sealed" | "activated";
+  next_sequence: DefaultInt8;
+  page_count: DefaultInt8;
+  materialized_count: DefaultInt8;
+  materialization_bytes: DefaultInt8;
+  intermediate_bytes: DefaultInt8;
+  evidence_bytes: DefaultInt8;
+  verified_sequence: DefaultInt8;
+  verified_page_count: DefaultInt8;
+  verified_materialized_count: DefaultInt8;
+  record_commitment_sha256: string;
+  verification_commitment_sha256: string;
+  last_receipt_sha256: string;
+  seal_sha256: string | null;
+  begin_request_document: string;
+  begin_receipt: JSONColumnType<JsonObject>;
+  finish_request_document: string | null;
+  finish_receipt: JSONColumnType<JsonObject | null>;
+  activation_request_document: string | null;
+  activation_receipt: JSONColumnType<JsonObject | null>;
+  created_at: CreatedTimestamp;
+  activated_at: NullableTimestamp;
+}
+export interface CataloguePublicationRecordTableV2 {
+  batch_id: string;
+  sequence_number: Int8;
+  import_record_id: Int8;
+  food_id: NullableInt8;
+  food_version_id: NullableInt8;
+  validated_food_sha256: string | null;
+  materialization_sha256: string;
+  materialization_bytes: Int8;
+}
+export interface CataloguePublicationPageTableV2 {
+  batch_id: string;
+  phase: "materialize" | "verify";
+  page_number: Int8;
+  first_sequence: Int8;
+  next_sequence: Int8;
+  request_document: string;
+  request_sha256: string;
+  record_commitment_sha256: string;
+  receipt_sha256: string;
+  receipt: JSONColumnType<JsonObject>;
+}
+export interface CataloguePublicationRollbackTableV2 {
+  request_id: string;
+  source_id: Int8;
+  target_release_id: string | null;
+  previous_release_id: string | null;
+  actor: string;
+  request_document: string;
+  request_sha256: string;
+  receipt: JSONColumnType<JsonObject>;
+  activation_id: Int8;
+  created_at: CreatedTimestamp;
+}
+
 export interface Database {
+  catalogue_publication_admission_v2: CataloguePublicationAdmissionTableV2;
+  catalogue_publication_v2: CataloguePublicationTableV2;
+  catalogue_publication_record_v2: CataloguePublicationRecordTableV2;
+  catalogue_publication_page_v2: CataloguePublicationPageTableV2;
+  catalogue_publication_rollback_v2: CataloguePublicationRollbackTableV2;
   account_erasure_job: AccountErasureJobTable;
   account_erasure_receipt: AccountErasureReceiptTable;
   diary_day_note: DiaryDayNoteTable;

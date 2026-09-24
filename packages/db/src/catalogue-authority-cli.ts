@@ -89,7 +89,7 @@ export async function main(
       databaseName: policy.databaseName,
       evidenceKind: "catalogue-authority-deployment-zero-write",
       policySha256: catalogueAuthorityDeploymentPolicySha256(policy),
-      schemaVersion: 7,
+      schemaVersion: 8,
     };
     reportBytes = `${canonicalJson(report as unknown as JsonValue)}\n`;
   } catch (error) {

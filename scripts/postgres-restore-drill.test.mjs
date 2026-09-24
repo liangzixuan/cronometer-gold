@@ -395,7 +395,7 @@ test("rejects an incomplete public ledger despite a complete owner-schema shadow
 test("tracks migrations through the four paged preparation migrations in the exact restore ledger", () => {
   const migrationLedger = JSON.parse(TRACKED_MIGRATION_LEDGER_JSON);
 
-  assert.equal(migrationLedger.length, 30);
+  assert.equal(migrationLedger.length, 32);
   assert.equal(
     migrationLedger.find((entry) => entry.name === "0025_manual_activity_ledger.sql")?.name,
     "0025_manual_activity_ledger.sql",
@@ -417,6 +417,14 @@ test("tracks migrations through the four paged preparation migrations in the exa
 
 test("pins each new paged migration checksum independently", () => {
   const ledger = JSON.parse(TRACKED_MIGRATION_LEDGER_JSON);
+  assert.equal(
+    ledger.find((entry) => entry.name === "0031_catalogue_paged_publication.sql")?.checksum,
+    "671849217f6e1596b04d5af3d11153e48a84882d9457e0c7d4ff26531955d64a",
+  );
+  assert.equal(
+    ledger.find((entry) => entry.name === "0032_catalogue_publication_consumers.sql")?.checksum,
+    "0df7a0111410978719c326fedb0e1ab1184ff3cea16641486b924afa5c2defc3",
+  );
   assert.equal(
     ledger.find((entry) => entry.name === "0027_catalogue_paged_staging.sql")?.checksum,
     "47e2a7db2345970b92a0c8b1e825605f384035727c2197253b68c907361fcab0",
@@ -778,9 +786,9 @@ test("rejects unexpected table or sequence DML authority", () => {
 test("pins every reviewed authority function and trigger", () => {
   assert.equal(
     validAuthorityFunctions().filter((entry) => entry.name !== "ordinary_function").length,
-    104,
+    126,
   );
-  assert.equal(validAuthorityTriggers().length, 110);
+  assert.equal(validAuthorityTriggers().length, 120);
 
   for (const [property, value] of [
     ["source_sha256", "0".repeat(64)],
@@ -1282,7 +1290,24 @@ test("restore commands stream exact SQL through stdin with owner and transaction
     () => runPostgresRestoreDrill(restoreOptions(), { run }),
     (error) => error === policyError,
   );
-  const statements = invocations.filter((call) => call.arguments_.includes("ON_ERROR_STOP=1"));
+  const viewCalls = invocations.filter((call) =>
+    call.options.input?.startsWith("begin; set local search_path"),
+  );
+  assert.equal(viewCalls.length, 1);
+  const viewCall = viewCalls[0];
+  assert.ok(viewCall.arguments_.includes("ON_ERROR_STOP=1"));
+  assert.ok(viewCall.arguments_.includes("--quiet"));
+  assert.ok(viewCall.arguments_.includes("--file"));
+  assert.match(viewCall.options.input, /create temporary view catalogue_expected_[a-f0-9]+ as /u);
+  assert.ok(viewCall.options.input.includes(pagedAuthorityPolicy.views[0].query));
+  assert.match(
+    viewCall.options.input,
+    /drop view pg_temp.catalogue_expected_[a-f0-9]+; rollback;$/u,
+  );
+  assert.ok(viewCall.arguments_.every((argument) => Buffer.byteLength(argument) < 1024));
+  const statements = invocations.filter(
+    (call) => call.arguments_.includes("ON_ERROR_STOP=1") && !viewCalls.includes(call),
+  );
   assert.equal(statements.length, 2);
   const expectedSql = [
     'revoke connect on database "nutrition_restore_ci_orchestration" from public',
@@ -1396,13 +1421,15 @@ test("pins the complete 139-row PostgreSQL constraint digest captured by the sch
   const evidence = validAuthorityEvidence();
   // PostgreSQL 17.6, ADR0104 schema-only diagnostic, 2026-09-21. This digest
   // covers every name, definition, type and validated flag, in collector order.
-  const canonicalRows = evidence.authorityConstraints.map((entry) => ({
-    constraint_type: entry.constraint_type,
-    definition: entry.definition,
-    name: entry.name,
-    table_name: entry.table_name,
-    validated: entry.validated,
-  }));
+  const canonicalRows = evidence.authorityConstraints
+    .filter((entry) => !entry.table_name.startsWith("catalogue_publication"))
+    .map((entry) => ({
+      constraint_type: entry.constraint_type,
+      definition: entry.definition,
+      name: entry.name,
+      table_name: entry.table_name,
+      validated: entry.validated,
+    }));
   assert.equal(canonicalRows.length, 139);
   assert.equal(
     createHash("sha256").update(JSON.stringify(canonicalRows)).digest("hex"),
@@ -1724,6 +1751,13 @@ function validAuthorityEvidence() {
     explicitColumnAclAttributeCount: "0",
     functions: validAuthorityFunctions(),
     relations: [
+      {
+        name: "promoted_food_search_catalogue_v1",
+        kind: "v",
+        owner: expectedOwner,
+        acl_is_default: true,
+        acl: [acl(expectedOwner, "SELECT")],
+      },
       ...pagedAuthorityPolicy.tables.map((name) => ({
         acl: [
           "DELETE",
@@ -1795,7 +1829,15 @@ function validAuthorityEvidence() {
         owner: expectedOwner,
       },
     ],
-    version: 15,
+    authorityViews: [
+      {
+        name: "promoted_food_search_catalogue_v1",
+        sourceSha256: "9fc070d1ac2427474187c4a035f77e7e5729ae867d0243202dd7fd1896c20f73",
+        definitionMatches: true,
+        options: [],
+      },
+    ],
+    version: 16,
   };
 }
 
@@ -2148,7 +2190,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "8946f31585a418f750601e35621b06ac938a8c466f26fddc1a123cd6c2df4ffd",
+        "b9bda857bcce39b37ee33728198fe8d15b112792fc9c1cb33c921a6ab1113d21",
         "jsonb",
       ),
       acl: [acl(expectedOwner, "EXECUTE"), acl("nutrition_catalogue_rollback", "EXECUTE")],
@@ -2162,7 +2204,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "a2cf554f00f20d13720e268e3778eca9e26064da34291befa9b75f3dbe55b915",
+        "1427d676a8322e2a83b436c70264ff6f18ebe2f793aceb9e138b766403caa303",
         "jsonb",
       ),
       acl: [acl(expectedOwner, "EXECUTE")],
@@ -2260,7 +2302,7 @@ function validAuthorityFunctions() {
     },
     {
       ...functionSemantics(
-        "d46f53aeffa6469eada5461ab59bd9c23d43bf9aab77704c61b21c44291ae028",
+        "54f0413a565c93fc6d76846873844a03488594580250ba2bc1c9f4117d3ab68a",
         "trigger",
       ),
       acl: [acl(expectedOwner, "EXECUTE")],
@@ -2784,6 +2826,8 @@ function authorityEvidenceRunner(evidence, failures = {}) {
     }
     if (sql.includes("pg_stat_activity")) return `${boundary.otherClientSessions}\n`;
     if (sql.includes("pg_get_userbyid(database_row.datdba)")) return `${boundary.owner}\n`;
+    if (sql.includes("create temporary view catalogue_expected_"))
+      return `${JSON.stringify(evidence.authorityViews[0])}\n`;
     if (sql.includes("authority_constraint_policy")) {
       return `${JSON.stringify(evidence.authorityConstraints)}\n`;
     }
@@ -2843,9 +2887,9 @@ function acl(grantee, privilege, grantor = expectedOwner) {
 }
 
 test("paged authority fixture covers all versioned companions, functions, and triggers", () => {
-  assert.equal(pagedAuthorityPolicy.tables.length, 14);
-  assert.equal(pagedAuthorityPolicy.functions.length, 49);
-  assert.equal(pagedAuthorityPolicy.triggers.length, 54);
+  assert.equal(pagedAuthorityPolicy.tables.length, 19);
+  assert.equal(pagedAuthorityPolicy.functions.length, 71);
+  assert.equal(pagedAuthorityPolicy.triggers.length, 64);
   validateRestoreAuthorityEvidence(validAuthorityEvidence(), expectedOwner);
 });
 
@@ -3040,4 +3084,31 @@ test("restore preflight permits only fixed companion tables with exact owner ACL
     [...pagedAuthorityPolicy.tables].sort(),
   );
   assert.doesNotMatch(clause, /\bor\b|\blike\b|aclexplode/u);
+});
+
+test("rejects changed or incomplete source-defined public eligibility view evidence", () => {
+  for (const mutate of [
+    (e) => {
+      e.authorityViews = [];
+    },
+    (e) => {
+      e.authorityViews[0].definitionMatches = false;
+    },
+    (e) => {
+      e.authorityViews[0].sourceSha256 = "0".repeat(64);
+    },
+    (e) => {
+      e.authorityViews[0].options = ["security_barrier=true"];
+    },
+    (e) => {
+      e.authorityViews.push(e.authorityViews[0]);
+    },
+  ]) {
+    const evidence = validAuthorityEvidence();
+    mutate(evidence);
+    assert.throws(
+      () => validateRestoreAuthorityEvidence(evidence, expectedOwner),
+      /public eligibility view/,
+    );
+  }
 });

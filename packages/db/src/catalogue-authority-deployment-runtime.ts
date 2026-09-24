@@ -12,12 +12,14 @@ import {
   type CatalogueAuthorityCanaryName,
   type CatalogueAuthorityDeploymentEvidence,
   type CatalogueAuthorityDeploymentPolicy,
+  type CatalogueAuthorityViewEvidence,
   type CatalogueFunctionEvidence,
   type CatalogueRoleMembershipEvidence,
   catalogueAuthorityDeploymentPolicySha256,
   catalogueAuthorityDeploymentStructure,
   catalogueAuthorityDeploymentStructureSha256,
 } from "./catalogue-authority-deployment.js";
+import { CATALOGUE_PAGED_VIEW_POLICY } from "./catalogue-paged-authority-policy.js";
 import type { Database } from "./types.js";
 
 export interface CatalogueAuthorityCanaryConnections {
@@ -127,6 +129,53 @@ const SHARED_APPLICATION_TRIGGER_FUNCTIONS = new Set([
   "reject_immutable_row_update",
   "set_row_updated_at",
 ]);
+
+// The reviewed query is parsed independently in an owned savepoint.
+// Expected definitions never come from the application view being attested.
+export async function collectCatalogueAuthorityViewEvidence(
+  database: Kysely<Database>,
+): Promise<readonly CatalogueAuthorityViewEvidence[]> {
+  const collect = async (transaction: Kysely<Database>) => {
+    const savepoint = `catalogue_view_scope_${randomUUID().replaceAll("-", "")}`;
+    await sql`savepoint ${sql.id(savepoint)}`.execute(transaction);
+    try {
+      await sql`set local search_path = pg_catalog, public, pg_temp`.execute(transaction);
+      const evidence: CatalogueAuthorityViewEvidence[] = [];
+      for (const expected of CATALOGUE_PAGED_VIEW_POLICY) {
+        const temporaryName = `catalogue_expected_${randomUUID().replaceAll("-", "")}`;
+        await sql`create temporary view ${sql.id(temporaryName)} as ${sql.raw(expected.query)}`.execute(
+          transaction,
+        );
+        const observed = await sql<{ definition_matches: boolean; options: string[] }>`
+          select pg_catalog.pg_get_viewdef(actual.oid, false) =
+            pg_catalog.pg_get_viewdef(${`pg_temp.${temporaryName}`}::regclass, false) as definition_matches,
+            coalesce(actual.reloptions, array[]::text[]) as options
+          from pg_catalog.pg_class actual
+          join pg_catalog.pg_namespace namespace on namespace.oid=actual.relnamespace
+          where namespace.nspname='public' and actual.relname=${expected.name} and actual.relkind='v'
+        `.execute(transaction);
+        if (observed.rows.length !== 1)
+          throw new Error("Catalogue public eligibility view is unavailable");
+        const row = observed.rows[0];
+        if (!row) throw new Error("Catalogue public eligibility view evidence is unavailable");
+        evidence.push({
+          name: expected.name,
+          sourceSha256: expected.sourceSha256,
+          definitionMatches: row.definition_matches,
+          options: row.options,
+        });
+        await sql`drop view ${sql.id("pg_temp", temporaryName)}`.execute(transaction);
+      }
+      return evidence;
+    } finally {
+      // Roll back successful work too: SET LOCAL and temporary DDL belong only
+      // to this attestation, never to the caller's surrounding transaction.
+      await sql`rollback to savepoint ${sql.id(savepoint)}`.execute(transaction);
+      await sql`release savepoint ${sql.id(savepoint)}`.execute(transaction);
+    }
+  };
+  return database.isTransaction ? collect(database) : database.transaction().execute(collect);
+}
 
 export async function collectCatalogueAuthorityDeploymentEvidence(
   database: Kysely<Database>,
@@ -514,14 +563,14 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
         class_row.relname as table_name,
         constraint_row.contype::text as constraint_type,
         constraint_row.convalidated as validated,
-        pg_catalog.pg_get_constraintdef(constraint_row.oid, class_row.relname not in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2')) as definition
+        pg_catalog.pg_get_constraintdef(constraint_row.oid, class_row.relname not in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_publication_admission_v2','catalogue_publication_page_v2','catalogue_publication_record_v2','catalogue_publication_rollback_v2','catalogue_publication_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2')) as definition
       from pg_catalog.pg_constraint as constraint_row
       join pg_catalog.pg_class as class_row
         on class_row.oid = constraint_row.conrelid
       join pg_catalog.pg_namespace as namespace_row
         on namespace_row.oid = class_row.relnamespace
       where namespace_row.nspname = ${policy.applicationSchema}
-        and (class_row.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or constraint_row.conname in (
+        and (class_row.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_publication_admission_v2','catalogue_publication_page_v2','catalogue_publication_record_v2','catalogue_publication_rollback_v2','catalogue_publication_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or constraint_row.conname in (
           'food_import_approval_database_authority_check',
           'food_import_batch_materialization_contract_check',
           'food_import_batch_nutrition_semantic_contract_check',
@@ -573,7 +622,7 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
       where namespace_row.nspname = ${policy.applicationSchema}
         and attribute_row.attnum > 0 and not attribute_row.attisdropped
         and (
-          class_row.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or
+          class_row.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_publication_admission_v2','catalogue_publication_page_v2','catalogue_publication_record_v2','catalogue_publication_rollback_v2','catalogue_publication_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or
           (class_row.relname = 'food_import_batch' and attribute_row.attname in (
             'nutrient_mapping_digest',
             'nutrient_mapping_revision_ids',
@@ -654,7 +703,7 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
       join pg_catalog.pg_am as access_method
         on access_method.oid = index_row.relam
       where namespace_row.nspname = ${policy.applicationSchema}
-        and (table_row.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or index_row.relname in ('food_source_release_activation_import_batch_unique','catalogue_legacy_release_batch_v2_idx'))
+        and (table_row.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_publication_admission_v2','catalogue_publication_page_v2','catalogue_publication_record_v2','catalogue_publication_rollback_v2','catalogue_publication_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or index_row.relname in ('food_source_release_activation_import_batch_unique','catalogue_legacy_release_batch_v2_idx'))
       order by namespace_row.nspname, table_row.relname, index_row.relname
     `.execute(database)
   ).rows.map((row) => ({
@@ -1061,6 +1110,7 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
       owner: schemaRow.owner,
       publicCreate: schemaRow.public_create,
     },
+    authorityViews: await collectCatalogueAuthorityViewEvidence(database),
     authorityConstraints,
     authorityFrozenColumns,
     authorityIndexes,
@@ -1083,7 +1133,7 @@ export async function collectCatalogueAuthorityDeploymentEvidence(
     nonSystemSchemas,
     policySha256: catalogueAuthorityDeploymentPolicySha256(policy),
     relations,
-    schemaVersion: 7,
+    schemaVersion: 8,
     triggers,
     types,
   };
@@ -1194,7 +1244,7 @@ export async function runCatalogueReviewerCanaries(
     beforeStructureSha256: catalogueAuthorityDeploymentStructureSha256(before),
     policySha256: catalogueAuthorityDeploymentPolicySha256(policy),
     results,
-    schemaVersion: 7,
+    schemaVersion: 8,
     structure,
   };
   assertCatalogueAuthorityCanaryEvidence(policy, evidence);

@@ -3,6 +3,20 @@
     {
       "arguments": "p_document text",
       "configuration": "application-schema",
+      "executeGrantees": ["nutrition_catalogue_promote_activate"],
+      "language": "plpgsql",
+      "leakproof": false,
+      "name": "catalogue_activate_publication_v2",
+      "parallel": "u",
+      "resultType": "jsonb",
+      "securityDefiner": true,
+      "sourceSha256": "ccb20f7259ef33f04b3d0d39a33da941576f1ccb6fd46ca0a7cef5de5f04b937",
+      "strict": false,
+      "volatility": "v"
+    },
+    {
+      "arguments": "p_document text",
+      "configuration": "application-schema",
       "executeGrantees": ["nutrition_catalogue_approve_quality"],
       "language": "plpgsql",
       "leakproof": false,
@@ -11,6 +25,34 @@
       "resultType": "jsonb",
       "securityDefiner": true,
       "sourceSha256": "186afb6bae243ba6d53966399ac26218cc46458a674988fce999aef3db307c41",
+      "strict": false,
+      "volatility": "v"
+    },
+    {
+      "arguments": "p_document text",
+      "configuration": "application-schema",
+      "executeGrantees": ["nutrition_catalogue_approve_quality"],
+      "language": "plpgsql",
+      "leakproof": false,
+      "name": "catalogue_admit_publication_v2",
+      "parallel": "u",
+      "resultType": "jsonb",
+      "securityDefiner": true,
+      "sourceSha256": "f6f98257e2605be175f65c2a63634dd1b23c9f616c479e5bd7e14f3cb3656945",
+      "strict": false,
+      "volatility": "v"
+    },
+    {
+      "arguments": "p_document text, p_phase text",
+      "configuration": "application-schema",
+      "executeGrantees": "owner-only",
+      "language": "plpgsql",
+      "leakproof": false,
+      "name": "catalogue_advance_publication_page_v2",
+      "parallel": "u",
+      "resultType": "jsonb",
+      "securityDefiner": true,
+      "sourceSha256": "4685582d152496335b797ddf6f0eeabfb6cf34765317a088dd971d07d7af418e",
       "strict": false,
       "volatility": "v"
     },
@@ -25,6 +67,34 @@
       "resultType": "trigger",
       "securityDefiner": true,
       "sourceSha256": "84e0fdf15075edda2f1a4e8bc7eee794f4c836bf10ffdcdce1a9aee235c26fff",
+      "strict": false,
+      "volatility": "v"
+    },
+    {
+      "arguments": "p_batch_id uuid, p_context text, p_terminal text, p_report text, p_actor text",
+      "configuration": "application-schema",
+      "executeGrantees": "owner-only",
+      "language": "plpgsql",
+      "leakproof": false,
+      "name": "catalogue_assert_publication_approvals_v2",
+      "parallel": "u",
+      "resultType": "void",
+      "securityDefiner": true,
+      "sourceSha256": "0cc9ca58fd5951e5a7891768452e8aac54eeb04658d30b906633146c1df37eb8",
+      "strict": false,
+      "volatility": "v"
+    },
+    {
+      "arguments": "p_source_id bigint, p_target uuid, p_budget_batch uuid, p_extra_bytes bigint",
+      "configuration": "application-schema",
+      "executeGrantees": "owner-only",
+      "language": "plpgsql",
+      "leakproof": false,
+      "name": "catalogue_assert_publication_cutover_budget_v2",
+      "parallel": "u",
+      "resultType": "void",
+      "securityDefiner": true,
+      "sourceSha256": "8cef92219afffd57dcf2fc76a22109cb912c570ca48f3b8b8048715e82fd4881",
       "strict": false,
       "volatility": "v"
     },
@@ -67,6 +137,20 @@
       "resultType": "jsonb",
       "securityDefiner": true,
       "sourceSha256": "780c91e2ae3d06d5903da649829e35d8aea16a41ca527db811ef0f8f3b666d8a",
+      "strict": false,
+      "volatility": "v"
+    },
+    {
+      "arguments": "p_document text",
+      "configuration": "application-schema",
+      "executeGrantees": ["nutrition_catalogue_promote_activate"],
+      "language": "plpgsql",
+      "leakproof": false,
+      "name": "catalogue_begin_publication_v2",
+      "parallel": "u",
+      "resultType": "jsonb",
+      "securityDefiner": true,
+      "sourceSha256": "620deb405daa84cd700eb090500cbeddf36706ccf4bc7643d50b9c24024776f4",
       "strict": false,
       "volatility": "v"
     },
@@ -127,6 +211,20 @@
       "volatility": "v"
     },
     {
+      "arguments": "p_source_id bigint, p_target uuid, p_operation text, p_batch uuid, p_actor text, p_reason text",
+      "configuration": "application-schema",
+      "executeGrantees": "owner-only",
+      "language": "plpgsql",
+      "leakproof": false,
+      "name": "catalogue_cutover_publication_v2",
+      "parallel": "u",
+      "resultType": "bigint",
+      "securityDefiner": true,
+      "sourceSha256": "7b38fcbd65c1ad33b77f9177deea63b3e851febcaac085d38fb32ae59708f35b",
+      "strict": false,
+      "volatility": "v"
+    },
+    {
       "arguments": "p_batch_id uuid, p_document text",
       "configuration": "application-schema",
       "executeGrantees": ["nutrition_catalogue_stage"],
@@ -137,6 +235,20 @@
       "resultType": "jsonb",
       "securityDefiner": true,
       "sourceSha256": "4168a104846e8f72100b552b454b29b2fe3eaa6f9a877d1e00ce63494526d948",
+      "strict": false,
+      "volatility": "v"
+    },
+    {
+      "arguments": "p_document text",
+      "configuration": "application-schema",
+      "executeGrantees": ["nutrition_catalogue_promote_activate"],
+      "language": "plpgsql",
+      "leakproof": false,
+      "name": "catalogue_finish_publication_v2",
+      "parallel": "u",
+      "resultType": "jsonb",
+      "securityDefiner": true,
+      "sourceSha256": "1e5cedeff52e4026b8d23c72e410eb00ea219721edbdc32b58a19a8f5516cc7e",
       "strict": false,
       "volatility": "v"
     },
@@ -258,6 +370,20 @@
       "executeGrantees": "owner-only",
       "language": "plpgsql",
       "leakproof": false,
+      "name": "catalogue_guard_publication_v2",
+      "parallel": "u",
+      "resultType": "trigger",
+      "securityDefiner": true,
+      "sourceSha256": "649b36ed52f65e1888d1ba52dd8228f4fe671b0f4037d438891dabf89d8955e9",
+      "strict": false,
+      "volatility": "v"
+    },
+    {
+      "arguments": "",
+      "configuration": "application-schema",
+      "executeGrantees": "owner-only",
+      "language": "plpgsql",
+      "leakproof": false,
       "name": "catalogue_guard_validation_context_v2",
       "parallel": "u",
       "resultType": "trigger",
@@ -295,6 +421,20 @@
       "volatility": "v"
     },
     {
+      "arguments": "p_batch_id uuid, p_actor text, p_require_live boolean",
+      "configuration": "application-schema",
+      "executeGrantees": "owner-only",
+      "language": "plpgsql",
+      "leakproof": false,
+      "name": "catalogue_lock_publication_v2",
+      "parallel": "u",
+      "resultType": "void",
+      "securityDefiner": true,
+      "sourceSha256": "ceaeb9c5c29629485e12e40f8754fb325cc6f265039e65b7529d97c55a712abd",
+      "strict": false,
+      "volatility": "v"
+    },
+    {
       "arguments": "p_source_id bigint",
       "configuration": "application-schema",
       "executeGrantees": "owner-only",
@@ -305,6 +445,34 @@
       "resultType": "text",
       "securityDefiner": true,
       "sourceSha256": "3368e302ca95d612f19a5407309917c51a2716a7c5e9a4a9066d779d21e3a13b",
+      "strict": false,
+      "volatility": "v"
+    },
+    {
+      "arguments": "p_document text",
+      "configuration": "application-schema",
+      "executeGrantees": ["nutrition_catalogue_promote_activate"],
+      "language": "sql",
+      "leakproof": false,
+      "name": "catalogue_materialize_publication_page_v2",
+      "parallel": "u",
+      "resultType": "jsonb",
+      "securityDefiner": true,
+      "sourceSha256": "48f24147dd0daa3d900509cb6c4e5529c854088b4e74da971273476578738724",
+      "strict": false,
+      "volatility": "v"
+    },
+    {
+      "arguments": "p_batch_id uuid, p_sequence bigint",
+      "configuration": "application-schema",
+      "executeGrantees": "owner-only",
+      "language": "plpgsql",
+      "leakproof": false,
+      "name": "catalogue_materialize_publication_record_v2",
+      "parallel": "u",
+      "resultType": "bigint",
+      "securityDefiner": true,
+      "sourceSha256": "e274f7f186ab341c94c6a81810da4a6e5353a55dd4d64dbaaa6676d71a14100c",
       "strict": false,
       "volatility": "v"
     },
@@ -374,9 +542,79 @@
       "parallel": "u",
       "resultType": "jsonb",
       "securityDefiner": true,
-      "sourceSha256": "c2a8c23b29d23cf5232d4fe0d32a8c75632a1d139a5b35ec41ae58d2c83a665c",
+      "sourceSha256": "ada1304ce7e766b63d829d9af0b68504e5b56ef8bc15a595e4a25cbc09da25cc",
       "strict": false,
       "volatility": "v"
+    },
+    {
+      "arguments": "p_batch_id uuid",
+      "configuration": "application-schema",
+      "executeGrantees": "owner-only",
+      "language": "sql",
+      "leakproof": false,
+      "name": "catalogue_publication_progress_v2",
+      "parallel": "u",
+      "resultType": "jsonb",
+      "securityDefiner": true,
+      "sourceSha256": "5c8c0c2830f3874b0c801cbf8b3cf4f58b7f21f8cb51ab621da6ccae7ce89aff",
+      "strict": false,
+      "volatility": "s"
+    },
+    {
+      "arguments": "p_core jsonb",
+      "configuration": "application-schema",
+      "executeGrantees": "owner-only",
+      "language": "sql",
+      "leakproof": false,
+      "name": "catalogue_publication_receipt_v2",
+      "parallel": "u",
+      "resultType": "jsonb",
+      "securityDefiner": false,
+      "sourceSha256": "a437c365feb70650d8a0148efdb09014278b1952dfde292b9c1f0c0eebc7b4db",
+      "strict": true,
+      "volatility": "i"
+    },
+    {
+      "arguments": "p_document text, p_keys text[]",
+      "configuration": "application-schema",
+      "executeGrantees": "owner-only",
+      "language": "plpgsql",
+      "leakproof": false,
+      "name": "catalogue_publication_request_v2",
+      "parallel": "u",
+      "resultType": "jsonb",
+      "securityDefiner": false,
+      "sourceSha256": "35a316c13432448109697d4a59131f42316bffc0243ca863473b0716c832c2a9",
+      "strict": false,
+      "volatility": "i"
+    },
+    {
+      "arguments": "p_release_id uuid",
+      "configuration": "application-schema",
+      "executeGrantees": "owner-only",
+      "language": "sql",
+      "leakproof": false,
+      "name": "catalogue_publication_target_barcodes_v2",
+      "parallel": "u",
+      "resultType": "TABLE(food_id bigint, food_version_id bigint, gtin text, market_code text)",
+      "securityDefiner": true,
+      "sourceSha256": "4a2c084f857f0da08922cc13fde3273877dc64af5b7c78dcd8a48e7645be1806",
+      "strict": false,
+      "volatility": "s"
+    },
+    {
+      "arguments": "",
+      "configuration": "application-schema",
+      "executeGrantees": "owner-only",
+      "language": "plpgsql",
+      "leakproof": false,
+      "name": "catalogue_publication_timeouts_v2",
+      "parallel": "u",
+      "resultType": "void",
+      "securityDefiner": false,
+      "sourceSha256": "cd372d03caf870d722715f04a953bdb3320b844fcc257228fa145eed7ac91810",
+      "strict": false,
+      "volatility": "s"
     },
     {
       "arguments": "p_admission_sha256 text",
@@ -389,6 +627,20 @@
       "resultType": "jsonb",
       "securityDefiner": true,
       "sourceSha256": "b31733d1ed923863fc38688834f7fba65681c9e8c1576bb9c83beeccb62e529c",
+      "strict": false,
+      "volatility": "v"
+    },
+    {
+      "arguments": "p_batch_id uuid",
+      "configuration": "application-schema",
+      "executeGrantees": ["nutrition_catalogue_promote_activate", "nutrition_catalogue_rollback"],
+      "language": "plpgsql",
+      "leakproof": false,
+      "name": "catalogue_read_publication_v2",
+      "parallel": "u",
+      "resultType": "jsonb",
+      "securityDefiner": true,
+      "sourceSha256": "c0e2971e9ff47e0b44442870cbc088e99faf8311b8718b0e444d113d53b0c460",
       "strict": false,
       "volatility": "v"
     },
@@ -420,7 +672,7 @@
       "parallel": "u",
       "resultType": "jsonb",
       "securityDefiner": true,
-      "sourceSha256": "4c4a81bc60ede20de39a0f73c473d66bfed68bbfea5dc26fbaa5aabd69b647ba",
+      "sourceSha256": "955240cc42ddb8daa2a4420334f4517b4bbb99cd8f51233dfeb43dd3a1843a53",
       "strict": false,
       "volatility": "v"
     },
@@ -434,7 +686,7 @@
       "parallel": "u",
       "resultType": "jsonb",
       "securityDefiner": true,
-      "sourceSha256": "99f884f6919854dcffe57863830c9b3141a2b4e46ae338663c4ef8b5af1c05de",
+      "sourceSha256": "d8032d71e259aa56ba70e4c060937e3d69b3e01ddaf151ec4a9a4e52034cccf4",
       "strict": false,
       "volatility": "v"
     },
@@ -536,7 +788,7 @@
       "parallel": "u",
       "resultType": "void",
       "securityDefiner": true,
-      "sourceSha256": "a5e6b8a52a9f8e93d77300d3c7f4fc0354ee23fee1d28fb90f00a673c550d943",
+      "sourceSha256": "48e36b25e9c16f670385041811610564220bfe52f3313c142c7e25c9e5d65f3a",
       "strict": false,
       "volatility": "s"
     },
@@ -567,6 +819,20 @@
       "sourceSha256": "7a1284c7da1e999e2ac0c72eef8171f029c88986c423f2a1edb6b300260d38a1",
       "strict": false,
       "volatility": "s"
+    },
+    {
+      "arguments": "p_document text",
+      "configuration": "application-schema",
+      "executeGrantees": ["nutrition_catalogue_rollback"],
+      "language": "plpgsql",
+      "leakproof": false,
+      "name": "catalogue_rollback_publication_v2",
+      "parallel": "u",
+      "resultType": "jsonb",
+      "securityDefiner": true,
+      "sourceSha256": "6c5320dae7452747738fc52eb6d44716c60e68740e8695d727f42465976abe71",
+      "strict": false,
+      "volatility": "v"
     },
     {
       "arguments": "p_batch_id uuid, p_document text",
@@ -611,6 +877,20 @@
       "volatility": "i"
     },
     {
+      "arguments": "p_record_id bigint, p_release_id uuid",
+      "configuration": "application-schema",
+      "executeGrantees": "owner-only",
+      "language": "plpgsql",
+      "leakproof": false,
+      "name": "catalogue_verify_legacy_publication_record_v2",
+      "parallel": "u",
+      "resultType": "jsonb",
+      "securityDefiner": true,
+      "sourceSha256": "b40a94a9ae384af3fb028c6c6a0d0702917aaa3b17b8e5794f7a61906f083eeb",
+      "strict": false,
+      "volatility": "v"
+    },
+    {
       "arguments": "p_batch_id uuid, p_page_number bigint",
       "configuration": "application-schema",
       "executeGrantees": ["nutrition_catalogue_stage"],
@@ -621,6 +901,34 @@
       "resultType": "jsonb",
       "securityDefiner": true,
       "sourceSha256": "50f79cfe28ac9a09d32d99cbf9fbc87f56f265db61a66b14848fd75d64fc866e",
+      "strict": false,
+      "volatility": "v"
+    },
+    {
+      "arguments": "p_document text",
+      "configuration": "application-schema",
+      "executeGrantees": ["nutrition_catalogue_promote_activate"],
+      "language": "sql",
+      "leakproof": false,
+      "name": "catalogue_verify_publication_page_v2",
+      "parallel": "u",
+      "resultType": "jsonb",
+      "securityDefiner": true,
+      "sourceSha256": "6711dbb46ed60dc4e6023c92b8ad01b637c7abd076b45adaf47df42194dcb7dd",
+      "strict": false,
+      "volatility": "v"
+    },
+    {
+      "arguments": "p_batch_id uuid, p_sequence bigint",
+      "configuration": "application-schema",
+      "executeGrantees": "owner-only",
+      "language": "plpgsql",
+      "leakproof": false,
+      "name": "catalogue_verify_publication_record_v2",
+      "parallel": "u",
+      "resultType": "jsonb",
+      "securityDefiner": true,
+      "sourceSha256": "189de2455deb548fb923cfb5b67d0cffadbc78d16dbeaa895881f65f7c7f65a7",
       "strict": false,
       "volatility": "v"
     },
@@ -779,6 +1087,66 @@
       "functionName": "catalogue_guard_preparation_evidence_insert_v2",
       "name": "catalogue_preparation_stage_page_v2_insert",
       "tableName": "catalogue_preparation_stage_page_v2"
+    },
+    {
+      "name": "catalogue_publication_admission_v2_guard",
+      "tableName": "catalogue_publication_admission_v2",
+      "functionName": "catalogue_guard_publication_v2",
+      "definition": "CREATE TRIGGER catalogue_publication_admission_v2_guard BEFORE INSERT OR DELETE OR UPDATE ON catalogue_publication_admission_v2 FOR EACH ROW EXECUTE FUNCTION catalogue_guard_publication_v2()"
+    },
+    {
+      "name": "catalogue_publication_admission_v2_truncate",
+      "tableName": "catalogue_publication_admission_v2",
+      "functionName": "catalogue_guard_publication_v2",
+      "definition": "CREATE TRIGGER catalogue_publication_admission_v2_truncate BEFORE TRUNCATE ON catalogue_publication_admission_v2 FOR EACH STATEMENT EXECUTE FUNCTION catalogue_guard_publication_v2()"
+    },
+    {
+      "name": "catalogue_publication_page_v2_guard",
+      "tableName": "catalogue_publication_page_v2",
+      "functionName": "catalogue_guard_publication_v2",
+      "definition": "CREATE TRIGGER catalogue_publication_page_v2_guard BEFORE INSERT OR DELETE OR UPDATE ON catalogue_publication_page_v2 FOR EACH ROW EXECUTE FUNCTION catalogue_guard_publication_v2()"
+    },
+    {
+      "name": "catalogue_publication_page_v2_truncate",
+      "tableName": "catalogue_publication_page_v2",
+      "functionName": "catalogue_guard_publication_v2",
+      "definition": "CREATE TRIGGER catalogue_publication_page_v2_truncate BEFORE TRUNCATE ON catalogue_publication_page_v2 FOR EACH STATEMENT EXECUTE FUNCTION catalogue_guard_publication_v2()"
+    },
+    {
+      "name": "catalogue_publication_record_v2_guard",
+      "tableName": "catalogue_publication_record_v2",
+      "functionName": "catalogue_guard_publication_v2",
+      "definition": "CREATE TRIGGER catalogue_publication_record_v2_guard BEFORE INSERT OR DELETE OR UPDATE ON catalogue_publication_record_v2 FOR EACH ROW EXECUTE FUNCTION catalogue_guard_publication_v2()"
+    },
+    {
+      "name": "catalogue_publication_record_v2_truncate",
+      "tableName": "catalogue_publication_record_v2",
+      "functionName": "catalogue_guard_publication_v2",
+      "definition": "CREATE TRIGGER catalogue_publication_record_v2_truncate BEFORE TRUNCATE ON catalogue_publication_record_v2 FOR EACH STATEMENT EXECUTE FUNCTION catalogue_guard_publication_v2()"
+    },
+    {
+      "name": "catalogue_publication_rollback_v2_guard",
+      "tableName": "catalogue_publication_rollback_v2",
+      "functionName": "catalogue_guard_publication_v2",
+      "definition": "CREATE TRIGGER catalogue_publication_rollback_v2_guard BEFORE INSERT OR DELETE OR UPDATE ON catalogue_publication_rollback_v2 FOR EACH ROW EXECUTE FUNCTION catalogue_guard_publication_v2()"
+    },
+    {
+      "name": "catalogue_publication_rollback_v2_truncate",
+      "tableName": "catalogue_publication_rollback_v2",
+      "functionName": "catalogue_guard_publication_v2",
+      "definition": "CREATE TRIGGER catalogue_publication_rollback_v2_truncate BEFORE TRUNCATE ON catalogue_publication_rollback_v2 FOR EACH STATEMENT EXECUTE FUNCTION catalogue_guard_publication_v2()"
+    },
+    {
+      "name": "catalogue_publication_v2_guard",
+      "tableName": "catalogue_publication_v2",
+      "functionName": "catalogue_guard_publication_v2",
+      "definition": "CREATE TRIGGER catalogue_publication_v2_guard BEFORE INSERT OR DELETE OR UPDATE ON catalogue_publication_v2 FOR EACH ROW EXECUTE FUNCTION catalogue_guard_publication_v2()"
+    },
+    {
+      "name": "catalogue_publication_v2_truncate",
+      "tableName": "catalogue_publication_v2",
+      "functionName": "catalogue_guard_publication_v2",
+      "definition": "CREATE TRIGGER catalogue_publication_v2_truncate BEFORE TRUNCATE ON catalogue_publication_v2 FOR EACH STATEMENT EXECUTE FUNCTION catalogue_guard_publication_v2()"
     },
     {
       "definition": "CREATE TRIGGER catalogue_reconciliation_baseline_v2_guard BEFORE INSERT ON catalogue_reconciliation_baseline_v2 FOR EACH ROW EXECUTE FUNCTION guard_catalogue_reconciliation_evidence_v2()",
@@ -1029,6 +1397,11 @@
     "catalogue_preparation_seal_page_v2",
     "catalogue_preparation_stage_page_v2",
     "catalogue_preparation_v2",
+    "catalogue_publication_admission_v2",
+    "catalogue_publication_page_v2",
+    "catalogue_publication_record_v2",
+    "catalogue_publication_rollback_v2",
+    "catalogue_publication_v2",
     "catalogue_reconciliation_baseline_v2",
     "catalogue_reconciliation_page_v2",
     "catalogue_reconciliation_v2",
@@ -1825,6 +2198,816 @@
       "notNull": false,
       "schemaName": "public",
       "tableName": "catalogue_preparation_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "admission_sha256",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_admission_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "admitted_by",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_admission_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "batch_id",
+      "dataType": "uuid",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_admission_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "context_sha256",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_admission_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "created_at",
+      "dataType": "timestamp with time zone",
+      "defaultExpression": "clock_timestamp()",
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_admission_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "max_cutover_barcode_rows",
+      "dataType": "bigint",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_admission_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "max_cutover_bytes",
+      "dataType": "bigint",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_admission_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "max_cutover_food_rows",
+      "dataType": "bigint",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_admission_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "max_evidence_bytes",
+      "dataType": "bigint",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_admission_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "max_intermediate_bytes",
+      "dataType": "bigint",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_admission_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "max_materialization_bytes",
+      "dataType": "bigint",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_admission_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "max_records",
+      "dataType": "bigint",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_admission_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "publisher_principal",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_admission_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "receipt",
+      "dataType": "jsonb",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_admission_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "report_sha256",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_admission_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "request_document",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_admission_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "request_sha256",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_admission_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "validation_terminal_sha256",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_admission_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "batch_id",
+      "dataType": "uuid",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_page_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "first_sequence",
+      "dataType": "bigint",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_page_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "next_sequence",
+      "dataType": "bigint",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_page_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "page_number",
+      "dataType": "bigint",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_page_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "phase",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_page_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "receipt",
+      "dataType": "jsonb",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_page_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "receipt_sha256",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_page_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "record_commitment_sha256",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_page_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "request_document",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_page_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "request_sha256",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_page_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "batch_id",
+      "dataType": "uuid",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_record_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "food_id",
+      "dataType": "bigint",
+      "defaultExpression": null,
+      "notNull": false,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_record_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "food_version_id",
+      "dataType": "bigint",
+      "defaultExpression": null,
+      "notNull": false,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_record_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "import_record_id",
+      "dataType": "bigint",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_record_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "materialization_bytes",
+      "dataType": "bigint",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_record_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "materialization_sha256",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_record_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "sequence_number",
+      "dataType": "bigint",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_record_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "validated_food_sha256",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": false,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_record_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "activation_id",
+      "dataType": "bigint",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_rollback_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "actor",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_rollback_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "created_at",
+      "dataType": "timestamp with time zone",
+      "defaultExpression": "clock_timestamp()",
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_rollback_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "previous_release_id",
+      "dataType": "uuid",
+      "defaultExpression": null,
+      "notNull": false,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_rollback_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "receipt",
+      "dataType": "jsonb",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_rollback_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "request_document",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_rollback_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "request_id",
+      "dataType": "uuid",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_rollback_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "request_sha256",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_rollback_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "source_id",
+      "dataType": "bigint",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_rollback_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "target_release_id",
+      "dataType": "uuid",
+      "defaultExpression": null,
+      "notNull": false,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_rollback_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "activated_at",
+      "dataType": "timestamp with time zone",
+      "defaultExpression": null,
+      "notNull": false,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "activation_receipt",
+      "dataType": "jsonb",
+      "defaultExpression": null,
+      "notNull": false,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "activation_request_document",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": false,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "admission_sha256",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "baseline_release_id",
+      "dataType": "uuid",
+      "defaultExpression": null,
+      "notNull": false,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "batch_id",
+      "dataType": "uuid",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "begin_receipt",
+      "dataType": "jsonb",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "begin_request_document",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "context_sha256",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "created_at",
+      "dataType": "timestamp with time zone",
+      "defaultExpression": "clock_timestamp()",
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "evidence_bytes",
+      "dataType": "bigint",
+      "defaultExpression": "0",
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "finish_receipt",
+      "dataType": "jsonb",
+      "defaultExpression": null,
+      "notNull": false,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "finish_request_document",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": false,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "initial_generation",
+      "dataType": "bigint",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "intermediate_bytes",
+      "dataType": "bigint",
+      "defaultExpression": "0",
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "last_generation",
+      "dataType": "bigint",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "last_receipt_sha256",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "mapping_document",
+      "dataType": "jsonb",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "mapping_sha256",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "materialization_bytes",
+      "dataType": "bigint",
+      "defaultExpression": "0",
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "materialized_count",
+      "dataType": "bigint",
+      "defaultExpression": "0",
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "next_sequence",
+      "dataType": "bigint",
+      "defaultExpression": "0",
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "page_count",
+      "dataType": "bigint",
+      "defaultExpression": "0",
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "phase",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "publication_sha256",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "publisher_principal",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "record_commitment_sha256",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "release_id",
+      "dataType": "uuid",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "report_sha256",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "seal_sha256",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": false,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "validation_terminal_sha256",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "verification_commitment_sha256",
+      "dataType": "text",
+      "defaultExpression": null,
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "verified_materialized_count",
+      "dataType": "bigint",
+      "defaultExpression": "0",
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "verified_page_count",
+      "dataType": "bigint",
+      "defaultExpression": "0",
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "identityKind": "",
+      "generatedKind": ""
+    },
+    {
+      "columnName": "verified_sequence",
+      "dataType": "bigint",
+      "defaultExpression": "0",
+      "notNull": true,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
       "identityKind": "",
       "generatedKind": ""
     },
@@ -3328,6 +4511,440 @@
       "validated": true
     },
     {
+      "constraintType": "c",
+      "definition": "CHECK ((admission_sha256 ~ '^[0-9a-f]{64}$'::text))",
+      "name": "cat_pub_admit_v2_admission_sha256_check",
+      "tableName": "catalogue_publication_admission_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "u",
+      "definition": "UNIQUE (admission_sha256)",
+      "name": "cat_pub_admit_v2_admission_sha256_uq",
+      "tableName": "catalogue_publication_admission_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "f",
+      "definition": "FOREIGN KEY (batch_id) REFERENCES catalogue_preparation_v2(batch_id)",
+      "name": "cat_pub_admit_v2_batch_id_fk",
+      "tableName": "catalogue_publication_admission_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "p",
+      "definition": "PRIMARY KEY (batch_id)",
+      "name": "cat_pub_admit_v2_batch_id_pk",
+      "tableName": "catalogue_publication_admission_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((publisher_principal <> admitted_by))",
+      "name": "cat_pub_admit_v2_check_1",
+      "tableName": "catalogue_publication_admission_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((max_cutover_barcode_rows > 0))",
+      "name": "cat_pub_admit_v2_max_cutover_barcode_rows_check",
+      "tableName": "catalogue_publication_admission_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((max_cutover_bytes > 0))",
+      "name": "cat_pub_admit_v2_max_cutover_bytes_check",
+      "tableName": "catalogue_publication_admission_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((max_cutover_food_rows > 0))",
+      "name": "cat_pub_admit_v2_max_cutover_food_rows_check",
+      "tableName": "catalogue_publication_admission_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((max_evidence_bytes > 0))",
+      "name": "cat_pub_admit_v2_max_evidence_bytes_check",
+      "tableName": "catalogue_publication_admission_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((max_intermediate_bytes > 0))",
+      "name": "cat_pub_admit_v2_max_intermediate_bytes_check",
+      "tableName": "catalogue_publication_admission_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((max_materialization_bytes > 0))",
+      "name": "cat_pub_admit_v2_max_materialization_bytes_check",
+      "tableName": "catalogue_publication_admission_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((max_records > 0))",
+      "name": "cat_pub_admit_v2_max_records_check",
+      "tableName": "catalogue_publication_admission_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK (((octet_length(request_document) >= 1) AND (octet_length(request_document) <= 65536)))",
+      "name": "cat_pub_admit_v2_request_document_check",
+      "tableName": "catalogue_publication_admission_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "f",
+      "definition": "FOREIGN KEY (batch_id) REFERENCES catalogue_publication_v2(batch_id)",
+      "name": "cat_pub_page_v2_batch_id_fk",
+      "tableName": "catalogue_publication_page_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK (((next_sequence > first_sequence) AND ((next_sequence - first_sequence) <= 250)))",
+      "name": "cat_pub_page_v2_check_3",
+      "tableName": "catalogue_publication_page_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((first_sequence >= 0))",
+      "name": "cat_pub_page_v2_first_sequence_check",
+      "tableName": "catalogue_publication_page_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((page_number >= 0))",
+      "name": "cat_pub_page_v2_page_number_check",
+      "tableName": "catalogue_publication_page_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((phase = ANY (ARRAY['materialize'::text, 'verify'::text])))",
+      "name": "cat_pub_page_v2_phase_check",
+      "tableName": "catalogue_publication_page_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "p",
+      "definition": "PRIMARY KEY (batch_id, phase, page_number)",
+      "name": "cat_pub_page_v2_pk_1",
+      "tableName": "catalogue_publication_page_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK (((octet_length(request_document) >= 1) AND (octet_length(request_document) <= 65536)))",
+      "name": "cat_pub_page_v2_request_document_check",
+      "tableName": "catalogue_publication_page_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "u",
+      "definition": "UNIQUE (batch_id, phase, first_sequence)",
+      "name": "cat_pub_page_v2_uq_2",
+      "tableName": "catalogue_publication_page_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "f",
+      "definition": "FOREIGN KEY (batch_id) REFERENCES catalogue_publication_v2(batch_id)",
+      "name": "cat_pub_record_v2_batch_id_fk",
+      "tableName": "catalogue_publication_record_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((((food_id IS NULL) = (food_version_id IS NULL)) AND ((food_id IS NULL) = (validated_food_sha256 IS NULL))))",
+      "name": "cat_pub_record_v2_check_3",
+      "tableName": "catalogue_publication_record_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "f",
+      "definition": "FOREIGN KEY (batch_id, sequence_number) REFERENCES catalogue_validation_record_v2(batch_id, sequence_number)",
+      "name": "cat_pub_record_v2_fk_2",
+      "tableName": "catalogue_publication_record_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "f",
+      "definition": "FOREIGN KEY (food_id) REFERENCES food(id)",
+      "name": "cat_pub_record_v2_food_id_fk",
+      "tableName": "catalogue_publication_record_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "f",
+      "definition": "FOREIGN KEY (food_version_id) REFERENCES food_version(id)",
+      "name": "cat_pub_record_v2_food_version_id_fk",
+      "tableName": "catalogue_publication_record_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "u",
+      "definition": "UNIQUE (food_version_id)",
+      "name": "cat_pub_record_v2_food_version_id_uq",
+      "tableName": "catalogue_publication_record_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "f",
+      "definition": "FOREIGN KEY (import_record_id) REFERENCES food_import_record(id)",
+      "name": "cat_pub_record_v2_import_record_id_fk",
+      "tableName": "catalogue_publication_record_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "u",
+      "definition": "UNIQUE (import_record_id)",
+      "name": "cat_pub_record_v2_import_record_id_uq",
+      "tableName": "catalogue_publication_record_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((materialization_bytes > 0))",
+      "name": "cat_pub_record_v2_materialization_bytes_check",
+      "tableName": "catalogue_publication_record_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "p",
+      "definition": "PRIMARY KEY (batch_id, sequence_number)",
+      "name": "cat_pub_record_v2_pk_1",
+      "tableName": "catalogue_publication_record_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "f",
+      "definition": "FOREIGN KEY (activation_id) REFERENCES food_source_release_activation(id)",
+      "name": "cat_pub_rollback_v2_activation_id_fk",
+      "tableName": "catalogue_publication_rollback_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "u",
+      "definition": "UNIQUE (activation_id)",
+      "name": "cat_pub_rollback_v2_activation_id_uq",
+      "tableName": "catalogue_publication_rollback_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "f",
+      "definition": "FOREIGN KEY (previous_release_id) REFERENCES food_source_release(id)",
+      "name": "cat_pub_rollback_v2_previous_release_id_fk",
+      "tableName": "catalogue_publication_rollback_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK (((octet_length(request_document) >= 1) AND (octet_length(request_document) <= 65536)))",
+      "name": "cat_pub_rollback_v2_request_document_check",
+      "tableName": "catalogue_publication_rollback_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "p",
+      "definition": "PRIMARY KEY (request_id)",
+      "name": "cat_pub_rollback_v2_request_id_pk",
+      "tableName": "catalogue_publication_rollback_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "f",
+      "definition": "FOREIGN KEY (source_id) REFERENCES food_source(id)",
+      "name": "cat_pub_rollback_v2_source_id_fk",
+      "tableName": "catalogue_publication_rollback_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "f",
+      "definition": "FOREIGN KEY (target_release_id) REFERENCES food_source_release(id)",
+      "name": "cat_pub_rollback_v2_target_release_id_fk",
+      "tableName": "catalogue_publication_rollback_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "f",
+      "definition": "FOREIGN KEY (admission_sha256) REFERENCES catalogue_publication_admission_v2(admission_sha256)",
+      "name": "cat_pub_v2_admission_sha256_fk",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "f",
+      "definition": "FOREIGN KEY (baseline_release_id) REFERENCES food_source_release(id)",
+      "name": "cat_pub_v2_baseline_release_id_fk",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "f",
+      "definition": "FOREIGN KEY (batch_id) REFERENCES catalogue_publication_admission_v2(batch_id)",
+      "name": "cat_pub_v2_batch_id_fk",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "p",
+      "definition": "PRIMARY KEY (batch_id)",
+      "name": "cat_pub_v2_batch_id_pk",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK (((seal_sha256 IS NOT NULL) = (phase = ANY (ARRAY['sealed'::text, 'activated'::text]))))",
+      "name": "cat_pub_v2_check_1",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK (((activated_at IS NOT NULL) = (phase = 'activated'::text)))",
+      "name": "cat_pub_v2_check_2",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK (((activation_receipt IS NOT NULL) = (phase = 'activated'::text)))",
+      "name": "cat_pub_v2_check_3",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK (((finish_receipt IS NOT NULL) = (phase = ANY (ARRAY['sealed'::text, 'activated'::text]))))",
+      "name": "cat_pub_v2_check_4",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((evidence_bytes >= 0))",
+      "name": "cat_pub_v2_evidence_bytes_check",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((initial_generation >= 0))",
+      "name": "cat_pub_v2_initial_generation_check",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((intermediate_bytes >= 0))",
+      "name": "cat_pub_v2_intermediate_bytes_check",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((last_generation >= initial_generation))",
+      "name": "cat_pub_v2_last_generation_check",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK (((jsonb_typeof(mapping_document) = 'array'::text) AND (jsonb_array_length(mapping_document) <= 10000) AND (octet_length((mapping_document)::text) <= 4194304)))",
+      "name": "cat_pub_v2_mapping_document_check",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((materialization_bytes >= 0))",
+      "name": "cat_pub_v2_materialization_bytes_check",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((materialized_count >= 0))",
+      "name": "cat_pub_v2_materialized_count_check",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((next_sequence >= 0))",
+      "name": "cat_pub_v2_next_sequence_check",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((page_count >= 0))",
+      "name": "cat_pub_v2_page_count_check",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((phase = ANY (ARRAY['materializing'::text, 'verifying'::text, 'sealed'::text, 'activated'::text])))",
+      "name": "cat_pub_v2_phase_check",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "u",
+      "definition": "UNIQUE (publication_sha256)",
+      "name": "cat_pub_v2_publication_sha256_uq",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "f",
+      "definition": "FOREIGN KEY (release_id) REFERENCES food_source_release(id)",
+      "name": "cat_pub_v2_release_id_fk",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "u",
+      "definition": "UNIQUE (release_id)",
+      "name": "cat_pub_v2_release_id_uq",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((verified_materialized_count >= 0))",
+      "name": "cat_pub_v2_verified_materialized_count_check",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((verified_page_count >= 0))",
+      "name": "cat_pub_v2_verified_page_count_check",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
+      "constraintType": "c",
+      "definition": "CHECK ((verified_sequence >= 0))",
+      "name": "cat_pub_v2_verified_sequence_check",
+      "tableName": "catalogue_publication_v2",
+      "validated": true
+    },
+    {
       "constraintType": "u",
       "definition": "UNIQUE (batch_id, source_food_key)",
       "name": "catalogue_reconciliation_baseline__batch_id_source_food_key_key",
@@ -3839,6 +5456,186 @@
     },
     {
       "accessMethod": "btree",
+      "definition": "CREATE UNIQUE INDEX cat_pub_admit_v2_admission_sha256_uq ON public.catalogue_publication_admission_v2 USING btree (admission_sha256)",
+      "isPrimary": false,
+      "isReady": true,
+      "isUnique": true,
+      "isValid": true,
+      "keyAttributeCount": 1,
+      "keyExpression": "admission_sha256",
+      "name": "cat_pub_admit_v2_admission_sha256_uq",
+      "predicate": null,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_admission_v2",
+      "totalAttributeCount": 1
+    },
+    {
+      "accessMethod": "btree",
+      "definition": "CREATE UNIQUE INDEX cat_pub_admit_v2_batch_id_pk ON public.catalogue_publication_admission_v2 USING btree (batch_id)",
+      "isPrimary": true,
+      "isReady": true,
+      "isUnique": true,
+      "isValid": true,
+      "keyAttributeCount": 1,
+      "keyExpression": "batch_id",
+      "name": "cat_pub_admit_v2_batch_id_pk",
+      "predicate": null,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_admission_v2",
+      "totalAttributeCount": 1
+    },
+    {
+      "accessMethod": "btree",
+      "definition": "CREATE UNIQUE INDEX cat_pub_page_v2_pk_1 ON public.catalogue_publication_page_v2 USING btree (batch_id, phase, page_number)",
+      "isPrimary": true,
+      "isReady": true,
+      "isUnique": true,
+      "isValid": true,
+      "keyAttributeCount": 3,
+      "keyExpression": "batch_id",
+      "name": "cat_pub_page_v2_pk_1",
+      "predicate": null,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_page_v2",
+      "totalAttributeCount": 3
+    },
+    {
+      "accessMethod": "btree",
+      "definition": "CREATE UNIQUE INDEX cat_pub_page_v2_uq_2 ON public.catalogue_publication_page_v2 USING btree (batch_id, phase, first_sequence)",
+      "isPrimary": false,
+      "isReady": true,
+      "isUnique": true,
+      "isValid": true,
+      "keyAttributeCount": 3,
+      "keyExpression": "batch_id",
+      "name": "cat_pub_page_v2_uq_2",
+      "predicate": null,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_page_v2",
+      "totalAttributeCount": 3
+    },
+    {
+      "accessMethod": "btree",
+      "definition": "CREATE UNIQUE INDEX cat_pub_record_v2_food_version_id_uq ON public.catalogue_publication_record_v2 USING btree (food_version_id)",
+      "isPrimary": false,
+      "isReady": true,
+      "isUnique": true,
+      "isValid": true,
+      "keyAttributeCount": 1,
+      "keyExpression": "food_version_id",
+      "name": "cat_pub_record_v2_food_version_id_uq",
+      "predicate": null,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_record_v2",
+      "totalAttributeCount": 1
+    },
+    {
+      "accessMethod": "btree",
+      "definition": "CREATE UNIQUE INDEX cat_pub_record_v2_import_record_id_uq ON public.catalogue_publication_record_v2 USING btree (import_record_id)",
+      "isPrimary": false,
+      "isReady": true,
+      "isUnique": true,
+      "isValid": true,
+      "keyAttributeCount": 1,
+      "keyExpression": "import_record_id",
+      "name": "cat_pub_record_v2_import_record_id_uq",
+      "predicate": null,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_record_v2",
+      "totalAttributeCount": 1
+    },
+    {
+      "accessMethod": "btree",
+      "definition": "CREATE UNIQUE INDEX cat_pub_record_v2_pk_1 ON public.catalogue_publication_record_v2 USING btree (batch_id, sequence_number)",
+      "isPrimary": true,
+      "isReady": true,
+      "isUnique": true,
+      "isValid": true,
+      "keyAttributeCount": 2,
+      "keyExpression": "batch_id",
+      "name": "cat_pub_record_v2_pk_1",
+      "predicate": null,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_record_v2",
+      "totalAttributeCount": 2
+    },
+    {
+      "accessMethod": "btree",
+      "definition": "CREATE UNIQUE INDEX cat_pub_rollback_v2_activation_id_uq ON public.catalogue_publication_rollback_v2 USING btree (activation_id)",
+      "isPrimary": false,
+      "isReady": true,
+      "isUnique": true,
+      "isValid": true,
+      "keyAttributeCount": 1,
+      "keyExpression": "activation_id",
+      "name": "cat_pub_rollback_v2_activation_id_uq",
+      "predicate": null,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_rollback_v2",
+      "totalAttributeCount": 1
+    },
+    {
+      "accessMethod": "btree",
+      "definition": "CREATE UNIQUE INDEX cat_pub_rollback_v2_request_id_pk ON public.catalogue_publication_rollback_v2 USING btree (request_id)",
+      "isPrimary": true,
+      "isReady": true,
+      "isUnique": true,
+      "isValid": true,
+      "keyAttributeCount": 1,
+      "keyExpression": "request_id",
+      "name": "cat_pub_rollback_v2_request_id_pk",
+      "predicate": null,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_rollback_v2",
+      "totalAttributeCount": 1
+    },
+    {
+      "accessMethod": "btree",
+      "definition": "CREATE UNIQUE INDEX cat_pub_v2_batch_id_pk ON public.catalogue_publication_v2 USING btree (batch_id)",
+      "isPrimary": true,
+      "isReady": true,
+      "isUnique": true,
+      "isValid": true,
+      "keyAttributeCount": 1,
+      "keyExpression": "batch_id",
+      "name": "cat_pub_v2_batch_id_pk",
+      "predicate": null,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "totalAttributeCount": 1
+    },
+    {
+      "accessMethod": "btree",
+      "definition": "CREATE UNIQUE INDEX cat_pub_v2_publication_sha256_uq ON public.catalogue_publication_v2 USING btree (publication_sha256)",
+      "isPrimary": false,
+      "isReady": true,
+      "isUnique": true,
+      "isValid": true,
+      "keyAttributeCount": 1,
+      "keyExpression": "publication_sha256",
+      "name": "cat_pub_v2_publication_sha256_uq",
+      "predicate": null,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "totalAttributeCount": 1
+    },
+    {
+      "accessMethod": "btree",
+      "definition": "CREATE UNIQUE INDEX cat_pub_v2_release_id_uq ON public.catalogue_publication_v2 USING btree (release_id)",
+      "isPrimary": false,
+      "isReady": true,
+      "isUnique": true,
+      "isValid": true,
+      "keyAttributeCount": 1,
+      "keyExpression": "release_id",
+      "name": "cat_pub_v2_release_id_uq",
+      "predicate": null,
+      "schemaName": "public",
+      "tableName": "catalogue_publication_v2",
+      "totalAttributeCount": 1
+    },
+    {
+      "accessMethod": "btree",
       "definition": "CREATE UNIQUE INDEX catalogue_reconciliation_baseline__batch_id_source_food_key_key ON public.catalogue_reconciliation_baseline_v2 USING btree (batch_id, source_food_key)",
       "isPrimary": false,
       "isReady": true,
@@ -4016,6 +5813,13 @@
       "schemaName": "public",
       "tableName": "food_import_batch",
       "totalAttributeCount": 1
+    }
+  ],
+  "views": [
+    {
+      "name": "promoted_food_search_catalogue_v1",
+      "query": "select\n  food.id as food_id,\n  version.id as food_version_id,\n  version.version_number,\n  food.kind,\n  food.source_food_key,\n  version.name,\n  version.normalized_name,\n  version.brand_name,\n  version.description,\n  version.language_tag,\n  version.market_code,\n  version.data_quality,\n  version.basis_quantity,\n  version.basis_unit,\n  version.source_modified_at,\n  source.id as food_source_id,\n  source.code as source_code,\n  source.display_name as source_display_name,\n  source.license_expression,\n  source.attribution_required,\n  source.attribution_text,\n  release.id as source_release_id,\n  release.release_key as source_release_key,\n  release.artifact_sha256 as source_artifact_sha256\nfrom food\njoin food_version as version\n  on version.food_id = food.id\n  and version.id = food.current_version_id\njoin food_source as source\n  on source.id = food.food_source_id\n  and source.active_release_id = version.source_release_id\njoin food_source_release as release\n  on release.id = source.active_release_id\n  and release.food_source_id = source.id\nwhere food.kind in ('generic', 'branded')\n  and food.visibility = 'public'\n  and food.owner_user_id is null\n  and food.archived_at is null\n  and version.data_quality <> 'quarantined'\n  and octet_length(version.name) <= 500\n  and octet_length(version.normalized_name) <= 512\n  and (\n    version.brand_name is null\n    or (char_length(btrim(version.brand_name)) > 0 and octet_length(version.brand_name) <= 300)\n  )\n  and version.source_release_id is not null\n  and source.active\n  and source.code ~ '^[A-Z][A-Z0-9_]{1,31}$'\n  and char_length(btrim(source.display_name)) > 0\n  and octet_length(source.display_name) <= 200\n  and char_length(btrim(source.license_expression)) > 0\n  and octet_length(source.license_expression) <= 256\n  and char_length(btrim(source.attribution_text)) > 0\n  and octet_length(source.attribution_text) <= 2000\n  and source.commercial_use_allowed is true\n  and source.redistribution_allowed is true\n  and source.rights_review_status in ('approved', 'restricted')\n  and source.rights_reviewed_at is not null\n  and length(btrim(source.rights_reviewed_by)) > 0\n  and release.status = 'promoted'\n  and release.promoted_at is not null\n  and release.rights_manifest_sha256 is not null\n  and (exists (\n    select 1\n    from food_import_batch as batch\n    join food_import_record as record\n      on record.batch_id = batch.id\n      and record.food_version_id = version.id\n      and record.validation_status = 'materialized'\n    where batch.food_source_id = source.id\n      and batch.release_id = release.id\n      and batch.status = 'completed'\n      and batch.completed_at is not null\n      and not exists (select 1 from catalogue_preparation_v2 preparation where preparation.batch_id=batch.id)\n  ) or exists (\n    select 1 from catalogue_publication_v2 publication\n    join catalogue_publication_record_v2 materialized on materialized.batch_id=publication.batch_id\n      and materialized.food_id=food.id and materialized.food_version_id=version.id\n    join catalogue_validation_record_v2 validated on validated.batch_id=materialized.batch_id\n      and validated.sequence_number=materialized.sequence_number and validated.validation_status='valid'\n      and validated.validated_food_sha256=materialized.validated_food_sha256\n    join catalogue_validation_context_v2 validation on validation.batch_id=publication.batch_id\n      and validation.phase='validated' and validation.terminal_sha256=publication.validation_terminal_sha256\n    join catalogue_reconciliation_v2 reconciliation on reconciliation.batch_id=publication.batch_id\n      and reconciliation.phase='complete' and reconciliation.context_sha256=publication.context_sha256\n      and reconciliation.terminal_sha256=publication.report_sha256\n      and reconciliation.validation_terminal_sha256=validation.terminal_sha256\n    join catalogue_preparation_v2 preparation on preparation.batch_id=publication.batch_id and preparation.phase='sealed'\n    join food_import_batch batch on batch.id=publication.batch_id and batch.food_source_id=source.id\n    join food_source_release_activation activation on activation.import_batch_id=publication.batch_id\n      and activation.food_source_id=source.id and activation.release_id=release.id\n      and activation.operation='activate'\n      and activation.database_principal=publication.publisher_principal\n      and activation.database_capability_role='nutrition_catalogue_promote_activate'\n      and activation.id::text=publication.activation_receipt->>'activationId'\n    where publication.release_id=release.id and publication.phase='activated'\n      and publication.activated_at is not null and publication.seal_sha256 is not null\n      and publication.finish_receipt is not null and publication.activation_receipt is not null\n      and publication.next_sequence=preparation.staged_count\n      and publication.verified_sequence=publication.next_sequence\n      and publication.verified_page_count=publication.page_count\n      and publication.materialized_count=validation.valid_count\n      and publication.verified_materialized_count=publication.materialized_count\n      and batch.release_class='live-reviewed' and release.release_class='live-reviewed'\n      and publication.activation_receipt->>'activeReleaseId'=release.id::text\n      and release.validation_summary->>'publicationProtocolVersion'='2'\n      and release.validation_summary->>'publicationSha256'=publication.publication_sha256\n      and release.validation_summary->>'batchId'=batch.id::text\n  ))",
+      "sourceSha256": "9fc070d1ac2427474187c4a035f77e7e5729ae867d0243202dd7fd1896c20f73"
     }
   ]
 }

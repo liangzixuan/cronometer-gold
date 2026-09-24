@@ -7,6 +7,7 @@ import {
   CATALOGUE_PAGED_INDEX_POLICY,
   CATALOGUE_PAGED_TABLES,
   CATALOGUE_PAGED_TRIGGER_POLICY,
+  CATALOGUE_PAGED_VIEW_POLICY,
 } from "./catalogue-paged-authority-policy.js";
 
 import { canonicalJson } from "./catalogue-validation.js";
@@ -46,11 +47,11 @@ export const CATALOGUE_PROMOTION_FUNCTION_SOURCE_SHA256 =
 export const CATALOGUE_PROMOTION_V1_FUNCTION_SOURCE_SHA256 =
   "2d5733cf34f2119db2e18564469fc76adf892172a936b1bfcbd21b3899629c96";
 export const CATALOGUE_ROLLBACK_FUNCTION_SOURCE_SHA256 =
-  "8946f31585a418f750601e35621b06ac938a8c466f26fddc1a123cd6c2df4ffd";
+  "b9bda857bcce39b37ee33728198fe8d15b112792fc9c1cb33c921a6ab1113d21";
 export const CATALOGUE_ROLLBACK_V1_FUNCTION_SOURCE_SHA256 =
-  "a2cf554f00f20d13720e268e3778eca9e26064da34291befa9b75f3dbe55b915";
+  "1427d676a8322e2a83b436c70264ff6f18ebe2f793aceb9e138b766403caa303";
 export const CATALOGUE_ACTIVATION_GUARD_SOURCE_SHA256 =
-  "d46f53aeffa6469eada5461ab59bd9c23d43bf9aab77704c61b21c44291ae028";
+  "54f0413a565c93fc6d76846873844a03488594580250ba2bc1c9f4117d3ab68a";
 export const CATALOGUE_COMPUTE_STAGING_SEAL_FUNCTION_SOURCE_SHA256 =
   "e7dbe4dc44ca8cef1183b966384000a3a252e4f92cc644091d46281e04d91822";
 export const CATALOGUE_OBSERVE_VALIDATION_FUNCTION_SOURCE_SHA256 =
@@ -326,7 +327,14 @@ export interface CatalogueAuthorityFunctionPolicy {
   readonly leakproof: boolean;
   readonly name: string;
   readonly parallel: string;
-  readonly resultType: "bigint" | "boolean" | "jsonb" | "text" | "trigger" | "void";
+  readonly resultType:
+    | "bigint"
+    | "boolean"
+    | "jsonb"
+    | "text"
+    | "trigger"
+    | "void"
+    | "TABLE(food_id bigint, food_version_id bigint, gtin text, market_code text)";
   readonly securityDefiner: boolean;
   readonly sourceSha256: string;
   readonly strict: boolean;
@@ -819,6 +827,7 @@ export const CATALOGUE_AUTHORITY_FUNCTION_POLICY: readonly CatalogueAuthorityFun
 ];
 
 export const CATALOGUE_AUTHORITY_PROTECTED_TABLES = [
+  ...CATALOGUE_PAGED_VIEW_POLICY.map((view) => view.name),
   ...CATALOGUE_PAGED_TABLES,
   "nutrient",
   "source_nutrient_map",
@@ -1252,7 +1261,7 @@ export interface CatalogueAuthorityDeploymentPolicy {
   readonly promotionFunctionSourceSha256: string;
   readonly reviewerLogins: Readonly<Record<CatalogueReviewerClass, string>>;
   readonly rollbackFunctionSourceSha256: string;
-  readonly schemaVersion: 7;
+  readonly schemaVersion: 8;
   readonly stageBatchFunctionSourceSha256: string;
   readonly stageParserReportFunctionSourceSha256: string;
   readonly stageRecordChunkFunctionSourceSha256: string;
@@ -1401,7 +1410,15 @@ export interface CatalogueAuthorityIndexEvidence {
   readonly totalAttributeCount: number;
 }
 
+export interface CatalogueAuthorityViewEvidence {
+  readonly name: string;
+  readonly sourceSha256: string;
+  readonly definitionMatches: boolean;
+  readonly options: readonly string[];
+}
+
 export interface CatalogueAuthorityDeploymentEvidence {
+  readonly authorityViews: readonly CatalogueAuthorityViewEvidence[];
   readonly applicationSchema: {
     readonly acl: readonly CatalogueAclEvidence[];
     readonly name: string;
@@ -1435,7 +1452,7 @@ export interface CatalogueAuthorityDeploymentEvidence {
   readonly nonSystemSchemas: readonly string[];
   readonly policySha256: string;
   readonly relations: readonly CatalogueRelationEvidence[];
-  readonly schemaVersion: 7;
+  readonly schemaVersion: 8;
   readonly types: readonly CatalogueTypeEvidence[];
 }
 
@@ -1473,7 +1490,7 @@ export interface CatalogueAuthorityCanaryEvidence {
     readonly canary: CatalogueAuthorityCanaryName;
     readonly sqlstate: "23503" | "42501";
   }[];
-  readonly schemaVersion: 7;
+  readonly schemaVersion: 8;
   readonly structure: CatalogueAuthorityDeploymentStructureEvidence;
 }
 
@@ -1502,7 +1519,7 @@ export function parseCatalogueAuthorityDeploymentPolicy(
     "stageValidateGuardSourceSha256",
     "validateBatchFunctionSourceSha256",
   ]);
-  if (policy.policyKind !== "catalogue-authority-deployment" || policy.schemaVersion !== 7) {
+  if (policy.policyKind !== "catalogue-authority-deployment" || policy.schemaVersion !== 8) {
     throw new Error("Catalogue authority deployment policy identity is unsupported");
   }
   if (
@@ -1612,7 +1629,7 @@ export function parseCatalogueAuthorityDeploymentPolicy(
     promotionFunctionSourceSha256,
     reviewerLogins,
     rollbackFunctionSourceSha256,
-    schemaVersion: 7,
+    schemaVersion: 8,
     stageBatchFunctionSourceSha256,
     stageParserReportFunctionSourceSha256,
     stageRecordChunkFunctionSourceSha256,
@@ -1650,6 +1667,7 @@ export function catalogueAuthorityDeploymentStructure(
     authorityConstraints: evidence.authorityConstraints,
     authorityFrozenColumns: evidence.authorityFrozenColumns,
     authorityIndexes: evidence.authorityIndexes,
+    authorityViews: evidence.authorityViews,
     capabilityRoles: evidence.capabilityRoles,
     columnAcls: evidence.columnAcls,
     database: {
@@ -1680,7 +1698,7 @@ export function assertCatalogueAuthorityDeploymentEvidence(
   evidence: CatalogueAuthorityDeploymentEvidence,
 ): void {
   if (
-    evidence.schemaVersion !== 7 ||
+    evidence.schemaVersion !== 8 ||
     evidence.policySha256 !== catalogueAuthorityDeploymentPolicySha256(policy)
   ) {
     throw new Error("Catalogue authority deployment evidence identity differs");
@@ -1851,7 +1869,7 @@ export function assertCatalogueAuthorityCanaryEvidence(
   evidence: CatalogueAuthorityCanaryEvidence,
 ): void {
   if (
-    evidence.schemaVersion !== 7 ||
+    evidence.schemaVersion !== 8 ||
     evidence.policySha256 !== catalogueAuthorityDeploymentPolicySha256(policy)
   ) {
     throw new Error("Catalogue authority canary evidence identity differs");
@@ -1942,6 +1960,19 @@ function assertCatalogueAuthorityStructure(
   ) {
     throw new Error("Catalogue authority index differs from policy");
   }
+  if (
+    canonicalJson(evidence.authorityViews as unknown as JsonValue) !==
+    canonicalJson(
+      CATALOGUE_PAGED_VIEW_POLICY.map(({ name, sourceSha256 }) => ({
+        name,
+        sourceSha256,
+        definitionMatches: true,
+        options: [],
+      })) as unknown as JsonValue,
+    )
+  ) {
+    throw new Error("Catalogue public eligibility view differs from source policy");
+  }
   if (evidence.defaultAcls.length !== 0) {
     throw new Error("Catalogue authority database has unreviewed default ACLs");
   }
@@ -1958,6 +1989,7 @@ function assertCatalogueAuthorityStructure(
     throw new Error("Catalogue authority relation set is malformed");
   }
   for (const [name, kind] of [
+    ["promoted_food_search_catalogue_v1", "v"],
     ["food_import_batch", "r"],
     ["food_import_approval", "r"],
     ["food_import_record", "r"],

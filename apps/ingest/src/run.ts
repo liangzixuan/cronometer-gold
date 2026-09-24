@@ -62,6 +62,10 @@ import {
 
 import { flagOption, optionalOption, parseArguments, requiredOption } from "./arguments.js";
 import { type CataloguePagedCommand, runCataloguePagedCommand } from "./catalogue-paged-command.js";
+import {
+  type CataloguePublicationCommand,
+  runCataloguePublicationCommand,
+} from "./catalogue-publication-command.js";
 import { runCatalogueValidationCommand } from "./catalogue-validation-command.js";
 import {
   assertCatalogueValidationRequestDestination,
@@ -203,6 +207,18 @@ export async function runCommand(argv: readonly string[], io: CommandIo): Promis
         return 0;
       case "cnf inspect":
         await inspectCnfCommand(argv, arguments_.positionals, arguments_.options, io);
+        return 0;
+      case "catalogue prepare-publication":
+      case "catalogue submit-publication":
+      case "catalogue read-publication":
+        await runCataloguePublicationCommand(
+          command.slice("catalogue ".length) as CataloguePublicationCommand,
+          argv,
+          arguments_.positionals,
+          arguments_.options,
+          io,
+          WORKSPACE_ROOT,
+        );
         return 0;
       case "catalogue validate-paged":
       case "catalogue retry-paged-validation":
@@ -3977,6 +3993,9 @@ function usage(): string {
     "  ingest catalogue prepare-paged-approval <batch-id> --role <data|quality|rights> --external-principal-id <reviewer-login> --manifest-sha256 <sha256> --validation-terminal-sha256 <sha256> --report-sha256 <sha256> --context-sha256 <sha256> --approval-reference <reference> --request-out <private-json>",
     "  ingest catalogue submit-paged-approval <batch-id> --request <private-json> --request-sha256 <sha256> --request-bytes <bytes>",
     "  ingest catalogue read-paged-report <batch-id> --role <data|quality|rights> --external-principal-id <reviewer-login> --report-sha256 <sha256> --page-number <positive-count> --page-out <private-json>",
+    "  ingest catalogue prepare-publication <admit|begin|materialize|verify|finish|activate|rollback> <explicit operation fields> --request-out <private-json>",
+    "  ingest catalogue submit-publication <operation> --request <private-json> --request-sha256 <sha256> --request-bytes <bytes> --receipt-out <private-json>",
+    "  ingest catalogue read-publication <batch-id> --authority <publisher|rollback>",
     "  ingest catalogue mappings <reviewed-mapping.json>",
     "  ingest catalogue register-source <import-ready-manifest> --evidence-bundle <bundle.json>",
     "  ingest catalogue reconcile --batch-id <uuid> --expected-current-release-id <uuid|none> --expected-validation-digest <lowercase-sha256> --report-out .local-data/evidence/catalogue-reconciliation/<file> [--validation-request .local-data/evidence/catalogue-validation/<name>.json --validation-request-sha256 <sha256> --validation-request-bytes <bytes>]",

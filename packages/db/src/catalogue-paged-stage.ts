@@ -608,7 +608,11 @@ export async function finishCataloguePreparationSealV2(
 /** Separate client preflight; SQL repeats these checks on every mutation. */
 export async function assertCataloguePreparationPrincipalV2(
   database: Kysely<Database>,
-  capability: "nutrition_catalogue_stage" | "nutrition_catalogue_approve_quality",
+  capability:
+    | "nutrition_catalogue_stage"
+    | "nutrition_catalogue_approve_quality"
+    | "nutrition_catalogue_promote_activate"
+    | "nutrition_catalogue_rollback",
 ): Promise<string> {
   const row = result(
     (

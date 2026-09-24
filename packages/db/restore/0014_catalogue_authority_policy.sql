@@ -194,6 +194,11 @@ begin
           'catalogue_preparation_seal_page_v2',
           'catalogue_preparation_stage_page_v2',
           'catalogue_preparation_v2',
+          'catalogue_publication_admission_v2',
+          'catalogue_publication_page_v2',
+          'catalogue_publication_record_v2',
+          'catalogue_publication_rollback_v2',
+          'catalogue_publication_v2',
           'catalogue_reconciliation_baseline_v2',
           'catalogue_reconciliation_page_v2',
           'catalogue_reconciliation_v2',
@@ -453,15 +458,15 @@ END) IS TRUE)$constraint$
       using errcode = '55000';
   end if;
 
-  -- ADR0104 companion structure is fixed policy. Readiness does not learn it
+  -- ADR0104/ADR0105 companion structure is fixed policy. Readiness does not learn it
   -- from restored state. Every new column, constraint and index must match.
   if (select count(*) from pg_class c join pg_namespace n on n.oid=c.relnamespace
-      where n.nspname=target_schema and c.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') and c.relkind='r') <> 14 then
+      where n.nspname=target_schema and c.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_publication_admission_v2','catalogue_publication_page_v2','catalogue_publication_record_v2','catalogue_publication_rollback_v2','catalogue_publication_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') and c.relkind='r') <> 19 then
     raise exception 'paged catalogue companion relation set differs' using errcode='55000';
   end if;
   if (select count(*) from pg_attribute a join pg_class c on c.oid=a.attrelid
       join pg_namespace n on n.oid=c.relnamespace where n.nspname=target_schema
-      and c.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') and a.attnum>0 and not a.attisdropped) <> 172 or exists (
+      and c.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_publication_admission_v2','catalogue_publication_page_v2','catalogue_publication_record_v2','catalogue_publication_rollback_v2','catalogue_publication_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') and a.attnum>0 and not a.attisdropped) <> 253 or exists (
     select 1 from (values
       ('catalogue_paged_approval_v2', 'approval_reference', 'text', true, null),
       ('catalogue_paged_approval_v2', 'approval_role', 'text', true, null),
@@ -542,6 +547,87 @@ END) IS TRUE)$constraint$
       ('catalogue_preparation_v2', 'staging_seal_sha256', 'text', false, null),
       ('catalogue_preparation_v2', 'terminal_document', 'text', false, null),
       ('catalogue_preparation_v2', 'terminal_receipt', 'jsonb', false, null),
+      ('catalogue_publication_admission_v2', 'admission_sha256', 'text', true, null),
+      ('catalogue_publication_admission_v2', 'admitted_by', 'text', true, null),
+      ('catalogue_publication_admission_v2', 'batch_id', 'uuid', true, null),
+      ('catalogue_publication_admission_v2', 'context_sha256', 'text', true, null),
+      ('catalogue_publication_admission_v2', 'created_at', 'timestamp with time zone', true, 'clock_timestamp()'),
+      ('catalogue_publication_admission_v2', 'max_cutover_barcode_rows', 'bigint', true, null),
+      ('catalogue_publication_admission_v2', 'max_cutover_bytes', 'bigint', true, null),
+      ('catalogue_publication_admission_v2', 'max_cutover_food_rows', 'bigint', true, null),
+      ('catalogue_publication_admission_v2', 'max_evidence_bytes', 'bigint', true, null),
+      ('catalogue_publication_admission_v2', 'max_intermediate_bytes', 'bigint', true, null),
+      ('catalogue_publication_admission_v2', 'max_materialization_bytes', 'bigint', true, null),
+      ('catalogue_publication_admission_v2', 'max_records', 'bigint', true, null),
+      ('catalogue_publication_admission_v2', 'publisher_principal', 'text', true, null),
+      ('catalogue_publication_admission_v2', 'receipt', 'jsonb', true, null),
+      ('catalogue_publication_admission_v2', 'report_sha256', 'text', true, null),
+      ('catalogue_publication_admission_v2', 'request_document', 'text', true, null),
+      ('catalogue_publication_admission_v2', 'request_sha256', 'text', true, null),
+      ('catalogue_publication_admission_v2', 'validation_terminal_sha256', 'text', true, null),
+      ('catalogue_publication_page_v2', 'batch_id', 'uuid', true, null),
+      ('catalogue_publication_page_v2', 'first_sequence', 'bigint', true, null),
+      ('catalogue_publication_page_v2', 'next_sequence', 'bigint', true, null),
+      ('catalogue_publication_page_v2', 'page_number', 'bigint', true, null),
+      ('catalogue_publication_page_v2', 'phase', 'text', true, null),
+      ('catalogue_publication_page_v2', 'receipt', 'jsonb', true, null),
+      ('catalogue_publication_page_v2', 'receipt_sha256', 'text', true, null),
+      ('catalogue_publication_page_v2', 'record_commitment_sha256', 'text', true, null),
+      ('catalogue_publication_page_v2', 'request_document', 'text', true, null),
+      ('catalogue_publication_page_v2', 'request_sha256', 'text', true, null),
+      ('catalogue_publication_record_v2', 'batch_id', 'uuid', true, null),
+      ('catalogue_publication_record_v2', 'food_id', 'bigint', false, null),
+      ('catalogue_publication_record_v2', 'food_version_id', 'bigint', false, null),
+      ('catalogue_publication_record_v2', 'import_record_id', 'bigint', true, null),
+      ('catalogue_publication_record_v2', 'materialization_bytes', 'bigint', true, null),
+      ('catalogue_publication_record_v2', 'materialization_sha256', 'text', true, null),
+      ('catalogue_publication_record_v2', 'sequence_number', 'bigint', true, null),
+      ('catalogue_publication_record_v2', 'validated_food_sha256', 'text', false, null),
+      ('catalogue_publication_rollback_v2', 'activation_id', 'bigint', true, null),
+      ('catalogue_publication_rollback_v2', 'actor', 'text', true, null),
+      ('catalogue_publication_rollback_v2', 'created_at', 'timestamp with time zone', true, 'clock_timestamp()'),
+      ('catalogue_publication_rollback_v2', 'previous_release_id', 'uuid', false, null),
+      ('catalogue_publication_rollback_v2', 'receipt', 'jsonb', true, null),
+      ('catalogue_publication_rollback_v2', 'request_document', 'text', true, null),
+      ('catalogue_publication_rollback_v2', 'request_id', 'uuid', true, null),
+      ('catalogue_publication_rollback_v2', 'request_sha256', 'text', true, null),
+      ('catalogue_publication_rollback_v2', 'source_id', 'bigint', true, null),
+      ('catalogue_publication_rollback_v2', 'target_release_id', 'uuid', false, null),
+      ('catalogue_publication_v2', 'activated_at', 'timestamp with time zone', false, null),
+      ('catalogue_publication_v2', 'activation_receipt', 'jsonb', false, null),
+      ('catalogue_publication_v2', 'activation_request_document', 'text', false, null),
+      ('catalogue_publication_v2', 'admission_sha256', 'text', true, null),
+      ('catalogue_publication_v2', 'baseline_release_id', 'uuid', false, null),
+      ('catalogue_publication_v2', 'batch_id', 'uuid', true, null),
+      ('catalogue_publication_v2', 'begin_receipt', 'jsonb', true, null),
+      ('catalogue_publication_v2', 'begin_request_document', 'text', true, null),
+      ('catalogue_publication_v2', 'context_sha256', 'text', true, null),
+      ('catalogue_publication_v2', 'created_at', 'timestamp with time zone', true, 'clock_timestamp()'),
+      ('catalogue_publication_v2', 'evidence_bytes', 'bigint', true, '0'),
+      ('catalogue_publication_v2', 'finish_receipt', 'jsonb', false, null),
+      ('catalogue_publication_v2', 'finish_request_document', 'text', false, null),
+      ('catalogue_publication_v2', 'initial_generation', 'bigint', true, null),
+      ('catalogue_publication_v2', 'intermediate_bytes', 'bigint', true, '0'),
+      ('catalogue_publication_v2', 'last_generation', 'bigint', true, null),
+      ('catalogue_publication_v2', 'last_receipt_sha256', 'text', true, null),
+      ('catalogue_publication_v2', 'mapping_document', 'jsonb', true, null),
+      ('catalogue_publication_v2', 'mapping_sha256', 'text', true, null),
+      ('catalogue_publication_v2', 'materialization_bytes', 'bigint', true, '0'),
+      ('catalogue_publication_v2', 'materialized_count', 'bigint', true, '0'),
+      ('catalogue_publication_v2', 'next_sequence', 'bigint', true, '0'),
+      ('catalogue_publication_v2', 'page_count', 'bigint', true, '0'),
+      ('catalogue_publication_v2', 'phase', 'text', true, null),
+      ('catalogue_publication_v2', 'publication_sha256', 'text', true, null),
+      ('catalogue_publication_v2', 'publisher_principal', 'text', true, null),
+      ('catalogue_publication_v2', 'record_commitment_sha256', 'text', true, null),
+      ('catalogue_publication_v2', 'release_id', 'uuid', true, null),
+      ('catalogue_publication_v2', 'report_sha256', 'text', true, null),
+      ('catalogue_publication_v2', 'seal_sha256', 'text', false, null),
+      ('catalogue_publication_v2', 'validation_terminal_sha256', 'text', true, null),
+      ('catalogue_publication_v2', 'verification_commitment_sha256', 'text', true, null),
+      ('catalogue_publication_v2', 'verified_materialized_count', 'bigint', true, '0'),
+      ('catalogue_publication_v2', 'verified_page_count', 'bigint', true, '0'),
+      ('catalogue_publication_v2', 'verified_sequence', 'bigint', true, '0'),
       ('catalogue_reconciliation_baseline_v2', 'batch_id', 'uuid', true, null),
       ('catalogue_reconciliation_baseline_v2', 'envelope', 'jsonb', true, null),
       ('catalogue_reconciliation_baseline_v2', 'sequence_number', 'bigint', true, null),
@@ -647,7 +733,7 @@ END) IS TRUE)$constraint$
   ) then raise exception 'paged catalogue column schema differs' using errcode='55000'; end if;
   if (select count(*) from pg_constraint k join pg_class c on c.oid=k.conrelid
       join pg_namespace n on n.oid=c.relnamespace where n.nspname=target_schema
-      and c.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2')) <> 130 or exists (
+      and c.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_publication_admission_v2','catalogue_publication_page_v2','catalogue_publication_record_v2','catalogue_publication_rollback_v2','catalogue_publication_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2')) <> 192 or exists (
     select 1 from (values
       ('catalogue_paged_approval_v2', 'catalogue_paged_approval_v2_approval_role_check', 'c', 'CHECK ((approval_role = ANY (ARRAY[''data''::text, ''quality''::text, ''rights''::text])))'),
       ('catalogue_paged_approval_v2', 'catalogue_paged_approval_v2_batch_id_database_principal_key', 'u', 'UNIQUE (batch_id, database_principal)'),
@@ -694,9 +780,9 @@ END) IS TRUE)$constraint$
       ('catalogue_preparation_seal_page_v2', 'catalogue_preparation_seal_page_v2_pkey', 'p', 'PRIMARY KEY (batch_id, page_number)'),
       ('catalogue_preparation_stage_page_v2', 'catalogue_preparation_stage_page__previous_receipt_sha256_check', 'c', 'CHECK ((previous_receipt_sha256 ~ ''^[0-9a-f]{64}$''::text))'),
       ('catalogue_preparation_stage_page_v2', 'catalogue_preparation_stage_page_record_commitment_sha256_check', 'c', 'CHECK ((record_commitment_sha256 ~ ''^[0-9a-f]{64}$''::text))'),
-      ('catalogue_preparation_stage_page_v2', 'catalogue_preparation_stage_page_v2_check', 'c', 'CHECK ((total_payload_text_bytes >= payload_text_bytes))'),
       ('catalogue_preparation_stage_page_v2', 'catalogue_preparation_stage_page_v2_batch_id_first_sequence_key', 'u', 'UNIQUE (batch_id, first_sequence)'),
       ('catalogue_preparation_stage_page_v2', 'catalogue_preparation_stage_page_v2_batch_id_fkey', 'f', 'FOREIGN KEY (batch_id) REFERENCES catalogue_preparation_v2(batch_id) ON DELETE RESTRICT'),
+      ('catalogue_preparation_stage_page_v2', 'catalogue_preparation_stage_page_v2_check', 'c', 'CHECK ((total_payload_text_bytes >= payload_text_bytes))'),
       ('catalogue_preparation_stage_page_v2', 'catalogue_preparation_stage_page_v2_check1', 'c', 'CHECK ((next_sequence = (first_sequence + record_count)))'),
       ('catalogue_preparation_stage_page_v2', 'catalogue_preparation_stage_page_v2_first_sequence_check', 'c', 'CHECK ((first_sequence >= 0))'),
       ('catalogue_preparation_stage_page_v2', 'catalogue_preparation_stage_page_v2_page_number_check', 'c', 'CHECK ((page_number >= 0))'),
@@ -730,6 +816,68 @@ END) IS TRUE)$constraint$
       ('catalogue_preparation_v2', 'catalogue_preparation_v2_stage_page_count_check', 'c', 'CHECK ((stage_page_count >= 0))'),
       ('catalogue_preparation_v2', 'catalogue_preparation_v2_staged_count_check', 'c', 'CHECK ((staged_count >= 0))'),
       ('catalogue_preparation_v2', 'catalogue_preparation_v2_staging_seal_sha256_check', 'c', 'CHECK ((staging_seal_sha256 ~ ''^[0-9a-f]{64}$''::text))'),
+      ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_admission_sha256_check', 'c', 'CHECK ((admission_sha256 ~ ''^[0-9a-f]{64}$''::text))'),
+      ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_admission_sha256_uq', 'u', 'UNIQUE (admission_sha256)'),
+      ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_batch_id_fk', 'f', 'FOREIGN KEY (batch_id) REFERENCES catalogue_preparation_v2(batch_id)'),
+      ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_batch_id_pk', 'p', 'PRIMARY KEY (batch_id)'),
+      ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_check_1', 'c', 'CHECK ((publisher_principal <> admitted_by))'),
+      ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_max_cutover_barcode_rows_check', 'c', 'CHECK ((max_cutover_barcode_rows > 0))'),
+      ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_max_cutover_bytes_check', 'c', 'CHECK ((max_cutover_bytes > 0))'),
+      ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_max_cutover_food_rows_check', 'c', 'CHECK ((max_cutover_food_rows > 0))'),
+      ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_max_evidence_bytes_check', 'c', 'CHECK ((max_evidence_bytes > 0))'),
+      ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_max_intermediate_bytes_check', 'c', 'CHECK ((max_intermediate_bytes > 0))'),
+      ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_max_materialization_bytes_check', 'c', 'CHECK ((max_materialization_bytes > 0))'),
+      ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_max_records_check', 'c', 'CHECK ((max_records > 0))'),
+      ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_request_document_check', 'c', 'CHECK (((octet_length(request_document) >= 1) AND (octet_length(request_document) <= 65536)))'),
+      ('catalogue_publication_page_v2', 'cat_pub_page_v2_batch_id_fk', 'f', 'FOREIGN KEY (batch_id) REFERENCES catalogue_publication_v2(batch_id)'),
+      ('catalogue_publication_page_v2', 'cat_pub_page_v2_check_3', 'c', 'CHECK (((next_sequence > first_sequence) AND ((next_sequence - first_sequence) <= 250)))'),
+      ('catalogue_publication_page_v2', 'cat_pub_page_v2_first_sequence_check', 'c', 'CHECK ((first_sequence >= 0))'),
+      ('catalogue_publication_page_v2', 'cat_pub_page_v2_page_number_check', 'c', 'CHECK ((page_number >= 0))'),
+      ('catalogue_publication_page_v2', 'cat_pub_page_v2_phase_check', 'c', 'CHECK ((phase = ANY (ARRAY[''materialize''::text, ''verify''::text])))'),
+      ('catalogue_publication_page_v2', 'cat_pub_page_v2_pk_1', 'p', 'PRIMARY KEY (batch_id, phase, page_number)'),
+      ('catalogue_publication_page_v2', 'cat_pub_page_v2_request_document_check', 'c', 'CHECK (((octet_length(request_document) >= 1) AND (octet_length(request_document) <= 65536)))'),
+      ('catalogue_publication_page_v2', 'cat_pub_page_v2_uq_2', 'u', 'UNIQUE (batch_id, phase, first_sequence)'),
+      ('catalogue_publication_record_v2', 'cat_pub_record_v2_batch_id_fk', 'f', 'FOREIGN KEY (batch_id) REFERENCES catalogue_publication_v2(batch_id)'),
+      ('catalogue_publication_record_v2', 'cat_pub_record_v2_check_3', 'c', 'CHECK ((((food_id IS NULL) = (food_version_id IS NULL)) AND ((food_id IS NULL) = (validated_food_sha256 IS NULL))))'),
+      ('catalogue_publication_record_v2', 'cat_pub_record_v2_fk_2', 'f', 'FOREIGN KEY (batch_id, sequence_number) REFERENCES catalogue_validation_record_v2(batch_id, sequence_number)'),
+      ('catalogue_publication_record_v2', 'cat_pub_record_v2_food_id_fk', 'f', 'FOREIGN KEY (food_id) REFERENCES food(id)'),
+      ('catalogue_publication_record_v2', 'cat_pub_record_v2_food_version_id_fk', 'f', 'FOREIGN KEY (food_version_id) REFERENCES food_version(id)'),
+      ('catalogue_publication_record_v2', 'cat_pub_record_v2_food_version_id_uq', 'u', 'UNIQUE (food_version_id)'),
+      ('catalogue_publication_record_v2', 'cat_pub_record_v2_import_record_id_fk', 'f', 'FOREIGN KEY (import_record_id) REFERENCES food_import_record(id)'),
+      ('catalogue_publication_record_v2', 'cat_pub_record_v2_import_record_id_uq', 'u', 'UNIQUE (import_record_id)'),
+      ('catalogue_publication_record_v2', 'cat_pub_record_v2_materialization_bytes_check', 'c', 'CHECK ((materialization_bytes > 0))'),
+      ('catalogue_publication_record_v2', 'cat_pub_record_v2_pk_1', 'p', 'PRIMARY KEY (batch_id, sequence_number)'),
+      ('catalogue_publication_rollback_v2', 'cat_pub_rollback_v2_activation_id_fk', 'f', 'FOREIGN KEY (activation_id) REFERENCES food_source_release_activation(id)'),
+      ('catalogue_publication_rollback_v2', 'cat_pub_rollback_v2_activation_id_uq', 'u', 'UNIQUE (activation_id)'),
+      ('catalogue_publication_rollback_v2', 'cat_pub_rollback_v2_previous_release_id_fk', 'f', 'FOREIGN KEY (previous_release_id) REFERENCES food_source_release(id)'),
+      ('catalogue_publication_rollback_v2', 'cat_pub_rollback_v2_request_document_check', 'c', 'CHECK (((octet_length(request_document) >= 1) AND (octet_length(request_document) <= 65536)))'),
+      ('catalogue_publication_rollback_v2', 'cat_pub_rollback_v2_request_id_pk', 'p', 'PRIMARY KEY (request_id)'),
+      ('catalogue_publication_rollback_v2', 'cat_pub_rollback_v2_source_id_fk', 'f', 'FOREIGN KEY (source_id) REFERENCES food_source(id)'),
+      ('catalogue_publication_rollback_v2', 'cat_pub_rollback_v2_target_release_id_fk', 'f', 'FOREIGN KEY (target_release_id) REFERENCES food_source_release(id)'),
+      ('catalogue_publication_v2', 'cat_pub_v2_admission_sha256_fk', 'f', 'FOREIGN KEY (admission_sha256) REFERENCES catalogue_publication_admission_v2(admission_sha256)'),
+      ('catalogue_publication_v2', 'cat_pub_v2_baseline_release_id_fk', 'f', 'FOREIGN KEY (baseline_release_id) REFERENCES food_source_release(id)'),
+      ('catalogue_publication_v2', 'cat_pub_v2_batch_id_fk', 'f', 'FOREIGN KEY (batch_id) REFERENCES catalogue_publication_admission_v2(batch_id)'),
+      ('catalogue_publication_v2', 'cat_pub_v2_batch_id_pk', 'p', 'PRIMARY KEY (batch_id)'),
+      ('catalogue_publication_v2', 'cat_pub_v2_check_1', 'c', 'CHECK (((seal_sha256 IS NOT NULL) = (phase = ANY (ARRAY[''sealed''::text, ''activated''::text]))))'),
+      ('catalogue_publication_v2', 'cat_pub_v2_check_2', 'c', 'CHECK (((activated_at IS NOT NULL) = (phase = ''activated''::text)))'),
+      ('catalogue_publication_v2', 'cat_pub_v2_check_3', 'c', 'CHECK (((activation_receipt IS NOT NULL) = (phase = ''activated''::text)))'),
+      ('catalogue_publication_v2', 'cat_pub_v2_check_4', 'c', 'CHECK (((finish_receipt IS NOT NULL) = (phase = ANY (ARRAY[''sealed''::text, ''activated''::text]))))'),
+      ('catalogue_publication_v2', 'cat_pub_v2_evidence_bytes_check', 'c', 'CHECK ((evidence_bytes >= 0))'),
+      ('catalogue_publication_v2', 'cat_pub_v2_initial_generation_check', 'c', 'CHECK ((initial_generation >= 0))'),
+      ('catalogue_publication_v2', 'cat_pub_v2_intermediate_bytes_check', 'c', 'CHECK ((intermediate_bytes >= 0))'),
+      ('catalogue_publication_v2', 'cat_pub_v2_last_generation_check', 'c', 'CHECK ((last_generation >= initial_generation))'),
+      ('catalogue_publication_v2', 'cat_pub_v2_mapping_document_check', 'c', 'CHECK (((jsonb_typeof(mapping_document) = ''array''::text) AND (jsonb_array_length(mapping_document) <= 10000) AND (octet_length((mapping_document)::text) <= 4194304)))'),
+      ('catalogue_publication_v2', 'cat_pub_v2_materialization_bytes_check', 'c', 'CHECK ((materialization_bytes >= 0))'),
+      ('catalogue_publication_v2', 'cat_pub_v2_materialized_count_check', 'c', 'CHECK ((materialized_count >= 0))'),
+      ('catalogue_publication_v2', 'cat_pub_v2_next_sequence_check', 'c', 'CHECK ((next_sequence >= 0))'),
+      ('catalogue_publication_v2', 'cat_pub_v2_page_count_check', 'c', 'CHECK ((page_count >= 0))'),
+      ('catalogue_publication_v2', 'cat_pub_v2_phase_check', 'c', 'CHECK ((phase = ANY (ARRAY[''materializing''::text, ''verifying''::text, ''sealed''::text, ''activated''::text])))'),
+      ('catalogue_publication_v2', 'cat_pub_v2_publication_sha256_uq', 'u', 'UNIQUE (publication_sha256)'),
+      ('catalogue_publication_v2', 'cat_pub_v2_release_id_fk', 'f', 'FOREIGN KEY (release_id) REFERENCES food_source_release(id)'),
+      ('catalogue_publication_v2', 'cat_pub_v2_release_id_uq', 'u', 'UNIQUE (release_id)'),
+      ('catalogue_publication_v2', 'cat_pub_v2_verified_materialized_count_check', 'c', 'CHECK ((verified_materialized_count >= 0))'),
+      ('catalogue_publication_v2', 'cat_pub_v2_verified_page_count_check', 'c', 'CHECK ((verified_page_count >= 0))'),
+      ('catalogue_publication_v2', 'cat_pub_v2_verified_sequence_check', 'c', 'CHECK ((verified_sequence >= 0))'),
       ('catalogue_reconciliation_baseline_v2', 'catalogue_reconciliation_baseline__batch_id_source_food_key_key', 'u', 'UNIQUE (batch_id, source_food_key)'),
       ('catalogue_reconciliation_baseline_v2', 'catalogue_reconciliation_baseline_v2_batch_id_fkey', 'f', 'FOREIGN KEY (batch_id) REFERENCES catalogue_reconciliation_v2(batch_id)'),
       ('catalogue_reconciliation_baseline_v2', 'catalogue_reconciliation_baseline_v2_pkey', 'p', 'PRIMARY KEY (batch_id, sequence_number)'),
@@ -788,7 +936,7 @@ END) IS TRUE)$constraint$
   ) then raise exception 'paged catalogue constraint schema differs' using errcode='55000'; end if;
   if (select count(*) from pg_index i join pg_class c on c.oid=i.indrelid
       join pg_class ix on ix.oid=i.indexrelid join pg_namespace n on n.oid=c.relnamespace
-      where n.nspname=target_schema and (c.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or ix.relname='catalogue_legacy_release_batch_v2_idx')) <> 23 or exists (
+      where n.nspname=target_schema and (c.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_publication_admission_v2','catalogue_publication_page_v2','catalogue_publication_record_v2','catalogue_publication_rollback_v2','catalogue_publication_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or ix.relname='catalogue_legacy_release_batch_v2_idx')) <> 35 or exists (
     select 1 from (values
       ('catalogue_paged_approval_v2', 'catalogue_paged_approval_v2_batch_id_database_principal_key', 'CREATE UNIQUE INDEX catalogue_paged_approval_v2_batch_id_database_principal_key ON public.catalogue_paged_approval_v2 USING btree (batch_id, database_principal)', false, true),
       ('catalogue_paged_approval_v2', 'catalogue_paged_approval_v2_pkey', 'CREATE UNIQUE INDEX catalogue_paged_approval_v2_pkey ON public.catalogue_paged_approval_v2 USING btree (batch_id, approval_role)', true, true),
@@ -801,6 +949,18 @@ END) IS TRUE)$constraint$
       ('catalogue_preparation_stage_page_v2', 'catalogue_preparation_stage_page_v2_pkey', 'CREATE UNIQUE INDEX catalogue_preparation_stage_page_v2_pkey ON public.catalogue_preparation_stage_page_v2 USING btree (batch_id, page_number)', true, true),
       ('catalogue_preparation_v2', 'catalogue_preparation_v2_admission_sha256_key', 'CREATE UNIQUE INDEX catalogue_preparation_v2_admission_sha256_key ON public.catalogue_preparation_v2 USING btree (admission_sha256)', false, true),
       ('catalogue_preparation_v2', 'catalogue_preparation_v2_pkey', 'CREATE UNIQUE INDEX catalogue_preparation_v2_pkey ON public.catalogue_preparation_v2 USING btree (batch_id)', true, true),
+      ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_admission_sha256_uq', 'CREATE UNIQUE INDEX cat_pub_admit_v2_admission_sha256_uq ON public.catalogue_publication_admission_v2 USING btree (admission_sha256)', false, true),
+      ('catalogue_publication_admission_v2', 'cat_pub_admit_v2_batch_id_pk', 'CREATE UNIQUE INDEX cat_pub_admit_v2_batch_id_pk ON public.catalogue_publication_admission_v2 USING btree (batch_id)', true, true),
+      ('catalogue_publication_page_v2', 'cat_pub_page_v2_pk_1', 'CREATE UNIQUE INDEX cat_pub_page_v2_pk_1 ON public.catalogue_publication_page_v2 USING btree (batch_id, phase, page_number)', true, true),
+      ('catalogue_publication_page_v2', 'cat_pub_page_v2_uq_2', 'CREATE UNIQUE INDEX cat_pub_page_v2_uq_2 ON public.catalogue_publication_page_v2 USING btree (batch_id, phase, first_sequence)', false, true),
+      ('catalogue_publication_record_v2', 'cat_pub_record_v2_food_version_id_uq', 'CREATE UNIQUE INDEX cat_pub_record_v2_food_version_id_uq ON public.catalogue_publication_record_v2 USING btree (food_version_id)', false, true),
+      ('catalogue_publication_record_v2', 'cat_pub_record_v2_import_record_id_uq', 'CREATE UNIQUE INDEX cat_pub_record_v2_import_record_id_uq ON public.catalogue_publication_record_v2 USING btree (import_record_id)', false, true),
+      ('catalogue_publication_record_v2', 'cat_pub_record_v2_pk_1', 'CREATE UNIQUE INDEX cat_pub_record_v2_pk_1 ON public.catalogue_publication_record_v2 USING btree (batch_id, sequence_number)', true, true),
+      ('catalogue_publication_rollback_v2', 'cat_pub_rollback_v2_activation_id_uq', 'CREATE UNIQUE INDEX cat_pub_rollback_v2_activation_id_uq ON public.catalogue_publication_rollback_v2 USING btree (activation_id)', false, true),
+      ('catalogue_publication_rollback_v2', 'cat_pub_rollback_v2_request_id_pk', 'CREATE UNIQUE INDEX cat_pub_rollback_v2_request_id_pk ON public.catalogue_publication_rollback_v2 USING btree (request_id)', true, true),
+      ('catalogue_publication_v2', 'cat_pub_v2_batch_id_pk', 'CREATE UNIQUE INDEX cat_pub_v2_batch_id_pk ON public.catalogue_publication_v2 USING btree (batch_id)', true, true),
+      ('catalogue_publication_v2', 'cat_pub_v2_publication_sha256_uq', 'CREATE UNIQUE INDEX cat_pub_v2_publication_sha256_uq ON public.catalogue_publication_v2 USING btree (publication_sha256)', false, true),
+      ('catalogue_publication_v2', 'cat_pub_v2_release_id_uq', 'CREATE UNIQUE INDEX cat_pub_v2_release_id_uq ON public.catalogue_publication_v2 USING btree (release_id)', false, true),
       ('catalogue_reconciliation_baseline_v2', 'catalogue_reconciliation_baseline__batch_id_source_food_key_key', 'CREATE UNIQUE INDEX catalogue_reconciliation_baseline__batch_id_source_food_key_key ON public.catalogue_reconciliation_baseline_v2 USING btree (batch_id, source_food_key)', false, true),
       ('catalogue_reconciliation_baseline_v2', 'catalogue_reconciliation_baseline_v2_pkey', 'CREATE UNIQUE INDEX catalogue_reconciliation_baseline_v2_pkey ON public.catalogue_reconciliation_baseline_v2 USING btree (batch_id, sequence_number)', true, true),
       ('catalogue_reconciliation_page_v2', 'catalogue_reconciliation_page_v2_pkey', 'CREATE UNIQUE INDEX catalogue_reconciliation_page_v2_pkey ON public.catalogue_reconciliation_page_v2 USING btree (batch_id, page_number)', true, true),
@@ -822,6 +982,128 @@ END) IS TRUE)$constraint$
       or i.indisprimary<>expected.is_primary or i.indisunique<>expected.is_unique
       or i.indnullsnotdistinct or pg_get_indexdef(i.indexrelid)<>expected.definition
   ) then raise exception 'paged catalogue index schema differs' using errcode='55000'; end if;
+
+  -- Parse the fixed source query in this isolated restore transaction. TEMP DDL
+  -- does not execute the reader query or persist an application object.
+  perform set_config('search_path','pg_catalog, public, pg_temp',true);
+  create temporary view catalogue_expected_publication_view_v2 as
+select
+  food.id as food_id,
+  version.id as food_version_id,
+  version.version_number,
+  food.kind,
+  food.source_food_key,
+  version.name,
+  version.normalized_name,
+  version.brand_name,
+  version.description,
+  version.language_tag,
+  version.market_code,
+  version.data_quality,
+  version.basis_quantity,
+  version.basis_unit,
+  version.source_modified_at,
+  source.id as food_source_id,
+  source.code as source_code,
+  source.display_name as source_display_name,
+  source.license_expression,
+  source.attribution_required,
+  source.attribution_text,
+  release.id as source_release_id,
+  release.release_key as source_release_key,
+  release.artifact_sha256 as source_artifact_sha256
+from food
+join food_version as version
+  on version.food_id = food.id
+  and version.id = food.current_version_id
+join food_source as source
+  on source.id = food.food_source_id
+  and source.active_release_id = version.source_release_id
+join food_source_release as release
+  on release.id = source.active_release_id
+  and release.food_source_id = source.id
+where food.kind in ('generic', 'branded')
+  and food.visibility = 'public'
+  and food.owner_user_id is null
+  and food.archived_at is null
+  and version.data_quality <> 'quarantined'
+  and octet_length(version.name) <= 500
+  and octet_length(version.normalized_name) <= 512
+  and (
+    version.brand_name is null
+    or (char_length(btrim(version.brand_name)) > 0 and octet_length(version.brand_name) <= 300)
+  )
+  and version.source_release_id is not null
+  and source.active
+  and source.code ~ '^[A-Z][A-Z0-9_]{1,31}$'
+  and char_length(btrim(source.display_name)) > 0
+  and octet_length(source.display_name) <= 200
+  and char_length(btrim(source.license_expression)) > 0
+  and octet_length(source.license_expression) <= 256
+  and char_length(btrim(source.attribution_text)) > 0
+  and octet_length(source.attribution_text) <= 2000
+  and source.commercial_use_allowed is true
+  and source.redistribution_allowed is true
+  and source.rights_review_status in ('approved', 'restricted')
+  and source.rights_reviewed_at is not null
+  and length(btrim(source.rights_reviewed_by)) > 0
+  and release.status = 'promoted'
+  and release.promoted_at is not null
+  and release.rights_manifest_sha256 is not null
+  and (exists (
+    select 1
+    from food_import_batch as batch
+    join food_import_record as record
+      on record.batch_id = batch.id
+      and record.food_version_id = version.id
+      and record.validation_status = 'materialized'
+    where batch.food_source_id = source.id
+      and batch.release_id = release.id
+      and batch.status = 'completed'
+      and batch.completed_at is not null
+      and not exists (select 1 from catalogue_preparation_v2 preparation where preparation.batch_id=batch.id)
+  ) or exists (
+    select 1 from catalogue_publication_v2 publication
+    join catalogue_publication_record_v2 materialized on materialized.batch_id=publication.batch_id
+      and materialized.food_id=food.id and materialized.food_version_id=version.id
+    join catalogue_validation_record_v2 validated on validated.batch_id=materialized.batch_id
+      and validated.sequence_number=materialized.sequence_number and validated.validation_status='valid'
+      and validated.validated_food_sha256=materialized.validated_food_sha256
+    join catalogue_validation_context_v2 validation on validation.batch_id=publication.batch_id
+      and validation.phase='validated' and validation.terminal_sha256=publication.validation_terminal_sha256
+    join catalogue_reconciliation_v2 reconciliation on reconciliation.batch_id=publication.batch_id
+      and reconciliation.phase='complete' and reconciliation.context_sha256=publication.context_sha256
+      and reconciliation.terminal_sha256=publication.report_sha256
+      and reconciliation.validation_terminal_sha256=validation.terminal_sha256
+    join catalogue_preparation_v2 preparation on preparation.batch_id=publication.batch_id and preparation.phase='sealed'
+    join food_import_batch batch on batch.id=publication.batch_id and batch.food_source_id=source.id
+    join food_source_release_activation activation on activation.import_batch_id=publication.batch_id
+      and activation.food_source_id=source.id and activation.release_id=release.id
+      and activation.operation='activate'
+      and activation.database_principal=publication.publisher_principal
+      and activation.database_capability_role='nutrition_catalogue_promote_activate'
+      and activation.id::text=publication.activation_receipt->>'activationId'
+    where publication.release_id=release.id and publication.phase='activated'
+      and publication.activated_at is not null and publication.seal_sha256 is not null
+      and publication.finish_receipt is not null and publication.activation_receipt is not null
+      and publication.next_sequence=preparation.staged_count
+      and publication.verified_sequence=publication.next_sequence
+      and publication.verified_page_count=publication.page_count
+      and publication.materialized_count=validation.valid_count
+      and publication.verified_materialized_count=publication.materialized_count
+      and batch.release_class='live-reviewed' and release.release_class='live-reviewed'
+      and publication.activation_receipt->>'activeReleaseId'=release.id::text
+      and release.validation_summary->>'publicationProtocolVersion'='2'
+      and release.validation_summary->>'publicationSha256'=publication.publication_sha256
+      and release.validation_summary->>'batchId'=batch.id::text
+  ));
+  if not exists(select 1 from pg_class c join pg_namespace n on n.oid=c.relnamespace
+    where n.nspname=target_schema and c.relname='promoted_food_search_catalogue_v1'
+      and c.relkind='v' and c.relowner=expected_owner_oid and c.reloptions is null
+      and pg_get_viewdef(c.oid,false)=pg_get_viewdef('pg_temp.catalogue_expected_publication_view_v2'::regclass,false)) then
+    raise exception 'catalogue public eligibility view differs from source policy' using errcode='55000';
+  end if;
+  drop view pg_temp.catalogue_expected_publication_view_v2;
 
   -- Pin the complete authority function boundary through migration 0022.
   -- Exact identity, executable body, and search_path are policy, not
@@ -882,6 +1164,28 @@ END) IS TRUE)$constraint$
         'guard_catalogue_paged_approval_v2',
         'guard_catalogue_reconciliation_evidence_v2',
         'guard_catalogue_reconciliation_state_v2',
+        'catalogue_publication_request_v2',
+        'catalogue_publication_receipt_v2',
+        'catalogue_publication_timeouts_v2',
+        'catalogue_publication_progress_v2',
+        'catalogue_lock_publication_v2',
+        'catalogue_assert_publication_approvals_v2',
+        'catalogue_admit_publication_v2',
+        'catalogue_begin_publication_v2',
+        'catalogue_materialize_publication_record_v2',
+        'catalogue_verify_publication_record_v2',
+        'catalogue_advance_publication_page_v2',
+        'catalogue_materialize_publication_page_v2',
+        'catalogue_verify_publication_page_v2',
+        'catalogue_finish_publication_v2',
+        'catalogue_read_publication_v2',
+        'catalogue_verify_legacy_publication_record_v2',
+        'catalogue_publication_target_barcodes_v2',
+        'catalogue_assert_publication_cutover_budget_v2',
+        'catalogue_cutover_publication_v2',
+        'catalogue_activate_publication_v2',
+        'catalogue_rollback_publication_v2',
+        'catalogue_guard_publication_v2',
         'advance_food_search_projection_revision',
         'catalogue_attest_import_nutrition_semantics',
         'catalogue_canonical_decimal_product',
@@ -937,7 +1241,7 @@ END) IS TRUE)$constraint$
         'set_row_updated_at',
         'validate_food_version_child_insert'
       )
-  ) <> 103 or exists (
+  ) <> 125 or exists (
     select 1
     from (
       values
@@ -969,18 +1273,18 @@ END) IS TRUE)$constraint$
         ('catalogue_normalize_source_text_v2', 'p_value text', 'e098cf8348b723c46e150c05a25ded716e0309c45e5d38a476d643d7bd716745', 'text', 'sql', 'i', true, false, 's', false),
         ('catalogue_observe_validation_page_v2', 'p_batch_id uuid, p_start_sequence bigint, p_maximum_records integer', '743618753ca47ccd11e6f0e6bd871704d458949711cb6102ee00c972dd534123', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_preparation_uint_v2', 'p_value jsonb', 'ed8877d47a0c6a92b0c5ebdc1d6e36086bf0287650de0cd3c335f29db75b69ae', 'bigint', 'plpgsql', 'i', false, false, 'u', false),
-        ('catalogue_prepare_reconciliation_page_v2', 'p_batch_id uuid, p_context text, p_page bigint', 'c2a8c23b29d23cf5232d4fe0d32a8c75632a1d139a5b35ec41ae58d2c83a665c', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_prepare_reconciliation_page_v2', 'p_batch_id uuid, p_context text, p_page bigint', 'ada1304ce7e766b63d829d9af0b68504e5b56ef8bc15a595e4a25cbc09da25cc', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_read_preparation_admission_v2', 'p_admission_sha256 text', 'b31733d1ed923863fc38688834f7fba65681c9e8c1576bb9c83beeccb62e529c', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_read_reconciliation_page_v2', 'p_batch_id uuid, p_report text, p_page bigint, p_role text, p_principal text', '561cf06b1a8324ba8ce552fe6c0fe75169e95311ab03401dcf6c4e063cd71cf5', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_reconciliation_baseline_header_v2', 'p_batch_id uuid', '4c4a81bc60ede20de39a0f73c473d66bfed68bbfea5dc26fbaa5aabd69b647ba', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_reconciliation_baseline_record_v2', 'p_record_id bigint, p_release_id uuid', '99f884f6919854dcffe57863830c9b3141a2b4e46ae338663c4ef8b5af1c05de', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_reconciliation_baseline_header_v2', 'p_batch_id uuid', '955240cc42ddb8daa2a4420334f4517b4bbb99cd8f51233dfeb43dd3a1843a53', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_reconciliation_baseline_record_v2', 'p_record_id bigint, p_release_id uuid', 'd8032d71e259aa56ba70e4c060937e3d69b3e01ddaf151ec4a9a4e52034cccf4', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_reconciliation_detail_v2', 'p_before jsonb, p_after jsonb', '89de7f9c6dc97e4e6b89bc1f8d506803368ed1b6a63377adea0de32d015ced7d', 'jsonb', 'sql', 's', false, false, 'u', true),
         ('catalogue_reconciliation_input_v2', 'p_batch_id uuid, p_validation_terminal_sha256 text', '3d70e181d4597ae6d2be0d011bb40c6a3699af996a1ca76772f53cac46c4d278', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_reconciliation_validation_page_v2', 'p_batch_id uuid, p_terminal text, p_page bigint', '3fc76a7de548e1b944541910b7137faa2eff3b9f9635c420f82a9261e47ba6f4', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_record_paged_approval_v2', 'p_batch_id uuid, p_role text, p_principal text, p_rights text, p_validation_terminal text, p_report text, p_context text, p_reference text', 'e336a4b2e28bfb2e05942bdcf29fe9b1fa5ba0132babd9a92817cd365fa7defe', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_reject_legacy_batch_v2', 'p_batch_id uuid', '3efd4cea547f4f7fbbaaac478b80e2b6a268e32034a910bb45e955f54ff6e88a', 'void', 'plpgsql', 's', false, false, 'u', true),
         ('catalogue_reject_legacy_record_v2', 'p_record_id bigint', '304f46808cea837f3bdd1211af5edac27a9e4625cbae8ae808f2b9e7a3c8cf69', 'void', 'plpgsql', 's', false, false, 'u', true),
-        ('catalogue_reject_legacy_release_v2', 'p_release_id uuid', 'a5e6b8a52a9f8e93d77300d3c7f4fc0354ee23fee1d28fb90f00a673c550d943', 'void', 'plpgsql', 's', false, false, 'u', true),
+        ('catalogue_reject_legacy_release_v2', 'p_release_id uuid', '48e36b25e9c16f670385041811610564220bfe52f3313c142c7e25c9e5d65f3a', 'void', 'plpgsql', 's', false, false, 'u', true),
         ('catalogue_reject_legacy_stage_document_v2', 'p_document text', '943d76ce5ad93805cfc937eea2544a1a84a75d87232e7fcdc4a8af498f2fd131', 'void', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_require_preparation_role_v2', 'p_role text', '7a1284c7da1e999e2ac0c72eef8171f029c88986c423f2a1edb6b300260d38a1', 'text', 'plpgsql', 's', false, false, 'u', false),
         ('catalogue_stage_preparation_page_v2', 'p_batch_id uuid, p_document text', '1a7ccde35c3c4427b4dbdefc3a5f76cbf91a3cd0715d949f72d0674adedc5f02', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
@@ -990,6 +1294,28 @@ END) IS TRUE)$constraint$
         ('guard_catalogue_paged_approval_v2', '', '0d48ff1d8bb9e354c7cd0471ff4829f473498c69f8b021fbe097d0c2a323356a', 'trigger', 'plpgsql', 'v', false, false, 'u', true),
         ('guard_catalogue_reconciliation_evidence_v2', '', '6793ddf19e8dbdfa947dad6855c10c9249c5cea78fe876db662b3f3a20b08a9e', 'trigger', 'plpgsql', 'v', false, false, 'u', true),
         ('guard_catalogue_reconciliation_state_v2', '', '97bdfe125868708ce265f8ad7416b2c38c37ce3e9e714e8623cf0aeb3b55e1b2', 'trigger', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_publication_request_v2', 'p_document text, p_keys text[]', '35a316c13432448109697d4a59131f42316bffc0243ca863473b0716c832c2a9', 'jsonb', 'plpgsql', 'i', false, false, 'u', false),
+        ('catalogue_publication_receipt_v2', 'p_core jsonb', 'a437c365feb70650d8a0148efdb09014278b1952dfde292b9c1f0c0eebc7b4db', 'jsonb', 'sql', 'i', true, false, 'u', false),
+        ('catalogue_publication_timeouts_v2', '', 'cd372d03caf870d722715f04a953bdb3320b844fcc257228fa145eed7ac91810', 'void', 'plpgsql', 's', false, false, 'u', false),
+        ('catalogue_publication_progress_v2', 'p_batch_id uuid', '5c8c0c2830f3874b0c801cbf8b3cf4f58b7f21f8cb51ab621da6ccae7ce89aff', 'jsonb', 'sql', 's', false, false, 'u', true),
+        ('catalogue_lock_publication_v2', 'p_batch_id uuid, p_actor text, p_require_live boolean', 'ceaeb9c5c29629485e12e40f8754fb325cc6f265039e65b7529d97c55a712abd', 'void', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_assert_publication_approvals_v2', 'p_batch_id uuid, p_context text, p_terminal text, p_report text, p_actor text', '0cc9ca58fd5951e5a7891768452e8aac54eeb04658d30b906633146c1df37eb8', 'void', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_admit_publication_v2', 'p_document text', 'f6f98257e2605be175f65c2a63634dd1b23c9f616c479e5bd7e14f3cb3656945', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_begin_publication_v2', 'p_document text', '620deb405daa84cd700eb090500cbeddf36706ccf4bc7643d50b9c24024776f4', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_materialize_publication_record_v2', 'p_batch_id uuid, p_sequence bigint', 'e274f7f186ab341c94c6a81810da4a6e5353a55dd4d64dbaaa6676d71a14100c', 'bigint', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_verify_publication_record_v2', 'p_batch_id uuid, p_sequence bigint', '189de2455deb548fb923cfb5b67d0cffadbc78d16dbeaa895881f65f7c7f65a7', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_advance_publication_page_v2', 'p_document text, p_phase text', '4685582d152496335b797ddf6f0eeabfb6cf34765317a088dd971d07d7af418e', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_materialize_publication_page_v2', 'p_document text', '48f24147dd0daa3d900509cb6c4e5529c854088b4e74da971273476578738724', 'jsonb', 'sql', 'v', false, false, 'u', true),
+        ('catalogue_verify_publication_page_v2', 'p_document text', '6711dbb46ed60dc4e6023c92b8ad01b637c7abd076b45adaf47df42194dcb7dd', 'jsonb', 'sql', 'v', false, false, 'u', true),
+        ('catalogue_finish_publication_v2', 'p_document text', '1e5cedeff52e4026b8d23c72e410eb00ea219721edbdc32b58a19a8f5516cc7e', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_read_publication_v2', 'p_batch_id uuid', 'c0e2971e9ff47e0b44442870cbc088e99faf8311b8718b0e444d113d53b0c460', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_verify_legacy_publication_record_v2', 'p_record_id bigint, p_release_id uuid', 'b40a94a9ae384af3fb028c6c6a0d0702917aaa3b17b8e5794f7a61906f083eeb', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_publication_target_barcodes_v2', 'p_release_id uuid', '4a2c084f857f0da08922cc13fde3273877dc64af5b7c78dcd8a48e7645be1806', 'TABLE(food_id bigint, food_version_id bigint, gtin text, market_code text)', 'sql', 's', false, false, 'u', true),
+        ('catalogue_assert_publication_cutover_budget_v2', 'p_source_id bigint, p_target uuid, p_budget_batch uuid, p_extra_bytes bigint', '8cef92219afffd57dcf2fc76a22109cb912c570ca48f3b8b8048715e82fd4881', 'void', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_cutover_publication_v2', 'p_source_id bigint, p_target uuid, p_operation text, p_batch uuid, p_actor text, p_reason text', '7b38fcbd65c1ad33b77f9177deea63b3e851febcaac085d38fb32ae59708f35b', 'bigint', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_activate_publication_v2', 'p_document text', 'ccb20f7259ef33f04b3d0d39a33da941576f1ccb6fd46ca0a7cef5de5f04b937', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_rollback_publication_v2', 'p_document text', '6c5320dae7452747738fc52eb6d44716c60e68740e8695d727f42465976abe71', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_guard_publication_v2', '', '649b36ed52f65e1888d1ba52dd8228f4fe671b0f4037d438891dabf89d8955e9', 'trigger', 'plpgsql', 'v', false, false, 'u', true),
         ('advance_food_search_projection_revision'::text, ''::text, 'd1e4a8a27203104c6339f045a31a4dfdd2aee3c78cdd94e06bfd3db2c9ac2108'::text, 'void'::text, 'plpgsql'::text, 'v'::text, false, false, 'u'::text, false),
         ('catalogue_attest_import_nutrition_semantics', 'p_batch_id uuid', '3b6b5d6de655e09c4935379fbaa356429961dedb39264cb25913e16c3a2c2e59', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_canonical_decimal_product', 'p_left text, p_right text', '299a2c88226123f167fe2d7001fdaf6a2e02425007f2426c8def9d0bb83a46c0', 'text', 'plpgsql', 'i', true, false, 's', false),
@@ -1001,8 +1327,8 @@ END) IS TRUE)$constraint$
         ('catalogue_promote_import_batch_v1', 'p_batch_id uuid, p_external_principal_id text, p_reason text', '2d5733cf34f2119db2e18564469fc76adf892172a936b1bfcbd21b3899629c96', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_record_import_approval', 'p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text', '9dfaa30970c3acfaaff6a1c1c4211cfd0b42c87824998841172429c4dcd5138f', 'boolean', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_record_import_approval_v1', 'p_batch_id uuid, p_requested_approval_role text, p_validation_digest text, p_rights_digest text, p_external_principal_id text, p_approval_reference text', '57a131aea73ba58d76f8d7cd867ea2cb2485567f65dc4c28c5a9ffe8963ca198', 'boolean', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_rollback_source_release', 'p_source_code text, p_target_release_id uuid, p_external_principal_id text, p_reason text', '8946f31585a418f750601e35621b06ac938a8c466f26fddc1a123cd6c2df4ffd', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
-        ('catalogue_rollback_source_release_v1', 'p_source_code text, p_target_release_id uuid, p_external_principal_id text, p_reason text', 'a2cf554f00f20d13720e268e3778eca9e26064da34291befa9b75f3dbe55b915', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_rollback_source_release', 'p_source_code text, p_target_release_id uuid, p_external_principal_id text, p_reason text', 'b9bda857bcce39b37ee33728198fe8d15b112792fc9c1cb33c921a6ab1113d21', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
+        ('catalogue_rollback_source_release_v1', 'p_source_code text, p_target_release_id uuid, p_external_principal_id text, p_reason text', '1427d676a8322e2a83b436c70264ff6f18ebe2f793aceb9e138b766403caa303', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_stage_import_batch', 'p_stage_document text', 'e35607a581873d4b7c3b092be4c60a63026b71db21e447c87c79aebb42e21445', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_stage_import_parser_report', 'p_batch_id uuid, p_parser_report_document text', '111c05a916f5fdce9be9ec6117d8220a239fff749efd628afb4164b3dc89f6a5', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
         ('catalogue_stage_import_record_chunk', 'p_batch_id uuid, p_expected_next_offset bigint, p_records_document text', 'd8e8d2354606768fdcaacd280fd2255359ace98758b3d8377f90a94e802541a2', 'jsonb', 'plpgsql', 'v', false, false, 'u', true),
@@ -1031,7 +1357,7 @@ END) IS TRUE)$constraint$
         ('guard_imported_food_version_child_delete', '', '4e36d3ee5cbd53dc6c98d9f457adbb5ee8cb6cbf8fc6b3e45d3133b4305e7cc1', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_source_active_release_authority', '', '306eec1771a7bbf7961bd6d46ba752801fe98f07d27fbf96291a1c454750cd11', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_source_initial_active_release', '', 'e3cbc51f28aafd274ea2bc3b71b824d51180d8e741dbcfd22d0af9e21849be43', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
-        ('guard_food_source_release_activation_authority', '', 'd46f53aeffa6469eada5461ab59bd9c23d43bf9aab77704c61b21c44291ae028', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
+        ('guard_food_source_release_activation_authority', '', '54f0413a565c93fc6d76846873844a03488594580250ba2bc1c9f4117d3ab68a', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_source_release_initial_state', '', '797445724ddd8d37cdbcc1891c724e9bd8af543548d322db5cf9c3d22ac13b3d', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_source_release_legacy_promotion_grandfather', '', '22340dfcbb5f98e1d0504703b0fb37830b31a4ecde5cbe81e55844968b86f214', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
         ('guard_food_source_release_update', '', '191701f20750b6e98b8acf290a1df2417bf17bd9c3a4e5e87a7ac7ef56453726', 'trigger', 'plpgsql', 'v', false, false, 'u', false),
@@ -1099,6 +1425,12 @@ END) IS TRUE)$constraint$
         (
           namespace_row.nspname = target_schema
           and class_row.relname in (
+            'catalogue_publication_admission_v2',
+            'catalogue_publication_v2',
+            'catalogue_publication_record_v2',
+            'catalogue_publication_page_v2',
+            'catalogue_publication_rollback_v2',
+            'promoted_food_search_catalogue_v1',
             'catalogue_paged_approval_v2',
             'catalogue_preparation_admission_v2',
             'catalogue_preparation_budget_usage_v2',
@@ -1136,6 +1468,16 @@ END) IS TRUE)$constraint$
         or (
           namespace_row.nspname = target_schema
           and trigger_row.tgname in (
+            'catalogue_publication_admission_v2_guard',
+            'catalogue_publication_admission_v2_truncate',
+            'catalogue_publication_v2_guard',
+            'catalogue_publication_v2_truncate',
+            'catalogue_publication_record_v2_guard',
+            'catalogue_publication_record_v2_truncate',
+            'catalogue_publication_page_v2_guard',
+            'catalogue_publication_page_v2_truncate',
+            'catalogue_publication_rollback_v2_guard',
+            'catalogue_publication_rollback_v2_truncate',
             'catalogue_paged_approval_v2_guard',
             'catalogue_paged_approval_v2_immutable',
             'catalogue_paged_approval_v2_truncate_guard',
@@ -1223,6 +1565,7 @@ END) IS TRUE)$constraint$
         or (
           procedure_namespace_row.nspname = target_schema
           and procedure_row.proname in (
+            'catalogue_guard_publication_v2',
             'catalogue_advance_validation_generation_v2',
             'catalogue_guard_legacy_batch_preparation_v2',
             'catalogue_guard_legacy_record_preparation_v2',
@@ -1270,7 +1613,7 @@ END) IS TRUE)$constraint$
           )
         )
       )
-  ) <> 108 or exists (
+  ) <> 118 or exists (
     select 1
     from (
       values
@@ -1328,6 +1671,16 @@ END) IS TRUE)$constraint$
         ('nutrient_validation_generation_v2', 'nutrient', 'catalogue_advance_validation_generation_v2', 'CREATE TRIGGER nutrient_validation_generation_v2 AFTER INSERT OR DELETE OR UPDATE OR TRUNCATE ON nutrient FOR EACH STATEMENT EXECUTE FUNCTION catalogue_advance_validation_generation_v2()'),
         ('source_nutrient_map_revision_validation_generation_v2', 'source_nutrient_map_revision', 'catalogue_advance_validation_generation_v2', 'CREATE TRIGGER source_nutrient_map_revision_validation_generation_v2 AFTER INSERT OR DELETE OR UPDATE OR TRUNCATE ON source_nutrient_map_revision FOR EACH STATEMENT EXECUTE FUNCTION catalogue_advance_validation_generation_v2()'),
         ('source_nutrient_map_validation_generation_v2', 'source_nutrient_map', 'catalogue_advance_validation_generation_v2', 'CREATE TRIGGER source_nutrient_map_validation_generation_v2 AFTER INSERT OR DELETE OR UPDATE OR TRUNCATE ON source_nutrient_map FOR EACH STATEMENT EXECUTE FUNCTION catalogue_advance_validation_generation_v2()'),
+        ('catalogue_publication_admission_v2_guard', 'catalogue_publication_admission_v2', 'catalogue_guard_publication_v2', 'CREATE TRIGGER catalogue_publication_admission_v2_guard BEFORE INSERT OR DELETE OR UPDATE ON catalogue_publication_admission_v2 FOR EACH ROW EXECUTE FUNCTION catalogue_guard_publication_v2()'),
+        ('catalogue_publication_admission_v2_truncate', 'catalogue_publication_admission_v2', 'catalogue_guard_publication_v2', 'CREATE TRIGGER catalogue_publication_admission_v2_truncate BEFORE TRUNCATE ON catalogue_publication_admission_v2 FOR EACH STATEMENT EXECUTE FUNCTION catalogue_guard_publication_v2()'),
+        ('catalogue_publication_v2_guard', 'catalogue_publication_v2', 'catalogue_guard_publication_v2', 'CREATE TRIGGER catalogue_publication_v2_guard BEFORE INSERT OR DELETE OR UPDATE ON catalogue_publication_v2 FOR EACH ROW EXECUTE FUNCTION catalogue_guard_publication_v2()'),
+        ('catalogue_publication_v2_truncate', 'catalogue_publication_v2', 'catalogue_guard_publication_v2', 'CREATE TRIGGER catalogue_publication_v2_truncate BEFORE TRUNCATE ON catalogue_publication_v2 FOR EACH STATEMENT EXECUTE FUNCTION catalogue_guard_publication_v2()'),
+        ('catalogue_publication_record_v2_guard', 'catalogue_publication_record_v2', 'catalogue_guard_publication_v2', 'CREATE TRIGGER catalogue_publication_record_v2_guard BEFORE INSERT OR DELETE OR UPDATE ON catalogue_publication_record_v2 FOR EACH ROW EXECUTE FUNCTION catalogue_guard_publication_v2()'),
+        ('catalogue_publication_record_v2_truncate', 'catalogue_publication_record_v2', 'catalogue_guard_publication_v2', 'CREATE TRIGGER catalogue_publication_record_v2_truncate BEFORE TRUNCATE ON catalogue_publication_record_v2 FOR EACH STATEMENT EXECUTE FUNCTION catalogue_guard_publication_v2()'),
+        ('catalogue_publication_page_v2_guard', 'catalogue_publication_page_v2', 'catalogue_guard_publication_v2', 'CREATE TRIGGER catalogue_publication_page_v2_guard BEFORE INSERT OR DELETE OR UPDATE ON catalogue_publication_page_v2 FOR EACH ROW EXECUTE FUNCTION catalogue_guard_publication_v2()'),
+        ('catalogue_publication_page_v2_truncate', 'catalogue_publication_page_v2', 'catalogue_guard_publication_v2', 'CREATE TRIGGER catalogue_publication_page_v2_truncate BEFORE TRUNCATE ON catalogue_publication_page_v2 FOR EACH STATEMENT EXECUTE FUNCTION catalogue_guard_publication_v2()'),
+        ('catalogue_publication_rollback_v2_guard', 'catalogue_publication_rollback_v2', 'catalogue_guard_publication_v2', 'CREATE TRIGGER catalogue_publication_rollback_v2_guard BEFORE INSERT OR DELETE OR UPDATE ON catalogue_publication_rollback_v2 FOR EACH ROW EXECUTE FUNCTION catalogue_guard_publication_v2()'),
+        ('catalogue_publication_rollback_v2_truncate', 'catalogue_publication_rollback_v2', 'catalogue_guard_publication_v2', 'CREATE TRIGGER catalogue_publication_rollback_v2_truncate BEFORE TRUNCATE ON catalogue_publication_rollback_v2 FOR EACH STATEMENT EXECUTE FUNCTION catalogue_guard_publication_v2()'),
         ('custom_food_nutrient_guard_delete_v3'::text, 'food_nutrient_value'::text, 'guard_custom_food_immutable_evidence_v3'::text, 'CREATE TRIGGER custom_food_nutrient_guard_delete_v3 BEFORE DELETE ON food_nutrient_value FOR EACH ROW EXECUTE FUNCTION guard_custom_food_immutable_evidence_v3()'::text),
         ('custom_food_nutrient_guard_insert_v3', 'food_nutrient_value', 'guard_custom_food_child_insert_v3', 'CREATE TRIGGER custom_food_nutrient_guard_insert_v3 BEFORE INSERT ON food_nutrient_value FOR EACH ROW EXECUTE FUNCTION guard_custom_food_child_insert_v3()'),
         ('custom_food_serving_guard_delete_v3', 'food_serving', 'guard_custom_food_immutable_evidence_v3', 'CREATE TRIGGER custom_food_serving_guard_delete_v3 BEFORE DELETE ON food_serving FOR EACH ROW EXECUTE FUNCTION guard_custom_food_immutable_evidence_v3()'),
@@ -1658,6 +2011,28 @@ END) IS TRUE)$constraint$
         ('guard_catalogue_paged_approval_v2()', 'owner'),
         ('guard_catalogue_reconciliation_evidence_v2()', 'owner'),
         ('guard_catalogue_reconciliation_state_v2()', 'owner'),
+        ('catalogue_publication_request_v2(text,text[])', 'owner'),
+        ('catalogue_publication_receipt_v2(jsonb)', 'owner'),
+        ('catalogue_publication_timeouts_v2()', 'owner'),
+        ('catalogue_publication_progress_v2(uuid)', 'owner'),
+        ('catalogue_lock_publication_v2(uuid,text,boolean)', 'owner'),
+        ('catalogue_assert_publication_approvals_v2(uuid,text,text,text,text)', 'owner'),
+        ('catalogue_admit_publication_v2(text)', 'quality'),
+        ('catalogue_begin_publication_v2(text)', 'promote'),
+        ('catalogue_materialize_publication_record_v2(uuid,bigint)', 'owner'),
+        ('catalogue_verify_publication_record_v2(uuid,bigint)', 'owner'),
+        ('catalogue_advance_publication_page_v2(text,text)', 'owner'),
+        ('catalogue_materialize_publication_page_v2(text)', 'promote'),
+        ('catalogue_verify_publication_page_v2(text)', 'promote'),
+        ('catalogue_finish_publication_v2(text)', 'promote'),
+        ('catalogue_read_publication_v2(uuid)', 'publish-read'),
+        ('catalogue_verify_legacy_publication_record_v2(bigint,uuid)', 'owner'),
+        ('catalogue_publication_target_barcodes_v2(uuid)', 'owner'),
+        ('catalogue_assert_publication_cutover_budget_v2(bigint,uuid,uuid,bigint)', 'owner'),
+        ('catalogue_cutover_publication_v2(bigint,uuid,text,uuid,text,text)', 'owner'),
+        ('catalogue_activate_publication_v2(text)', 'promote'),
+        ('catalogue_rollback_publication_v2(text)', 'rollback'),
+        ('catalogue_guard_publication_v2()', 'owner'),
         ('guard_food_import_batch_nutrition_semantics()'::text, 'owner'::text),
         ('guard_food_import_batch_stage_validate_authority()'::text, 'owner'::text),
         ('guard_food_import_record_nutrition_semantics()', 'owner'),
@@ -1732,6 +2107,12 @@ END) IS TRUE)$constraint$
         'grant execute on function public.%s to nutrition_catalogue_validate',
         stage_validate_function_spec.function_identity
       );
+    elsif stage_validate_function_spec.acl_kind = 'promote' then
+      execute format('grant execute on function public.%s to nutrition_catalogue_promote_activate',stage_validate_function_spec.function_identity);
+    elsif stage_validate_function_spec.acl_kind = 'rollback' then
+      execute format('grant execute on function public.%s to nutrition_catalogue_rollback',stage_validate_function_spec.function_identity);
+    elsif stage_validate_function_spec.acl_kind = 'publish-read' then
+      execute format('grant execute on function public.%s to nutrition_catalogue_promote_activate,nutrition_catalogue_rollback',stage_validate_function_spec.function_identity);
     elsif stage_validate_function_spec.acl_kind = 'quality' then
       execute pg_catalog.format('grant execute on function public.%s to nutrition_catalogue_approve_quality', stage_validate_function_spec.function_identity);
     elsif stage_validate_function_spec.acl_kind = 'reviewers' then
@@ -1739,6 +2120,7 @@ END) IS TRUE)$constraint$
     end if;
 
     expected_acl_count := case
+      when stage_validate_function_spec.acl_kind = 'publish-read' then 3
       when stage_validate_function_spec.acl_kind = 'owner' then 1
       when stage_validate_function_spec.acl_kind = 'reviewers' then 4
       else 2
@@ -1769,6 +2151,9 @@ END) IS TRUE)$constraint$
               stage_validate_function_spec.acl_kind = 'validate'
               and grantee_role.rolname = 'nutrition_catalogue_validate'
             )
+            or (stage_validate_function_spec.acl_kind = 'promote' and grantee_role.rolname = 'nutrition_catalogue_promote_activate')
+            or (stage_validate_function_spec.acl_kind = 'rollback' and grantee_role.rolname = 'nutrition_catalogue_rollback')
+            or (stage_validate_function_spec.acl_kind = 'publish-read' and grantee_role.rolname in ('nutrition_catalogue_promote_activate','nutrition_catalogue_rollback'))
             or (stage_validate_function_spec.acl_kind = 'quality' and grantee_role.rolname = 'nutrition_catalogue_approve_quality')
             or (stage_validate_function_spec.acl_kind = 'reviewers' and grantee_role.rolname in ('nutrition_catalogue_approve_data','nutrition_catalogue_approve_quality','nutrition_catalogue_approve_rights'))
           )
@@ -1779,7 +2164,7 @@ END) IS TRUE)$constraint$
     end if;
   end loop;
 
-  for stage_validate_function_spec in select unnest(array['catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2']) as table_name loop
+  for stage_validate_function_spec in select unnest(array['catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_publication_admission_v2','catalogue_publication_page_v2','catalogue_publication_record_v2','catalogue_publication_rollback_v2','catalogue_publication_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2']) as table_name loop
     execute format('revoke all on table public.%I from public', stage_validate_function_spec.table_name);
     execute format('grant all on table public.%I to %I', stage_validate_function_spec.table_name,expected_owner);
     if exists(select 1 from pg_class c

@@ -102,7 +102,8 @@ retains earlier boundaries. A successful successor never changes an older result
 
 | Order | Work | Concrete exit |
 | --- | --- | --- |
-| Active beta prerequisite | Paged catalogue preparation through review (ADR 0104), checklist C1 | Separate admission, stage/seal, validation and streamed reconciliation/reviewer commitments with retained exact requests and fixed authority/restore policy. Source review and local gates passed, including the bounded synthetic memory workloads and complete authority/restore canaries. Exact-commit automatic delivery evidence is pending. Version 2 publication, actual full-candidate scale and target cutover remain open. |
+| Active beta prerequisite | V2 catalogue publication (ADR 0105), checklist C1 | Bounded off-current materialization, complete persisted verification, atomic visibility, rollback and V2 successor baselines with retained exact requests. Source review/offline checks and approved 251-record rehearsal 2 passed, with all 12 cases executed and cleanup complete. Attempt 1's authority failure and reviewed correction remain recorded. Final delivery and automatic evidence remain pending. Full-candidate scale and target cutover remain open. |
+| Completed beta prerequisite | Paged catalogue preparation through review (ADR 0104) | Delivered at `3816726`; bounded synthetic memory/authority proof, reviewed CI integration corrections and all three CI/nine container jobs passed. One approved quality retry and earlier failures remain preserved. |
 | Completed beta prerequisite | Catalogue review handoff (ADR 0103) | Delivered at `007a17d`: restricted reviewer submission, retained-validation reconciliation, approved synthetic PostgreSQL proof and final local/automatic gates passed. CI attempt one and container attempt two passed after one approved web-job retry; original failure retained. |
 | Completed beta prerequisite | Independent bounded full-CSV validation (ADR 0102) | Delivered at `af65b98`: retained exact prepare/submit request, semantic recheck, approved synthetic PostgreSQL proof and all three CI/nine actual container jobs passed. |
 | Completed beta prerequisite | Capped full-CSV capability staging (ADR 0101) | Delivered at `772e10d`: bounded export verification, restricted-login staging/sealing, approved PostgreSQL proof, final local and all three CI/nine container jobs passed. |
@@ -133,31 +134,39 @@ retains earlier boundaries. A successful successor never changes an older result
 | Completed external review | Scoped Claude review at `805b937` | The supplied report found no ADR 0077 blockers. Its recommendations were addressed in the delivered follow-up; the report remains limited to its original scope. Routine product work does not require another paid review. |
 | Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Advance only under applicable existing authorization and unchanged release gates. |
 
-### Active bounded beta prerequisite: catalogue review handoff
+### Active bounded beta prerequisite: V2 catalogue publication
 
-[ADR 0100](../adr/0100-fdc-csv-normalized-record-export.md) is delivered at
-`ece0bbe`, and [ADR 0101](../adr/0101-fdc-csv-capability-staging.md) at `772e10d`,
-each with required local and exact automatic evidence. Together they export,
-stage and seal a bounded verified batch under restricted staging authority.
-[ADR 0102](../adr/0102-fdc-csv-independent-validation.md) is delivered at
-`af65b98`, including its approved PostgreSQL rehearsal and all three CI/nine
-actual container jobs. Its separate validator retains an exact private request
-for replay-safe submission through the existing semantic-recheck capability.
-[ADR 0103](../adr/0103-catalogue-review-handoff.md) connects that validation to
-reconciliation and restricted reviewer decisions. Independent review, 244 focused
-offline cases, affected types/Biome, pre-service canonical check/build and the
-approved bounded PostgreSQL rehearsal passed. The rehearsal executed five cases,
-zero skipped, on September 21 at 03:23 UTC; owned cleanup and service shutdown
-passed. Delivery requires final canonical gates and exact-commit automatic proof.
+[ADRs 0100 through 0104](../adr/README.md) provide bounded export, restricted
+staging, independent validation, reconciliation and reviewer decisions. ADR 0104
+is delivered at `3816726` with all three CI and nine actual container jobs passed.
+Its original 12,500/25,000-record measurements retain their source identity and
+only 2.64453125 MiB minimum headroom under the 256 MiB peak limit. They do not
+measure the new publication path or the full USDA candidate.
 
-Existing SQL limits remain 10,000 records, 64 MiB of PostgreSQL payload text,
-250 records/16 MiB per stage request and 1 MiB per payload. Accumulated-row scans,
-aggregate seal construction and whole-batch validation still need coherent scale
-work. Do not split a release or raise caps to call this consumer-scale readiness.
-The [beta checklist](beta-exit-checklist.md) retains all six open exits. Apply the
-[development workflow](../quality/development-workflow.md), required integration
-and formal source/local/automatic/release boundaries; no new timed automation is
-inferred from this source work.
+[ADR 0105](../adr/0105-catalogue-paged-publication.md) completes the publication
+consumer path as one package: off-current bounded materialization, verification
+of persisted records, atomic visibility, restricted rollback and V2 successor
+baselines. It updates public eligibility, authority, restore and privacy contracts
+together. The [command guide](../ingestion/catalogue-paged-publication.md) defines
+explicit retained requests and retries. Initial source review and offline checks
+passed. The first approved 251-record PostgreSQL rehearsal passed publication,
+restore and nine endpoint fixtures but failed authority verification. A production
+helper committed a caller-owned transaction and reset its local `search_path`.
+The transaction-ownership correction passed independent review and focused
+offline checks. Separately approved attempt 2 passed all 12 cases, with no skips
+and successful cleanup. Final delivery checks and exact-commit automatic proof
+remain pending. The
+[dated result](../adr/0105-catalogue-paged-publication.md#rehearsal-checkpoint-september-24-2026-utc)
+retains the original failed attempt and its source identity.
+
+The final visibility transaction still performs O(N) food/barcode work. Existing
+two-second lock and thirty-second statement limits remain. The small functional
+rehearsal does not qualify publication resource limits, a populated-publication
+backup/restore, Meilisearch rebuild or alias switch. Larger resource acceptance
+and the unacquired full April 2026 USDA catalogue need their own measured evidence. If the
+terminal operation cannot fit its reviewed envelope, retain that result and assess
+the reader architecture before another attempt or a limit change. All six
+[beta exits](beta-exit-checklist.md) remain open.
 
 ### Milestone and external-decision boundaries
 

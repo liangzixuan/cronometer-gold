@@ -1,7 +1,8 @@
 # ADR 0104: Prepare catalogue batches in bounded pages through review
 
-Status: Source review and required local validation passed. Exact-commit automatic
-checks are pending. All six beta exits remain open.
+Status: Delivered at `3816726` after reviewed CI integration corrections. All three
+CI and nine container jobs passed; one approved quality retry and every earlier
+failure remain recorded. All six beta exits remain open.
 
 ## Context
 

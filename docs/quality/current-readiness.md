@@ -274,26 +274,79 @@ socket unavailable and permanent group membership unchanged. The frozen source
 bytes remained unchanged. This completed session authorizes no further service
 run; prior failed attempts and opt-in skips retain their original status.
 
-[ADR 0104](../adr/0104-paged-catalogue-preparation.md) is the active C1 source
-package: admission-budgeted paged staging/sealing, independent validation with
-retained requests, streamed reconciliation and restricted reviewer commitments.
-The user approved this source work and selected the U.S.-first April 2026 full
-USDA CSV catalogue target. Source review, focused checks and canonical check/build
-passed. On September 23, the 12,500/25,000-record synthetic workloads passed at
-253.35546875/250.9609375 MiB, within the unchanged 256 MiB peak/32 MiB growth limits.
-Each ran 55 cases with zero skips, including one actual database case, and restored
-107 tables through owned cleanup. Original memory proof retains its source
-identity and includes test-process RSS through restore/cleanup, not runner
-teardown or child-process memory. The final canary session at 18:42:43–18:42:51 UTC
-passed two actual database cases and nine endpoint fixtures, zero skips. It
-confirmed the full authority tamper sequence and repeatable restore policy after
-reviewed corrections. All prior failed attempts remain recorded; no fresh memory
-measurement is claimed for those corrections. Cleanup removed owned containers
-and credentials; Docker service/socket and containerd are inactive/disabled.
-Exact-commit automatic delivery evidence remains pending. Version-2 promotion and
-activation remain fenced. The synthetic fixtures do not qualify a full upstream candidate. All six beta exits, compatible
-publication, actual scale, external identity/caller cutover and target acceptance
-remain open. The source approval does not authorize another service session.
+[ADR 0104](../adr/0104-paged-catalogue-preparation.md) is delivered at
+`38167263b3050b4aec0746b8577a5c6eb365750e`. The September 23 21:44 UTC observation
+confirmed all three actual [CI jobs](https://github.com/liangzixuan/cronometer-gold/actions/runs/35914022271)
+and nine [container jobs](https://github.com/liangzixuan/cronometer-gold/actions/runs/35914022360)
+completed successfully. Quality passed on its single approved retry; database and
+secrets retained their original successful executions. Containers passed attempt
+one. The 21:45 UTC verifier confirmed clean matching heads and all 61 reviewed
+working-tree/committed hashes. The delivery monitor is paused.
+
+Earlier automatic failures exposed legacy body-pin/privacy inventory drift,
+custom-schema fixture omissions and an oversized SQL command argument in restore.
+Reviewed corrections preserve exact authority and policy bytes; restore now sends
+SQL through stdin. Final source passed 317 fresh static and 5,391 cached cases,
+with 95 cached opt-in skips; build passed 11 cached tasks. Fresh database CI passed
+full backup/restore, export/erasure, readiness and real search. The original CSV
+timeout and every earlier failed attempt remain recorded; retry success does not
+establish the timeout's cause.
+
+Historical synthetic memory proof at 12,500/25,000 records measured
+253.35546875/250.9609375 MiB, growth -2.39453125 MiB, under the unchanged 256 MiB
+peak/32 MiB growth limits. Minimum headroom is 2.64453125 MiB. It covers the test
+process through restore and owned database cleanup, excluding runner teardown and
+child memory. Attempt 14 failed a later canary. Attempt 17 separately passed two
+actual database canaries and nine endpoint fixtures, zero skips, on its recorded
+source. These historical runs do not measure the corrective commit afresh or the
+full USDA candidate. Owned resources were removed and services stopped/disabled.
+
+[ADR 0105](../adr/0105-catalogue-paged-publication.md) is the active source package
+under explicit user approval: bounded off-current publication, complete persisted
+verification, atomic activation, rollback and published-V2 successor baselines.
+Authority, restore and privacy integration form part of that package. Initial
+independent review and offline checks passed on `reviewed-source-final-01.json`
+(SHA-256 `8f4f53428effda9bfbffec934ef902eb12027705f3e82ff25adb37e456c64a54`)
+at base `38167263b3050b4aec0746b8577a5c6eb365750e`.
+
+The explicitly approved rehearsal attempt 1 ran September 24 UTC. Its 251-record
+publication lifecycle passed from 00:24:43 to 00:24:57. Canaries ran from 00:25:00
+to 00:25:03: the restore canary and nine endpoint fixtures passed; the authority
+canary failed. The overall result was 12 executed, 11 passed, one failed, zero
+skipped. Owned-resource cleanup completed at 00:25:09. Preserve this failed
+attempt and its exact source identity; its one-session approval is consumed.
+
+The production authority helper unconditionally began and committed an inner
+transaction while its caller owned a manually begun transaction. The commit
+reset the caller's local `search_path`, producing schema-qualified foreign-key
+renderings. The correction addresses transaction ownership and affected callers
+and tests without normalizing policy strings or weakening assertions. Independent
+review, 273 focused cases, database types and scoped formatting checks passed.
+Two ownership regressions failed before the fix; their failures remain recorded.
+
+The user separately approved attempt 2. It ran September 24 from
+01:16:26.476771 to 01:17:03.644326 UTC and passed all 12 executed cases, with zero
+failures or skips: three actual database cases (the 251-record publication
+lifecycle, authority and restore canaries) and nine endpoint fixtures. Cleanup
+completed at 01:17:04.799030 UTC without failures. Owned resources were removed;
+the engine was empty, Docker service/socket and containerd were inactive and
+disabled, the socket was unavailable and permanent group membership was unchanged.
+Frozen source and runtime hashes remained intact. That service approval is consumed.
+
+The successful attempt used `reviewed-source-final-02.json` (SHA-256
+`72cea8125efda1d23b5743925e893deafa301e47318af764773f3f2d579e8835`)
+at the same `3816726` base, with service manifest SHA-256
+`9dc4084e9e626a1ec7e10ba5a6e802fd5a6e1140401ba87f253302bb4ce3399d`.
+Proof is retained in `service-rehearsal-za3twnrg`. Source review, offline checks
+and this bounded local rehearsal passed; final delivery checks and exact-commit
+automatic evidence remain pending.
+
+The small functional result does not qualify publication memory/resource limits,
+full USDA scale, Meilisearch rebuild/alias switching or backup/restore of a
+populated publication. The existing restore canary and publication-history
+inventory checks retain their narrower scopes. All six beta exits, authenticated
+external identities/caller cutover, hosted/target execution, exact-commit automatic
+delivery evidence and release acceptance remain open.
 
 Use the [build plan](../product/build-plan.md) for priorities and the
 [release gates](release-gates.md) for authoritative acceptance. The
@@ -342,7 +395,7 @@ authorizations within their original scope.
 | Lane | Owner and next evidence | Exit |
 | --- | --- | --- |
 | Automatic delivery evidence | Delivery owner re-reads the exact commit's CI and actual container jobs. | Both applicable workflows complete successfully with required jobs executed; release artifact/digest/provenance requirements remain separate. [Supply chain](container-supply-chain.md#required-github-configuration). |
-| Beta engineering prerequisites | ADRs 0100 through 0102 are delivered. ADR 0103 independent review, focused checks, pre-service canonical gates and approved bounded PostgreSQL proof passed; delivery requires final canonical gates and exact-commit automatic proof. | Applicable source/local/automatic proof; C1 remains open for full-catalogue staging/validation, authority cutover and target scale evidence. [Beta checklist](../product/beta-exit-checklist.md). |
+| Beta engineering prerequisites | ADRs 0100 through 0104 are delivered. ADR 0105 source review/offline checks and approved 251-record rehearsal 2 passed all 12 cases with cleanup complete. Attempt 1's authority failure and reviewed correction remain recorded; final delivery and exact-commit automatic evidence remain pending. | Applicable source/local/automatic proof; C1 remains open for full-catalogue staging/validation, authority cutover and target scale evidence. [Beta checklist](../product/beta-exit-checklist.md). |
 | Signed device and accessibility | Release owner confirms identifier history and numbering; device operators and reviewers prepare approved Windows relay/capture prerequisites and the physical iOS/Android matrix. | Exact signed artifacts, protected-storage/OS-kill, notification, cross-client and accessibility evidence with required attestations. Exports do not substitute. [Windows boundary](../../infra/runbooks/physical-device-windows-wsl2-private-https.md), [release matrix](../../infra/runbooks/platform-health-release.md). |
 | Hosted beta and mail/privacy operations | Deployment/security, database/privacy and mail owners review target/budget, seven-image deployment, TLS/access/readiness, off-host restore and production delivery operations. | Hosted restore/erasure replay and access evidence, approved provider/sender and abuse/retry/suppression operations, independent review and rollout decisions. [Release](../../infra/runbooks/platform-health-release.md), [restore](../../infra/runbooks/postgres-backup-and-restore.md), [mail/privacy gates](release-gates.md). |
 | Live catalogue and database authority | Acquisition/storage operators, data-quality/rights reviewers and database authority owner provide authenticated dual acquisition, immutable retention, manifest-v4 review bundle, mapping/scale evidence and caller cutover. | Approved numeric catalogue/search/resource thresholds, three distinct role approvals and separate activation decision. The 363-food pilot and synthetic fixtures are insufficient. [Source runbook](../../infra/runbooks/food-source-release.md), [catalogue boundary](../product/build-plan.md#parallel-release-acceptance-target--live-catalogue-evidence). |
@@ -365,15 +418,15 @@ be reintroduced as missing source work from an older summary.
 
 ## Active milestone and successor
 
-Complete [ADR 0103](../adr/0103-catalogue-review-handoff.md) as one coherent
-catalogue review handoff. Independent review, focused checks, pre-service canonical
-gates and the approved actual PostgreSQL rehearsal passed. Delivery requires final
-canonical gates and exact-commit automatic proof. It does not close C1/C2 or
-authorize live review/activation. ADRs 0077 through 0102 are delivered baselines.
-Subsequent work
-must advance the [beta checklist](../product/beta-exit-checklist.md), with one
-source package active and action-specific execution approvals preserved. Record
-interruptions in the outside-Git checkpoint; avoid status-only commit/build cycles.
+Complete [ADR 0105](../adr/0105-catalogue-paged-publication.md) as one coherent
+publication package through final source/delivery checks and exact-commit
+automatic evidence. Preserve rehearsal 1's failure and the separately approved
+attempt 2's successful, source-bound result. Its service approval is consumed;
+unchanged proof retains its recorded scope.
+ADRs 0077 through 0104 are delivered baselines. This work does not close C1/C2 or
+authorize live activation. Advance the [beta checklist](../product/beta-exit-checklist.md)
+with one package active and action-specific execution approvals preserved. Record
+interruptions outside Git; avoid status-only commit/build cycles.
 
 The scoped external report is complete at `805b937`. Another paid review needs
 explicit scope/spending approval. Audit authorization is consumed. Source,

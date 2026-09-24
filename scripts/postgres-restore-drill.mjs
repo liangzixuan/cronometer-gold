@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { lstat, open, realpath } from "node:fs/promises";
 import { join, resolve } from "node:path";
@@ -10,7 +10,7 @@ const pagedPolicyBytes = readFileSync(
 );
 if (
   createHash("sha256").update(pagedPolicyBytes).digest("hex") !==
-  "fa3f0ba540a8df87799fbf4d6d126dca58ce598ef3ba941151a13180d9ef6f18"
+  "97f155eed1159cab94c388990ac0e55a0714fa22190eac66563602e82df61e7c"
 ) {
   throw new Error("Paged catalogue authority manifest differs from reviewed policy");
 }
@@ -29,7 +29,7 @@ const AUTHORITY_POLICY_PATH = new URL(
 const MIGRATION_DIRECTORY = new URL("../packages/db/migrations/", import.meta.url);
 const MIGRATION_FILE_PATTERN = /^\d{4}_[a-z0-9_]+\.sql$/;
 const EXPECTED_AUTHORITY_POLICY_SHA256 =
-  "24409d50e25073e3b64990937e2d4b8d54de1496c507fef7ebbeda53c0248eb0";
+  "444f53f4900b403d7378dd2b29258a1c41f7f32e88b09b37cf55282c3302e0b8";
 const CAPABILITY_ROLES = [
   "nutrition_catalogue_stage",
   "nutrition_catalogue_validate",
@@ -334,6 +334,7 @@ const AUTHORITY_INDEX_POLICY = [
 ];
 const PROTECTED_CATALOGUE_TABLES = new Set([
   ...PAGED_AUTHORITY_POLICY.tables,
+  ...PAGED_AUTHORITY_POLICY.views.map((view) => view.name),
   "nutrient",
   "source_nutrient_map",
   "source_nutrient_map_revision",
@@ -567,7 +568,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "8946f31585a418f750601e35621b06ac938a8c466f26fddc1a123cd6c2df4ffd",
+      sourceSha256: "b9bda857bcce39b37ee33728198fe8d15b112792fc9c1cb33c921a6ab1113d21",
       strict: false,
       volatility: "v",
     },
@@ -584,7 +585,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
       parallel: "u",
       resultType: "jsonb",
       securityDefiner: true,
-      sourceSha256: "a2cf554f00f20d13720e268e3778eca9e26064da34291befa9b75f3dbe55b915",
+      sourceSha256: "1427d676a8322e2a83b436c70264ff6f18ebe2f793aceb9e138b766403caa303",
       strict: false,
       volatility: "v",
     },
@@ -838,7 +839,7 @@ const AUTHORITY_FUNCTION_POLICY = new Map([
     {
       ...DEFAULT_AUTHORITY_FUNCTION_POLICY,
       executeGrantees: "owner-only",
-      sourceSha256: "d46f53aeffa6469eada5461ab59bd9c23d43bf9aab77704c61b21c44291ae028",
+      sourceSha256: "54f0413a565c93fc6d76846873844a03488594580250ba2bc1c9f4117d3ab68a",
     },
   ],
   [
@@ -1774,6 +1775,48 @@ function loadTrackedMigrationLedger() {
   }));
 }
 
+export function collectAuthorityViews(run, options, database) {
+  const rows = PAGED_AUTHORITY_POLICY.views.map((expected) => {
+    const temporaryName = `catalogue_expected_${randomUUID().replaceAll("-", "")}`;
+    const input = [
+      "begin; set local search_path = pg_catalog, public, pg_temp;",
+      `create temporary view ${temporaryName} as ${expected.query};`,
+      `select json_build_object('name','${expected.name}', 'sourceSha256','${expected.sourceSha256}',`,
+      "'definitionMatches',pg_catalog.pg_get_viewdef(actual.oid,false)=",
+      `pg_catalog.pg_get_viewdef('pg_temp.${temporaryName}'::regclass,false),`,
+      "'options',coalesce(actual.reloptions,array[]::text[]))::text",
+      "from pg_catalog.pg_class actual join pg_catalog.pg_namespace namespace on namespace.oid=actual.relnamespace",
+      `where namespace.nspname='public' and actual.relname='${expected.name}' and actual.relkind='v';`,
+      `drop view pg_temp.${temporaryName}; rollback;`,
+    ].join("\n");
+    const output = docker(
+      run,
+      options.container,
+      [
+        "psql",
+        "--username",
+        options.user,
+        "--dbname",
+        database,
+        "--set",
+        "ON_ERROR_STOP=1",
+        "--quiet",
+        "--tuples-only",
+        "--no-align",
+        "--file",
+        "-",
+      ],
+      { input },
+    ).trim();
+    try {
+      return JSON.parse(output);
+    } catch {
+      throw new Error("Database returned malformed public eligibility view evidence");
+    }
+  });
+  return rows;
+}
+
 export function collectAuthorityFingerprint(run, options, database) {
   const evidence = {
     authorityConstraints: psqlJson(run, options, database, [
@@ -1781,12 +1824,12 @@ export function collectAuthorityFingerprint(run, options, database) {
       "from (",
       "select constraint_row.conname as name, class_row.relname as table_name,",
       "constraint_row.contype as constraint_type, constraint_row.convalidated as validated,",
-      "pg_catalog.pg_get_constraintdef(constraint_row.oid, class_row.relname not in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2')) as definition",
+      "pg_catalog.pg_get_constraintdef(constraint_row.oid, class_row.relname not in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_publication_admission_v2','catalogue_publication_page_v2','catalogue_publication_record_v2','catalogue_publication_rollback_v2','catalogue_publication_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2')) as definition",
       "from pg_catalog.pg_constraint as constraint_row",
       "join pg_catalog.pg_class as class_row on class_row.oid = constraint_row.conrelid",
       "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = class_row.relnamespace",
       "where namespace_row.nspname = 'public'",
-      "and (class_row.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or constraint_row.conname in ('food_import_approval_database_authority_check','food_import_batch_materialization_contract_check','food_import_batch_nutrition_semantic_contract_check','food_import_batch_promotable_contract_check','food_import_batch_stage_validate_database_authority_check','food_import_batch_staging_seal_check','food_import_record_nutrition_semantic_contract_check','food_import_record_validated_food_contract_check','food_source_release_activation_database_authority_check'))",
+      "and (class_row.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_publication_admission_v2','catalogue_publication_page_v2','catalogue_publication_record_v2','catalogue_publication_rollback_v2','catalogue_publication_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or constraint_row.conname in ('food_import_approval_database_authority_check','food_import_batch_materialization_contract_check','food_import_batch_nutrition_semantic_contract_check','food_import_batch_promotable_contract_check','food_import_batch_stage_validate_database_authority_check','food_import_batch_staging_seal_check','food_import_record_nutrition_semantic_contract_check','food_import_record_validated_food_contract_check','food_source_release_activation_database_authority_check'))",
       ") authority_constraint_policy",
     ]),
     referenceIntegrityConstraints: psqlJson(run, options, database, [
@@ -1814,7 +1857,7 @@ export function collectAuthorityFingerprint(run, options, database) {
       "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = class_row.relnamespace",
       "left join pg_catalog.pg_attrdef as default_row on default_row.adrelid = attribute_row.attrelid and default_row.adnum = attribute_row.attnum",
       "where namespace_row.nspname = 'public'",
-      "and attribute_row.attnum>0 and not attribute_row.attisdropped and (class_row.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or (class_row.relname = 'food_import_batch' and attribute_row.attname in ('nutrient_mapping_digest','nutrient_mapping_revision_ids','nutrition_semantic_contract_version','nutrition_semantic_sha256','validated_food_contract_version','staged_database_principal','staged_database_capability_role','staging_seal_sha256','staging_sealed_at','validated_database_principal','validated_database_capability_role'))",
+      "and attribute_row.attnum>0 and not attribute_row.attisdropped and (class_row.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_publication_admission_v2','catalogue_publication_page_v2','catalogue_publication_record_v2','catalogue_publication_rollback_v2','catalogue_publication_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or (class_row.relname = 'food_import_batch' and attribute_row.attname in ('nutrient_mapping_digest','nutrient_mapping_revision_ids','nutrition_semantic_contract_version','nutrition_semantic_sha256','validated_food_contract_version','staged_database_principal','staged_database_capability_role','staging_seal_sha256','staging_sealed_at','validated_database_principal','validated_database_capability_role'))",
       "or (class_row.relname = 'food_import_record' and attribute_row.attname in ('nutrition_semantic_contract_version','nutrition_semantic_sha256','validated_food_contract_version','validated_food_document','validated_food_sha256'))) ",
       ") authority_frozen_column_policy",
     ]),
@@ -1835,7 +1878,7 @@ export function collectAuthorityFingerprint(run, options, database) {
       "join pg_catalog.pg_namespace as namespace_row on namespace_row.oid = table_row.relnamespace",
       "join pg_catalog.pg_am as access_method on access_method.oid = index_row.relam",
       "where namespace_row.nspname = 'public'",
-      "and (table_row.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or index_row.relname in ('food_source_release_activation_import_batch_unique','catalogue_legacy_release_batch_v2_idx'))",
+      "and (table_row.relname in ('catalogue_paged_approval_v2','catalogue_preparation_admission_v2','catalogue_preparation_budget_usage_v2','catalogue_preparation_record_v2','catalogue_preparation_seal_page_v2','catalogue_preparation_stage_page_v2','catalogue_preparation_v2','catalogue_publication_admission_v2','catalogue_publication_page_v2','catalogue_publication_record_v2','catalogue_publication_rollback_v2','catalogue_publication_v2','catalogue_reconciliation_baseline_v2','catalogue_reconciliation_page_v2','catalogue_reconciliation_v2','catalogue_validation_context_v2','catalogue_validation_generation_v2','catalogue_validation_page_v2','catalogue_validation_record_v2') or index_row.relname in ('food_source_release_activation_import_batch_unique','catalogue_legacy_release_batch_v2_idx'))",
       ") authority_index_policy",
     ]),
     columnAcls: psqlJson(run, options, database, [
@@ -1985,7 +2028,8 @@ export function collectAuthorityFingerprint(run, options, database) {
       "where namespace_row.nspname = 'public'",
       ") type_policy",
     ]),
-    version: 15,
+    authorityViews: collectAuthorityViews(run, options, database),
+    version: 16,
   };
   validateRestoreAuthorityEvidence(evidence, options.expectedOwner);
   const fingerprint = canonicalJson(evidence);
@@ -2179,10 +2223,23 @@ export async function retainRestoreAuthorityConstraintMismatch(operation, direct
 
 export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
   if (!SAFE_ROLE.test(expectedOwner)) throw new Error("Invalid expected PostgreSQL owner name");
-  if (!evidence || typeof evidence !== "object" || evidence.version !== 15) {
+  if (!evidence || typeof evidence !== "object" || evidence.version !== 16) {
     throw new Error("Database-authority fingerprint has an unsupported version");
   }
 
+  if (
+    canonicalJson(requiredArray(evidence.authorityViews, "public eligibility views")) !==
+    canonicalJson(
+      PAGED_AUTHORITY_POLICY.views.map(({ name, sourceSha256 }) => ({
+        name,
+        sourceSha256,
+        definitionMatches: true,
+        options: [],
+      })),
+    )
+  ) {
+    throw new Error("Catalogue public eligibility view differs from source policy");
+  }
   const authorityConstraints = requiredArray(
     evidence.authorityConstraints,
     "catalogue authority constraints",
@@ -2306,6 +2363,10 @@ export function validateRestoreAuthorityEvidence(evidence, expectedOwner) {
     )
   ) {
     throw new Error("Paged catalogue companion relation set is missing or duplicated");
+  }
+  for (const expected of PAGED_AUTHORITY_POLICY.views) {
+    if (!relations.some((relation) => relation.name === expected.name && relation.kind === "v"))
+      throw new Error("Catalogue public eligibility view relation is unavailable");
   }
   for (const relation of relations) {
     if (relation.owner !== expectedOwner) {
