@@ -9,6 +9,7 @@ import {
   localDevelopmentSupervisorGraceMs,
   parseServiceShutdownGraceMs,
 } from "./local-development-shutdown-budget.mjs";
+import { localObjectStoreEnvironment } from "./local-object-store.mjs";
 import { bootstrapScopedMeiliKeys } from "./scoped-meili-keys.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
@@ -373,7 +374,7 @@ function exactLocalDatabaseUrl(environment) {
 }
 
 function assertLocalObjectStorage(environment) {
-  const port = exactPort(environment, "MINIO_API_PORT");
+  const port = exactPort(environment, "OBJECT_STORE_PORT");
   exactLoopbackHttpUrl(environment, "EXPORT_ARTIFACT_ENDPOINT", port, "export artifact store");
   exactLoopbackHttpUrl(
     environment,
@@ -391,14 +392,16 @@ function assertLocalObjectStorage(environment) {
   }
 
   const credentialFields = [
-    "MINIO_ROOT_USER",
-    "MINIO_ROOT_PASSWORD",
+    "ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID",
+    "ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY",
     "EXPORT_ARTIFACT_READ_ACCESS_KEY_ID",
     "EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY",
     "EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID",
     "EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY",
     "ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID",
     "ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY",
+    "ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID",
+    "ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY",
   ];
   const credentials = credentialFields.map((field) => required(environment, field));
   if (new Set(credentials).size !== credentials.length) {
@@ -860,7 +863,10 @@ export async function runLocalDevelopmentWithPrivateEnv(arguments_ = [], depende
 
   let privateEnvironment;
   try {
-    privateEnvironment = parsePrivateEnvironment(source, dependencies);
+    privateEnvironment = {
+      ...parsePrivateEnvironment(source, dependencies),
+      ...(dependencies.readObjectStoreEnvironment ?? localObjectStoreEnvironment)(),
+    };
   } catch {
     throw new Error("Unable to load the private local development environment");
   }

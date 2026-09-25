@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { devNull } from "node:os";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
+  assertComposeConfiguration,
   LocalInfrastructureError,
   startLocalInfrastructure,
   statusLocalInfrastructure,
@@ -37,7 +39,7 @@ const composePrefix = [
   "-f",
   composeFile,
 ];
-const persistentServices = ["postgres", "meilisearch", "minio", "mailpit"];
+const persistentServices = ["postgres", "meilisearch", "object-store", "mailpit"];
 
 function success(stdout = "") {
   return { error: undefined, signal: null, status: 0, stderr: "", stdout };
@@ -100,14 +102,11 @@ function healthcheck(serviceName) {
       test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:7700/health >/dev/null"],
       timeout: "5s",
     },
-    minio: {
+    "object-store": {
       interval: "10s",
       retries: 20,
       start_period: "10s",
-      test: [
-        "CMD-SHELL",
-        "curl --fail --silent http://127.0.0.1:9000/minio/health/ready >/dev/null",
-      ],
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:9000/readyz >/dev/null"],
       timeout: "5s",
     },
     postgres: {
@@ -119,30 +118,6 @@ function healthcheck(serviceName) {
     },
   };
   return checks[serviceName];
-}
-
-function bootstrapCommand() {
-  return `${[
-    'mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"',
-    "mc mb --ignore-existing local/nutrition-private-exports",
-    "mc mb --ignore-existing local/nutrition-erasure-ledger",
-    "mc anonymous set none local/nutrition-private-exports",
-    "mc anonymous set none local/nutrition-erasure-ledger",
-    "mc admin policy create local nutrition-export-writer /policies/export-writer-policy.json",
-    "mc admin policy create local nutrition-export-reader /policies/export-reader-policy.json",
-    "mc admin policy create local nutrition-erasure-writer /policies/erasure-writer-policy.json",
-    "mc admin policy create local nutrition-erasure-restore /policies/erasure-restore-policy.json",
-    'mc admin user add local "$${EXPORT_WRITE_USER}" "$${EXPORT_WRITE_PASSWORD}"',
-    'mc admin user add local "$${EXPORT_READ_USER}" "$${EXPORT_READ_PASSWORD}"',
-    'mc admin user add local "$${ERASURE_WRITE_USER}" "$${ERASURE_WRITE_PASSWORD}"',
-    'mc admin user add local "$${ERASURE_RESTORE_USER}" "$${ERASURE_RESTORE_PASSWORD}"',
-    'mc admin policy attach local nutrition-export-writer --user "$${EXPORT_WRITE_USER}"',
-    'mc admin policy attach local nutrition-export-reader --user "$${EXPORT_READ_USER}"',
-    'mc admin policy attach local nutrition-erasure-writer --user "$${ERASURE_WRITE_USER}"',
-    'mc admin policy attach local nutrition-erasure-restore --user "$${ERASURE_RESTORE_USER}"',
-    "mc version suspend local/nutrition-private-exports",
-    "mc version enable local/nutrition-erasure-ledger",
-  ].join("\n")}\n`;
 }
 
 function runtime(serviceName) {
@@ -163,33 +138,32 @@ function runtime(serviceName) {
       image:
         "getmeili/meilisearch:v1.32.0@sha256:61b1c86c459fa52d0653516f573702791e611574737dc76175ae9d2628c911f5",
     },
-    minio: {
-      command: ["server", "/data", "--console-address", ":9001"],
+    "object-store": {
+      command: [
+        "server",
+        "-dir=/data",
+        "-ip=127.0.0.1",
+        "-ip.bind=127.0.0.1",
+        "-filer",
+        "-s3",
+        "-s3.ip.bind=0.0.0.0",
+        "-s3.port=9000",
+        "-s3.port.iceberg=0",
+        "-s3.port.lance=0",
+        "-s3.config=/config/s3.json",
+        "-s3.iam.readOnly=true",
+        "-s3.autoCreateBucket=false",
+        "-s3.allowDeleteBucketNotEmpty=false",
+        "-volume.max=16",
+        "-master.volumeSizeLimitMB=64",
+        "-master.telemetry=false",
+      ],
       entrypoint: null,
-      environment: {
-        MINIO_ROOT_PASSWORD: "protected-test-value",
-        MINIO_ROOT_USER: "protected-test-value",
-      },
+      cpus: 2,
+      mem_limit: "1073741824",
+      pids_limit: 256,
       image:
-        "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e",
-    },
-    "minio-bootstrap": {
-      command: [bootstrapCommand()],
-      entrypoint: ["/bin/sh", "-eu", "-c"],
-      environment: {
-        ERASURE_RESTORE_PASSWORD: "protected-test-value",
-        ERASURE_RESTORE_USER: "protected-test-value",
-        ERASURE_WRITE_PASSWORD: "protected-test-value",
-        ERASURE_WRITE_USER: "protected-test-value",
-        EXPORT_READ_PASSWORD: "protected-test-value",
-        EXPORT_READ_USER: "protected-test-value",
-        EXPORT_WRITE_PASSWORD: "protected-test-value",
-        EXPORT_WRITE_USER: "protected-test-value",
-        MINIO_ROOT_PASSWORD: "protected-test-value",
-        MINIO_ROOT_USER: "protected-test-value",
-      },
-      image:
-        "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e",
+        "ghcr.io/chrislusf/seaweedfs:4.47@sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882",
     },
     postgres: {
       ...common,
@@ -232,25 +206,19 @@ function composeConfiguration() {
         restart: "unless-stopped",
         volumes: [namedVolume("meilisearch-data", "/meili_data")],
       },
-      minio: {
-        ...runtime("minio"),
-        healthcheck: healthcheck("minio"),
+      "object-store": {
+        ...runtime("object-store"),
+        healthcheck: healthcheck("object-store"),
         networks: network,
-        ports: [configPort(9000), configPort(9001)],
+        ports: [configPort(9000)],
         restart: "unless-stopped",
-        volumes: [namedVolume("minio-data", "/data")],
-      },
-      "minio-bootstrap": {
-        ...runtime("minio-bootstrap"),
-        depends_on: { minio: { condition: "service_healthy", required: true } },
-        networks: network,
-        restart: "no",
         volumes: [
+          namedVolume("object-store-data", "/data"),
           {
-            bind: {},
+            bind: { create_host_path: false },
             read_only: true,
-            source: resolve(repositoryRoot, "infra/minio"),
-            target: "/policies",
+            source: resolve(repositoryRoot, ".local-data/object-store/s3.json"),
+            target: "/config/s3.json",
             type: "bind",
           },
         ],
@@ -266,7 +234,7 @@ function composeConfiguration() {
     },
     volumes: {
       "meilisearch-data": { name: `${projectName}_meilisearch-data` },
-      "minio-data": { name: `${projectName}_minio-data` },
+      "object-store-data": { name: `${projectName}_object-store-data` },
       "postgres-data": { name: `${projectName}_postgres-data` },
     },
   };
@@ -291,7 +259,7 @@ function persistentStatus({ index, publishedPorts = new Map(), value } = {}) {
   const entries = [
     service("postgres", [5432], { publishedPorts: publishedPorts.get("postgres") }),
     service("meilisearch", [7700], { publishedPorts: publishedPorts.get("meilisearch") }),
-    service("minio", [9000, 9001], { publishedPorts: publishedPorts.get("minio") }),
+    service("object-store", [9000], { publishedPorts: publishedPorts.get("object-store") }),
     service("mailpit", [1025, 8025], { publishedPorts: publishedPorts.get("mailpit") }),
   ];
   if (index !== undefined) entries[index] = { ...entries[index], ...value };
@@ -321,7 +289,12 @@ function createRunner(replacements = new Map()) {
 
 function callStart(
   runner,
-  { currentUid = 1000, environment = { PATH: "/usr/bin" }, fileMetadata = safeMetadata() } = {},
+  {
+    currentUid = 1000,
+    environment = { PATH: "/usr/bin" },
+    fileMetadata = safeMetadata(),
+    prepare = () => {},
+  } = {},
 ) {
   const messages = [];
   let error;
@@ -331,6 +304,7 @@ function callStart(
       environment,
       inspectFile: () => fileMetadata,
       run: runner.run,
+      prepare,
       write: (message) => messages.push(message),
     });
   } catch (raised) {
@@ -351,6 +325,7 @@ function callStatus(
       environment,
       inspectFile: () => fileMetadata,
       run: runner.run,
+      prepare: () => {},
       write: (message) => messages.push(message),
     });
   } catch (raised) {
@@ -377,6 +352,7 @@ function callStop(
       environment,
       inspectFile: () => fileMetadata,
       run: runner.run,
+      prepare: () => {},
       write: (message) => messages.push(message),
     });
   } catch (raised) {
@@ -399,7 +375,7 @@ test("uses the exact shell-free fail-closed local lifecycle", () => {
         "docker",
         [...composePrefix, "up", "-d", "--wait", "--wait-timeout", "300", ...persistentServices],
       ],
-      ["docker", [...composePrefix, "run", "--rm", "--no-deps", "--no-tty", "minio-bootstrap"]],
+      [process.execPath, [resolve(repositoryRoot, "scripts/local-object-store.mjs"), "bootstrap"]],
       ["docker", [...composePrefix, "ps", "--format", "json"]],
     ],
   );
@@ -419,7 +395,7 @@ test("uses the exact shell-free fail-closed local lifecycle", () => {
     "[local-infra] Docker boundary accepted.",
     "[local-infra] Compose configuration accepted.",
     "[local-infra] Persistent services are healthy.",
-    "[local-infra] MinIO bootstrap completed.",
+    "[local-infra] Object-store bootstrap completed.",
     "[local-infra] Four loopback-only persistent services remain healthy.",
   ]);
 });
@@ -494,6 +470,18 @@ test("binds Docker Desktop and rejects ambient Docker or Compose controls", () =
 test("rejects unsafe rendered Compose topology before any mutation or secret output", () => {
   const mutations = [
     (config) => {
+      config.services["object-store"].mem_limit = "2147483648";
+    },
+    (config) => {
+      config.services["object-store"].pids_limit = 512;
+    },
+    (config) => {
+      config.services["object-store"].volumes[1].bind.create_host_path = true;
+    },
+    (config) => {
+      config.services["object-store"].volumes[1].source = "/unreviewed/s3.json";
+    },
+    (config) => {
       config.name = "shadow-project";
     },
     (config) => {
@@ -515,17 +503,17 @@ test("rejects unsafe rendered Compose topology before any mutation or secret out
       config.services.meilisearch.healthcheck.test = ["NONE"];
     },
     (config) => {
-      config.services.minio.healthcheck.test[1] =
+      config.services["object-store"].healthcheck.test[1] =
         "curl --fail --silent http://127.0.0.1:9000/minio/health/live >/dev/null";
     },
     (config) => {
       config.services.mailpit.healthcheck.disable = true;
     },
     (config) => {
-      config.services["minio-bootstrap"].volumes[0].read_only = false;
+      config.services["object-store"].volumes[1].read_only = false;
     },
     (config) => {
-      config.services["minio-bootstrap"].ports = [configPort(9000)];
+      config.services["object-store"].ports.push(configPort(9001));
     },
     (config) => {
       config.volumes.unreviewed = {};
@@ -552,13 +540,10 @@ test("rejects unsafe rendered Compose topology before any mutation or secret out
       config.services.postgres.ports[0].name = "unreviewed";
     },
     (config) => {
-      config.services["minio-bootstrap"].command[0] +=
-        "mc rb --force local/nutrition-private-exports\n";
+      config.services["object-store"].cpus = 3;
     },
     (config) => {
-      config.services["minio-bootstrap"].command[0] = config.services[
-        "minio-bootstrap"
-      ].command[0].replace("mc mb --ignore-existing", "mc mb");
+      config.services["object-store"].command.push("-s3.autoCreateBucket=true");
     },
   ];
 
@@ -588,7 +573,7 @@ test("stops at the first failed lifecycle stage without exposing child output", 
   const stages = [
     { call: 3, count: 4, stage: "Compose configuration" },
     { call: 4, count: 5, stage: "persistent-service startup" },
-    { call: 5, count: 6, stage: "MinIO bootstrap" },
+    { call: 5, count: 6, stage: "object-store bootstrap" },
     { call: 6, count: 7, stage: "persistent-service postcondition" },
   ];
   for (const { call, count, stage } of stages) {
@@ -759,9 +744,9 @@ test("locks package scripts, docs, readiness health, and no-argument CLIs", () =
     assert.match(document, /install -m 600 \.env\.example \.env/u);
     assert.doesNotMatch(document, /cp \.env\.example \.env/u);
   }
-  assert.match(composeSource, /http:\/\/127\.0\.0\.1:9000\/minio\/health\/ready/u);
+  assert.match(composeSource, /http:\/\/127\.0\.0\.1:9000\/readyz/u);
   assert.doesNotMatch(composeSource, /minio\/health\/live/u);
-  assert.match(localRunbook, /http:\/\/127\.0\.0\.1:9000\/minio\/health\/ready/u);
+  assert.match(localRunbook, /http:\/\/127\.0\.0\.1:9000\/readyz/u);
   assert.doesNotMatch(localRunbook, /minio\/health\/live/u);
 
   for (const path of [upScriptPath, downScriptPath, statusScriptPath]) {
@@ -774,4 +759,43 @@ test("locks package scripts, docs, readiness health, and no-argument CLIs", () =
     assert.equal(rejected.stdout, "");
     assert.equal(rejected.stderr, "[local-infra] No arguments are accepted.\n");
   }
+});
+
+test("accepts the genuine offline Compose render at the exact startup boundary", () => {
+  const rendered = spawnSync(
+    "docker",
+    [
+      "compose",
+      "--project-name",
+      projectName,
+      "--env-file",
+      devNull,
+      "-f",
+      composeFile,
+      "config",
+      "--format",
+      "json",
+    ],
+    { cwd: repositoryRoot, encoding: "utf8", env: process.env, shell: false, timeout: 15000 },
+  );
+  assert.equal(rendered.status, 0, "offline Compose render must succeed");
+  assert.doesNotThrow(() => assertComposeConfiguration(rendered.stdout));
+});
+
+test("prepares the validated rendered port and stops before service startup on private-state failure", () => {
+  const config = composeConfiguration();
+  config.services["object-store"].ports[0].published = "19000";
+  const runner = createRunner(new Map([[3, success(JSON.stringify(config))]]));
+  let selectedPort;
+  const outcome = callStart(runner, {
+    prepare: ({ port }) => {
+      selectedPort = port;
+      assert.equal(runner.calls.length, 4);
+      throw new Error("protected-state");
+    },
+  });
+  assert.equal(selectedPort, 19000);
+  assert.equal(outcome.error?.stage, "object-store preparation");
+  assert.equal(runner.calls.length, 4);
+  assert.doesNotMatch(outcome.error.message, /protected-state/u);
 });

@@ -34,7 +34,7 @@ LEDGER_BUCKET = "nutrition-erasure-ledger"
 CONTAINER_LABEL_KEY = "com.nutrition-tracker.fixture"
 CONTAINER_LABEL_VALUE = "localstack-s3-iam-tests"
 AMBIGUOUS_LAUNCH_RECONCILIATION_SECONDS = 20
-POLICY_DIRECTORY = REPOSITORY_ROOT / "infra" / "minio"
+POLICY_DIRECTORY = REPOSITORY_ROOT / "infra" / "object-store"
 EXPORT_LIFECYCLE_FILE = REPOSITORY_ROOT / "infra" / "localstack" / "export-lifecycle.json"
 POLICIES = {
     "nutrition-export-writer": POLICY_DIRECTORY / "export-writer-policy.json",

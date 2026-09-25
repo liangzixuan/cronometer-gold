@@ -202,7 +202,7 @@ class LocalStackFixtureContractTest(unittest.TestCase):
         self.assertIn("LocalStack restore version-list condition compatibility", self.runner)
 
     def test_restore_policy_compatibility_delta_is_localstack_only(self) -> None:
-        production_path = ROOT / "infra" / "minio" / "erasure-restore-policy.json"
+        production_path = ROOT / "infra" / "object-store" / "erasure-restore-policy.json"
         compatibility_path = ROOT / "infra" / "localstack" / "erasure-restore-policy.json"
         production = json.loads(production_path.read_text(encoding="utf-8"))
         compatibility = json.loads(compatibility_path.read_text(encoding="utf-8"))
@@ -246,9 +246,9 @@ class LocalStackFixtureContractTest(unittest.TestCase):
                 doraise=True,
             )
 
-    def test_existing_minio_permission_lane_is_retained(self) -> None:
+    def test_authenticated_object_store_permission_lane_is_retained(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-        self.assertIn("minio-bootstrap", workflow)
+        self.assertIn("node scripts/local-object-store.mjs bootstrap", workflow)
         self.assertIn("test:integration", workflow)
         for policy_name in (
             "export-writer-policy.json",
@@ -256,7 +256,7 @@ class LocalStackFixtureContractTest(unittest.TestCase):
             "erasure-writer-policy.json",
             "erasure-restore-policy.json",
         ):
-            policy = json.loads((ROOT / "infra" / "minio" / policy_name).read_text(encoding="utf-8"))
+            policy = json.loads((ROOT / "infra" / "object-store" / policy_name).read_text(encoding="utf-8"))
             self.assertEqual(policy.get("Version"), "2012-10-17")
 
     def test_docs_reject_hosting_real_data_and_ci_developer_tokens(self) -> None:

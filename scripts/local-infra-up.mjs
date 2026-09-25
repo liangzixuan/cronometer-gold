@@ -3,6 +3,8 @@ import { lstatSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { prepareLocalObjectStore } from "./local-object-store.mjs";
+
 const scriptPath = fileURLToPath(import.meta.url);
 const repositoryRoot = resolve(dirname(scriptPath), "..");
 const envFile = resolve(repositoryRoot, ".env");
@@ -17,18 +19,18 @@ const composePrefix = [
   "-f",
   composeFile,
 ];
-const persistentServices = ["postgres", "meilisearch", "minio", "mailpit"];
-const allServices = [...persistentServices, "minio-bootstrap"];
+const persistentServices = ["postgres", "meilisearch", "object-store", "mailpit"];
+const allServices = persistentServices;
 const expectedTargetPorts = new Map([
   ["postgres", [5432]],
   ["meilisearch", [7700]],
-  ["minio", [9000, 9001]],
+  ["object-store", [9000]],
   ["mailpit", [1025, 8025]],
 ]);
 const expectedVolumeMounts = new Map([
   ["postgres", { source: "postgres-data", target: "/var/lib/postgresql/data" }],
   ["meilisearch", { source: "meilisearch-data", target: "/meili_data" }],
-  ["minio", { source: "minio-data", target: "/data" }],
+  ["object-store", { source: "object-store-data", target: "/data" }],
   ["mailpit", null],
 ]);
 const expectedHealthchecks = new Map([
@@ -53,15 +55,12 @@ const expectedHealthchecks = new Map([
     },
   ],
   [
-    "minio",
+    "object-store",
     {
       interval: "10s",
       retries: 20,
       start_period: "10s",
-      test: [
-        "CMD-SHELL",
-        "curl --fail --silent http://127.0.0.1:9000/minio/health/ready >/dev/null",
-      ],
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:9000/readyz >/dev/null"],
       timeout: "5s",
     },
   ],
@@ -76,27 +75,6 @@ const expectedHealthchecks = new Map([
     },
   ],
 ]);
-const expectedBootstrapCommand = `${[
-  'mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"',
-  "mc mb --ignore-existing local/nutrition-private-exports",
-  "mc mb --ignore-existing local/nutrition-erasure-ledger",
-  "mc anonymous set none local/nutrition-private-exports",
-  "mc anonymous set none local/nutrition-erasure-ledger",
-  "mc admin policy create local nutrition-export-writer /policies/export-writer-policy.json",
-  "mc admin policy create local nutrition-export-reader /policies/export-reader-policy.json",
-  "mc admin policy create local nutrition-erasure-writer /policies/erasure-writer-policy.json",
-  "mc admin policy create local nutrition-erasure-restore /policies/erasure-restore-policy.json",
-  'mc admin user add local "$${EXPORT_WRITE_USER}" "$${EXPORT_WRITE_PASSWORD}"',
-  'mc admin user add local "$${EXPORT_READ_USER}" "$${EXPORT_READ_PASSWORD}"',
-  'mc admin user add local "$${ERASURE_WRITE_USER}" "$${ERASURE_WRITE_PASSWORD}"',
-  'mc admin user add local "$${ERASURE_RESTORE_USER}" "$${ERASURE_RESTORE_PASSWORD}"',
-  'mc admin policy attach local nutrition-export-writer --user "$${EXPORT_WRITE_USER}"',
-  'mc admin policy attach local nutrition-export-reader --user "$${EXPORT_READ_USER}"',
-  'mc admin policy attach local nutrition-erasure-writer --user "$${ERASURE_WRITE_USER}"',
-  'mc admin policy attach local nutrition-erasure-restore --user "$${ERASURE_RESTORE_USER}"',
-  "mc version suspend local/nutrition-private-exports",
-  "mc version enable local/nutrition-erasure-ledger",
-].join("\n")}\n`;
 const expectedServiceRuntime = new Map([
   [
     "postgres",
@@ -141,23 +119,43 @@ const expectedServiceRuntime = new Map([
     },
   ],
   [
-    "minio",
+    "object-store",
     {
-      command: ["server", "/data", "--console-address", ":9001"],
+      command: [
+        "server",
+        "-dir=/data",
+        "-ip=127.0.0.1",
+        "-ip.bind=127.0.0.1",
+        "-filer",
+        "-s3",
+        "-s3.ip.bind=0.0.0.0",
+        "-s3.port=9000",
+        "-s3.port.iceberg=0",
+        "-s3.port.lance=0",
+        "-s3.config=/config/s3.json",
+        "-s3.iam.readOnly=true",
+        "-s3.autoCreateBucket=false",
+        "-s3.allowDeleteBucketNotEmpty=false",
+        "-volume.max=16",
+        "-master.volumeSizeLimitMB=64",
+        "-master.telemetry=false",
+      ],
       entrypoint: null,
-      environmentKeys: ["MINIO_ROOT_PASSWORD", "MINIO_ROOT_USER"],
+      environmentKeys: null,
       image:
-        "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e",
+        "ghcr.io/chrislusf/seaweedfs:4.47@sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882",
       keys: [
         "command",
         "entrypoint",
-        "environment",
         "healthcheck",
         "image",
         "networks",
         "ports",
         "restart",
         "volumes",
+        "cpus",
+        "mem_limit",
+        "pids_limit",
       ],
     },
   ],
@@ -170,37 +168,6 @@ const expectedServiceRuntime = new Map([
       image:
         "axllent/mailpit:v1.29.4@sha256:0530ab1c658a0f225f148e617522db84053bd1e4879e664c23de5fee44ad6819",
       keys: ["command", "entrypoint", "healthcheck", "image", "networks", "ports", "restart"],
-    },
-  ],
-  [
-    "minio-bootstrap",
-    {
-      command: [expectedBootstrapCommand],
-      entrypoint: ["/bin/sh", "-eu", "-c"],
-      environmentKeys: [
-        "ERASURE_RESTORE_PASSWORD",
-        "ERASURE_RESTORE_USER",
-        "ERASURE_WRITE_PASSWORD",
-        "ERASURE_WRITE_USER",
-        "EXPORT_READ_PASSWORD",
-        "EXPORT_READ_USER",
-        "EXPORT_WRITE_PASSWORD",
-        "EXPORT_WRITE_USER",
-        "MINIO_ROOT_PASSWORD",
-        "MINIO_ROOT_USER",
-      ],
-      image:
-        "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e",
-      keys: [
-        "command",
-        "depends_on",
-        "entrypoint",
-        "environment",
-        "image",
-        "networks",
-        "restart",
-        "volumes",
-      ],
     },
   ],
 ]);
@@ -221,8 +188,8 @@ function fail(stage) {
   throw new LocalInfrastructureError(stage);
 }
 
-function execute(run, environment, stage, args, timeout) {
-  const result = run("docker", args, {
+function execute(run, environment, stage, args, timeout, command = "docker") {
+  const result = run(command, args, {
     cwd: repositoryRoot,
     encoding: "utf8",
     env: environment,
@@ -376,6 +343,11 @@ function assertServiceRuntime(serviceName, service, stage) {
     }
   }
 
+  if (
+    serviceName === "object-store" &&
+    (service.cpus !== 2 || service.mem_limit !== "1073741824" || service.pids_limit !== 256)
+  )
+    fail(stage);
   if (expected.environmentKeys === null) {
     if (service.environment !== undefined) fail(stage);
   } else {
@@ -408,7 +380,20 @@ function assertPersistentVolume(serviceName, service, stage) {
     if (volumes.length !== 0) fail(stage);
     return;
   }
-  if (volumes.length !== 1) fail(stage);
+  if (volumes.length !== (serviceName === "object-store" ? 2 : 1)) fail(stage);
+  if (serviceName === "object-store") {
+    const configMount = volumes[1];
+    exactObjectKeys(configMount, ["bind", "read_only", "source", "target", "type"], stage);
+    exactObjectKeys(configMount.bind, ["create_host_path"], stage);
+    if (configMount.bind.create_host_path !== false) fail(stage);
+    if (
+      configMount.type !== "bind" ||
+      configMount.source !== resolve(repositoryRoot, ".local-data/object-store/s3.json") ||
+      configMount.target !== "/config/s3.json" ||
+      configMount.read_only !== true
+    )
+      fail(stage);
+  }
   const mount = volumes[0];
   exactObjectKeys(mount, ["source", "target", "type", "volume"], stage);
   exactObjectKeys(mount.volume, [], stage);
@@ -421,13 +406,17 @@ function assertPersistentVolume(serviceName, service, stage) {
   }
 }
 
-function assertComposeConfiguration(value) {
+export function assertComposeConfiguration(value) {
   const stage = "Compose boundary validation";
   const config = parseJson(stage, value);
   exactObjectKeys(config, ["name", "networks", "services", "volumes"], stage);
   if (config?.name !== projectName) fail(stage);
   exactObjectKeys(config?.services, allServices, stage);
-  exactObjectKeys(config?.volumes, ["postgres-data", "meilisearch-data", "minio-data"], stage);
+  exactObjectKeys(
+    config?.volumes,
+    ["postgres-data", "meilisearch-data", "object-store-data"],
+    stage,
+  );
   exactObjectKeys(config?.networks, ["nutrition-local"], stage);
 
   const network = config.networks["nutrition-local"];
@@ -436,7 +425,7 @@ function assertComposeConfiguration(value) {
   if (network.driver !== "bridge" || network.name !== `${projectName}_nutrition-local`) {
     fail(stage);
   }
-  for (const volumeName of ["postgres-data", "meilisearch-data", "minio-data"]) {
+  for (const volumeName of ["postgres-data", "meilisearch-data", "object-store-data"]) {
     const volume = config.volumes[volumeName];
     exactObjectKeys(volume, ["name"], stage);
     if (volume.name !== `${projectName}_${volumeName}`) fail(stage);
@@ -480,38 +469,6 @@ function assertComposeConfiguration(value) {
       .sort((left, right) => left.target - right.target);
     if (mappings.some(({ target }, index) => target !== targets[index])) fail(stage);
     expectedPublishedPorts.set(serviceName, mappings);
-  }
-
-  const bootstrap = config.services["minio-bootstrap"];
-  assertServiceRuntime("minio-bootstrap", bootstrap, stage);
-  assertNetworkAttachment(bootstrap, stage);
-  exactObjectKeys(bootstrap?.depends_on, ["minio"], stage);
-  const dependency = bootstrap.depends_on.minio;
-  exactObjectKeys(dependency, ["condition", "required"], stage);
-  const bootstrapPorts = bootstrap.ports ?? [];
-  const bootstrapVolumes = bootstrap.volumes ?? [];
-  if (
-    bootstrap.restart !== "no" ||
-    (bootstrap.healthcheck !== undefined && bootstrap.healthcheck !== null) ||
-    dependency?.condition !== "service_healthy" ||
-    dependency.required !== true ||
-    !Array.isArray(bootstrapPorts) ||
-    bootstrapPorts.length !== 0 ||
-    !Array.isArray(bootstrapVolumes) ||
-    bootstrapVolumes.length !== 1
-  ) {
-    fail(stage);
-  }
-  const policyMount = bootstrapVolumes[0];
-  exactObjectKeys(policyMount, ["bind", "read_only", "source", "target", "type"], stage);
-  exactObjectKeys(policyMount.bind, [], stage);
-  if (
-    policyMount?.type !== "bind" ||
-    policyMount.source !== resolve(repositoryRoot, "infra/minio") ||
-    policyMount.target !== "/policies" ||
-    policyMount.read_only !== true
-  ) {
-    fail(stage);
   }
 
   return expectedPublishedPorts;
@@ -589,13 +546,14 @@ function defaults(options) {
     environment: process.env,
     inspectFile: inspectEnvironmentFile,
     run: spawnSync,
+    prepare: prepareLocalObjectStore,
     write: (message) => process.stdout.write(`${message}\n`),
     ...options,
   };
 }
 
 export function startLocalInfrastructure(options = {}) {
-  const { currentUid, environment, inspectFile, run, write } = defaults(options);
+  const { currentUid, environment, inspectFile, run, write, prepare } = defaults(options);
   assertEnvironmentFile(inspectFile(), currentUid);
   assertDockerBoundary(run, environment);
   write("[local-infra] Docker boundary accepted.");
@@ -609,6 +567,11 @@ export function startLocalInfrastructure(options = {}) {
   );
   const expectedPublishedPorts = assertComposeConfiguration(renderedConfig);
   write("[local-infra] Compose configuration accepted.");
+  try {
+    prepare({ port: expectedPublishedPorts.get("object-store")[0].published });
+  } catch {
+    fail("object-store preparation");
+  }
 
   execute(
     run,
@@ -622,11 +585,12 @@ export function startLocalInfrastructure(options = {}) {
   execute(
     run,
     environment,
-    "MinIO bootstrap",
-    [...composePrefix, "run", "--rm", "--no-deps", "--no-tty", "minio-bootstrap"],
+    "object-store bootstrap",
+    [resolve(repositoryRoot, "scripts/local-object-store.mjs"), "bootstrap"],
     BOOTSTRAP_TIMEOUT_MS,
+    process.execPath,
   );
-  write("[local-infra] MinIO bootstrap completed.");
+  write("[local-infra] Object-store bootstrap completed.");
 
   const status = execute(
     run,

@@ -12,8 +12,8 @@ const POSTGRES_IMAGE =
   "postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94";
 const MEILISEARCH_IMAGE =
   "getmeili/meilisearch:v1.32.0@sha256:61b1c86c459fa52d0653516f573702791e611574737dc76175ae9d2628c911f5";
-const MINIO_IMAGE =
-  "quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z@sha256:a1ea29fa28355559ef137d71fc570e508a214ec84ff8083e39bc5428980b015e";
+const OBJECT_STORE_IMAGE =
+  "ghcr.io/chrislusf/seaweedfs:4.47@sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882";
 const MAILPIT_IMAGE =
   "axllent/mailpit:v1.29.4@sha256:0530ab1c658a0f225f148e617522db84053bd1e4879e664c23de5fee44ad6819";
 const ATTACKER_IMAGE = `busybox:latest@sha256:${"0".repeat(64)}`;
@@ -21,8 +21,7 @@ const ATTACKER_IMAGE = `busybox:latest@sha256:${"0".repeat(64)}`;
 const EXPECTED_IMAGES = [
   { service: "postgres", image: POSTGRES_IMAGE },
   { service: "meilisearch", image: MEILISEARCH_IMAGE },
-  { service: "minio", image: MINIO_IMAGE },
-  { service: "minio-bootstrap", image: MINIO_IMAGE },
+  { service: "object-store", image: OBJECT_STORE_IMAGE },
   { service: "mailpit", image: MAILPIT_IMAGE },
 ].map(({ service, image }) => ({ service, declaration: `    image: ${image}` }));
 
@@ -113,7 +112,7 @@ function validateLocalComposeImages(source) {
   assert.deepEqual(
     imageKeyLines(source),
     expectedDeclarations,
-    "compose image keys must be the five exact canonical declarations in order",
+    "compose image keys must be the four exact canonical declarations in order",
   );
 
   for (const { service, declaration } of EXPECTED_IMAGES) {
@@ -132,7 +131,7 @@ function validateLocalComposeImages(source) {
   assert.deepEqual(
     renderLocalComposeImages(source),
     expectedServiceImages,
-    "rendered Compose model must contain exactly the five reviewed services and images",
+    "rendered Compose model must contain exactly the four reviewed services and images",
   );
 }
 
@@ -150,7 +149,7 @@ function assertRejected(source, label) {
   );
 }
 
-test("binds every local Compose service to the five reviewed image declarations", () => {
+test("binds every local Compose service to the four reviewed image declarations", () => {
   validateLocalComposeImages(localCompose);
 });
 

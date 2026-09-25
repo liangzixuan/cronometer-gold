@@ -184,7 +184,7 @@ function localS3Endpoint(value: string, field: string, port: string): string {
   try {
     url = new URL(value);
   } catch {
-    throw new Error(`${field} must use the local Compose MinIO target`);
+    throw new Error(`${field} must use the local Compose S3 object-store target`);
   }
   const expected = `http://127.0.0.1:${port}`;
   if (
@@ -198,7 +198,7 @@ function localS3Endpoint(value: string, field: string, port: string): string {
     url.hash ||
     (url.pathname !== "" && url.pathname !== "/")
   ) {
-    throw new Error(`${field} must use the local Compose MinIO target`);
+    throw new Error(`${field} must use the local Compose S3 object-store target`);
   }
   return value;
 }
@@ -750,7 +750,7 @@ async function attemptCleanup(
   }
 }
 
-describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO boundary", () => {
+describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and S3 boundary", () => {
   it("exports reconciled artifacts and completes capability-only account erasure", {
     timeout: 120_000,
   }, async () => {
@@ -760,9 +760,9 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
       port: exactPort(required(process.env.POSTGRES_PORT, "POSTGRES_PORT"), "POSTGRES_PORT"),
       user: required(process.env.POSTGRES_USER, "POSTGRES_USER"),
     };
-    const minioPort = exactPort(
-      required(process.env.MINIO_API_PORT, "MINIO_API_PORT"),
-      "MINIO_API_PORT",
+    const objectStorePort = exactPort(
+      required(process.env.OBJECT_STORE_PORT, "OBJECT_STORE_PORT"),
+      "OBJECT_STORE_PORT",
     );
     const meiliPort = exactPort(required(process.env.MEILI_PORT, "MEILI_PORT"), "MEILI_PORT");
     const meiliUrl = localMeiliEndpoint(required(process.env.MEILI_URL, "MEILI_URL"), meiliPort);
@@ -785,12 +785,12 @@ describe.skipIf(!enabled)("live retention API, worker, PostgreSQL, and MinIO bou
     const exportEndpoint = localS3Endpoint(
       required(process.env.EXPORT_ARTIFACT_ENDPOINT, "EXPORT_ARTIFACT_ENDPOINT"),
       "EXPORT_ARTIFACT_ENDPOINT",
-      minioPort,
+      objectStorePort,
     );
     const ledgerEndpoint = localS3Endpoint(
       required(process.env.ERASURE_REPLAY_LEDGER_ENDPOINT, "ERASURE_REPLAY_LEDGER_ENDPOINT"),
       "ERASURE_REPLAY_LEDGER_ENDPOINT",
-      minioPort,
+      objectStorePort,
     );
     const exportRegion = exactValue(
       required(process.env.EXPORT_ARTIFACT_REGION, "EXPORT_ARTIFACT_REGION"),

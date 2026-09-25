@@ -1,7 +1,7 @@
 # Local infrastructure
 
 This Compose project runs only local dependencies. PostgreSQL is authoritative;
-Meilisearch is a disposable projection, MinIO holds raw import/test artifacts, and
+Meilisearch is a disposable projection, SeaweedFS supplies the private S3 test fixture, and
 Mailpit captures email without delivering it.
 
 ```sh
@@ -16,10 +16,10 @@ to be an owned, regular, single-link mode-`0600` file. It rejects every ambient
 Docker or Compose override, binds the exact `nutrition-tracker-local` project,
 and requires Docker Desktop's Linux server through `/var/run/docker.sock`. It
 captures the rendered Compose model without printing interpolated values and
-validates the exact five-service, named-volume, read-only policy-mount, health,
+validates the exact four-service, named-volume, read-only credential-mount, health,
 and loopback-port topology before starting anything. It waits at most 300
-seconds for PostgreSQL, Meilisearch, MinIO, and Mailpit, runs `minio-bootstrap`
-as a separate removable one-shot, and verifies the four persistent services and
+seconds for PostgreSQL, Meilisearch, object storage, and Mailpit, bootstraps
+the two buckets through signed host requests, and verifies the four persistent services and
 their effective published ports afterward.
 
 `pnpm infra:status` accepts no arguments and repeats the same environment-file,
@@ -32,23 +32,28 @@ Local endpoints:
 | --- | --- |
 | PostgreSQL | `127.0.0.1:5432` |
 | Meilisearch | <http://127.0.0.1:7700/health> |
-| MinIO API / console | <http://127.0.0.1:9000> / <http://127.0.0.1:9001> |
+| S3 fixture | <http://127.0.0.1:9000/readyz> |
 | Mailpit UI / SMTP | <http://127.0.0.1:8025> / `127.0.0.1:1025` |
 
-The one-shot `minio-bootstrap` service creates the private export and erasure
-ledger buckets and four separate least-privilege users. The export bucket is
-unversioned so expiry removes the only ciphertext; the append-only erasure
-ledger is versioned. Application principals cannot list either bucket and the
-API has read-only export access. The offline restore principal can list versions
-only under the ledger prefix and read an exact version so ambiguity fails closed;
-those credentials are never passed to the API or worker. Create the legacy
-`S3_BUCKET` manually only when a food-import rehearsal needs it.
+The startup helper generates five separate credentials and attaches the four
+policies in `infra/object-store/` plus a fixture-only admin policy. It creates
+private export and erasure-ledger buckets. Export versioning is suspended so
+expiry can delete the null version; ledger versioning is enabled. Restore can
+list versions only under `erasure-ledger/v1/*` and read the exact version. Admin
+and restore credentials never enter the API or worker environment.
 
-All published ports bind to loopback. The checked-in credentials are deliberately
-weak and must never appear in a shared or OCI controlled-beta deployment. CI and
-the controlled-beta environment use digest-pinned images after registry and
-licence review. Local Compose also retains human-readable tags alongside exact
-digests so version intent and immutable image bytes are both explicit.
+Generated files live in owner-only `.local-data/object-store/`. The read-only
+S3 configuration is mode `0444` inside that mode-`0700` directory so the image's
+UID 1000 can read its file bind on different host UIDs. `runtime.env` is mode
+`0600`; `pnpm dev` and `pnpm dev:api` validate it and apply only the existing
+application environment allowlist. Repeated startup retains credentials and
+rejects policy, port or bucket-versioning drift. The new `object-store-data`
+volume never reuses former MinIO state.
+
+All host ports bind to loopback. The object-store process has limits of 1 GiB,
+2 CPUs and 256 PIDs. Only its S3 endpoint is published; internal services bind
+to container loopback. See [fixture qualification](../object-store/README.md)
+for the exact image trust gate and the limits of offline checks.
 
 Stop through the same Docker Desktop, environment-file, and fixed-project
 boundary without deleting state:

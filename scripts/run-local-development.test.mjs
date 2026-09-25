@@ -56,9 +56,9 @@ function environment(overrides = {}) {
     MEILI_SEARCH_KEY: "unprovisioned-search-placeholder",
     MEILI_TASK_OBSERVER_KEY: "unprovisioned-task-observer-placeholder",
     MEILI_URL: "http://127.0.0.1:7700",
-    MINIO_API_PORT: "9000",
-    MINIO_ROOT_PASSWORD: "root-password-must-not-reach-runtime",
-    MINIO_ROOT_USER: "root-user-must-not-reach-runtime",
+    OBJECT_STORE_PORT: "9000",
+    ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY: "root-password-must-not-reach-runtime",
+    ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID: "root-user-must-not-reach-runtime",
     NODE_ENV: "development",
     PATH: "/home/test/.local/bin:/usr/bin",
     POSTGRES_DB: "nutrition_tracker",
@@ -256,8 +256,8 @@ test("projects the real example through an explicit application allowlist withou
     "EXPO_TOKEN",
     "HEALTH_REVIEWER_PRIVATE_KEY_FILE",
     "MEILI_MASTER_KEY",
-    "MINIO_ROOT_PASSWORD",
-    "MINIO_ROOT_USER",
+    "ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY",
+    "ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID",
     "POSTGRES_DB",
     "POSTGRES_PASSWORD",
     "POSTGRES_PORT",
@@ -270,8 +270,14 @@ test("projects the real example through an explicit application allowlist withou
     assert.equal(Object.hasOwn(projected, field), false, `${field} must not be projected`);
   }
   const projectedValues = Object.values(projected);
-  assert.equal(projectedValues.includes(sourceEnvironment.MINIO_ROOT_USER), false);
-  assert.equal(projectedValues.includes(sourceEnvironment.MINIO_ROOT_PASSWORD), false);
+  assert.equal(
+    projectedValues.includes(sourceEnvironment.ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID),
+    false,
+  );
+  assert.equal(
+    projectedValues.includes(sourceEnvironment.ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY),
+    false,
+  );
 });
 
 test("selects only the exact API-only profile and rejects arbitrary forwarding", async () => {
@@ -347,7 +353,7 @@ test("rejects listener, dependency, credential, and TLS drift before key bootstr
     { MEILI_PORT: "07700" },
     { MEILI_URL: "http://localhost:7700" },
     { MEILI_URL: "https://127.0.0.1:7700" },
-    { MINIO_API_PORT: "09000" },
+    { OBJECT_STORE_PORT: "09000" },
     { NODE_TLS_REJECT_UNAUTHORIZED: "0" },
     { POSTGRES_PORT: "05432" },
     { S3_ENDPOINT: "http://192.0.2.1:9000" },
@@ -577,6 +583,11 @@ test("reads one validated private descriptor and launches without a loader subpr
   const unexpandedHome = "$" + "{HOME}";
   const source = `SERVICE_VERSION=${unexpandedHome}\n`;
   await runLocalDevelopmentWithPrivateEnv(["--api-only"], {
+    readObjectStoreEnvironment: () => ({
+      EXPORT_ARTIFACT_READ_ACCESS_KEY_ID: "generated-reader-id",
+      EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY: "generated-reader-secret",
+      EXPORT_ARTIFACT_STORE: "s3",
+    }),
     bootstrap: async () => scopedKeys(),
     close: (descriptor) => {
       order.push("close");
@@ -618,6 +629,16 @@ test("reads one validated private descriptor and launches without a loader subpr
   assert.equal(calls[0].options.detached, true);
   assert.equal(calls[0].options.shell, false);
   assert.equal(calls[0].options.env.SERVICE_VERSION, unexpandedHome);
+  assert.equal(calls[0].options.env.EXPORT_ARTIFACT_READ_ACCESS_KEY_ID, "generated-reader-id");
+  assert.equal(calls[0].options.env.EXPORT_ARTIFACT_STORE, "s3");
+  assert.equal(
+    Object.hasOwn(calls[0].options.env, "ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY"),
+    false,
+  );
+  assert.equal(
+    Object.hasOwn(calls[0].options.env, "ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY"),
+    false,
+  );
   assert.equal(Object.hasOwn(calls[0].options.env, "MEILI_MASTER_KEY"), false);
 });
 
@@ -973,4 +994,35 @@ test("permits only exact loopback Mailpit settings in the guarded runtime", () =
       /loopback Mailpit SMTP|loopback (?:email-verification|password-recovery) web origin fixture/u,
     );
   }
+});
+
+test("refuses an invalid generated object-store overlay before bootstrap or launch", async () => {
+  const source = "SHUTDOWN_GRACE_MS=10000\n";
+  let launched = false;
+  await assert.rejects(
+    runLocalDevelopmentWithPrivateEnv([], {
+      open: () => 77,
+      close: () => {},
+      getuid: () => 1000,
+      fstat: () => ({
+        isFile: () => true,
+        mode: 0o100600,
+        nlink: 1,
+        size: Buffer.byteLength(source),
+        uid: 1000,
+      }),
+      read: () => source,
+      readObjectStoreEnvironment: () => {
+        throw new Error("protected-input");
+      },
+      bootstrap: () => {
+        launched = true;
+      },
+      spawn: () => {
+        launched = true;
+      },
+    }),
+    { message: "Unable to load the private local development environment" },
+  );
+  assert.equal(launched, false);
 });

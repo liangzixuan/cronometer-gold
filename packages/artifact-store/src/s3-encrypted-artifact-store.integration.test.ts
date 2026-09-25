@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 import {
   ArtifactAuthenticationError,
@@ -13,6 +13,79 @@ import { EncryptedErasureReplayLedger } from "./erasure-replay-ledger.js";
 import { S3ArtifactStoreError, S3RawArtifactStore } from "./s3-raw-artifact-store.js";
 
 const enabled = process.env.RUN_ARTIFACT_STORE_INTEGRATION === "1";
+
+function integrationCredentials(environment: Readonly<NodeJS.ProcessEnv>) {
+  const pair = (prefix: string) => {
+    const value = (suffix: string): string => {
+      const name = `${prefix}_${suffix}`;
+      const credential = environment[name];
+      if (!credential?.trim()) throw new Error(`Missing integration credential: ${name}`);
+      return credential;
+    };
+    return {
+      accessKeyId: value("ACCESS_KEY_ID"),
+      secretAccessKey: value("SECRET_ACCESS_KEY"),
+    };
+  };
+  const credentials = {
+    admin: pair("ARTIFACT_STORE_ADMIN"),
+    exportWriter: pair("EXPORT_ARTIFACT_WRITE"),
+    exportReader: pair("EXPORT_ARTIFACT_READ"),
+    ledgerWriter: pair("ERASURE_REPLAY_LEDGER_WRITE"),
+    ledgerRestore: pair("ERASURE_REPLAY_LEDGER_RESTORE"),
+  };
+  if (new Set(Object.values(credentials).map(({ accessKeyId }) => accessKeyId)).size !== 5) {
+    throw new Error("Integration storage principals must be distinct");
+  }
+  return credentials;
+}
+
+describe("S3 integration credential prerequisites", () => {
+  const environment = (): NodeJS.ProcessEnv =>
+    Object.fromEntries(
+      [
+        "ARTIFACT_STORE_ADMIN",
+        "EXPORT_ARTIFACT_WRITE",
+        "EXPORT_ARTIFACT_READ",
+        "ERASURE_REPLAY_LEDGER_WRITE",
+        "ERASURE_REPLAY_LEDGER_RESTORE",
+      ].flatMap((prefix) => [
+        [`${prefix}_ACCESS_KEY_ID`, `${prefix}-test-id`],
+        [`${prefix}_SECRET_ACCESS_KEY`, `${prefix}-test-secret`],
+      ]),
+    );
+
+  it("requires explicit administrator credentials even if legacy root values exist", () => {
+    const values = environment();
+    delete values.ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID;
+    values.MINIO_ROOT_USER = "legacy-root";
+    values.MINIO_ROOT_PASSWORD = "legacy-secret";
+    expect(() => integrationCredentials(values)).toThrow(
+      "Missing integration credential: ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID",
+    );
+  });
+
+  it("rejects an absent or blank role secret before opening any connection", () => {
+    const values = environment();
+    delete values.ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY;
+    expect(() => integrationCredentials(values)).toThrow(
+      "Missing integration credential: ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY",
+    );
+    values.ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY = " ";
+    expect(() => integrationCredentials(values)).toThrow(
+      "Missing integration credential: ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY",
+    );
+  });
+
+  it("rejects reused principals and accepts five explicit distinct accounts", () => {
+    const values = environment();
+    expect(Object.keys(integrationCredentials(values))).toHaveLength(5);
+    values.EXPORT_ARTIFACT_READ_ACCESS_KEY_ID = values.EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID;
+    expect(() => integrationCredentials(values)).toThrow(
+      "Integration storage principals must be distinct",
+    );
+  });
+});
 
 async function collect(stream: Readable): Promise<Buffer> {
   const chunks: Buffer[] = [];
@@ -47,24 +120,21 @@ function rawStore(
 }
 
 describe.skipIf(!enabled)("live S3 encrypted artifact boundary", () => {
+  let credentials: ReturnType<typeof integrationCredentials>;
+  beforeAll(() => {
+    credentials = integrationCredentials(process.env);
+  });
   it("crosses worker-write/API-read credentials, rejects copied ciphertext, is immutable, and expires by deletion", async () => {
     const writerRaw = rawStore(
-      process.env.EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID ?? "nutrition_export_writer",
-      process.env.EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY ?? "nutrition_export_writer_local_only",
+      credentials.exportWriter.accessKeyId,
+      credentials.exportWriter.secretAccessKey,
       { deleteVersionPolicy: "suspended_null" },
     );
     const readerRaw = rawStore(
-      process.env.EXPORT_ARTIFACT_READ_ACCESS_KEY_ID ?? "nutrition_export_reader",
-      process.env.EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY ?? "nutrition_export_reader_local_only",
+      credentials.exportReader.accessKeyId,
+      credentials.exportReader.secretAccessKey,
     );
-    const adminRaw = rawStore(
-      process.env.ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID ??
-        process.env.MINIO_ROOT_USER ??
-        "nutrition_local",
-      process.env.ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY ??
-        process.env.MINIO_ROOT_PASSWORD ??
-        "nutrition_local_password_only",
-    );
+    const adminRaw = rawStore(credentials.admin.accessKeyId, credentials.admin.secretAccessKey);
     const keyRing = {
       currentKeyId: "integration-export-key-v1",
       keys: new Map([["integration-export-key-v1", Buffer.alloc(32, 23)]]),
@@ -86,6 +156,30 @@ describe.skipIf(!enabled)("live S3 encrypted artifact boundary", () => {
         objectKey,
         plaintextBytes: plaintext.byteLength,
         source: Readable.from([plaintext]),
+      });
+
+      // The object exists and the valid reader can read it below. Authentication
+      // rejection must be an actual 403, not a missing object or transport failure.
+      const anonymousUrl = new URL(
+        `/${process.env.EXPORT_ARTIFACT_BUCKET ?? "nutrition-private-exports"}/${objectKey}`,
+        process.env.EXPORT_ARTIFACT_ENDPOINT ?? "http://127.0.0.1:9000",
+      );
+      const anonymous = await fetch(anonymousUrl, {
+        redirect: "error",
+        signal: AbortSignal.timeout(5_000),
+      });
+      try {
+        expect(anonymous.status).toBe(403);
+      } finally {
+        await anonymous.body?.cancel();
+      }
+      const wrongSecret = rawStore(
+        credentials.exportReader.accessKeyId,
+        `${credentials.exportReader.secretAccessKey}-incorrect`,
+      );
+      await expect(wrongSecret.open({ objectKey })).rejects.toMatchObject({
+        name: "S3ArtifactStoreError",
+        statusCode: 403,
       });
 
       // A second write to the same random key must fail instead of overwriting a
@@ -146,26 +240,18 @@ describe.skipIf(!enabled)("live S3 encrypted artifact boundary", () => {
   it("writes one immutable encrypted ledger version and enforces restore-only version-aware access", async () => {
     const bucket = process.env.ERASURE_REPLAY_LEDGER_BUCKET ?? "nutrition-erasure-ledger";
     const writerRaw = rawStore(
-      process.env.ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID ?? "nutrition_erasure_writer",
-      process.env.ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY ??
-        "nutrition_erasure_writer_local_only",
+      credentials.ledgerWriter.accessKeyId,
+      credentials.ledgerWriter.secretAccessKey,
       { bucket },
     );
     const restoreRaw = rawStore(
-      process.env.ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID ?? "nutrition_erasure_restore",
-      process.env.ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY ??
-        "nutrition_erasure_restore_local_only",
+      credentials.ledgerRestore.accessKeyId,
+      credentials.ledgerRestore.secretAccessKey,
       { bucket, readVersionPolicy: "require_singleton" },
     );
-    const adminRaw = rawStore(
-      process.env.ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID ??
-        process.env.MINIO_ROOT_USER ??
-        "nutrition_local",
-      process.env.ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY ??
-        process.env.MINIO_ROOT_PASSWORD ??
-        "nutrition_local_password_only",
-      { bucket },
-    );
+    const adminRaw = rawStore(credentials.admin.accessKeyId, credentials.admin.secretAccessKey, {
+      bucket,
+    });
     const keyRing = {
       currentKeyId: "integration-ledger-key-v1",
       keys: new Map([["integration-ledger-key-v1", Buffer.alloc(32, 24)]]),
@@ -195,9 +281,66 @@ describe.skipIf(!enabled)("live S3 encrypted artifact boundary", () => {
       subjectUserId,
     });
     expect(await restore.findForSubject({ subjectUserId })).toMatchObject({ jobId, subjectUserId });
-    expect(await adminRaw.listObjectVersions({ objectKey: receipt.reference })).toEqual([
-      expect.objectContaining({ deleteMarker: false }),
-    ]);
+    const versions = await adminRaw.listObjectVersions({ objectKey: receipt.reference });
+    expect(versions).toEqual([expect.objectContaining({ deleteMarker: false, isLatest: true })]);
+    const version = required(versions[0], "Missing immutable ledger version");
+    expect(version.versionId).not.toBe("null");
+    expect(version.versionId.length).toBeGreaterThan(0);
+    expect(await restoreRaw.resolveSingletonVersion({ objectKey: receipt.reference })).toEqual({
+      versionId: version.versionId,
+    });
+    const exact = required(
+      await restoreRaw.open({ objectKey: receipt.reference }),
+      "Missing exact ledger version",
+    );
+    try {
+      // The strict S3 reader requests this version and rejects a different/missing
+      // response header. Retain direct evidence from the real HTTP response too.
+      expect(exact.stream).toHaveProperty(["headers", "x-amz-version-id"], version.versionId);
+      expect((await collect(exact.stream)).byteLength).toBe(exact.contentLength);
+    } finally {
+      exact.stream.destroy();
+    }
+
+    await expect(writerRaw.delete({ objectKey: receipt.reference })).rejects.toMatchObject({
+      name: "S3ArtifactStoreError",
+      statusCode: 403,
+    });
+
+    // Test the prefix condition independently of a missing key or the singleton
+    // reader's initial ListVersions request: this object exists outside the prefix.
+    const outsideKey = `integration/${randomBytes(16).toString("hex")}/outside-ledger.enc`;
+    const outsideBytes = Buffer.from("synthetic-outside-prefix-ciphertext");
+    await adminRaw.put({
+      contentLength: outsideBytes.byteLength,
+      objectKey: outsideKey,
+      source: Readable.from([outsideBytes]),
+    });
+    const outside = required(
+      await adminRaw.open({ objectKey: outsideKey }),
+      "Missing prefix fixture",
+    );
+    expect(await collect(outside.stream)).toEqual(outsideBytes);
+    await expect(restoreRaw.listObjectVersions({ objectKey: outsideKey })).rejects.toMatchObject({
+      name: "S3ArtifactStoreError",
+      statusCode: 403,
+    });
+    const restoreDirect = rawStore(
+      credentials.ledgerRestore.accessKeyId,
+      credentials.ledgerRestore.secretAccessKey,
+      { bucket },
+    );
+    await expect(restoreDirect.open({ objectKey: outsideKey })).rejects.toMatchObject({
+      name: "S3ArtifactStoreError",
+      statusCode: 403,
+    });
+    // The same direct reader is allowed inside the prefix, so the negative above
+    // cannot pass merely because this principal lacks all GetObject authority.
+    const allowed = required(
+      await restoreDirect.open({ objectKey: receipt.reference }),
+      "Missing permitted ledger object",
+    );
+    expect((await collect(allowed.stream)).byteLength).toBe(allowed.contentLength);
     await expect(
       writerRaw.put({
         contentLength: 1,

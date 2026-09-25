@@ -17,11 +17,11 @@ The fixture is deliberately narrow:
   policies; and
 - automatic removal of only the uniquely named, labeled container it created.
 
-The existing MinIO CI lane remains mandatory. LocalStack currently ignores
+The authenticated SeaweedFS CI lane remains mandatory. LocalStack currently ignores
 secret-access-key values, so this fixture can test access-key identity, IAM
 policy decisions, request shape, conditional writes, version inventory, and
-exact-version reads, but not rejection of an incorrect SigV4 secret. MinIO
-continues to cover authenticated-secret behavior and the real-provider canaries
+exact-version reads, but not rejection of an incorrect SigV4 secret. The mandatory default fixture tests
+cover authenticated-secret behavior and the real-provider canaries
 remain deployment gates.
 
 The pinned LocalStack release also fails the actual S3 authorization path for
@@ -31,7 +31,7 @@ request as allowed. Only this synthetic emulator therefore uses
 `infra/localstack/erasure-restore-policy.json`: its exact structural delta is
 removal of that condition from the bucket-scoped list statement. Object and
 exact-version reads remain restricted to `erasure-ledger/v1/*`, bucket listing
-and cross-bucket access remain denied, and the production/MinIO policy is
+and cross-bucket access remain denied, and the shared role policy is
 unchanged. The tradeoff is that the LocalStack restore principal can enumerate
 version metadata for every synthetic object in its dedicated ledger bucket;
 never treat this as production IAM evidence.
@@ -84,7 +84,7 @@ authenticate the container. Create a Developer Auth Token on the Auth Tokens
 page. Do not paste it into chat, `.env`, a command argument, source control, or a
 log.
 
-Start the ordinary PostgreSQL, Meilisearch, MinIO, and Mailpit dependencies
+Start the ordinary PostgreSQL, Meilisearch, the default object store, and Mailpit dependencies
 first. Then start the separate persistent LocalStack project:
 
 ```sh

@@ -3,6 +3,8 @@ import { closeSync, constants, fstatSync, openSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { localObjectStoreEnvironment } from "./local-object-store.mjs";
+
 import { bootstrapScopedMeiliKeys } from "./scoped-meili-keys.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
@@ -67,7 +69,7 @@ const retentionIntegrationEnvironmentFields = [
   "MEILI_SEARCH_KEY",
   "MEILI_TASK_OBSERVER_KEY",
   "MEILI_URL",
-  "MINIO_API_PORT",
+  "OBJECT_STORE_PORT",
   "POSTGRES_DB",
   "POSTGRES_PASSWORD",
   "POSTGRES_PORT",
@@ -163,6 +165,12 @@ function environmentForStep(environment, step) {
     return {
       ...safeRuntime,
       ...pickEnvironment(sanitized, artifactIntegrationEnvironmentFields),
+      // Only the storage qualification test needs fixture administration. The
+      // loaded CLI replaces ambient values with the validated generated fixture.
+      ...pickEnvironment(environment, [
+        "ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID",
+        "ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY",
+      ]),
       ...step.environment,
     };
   }
@@ -205,23 +213,23 @@ export function assertRetentionPrivacyDrillEnvironment(environment) {
     throw new Error("Retention privacy drill requires the local PostgreSQL Compose target");
   }
 
-  const minioPort = exactPort(environment, "MINIO_API_PORT");
-  const expectedEndpoint = `http://127.0.0.1:${minioPort}`;
+  const objectStorePort = exactPort(environment, "OBJECT_STORE_PORT");
+  const expectedEndpoint = `http://127.0.0.1:${objectStorePort}`;
   for (const field of ["EXPORT_ARTIFACT_ENDPOINT", "ERASURE_REPLAY_LEDGER_ENDPOINT"]) {
     const value = required(environment, field);
-    const url = parsedUrl(value, "MinIO Compose");
+    const url = parsedUrl(value, "S3 object-store Compose");
     if (
       value !== expectedEndpoint ||
       url.protocol !== "http:" ||
       url.hostname !== "127.0.0.1" ||
-      url.port !== minioPort ||
+      url.port !== objectStorePort ||
       url.username ||
       url.password ||
       url.search ||
       url.hash ||
       (url.pathname !== "" && url.pathname !== "/")
     ) {
-      throw new Error("Retention privacy drill requires the local MinIO Compose target");
+      throw new Error("Retention privacy drill requires the local S3 object-store Compose target");
     }
   }
   if (
@@ -230,7 +238,7 @@ export function assertRetentionPrivacyDrillEnvironment(environment) {
     required(environment, "EXPORT_ARTIFACT_BUCKET") !== "nutrition-private-exports" ||
     required(environment, "ERASURE_REPLAY_LEDGER_BUCKET") !== "nutrition-erasure-ledger"
   ) {
-    throw new Error("Retention privacy drill requires the local MinIO fixture");
+    throw new Error("Retention privacy drill requires the local S3 object-store fixture");
   }
 
   const meiliPort = exactPort(environment, "MEILI_PORT");
@@ -252,14 +260,14 @@ export function assertRetentionPrivacyDrillEnvironment(environment) {
   required(environment, "MEILI_MASTER_KEY");
 
   const credentialIds = [
-    required(environment, "MINIO_ROOT_USER"),
+    required(environment, "ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID"),
     required(environment, "EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID"),
     required(environment, "EXPORT_ARTIFACT_READ_ACCESS_KEY_ID"),
     required(environment, "ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID"),
     required(environment, "ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID"),
   ];
   const credentialSecrets = [
-    required(environment, "MINIO_ROOT_PASSWORD"),
+    required(environment, "ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY"),
     required(environment, "EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY"),
     required(environment, "EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY"),
     required(environment, "ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY"),
@@ -269,7 +277,7 @@ export function assertRetentionPrivacyDrillEnvironment(environment) {
     new Set(credentialIds).size !== credentialIds.length ||
     new Set(credentialSecrets).size !== credentialSecrets.length
   ) {
-    throw new Error("Retention privacy drill requires split MinIO credentials");
+    throw new Error("Retention privacy drill requires split S3 object-store credentials");
   }
 }
 
@@ -350,6 +358,22 @@ export async function runRetentionPrivacyDrill(
   }
 }
 
+export async function runLoadedRetentionPrivacyDrill({
+  environment = process.env,
+  readObjectStore = localObjectStoreEnvironment,
+  spawn = spawnSync,
+  bootstrapMeiliKeys = bootstrapScopedMeiliKeys,
+} = {}) {
+  // The outer CLI has already loaded the checked .env descriptor. Provider
+  // credentials and targets come only from the generated, validated fixture.
+  const generated = readObjectStore();
+  await runRetentionPrivacyDrill(
+    spawn,
+    { ...withoutExternalCredentials(environment), ...generated },
+    bootstrapMeiliKeys,
+  );
+}
+
 export function runRetentionPrivacyDrillWithPrivateEnv(dependencies = {}) {
   const open = dependencies.open ?? openSync;
   const fstat = dependencies.fstat ?? fstatSync;
@@ -425,7 +449,7 @@ export function runRetentionPrivacyDrillWithPrivateEnv(dependencies = {}) {
 
 if (process.argv[1] && resolve(process.argv[1]) === scriptPath) {
   if (process.argv[2] === "--loaded" && process.argv.length === 3) {
-    await runRetentionPrivacyDrill();
+    await runLoadedRetentionPrivacyDrill();
   } else if (process.argv.length === 2) {
     runRetentionPrivacyDrillWithPrivateEnv();
   } else {

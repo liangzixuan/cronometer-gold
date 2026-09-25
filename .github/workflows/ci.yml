@@ -172,16 +172,62 @@ jobs:
       - name: Build integration-test workspace packages
         run: pnpm --filter @nutrition-tracker/worker... build
 
+      - name: Set up pinned Buildx metadata inspection
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+        with:
+          version: v0.36.1
+          driver: docker
+          cache-binary: false
+
+      - name: Install pinned Cosign for the object-store fixture
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.1.3
+
+      - name: Verify the approved object-store index and ARM64 release signatures
+        run: |
+          set -euo pipefail
+          node scripts/verify-local-object-store-image.mjs | tee "${RUNNER_TEMP}/object-store-provenance.json"
+
+      - name: Initialize an empty object-store vulnerability-ignore policy
+        run: install -m 600 /dev/null "${RUNNER_TEMP}/object-store.trivyignore"
+
+      - name: Reject high or critical object-store vulnerabilities before execution
+        env:
+          TRIVY_PLATFORM: linux/arm64
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.74.0
+          scan-type: image
+          image-ref: ghcr.io/chrislusf/seaweedfs@sha256:d4cf67729aa8777e1a43a5b61d72e5b96179e4b7bac9a221cb14cbc2036cb32e
+          scanners: vuln
+          vuln-type: os,library
+          severity: HIGH,CRITICAL
+          ignore-unfixed: false
+          trivyignores: ${{ runner.temp }}/object-store.trivyignore
+          exit-code: "1"
+          format: table
+          hide-progress: true
+          timeout: 15m
+
+      - name: Prepare private object-store fixture credentials
+        run: node scripts/local-object-store.mjs prepare
+
       - name: Validate local service topology
         run: |
           docker compose -f infra/docker/compose.yml config --quiet
-          test "$(docker compose -f infra/docker/compose.yml config --format json | \
-            jq '.services["minio-bootstrap"].command | length')" = 1
+          docker compose -f infra/docker/compose.yml config --format json | node --input-type=module -e '
+            import assert from "node:assert/strict";
+            import { readFileSync } from "node:fs";
+            import { OBJECT_STORE_REF } from "./scripts/verify-local-object-store-image.mjs";
+            const service = JSON.parse(readFileSync(0, "utf8")).services["object-store"];
+            assert.equal(service.image, OBJECT_STORE_REF);
+          '
 
       - name: Bootstrap least-privilege private object storage
         run: |
-          docker compose -f infra/docker/compose.yml up -d --wait minio
-          docker compose -f infra/docker/compose.yml run --rm --no-deps minio-bootstrap
+          docker compose -f infra/docker/compose.yml up -d --wait object-store
+          node scripts/local-object-store.mjs bootstrap
 
       - name: Exercise encrypted artifact storage with split credentials
         env:
@@ -189,18 +235,16 @@ jobs:
           EXPORT_ARTIFACT_ENDPOINT: http://127.0.0.1:9000
           EXPORT_ARTIFACT_REGION: us-east-1
           EXPORT_ARTIFACT_BUCKET: nutrition-private-exports
-          EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID: nutrition_export_writer
-          EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY: nutrition_export_writer_local_only
-          EXPORT_ARTIFACT_READ_ACCESS_KEY_ID: nutrition_export_reader
-          EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY: nutrition_export_reader_local_only
           ERASURE_REPLAY_LEDGER_ENDPOINT: http://127.0.0.1:9000
           ERASURE_REPLAY_LEDGER_REGION: us-east-1
           ERASURE_REPLAY_LEDGER_BUCKET: nutrition-erasure-ledger
-          ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID: nutrition_erasure_writer
-          ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY: nutrition_erasure_writer_local_only
-          ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID: nutrition_erasure_restore
-          ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY: nutrition_erasure_restore_local_only
-        run: pnpm --filter @nutrition-tracker/artifact-store test:integration
+        run: >-
+          node node_modules/dotenv-cli/cli.js
+          -o
+          --no-expand
+          -e .local-data/object-store/runtime.env
+          --
+          pnpm --filter @nutrition-tracker/artifact-store test:integration
 
       - name: Apply and replay database migrations
         env:
@@ -243,27 +287,20 @@ jobs:
           POSTGRES_PORT: "5432"
           POSTGRES_USER: nutrition_local
           TEST_DATABASE_URL: postgresql://nutrition_local:nutrition_local_only@127.0.0.1:5432/nutrition_tracker
-          MINIO_API_PORT: "9000"
+          OBJECT_STORE_PORT: "9000"
           MEILI_PORT: "7700"
           MEILI_URL: http://127.0.0.1:7700
           EXPORT_ARTIFACT_ENDPOINT: http://127.0.0.1:9000
           EXPORT_ARTIFACT_REGION: us-east-1
           EXPORT_ARTIFACT_BUCKET: nutrition-private-exports
-          EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID: nutrition_export_writer
-          EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY: nutrition_export_writer_local_only
-          EXPORT_ARTIFACT_READ_ACCESS_KEY_ID: nutrition_export_reader
-          EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY: nutrition_export_reader_local_only
           ERASURE_REPLAY_LEDGER_ENDPOINT: http://127.0.0.1:9000
           ERASURE_REPLAY_LEDGER_REGION: us-east-1
           ERASURE_REPLAY_LEDGER_BUCKET: nutrition-erasure-ledger
-          ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID: nutrition_erasure_writer
-          ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY: nutrition_erasure_writer_local_only
-          ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID: nutrition_erasure_restore
-          ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY: nutrition_erasure_restore_local_only
         run: >-
           node node_modules/dotenv-cli/cli.js
           -o
           --no-expand
+          -e .local-data/object-store/runtime.env
           -e "${RUNNER_TEMP}/retention-meili.env"
           --
           pnpm --filter @nutrition-tracker/api test:retention-integration
@@ -277,10 +314,9 @@ jobs:
           ERASURE_REPLAY_LEDGER_LOCATOR_CURRENT_KEY_ID: ci-erasure-locator-v1
           ERASURE_REPLAY_LEDGER_LOCATOR_HMAC_KEYS: '{"ci-erasure-locator-v1":"AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM="}'
           ERASURE_REPLAY_LEDGER_REGION: us-east-1
-          ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID: nutrition_erasure_restore
-          ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY: nutrition_erasure_restore_local_only
           ERASURE_REPLAY_LEDGER_RESTORE_SPOOL_DIR: /dev/shm/nutrition-erasure-restore-ci
         run: |
+          node node_modules/dotenv-cli/cli.js -o --no-expand -e .local-data/object-store/runtime.env -- bash -euo pipefail <<'OBJECT_STORE_TEST'
           source_restore_epoch="$(openssl rand -hex 32)"
           target_restore_epoch="$(openssl rand -hex 32)"
           if [ "${source_restore_epoch}" = "${target_restore_epoch}" ]; then
@@ -314,21 +350,20 @@ jobs:
           pnpm --filter @nutrition-tracker/worker erasure:restore-replay
           pnpm --filter @nutrition-tracker/worker database:readiness-probe
           TEST_DATABASE_URL="${DATABASE_URL}" pnpm --filter @nutrition-tracker/api test
+          OBJECT_STORE_TEST
 
       - name: Exercise live erasure-ledger replay and API/worker readiness
         env:
           ERASURE_REPLAY_LEDGER_BUCKET: nutrition-erasure-ledger
           ERASURE_REPLAY_LEDGER_ENDPOINT: http://127.0.0.1:9000
           ERASURE_REPLAY_LEDGER_REGION: us-east-1
-          ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID: nutrition_erasure_restore
-          ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY: nutrition_erasure_restore_local_only
-          ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID: nutrition_erasure_writer
-          ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY: nutrition_erasure_writer_local_only
           RUN_RETENTION_RESTORE_INTEGRATION: "1"
           TEST_DATABASE_URL: postgresql://nutrition_local:nutrition_local_only@127.0.0.1:5432/nutrition_tracker
         run: |
+          node node_modules/dotenv-cli/cli.js -o --no-expand -e .local-data/object-store/runtime.env -- bash -euo pipefail <<'OBJECT_STORE_TEST'
           pnpm --filter @nutrition-tracker/worker exec vitest run src/erasure-ledger-restore.integration.test.ts
           pnpm --filter @nutrition-tracker/api exec vitest run test/restore-readiness.integration.test.ts
+          OBJECT_STORE_TEST
 
       - name: Exercise PostgreSQL-to-Meilisearch worker boundary
         env:
@@ -374,3 +409,12 @@ jobs:
             exit 1
           fi
           rm -f -- "${target}"
+
+      - name: Stop and remove the owned CI object-store fixture
+        if: always()
+        run: |
+          test "${GITHUB_ACTIONS}" = true
+          cleanup_status=0
+          docker compose -f infra/docker/compose.yml down --volumes --timeout 10 || cleanup_status=$?
+          node scripts/local-object-store.mjs cleanup || cleanup_status=$?
+          exit "${cleanup_status}"

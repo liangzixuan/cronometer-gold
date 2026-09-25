@@ -50,8 +50,8 @@ infra/localstack
 infra/localstack/**
 infra/tailscale
 infra/tailscale/**
-infra/minio
-infra/minio/**
+infra/object-store
+infra/object-store/**
 infra/oci
 infra/oci/**
 infra/runbooks

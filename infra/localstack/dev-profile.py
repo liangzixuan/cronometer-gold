@@ -27,7 +27,7 @@ from typing import Any, Mapping, Sequence
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_FILE = REPOSITORY_ROOT / "infra" / "localstack" / "compose.dev.yml"
-POLICY_DIRECTORY = REPOSITORY_ROOT / "infra" / "minio"
+POLICY_DIRECTORY = REPOSITORY_ROOT / "infra" / "object-store"
 EXPORT_LIFECYCLE_FILE = REPOSITORY_ROOT / "infra" / "localstack" / "export-lifecycle.json"
 LOCAL_DATA_DIRECTORY = REPOSITORY_ROOT / ".local-data"
 PROFILE_STATE_DIRECTORY = LOCAL_DATA_DIRECTORY / "localstack"

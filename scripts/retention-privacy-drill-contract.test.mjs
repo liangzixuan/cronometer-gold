@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   assertRetentionPrivacyDrillEnvironment,
   retentionPrivacyDrillSteps,
+  runLoadedRetentionPrivacyDrill,
   runRetentionPrivacyDrill,
   runRetentionPrivacyDrillWithPrivateEnv,
 } from "./run-retention-privacy-drill.mjs";
@@ -63,18 +64,16 @@ const expectedArtifactStep = [
   "          EXPORT_ARTIFACT_ENDPOINT: http://127.0.0.1:9000",
   "          EXPORT_ARTIFACT_REGION: us-east-1",
   "          EXPORT_ARTIFACT_BUCKET: nutrition-private-exports",
-  "          EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID: nutrition_export_writer",
-  "          EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY: nutrition_export_writer_local_only",
-  "          EXPORT_ARTIFACT_READ_ACCESS_KEY_ID: nutrition_export_reader",
-  "          EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY: nutrition_export_reader_local_only",
   "          ERASURE_REPLAY_LEDGER_ENDPOINT: http://127.0.0.1:9000",
   "          ERASURE_REPLAY_LEDGER_REGION: us-east-1",
   "          ERASURE_REPLAY_LEDGER_BUCKET: nutrition-erasure-ledger",
-  "          ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID: nutrition_erasure_writer",
-  "          ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY: nutrition_erasure_writer_local_only",
-  "          ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID: nutrition_erasure_restore",
-  "          ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY: nutrition_erasure_restore_local_only",
-  "        run: pnpm --filter @nutrition-tracker/artifact-store test:integration",
+  "        run: >-",
+  "          node node_modules/dotenv-cli/cli.js",
+  "          -o",
+  "          --no-expand",
+  "          -e .local-data/object-store/runtime.env",
+  "          --",
+  "          pnpm --filter @nutrition-tracker/artifact-store test:integration",
   "",
 ].join("\n");
 const expectedRetentionStep = [
@@ -86,27 +85,20 @@ const expectedRetentionStep = [
   '          POSTGRES_PORT: "5432"',
   "          POSTGRES_USER: nutrition_local",
   "          TEST_DATABASE_URL: postgresql://nutrition_local:nutrition_local_only@127.0.0.1:5432/nutrition_tracker",
-  '          MINIO_API_PORT: "9000"',
+  '          OBJECT_STORE_PORT: "9000"',
   '          MEILI_PORT: "7700"',
   "          MEILI_URL: http://127.0.0.1:7700",
   "          EXPORT_ARTIFACT_ENDPOINT: http://127.0.0.1:9000",
   "          EXPORT_ARTIFACT_REGION: us-east-1",
   "          EXPORT_ARTIFACT_BUCKET: nutrition-private-exports",
-  "          EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID: nutrition_export_writer",
-  "          EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY: nutrition_export_writer_local_only",
-  "          EXPORT_ARTIFACT_READ_ACCESS_KEY_ID: nutrition_export_reader",
-  "          EXPORT_ARTIFACT_READ_SECRET_ACCESS_KEY: nutrition_export_reader_local_only",
   "          ERASURE_REPLAY_LEDGER_ENDPOINT: http://127.0.0.1:9000",
   "          ERASURE_REPLAY_LEDGER_REGION: us-east-1",
   "          ERASURE_REPLAY_LEDGER_BUCKET: nutrition-erasure-ledger",
-  "          ERASURE_REPLAY_LEDGER_WRITE_ACCESS_KEY_ID: nutrition_erasure_writer",
-  "          ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY: nutrition_erasure_writer_local_only",
-  "          ERASURE_REPLAY_LEDGER_RESTORE_ACCESS_KEY_ID: nutrition_erasure_restore",
-  "          ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY: nutrition_erasure_restore_local_only",
   "        run: >-",
   "          node node_modules/dotenv-cli/cli.js",
   "          -o",
   "          --no-expand",
+  "          -e .local-data/object-store/runtime.env",
   `          -e "\${RUNNER_TEMP}/retention-meili.env"`,
   "          --",
   "          pnpm --filter @nutrition-tracker/api test:retention-integration",
@@ -182,8 +174,8 @@ const expectedSearchIntegrationStep = [
 ].join("\n");
 
 const localFixture = {
-  ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID: "ambient-admin-must-not-escape",
-  ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY: "ambient-admin-secret-must-not-escape",
+  ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID: "generated-fixture-admin",
+  ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY: "generated-fixture-admin-secret",
   AWS_SECRET_ACCESS_KEY: "ambient-cloud-secret-must-not-escape",
   CI: "true",
   DATABASE_URL:
@@ -211,9 +203,7 @@ const localFixture = {
   MEILI_SEARCH_KEY: "nutrition_meili_search_local_only",
   MEILI_TASK_OBSERVER_KEY: "nutrition_meili_task_observer_local_only",
   MEILI_URL: "http://127.0.0.1:7700",
-  MINIO_API_PORT: "9000",
-  MINIO_ROOT_PASSWORD: "nutrition_minio_root_local_only",
-  MINIO_ROOT_USER: "nutrition_minio_root",
+  OBJECT_STORE_PORT: "9000",
   POSTGRES_DB: "nutrition_tracker",
   POSTGRES_PASSWORD: "nutrition_local_only",
   POSTGRES_PORT: "5432",
@@ -552,8 +542,6 @@ test("binds the local privacy drill to one overridden environment and exact step
     assert.equal(call.shell, false);
     assert.equal(call.stdio, "inherit");
     for (const forbidden of [
-      "ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID",
-      "ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY",
       "AWS_SECRET_ACCESS_KEY",
       "DOCKER_AUTH_CONFIG",
       "GITHUB_TOKEN",
@@ -568,6 +556,8 @@ test("binds the local privacy drill to one overridden environment and exact step
   assert.deepEqual(Object.keys(infrastructure.environment).sort(), ["CI", "PATH"]);
   assert.deepEqual(Object.keys(build.environment).sort(), ["CI", "PATH"]);
   assert.deepEqual(Object.keys(artifact.environment).sort(), [
+    "ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID",
+    "ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY",
     "CI",
     "ERASURE_REPLAY_LEDGER_BUCKET",
     "ERASURE_REPLAY_LEDGER_ENDPOINT",
@@ -608,7 +598,7 @@ test("binds the local privacy drill to one overridden environment and exact step
     "MEILI_SEARCH_KEY",
     "MEILI_TASK_OBSERVER_KEY",
     "MEILI_URL",
-    "MINIO_API_PORT",
+    "OBJECT_STORE_PORT",
     "PATH",
     "POSTGRES_DB",
     "POSTGRES_PASSWORD",
@@ -616,6 +606,18 @@ test("binds the local privacy drill to one overridden environment and exact step
     "POSTGRES_USER",
     "RUN_RETENTION_WORKER_INTEGRATION",
   ]);
+  assert.equal(
+    artifact.environment.ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID,
+    localFixture.ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID,
+  );
+  assert.equal(
+    artifact.environment.ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY,
+    localFixture.ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY,
+  );
+  for (const child of [infrastructure, build, retention]) {
+    assert.equal(Object.hasOwn(child.environment, "ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID"), false);
+    assert.equal(Object.hasOwn(child.environment, "ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY"), false);
+  }
   assert.equal(Object.hasOwn(artifact.environment, "MINIO_ROOT_USER"), false);
   assert.equal(Object.hasOwn(artifact.environment, "MEILI_MASTER_KEY"), false);
   assert.equal(Object.hasOwn(retention.environment, "MINIO_ROOT_USER"), false);
@@ -636,6 +638,86 @@ test("binds the local privacy drill to one overridden environment and exact step
   assert.match(releaseGates, /same closeable API application runtime/u);
   assert.match(releaseGates, /same combined search\/retention worker runtime/u);
   assert.match(releaseGates, /never a cloud, public-hosting,\s+physical-phone/u);
+});
+
+test("loaded CLI replaces ambient storage credentials and limits generated administration to qualification", async () => {
+  const calls = [];
+  let reads = 0;
+  const generated = Object.fromEntries(
+    Object.entries(localFixture).filter(
+      ([name]) =>
+        name.startsWith("ARTIFACT_STORE_") ||
+        name.startsWith("EXPORT_ARTIFACT_") ||
+        name.startsWith("ERASURE_REPLAY_LEDGER_") ||
+        name === "OBJECT_STORE_PORT",
+    ),
+  );
+  await runLoadedRetentionPrivacyDrill({
+    environment: {
+      ...localFixture,
+      ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID: "ambient-admin-must-not-escape",
+      ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY: "ambient-admin-secret-must-not-escape",
+      EXPORT_ARTIFACT_ENDPOINT: "https://untrusted.invalid",
+      EXPORT_ARTIFACT_READ_ACCESS_KEY_ID: "ambient-reader-must-not-escape",
+    },
+    readObjectStore: () => {
+      reads += 1;
+      return generated;
+    },
+    spawn: (_command, _args, options) => {
+      calls.push(options.env);
+      return { error: undefined, signal: null, status: 0 };
+    },
+    bootstrapMeiliKeys: async () => ({
+      MEILI_ADMIN_KEY: "d".repeat(64),
+      MEILI_SEARCH_KEY: "c".repeat(64),
+      MEILI_TASK_OBSERVER_KEY: "e".repeat(64),
+    }),
+  });
+  assert.equal(reads, 1);
+  assert.equal(calls.length, 4);
+  assert.equal(
+    calls[2].ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID,
+    generated.ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID,
+  );
+  assert.equal(
+    calls[2].ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY,
+    generated.ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY,
+  );
+  for (const [index, environment] of calls.entries()) {
+    assert.equal(JSON.stringify(environment).includes("ambient-"), false);
+    if (index !== 2) {
+      assert.equal(Object.hasOwn(environment, "ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID"), false);
+      assert.equal(Object.hasOwn(environment, "ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY"), false);
+    }
+  }
+  assert.equal(
+    calls[3].EXPORT_ARTIFACT_READ_ACCESS_KEY_ID,
+    generated.EXPORT_ARTIFACT_READ_ACCESS_KEY_ID,
+  );
+  assert.equal(calls[3].EXPORT_ARTIFACT_ENDPOINT, generated.EXPORT_ARTIFACT_ENDPOINT);
+  assert.match(
+    readSource("scripts/run-retention-privacy-drill.mjs"),
+    /await runLoadedRetentionPrivacyDrill\(\);/u,
+  );
+});
+
+test("loaded CLI stops before any child if generated storage validation fails", async () => {
+  let calls = 0;
+  await assert.rejects(
+    runLoadedRetentionPrivacyDrill({
+      environment: localFixture,
+      readObjectStore: () => {
+        throw new Error("synthetic invalid owned fixture");
+      },
+      spawn: () => {
+        calls += 1;
+        return { error: undefined, signal: null, status: 0 };
+      },
+    }),
+    /synthetic invalid owned fixture/u,
+  );
+  assert.equal(calls, 0);
 });
 
 test("opens, validates, and closes the private environment descriptor before the loaded run", () => {
@@ -907,12 +989,18 @@ test("rejects target drift and credential collapse before launching a drill step
       ERASURE_REPLAY_LEDGER_RESTORE_SECRET_ACCESS_KEY:
         localFixture.ERASURE_REPLAY_LEDGER_WRITE_SECRET_ACCESS_KEY,
     },
-    { ...localFixture, MINIO_ROOT_USER: localFixture.EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID },
-    { ...localFixture, MINIO_ROOT_PASSWORD: localFixture.EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY },
+    {
+      ...localFixture,
+      ARTIFACT_STORE_ADMIN_ACCESS_KEY_ID: localFixture.EXPORT_ARTIFACT_WRITE_ACCESS_KEY_ID,
+    },
+    {
+      ...localFixture,
+      ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY: localFixture.EXPORT_ARTIFACT_WRITE_SECRET_ACCESS_KEY,
+    },
     { ...localFixture, NODE_TLS_REJECT_UNAUTHORIZED: "0" },
     { ...localFixture, npm_config_strict_ssl: "false" },
     { ...localFixture, GIT_SSL_NO_VERIFY: "1" },
-    { ...localFixture, MINIO_ROOT_PASSWORD: "" },
+    { ...localFixture, ARTIFACT_STORE_ADMIN_SECRET_ACCESS_KEY: "" },
   ];
 
   for (const mutation of mutations) {
@@ -1042,6 +1130,10 @@ test("rejects retention drill removal, reordering, target drift, or weakened cre
   );
   const mutations = [
     workflow.replace(expectedArtifactStep, ""),
+    workflow.replace(
+      expectedArtifactStep,
+      expectedArtifactStep.replace("          -e .local-data/object-store/runtime.env\n", ""),
+    ),
     workflow.replace(expectedMeiliBootstrapStep, ""),
     workflow.replace(expectedRetentionStep, ""),
     workflow.replace(expectedWorkerSearchStep, ""),
@@ -1100,6 +1192,7 @@ test("rejects retention drill removal, reordering, target drift, or weakened cre
           "          node node_modules/dotenv-cli/cli.js",
           "          -o",
           "          --no-expand",
+          "          -e .local-data/object-store/runtime.env",
           `          -e "\${RUNNER_TEMP}/retention-meili.env"`,
           "          --",
           "          pnpm --filter @nutrition-tracker/api test:retention-integration",
@@ -1141,8 +1234,8 @@ test("rejects retention drill removal, reordering, target drift, or weakened cre
     workflow.replace(
       expectedRetentionStep,
       expectedRetentionStep.replace(
-        "EXPORT_ARTIFACT_READ_ACCESS_KEY_ID: nutrition_export_reader",
-        "EXPORT_ARTIFACT_READ_ACCESS_KEY_ID: nutrition_export_writer",
+        "          -e .local-data/object-store/runtime.env\n",
+        "          -e .env\n",
       ),
     ),
     workflow.replace(
