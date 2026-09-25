@@ -1,22 +1,22 @@
-/* SB Admin's compact application shell and Flatly palette, adapted to React.
-   Scoped to application screens so the public landing page keeps its own layout. */
+/* Daily Ledger: compact application layout, using the existing Flatly control foundations.
+   Scoped to application screens; the public landing page has its own layout. */
 .shell {
-  --ink: #263746;
-  --ink-muted: #566775;
-  --paper: #f4f6f8;
-  --paper-deep: #e8eef2;
-  --forest: #146e5b;
-  --lime: #d6f1e8;
-  --line: #dce3e8;
+  --ink: #172b46;
+  --ink-muted: #526780;
+  --paper: #f8fafc;
+  --paper-deep: #edf2f7;
+  --forest: #007e83;
+  --lime: #d6f2ef;
+  --line: #dce5ee;
   --white: #ffffff;
-  grid-template-columns: 220px minmax(0, 1fr);
+  grid-template-columns: 198px minmax(0, 1fr);
   background: var(--paper);
 }
 
 .shell .sidebar {
-  padding: 28px 20px;
+  padding: 24px 12px;
   color: #ffffff;
-  background: #2c3e50;
+  background: #192c40;
   border: 0;
   overflow-y: auto;
 }
@@ -42,7 +42,7 @@
 }
 .shell .sidebar nav a[aria-current="page"] {
   color: #ffffff;
-  background: #146e5b;
+  background: #007e83;
 }
 .shell .sidebar .accountIdentity,
 .shell .sidebar .wellnessNote {
@@ -58,7 +58,7 @@
 }
 .shell .dashboard {
   width: min(1440px, 100%);
-  padding: 28px 32px 64px;
+  padding: 24px 22px 48px;
 }
 .shell .dashboardHeader {
   align-items: center;
@@ -155,7 +155,7 @@
 }
 .overviewQuickLinks .buttonPrimary {
   color: #ffffff;
-  background: #146e5b;
+  background: #007e83;
   border: 1px solid #146e5b;
 }
 .overviewQuickLinks .secondaryAction {
@@ -553,4 +553,811 @@
   .shell .foodResultList .sourceCopy {
     text-align: left;
   }
+}
+
+@font-face {
+  font-family: "Nourishing Icons";
+  src: url("/fonts/fa-solid-900.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 900;
+  font-display: block;
+}
+.appIcon {
+  display: inline-block;
+  width: 1.15em;
+  flex: 0 0 auto;
+  font-family: "Nourishing Icons", sans-serif;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1;
+  text-align: center;
+}
+.shell {
+  color: var(--ink);
+  font-size: 14px;
+}
+.shell .sidebar .brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px;
+  font-size: 16px;
+  letter-spacing: 0;
+}
+.shell .sidebar .brand .appIcon {
+  color: #62d2cb;
+  font-size: 21px;
+}
+.shell .sidebar nav {
+  margin-top: 30px;
+  gap: 4px;
+}
+.shell .sidebar nav a {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 43px;
+  padding: 10px 12px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+.shell .sidebar nav .appIcon {
+  font-size: 16px;
+  padding: 0;
+  color: inherit;
+  font-weight: 900;
+}
+.shell .sidebar .accountIdentity {
+  padding-top: 24px;
+}
+.shell .sidebar .wellnessNote {
+  font-size: 11px;
+  line-height: 1.5;
+}
+.shell .dashboard {
+  max-width: 1600px;
+}
+.shell :is(button, input, select, textarea, .buttonPrimary, .secondaryAction) {
+  border-radius: 5px;
+}
+.shell button {
+  font-weight: 600;
+}
+.shell .diaryDashboard .kicker {
+  display: none;
+}
+.shell .ledgerToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 18px;
+  margin-bottom: 18px;
+}
+.shell .ledgerToolbar .dashboardHeader {
+  margin: 0;
+}
+.shell .ledgerToolbar .dateNavigator {
+  margin: 0;
+}
+.shell .ledgerToolbar h1 {
+  font-size: 32px;
+  letter-spacing: -0.04em;
+}
+.shell .ledgerToolbar .statusPill {
+  font-size: 10px;
+  padding: 4px 7px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.shell .ledgerToolbar .buttonPrimary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 40px;
+  padding: 9px 17px;
+  margin-left: auto;
+  color: white;
+  text-decoration: none;
+  font-size: 14px;
+}
+.shell .dateNavigator :is(button, input) {
+  min-height: 40px;
+  font-size: 13px;
+}
+.shell .dateNavigator button {
+  padding: 8px 12px;
+}
+.shell .dateNavigator input {
+  width: 156px;
+}
+.shell .diaryStatus {
+  margin: 8px 0;
+}
+.shell .diaryStatus:empty {
+  display: none;
+}
+.shell .dailySummary {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: white;
+  margin: 0 0 18px;
+  padding: 13px 18px 11px;
+}
+.shell .dailySummaryHeading {
+  margin-bottom: 9px;
+}
+.shell .dailySummaryHeading h2 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+.shell .dailySummaryHeading p {
+  font-size: 11px;
+}
+.shell .dailySummaryGrid {
+  grid-template-columns: 1.3fr repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+.shell .dailySummaryCard {
+  border: 0;
+  border-left: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  padding: 0 0 0 18px;
+}
+.shell .dailySummaryCard:first-child {
+  border-left: 3px solid var(--forest);
+  padding-left: 12px;
+}
+.shell .dailySummaryCard dt {
+  font-size: 12px;
+  margin-bottom: 1px;
+  color: var(--ink-muted);
+}
+.shell .dailySummaryValue {
+  font-size: 22px;
+  line-height: 1.35;
+  letter-spacing: -0.03em;
+}
+.shell .dailySummaryQualification {
+  font-size: 10px;
+  margin-top: 2px;
+}
+.shell .dailySummaryNote {
+  font-size: 11px;
+  margin: 9px 0 0;
+  max-width: none;
+}
+.shell .ledgerWorkspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1.9fr) minmax(300px, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+.shell .ledgerWorkspace .diaryGrid {
+  display: block;
+}
+.shell .ledgerWorkspace > * {
+  min-width: 0;
+}
+.shell .ledgerRail {
+  min-width: 0;
+  display: grid;
+  gap: 14px;
+  position: sticky;
+  top: 18px;
+}
+.shell .ledgerRail .nutritionSummary {
+  position: static;
+  margin: 0;
+  padding: 17px;
+  border-radius: 6px;
+  background: white;
+}
+.shell .nutritionSummary h2 {
+  font-size: 17px;
+  letter-spacing: -0.025em;
+}
+.shell .nutritionSummary > a {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--forest);
+  text-underline-offset: 3px;
+}
+.shell .nutritionSummary dl {
+  margin-top: 12px;
+}
+.shell .nutrientTotal {
+  padding: 9px 0;
+  gap: 8px;
+  font-size: 12px;
+}
+.shell .nutrientTotal dd {
+  overflow-wrap: anywhere;
+}
+.shell .nutrientTotal small {
+  font-size: 10px;
+  max-width: 170px;
+}
+.shell .totalsNote {
+  font-size: 11px;
+  line-height: 1.5;
+}
+.shell .ledgerTableHead {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(100px, 0.45fr) 94px 86px;
+  gap: 10px;
+  background: #edf3f8;
+  padding: 9px 14px;
+  border: 1px solid var(--line);
+  border-radius: 5px 5px 0 0;
+  font-size: 11px;
+  color: var(--ink-muted);
+}
+.shell .mealSection {
+  margin: 0 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: white;
+  overflow: visible;
+}
+.shell .mealHeading {
+  min-height: 45px;
+  padding: 7px 12px;
+  gap: 10px;
+  background: #f0f5f9;
+  border-radius: 5px 5px 0 0;
+}
+.shell .mealHeading h2 {
+  font-size: 15px;
+  line-height: 1.3;
+  letter-spacing: 0;
+}
+.shell .mealHeading .buttonQuiet {
+  padding: 4px 6px;
+  min-height: 30px;
+  font-size: 11px;
+}
+.shell .mealHeading a {
+  font-size: 12px;
+}
+.shell .mealSection ul {
+  margin: 0;
+}
+.shell .mealSection li {
+  padding: 0;
+}
+.shell .mealSection li:last-child {
+  border-bottom: 0;
+}
+.shell .mealSection .diaryEntry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(100px, 0.45fr) 94px 86px;
+  align-items: center;
+  padding: 10px 14px;
+  gap: 10px;
+  min-height: 53px;
+}
+.shell .ledgerRowName h3 {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.shell .ledgerRowName > p {
+  font-size: 11px;
+}
+.shell .ledgerRowPortion {
+  font-size: 12px;
+  color: var(--ink-muted);
+  overflow-wrap: anywhere;
+}
+.shell .ledgerRowEnergy {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.shell .ledgerRowActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: end;
+  gap: 4px;
+}
+.shell .ledgerRowActions button {
+  min-height: 32px;
+  padding: 5px 7px;
+  font-size: 11px;
+}
+.shell .ledgerMore {
+  grid-column: 1 / -1;
+  font-size: 12px;
+}
+.shell .ledgerMore > summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--ink-muted);
+  min-height: 28px;
+  padding: 4px 0;
+}
+.shell .ledgerMore[open] {
+  padding: 8px 0;
+}
+.shell .ledgerMore .entryActions {
+  padding: 10px 0;
+}
+.shell .mealSection .entryNutrients {
+  padding: 0 14px;
+  font-size: 11px;
+}
+.shell .entryNutrients summary {
+  cursor: pointer;
+}
+.shell .mealSection .entryEditor {
+  padding: 14px;
+  font-size: 12px;
+}
+.shell .emptyMeal {
+  margin: 0;
+  padding: 14px;
+  border: 0;
+  font-size: 12px;
+}
+.shell .diaryPageCount {
+  display: inline-block;
+  font-size: 11px;
+  color: var(--ink-muted);
+  margin: 0 14px 10px 0;
+}
+.shell .ledgerRail .todayOverviewHeading {
+  display: none;
+}
+.shell .ledgerRail .todayOverviewGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 14px;
+  margin: 0;
+}
+.shell .ledgerRail .todayOverviewCard {
+  padding: 16px;
+  border-radius: 6px;
+}
+.shell .ledgerRail .todayOverviewCard header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+}
+.shell .ledgerRail .todayOverviewCard h3 {
+  font-size: 15px;
+  margin: 0;
+}
+.shell .ledgerRail .todayOverviewCard header a {
+  font-size: 11px;
+}
+.shell .ledgerRail .todayOverviewMetric {
+  margin: 8px 0 0;
+  font-size: 13px;
+}
+.shell .ledgerRail .todayOverviewMetric strong {
+  font-size: 22px;
+}
+.shell .ledgerRail .todayOverviewBody p {
+  font-size: 11px;
+}
+.shell .ledgerRail .diaryGroupSettings {
+  margin: 0;
+  padding: 16px;
+  border-radius: 6px;
+  min-width: 0;
+}
+.shell .ledgerRail .diaryGroupSettings h2 {
+  font-size: 15px;
+  margin-bottom: 10px;
+}
+.shell .ledgerRail .diaryGroupSettings :is(p, label) {
+  font-size: 11px;
+}
+.shell .ledgerRail .diaryGroupSettings textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 78px;
+  resize: vertical;
+  padding: 10px;
+  border: 1px solid var(--line);
+  font: inherit;
+}
+.shell .ledgerRail .diaryGroupSettings .entryActions button {
+  min-height: 32px;
+  padding: 5px 8px;
+  font-size: 11px;
+}
+.shell .ledgerDayNoteHelp {
+  margin: 10px 0;
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+.shell .ledgerDayNoteHelp summary {
+  cursor: pointer;
+}
+.shell .diaryGroupSettingsLauncher {
+  margin-top: 16px;
+  font-size: 12px;
+}
+.shell .emptyDiary {
+  border-radius: 6px;
+  padding: 24px;
+}
+.shell .emptyDiary h2 {
+  font-size: 23px;
+}
+
+@media (max-width: 1200px) {
+  .shell .ledgerWorkspace {
+    grid-template-columns: minmax(0, 1.6fr) minmax(280px, 1fr);
+    gap: 14px;
+  }
+  .shell .ledgerTableHead,
+  .shell .mealSection .diaryEntry {
+    grid-template-columns: minmax(0, 1fr) 100px 78px;
+  }
+  .shell .ledgerRowActions {
+    grid-column: 1 / -1;
+    justify-content: start;
+  }
+}
+@media (max-width: 1020px) {
+  .shell .ledgerWorkspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .shell .ledgerRail {
+    position: static;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .shell .ledgerRail .nutritionSummary {
+    grid-row: span 2;
+  }
+  .shell .ledgerTableHead,
+  .shell .mealSection .diaryEntry {
+    grid-template-columns: minmax(0, 1fr) minmax(100px, 0.45fr) 94px 86px;
+  }
+  .shell .ledgerRowActions {
+    grid-column: auto;
+    justify-content: end;
+  }
+}
+@media (max-width: 760px) {
+  .shell .sidebar .brand {
+    padding: 0;
+    font-size: 15px;
+  }
+  .shell .sidebar nav {
+    gap: 4px;
+  }
+  .shell .sidebar nav a {
+    gap: 7px;
+    min-height: 40px;
+    font-size: 12px;
+    padding: 8px 10px;
+  }
+  .shell .sidebar .accountIdentity {
+    padding-top: 0;
+  }
+  .shell .dashboard {
+    padding: 20px 16px 40px;
+  }
+  .shell .ledgerToolbar {
+    gap: 10px;
+  }
+  .shell .ledgerToolbar .dashboardHeader {
+    width: 100%;
+  }
+  .shell .ledgerToolbar h1 {
+    font-size: 28px;
+  }
+  .shell .ledgerToolbar .buttonPrimary {
+    margin-left: 0;
+  }
+  .shell .dailySummaryGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .shell .dailySummaryCard {
+    padding-left: 12px;
+  }
+  .shell .dailySummaryValue {
+    font-size: 20px;
+  }
+  .shell .dailySummaryNote {
+    line-height: 1.5;
+  }
+}
+@media (max-width: 580px) {
+  .shell .ledgerTableHead {
+    display: none;
+  }
+  .shell .ledgerRail {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .shell .ledgerRail .nutritionSummary {
+    grid-row: auto;
+  }
+  .shell .mealSection .diaryEntry {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 5px 10px;
+    padding: 12px;
+  }
+  .shell .ledgerRowName {
+    grid-column: 1 / -1;
+  }
+  .shell .ledgerRowName h3 {
+    font-size: 14px;
+  }
+  .shell .ledgerRowPortion {
+    grid-column: 1;
+  }
+  .shell .ledgerRowEnergy {
+    grid-column: 2;
+  }
+  .shell .ledgerRowActions {
+    grid-column: 1 / -1;
+    justify-content: start;
+    margin-top: 3px;
+  }
+  .shell .ledgerRowActions button,
+  .shell .ledgerMore > summary {
+    min-height: 40px;
+  }
+  .shell .mealHeading {
+    gap: 5px;
+  }
+  .shell .entryEditor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.shell .sidebar .brand > span:not(.appIcon) {
+  color: white;
+}
+.shell .mealSection li {
+  position: relative;
+}
+.shell .ledgerRowActions {
+  padding-right: 28px;
+}
+.shell .ledgerMore > summary {
+  position: absolute;
+  top: 10px;
+  right: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  list-style: none;
+}
+.shell .ledgerMore > summary::-webkit-details-marker {
+  display: none;
+}
+.shell .ledgerMore > summary > span:not(.appIcon) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.shell .ledgerMore > summary:hover {
+  background: #edf4f7;
+  color: var(--forest);
+}
+.shell .ledgerMore > summary:focus-visible {
+  outline: 3px solid #2269b2;
+  outline-offset: 2px;
+}
+.shell .ledgerMore[open] {
+  padding: 0;
+}
+.shell .ledgerMoreContent {
+  border-top: 1px solid var(--line);
+  padding: 12px 14px;
+  background: #f8fafc;
+}
+.shell .ledgerEntryEvidence {
+  color: var(--ink-muted);
+  font-size: 11px;
+  display: grid;
+  gap: 5px;
+}
+.shell .ledgerPanelHeading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.shell .ledgerPanelHeading a {
+  font-size: 11px;
+  color: var(--forest);
+  text-underline-offset: 3px;
+}
+.shell .ledgerContent > .buttonQuiet {
+  font-size: 11px;
+  min-height: 30px;
+  margin-bottom: 8px;
+}
+@media (max-width: 1200px) and (min-width: 1021px) {
+  .shell .ledgerMore > summary {
+    top: 43px;
+  }
+}
+@media (max-width: 580px) {
+  .shell .ledgerRowActions {
+    padding-right: 0;
+  }
+  .shell .ledgerMore > summary {
+    top: auto;
+    bottom: 10px;
+    min-width: 40px;
+  }
+  .shell .ledgerMore[open] > summary {
+    position: static;
+    margin: 0 0 8px auto;
+  }
+}
+
+/* The compact strip and key nutrient view keep the day's controls in reach. */
+.shell .diaryDashboard .dailySummaryHeading {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.shell .diaryDashboard .dailySummary {
+  padding-top: 14px;
+}
+.shell .ledgerContent .diaryPageCount {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.shell .ledgerContent > .buttonQuiet {
+  display: block;
+  margin: 0 0 8px auto;
+  padding: 2px 6px;
+  min-height: 24px;
+  border: 0;
+  background: transparent;
+}
+.shell .mealSection .diaryEntry {
+  min-height: 44px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.shell .ledgerRowActions button {
+  color: var(--forest);
+  background: white;
+  border: 1px solid var(--line);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.shell .ledgerMore > summary {
+  top: 6px;
+}
+.shell .nutrientTotal {
+  padding: 7px 0;
+}
+.shell .ledgerOtherNutrients {
+  border-top: 1px solid var(--line);
+  margin-top: 8px;
+  padding-top: 8px;
+  font-size: 12px;
+}
+.shell .ledgerOtherNutrients summary {
+  color: var(--forest);
+  cursor: pointer;
+  min-height: 28px;
+}
+.shell .ledgerOtherNutrients summary:focus-visible {
+  outline: 3px solid #2269b2;
+  outline-offset: 2px;
+}
+.shell .nutritionSummary .ledgerSavedTargets {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 11px;
+  text-decoration: none;
+}
+@media (max-width: 1200px) and (min-width: 1021px) {
+  .shell .ledgerMore > summary {
+    top: auto;
+    bottom: 7px;
+  }
+  .shell .ledgerMore[open] > summary {
+    position: static;
+    margin-left: auto;
+  }
+}
+@media (max-width: 580px) {
+  .shell .mealSection .diaryEntry {
+    padding: 12px;
+  }
+  .shell .ledgerMore > summary {
+    top: auto;
+    bottom: 12px;
+  }
+  .shell .ledgerMore[open] > summary {
+    position: static;
+  }
+}
+
+.shell .ledgerAccount {
+  margin-top: auto;
+  font-size: 12px;
+}
+.shell .ledgerAccount > summary {
+  padding: 10px;
+  cursor: pointer;
+  min-height: 40px;
+  border: 1px solid #587082;
+  border-radius: 5px;
+}
+.shell .ledgerAccount > summary:focus-visible {
+  outline: 3px solid #b1ecdb;
+  outline-offset: 2px;
+}
+.shell .ledgerAccountPanel {
+  padding: 4px 10px 10px;
+}
+.shell .ledgerAccount .accountIdentity {
+  padding-top: 8px;
+}
+@media (max-width: 760px) {
+  .shell .ledgerAccount {
+    grid-column: 2;
+    grid-row: 1;
+    margin: 0;
+    position: relative;
+  }
+  .shell .ledgerAccountPanel {
+    position: absolute;
+    z-index: 5;
+    width: 240px;
+    max-width: calc(100vw - 40px);
+    top: 46px;
+    right: 0;
+    padding: 14px;
+    background: #192c40;
+    border: 1px solid #587082;
+    border-radius: 5px;
+  }
+  .shell .ledgerAccount .signOutButton {
+    margin-top: 10px;
+  }
+  .shell .ledgerAccount .verificationLink {
+    display: inline-block;
+    padding: 8px 0;
+  }
+  .shell .ledgerAccount .wellnessNote {
+    margin-top: 8px;
+  }
+}
+
+.shell .ledgerRail .todayOverview {
+  margin: 0;
+}
+.shell .ledgerRail .todayOverviewBody {
+  min-height: 0;
+  margin-top: 8px;
 }

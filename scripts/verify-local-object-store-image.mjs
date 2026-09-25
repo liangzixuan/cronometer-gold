@@ -83,7 +83,7 @@ export function verifyObjectStoreImage(run = capture) {
       records.length === 0 ||
       records.some(
         (record) =>
-          record.critical?.type !== "https://sigstore.dev/cosign/sign/v1" ||
+          record.critical?.type !== "cosign container image signature" ||
           record.critical?.image?.["docker-manifest-digest"] !== digest,
       )
     ) {

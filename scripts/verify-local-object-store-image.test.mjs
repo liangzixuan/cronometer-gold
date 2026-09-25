@@ -26,7 +26,7 @@ function signature(digest) {
   return [
     {
       critical: {
-        type: "https://sigstore.dev/cosign/sign/v1",
+        type: "cosign container image signature",
         image: { "docker-manifest-digest": digest },
       },
     },
@@ -45,7 +45,7 @@ function runner(overrides = {}) {
   return { calls, run };
 }
 
-test("verifies exact official index and ARM64 source before both release signatures", () => {
+test("accepts Cosign simple-signing payloads with exact index and ARM64 source", () => {
   const { calls, run } = runner();
   const result = verifyObjectStoreImage(run);
   assert.equal(result.ref, OBJECT_STORE_REF);
@@ -66,6 +66,14 @@ test("verifies exact official index and ARM64 source before both release signatu
     ]);
     assert.equal(call.args.length, 8);
   }
+});
+
+test("rejects the unsupported signature type formerly used by the fixture", () => {
+  const signatures = signature(OBJECT_STORE_IMAGE.digest);
+  signatures[0].critical.type = "https://sigstore.dev/cosign/sign/v1";
+  const { calls, run } = runner({ signatures });
+  assert.throws(() => verifyObjectStoreImage(run), /signature output/);
+  assert.equal(calls.length, 3);
 });
 
 test("rejects changed index bytes before another external command", () => {

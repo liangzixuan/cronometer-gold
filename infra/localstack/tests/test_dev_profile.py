@@ -129,8 +129,8 @@ class PersistentLocalStackContractTest(unittest.TestCase):
             "python3 -B infra/localstack/run-tests.py",
         )
 
-    def test_docs_preserve_minio_and_reject_phone_or_release_hosting(self) -> None:
-        self.assertIn("MinIO CI lane remains mandatory", self.readme)
+    def test_docs_preserve_authenticated_storage_and_reject_phone_or_release_hosting(self) -> None:
+        self.assertIn("The authenticated SeaweedFS CI lane remains mandatory", self.readme)
         self.assertIn("LocalStack is never a phone endpoint", self.readme)
         self.assertIn("no volume-reset command", self.readme)
         self.assertIn("noninteractive invocation fails closed", self.readme)

@@ -68,6 +68,7 @@ import {
 } from "../../lib/diary-group-draft";
 import { type HydrationDay, parseHydrationDay } from "../../lib/hydration";
 import { confirmBrowserLogout } from "../../lib/private-api";
+import { Icon } from "../ui/Icon";
 import { DailySummary } from "./DailySummary";
 import { DiaryDayNote } from "./DiaryDayNote";
 import { TodayOverviewCards } from "./TodayOverviewCards";
@@ -1723,112 +1724,217 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
     ),
   );
 
+  const keyNutrientCodes = [
+    "energy",
+    "protein",
+    "carbohydrate",
+    "fat",
+    "fiber",
+    "calcium",
+    "iron",
+    "vitamin-d",
+  ];
+  const nutrientRows = (keyOnly: boolean) => {
+    const totals = diary?.totals ?? [];
+    const selected = keyOnly
+      ? keyNutrientCodes.flatMap((code) => totals.filter((nutrient) => nutrient.code === code))
+      : totals.filter((nutrient) => !keyNutrientCodes.includes(nutrient.code));
+    return selected.map((nutrient) => {
+      const display = nutrientDisplay(nutrient);
+      return (
+        <div
+          key={nutrient.nutrientId}
+          className={`nutrientTotal nutrientTotal--${nutrient.completeness}`}
+        >
+          <dt>{nutrient.name}</dt>
+          <dd>
+            {display.amount}
+            <small>{display.qualification}</small>
+          </dd>
+        </div>
+      );
+    });
+  };
+
+  const overviewCards =
+    session && hasCommittedDate ? (
+      <TodayOverviewCards
+        activity={activityOverviewForCurrentIdentity}
+        date={date}
+        hydration={hydrationOverviewForCurrentIdentity}
+        onRetryActivity={() => void loadOverviewCard("activity", date)}
+        onRetryHydration={() => void loadOverviewCard("hydration", date)}
+      />
+    ) : null;
+  const dayNote =
+    session && hasCommittedDate ? (
+      <DiaryDayNote
+        key={`${session.user.id}:${mealPrivateGeneration}`}
+        session={session}
+        localDate={date}
+        privateGeneration={mealPrivateGeneration}
+        isPrivateCurrent={() =>
+          !privateUiClosed.current &&
+          privateUiGeneration.current === mealPrivateGeneration &&
+          sessionRef.current?.user.id === session.user.id
+        }
+        isViewCurrent={() =>
+          !privateUiClosed.current &&
+          privateUiGeneration.current === mealPrivateGeneration &&
+          viewEpoch.current === mealViewEpoch &&
+          sessionRef.current === session &&
+          dateRef.current === date &&
+          explicitDateRef.current === explicitDate &&
+          (explicitDate === null || explicitDate === date)
+        }
+        onUnauthorized={signInAgain}
+        onReturn={chooseDate}
+      />
+    ) : null;
+
   return (
     <>
-      <aside className="sidebar">
+      <aside className="sidebar ledgerSidebar">
         <Link className="brand brandDark" href="/">
-          nutrition<span>/ledger</span>
+          <Icon name="leaf" />
+          <span>Nourishing</span>
         </Link>
         <nav aria-label="Application navigation">
           <Link
             aria-current={view === "overview" ? "page" : undefined}
             href={`/overview${dateQuery}`}
           >
+            <Icon name="dashboard" />
             Dashboard
           </Link>
           <Link
             aria-current={view === "diary" ? "page" : undefined}
             href={`/dashboard${dateQuery}`}
           >
+            <Icon name="diary" />
             Diary
           </Link>
-          <Link href={`/foods${dateQuery}`}>Foods</Link>
-          <Link href={`/recipes${dateQuery}`}>Recipes</Link>
-          <Link href={`/goals${dateQuery}`}>Goals</Link>
-          <Link href={`/hydration${dateQuery}`}>Hydration</Link>
-          <Link href={`/activities${dateQuery}`}>Activity</Link>
+          <Link href={`/foods${dateQuery}`}>
+            <Icon name="foods" />
+            Foods
+          </Link>
+          <Link href={`/recipes${dateQuery}`}>
+            <Icon name="recipes" />
+            Recipes
+          </Link>
+          <Link href={`/goals${dateQuery}`}>
+            <Icon name="goals" />
+            Goals
+          </Link>
+          <Link href={`/hydration${dateQuery}`}>
+            <Icon name="water" />
+            Hydration
+          </Link>
+          <Link href={`/activities${dateQuery}`}>
+            <Icon name="activity" />
+            Activity
+          </Link>
           <Link href={hasCommittedDate ? `/reports?to=${encodeURIComponent(date)}` : "/reports"}>
+            <Icon name="reports" />
             Reports
           </Link>
-          <Link href="/health">Health & privacy</Link>
-        </nav>
-        {session ? <p className="accountIdentity">Signed in as {session.user.email}</p> : null}
-        {session && !session.user.emailVerified ? (
-          <Link className="verificationLink" href="/verify-email">
-            Verify email
+          <Link href="/health">
+            <Icon name="privacy" />
+            Health & privacy
           </Link>
-        ) : null}
-        <button
-          className="signOutButton"
-          disabled={controlsBusy}
-          onClick={() => void signOut()}
-          type="button"
-        >
-          Sign out
-        </button>
-        <p className="wellnessNote">Wellness information only—not medical advice.</p>
+        </nav>
+        <details className="ledgerAccount">
+          <summary>Account</summary>
+          <div className="ledgerAccountPanel">
+            {session ? <p className="accountIdentity">Signed in as {session.user.email}</p> : null}
+            {session && !session.user.emailVerified ? (
+              <Link className="verificationLink" href="/verify-email">
+                Verify email
+              </Link>
+            ) : null}
+            <button
+              className="signOutButton"
+              disabled={controlsBusy}
+              onClick={() => void signOut()}
+              type="button"
+            >
+              Sign out
+            </button>
+            <p className="wellnessNote">General wellness information. Not medical advice.</p>
+          </div>
+        </details>
       </aside>
 
       <section
         className={`dashboard ${view === "overview" ? "overviewDashboard" : "diaryDashboard"}`}
         id="today"
       >
-        <header
-          className={`dashboardHeader ${view === "overview" ? "overviewHeader" : "diaryHeader"}`}
-        >
-          <div>
-            <p className="kicker">
-              {view === "overview" ? "Your daily overview" : "Private local-day diary"}
-            </p>
-            <h1>{view === "overview" ? "Dashboard" : "Diary"}</h1>
-          </div>
-          <span className="statusPill">
-            {session?.profile.timeZone ?? diary?.timeZone ?? "Local time"}
-          </span>
-        </header>
+        <div className="ledgerToolbar">
+          <header
+            className={`dashboardHeader ${view === "overview" ? "overviewHeader" : "diaryHeader"}`}
+          >
+            <div>
+              <p className="kicker">
+                {view === "overview" ? "Your daily overview" : "Private local-day diary"}
+              </p>
+              <h1>{view === "overview" ? "Dashboard" : "Diary"}</h1>
+            </div>
+            <span className="statusPill">
+              {session?.profile.timeZone ?? diary?.timeZone ?? "Local time"}
+            </span>
+          </header>
 
-        <fieldset className="dateNavigator">
-          <legend className="srOnly">Diary date</legend>
-          <button
-            disabled={!hasCommittedDate || controlsBusy}
-            onClick={() => {
-              if (hasCommittedDate) chooseDate(shiftLocalDate(date, -1));
-            }}
-            type="button"
-            aria-label="Previous day"
-          >
-            ←
-          </button>
-          <label htmlFor="diary-date">Local date</label>
-          <input
-            disabled={!hasCommittedDate || controlsBusy}
-            id="diary-date"
-            onChange={(event) => chooseDate(event.target.value)}
-            type="date"
-            value={date}
-          />
-          <button
-            disabled={!hasCommittedDate || controlsBusy}
-            onClick={() => {
-              if (hasCommittedDate) chooseDate(shiftLocalDate(date, 1));
-            }}
-            type="button"
-            aria-label="Next day"
-          >
-            →
-          </button>
-          <button
-            disabled={!session || controlsBusy}
-            onClick={() => {
-              if (session) {
-                chooseDate(localDateInTimeZone(new Date(), session.profile.timeZone));
-              }
-            }}
-            type="button"
-          >
-            Today
-          </button>
-        </fieldset>
+          <fieldset className="dateNavigator">
+            <legend className="srOnly">Diary date</legend>
+            <button
+              disabled={!hasCommittedDate || controlsBusy}
+              onClick={() => {
+                if (hasCommittedDate) chooseDate(shiftLocalDate(date, -1));
+              }}
+              type="button"
+              aria-label="Previous day"
+            >
+              <Icon name="chevron-left" />
+            </button>
+            <label className="srOnly" htmlFor="diary-date">
+              Local date
+            </label>
+            <input
+              disabled={!hasCommittedDate || controlsBusy}
+              id="diary-date"
+              onChange={(event) => chooseDate(event.target.value)}
+              type="date"
+              value={date}
+            />
+            <button
+              disabled={!hasCommittedDate || controlsBusy}
+              onClick={() => {
+                if (hasCommittedDate) chooseDate(shiftLocalDate(date, 1));
+              }}
+              type="button"
+              aria-label="Next day"
+            >
+              <Icon name="chevron-right" />
+            </button>
+            <button
+              disabled={!session || controlsBusy}
+              onClick={() => {
+                if (session) {
+                  chooseDate(localDateInTimeZone(new Date(), session.profile.timeZone));
+                }
+              }}
+              type="button"
+            >
+              Today
+            </button>
+          </fieldset>
+          {view === "diary" && hasCommittedDate ? (
+            <Link className="buttonPrimary ledgerAddFood" href={`/foods${dateQuery}`}>
+              <Icon name="plus" />
+              Add food
+            </Link>
+          ) : null}
+        </div>
 
         {view === "overview" && hasCommittedDate ? (
           <nav aria-label="Dashboard actions" className="overviewQuickLinks">
@@ -1842,139 +1948,6 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
               Nutrition report
             </Link>
           </nav>
-        ) : null}
-
-        {view === "diary" ? (
-          <div className="diaryGroupSettingsLauncher">
-            <button
-              aria-controls="diary-group-settings"
-              aria-expanded={diaryGroupSettingsOpen}
-              className="secondaryAction"
-              disabled={!session || controlsBusy}
-              onClick={() => {
-                const opening = !diaryGroupSettingsOpen;
-                if (opening && session) setDiaryGroupDraft(createDiaryGroupDraft(session));
-                setDiaryGroupSettingsOpen(opening);
-              }}
-              type="button"
-            >
-              {diaryGroupSettingsOpen ? "Close diary group settings" : "Customize diary groups"}
-            </button>
-          </div>
-        ) : null}
-
-        {view === "diary" && diaryGroupSettingsOpen && session ? (
-          <section
-            aria-labelledby="diary-group-settings-title"
-            className="diaryGroupSettings"
-            id="diary-group-settings"
-          >
-            <div>
-              <p className="kicker">Your diary layout</p>
-              <h2 id="diary-group-settings-title">Name and order meal groups</h2>
-              <p>
-                Labels and order change everywhere you choose a diary destination. Existing entries
-                keep their stable saved destination.
-              </p>
-            </div>
-            <form
-              aria-busy={profileBusy}
-              onSubmit={(event) => {
-                event.preventDefault();
-                void saveDiaryGroups();
-              }}
-            >
-              <ol className="diaryGroupList">
-                {diaryGroupDraft.groups.map((group, index) => (
-                  <li key={group.mealSlot}>
-                    <label htmlFor={`diary-group-${group.mealSlot}`}>
-                      Group {index + 1} label
-                      <input
-                        disabled={profileBusy}
-                        id={`diary-group-${group.mealSlot}`}
-                        maxLength={120}
-                        onChange={(event) =>
-                          setDiaryGroupDraft((current) => ({
-                            ...current,
-                            groups: current.groups.map((candidate) =>
-                              candidate.mealSlot === group.mealSlot
-                                ? { ...candidate, label: event.target.value }
-                                : candidate,
-                            ),
-                          }))
-                        }
-                        value={group.label}
-                      />
-                    </label>
-                    <small>Stable destination: {mealLabel(group.mealSlot)}</small>
-                    <div className="entryActions">
-                      <button
-                        aria-label={`Move group ${index + 1} up`}
-                        disabled={profileBusy || index === 0}
-                        onClick={() =>
-                          setDiaryGroupDraft((current) => ({
-                            ...current,
-                            groups: moveDiaryGroup(current.groups, index, -1),
-                          }))
-                        }
-                        type="button"
-                      >
-                        Move up
-                      </button>
-                      <button
-                        aria-label={`Move group ${index + 1} down`}
-                        disabled={profileBusy || index === diaryGroupDraft.groups.length - 1}
-                        onClick={() =>
-                          setDiaryGroupDraft((current) => ({
-                            ...current,
-                            groups: moveDiaryGroup(current.groups, index, 1),
-                          }))
-                        }
-                        type="button"
-                      >
-                        Move down
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ol>
-              <p className="fieldHelp">
-                Use four unique labels, each 1–40 characters. Reset prepares Breakfast, Lunch,
-                Dinner, and Snacks; nothing changes until you save.
-              </p>
-              <div className="entryActions">
-                <button
-                  disabled={profileBusy}
-                  onClick={() => {
-                    setDiaryGroupDraft((current) => ({ ...current, groups: defaultDiaryGroups }));
-                    setMessage(
-                      "Default diary group names and order prepared. Choose Save groups to apply them.",
-                    );
-                  }}
-                  type="button"
-                >
-                  Reset defaults
-                </button>
-                <button
-                  disabled={profileBusy}
-                  onClick={() => {
-                    setDiaryGroupDraft(createDiaryGroupDraft(session));
-                    setDiaryGroupSettingsOpen(false);
-                  }}
-                  type="button"
-                >
-                  Cancel
-                </button>
-                <button
-                  className="buttonPrimary"
-                  disabled={profileBusy || mutationBusy !== null || !diaryGroupsChanged}
-                  type="submit"
-                >
-                  {profileBusy ? "Saving…" : "Save groups"}
-                </button>
-              </div>
-            </form>
-          </section>
         ) : null}
 
         <p
@@ -1997,618 +1970,813 @@ export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
           </button>
         ) : null}
 
-        {view === "overview" && session && diary && diaryPage && state === "ready" ? (
+        {session && diary && diaryPage && state === "ready" ? (
           <DailySummary totals={diary.totals} totalEntries={diaryPage.page.totalEntries} />
         ) : null}
 
-        {session && hasCommittedDate ? (
-          <TodayOverviewCards
-            activity={activityOverviewForCurrentIdentity}
-            date={date}
-            hydration={hydrationOverviewForCurrentIdentity}
-            onRetryActivity={() => void loadOverviewCard("activity", date)}
-            onRetryHydration={() => void loadOverviewCard("hydration", date)}
-          />
-        ) : null}
+        {view === "overview" ? overviewCards : null}
+        {view === "diary" ? (
+          <div className="ledgerWorkspace">
+            <div className="ledgerContent">
+              {view === "diary" && diary && diaryPage && state === "ready" ? (
+                <>
+                  <p className="diaryPageCount" id="diary-page-count">
+                    {diary.entries.length} of {diaryPage.page.totalEntries} entries loaded.
+                    Nutrition totals include all {diaryPage.page.totalEntries}.
+                  </p>
+                  {diary.entries.length > 0 ? (
+                    <button
+                      aria-controls="diary-entry-groups"
+                      className="buttonQuiet"
+                      disabled={!canUseMealControls()}
+                      onClick={expandAllMeals}
+                      type="button"
+                    >
+                      Expand all meals
+                    </button>
+                  ) : null}
+                  {!completeDayLoaded ? (
+                    <p className="fieldHelp">Load the complete day before changing entry order.</p>
+                  ) : null}
+                </>
+              ) : null}
 
-        {view === "diary" && session && hasCommittedDate ? (
-          <DiaryDayNote
-            key={`${session.user.id}:${mealPrivateGeneration}`}
-            session={session}
-            localDate={date}
-            privateGeneration={mealPrivateGeneration}
-            isPrivateCurrent={() =>
-              !privateUiClosed.current &&
-              privateUiGeneration.current === mealPrivateGeneration &&
-              sessionRef.current?.user.id === session.user.id
-            }
-            isViewCurrent={() =>
-              !privateUiClosed.current &&
-              privateUiGeneration.current === mealPrivateGeneration &&
-              viewEpoch.current === mealViewEpoch &&
-              sessionRef.current === session &&
-              dateRef.current === date &&
-              explicitDateRef.current === explicitDate &&
-              (explicitDate === null || explicitDate === date)
-            }
-            onUnauthorized={signInAgain}
-            onReturn={chooseDate}
-          />
-        ) : null}
-
-        {view === "diary" && diary && diaryPage && state === "ready" ? (
-          <>
-            <p className="diaryPageCount" id="diary-page-count">
-              {diary.entries.length} of {diaryPage.page.totalEntries} entries loaded. Nutrition
-              totals include all {diaryPage.page.totalEntries}.
-            </p>
-            {diary.entries.length > 0 ? (
-              <button
-                aria-controls="diary-entry-groups"
-                className="buttonQuiet"
-                disabled={!canUseMealControls()}
-                onClick={expandAllMeals}
-                type="button"
-              >
-                Expand all meals
-              </button>
-            ) : null}
-            {!completeDayLoaded ? (
-              <p className="fieldHelp">Load the complete day before changing entry order.</p>
-            ) : null}
-          </>
-        ) : null}
-
-        {view === "diary" && diary && diaryPage?.page.totalEntries === 0 && state === "ready" ? (
-          <section className="emptyDiary" aria-labelledby="empty-diary-title">
-            <div>
-              <p className="kicker">Nothing logged</p>
-              <h2 id="empty-diary-title">Start with a food you actually ate.</h2>
-              <p>
-                Choose a source-attributed food and its reviewed default serving. Unknown nutrients
-                will remain unknown.
-              </p>
-            </div>
-            <Link
-              className="emptyDiaryAction"
-              href={`/foods?date=${date}&meal=${diaryGroups[0]?.mealSlot ?? "breakfast"}`}
-            >
-              Find a food
-            </Link>
-          </section>
-        ) : null}
-
-        {view === "diary" && diary && diary.entries.length > 0 ? (
-          <div className="diaryGrid">
-            <div
-              aria-busy={pageState === "loading"}
-              aria-describedby="diary-page-count"
-              className="mealLedger"
-              id="diary-entry-groups"
-            >
-              {diaryGroups.map((group) => {
-                const entries = diary.entries.filter((entry) => entry.mealSlot === group.mealSlot);
-                const containsEditor = entries.some((entry) => entry.id === editor?.entryId);
-                const collapsed =
-                  collapsedMeals.has(group.mealSlot) && !containsEditor && !controlsBusy;
-                return (
-                  <section
-                    className="mealSection"
-                    key={group.mealSlot}
-                    aria-labelledby={`meal-${group.mealSlot}`}
+              {view === "diary" &&
+              diary &&
+              diaryPage?.page.totalEntries === 0 &&
+              state === "ready" ? (
+                <section className="emptyDiary" aria-labelledby="empty-diary-title">
+                  <div>
+                    <p className="kicker">Nothing logged</p>
+                    <h2 id="empty-diary-title">Start with a food you actually ate.</h2>
+                    <p>
+                      Choose a source-attributed food and its reviewed default serving. Unknown
+                      nutrients will remain unknown.
+                    </p>
+                  </div>
+                  <Link
+                    className="emptyDiaryAction"
+                    href={`/foods?date=${date}&meal=${diaryGroups[0]?.mealSlot ?? "breakfast"}`}
                   >
-                    <div className="mealHeading" style={{ flexWrap: "wrap" }}>
-                      <h2 id={`meal-${group.mealSlot}`}>{group.label}</h2>
-                      <div
-                        style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 16 }}
+                    Find a food
+                  </Link>
+                </section>
+              ) : null}
+
+              {view === "diary" && diary && diary.entries.length > 0 ? (
+                <div className="diaryLedgerBody">
+                  <div
+                    aria-busy={pageState === "loading"}
+                    aria-describedby="diary-page-count"
+                    className="mealLedger"
+                    id="diary-entry-groups"
+                  >
+                    <div className="ledgerTableHead" aria-hidden="true">
+                      <span>Food</span>
+                      <span>Amount</span>
+                      <span>kcal</span>
+                      <span />
+                    </div>
+                    {diaryGroups.map((group) => {
+                      const entries = diary.entries.filter(
+                        (entry) => entry.mealSlot === group.mealSlot,
+                      );
+                      const containsEditor = entries.some((entry) => entry.id === editor?.entryId);
+                      const collapsed =
+                        collapsedMeals.has(group.mealSlot) && !containsEditor && !controlsBusy;
+                      return (
+                        <section
+                          className="mealSection"
+                          key={group.mealSlot}
+                          aria-labelledby={`meal-${group.mealSlot}`}
+                        >
+                          <div className="mealHeading" style={{ flexWrap: "wrap" }}>
+                            <h2 id={`meal-${group.mealSlot}`}>{group.label}</h2>
+                            <div
+                              style={{
+                                display: "flex",
+                                flexWrap: "wrap",
+                                alignItems: "center",
+                                gap: 16,
+                              }}
+                            >
+                              <button
+                                aria-controls={`meal-entries-${group.mealSlot}`}
+                                aria-expanded={!collapsed}
+                                aria-label={`${collapsed ? "Expand" : "Collapse"} ${group.label}`}
+                                className="buttonQuiet"
+                                disabled={
+                                  controlsBusy ||
+                                  state !== "ready" ||
+                                  pageState === "loading" ||
+                                  !session ||
+                                  containsEditor
+                                }
+                                onClick={() => toggleMeal(group.mealSlot)}
+                                type="button"
+                              >
+                                {collapsed ? "Expand" : "Collapse"}
+                              </button>
+                              <Link href={`/foods?date=${date}&meal=${group.mealSlot}`}>
+                                Add food
+                              </Link>
+                            </div>
+                          </div>
+                          {collapsed && entries.length > 0 ? (
+                            <p className="fieldHelp">Loaded entries hidden.</p>
+                          ) : null}
+                          <div id={`meal-entries-${group.mealSlot}`}>
+                            {entries.length === 0 ? (
+                              <p className="emptyMeal">
+                                {diaryPage?.page.nextCursor
+                                  ? "No entries loaded for this meal yet"
+                                  : "No entries"}
+                              </p>
+                            ) : collapsed ? null : (
+                              <ul>
+                                {entries.map((entry, entryIndex) => (
+                                  <li key={entry.id}>
+                                    {editor?.entryId === entry.id ? (
+                                      <div className="entryEditor">
+                                        <label>
+                                          Quantity
+                                          <input
+                                            inputMode="decimal"
+                                            maxLength={18}
+                                            onChange={(event) =>
+                                              setEditor({ ...editor, quantity: event.target.value })
+                                            }
+                                            value={editor.quantity}
+                                          />
+                                        </label>
+                                        <label>
+                                          Meal
+                                          <select
+                                            onChange={(event) =>
+                                              setEditor({
+                                                ...editor,
+                                                mealSlot: event.target.value as MealSlot,
+                                              })
+                                            }
+                                            value={editor.mealSlot}
+                                          >
+                                            {diaryGroups.map((groupOption) => (
+                                              <option
+                                                key={groupOption.mealSlot}
+                                                value={groupOption.mealSlot}
+                                              >
+                                                {groupOption.label}
+                                              </option>
+                                            ))}
+                                          </select>
+                                        </label>
+                                        <label>
+                                          Local date
+                                          <input
+                                            onChange={(event) =>
+                                              setEditor({
+                                                ...editor,
+                                                localDate: event.target.value,
+                                              })
+                                            }
+                                            type="date"
+                                            value={editor.localDate}
+                                          />
+                                        </label>
+                                        <label>
+                                          Local time
+                                          <input
+                                            onChange={(event) =>
+                                              setEditor({
+                                                ...editor,
+                                                localTime: event.target.value,
+                                              })
+                                            }
+                                            type="time"
+                                            value={editor.localTime}
+                                          />
+                                        </label>
+                                        <label
+                                          className="entryNoteField"
+                                          htmlFor={`entry-note-${entry.id}`}
+                                        >
+                                          Private note
+                                          <textarea
+                                            aria-describedby={`entry-note-help-${entry.id}`}
+                                            id={`entry-note-${entry.id}`}
+                                            maxLength={4_000}
+                                            onChange={(event) =>
+                                              setEditor({ ...editor, note: event.target.value })
+                                            }
+                                            rows={4}
+                                            value={editor.note}
+                                          />
+                                        </label>
+                                        <small
+                                          className="entryNoteHint"
+                                          id={`entry-note-help-${entry.id}`}
+                                        >
+                                          Clear the field and save to remove this note from the
+                                          current display only. Immutable prior revisions remain in
+                                          your private account export until whole-account erasure.
+                                          Character count:{" "}
+                                          {diaryEntryNoteCharacterCount(editor.note)}
+                                          of 2,000.
+                                        </small>
+                                        <small className="entryTimeHint">
+                                          Changed date and time are interpreted in{" "}
+                                          {editor.originTimeZone}.
+                                        </small>
+                                        <div className="entryActions">
+                                          <button
+                                            aria-label={`Clear note field for ${entryName(entry)}`}
+                                            disabled={
+                                              mutationBusy !== null || editor.note.length === 0
+                                            }
+                                            onClick={() => setEditor({ ...editor, note: "" })}
+                                            type="button"
+                                          >
+                                            Clear field
+                                          </button>
+                                          <button
+                                            aria-label={`Save changes to ${entryName(entry)}`}
+                                            disabled={
+                                              mutationBusy !== null || diary.status === "locked"
+                                            }
+                                            onClick={() => void saveEntry()}
+                                            type="button"
+                                          >
+                                            {mutationBusy === entry.id ? "Saving…" : "Save"}
+                                          </button>
+                                          <button
+                                            aria-label={`Cancel editing ${entryName(entry)}`}
+                                            disabled={mutationBusy !== null}
+                                            onClick={() => setEditor(null)}
+                                            type="button"
+                                          >
+                                            Cancel
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ) : (
+                                      <article className="diaryEntry ledgerEntryRow">
+                                        <div className="ledgerRowName">
+                                          <h3>{entryName(entry)}</h3>
+                                        </div>
+                                        <div className="ledgerRowPortion">
+                                          <span className="srOnly">Amount: </span>
+                                          {entryPortionLabel(entry)}
+                                        </div>
+                                        <div className="ledgerRowEnergy">
+                                          <span className="srOnly">Energy: </span>
+                                          {entryEnergyDisplay(entry)}
+                                        </div>
+                                        <div className="ledgerRowActions">
+                                          <button
+                                            aria-label={`Edit ${entryName(entry)}`}
+                                            disabled={
+                                              mutationBusy !== null ||
+                                              diary.status === "locked" ||
+                                              session === null
+                                            }
+                                            onClick={() => beginEntryEdit(entry)}
+                                            type="button"
+                                          >
+                                            Edit
+                                          </button>
+                                        </div>
+                                      </article>
+                                    )}
+                                    <details
+                                      className="ledgerMore"
+                                      open={
+                                        repeatDestination?.entry === entry ||
+                                        renderedPendingRepeat(entry) !== undefined
+                                          ? true
+                                          : undefined
+                                      }
+                                    >
+                                      <summary
+                                        aria-label={`More actions and details for ${entryName(entry)}`}
+                                      >
+                                        <Icon name="more" />
+                                        <span>More</span>
+                                      </summary>
+                                      <div className="ledgerMoreContent">
+                                        <div className="ledgerEntryEvidence">
+                                          {entry.entryKind === "food" && entry.food.brandName ? (
+                                            <p>{entry.food.brandName}</p>
+                                          ) : null}
+                                          {entry.entryKind === "recipe" ? (
+                                            <p>Recipe version {entry.recipe.versionNumber}</p>
+                                          ) : null}
+                                          {entry.note !== null ? (
+                                            <div className="entryNote">
+                                              <small>Private note</small>
+                                              <p>{entry.note}</p>
+                                            </div>
+                                          ) : null}
+                                          <small>Logged at {entry.localTime.slice(0, 5)}</small>
+                                          {entry.timeZone !== diary.timeZone ? (
+                                            <small>Logged in {entry.timeZone}</small>
+                                          ) : null}
+                                          {entry.entryKind === "food" ? (
+                                            <small>
+                                              {entry.foodProvenance.kind === "private_custom"
+                                                ? `Owner-entered private food · pinned version ${entry.foodProvenance.customFoodVersionNumber}`
+                                                : `${entry.foodProvenance.source.attributionRequired ? entry.foodProvenance.source.attributionText : entry.foodProvenance.source.displayName} · ${entry.foodProvenance.source.licenseExpression}`}
+                                            </small>
+                                          ) : (
+                                            <div className="entryProvenance">
+                                              <small>
+                                                {entry.recipe.retentionPolicy.assumption}
+                                              </small>
+                                              {entry.recipe.warnings.map((warning) => (
+                                                <small key={warning.code}>{warning.message}</small>
+                                              ))}
+                                              {entry.sources.map((source) => (
+                                                <small key={`${source.code}:${source.releaseId}`}>
+                                                  {source.attributionRequired
+                                                    ? source.attributionText
+                                                    : source.displayName}{" "}
+                                                  · {source.licenseExpression}
+                                                </small>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </div>
+                                        {editor?.entryId !== entry.id ? (
+                                          <div className="entryActions">
+                                            <button
+                                              aria-label={`Move ${entryName(entry)} up within ${group.label}`}
+                                              disabled={
+                                                mutationBusy !== null ||
+                                                editor !== null ||
+                                                diary.status === "locked" ||
+                                                !completeDayLoaded ||
+                                                entryIndex === 0
+                                              }
+                                              onClick={() => void reorderEntry(entry, "up")}
+                                              type="button"
+                                            >
+                                              Move up
+                                            </button>
+                                            <button
+                                              aria-label={`Move ${entryName(entry)} down within ${group.label}`}
+                                              disabled={
+                                                mutationBusy !== null ||
+                                                editor !== null ||
+                                                diary.status === "locked" ||
+                                                !completeDayLoaded ||
+                                                entryIndex === entries.length - 1
+                                              }
+                                              onClick={() => void reorderEntry(entry, "down")}
+                                              type="button"
+                                            >
+                                              Move down
+                                            </button>
+
+                                            <button
+                                              aria-label={
+                                                renderedPendingRepeat(entry)?.customDestination
+                                                  ? `Retry repeat for ${entryName(entry)}`
+                                                  : `Repeat ${entryName(entry)} today`
+                                              }
+                                              disabled={mutationBusy !== null}
+                                              onClick={() =>
+                                                void repeatEntry(
+                                                  entry,
+                                                  undefined,
+                                                  renderedPendingRepeat(entry)?.customDestination
+                                                    ? renderedPendingRepeat(entry)
+                                                    : undefined,
+                                                )
+                                              }
+                                              type="button"
+                                            >
+                                              {mutationBusy === entry.id
+                                                ? "Working…"
+                                                : renderedPendingRepeat(entry)?.customDestination
+                                                  ? "Retry pinned repeat"
+                                                  : "Repeat today"}
+                                            </button>
+                                            <button
+                                              aria-label={`Repeat ${entryName(entry)} to another day or meal`}
+                                              disabled={
+                                                mutationBusy !== null ||
+                                                editor !== null ||
+                                                renderedPendingRepeat(entry) !== undefined
+                                              }
+                                              onClick={() => openRepeatDestination(entry)}
+                                              type="button"
+                                            >
+                                              Repeat to…
+                                            </button>
+                                            <button
+                                              aria-label={`Delete ${entryName(entry)}`}
+                                              className="dangerAction"
+                                              disabled={
+                                                mutationBusy !== null || diary.status === "locked"
+                                              }
+                                              onClick={() => void deleteEntry(entry)}
+                                              type="button"
+                                            >
+                                              {mutationBusy === entry.id ? "Working…" : "Delete"}
+                                            </button>
+                                          </div>
+                                        ) : null}
+                                        {canInspectEntryNutrients(entry) &&
+                                        renderedPendingRepeat(entry) ? (
+                                          <section
+                                            aria-label={`Pending repeat for ${entryName(entry)}`}
+                                          >
+                                            <p className="fieldHelp">
+                                              Pending repeat:{" "}
+                                              {renderedPendingRepeat(entry)?.targetDate} ·{" "}
+                                              {diaryGroupLabel(
+                                                diaryGroups,
+                                                renderedPendingRepeat(entry)?.body.mealSlot ??
+                                                  entry.mealSlot,
+                                              )}{" "}
+                                              · {renderedPendingRepeat(entry)?.expectedTimeZone}.
+                                              The destination and pinned source version stay fixed
+                                              until this operation is resolved.
+                                            </p>
+                                            {!renderedPendingRepeat(entry)?.customDestination ? (
+                                              <button
+                                                type="button"
+                                                disabled={mutationBusy !== null}
+                                                onClick={() =>
+                                                  void repeatEntry(
+                                                    entry,
+                                                    undefined,
+                                                    renderedPendingRepeat(entry),
+                                                  )
+                                                }
+                                              >
+                                                Retry pinned repeat
+                                              </button>
+                                            ) : null}
+                                          </section>
+                                        ) : null}
+                                        {repeatDestination?.entry === entry &&
+                                        currentRepeatDestination(repeatDestination) ? (
+                                          <section
+                                            className="entryEditor"
+                                            aria-label={`Repeat destination for ${entryName(entry)}`}
+                                          >
+                                            <h3>Repeat {entryName(entry)} to…</h3>
+                                            <label>
+                                              Repeat date
+                                              <input
+                                                type="date"
+                                                value={repeatDestination.targetDate}
+                                                onChange={(event) =>
+                                                  changeRepeatDestination(
+                                                    repeatDestination,
+                                                    "targetDate",
+                                                    event.target.value,
+                                                  )
+                                                }
+                                              />
+                                            </label>
+                                            <label>
+                                              Repeat meal
+                                              <select
+                                                value={repeatDestination.mealSlot}
+                                                onChange={(event) =>
+                                                  changeRepeatDestination(
+                                                    repeatDestination,
+                                                    "mealSlot",
+                                                    event.target.value,
+                                                  )
+                                                }
+                                              >
+                                                {diaryGroups.map((group) => (
+                                                  <option
+                                                    key={group.mealSlot}
+                                                    value={group.mealSlot}
+                                                  >
+                                                    {group.label}
+                                                  </option>
+                                                ))}
+                                              </select>
+                                            </label>
+                                            <p className="fieldHelp">
+                                              Today uses the current time; another date uses noon in{" "}
+                                              {session?.profile.timeZone}. The logged quantity, note
+                                              and nutrient snapshot are repeated unchanged.
+                                            </p>
+                                            <div className="entryActions">
+                                              <button
+                                                type="button"
+                                                onClick={() =>
+                                                  void repeatEntry(entry, repeatDestination)
+                                                }
+                                              >
+                                                Confirm repeat destination
+                                              </button>
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  if (currentRepeatDestination(repeatDestination))
+                                                    closeRepeatDestination();
+                                                }}
+                                              >
+                                                Cancel repeat destination
+                                              </button>
+                                            </div>
+                                          </section>
+                                        ) : null}
+                                        {canInspectEntryNutrients(entry) ? (
+                                          <section
+                                            aria-label={`Logged nutrients for ${entryName(entry)}, ${entryPortionLabel(entry)} at ${entry.localTime.slice(0, 5)}`}
+                                            style={{
+                                              minWidth: 0,
+                                              paddingBottom: 16,
+                                              overflowWrap: "anywhere",
+                                            }}
+                                          >
+                                            <div className="entryActions">
+                                              <button
+                                                aria-label={`${entryNutrientChoices.get(entry)?.open ? "Hide" : "Show"} nutrients for ${entryName(entry)}, ${entryPortionLabel(entry)} at ${entry.localTime.slice(0, 5)}`}
+                                                aria-expanded={
+                                                  entryNutrientChoices.get(entry)?.open ?? false
+                                                }
+                                                aria-controls={`entry-nutrients-${entry.id}`}
+                                                onClick={() => toggleEntryNutrients(entry)}
+                                                type="button"
+                                              >
+                                                {entryNutrientChoices.get(entry)?.open
+                                                  ? "Hide nutrients"
+                                                  : "Show nutrients"}
+                                              </button>
+                                            </div>
+                                            <div id={`entry-nutrients-${entry.id}`}>
+                                              {entryNutrientChoices.get(entry)?.open ? (
+                                                <>
+                                                  <p className="fieldHelp">
+                                                    Nutrition for this saved logged portion:{" "}
+                                                    {entryPortionLabel(entry)}. Entry revision{" "}
+                                                    {entry.revision}.
+                                                    {editor?.entryId === entry.id
+                                                      ? " Unsaved edits are not included."
+                                                      : ""}
+                                                  </p>
+                                                  {entry.nutrients.length === 0 ? (
+                                                    <p className="fieldHelp">
+                                                      Nutrient details are unavailable for this
+                                                      logged portion.
+                                                    </p>
+                                                  ) : (
+                                                    <dl>
+                                                      {entryNutrientRows(entry).map(
+                                                        ({ nutrient, key }) => {
+                                                          const display = nutrientDisplay(nutrient);
+                                                          return (
+                                                            <div
+                                                              key={key}
+                                                              className={`nutrientTotal nutrientTotal--${nutrient.completeness}`}
+                                                              style={{
+                                                                gridTemplateColumns:
+                                                                  "minmax(0, 1fr)",
+                                                                gap: 4,
+                                                              }}
+                                                            >
+                                                              <dt>
+                                                                {nutrient.name} ({nutrient.unit})
+                                                              </dt>
+                                                              <dd style={{ textAlign: "left" }}>
+                                                                {display.amount}
+                                                                <small>
+                                                                  {display.qualification}
+                                                                </small>
+                                                              </dd>
+                                                            </div>
+                                                          );
+                                                        },
+                                                      )}
+                                                    </dl>
+                                                  )}
+                                                </>
+                                              ) : null}
+                                            </div>
+                                          </section>
+                                        ) : null}
+                                      </div>
+                                    </details>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </div>
+                        </section>
+                      );
+                    })}
+                  </div>
+
+                  {diaryPage && diaryPage.page.totalEntries > DIARY_PAGE_SIZE ? (
+                    <div className="diaryLoadMore">
+                      <button
+                        aria-controls="diary-entry-groups"
+                        aria-describedby="diary-page-count"
+                        aria-disabled={
+                          diaryPage.page.nextCursor === null ||
+                          pageState === "loading" ||
+                          mutationBusy !== null
+                        }
+                        className="secondaryAction"
+                        disabled={pageState === "loading" || mutationBusy !== null}
+                        onClick={() => void loadMore()}
+                        type="button"
                       >
+                        {pageState === "loading"
+                          ? "Loading more…"
+                          : pageState === "error"
+                            ? "Retry load more"
+                            : diaryPage.page.nextCursor === null
+                              ? "All entries loaded"
+                              : "Load more"}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              <div className="ledgerGroupSettings">
+                {view === "diary" ? (
+                  <div className="diaryGroupSettingsLauncher">
+                    <button
+                      aria-controls="diary-group-settings"
+                      aria-expanded={diaryGroupSettingsOpen}
+                      className="secondaryAction"
+                      disabled={!session || controlsBusy}
+                      onClick={() => {
+                        const opening = !diaryGroupSettingsOpen;
+                        if (opening && session) setDiaryGroupDraft(createDiaryGroupDraft(session));
+                        setDiaryGroupSettingsOpen(opening);
+                      }}
+                      type="button"
+                    >
+                      {diaryGroupSettingsOpen
+                        ? "Close diary group settings"
+                        : "Customize diary groups"}
+                    </button>
+                  </div>
+                ) : null}
+
+                {view === "diary" && diaryGroupSettingsOpen && session ? (
+                  <section
+                    aria-labelledby="diary-group-settings-title"
+                    className="diaryGroupSettings"
+                    id="diary-group-settings"
+                  >
+                    <div>
+                      <p className="kicker">Your diary layout</p>
+                      <h2 id="diary-group-settings-title">Name and order meal groups</h2>
+                      <p>
+                        Labels and order change everywhere you choose a diary destination. Existing
+                        entries keep their stable saved destination.
+                      </p>
+                    </div>
+                    <form
+                      aria-busy={profileBusy}
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void saveDiaryGroups();
+                      }}
+                    >
+                      <ol className="diaryGroupList">
+                        {diaryGroupDraft.groups.map((group, index) => (
+                          <li key={group.mealSlot}>
+                            <label htmlFor={`diary-group-${group.mealSlot}`}>
+                              Group {index + 1} label
+                              <input
+                                disabled={profileBusy}
+                                id={`diary-group-${group.mealSlot}`}
+                                maxLength={120}
+                                onChange={(event) =>
+                                  setDiaryGroupDraft((current) => ({
+                                    ...current,
+                                    groups: current.groups.map((candidate) =>
+                                      candidate.mealSlot === group.mealSlot
+                                        ? { ...candidate, label: event.target.value }
+                                        : candidate,
+                                    ),
+                                  }))
+                                }
+                                value={group.label}
+                              />
+                            </label>
+                            <small>Stable destination: {mealLabel(group.mealSlot)}</small>
+                            <div className="entryActions">
+                              <button
+                                aria-label={`Move group ${index + 1} up`}
+                                disabled={profileBusy || index === 0}
+                                onClick={() =>
+                                  setDiaryGroupDraft((current) => ({
+                                    ...current,
+                                    groups: moveDiaryGroup(current.groups, index, -1),
+                                  }))
+                                }
+                                type="button"
+                              >
+                                Move up
+                              </button>
+                              <button
+                                aria-label={`Move group ${index + 1} down`}
+                                disabled={
+                                  profileBusy || index === diaryGroupDraft.groups.length - 1
+                                }
+                                onClick={() =>
+                                  setDiaryGroupDraft((current) => ({
+                                    ...current,
+                                    groups: moveDiaryGroup(current.groups, index, 1),
+                                  }))
+                                }
+                                type="button"
+                              >
+                                Move down
+                              </button>
+                            </div>
+                          </li>
+                        ))}
+                      </ol>
+                      <p className="fieldHelp">
+                        Use four unique labels, each 1–40 characters. Reset prepares Breakfast,
+                        Lunch, Dinner, and Snacks; nothing changes until you save.
+                      </p>
+                      <div className="entryActions">
                         <button
-                          aria-controls={`meal-entries-${group.mealSlot}`}
-                          aria-expanded={!collapsed}
-                          aria-label={`${collapsed ? "Expand" : "Collapse"} ${group.label}`}
-                          className="buttonQuiet"
-                          disabled={
-                            controlsBusy ||
-                            state !== "ready" ||
-                            pageState === "loading" ||
-                            !session ||
-                            containsEditor
-                          }
-                          onClick={() => toggleMeal(group.mealSlot)}
+                          disabled={profileBusy}
+                          onClick={() => {
+                            setDiaryGroupDraft((current) => ({
+                              ...current,
+                              groups: defaultDiaryGroups,
+                            }));
+                            setMessage(
+                              "Default diary group names and order prepared. Choose Save groups to apply them.",
+                            );
+                          }}
                           type="button"
                         >
-                          {collapsed ? "Expand" : "Collapse"}
+                          Reset defaults
                         </button>
-                        <Link href={`/foods?date=${date}&meal=${group.mealSlot}`}>Add food</Link>
+                        <button
+                          disabled={profileBusy}
+                          onClick={() => {
+                            setDiaryGroupDraft(createDiaryGroupDraft(session));
+                            setDiaryGroupSettingsOpen(false);
+                          }}
+                          type="button"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          className="buttonPrimary"
+                          disabled={profileBusy || mutationBusy !== null || !diaryGroupsChanged}
+                          type="submit"
+                        >
+                          {profileBusy ? "Saving…" : "Save groups"}
+                        </button>
                       </div>
-                    </div>
-                    {collapsed && entries.length > 0 ? (
-                      <p className="fieldHelp">Loaded entries hidden.</p>
-                    ) : null}
-                    <div id={`meal-entries-${group.mealSlot}`}>
-                      {entries.length === 0 ? (
-                        <p className="emptyMeal">
-                          {diaryPage?.page.nextCursor
-                            ? "No entries loaded for this meal yet"
-                            : "No entries"}
-                        </p>
-                      ) : collapsed ? null : (
-                        <ul>
-                          {entries.map((entry, entryIndex) => (
-                            <li key={entry.id}>
-                              {editor?.entryId === entry.id ? (
-                                <div className="entryEditor">
-                                  <label>
-                                    Quantity
-                                    <input
-                                      inputMode="decimal"
-                                      maxLength={18}
-                                      onChange={(event) =>
-                                        setEditor({ ...editor, quantity: event.target.value })
-                                      }
-                                      value={editor.quantity}
-                                    />
-                                  </label>
-                                  <label>
-                                    Meal
-                                    <select
-                                      onChange={(event) =>
-                                        setEditor({
-                                          ...editor,
-                                          mealSlot: event.target.value as MealSlot,
-                                        })
-                                      }
-                                      value={editor.mealSlot}
-                                    >
-                                      {diaryGroups.map((groupOption) => (
-                                        <option
-                                          key={groupOption.mealSlot}
-                                          value={groupOption.mealSlot}
-                                        >
-                                          {groupOption.label}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                  <label>
-                                    Local date
-                                    <input
-                                      onChange={(event) =>
-                                        setEditor({ ...editor, localDate: event.target.value })
-                                      }
-                                      type="date"
-                                      value={editor.localDate}
-                                    />
-                                  </label>
-                                  <label>
-                                    Local time
-                                    <input
-                                      onChange={(event) =>
-                                        setEditor({ ...editor, localTime: event.target.value })
-                                      }
-                                      type="time"
-                                      value={editor.localTime}
-                                    />
-                                  </label>
-                                  <label
-                                    className="entryNoteField"
-                                    htmlFor={`entry-note-${entry.id}`}
-                                  >
-                                    Private note
-                                    <textarea
-                                      aria-describedby={`entry-note-help-${entry.id}`}
-                                      id={`entry-note-${entry.id}`}
-                                      maxLength={4_000}
-                                      onChange={(event) =>
-                                        setEditor({ ...editor, note: event.target.value })
-                                      }
-                                      rows={4}
-                                      value={editor.note}
-                                    />
-                                  </label>
-                                  <small
-                                    className="entryNoteHint"
-                                    id={`entry-note-help-${entry.id}`}
-                                  >
-                                    Clear the field and save to remove this note from the current
-                                    display only. Immutable prior revisions remain in your private
-                                    account export until whole-account erasure. Character count:{" "}
-                                    {diaryEntryNoteCharacterCount(editor.note)}
-                                    of 2,000.
-                                  </small>
-                                  <small className="entryTimeHint">
-                                    Changed date and time are interpreted in {editor.originTimeZone}
-                                    .
-                                  </small>
-                                  <div className="entryActions">
-                                    <button
-                                      aria-label={`Clear note field for ${entryName(entry)}`}
-                                      disabled={mutationBusy !== null || editor.note.length === 0}
-                                      onClick={() => setEditor({ ...editor, note: "" })}
-                                      type="button"
-                                    >
-                                      Clear field
-                                    </button>
-                                    <button
-                                      aria-label={`Save changes to ${entryName(entry)}`}
-                                      disabled={mutationBusy !== null || diary.status === "locked"}
-                                      onClick={() => void saveEntry()}
-                                      type="button"
-                                    >
-                                      {mutationBusy === entry.id ? "Saving…" : "Save"}
-                                    </button>
-                                    <button
-                                      aria-label={`Cancel editing ${entryName(entry)}`}
-                                      disabled={mutationBusy !== null}
-                                      onClick={() => setEditor(null)}
-                                      type="button"
-                                    >
-                                      Cancel
-                                    </button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <article className="diaryEntry">
-                                  <div>
-                                    <h3>{entryName(entry)}</h3>
-                                    {entry.entryKind === "food" && entry.food.brandName ? (
-                                      <p>{entry.food.brandName}</p>
-                                    ) : null}
-                                    {entry.entryKind === "recipe" ? (
-                                      <p>Recipe version {entry.recipe.versionNumber}</p>
-                                    ) : null}
-                                    {entry.note !== null ? (
-                                      <div className="entryNote">
-                                        <small>Private note</small>
-                                        <p>{entry.note}</p>
-                                      </div>
-                                    ) : null}
-                                    <small>
-                                      {entryPortionLabel(entry)} · {entry.localTime.slice(0, 5)} ·{" "}
-                                      {entryEnergyDisplay(entry)}
-                                    </small>
-                                    {entry.timeZone !== diary.timeZone ? (
-                                      <small>Logged in {entry.timeZone}</small>
-                                    ) : null}
-                                    {entry.entryKind === "food" ? (
-                                      <small>
-                                        {entry.foodProvenance.kind === "private_custom"
-                                          ? `Owner-entered private food · pinned version ${entry.foodProvenance.customFoodVersionNumber}`
-                                          : `${entry.foodProvenance.source.attributionRequired ? entry.foodProvenance.source.attributionText : entry.foodProvenance.source.displayName} · ${entry.foodProvenance.source.licenseExpression}`}
-                                      </small>
-                                    ) : (
-                                      <div className="entryProvenance">
-                                        <small>{entry.recipe.retentionPolicy.assumption}</small>
-                                        {entry.recipe.warnings.map((warning) => (
-                                          <small key={warning.code}>{warning.message}</small>
-                                        ))}
-                                        {entry.sources.map((source) => (
-                                          <small key={`${source.code}:${source.releaseId}`}>
-                                            {source.attributionRequired
-                                              ? source.attributionText
-                                              : source.displayName}{" "}
-                                            · {source.licenseExpression}
-                                          </small>
-                                        ))}
-                                      </div>
-                                    )}
-                                  </div>
-                                  <div className="entryActions">
-                                    <button
-                                      aria-label={`Move ${entryName(entry)} up within ${group.label}`}
-                                      disabled={
-                                        mutationBusy !== null ||
-                                        editor !== null ||
-                                        diary.status === "locked" ||
-                                        !completeDayLoaded ||
-                                        entryIndex === 0
-                                      }
-                                      onClick={() => void reorderEntry(entry, "up")}
-                                      type="button"
-                                    >
-                                      Move up
-                                    </button>
-                                    <button
-                                      aria-label={`Move ${entryName(entry)} down within ${group.label}`}
-                                      disabled={
-                                        mutationBusy !== null ||
-                                        editor !== null ||
-                                        diary.status === "locked" ||
-                                        !completeDayLoaded ||
-                                        entryIndex === entries.length - 1
-                                      }
-                                      onClick={() => void reorderEntry(entry, "down")}
-                                      type="button"
-                                    >
-                                      Move down
-                                    </button>
-                                    <button
-                                      aria-label={`Edit ${entryName(entry)}`}
-                                      disabled={
-                                        mutationBusy !== null ||
-                                        diary.status === "locked" ||
-                                        session === null
-                                      }
-                                      onClick={() => beginEntryEdit(entry)}
-                                      type="button"
-                                    >
-                                      Edit
-                                    </button>
-                                    <button
-                                      aria-label={
-                                        renderedPendingRepeat(entry)?.customDestination
-                                          ? `Retry repeat for ${entryName(entry)}`
-                                          : `Repeat ${entryName(entry)} today`
-                                      }
-                                      disabled={mutationBusy !== null}
-                                      onClick={() =>
-                                        void repeatEntry(
-                                          entry,
-                                          undefined,
-                                          renderedPendingRepeat(entry)?.customDestination
-                                            ? renderedPendingRepeat(entry)
-                                            : undefined,
-                                        )
-                                      }
-                                      type="button"
-                                    >
-                                      {mutationBusy === entry.id
-                                        ? "Working…"
-                                        : renderedPendingRepeat(entry)?.customDestination
-                                          ? "Retry pinned repeat"
-                                          : "Repeat today"}
-                                    </button>
-                                    <button
-                                      aria-label={`Repeat ${entryName(entry)} to another day or meal`}
-                                      disabled={
-                                        mutationBusy !== null ||
-                                        editor !== null ||
-                                        renderedPendingRepeat(entry) !== undefined
-                                      }
-                                      onClick={() => openRepeatDestination(entry)}
-                                      type="button"
-                                    >
-                                      Repeat to…
-                                    </button>
-                                    <button
-                                      aria-label={`Delete ${entryName(entry)}`}
-                                      className="dangerAction"
-                                      disabled={mutationBusy !== null || diary.status === "locked"}
-                                      onClick={() => void deleteEntry(entry)}
-                                      type="button"
-                                    >
-                                      {mutationBusy === entry.id ? "Working…" : "Delete"}
-                                    </button>
-                                  </div>
-                                </article>
-                              )}
-                              {canInspectEntryNutrients(entry) && renderedPendingRepeat(entry) ? (
-                                <section aria-label={`Pending repeat for ${entryName(entry)}`}>
-                                  <p className="fieldHelp">
-                                    Pending repeat: {renderedPendingRepeat(entry)?.targetDate} ·{" "}
-                                    {diaryGroupLabel(
-                                      diaryGroups,
-                                      renderedPendingRepeat(entry)?.body.mealSlot ?? entry.mealSlot,
-                                    )}{" "}
-                                    · {renderedPendingRepeat(entry)?.expectedTimeZone}. The
-                                    destination and pinned source version stay fixed until this
-                                    operation is resolved.
-                                  </p>
-                                  {!renderedPendingRepeat(entry)?.customDestination ? (
-                                    <button
-                                      type="button"
-                                      disabled={mutationBusy !== null}
-                                      onClick={() =>
-                                        void repeatEntry(
-                                          entry,
-                                          undefined,
-                                          renderedPendingRepeat(entry),
-                                        )
-                                      }
-                                    >
-                                      Retry pinned repeat
-                                    </button>
-                                  ) : null}
-                                </section>
-                              ) : null}
-                              {repeatDestination?.entry === entry &&
-                              currentRepeatDestination(repeatDestination) ? (
-                                <section
-                                  className="entryEditor"
-                                  aria-label={`Repeat destination for ${entryName(entry)}`}
-                                >
-                                  <h3>Repeat {entryName(entry)} to…</h3>
-                                  <label>
-                                    Repeat date
-                                    <input
-                                      type="date"
-                                      value={repeatDestination.targetDate}
-                                      onChange={(event) =>
-                                        changeRepeatDestination(
-                                          repeatDestination,
-                                          "targetDate",
-                                          event.target.value,
-                                        )
-                                      }
-                                    />
-                                  </label>
-                                  <label>
-                                    Repeat meal
-                                    <select
-                                      value={repeatDestination.mealSlot}
-                                      onChange={(event) =>
-                                        changeRepeatDestination(
-                                          repeatDestination,
-                                          "mealSlot",
-                                          event.target.value,
-                                        )
-                                      }
-                                    >
-                                      {diaryGroups.map((group) => (
-                                        <option key={group.mealSlot} value={group.mealSlot}>
-                                          {group.label}
-                                        </option>
-                                      ))}
-                                    </select>
-                                  </label>
-                                  <p className="fieldHelp">
-                                    Today uses the current time; another date uses noon in{" "}
-                                    {session?.profile.timeZone}. The logged quantity, note and
-                                    nutrient snapshot are repeated unchanged.
-                                  </p>
-                                  <div className="entryActions">
-                                    <button
-                                      type="button"
-                                      onClick={() => void repeatEntry(entry, repeatDestination)}
-                                    >
-                                      Confirm repeat destination
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        if (currentRepeatDestination(repeatDestination))
-                                          closeRepeatDestination();
-                                      }}
-                                    >
-                                      Cancel repeat destination
-                                    </button>
-                                  </div>
-                                </section>
-                              ) : null}
-                              {canInspectEntryNutrients(entry) ? (
-                                <section
-                                  aria-label={`Logged nutrients for ${entryName(entry)}, ${entryPortionLabel(entry)} at ${entry.localTime.slice(0, 5)}`}
-                                  style={{
-                                    minWidth: 0,
-                                    paddingBottom: 16,
-                                    overflowWrap: "anywhere",
-                                  }}
-                                >
-                                  <div className="entryActions">
-                                    <button
-                                      aria-label={`${entryNutrientChoices.get(entry)?.open ? "Hide" : "Show"} nutrients for ${entryName(entry)}, ${entryPortionLabel(entry)} at ${entry.localTime.slice(0, 5)}`}
-                                      aria-expanded={entryNutrientChoices.get(entry)?.open ?? false}
-                                      aria-controls={`entry-nutrients-${entry.id}`}
-                                      onClick={() => toggleEntryNutrients(entry)}
-                                      type="button"
-                                    >
-                                      {entryNutrientChoices.get(entry)?.open
-                                        ? "Hide nutrients"
-                                        : "Show nutrients"}
-                                    </button>
-                                  </div>
-                                  <div id={`entry-nutrients-${entry.id}`}>
-                                    {entryNutrientChoices.get(entry)?.open ? (
-                                      <>
-                                        <p className="fieldHelp">
-                                          Nutrition for this saved logged portion:{" "}
-                                          {entryPortionLabel(entry)}. Entry revision{" "}
-                                          {entry.revision}.
-                                          {editor?.entryId === entry.id
-                                            ? " Unsaved edits are not included."
-                                            : ""}
-                                        </p>
-                                        {entry.nutrients.length === 0 ? (
-                                          <p className="fieldHelp">
-                                            Nutrient details are unavailable for this logged
-                                            portion.
-                                          </p>
-                                        ) : (
-                                          <dl>
-                                            {entryNutrientRows(entry).map(({ nutrient, key }) => {
-                                              const display = nutrientDisplay(nutrient);
-                                              return (
-                                                <div
-                                                  key={key}
-                                                  className={`nutrientTotal nutrientTotal--${nutrient.completeness}`}
-                                                  style={{
-                                                    gridTemplateColumns: "minmax(0, 1fr)",
-                                                    gap: 4,
-                                                  }}
-                                                >
-                                                  <dt>
-                                                    {nutrient.name} ({nutrient.unit})
-                                                  </dt>
-                                                  <dd style={{ textAlign: "left" }}>
-                                                    {display.amount}
-                                                    <small>{display.qualification}</small>
-                                                  </dd>
-                                                </div>
-                                              );
-                                            })}
-                                          </dl>
-                                        )}
-                                      </>
-                                    ) : null}
-                                  </div>
-                                </section>
-                              ) : null}
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </div>
+                    </form>
                   </section>
-                );
-              })}
-            </div>
-
-            <aside className="nutritionSummary" aria-labelledby="nutrition-summary-title">
-              <p className="kicker">Authoritative snapshot totals</p>
-              <h2 id="nutrition-summary-title">Nutrition</h2>
-              {diary.totals.length === 0 ? (
-                <p>No nutrient totals are available yet.</p>
-              ) : (
-                <dl>
-                  {diary.totals.map((nutrient) => {
-                    const display = nutrientDisplay(nutrient);
-                    return (
-                      <div
-                        key={nutrient.nutrientId}
-                        className={`nutrientTotal nutrientTotal--${nutrient.completeness}`}
-                      >
-                        <dt>{nutrient.name}</dt>
-                        <dd>
-                          {display.amount}
-                          <small>{display.qualification}</small>
-                        </dd>
-                      </div>
-                    );
-                  })}
-                </dl>
-              )}
-              <p className="totalsNote">
-                These totals cover all {diaryPage?.page.totalEntries ?? diary.entries.length} diary
-                entries, including entries not loaded yet. Partial nutrient totals are lower bounds.
-                Unknown values are never counted as zero.
-              </p>
-            </aside>
-
-            {diaryPage && diaryPage.page.totalEntries > DIARY_PAGE_SIZE ? (
-              <div className="diaryLoadMore">
-                <button
-                  aria-controls="diary-entry-groups"
-                  aria-describedby="diary-page-count"
-                  aria-disabled={
-                    diaryPage.page.nextCursor === null ||
-                    pageState === "loading" ||
-                    mutationBusy !== null
-                  }
-                  className="secondaryAction"
-                  disabled={pageState === "loading" || mutationBusy !== null}
-                  onClick={() => void loadMore()}
-                  type="button"
-                >
-                  {pageState === "loading"
-                    ? "Loading more…"
-                    : pageState === "error"
-                      ? "Retry load more"
-                      : diaryPage.page.nextCursor === null
-                        ? "All entries loaded"
-                        : "Load more"}
-                </button>
+                ) : null}
               </div>
-            ) : null}
+            </div>
+            <div className="ledgerRail">
+              {diary && diaryPage && state === "ready" ? (
+                <aside className="nutritionSummary" aria-labelledby="nutrition-summary-title">
+                  <div className="ledgerPanelHeading">
+                    <h2 id="nutrition-summary-title">Nutrient summary</h2>
+                    <Link href={`/reports?to=${encodeURIComponent(date)}`}>
+                      Open nutrition report
+                    </Link>
+                  </div>
+                  {diary.totals.length === 0 ? (
+                    <p>No nutrient totals are available yet.</p>
+                  ) : (
+                    <>
+                      <dl>{nutrientRows(true)}</dl>
+                      <details className="ledgerOtherNutrients">
+                        <summary>More nutrients</summary>
+                        <dl>{nutrientRows(false)}</dl>
+                      </details>
+                    </>
+                  )}
+                  <Link className="ledgerSavedTargets" href={`/goals${dateQuery}`}>
+                    <Icon name="settings" /> Saved targets
+                  </Link>
+                  <p className="totalsNote">
+                    These totals cover all {diaryPage.page.totalEntries} diary entries, including
+                    entries not loaded yet. Partial nutrient totals are lower bounds. Unknown values
+                    are never counted as zero.
+                  </p>
+                </aside>
+              ) : null}
+              {overviewCards}
+              {dayNote}
+            </div>
           </div>
         ) : null}
 

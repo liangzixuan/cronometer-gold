@@ -1,6 +1,6 @@
 import Link from "next/link";
-
 import { isLocalDate } from "../../lib/diary";
+import { Icon } from "../ui/Icon";
 import { FoodSearchClient } from "./FoodSearchClient";
 
 export const dynamic = "force-dynamic";
@@ -20,20 +20,36 @@ export default async function FoodsPage({ searchParams }: FoodsPageProps) {
     <main className="shell">
       <aside className="sidebar">
         <Link className="brand brandDark" href="/">
-          nutrition<span>/ledger</span>
+          <Icon name="leaf" /> Nourishing
         </Link>
         <nav aria-label="Application navigation">
-          <Link href={`/overview${dateQuery}`}>Dashboard</Link>
-          <Link href={`/dashboard${dateQuery}`}>Diary</Link>
-          <Link aria-current="page" href={`/foods${dateQuery}`}>
-            Foods
+          <Link href={`/overview${dateQuery}`}>
+            <Icon name="dashboard" /> Dashboard
           </Link>
-          <Link href={`/recipes${dateQuery}`}>Recipes</Link>
-          <Link href={`/goals${dateQuery}`}>Goals</Link>
-          <Link href={`/hydration${dateQuery}`}>Hydration</Link>
-          <Link href={`/activities${dateQuery}`}>Activity</Link>
-          <Link href={reportHref}>Reports</Link>
-          <Link href="/health">Health & privacy</Link>
+          <Link href={`/dashboard${dateQuery}`}>
+            <Icon name="diary" /> Diary
+          </Link>
+          <Link aria-current="page" href={`/foods${dateQuery}`}>
+            <Icon name="foods" /> Foods
+          </Link>
+          <Link href={`/recipes${dateQuery}`}>
+            <Icon name="recipes" /> Recipes
+          </Link>
+          <Link href={`/goals${dateQuery}`}>
+            <Icon name="goals" /> Goals
+          </Link>
+          <Link href={`/hydration${dateQuery}`}>
+            <Icon name="water" /> Hydration
+          </Link>
+          <Link href={`/activities${dateQuery}`}>
+            <Icon name="activity" /> Activity
+          </Link>
+          <Link href={reportHref}>
+            <Icon name="reports" /> Reports
+          </Link>
+          <Link href="/health">
+            <Icon name="privacy" /> Health & privacy
+          </Link>
         </nav>
         <p className="wellnessNote">Wellness information only—not medical advice.</p>
       </aside>

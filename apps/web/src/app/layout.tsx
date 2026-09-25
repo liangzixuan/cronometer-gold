@@ -12,7 +12,7 @@ import "./daily-theme.css";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Nutrition Tracker",
+  title: "Nourishing",
   description: "Provenance-first nutrition tracking",
 };
 

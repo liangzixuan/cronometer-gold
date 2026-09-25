@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { type FormEvent, Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-
 import { isLocalDate, parseSession, type SessionSummary } from "../../lib/diary";
 import {
   adjacentNutritionReportRange,
@@ -24,6 +23,7 @@ import {
   targetSnapshotForPoint,
 } from "../../lib/nutrition-reports";
 import { confirmBrowserLogout } from "../../lib/private-api";
+import { Icon } from "../ui/Icon";
 import { PrintableNutritionReport } from "./PrintableNutritionReport";
 import printStyles from "./report-print-shell.module.css";
 
@@ -844,16 +844,30 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
     <>
       <aside className={`sidebar ${printStyles.screen}`}>
         <Link className="brand brandDark" href="/">
-          nutrition<span>/ledger</span>
+          <Icon name="leaf" /> Nourishing
         </Link>
         <nav aria-label="Application navigation">
-          <Link href={`/overview${dateQuery}`}>Dashboard</Link>
-          <Link href={`/dashboard${dateQuery}`}>Diary</Link>
-          <Link href={`/foods${dateQuery}`}>Foods</Link>
-          <Link href={`/recipes${dateQuery}`}>Recipes</Link>
-          <Link href={`/goals${dateQuery}`}>Goals</Link>
-          <Link href={`/hydration${dateQuery}`}>Hydration</Link>
-          <Link href={`/activities${dateQuery}`}>Activity</Link>
+          <Link href={`/overview${dateQuery}`}>
+            <Icon name="dashboard" /> Dashboard
+          </Link>
+          <Link href={`/dashboard${dateQuery}`}>
+            <Icon name="diary" /> Diary
+          </Link>
+          <Link href={`/foods${dateQuery}`}>
+            <Icon name="foods" /> Foods
+          </Link>
+          <Link href={`/recipes${dateQuery}`}>
+            <Icon name="recipes" /> Recipes
+          </Link>
+          <Link href={`/goals${dateQuery}`}>
+            <Icon name="goals" /> Goals
+          </Link>
+          <Link href={`/hydration${dateQuery}`}>
+            <Icon name="water" /> Hydration
+          </Link>
+          <Link href={`/activities${dateQuery}`}>
+            <Icon name="activity" /> Activity
+          </Link>
           <Link
             aria-current="page"
             href={
@@ -862,9 +876,11 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
                 : "/reports"
             }
           >
-            Reports
+            <Icon name="reports" /> Reports
           </Link>
-          <Link href="/health">Health & privacy</Link>
+          <Link href="/health">
+            <Icon name="privacy" /> Health & privacy
+          </Link>
         </nav>
         {session ? <p className="accountIdentity">Signed in as {session.user.email}</p> : null}
         <button

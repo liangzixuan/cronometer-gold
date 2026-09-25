@@ -1,0 +1,6 @@
+Font Awesome Free 5.12.0 by Fonticons, Inc.
+Source: installed Bootstrap Studio SB Admin template export.
+Font license: SIL Open Font License 1.1.
+https://fontawesome.com/license/free
+https://openfontlicense.org/open-font-license-official-text/
+Unmodified font. No Font Awesome JavaScript is included.

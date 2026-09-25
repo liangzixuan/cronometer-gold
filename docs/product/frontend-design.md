@@ -7,9 +7,12 @@ Cronometer or Gold feature parity.
 
 ## Bootstrap Studio handoff
 
-The selected design foundation is the installed SB Admin full-site template and
-integrated Bootswatch Flatly theme. Reuse their compact sidebar/content layout,
-summary cards, labeled controls and responsive spacing. Keep typography and
+The user selected Daily Ledger from five visual directions on September 25, 2026.
+It uses a compact navy sidebar, teal actions, a grouped food ledger and a nutrient
+rail. The installed SB Admin full-site template informed the navigation and
+content structure; Bootswatch Flatly was a separate theme reference, not a theme
+applied inside the locked SB Admin template. Reuse their established patterns
+for labeled controls, responsive spacing and compact summaries. Keep typography and
 spacing consistent across screens instead of selecting a new template per feature.
 Use the Online Library to compare established component patterns before writing
 one. Inspect the component's markup, scripts, dependencies, license and keyboard
@@ -36,6 +39,24 @@ existing guarded diary reader with a small `DailySummary` component; `/dashboard
 remains the diary route. Both use the same owner, date and snapshot boundaries.
 Nutrition cards show whole-day totals and explicit unknown/lower-bound states.
 No target percentage, energy balance or chart should be invented from absent data.
+
+## Daily Ledger
+
+Keep the primary flow on one screen: select a day, scan meals, add a food, edit a
+portion and inspect that day's nutrients. Food names, portions, energy and Edit
+are visible on each row. Native disclosures hold attribution and secondary
+actions; they preserve keyboard access and the existing retry and repeat flows.
+On narrow screens, rows stack without removing controls or shortening food names.
+
+The summary strip uses authoritative whole-day totals, including entries beyond
+the loaded page. Nutrient rows retain unknown, partial and trace qualifications.
+The diary does not load goal progress, so it links to saved targets rather than
+inventing remaining calories or progress bars. Water, activity and private day
+notes use their existing data and persistence boundaries.
+
+Navigation reuses the unmodified Font Awesome 5.12.0 solid font from the installed
+SB Admin export. Its license and provenance are in `apps/web/public/fonts/`.
+Only the font is used; no template JavaScript or additional package was added.
 
 ## Verification
 

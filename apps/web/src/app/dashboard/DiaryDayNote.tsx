@@ -491,13 +491,16 @@ export function DiaryDayNote(props: DiaryDayNoteProps) {
   return (
     <section className="diaryGroupSettings" aria-labelledby="day-note-title">
       <h2 id="day-note-title">Day note</h2>
-      <p className="fieldHelp">
-        Private context for {props.localDate}, even when no foods are logged.
-      </p>
-      <p className="fieldHelp">
-        Drafts and unconfirmed requests stay in this open diary only. Closing or reloading it can
-        lose them.
-      </p>
+      <details className="ledgerDayNoteHelp">
+        <summary>About this private note</summary>
+        <p className="fieldHelp">
+          Private context for {props.localDate}, even when no foods are logged.
+        </p>
+        <p className="fieldHelp">
+          Drafts and unconfirmed requests stay in this open diary only. Closing or reloading it can
+          lose them.
+        </p>
+      </details>
       <p role="status" aria-live="polite">
         {state.message}
       </p>
