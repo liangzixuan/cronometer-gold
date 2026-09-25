@@ -1,4 +1,13 @@
 import {
+  type AccountErasureJob,
+  type AccountExportJob,
+  assertAccountErasureLifecycle,
+  assertAccountExportLifecycle,
+} from "@nutrition-tracker/contracts";
+
+export type { AccountErasureJob, AccountExportJob } from "@nutrition-tracker/contracts";
+
+import {
   type DiaryNutrient,
   localTimeInTimeZone,
   type MealSlot,
@@ -13,7 +22,6 @@ const LOCAL_TIME = /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/u;
 const EXACT_DECIMAL = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/u;
 const POSITIVE_INPUT_DECIMAL = /^(?=.*[1-9])(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,6})?$/u;
 
-export type JobStatus = "queued" | "running" | "completed" | "failed";
 export type HealthPlatform = "apple_healthkit" | "android_health_connect";
 
 export interface NutrientTrend {
@@ -192,53 +200,6 @@ export interface PlatformIntegration {
     readonly status: "granted" | "revoked";
     readonly recordedAt: string;
   }[];
-}
-
-export interface AccountExportJob {
-  readonly id: string;
-  readonly status: JobStatus;
-  readonly formats: readonly ("json" | "csv")[];
-  readonly requestedAt: string;
-  readonly startedAt: string | null;
-  readonly completedAt: string | null;
-  readonly expiresAt: string | null;
-  readonly artifacts: readonly {
-    readonly format: "json" | "csv";
-    readonly fileName: string;
-    readonly byteLength: string;
-    readonly sha256: string;
-    readonly downloadPath: string;
-    readonly mediaType: "application/json" | "application/zip";
-    readonly expiresAt: string;
-  }[];
-  readonly manifestSha256: string | null;
-  readonly reconciliation: {
-    readonly snapshotWatermark: string;
-    readonly entities: readonly {
-      readonly entity: string;
-      readonly sourceCount: number;
-      readonly exportedCount: number;
-      readonly watermark: string;
-    }[];
-    readonly reconciled: boolean;
-  } | null;
-  readonly failureCode: "EXPORT_FAILED" | null;
-}
-
-export interface AccountErasureJob {
-  readonly id: string;
-  readonly status: JobStatus;
-  readonly requestedAt: string;
-  readonly startedAt: string | null;
-  readonly completedAt: string | null;
-  readonly executeAfter: string;
-  readonly recentAuthenticationSatisfied: true;
-  readonly consequences: readonly [
-    "ACCOUNT_ACCESS_REVOKED",
-    "PRIVATE_HEALTH_DATA_DELETED",
-    "EXPORT_LINKS_REVOKED",
-  ];
-  readonly failureCode: "ERASURE_FAILED" | null;
 }
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -921,7 +882,9 @@ export function parseExportJob(value: unknown): AccountExportJob {
         throw new TypeError("Export reconciliation counts were invalid.");
     }
   }
-  return job as unknown as AccountExportJob;
+  const exported = job as unknown as AccountExportJob;
+  assertAccountExportLifecycle(exported);
+  return exported;
 }
 
 function parseErasureValue(value: unknown): AccountErasureJob {
@@ -954,7 +917,9 @@ function parseErasureValue(value: unknown): AccountErasureJob {
     !(job.failureCode === null || job.failureCode === "ERASURE_FAILED")
   )
     throw new TypeError("The erasure job was invalid.");
-  return job as unknown as AccountErasureJob;
+  const erasure = job as unknown as AccountErasureJob;
+  assertAccountErasureLifecycle(erasure);
+  return erasure;
 }
 
 export function parseErasureJob(value: unknown): AccountErasureJob {

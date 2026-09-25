@@ -571,7 +571,7 @@ describe("food and recipe diary entry union", () => {
     note: null,
   } as const;
 
-  it("caps explicitly paged diary responses and keeps empty-page metadata coherent", () => {
+  it("requires page metadata, caps entries and keeps empty-page metadata coherent", () => {
     const validate = validator(diaryDayResponseSchema);
     const food = {
       ...common,
@@ -596,7 +596,8 @@ describe("food and recipe diary entry union", () => {
       updatedAt: "2026-08-16T12:00:00.000Z",
     };
 
-    expect(validate({ data }), JSON.stringify(validate.errors)).toBe(true);
+    expect(validate({ data: { ...data, entries: data.entries.slice(0, 20) } })).toBe(false);
+    expect(validate({ data: { ...data, entries: [] } })).toBe(false);
     expect(
       validate({
         data: { ...data, entries: data.entries.slice(0, 20) },

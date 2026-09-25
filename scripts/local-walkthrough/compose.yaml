@@ -1,0 +1,66 @@
+name: nourishing-walkthrough-${WALKTHROUGH_RUN_ID:?required}
+
+services:
+  postgres:
+    image: postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+    pull_policy: never
+    restart: "no"
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 1.0
+    pids_limit: 256
+    labels:
+      io.nourishing.walkthrough: ${WALKTHROUGH_RUN_ID:?required}
+    environment:
+      POSTGRES_DB: nourishing_walkthrough_${WALKTHROUGH_RUN_ID:?required}
+      POSTGRES_USER: walkthrough_owner
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+    ports:
+      - "127.0.0.1:${WALKTHROUGH_POSTGRES_PORT:?required}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} -h 127.0.0.1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "2"}
+    networks: [walkthrough]
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.32.0@sha256:61b1c86c459fa52d0653516f573702791e611574737dc76175ae9d2628c911f5
+    pull_policy: never
+    restart: "no"
+    mem_limit: 1g
+    memswap_limit: 1g
+    cpus: 1.0
+    pids_limit: 256
+    labels:
+      io.nourishing.walkthrough: ${WALKTHROUGH_RUN_ID:?required}
+    environment:
+      MEILI_ENV: development
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:?required}
+      MEILI_NO_ANALYTICS: "true"
+    ports:
+      - "127.0.0.1:${WALKTHROUGH_MEILI_PORT:?required}:7700"
+    volumes:
+      - meilisearch-data:/meili_data
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:7700/health >/dev/null"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging:
+      driver: json-file
+      options: {max-size: "10m", max-file: "2"}
+    networks: [walkthrough]
+
+networks:
+  walkthrough:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  meilisearch-data:

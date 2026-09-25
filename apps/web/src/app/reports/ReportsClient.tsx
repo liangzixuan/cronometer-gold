@@ -847,6 +847,7 @@ export function ReportsClient({ initialFrom, initialTo }: ReportsClientProps) {
           nutrition<span>/ledger</span>
         </Link>
         <nav aria-label="Application navigation">
+          <Link href={`/overview${dateQuery}`}>Dashboard</Link>
           <Link href={`/dashboard${dateQuery}`}>Diary</Link>
           <Link href={`/foods${dateQuery}`}>Foods</Link>
           <Link href={`/recipes${dateQuery}`}>Recipes</Link>

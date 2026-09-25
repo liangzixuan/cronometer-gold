@@ -53,6 +53,19 @@ import {
 } from "../../lib/retention";
 
 type LoadState = "loading" | "ready" | "error";
+type HealthSection = "foods" | "biometrics" | "reminders" | "integrations";
+const healthSections: readonly HealthSection[] = [
+  "foods",
+  "biometrics",
+  "reminders",
+  "integrations",
+];
+const healthSectionLabels: Record<HealthSection, string> = {
+  foods: "custom foods",
+  biometrics: "biometrics",
+  reminders: "reminders",
+  integrations: "health integrations",
+};
 
 interface BiometricWindow {
   readonly from: string;
@@ -297,6 +310,10 @@ function reminderDraft(reminder?: Reminder): ReminderDraft {
 export function HealthClient() {
   const router = useRouter();
   const [state, setState] = useState<LoadState>("loading");
+  const [sectionErrors, setSectionErrors] = useState<Partial<Record<HealthSection, string>>>({});
+  const [sectionLoading, setSectionLoading] = useState<Partial<Record<HealthSection, boolean>>>({});
+  const sectionControllers = useRef<Partial<Record<HealthSection, AbortController>>>({});
+
   const [message, setMessage] = useState("Opening your private health workspace…");
   const [session, setSessionState] = useState<SessionSummary | null>(null);
   const [nutrients, setNutrients] = useState<readonly TargetableNutrient[]>([]);
@@ -972,227 +989,286 @@ export function HealthClient() {
     [operation, signInAgain],
   );
 
-  const loadAll = useCallback(async () => {
-    if (
-      privateUiClosed.current ||
-      !mounted.current ||
-      eventWrite.current !== null ||
-      (loadController.current && !loadController.current.signal.aborted)
-    )
-      return;
-    trendNutrientRegistry.current = null;
-    trendControls.current += 1;
-    reminderControls.current += 1;
-    invalidateHistory();
-    const historyEpoch = historyGeneration.current;
-    installHistory({
-      ...historyRef.current,
-      status: "loading",
-      message: "Loading biometric history…",
-    });
-    const generation = ++foodListGeneration.current;
-    invalidateCustomControls();
-    setVerifiedFoodListOwner(null);
-    foodDetailsReady.current = false;
-    closeFoodDetails();
-    loadController.current?.abort();
-    const controller = new AbortController();
-    loadController.current = controller;
-    const receiptOverlay = {
-      controller,
-      generation,
-      owner: ownerUserId.current,
-      foods: new Map<string, CustomFood>(),
-    };
-    customLoadReceipts.current = receiptOverlay;
-    setState("loading");
-    try {
-      const sessionResponse = await fetch("/api/auth/me", {
-        headers: { accept: "application/json" },
-        cache: "no-store",
-        signal: controller.signal,
-      });
-      if (!sessionResponse.ok) throw new HealthOwnerFenceError();
-      const nextSession = parseSession(await json(sessionResponse));
-      if (ownerUserId.current !== null && ownerUserId.current !== nextSession.user.id) {
-        throw new HealthOwnerFenceError();
-      }
-      const now = new Date();
-      const capturedRecent =
-        recentHistory.current ??
-        historyWindow(now.getTime() - 120 * HISTORY_DAY, now.getTime() + HISTORY_DAY);
-      if (!capturedRecent)
-        throw new Error("The current instant is outside the supported biometric history range.");
-      recentHistory.current = capturedRecent;
-      const capturedWindow = historyRef.current.window ?? capturedRecent;
-      const rangeStart = capturedWindow.from;
-      const rangeEnd = capturedWindow.to;
-      await installHealthPrivateDataForOwner({
-        expectedOwnerUserId: nextSession.user.id,
-        signal: controller.signal,
-        loadPrivateData: async () => {
-          const responses = await Promise.all([
-            fetch("/api/nutrients/targetable", {
-              cache: "no-store",
-              signal: controller.signal,
-            }),
-            fetch("/api/retention/custom-foods?limit=50", {
-              cache: "no-store",
-              signal: controller.signal,
-            }),
-            fetch("/api/retention/biometrics/definitions", {
-              cache: "no-store",
-              signal: controller.signal,
-            }),
-            fetch(
-              `/api/retention/biometrics/events?from=${encodeURIComponent(rangeStart)}&to=${encodeURIComponent(rangeEnd)}&limit=100`,
-              { cache: "no-store", signal: controller.signal },
-            ),
-            fetch("/api/retention/reminders", {
-              cache: "no-store",
-              signal: controller.signal,
-            }),
-            fetch("/api/retention/integrations/health", {
-              cache: "no-store",
-              signal: controller.signal,
-            }),
-          ]);
-          if (responses.some((response) => response.status === 401)) {
-            throw new HealthOwnerFenceError();
-          }
-          for (const response of responses) {
-            if (!response.ok)
-              throw new Error(
-                responseError(await json(response), "Private health data could not be loaded."),
-              );
-          }
-          const [
-            nutrientBody,
-            customBody,
-            definitionBody,
-            eventBody,
-            reminderBody,
-            integrationBody,
-          ] = await Promise.all(responses.map(json));
-          return {
-            nutrients: parseTargetableNutrients(nutrientBody),
-            customPage: parseCustomFoodList(customBody),
-            definitions: parseBiometricDefinitions(definitionBody),
-            eventPage: parseBiometricEvents(eventBody),
-            reminders: parseReminders(reminderBody),
-            integrations: parseIntegrations(integrationBody),
-          };
-        },
-        revalidateSession: () => revalidateHealthSession(controller.signal),
-        install: (data, currentSession) => {
-          if (
-            privateUiClosed.current ||
-            (ownerUserId.current !== null && ownerUserId.current !== nextSession.user.id)
-          ) {
-            throw new HealthOwnerFenceError();
-          }
-          const historyIsCurrent = historyGeneration.current === historyEpoch;
-          ownerUserId.current = nextSession.user.id;
-          const localToday = localDateInTimeZone(now, currentSession.profile.timeZone);
-          setSession(currentSession);
-          setNutrients(data.nutrients);
-          const accepted =
-            customLoadReceipts.current === receiptOverlay &&
-            receiptOverlay.owner === nextSession.user.id &&
-            !controller.signal.aborted
-              ? [...receiptOverlay.foods.values()]
-              : [];
-          const customItems = accepted.reduce<readonly CustomFood[]>(
-            mergeAcceptedCustomFood,
-            data.customPage.items,
-          );
-          if (!installCustomFoods(customItems, generation, nextSession.user.id)) return;
-          trendNutrientRegistry.current = {
-            values: data.nutrients,
-            scope: JSON.stringify([currentSession.user.id, currentSession.profile]),
-          };
-          if (customLoadReceipts.current === receiptOverlay) customLoadReceipts.current = null;
-          foodDetailsReady.current = true;
-          setVerifiedFoodListOwner(nextSession.user.id);
-          setCustomFoodCursor(data.customPage.nextCursor);
-          setDefinitions(data.definitions);
-          installHistory({
-            window: capturedWindow,
-            events: historyIsCurrent ? data.eventPage.items : [],
-            cursor: historyIsCurrent ? data.eventPage.nextCursor : null,
-            status: historyIsCurrent ? "ready" : "error",
-            verified: historyIsCurrent,
-            message: historyIsCurrent
-              ? ""
-              : "History changed while this workspace was loading. Choose Reload history to verify this window.",
-            owner: nextSession.user.id,
-          });
-          setReminders(data.reminders);
-          setIntegrations(data.integrations);
-          replaceTrendRange({
-            from: trendRangeRef.current.from || shiftLocalDate(localToday, -13),
-            to: trendRangeRef.current.to || localToday,
-          });
-          setEventDate((value) => value || localToday);
-          setEventTime(
-            (value) =>
-              value || localTimeInTimeZone(now, currentSession.profile.timeZone).slice(0, 5),
-          );
-          setSelectedNutrient((value) => value || data.nutrients[0]?.nutrientId || "");
-          setSelectedDefinition(
-            (value) => value || data.definitions.find((item) => item.status === "active")?.id || "",
-          );
-          if (!customInitialized.current) {
-            customInitialized.current = true;
-            const value = customRef.current;
-            if (
-              value.id === null &&
-              value.nutrients.length === 0 &&
-              !value.name &&
-              !value.brandName &&
-              !value.servingLabel &&
-              !value.servingGrams &&
-              !value.notes
-            )
-              replaceCustom(blankCustom(data.nutrients[0]?.nutrientId ?? ""));
-          }
-          setState("ready");
-          setMessage("Private health workspace is current.");
-        },
-      });
-    } catch (error) {
-      if (controller.signal.aborted) return;
-      if (error instanceof HealthOwnerFenceError) return signInAgain();
-      setState("error");
-      if (historyGeneration.current === historyEpoch)
-        installHistory({
-          ...historyRef.current,
-          status: "error",
-          message:
-            "Private data could not be verified. Retry private data or reload this history window.",
-        });
-      setMessage(
-        error instanceof Error ? error.message : "Private health data could not be loaded.",
+  const loadAll = useCallback(
+    async (only?: HealthSection) => {
+      if (privateUiClosed.current || !mounted.current || eventWrite.current !== null) return;
+      const selected = (only ? [only] : healthSections).filter(
+        (section) =>
+          !sectionControllers.current[section] ||
+          sectionControllers.current[section]?.signal.aborted,
       );
-    } finally {
-      if (loadController.current === controller) loadController.current = null;
-      if (customLoadReceipts.current === receiptOverlay) customLoadReceipts.current = null;
-    }
-  }, [
-    closeFoodDetails,
-    installCustomFoods,
-    installHistory,
-    invalidateHistory,
-    invalidateCustomControls,
-    replaceCustom,
-    revalidateHealthSession,
-    setSession,
-    setReminders,
-    replaceTrendRange,
-    setSelectedDefinition,
-    setSelectedNutrient,
-    signInAgain,
-  ]);
+      let failed = false;
+      let cancelled = false;
+      let initialSession: Promise<ReturnType<typeof parseSession>> | null = null;
+      await Promise.all(
+        selected.map(async (section) => {
+          const controller = new AbortController();
+          sectionControllers.current[section] = controller;
+          privateReadControllers.current.add(controller);
+          setSectionLoading((value) => ({ ...value, [section]: true }));
+          setSectionErrors((value) => ({ ...value, [section]: undefined }));
+          const current = () =>
+            !controller.signal.aborted &&
+            !privateUiClosed.current &&
+            mounted.current &&
+            sectionControllers.current[section] === controller;
+          const generation =
+            section === "foods" ? ++foodListGeneration.current : foodListGeneration.current;
+          const receiptOverlay = {
+            controller,
+            generation,
+            owner: ownerUserId.current,
+            foods: new Map<string, CustomFood>(),
+          };
+          if (section === "foods") {
+            trendNutrientRegistry.current = null;
+            trendControls.current += 1;
+            invalidateCustomControls();
+            setVerifiedFoodListOwner(null);
+            foodDetailsReady.current = false;
+            closeFoodDetails();
+            loadController.current = controller;
+            customLoadReceipts.current = receiptOverlay;
+            setState("loading");
+          }
+          if (section === "biometrics") {
+            invalidateHistory();
+            installHistory({
+              ...historyRef.current,
+              status: "loading",
+              message: "Loading biometric history…",
+            });
+          }
+          if (section === "reminders") reminderControls.current += 1;
+          const historyEpoch = historyGeneration.current;
+          try {
+            // Share initial authentication; each section still verifies its owner after its private read.
+            initialSession ??= (async () => {
+              const response = await fetch("/api/auth/me", {
+                headers: { accept: "application/json" },
+                cache: "no-store",
+                signal: controller.signal,
+              });
+              if (!response.ok) throw new HealthOwnerFenceError();
+              return parseSession(await json(response));
+            })();
+            const nextSession = await initialSession;
+            controller.signal.throwIfAborted();
+            if (ownerUserId.current !== null && ownerUserId.current !== nextSession.user.id)
+              throw new HealthOwnerFenceError();
+            const now = new Date();
+            const capturedRecent =
+              recentHistory.current ??
+              historyWindow(now.getTime() - 120 * HISTORY_DAY, now.getTime() + HISTORY_DAY);
+            if (!capturedRecent)
+              throw new Error(
+                "The current instant is outside the supported biometric history range.",
+              );
+            recentHistory.current = capturedRecent;
+            const capturedWindow = historyRef.current.window ?? capturedRecent;
+            const read = async (path: string) => {
+              const response = await fetch(path, { cache: "no-store", signal: controller.signal });
+              if (response.status === 401) {
+                if (current()) signInAgain();
+                throw new HealthOwnerFenceError();
+              }
+              const body = await json(response);
+              if (!response.ok)
+                throw new Error(responseError(body, "Private health data could not be loaded."));
+              return body;
+            };
+            await installHealthPrivateDataForOwner({
+              expectedOwnerUserId: nextSession.user.id,
+              signal: controller.signal,
+              loadPrivateData: async () => {
+                switch (section) {
+                  case "foods": {
+                    const [nutrientBody, customBody] = await Promise.all([
+                      read("/api/nutrients/targetable"),
+                      read("/api/retention/custom-foods?limit=50"),
+                    ]);
+                    return {
+                      section,
+                      nutrients: parseTargetableNutrients(nutrientBody),
+                      customPage: parseCustomFoodList(customBody),
+                    };
+                  }
+                  case "biometrics": {
+                    const [definitionBody, eventBody] = await Promise.all([
+                      read("/api/retention/biometrics/definitions"),
+                      read(
+                        `/api/retention/biometrics/events?from=${encodeURIComponent(capturedWindow.from)}&to=${encodeURIComponent(capturedWindow.to)}&limit=100`,
+                      ),
+                    ]);
+                    return {
+                      section,
+                      definitions: parseBiometricDefinitions(definitionBody),
+                      eventPage: parseBiometricEvents(eventBody),
+                    };
+                  }
+                  case "reminders":
+                    return {
+                      section,
+                      reminders: parseReminders(await read("/api/retention/reminders")),
+                    };
+                  case "integrations":
+                    return {
+                      section,
+                      integrations: parseIntegrations(
+                        await read("/api/retention/integrations/health"),
+                      ),
+                    };
+                }
+              },
+              revalidateSession: () => revalidateHealthSession(controller.signal),
+              install: (data, currentSession) => {
+                if (!current()) return;
+                if (ownerUserId.current !== null && ownerUserId.current !== nextSession.user.id)
+                  throw new HealthOwnerFenceError();
+                ownerUserId.current = nextSession.user.id;
+                const localToday = localDateInTimeZone(now, currentSession.profile.timeZone);
+                setSession(currentSession);
+                if (data.section === "foods") {
+                  setNutrients(data.nutrients);
+                  const accepted =
+                    customLoadReceipts.current === receiptOverlay &&
+                    receiptOverlay.owner === nextSession.user.id
+                      ? [...receiptOverlay.foods.values()]
+                      : [];
+                  const customItems = accepted.reduce<readonly CustomFood[]>(
+                    mergeAcceptedCustomFood,
+                    data.customPage.items,
+                  );
+                  if (!installCustomFoods(customItems, generation, nextSession.user.id)) return;
+                  trendNutrientRegistry.current = {
+                    values: data.nutrients,
+                    scope: JSON.stringify([currentSession.user.id, currentSession.profile]),
+                  };
+                  foodDetailsReady.current = true;
+                  setVerifiedFoodListOwner(nextSession.user.id);
+                  setCustomFoodCursor(data.customPage.nextCursor);
+                  setSelectedNutrient((value) => value || data.nutrients[0]?.nutrientId || "");
+                  if (!customInitialized.current) {
+                    customInitialized.current = true;
+                    const value = customRef.current;
+                    if (
+                      value.id === null &&
+                      value.nutrients.length === 0 &&
+                      !value.name &&
+                      !value.brandName &&
+                      !value.servingLabel &&
+                      !value.servingGrams &&
+                      !value.notes
+                    )
+                      replaceCustom(blankCustom(data.nutrients[0]?.nutrientId ?? ""));
+                  }
+                  setState("ready");
+                } else if (data.section === "biometrics") {
+                  const historyIsCurrent = historyGeneration.current === historyEpoch;
+                  setDefinitions(data.definitions);
+                  installHistory({
+                    window: capturedWindow,
+                    events: historyIsCurrent ? data.eventPage.items : [],
+                    cursor: historyIsCurrent ? data.eventPage.nextCursor : null,
+                    status: historyIsCurrent ? "ready" : "error",
+                    verified: historyIsCurrent,
+                    message: historyIsCurrent
+                      ? ""
+                      : "History changed while this workspace was loading. Choose Reload history to verify this window.",
+                    owner: nextSession.user.id,
+                  });
+                  setSelectedDefinition(
+                    (value) =>
+                      value || data.definitions.find((item) => item.status === "active")?.id || "",
+                  );
+                  setEventDate((value) => value || localToday);
+                  setEventTime(
+                    (value) =>
+                      value ||
+                      localTimeInTimeZone(now, currentSession.profile.timeZone).slice(0, 5),
+                  );
+                } else if (data.section === "reminders") setReminders(data.reminders);
+                else setIntegrations(data.integrations);
+                replaceTrendRange({
+                  from: trendRangeRef.current.from || shiftLocalDate(localToday, -13),
+                  to: trendRangeRef.current.to || localToday,
+                });
+              },
+            });
+          } catch (error) {
+            if (!current()) return;
+            if (error instanceof HealthOwnerFenceError) return signInAgain();
+            failed = true;
+            const detail =
+              error instanceof Error ? error.message : "Private health data could not be loaded.";
+            setSectionErrors((value) => ({ ...value, [section]: detail }));
+            setMessage(detail);
+            if (section === "foods") setState("error");
+            if (section === "biometrics" && historyGeneration.current === historyEpoch)
+              installHistory({
+                ...historyRef.current,
+                status: "error",
+                message: "Biometrics could not be loaded. Retry biometrics to verify this window.",
+              });
+          } finally {
+            if (controller.signal.aborted) cancelled = true;
+            if (current()) setSectionLoading((value) => ({ ...value, [section]: false }));
+            if (sectionControllers.current[section] === controller)
+              delete sectionControllers.current[section];
+            privateReadControllers.current.delete(controller);
+            if (loadController.current === controller) loadController.current = null;
+            if (customLoadReceipts.current === receiptOverlay) customLoadReceipts.current = null;
+          }
+        }),
+      );
+      if (
+        !only &&
+        !failed &&
+        !cancelled &&
+        mounted.current &&
+        !privateUiClosed.current &&
+        selected.length === healthSections.length
+      )
+        setMessage("Private health workspace is current.");
+    },
+    [
+      closeFoodDetails,
+      installCustomFoods,
+      installHistory,
+      invalidateHistory,
+      invalidateCustomControls,
+      replaceCustom,
+      revalidateHealthSession,
+      setSession,
+      setReminders,
+      replaceTrendRange,
+      setSelectedDefinition,
+      setSelectedNutrient,
+      signInAgain,
+    ],
+  );
+
+  function sectionStatus(section: HealthSection) {
+    if (privateUiClosed.current) return null;
+    const label = healthSectionLabels[section];
+    return (
+      <>
+        {sectionLoading[section] ? <p role="status">Loading {label}…</p> : null}
+        {sectionErrors[section] ? (
+          <div role="status">
+            <p>{sectionErrors[section]}</p>
+            <button
+              type="button"
+              disabled={Boolean(sectionLoading[section]) || eventWriting}
+              onClick={() => void loadAll(section)}
+            >
+              Retry {label}
+            </button>
+          </div>
+        ) : null}
+      </>
+    );
+  }
 
   async function loadMoreCustomFoods() {
     if (!customFoodCursor) return;
@@ -1278,7 +1354,7 @@ export function HealthClient() {
   const historyUnavailable =
     !historyVisible ||
     historyController.current !== null ||
-    loadController.current !== null ||
+    sectionControllers.current.biometrics !== undefined ||
     eventWriting;
   const earlierWindow = eventWindow
     ? historyWindow(
@@ -1309,7 +1385,7 @@ export function HealthClient() {
       historyRef.current === history &&
       historyGeneration.current === renderedHistoryGeneration &&
       historyController.current === null &&
-      loadController.current === null &&
+      sectionControllers.current.biometrics === undefined &&
       eventWrite.current === null
     );
   }
@@ -1899,7 +1975,7 @@ export function HealthClient() {
       canEditEventDraft() &&
       eventWrite.current === null &&
       historyController.current === null &&
-      loadController.current === null
+      sectionControllers.current.biometrics === undefined
     );
   }
   function editEvent(event: BiometricEvent) {
@@ -2335,6 +2411,7 @@ export function HealthClient() {
   }
 
   const savedFilterScopeReady =
+    customInitialized.current &&
     mounted.current &&
     visible.current &&
     (typeof document === "undefined" || document.visibilityState !== "hidden") &&
@@ -2391,6 +2468,7 @@ export function HealthClient() {
           nutrition<span>/ledger</span>
         </Link>
         <nav aria-label="Application navigation">
+          <Link href="/overview">Dashboard</Link>
           <Link href="/dashboard">Diary</Link>
           <Link href="/foods">Foods</Link>
           <Link href="/recipes">Recipes</Link>
@@ -2425,7 +2503,8 @@ export function HealthClient() {
         <p className={`diaryStatus diaryStatus--${state}`} role="status" aria-live="polite">
           {message}
         </p>
-        {state === "error" ? (
+
+        {Object.values(sectionErrors).some(Boolean) ? (
           <button
             className="secondaryAction"
             disabled={eventWriting}
@@ -2606,6 +2685,7 @@ export function HealthClient() {
         </section>
 
         <section className="retentionSection" aria-labelledby="custom-food-heading">
+          {sectionStatus("foods")}
           <div className="sectionHeading">
             <div>
               <p className="kicker">Private and versioned</p>
@@ -3152,6 +3232,7 @@ export function HealthClient() {
         </section>
 
         <section className="retentionSection" aria-labelledby="biometrics-heading">
+          {sectionStatus("biometrics")}
           <div className="sectionHeading">
             <div>
               <p className="kicker">Manual weight & metrics</p>
@@ -3333,7 +3414,7 @@ export function HealthClient() {
                     disabled={
                       eventWriting ||
                       historyController.current !== null ||
-                      loadController.current !== null ||
+                      sectionControllers.current.biometrics !== undefined ||
                       !session
                     }
                     type="submit"
@@ -3516,6 +3597,7 @@ export function HealthClient() {
         </section>
 
         <section className="retentionSection" aria-labelledby="reminders-heading">
+          {sectionStatus("reminders")}
           <div className="sectionHeading">
             <div>
               <p className="kicker">Explicit notification consent</p>
@@ -3688,7 +3770,9 @@ export function HealthClient() {
           <div className="privacyGrid">
             <article>
               <h3>Health integrations</h3>
-              {integrations.length === 0 ? (
+              {sectionStatus("integrations")}
+              {sectionLoading.integrations ||
+              sectionErrors.integrations ? null : integrations.length === 0 ? (
                 <p>
                   No connected health platforms. Connect weight import from the mobile app, where
                   the operating system can show its permission sheet.

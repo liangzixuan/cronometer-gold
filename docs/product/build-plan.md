@@ -26,9 +26,10 @@ reviewer, or production-release acceptance.
    bounded recent/favorite reranking, and authoritative exact barcode lookup.
 4. **Diary vertical slice (implemented):** account/profile, local-day diary, serving
    selection, add/edit/delete, meal groups, exact daily totals, retry-safe
-   idempotency, and opt-in 20-entry response pages with coherent whole-day
-   totals, encrypted revision-bound continuations, and legacy full-day
-   compatibility. The reviewed 50-active-entry day cap remains.
+   idempotency and coherent whole-day totals. The current daily-app changes
+   require response pages of at most 20 entries with encrypted continuations
+   and remove the unused full-day transport fallback. The reviewed
+   50-active-entry day cap remains.
 5. **Recipes and goals (implemented):** yield-aware versioned recipes, immutable
    recipe diary snapshots, versioned targets, bounded energy estimates, and
    lower-bound nutrient progress. This implemented claim covers user-authored
@@ -85,13 +86,29 @@ reviewer, or production-release acceptance.
 
 ## Forward milestones
 
-The September 19 user-approved priority is the finite
-[controlled-beta exit checklist](beta-exit-checklist.md). Advance its catalogue,
-account delivery, hosted recovery and actual-client prerequisites before selecting
-further incremental features. Prepare reviewable external decision packages while
-authorized source work proceeds; an unresolved external decision does not make a
-release gate pass. Demonstrated P0/P1 defects still interrupt the active package.
-The full M0/M1/M2 scope and every action-specific approval remain unchanged.
+The September 24 product review and approved engineering simplification put a
+usable daily app first: Dashboard, Diary, Add Food and Nutrition Report, populated
+with explicit synthetic data for local review. Match the practical workflows of
+an independent Cronometer-style product, then deliver Gold capabilities and
+improvements against explicit acceptance. Source or CI progress alone does not
+establish product parity.
+
+Keep one active product slice. Reconcile the walkthrough setup into maintained
+repository tooling, reuse shared privacy lifecycle validation, separate unrelated
+feature loading failures, and remove verified-unused diary transport fallback
+branches while preserving stored history. Use Bootstrap Studio's bundled full-site
+layouts, Bootswatch themes and reviewed community components as design sources;
+adapt the chosen layout into the existing Next/React app with real API behavior.
+The accepted visual loop is compact dashboard → diary → add/edit food → nutrient
+report → reload, with desktop and narrow-screen review in Brave. See the [frontend design handoff](frontend-design.md) and [maintained walkthrough](../quality/local-walkthrough.md).
+
+The finite [controlled-beta exit checklist](beta-exit-checklist.md) remains the
+release queue. Catalogue scale, account delivery, hosted recovery, signed devices
+and independent acceptance remain open until their own evidence passes. The
+approved Expo compatibility refresh is bounded maintenance; the unfinished
+ADR0106 qualification and its earlier failures are retained. Do not resume another
+catalogue service attempt or feature family by default. Existing action-specific
+approvals and the full M0/M1/M2 acceptance requirements remain in force.
 
 ### Execution queue
 
@@ -102,7 +119,10 @@ retains earlier boundaries. A successful successor never changes an older result
 
 | Order | Work | Concrete exit |
 | --- | --- | --- |
-| Active beta prerequisite | V2 catalogue publication (ADR 0105), checklist C1 | Bounded off-current materialization, complete persisted verification, atomic visibility, rollback and V2 successor baselines with retained exact requests. Source review/offline checks and approved 251-record rehearsal 2 passed, with all 12 cases executed and cleanup complete. Attempt 1's authority failure and reviewed correction remain recorded. Final delivery and automatic evidence remain pending. Full-candidate scale and target cutover remain open. |
+| Active product slice | Reproducible daily walkthrough and focused simplification | Real populated Dashboard/Diary/Add Food/Report flow, shared lifecycle checks, independent feature loading, reviewed Bootstrap Studio design handoff and repeatable setup. Preserve real persistence and existing integrity boundaries. |
+| Bounded approved maintenance | Expo compatibility refresh | Respect the approved release-age boundary, frozen install and applicable checks. This does not reopen catalogue qualification. |
+| Preserved release prerequisite | Publication capacity and populated restore (ADR 0106), checklist C1 | Dedicated actual-command measurements at 12,500/25,000 synthetic records and restricted populated-restore replay/resume/rollback. Approved source work; service qualification and delivery pending. |
+| Completed beta prerequisite | V2 catalogue publication (ADR 0105) | Delivered at `0b6208df`; local and all three CI/nine container jobs passed after one approved database-only retry. Earlier failures preserved; capacity and target acceptance remain open. |
 | Completed beta prerequisite | Paged catalogue preparation through review (ADR 0104) | Delivered at `3816726`; bounded synthetic memory/authority proof, reviewed CI integration corrections and all three CI/nine container jobs passed. One approved quality retry and earlier failures remain preserved. |
 | Completed beta prerequisite | Catalogue review handoff (ADR 0103) | Delivered at `007a17d`: restricted reviewer submission, retained-validation reconciliation, approved synthetic PostgreSQL proof and final local/automatic gates passed. CI attempt one and container attempt two passed after one approved web-job retry; original failure retained. |
 | Completed beta prerequisite | Independent bounded full-CSV validation (ADR 0102) | Delivered at `af65b98`: retained exact prepare/submit request, semantic recheck, approved synthetic PostgreSQL proof and all three CI/nine actual container jobs passed. |
@@ -134,38 +154,25 @@ retains earlier boundaries. A successful successor never changes an older result
 | Completed external review | Scoped Claude review at `805b937` | The supplied report found no ADR 0077 blockers. Its recommendations were addressed in the delivered follow-up; the report remains limited to its original scope. Routine product work does not require another paid review. |
 | Parallel gated work | Catalogue, hosting, signed-device/accessibility and scientific/legal acceptance | Advance only under applicable existing authorization and unchanged release gates. |
 
-### Active bounded beta prerequisite: V2 catalogue publication
+### Preserved release prerequisites
 
-[ADRs 0100 through 0104](../adr/README.md) provide bounded export, restricted
-staging, independent validation, reconciliation and reviewer decisions. ADR 0104
-is delivered at `3816726` with all three CI and nine actual container jobs passed.
-Its original 12,500/25,000-record measurements retain their source identity and
-only 2.64453125 MiB minimum headroom under the 256 MiB peak limit. They do not
-measure the new publication path or the full USDA candidate.
+ADR0105 is delivered at `0b6208df` with all three CI and nine actual container
+jobs passed. Its 251-record functional rehearsal does not qualify publication
+capacity, full USDA scale, Meilisearch rebuild/alias switching or a populated
+publication restore.
 
-[ADR 0105](../adr/0105-catalogue-paged-publication.md) completes the publication
-consumer path as one package: off-current bounded materialization, verification
-of persisted records, atomic visibility, restricted rollback and V2 successor
-baselines. It updates public eligibility, authority, restore and privacy contracts
-together. The [command guide](../ingestion/catalogue-paged-publication.md) defines
-explicit retained requests and retries. Initial source review and offline checks
-passed. The first approved 251-record PostgreSQL rehearsal passed publication,
-restore and nine endpoint fixtures but failed authority verification. A production
-helper committed a caller-owned transaction and reset its local `search_path`.
-The transaction-ownership correction passed independent review and focused
-offline checks. Separately approved attempt 2 passed all 12 cases, with no skips
-and successful cleanup. Final delivery checks and exact-commit automatic proof
-remain pending. The
-[dated result](../adr/0105-catalogue-paged-publication.md#rehearsal-checkpoint-september-24-2026-utc)
-retains the original failed attempt and its source identity.
+The separately prepared ADR0106 qualification package remains outside this
+daily-app delivery. Its first two service attempts failed and their approvals
+are consumed. Preserve that work and its evidence; no further catalogue service
+attempt is authorized by the daily-app scope. The approved logical admission
+targets are 1,280 MiB for materialization and 2,304 MiB for cumulative
+intermediate data. Physical limits, the 256 MiB command peak, 32 MiB growth,
+two-second lock and thirty-second statement limits remain unchanged.
 
-The final visibility transaction still performs O(N) food/barcode work. Existing
-two-second lock and thirty-second statement limits remain. The small functional
-rehearsal does not qualify publication resource limits, a populated-publication
-backup/restore, Meilisearch rebuild or alias switch. Larger resource acceptance
-and the unacquired full April 2026 USDA catalogue need their own measured evidence. If the
-terminal operation cannot fit its reviewed envelope, retain that result and assess
-the reader architecture before another attempt or a limit change. All six
+The final visibility transaction remains O(N). A failure to fit its approved
+envelope requires diagnosis before another run or limit change. Historical
+ADR0104 memory proof and ADR0105 functional proof do not qualify that path.
+External identities, caller cutover and all six
 [beta exits](beta-exit-checklist.md) remain open.
 
 ### Milestone and external-decision boundaries
@@ -442,8 +449,7 @@ Each retains its separate explicit-approval gate.
    API, web, and mobile. New diary screens request at most 20 entries per page;
    every page repeats whole-day totals and count, encrypted continuations bind the
    owner/date/limit/day revision/effective time-zone state, and a stale day forces
-   a page-one restart. Legacy date-only readers still receive the complete bounded
-   day. The 50-entry write/aggregation cap remains until separate scale and client-
+   a page-one restart. Date-only and other unpaged requests are rejected. The 50-entry write/aggregation cap remains until separate scale and client-
    virtualization evidence supports a change. This closes one M1 source slice,
    not M1, signed-device, cross-client, accessibility, controlled-beta, or release
    acceptance. A future staggered pagination deployment must remain API-first as
@@ -798,8 +804,8 @@ but does not claim an offline catalogue, an offline diary cache, browser
 persistence, background delivery, or general offline synchronization.
 Account
 export and deletion are implemented and locally drilled under the retention and
-privacy milestone; they are not production evidence. Diary screens now opt into
-20-entry pages while legacy date-only readers retain a complete-day response.
+privacy milestone; they are not production evidence. Diary reads require
+pages of at most 20 entries; date-only and other unpaged requests are rejected.
 Every page is derived with the authoritative whole-day totals inside one
 repeatable-read snapshot; encrypted continuations reject a changed day or
 effective profile time zone instead of merging revisions. Pagination bounds each

@@ -350,7 +350,7 @@ describe("actual web hydration component state transitions", () => {
     expect(text()).toContain("Hydration entry moved to 2026-11-02");
     expect(text()).toContain("0 mL");
     expect(button("View destination day 2026-11-02")).toBeDefined();
-    const back = elements().find((node) => text(node) === "Return to Today overview");
+    const back = elements().find((node) => text(node) === "Return to diary");
     expect(back?.props.href).toBe("/dashboard?date=2026-11-01");
   });
 

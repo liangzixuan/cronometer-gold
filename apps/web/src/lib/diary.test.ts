@@ -599,17 +599,16 @@ describe("web diary editor snapshot binding", () => {
 });
 
 describe("web diary pagination", () => {
-  it("builds an opt-in bounded page path and normalizes a legacy final page", () => {
+  it("builds a bounded page path and rejects missing page metadata", () => {
     expect(diaryPagePath("2026-08-15")).toBe("/api/diary?date=2026-08-15&limit=20");
     expect(diaryPagePath("2026-08-15", "d1.next_page-2")).toBe(
       "/api/diary?date=2026-08-15&limit=20&cursor=d1.next_page-2",
     );
     expect(() => diaryPagePath("2026-08-15", "page_2.next")).toThrow(TypeError);
     expect(() => diaryPagePath("2026-08-15", "x".repeat(513))).toThrow(TypeError);
-    const { page: _page, ...legacyWire } = diaryPageFixture([entry], null, 1);
-    const legacy = parseDiaryPage(legacyWire);
-    expect(legacy).toMatchObject({ legacy: true, page: { nextCursor: null, totalEntries: 1 } });
-    expect(() => parseDiaryPage({ ...legacyWire, unexpected: true })).toThrow(TypeError);
+    const { page: _page, ...missingPage } = diaryPageFixture([entry], null, 1);
+    expect(() => parseDiaryPage(missingPage)).toThrow(TypeError);
+    expect(() => parseDiaryPage({ ...missingPage, unexpected: true })).toThrow(TypeError);
     expect(() => parseDiaryPage(diaryPageFixture([], "d1.page_2", 1))).toThrow(TypeError);
     expect(() => parseDiaryPage(diaryPageFixture([entry], "page_2.next", 2))).toThrow(TypeError);
     expect(isDiaryPageStaleProblem(409, { code: "DIARY_PAGE_STALE" })).toBe(true);

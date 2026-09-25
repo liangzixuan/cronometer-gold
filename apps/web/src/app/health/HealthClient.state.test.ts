@@ -324,6 +324,7 @@ function workspace(
     cursor: null as string | null,
     owner,
     timeZone: "America/Chicago",
+    sectionRead: null as null | ((url: string) => Response | Promise<Response> | undefined),
     read: null as null | (() => Response | Promise<Response>),
     continuation: null as null | (() => Response | Promise<Response>),
     write: null as null | ((url: string, init: RequestInit) => Response | Promise<Response>),
@@ -339,6 +340,8 @@ function workspace(
       if (!state.write) throw new Error(`Unexpected write: ${url}`);
       return state.write(url, init);
     }
+    const sectionResult = state.sectionRead?.(url);
+    if (sectionResult !== undefined) return sectionResult;
     if (url === "/api/retention/custom-foods?limit=50")
       return state.read ? state.read() : page(state.items, state.cursor);
     if (url.startsWith("/api/retention/custom-foods?limit=50&cursor=")) {
@@ -3206,9 +3209,9 @@ function inputsExceptHistoryMetric() {
 
 describe("loaded biometric history metric filter", () => {
   it("does not invent loaded counts or expose private choices during initial unverified loading", async () => {
-    const { state, fetcher } = metricHistoryWorkspace();
+    const { state, fetcher, items } = metricHistoryWorkspace();
     const pending = deferred<Response>();
-    state.read = () => pending.promise;
+    state.eventRead = () => pending.promise;
     await mount();
     expect(historyFilterStatus()).toBe("");
     expect(historyStatus()).toContain("unavailable until your private data is verified");
@@ -3219,7 +3222,7 @@ describe("loaded biometric history metric filter", () => {
     invoke(button("All metrics"), "onClick");
     await hooks.settle();
     expect(fetcher.mock.calls).toHaveLength(requests);
-    pending.resolve(page(state.items));
+    pending.resolve(eventPage(items));
     await hooks.settle();
     expect(historyFilterStatus()).toContain("Showing 5 of 5 loaded readings");
     expect(historyMetricControl().props.value).toBe("");
@@ -3440,9 +3443,9 @@ describe("loaded biometric history metric filter", () => {
     hooks.replayEffects();
     await hooks.settle();
     expect(historyMetricControl().props.value).toBe(missingHistoryMetric);
-    // A failed same-scope full read retains the existing last-verified history snapshot.
+    // A failed custom-food read does not invalidate the independently verified history.
     expect(historyFilterStatus()).toContain("Showing 0 of 0 loaded readings");
-    expect(historyStatus()).toContain("Private data could not be verified");
+    expect(historyStatus()).not.toContain("could not be verified");
     state.read = null;
     const prior = eventReads().length;
     await click("Retry private data");
@@ -5068,5 +5071,69 @@ describe("web custom-food dirty Revise protection", () => {
     expect(field("Name").props.value).toBe(second.currentVersion.name);
     expect(button("Save new version")).toBeDefined();
     expect(fetcher.mock.calls).toHaveLength(requests);
+  });
+});
+
+describe("independent private health section loading", () => {
+  it.each([
+    ["/api/retention/reminders", "reminders"],
+    ["/api/retention/integrations/health", "health integrations"],
+  ])(
+    "keeps food and history usable while %s waits, fails and retries alone",
+    async (path, label) => {
+      const { state, fetcher } = historyWorkspace();
+      const pending = deferred<Response>();
+      state.sectionRead = (url) => (url === path ? pending.promise : undefined);
+      await mount();
+      expect(text()).toContain(`Loading ${label}…`);
+      expect(disclosure(food()).props.disabled).toBe(false);
+      expect(button("Reload history").props.disabled).toBe(false);
+      await change("Name", "Unsaved independent food");
+      await changeEvent("Exact value", "73.12300");
+      pending.resolve(Response.json({ error: "Section unavailable" }, { status: 503 }));
+      await hooks.settle();
+      expect(button(`Retry ${label}`).props.disabled).toBe(false);
+      expect(disclosure(food()).props.disabled).toBe(false);
+      expect(button("Reload history").props.disabled).toBe(false);
+      const before = fetcher.mock.calls.length;
+      state.sectionRead = null;
+      await click(`Retry ${label}`);
+      const privatePaths = fetcher.mock.calls
+        .slice(before)
+        .map(([url]) => url)
+        .filter((url) => url !== "/api/auth/me");
+      expect(privatePaths).toEqual([path]);
+      expect(field("Name").props.value).toBe("Unsaved independent food");
+      expect(text(eventForm())).toContain("Log event");
+      expect(elements(eventForm()).find((node) => node.props.value === "73.12300")).toBeDefined();
+      expect(text()).not.toContain(`Retry ${label}`);
+    },
+  );
+
+  it("keeps biometric reads available when custom-food metadata fails", async () => {
+    const { state } = historyWorkspace();
+    state.sectionRead = (url) =>
+      url === "/api/nutrients/targetable"
+        ? Response.json({ error: "Metadata unavailable" }, { status: 503 })
+        : undefined;
+    await mount();
+    expect(button("Retry custom foods").props.disabled).toBe(false);
+    expect(button("Reload history").props.disabled).toBe(false);
+    expect(eventRows()).not.toHaveLength(0);
+  });
+
+  it("closes all sections when an unrelated delayed request reports unauthorized", async () => {
+    const { state } = historyWorkspace();
+    const pending = deferred<Response>();
+    state.sectionRead = (url) => (url === "/api/retention/reminders" ? pending.promise : undefined);
+    await mount();
+    const savedDisclosure = disclosure(food());
+    pending.resolve(Response.json({ error: "Expired" }, { status: 401 }));
+    await hooks.settle();
+    expect(router.replace).toHaveBeenCalledWith("/login");
+    expect(eventRows()).toHaveLength(0);
+    invoke(savedDisclosure, "onClick");
+    await hooks.settle();
+    expect(text()).not.toContain(food().currentVersion.name);
   });
 });

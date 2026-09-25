@@ -169,7 +169,7 @@ export function validatedDiaryDate(request: Request): string | null {
 
 export interface DiaryReadQuery {
   readonly date: string;
-  readonly limit?: number;
+  readonly limit: number;
   readonly cursor?: string;
 }
 
@@ -181,14 +181,13 @@ export function validatedDiaryReadQuery(request: Request): DiaryReadQuery | null
   const dates = url.searchParams.getAll("date");
   const limits = url.searchParams.getAll("limit");
   const cursors = url.searchParams.getAll("cursor");
-  if (dates.length !== 1 || limits.length > 1 || cursors.length > 1) return null;
+  if (dates.length !== 1 || limits.length !== 1 || cursors.length > 1) return null;
   const date = dates[0];
   const rawLimit = limits[0];
   const rawCursor = cursors[0];
-  if (!isLocalDate(date) || (rawLimit !== undefined && !/^(?:[1-9]|1[0-9]|20)$/u.test(rawLimit))) {
+  if (!isLocalDate(date) || rawLimit === undefined || !/^(?:[1-9]|1[0-9]|20)$/u.test(rawLimit)) {
     return null;
   }
-  if (rawCursor !== undefined && rawLimit === undefined) return null;
   if (
     rawCursor !== undefined &&
     (rawCursor.length === 0 ||
@@ -197,16 +196,13 @@ export function validatedDiaryReadQuery(request: Request): DiaryReadQuery | null
   ) {
     return null;
   }
-  const limit = rawLimit === undefined ? undefined : Number(rawLimit);
-  if (
-    limit !== undefined &&
-    (!Number.isSafeInteger(limit) || limit < 1 || limit > DIARY_PAGE_SIZE)
-  ) {
+  const limit = Number(rawLimit);
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > DIARY_PAGE_SIZE) {
     return null;
   }
   return {
     date,
-    ...(limit === undefined ? {} : { limit }),
+    limit,
     ...(rawCursor === undefined ? {} : { cursor: rawCursor }),
   };
 }

@@ -762,20 +762,7 @@ export class DatabaseDiaryService implements DiaryService {
     this.#pageCursorCodec = new DiaryPageCursorCodec(options.cursorSecret);
   }
 
-  async getDay(input: Parameters<DiaryService["getDay"]>[0]): Promise<DiaryDay> {
-    input.signal?.throwIfAborted();
-    try {
-      const result = await getDiaryDay(this.#database, input);
-      input.signal?.throwIfAborted();
-      return day(result);
-    } catch (error) {
-      mapDiaryPersistenceError(error);
-    }
-  }
-
-  async getDayPage(
-    input: Parameters<NonNullable<DiaryService["getDayPage"]>>[0],
-  ): Promise<DiaryDayResponse> {
+  async getDayPage(input: Parameters<DiaryService["getDayPage"]>[0]): Promise<DiaryDayResponse> {
     input.signal?.throwIfAborted();
     const binding = {
       userId: input.userId,
@@ -841,32 +828,8 @@ export class DatabaseDiaryService implements DiaryService {
     }
   }
 
-  async updateEntry(
-    input: Parameters<DiaryService["updateEntry"]>[0],
-  ): Promise<DiaryMutationResponse> {
-    input.signal?.throwIfAborted();
-    try {
-      const result = await updateDiaryEntry(this.#database, {
-        clientOperationId: input.clientOperationId,
-        entryId: input.entryId,
-        expectedEntryRevision: input.expectedRevision,
-        ...(input.patch.mealSlot === undefined ? {} : { mealSlot: input.patch.mealSlot }),
-        ...(input.patch.occurredAt === undefined ? {} : { occurredAt: input.patch.occurredAt }),
-        ...(input.patch.portion === undefined ? {} : { portion: input.patch.portion }),
-        ...(input.patch.position === undefined ? {} : { position: input.patch.position }),
-        ...(input.patch.note === undefined ? {} : { note: input.patch.note }),
-        requestDigest: input.requestDigest,
-        userId: input.userId,
-      });
-      input.signal?.throwIfAborted();
-      return mutation(result, false);
-    } catch (error) {
-      mapDiaryPersistenceError(error);
-    }
-  }
-
   async updateEntryCorrection(
-    input: Parameters<NonNullable<DiaryService["updateEntryCorrection"]>>[0],
+    input: Parameters<DiaryService["updateEntryCorrection"]>[0],
   ): Promise<DiaryCorrectionMutationResponse> {
     input.signal?.throwIfAborted();
     try {
@@ -892,27 +855,8 @@ export class DatabaseDiaryService implements DiaryService {
     }
   }
 
-  async deleteEntry(
-    input: Parameters<DiaryService["deleteEntry"]>[0],
-  ): Promise<DiaryMutationResponse> {
-    input.signal?.throwIfAborted();
-    try {
-      const result = await deleteDiaryEntry(this.#database, {
-        clientOperationId: input.clientOperationId,
-        entryId: input.entryId,
-        expectedEntryRevision: input.expectedRevision,
-        requestDigest: input.requestDigest,
-        userId: input.userId,
-      });
-      input.signal?.throwIfAborted();
-      return mutation(result, true);
-    } catch (error) {
-      mapDiaryPersistenceError(error);
-    }
-  }
-
   async deleteEntryCorrection(
-    input: Parameters<NonNullable<DiaryService["deleteEntryCorrection"]>>[0],
+    input: Parameters<DiaryService["deleteEntryCorrection"]>[0],
   ): Promise<DiaryCorrectionMutationResponse> {
     input.signal?.throwIfAborted();
     try {

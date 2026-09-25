@@ -31,7 +31,7 @@ async function diaryResponse(upstream: Response, expectedDate: string): Promise<
     }
     const etag = upstream.headers.get("etag") ?? `"${diary.data.revision}"`;
     return Response.json(
-      diary.legacy ? { data: diary.data } : { data: diary.data, page: diary.page },
+      { data: diary.data, page: diary.page },
       { status: upstream.status, headers: { ...PRIVATE_RESPONSE_HEADERS, etag } },
     );
   } catch {
@@ -42,8 +42,7 @@ async function diaryResponse(upstream: Response, expectedDate: string): Promise<
 export async function proxyDiaryGet(request: Request): Promise<Response> {
   const query = validatedDiaryReadQuery(request);
   if (!query) return privateJsonError(400, "Choose a valid paged diary request.");
-  const params = new URLSearchParams({ date: query.date });
-  if (query.limit !== undefined) params.set("limit", String(query.limit));
+  const params = new URLSearchParams({ date: query.date, limit: String(query.limit) });
   if (query.cursor !== undefined) params.set("cursor", query.cursor);
   const upstream = await authenticatedFetch(request, `/v1/diary?${params.toString()}`);
   return diaryResponse(upstream, query.date);

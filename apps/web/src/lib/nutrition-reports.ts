@@ -870,6 +870,27 @@ export function reportAmountText(point: NutritionReportSeriesPoint, unit: string
   return `${point.aggregate.isExact ? "" : "At least "}${point.aggregate.knownAmount} ${unit}`;
 }
 
+const exactTargetPercentFormatter = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 1,
+  roundingMode: "halfEven",
+  useGrouping: false,
+});
+const lowerBoundTargetPercentFormatter = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 1,
+  roundingMode: "floor",
+  useGrouping: false,
+});
+
+function reportTargetPercentText(value: string, isExact: boolean | null): string {
+  // The report parser validates this decimal string. Keep it as a string so Intl
+  // preserves digits beyond the range of exact binary-number representation.
+  const formatter = isExact ? exactTargetPercentFormatter : lowerBoundTargetPercentFormatter;
+  const amount = formatter.format(value as Intl.StringNumericLiteral);
+  if (!isExact) return `at least ${amount}`;
+  const discardedDigits = value.split(".")[1]?.slice(1) ?? "";
+  return `${/[1-9]/u.test(discardedDigits) ? "approximately " : ""}${amount}`;
+}
+
 export function reportComparisonText(point: NutritionReportSeriesPoint): string {
   const comparison = point.comparison;
   if (!comparison) return "Not compared";
@@ -879,7 +900,7 @@ export function reportComparisonText(point: NutritionReportSeriesPoint): string 
       ? comparison.targetPercentIsExact === null
         ? null
         : "target percentage unavailable because the saved target is zero"
-      : `${comparison.targetPercentIsExact ? "" : "at least "}${comparison.targetLowerBoundPercent}% of target`,
+      : `${reportTargetPercentText(comparison.targetLowerBoundPercent, comparison.targetPercentIsExact)}% of target`,
     comparison.maximumState === null ? null : `maximum ${comparison.maximumState}`,
   ].filter((value): value is string => value !== null);
   return parts.length === 0 ? "No saved threshold" : parts.join(" · ");

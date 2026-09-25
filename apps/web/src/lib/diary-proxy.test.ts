@@ -52,11 +52,9 @@ const entry = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("web diary read query and proxy", () => {
-  it("keeps legacy date-only reads while validating opt-in pagination separately", () => {
+  it("requires an explicit bounded page limit for every diary read", () => {
     const request = (query: string) => new Request(`https://app.example.test/api/diary?${query}`);
-    expect(validatedDiaryReadQuery(request("date=2026-08-15"))).toEqual({
-      date: "2026-08-15",
-    });
+    expect(validatedDiaryReadQuery(request("date=2026-08-15"))).toBeNull();
     expect(
       validatedDiaryReadQuery(request("date=2026-08-15&limit=20&cursor=d1.page_2-next")),
     ).toEqual({ date: "2026-08-15", limit: 20, cursor: "d1.page_2-next" });
@@ -71,6 +69,16 @@ describe("web diary read query and proxy", () => {
     expect(validatedDiaryReadQuery(request("date=2026-08-15&limit=20&limit=20"))).toBeNull();
     expect(validatedDiaryReadQuery(request("date=2026-08-15&limit=20&extra=true"))).toBeNull();
     expect(validatedDiaryDate(request("date=2026-08-15&limit=20"))).toBeNull();
+  });
+
+  it("rejects a date-only diary read before calling the upstream", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const response = await proxyDiaryGet(
+      new Request("https://app.example.test/api/diary?date=2026-08-15"),
+    );
+    expect(response.status).toBe(400);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("forwards only the reviewed paged keys and preserves page metadata, ETag, and no-store", async () => {
@@ -143,7 +151,7 @@ describe("web diary read query and proxy", () => {
     });
   });
 
-  it("forwards a legacy date-only read unchanged and does not invent wire page metadata", async () => {
+  it("rejects an upstream response without page metadata", async () => {
     const calls: string[] = [];
     vi.stubGlobal(
       "fetch",
@@ -165,23 +173,14 @@ describe("web diary read query and proxy", () => {
       }),
     );
     const response = await proxyDiaryGet(
-      new Request("https://app.example.test/api/diary?date=2026-08-15", {
+      new Request("https://app.example.test/api/diary?date=2026-08-15&limit=20", {
         headers: { cookie: `${SESSION_COOKIE}=${"t".repeat(43)}` },
       }),
     );
-    expect(calls).toEqual(["http://127.0.0.1:4000/v1/diary?date=2026-08-15"]);
+    expect(calls).toEqual(["http://127.0.0.1:4000/v1/diary?date=2026-08-15&limit=20"]);
+    expect(response.status).toBe(502);
     expect(await response.json()).toEqual({
-      data: {
-        id: null,
-        localDate: "2026-08-15",
-        timeZone: "America/Chicago",
-        status: "open",
-        revision: "0",
-        orderDigest: "a".repeat(64),
-        entries: [],
-        totals: [],
-        updatedAt: null,
-      },
+      error: "The diary service returned an invalid response.",
     });
   });
 });

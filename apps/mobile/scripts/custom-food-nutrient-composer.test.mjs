@@ -10788,3 +10788,77 @@ describe("native definition and reminder draft protection", () => {
       harness.unmount();
     });
 });
+
+describe("native independent health section loading", () => {
+  it.each([
+    ["/v1/reminders", "reminders"],
+    ["/v1/integrations/health", "health integrations"],
+  ])(
+    "keeps foods and history usable while %s waits, fails and retries alone",
+    async (path, label) => {
+      const pending = deferred();
+      let waiting = true;
+      const { harness, requests } = setup((request) =>
+        request.url.pathname === path && waiting ? pending.promise : undefined,
+      );
+      try {
+        let tree = await harness.settle();
+        expect(text(tree)).toContain(`Loading ${label}`);
+        expect(button(tree, "Show nutrients").props.disabled).toBe(false);
+        expect(button(tree, "Reload history").props.disabled).toBe(false);
+        await fillManual(harness, "12.00");
+        pending.resolve(response({ error: "Section unavailable" }, 503));
+        tree = await harness.settle();
+        expect(button(tree, `Retry ${label}`).props.disabled).toBe(false);
+        expect(button(tree, "Show nutrients").props.disabled).toBe(false);
+        expect(button(tree, "Reload history").props.disabled).toBe(false);
+        const before = requests.length;
+        waiting = false;
+        tree = await click(harness, `Retry ${label}`);
+        expect(requests.slice(before).map((request) => request.url.pathname)).toEqual([path]);
+        expect(canonical(tree)).toBe("208=12.00");
+        expect(input(tree, "Name").props.value).toBe("Owner food");
+        expect(text(tree)).not.toContain(`Retry ${label}`);
+      } finally {
+        harness.unmount();
+      }
+    },
+  );
+
+  it("keeps biometric reads available after food metadata fails", async () => {
+    const { harness } = setup((request) =>
+      request.url.pathname === "/v1/nutrients/targetable"
+        ? response({ error: "Metadata unavailable" }, 503)
+        : undefined,
+    );
+    try {
+      const tree = await harness.settle();
+      expect(button(tree, "Retry custom foods").props.disabled).toBe(false);
+      expect(button(tree, "Reload history").props.disabled).toBe(false);
+    } finally {
+      harness.unmount();
+    }
+  });
+
+  it("rejects an unrelated delayed receipt after owner replacement", async () => {
+    const pending = deferred();
+    let reads = 0;
+    const { harness } = setup((request) =>
+      request.url.pathname === "/v1/integrations/health" && ++reads === 1
+        ? pending.promise
+        : undefined,
+    );
+    try {
+      await harness.settle();
+      harness.updateProps({ ownerUserId: "new-owner", sessionEpoch: 2 });
+      await harness.settle();
+      const before = harness.stateWrites;
+      pending.resolve(response({ error: "Old owner failure" }, 503));
+      const tree = await harness.settle();
+      expect(harness.stateWrites).toBe(before);
+      expect(text(tree)).not.toContain("Old owner failure");
+    } finally {
+      harness.unmount();
+    }
+  });
+});

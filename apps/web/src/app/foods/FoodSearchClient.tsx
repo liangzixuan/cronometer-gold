@@ -9,6 +9,7 @@ import {
   createOperationId,
   currentLocalDate,
   type DiaryGroup,
+  type DiaryMutationResult,
   defaultDiaryGroups,
   defaultMealForHour,
   defaultMealForTime,
@@ -139,10 +140,59 @@ export function quickAddTimeZoneReviewMessage(
     : "Your diary time zone changed. This food was not added, and its stale retry was cleared. Current account settings could not be reloaded; refresh this page, then review the local diary day before adding again.";
 }
 
+interface FoodAddSuccess {
+  readonly foodVersionId: string;
+  readonly localDate: string;
+  readonly message: string;
+  readonly instance: "search" | "barcode";
+  readonly context: string;
+}
+
+export function confirmedFoodAddDate(mutation: DiaryMutationResult, foodVersionId: string): string {
+  const day = mutation.affectedDays[0];
+  if (
+    mutation.entry?.entryKind !== "food" ||
+    mutation.entry.foodVersionId !== foodVersionId ||
+    mutation.affectedDays.length !== 1 ||
+    !day ||
+    day.localDate !== mutation.entry.localDate
+  ) {
+    throw new TypeError("The saved diary day could not be confirmed.");
+  }
+  return day.localDate;
+}
+
+export function FoodAddConfirmation({
+  confirmation,
+}: {
+  readonly confirmation: Pick<FoodAddSuccess, "localDate" | "message"> | null;
+}) {
+  return (
+    <div className="foodAddConfirmation" data-state={confirmation ? "ready" : "idle"}>
+      {confirmation ? (
+        <>
+          <p>{confirmation.message}</p>
+          <Link
+            className="secondaryAction"
+            href={`/dashboard?date=${encodeURIComponent(confirmation.localDate)}`}
+          >
+            Open diary for {confirmation.localDate}
+          </Link>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 export function FoodSearchClient() {
   const searchParams = useSearchParams();
   const requestedDate = searchParams.get("date");
   const requestedMeal = searchParams.get("meal");
+  const confirmationContext = JSON.stringify([requestedDate, requestedMeal]);
+  const confirmationContextRef = useRef(confirmationContext);
+  confirmationContextRef.current = confirmationContext;
+  const confirmationGeneration = useRef(0);
+  const [confirmation, setConfirmation] = useState<FoodAddSuccess | null>(null);
   const [diaryDate, setDiaryDate] = useState(() =>
     requestedDate && isLocalDate(requestedDate) ? requestedDate : currentLocalDate(),
   );
@@ -170,9 +220,7 @@ export function FoodSearchClient() {
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [lastSearchQuery, setLastSearchQuery] = useState("");
   const [searchState, setSearchState] = useState<LoadState>("idle");
-  const [searchMessage, setSearchMessage] = useState(
-    "Search the public catalogue by a food or brand name.",
-  );
+  const [searchMessage, setSearchMessage] = useState("Search by food or brand name.");
   const [barcode, setBarcode] = useState("");
   const [barcodeResult, setBarcodeResult] = useState<FoodSearchHit | null>(null);
   const [barcodeState, setBarcodeState] = useState<BarcodeState>("idle");
@@ -207,6 +255,7 @@ export function FoodSearchClient() {
     const controller = new AbortController();
     autocompleteController.current = controller;
     const timer = window.setTimeout(() => {
+      if (controller.signal.aborted) return;
       setSuggestionState("loading");
       void (async () => {
         try {
@@ -249,6 +298,8 @@ export function FoodSearchClient() {
   );
 
   useEffect(() => {
+    confirmationGeneration.current += 1;
+    setConfirmation(null);
     const controller = new AbortController();
     void (async () => {
       try {
@@ -279,7 +330,10 @@ export function FoodSearchClient() {
         // Catalogue search remains public if session discovery is unavailable.
       }
     })();
-    return () => controller.abort();
+    return () => {
+      controller.abort();
+      confirmationGeneration.current += 1;
+    };
   }, [requestedDate, requestedMeal]);
 
   const runSearch = useCallback(
@@ -348,17 +402,22 @@ export function FoodSearchClient() {
     [intent, results],
   );
 
+  function closeSuggestions(selectedQuery: string) {
+    autocompleteController.current?.abort();
+    suppressedAutocompleteValue.current = normalizeSearchText(selectedQuery);
+    setSuggestions([]);
+    setSuggestionState("idle");
+  }
+
   function submitSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setSuggestions([]);
+    closeSuggestions(query);
     void runSearch(query);
   }
 
   function chooseSuggestion(suggestion: FoodAutocompleteSuggestion) {
-    suppressedAutocompleteValue.current = normalizeSearchText(suggestion.label);
+    closeSuggestions(suggestion.label);
     setQuery(suggestion.label);
-    setSuggestions([]);
-    setSuggestionState("idle");
     void runSearch(suggestion.label);
   }
 
@@ -446,12 +505,19 @@ export function FoodSearchClient() {
     }
   }
 
-  async function addFood(food: FoodSearchHit, draft: QuickAddDraft) {
+  async function addFood(
+    food: FoodSearchHit,
+    draft: QuickAddDraft,
+    instance: "search" | "barcode",
+  ) {
     if (activeAddOperation.current !== null) {
       setAddState("error");
       setAddMessage("Wait for the current diary addition to finish before adding another food.");
       return;
     }
+    const generation = ++confirmationGeneration.current;
+    const context = confirmationContextRef.current;
+    setConfirmation(null);
     if (dateReviewRequired) {
       setAddState("error");
       setAddMessage("Review and confirm the local diary day before adding this food again.");
@@ -538,14 +604,25 @@ export function FoodSearchClient() {
         throw new Error(message);
       }
       const mutation = parseDiaryMutation(body);
-      const loggedDate = mutation.affectedDays[0]?.localDate ?? diaryDate;
+      const loggedDate = confirmedFoodAddDate(mutation, food.foodVersionId);
+      const message = `${quickAddAmountLabel(draft)} of ${food.name} was added to ${diaryGroupLabel(diaryGroups, mealSlot)} on ${loggedDate}.`;
       if (pendingAdds.current.get(operation.intentKey) === operation) {
         pendingAdds.current.delete(operation.intentKey);
       }
       setAddState("ready");
-      setAddMessage(
-        `${quickAddAmountLabel(draft)} of ${food.name} was added to ${diaryGroupLabel(diaryGroups, mealSlot)} on ${loggedDate}.`,
-      );
+      setAddMessage(message);
+      if (
+        confirmationGeneration.current === generation &&
+        confirmationContextRef.current === context
+      ) {
+        setConfirmation({
+          foodVersionId: food.foodVersionId,
+          localDate: loggedDate,
+          message,
+          instance,
+          context,
+        });
+      }
     } catch (error) {
       setAddState("error");
       setAddMessage(
@@ -587,67 +664,76 @@ export function FoodSearchClient() {
     const servingAvailable = hasGramResolvedServing(food);
     const controlId = `quick-add-${instance}-${food.foodVersionId}`;
     const busy = addingFoodVersion !== null;
+    const currentConfirmation =
+      confirmation?.context === confirmationContext &&
+      confirmation.foodVersionId === food.foodVersionId &&
+      confirmation.instance === instance
+        ? confirmation
+        : null;
     return (
-      <fieldset className="quickAddControls">
-        <legend className="srOnly">Add {food.name} to the diary</legend>
-        <label htmlFor={`${controlId}-kind`}>
-          Unit
-          <select
-            disabled={busy}
-            id={`${controlId}-kind`}
-            onChange={(event) =>
-              updateQuickAddDraft(food, {
-                kind: event.target.value as QuickAddPortionKind,
-              })
-            }
-            value={draft.kind}
+      <div className="foodAddArea">
+        <fieldset className="quickAddControls">
+          <legend className="srOnly">Add {food.name} to the diary</legend>
+          <label htmlFor={`${controlId}-kind`}>
+            Unit
+            <select
+              disabled={busy}
+              id={`${controlId}-kind`}
+              onChange={(event) =>
+                updateQuickAddDraft(food, {
+                  kind: event.target.value as QuickAddPortionKind,
+                })
+              }
+              value={draft.kind}
+            >
+              {servingAvailable && food.defaultServing ? (
+                <option value="serving">Default serving: {food.defaultServing.label}</option>
+              ) : null}
+              <option value="grams">Grams</option>
+            </select>
+          </label>
+          <label htmlFor={`${controlId}-amount`}>
+            Amount
+            <input
+              aria-describedby={`${controlId}-amount-help`}
+              aria-invalid={!amountIsValid}
+              autoComplete="off"
+              disabled={busy}
+              id={`${controlId}-amount`}
+              inputMode="decimal"
+              maxLength={19}
+              onChange={(event) => updateQuickAddDraft(food, { amount: event.target.value })}
+              pattern="(?=.*[1-9])(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,6})?"
+              value={draft.amount}
+            />
+          </label>
+          <small id={`${controlId}-amount-help`}>
+            {amountIsValid
+              ? draft.kind === "serving"
+                ? "How many of the listed default serving."
+                : "Exact grams to add."
+              : "Enter a positive decimal, up to 12 whole digits and 6 decimal places."}
+          </small>
+          <button
+            aria-label={`Add ${quickAddAmountLabel(draft)} of ${food.name}`}
+            className="quickAddButton"
+            disabled={busy || dateReviewRequired || !amountIsValid}
+            onClick={() => void addFood(food, draft, instance)}
+            type="button"
           >
-            {servingAvailable && food.defaultServing ? (
-              <option value="serving">Default serving: {food.defaultServing.label}</option>
-            ) : null}
-            <option value="grams">Grams</option>
-          </select>
-        </label>
-        <label htmlFor={`${controlId}-amount`}>
-          Amount
-          <input
-            aria-describedby={`${controlId}-amount-help`}
-            aria-invalid={!amountIsValid}
-            autoComplete="off"
-            disabled={busy}
-            id={`${controlId}-amount`}
-            inputMode="decimal"
-            maxLength={19}
-            onChange={(event) => updateQuickAddDraft(food, { amount: event.target.value })}
-            pattern="(?=.*[1-9])(?:0|[1-9][0-9]{0,11})(?:\.[0-9]{1,6})?"
-            value={draft.amount}
-          />
-        </label>
-        <small id={`${controlId}-amount-help`}>
-          {amountIsValid
-            ? draft.kind === "serving"
-              ? "How many of the listed default serving."
-              : "Exact grams to add."
-            : "Enter a positive decimal, up to 12 whole digits and 6 decimal places."}
-        </small>
-        <button
-          aria-label={`Add ${quickAddAmountLabel(draft)} of ${food.name}`}
-          className="quickAddButton"
-          disabled={busy || dateReviewRequired || !amountIsValid}
-          onClick={() => void addFood(food, draft)}
-          type="button"
-        >
-          {addingFoodVersion === food.foodVersionId
-            ? "Adding…"
-            : busy
-              ? "Wait for current add"
-              : dateReviewRequired
-                ? "Review diary day first"
-                : amountIsValid
-                  ? `Add ${quickAddAmountLabel(draft)}`
-                  : "Enter a valid amount"}
-        </button>
-      </fieldset>
+            {addingFoodVersion === food.foodVersionId
+              ? "Adding…"
+              : busy
+                ? "Wait for current add"
+                : dateReviewRequired
+                  ? "Review diary day first"
+                  : amountIsValid
+                    ? `Add ${quickAddAmountLabel(draft)}`
+                    : "Enter a valid amount"}
+          </button>
+        </fieldset>
+        <FoodAddConfirmation confirmation={currentConfirmation} />
+      </div>
     );
   }
 
@@ -658,77 +744,13 @@ export function FoodSearchClient() {
       <section className="foodSearchPanel" aria-labelledby="catalogue-search-title">
         <div className="foodPanelHeading">
           <div>
-            <p className="kicker">Catalogue search</p>
+            <p className="kicker">Food search</p>
             <h2 id="catalogue-search-title">Find a food</h2>
           </div>
-          <p>Public catalogue results only. Personal foods arrive with diary accounts.</p>
+          <p>Search by food or brand name, or look up a barcode below.</p>
         </div>
 
-        <fieldset className="quickAddControls">
-          <legend className="srOnly">Diary destination</legend>
-          <label htmlFor="quick-add-date">
-            Local day
-            <input
-              id="quick-add-date"
-              onChange={(event) =>
-                isLocalDate(event.target.value) && setDiaryDate(event.target.value)
-              }
-              type="date"
-              value={diaryDate}
-            />
-          </label>
-          <label htmlFor="quick-add-meal">
-            Meal
-            <select
-              id="quick-add-meal"
-              onChange={(event) => setMealSlot(event.target.value as MealSlot)}
-              value={mealSlot}
-            >
-              {diaryGroups.map((group) => (
-                <option key={group.mealSlot} value={group.mealSlot}>
-                  {group.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <Link href="/login">Account</Link>
-          {dateReviewRequired ? (
-            <button
-              className="quickAddButton"
-              disabled={!timeZone || addingFoodVersion !== null}
-              onClick={confirmDiaryDateReview}
-              type="button"
-            >
-              Confirm {diaryDate} as local day
-            </button>
-          ) : null}
-        </fieldset>
-        <p className={`addStatus addStatus--${addState}`} role="status" aria-live="polite">
-          {addMessage}
-        </p>
-
         <form aria-label="Food search" className="foodSearchForm" onSubmit={submitSearch}>
-          <fieldset className="intentFieldset">
-            <legend>Food type</legend>
-            <div className="intentControls">
-              {foodSearchIntents.map((option) => (
-                <label
-                  key={option}
-                  className={intent === option ? "intentOption active" : "intentOption"}
-                >
-                  <input
-                    checked={intent === option}
-                    name="food-intent"
-                    onChange={() => chooseIntent(option)}
-                    type="radio"
-                    value={option}
-                  />
-                  <span>{intentLabels[option]}</span>
-                </label>
-              ))}
-            </div>
-          </fieldset>
-
           <label className="fieldLabel" htmlFor="food-query">
             Food or brand
           </label>
@@ -781,7 +803,70 @@ export function FoodSearchClient() {
               {searchState === "loading" ? "Searching…" : "Search"}
             </button>
           </div>
+          <fieldset className="intentFieldset">
+            <legend>Food type</legend>
+            <div className="intentControls">
+              {foodSearchIntents.map((option) => (
+                <label
+                  key={option}
+                  className={intent === option ? "intentOption active" : "intentOption"}
+                >
+                  <input
+                    checked={intent === option}
+                    name="food-intent"
+                    onChange={() => chooseIntent(option)}
+                    type="radio"
+                    value={option}
+                  />
+                  <span>{intentLabels[option]}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
         </form>
+
+        <fieldset className="quickAddControls">
+          <legend className="srOnly">Diary destination</legend>
+          <label htmlFor="quick-add-date">
+            Local day
+            <input
+              id="quick-add-date"
+              onChange={(event) =>
+                isLocalDate(event.target.value) && setDiaryDate(event.target.value)
+              }
+              type="date"
+              value={diaryDate}
+            />
+          </label>
+          <label htmlFor="quick-add-meal">
+            Meal
+            <select
+              id="quick-add-meal"
+              onChange={(event) => setMealSlot(event.target.value as MealSlot)}
+              value={mealSlot}
+            >
+              {diaryGroups.map((group) => (
+                <option key={group.mealSlot} value={group.mealSlot}>
+                  {group.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <Link href="/login">Account</Link>
+          {dateReviewRequired ? (
+            <button
+              className="quickAddButton"
+              disabled={!timeZone || addingFoodVersion !== null}
+              onClick={confirmDiaryDateReview}
+              type="button"
+            >
+              Confirm {diaryDate} as local day
+            </button>
+          ) : null}
+        </fieldset>
+        <p className={`addStatus addStatus--${addState}`} role="status" aria-live="polite">
+          {addMessage}
+        </p>
 
         <p className={`searchStatus searchStatus--${searchState}`} role="status" aria-live="polite">
           {searchMessage}
@@ -807,8 +892,8 @@ export function FoodSearchClient() {
                     <small>
                       {food.source.licenseExpression} · {food.marketCode} · {food.languageTag}
                     </small>
-                    {quickAddControls(food, "search")}
                   </div>
+                  {quickAddControls(food, "search")}
                 </article>
               </li>
             ))}

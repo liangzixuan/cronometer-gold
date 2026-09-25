@@ -368,6 +368,95 @@ describe("retention same-origin adapter", () => {
     );
   });
 
+  it("rejects an export completion without lifecycle evidence", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          data: {
+            replayed: false,
+            export: {
+              id: exportId,
+              status: "completed",
+              formats: ["json"],
+              requestedAt: "2026-08-16T08:00:00.000Z",
+              startedAt: null,
+              completedAt: null,
+              expiresAt: null,
+              artifacts: [],
+              manifestSha256: null,
+              reconciliation: null,
+              failureCode: null,
+            },
+          },
+        }),
+      ),
+    );
+    const response = await proxyRetentionRequest(
+      new Request(`https://app.example.test/api/retention/exports/${exportId}`, {
+        headers: { cookie: `${SESSION_COOKIE}=${"t".repeat(43)}` },
+      }),
+      ["exports", exportId],
+    );
+    expect(response.status).toBe(502);
+    expect(await response.json()).toEqual({
+      error: "The private account service returned an invalid response.",
+    });
+  });
+
+  it.each([
+    { ...erasure("completed"), completedAt: null },
+    { ...erasure(), status: "failed" },
+  ])(
+    "preserves the status capability when a $status response has inconsistent lifecycle evidence",
+    async (job) => {
+      const expiresAt = Date.now() + 60 * 60_000;
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json({ data: { replayed: false, erasure: job } })),
+      );
+      const response = await proxyRetentionRequest(
+        new Request("https://app.example.test/api/retention/account/erasure/status", {
+          headers: {
+            cookie: `__Secure-nutrition_erasure_status=${erasureId}.${erasureToken}.${expiresAt}`,
+          },
+        }),
+        ["account", "erasure", "status"],
+      );
+      expect(response.status).toBe(502);
+      expect(response.headers.get("set-cookie")).toBeNull();
+      expect(await response.json()).toEqual({
+        error: "The private account service returned an invalid response.",
+      });
+    },
+  );
+
+  it("rejects an inconsistent erasure mutation before issuing a status cookie", async () => {
+    const expiresAt = new Date(Date.now() + 60 * 60_000).toISOString();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({
+          data: {
+            replayed: false,
+            erasure: { ...erasure("completed"), startedAt: null },
+            statusCapability: { token: erasureToken, expiresAt },
+          },
+        }),
+      ),
+    );
+    const response = await proxyRetentionRequest(
+      mutationRequest(
+        "account/erasure",
+        { confirmation: "DELETE_MY_ACCOUNT" },
+        { "x-reauthentication-token": reauthenticationToken },
+      ),
+      ["account", "erasure"],
+    );
+    expect(response.status).toBe(502);
+    expect(response.headers.get("set-cookie")).toBeNull();
+  });
+
   it("streams reviewed artifacts above 100 MiB and cancels upstream on abort", async () => {
     let cancelled = false;
     const upstreamBody = new ReadableStream<Uint8Array>({

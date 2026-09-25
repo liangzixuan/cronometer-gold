@@ -68,6 +68,7 @@ import {
 } from "../../lib/diary-group-draft";
 import { type HydrationDay, parseHydrationDay } from "../../lib/hydration";
 import { confirmBrowserLogout } from "../../lib/private-api";
+import { DailySummary } from "./DailySummary";
 import { DiaryDayNote } from "./DiaryDayNote";
 import { TodayOverviewCards } from "./TodayOverviewCards";
 
@@ -178,7 +179,7 @@ function entryName(entry: DiaryEntry): string {
 
 function entryPortionLabel(entry: DiaryEntry): string {
   return entry.portion.kind === "serving"
-    ? `${entry.portion.amount} ${entry.portion.servingLabel}`
+    ? `${entry.portion.amount} × ${entry.portion.servingLabel}`
     : `${entry.portion.grams} g`;
 }
 
@@ -198,7 +199,12 @@ function loadedMessage(page: DiaryPage): string {
   return `${loaded} of ${total} ${total === 1 ? "entry" : "entries"} loaded. Nutrition totals include all ${total}.`;
 }
 
-export function DiaryClient() {
+interface DiaryClientProps {
+  readonly view?: "diary" | "overview";
+}
+
+export function DiaryClient({ view = "diary" }: DiaryClientProps = {}) {
+  const viewRoute = view === "overview" ? "/overview" : "/dashboard";
   const router = useRouter();
   const searchParams = useSearchParams();
   const explicitDate = searchParams.get("date");
@@ -507,7 +513,7 @@ export function DiaryClient() {
       if (privateUiClosed.current || !isLocalDate(next)) return;
       if (next === dateRef.current) {
         if (rewriteUrl) {
-          router.replace(`/dashboard?date=${encodeURIComponent(next)}`, { scroll: false });
+          router.replace(`${viewRoute}?date=${encodeURIComponent(next)}`, { scroll: false });
         }
         return;
       }
@@ -531,10 +537,10 @@ export function DiaryClient() {
       setPageState("idle");
       setDate(next);
       if (rewriteUrl) {
-        router.replace(`/dashboard?date=${encodeURIComponent(next)}`, { scroll: false });
+        router.replace(`${viewRoute}?date=${encodeURIComponent(next)}`, { scroll: false });
       }
     },
-    [router, setEditor, closeEntryNutrients],
+    [router, viewRoute, setEditor, closeEntryNutrients],
   );
 
   const loadDiary = useCallback(
@@ -1724,7 +1730,16 @@ export function DiaryClient() {
           nutrition<span>/ledger</span>
         </Link>
         <nav aria-label="Application navigation">
-          <Link aria-current="page" href={`/dashboard${dateQuery}`}>
+          <Link
+            aria-current={view === "overview" ? "page" : undefined}
+            href={`/overview${dateQuery}`}
+          >
+            Dashboard
+          </Link>
+          <Link
+            aria-current={view === "diary" ? "page" : undefined}
+            href={`/dashboard${dateQuery}`}
+          >
             Diary
           </Link>
           <Link href={`/foods${dateQuery}`}>Foods</Link>
@@ -1754,17 +1769,18 @@ export function DiaryClient() {
         <p className="wellnessNote">Wellness information only—not medical advice.</p>
       </aside>
 
-      <section className="dashboard diaryDashboard" id="today">
-        <header className="dashboardHeader diaryHeader">
+      <section
+        className={`dashboard ${view === "overview" ? "overviewDashboard" : "diaryDashboard"}`}
+        id="today"
+      >
+        <header
+          className={`dashboardHeader ${view === "overview" ? "overviewHeader" : "diaryHeader"}`}
+        >
           <div>
-            <p className="kicker">Private local-day diary</p>
-            <h1>
-              {!hasCommittedDate
-                ? "Opening diary…"
-                : session && date === localDateInTimeZone(new Date(), session.profile.timeZone)
-                  ? "Today"
-                  : date}
-            </h1>
+            <p className="kicker">
+              {view === "overview" ? "Your daily overview" : "Private local-day diary"}
+            </p>
+            <h1>{view === "overview" ? "Dashboard" : "Diary"}</h1>
           </div>
           <span className="statusPill">
             {session?.profile.timeZone ?? diary?.timeZone ?? "Local time"}
@@ -1814,24 +1830,40 @@ export function DiaryClient() {
           </button>
         </fieldset>
 
-        <div className="diaryGroupSettingsLauncher">
-          <button
-            aria-controls="diary-group-settings"
-            aria-expanded={diaryGroupSettingsOpen}
-            className="secondaryAction"
-            disabled={!session || controlsBusy}
-            onClick={() => {
-              const opening = !diaryGroupSettingsOpen;
-              if (opening && session) setDiaryGroupDraft(createDiaryGroupDraft(session));
-              setDiaryGroupSettingsOpen(opening);
-            }}
-            type="button"
-          >
-            {diaryGroupSettingsOpen ? "Close diary group settings" : "Customize diary groups"}
-          </button>
-        </div>
+        {view === "overview" && hasCommittedDate ? (
+          <nav aria-label="Dashboard actions" className="overviewQuickLinks">
+            <Link className="buttonPrimary" href={`/foods${dateQuery}`}>
+              Add food
+            </Link>
+            <Link className="secondaryAction" href={`/dashboard${dateQuery}`}>
+              Open diary
+            </Link>
+            <Link className="secondaryAction" href={`/reports?to=${encodeURIComponent(date)}`}>
+              Nutrition report
+            </Link>
+          </nav>
+        ) : null}
 
-        {diaryGroupSettingsOpen && session ? (
+        {view === "diary" ? (
+          <div className="diaryGroupSettingsLauncher">
+            <button
+              aria-controls="diary-group-settings"
+              aria-expanded={diaryGroupSettingsOpen}
+              className="secondaryAction"
+              disabled={!session || controlsBusy}
+              onClick={() => {
+                const opening = !diaryGroupSettingsOpen;
+                if (opening && session) setDiaryGroupDraft(createDiaryGroupDraft(session));
+                setDiaryGroupSettingsOpen(opening);
+              }}
+              type="button"
+            >
+              {diaryGroupSettingsOpen ? "Close diary group settings" : "Customize diary groups"}
+            </button>
+          </div>
+        ) : null}
+
+        {view === "diary" && diaryGroupSettingsOpen && session ? (
           <section
             aria-labelledby="diary-group-settings-title"
             className="diaryGroupSettings"
@@ -1965,6 +1997,10 @@ export function DiaryClient() {
           </button>
         ) : null}
 
+        {view === "overview" && session && diary && diaryPage && state === "ready" ? (
+          <DailySummary totals={diary.totals} totalEntries={diaryPage.page.totalEntries} />
+        ) : null}
+
         {session && hasCommittedDate ? (
           <TodayOverviewCards
             activity={activityOverviewForCurrentIdentity}
@@ -1975,7 +2011,7 @@ export function DiaryClient() {
           />
         ) : null}
 
-        {session && hasCommittedDate ? (
+        {view === "diary" && session && hasCommittedDate ? (
           <DiaryDayNote
             key={`${session.user.id}:${mealPrivateGeneration}`}
             session={session}
@@ -2000,7 +2036,7 @@ export function DiaryClient() {
           />
         ) : null}
 
-        {diary && diaryPage && state === "ready" ? (
+        {view === "diary" && diary && diaryPage && state === "ready" ? (
           <>
             <p className="diaryPageCount" id="diary-page-count">
               {diary.entries.length} of {diaryPage.page.totalEntries} entries loaded. Nutrition
@@ -2023,7 +2059,7 @@ export function DiaryClient() {
           </>
         ) : null}
 
-        {diary && diaryPage?.page.totalEntries === 0 && state === "ready" ? (
+        {view === "diary" && diary && diaryPage?.page.totalEntries === 0 && state === "ready" ? (
           <section className="emptyDiary" aria-labelledby="empty-diary-title">
             <div>
               <p className="kicker">Nothing logged</p>
@@ -2042,7 +2078,7 @@ export function DiaryClient() {
           </section>
         ) : null}
 
-        {diary && diary.entries.length > 0 ? (
+        {view === "diary" && diary && diary.entries.length > 0 ? (
           <div className="diaryGrid">
             <div
               aria-busy={pageState === "loading"}
@@ -2228,10 +2264,8 @@ export function DiaryClient() {
                                       </div>
                                     ) : null}
                                     <small>
-                                      {entry.portion.kind === "serving"
-                                        ? `${entry.portion.amount} ${entry.portion.servingLabel}`
-                                        : `${entry.portion.grams} g`}{" "}
-                                      · {entry.localTime.slice(0, 5)} · {entryEnergyDisplay(entry)}
+                                      {entryPortionLabel(entry)} · {entry.localTime.slice(0, 5)} ·{" "}
+                                      {entryEnergyDisplay(entry)}
                                     </small>
                                     {entry.timeZone !== diary.timeZone ? (
                                       <small>Logged in {entry.timeZone}</small>

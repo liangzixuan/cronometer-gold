@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import { EMAIL_VERIFICATION_BOOTSTRAP_SCRIPT } from "../lib/email-verification";
 import { PASSWORD_RECOVERY_BOOTSTRAP_SCRIPT } from "../lib/password-recovery";
 import "./styles.css";
+import "./daily-theme.css";
 
 // Per-request CSP nonces require request-time rendering so every Next script receives the nonce.
 export const dynamic = "force-dynamic";

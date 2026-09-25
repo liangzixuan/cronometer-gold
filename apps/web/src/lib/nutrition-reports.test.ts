@@ -6,6 +6,7 @@ import {
 } from "../test/nutrition-report-fixture";
 import {
   adjacentNutritionReportRange,
+  type NutritionReportSeriesPoint,
   nutritionReportDates,
   nutritionReportRange,
   parseNutritionReport,
@@ -649,4 +650,76 @@ describe("report source diary destinations", () => {
       ).toThrow(TypeError);
     },
   );
+});
+
+describe("report target percentage presentation", () => {
+  const point: NutritionReportSeriesPoint = {
+    localDate: "2026-09-24",
+    goalVersionId: null,
+    aggregate: null,
+    knownPercentOfScale: null,
+    minimumPercentOfScale: null,
+    targetPercentOfScale: null,
+    maximumPercentOfScale: null,
+    comparison: null,
+  };
+
+  it.each([
+    ["66.6666666666666666666666666666666666666667", true, "approximately 66.7"],
+    ["99.9999999999999999999999999999999999999999", false, "at least 99.9"],
+    ["125.29", true, "approximately 125.3"],
+    ["125.29", false, "at least 125.2"],
+    ["12.2500", true, "approximately 12.2"],
+    ["12.3500", true, "approximately 12.4"],
+    ["125.200000", true, "125.2"],
+    ["0", true, "0"],
+    ["0.00001", true, "approximately 0"],
+    ["0.00001", false, "at least 0"],
+    ["90071992547409931234567890.19", true, "approximately 90071992547409931234567890.2"],
+    ["90071992547409931234567890.19", false, "at least 90071992547409931234567890.1"],
+  ] as const)(
+    "formats %s with exact=%s without changing the source",
+    (value, isExact, expected) => {
+      const input = {
+        ...point,
+        comparison: {
+          minimumState: "met" as const,
+          targetLowerBoundPercent: value,
+          targetPercentIsExact: isExact,
+          maximumState: "indeterminate" as const,
+        },
+      };
+      const original = JSON.stringify(input);
+      expect(reportComparisonText(input)).toBe(
+        `minimum met · ${expected}% of target · maximum indeterminate`,
+      );
+      expect(JSON.stringify(input)).toBe(original);
+    },
+  );
+
+  it("keeps missing comparisons and unavailable saved-target states unchanged", () => {
+    expect(reportComparisonText(point)).toBe("Not compared");
+    expect(
+      reportComparisonText({
+        ...point,
+        comparison: {
+          minimumState: null,
+          targetLowerBoundPercent: null,
+          targetPercentIsExact: null,
+          maximumState: null,
+        },
+      }),
+    ).toBe("No saved threshold");
+    expect(
+      reportComparisonText({
+        ...point,
+        comparison: {
+          minimumState: null,
+          targetLowerBoundPercent: null,
+          targetPercentIsExact: false,
+          maximumState: null,
+        },
+      }),
+    ).toBe("target percentage unavailable because the saved target is zero");
+  });
 });

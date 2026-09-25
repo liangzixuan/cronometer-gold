@@ -1107,6 +1107,9 @@ export function GoalsClient() {
           nutrition<span>/ledger</span>
         </Link>
         <nav aria-label="Application navigation">
+          <Link href={date ? `/overview?date=${encodeURIComponent(date)}` : "/overview"}>
+            Dashboard
+          </Link>
           <Link href={`/dashboard?date=${date}`}>Diary</Link>
           <Link href={`/foods?date=${date}`}>Foods</Link>
           <Link href={`/recipes?date=${date}`}>Recipes</Link>

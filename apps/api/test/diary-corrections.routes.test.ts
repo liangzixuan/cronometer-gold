@@ -58,10 +58,13 @@ function authStub(): AuthService {
 
 function diaryStub(overrides: Partial<DiaryService> = {}): DiaryService {
   return {
-    getDay: vi.fn(async () => diaryDay),
+    getDayPage: vi.fn(async () => ({
+      data: diaryDay,
+      page: { nextCursor: null, totalEntries: 1 },
+    })),
     createEntry: vi.fn(async () => mutationResponse),
-    updateEntry: vi.fn(async () => mutationResponse),
-    deleteEntry: vi.fn(async () => ({ data: { ...mutationResponse.data, entry: null } })),
+    updateEntryCorrection: vi.fn(async () => correctionResponse("update")),
+    deleteEntryCorrection: vi.fn(async () => correctionResponse("delete")),
     ...overrides,
   };
 }
@@ -185,10 +188,9 @@ afterEach(async () => {
 });
 
 describe("durable diary correction routes", () => {
-  it("preserves the legacy PATCH route, digest domain, and response", async () => {
-    const updateEntry = vi.fn(async () => mutationResponse);
+  it("requires the v1 correction marker before editing an entry", async () => {
     const updateEntryCorrection = vi.fn(async () => correctionResponse("update"));
-    const service = diaryStub({ updateEntry, updateEntryCorrection });
+    const service = diaryStub({ updateEntryCorrection });
     const response = await createTestApp(service).inject({
       method: "PATCH",
       url: `/v1/diary/entries/${entryId}`,
@@ -196,9 +198,7 @@ describe("durable diary correction routes", () => {
       payload: { mealSlot: "lunch" },
     });
 
-    expect(response.statusCode, response.body).toBe(200);
-    expect(response.json()).toEqual(mutationResponse);
-    expect(updateEntry).toHaveBeenCalledOnce();
+    expect(response.statusCode, response.body).toBe(400);
     expect(updateEntryCorrection).not.toHaveBeenCalled();
   });
 
@@ -295,16 +295,14 @@ describe("durable diary correction routes", () => {
     expect(replayInput?.requestDigest).toBe(firstInput?.requestDigest);
   });
 
-  it("keeps legacy delete intact and exposes durable delete only behind its marker", async () => {
-    const legacy = { data: { ...mutationResponse.data, entry: null } };
+  it("requires the v1 correction marker and returns a durable delete receipt", async () => {
     const deleted = correctionResponse("delete", { operationId: secondOperationId });
-    const deleteEntry = vi.fn(async () => legacy);
     const deleteEntryCorrection = vi.fn(async (input) =>
       correctionResponse("delete", { operationId: input.clientOperationId }),
     );
-    const service = diaryStub({ deleteEntry, deleteEntryCorrection });
+    const service = diaryStub({ deleteEntryCorrection });
     const app = createTestApp(service);
-    const legacyResponse = await app.inject({
+    const missingMarker = await app.inject({
       method: "DELETE",
       url: `/v1/diary/entries/${entryId}`,
       headers: { ...authHeaders, "idempotency-key": operationId, "if-match": '"3"' },
@@ -315,11 +313,9 @@ describe("durable diary correction routes", () => {
       headers: { ...authHeaders, "idempotency-key": secondOperationId, "if-match": '"3"' },
     });
 
-    expect(legacyResponse.statusCode, legacyResponse.body).toBe(200);
-    expect(legacyResponse.json()).toEqual(legacy);
+    expect(missingMarker.statusCode, missingMarker.body).toBe(400);
     expect(correction.statusCode, correction.body).toBe(200);
     expect(correction.json()).toEqual(deleted);
-    expect(deleteEntry).toHaveBeenCalledOnce();
     expect(deleteEntryCorrection).toHaveBeenCalledOnce();
   });
 

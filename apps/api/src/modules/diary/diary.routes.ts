@@ -48,12 +48,7 @@ import {
 import type { AuthService } from "../auth/auth-service.js";
 
 export interface DiaryService {
-  getDay(input: {
-    readonly userId: string;
-    readonly localDate: string;
-    readonly signal?: AbortSignal;
-  }): Promise<DiaryDay>;
-  getDayPage?(input: {
+  getDayPage(input: {
     readonly userId: string;
     readonly localDate: string;
     readonly limit: number;
@@ -68,16 +63,7 @@ export interface DiaryService {
     readonly entry: CreateDiaryEntryRequest;
     readonly signal?: AbortSignal;
   }): Promise<DiaryMutationResponse>;
-  updateEntry(input: {
-    readonly userId: string;
-    readonly entryId: string;
-    readonly expectedRevision: string;
-    readonly clientOperationId: string;
-    readonly requestDigest: string;
-    readonly patch: UpdateDiaryEntryRequest;
-    readonly signal?: AbortSignal;
-  }): Promise<DiaryMutationResponse>;
-  updateEntryCorrection?(input: {
+  updateEntryCorrection(input: {
     readonly userId: string;
     readonly entryId: string;
     readonly expectedRevision: string;
@@ -87,15 +73,7 @@ export interface DiaryService {
     readonly patch: UpdateDiaryEntryRequest;
     readonly signal?: AbortSignal;
   }): Promise<DiaryCorrectionMutationResponse>;
-  deleteEntry(input: {
-    readonly userId: string;
-    readonly entryId: string;
-    readonly expectedRevision: string;
-    readonly clientOperationId: string;
-    readonly requestDigest: string;
-    readonly signal?: AbortSignal;
-  }): Promise<DiaryMutationResponse>;
-  deleteEntryCorrection?(input: {
+  deleteEntryCorrection(input: {
     readonly userId: string;
     readonly entryId: string;
     readonly expectedRevision: string;
@@ -190,7 +168,7 @@ export class DiaryPageStaleServiceError extends Error {
 interface DiaryQuerystring {
   date: string;
   cursor?: string;
-  limit?: number;
+  limit: number;
 }
 
 interface EntryParams {
@@ -198,7 +176,7 @@ interface EntryParams {
 }
 
 interface DiaryCorrectionQuery {
-  diaryCorrectionProtocol?: "v1";
+  diaryCorrectionProtocol: "v1";
   profileTimeZonePrecondition?: "v1";
 }
 
@@ -213,7 +191,7 @@ interface DayParams {
 const dateQuerySchema = {
   type: "object",
   additionalProperties: false,
-  required: ["date"],
+  required: ["date", "limit"],
   properties: {
     date: {
       type: "string",
@@ -228,7 +206,6 @@ const dateQuerySchema = {
     },
     limit: { type: "integer", minimum: 1, maximum: 20 },
   },
-  dependencies: { cursor: ["limit"] },
 } as const;
 
 const entryParamsSchema = {
@@ -247,6 +224,7 @@ const entryParamsSchema = {
 const diaryCorrectionQuerySchema = {
   type: "object",
   additionalProperties: false,
+  required: ["diaryCorrectionProtocol"],
   properties: {
     diaryCorrectionProtocol: { type: "string", const: "v1" },
     profileTimeZonePrecondition: { type: "string", const: "v1" },
@@ -271,17 +249,6 @@ const dayParamsSchema = {
       type: "string",
       format: "date",
       pattern: "^(?!0000)[0-9]{4}-[0-9]{2}-[0-9]{2}$",
-    },
-  },
-} as const;
-
-const diaryMutationOrCorrectionResponseSchema = {
-  ...diaryCorrectionMutationResponseSchema,
-  $id: "DiaryMutationOrCorrectionResponse",
-  properties: {
-    data: {
-      ...diaryCorrectionMutationResponseSchema.properties.data,
-      required: ["replayed", "entry", "affectedDays"],
     },
   },
 } as const;
@@ -374,8 +341,6 @@ async function rejectDiaryCorrectionPreconditions(request: FastifyRequest): Prom
     body !== null &&
     !Array.isArray(body) &&
     Object.hasOwn(body, "occurredAt");
-  if (protocol === undefined && timeZoneMarker === undefined && timeZoneHeader === undefined)
-    return;
   if (protocol !== "v1") invalidCorrectionProtocol();
   if (
     movesAcrossLocalDate
@@ -393,7 +358,7 @@ async function rejectDeleteCorrectionPreconditions(request: FastifyRequest): Pro
   const hasTimeZoneSignal =
     query.profileTimeZonePrecondition !== undefined ||
     request.headers["x-expected-profile-time-zone"] !== undefined;
-  if (!hasTimeZoneSignal && (protocol === undefined || protocol === "v1")) return;
+  if (!hasTimeZoneSignal && protocol === "v1") return;
   invalidCorrectionProtocol();
 }
 
@@ -637,14 +602,9 @@ function invalidDiaryPageResponse(): HttpProblem {
 
 function assertDiaryDayResponse(
   response: DiaryDayResponse,
-  request: Readonly<{ limit: number | undefined; hasCursor: boolean }>,
+  request: Readonly<{ limit: number; hasCursor: boolean }>,
 ): void {
   assertDiaryDay(response.data);
-  if (request.limit === undefined) {
-    if (response.page !== undefined) throw invalidDiaryPageResponse();
-    return;
-  }
-
   const page = response.page;
   if (page === undefined) throw invalidDiaryPageResponse();
   const entryCount = response.data.entries.length;
@@ -842,38 +802,21 @@ export const diaryRoutes: FastifyPluginAsync<DiaryRoutesOptions> = async (app, o
       if (!options.diaryService) throw unavailable();
       const principal = authenticatedPrincipal(request);
       try {
-        const response = await withRequestSignal(request, async (signal) => {
-          if (request.query.limit === undefined) {
-            const day = await options.diaryService?.getDay({
-              userId: principal.userId,
-              localDate: request.query.date,
-              signal,
-            });
-            if (!day) throw unavailable();
-            return { data: day };
-          }
-          const diaryService = options.diaryService;
-          if (!diaryService?.getDayPage) throw unavailable();
-          return diaryService.getDayPage({
+        const diaryService = options.diaryService;
+        const response = await withRequestSignal(request, (signal) =>
+          diaryService.getDayPage({
             userId: principal.userId,
             localDate: request.query.date,
             limit: request.query.limit,
             ...(request.query.cursor === undefined ? {} : { cursor: request.query.cursor }),
             signal,
-          });
-        });
+          }),
+        );
         assertDiaryDayResponse(response, {
           limit: request.query.limit,
           hasCursor: request.query.cursor !== undefined,
         });
-        reply
-          .header("cache-control", "no-store")
-          .header(
-            "etag",
-            response.page === undefined
-              ? revisionEtag(response.data.revision)
-              : diaryPageEtag(response),
-          );
+        reply.header("cache-control", "no-store").header("etag", diaryPageEtag(response));
         return response;
       } catch (error) {
         throw mapDiaryError(error);
@@ -974,7 +917,7 @@ export const diaryRoutes: FastifyPluginAsync<DiaryRoutesOptions> = async (app, o
         querystring: diaryCorrectionQuerySchema,
         body: updateDiaryEntryRequestSchema,
         response: {
-          200: diaryMutationOrCorrectionResponseSchema,
+          200: diaryCorrectionMutationResponseSchema,
           400: problemDetailsSchema,
           401: problemDetailsSchema,
           404: problemDetailsSchema,
@@ -985,73 +928,44 @@ export const diaryRoutes: FastifyPluginAsync<DiaryRoutesOptions> = async (app, o
         },
       },
     },
-    async (request, reply): Promise<DiaryMutationResponse | DiaryCorrectionMutationResponse> => {
+    async (request, reply): Promise<DiaryCorrectionMutationResponse> => {
       if (!options.diaryService) throw unavailable();
       const principal = authenticatedPrincipal(request);
       const clientOperationId = requireIdempotencyKey(request.headers["idempotency-key"]);
       const expectedRevision = requireRevision(request.headers["if-match"]);
       try {
-        if (request.query.diaryCorrectionProtocol === "v1") {
-          const diaryService = options.diaryService;
-          if (!diaryService.updateEntryCorrection) throw unavailable();
-          const entryId = request.params.entryId.toLowerCase();
-          const expectedTimeZone =
-            request.body.occurredAt === undefined
-              ? undefined
-              : expectedProfileTimeZone(request.headers["x-expected-profile-time-zone"]);
-          const digest = requestDigest("update-diary-entry-correction-v1", {
+        const diaryService = options.diaryService;
+        const entryId = request.params.entryId.toLowerCase();
+        const expectedTimeZone =
+          request.body.occurredAt === undefined
+            ? undefined
+            : expectedProfileTimeZone(request.headers["x-expected-profile-time-zone"]);
+        const digest = requestDigest("update-diary-entry-correction-v1", {
+          entryId,
+          expectedRevision,
+          ...(expectedTimeZone === undefined ? {} : { expectedProfileTimeZone: expectedTimeZone }),
+          patch: request.body,
+        });
+        const result = await withRequestSignal(request, (signal) =>
+          diaryService.updateEntryCorrection({
+            userId: principal.userId,
             entryId,
             expectedRevision,
+            clientOperationId,
+            requestDigest: digest,
             ...(expectedTimeZone === undefined
               ? {}
               : { expectedProfileTimeZone: expectedTimeZone }),
             patch: request.body,
-          });
-          const result = await withRequestSignal(
-            request,
-            (signal) =>
-              diaryService.updateEntryCorrection?.({
-                userId: principal.userId,
-                entryId,
-                expectedRevision,
-                clientOperationId,
-                requestDigest: digest,
-                ...(expectedTimeZone === undefined
-                  ? {}
-                  : { expectedProfileTimeZone: expectedTimeZone }),
-                patch: request.body,
-                signal,
-              }) ?? Promise.reject(unavailable()),
-          );
-          assertCorrectionMutation(result, {
-            operationId: clientOperationId,
-            kind: "update",
-            entryId,
-            revision: expectedRevision,
-          });
-          reply.header("cache-control", "no-store");
-          if (result.data.entry) reply.header("etag", revisionEtag(result.data.entry.revision));
-          return result;
-        }
-        const digest = requestDigest("update-diary-entry", {
-          entryId: request.params.entryId,
-          expectedRevision,
-          patch: request.body,
-        });
-        const result = await withRequestSignal(
-          request,
-          (signal) =>
-            options.diaryService?.updateEntry({
-              userId: principal.userId,
-              entryId: request.params.entryId,
-              expectedRevision,
-              clientOperationId,
-              requestDigest: digest,
-              patch: request.body,
-              signal,
-            }) ?? Promise.reject(unavailable()),
+            signal,
+          }),
         );
-        assertMutation(result);
+        assertCorrectionMutation(result, {
+          operationId: clientOperationId,
+          kind: "update",
+          entryId,
+          revision: expectedRevision,
+        });
         reply.header("cache-control", "no-store");
         if (result.data.entry) reply.header("etag", revisionEtag(result.data.entry.revision));
         return result;
@@ -1235,7 +1149,7 @@ export const diaryRoutes: FastifyPluginAsync<DiaryRoutesOptions> = async (app, o
         params: entryParamsSchema,
         querystring: diaryCorrectionQuerySchema,
         response: {
-          200: diaryMutationOrCorrectionResponseSchema,
+          200: diaryCorrectionMutationResponseSchema,
           400: problemDetailsSchema,
           401: problemDetailsSchema,
           404: problemDetailsSchema,
@@ -1246,58 +1160,34 @@ export const diaryRoutes: FastifyPluginAsync<DiaryRoutesOptions> = async (app, o
         },
       },
     },
-    async (request, reply): Promise<DiaryMutationResponse | DiaryCorrectionMutationResponse> => {
+    async (request, reply): Promise<DiaryCorrectionMutationResponse> => {
       if (!options.diaryService) throw unavailable();
       const principal = authenticatedPrincipal(request);
       const clientOperationId = requireIdempotencyKey(request.headers["idempotency-key"]);
       const expectedRevision = requireRevision(request.headers["if-match"]);
       try {
-        if (request.query.diaryCorrectionProtocol === "v1") {
-          const diaryService = options.diaryService;
-          if (!diaryService.deleteEntryCorrection) throw unavailable();
-          const entryId = request.params.entryId.toLowerCase();
-          const digest = requestDigest("delete-diary-entry-correction-v1", {
-            entryId,
-            expectedRevision,
-          });
-          const result = await withRequestSignal(
-            request,
-            (signal) =>
-              diaryService.deleteEntryCorrection?.({
-                userId: principal.userId,
-                entryId,
-                expectedRevision,
-                clientOperationId,
-                requestDigest: digest,
-                signal,
-              }) ?? Promise.reject(unavailable()),
-          );
-          assertCorrectionMutation(result, {
-            operationId: clientOperationId,
-            kind: "delete",
-            entryId,
-            revision: expectedRevision,
-          });
-          reply.header("cache-control", "no-store");
-          return result;
-        }
-        const digest = requestDigest("delete-diary-entry", {
-          entryId: request.params.entryId,
+        const diaryService = options.diaryService;
+        const entryId = request.params.entryId.toLowerCase();
+        const digest = requestDigest("delete-diary-entry-correction-v1", {
+          entryId,
           expectedRevision,
         });
-        const result = await withRequestSignal(
-          request,
-          (signal) =>
-            options.diaryService?.deleteEntry({
-              userId: principal.userId,
-              entryId: request.params.entryId,
-              expectedRevision,
-              clientOperationId,
-              requestDigest: digest,
-              signal,
-            }) ?? Promise.reject(unavailable()),
+        const result = await withRequestSignal(request, (signal) =>
+          diaryService.deleteEntryCorrection({
+            userId: principal.userId,
+            entryId,
+            expectedRevision,
+            clientOperationId,
+            requestDigest: digest,
+            signal,
+          }),
         );
-        assertMutation(result);
+        assertCorrectionMutation(result, {
+          operationId: clientOperationId,
+          kind: "delete",
+          entryId,
+          revision: expectedRevision,
+        });
         reply.header("cache-control", "no-store");
         return result;
       } catch (error) {

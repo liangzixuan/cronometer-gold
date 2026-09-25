@@ -171,8 +171,8 @@ export interface DiaryDay {
 
 export interface DiaryDayResponse {
   readonly data: DiaryDay;
-  /** Present only when the caller explicitly opts into bounded diary pagination. */
-  readonly page?: {
+  /** Bounded page metadata for the same coherent day snapshot as the totals. */
+  readonly page: {
     readonly nextCursor: string | null;
     /** Authoritative count for the whole coherent day snapshot, not just this page. */
     readonly totalEntries: number;
@@ -746,7 +746,7 @@ export const diaryDayResponseSchema = {
   $id: "DiaryDayResponse",
   type: "object",
   additionalProperties: false,
-  required: ["data"],
+  required: ["data", "page"],
   properties: {
     data: diaryDaySchema,
     page: {

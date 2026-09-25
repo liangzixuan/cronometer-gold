@@ -206,6 +206,27 @@ describe("public contracts", () => {
     expect(diaryMutationResponseSchema.properties.data.properties.affectedDays.maxItems).toBe(2);
   });
 
+  it("requires page metadata on every diary response", () => {
+    const ajv = new Ajv({ allErrors: true, strict: true });
+    addFormats(ajv);
+    const validate = ajv.compile(diaryDayResponseSchema);
+    const data = {
+      id: null,
+      localDate: "2026-08-15",
+      timeZone: "America/Chicago",
+      status: "open",
+      revision: "0",
+      orderDigest: "a".repeat(64),
+      entries: [],
+      totals: [],
+      updatedAt: null,
+    };
+    expect(validate({ data })).toBe(false);
+    expect(validate({ data, page: { nextCursor: null, totalEntries: 0 } })).toBe(true);
+    expect(validate({ data, page: { nextCursor: null } })).toBe(false);
+    expect(validate({ data, page: { nextCursor: null, totalEntries: 1 } })).toBe(false);
+  });
+
   it("publishes revision-proven correction receipts and compact atomic reorder contracts", () => {
     const ajv = new Ajv({ allErrors: true, strict: true });
     addFormats(ajv);

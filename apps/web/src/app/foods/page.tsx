@@ -23,7 +23,8 @@ export default async function FoodsPage({ searchParams }: FoodsPageProps) {
           nutrition<span>/ledger</span>
         </Link>
         <nav aria-label="Application navigation">
-          <Link href={`/dashboard${dateQuery}`}>Today</Link>
+          <Link href={`/overview${dateQuery}`}>Dashboard</Link>
+          <Link href={`/dashboard${dateQuery}`}>Diary</Link>
           <Link aria-current="page" href={`/foods${dateQuery}`}>
             Foods
           </Link>
@@ -40,14 +41,14 @@ export default async function FoodsPage({ searchParams }: FoodsPageProps) {
       <section className="dashboard foodDashboard">
         <header className="dashboardHeader foodPageHeader">
           <div>
-            <p className="kicker">Search milestone</p>
+            <p className="kicker">Food search</p>
             <h1>Foods</h1>
           </div>
-          <span className="statusPill">Public catalogue</span>
+          <span className="statusPill">Generic & branded</span>
         </header>
         <p className="foodPageIntro">
-          Search generic and branded foods from promoted, source-attributed catalogue releases.
-          Results never invent missing serving data.
+          Find generic and branded foods, review their serving information, and add them to your
+          diary. Missing serving data stays unknown.
         </p>
         <FoodSearchClient />
       </section>

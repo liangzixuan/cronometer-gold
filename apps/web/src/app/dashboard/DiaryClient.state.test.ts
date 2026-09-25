@@ -147,6 +147,7 @@ import {
   parseDiaryPage,
   parseSession,
 } from "../../lib/diary";
+import { DailySummary } from "./DailySummary";
 import { DiaryClient } from "./DiaryClient";
 import { DiaryDayNote } from "./DiaryDayNote";
 
@@ -328,9 +329,9 @@ function fetcher(currentPage = page()) {
     );
   });
 }
-async function mount(fetch = fetcher()) {
+async function mount(fetch = fetcher(), view: "diary" | "overview" = "diary") {
   vi.stubGlobal("fetch", fetch);
-  hooks.mount(() => DiaryClient());
+  hooks.mount(() => DiaryClient({ view }));
   await hooks.settle();
   return fetch;
 }
@@ -371,6 +372,29 @@ afterEach(() => {
 });
 
 describe("actual diary meal visibility", () => {
+  it("separates the saved serving multiplier from an intact source label", async () => {
+    const originalEntry = entry(0);
+    const fixture = page([
+      {
+        ...originalEntry,
+        resolvedGrams: "59",
+        portion: {
+          ...originalEntry.portion,
+          amount: "0.500000",
+          servingLabel: "1 medium banana (118 g)",
+        },
+      },
+    ]);
+    const original = JSON.stringify(fixture);
+    await mount(fetcher(fixture));
+    const portion = "0.500000 × 1 medium banana (118 g)";
+    expect(text(group("breakfast"))).toContain(portion);
+    expect(nutrientControl(0).props["aria-label"]).toContain(portion);
+    await toggleNutrients(0);
+    expect(nutrientDetailText(0)).toContain(portion);
+    expect(JSON.stringify(fixture)).toBe(original);
+  });
+
   it("starts expanded and hides only loaded rows while preserving all authoritative evidence and destinations", async () => {
     const fixture = page();
     const original = JSON.stringify(fixture);
@@ -453,7 +477,7 @@ describe("actual diary meal visibility", () => {
     await click("Cancel editing Apple 0");
     await click("Collapse Breakfast");
     await click("Expand Breakfast");
-    expect(text(group("breakfast"))).toContain("1.250000 medium apple");
+    expect(text(group("breakfast"))).toContain("1.250000 × medium apple");
     expect(text(group("breakfast"))).toContain("Exact private note 0");
     expect(fetch).toHaveBeenCalledTimes(requestCount);
   });
@@ -614,7 +638,7 @@ describe("diary collapse paging and work in progress", () => {
     expect(field("Quantity").props.value).toBe("2.125000");
     expect(field("Private note").props.value).toBe("New exact note");
     await toggleNutrients(0);
-    expect(nutrientDetailText(0)).toContain("1.250000 medium apple");
+    expect(nutrientDetailText(0)).toContain("1.250000 × medium apple");
     expect(nutrientDetailText(0)).toContain("Unsaved edits are not included.");
     expect(field("Quantity").props.value).toBe("2.125000");
     expect(field("Private note").props.value).toBe("New exact note");
@@ -1085,7 +1109,7 @@ describe("logged portion nutrient details", () => {
         }),
       );
     }
-    expect(nutrientDetailText(2)).toContain("1.250000 bowl");
+    expect(nutrientDetailText(2)).toContain("1.250000 × bowl");
     expect(nutrientDetailText(0)).toContain("Unknown0/1 contributions quantified");
     await toggleNutrients(1);
     expect(nutrientControl(0).props["aria-expanded"]).toBe(true);
@@ -1117,10 +1141,10 @@ describe("logged portion nutrient details", () => {
     parseDiaryPage(fixture);
     await mount(fetcher(fixture));
     expect(nutrientControl(0).props["aria-label"]).toContain(
-      "Same food, 1.250000 medium apple at 08:30",
+      "Same food, 1.250000 × medium apple at 08:30",
     );
     expect(nutrientControl(1).props["aria-label"]).toContain(
-      "Same food, 1.250000 medium apple at 09:45",
+      "Same food, 1.250000 × medium apple at 09:45",
     );
     await toggleNutrients(1);
     expect(nutrientControl(0).props["aria-expanded"]).toBe(false);
@@ -1198,7 +1222,7 @@ describe("logged portion nutrient details", () => {
     );
     const requests = fetch.mock.calls.length;
     await toggleNutrients(0);
-    expect(nutrientDetailText(0)).toContain("1.250000 medium apple");
+    expect(nutrientDetailText(0)).toContain("1.250000 × medium apple");
     expect(nutrientDetailText(0)).toContain("Unsaved edits are not included.");
     await toggleNutrients(0);
     expect(
@@ -2320,5 +2344,59 @@ describe("web diary repeat destination", () => {
     invoke(confirm);
     await hooks.settle();
     expect(fetch).toHaveBeenCalledTimes(count);
+  });
+});
+
+describe("dashboard overview composition", () => {
+  it("uses the current whole-day snapshot without loading every entry or mounting diary tools", async () => {
+    const fixture = page(
+      Array.from({ length: 20 }, (_, index) => entry(index)),
+      "d1.next-page",
+      45,
+    );
+    const fetch = await mount(fetcher(fixture), "overview");
+    const summary = elements().find((node) => node.type === DailySummary);
+    expect(summary?.props.totalEntries).toBe(45);
+    expect(summary?.props.totals).toEqual(fixture.data.totals);
+    expect(elements().some((node) => node.type === DiaryDayNote)).toBe(false);
+    expect(elements().some((node) => node.props.id === "diary-entry-groups")).toBe(false);
+    expect(text()).not.toContain("Customize diary groups");
+    expect(text()).not.toContain("Load more");
+    expect(fetch.mock.calls.filter(([url]) => url === "/api/auth/me")).toHaveLength(1);
+    expect(fetch.mock.calls.filter(([url]) => url.startsWith("/api/diary?"))).toHaveLength(1);
+  });
+
+  it("keeps date navigation on overview and removes the old summary while the next day loads", async () => {
+    const pending = deferred<Response>();
+    const base = fetcher();
+    const fetch = vi.fn((url: string, init?: RequestInit) =>
+      url.startsWith("/api/diary?date=2026-08-16") ? pending.promise : base(url, init),
+    );
+    await mount(fetch, "overview");
+    expect(elements().some((node) => node.type === DailySummary)).toBe(true);
+    invoke(button("Next day"));
+    route.date = "2026-08-16";
+    await hooks.settle();
+    expect(router.replace).toHaveBeenCalledWith("/overview?date=2026-08-16", { scroll: false });
+    expect(elements().some((node) => node.type === DailySummary)).toBe(false);
+    pending.resolve(Response.json(page([entry(2, "breakfast", route.date)], null, 1, route.date)));
+    await hooks.settle();
+    expect(elements().find((node) => node.type === DailySummary)?.props.totalEntries).toBe(1);
+  });
+
+  it("clears the summary when the existing unauthorized path closes private UI", async () => {
+    const base = fetcher();
+    const fetch = vi.fn((url: string, init?: RequestInit) =>
+      url.startsWith("/api/diary?date=2026-08-16")
+        ? Promise.resolve(Response.json({ error: "Unauthorized" }, { status: 401 }))
+        : base(url, init),
+    );
+    await mount(fetch, "overview");
+    expect(elements().some((node) => node.type === DailySummary)).toBe(true);
+    invoke(button("Next day"));
+    route.date = "2026-08-16";
+    await hooks.settle();
+    expect(elements().some((node) => node.type === DailySummary)).toBe(false);
+    expect(router.replace).toHaveBeenCalledWith("/login");
   });
 });

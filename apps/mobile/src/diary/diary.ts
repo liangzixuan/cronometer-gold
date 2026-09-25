@@ -213,7 +213,6 @@ export interface DiaryPageMetadata {
 export interface DiaryPage {
   readonly data: DiaryDay;
   readonly page: DiaryPageMetadata;
-  readonly legacy: boolean;
 }
 
 export interface DiaryEditorOrigin {
@@ -1101,19 +1100,8 @@ function completePageShape(page: DiaryPage): boolean {
 
 export function parseDiaryPage(value: unknown): DiaryPage {
   const data = parseDiaryDay(value);
-  if (!record(value) || !("page" in value)) {
-    if (!record(value) || Object.keys(value).length !== 1 || !("data" in value)) {
-      throw new TypeError("The legacy diary response was invalid.");
-    }
-    const legacy = {
-      data,
-      page: { nextCursor: null, totalEntries: data.entries.length },
-      legacy: true,
-    } satisfies DiaryPage;
-    if (!completePageShape(legacy)) throw new TypeError("The diary response was invalid.");
-    return legacy;
-  }
   if (
+    !record(value) ||
     Object.keys(value).some((key) => key !== "data" && key !== "page") ||
     !record(value.page) ||
     Object.keys(value.page).some((key) => key !== "nextCursor" && key !== "totalEntries") ||
@@ -1134,7 +1122,6 @@ export function parseDiaryPage(value: unknown): DiaryPage {
       nextCursor: value.page.nextCursor,
       totalEntries: Number(value.page.totalEntries),
     },
-    legacy: false,
   };
 }
 
@@ -1160,7 +1147,6 @@ export function mergeDiaryPages(current: DiaryPage | null, incoming: DiaryPage):
     current.data.updatedAt !== incoming.data.updatedAt ||
     current.page.totalEntries !== incoming.page.totalEntries ||
     !sameTotals(current.data.totals, incoming.data.totals) ||
-    incoming.legacy ||
     (incoming.data.entries.length === 0 && incoming.page.nextCursor !== null)
   ) {
     throw new TypeError("The diary pages did not describe the same day snapshot.");
@@ -1169,7 +1155,6 @@ export function mergeDiaryPages(current: DiaryPage | null, incoming: DiaryPage):
   const merged: DiaryPage = {
     data: { ...current.data, entries },
     page: incoming.page,
-    legacy: false,
   };
   if (!completePageShape(merged)) {
     throw new TypeError("The diary pages overlapped or exceeded the day total.");

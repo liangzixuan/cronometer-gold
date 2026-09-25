@@ -45,10 +45,10 @@ describe("private-route telemetry boundary", () => {
       requestPasswordRecovery: vi.fn(async () => ({ data: { status: "accepted" as const } })),
     };
     const diaryService: DiaryService = {
-      getDay: vi.fn(),
+      getDayPage: vi.fn(),
       createEntry: vi.fn(async () => Promise.reject(new Error(privateFailure))),
-      updateEntry: vi.fn(),
-      deleteEntry: vi.fn(),
+      updateEntryCorrection: vi.fn(),
+      deleteEntryCorrection: vi.fn(),
     };
     const nutritionReportService: NutritionReportService = {
       getNutritionReport: vi.fn(async () => Promise.reject(new Error(privateFailure))),

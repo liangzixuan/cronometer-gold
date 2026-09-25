@@ -1,3 +1,8 @@
+import type {
+  AccountErasureJob,
+  AccountExportJob,
+  RetentionJobStatus,
+} from "@nutrition-tracker/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -9,6 +14,8 @@ import {
   parseCustomFoodList,
   parseCustomFoodMutation,
   parseCustomFoodResponse,
+  parseErasureJob,
+  parseErasureMutation,
   parseExportJob,
   parseIntegrationMutation,
   parseIntegrations,
@@ -66,6 +73,115 @@ function customFood(versionId: unknown = "9007199254740993") {
     updatedAt: instant,
   };
 }
+
+function exportJob(status: RetentionJobStatus): AccountExportJob {
+  const completed = status === "completed";
+  return {
+    id: uuid,
+    status,
+    formats: ["json"],
+    requestedAt: instant,
+    startedAt: status === "running" || completed ? instant : null,
+    completedAt: completed ? instant : null,
+    expiresAt: completed ? "2026-11-01T07:00:00.000Z" : null,
+    artifacts: completed
+      ? [
+          {
+            format: "json",
+            fileName: "nutrition-export.json",
+            byteLength: "100",
+            sha256: "a".repeat(64),
+            downloadPath: `/v1/exports/${uuid}/artifacts/json`,
+            mediaType: "application/json",
+            expiresAt: "2026-11-01T07:00:00.000Z",
+          },
+        ]
+      : [],
+    manifestSha256: completed ? "b".repeat(64) : null,
+    reconciliation: completed
+      ? {
+          snapshotWatermark: instant,
+          entities: [
+            { entity: "diary_entries", sourceCount: 1, exportedCount: 1, watermark: instant },
+          ],
+          reconciled: true,
+        }
+      : null,
+    failureCode: status === "failed" ? "EXPORT_FAILED" : null,
+  };
+}
+
+function erasureJob(status: RetentionJobStatus): AccountErasureJob {
+  return {
+    id: uuid,
+    status,
+    requestedAt: instant,
+    startedAt: status === "running" || status === "completed" ? instant : null,
+    completedAt: status === "completed" ? instant : null,
+    executeAfter: "2026-11-02T05:00:00.000Z",
+    recentAuthenticationSatisfied: true,
+    consequences: ["ACCOUNT_ACCESS_REVOKED", "PRIVATE_HEALTH_DATA_DELETED", "EXPORT_LINKS_REVOKED"],
+    failureCode: status === "failed" ? "ERASURE_FAILED" : null,
+  };
+}
+
+const statusCapability = { token: "s".repeat(43), expiresAt: "2026-11-03T05:00:00.000Z" };
+
+describe("privacy response lifecycle", () => {
+  it.each(["queued", "running", "completed", "failed"] as const)(
+    "preserves a valid %s job in export, erasure status and erasure mutation responses",
+    (status) => {
+      const exported = exportJob(status);
+      const erasure = erasureJob(status);
+      expect(parseExportJob({ data: { replayed: false, export: exported } })).toEqual(exported);
+      expect(parseErasureJob({ data: { replayed: true, erasure } })).toEqual(erasure);
+      expect(
+        parseErasureMutation({ data: { replayed: false, erasure, statusCapability } }),
+      ).toEqual({
+        job: erasure,
+        statusCapability,
+      });
+    },
+  );
+
+  it.each([
+    ["queued with a start time", { ...exportJob("queued"), startedAt: instant }],
+    ["running without a start time", { ...exportJob("running"), startedAt: null }],
+    ["failed without a failure code", { ...exportJob("failed"), failureCode: null }],
+    ["completed without a completion time", { ...exportJob("completed"), completedAt: null }],
+    ["completed without its requested artifact", { ...exportJob("completed"), artifacts: [] }],
+    ["completed without a manifest", { ...exportJob("completed"), manifestSha256: null }],
+    [
+      "completed with unreconciled counts",
+      {
+        ...exportJob("completed"),
+        reconciliation: {
+          snapshotWatermark: instant,
+          entities: [
+            { entity: "diary_entries", sourceCount: 2, exportedCount: 1, watermark: instant },
+          ],
+          reconciled: true,
+        },
+      },
+    ],
+  ])("rejects an export %s", (_label, exported) => {
+    expect(() => parseExportJob({ data: { replayed: false, export: exported } })).toThrow(
+      /lifecycle/u,
+    );
+  });
+
+  it.each([
+    ["queued with a start time", { ...erasureJob("queued"), startedAt: instant }],
+    ["running without a start time", { ...erasureJob("running"), startedAt: null }],
+    ["completed without a completion time", { ...erasureJob("completed"), completedAt: null }],
+    ["failed without a failure code", { ...erasureJob("failed"), failureCode: null }],
+  ])("rejects an erasure %s before accepting status or mutation capability", (_label, erasure) => {
+    expect(() => parseErasureJob({ data: { replayed: false, erasure } })).toThrow(/lifecycle/u);
+    expect(() =>
+      parseErasureMutation({ data: { replayed: false, erasure, statusCapability } }),
+    ).toThrow(/lifecycle/u);
+  });
+});
 
 describe("custom-food version identifiers", () => {
   it.each(["1", "9007199254740993", "99999999999999999999"])(
@@ -299,45 +415,7 @@ describe("retention response boundaries", () => {
   });
 
   it("accepts only authenticated same-origin export artifact paths", () => {
-    const response = {
-      data: {
-        replayed: false,
-        export: {
-          id: uuid,
-          status: "completed",
-          formats: ["json"],
-          requestedAt: instant,
-          startedAt: instant,
-          completedAt: instant,
-          expiresAt: "2026-11-01T07:00:00.000Z",
-          artifacts: [
-            {
-              format: "json",
-              fileName: "nutrition-export.json",
-              byteLength: "100",
-              sha256: "a".repeat(64),
-              downloadPath: `/v1/exports/${uuid}/artifacts/json`,
-              mediaType: "application/json",
-              expiresAt: "2026-11-01T07:00:00.000Z",
-            },
-          ],
-          manifestSha256: "b".repeat(64),
-          reconciliation: {
-            snapshotWatermark: "2026-11-01T05:00:00.000Z",
-            entities: [
-              {
-                entity: "diary_entries",
-                sourceCount: 1,
-                exportedCount: 1,
-                watermark: "2026-11-01T05:00:00.000Z",
-              },
-            ],
-            reconciled: true,
-          },
-          failureCode: null,
-        },
-      },
-    };
+    const response = { data: { replayed: false, export: exportJob("completed") } };
     expect(parseExportJob(response).status).toBe("completed");
     expect(() =>
       parseExportJob({

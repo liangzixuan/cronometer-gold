@@ -141,11 +141,8 @@ describeDatabase("live private API adapters", () => {
         url: "/v1/diary?date=2026-08-15",
         headers: { authorization },
       });
-      expect(diary.statusCode).toBe(200);
-      expect(diary.headers.etag).toBe('"0"');
-      expect(diary.json()).toMatchObject({
-        data: { entries: [], id: null, localDate: "2026-08-15", revision: "0", totals: [] },
-      });
+      expect(diary.statusCode).toBe(400);
+      expect(diary.json()).toMatchObject({ code: "VALIDATION_ERROR" });
       const diaryPage = await app.inject({
         method: "GET",
         url: "/v1/diary?date=2026-08-15&limit=20",

@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 
 import type {
+  DiaryCorrectionMutationResponse,
   DiaryDayResponse,
+  DiaryEntry,
   DiaryNutrientAggregate,
   DiaryRecipeEntry,
 } from "@nutrition-tracker/contracts";
@@ -51,14 +53,45 @@ function authStub(): AuthService {
   };
 }
 
+function correctionResponse(
+  input: {
+    readonly entryId: string;
+    readonly expectedRevision: string;
+    readonly clientOperationId: string;
+  },
+  kind: "update" | "delete" = "update",
+  entry: DiaryEntry = diaryEntry,
+): DiaryCorrectionMutationResponse {
+  const revision = (BigInt(input.expectedRevision) + 1n).toString();
+  const affectedDays = [{ localDate: entry.localDate, revision: "5" }];
+  return {
+    data: {
+      replayed: false,
+      entry: kind === "delete" ? null : { ...entry, id: input.entryId, revision },
+      affectedDays,
+      receipt: {
+        protocol: "v1",
+        operationId: input.clientOperationId,
+        kind,
+        expectedSubjects: [{ entryId: input.entryId, revision: input.expectedRevision }],
+        resultSubjects: [
+          { entryId: input.entryId, revision, state: kind === "delete" ? "deleted" : "active" },
+        ],
+        affectedDays,
+      },
+    },
+  };
+}
+
 function diaryStub(overrides: Partial<DiaryService> = {}): DiaryService {
   return {
-    getDay: vi.fn(async () => diaryDay),
-    createEntry: vi.fn(async () => mutationResponse),
-    updateEntry: vi.fn(async () => mutationResponse),
-    deleteEntry: vi.fn(async () => ({
-      data: { ...mutationResponse.data, entry: null },
+    getDayPage: vi.fn(async () => ({
+      data: diaryDay,
+      page: { nextCursor: null, totalEntries: 1 },
     })),
+    createEntry: vi.fn(async () => mutationResponse),
+    updateEntryCorrection: vi.fn(async (input) => correctionResponse(input)),
+    deleteEntryCorrection: vi.fn(async (input) => correctionResponse(input, "delete")),
     ...overrides,
   };
 }
@@ -92,26 +125,53 @@ describe("diary routes", () => {
     const app = createTestApp(service);
     const unauthorized = await app.inject({
       method: "GET",
-      url: "/v1/diary?date=2026-08-15",
+      url: "/v1/diary?date=2026-08-15&limit=20",
     });
     const response = await app.inject({
       method: "GET",
-      url: "/v1/diary?date=2026-08-15",
+      url: "/v1/diary?date=2026-08-15&limit=20",
       headers: authHeaders,
     });
 
     expect(unauthorized.statusCode).toBe(401);
-    expect(service.getDay).toHaveBeenCalledOnce();
-    expect(service.getDay).toHaveBeenCalledWith(
+    expect(service.getDayPage).toHaveBeenCalledOnce();
+    expect(service.getDayPage).toHaveBeenCalledWith(
       expect.objectContaining({ userId, localDate: "2026-08-15" }),
     );
     expect(response.statusCode, response.body).toBe(200);
-    expect(response.headers.etag).toBe('"4"');
+    expect(response.headers.etag).toMatch(/^"p-[A-Za-z0-9_-]{43}"$/u);
     expect(response.headers["cache-control"]).toBe("no-store");
-    expect(response.json()).toEqual({ data: diaryDay });
+    expect(response.json()).toEqual({
+      data: diaryDay,
+      page: { nextCursor: null, totalEntries: 1 },
+    });
   });
 
-  it("opts into bounded pages explicitly and emits a validator for the exact page body", async () => {
+  it("rejects an unpaged request before reading the diary", async () => {
+    const service = diaryStub();
+    const response = await createTestApp(service).inject({
+      method: "GET",
+      url: "/v1/diary?date=2026-08-15",
+      headers: authHeaders,
+    });
+    expect(response.statusCode).toBe(400);
+    expect(service.getDayPage).not.toHaveBeenCalled();
+  });
+
+  it("rejects a data-only persistence response instead of inventing page metadata", async () => {
+    const service = diaryStub({
+      getDayPage: vi.fn(async () => ({ data: diaryDay }) as DiaryDayResponse),
+    });
+    const response = await createTestApp(service).inject({
+      method: "GET",
+      url: "/v1/diary?date=2026-08-15&limit=20",
+      headers: authHeaders,
+    });
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toMatchObject({ code: "INTERNAL_ERROR" });
+  });
+
+  it("emits a validator for the exact required page body", async () => {
     let call = 0;
     const getDayPage = vi.fn(async () => {
       call += 1;
@@ -135,7 +195,6 @@ describe("diary routes", () => {
 
     expect(first.statusCode, first.body).toBe(200);
     expect(second.statusCode, second.body).toBe(200);
-    expect(service.getDay).not.toHaveBeenCalled();
     expect(getDayPage).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ userId, localDate: "2026-08-15", limit: 20 }),
@@ -232,8 +291,6 @@ describe("diary routes", () => {
       headers: authHeaders,
     });
     expect(response.statusCode).toBe(400);
-    expect(service.getDayPage).not.toHaveBeenCalled();
-    expect(service.getDay).not.toHaveBeenCalled();
   });
 
   it("maps invalid and stale continuation failures without exposing cursor state", async () => {
@@ -432,7 +489,7 @@ describe("diary routes", () => {
     const app = createTestApp(service);
     const base = {
       method: "PATCH" as const,
-      url: `/v1/diary/entries/${entryId}`,
+      url: `/v1/diary/entries/${entryId}?diaryCorrectionProtocol=v1`,
       headers: {
         ...authHeaders,
         "idempotency-key": operationId,
@@ -448,7 +505,7 @@ describe("diary routes", () => {
 
     expect(first.statusCode).toBe(200);
     expect(second.statusCode).toBe(200);
-    const calls = vi.mocked(service.updateEntry).mock.calls;
+    const calls = vi.mocked(service.updateEntryCorrection).mock.calls;
     expect(calls[0]?.[0]).toMatchObject({ userId, entryId, expectedRevision: "3" });
     expect(calls[1]?.[0]).toMatchObject({ userId, entryId, expectedRevision: "4" });
     expect(calls[0]?.[0].requestDigest).not.toBe(calls[1]?.[0].requestDigest);
@@ -460,7 +517,7 @@ describe("diary routes", () => {
     const exactNote = "  Felt 😀 energized after lunch.\nKeep this spacing.  ";
     const setResponse = await app.inject({
       method: "PATCH",
-      url: `/v1/diary/entries/${entryId}`,
+      url: `/v1/diary/entries/${entryId}?diaryCorrectionProtocol=v1`,
       headers: {
         ...authHeaders,
         "idempotency-key": operationId,
@@ -470,7 +527,7 @@ describe("diary routes", () => {
     });
     const clearResponse = await app.inject({
       method: "PATCH",
-      url: `/v1/diary/entries/${entryId}`,
+      url: `/v1/diary/entries/${entryId}?diaryCorrectionProtocol=v1`,
       headers: {
         ...authHeaders,
         "idempotency-key": randomUUID(),
@@ -481,7 +538,7 @@ describe("diary routes", () => {
     for (const invalidNote of ["", "x".repeat(2_001), 42, "bad\u0000note", "\uD800", "\uDC00"]) {
       const response = await app.inject({
         method: "PATCH",
-        url: `/v1/diary/entries/${entryId}`,
+        url: `/v1/diary/entries/${entryId}?diaryCorrectionProtocol=v1`,
         headers: {
           ...authHeaders,
           "idempotency-key": randomUUID(),
@@ -510,15 +567,15 @@ describe("diary routes", () => {
     expect(setResponse.statusCode, setResponse.body).toBe(200);
     expect(clearResponse.statusCode, clearResponse.body).toBe(200);
     expect(createWithNote.statusCode).toBe(400);
-    expect(service.updateEntry).toHaveBeenNthCalledWith(
+    expect(service.updateEntryCorrection).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ patch: { note: exactNote } }),
     );
-    expect(service.updateEntry).toHaveBeenNthCalledWith(
+    expect(service.updateEntryCorrection).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({ patch: { note: null } }),
     );
-    expect(service.updateEntry).toHaveBeenCalledTimes(2);
+    expect(service.updateEntryCorrection).toHaveBeenCalledTimes(2);
     expect(service.createEntry).not.toHaveBeenCalled();
   });
   it.each(["", "x".repeat(10_000), "😀".repeat(2_500)])(
@@ -526,15 +583,15 @@ describe("diary routes", () => {
     async (legacyNote) => {
       const app = createTestApp(
         diaryStub({
-          getDay: vi.fn(async () => ({
-            ...diaryDay,
-            entries: [{ ...diaryEntry, note: legacyNote }],
+          getDayPage: vi.fn(async () => ({
+            data: { ...diaryDay, entries: [{ ...diaryEntry, note: legacyNote }] },
+            page: { nextCursor: null, totalEntries: 1 },
           })),
         }),
       );
       const response = await app.inject({
         method: "GET",
-        url: "/v1/diary?date=2026-08-15",
+        url: "/v1/diary?date=2026-08-15&limit=20",
         headers: authHeaders,
       });
 
@@ -579,14 +636,15 @@ describe("diary routes", () => {
       sources: [diaryEntry.source],
       source: null,
     };
-    const responseBody = {
-      data: { ...mutationResponse.data, entry: recipeEntry },
-    };
     expect(() => assertDiaryEntry(recipeEntry)).not.toThrow();
-    const service = diaryStub({ updateEntry: vi.fn(async () => responseBody) });
+    const service = diaryStub({
+      updateEntryCorrection: vi.fn(async (input) =>
+        correctionResponse(input, "update", recipeEntry),
+      ),
+    });
     const response = await createTestApp(service).inject({
       method: "PATCH",
-      url: `/v1/diary/entries/${entryId}`,
+      url: `/v1/diary/entries/${entryId}?diaryCorrectionProtocol=v1`,
       headers: {
         ...authHeaders,
         "idempotency-key": operationId,
@@ -595,8 +653,8 @@ describe("diary routes", () => {
       payload: { portion: { kind: "serving", amount: "1" } },
     });
     expect(response.statusCode, response.body).toBe(200);
-    expect(response.json().data.entry).toEqual(recipeEntry);
-    expect(service.updateEntry).toHaveBeenCalledWith(
+    expect(response.json().data.entry).toEqual({ ...recipeEntry, revision: "4" });
+    expect(service.updateEntryCorrection).toHaveBeenCalledWith(
       expect.objectContaining({
         entryId,
         patch: { portion: { kind: "serving", amount: "1" } },
@@ -615,13 +673,13 @@ describe("diary routes", () => {
     });
     const missingRevision = await app.inject({
       method: "PATCH",
-      url: `/v1/diary/entries/${entryId}`,
+      url: `/v1/diary/entries/${entryId}?diaryCorrectionProtocol=v1`,
       headers: { ...authHeaders, "idempotency-key": operationId },
       payload: { mealSlot: "lunch" },
     });
     const weakRevision = await app.inject({
       method: "DELETE",
-      url: `/v1/diary/entries/${entryId}`,
+      url: `/v1/diary/entries/${entryId}?diaryCorrectionProtocol=v1`,
       headers: {
         ...authHeaders,
         "idempotency-key": operationId,
@@ -633,8 +691,8 @@ describe("diary routes", () => {
     expect(missingRevision.statusCode).toBe(428);
     expect(weakRevision.statusCode).toBe(400);
     expect(service.createEntry).not.toHaveBeenCalled();
-    expect(service.updateEntry).not.toHaveBeenCalled();
-    expect(service.deleteEntry).not.toHaveBeenCalled();
+    expect(service.updateEntryCorrection).not.toHaveBeenCalled();
+    expect(service.deleteEntryCorrection).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -661,10 +719,12 @@ describe("diary routes", () => {
 
   it("passes only the authenticated owner to delete and fails cross-user misses closed", async () => {
     const notFound = new DiaryNotFoundServiceError();
-    const service = diaryStub({ deleteEntry: vi.fn(async () => Promise.reject(notFound)) });
+    const service = diaryStub({
+      deleteEntryCorrection: vi.fn(async () => Promise.reject(notFound)),
+    });
     const response = await createTestApp(service).inject({
       method: "DELETE",
-      url: `/v1/diary/entries/${entryId}`,
+      url: `/v1/diary/entries/${entryId}?diaryCorrectionProtocol=v1`,
       headers: {
         ...authHeaders,
         "idempotency-key": operationId,
@@ -674,7 +734,7 @@ describe("diary routes", () => {
 
     expect(response.statusCode).toBe(404);
     expect(response.body).not.toContain("private owner identifier");
-    expect(service.deleteEntry).toHaveBeenCalledWith(
+    expect(service.deleteEntryCorrection).toHaveBeenCalledWith(
       expect.objectContaining({ userId, entryId, expectedRevision: "3" }),
     );
   });
@@ -690,11 +750,14 @@ describe("diary routes", () => {
       unknownReasonCounts: { ...firstTotal.unknownReasonCounts, not_reported: 1 },
     };
     const service = diaryStub({
-      getDay: vi.fn(async () => ({ ...diaryDay, totals: [invalid] })),
+      getDayPage: vi.fn(async () => ({
+        data: { ...diaryDay, totals: [invalid] },
+        page: { nextCursor: null, totalEntries: 1 },
+      })),
     });
     const response = await createTestApp(service).inject({
       method: "GET",
-      url: "/v1/diary?date=2026-08-15",
+      url: "/v1/diary?date=2026-08-15&limit=20",
       headers: authHeaders,
     });
 
