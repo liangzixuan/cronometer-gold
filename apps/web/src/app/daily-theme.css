@@ -614,8 +614,10 @@
   font-size: 11px;
   line-height: 1.5;
 }
-.shell .dashboard {
-  max-width: 1600px;
+.shell .overviewDashboard,
+.shell .diaryDashboard {
+  width: 100%;
+  max-width: none;
 }
 .shell :is(button, input, select, textarea, .buttonPrimary, .secondaryAction) {
   border-radius: 5px;
@@ -731,7 +733,7 @@
 }
 .shell .ledgerWorkspace {
   display: grid;
-  grid-template-columns: minmax(0, 1.9fr) minmax(300px, 1fr);
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 34%, 420px);
   gap: 20px;
   align-items: start;
 }
@@ -787,7 +789,7 @@
 }
 .shell .ledgerTableHead {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(100px, 0.45fr) 94px 86px;
+  grid-template-columns: minmax(0, 1fr) clamp(100px, 24%, 220px) 94px 86px;
   gap: 10px;
   background: #edf3f8;
   padding: 9px 14px;
@@ -834,7 +836,7 @@
 }
 .shell .mealSection .diaryEntry {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(100px, 0.45fr) 94px 86px;
+  grid-template-columns: minmax(0, 1fr) clamp(100px, 24%, 220px) 94px 86px;
   align-items: center;
   padding: 10px 14px;
   gap: 10px;
