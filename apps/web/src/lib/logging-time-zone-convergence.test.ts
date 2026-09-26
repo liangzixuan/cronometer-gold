@@ -6,7 +6,7 @@ import {
   customFoodLogTimeZoneReviewMessage,
   customFoodProfileRefreshBelongsToOwner,
   fenceCustomFoodLogForTimeZoneChange,
-} from "../app/health/HealthClient";
+} from "../app/foods/custom/CustomFoodsClient";
 import {
   fenceRecipeLogForTimeZoneChange,
   recipeLogTimeZoneReviewMessage,

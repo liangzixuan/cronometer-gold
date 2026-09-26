@@ -42,10 +42,26 @@ The three generated nutrient assets and their provenance are in
 `apps/web/public/images/nutrients/README.md`; font provenance is in
 `apps/web/public/fonts/`. No new package or remote asset service is required.
 
+## Personal foods
+
+Foods has two destinations: Catalogue for published foods and My foods for the
+user's private library. The authenticated `/foods/custom` route owns creation,
+revision, copying, archiving and logging a saved food version. Health & privacy
+loads its nutrient registry independently for Trends.
+
+The food editor and saved library sit beside each other on desktop and stack on
+narrow screens. Nutrient controls wrap with their row, and actions have at least
+44 px hit targets. Keep saved-food details separate from unsaved editor values.
+A valid selected diary date follows Foods navigation and initializes a newly
+opened log. Changing that route date does not overwrite an open logging draft.
+Owner checks, draft choices and exact retries apply on the dedicated page as they
+do elsewhere in the app. Revising a food never rewrites past diary entries.
+
 ## Responsive layout
 
-Use available width without a fixed desktop content cap. Bound the Diary's
-numeric columns and nutrient rail so long lines stay readable. Dashboard panels
+Keep main content centered within each route's width limit so wide screens do not
+stretch forms or summaries excessively. Bound the Diary's numeric columns and
+nutrient rail so long lines stay readable. Dashboard panels
 sit side by side on wide screens, use fewer columns on tablets and stack on
 phones. Navigation keeps its own scroll area on narrow screens, with More and
 Account accessible outside that strip. Food names wrap, controls remain usable,

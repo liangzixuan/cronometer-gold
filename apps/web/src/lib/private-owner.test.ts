@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { defaultDiaryGroups, type SessionSummary } from "../../lib/diary";
-import { HealthOwnerFenceError, installHealthPrivateDataForOwner } from "./HealthClient";
+import { defaultDiaryGroups, type SessionSummary } from "./diary";
+import { installPrivateDataForOwner, PrivateOwnerFenceError } from "./private-owner";
 
 function session(userId: string): SessionSummary {
   return {
@@ -33,7 +33,7 @@ function deferred<T>(): { readonly promise: Promise<T>; readonly resolve: (value
   };
 }
 
-describe("private health workspace owner fence", () => {
+describe("private workspace owner fence", () => {
   it("never installs a delayed private response set after the browser session changes owner", async () => {
     const ownerA = "5e041a5d-00e7-4260-832a-90e34a04e60a";
     const ownerB = "5f5536b9-0f35-44e8-9a77-c26679d7b21b";
@@ -41,7 +41,7 @@ describe("private health workspace owner fence", () => {
     let currentSession = session(ownerA);
     const install = vi.fn();
 
-    const loading = installHealthPrivateDataForOwner({
+    const loading = installPrivateDataForOwner({
       expectedOwnerUserId: ownerA,
       loadPrivateData: () => delayedHealthData.promise,
       revalidateSession: async () => currentSession,
@@ -51,7 +51,7 @@ describe("private health workspace owner fence", () => {
     currentSession = session(ownerB);
     delayedHealthData.resolve({ owner: ownerB });
 
-    await expect(loading).rejects.toBeInstanceOf(HealthOwnerFenceError);
+    await expect(loading).rejects.toBeInstanceOf(PrivateOwnerFenceError);
     expect(install).not.toHaveBeenCalled();
   });
 
@@ -60,7 +60,7 @@ describe("private health workspace owner fence", () => {
     const install = vi.fn();
     const data = { customFoods: ["private-food-a"], events: ["event-a"] };
 
-    await installHealthPrivateDataForOwner({
+    await installPrivateDataForOwner({
       expectedOwnerUserId: owner,
       loadPrivateData: async () => data,
       revalidateSession: async () => session(owner),
