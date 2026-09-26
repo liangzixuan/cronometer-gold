@@ -184,10 +184,12 @@ jobs:
         with:
           cosign-release: v3.1.3
 
-      - name: Verify the approved object-store index and ARM64 release signatures
+      - name: Verify the qualified patched object-store image
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          node scripts/verify-local-object-store-image.mjs | tee "${RUNNER_TEMP}/object-store-provenance.json"
+          node scripts/prepare-ci-object-store.mjs verify | tee "${RUNNER_TEMP}/object-store-provenance.json"
 
       - name: Initialize an empty object-store vulnerability-ignore policy
         run: install -m 600 /dev/null "${RUNNER_TEMP}/object-store.trivyignore"
@@ -199,7 +201,7 @@ jobs:
         with:
           version: v0.74.0
           scan-type: image
-          image-ref: ghcr.io/chrislusf/seaweedfs@sha256:d4cf67729aa8777e1a43a5b61d72e5b96179e4b7bac9a221cb14cbc2036cb32e
+          image-ref: ghcr.io/liangzixuan/cronometer-gold-object-store@sha256:bb59c87fd41a196d75ad6ce789d9dfeeea54845910f31250fbfd2984f216ca30
           scanners: vuln
           vuln-type: os,library
           severity: HIGH,CRITICAL
@@ -214,20 +216,13 @@ jobs:
         run: node scripts/local-object-store.mjs prepare
 
       - name: Validate local service topology
-        run: |
-          docker compose -f infra/docker/compose.yml config --quiet
-          docker compose -f infra/docker/compose.yml config --format json | node --input-type=module -e '
-            import assert from "node:assert/strict";
-            import { readFileSync } from "node:fs";
-            import { OBJECT_STORE_REF } from "./scripts/verify-local-object-store-image.mjs";
-            const service = JSON.parse(readFileSync(0, "utf8")).services["object-store"];
-            assert.equal(service.image, OBJECT_STORE_REF);
-          '
+        run: node scripts/prepare-ci-object-store.mjs prepare
 
       - name: Bootstrap least-privilege private object storage
         run: |
-          docker compose -f infra/docker/compose.yml up -d --wait object-store
+          docker compose -f infra/docker/compose.yml -f "${RUNNER_TEMP}/patched-object-store.compose.json" up -d --wait object-store
           node scripts/local-object-store.mjs bootstrap
+          node scripts/prepare-ci-object-store.mjs runtime
 
       - name: Exercise encrypted artifact storage with split credentials
         env:

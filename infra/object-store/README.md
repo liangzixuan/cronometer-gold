@@ -19,17 +19,26 @@ The separate build evidence retains the resolved graph, sums and binary identity
 The reviewed dependency notices accompany both that evidence and the derived
 image under `/usr/share/licenses/nourishing-object-store/NOTICES.txt`.
 
-The resulting project image needs its own exact digest, signature, source-bound
-provenance and SBOM. The upstream signature authenticates only the original base.
-The trusted container workflow builds and qualifies the derivative independently
-of pull-request tests. After that job succeeds, a reviewed follow-up must pin its
-immutable digest and original build identity in CI. Until that pin is delivered,
-the existing database scan remains blocked by the upstream vulnerability. The
-consumer must independently verify and scan the derivative before starting it;
-its Compose override may change only the image. The zero-HIGH/zero-CRITICAL scan uses an empty
-ignore policy. The mandatory S3 permission, versioning, privacy, immutable ledger
-and full restore tests remain required. A build or offline test pass does not
-qualify the image. No production storage or running preview changes here.
+CI consumes the qualified project image pinned by `scripts/prepare-ci-object-store.mjs`:
+index `sha256:f936639ab401e5ba291eebdc8eae421c382faee0c971e71e0a9dba94e7c08c2e`,
+ARM64 runtime `sha256:bb59c87fd41a196d75ad6ce789d9dfeeea54845910f31250fbfd2984f216ca30`.
+Its original source and workflow revision is
+`e109b1ea70720a186c35d13e9fe4fedba93759e1`, built by
+`.github/workflows/container-supply-chain.yml` on `refs/heads/codex/retention-features`.
+The upstream signature authenticates only the original base; the derivative's
+own signature, source-bound provenance, SBOM, runtime layers and compiled module
+identity must pass the existing full verifier on every consumer run.
+
+Push and pull-request database checks use this already-published image without
+a publisher-job dependency or signing permissions. They rescan its exact runtime
+for HIGH/CRITICAL vulnerabilities with an empty ignore policy before execution.
+The CI-only Compose override changes only the image; rendered topology must
+otherwise match local Compose exactly. After startup, the helper checks the
+pinned image/config identity and actual process UID/GID 1000. Existing S3
+permissions, versioning, privacy, immutable-ledger and full-restore tests remain
+mandatory. The original build's qualification does not replace these consumer
+tests or broader release acceptance. No production storage or running preview
+changes here.
 
 `node scripts/local-object-store.mjs prepare` creates private generated state;
 `OBJECT_STORE_PORT` selects the initial loopback port (default 9000). It refuses
