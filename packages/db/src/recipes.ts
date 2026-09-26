@@ -254,6 +254,7 @@ interface MaterializedRecipe {
 type MaterializedIngredient = RecipeIngredientRecord & {
   readonly nutrientProfile: ReturnType<typeof createResolvedNutrientProfile>;
 };
+type MaterializedNestedIngredient = Extract<MaterializedIngredient, { kind: "recipe" }>;
 
 export async function createRecipe(
   database: Kysely<Database>,
@@ -617,6 +618,10 @@ async function materializeRecipe(
   );
   const discoveryByVersion = new Map(foodDiscovery.map((food) => [food.foodVersionId, food]));
   const ingredients: MaterializedIngredient[] = [];
+  const nestedByVersion = new Map<
+    string,
+    Pick<MaterializedNestedIngredient, "nutrientProfile" | "recipe">
+  >();
   for (const [index, ingredient] of draft.ingredients.entries()) {
     const position = ingredientPosition(ingredient.position ?? index);
     if (ingredient.kind === "food") {
@@ -635,9 +640,29 @@ async function materializeRecipe(
         ),
       );
     } else {
-      ingredients.push(
-        await materializeNestedIngredient(transaction, userId, ingredient, position),
-      );
+      const snapshot = nestedByVersion.get(ingredient.recipeVersionId);
+      if (snapshot) {
+        ingredients.push({
+          grams: inputDecimal(ingredient.grams, "nested recipe grams"),
+          kind: "recipe",
+          note: boundedNote(ingredient.note ?? null),
+          nutrientProfile: snapshot.nutrientProfile,
+          position,
+          recipe: snapshot.recipe,
+        });
+      } else {
+        const materialized = await materializeNestedIngredient(
+          transaction,
+          userId,
+          ingredient,
+          position,
+        );
+        nestedByVersion.set(ingredient.recipeVersionId, {
+          nutrientProfile: materialized.nutrientProfile,
+          recipe: materialized.recipe,
+        });
+        ingredients.push(materialized);
+      }
     }
   }
   let calculated: ReturnType<typeof calculateRecipeNutrition>;
@@ -1306,7 +1331,7 @@ async function materializeNestedIngredient(
   userId: string,
   ingredient: Extract<RecipeIngredientInput, { kind: "recipe" }>,
   position: number,
-): Promise<MaterializedIngredient> {
+): Promise<MaterializedNestedIngredient> {
   const version = await loadRecipeVersionRow(transaction, userId, ingredient.recipeVersionId);
   const nutrients = await loadRecipeNutrients(transaction, ingredient.recipeVersionId);
   const grams = inputDecimal(ingredient.grams, "nested recipe grams");
