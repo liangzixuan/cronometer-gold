@@ -32,12 +32,22 @@ packages/*
 !packages/search/
 !packages/search/**
 
-# The source-built Node runtime is the only image that copies a repository infra file.
+# Source-built runtime images copy only these reviewed public build inputs.
 !infra/
 infra/*
 !infra/docker/
 infra/docker/*
 !infra/docker/node-release-CC68F5A3106FF448322E48ED27F5E38D5B0A215F.asc
+!infra/docker/object-store.go.mod
+!infra/docker/object-store.go.sum
+!infra/docker/object-store-modules.json
+!infra/docker/object-store-NOTICES.txt
+
+# Standard-library-only verifier and its native builder tests.
+!scripts/
+scripts/*
+!scripts/verify-object-store-modules.go
+!scripts/verify-object-store-modules_test.go
 
 # Never send local service data or deployment/control-plane implementations.
 .local-data

@@ -59,6 +59,14 @@ const reviewedExposureRules = [
   "!infra/docker/",
   "infra/docker/*",
   "!infra/docker/node-release-CC68F5A3106FF448322E48ED27F5E38D5B0A215F.asc",
+  "!infra/docker/object-store.go.mod",
+  "!infra/docker/object-store.go.sum",
+  "!infra/docker/object-store-modules.json",
+  "!infra/docker/object-store-NOTICES.txt",
+  "!scripts/",
+  "scripts/*",
+  "!scripts/verify-object-store-modules.go",
+  "!scripts/verify-object-store-modules_test.go",
 ];
 
 const requiredExclusions = [
@@ -353,76 +361,80 @@ test("rejects a companion ignore override for every repository Dockerfile", () =
   }
 });
 
-test("binds every supply-chain Buildx action to the literal root context", () => {
-  const lines = readFileSync(supplyChainWorkflow, "utf8").split(/\r?\n/gu);
-  const actionLines = lines
-    .map((line, index) => ({ index, line }))
-    .filter(({ line }) => line.includes("docker/build-push-action@"));
-  assert.equal(
-    actionLines.length,
-    3,
-    "The supply-chain workflow must retain exactly the three reviewed Buildx steps.",
-  );
-  assert.doesNotMatch(
-    readFileSync(supplyChainWorkflow, "utf8"),
-    /^\s+build-contexts:/mu,
-    "Named Buildx contexts bypass the reviewed root .dockerignore policy.",
-  );
-  assert.doesNotMatch(
-    readFileSync(supplyChainWorkflow, "utf8"),
-    /uses:\s*["']?docker\/bake-action@|^\s+docker(?:\s+buildx)?\s+build(?:\s|$)/gmu,
-    "Alternate Docker builders bypass the three reviewed root-context steps.",
-  );
+for (const [workflowPath, expectedSteps] of [
+  [supplyChainWorkflow, 5],
+  [join(repositoryRoot, ".github/workflows/ci.yml"), 0],
+]) {
+  test(`binds every ${basename(workflowPath)} Buildx action to the literal root context`, () => {
+    const lines = readFileSync(workflowPath, "utf8").split(/\r?\n/gu);
+    const actionLines = lines
+      .map((line, index) => ({ index, line }))
+      .filter(({ line }) => line.includes("docker/build-push-action@"));
+    assert.equal(
+      actionLines.length,
+      expectedSteps,
+      "The workflow must retain exactly its reviewed Buildx steps.",
+    );
+    assert.doesNotMatch(
+      readFileSync(workflowPath, "utf8"),
+      /^\s+build-contexts:/mu,
+      "Named Buildx contexts bypass the reviewed root .dockerignore policy.",
+    );
+    assert.doesNotMatch(
+      readFileSync(workflowPath, "utf8"),
+      /uses:\s*["']?docker\/bake-action@|^\s+docker(?:\s+buildx)?\s+build(?:\s|$)/gmu,
+      "Alternate Docker builders bypass the reviewed root-context steps.",
+    );
 
-  for (const { index, line } of actionLines) {
-    const matched = /^( *)uses:\s*["']?docker\/build-push-action@[^\s"'#]+["']?(?:\s+#.*)?$/u.exec(
-      line,
-    );
-    assert.ok(
-      matched,
-      `Buildx action at workflow line ${index + 1} must remain a direct step use.`,
-    );
-    const usesIndent = matched[1].length;
-    let stepEnd = lines.length;
-    for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
-      const candidate = lines[cursor];
-      if (candidate.trim().length === 0 || candidate.trimStart().startsWith("#")) continue;
-      if (leadingSpaces(candidate) < usesIndent) {
-        stepEnd = cursor;
-        break;
+    for (const { index, line } of actionLines) {
+      const matched =
+        /^( *)uses:\s*["']?docker\/build-push-action@[^\s"'#]+["']?(?:\s+#.*)?$/u.exec(line);
+      assert.ok(
+        matched,
+        `Buildx action at workflow line ${index + 1} must remain a direct step use.`,
+      );
+      const usesIndent = matched[1].length;
+      let stepEnd = lines.length;
+      for (let cursor = index + 1; cursor < lines.length; cursor += 1) {
+        const candidate = lines[cursor];
+        if (candidate.trim().length === 0 || candidate.trimStart().startsWith("#")) continue;
+        if (leadingSpaces(candidate) < usesIndent) {
+          stepEnd = cursor;
+          break;
+        }
       }
-    }
 
-    const withLine = `${" ".repeat(usesIndent)}with:`;
-    const withIndices = [];
-    for (let cursor = index + 1; cursor < stepEnd; cursor += 1) {
-      if (lines[cursor] === withLine) withIndices.push(cursor);
-    }
-    assert.deepEqual(
-      withIndices,
-      [index + 1],
-      `Buildx action at workflow line ${index + 1} must have one direct with mapping immediately after uses.`,
-    );
-
-    let withEnd = stepEnd;
-    for (let cursor = withIndices[0] + 1; cursor < stepEnd; cursor += 1) {
-      const candidate = lines[cursor];
-      if (candidate.trim().length === 0 || candidate.trimStart().startsWith("#")) continue;
-      if (leadingSpaces(candidate) <= usesIndent) {
-        withEnd = cursor;
-        break;
+      const withLine = `${" ".repeat(usesIndent)}with:`;
+      const withIndices = [];
+      for (let cursor = index + 1; cursor < stepEnd; cursor += 1) {
+        if (lines[cursor] === withLine) withIndices.push(cursor);
       }
+      assert.deepEqual(
+        withIndices,
+        [index + 1],
+        `Buildx action at workflow line ${index + 1} must have one direct with mapping immediately after uses.`,
+      );
+
+      let withEnd = stepEnd;
+      for (let cursor = withIndices[0] + 1; cursor < stepEnd; cursor += 1) {
+        const candidate = lines[cursor];
+        if (candidate.trim().length === 0 || candidate.trimStart().startsWith("#")) continue;
+        if (leadingSpaces(candidate) <= usesIndent) {
+          withEnd = cursor;
+          break;
+        }
+      }
+      const contextLines = lines
+        .slice(withIndices[0] + 1, withEnd)
+        .filter((candidate) => /^\s*context:/u.test(candidate));
+      assert.deepEqual(
+        contextLines,
+        [`${" ".repeat(usesIndent + 2)}context: .`],
+        `Buildx action at workflow line ${index + 1} must use exactly one literal root context.`,
+      );
     }
-    const contextLines = lines
-      .slice(withIndices[0] + 1, withEnd)
-      .filter((candidate) => /^\s*context:/u.test(candidate));
-    assert.deepEqual(
-      contextLines,
-      [`${" ".repeat(usesIndent + 2)}context: .`],
-      `Buildx action at workflow line ${index + 1} must use exactly one literal root context.`,
-    );
-  }
-});
+  });
+}
 
 test("keeps the root Docker context deny-by-default with only reviewed build inputs", () => {
   const rules = dockerignoreRules();

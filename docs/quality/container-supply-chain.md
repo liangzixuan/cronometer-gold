@@ -1,9 +1,10 @@
 # Container supply chain
 
-The `container supply chain` workflow produces eight repository-owned
-`linux/arm64` artifacts: a dedicated patched Node runtime, four application
-images, Caddy, PostgreSQL, and a patched Meilisearch derivative. The Node runtime
-is a build input for the four applications, not an eighth deployment image. The
+The `container supply chain` workflow produces nine repository-owned
+`linux/arm64` artifacts: a patched Node runtime, four application images, Caddy,
+PostgreSQL, a patched Meilisearch derivative and a patched SeaweedFS test fixture.
+The Node runtime is a build input; the storage fixture supports CI qualification.
+Neither adds a production deployment service. The
 workflow runs on pushes to
 the default branch and can also be started manually from that branch. It never
 deploys infrastructure or updates a running environment.
@@ -72,6 +73,28 @@ OCI deployment must consume the recorded digest, not a mutable convenience tag:
 ```text
 ghcr.io/<owner>/<repository>-api@sha256:<digest>
 ```
+
+## Repository-owned storage fixture
+
+The independent `build, scan, publish (object-store)` job builds exact SeaweedFS
+4.47 source with the reviewed gRPC fix and frozen module inputs. Publication is
+restricted to normal pushes on the approved default branch. The job authenticates
+the original signed runtime base, requires native Go checksum-log and graph
+verification, and preserves the base entrypoint and companions. Only the rebuilt
+`weed` binary and required dependency notices are added.
+
+The candidate must pass exact binary and BuildKit evidence checks and the same
+zero-HIGH/CRITICAL scan before project signing, GitHub provenance and immutable
+tag publication. The public module graph, sums, binary metadata, checksum and
+notices are retained in the job log as Base64 with SHA-256 and byte counts.
+
+Database CI consumes a previously qualified immutable image, following the
+existing PostgreSQL and Meilisearch pattern. A reviewed consumer pin follows the
+first successful storage publication. Until then, its original upstream scan
+remains blocked; the source/build commit is not completed delivery. The
+always-running pull-request checks do not depend on publishing permissions or
+conditionally skipped container jobs. Storage permissions, versioning, privacy
+and restore acceptance remain mandatory after the consumer pin.
 
 ## Repository-owned patched Node runtime
 
@@ -332,10 +355,10 @@ environment remains limited to synthetic reviewer data.
   remains push-only with a default-branch job condition: GitHub reports a job
   skipped by its condition as `Success`, so a feature-branch push could satisfy
   that setting without executing the container gate.
-- Treat all eight repository-artifact results (the Node producer, four
-  applications, Caddy, PostgreSQL, and Meilisearch) plus the read-only upstream
-  input-validation result as mandatory **post-merge release evidence** for the
-  exact default-branch commit. A commit is not releasable until those nine real
+- Treat all nine repository-artifact results (the Node producer, four
+  applications, Caddy, PostgreSQL, Meilisearch and the storage fixture) plus the
+  read-only upstream input-validation result as mandatory **post-merge release evidence** for the
+  exact default-branch commit. A commit is not releasable until those ten real
   jobs execute and pass. Redesign the workflow to run an explicit fail-closed pull-request
   lane before adding any container job name to pre-merge branch protection.
 

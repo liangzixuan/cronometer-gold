@@ -5,13 +5,31 @@ and CI. Production storage adapters, policy permissions, encrypted formats and
 retained history are unchanged. The four policy JSON files are the existing
 role contract, relocated without semantic changes.
 
-The image is exactly
+The upstream image is exactly
 `ghcr.io/chrislusf/seaweedfs:4.47@sha256:ce9e796f1fe6f06968f4c04bdaf8f678dad9c8acdfef3d244133d71bfa6bf882`.
-CI must verify its index and selected platform signature against the exact
-release workflow identity and run the existing zero-HIGH/zero-CRITICAL scan
-before starting it. A pin and offline tests do not qualify runtime behavior.
-The mandatory S3 integration, privacy, immutable ledger and restore tests remain
-required. Local AMD64 behavior needs a separately approved live session.
+Its bundled gRPC version fails the required vulnerability scan. It remains the
+authenticated build input and the unchanged local Compose pin; it is not accepted
+for new execution. Local AMD64 qualification needs separate approval.
+
+The native ARM64 CI build uses exact SeaweedFS 4.47 source with the reviewed gRPC
+fix, preserving the upstream runtime files and replacing only `/usr/bin/weed`.
+The module inputs under `infra/docker/object-store.*` are immutable build inputs.
+Go must verify their checksums and build without changing the reviewed graph.
+The separate build evidence retains the resolved graph, sums and binary identity.
+The reviewed dependency notices accompany both that evidence and the derived
+image under `/usr/share/licenses/nourishing-object-store/NOTICES.txt`.
+
+The resulting project image needs its own exact digest, signature, source-bound
+provenance and SBOM. The upstream signature authenticates only the original base.
+The trusted container workflow builds and qualifies the derivative independently
+of pull-request tests. After that job succeeds, a reviewed follow-up must pin its
+immutable digest and original build identity in CI. Until that pin is delivered,
+the existing database scan remains blocked by the upstream vulnerability. The
+consumer must independently verify and scan the derivative before starting it;
+its Compose override may change only the image. The zero-HIGH/zero-CRITICAL scan uses an empty
+ignore policy. The mandatory S3 permission, versioning, privacy, immutable ledger
+and full restore tests remain required. A build or offline test pass does not
+qualify the image. No production storage or running preview changes here.
 
 `node scripts/local-object-store.mjs prepare` creates private generated state;
 `OBJECT_STORE_PORT` selects the initial loopback port (default 9000). It refuses

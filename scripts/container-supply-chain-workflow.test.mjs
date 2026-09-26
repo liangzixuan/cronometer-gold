@@ -75,14 +75,14 @@ const TRIVY_ACTION = "aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e
 const ATTEST_ACTION = "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8";
 
 const reviewedActionCounts = new Map([
-  [ATTEST_ACTION, 3],
-  [BUILD_ACTION, 3],
-  [BUILDX_ACTION, 4],
-  [CHECKOUT_ACTION, 6],
-  [COSIGN_ACTION, 3],
-  [LOGIN_ACTION, 3],
+  [ATTEST_ACTION, 4],
+  [BUILD_ACTION, 5],
+  [BUILDX_ACTION, 5],
+  [CHECKOUT_ACTION, 7],
+  [COSIGN_ACTION, 4],
+  [LOGIN_ACTION, 4],
   [QEMU_ACTION, 1],
-  [TRIVY_ACTION, 5],
+  [TRIVY_ACTION, 7],
 ]);
 
 const criticalControlKeys = [
@@ -95,6 +95,14 @@ const criticalControlKeys = [
   "id",
   "if",
   "ignore-unfixed",
+  "image-ref",
+  "list-all-pkgs",
+  "scan-type",
+  "scanners",
+  "skip-setup-trivy",
+  "vuln-type",
+  "format",
+  "output",
   "name",
   "outputs",
   "permissions",
@@ -152,6 +160,10 @@ const publisherFamilies = [
       `"${shellVariable("IMAGE")}@${shellVariable("DIGEST")}"`,
   },
 ];
+
+const storageTagCommand =
+  `docker buildx imagetools create --tag "${shellVariable("STORAGE_IMAGE")}:sha-${shellVariable("REVISION")}" ` +
+  `"${shellVariable("IMAGE_REF")}"`;
 
 const publisherPermissions = [
   ["attestations", "write"],
@@ -269,12 +281,25 @@ function assertCaddyVulnerabilityPatchGraph(overrides = {}) {
     workflow: overrides.workflow ?? workflow,
   };
 
+  const caddyWorkflowScope = sources.workflow.replace(
+    workflowJob(sources.workflow, "storage-image"),
+    "",
+  );
+  const serviceJob = workflowJob(sources.workflow, "build-scan-publish-services");
+  const identityStep = workflowStep(serviceJob, "Verify ARM64 service identity");
+  const caddyIdentity = boundedSection(
+    identityStep,
+    "            caddy)",
+    "            postgres)",
+    "Caddy workflow identity branch",
+  );
+
   assertReviewedGrpcReferences(sources.dockerfile, 3, "Caddy Dockerfile");
-  assertReviewedGrpcReferences(sources.workflow, 1, "container workflow");
+  assertReviewedGrpcReferences(caddyWorkflowScope, 1, "container workflow outside storage");
   assertReviewedGrpcReferences(sources.admission, 1, "Caddy admission policy");
   assertReviewedGrpcReferences(sources.documentation, 1, "container documentation");
   assertReviewedXNetReferences(sources.dockerfile, 3, "Caddy Dockerfile");
-  assertReviewedXNetReferences(sources.workflow, 1, "container workflow");
+  assertReviewedXNetReferences(caddyWorkflowScope, 1, "container workflow outside storage");
   assertReviewedXNetReferences(sources.admission, 1, "Caddy admission policy");
   assertReviewedXNetReferences(sources.documentation, 1, "container documentation");
 
@@ -296,15 +321,13 @@ function assertCaddyVulnerabilityPatchGraph(overrides = {}) {
     '    elif variable == "POSTGRES_IMAGE":',
     "Caddy admission branch",
   );
-  const serviceJob = workflowJob(sources.workflow, "build-scan-publish-services");
-  const identityStep = workflowStep(serviceJob, "Verify ARM64 service identity");
 
   assertOneExactLine(buildStage, CADDY_GRPC_REQUIRE_LINE, "Caddy grpc requirement");
   assertOneExactLine(buildStage, CADDY_GRPC_BINARY_ASSERTION_LINE, "Caddy grpc binary assertion");
   assertOneExactLine(buildStage, CADDY_X_NET_REQUIRE_LINE, "Caddy x/net requirement");
   assertOneExactLine(buildStage, CADDY_X_NET_BINARY_ASSERTION_LINE, "Caddy x/net binary assertion");
   assertOneExactLine(runtimeMetadata, CADDY_RUNTIME_LABEL_LINE, "Caddy runtime label");
-  assertOneExactLine(identityStep, CADDY_WORKFLOW_LABEL_LINE, "Caddy workflow identity");
+  assertOneExactLine(caddyIdentity, CADDY_WORKFLOW_LABEL_LINE, "Caddy workflow identity");
   assertOneExactLine(admissionBranch, CADDY_ADMISSION_LABEL_LINE, "Caddy admission label");
   assertOneExactLine(
     sources.documentation,
@@ -381,8 +404,8 @@ function assertOnlyReviewedActions(source) {
   );
   assert.deepEqual(
     actionValues.filter((action) => action.includes("setup-buildx-action@")),
-    Array.from({ length: 4 }, () => BUILDX_ACTION),
-    "all four Buildx setups must use only the reviewed pinned action",
+    Array.from({ length: 5 }, () => BUILDX_ACTION),
+    "all five Buildx setups must use only the reviewed pinned action",
   );
   for (const line of source.split("\n")) {
     if (line.trimStart().startsWith("#")) continue;
@@ -400,9 +423,35 @@ function assertOnlyReviewedPublicationCommands(source) {
     .filter((line) => line.trim().length > 0 && !line.trimStart().startsWith("#"));
   assert.deepEqual(
     activeLines.filter((line) => /\bdocker\s+buildx\s+imagetools\s+create\b/u.test(line)),
-    publisherFamilies.map((family) => `          ${family.tagCommand}`),
-    "only the three post-verification immutable-tag commands may publish repository images",
+    [
+      ...publisherFamilies.map((family) => `          ${family.tagCommand}`),
+      `          ${storageTagCommand}`,
+    ],
+    "only the four post-verification immutable-tag commands may publish repository images",
   );
+
+  const storage = workflowJob(source, "storage-image");
+  const storageTag = workflowStep(storage, "Publish the immutable verified storage tag");
+  assertExactScalar(
+    storageTag,
+    8,
+    "if",
+    "steps.existing.outputs.exists != 'true'",
+    "storage immutable-tag publication",
+  );
+  assertMissingScalar(storageTag, 8, "continue-on-error", "storage immutable-tag publication");
+  assertOneExactLine(
+    storageTag,
+    `          ${storageTagCommand}`,
+    "storage immutable-tag publication",
+  );
+  assertStepOrder(storage, [
+    "Reject all high and critical patched-storage vulnerabilities",
+    "Require the patched gRPC binary in the scan inventory",
+    "Verify the signed same-source storage digest",
+    "Publish the immutable verified storage tag",
+    "Export the verified storage digest",
+  ]);
 
   const forbiddenPublication = [
     /\bdocker\s+(?:image\s+)?push\b/u,
@@ -426,10 +475,15 @@ function assertOnlyReviewedIgnorePolicyReferences(source) {
   const expectedCounts = new Map([
     [`run: install -m 600 /dev/null "${shellVariable("RUNNER_TEMP")}/empty.trivyignore"`, 3],
     [`trivyignores: ${githubExpression("runner.temp")}/empty.trivyignore`, 5],
+    [
+      `run: install -m 600 /dev/null "${shellVariable("RUNNER_TEMP")}/patched-storage.trivyignore"`,
+      1,
+    ],
+    [`trivyignores: ${githubExpression("runner.temp")}/patched-storage.trivyignore`, 2],
   ]);
   const actualCounts = new Map();
   for (const line of source.split("\n")) {
-    if (line.trimStart().startsWith("#") || !line.includes("empty.trivyignore")) continue;
+    if (line.trimStart().startsWith("#") || !line.includes(".trivyignore")) continue;
     const reference = line.trim();
     actualCounts.set(reference, (actualCounts.get(reference) ?? 0) + 1);
   }
@@ -1006,7 +1060,7 @@ test("publisher mutations cannot tag before scanning or replace digest-only outp
   );
   assert.throws(
     () => assertOnlyReviewedPublicationCommands(preScanPublication),
-    /only the three post-verification immutable-tag commands/u,
+    /only the four post-verification immutable-tag commands/u,
   );
 });
 
@@ -1030,5 +1084,40 @@ test("the empty ignore initializer must remain immediately adjacent to its scan"
   assert.throws(
     () => assertOnlyReviewedIgnorePolicyReferences(rewrittenIgnore),
     /may only be initialized empty and consumed by reviewed scans/u,
+  );
+});
+
+test("storage publication and ignore policy remain globally bound", () => {
+  const storage = workflowJob(workflow, "storage-image");
+  const publication = workflowStep(storage, "Publish the immutable verified storage tag");
+  const verification = workflowStep(storage, "Verify the signed same-source storage digest");
+  const premature = workflow
+    .replace(publication, "")
+    .replace(verification, `${publication}\n${verification}`);
+  assert.throws(() => assertOnlyReviewedPublicationCommands(premature));
+  const unknownIgnore = `${workflow}\n      - name: Unreviewed ignore rewrite\n        run: printf CVE-unreviewed > ${shellVariable("RUNNER_TEMP")}/unreviewed.trivyignore\n`;
+  assert.throws(() => assertOnlyReviewedIgnorePolicyReferences(unknownIgnore));
+  const rewrite = workflow.replace(
+    `        run: install -m 600 /dev/null "${shellVariable("RUNNER_TEMP")}/patched-storage.trivyignore"`,
+    `        run: printf CVE-unreviewed > "${shellVariable("RUNNER_TEMP")}/patched-storage.trivyignore"`,
+  );
+  assert.throws(() => assertOnlyReviewedIgnorePolicyReferences(rewrite));
+});
+
+test("Caddy patch identity cannot move into another service branch", () => {
+  const moved = workflow
+    .replace(CADDY_WORKFLOW_LABEL_LINE, "")
+    .replace("            postgres)", `            postgres)\n${CADDY_WORKFLOW_LABEL_LINE}`);
+  assert.throws(
+    () => assertCaddyVulnerabilityPatchGraph({ workflow: moved }),
+    /one exact active line/u,
+  );
+  const changed = workflow.replace(
+    CADDY_WORKFLOW_LABEL_LINE,
+    CADDY_WORKFLOW_LABEL_LINE.replace(CADDY_GRPC_PATCH_VERSION, "v1.83.1"),
+  );
+  assert.throws(
+    () => assertCaddyVulnerabilityPatchGraph({ workflow: changed }),
+    /alternate Caddy grpc version/u,
   );
 });
