@@ -346,16 +346,21 @@ export function verifyPatchedObjectStoreImage(
         options.imageRef,
       ]),
     );
+    // Cosign v3.1.3 includes other verified bundles for this subject and maps
+    // their predicate types to critical.type. GitHub provenance is checked below.
     if (
       !Array.isArray(signatures) ||
-      signatures.length === 0 ||
+      !signatures.some((item) => item?.critical?.type === "https://sigstore.dev/cosign/sign/v1") ||
       signatures.some(
         (item) =>
-          item.critical?.type !== "https://sigstore.dev/cosign/sign/v1" ||
-          item.critical?.image?.["docker-manifest-digest"] !== digest,
+          !["https://sigstore.dev/cosign/sign/v1", "https://slsa.dev/provenance/v1"].includes(
+            item?.critical?.type,
+          ) || item?.critical?.image?.["docker-manifest-digest"] !== digest,
       )
     ) {
-      throw new Error("Project signature output is empty or names another digest.");
+      throw new Error(
+        "Project signature output lacks a signing predicate or has an unexpected type or digest.",
+      );
     }
     run("gh", [
       "attestation",

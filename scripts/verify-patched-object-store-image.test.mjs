@@ -199,14 +199,16 @@ function fixture() {
     provenance,
     sbom,
     options,
-    signatures: [
-      {
+    // Captured predicates attached to index 48fc4e0c6e1272d2745fa3516039eaae4d12d76371233cd8f4ddd31b81f42138.
+    // Cosign v3.1.3 transformOutput maps each verified predicateType to critical.type.
+    signatures: ["https://sigstore.dev/cosign/sign/v1", "https://slsa.dev/provenance/v1"].map(
+      (type) => ({
         critical: {
-          type: "https://sigstore.dev/cosign/sign/v1",
+          type,
           image: { "docker-manifest-digest": digest(indexRaw) },
         },
-      },
-    ],
+      }),
+    ),
     metadata: metadata(),
     calls: [],
   };
@@ -257,9 +259,96 @@ test("full verification binds project signing and GitHub provenance to the exact
     cosign.includes(`https://github.com/${PATCHED_STORE.workflow}@${PATCHED_STORE.sourceRef}`),
   );
   const gh = state.calls.find(([command]) => command === "gh")[1];
+  assert.equal(
+    cosign[cosign.indexOf("--certificate-oidc-issuer") + 1],
+    "https://token.actions.githubusercontent.com",
+  );
+  assert.equal(cosign.at(-1), state.options.imageRef);
   assert.ok(gh.includes("--deny-self-hosted-runners"));
   assert.equal(gh[gh.indexOf("--source-digest") + 1], revision);
+  assert.equal(gh[gh.indexOf("--signer-digest") + 1], revision);
+  assert.equal(gh[gh.indexOf("--signer-workflow") + 1], PATCHED_STORE.workflow);
+  assert.equal(gh[gh.indexOf("--source-ref") + 1], PATCHED_STORE.sourceRef);
+  assert.equal(gh[gh.indexOf("--predicate-type") + 1], "https://slsa.dev/provenance/v1");
 });
+test("accepts an actual signing predicate with or without the separate provenance output", () => {
+  for (const reverse of [false, true]) {
+    const state = fixture();
+    state.options.mode = "verify";
+    if (reverse) state.signatures.reverse();
+    else state.signatures.splice(1, 1);
+    state.verify();
+    assert.ok(state.calls.some(([command]) => command === "gh"));
+  }
+});
+test("a valid signature and provenance output cannot bypass GitHub source verification", () => {
+  const state = fixture();
+  state.options.mode = "verify";
+  const run = state.run;
+  state.run = (command, args) => {
+    if (command === "gh") throw new Error("GitHub source verification rejected");
+    return run(command, args);
+  };
+  assert.throws(state.verify, /GitHub source verification rejected/);
+});
+for (const [name, change] of [
+  [
+    "provenance without a signing predicate",
+    (s) => {
+      s.signatures.shift();
+    },
+  ],
+  [
+    "another digest in accompanying provenance",
+    (s) => {
+      s.signatures[1].critical.image["docker-manifest-digest"] = `sha256:${"0".repeat(64)}`;
+    },
+  ],
+  [
+    "unknown accompanying predicate",
+    (s) => {
+      s.signatures[1].critical.type = "https://example.test/unknown";
+    },
+  ],
+  [
+    "missing accompanying predicate",
+    (s) => {
+      delete s.signatures[1].critical.type;
+    },
+  ],
+  [
+    "missing accompanying digest",
+    (s) => {
+      delete s.signatures[1].critical.image;
+    },
+  ],
+  [
+    "missing critical record",
+    (s) => {
+      delete s.signatures[1].critical;
+    },
+  ],
+  [
+    "null output entry",
+    (s) => {
+      s.signatures[1] = null;
+    },
+  ],
+  [
+    "non-array output",
+    (s) => {
+      s.signatures = {};
+    },
+  ],
+]) {
+  test(`rejects ${name} before GitHub verification`, () => {
+    const state = fixture();
+    state.options.mode = "verify";
+    change(state);
+    assert.throws(state.verify);
+    assert.ok(!state.calls.some(([command]) => command === "gh"));
+  });
+}
 for (const [name, change] of [
   [
     "runtime user",
