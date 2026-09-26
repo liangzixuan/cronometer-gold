@@ -15,3 +15,6 @@ f247b311d86f3e3f2db43d66cce48161ea6c5c85:infra/docker/object-store-modules.json:
 f247b311d86f3e3f2db43d66cce48161ea6c5c85:infra/docker/object-store-modules.json:sourcegraph-access-token:197
 f247b311d86f3e3f2db43d66cce48161ea6c5c85:infra/docker/object-store-modules.json:sourcegraph-access-token:220
 f247b311d86f3e3f2db43d66cce48161ea6c5c85:infra/docker/object-store-modules.json:generic-api-key:727
+ae34e6295e754faeb7b9090e01e1bd14955b4f92:infra/docker/object-store-modules.json:generic-api-key:412
+ae34e6295e754faeb7b9090e01e1bd14955b4f92:infra/docker/object-store-modules.json:generic-api-key:536
+ae34e6295e754faeb7b9090e01e1bd14955b4f92:infra/docker/object-store-modules.json:generic-api-key:1113

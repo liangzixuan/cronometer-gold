@@ -195,8 +195,15 @@ export function extractBinaryMetadata(runtimeRef, run = capture) {
 
 export function verifyBuildMaterials(payload, lock) {
   const build = payload.SLSA?.buildDefinition;
+  const root = build?.externalParameters?.request?.root;
+  // BuildKit names this file relative to its separate Dockerfile context.
+  // Validate both exact paths; signed source acceptance remains a later gate.
   if (
-    build?.externalParameters?.configSource?.path !== "infra/docker/object-store.Dockerfile" ||
+    build?.externalParameters?.configSource?.path !== "object-store.Dockerfile" ||
+    root?.configSource?.path !== "object-store.Dockerfile" ||
+    root?.request?.args?.["vcs:localdir:dockerfile"] !== "infra/docker" ||
+    root?.request?.args?.["vcs:localdir:context"] !== "." ||
+    root?.request?.args?.target !== "runtime" ||
     build.externalParameters.request?.args?.target !== "runtime" ||
     build.internalParameters?.builderPlatform !== "linux/arm64"
   ) {

@@ -140,8 +140,22 @@ function fixture() {
         buildType:
           "https://github.com/moby/buildkit/blob/master/docs/attestations/slsa-definitions.md",
         externalParameters: {
-          configSource: { path: "infra/docker/object-store.Dockerfile" },
-          request: { args: { target: "runtime" } },
+          // Exact local-context tuple captured from the ae34e629 BuildKit
+          // SLSA predicate (sha256:2b9b530d33b82a09751a42f6ec6837ad451eef79476994c29efb964f2cf41ac4).
+          configSource: { path: "object-store.Dockerfile" },
+          request: {
+            args: { target: "runtime" },
+            root: {
+              configSource: { path: "object-store.Dockerfile" },
+              request: {
+                args: {
+                  target: "runtime",
+                  "vcs:localdir:dockerfile": "infra/docker",
+                  "vcs:localdir:context": ".",
+                },
+              },
+            },
+          },
         },
         internalParameters: { builderPlatform: "linux/arm64" },
         resolvedDependencies: [
@@ -421,4 +435,46 @@ test("requires every exact upstream material", () => {
     state.provenance.SLSA.buildDefinition.resolvedDependencies.splice(index, 1);
     assert.throws(() => verifyBuildMaterials(state.provenance, lock));
   }
+});
+
+test("accepts the captured basename and exact Dockerfile/context directory tuple", () => {
+  assert.doesNotThrow(() => verifyBuildMaterials(fixture().provenance, lock));
+});
+for (const [field, values] of [
+  [
+    "basename",
+    [
+      undefined,
+      "other.Dockerfile",
+      "../object-store.Dockerfile",
+      "infra/docker/object-store.Dockerfile",
+    ],
+  ],
+  ["root basename", [undefined, "other.Dockerfile", "../object-store.Dockerfile"]],
+  ["directory", [undefined, "other", "../infra/docker", "infra/./docker", "/infra/docker"]],
+  ["context", [undefined, "..", "./", "/"]],
+  ["target", [undefined, "build-evidence"]],
+  ["root target", [undefined, "build-evidence"]],
+  ["platform", [undefined, "linux/amd64"]],
+]) {
+  for (const value of values)
+    test(`rejects ${field}=${String(value)} in the provenance tuple`, () => {
+      const state = fixture();
+      const build = state.provenance.SLSA.buildDefinition;
+      const external = build.externalParameters;
+      const root = external.request.root;
+      if (field === "basename") external.configSource.path = value;
+      if (field === "root basename") root.configSource.path = value;
+      if (field === "directory") root.request.args["vcs:localdir:dockerfile"] = value;
+      if (field === "context") root.request.args["vcs:localdir:context"] = value;
+      if (field === "target") external.request.args.target = value;
+      if (field === "root target") root.request.args.target = value;
+      if (field === "platform") build.internalParameters.builderPlatform = value;
+      assert.throws(() => verifyBuildMaterials(state.provenance, lock), /another build definition/);
+    });
+}
+test("rejects a missing local-context root record", () => {
+  const state = fixture();
+  delete state.provenance.SLSA.buildDefinition.externalParameters.request.root;
+  assert.throws(() => verifyBuildMaterials(state.provenance, lock), /another build definition/);
 });
