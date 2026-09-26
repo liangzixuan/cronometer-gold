@@ -60,6 +60,45 @@ const healthSectionLabels: Record<HealthSection, string> = {
   integrations: "health integrations",
 };
 
+type TrendKind = "nutrition" | "biometric";
+interface TrendRequest {
+  readonly key: string;
+  readonly ownerUserId: string;
+  readonly profileScope: string;
+  readonly timeZone: string;
+  readonly from: string;
+  readonly to: string;
+  readonly seriesId: string;
+}
+type TrendResult =
+  | { readonly kind: "nutrition"; readonly data: NutrientTrend }
+  | { readonly kind: "biometric"; readonly data: BiometricTrend };
+interface TrendRead {
+  readonly request: TrendRequest;
+  readonly status: LoadState;
+  readonly result: TrendResult | null;
+  readonly message: string;
+}
+function trendRequest(
+  session: SessionSummary,
+  range: { readonly from: string; readonly to: string },
+  seriesId: string,
+  generation: number,
+): TrendRequest | null {
+  if (!seriesId || !isLocalDate(range.from) || !isLocalDate(range.to) || range.from > range.to)
+    return null;
+  const profileScope = JSON.stringify([session.user.id, session.profile]);
+  return {
+    key: JSON.stringify([profileScope, range.from, range.to, seriesId, generation]),
+    ownerUserId: session.user.id,
+    profileScope,
+    timeZone: session.profile.timeZone,
+    from: range.from,
+    to: range.to,
+    seriesId,
+  };
+}
+
 interface BiometricWindow {
   readonly from: string;
   readonly to: string;
@@ -241,8 +280,16 @@ export function HealthClient() {
   const renderedTrendControls = trendControls.current;
   const [selectedNutrient, setSelectedNutrientState] = useState("");
   const selectedNutrientRef = useRef(selectedNutrient);
-  const [nutrientTrend, setNutrientTrend] = useState<NutrientTrend | null>(null);
-  const [biometricTrend, setBiometricTrend] = useState<BiometricTrend | null>(null);
+  const [trendReads, setTrendReads] = useState<Record<TrendKind, TrendRead | null>>({
+    nutrition: null,
+    biometric: null,
+  });
+  const trendReadsRef = useRef(trendReads);
+  const installTrendRead = useCallback((kind: TrendKind, read: TrendRead | null) => {
+    const next = { ...trendReadsRef.current, [kind]: read };
+    trendReadsRef.current = next;
+    setTrendReads(next);
+  }, []);
   const [exportJob, setExportJob] = useState<AccountExportJob | null>(null);
   const [erasureJob, setErasureJob] = useState<AccountErasureJob | null>(null);
   const [password, setPassword] = useState("");
@@ -250,7 +297,17 @@ export function HealthClient() {
   const [busy, setBusy] = useState<string | null>(null);
   const operations = useRef(new Map<string, string>());
   const loadController = useRef<AbortController | null>(null);
-  const trendController = useRef<AbortController | null>(null);
+  const trendControllers = useRef<Record<TrendKind, AbortController | null>>({
+    nutrition: null,
+    biometric: null,
+  });
+  const trendGenerations = useRef({ nutrition: 0, biometric: 0 });
+  const abortTrendRequests = useCallback(() => {
+    trendGenerations.current.nutrition += 1;
+    trendGenerations.current.biometric += 1;
+    trendControllers.current.nutrition?.abort();
+    trendControllers.current.biometric?.abort();
+  }, []);
   const privateReadControllers = useRef(new Set<AbortController>());
   const ownerUserId = useRef<string | null>(null);
   const privateUiClosed = useRef(false);
@@ -258,18 +315,22 @@ export function HealthClient() {
   const visible = useRef(true);
   const installedSession = useRef<SessionSummary | null>(null);
 
-  const replaceTrendRange = useCallback((next: { from: string; to: string }) => {
-    const current = trendRangeRef.current;
-    if (current.from === next.from && current.to === next.to) return;
-    trendController.current?.abort();
-    trendControls.current += 1;
-    trendRangeRef.current = next;
-    setTrendRange(next);
-  }, []);
+  const replaceTrendRange = useCallback(
+    (next: { from: string; to: string }) => {
+      const current = trendRangeRef.current;
+      if (current.from === next.from && current.to === next.to) return;
+      abortTrendRequests();
+      trendControls.current += 1;
+      trendRangeRef.current = next;
+      setTrendRange(next);
+    },
+    [abortTrendRequests],
+  );
   const setSelectedNutrient = useCallback((change: string | ((value: string) => string)) => {
     const next = typeof change === "function" ? change(selectedNutrientRef.current) : change;
     if (next === selectedNutrientRef.current) return;
-    trendController.current?.abort();
+    trendControllers.current.nutrition?.abort();
+    trendGenerations.current.nutrition += 1;
     trendControls.current += 1;
     selectedNutrientRef.current = next;
     setSelectedNutrientState(next);
@@ -277,7 +338,8 @@ export function HealthClient() {
   const setSelectedDefinition = useCallback((change: string | ((value: string) => string)) => {
     const next = typeof change === "function" ? change(selectedDefinitionRef.current) : change;
     if (next === selectedDefinitionRef.current) return;
-    trendController.current?.abort();
+    trendControllers.current.biometric?.abort();
+    trendGenerations.current.biometric += 1;
     trendControls.current += 1;
     selectedDefinitionRef.current = next;
     setSelectedDefinitionState(next);
@@ -395,7 +457,7 @@ export function HealthClient() {
             JSON.stringify([next.user.id, next.profile]))
       ) {
         trendControls.current += 1;
-        trendController.current?.abort();
+        abortTrendRequests();
         reminderControls.current += 1;
         resetHistoryMetric();
         invalidateHistory();
@@ -415,14 +477,20 @@ export function HealthClient() {
       installedSession.current = next;
       setSessionState(next);
     },
-    [installHistory, invalidateHistory, resetHistoryMetric, installTrendNutrientFilter],
+    [
+      installHistory,
+      invalidateHistory,
+      resetHistoryMetric,
+      installTrendNutrientFilter,
+      abortTrendRequests,
+    ],
   );
 
   const signInAgain = useCallback(() => {
     privateUiClosed.current = true;
     resetHistoryMetric();
     loadController.current?.abort();
-    trendController.current?.abort();
+    abortTrendRequests();
     for (const controller of privateReadControllers.current) controller.abort();
     privateReadControllers.current.clear();
     ownerUserId.current = null;
@@ -456,8 +524,8 @@ export function HealthClient() {
     replaceReminder(reminderDraft());
     replaceTrendRange({ from: "", to: "" });
     setSelectedNutrient("");
-    setNutrientTrend(null);
-    setBiometricTrend(null);
+    installTrendRead("nutrition", null);
+    installTrendRead("biometric", null);
     setExportJob(null);
     setErasureJob(null);
     setPassword("");
@@ -468,6 +536,8 @@ export function HealthClient() {
     router.replace("/login");
     router.refresh();
   }, [
+    abortTrendRequests,
+    installTrendRead,
     resetHistoryMetric,
     router,
     setSession,
@@ -997,76 +1067,183 @@ export function HealthClient() {
       if (typeof document !== "undefined")
         document.removeEventListener("visibilitychange", visibilityChanged);
       loadController.current?.abort();
+      abortTrendRequests();
       for (const controller of privateReadControllers.current) controller.abort();
       privateReadControllers.current.clear();
     };
-  }, [invalidateHistory, loadAll]);
+  }, [abortTrendRequests, invalidateHistory, loadAll]);
+
+  const currentTrendRequest = useCallback((kind: TrendKind): TrendRequest | null => {
+    const currentSession = installedSession.current;
+    if (
+      !mounted.current ||
+      privateUiClosed.current ||
+      !currentSession ||
+      ownerUserId.current !== currentSession.user.id
+    )
+      return null;
+    return trendRequest(
+      currentSession,
+      trendRangeRef.current,
+      kind === "nutrition" ? selectedNutrientRef.current : selectedDefinitionRef.current,
+      trendGenerations.current[kind],
+    );
+  }, []);
+
+  const loadTrend = useCallback(
+    (kind: TrendKind, request: TrendRequest) => {
+      if (currentTrendRequest(kind)?.key !== request.key) return;
+      trendControllers.current[kind]?.abort();
+      const controller = new AbortController();
+      trendControllers.current[kind] = controller;
+      privateReadControllers.current.add(controller);
+      const current = () =>
+        !controller.signal.aborted &&
+        trendControllers.current[kind] === controller &&
+        currentTrendRequest(kind)?.key === request.key;
+      const label = kind === "nutrition" ? "Nutrition" : "Biometric";
+      installTrendRead(kind, {
+        request,
+        status: "loading",
+        result: null,
+        message: `Loading ${label.toLowerCase()} trend…`,
+      });
+      void (async () => {
+        try {
+          await installPrivateDataForOwner({
+            expectedOwnerUserId: request.ownerUserId,
+            signal: controller.signal,
+            loadPrivateData: async (): Promise<TrendResult> => {
+              const query = `${kind === "nutrition" ? "nutrientId" : "definitionId"}=${encodeURIComponent(request.seriesId)}&from=${request.from}&to=${request.to}`;
+              const response = await fetch(
+                `/api/retention/trends/${kind === "nutrition" ? "nutrients" : "biometrics"}?${query}`,
+                { cache: "no-store", signal: controller.signal },
+              );
+              controller.signal.throwIfAborted();
+              if (response.status === 401) throw new PrivateOwnerFenceError();
+              const body = await json(response);
+              controller.signal.throwIfAborted();
+              if (!response.ok)
+                throw new Error(responseError(body, `${label} trend could not be loaded.`));
+              return kind === "nutrition"
+                ? { kind, data: parseNutrientTrend(body) }
+                : { kind, data: parseBiometricTrend(body) };
+            },
+            revalidateSession: () => revalidateHealthSession(controller.signal),
+            install: (result, verifiedSession) => {
+              if (!current()) return;
+              if (
+                JSON.stringify([verifiedSession.user.id, verifiedSession.profile]) !==
+                request.profileScope
+              ) {
+                setSession(verifiedSession);
+                void loadAll("nutrients");
+                return;
+              }
+              const seriesId =
+                result.kind === "nutrition" ? result.data.nutrient.id : result.data.definition.id;
+              if (
+                seriesId !== request.seriesId ||
+                result.data.from !== request.from ||
+                result.data.to !== request.to ||
+                result.data.timeZone !== request.timeZone
+              )
+                throw new Error(
+                  `${label} trend did not match the selected series, dates or time zone.`,
+                );
+              installTrendRead(kind, { request, status: "ready", result, message: "" });
+            },
+          });
+        } catch (error) {
+          if (!current()) return;
+          if (error instanceof PrivateOwnerFenceError) return signInAgain();
+          installTrendRead(kind, {
+            request,
+            status: "error",
+            result: null,
+            message: error instanceof Error ? error.message : `${label} trend could not be loaded.`,
+          });
+        } finally {
+          privateReadControllers.current.delete(controller);
+          if (trendControllers.current[kind] === controller) trendControllers.current[kind] = null;
+        }
+      })();
+    },
+    [
+      currentTrendRequest,
+      installTrendRead,
+      loadAll,
+      revalidateHealthSession,
+      setSession,
+      signInAgain,
+    ],
+  );
+
+  const nutritionTrendKey = session
+    ? (trendRequest(session, trendRange, selectedNutrient, trendGenerations.current.nutrition)
+        ?.key ?? null)
+    : null;
+  const biometricTrendKey = session
+    ? (trendRequest(session, trendRange, selectedDefinition, trendGenerations.current.biometric)
+        ?.key ?? null)
+    : null;
 
   useEffect(() => {
-    if (!from || !to || !isLocalDate(from) || !isLocalDate(to) || from > to) return;
-    const initiatingOwnerUserId = ownerUserId.current;
-    if (initiatingOwnerUserId === null || privateUiClosed.current) return;
-    trendController.current?.abort();
-    const controller = new AbortController();
-    trendController.current = controller;
-    void (async () => {
-      try {
-        await installPrivateDataForOwner({
-          expectedOwnerUserId: initiatingOwnerUserId,
-          signal: controller.signal,
-          loadPrivateData: async () => {
-            const requests: Promise<Response>[] = [];
-            if (selectedNutrient)
-              requests.push(
-                fetch(
-                  `/api/retention/trends/nutrients?nutrientId=${encodeURIComponent(selectedNutrient)}&from=${from}&to=${to}`,
-                  { cache: "no-store", signal: controller.signal },
-                ),
-              );
-            if (selectedDefinition)
-              requests.push(
-                fetch(
-                  `/api/retention/trends/biometrics?definitionId=${encodeURIComponent(selectedDefinition)}&from=${from}&to=${to}`,
-                  { cache: "no-store", signal: controller.signal },
-                ),
-              );
-            const responses = await Promise.all(requests);
-            if (responses.some((response) => response.status === 401)) {
-              throw new PrivateOwnerFenceError();
-            }
-            for (const response of responses)
-              if (!response.ok)
-                throw new Error(responseError(await json(response), "Trends could not be loaded."));
-            let index = 0;
-            return {
-              nutrient: selectedNutrient
-                ? parseNutrientTrend(await json(responses[index++] as Response))
-                : null,
-              biometric: selectedDefinition
-                ? parseBiometricTrend(await json(responses[index] as Response))
-                : null,
-            };
-          },
-          revalidateSession: () => revalidateHealthSession(controller.signal),
-          install: (trends) => {
-            if (privateUiClosed.current || ownerUserId.current !== initiatingOwnerUserId) {
-              throw new PrivateOwnerFenceError();
-            }
-            setNutrientTrend(trends.nutrient);
-            setBiometricTrend(trends.biometric);
-          },
-        });
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        if (error instanceof PrivateOwnerFenceError) {
-          signInAgain();
-          return;
-        }
-        setMessage(error instanceof Error ? error.message : "Trends could not be loaded.");
+    for (const kind of ["nutrition", "biometric"] as const) {
+      const request = currentTrendRequest(kind);
+      const renderedKey = kind === "nutrition" ? nutritionTrendKey : biometricTrendKey;
+      if (request && request.key !== renderedKey) continue;
+      const previous = trendReadsRef.current[kind];
+      if (!request) {
+        trendControllers.current[kind]?.abort();
+        if (previous) installTrendRead(kind, null);
+      } else if (
+        previous?.request.key !== request.key ||
+        (previous.status === "loading" &&
+          (!trendControllers.current[kind] || trendControllers.current[kind]?.signal.aborted))
+      ) {
+        loadTrend(kind, request);
       }
-    })();
-    return () => controller.abort();
-  }, [from, revalidateHealthSession, selectedDefinition, selectedNutrient, signInAgain, to]);
+    }
+  }, [nutritionTrendKey, biometricTrendKey, currentTrendRequest, installTrendRead, loadTrend]);
+
+  function visibleTrendRead(kind: TrendKind) {
+    const read = trendReads[kind];
+    return read && read.request.key === currentTrendRequest(kind)?.key ? read : null;
+  }
+  const nutritionRead = visibleTrendRead("nutrition");
+  const biometricRead = visibleTrendRead("biometric");
+  const nutrientTrend =
+    nutritionRead?.result?.kind === "nutrition" ? nutritionRead.result.data : null;
+  const biometricTrend =
+    biometricRead?.result?.kind === "biometric" ? biometricRead.result.data : null;
+
+  function retryTrend(kind: TrendKind, read: TrendRead | null) {
+    if (
+      !canUseTrendInputs() ||
+      !read ||
+      read.status !== "error" ||
+      trendReadsRef.current[kind] !== read ||
+      currentTrendRequest(kind)?.key !== read.request.key ||
+      trendControllers.current[kind]
+    )
+      return;
+    loadTrend(kind, read.request);
+  }
+
+  function trendStatus(kind: TrendKind, read: TrendRead | null) {
+    const label = kind === "nutrition" ? "nutrition" : "biometric";
+    if (privateUiClosed.current || !session) return "Verify your private session to load trends.";
+    if (!isLocalDate(from) || !isLocalDate(to) || from > to)
+      return "Choose a valid date range to load trends.";
+    if (!(kind === "nutrition" ? selectedNutrient : selectedDefinition))
+      return `Choose a ${kind === "nutrition" ? "nutrient" : "metric"} to load its trend.`;
+    if (!read || read.status === "loading") return `Loading ${label} trend…`;
+    if (read.status === "error") return read.message;
+    return read.result?.data.points.length
+      ? `Showing ${read.request.from} through ${read.request.to}.`
+      : `No ${label} trend data for this range.`;
+  }
 
   const selectedDefinitionRecord = useMemo(
     () => definitions.find((definition) => definition.id === selectedDefinition) ?? null,
@@ -1787,6 +1964,18 @@ export function HealthClient() {
           <div className="trendTables">
             <div>
               <h3>{nutrientTrend?.nutrient.name ?? "Nutrition"}</h3>
+              <p id="nutrition-trend-status" role="status" aria-live="polite">
+                {trendStatus("nutrition", nutritionRead)}
+              </p>
+              {nutritionRead?.status === "error" ? (
+                <button
+                  className="secondaryAction"
+                  type="button"
+                  onClick={() => retryTrend("nutrition", nutritionRead)}
+                >
+                  Retry nutrition trend
+                </button>
+              ) : null}
               <p className="finePrint">
                 Buckets use {nutrientTrend?.timeZone ?? session?.profile.timeZone ?? "profile time"}
                 ; UTC bounds preserve 23/25-hour days.
@@ -1797,11 +1986,23 @@ export function HealthClient() {
                     <span>{point.localDate}</span>
                     <strong>{trendAggregateLabel(point.aggregate)}</strong>
                   </li>
-                )) ?? <li>Choose a range to load server totals.</li>}
+                ))}
               </ul>
             </div>
             <div>
               <h3>{biometricTrend?.definition.name ?? "Biometrics"}</h3>
+              <p id="biometric-trend-status" role="status" aria-live="polite">
+                {trendStatus("biometric", biometricRead)}
+              </p>
+              {biometricRead?.status === "error" ? (
+                <button
+                  className="secondaryAction"
+                  type="button"
+                  onClick={() => retryTrend("biometric", biometricRead)}
+                >
+                  Retry biometric trend
+                </button>
+              ) : null}
               <p className="finePrint">
                 Exact entered values; no averages are calculated in JavaScript.
               </p>
@@ -1818,7 +2019,7 @@ export function HealthClient() {
                       min {point.minimum} · max {point.maximum}
                     </small>
                   </li>
-                )) ?? <li>Choose a metric to load server aggregates.</li>}
+                ))}
               </ul>
             </div>
           </div>

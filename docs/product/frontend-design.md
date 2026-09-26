@@ -104,6 +104,20 @@ Nutrient threshold rows fit the editor column: source details occupy a full row,
 and threshold fields wrap to the available width. Editable and reference preview
 rows must remain contained beside the progress panel at tablet sizes.
 
+## Health trends
+
+Nutrition and biometric trends load independently. Each card shows its own loading
+state, result or error, with Retry for that card. Retrying one card keeps the other
+card available. Changing a range or series hides results from the previous choice
+immediately. An incomplete date range or Biometric None shows an explanation
+instead of old rows.
+
+Trend results remain tied to the signed-in owner, profile, selected dates and
+series. Late responses cannot replace the current view. Preserve the server's
+exact biometric values, nutrient coverage labels and profile-local day boundaries;
+missing nutrition values remain unknown. Trend recovery must leave biometric,
+reminder and privacy-action drafts alone.
+
 ## Responsive layout
 
 Keep main content centered within each route's width limit so wide screens do not

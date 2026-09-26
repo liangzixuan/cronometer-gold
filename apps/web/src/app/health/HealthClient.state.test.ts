@@ -83,6 +83,17 @@ const hooks = vi.hoisted(() => {
       for (const slot of mountedEffects) slot.cleanup = slot.effect?.();
     },
     renderWithoutEffects: () => render(false),
+    renderBeforeCommit() {
+      // Refresh handlers for a render without committing intermediate effect
+      // dependencies. The next render() compares against the last committed view.
+      const committedEffects = slots.flatMap((slot, index) =>
+        slot.effect ? [[index, slot] as const] : [],
+      );
+      const queuedEffects = [...effects];
+      render(false);
+      effects = queuedEffects;
+      for (const [index, slot] of committedEffects) slots[index] = slot;
+    },
     mount(next: () => unknown) {
       slots = [];
       effects = [];
@@ -2082,6 +2093,7 @@ describe("Health trend date shortcuts", () => {
       "/api/retention/trends/nutrients",
       "/api/retention/trends/biometrics",
       "/api/auth/me",
+      "/api/auth/me",
     ]);
     expect(
       trendReads()
@@ -2494,7 +2506,6 @@ describe("web Health trend nutrient name search", () => {
     const requests = fetcher.mock.calls.slice(before).map(([path]) => path);
     expect(requests).toEqual([
       `/api/retention/trends/nutrients?nutrientId=9007199254740993&from=${dates.from}&to=${dates.to}`,
-      `/api/retention/trends/biometrics?definitionId=${historyDefinition.id}&from=${dates.from}&to=${dates.to}`,
       "/api/auth/me",
     ]);
     expect(trendNutrientOptions()).toEqual([
@@ -2536,7 +2547,7 @@ describe("web Health trend nutrient name search", () => {
       const { state, fetcher, trendReads } = trendSearchWorkspace();
       await mount();
       const pending = deferred<Response>();
-      state.trend = () => pending.promise;
+      state.trend = () => pending.promise.then((response) => response.clone());
       await click("Last 7 days");
       const reads = trendReads().slice(-2);
       if (phase === "failed") {
@@ -2546,7 +2557,8 @@ describe("web Health trend nutrient name search", () => {
       const before = fetcher.mock.calls.length,
         inputs = inputsExceptTrendSearch(),
         result = trendText(),
-        message = status();
+        message = status(),
+        cardMessages = [text(trendCardStatus("nutrition")), text(trendCardStatus("biometric"))];
       const aborts = reads.map(([, init]) => init?.signal?.aborted);
       await change(trendSearchLabel, "Sodium");
       await click(clearTrendSearchLabel);
@@ -2555,9 +2567,16 @@ describe("web Health trend nutrient name search", () => {
       expect(inputsExceptTrendSearch()).toEqual(inputs);
       expect(trendText()).toBe(result);
       expect(status()).toBe(message);
+      expect([text(trendCardStatus("nutrition")), text(trendCardStatus("biometric"))]).toEqual(
+        cardMessages,
+      );
       pending.resolve(Response.json({ error: "Current pending result" }, { status: 503 }));
       await hooks.settle();
-      if (phase === "pending") expect(status()).toBe("Current pending result");
+      if (phase === "pending") {
+        expect(text(trendCardStatus("nutrition"))).toContain("Current pending result");
+        expect(text(trendCardStatus("biometric"))).toContain("Current pending result");
+        expect(status()).toBe(message);
+      }
     },
   );
 
@@ -2938,4 +2957,563 @@ describe("Health request independence", () => {
     expect(text()).not.toContain("Create private food");
     expect(trendText()).toContain("Response protein");
   });
+});
+
+describe("independent Health trend cards", () => {
+  it.each([
+    ["nutrients", "pending"],
+    ["nutrients", "failed"],
+    ["biometrics", "pending"],
+    ["biometrics", "failed"],
+  ])("installs the healthy peer while %s is %s", async (blocked, phase) => {
+    const { state, trendReads, writes } = trendWorkspace();
+    const pending = deferred<Response>();
+    state.trend = (path) =>
+      path.includes(`/${blocked}?`)
+        ? phase === "pending"
+          ? pending.promise
+          : Response.json({ error: `${blocked} unavailable` }, { status: 503 })
+        : trendResponse(path, state.timeZone);
+    await mount();
+    expect(trendReads().some(([path]) => path.includes("/nutrients?"))).toBe(true);
+    expect(trendReads().some(([path]) => path.includes("/biometrics?"))).toBe(true);
+    expect(trendText()).toContain(
+      blocked === "nutrients" ? "0.00000 kg" : "≥ 0 g · Partial · 1/2 contributions quantified",
+    );
+    expect(trendText()).not.toContain(blocked === "nutrients" ? "≥ 0 g" : "0.00000 kg");
+    expect(writes()).toHaveLength(0);
+  });
+
+  it.each(["nutrients", "biometrics"])(
+    "retries only the failed %s card and preserves its healthy peer",
+    async (failed) => {
+      const { state, trendReads, writes } = trendWorkspace();
+      state.trend = (path) =>
+        path.includes(`/${failed}?`)
+          ? Response.json({ error: `${failed} unavailable` }, { status: 503 })
+          : trendResponse(path, state.timeZone);
+      await mount();
+      const before = trendReads().length;
+      const retry = button(
+        failed === "nutrients" ? "Retry nutrition trend" : "Retry biometric trend",
+      );
+      const pending = deferred<Response>();
+      state.trend = (path) =>
+        path.includes(`/${failed}?`) ? pending.promise : trendResponse(path, state.timeZone);
+      invoke(retry, "onClick");
+      await hooks.settle();
+      expect(
+        trendReads()
+          .slice(before)
+          .map(([path]) => path.split("?")[0]),
+      ).toEqual([`/api/retention/trends/${failed}`]);
+      expect(trendText()).toContain(
+        failed === "nutrients" ? "0.00000 kg" : "≥ 0 g · Partial · 1/2 contributions quantified",
+      );
+      const current = requiredHistory(trendReads().at(-1));
+      pending.resolve(trendResponse(current[0], state.timeZone));
+      await hooks.settle();
+      expect(trendText()).toContain("0.00000 kg");
+      expect(trendText()).toContain("≥ 0 g · Partial · 1/2 contributions quantified");
+      expect(writes()).toHaveLength(0);
+    },
+  );
+
+  it.each(["2026-08-01", ""])(
+    "hides both old results before effects after changing From to %s",
+    async (from) => {
+      const { fetcher } = trendWorkspace();
+      await mount();
+      expect(trendText()).toContain("0.00000 kg");
+      expect(trendText()).toContain("≥ 0 g");
+      const before = fetcher.mock.calls.length;
+      invoke(trendField("From"), "onChange", { target: { value: from } });
+      hooks.renderWithoutEffects();
+      expect(trendDates().from).toBe(from);
+      expect(trendText()).not.toContain("0.00000 kg");
+      expect(trendText()).not.toContain("≥ 0 g");
+      expect(fetcher.mock.calls).toHaveLength(before);
+    },
+  );
+
+  it("clears Biometric None immediately without refetching or hiding nutrition", async () => {
+    const { trendReads } = trendWorkspace();
+    await mount();
+    const before = trendReads().length;
+    invoke(trendField("Biometric"), "onChange", { target: { value: "" } });
+    hooks.renderWithoutEffects();
+    expect(trendText()).not.toContain("0.00000 kg");
+    expect(trendText()).toContain("≥ 0 g · Partial · 1/2 contributions quantified");
+    hooks.render();
+    await hooks.settle();
+    expect(trendReads()).toHaveLength(before);
+  });
+});
+
+function trendCardStatus(kind: "nutrition" | "biometric") {
+  return requiredHistory(elements().find((node) => node.props.id === `${kind}-trend-status`));
+}
+
+describe("Health trend card context and recovery", () => {
+  it.each(["nutrients", "biometrics"])(
+    "keeps %s loading, error, and empty feedback scoped to its live region",
+    async (kind) => {
+      const { state, trendReads } = trendWorkspace();
+      const pending = deferred<Response>();
+      state.trend = (path) =>
+        path.includes(`/${kind}?`) ? pending.promise : trendResponse(path, state.timeZone);
+      await mount();
+      const label = kind === "nutrients" ? "nutrition" : "biometric";
+      expect(trendCardStatus(label).props["aria-live"]).toBe("polite");
+      expect(text(trendCardStatus(label))).toMatch(/loading/i);
+      expect(trendText()).toContain(kind === "nutrients" ? "0.00000 kg" : "≥ 0 g");
+      pending.resolve(Response.json({ data: { malformed: true } }));
+      await hooks.settle();
+      expect(text(trendCardStatus(label))).not.toMatch(/loading/i);
+      expect(button(`Retry ${label} trend`).props.disabled).not.toBe(true);
+      state.trend = async (path) => {
+        const body = await trendResponse(path, state.timeZone).json();
+        body.data.points = [];
+        return Response.json(body);
+      };
+      const before = trendReads().length;
+      await click(`Retry ${label} trend`);
+      expect(
+        trendReads()
+          .slice(before)
+          .map(([path]) => path.split("?")[0]),
+      ).toEqual([`/api/retention/trends/${kind}`]);
+      expect(text(trendCardStatus(label))).toMatch(/no .*data|no .*record|no .*point/i);
+      expect(trendText()).toContain(kind === "nutrients" ? "0.00000 kg" : "≥ 0 g");
+    },
+  );
+
+  it.each([
+    ["From", ""],
+    ["To", ""],
+    ["From", "2026-02-30"],
+    ["From", "not-a-date"],
+    ["From", "2026-09-14"],
+  ])(
+    "hides old rows for invalid %s=%s without fetching and recovers with a valid preset",
+    async (label, value) => {
+      const { trendReads } = trendWorkspace();
+      await mount();
+      const before = trendReads().length;
+      invoke(trendField(label), "onChange", { target: { value } });
+      hooks.renderWithoutEffects();
+      expect(trendText()).not.toContain("0.00000 kg");
+      expect(trendText()).not.toContain("≥ 0 g");
+      hooks.render();
+      await hooks.settle();
+      expect(trendReads()).toHaveLength(before);
+      expect(text(trendCardStatus("nutrition"))).toMatch(/range|date/i);
+      expect(text(trendCardStatus("biometric"))).toMatch(/range|date/i);
+      await click("Last 7 days");
+      expect(trendReads()).toHaveLength(before + 2);
+      expect(trendText()).toContain("2026-09-07");
+      expect(trendText()).toContain("0.00000 kg");
+      expect(trendText()).toContain("≥ 0 g");
+    },
+  );
+
+  it("accepts a single-day inclusive range and makes equal range and series selections no-ops", async () => {
+    const { trendReads, fetcher } = trendWorkspace();
+    await mount();
+    invoke(trendField("From"), "onChange", { target: { value: String(trendDates().to) } });
+    await hooks.settle();
+    expect(
+      trendReads()
+        .slice(-2)
+        .map(([path]) => requestRange(path)),
+    ).toEqual([
+      { from: "2026-09-13", to: "2026-09-13", cursor: null, limit: null },
+      { from: "2026-09-13", to: "2026-09-13", cursor: null, limit: null },
+    ]);
+    const before = fetcher.mock.calls.length,
+      result = trendText();
+    for (const label of ["From", "To", "Nutrient", "Biometric"]) {
+      const input = trendField(label);
+      invoke(input, "onChange", { target: { value: input.props.value } });
+    }
+    await hooks.settle();
+    expect(fetcher.mock.calls).toHaveLength(before);
+    expect(trendText()).toBe(result);
+  });
+
+  it.each(["Nutrient", "Biometric"])(
+    "hides only replaced %s rows before effects and requests only that series",
+    async (label) => {
+      const { state, trendReads } = trendWorkspace();
+      const second = {
+        ...historyDefinition,
+        id: "4bcfa2bf-4950-43f7-9f24-000000000002",
+        name: "Second metric",
+      };
+      state.definitions = [historyDefinition, second];
+      state.trend = async (path) => {
+        const body = await trendResponse(path, state.timeZone).json();
+        if (path.includes(second.id)) body.data.definition = second;
+        return Response.json(body);
+      };
+      await mount();
+      const before = trendReads().length;
+      invoke(trendField(label), "onChange", {
+        target: { value: label === "Nutrient" ? "3" : second.id },
+      });
+      hooks.renderWithoutEffects();
+      expect(trendText()).not.toContain(label === "Nutrient" ? "≥ 0 g" : "0.00000 kg");
+      expect(trendText()).toContain(label === "Nutrient" ? "0.00000 kg" : "≥ 0 g");
+      hooks.render();
+      await hooks.settle();
+      expect(
+        trendReads()
+          .slice(before)
+          .map(([path]) => path.split("?")[0]),
+      ).toEqual([`/api/retention/trends/${label === "Nutrient" ? "nutrients" : "biometrics"}`]);
+      expect(trendText()).toContain("0.00000 kg");
+      expect(trendText()).toContain("≥ 0 g");
+    },
+  );
+
+  it.each(["profile", "owner"])(
+    "hides obsolete rows after a verified %s replacement before effects",
+    async (scope) => {
+      const { state, trendReads } = trendWorkspace();
+      await mount();
+      const pending = deferred<Response>();
+      state.trend = () => pending.promise;
+      state.timeZone = scope === "profile" ? "Asia/Tokyo" : state.timeZone;
+      state.owner = scope === "owner" ? otherOwner : owner;
+      hooks.replayEffects();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      hooks.renderWithoutEffects();
+      expect(trendText()).not.toContain("0.00000 kg");
+      expect(trendText()).not.toContain("≥ 0 g");
+      if (scope === "owner") expect(router.replace).toHaveBeenCalledWith("/login");
+      else {
+        expect(router.replace).not.toHaveBeenCalled();
+        const before = trendReads().length;
+        state.trend = (path) => trendResponse(path, state.timeZone);
+        hooks.render();
+        await hooks.settle();
+        expect(trendReads().length).toBeGreaterThan(before);
+        expect(trendText()).toContain("Asia/Tokyo");
+        expect(trendText()).toContain("0.00000 kg");
+      }
+    },
+  );
+
+  it.each(["nutrients", "biometrics"])(
+    "rejects retained %s Retry after range edit-and-restore and deduplicates a current Retry",
+    async (kind) => {
+      const { state, trendReads } = trendWorkspace();
+      state.trend = (path) =>
+        path.includes(`/${kind}?`)
+          ? Response.json({ error: "Try again" }, { status: 503 })
+          : trendResponse(path, state.timeZone);
+      await mount();
+      const label = kind === "nutrients" ? "Retry nutrition trend" : "Retry biometric trend";
+      const stale = button(label),
+        original = trendDates().from;
+      invoke(trendField("From"), "onChange", { target: { value: "2026-08-01" } });
+      hooks.renderWithoutEffects();
+      invoke(trendField("From"), "onChange", { target: { value: original } });
+      hooks.renderWithoutEffects();
+      const before = trendReads().length;
+      invoke(stale, "onClick");
+      expect(trendReads()).toHaveLength(before);
+      hooks.render();
+      await hooks.settle();
+      const pending = deferred<Response>();
+      state.trend = (path) =>
+        path.includes(`/${kind}?`) ? pending.promise : trendResponse(path, state.timeZone);
+      const current = button(label),
+        currentBefore = trendReads().length;
+      invoke(current, "onClick");
+      invoke(current, "onClick");
+      await hooks.settle();
+      expect(
+        trendReads()
+          .slice(currentBefore)
+          .map(([path]) => path.split("?")[0]),
+      ).toEqual([`/api/retention/trends/${kind}`]);
+    },
+  );
+
+  it.each(["success", "503", "401"])(
+    "ignores a late %s JSON/read result across replacement, unmount, and private closure",
+    async (outcome) => {
+      for (const ending of ["replacement", "unmount", "closure"]) {
+        const { state, trendReads, fetcher } = trendWorkspace();
+        await mount();
+        const pending = deferred<Response>();
+        state.trend = (path) =>
+          path.includes("/biometrics?") ? pending.promise : trendResponse(path, state.timeZone);
+        await click("Last 7 days");
+        const old = requiredHistory(
+          trendReads()
+            .filter(([path]) => path.includes("/biometrics?"))
+            .at(-1),
+        );
+        if (ending === "replacement") {
+          state.trend = (path) => trendResponse(path, state.timeZone);
+          await click("Last 30 days");
+        } else if (ending === "unmount") hooks.unmount();
+        else {
+          state.owner = otherOwner;
+          hooks.replayEffects();
+          await hooks.settle();
+          expect(router.replace).toHaveBeenCalledWith("/login");
+        }
+        expect(old[1]?.signal?.aborted).toBe(true);
+        const before = fetcher.mock.calls.length,
+          updates = hooks.afterClose(),
+          redirects = router.replace.mock.calls.length;
+        const result = trendText(),
+          message = status();
+        const response =
+          outcome === "success"
+            ? trendResponse(old[0], state.timeZone)
+            : Response.json({ error: "obsolete private result" }, { status: Number(outcome) });
+        const readBody = vi.spyOn(response, "json");
+        pending.resolve(response);
+        await hooks.settle();
+        expect(fetcher.mock.calls).toHaveLength(before);
+        expect(hooks.afterClose()).toBe(updates);
+        expect(router.replace).toHaveBeenCalledTimes(redirects);
+        expect(trendText()).toBe(result);
+        expect(status()).toBe(message);
+        expect(readBody).not.toHaveBeenCalled();
+        hooks.unmount();
+        vi.clearAllMocks();
+      }
+    },
+  );
+
+  it("ignores parsed old data that completes after a range replacement", async () => {
+    const { state, trendReads, fetcher } = trendWorkspace();
+    await mount();
+    const body = deferred<unknown>();
+    let requested = "";
+    state.trend = (path) => {
+      if (!path.includes("/nutrients?")) return trendResponse(path, state.timeZone);
+      requested = path;
+      const response = Response.json({});
+      vi.spyOn(response, "json").mockImplementation(() => body.promise);
+      return response;
+    };
+    await click("Last 7 days");
+    expect(requested).not.toBe("");
+    const old = requiredHistory(
+      trendReads()
+        .filter(([path]) => path.includes("/nutrients?"))
+        .at(-1),
+    );
+    state.trend = (path) => trendResponse(path, state.timeZone);
+    await click("Last 30 days");
+    expect(old[1]?.signal?.aborted).toBe(true);
+    const before = fetcher.mock.calls.length,
+      result = trendText();
+    body.resolve(await trendResponse(requested, "America/Chicago").json());
+    await hooks.settle();
+    expect(fetcher.mock.calls).toHaveLength(before);
+    expect(trendText()).toBe(result);
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+
+  it.each(["nutrients", "biometrics"])(
+    "closes every private view for a current %s 401 before reading JSON",
+    async (kind) => {
+      const { state } = trendWorkspace();
+      state.eventRead = () => eventPage([reading()]);
+      await mount();
+      const unauthorized = Response.json({ error: "expired" }, { status: 401 });
+      const readBody = vi.spyOn(unauthorized, "json");
+      state.trend = (path) =>
+        path.includes(`/${kind}?`) ? unauthorized : trendResponse(path, state.timeZone);
+      await click("Last 7 days");
+      expect(router.replace).toHaveBeenCalledWith("/login");
+      expect(readBody).not.toHaveBeenCalled();
+      expect(trendText()).not.toContain("0.00000 kg");
+      expect(trendText()).not.toContain("≥ 0 g");
+      expect(eventRows()).toHaveLength(0);
+      expect(trendDates()).toEqual({ from: "", to: "" });
+    },
+  );
+});
+
+describe("Health trend response scope verification", () => {
+  it.each([
+    ["nutrients", "identity"],
+    ["nutrients", "range"],
+    ["nutrients", "timeZone"],
+    ["biometrics", "identity"],
+    ["biometrics", "range"],
+    ["biometrics", "timeZone"],
+  ])(
+    "rejects a %s response with the wrong %s while preserving its peer",
+    async (kind, mismatch) => {
+      const { state, trendReads } = trendWorkspace();
+      state.trend = async (path) => {
+        const body = await trendResponse(path, state.timeZone).json();
+        if (path.includes(`/${kind}?`)) {
+          if (mismatch === "identity") {
+            if (kind === "nutrients") body.data.nutrient.id = "999";
+            else body.data.definition.id = "4bcfa2bf-4950-43f7-9f24-000000000099";
+          } else if (mismatch === "range") body.data.to = "2026-09-12";
+          else body.data.timeZone = "Asia/Tokyo";
+        }
+        return Response.json(body);
+      };
+      await mount();
+      const retryLabel = kind === "nutrients" ? "Retry nutrition trend" : "Retry biometric trend";
+      expect(button(retryLabel).props.disabled).not.toBe(true);
+      expect(trendText()).not.toContain(kind === "nutrients" ? "≥ 0 g" : "0.00000 kg");
+      expect(trendText()).toContain(kind === "nutrients" ? "0.00000 kg" : "≥ 0 g");
+      const before = trendReads().length;
+      state.trend = (path) => trendResponse(path, state.timeZone);
+      await click(retryLabel);
+      expect(
+        trendReads()
+          .slice(before)
+          .map(([path]) => path.split("?")[0]),
+      ).toEqual([`/api/retention/trends/${kind}`]);
+      expect(trendText()).toContain("0.00000 kg");
+      expect(trendText()).toContain("≥ 0 g");
+    },
+  );
+
+  it("revalidates both cards under a changed same-owner profile without installing the earlier zone result", async () => {
+    const { state, trendReads } = trendWorkspace();
+    await mount();
+    const pending = deferred<Response>();
+    state.trend = (path) =>
+      path.includes("/nutrients?") ? pending.promise : trendResponse(path, state.timeZone);
+    await click("Last 7 days");
+    const old = requiredHistory(
+      trendReads()
+        .filter(([path]) => path.includes("/nutrients?"))
+        .at(-1),
+    );
+    const newReads = deferred<Response>();
+    state.timeZone = "Asia/Tokyo";
+    state.trend = () => newReads.promise;
+    pending.resolve(trendResponse(old[0], "America/Chicago"));
+    await hooks.settle();
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(trendText()).not.toContain("0.00000 kg");
+    expect(trendText()).not.toContain("≥ 0 g");
+    expect(trendText()).not.toContain("Buckets use America/Chicago");
+    expect(
+      trendReads()
+        .slice(-2)
+        .map(([path]) => path.split("?")[0]),
+    ).toEqual(["/api/retention/trends/nutrients", "/api/retention/trends/biometrics"]);
+    state.trend = (path) => trendResponse(path, state.timeZone);
+    await click("Last 30 days");
+    expect(trendText()).toContain("Asia/Tokyo");
+    expect(trendText()).toContain("0.00000 kg");
+    expect(trendText()).toContain("≥ 0 g");
+    const result = trendText();
+    newReads.resolve(Response.json({ error: "obsolete zone response" }, { status: 401 }));
+    await hooks.settle();
+    expect(trendText()).toBe(result);
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+
+  it("rejects Retry before a visibility event and rejects the old Retry after restoring visibility", async () => {
+    const view = visibility();
+    const { state, trendReads } = trendWorkspace();
+    state.trend = (path) =>
+      path.includes("/nutrients?")
+        ? Response.json({ error: "Try again" }, { status: 503 })
+        : trendResponse(path, state.timeZone);
+    await mount();
+    const stale = button("Retry nutrition trend"),
+      before = trendReads().length;
+    expect(trendText()).toContain("0.00000 kg");
+    view.document.visibilityState = "hidden";
+    invoke(stale, "onClick");
+    hooks.renderWithoutEffects();
+    expect(trendReads()).toHaveLength(before);
+    await view.set("visible");
+    const restored = trendReads().length;
+    invoke(stale, "onClick");
+    await hooks.settle();
+    expect(trendReads()).toHaveLength(restored);
+  });
+
+  it.each(["nutrients", "biometrics"])(
+    "verifies ownership after the %s read before exposing it",
+    async (kind) => {
+      const { state, trendReads } = trendWorkspace();
+      await mount();
+      const pending = deferred<Response>();
+      state.trend = (path) =>
+        path.includes(`/${kind}?`) ? pending.promise : trendResponse(path, state.timeZone);
+      await click("Last 7 days");
+      expect(trendText()).toContain(kind === "nutrients" ? "0.00000 kg" : "≥ 0 g");
+      const old = requiredHistory(
+        trendReads()
+          .filter(([path]) => path.includes(`/${kind}?`))
+          .at(-1),
+      );
+      state.owner = otherOwner;
+      pending.resolve(trendResponse(old[0], state.timeZone));
+      await hooks.settle();
+      expect(router.replace).toHaveBeenCalledWith("/login");
+      expect(trendText()).not.toContain("0.00000 kg");
+      expect(trendText()).not.toContain("≥ 0 g");
+      expect(trendDates()).toEqual({ from: "", to: "" });
+    },
+  );
+});
+
+describe("batched Health trend restoration", () => {
+  it.each(["range", "nutrient", "biometric"])(
+    "reloads restored %s after A-to-B-to-A renders commit together",
+    async (kind) => {
+      const { state, trendReads } = trendWorkspace();
+      const second = {
+        ...historyDefinition,
+        id: "4bcfa2bf-4950-43f7-9f24-000000000002",
+        name: "Second metric",
+      };
+      state.definitions = [historyDefinition, second];
+      await mount();
+      expect(trendText()).toContain("≥ 0 g");
+      expect(trendText()).toContain("0.00000 kg");
+      const before = trendReads().length;
+      const label = kind === "range" ? "From" : kind === "nutrient" ? "Nutrient" : "Biometric";
+      const original = trendField(label).props.value;
+      const replacement = kind === "range" ? "2026-08-01" : kind === "nutrient" ? "3" : second.id;
+      invoke(trendField(label), "onChange", { target: { value: replacement } });
+      hooks.renderBeforeCommit();
+      expect(trendField(label).props.value).toBe(replacement);
+      invoke(trendField(label), "onChange", { target: { value: original } });
+      hooks.renderBeforeCommit();
+      expect(trendField(label).props.value).toBe(original);
+      expect(trendReads()).toHaveLength(before);
+      if (kind !== "biometric") expect(trendText()).not.toContain("≥ 0 g");
+      if (kind !== "nutrient") expect(trendText()).not.toContain("0.00000 kg");
+      if (kind !== "range")
+        expect(trendText()).toContain(kind === "nutrient" ? "0.00000 kg" : "≥ 0 g");
+      hooks.render();
+      await hooks.settle();
+      expect(
+        trendReads()
+          .slice(before)
+          .map(([path]) => path.split("?")[0]),
+      ).toEqual(
+        kind === "range"
+          ? ["/api/retention/trends/nutrients", "/api/retention/trends/biometrics"]
+          : [`/api/retention/trends/${kind === "nutrient" ? "nutrients" : "biometrics"}`],
+      );
+      expect(trendText()).toContain("≥ 0 g");
+      expect(trendText()).toContain("0.00000 kg");
+      expect(text(trendCardStatus("nutrition"))).not.toMatch(/loading/i);
+      expect(text(trendCardStatus("biometric"))).not.toMatch(/loading/i);
+    },
+  );
 });
