@@ -84,9 +84,20 @@ interface SavedGoalCopySource {
   readonly readGeneration: number;
 }
 
-interface GoalCopyConfirmation {
-  readonly source: SavedGoalCopySource;
+interface GoalDraftChoice {
+  readonly action: "copy" | "new" | "date" | "reload";
+  readonly source: SavedGoalCopySource | null;
   readonly builder: GoalBuilder;
+  readonly session: SessionSummary;
+  readonly route: SavedGoalCopySource["route"];
+  readonly readGeneration: number;
+  readonly actionGeneration: number;
+  readonly date: string;
+  readonly targetDate: string;
+}
+
+interface GoalConflict {
+  readonly kind: "revision" | "eligibility";
 }
 
 export function emptyGoal(date: string): GoalBuilder {
@@ -259,14 +270,31 @@ export function GoalsClient() {
   );
   const [builder, setBuilderState] = useState<GoalBuilder>(() => emptyGoal(""));
   const builderRef = useRef(builder);
+  const baselineRef = useRef(builder);
+  const actionGeneration = useRef(0);
+  const privateClosed = useRef(false);
+  const [dateDraft, setDateDraft] = useState(date);
+  const dateDraftRef = useRef(date);
+  const dateProposalPending = useRef(false);
+  const [conflict, setConflictState] = useState<GoalConflict | null>(null);
+  const conflictRef = useRef<GoalConflict | null>(null);
+  const setConflict = useCallback((next: GoalConflict | null) => {
+    conflictRef.current = next;
+    setConflictState(next);
+  }, []);
   const [copySource, setCopySourceState] = useState<SavedGoalCopySource | null>(null);
   const copySourceRef = useRef<SavedGoalCopySource | null>(null);
-  const [copyConfirmation, setCopyConfirmation] = useState<GoalCopyConfirmation | null>(null);
-  const copyConfirmationRef = useRef<GoalCopyConfirmation | null>(null);
-  const clearCopyConfirmation = useCallback(() => {
-    copyConfirmationRef.current = null;
-    setCopyConfirmation(null);
+  const [draftChoice, setDraftChoice] = useState<GoalDraftChoice | null>(null);
+  const draftChoiceRef = useRef<GoalDraftChoice | null>(null);
+  const draftKeepButton = useRef<HTMLButtonElement | null>(null);
+  const clearDraftChoice = useCallback(() => {
+    draftChoiceRef.current = null;
+    setDraftChoice(null);
   }, []);
+  useEffect(() => {
+    if (draftChoice && draftChoiceRef.current === draftChoice) draftKeepButton.current?.focus();
+  }, [draftChoice]);
+
   const setBuilder = useCallback(
     (change: GoalBuilder | ((current: GoalBuilder) => GoalBuilder)) => {
       const current = builderRef.current;
@@ -275,18 +303,19 @@ export function GoalsClient() {
       // Keep local actions aware of raw edits before React paints. Functional
       // changes remain pure; confirmation and ref updates happen outside them.
       builderRef.current = next;
-      clearCopyConfirmation();
+      actionGeneration.current += 1;
+      clearDraftChoice();
       setBuilderState(next);
     },
-    [clearCopyConfirmation],
+    [clearDraftChoice],
   );
   const setCopySource = useCallback(
     (next: SavedGoalCopySource | null) => {
       copySourceRef.current = next;
-      clearCopyConfirmation();
+      clearDraftChoice();
       setCopySourceState(next);
     },
-    [clearCopyConfirmation],
+    [clearDraftChoice],
   );
   const [definitions, setDefinitions] = useState<readonly TargetableNutrient[]>([]);
   const [selectedNutrientId, setSelectedNutrientId] = useState("");
@@ -312,6 +341,7 @@ export function GoalsClient() {
   const [profileBirthDate, setProfileBirthDate] = useState("");
   const [profileSexAtBirth, setProfileSexAtBirth] = useState("");
   const [profileBusy, setProfileBusy] = useState(false);
+  const [candidateBusy, setCandidateBusy] = useState(false);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [message, setMessage] = useState("Loading your versioned goals…");
   const [busy, setBusy] = useState(false);
@@ -347,6 +377,9 @@ export function GoalsClient() {
   );
 
   const signInAgain = useCallback(() => {
+    privateClosed.current = true;
+    actionGeneration.current += 1;
+    setConflict(null);
     setCopySource(null);
     resetNutrientPicker();
     pickerScope.current = null;
@@ -359,29 +392,46 @@ export function GoalsClient() {
     candidateController.current?.abort();
     pending.current.clear();
     sessionRef.current = null;
+    setGoal(null);
+    setProgress(null);
+    setBuilder(emptyGoal(""));
+    setDefinitions([]);
+    pickerDefinitions.current = [];
+    setProfileBirthDate("");
+    setProfileSexAtBirth("");
     setReferenceSets(null);
     router.replace("/login");
     router.refresh();
-  }, [router, resetNutrientPicker, setCopySource]);
+  }, [router, resetNutrientPicker, setCopySource, setConflict, setBuilder]);
 
   const load = useCallback(
-    async (localDate: string, ownerSession: SessionSummary) => {
+    async (
+      localDate: string,
+      ownerSession: SessionSummary,
+      mode: "auto" | "replace" | "preserve" = "auto",
+    ) => {
+      if (privateClosed.current || !pickerMounted.current) return;
+      const readBuilder = builderRef.current;
+      const replace =
+        mode === "replace" ||
+        (mode === "auto" && JSON.stringify(readBuilder) === JSON.stringify(baselineRef.current));
+      actionGeneration.current += 1;
       setCopySource(null);
       loadController.current?.abort();
       const controller = new AbortController();
       loadController.current = controller;
       const requestGeneration = generation.current + 1;
       generation.current = requestGeneration;
-      const ownerUserId = ownerSession.user.id;
       const requestRoute = pickerRoute.current;
-      selectedDateRef.current = localDate;
       setState("loading");
       const requestIsCurrent = () =>
+        pickerMounted.current &&
+        !privateClosed.current &&
+        pickerRoute.current === requestRoute &&
         loadController.current === controller &&
         !controller.signal.aborted &&
         generation.current === requestGeneration &&
-        selectedDateRef.current === localDate &&
-        sessionRef.current?.user.id === ownerUserId;
+        sessionRef.current === ownerSession;
       try {
         const [currentResponse, progressResponse, nutrientResponse, referenceResponse] =
           await Promise.all([
@@ -429,10 +479,16 @@ export function GoalsClient() {
         const nextGoal = parseCurrentGoal(currentBody);
         const nextProgress = parseGoalProgress(progressBody);
         const nextDefinitions = parseTargetableNutrients(nutrientBody);
-        const candidateDate = nextGoal?.effectiveFrom ?? localDate;
+        const candidateDate = replace
+          ? (nextGoal?.effectiveFrom ?? localDate)
+          : readBuilder.effectiveFrom;
         let effectiveReferenceResponse = referenceResponse;
         let effectiveReferenceBody = referenceBody;
-        if (candidateDate !== localDate && referenceResponse.status !== 404) {
+        if (
+          isLocalDate(candidateDate) &&
+          candidateDate !== localDate &&
+          referenceResponse.status !== 404
+        ) {
           effectiveReferenceResponse = await fetch(
             `/api/goals/reference-target-sets?date=${encodeURIComponent(candidateDate)}`,
             {
@@ -471,13 +527,20 @@ export function GoalsClient() {
           throw new Error("Your profile changed while candidate targets were loading. Refresh.");
         }
         if (!requestIsCurrent()) return;
-        setGoal(nextGoal);
+        const replaceEditor = replace && builderRef.current === readBuilder;
+        if (replaceEditor) setGoal(nextGoal);
         setProgress(nextProgress);
+        selectedDateRef.current = localDate;
+        dateProposalPending.current = false;
+        dateDraftRef.current = localDate;
+        setDate(localDate);
+        setDateDraft(localDate);
         installPickerScope(ownerSession, localDate);
         pickerDefinitions.current = nextDefinitions;
         loadedPickerRoute.current = requestRoute;
         setCopySource(
-          nextGoal?.energy.mode === "fixed" &&
+          replaceEditor &&
+            nextGoal?.energy.mode === "fixed" &&
             (nextGoal.status === "active" || nextGoal.status === "archived") &&
             nextReferenceSets?.applied === null
             ? {
@@ -506,24 +569,39 @@ export function GoalsClient() {
             },
           };
         }
-        effectiveDateRef.current = nextBuilder.effectiveFrom;
-        setBuilder(nextBuilder);
-        setTemplatesSupported(effectiveReferenceResponse.status !== 404);
-        setReferenceSets(nextReferenceSets);
-        setSelectedReferenceGroup(appliedSet?.groupCode ?? "");
-        setReferenceAcknowledged(false);
-        setReferenceCustomized(false);
+        if (replaceEditor) {
+          effectiveDateRef.current = nextBuilder.effectiveFrom;
+          baselineRef.current = nextBuilder;
+          setBuilder(nextBuilder);
+          setConflict(null);
+          setTemplatesSupported(effectiveReferenceResponse.status !== 404);
+          setReferenceSets(nextReferenceSets);
+          setSelectedReferenceGroup(appliedSet?.groupCode ?? "");
+          setReferenceAcknowledged(false);
+          setReferenceCustomized(false);
+        } else if (
+          builderRef.current === readBuilder &&
+          candidateDate === readBuilder.effectiveFrom
+        ) {
+          setTemplatesSupported(effectiveReferenceResponse.status !== 404);
+          setReferenceSets(nextReferenceSets);
+          setSelectedReferenceGroup("");
+          setReferenceAcknowledged(false);
+        }
         setState("ready");
         setMessage(
-          nextGoal
-            ? `Goal version ${nextGoal.versionNumber} applies on ${localDate}.${
-                nextReferenceSets &&
-                appliedReferenceMatchesGoal(nextReferenceSets.applied, nextGoal)
-                  ? " Its source-verified candidate provenance was confirmed."
-                  : ""
-              }`
-            : "No active goal applies to this local day. Create one below.",
+          !replaceEditor
+            ? `Progress refreshed for ${localDate}. Your unsaved goal draft is still here, effective ${builderRef.current.effectiveFrom || "date not chosen"}; its saved view may be out of date.`
+            : nextGoal
+              ? `Goal version ${nextGoal.versionNumber} applies on ${localDate}.${
+                  nextReferenceSets &&
+                  appliedReferenceMatchesGoal(nextReferenceSets.applied, nextGoal)
+                    ? " Its source-verified candidate provenance was confirmed."
+                    : ""
+                }`
+              : "No active goal applies to this local day. Create one below.",
         );
+        return true;
       } catch (caught) {
         if (!requestIsCurrent()) return;
         setState("error");
@@ -532,30 +610,49 @@ export function GoalsClient() {
         if (loadController.current === controller) loadController.current = null;
       }
     },
-    [signInAgain, installPickerScope, setCopySource, setBuilder],
+    [signInAgain, installPickerScope, setCopySource, setBuilder, setConflict],
   );
 
   const refreshSessionAndGoals = useCallback(
-    async (preferredDate?: string, expectedOwnerUserId?: string) => {
+    async (
+      preferredDate?: string,
+      expectedOwnerUserId?: string,
+      mode: "auto" | "replace" | "preserve" = "auto",
+    ) => {
+      if (!pickerMounted.current || privateClosed.current) return;
+      actionGeneration.current += 1;
+      clearDraftChoice();
+      const requestRoute = pickerRoute.current;
+      const initiatingOwner = expectedOwnerUserId ?? sessionRef.current?.user.id;
+      const initiatingBuilder = builderRef.current;
       authController.current?.abort();
       const controller = new AbortController();
       authController.current = controller;
+      const requestIsCurrent = () =>
+        authController.current === controller &&
+        !controller.signal.aborted &&
+        pickerMounted.current &&
+        !privateClosed.current &&
+        pickerRoute.current === requestRoute;
+      setState("loading");
       try {
         const response = await fetch("/api/auth/me", {
           headers: { accept: "application/json" },
           cache: "no-store",
           signal: controller.signal,
         });
+        if (!requestIsCurrent()) return;
         if (response.status === 401) return signInAgain();
         const body = await json(response);
         if (!response.ok) {
           throw new Error(errorMessage(body, "Your private goal session could not be verified."));
         }
+        if (!requestIsCurrent()) return;
         const nextSession = parseSession(body);
-        if (expectedOwnerUserId && nextSession.user.id !== expectedOwnerUserId) {
+        if (initiatingOwner && nextSession.user.id !== initiatingOwner) {
           return signInAgain();
         }
-        if (authController.current !== controller || controller.signal.aborted) return;
+        if (!requestIsCurrent()) return;
         sessionRef.current = nextSession;
         setProfileBirthDate(nextSession.profile.birthDate ?? "");
         setProfileSexAtBirth(nextSession.profile.sexAtBirth ?? "");
@@ -564,11 +661,13 @@ export function GoalsClient() {
             ? preferredDate
             : localDateInTimeZone(new Date(), nextSession.profile.timeZone);
         installPickerScope(nextSession, localDate);
-        selectedDateRef.current = localDate;
-        setDate(localDate);
-        await load(localDate, nextSession);
+        return await load(
+          localDate,
+          nextSession,
+          builderRef.current === initiatingBuilder ? mode : "preserve",
+        );
       } catch (caught) {
-        if (authController.current !== controller || controller.signal.aborted) return;
+        if (!requestIsCurrent()) return;
         setState("error");
         setMessage(
           caught instanceof Error
@@ -579,16 +678,21 @@ export function GoalsClient() {
         if (authController.current === controller) authController.current = null;
       }
     },
-    [load, signInAgain, installPickerScope],
+    [load, signInAgain, installPickerScope, clearDraftChoice],
   );
 
   useEffect(() => {
     pickerMounted.current = true;
+    privateClosed.current = false;
+    actionGeneration.current += 1;
+    clearDraftChoice();
     void refreshSessionAndGoals(
       requestedDate && isLocalDate(requestedDate) ? requestedDate : undefined,
     );
     return () => {
       pickerMounted.current = false;
+      actionGeneration.current += 1;
+      draftChoiceRef.current = null;
       pickerGeneration.current += 1;
       authController.current?.abort();
       loadController.current?.abort();
@@ -597,7 +701,7 @@ export function GoalsClient() {
       candidateController.current?.abort();
       generation.current += 1;
     };
-  }, [refreshSessionAndGoals, requestedDate]);
+  }, [refreshSessionAndGoals, requestedDate, clearDraftChoice]);
 
   const loadCandidates = useCallback(
     async (effectiveFrom: string, ownerSession: SessionSummary) => {
@@ -605,18 +709,24 @@ export function GoalsClient() {
         setMessage("Choose a real effective date before loading candidate targets.");
         return;
       }
+      actionGeneration.current += 1;
+      clearDraftChoice();
+      setCandidateBusy(true);
       candidateController.current?.abort();
       const controller = new AbortController();
       candidateController.current = controller;
       const requestGeneration = candidateGeneration.current + 1;
       candidateGeneration.current = requestGeneration;
-      const ownerUserId = ownerSession.user.id;
+      const requestRoute = pickerRoute.current;
       const requestIsCurrent = () =>
         candidateController.current === controller &&
         !controller.signal.aborted &&
         candidateGeneration.current === requestGeneration &&
         effectiveDateRef.current === effectiveFrom &&
-        sessionRef.current?.user.id === ownerUserId;
+        pickerMounted.current &&
+        !privateClosed.current &&
+        pickerRoute.current === requestRoute &&
+        sessionRef.current === ownerSession;
       try {
         const response = await fetch(
           `/api/goals/reference-target-sets?date=${encodeURIComponent(effectiveFrom)}`,
@@ -668,15 +778,18 @@ export function GoalsClient() {
           caught instanceof Error ? caught.message : "Candidate targets could not be loaded.",
         );
       } finally {
-        if (candidateController.current === controller) candidateController.current = null;
+        if (candidateController.current === controller) {
+          candidateController.current = null;
+          if (pickerMounted.current && !privateClosed.current) setCandidateBusy(false);
+        }
       }
     },
-    [signInAgain],
+    [signInAgain, clearDraftChoice],
   );
 
   async function saveProfilePrerequisites() {
     const ownerSession = sessionRef.current;
-    if (!ownerSession || profileBusy) return;
+    if (!ownerSession || !canUseGoalControls()) return;
     if (profileBirthDate !== "" && !isLocalDate(profileBirthDate)) {
       setMessage("Birth date must be a real YYYY-MM-DD date.");
       return;
@@ -685,6 +798,8 @@ export function GoalsClient() {
       setMessage("Choose a profile sex-at-birth value before saving.");
       return;
     }
+    actionGeneration.current += 1;
+    clearDraftChoice();
     const ownerUserId = ownerSession.user.id;
     const requestGeneration = generation.current;
     const controller = new AbortController();
@@ -721,9 +836,24 @@ export function GoalsClient() {
         return signInAgain();
       }
       if (response.status === 409 || response.status === 412) {
-        await refreshSessionAndGoals(selectedDateRef.current, ownerUserId);
-        if (sessionRef.current?.user.id === ownerUserId) {
-          setMessage("Your profile changed elsewhere. Fresh values were loaded for review.");
+        setConflict({
+          kind: "eligibility",
+        });
+        const refreshed = await refreshSessionAndGoals(
+          selectedDateRef.current,
+          ownerUserId,
+          "preserve",
+        );
+        if (
+          pickerMounted.current &&
+          !privateClosed.current &&
+          sessionRef.current?.user.id === ownerUserId
+        ) {
+          setMessage(
+            refreshed
+              ? "Your profile changed elsewhere. Fresh eligibility values were loaded and your goal draft is still here. Publishing is paused until you discard and reload saved values or explicitly start a new draft."
+              : "Your profile changed elsewhere and eligibility could not be refreshed. Your goal draft is still here. Retry the reload before publishing.",
+          );
         }
         return;
       }
@@ -746,13 +876,14 @@ export function GoalsClient() {
     } finally {
       if (profileController.current === controller) {
         profileController.current = null;
-        setProfileBusy(false);
+        if (pickerMounted.current && !privateClosed.current) setProfileBusy(false);
       }
     }
   }
 
   function applyReferenceDraft(set: ReferenceTargetSet) {
     const ownerSession = sessionRef.current;
+    if (!canUseGoalControls()) return;
     if (!ownerSession || !referenceSets || !referenceAcknowledged) {
       setMessage("Review and accept the exact eligibility acknowledgement before applying.");
       return;
@@ -783,6 +914,7 @@ export function GoalsClient() {
   }
 
   function customizeReferenceDraft(set?: ReferenceTargetSet) {
+    if (!canUseGoalControls()) return;
     const targets = set
       ? referenceTargetsForDraft(set, true)
       : builder.targets.map((target) => ({
@@ -848,7 +980,7 @@ export function GoalsClient() {
 
   function updateTarget(index: number, patch: Partial<TargetDraft>) {
     if (builder.reference) return;
-    setBuilder({
+    editBuilder({
       ...builder,
       targets: builder.targets.map((target, candidate) =>
         candidate === index ? { ...target, ...patch } : target,
@@ -858,14 +990,24 @@ export function GoalsClient() {
 
   async function save(event: FormEvent) {
     event.preventDefault();
+    const ownerSession = sessionRef.current;
+    if (!ownerSession || !canUseGoalControls() || conflictRef.current?.kind === "eligibility")
+      return;
     if (verifiedApplied && builder.reference === null && !referenceCustomized) {
       setMessage(
         "This goal has verified candidate provenance. Choose Customize explicitly before publishing custom rows.",
       );
       return;
     }
-    const ownerSession = sessionRef.current;
-    if (!ownerSession || busy || writeController.current) return;
+    if (
+      builder.reference &&
+      builder.reference.expectedProfileRevision !== ownerSession.profile.revision
+    ) {
+      setMessage(
+        "Your profile changed. Reload and review the candidate, or customize its values, before publishing this draft.",
+      );
+      return;
+    }
     let body: ReturnType<typeof goalBody>;
     try {
       body = goalBody(builder, templatesSupported ? ownerSession.user.id : undefined);
@@ -873,6 +1015,8 @@ export function GoalsClient() {
       setMessage(caught instanceof Error ? caught.message : "Review the goal fields.");
       return;
     }
+    actionGeneration.current += 1;
+    clearDraftChoice();
     const intentKey = `${builder.goalId ?? "create"}:${builder.revision ?? "new"}:${JSON.stringify(body)}`;
     const operation = prepareStableMutation(
       pending.current,
@@ -884,6 +1028,7 @@ export function GoalsClient() {
     const ownerUserId = ownerSession.user.id;
     const requestGeneration = generation.current;
     const savedDate = date;
+    const savedRoute = pickerRoute.current;
     const controller = new AbortController();
     writeController.current = controller;
     const requestIsCurrent = () =>
@@ -891,7 +1036,10 @@ export function GoalsClient() {
       !controller.signal.aborted &&
       generation.current === requestGeneration &&
       selectedDateRef.current === savedDate &&
-      sessionRef.current?.user.id === ownerUserId;
+      pickerMounted.current &&
+      !privateClosed.current &&
+      builderRef.current === builder &&
+      sessionRef.current === ownerSession;
     setBusy(true);
     setMessage(
       builder.goalId ? "Publishing a new immutable goal revision…" : "Creating your goal…",
@@ -924,10 +1072,25 @@ export function GoalsClient() {
       }
       if (response.status === 409 || response.status === 412) {
         pending.current.delete(intentKey);
-        await refreshSessionAndGoals(savedDate, ownerUserId);
-        if (sessionRef.current?.user.id !== ownerUserId) return;
+        setConflict({
+          kind: response.status === 412 ? "revision" : "eligibility",
+        });
+        let refreshed = true;
+        if (response.status === 409) {
+          refreshed = Boolean(await refreshSessionAndGoals(savedDate, ownerUserId, "preserve"));
+          if (
+            !pickerMounted.current ||
+            privateClosed.current ||
+            sessionRef.current?.user.id !== ownerUserId
+          )
+            return;
+        }
         setMessage(
-          "The goal or eligibility profile changed elsewhere. Fresh values were loaded; review before saving again.",
+          response.status === 412
+            ? "This saved goal changed elsewhere. Your edits are still here and the saved view may be out of date. Discard edits and reload the saved goal when ready; saving this draft again will still use its original revision."
+            : refreshed
+              ? "Your goal or eligibility profile changed elsewhere. Your edits are still here. Publishing is paused: discard edits and reload the saved goal, or explicitly start a new draft using the refreshed eligibility values."
+              : "Your goal or eligibility profile changed elsewhere and eligibility could not be refreshed. Your edits are still here. Retry the reload before publishing.",
         );
         return;
       }
@@ -935,14 +1098,28 @@ export function GoalsClient() {
       const mutation = parseGoalMutation(responseBody);
       if (!requestIsCurrent()) return;
       pending.current.delete(intentKey);
+      const savedBuilder = goalBuilderFromGoal(mutation.goal);
       setGoal(mutation.goal);
-      setBuilder(goalBuilderFromGoal(mutation.goal));
-      await load(savedDate, ownerSession);
-      if (sessionRef.current?.user.id !== ownerUserId) return;
+      baselineRef.current = savedBuilder;
+      effectiveDateRef.current = savedBuilder.effectiveFrom;
+      setBuilder(savedBuilder);
+      const refreshed = await load(savedDate, ownerSession, "replace");
+      if (
+        !pickerMounted.current ||
+        privateClosed.current ||
+        controller.signal.aborted ||
+        writeController.current !== controller ||
+        pickerRoute.current !== savedRoute ||
+        sessionRef.current !== ownerSession
+      )
+        return;
+      const receiptMessage = mutation.replayed
+        ? "The earlier goal save was confirmed safely."
+        : `Goal version ${mutation.goal.versionNumber} published.`;
       setMessage(
-        mutation.replayed
-          ? "The earlier goal save was confirmed safely."
-          : `Goal version ${mutation.goal.versionNumber} published.`,
+        refreshed
+          ? receiptMessage
+          : `${receiptMessage} The saved view could not be refreshed. Retry loading it before making further changes.`,
       );
     } catch (caught) {
       if (!requestIsCurrent()) return;
@@ -952,30 +1129,33 @@ export function GoalsClient() {
     } finally {
       if (writeController.current === controller) {
         writeController.current = null;
-        setBusy(false);
+        if (pickerMounted.current && !privateClosed.current) setBusy(false);
       }
     }
   }
 
-  function canCopySavedGoal() {
+  const actionRoute = pickerRoute.current;
+  const actionSession = sessionRef.current;
+  const renderedActionGeneration = actionGeneration.current;
+  const actionReadGeneration = generation.current;
+  function canUseGoalControls(allowError = false) {
     return (
-      copySource !== null &&
-      copySourceRef.current === copySource &&
-      goal === copySource.goal &&
       pickerMounted.current &&
-      state === "ready" &&
+      !privateClosed.current &&
+      (state === "ready" || (allowError && state === "error")) &&
       !busy &&
       !profileBusy &&
+      !candidateBusy &&
+      actionSession !== null &&
+      sessionRef.current === actionSession &&
+      pickerRoute.current === actionRoute &&
+      (loadedPickerRoute.current === actionRoute || (allowError && state === "error")) &&
       builderRef.current === builder &&
-      sessionRef.current === copySource.session &&
-      pickerRoute.current === copySource.route &&
-      loadedPickerRoute.current === copySource.route &&
-      pickerScope.current !== null &&
-      pickerScope.current === copySource.scope &&
-      date === copySource.progressDate &&
-      selectedDateRef.current === copySource.progressDate &&
-      effectiveDateRef.current === builder.effectiveFrom &&
-      generation.current === copySource.readGeneration &&
+      actionGeneration.current === renderedActionGeneration &&
+      generation.current === actionReadGeneration &&
+      conflictRef.current === conflict &&
+      selectedDateRef.current === date &&
+      dateDraftRef.current === dateDraft &&
       !authController.current &&
       !loadController.current &&
       !writeController.current &&
@@ -984,8 +1164,74 @@ export function GoalsClient() {
     );
   }
 
-  function copySavedGoalToDraft() {
-    if (!canCopySavedGoal() || !copySource) return;
+  function editBuilder(change: GoalBuilder | ((current: GoalBuilder) => GoalBuilder)) {
+    if (
+      !pickerMounted.current ||
+      privateClosed.current ||
+      !actionSession ||
+      sessionRef.current !== actionSession ||
+      pickerRoute.current !== actionRoute ||
+      builderRef.current !== builder ||
+      actionGeneration.current !== renderedActionGeneration ||
+      busy ||
+      profileBusy ||
+      writeController.current ||
+      profileController.current
+    )
+      return;
+    setBuilder(change);
+  }
+
+  function canRetryInitialLoad() {
+    return (
+      pickerMounted.current &&
+      !privateClosed.current &&
+      state === "error" &&
+      (actionSession === null || loadedPickerRoute.current === null) &&
+      sessionRef.current === actionSession &&
+      pickerRoute.current === actionRoute &&
+      actionGeneration.current === renderedActionGeneration &&
+      generation.current === actionReadGeneration &&
+      !authController.current &&
+      !loadController.current &&
+      !writeController.current &&
+      !profileController.current &&
+      !candidateController.current
+    );
+  }
+
+  function reloadSavedGoal() {
+    if (canRetryInitialLoad())
+      void refreshSessionAndGoals(
+        requestedDate && isLocalDate(requestedDate) ? requestedDate : undefined,
+        actionSession?.user.id,
+      );
+    else requestReplacement("reload");
+  }
+
+  function builderHasEdits() {
+    return JSON.stringify(builderRef.current) !== JSON.stringify(baselineRef.current);
+  }
+
+  function canCopySavedGoal() {
+    return (
+      canUseGoalControls() &&
+      !dateProposalPending.current &&
+      copySource !== null &&
+      copySourceRef.current === copySource &&
+      goal === copySource.goal &&
+      sessionRef.current === copySource.session &&
+      pickerRoute.current === copySource.route &&
+      pickerScope.current !== null &&
+      pickerScope.current === copySource.scope &&
+      date === copySource.progressDate &&
+      effectiveDateRef.current === builder.effectiveFrom &&
+      generation.current === copySource.readGeneration
+    );
+  }
+
+  function copySavedGoalToDraft(confirmed = false) {
+    if ((!confirmed && !canCopySavedGoal()) || !copySource) return;
     const next = {
       ...goalBuilderFromGoal(copySource.goal),
       goalId: null,
@@ -997,6 +1243,8 @@ export function GoalsClient() {
     candidateController.current = null;
     candidateGeneration.current += 1;
     effectiveDateRef.current = next.effectiveFrom;
+    baselineRef.current = emptyGoal("");
+    setConflict(null);
     setBuilder(next);
     setReferenceSets(null);
     setSelectedReferenceGroup("");
@@ -1007,41 +1255,106 @@ export function GoalsClient() {
     );
   }
 
+  function openDraftChoice(action: GoalDraftChoice["action"], targetDate = date) {
+    const session = sessionRef.current;
+    if (!session) return;
+    actionGeneration.current += 1;
+    const choice: GoalDraftChoice = {
+      action,
+      targetDate,
+      source: action === "copy" ? copySource : null,
+      builder,
+      session,
+      route: actionRoute,
+      readGeneration: generation.current,
+      actionGeneration: actionGeneration.current,
+      date,
+    };
+    draftChoiceRef.current = choice;
+    setDraftChoice(choice);
+  }
+
   function requestGoalCopy() {
     if (!canCopySavedGoal() || !copySource) return;
-    if (JSON.stringify(builder) === JSON.stringify(goalBuilderFromGoal(copySource.goal))) {
+    if (JSON.stringify(builder) === JSON.stringify(goalBuilderFromGoal(copySource.goal)))
       copySavedGoalToDraft();
-      return;
-    }
-    const confirmation = { source: copySource, builder };
-    copyConfirmationRef.current = confirmation;
-    setCopyConfirmation(confirmation);
+    else openDraftChoice("copy");
   }
 
-  function resolveGoalCopy(discard: boolean) {
-    if (
-      !canCopySavedGoal() ||
-      !copyConfirmation ||
-      copyConfirmationRef.current !== copyConfirmation ||
-      copySourceRef.current !== copyConfirmation.source ||
-      builderRef.current !== copyConfirmation.builder
-    )
-      return;
-    if (discard) copySavedGoalToDraft();
-    else clearCopyConfirmation();
-  }
-
-  function beginNewGoal() {
-    if (!isLocalDate(date)) {
-      setMessage("Choose a real progress date before starting a new goal.");
-      return;
-    }
+  function installNewGoal() {
     const next = emptyGoal(date);
     effectiveDateRef.current = next.effectiveFrom;
+    baselineRef.current = next;
+    setConflict(null);
     setBuilder(next);
+    setReferenceSets(null);
+    setSelectedReferenceGroup("");
     setReferenceAcknowledged(false);
     setReferenceCustomized(false);
+    dateProposalPending.current = false;
+    dateDraftRef.current = date;
+    setDateDraft(date);
     setMessage("New goal draft started. Choose its effective date and explicit targets.");
+  }
+
+  function performReplacement(action: "new" | "date" | "reload", targetDate: string) {
+    clearDraftChoice();
+    if (action === "new") installNewGoal();
+    else if (sessionRef.current)
+      void refreshSessionAndGoals(targetDate, sessionRef.current.user.id, "replace");
+  }
+
+  function requestReplacement(action: "new" | "date" | "reload", targetDate = date) {
+    if (
+      !canUseGoalControls(action !== "new") ||
+      !isLocalDate(targetDate) ||
+      (action === "new" && dateProposalPending.current)
+    )
+      return;
+    if (action === "reload" && conflictRef.current !== null) {
+      performReplacement(action, targetDate);
+    } else if (builderHasEdits()) openDraftChoice(action, targetDate);
+    else performReplacement(action, targetDate);
+  }
+
+  function choiceIsCurrent() {
+    return (
+      draftChoice !== null &&
+      draftChoiceRef.current === draftChoice &&
+      canUseGoalControls(draftChoice.action !== "new" && draftChoice.action !== "copy") &&
+      builderRef.current === draftChoice.builder &&
+      sessionRef.current === draftChoice.session &&
+      pickerRoute.current === draftChoice.route &&
+      generation.current === draftChoice.readGeneration &&
+      actionGeneration.current === draftChoice.actionGeneration &&
+      date === draftChoice.date &&
+      (draftChoice.action !== "copy" ||
+        (canCopySavedGoal() && copySourceRef.current === draftChoice.source))
+    );
+  }
+
+  function resolveDraftChoice(discard: boolean) {
+    if (!choiceIsCurrent() || !draftChoice) return;
+    const choice = draftChoice;
+    clearDraftChoice();
+    actionGeneration.current += 1;
+    if (!discard) {
+      dateProposalPending.current = false;
+      dateDraftRef.current = date;
+      setDateDraft(date);
+    } else if (choice.action === "copy") {
+      // The choice consumed the current action token; its source was checked above.
+      copySavedGoalToDraft(true);
+    } else performReplacement(choice.action, choice.targetDate);
+  }
+
+  function changeProgressDate(value: string) {
+    if (!canUseGoalControls(true) || value === dateDraft) return;
+    actionGeneration.current += 1;
+    clearDraftChoice();
+    dateProposalPending.current = true;
+    dateDraftRef.current = value;
+    setDateDraft(value);
   }
 
   const historicalGoal = goalBuilderIsHistorical(goal, builder);
@@ -1069,35 +1382,20 @@ export function GoalsClient() {
     ? selectedNutrientId
     : (matchingNutrients[0]?.nutrientId ?? "");
   const renderedPickerGeneration = pickerGeneration.current;
-  const renderedReadGeneration = generation.current;
-  const renderedPickerRoute = pickerRoute.current;
   const renderedPickerScope = pickerScope.current;
-  const renderedPickerSession = sessionRef.current;
   function canUseNutrientPicker() {
     return (
-      pickerMounted.current &&
-      state === "ready" &&
-      !busy &&
-      !profileBusy &&
+      canUseGoalControls() &&
+      !dateProposalPending.current &&
       !historicalGoal &&
       !referenceLocked &&
-      !!renderedPickerSession &&
-      sessionRef.current === renderedPickerSession &&
       pickerScope.current !== null &&
       pickerScope.current === renderedPickerScope &&
-      pickerRoute.current === renderedPickerRoute &&
-      loadedPickerRoute.current === renderedPickerRoute &&
-      selectedDateRef.current === date &&
       effectiveDateRef.current === builder.effectiveFrom &&
-      generation.current === renderedReadGeneration &&
       pickerGeneration.current === renderedPickerGeneration &&
       nutrientQueryRef.current === nutrientQuery &&
       nutrientSelectionRef.current === selectedNutrientId &&
-      pickerDefinitions.current === definitions &&
-      !authController.current &&
-      !loadController.current &&
-      !writeController.current &&
-      !profileController.current
+      pickerDefinitions.current === definitions
     );
   }
   const pickerDisabled = !canUseNutrientPicker();
@@ -1132,18 +1430,6 @@ export function GoalsClient() {
         <p className="workspaceStatus" data-state={state} aria-live="polite">
           {message}
         </p>
-        {state === "error" ? (
-          <button
-            className="buttonSecondary"
-            onClick={() => {
-              const ownerSession = sessionRef.current;
-              if (ownerSession && isLocalDate(date)) void load(date, ownerSession);
-            }}
-            type="button"
-          >
-            Retry goals
-          </button>
-        ) : null}
         <div className="goalWorkspace">
           <section className="workspacePanel">
             <div className="workspaceHeading">
@@ -1157,8 +1443,8 @@ export function GoalsClient() {
                 <>
                   <button
                     className="buttonSecondary"
-                    disabled={busy}
-                    onClick={beginNewGoal}
+                    disabled={!canUseGoalControls() || dateProposalPending.current}
+                    onClick={() => requestReplacement("new")}
                     type="button"
                   >
                     New goal
@@ -1167,6 +1453,18 @@ export function GoalsClient() {
                 </>
               ) : null}
             </div>
+            <button
+              className="buttonSecondary"
+              disabled={!canUseGoalControls(true) && !canRetryInitialLoad()}
+              onClick={reloadSavedGoal}
+              type="button"
+            >
+              {conflict
+                ? "Discard edits and reload saved goal"
+                : state === "error"
+                  ? "Retry goals"
+                  : "Reload saved goal"}
+            </button>
             {copySource ? (
               <section className="workspaceSection" aria-label="Copy saved goal">
                 <p className="fieldHelp">
@@ -1182,34 +1480,46 @@ export function GoalsClient() {
                 >
                   Copy saved goal to new draft
                 </button>
-                {copyConfirmation &&
-                copyConfirmationRef.current === copyConfirmation &&
-                canCopySavedGoal() ? (
-                  <fieldset
-                    aria-labelledby="copy-goal-confirmation"
-                    style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}
-                  >
-                    <p id="copy-goal-confirmation" className="coverageCopy" aria-live="polite">
-                      This editor has unsaved changes. Keep editing, or discard them and copy saved
-                      goal version {copySource.goal.versionNumber}.
-                    </p>
-                    <button
-                      className="buttonQuiet"
-                      onClick={() => resolveGoalCopy(false)}
-                      type="button"
-                    >
-                      Keep editing
-                    </button>{" "}
-                    <button
-                      className="buttonSecondary"
-                      onClick={() => resolveGoalCopy(true)}
-                      type="button"
-                    >
-                      Discard edits and copy saved version
-                    </button>
-                  </fieldset>
-                ) : null}
               </section>
+            ) : null}
+            {draftChoice && choiceIsCurrent() ? (
+              <fieldset
+                aria-labelledby="goal-draft-confirmation"
+                style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}
+              >
+                <p id="goal-draft-confirmation" className="coverageCopy" aria-live="polite">
+                  This editor has unsaved changes. Keep editing, or discard them to{" "}
+                  {draftChoice.action === "new"
+                    ? "start a new goal"
+                    : draftChoice.action === "date"
+                      ? `load the goal and progress for ${draftChoice.targetDate}`
+                      : draftChoice.action === "copy"
+                        ? `copy saved goal version ${draftChoice.source?.goal.versionNumber}`
+                        : "reload the saved goal"}
+                  .
+                </p>
+                <button
+                  className="buttonQuiet"
+                  onClick={() => resolveDraftChoice(false)}
+                  ref={draftKeepButton}
+                  type="button"
+                >
+                  Keep editing
+                </button>{" "}
+                <button
+                  className="buttonSecondary"
+                  onClick={() => resolveDraftChoice(true)}
+                  type="button"
+                >
+                  {draftChoice.action === "new"
+                    ? "Discard edits and start new goal"
+                    : draftChoice.action === "date"
+                      ? "Discard edits and change progress date"
+                      : draftChoice.action === "copy"
+                        ? "Discard edits and copy saved version"
+                        : "Discard edits and reload saved goal"}
+                </button>
+              </fieldset>
             ) : null}
             <form className="workspaceForm" onSubmit={(event) => void save(event)}>
               <fieldset className="goalEditorFields" disabled={busy || historicalGoal}>
@@ -1220,11 +1530,16 @@ export function GoalsClient() {
                     type="date"
                     onBlur={() => {
                       const ownerSession = sessionRef.current;
-                      if (ownerSession && isLocalDate(builder.effectiveFrom)) {
+                      if (
+                        canUseGoalControls() &&
+                        ownerSession &&
+                        isLocalDate(builder.effectiveFrom)
+                      ) {
                         void loadCandidates(builder.effectiveFrom, ownerSession);
                       }
                     }}
                     onChange={(event) => {
+                      if (!canUseGoalControls()) return;
                       const effectiveFrom = event.target.value;
                       effectiveDateRef.current = effectiveFrom;
                       candidateController.current?.abort();
@@ -1232,7 +1547,7 @@ export function GoalsClient() {
                       setSelectedReferenceGroup("");
                       setReferenceAcknowledged(false);
                       if (builder.reference) setReferenceCustomized(false);
-                      setBuilder({
+                      editBuilder({
                         ...builder,
                         effectiveFrom,
                         ...(builder.reference ? { targets: [], reference: null } : {}),
@@ -1259,7 +1574,7 @@ export function GoalsClient() {
                         checked={builder.energyMode === "fixed"}
                         name="energy-mode"
                         onChange={() =>
-                          setBuilder({
+                          editBuilder({
                             ...builder,
                             energyMode: "fixed",
                             fixedKcal: builder.energyMode === "derived" ? "" : builder.fixedKcal,
@@ -1275,7 +1590,7 @@ export function GoalsClient() {
                       <input
                         checked={builder.energyMode === "derived"}
                         name="energy-mode"
-                        onChange={() => setBuilder({ ...builder, energyMode: "derived" })}
+                        onChange={() => editBuilder({ ...builder, energyMode: "derived" })}
                         type="radio"
                       />
                       <span>Profile-derived estimate</span>
@@ -1289,7 +1604,7 @@ export function GoalsClient() {
                       inputMode="decimal"
                       maxLength={19}
                       onChange={(event) =>
-                        setBuilder({ ...builder, fixedKcal: event.target.value })
+                        editBuilder({ ...builder, fixedKcal: event.target.value })
                       }
                       placeholder="Enter your selected value"
                       value={builder.fixedKcal}
@@ -1302,7 +1617,7 @@ export function GoalsClient() {
                       <select
                         onChange={(event) => {
                           const code = event.target.value as GoalBuilder["activityLevelCode"];
-                          setBuilder({
+                          editBuilder({
                             ...builder,
                             activityLevelCode: code,
                             activityFactor: "",
@@ -1323,7 +1638,7 @@ export function GoalsClient() {
                         inputMode="decimal"
                         maxLength={19}
                         onChange={(event) =>
-                          setBuilder({
+                          editBuilder({
                             ...builder,
                             activityFactor: event.target.value,
                             palAcknowledged: false,
@@ -1338,7 +1653,7 @@ export function GoalsClient() {
                         inputMode="decimal"
                         maxLength={20}
                         onChange={(event) =>
-                          setBuilder({ ...builder, adjustmentKcal: event.target.value })
+                          editBuilder({ ...builder, adjustmentKcal: event.target.value })
                         }
                         value={builder.adjustmentKcal}
                       />
@@ -1348,7 +1663,7 @@ export function GoalsClient() {
                         <input
                           checked={builder.palAcknowledged}
                           onChange={(event) =>
-                            setBuilder({ ...builder, palAcknowledged: event.target.checked })
+                            editBuilder({ ...builder, palAcknowledged: event.target.checked })
                           }
                           type="checkbox"
                         />{" "}
@@ -1366,7 +1681,7 @@ export function GoalsClient() {
                   <span>Why this energy target?</span>
                   <textarea
                     maxLength={1_000}
-                    onChange={(event) => setBuilder({ ...builder, rationale: event.target.value })}
+                    onChange={(event) => editBuilder({ ...builder, rationale: event.target.value })}
                     value={builder.rationale}
                   />
                 </label>
@@ -1471,6 +1786,9 @@ export function GoalsClient() {
                                       }
                                       name="reference-target-group"
                                       onChange={() => {
+                                        if (!canUseGoalControls()) return;
+                                        actionGeneration.current += 1;
+                                        clearDraftChoice();
                                         setSelectedReferenceGroup(candidate.groupCode);
                                         setReferenceAcknowledged(false);
                                       }}
@@ -1507,9 +1825,12 @@ export function GoalsClient() {
                                         historicalGoal ||
                                         (referenceLocked && !appliedProfileDrift)
                                       }
-                                      onChange={(event) =>
-                                        setReferenceAcknowledged(event.target.checked)
-                                      }
+                                      onChange={(event) => {
+                                        if (!canUseGoalControls()) return;
+                                        actionGeneration.current += 1;
+                                        clearDraftChoice();
+                                        setReferenceAcknowledged(event.target.checked);
+                                      }}
                                       type="checkbox"
                                     />{" "}
                                     {referenceSets.acknowledgementPolicy.text}
@@ -1758,7 +2079,7 @@ export function GoalsClient() {
                           className="buttonDanger"
                           disabled={referenceLocked}
                           onClick={() =>
-                            setBuilder({
+                            editBuilder({
                               ...builder,
                               targets: builder.targets.filter(
                                 (_, candidate) => candidate !== index,
@@ -1778,6 +2099,8 @@ export function GoalsClient() {
                 className="buttonPrimary"
                 disabled={
                   busy ||
+                  !canUseGoalControls() ||
+                  conflict?.kind === "eligibility" ||
                   historicalGoal ||
                   (verifiedApplied && builder.reference === null && !referenceCustomized)
                 }
@@ -1834,21 +2157,10 @@ export function GoalsClient() {
               <span>Progress date</span>
               <input
                 type="date"
-                onChange={(event) => {
-                  const nextDate = event.target.value;
-                  if (selectedDateRef.current !== nextDate) {
-                    resetNutrientPicker();
-                    pickerScope.current = null;
-                  }
-                  selectedDateRef.current = nextDate;
-                  loadController.current?.abort();
-                  setDate(nextDate);
-                }}
-                onBlur={() => {
-                  const ownerSession = sessionRef.current;
-                  if (ownerSession && isLocalDate(date)) void load(date, ownerSession);
-                }}
-                value={date}
+                disabled={!canUseGoalControls(true)}
+                onChange={(event) => changeProgressDate(event.target.value)}
+                onBlur={() => requestReplacement(dateDraft === date ? "reload" : "date", dateDraft)}
+                value={dateDraft}
               />
             </label>
             {progress?.energy ? (

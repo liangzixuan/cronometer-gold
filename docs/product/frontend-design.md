@@ -86,6 +86,24 @@ existing ingredients. Private foods retain private provenance and unknown
 nutrients. An archived food cannot enter a new or revised recipe, while an
 existing saved recipe snapshot remains loggable.
 
+## Goal drafts
+
+Keep entered goal values separate from the saved goal used for progress. New,
+Copy and a change of progress date use an inline Keep editing / Discard edits
+choice before replacing a dirty editor. Keeping edits retains the original date
+and goal context. A failed replacement read leaves the draft available.
+
+A rejected save keeps the entered values and expected revision. Loading saved
+values requires an explicit discard. A changed eligibility profile still requires
+fresh review; retaining edits must not carry an outdated reference selection into
+a new save. Ambiguous saves retain their exact request and operation identity.
+These controls protect the current goal editor; they do not provide persistent
+autosave or protect every browser navigation.
+
+Nutrient threshold rows fit the editor column: source details occupy a full row,
+and threshold fields wrap to the available width. Editable and reference preview
+rows must remain contained beside the progress panel at tablet sizes.
+
 ## Responsive layout
 
 Keep main content centered within each route's width limit so wide screens do not

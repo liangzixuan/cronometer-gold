@@ -1646,8 +1646,22 @@ button:disabled {
 }
 
 .goalTargetRow {
-  grid-template-columns: minmax(150px, 1fr) repeat(3, minmax(90px, 0.45fr)) auto;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
   padding: 14px 0;
+}
+
+.goalTargetRow > * {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.goalTargetRow > div:first-child {
+  grid-column: 1 / -1;
+}
+
+.goalTargetRow input {
+  width: 100%;
 }
 
 .ingredientRow input,

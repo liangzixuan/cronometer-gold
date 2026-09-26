@@ -587,7 +587,8 @@ describe("web goal nutrient search", () => {
     expect(field("Why this energy target?").props.value).toBe(" Raw new rationale ");
     expect(targetRows()).toHaveLength(1);
     const beforeNew = button("Add nutrient");
-    invoke(button("New goal"), "onClick");
+    await click("New goal");
+    invoke(button(discardNewGoalLabel), "onClick");
     invoke(beforeNew, "onClick");
     await hooks.settle();
     expect(targetRows()).toHaveLength(0);
@@ -658,7 +659,7 @@ describe("web goal nutrient search", () => {
     expect(calls).toHaveLength(count);
   });
 
-  it("preserves query through New and same-private reload, resets actual date", async () => {
+  it("preserves query through New and same-private reload while a date change is only proposed", async () => {
     const { calls } = await workspace({ goal: savedGoal() });
     await change("Find a nutrient", "  vitamin ");
     await click("New goal");
@@ -671,7 +672,8 @@ describe("web goal nutrient search", () => {
     invoke(field("Progress date"), "onChange", { target: { value: "2026-09-12" } });
     invokeOldPicker(old);
     await hooks.settle();
-    expect(field("Find a nutrient").props.value).toBe("");
+    expect(field("Find a nutrient").props.value).toBe("  vitamin ");
+    expect(button("Add nutrient").props.disabled).toBe(true);
     expect(calls).toHaveLength(count);
   });
 
@@ -823,7 +825,7 @@ describe("goal nutrient picker availability", () => {
       const old = pickerControls(),
         count = calls.length;
       await change("Progress date", nextDate);
-      expect(field("Find a nutrient").props.value).toBe("");
+      expect(field("Find a nutrient").props.value).toBe("vitamin");
       expect(button("Clear nutrient search").props.disabled).toBe(true);
       invokeOldPicker(old);
       invokeOldPicker(pickerControls());
@@ -1010,7 +1012,7 @@ it("fences retained Add when a current candidate receipt re-locks the same custo
   deferCandidate = true;
   invoke(field("Effective from"), "onBlur");
   await hooks.settle();
-  expect(button("Add nutrient").props.disabled).toBe(false);
+  expect(button("Add nutrient").props.disabled).toBe(true);
   pending.resolve(Response.json(ref));
   await new Promise((resolve) => setTimeout(resolve, 0));
   invokeOldPicker(old);
@@ -1333,12 +1335,16 @@ describe("saved goal copy ownership", () => {
       expect(hasButton(discardLabel)).toBe(false);
       expect(status()).not.toContain("Copied saved goal");
       expect(calls).toHaveLength(count);
-      if (kind !== "New") expect(field("Why this energy target?").props.value).toBe(" Dirty ");
+      expect(field("Why this energy target?").props.value).toBe(" Dirty ");
       if (kind === "energy") expect(field("Daily energy (kcal)").props.value).toBe("9999");
       if (kind === "threshold") expect(field("Calcium target mg").props.value).toBe("222");
       if (kind === "source") expect(field("Calcium target source").props.value).toBe(" Changed ");
       if (kind === "Add") expect(targetRows()).toHaveLength(2);
-      if (kind === "Remove" || kind === "New") expect(targetRows()).toHaveLength(0);
+      if (kind === "Remove") expect(targetRows()).toHaveLength(0);
+      if (kind === "New") {
+        expect(targetRows()).toHaveLength(1);
+        expect(hasButton(discardNewGoalLabel)).toBe(true);
+      }
       if (kind === "date") expect(field("Effective from").props.value).toBe("2026-09-14");
     },
   );
@@ -1381,7 +1387,8 @@ describe("saved goal copy ownership", () => {
       invoke(dateInput, "onChange", { target: { value: nextDate } });
       invoke(copy, "onClick");
       invoke(discard, "onClick");
-      invoke(dateInput, "onChange", { target: { value: day } });
+      await hooks.settle();
+      await change("Progress date", day);
       invoke(copy, "onClick");
       invoke(discard, "onClick");
       await hooks.settle();
@@ -1389,6 +1396,7 @@ describe("saved goal copy ownership", () => {
       expect(field("Why this energy target?").props.value).toBe(" Dirty ");
       invoke(field("Progress date"), "onBlur");
       await hooks.settle();
+      await click(discardReloadGoalLabel);
       expect(button(copyLabel).props.disabled).toBe(false);
       invoke(discard, "onClick");
       await hooks.settle();
@@ -1439,7 +1447,10 @@ describe("saved goal copy ownership", () => {
       const old = [button(copyLabel), button(discardLabel)];
       active = true;
       if (phase === "auth") hooks.replayEffects();
-      if (phase === "load") invoke(field("Progress date"), "onBlur");
+      if (phase === "load") {
+        await click("Reload saved goal");
+        await click(discardReloadGoalLabel);
+      }
       if (phase === "candidate") invoke(field("Effective from"), "onBlur");
       if (phase === "write") void submit();
       if (phase === "profile") invoke(button("Save profile and check eligibility"), "onClick");
@@ -1466,9 +1477,14 @@ describe("saved goal copy ownership", () => {
       await hooks.settle();
       if (phase === "candidate") {
         expect(button(copyLabel).props.disabled).toBe(false);
-        // Same source/builder still owns its choice after an unrelated candidate read.
-        await click("Keep editing");
+        // A candidate read retires the earlier choice even when saved source values match.
+        expect(hasButton("Keep editing")).toBe(false);
+        const before = rawEditor();
+        for (const node of old) invoke(node, "onClick");
+        await hooks.settle();
+        expect(rawEditor()).toEqual(before);
         await click(copyLabel);
+        expect(hasButton(discardLabel)).toBe(true);
       } else {
         const editor = rawEditor(),
           message = status();
@@ -1476,7 +1492,10 @@ describe("saved goal copy ownership", () => {
         await hooks.settle();
         expect(rawEditor()).toEqual(editor);
         expect(status()).toBe(message);
-        if (phase === "profile") expect(button(copyLabel).props.disabled).toBe(true);
+        if (phase === "auth") {
+          expect(hasButton(copyLabel)).toBe(false);
+          expect(router.replace).toHaveBeenCalledWith("/login");
+        } else if (phase === "profile") expect(button(copyLabel).props.disabled).toBe(true);
         else expect(button(copyLabel).props.disabled).toBe(false);
       }
     },
@@ -1555,8 +1574,8 @@ describe("copied goal mutation ownership", () => {
     await hooks.settle();
     const otherBody = required(writes(calls)[4]);
     expect(new Headers(otherBody.init?.headers).get("idempotency-key")).not.toBe(firstKey);
-    invoke(field("Progress date"), "onBlur");
-    await hooks.settle();
+    await click("Reload saved goal");
+    await click(discardReloadGoalLabel);
     await submit();
     await hooks.settle();
     const replayRevision = required(writes(calls)[5]);
@@ -1589,5 +1608,637 @@ describe("copied goal mutation ownership", () => {
     expect(writes(calls)).toHaveLength(1);
     expect(writes(calls)[0]?.path).toBe("/api/goals");
     expect(button(copyLabel).props.disabled).toBe(false);
+  });
+});
+
+const discardNewGoalLabel = "Discard edits and start new goal";
+const discardReloadGoalLabel = "Discard edits and reload saved goal";
+async function editGoalDraft() {
+  await change("Daily energy (kcal)", "2200.000001");
+  await change("Why this energy target?", "  Raw energy rationale\nkeep spacing  ");
+  await change("Calcium minimum mg", "0.000000000001");
+  await change("Calcium target mg", "999.000000000001");
+  await change("Calcium maximum mg", "1000.000000000001");
+  await change("Calcium target source", "  Draft source  ");
+  await change("Calcium source version", " draft-v2 ");
+  await change("Calcium rationale", "  Raw target rationale  ");
+}
+
+describe("goal draft replacement regressions", () => {
+  it("preserves every dirty field through New and Keep editing until explicit discard", async () => {
+    const { calls } = await copyWorkspace();
+    await editGoalDraft();
+    const before = rawEditor(),
+      count = calls.length;
+    const allocation = vi.spyOn(globalThis.crypto, "randomUUID");
+    await click("New goal");
+    expect(rawEditor()).toEqual(before);
+    expect(hasButton(discardNewGoalLabel)).toBe(true);
+    await click("Keep editing");
+    expect(rawEditor()).toEqual(before);
+    expect(calls).toHaveLength(count);
+    expect(allocation).not.toHaveBeenCalled();
+    await click("New goal");
+    await click(discardNewGoalLabel);
+    expect(text()).toContain("NEW GOAL");
+    expect(field("Effective from").props.value).toBe(day);
+    expect(targetRows()).toHaveLength(0);
+    expect(calls).toHaveLength(count);
+    expect(allocation).not.toHaveBeenCalled();
+  });
+
+  it("preserves a rejected 412 draft and original revision without implicit reads", async () => {
+    const { calls, setGoal } = await copyWorkspace({
+      intercept: ({ init }) =>
+        init?.method === "POST"
+          ? Response.json({ message: "Revision changed" }, { status: 412 })
+          : undefined,
+    });
+    await editGoalDraft();
+    const before = rawEditor(),
+      count = calls.length;
+    setGoal(savedGoal(undefined, "4"));
+    await submit();
+    await hooks.settle();
+    expect(rawEditor()).toEqual(before);
+    expect(calls.slice(count).map((call) => call.init?.method)).toEqual(["POST"]);
+    expect(hasButton(discardReloadGoalLabel)).toBe(true);
+    expect(status().toLowerCase()).toContain("edits");
+    await submit();
+    await hooks.settle();
+    const posts = writes(calls);
+    expect(posts).toHaveLength(2);
+    expect(posts[1]?.init?.body).toBe(posts[0]?.init?.body);
+    expect(new Headers(posts[1]?.init?.headers).get("idempotency-key")).not.toBe(
+      new Headers(posts[0]?.init?.headers).get("idempotency-key"),
+    );
+    expect(posts.map((call) => new Headers(call.init?.headers).get("if-match"))).toEqual([
+      '"3"',
+      '"3"',
+    ]);
+    expect(rawEditor()).toEqual(before);
+  });
+
+  it("keeps the rejected draft and revision when an explicit reload fails", async () => {
+    let failReads = false;
+    const { calls } = await copyWorkspace({
+      intercept: ({ path, init }) => {
+        if (init?.method === "POST") return Response.json({}, { status: 412 });
+        if (failReads && path.startsWith("/api/goals/current?"))
+          return Response.json(
+            { message: "Saved goal is temporarily unavailable" },
+            { status: 503 },
+          );
+        return undefined;
+      },
+    });
+    await editGoalDraft();
+    const before = rawEditor();
+    await submit();
+    await hooks.settle();
+    failReads = true;
+    await click(discardReloadGoalLabel);
+    expect(rawEditor()).toEqual(before);
+    expect(writes(calls)).toHaveLength(1);
+    expect(new Headers(writes(calls)[0]?.init?.headers).get("if-match")).toBe('"3"');
+    expect(status()).toBe("The current goal could not be loaded.");
+  });
+});
+
+const reloadGoalLabel = "Reload saved goal";
+const discardGoalDateLabel = "Discard edits and change progress date";
+function goalDraftValues() {
+  return [
+    "Effective from",
+    "Daily energy (kcal)",
+    "Why this energy target?",
+    "Calcium minimum mg",
+    "Calcium target mg",
+    "Calcium maximum mg",
+    "Calcium target source",
+    "Calcium source version",
+    "Calcium rationale",
+  ].map((label) => [label, field(label).props.value]);
+}
+async function askGoalReplacement(action: "new" | "reload" | "date") {
+  if (action === "new") await click("New goal");
+  else if (action === "reload") await click(reloadGoalLabel);
+  else {
+    await change("Progress date", "2026-09-12");
+    invoke(field("Progress date"), "onBlur");
+    await hooks.settle();
+  }
+}
+function goalReplacementLabel(action: "new" | "reload" | "date") {
+  return action === "new"
+    ? discardNewGoalLabel
+    : action === "reload"
+      ? discardReloadGoalLabel
+      : discardGoalDateLabel;
+}
+
+describe("goal draft replacement choices and races", () => {
+  it.each(["reload", "date"] as const)(
+    "keeps exact draft and original context when declining %s",
+    async (action) => {
+      const { calls } = await copyWorkspace();
+      await editGoalDraft();
+      const before = goalDraftValues(),
+        count = calls.length;
+      await askGoalReplacement(action);
+      expect(goalDraftValues()).toEqual(before);
+      expect(hasButton(goalReplacementLabel(action))).toBe(true);
+      expect(calls).toHaveLength(count);
+      await click("Keep editing");
+      expect(goalDraftValues()).toEqual(before);
+      expect(field("Progress date").props.value).toBe(day);
+      expect(text()).toContain("GOAL REVISION 3");
+      expect(calls).toHaveLength(count);
+    },
+  );
+
+  it("installs a new progress day only after explicit discard and preserves the previous fields while loading", async () => {
+    let nextDay = false;
+    const pending = deferred<Response>();
+    const { calls } = await copyWorkspace({
+      intercept: ({ path }) =>
+        nextDay && path.startsWith("/api/goals/current?") ? pending.promise : undefined,
+    });
+    await editGoalDraft();
+    const before = goalDraftValues();
+    await askGoalReplacement("date");
+    nextDay = true;
+    await click(discardGoalDateLabel);
+    expect(goalDraftValues()).toEqual(before);
+    expect(text()).toContain("GOAL REVISION 3");
+    pending.resolve(
+      Response.json({
+        data: { goal: { ...savedGoal(undefined, "4"), effectiveFrom: "2026-09-12" } },
+      }),
+    );
+    await hooks.settle();
+    expect(field("Progress date").props.value).toBe("2026-09-12");
+    expect(field("Effective from").props.value).toBe("2026-09-12");
+    expect(text()).toContain("GOAL REVISION 4");
+    expect(field("Daily energy (kcal)").props.value).toBe("2100.00");
+    expect(
+      calls
+        .filter((call) => call.path.startsWith("/api/goals/current?"))
+        .map((call) => new URL(call.path, "https://fixture.test").searchParams.get("date")),
+    ).toEqual([day, "2026-09-12"]);
+  });
+
+  it("refreshes route progress without replacing the dirty editor or its saved goal identity", async () => {
+    const { setGoal } = await copyWorkspace();
+    await editGoalDraft();
+    const before = goalDraftValues();
+    setGoal({ ...savedGoal(undefined, "4"), effectiveFrom: "2026-09-12" });
+    navigation.query = "date=2026-09-12";
+    hooks.render();
+    await hooks.settle();
+    expect(goalDraftValues()).toEqual(before);
+    expect(text()).toContain("GOAL REVISION 3");
+    expect(text()).not.toContain("GOAL REVISION 4");
+    expect(field("Progress date").props.value).toBe("2026-09-12");
+    expect(field("Effective from").props.value).toBe(day);
+  });
+
+  it.each(["new", "reload", "date"] as const)(
+    "invalidates a retained %s choice on a newer edit and exact edit restoration",
+    async (action) => {
+      const { calls } = await copyWorkspace();
+      await editGoalDraft();
+      await askGoalReplacement(action);
+      const discard = button(goalReplacementLabel(action));
+      const input = field("Why this energy target?"),
+        original = input.props.value;
+      invoke(input, "onChange", { target: { value: "Later edit" } });
+      await hooks.settle();
+      await change("Why this energy target?", String(original));
+      const count = calls.length;
+      invoke(discard, "onClick");
+      await hooks.settle();
+      expect(field("Why this energy target?").props.value).toBe(original);
+      expect(field("Calcium target mg").props.value).toBe("999.000000000001");
+      expect(calls).toHaveLength(count);
+      expect(hasButton(goalReplacementLabel(action))).toBe(false);
+    },
+  );
+
+  it.each(["route", "date", "owner", "unmount"] as const)(
+    "rejects retained New choices after %s scope changes",
+    async (scope) => {
+      let otherOwner = false;
+      const { calls } = await copyWorkspace({
+        intercept: ({ path }) =>
+          otherOwner && path === "/api/auth/me"
+            ? session("217e6c14-c82b-4451-a81e-2495863a3f64")
+            : undefined,
+      });
+      await editGoalDraft();
+      await askGoalReplacement("new");
+      const old = [button(discardNewGoalLabel), button("Keep editing")];
+      if (scope === "route") {
+        navigation.query = "date=2026-09-12";
+        hooks.renderWithoutEffects();
+      }
+      if (scope === "date")
+        invoke(field("Progress date"), "onChange", { target: { value: "2026-09-12" } });
+      if (scope === "owner") {
+        otherOwner = true;
+        hooks.replayEffects();
+        await hooks.settle();
+      }
+      if (scope === "unmount") hooks.unmount();
+      const count = calls.length,
+        updates = hooks.afterClose();
+      for (const node of old) invoke(node, "onClick");
+      if (scope !== "route") await hooks.settle();
+      expect(calls).toHaveLength(count);
+      expect(hooks.afterClose()).toBe(updates);
+      if (scope !== "owner")
+        expect(field("Calcium target mg").props.value).toBe("999.000000000001");
+      else expect(targetRows()).toHaveLength(0);
+    },
+  );
+
+  it("uses one replacement choice and never revives an earlier New or Copy discard", async () => {
+    const { calls } = await copyWorkspace();
+    await editGoalDraft();
+    await askGoalReplacement("new");
+    const firstNew = button(discardNewGoalLabel);
+    await click(copyLabel);
+    expect(hasButton(discardNewGoalLabel)).toBe(false);
+    const copy = button(discardLabel);
+    await askGoalReplacement("reload");
+    expect(hasButton(discardLabel)).toBe(false);
+    const before = rawEditor(),
+      count = calls.length;
+    invoke(firstNew, "onClick");
+    invoke(copy, "onClick");
+    await hooks.settle();
+    expect(rawEditor()).toEqual(before);
+    expect(calls).toHaveLength(count);
+    expect(hasButton(discardReloadGoalLabel)).toBe(true);
+    await click("Keep editing");
+    await askGoalReplacement("new");
+    invoke(firstNew, "onClick");
+    await hooks.settle();
+    expect(rawEditor()).toEqual(before);
+    expect(hasButton(discardNewGoalLabel)).toBe(true);
+  });
+
+  it.each(["new", "reload"] as const)(
+    "accepts a %s discard only once before paint",
+    async (action) => {
+      let loading = false;
+      const pending = deferred<Response>();
+      const { calls } = await copyWorkspace({
+        intercept: ({ path }) =>
+          loading && path.startsWith("/api/goals/current?") ? pending.promise : undefined,
+      });
+      await editGoalDraft();
+      await askGoalReplacement(action);
+      const discard = button(goalReplacementLabel(action));
+      const beforeReads = calls.filter((call) =>
+        call.path.startsWith("/api/goals/current?"),
+      ).length;
+      loading = action === "reload";
+      invoke(discard, "onClick");
+      invoke(discard, "onClick");
+      await hooks.settle();
+      expect(calls.filter((call) => call.path.startsWith("/api/goals/current?"))).toHaveLength(
+        beforeReads + (action === "reload" ? 1 : 0),
+      );
+      if (action === "reload") {
+        pending.resolve(Response.json({ data: { goal: savedGoal(undefined, "4") } }));
+        await hooks.settle();
+      }
+      await change("Why this energy target?", "Later draft");
+      const count = calls.length;
+      invoke(discard, "onClick");
+      await hooks.settle();
+      expect(field("Why this energy target?").props.value).toBe("Later draft");
+      expect(calls).toHaveLength(count);
+    },
+  );
+
+  it.each(["write", "profile", "candidate"] as const)(
+    "blocks New, reload and progress transitions during live %s work",
+    async (phase) => {
+      let active = false;
+      const pending = deferred<Response>();
+      const { calls } = await copyWorkspace({
+        intercept: ({ path, init }) =>
+          active &&
+          (phase === "write"
+            ? init?.method === "POST"
+            : phase === "profile"
+              ? path === "/api/profile"
+              : path.startsWith("/api/goals/reference-target-sets?"))
+            ? pending.promise
+            : undefined,
+      });
+      await editGoalDraft();
+      const old = [button("New goal"), button(reloadGoalLabel)],
+        dateInput = field("Progress date");
+      const before = goalDraftValues();
+      active = true;
+      if (phase === "write") void submit();
+      else if (phase === "profile") invoke(button("Save profile and check eligibility"), "onClick");
+      else invoke(field("Effective from"), "onBlur");
+      const count = calls.length;
+      for (const node of old) invoke(node, "onClick");
+      invoke(dateInput, "onChange", { target: { value: "2026-09-12" } });
+      invoke(dateInput, "onBlur");
+      await hooks.settle();
+      expect(goalDraftValues()).toEqual(before);
+      expect(field("Progress date").props.value).toBe(day);
+      expect(calls).toHaveLength(count);
+      hooks.render();
+      expect(button("New goal").props.disabled).toBe(true);
+      expect(button(reloadGoalLabel).props.disabled).toBe(true);
+      active = false;
+      pending.resolve(Response.json({ message: "Temporary failure" }, { status: 503 }));
+      await hooks.settle();
+      expect(goalDraftValues()).toEqual(before);
+    },
+  );
+
+  it.each(["new", "reload", "date"] as const)(
+    "preserves an ambiguous save body, key and revision across declined %s",
+    async (action) => {
+      const { calls } = await copyWorkspace({
+        intercept: ({ init }) =>
+          init?.method === "POST" ? Response.json({}, { status: 503 }) : undefined,
+      });
+      await editGoalDraft();
+      await submit();
+      await hooks.settle();
+      const first = required(writes(calls)[0]),
+        before = goalDraftValues(),
+        count = calls.length;
+      await askGoalReplacement(action);
+      await click("Keep editing");
+      expect(goalDraftValues()).toEqual(before);
+      expect(calls).toHaveLength(count);
+      await submit();
+      await hooks.settle();
+      const second = required(writes(calls)[1]);
+      expect(second.path).toBe(first.path);
+      expect(second.init?.body).toBe(first.init?.body);
+      expect(new Headers(second.init?.headers).get("idempotency-key")).toBe(
+        new Headers(first.init?.headers).get("idempotency-key"),
+      );
+      expect(new Headers(second.init?.headers).get("if-match")).toBe('"3"');
+    },
+  );
+});
+
+describe("goal conflict draft recovery", () => {
+  it.each(["verified", "unavailable"] as const)(
+    "keeps a 409 draft blocked when eligibility refresh is %s until explicit recovery",
+    async (refresh) => {
+      let rejected = false;
+      const { calls } = await copyWorkspace({
+        intercept: ({ path, init }) => {
+          if (init?.method === "POST") {
+            rejected = true;
+            return Response.json({ message: "Eligibility changed" }, { status: 409 });
+          }
+          if (rejected && path === "/api/auth/me")
+            return refresh === "unavailable"
+              ? Response.json({}, { status: 503 })
+              : session()
+                  .json()
+                  .then((body) => {
+                    body.data.profile.revision = "5";
+                    return Response.json(body);
+                  });
+          if (rejected && path.startsWith("/api/goals/reference-target-sets?")) {
+            const body = manualReferences();
+            body.data.profileRevision = "5";
+            return Response.json(body);
+          }
+          return undefined;
+        },
+      });
+      await editGoalDraft();
+      const before = goalDraftValues();
+      await submit();
+      await hooks.settle();
+      expect(goalDraftValues()).toEqual(before);
+      expect(writes(calls)).toHaveLength(1);
+      expect(hasButton(discardReloadGoalLabel)).toBe(true);
+      await submit();
+      await hooks.settle();
+      expect(writes(calls)).toHaveLength(1);
+      invoke(field("Profile-derived estimate"), "onChange");
+      await hooks.settle();
+      invoke(field("Fixed target"), "onChange");
+      await hooks.settle();
+      await submit();
+      await hooks.settle();
+      expect(writes(calls)).toHaveLength(1);
+      expect(field("Why this energy target?").props.value).toBe(
+        "  Raw energy rationale\nkeep spacing  ",
+      );
+      if (refresh === "verified") {
+        const group = required(
+          elements().find(
+            (node) => node.type === "input" && node.props.name === "reference-target-group",
+          ),
+        );
+        invoke(group, "onChange");
+        await hooks.settle();
+        const acknowledgement = required(
+          elements().find((node) => node.type === "input" && node.props.type === "checkbox"),
+        );
+        invoke(acknowledgement, "onChange", { target: { checked: true } });
+        await hooks.settle();
+        invoke(button("Apply 12 values to unsaved draft"), "onClick");
+        await hooks.settle();
+        await submit();
+        await hooks.settle();
+        expect(writes(calls)).toHaveLength(1);
+      }
+    },
+  );
+
+  it.each(["GOAL_OWNER_CHANGED", "PROFILE_OWNER_CHANGED"] as const)(
+    "clears private drafts for the explicit %s response",
+    async (code) => {
+      const { calls } = await copyWorkspace({
+        intercept: ({ init }) =>
+          init?.method === "POST" ? Response.json({ code }, { status: 409 }) : undefined,
+      });
+      await editGoalDraft();
+      await askGoalReplacement("new");
+      const old = button(discardNewGoalLabel);
+      await submit();
+      await hooks.settle();
+      expect(router.replace).toHaveBeenCalledWith("/login");
+      expect(targetRows()).toHaveLength(0);
+      const before = rawEditor(),
+        count = calls.length;
+      invoke(old, "onClick");
+      await hooks.settle();
+      expect(rawEditor()).toEqual(before);
+      expect(calls).toHaveLength(count);
+    },
+  );
+
+  it("rejects a retained conflict discard after a later edit, then reloads only through the current control", async () => {
+    const { calls, setGoal } = await copyWorkspace({
+      intercept: ({ init }) =>
+        init?.method === "POST" ? Response.json({}, { status: 412 }) : undefined,
+    });
+    await editGoalDraft();
+    await submit();
+    await hooks.settle();
+    const old = button(discardReloadGoalLabel);
+    await change("Calcium target mg", "998.000000000001");
+    const count = calls.length;
+    invoke(old, "onClick");
+    await hooks.settle();
+    expect(calls).toHaveLength(count);
+    expect(field("Calcium target mg").props.value).toBe("998.000000000001");
+    setGoal(savedGoal(undefined, "4"));
+    await click(discardReloadGoalLabel);
+    expect(text()).toContain("GOAL REVISION 4");
+    assertSavedRows();
+    expect(writes(calls)).toHaveLength(1);
+    expect(hasButton(discardReloadGoalLabel)).toBe(false);
+  });
+
+  it("clears only a definitively rejected operation while retaining an earlier ambiguous body for safe replay", async () => {
+    let postCount = 0;
+    const { calls } = await copyWorkspace({
+      intercept: ({ init }) =>
+        init?.method === "POST"
+          ? Response.json({}, { status: ++postCount === 2 ? 412 : 503 })
+          : undefined,
+    });
+    await editGoalDraft();
+    await submit();
+    await hooks.settle();
+    const first = required(writes(calls)[0]);
+    await change("Why this energy target?", "Different rejected body");
+    await submit();
+    await hooks.settle();
+    await change("Why this energy target?", "  Raw energy rationale\nkeep spacing  ");
+    await submit();
+    await hooks.settle();
+    const replay = required(writes(calls)[2]);
+    expect(replay.init?.body).toBe(first.init?.body);
+    expect(new Headers(replay.init?.headers).get("idempotency-key")).toBe(
+      new Headers(first.init?.headers).get("idempotency-key"),
+    );
+    expect(new Headers(replay.init?.headers).get("if-match")).toBe('"3"');
+  });
+});
+
+describe("goal replacement read recovery", () => {
+  it("recovers an initial session failure through Retry before loading private goal data", async () => {
+    let authFailed = true;
+    const { calls } = await copyWorkspace({
+      intercept: ({ path }) =>
+        path === "/api/auth/me" && authFailed ? Response.json({}, { status: 503 }) : undefined,
+    });
+    expect(calls.filter((call) => call.path.startsWith("/api/goals/current?"))).toHaveLength(0);
+    expect(router.replace).not.toHaveBeenCalled();
+    authFailed = false;
+    await click("Retry goals");
+    expect(calls.filter((call) => call.path === "/api/auth/me")).toHaveLength(2);
+    expect(calls.filter((call) => call.path.startsWith("/api/goals/current?"))).toHaveLength(1);
+    assertSavedRows();
+    expect(button(copyLabel).props.disabled).toBe(false);
+  });
+
+  it.each(["auth", "goal"] as const)(
+    "preserves a later edit made during an explicit replacement's pending %s response",
+    async (phase) => {
+      let pendingRead = false;
+      const pending = deferred<Response>();
+      const { setGoal } = await copyWorkspace({
+        intercept: ({ path }) =>
+          pendingRead &&
+          (phase === "auth" ? path === "/api/auth/me" : path.startsWith("/api/goals/current?"))
+            ? pending.promise
+            : undefined,
+      });
+      await editGoalDraft();
+      await click(reloadGoalLabel);
+      pendingRead = true;
+      await click(discardReloadGoalLabel);
+      await change("Why this energy target?", "Later edit during replacement");
+      expect(field("Why this energy target?").props.value).toBe("Later edit during replacement");
+      const before = goalDraftValues();
+      const newer = savedGoal(undefined, "4");
+      setGoal(newer);
+      pendingRead = false;
+      pending.resolve(phase === "auth" ? session() : Response.json({ data: { goal: newer } }));
+      await hooks.settle();
+      expect(goalDraftValues()).toEqual(before);
+      expect(text()).toContain("GOAL REVISION 3");
+      expect(text()).not.toContain("GOAL REVISION 4");
+    },
+  );
+});
+
+describe("goal read retry and accepted save status", () => {
+  it("retries an initial goal read failure without a URL date after authentication succeeded", async () => {
+    navigation.query = "";
+    let fail = true;
+    const { calls } = await copyWorkspace({
+      intercept: ({ path }) =>
+        fail && path.startsWith("/api/goals/current?")
+          ? Response.json({}, { status: 503 })
+          : undefined,
+    });
+    expect(calls.filter((call) => call.path === "/api/auth/me")).toHaveLength(1);
+    expect(calls.filter((call) => call.path.startsWith("/api/goals/current?"))).toHaveLength(1);
+    expect(status()).toContain("could not be loaded");
+    fail = false;
+    await click("Retry goals");
+    const reads = calls.filter((call) => call.path.startsWith("/api/goals/current?"));
+    expect(reads).toHaveLength(2);
+    expect(reads[1]?.path).toBe(reads[0]?.path);
+    assertSavedRows();
+    expect(button(copyLabel).props.disabled).toBe(false);
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+
+  it("reports an accepted publication and preserves its revision when follow-up reading fails", async () => {
+    let published = false;
+    const accepted = savedGoal(undefined, "4");
+    accepted.currentVersion.energy.targetKcal = "2200.000001";
+    const { calls, setGoal } = await copyWorkspace({
+      intercept: ({ path, init }) => {
+        if (init?.method === "POST") {
+          published = true;
+          return Response.json({ data: { replayed: false, goal: accepted } });
+        }
+        if (published && path.startsWith("/api/goals/current?"))
+          return Response.json({}, { status: 503 });
+        return undefined;
+      },
+    });
+    await change("Daily energy (kcal)", "2200.000001");
+    await submit();
+    await hooks.settle();
+    expect(text()).toContain("GOAL REVISION 4");
+    expect(field("Daily energy (kcal)").props.value).toBe("2200.000001");
+    expect(status().toLowerCase()).toContain("published");
+    expect(status().toLowerCase()).toContain("refresh");
+    expect(status()).not.toContain("retry safely");
+    expect(writes(calls)).toHaveLength(1);
+    published = false;
+    setGoal(accepted);
+    await click("Retry goals");
+    expect(hasButton(discardReloadGoalLabel)).toBe(false);
+    expect(calls.filter((call) => call.path.startsWith("/api/goals/current?"))).toHaveLength(3);
+    expect(text()).toContain("GOAL REVISION 4");
+    expect(field("Daily energy (kcal)").props.value).toBe("2200.000001");
   });
 });
